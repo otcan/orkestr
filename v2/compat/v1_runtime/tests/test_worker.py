@@ -187,8 +187,6 @@ class WorkerTests(unittest.TestCase):
                 return self.calls > 2
         for failure in ("cancelled", "blocked", "session_revoked"):
             with self.subTest(failure=failure):
-                # Each subtest uses a separate ledger so the first blocked row
-                # intentionally cannot hide a later test's input.
                 ledger = Ledger(Path(self.temp.name) / (failure + ".sqlite3"), {"test_scope": "one"})
                 ledger.enqueue(dict(publicMessageId="public", publicThreadId="thread", chatId="chat", accountId="account", text="request"))
                 peer = Peer()
@@ -201,11 +199,20 @@ class WorkerTests(unittest.TestCase):
                     return original(method, route, **kwargs)
                 peer.request = request
                 Worker(peer, ledger).run(Stop())
-                blocked = ledger.next_input()
-                self.assertEqual(blocked["phase"], "blocked")
-                self.assertTrue(blocked["blocked"])
-                self.assertNotIn("reply", blocked)
                 self.assertFalse(any(route == "/accept" for route, _ in peer.mutations))
+                if failure == "session_revoked":
+                    # A revoked owner session is not the input's fault: it waits
+                    # for the restarted service instead of being refused.
+                    pending = ledger.next_input()
+                    self.assertEqual(pending["phase"], "running")
+                    self.assertNotIn("refused", pending)
+                    continue
+                self.assertIsNone(ledger.next_input())
+                notice = [m for m in ledger.messages() if m["role"] == "assistant"]
+                self.assertEqual(len(notice), 1)
+                self.assertEqual(notice[0]["kind"], "notice")
+                self.assertEqual(notice[0]["refusal"], "execution_requires_review")
+                self.assertTrue(notice[0]["text"].startswith("Not accepted: execution_requires_review"))
 
     def test_mismatched_canonical_history_cannot_be_mirrored(self):
         original = self.peer.request

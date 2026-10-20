@@ -66,6 +66,7 @@ Each binding is `<bindings_dir>/<remote_thread_id>.json`:
 | `progress_updates` | Export intermediate Deep progress for this binding |
 | `attachments` | Accept inbound attachments for this binding |
 | `max_outstanding_inputs` | 1–64 unsettled inputs before intake answers 409 |
+| `max_input_age_seconds` | Optional, 60–604800 (default 1800): how long an input may wait without a Rust window before it is refused as `input_expired` |
 
 `conversation_id`, `remote_thread_id`, `public_thread_id` and `chat_id` must be
 unique across bindings. A newcomer that collides with a serving binding is
@@ -127,8 +128,29 @@ POST /threads/<id>/mirror-acks
 
 `ackedThrough` is the highest sequence below which every export has a
 terminal outcome. `GET /threads/<id>/health` reports outstanding inputs,
-pending, uncertain and failed deliveries. `failed` deliveries settle (V1 will
-not resend them) and remain visible there for operator review.
+pending, uncertain and failed deliveries, plus `refusedInputs` and the latest
+`recentRefusals` (`publicMessageId`, `reason`, `phase`, `atMs`, `settled`).
+`failed` deliveries settle (V1 will not resend them) and remain visible there
+for operator review.
+
+## Refused and expired inputs
+
+An input that will not get a reply is closed instead of holding the chat. A
+safety refusal (`execution_requires_review`, `window_refused`, a mismatched
+receipt, …) or a definite upstream refusal (any 4xx other than 408/425/429, or
+a malformed response; reason `upstream_refused:<status>`) makes the input
+terminal: its final export is an owner notice, `kind: "notice"`,
+`refusal: <reason>`, text `Not accepted: <reason>. …`. V1 delivers and
+acknowledges it like any reply, which settles the input, and the next input
+proceeds. Nothing is resent to Rust. Transport failures, 5xx, 408/425/429 and a
+revoked owner session retry the same frozen request.
+
+An input that waited longer than `max_input_age_seconds` without a Rust window
+(queued, admitted, or refused as `window_busy`) is refused as `input_expired`,
+also while the binding is paused, so a re-enabled binding never runs stale
+input. A window request whose outcome is unknown is never expired, and V2 timer
+occurrences follow Core's own dispatch queue. Inputs blocked by an earlier
+adapter version are closed with a notice the same way.
 
 A V1 build without acknowledgements never settles anything, so the adapter
 then behaves exactly like the pilot: at most `max_outstanding_inputs` inputs.
@@ -206,9 +228,11 @@ are never exported; replies are text only.
    acknowledgement (`ackedThrough` advances). Do not claim delivery from an
    adapter HTTP acknowledgement alone.
 
-A busy Rust window remains visible as waiting; the adapter never forces another
-conversation to stop. Revocation, scope changes, unexpected terminal execution
-or inconsistent receipts block the binding or input for operator review. No
+A busy Rust window remains visible as waiting (until `max_input_age_seconds`);
+the adapter never forces another conversation to stop. Revocation or scope
+changes block the binding; unexpected terminal execution or inconsistent
+receipts refuse that input with an owner notice and keep it in health for
+operator review. No
 alternate provider, local executor, or direct WhatsApp send is used as a
 fallback.
 

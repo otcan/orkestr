@@ -26,6 +26,17 @@ TIMER_NAMESPACE = uuid.UUID("0c6f7a52-5d8e-4b1f-9a3c-2e7d4b8f1a60")
 TIMER_PREFIX = "v2timer-"
 TIMER_SOURCE = "orkestr-v2-timer"
 TIMER_TEXT_LIMIT = 500
+# Deterministic IDs for the owner notice that closes a refused input.
+NOTICE_NAMESPACE = uuid.UUID("5d0c3f7e-8a41-4c2b-9e6d-1b7f2a9c4e83")
+# Phases in which no Rust execution window was opened for the input yet.
+NOT_STARTED = ("queued", "admitted", "waiting_for_window")
+DEFAULT_MAX_INPUT_AGE_S = 30 * 60
+RECENT_REFUSALS = 10
+
+
+def refusal_notice(reason):
+    return ("Not accepted: %s. Orkestr V2 did not produce a reply to this message; "
+            "send it again if it is still needed." % reason)
 
 
 class Conflict(ValueError):
@@ -163,7 +174,7 @@ class Ledger:
             keys = ("message", "window", "fast", "deep") + (("attachments",) if attachments else ())
             data = {"remote_id": remote_id, "public_id": body["publicMessageId"], "text": body["text"],
                     "public_thread_id": body.get("publicThreadId"), "chat_id": body.get("chatId"), "account_id": body.get("accountId"),
-                    "phase": "queued", "keys": {k: str(uuid.uuid4()) for k in keys}}
+                    "phase": "queued", "queued_at": time.time(), "keys": {k: str(uuid.uuid4()) for k in keys}}
             if attachments:
                 data["attachments"] = attachments
             db.execute("INSERT INTO inputs VALUES (?,?,?,?)", (body["publicMessageId"], digest, remote_id, json.dumps(data)))
@@ -208,6 +219,57 @@ class Ledger:
             db.execute("BEGIN IMMEDIATE")
             data["phase"] = "completed"
             self._settle(db, data, outcome)
+
+    def refuse(self, data, reason):
+        """Close an input that will not get a reply, with a visible owner notice.
+
+        The notice is exported as the input's final reply, so V1 delivers it
+        like any other and its acknowledgement settles the input. Later inputs
+        are no longer held behind it. Nothing is resent to Rust.
+        """
+        reason = str(reason)[:200] or "refused"
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute("SELECT data FROM inputs WHERE remote_id=?", (data["remote_id"],)).fetchone()
+            if not row or json.loads(row[0]).get("phase") == "completed":
+                return None
+            message = {"id": str(uuid.uuid5(NOTICE_NAMESPACE, data["remote_id"])), "role": "assistant", "state": "completed",
+                       "phase": "final_answer", "kind": "notice", "source": "rust-v2-adapter",
+                       "parentMessageId": data["remote_id"], "refusal": reason, "text": refusal_notice(reason)}
+            data.pop("blocked", None)
+            data.update(phase="completed", refused={"reason": reason, "phase": data.get("phase"), "atMs": int(time.time() * 1000)})
+            self.save(data, db)
+            self._export(db, data, "final", "final:" + data["remote_id"], message)
+            return message
+
+    def expire_stale(self, max_age_s, now=None):
+        """Refuse inputs that waited longer than max_age_s without a Rust window.
+
+        Only inputs with no window opened (or a definite busy refusal) qualify:
+        a window request whose outcome is unknown may be running and is left
+        alone. V2 timer occurrences follow Core's own dispatch queue and never
+        expire here. Returns the refused inputs.
+        """
+        now = time.time() if now is None else now
+        expired = []
+        with self.connect() as db:
+            rows = db.execute("SELECT data FROM inputs WHERE json_extract(data,'$.phase') IN (%s) ORDER BY rowid"
+                              % ",".join("?" * len(NOT_STARTED)), NOT_STARTED).fetchall()
+        for (raw,) in rows:
+            data = json.loads(raw)
+            if data.get("origin") == "timer" or "window" in data or data.get("blocked"):
+                continue
+            if "window_request" in data and data.get("phase") != "waiting_for_window":
+                continue
+            since = data.get("queued_at", data.get("admitted_at"))
+            if not isinstance(since, (int, float)):
+                # Inputs from older ledgers start their clock now.
+                data["queued_at"] = now
+                self.save(data)
+                continue
+            if now - since > max_age_s and self.refuse(data, "input_expired"):
+                expired.append(data)
+        return expired
 
     def timer_cursor(self):
         with self.connect() as db:
@@ -357,8 +419,16 @@ class Ledger:
             outcomes = dict(db.execute("SELECT coalesce(outcome,'pending'),count(*) FROM exports GROUP BY 1").fetchall())
             outstanding = db.execute("SELECT count(*) FROM inputs WHERE json_extract(data,'$.settled') IS NULL").fetchone()[0]
             cursor = self._acked_through(db)
+            refused = db.execute("SELECT count(*) FROM inputs WHERE json_extract(data,'$.refused') IS NOT NULL").fetchone()[0]
+            recent = [json.loads(raw) for (raw,) in db.execute(
+                "SELECT data FROM inputs WHERE json_extract(data,'$.refused') IS NOT NULL ORDER BY rowid DESC LIMIT ?",
+                (RECENT_REFUSALS,)).fetchall()]
         current = self.next_input()
         return {"phase": current["phase"] if current else "idle", "blocked": bool(current and current.get("blocked")),
                 "outstandingInputs": outstanding, "maxOutstandingInputs": self.max_outstanding, "ackedThrough": cursor,
                 "pendingExports": outcomes.get("pending", 0), "uncertainDeliveries": outcomes.get("uncertain", 0),
-                "failedDeliveries": outcomes.get("failed", 0), "revoked": self.revoked()}
+                "failedDeliveries": outcomes.get("failed", 0), "revoked": self.revoked(),
+                "refusedInputs": refused,
+                "recentRefusals": [{"publicMessageId": d["public_id"], "reason": d["refused"]["reason"],
+                                    "phase": d["refused"].get("phase"), "atMs": d["refused"]["atMs"],
+                                    "settled": bool(d.get("settled"))} for d in recent]}

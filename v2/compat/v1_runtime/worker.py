@@ -2,7 +2,7 @@
 import time
 import uuid
 
-from .ledger import PROGRESS_LIMIT, no_reply
+from .ledger import DEFAULT_MAX_INPUT_AGE_S, PROGRESS_LIMIT, no_reply
 from .rust_client import ClientError
 
 PROGRESS_INTERVAL_S = 60
@@ -14,6 +14,24 @@ class Refused(RuntimeError):
     """A safety condition requires operator reconciliation, never silent replay."""
 
 
+# Failures that may clear by themselves; the same frozen request is retried.
+# A revoked owner session refuses every binding until the service restarts, so
+# it is not a property of the input.
+TRANSIENT_CODES = ("transport_failed", "transport_outcome_unknown", "session_revoked")
+
+
+def transient(error):
+    code, status = getattr(error, "code", None), getattr(error, "status", None)
+    if code is None or code in TRANSIENT_CODES:
+        return True
+    return code == "unexpected_status" and isinstance(status, int) and (status >= 500 or status in (408, 425, 429))
+
+
+def refusal_reason(error):
+    status = getattr(error, "status", None)
+    return "upstream_refused:%s" % (status if status is not None else getattr(error, "code", "error"))
+
+
 def attachment_note(text, manifest_id, references):
     lines = ["[WhatsApp attachments imported into this conversation's attachment store, manifest %s:" % manifest_id]
     lines += ["- %s (%s, %d bytes, reference %s)" % (r["filename"], r["media_type"], r["byte_length"], r["reference_id"])
@@ -22,9 +40,10 @@ def attachment_note(text, manifest_id, references):
 
 
 class Worker:
-    def __init__(self, client, ledger, progress_updates=False):
+    def __init__(self, client, ledger, progress_updates=False, max_input_age_s=DEFAULT_MAX_INPUT_AGE_S):
         self.client, self.ledger = client, ledger
         self.progress_updates = progress_updates
+        self.max_input_age_s = max_input_age_s
 
     def import_attachments(self, data):
         if "attachment_request" not in data:
@@ -283,8 +302,18 @@ class Worker:
 
     def run(self, stop, active=lambda: True):
         while not stop.wait(1):
+            # Expiry only touches the ledger, so it also runs while the binding
+            # is paused: a re-enabled binding never runs stale input.
+            self.expire_stale()
             if active():
                 self.run_once(stop)
+
+    def expire_stale(self):
+        try:
+            self.ledger.expire_stale(self.max_input_age_s)
+        except Exception:
+            # Retried every pass; never blocks the binding.
+            pass
 
     def run_once(self, stop):
         try:
@@ -295,18 +324,21 @@ class Worker:
         data = self.ledger.next_input()
         if not data:
             return
+        if data.get("blocked"):
+            # Written by an earlier adapter version: close it visibly so the
+            # inputs behind it proceed.
+            self.ledger.refuse(data, data["blocked"])
+            return
         try:
             self.step(data)
         except Refused as error:
-            data["blocked"] = str(error)
-            data["phase"] = "blocked"
-            self.ledger.save(data)
+            # A definite refusal is terminal for this input only: the owner gets
+            # a notice and later inputs proceed. Health keeps it for review.
+            self.ledger.refuse(data, str(error))
         except Exception as error:
-            # Only transport failures have an automatic retry path. Preserve
-            # immutable POST keys when the commit outcome is unknown.
-            code = getattr(error, "code", None)
-            if code is not None and code not in ("transport_failed", "transport_outcome_unknown"):
-                data["blocked"] = "upstream_refused"
-                data["phase"] = "blocked"
-                self.ledger.save(data)
+            # Transient failures retry the same frozen request (bounded by the
+            # input age limit until a window is open). Definite upstream
+            # refusals are terminal like any other refusal.
+            if not transient(error):
+                self.ledger.refuse(data, refusal_reason(error))
             stop.wait(4)

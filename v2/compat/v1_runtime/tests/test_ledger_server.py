@@ -253,6 +253,17 @@ class AcknowledgementTests(Harness):
         # Duplicate intake of a settled input is still idempotent and never re-executed.
         self.assertEqual(self.post(1)[0], 200)
 
+    def test_health_exposes_refused_inputs_and_their_notice_is_listed(self):
+        self.assertEqual(self.post(1, body=self.body(1, publicMessageId="refused"))[0], 202)
+        ledger = self.registry.get(self.remote(1)).ledger
+        ledger.refuse(ledger.next_input(), "execution_requires_review")
+        health = self.request("GET", "/threads/%s/health" % self.remote(1))[1]
+        self.assertEqual(health["refusedInputs"], 1)
+        self.assertEqual(health["recentRefusals"][0]["reason"], "execution_requires_review")
+        self.assertEqual(health["phase"], "idle")
+        notice = self.listing(1)["messages"][-1]
+        self.assertEqual((notice["kind"], notice["refusal"]), ("notice", "execution_requires_review"))
+
     def test_uncertain_delivery_is_never_pruned_until_resolved(self):
         self.finish(1)
         self.assertEqual(self.ack(1, "acceptance-message", outcome="uncertain", outboxJobId=None)[1]["settled"], False)
