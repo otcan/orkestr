@@ -50,6 +50,7 @@ jobs:
         run: python3 tests/check_boundaries.py
       - name: Persistent manager ledger and owned-process regressions
         run: |
+          python3 -I -S -B -m unittest discover -s provider-broker -p test_codex_output_items.py -v
           python3 -I -S -B -m unittest discover -s provider-broker -p test_codex_service_ledger.py -v
           python3 -I -S -B -m unittest discover -s provider-broker -p test_codex_service_conversations.py -v
           python3 -I -S -B -m unittest discover -s provider-broker -p test_codex_service_clock.py -v
