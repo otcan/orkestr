@@ -333,6 +333,37 @@ fn assistant_error_requires_terminal_error_and_cannot_become_success() {
 }
 
 #[test]
+fn closed_error_class_maps_to_presentation_class_and_first_notice_wins() {
+    use orkestr_v2_contracts::ExecutionFailureClass as Class;
+    for (error, class) in [
+        ("authentication_failed", Class::Authentication),
+        ("rate_limit", Class::Quota),
+        ("billing_error", Class::Billing),
+        ("server_error", Class::Provider),
+        ("invalid_request", Class::Provider),
+        ("unknown", Class::Unknown),
+        ("novel", Class::Unknown),
+    ] {
+        let mut parser = initialized();
+        assert_eq!(parser.failure_class(), None);
+        let mut notice = assistant(SESSION);
+        notice["error"] = json!(error);
+        receive(&mut parser, notice).unwrap();
+        let mut later = assistant(SESSION);
+        later["error"] = json!("rate_limit");
+        receive(&mut parser, later).unwrap();
+        assert_eq!(parser.failure_class(), Some(class), "{error}");
+    }
+    let mut parser = initialized();
+    receive(&mut parser, result(SESSION, true)).unwrap();
+    assert_eq!(
+        parser.failure_class(),
+        None,
+        "unclassified failure stays None"
+    );
+}
+
+#[test]
 fn arbitrary_provider_words_do_not_turn_into_errors_or_verified_success() {
     let mut parser = initialized();
     let mut content = assistant(SESSION);

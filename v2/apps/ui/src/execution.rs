@@ -56,6 +56,19 @@ pub struct Execution {
     control_error: Option<String>,
     canonical_received: std::collections::BTreeMap<String, u64>,
     canonical: std::collections::BTreeMap<String, orkestr_v2_contracts::ExecutionStatus>,
+    failure: Option<&'static str>,
+}
+
+/// Short truthful cause for a failed run; never provider text.
+pub fn failure_label(class: orkestr_v2_contracts::ExecutionFailureClass) -> &'static str {
+    use orkestr_v2_contracts::ExecutionFailureClass as Class;
+    match class {
+        Class::Authentication => "provider login required",
+        Class::Quota => "provider usage limit reached",
+        Class::Billing => "provider billing problem",
+        Class::Provider => "provider rejected the request",
+        Class::Unknown => "provider reported an error",
+    }
 }
 impl Execution {
     pub const STALE_MS: u64 = 15_000;
@@ -198,6 +211,7 @@ impl Execution {
         };
         // All checks precede this atomic replacement. A new canonical run resets local sample revision.
         self.scope = Some((conversation.clone(), run));
+        self.failure = status.failure.as_ref().map(|f| failure_label(f.class));
         self.sample = Some(sample);
         self.received_ms = Some(received_ms);
         self.connected = true;
@@ -301,7 +315,10 @@ impl Execution {
             ),
             Some(s) => format!(
                 "{} · queue age {} · progress {}",
-                s.phase.label(),
+                match (s.phase, self.failure) {
+                    (Phase::Failed, Some(cause)) => format!("Failed: {cause}"),
+                    _ => s.phase.label().to_string(),
+                },
                 s.queue_age_ms
                     .map(|v| format!("{}s", v / 1000))
                     .unwrap_or_else(|| "unavailable".into()),

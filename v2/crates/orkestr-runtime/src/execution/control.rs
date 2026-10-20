@@ -226,6 +226,7 @@ impl StoppingCodex {
                     event,
                     ProviderEvent::CompletedProposal { .. }
                         | ProviderEvent::Failed
+                        | ProviderEvent::FailedWith(_)
                         | ProviderEvent::Lost
                 );
                 // Keep at most fifteen nonterminal samples, reserving the

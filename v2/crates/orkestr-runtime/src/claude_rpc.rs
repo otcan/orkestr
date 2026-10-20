@@ -35,6 +35,7 @@ pub struct ClaudeRpc {
     terminal: bool,
     poisoned: bool,
     failure_seen: bool,
+    failure_class: Option<orkestr_v2_contracts::ExecutionFailureClass>,
     telemetry_ids: HashSet<String>,
 }
 
@@ -56,6 +57,7 @@ impl ClaudeRpc {
             terminal: false,
             poisoned: false,
             failure_seen: false,
+            failure_class: None,
             telemetry_ids: HashSet::new(),
         })
     }
@@ -79,6 +81,12 @@ impl ClaudeRpc {
     /// acceptance. A poisoned connection is unusable even if this returns true.
     pub fn terminal_result_seen(&self) -> bool {
         self.terminal
+    }
+
+    /// Closed class from the provider's own assistant error notice, if any.
+    /// Never derived from provider text.
+    pub fn failure_class(&self) -> Option<orkestr_v2_contracts::ExecutionFailureClass> {
+        self.failure_class
     }
 
     /// Clean EOF is valid only after a terminal result with no protocol error.
@@ -208,6 +216,8 @@ impl ClaudeRpc {
             // Some provider failures arrive as an assistant notice followed by
             // a result. Keep draining that result; never resurrect this as success.
             self.failure_seen = true;
+            self.failure_class
+                .get_or_insert(failure_class(error.as_str().unwrap_or_default()));
             return Ok(Some(ClaudeObservation::Failed));
         }
         if !self.initialized {
@@ -353,3 +363,15 @@ fn bounded(value: &Value, depth: usize, nodes: &mut usize) -> Result<(), Blocker
 mod tests;
 
 mod telemetry;
+
+/// Map the broker's closed Claude error class to the presentation class.
+fn failure_class(error: &str) -> orkestr_v2_contracts::ExecutionFailureClass {
+    use orkestr_v2_contracts::ExecutionFailureClass as Class;
+    match error {
+        "authentication_failed" => Class::Authentication,
+        "rate_limit" => Class::Quota,
+        "billing_error" => Class::Billing,
+        "invalid_request" | "server_error" | "max_output_tokens" => Class::Provider,
+        _ => Class::Unknown,
+    }
+}

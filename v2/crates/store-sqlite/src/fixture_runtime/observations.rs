@@ -62,7 +62,7 @@ impl FixtureSupervisorStore {
             ProviderEvent::CompletedProposal { synthetic } => {
                 ("completed_proposal", Some(i64::from(*synthetic)), None)
             }
-            ProviderEvent::Failed => ("failed", None, None),
+            ProviderEvent::Failed | ProviderEvent::FailedWith(_) => ("failed", None, None),
             ProviderEvent::Lost => ("lost", None, None),
             ProviderEvent::Progress(text) => ("progress", None, Some(text.as_str())),
             ProviderEvent::Stopped => ("stopped", None, None),
