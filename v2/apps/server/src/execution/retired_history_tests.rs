@@ -102,11 +102,17 @@ async fn mounted_routes_read_original_retired_run_and_empty_worker_history() {
 async fn newer_scope_keeps_old_history_readable_without_live_controls() {
     let f = retired().await;
     let run = f.expected.held[0].boundary_run_id.clone();
+    let new_machine = "d".repeat(64);
+    f.state
+        .store
+        .save_session(&new_machine, &f.owner)
+        .await
+        .unwrap();
     let newer = f
         .state
         .store
         .authorize_supervisor(
-            &"c".repeat(64),
+            &new_machine,
             ProductionSupervisorConfig {
                 provider: ProviderKind::Codex,
                 namespace: "synthetic-held-fixture".into(),
