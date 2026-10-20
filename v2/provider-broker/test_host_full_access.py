@@ -56,6 +56,22 @@ class HostFullAccessTests(unittest.TestCase):
         with self.assertRaises(Refused):
             reply(channel, {"type": "dangerFullAccess"})
 
+    def test_host_sub_agent_thread_events_are_dropped_not_fatal(self):
+        for full, sandbox, reply_sandbox in ((True, "danger-full-access", {"type": "dangerFullAccess"}),
+                                             (False, "read-only", {"type": "readOnly", "networkAccess": False})):
+            channel = setup(full)
+            start(channel, sandbox)
+            reply(channel, reply_sandbox)
+            sub = {"method": "turn/started", "params": {"threadId": "synthetic-sub-agent",
+                   "turn": {"id": "sub-turn", "status": "inProgress"}}}
+            if full:
+                self.assertIsNone(channel.provider(sub))
+                self.assertIsNone(channel.provider({"method": "item/agentMessage/delta", "params": {
+                    "threadId": "synthetic-sub-agent", "turnId": "sub-turn", "delta": "x"}}))
+            else:
+                with self.assertRaises(Refused):
+                    channel.provider(sub)
+
     def test_host_command_installs_exact_real_environment(self):
         from codex_service.profile import host_command
         command = host_command(Path("/opt/example/native"),
