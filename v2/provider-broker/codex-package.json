@@ -4,8 +4,8 @@
   "files": {
     "server.py": "59959b39da32284feea310e4595870a2e5aa9f47dd09382c3accb2386e3e1abe",
     "configuration.py": "1fba545e87e0834d2b3ba36a2c1249ca825631dfa5d6b29cd1b7fa573a8d22ec",
-    "protocol.py": "1d13ade5055b0ac34b6e437ef64ecf7ab8d40780cb2592b91c0c81a4304a6ff6",
-    "transport.py": "98de61e59d50df6ee48ba66f4d4ac0b52f04076203b32071f424100a58ae22a7",
+    "protocol.py": "a64a1e22664859578aadaa156b3566075f93c5d6b7cdafd3f6affa7ba69b9320",
+    "transport.py": "5ebf87ce14b1d7038829893838a98550302fcb4335cb8be7bb159933bc854a85",
     "codex_bootstrap.py": "04bf9751c1da6d5366380ce6589afb27cb5b1c8671425681dbb5a21778843276",
     "reaping.py": "4632be4e94cef92a0b8a2970bad0a55a1925d07d7926eb05a6af32ef512954d7"
   },

@@ -4,7 +4,9 @@ This standalone Python standard-library server is a trusted connector, separate
 from untrusted workers. It opens a dedicated Codex app-server over stdio with
 fixed arguments `app-server --listen stdio://`. It creates a new persistent
 native thread per role/channel; it never resumes a V1 thread or connects to a
-shared app-server. Claude is explicitly unsupported in this slice.
+shared app-server. The separate Claude entry
+(`claude_server.py`) and its installed-CLI qualification are described in
+`docs/v2/claude-installed-cli.md`.
 
 The executable accepts exactly:
 
