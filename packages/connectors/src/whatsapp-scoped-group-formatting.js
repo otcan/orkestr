@@ -133,12 +133,16 @@ export function scopedGroupReplyChunks({text, message, thread, messages, config,
     if (footer.length > SCOPED_FOOTER_MAX_CHARS) throw new Error('group_footer_too_large');
     suffix = `\n\n${footer}`;
   }
+  // Entries are exactly what is sent: the bridge trims outbound text, so an
+  // untrimmed entry would no longer match its frozen timer proof.
+  const body = content.trim();
   // The footer rides on the message and does not count against the budget.
-  if (content.length <= limit) return [content + suffix];
+  if (body.length <= limit) return [body + suffix];
   const marker = `\n\n${SCOPED_ATTACHED_MARKER}`;
-  const preview = scopedReplyPreview(content, limit - marker.length);
-  const full = clean.length > SCOPED_DOCUMENT_MAX_CHARS
-    ? scopedReplyPreview(clean, SCOPED_DOCUMENT_MAX_CHARS - TRUNCATED_NOTE.length) + TRUNCATED_NOTE : clean;
+  const preview = scopedReplyPreview(body, limit - marker.length);
+  const whole = clean.trim();
+  const full = whole.length > SCOPED_DOCUMENT_MAX_CHARS
+    ? scopedReplyPreview(whole, SCOPED_DOCUMENT_MAX_CHARS - TRUNCATED_NOTE.length) + TRUNCATED_NOTE : whole;
   const filename = scopedReplyDocumentName(message?.id || content);
   return [preview + marker + suffix, {document: {filename, mimetype: SCOPED_DOCUMENT_MIMETYPE, text: full}}];
 }

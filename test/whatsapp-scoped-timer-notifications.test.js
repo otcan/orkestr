@@ -271,3 +271,10 @@ test('a timer reply over the budget is one message plus a journaled Markdown doc
  const resumed=createScopedTimerNotifications({...options,env});await resumed.tick();resumed.close();
  assert.equal(state.sent.length,2,'neither the message nor the document repeats');
 });
+test('a timer answer with trailing whitespace and no footer still matches its proof',async t=>{
+ const {state,config,notifier}=fixture(t);
+ config.appendDebugFooter=false;
+ state.messages[1].text='All clear.  \n';
+ assert.equal((await notifier.tick()).sent,1);
+ assert.equal(state.sent[0].text,'[Timer: Example check]\nAll clear.');
+});

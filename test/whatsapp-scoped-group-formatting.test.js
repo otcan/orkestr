@@ -102,3 +102,10 @@ test('stored entries round-trip, and old plain texts stay texts', () => {
   assert.deepEqual(replyEntrySendFields('[Timer: x]\nold chunk'), {text: '[Timer: x]\nold chunk'});
   assert.equal(typeof decodeReplyEntry('{"document":{"filename":"evil.sh","mimetype":"text/markdown","text":"x"}}'), 'string');
 });
+
+test('entries carry no edge whitespace, so they match what the bridge actually sends', () => {
+  assert.deepEqual(chunk('[Timer: x]\nanswer  \n'), ['[Timer: x]\nanswer']);
+  const entries = chunk(`  ${words(5000)}\n\n`);
+  assert.equal(entries[0], entries[0].trim());
+  assert.equal(entries[1].document.text, words(5000));
+});
