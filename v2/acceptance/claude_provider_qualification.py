@@ -351,6 +351,29 @@ def followup(c):
     assert "second" in (t2 or "").lower()
 
 
+def long(c):
+    """Full access beyond the 60 s run lease: renewal keeps the same child."""
+    c.setup(); c.stop_server(); c.configure(budget_ms=900_000, full_access=True); c.start(True)
+    s, t = turn(c, "l1", "Use the Bash tool with a 200000 ms timeout to run exactly: sleep 80; echo long-ok. "
+                "Then reply with only its output.", timeout=200)
+    leases = c.db("SELECT count(*) FROM production_run_leases WHERE run_id='%s'" % s["run_id"])
+    log("long", leases=leases)
+    assert s["phase"] == "awaiting_acceptance" and "long-ok" in (t or ""), t
+    assert leases[0][0] >= 2, leases
+    log("scenario", name="long_stop")
+    assert c.send("l2", "Use the Bash tool with a 200000 ms timeout to run exactly: sleep 150; echo late. Then say done.") == 202
+    running = wait_for(lambda: c.phase_in("running") if (c.status().get("capabilities") or {}).get("stop") else None, "running", 60)
+    time.sleep(75)
+    s2 = c.status()
+    assert s2["phase"] == "running", s2["phase"]
+    code, _, _ = c.request(c.path + "/stop", "POST", {"run_id": s2["run_id"], "expected_revision": s2["revision"],
+        "expected_control_revision": s2.get("control_revision"), "request_key": "stop:l2"})
+    s3 = wait_for(lambda: c.phase_in("cancelled", "failed", "blocked"), "stop after renewal", 40)
+    log("stopped", http=code, status=c.summary(s3),
+        leases=c.db("SELECT count(*) FROM production_run_leases WHERE run_id='%s'" % s2["run_id"]))
+    assert s3["phase"] == "cancelled"
+
+
 def main():
     evidence.mkdir(mode=0o700, parents=True, exist_ok=True)
     root.mkdir(mode=0o700, parents=True, exist_ok=True)

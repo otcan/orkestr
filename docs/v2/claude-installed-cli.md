@@ -56,6 +56,19 @@ subreaper broker (setsid tool shells included) before reporting the reap
 witness. An interrupt during a tool reports `aborted_tools`; it is the same
 interrupted terminal for that exact input.
 
+## Long runs and lease renewal
+
+Claude runs renew their 60 s run lease like Codex Deep: every 20 s, under the
+same scheduling lock as Stop and observation, once the input is fully written,
+native identity is committed and no observation awaits its receipt. The same
+native child, turn and observation cursor continue under the new fence; any
+refused or uncertain transfer quarantines the child (no retry, no new turn).
+The 45 s Claude budget cap is gone; `execution_budget.max_run_ms` has the
+ordinary bound. Long tools emit `tool_progress` and `keep_alive` frames; both
+are bounded discards. Claude background tasks stay disabled: each accepted turn
+is a new native process, so a detached job would die with it (Worker detached
+jobs belong to the workspace-exec profile, not to the Claude native).
+
 ## Qualification matrix (Deep role, real CLI, isolated candidate)
 
 | Scenario | Result |
@@ -69,14 +82,13 @@ interrupted terminal for that exact input.
 | Auth failure (empty account): `failed`, no progress, no fallback | pass |
 | Quota (synthetic native, installed-CLI `rate_limit` frames): `failed` | pass, synthetic |
 | Full access: Bash tool with `sudo -n`, resume, Stop during a tool | pass |
+| Full access: 80 s tool run across 4 lease renewals, then Stop at 75 s | pass |
 
 ## Known limits
 
 - Fast and Worker roles refuse `provider: "claude"` by configuration. Fast needs
   a persistent Claude session wrapper; Worker needs typed Claude Worker
   composition. Beta execution windows (the pilot service) are Codex-only.
-- Claude runs keep the 45 s budget: there is no Claude lease renewal yet.
-  Longer full-access work is cancelled through the ordinary Stop path.
 - Steer is unavailable; a follow-up stays queued until acceptance.
 - Any single text block over 8 KiB refuses the turn (same per-item bound as
   Codex snapshots); the run becomes `blocked`, never a partial success.

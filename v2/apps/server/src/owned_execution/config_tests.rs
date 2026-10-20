@@ -183,7 +183,7 @@ fn only_private_finite_execution_budgets_are_accepted() {
 }
 
 #[test]
-fn claude_selection_is_private_explicit_and_refuses_unimplemented_worker_or_lease_policy() {
+fn claude_selection_is_private_explicit_refuses_worker_and_allows_renewed_long_runs() {
     let mut fixture = Fixture::new();
     fixture.write();
     assert!(fixture.load().unwrap().provider == super::config::Provider::Codex);
@@ -194,9 +194,10 @@ fn claude_selection_is_private_explicit_and_refuses_unimplemented_worker_or_leas
     fixture.write();
     assert!(fixture.load().is_err());
     fixture.value.as_object_mut().unwrap().remove("worker");
-    fixture.value["execution_budget"] = json!({"max_run_ms":60_000});
+    // Claude runs renew their lease like Codex; the ordinary budget bound applies.
+    fixture.value["execution_budget"] = json!({"max_run_ms":3_600_000});
     fixture.write();
-    assert!(fixture.load().is_err());
+    assert!(fixture.load().is_ok());
     fixture
         .value
         .as_object_mut()
