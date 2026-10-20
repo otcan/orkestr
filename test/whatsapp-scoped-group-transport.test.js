@@ -18,6 +18,13 @@ test('only fresh owner messages in the configured groups are admitted once',asyn
  assert.equal(await p.observe(client,message),true);
  assert.equal(await p.observe(client,message),false);
 });
+test('captionless WhatsApp images are admitted for attachment publication', async t => {
+ const {p,client,message}=fixture(t);
+ const media={...message,id:{_serialized:'owner-image-1'},body:'',hasMedia:true,
+   downloadMedia:async()=>({data:Buffer.from('fake-image').toString('base64'),mimetype:'image/png',filename:'sample.png'})};
+ assert.equal(await p.observe(client,media),true);
+ assert.equal(await p.observe(client,media),false,'provider replay stays idempotent');
+});
 test('replies require the original group and parent and remain idempotent',async t=>{
  let calls=0;const {p,client,message,group}=fixture(t,async()=>{calls++;return {id:{_serialized:'agent-1'}};});
  await assert.rejects(p.sendText(client,group,'reply','main',{requestId:'r1',parentId:'missing'}),/parent_required/);

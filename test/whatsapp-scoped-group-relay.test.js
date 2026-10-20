@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import test from 'node:test';
 import {DatabaseSync} from 'node:sqlite';
 import {createScopedGroupRelay} from '../packages/connectors/src/whatsapp-scoped-group-relay.js';
@@ -6,15 +9,15 @@ import * as formatter from '../packages/connectors/src/whatsapp-formatting.js';
 
 function fixture(t, footer = false, progress = false, extraConfig = {}) {
   const inboxDb = new DatabaseSync(':memory:'), relayDb = new DatabaseSync(':memory:');
-  inboxDb.exec(`CREATE TABLE group_input(id TEXT,chat_id TEXT,body TEXT,created_at TEXT);
+  inboxDb.exec(`CREATE TABLE group_input(id TEXT,chat_id TEXT,body TEXT,created_at TEXT,media_path TEXT,media_filename TEXT,media_mimetype TEXT,media_size INTEGER);
     CREATE TABLE group_send(state TEXT);
-    INSERT INTO group_input VALUES('wa-1','group-1','hello','2026-01-01');`);
+    INSERT INTO group_input(id,chat_id,body,created_at) VALUES('wa-1','group-1','hello','2026-01-01');`);
   const config = {forwardProgressUpdates: progress, forwardProgressSince: '2026-01-01T00:00:00Z', ownerUserId: 'admin', appendDebugFooter: footer, replyPrefix: 'agent:', groups: [
     {chatId: 'group-1', threadId: 'thread-1', name: 'First'},
     {chatId: 'group-2', threadId: 'thread-2', name: 'Second'},
   ]};
   Object.assign(config, extraConfig);
-  const state = {posts: [], sent: [], pages: {}, retired: new Set(), failReply: false,
+  const state = {posts: [], uploads: [], sent: [], pages: {}, retired: new Set(), failReply: false,
     suppressFooter: false, quotaFails: false, quotaCalls: 0,
     quota: {codex: {fiveHourRemainingPct: 73}, claude: {weeklyRemainingPct: 64}}};
   const api = async (url, options) => {
@@ -22,6 +25,10 @@ function fixture(t, footer = false, progress = false, extraConfig = {}) {
       state.quotaCalls++;
       if (state.quotaFails) throw new Error('quota_unavailable');
       return {quota: state.quota};
+    }
+    if (url.endsWith('/uploads')) {
+      state.uploads.push({url, ...options});
+      return {attachments: [{id: 'attachment-safe-1', name: options.body.files[0].name, mimetype: options.body.files[0].mimetype}]};
     }
     const threadId = url.split('/')[3], groupId = threadId.replace('thread', 'group');
     if (url.endsWith('/input')) {
@@ -40,6 +47,49 @@ function fixture(t, footer = false, progress = false, extraConfig = {}) {
   t.after(() => {inboxDb.close(); relayDb.close();});
   return {relay, state, inboxDb, relayDb, config};
 }
+
+test('scoped group media is uploaded through thread attachments and routed once with caption', async t => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'scoped-group-media-'));
+  t.after(() => fs.rm(dir, {recursive: true, force: true}));
+  const {relay, state, inboxDb, config} = fixture(t, false, false, {mediaDir: dir});
+  const mediaPath = path.join(dir, 'media.png');
+  await fs.writeFile(mediaPath, Buffer.from('synthetic-image'));
+  inboxDb.prepare(`INSERT INTO group_input(id,chat_id,body,created_at,media_path,media_filename,media_mimetype,media_size)
+    VALUES(?,?,?,?,?,?,?,?)`).run('wa-image', 'group-1', 'please inspect', '2026-01-02', mediaPath, 'sample.png', 'image/png', 15);
+
+  await relay.tick();
+  await relay.tick();
+  assert.equal(state.uploads.length, 1);
+  assert.equal(state.uploads[0].url, '/api/threads/thread-1/uploads');
+  assert.equal(state.uploads[0].body.files[0].contentBase64, Buffer.from('synthetic-image').toString('base64'));
+  const inputPosts = state.posts.filter(post => post.url.endsWith('/input'));
+  const imagePost = inputPosts.find(post => /please inspect/.test(post.body.text));
+  assert.ok(imagePost);
+  assert.deepEqual(imagePost.body.attachments, [{id: 'attachment-safe-1', name: 'sample.png', mimetype: 'image/png'}]);
+  assert.equal(inputPosts.filter(post => /please inspect/.test(post.body.text)).length, 1);
+  assert.equal(await fs.stat(mediaPath).then(() => true, () => false), false);
+});
+
+test('captionless supported image is visibly described and attached; unsupported media is visibly skipped', async t => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'scoped-group-media-'));
+  t.after(() => fs.rm(dir, {recursive: true, force: true}));
+  const {relay, state, inboxDb} = fixture(t, false, false, {mediaDir: dir});
+  const imagePath = path.join(dir, 'image.png');
+  const docPath = path.join(dir, 'document.bin');
+  await fs.writeFile(imagePath, Buffer.from('image'));
+  await fs.writeFile(docPath, Buffer.from('document'));
+  const insert = inboxDb.prepare(`INSERT INTO group_input(id,chat_id,body,created_at,media_path,media_filename,media_mimetype,media_size)
+    VALUES(?,?,?,?,?,?,?,?)`);
+  insert.run('wa-empty-caption', 'group-1', '', '2026-01-02', imagePath, 'image.png', 'image/png', 5);
+  insert.run('wa-unsupported', 'group-1', 'see attached', '2026-01-02', docPath, 'document.bin', 'application/pdf', 8);
+  await relay.tick();
+  const posts = state.posts.filter(post => post.url.endsWith('/input'));
+  assert.equal(state.uploads.length, 1);
+  assert.match(posts.find(post => /Image attached: image.png/.test(post.body.text)).body.text, /Image attached: image.png/);
+  const skipped = posts.find(post => /attachment skipped/.test(post.body.text));
+  assert.ok(skipped);
+  assert.equal(skipped.body.attachments, undefined);
+});
 const answer = (id, parent = 'input-thread-1', phase = 'final_answer') => ({id, role: 'assistant', source: 'codex-app-server', state: 'completed', phase, parentMessageId: parent, text: 'agent: answer'});
 test('only the matching final is sent; input and completed output do not replay', async t => {
   const {relay, state} = fixture(t);
@@ -55,7 +105,7 @@ test('only the matching final is sent; input and completed output do not replay'
 test('a broken binding does not prevent another group from progressing', async t => {
   const {relay, state, inboxDb} = fixture(t);
   state.retired.add('thread-1');
-  inboxDb.exec("INSERT INTO group_input VALUES('wa-2','group-2','hello','2026-01-02')");
+  inboxDb.exec("INSERT INTO group_input(id,chat_id,body,created_at) VALUES('wa-2','group-2','hello','2026-01-02')");
   const status = await relay.tick();
   assert.equal(status.routed, 1); assert.equal(status.ok, false);
   assert.equal(state.posts[0].url, '/api/threads/thread-2/input');
@@ -203,7 +253,7 @@ test('cutover cutoff leaves old scoped input unqueued while another group still 
   fence.activate({to:'temporary',evidence:{routeId:'temporary',checkedAt:new Date(now).toISOString(),restrictionCleared:true,authenticated:true,ready:true,identityVerified:true,oldRouteStopped:true,legacyRouterDisabled:true,transportJournalsClear:true}});
   const {relay,state,inboxDb} = fixture(t,false,false,{routeControl:{threadId:'thread-1',routeId:'temporary',dbPath}});
   t.after(()=>{relay.close();fence.close();fs.rmSync(dir,{recursive:true,force:true});});
-  inboxDb.exec("INSERT INTO group_input VALUES('wa-2','group-2','new','2026-01-02')");
+  inboxDb.exec("INSERT INTO group_input(id,chat_id,body,created_at) VALUES('wa-2','group-2','new','2026-01-02')");
   await relay.tick();
   assert.equal(state.posts.length,1); assert.match(state.posts[0].url,/thread-2/);
 });
@@ -218,7 +268,7 @@ for (const activeRoute of ['temporary', 'successor']) {
     fence.activate({to:activeRoute,evidence:{routeId:activeRoute,checkedAt:new Date(now).toISOString(),restrictionCleared:true,authenticated:true,ready:true,identityVerified:true,oldRouteStopped:true,legacyRouterDisabled:true,transportJournalsClear:true}});
     const {relay,state,inboxDb} = fixture(t,false,false,{routeControl:{threadIds:['thread-1','thread-2'],routeId:'temporary',dbPath}});
     t.after(()=>{relay.close();fence.close();fs.rmSync(dir,{recursive:true,force:true});});
-    inboxDb.exec("INSERT INTO group_input VALUES('wa-old-2','group-2','old','2026-01-01'); INSERT INTO group_input VALUES('wa-new-2','group-2','new','2026-01-02')");
+    inboxDb.exec("INSERT INTO group_input(id,chat_id,body,created_at) VALUES('wa-old-2','group-2','old','2026-01-01'); INSERT INTO group_input(id,chat_id,body,created_at) VALUES('wa-new-2','group-2','new','2026-01-02')");
     await relay.tick();
     assert.equal(state.posts.length,activeRoute==='temporary'?1:0);
     if (activeRoute==='temporary') {
