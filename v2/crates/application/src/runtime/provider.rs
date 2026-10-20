@@ -21,6 +21,9 @@ pub enum ProviderEvent {
         synthetic: bool,
     },
     Failed,
+    /// Terminal failure with the provider's own closed class (auth, quota...).
+    /// Same lifecycle meaning as `Failed`; the class is presentation evidence.
+    FailedWith(orkestr_v2_contracts::ExecutionFailureClass),
     Stopped,
     Lost,
 }

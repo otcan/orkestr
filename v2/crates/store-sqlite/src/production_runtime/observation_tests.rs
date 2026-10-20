@@ -142,6 +142,86 @@ async fn committed_replay_survives_expiry_and_takeover_without_rewriting_termina
     assert_eq!(status.phase, orkestr_v2_contracts::ExecutionPhase::Failed);
 }
 #[tokio::test]
+async fn failure_class_is_closed_replay_stable_and_only_on_failed_status() {
+    use orkestr_v2_contracts::{ExecutionFailure, ExecutionFailureClass, ExecutionPhase};
+    let f = setup().await;
+    let p = consumed(&f).await;
+    let failed = input(
+        &p,
+        1,
+        ProviderEvent::FailedWith(ExecutionFailureClass::Quota),
+    );
+    let receipt = f
+        .handle
+        .append_provider_event(&f.owner, &p, &failed)
+        .await
+        .unwrap();
+    assert_eq!(receipt.state, RunState::Failed);
+    let status = f
+        .store
+        .execution_status(&f.owner, &f.conversation)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(status.phase, ExecutionPhase::Failed);
+    assert_eq!(
+        status.failure,
+        Some(ExecutionFailure {
+            class: ExecutionFailureClass::Quota
+        })
+    );
+    assert!(status.is_valid());
+    let wire = serde_json::to_value(&status).unwrap();
+    assert_eq!(wire["failure"], serde_json::json!({"class": "quota"}));
+    // The class is part of the committed digest: a replay cannot relabel it.
+    let before = snapshot(&f.store).await;
+    let relabeled = input(
+        &p,
+        1,
+        ProviderEvent::FailedWith(ExecutionFailureClass::Authentication),
+    );
+    assert!(matches!(
+        f.handle
+            .append_provider_event(&f.owner, &p, &relabeled)
+            .await,
+        Err(RuntimeStoreError::Conflict)
+    ));
+    assert!(matches!(
+        f.handle
+            .append_provider_event(&f.owner, &p, &input(&p, 1, ProviderEvent::Failed))
+            .await,
+        Err(RuntimeStoreError::Conflict)
+    ));
+    assert!(
+        f.handle
+            .append_provider_event(&f.owner, &p, &failed)
+            .await
+            .unwrap()
+            .duplicate
+    );
+    assert_eq!(snapshot(&f.store).await, before);
+}
+#[tokio::test]
+async fn unclassified_failure_has_no_failure_field() {
+    let f = setup().await;
+    let p = consumed(&f).await;
+    f.handle
+        .append_provider_event(&f.owner, &p, &input(&p, 1, ProviderEvent::Failed))
+        .await
+        .unwrap();
+    let status = f
+        .store
+        .execution_status(&f.owner, &f.conversation)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(status.failure.is_none());
+    assert!(serde_json::to_value(&status)
+        .unwrap()
+        .get("failure")
+        .is_none());
+}
+#[tokio::test]
 async fn forgery_gaps_synthetic_and_unavailable_progress_do_not_spend_sequence() {
     let f = setup().await;
     let p = consumed(&f).await;

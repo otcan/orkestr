@@ -200,6 +200,18 @@ impl Store {
         } else {
             None
         };
+        let failure = match (&run_id, phase) {
+            (Some(run), ExecutionPhase::Failed) => sqlx::query_scalar::<_, String>(
+                "SELECT f.class FROM production_failure_classes f JOIN production_observations o ON o.event_id=f.event_id WHERE f.run_id=? AND o.kind='failed' ORDER BY o.run_sequence DESC LIMIT 1",
+            )
+            .bind(run.to_string())
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(db)?
+            .and_then(|class| super::observations::failure_class(&class))
+            .map(|class| orkestr_v2_contracts::ExecutionFailure { class }),
+            _ => None,
+        };
         let control_revision = if let Some(run) = &run_id {
             Some(
                 sqlx::query_scalar::<_, i64>(
@@ -214,6 +226,7 @@ impl Store {
             None
         };
         let status = ExecutionStatus {
+            failure,
             schema_version: 1,
             conversation_id: conversation.clone(),
             run_id,

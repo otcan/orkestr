@@ -116,7 +116,10 @@ impl ClaudeOutput {
                     .push_back(ProviderEvent::CompletedProposal { synthetic: false });
             }
             Some(ClaudeObservation::Failed) if self.rpc.terminal_result_seen() => {
-                self.events.push_back(ProviderEvent::Failed)
+                self.events.push_back(match self.rpc.failure_class() {
+                    Some(class) => ProviderEvent::FailedWith(class),
+                    None => ProviderEvent::Failed,
+                })
             }
             Some(ClaudeObservation::Failed) => {} // notice is not a terminal result
             None => {} // Validated non-authoritative telemetry produces no event.

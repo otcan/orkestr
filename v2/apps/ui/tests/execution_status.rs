@@ -232,3 +232,32 @@ fn separate_fast_retention_does_not_replace_deep_or_inherit_its_high_water() {
     assert!(deep.control_status().is_none());
     assert!(fast.apply_status(remounted, 103, fast_status).is_err());
 }
+#[test]
+fn failed_run_shows_closed_cause_without_provider_text() {
+    let mut state = Execution::default();
+    let mut status = wire();
+    status.phase = orkestr_v2_contracts::ExecutionPhase::Failed;
+    status.capabilities.stop = false;
+    status.capabilities.steer = false;
+    status.failure = Some(orkestr_v2_contracts::ExecutionFailure {
+        class: orkestr_v2_contracts::ExecutionFailureClass::Quota,
+    });
+    let generation = state.select(&status.conversation_id.to_string(), "");
+    state.apply_status(generation, 100, status.clone()).unwrap();
+    assert!(state
+        .summary(100)
+        .starts_with("Failed: provider usage limit reached"));
+    let mut plain = status;
+    plain.failure = None;
+    plain.revision = 11;
+    state.apply_status(generation, 101, plain).unwrap();
+    assert!(state.summary(101).starts_with("Failed ·"));
+}
+#[test]
+fn failure_cause_requires_failed_phase() {
+    let mut status = wire();
+    status.failure = Some(orkestr_v2_contracts::ExecutionFailure {
+        class: orkestr_v2_contracts::ExecutionFailureClass::Authentication,
+    });
+    assert!(!status.is_valid());
+}

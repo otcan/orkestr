@@ -79,6 +79,7 @@ async fn populated_prefixes_copy_first_edges_to_47_preserve_rows_and_rollback_so
         );
         for table in [
             "execution_window_queue",
+            "production_failure_classes",
             "workspace_exec_profiles",
             "workspace_exec_delegations",
             "workspace_exec_results",
@@ -123,7 +124,7 @@ async fn populated_prefixes_copy_first_edges_to_47_preserve_rows_and_rollback_so
                 .fetch_one(&mut upgraded)
                 .await
                 .unwrap(),
-            48
+            49
         );
         assert!(sqlx::query("PRAGMA foreign_key_check")
             .fetch_all(&mut upgraded)

@@ -70,6 +70,18 @@ interrupted terminal for that exact input.
 | Quota (synthetic native, installed-CLI `rate_limit` frames): `failed` | pass, synthetic |
 | Full access: Bash tool with `sudo -n`, resume, Stop during a tool | pass |
 
+## Failure cause
+
+A `failed` execution status carries `failure: {"class": ...}` when the provider
+stated a closed class: `authentication` (not logged in or login rejected),
+`quota` (usage or rate limit), `billing`, `provider` (invalid request, server
+error, output limit) or `unknown`. Runtime takes only the first assistant
+`error` class of the turn; provider text and account data are never stored.
+The class is part of the committed observation digest, so a replay cannot
+relabel it, and it is absent for every other phase and for unclassified
+failures (Codex does not state a class). The web status line shows a short
+cause, for example `Failed: provider usage limit reached`.
+
 ## Known limits
 
 - Fast and Worker roles refuse `provider: "claude"` by configuration. Fast needs
@@ -80,7 +92,6 @@ interrupted terminal for that exact input.
 - Steer is unavailable; a follow-up stays queued until acceptance.
 - Any single text block over 8 KiB refuses the turn (same per-item bound as
   Codex snapshots); the run becomes `blocked`, never a partial success.
-- The failure class is not shown to the owner yet: the status reads `failed`.
 - A real quota exhaustion was not induced; quota evidence replays the
   installed CLI's frame shapes through the real server and broker.
 

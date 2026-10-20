@@ -51,6 +51,7 @@ async fn proposal_migration_preserves_old_blocked_children_and_every_prior_row()
     sqlx::raw_sql(views).execute(&mut *tx).await.unwrap();
     for table in [
         "execution_window_queue",
+        "production_failure_classes",
         "archived_history_messages",
         "archived_history_quarantine",
         "archived_history_sources",
@@ -92,5 +93,5 @@ async fn proposal_migration_preserves_old_blocked_children_and_every_prior_row()
         .fetch_one(&reopened.pool)
         .await
         .unwrap();
-    assert_eq!(latest, 48);
+    assert_eq!(latest, 49);
 }
