@@ -47,8 +47,16 @@ conversation.
   in the same transaction that admits the window. The Runtime opens fresh
   windows one at a time under a single `opening` lock. Follow-up input to an
   already-live window needs no new slot.
+- **Idle reclamation.** Once every role is accepted, a window stays open for
+  follow-up input until its deadline. When a fresh window needs a slot and the
+  capacity is full, the Runtime retires the oldest idle live window of another
+  conversation. A window is idle when every role is accepted and Core shows no
+  pending input, run or descendant, which is the former conversation-switch
+  precondition. The check and the stop run under that conversation's
+  operation lock, so no follow-up input can be admitted between them.
+  Conversations with queued intents are never reclaimed.
 - **Durable queue.** A fresh-window intent that cannot start is recorded in
-  `execution_window_queue` (migration `0046`) and answered with
+  `execution_window_queue` (migration `0047`) and answered with
   `202 Accepted` and an `ExecutionWindowQueued` receipt. An intent also queues
   when its conversation already has queued intents, so per-conversation order
   is kept. The dispatcher drains rows in FIFO order, and only the earliest row
@@ -106,8 +114,10 @@ authenticated request.
 - Real HTTP with the root manager and synthetic natives
   (`tests/service_roles_http.py`, capacity 2): a second conversation's Deep
   turn runs and finishes while the first conversation's Deep turn is held. A
-  third conversation queues (`202`). When the second window retires, the third
-  starts by itself. The first conversation then resumes in generation 2.
+  third conversation queues (`202`). Once the second window is idle it is
+  reclaimed and the third starts by itself. The first conversation's next
+  input joins its still-open window. Later windows reclaim idle slots inline,
+  and shutdown stays clean.
 
 ## Limits
 

@@ -197,13 +197,13 @@ impl Controller {
         self.sweep(browser).await;
         // Earlier durable intents (any conversation) take free slots first.
         self.drain_locked(browser).await;
-        let room = input.window_id.is_some()
-            || self
-                .store
-                .live_execution_windows_authenticated(browser)
-                .await
-                .map_err(|_| "window capacity unavailable")?
-                < self.capacity;
+        let mut room = input.window_id.is_some() || self.live(browser).await? < self.capacity;
+        if !room && !self.waiting(browser, conversation).await? {
+            // Retire another conversation's idle window rather than queue.
+            let keep = std::iter::once(conversation.clone()).collect();
+            room = self.reclaim_idle(browser, &keep).await
+                && self.live(browser).await? < self.capacity;
+        }
         if room && !self.waiting(browser, conversation).await? {
             return entry
                 .process(browser, owner, conversation, input)
@@ -217,6 +217,13 @@ impl Controller {
             .map_err(|_| "window queue unavailable")?;
         self.queue.wake();
         Ok(WindowOutcome::Queued(queued))
+    }
+
+    async fn live(&self, browser: &str) -> Result<u32, &'static str> {
+        self.store
+            .live_execution_windows_authenticated(browser)
+            .await
+            .map_err(|_| "window capacity unavailable")
     }
 
     /// Whether this conversation already has queued intents (per-conversation order).

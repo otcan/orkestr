@@ -248,7 +248,10 @@ impl Controller {
                     self.queue.forget(browser);
                     return;
                 }
-                Err(_) => return,
+                Err(_) => {
+                    eprintln!("window dispatch deferred: store unavailable");
+                    return;
+                }
             }
         }
     }
@@ -266,6 +269,7 @@ impl Controller {
             .store
             .live_execution_windows_authenticated(browser)
             .await?;
+        let queued: HashSet<_> = rows.iter().map(|row| row.conversation_id.clone()).collect();
         let mut seen = HashSet::new();
         let mut progressed = false;
         for row in rows {
@@ -288,7 +292,10 @@ impl Controller {
             };
             let fresh = request.window_id.is_none();
             if fresh && live >= self.capacity {
-                continue;
+                if !self.reclaim_idle(browser, &queued).await {
+                    continue;
+                }
+                live = live.saturating_sub(1);
             }
             // Source still eligible (not held, consumed or admitted elsewhere)?
             match self
@@ -312,7 +319,12 @@ impl Controller {
                 continue;
             };
             let owner = self.config.owner_id.clone();
-            match entry.process(browser, &owner, conversation, &request).await {
+            let result = entry.process(browser, &owner, conversation, &request).await;
+            if let Err(reason) = &result {
+                // Static local diagnostics only; never provider text or tokens.
+                eprintln!("window dispatch refused: {reason}");
+            }
+            match result {
                 Ok(_) => {
                     self.queue.settled(&row.request_key);
                     live += u32::from(fresh);
@@ -328,6 +340,39 @@ impl Controller {
             }
         }
         Ok(progressed)
+    }
+
+    /// Free one slot by retiring the oldest idle live window: every role
+    /// accepted, nothing pending in Core. Conversations in `keep` (the caller's
+    /// own, or any with queued intents) are never reclaimed. Caller holds
+    /// `opening`. Idle windows otherwise stay open for follow-ups until expiry.
+    pub(super) async fn reclaim_idle(
+        &self,
+        browser: &str,
+        keep: &HashSet<orkestr_v2_contracts::ConversationId>,
+    ) -> bool {
+        let Ok(live) = self
+            .store
+            .unresolved_execution_windows_authenticated(browser)
+            .await
+        else {
+            return false;
+        };
+        let now = now_ms();
+        for status in live {
+            if status.expires_at_ms <= now || keep.contains(&status.conversation_id) {
+                continue;
+            }
+            let Some(entry) = self.existing(&status.conversation_id) else {
+                continue;
+            };
+            match entry.retire_if_idle(browser).await {
+                Ok(true) => return true,
+                Ok(false) => {}
+                Err(reason) => eprintln!("idle window reclamation failed: {reason}"),
+            }
+        }
+        false
     }
 
     async fn withdraw(

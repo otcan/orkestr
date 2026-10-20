@@ -149,8 +149,10 @@ def run(case):
     bfast["_role"] = "fast"
     accept(case, second, bfast, "accept:second-fast")
     assert status(case, first, phase="running")["run_id"] == deep["run_id"]
-    # Retiring the second window frees a slot: the queued third starts by itself.
+    # The second window is now idle (every role accepted). Under capacity
+    # pressure the dispatcher retires it, and the queued third starts by itself.
     cdeep_running = wait_for(lambda: status(case, third, phase="running"), "queued third Deep turn", 30)
+    assert next(row for row in windows(case) if row["conversation_id"] == second)["state"] == "closed"
     dispatched = expect(case, path(third) + "/window", 202, "POST", pending_c)
     assert dispatched["state"] == "dispatched" and dispatched["window_id"], dispatched
     assert expect(case, path(third) + "/window/queue")["entries"] == []
@@ -159,12 +161,11 @@ def run(case):
     (case.workspaces["deep"] / "release-1").touch()
     deep_receipt = accept(case, first, ready(case, first, "deep"), "accept:first-deep")
     # Deep stays in "hold" mode: every Deep turn here needs its own release file.
-    wait_for(lambda: next(row for row in windows(case) if row["id"] == a["window_id"])["state"] == "closed",
-             "first window retirement", 30)
+    # An idle window stays open for follow-ups: the next input joins it.
     akey = "first:2"
-    pending_a = window_request(intake(case, first, akey, 3), akey, 1, a["window_id"])
+    pending_a = {**window_request(intake(case, first, akey, 3), akey, 1), "window_id": a["window_id"]}
     resumed = expect(case, path(first) + "/window", 201, "POST", pending_a)["status"]
-    assert resumed["generation"] == 2 and resumed["predecessor_window_id"] == a["window_id"]
+    assert resumed["generation"] == 1 and resumed["window_id"] == a["window_id"]
     (case.workspaces["deep"] / "release-3").touch()
     adeep = ready(case, first, "deep", previous=deep["run_id"])
     afast = ready(case, first, "fast", previous=fast["run_id"])
@@ -177,14 +178,14 @@ def run(case):
     cfast = ready(case, third, "fast")
     cfast["_role"] = "fast"
     accept(case, third, cfast, "accept:third-fast")
-    wait_for(lambda: all(row["state"] == "closed" for row in windows(case)), "all windows retired", 30)
+    # Both remaining windows are idle; later fresh windows reclaim them inline.
     runs = case.rows("SELECT id,role,conversation_id,state,session_id,native_session_id,context_id,incarnation_id FROM production_runs ORDER BY rowid")
     assert len(runs) == 9 and all(row["state"] == "succeeded" for row in runs)
     for role in ("deep", "fast"):
         rows = [row for row in runs if row["role"] == role and row["conversation_id"] == first]
         assert len(rows) == 2
         assert len({row["session_id"] for row in rows}) == len({row["native_session_id"] for row in rows}) == 1
-        assert len({row["incarnation_id"] for row in rows}) == 2
+        assert len({row["incarnation_id"] for row in rows}) == 1
         for conversation in (second, third):
             other = next(row for row in runs if row["role"] == role and row["conversation_id"] == conversation)
             assert other["native_session_id"] != rows[0]["native_session_id"]
@@ -192,15 +193,15 @@ def run(case):
     trace = case.trace()
     assert len([row for row in trace if row["kind"] == "turn"]) == 9
     for role in ("deep", "fast"):
-        assert [row["resumed"] for row in trace if row["kind"] == "ready" and row["role"] == role] == [False, False, False, True]
+        assert [row["resumed"] for row in trace if row["kind"] == "ready" and row["role"] == role] == [False, False, False]
     assert case.rows("SELECT count(*) AS n FROM production_acceptances") == [{"n": 9}]
     from service_roles_retention import run as retained_workers
     retention = retained_workers(case)
     case.stop()
     final = windows(case)
-    assert len(final) == 6 and all(row["state"] == "closed" for row in final)
+    assert len(final) == 5 and all(row["state"] == "closed" for row in final)
     manager = case.rows("SELECT conversation,generation,state FROM windows ORDER BY rowid", manager=True)
-    assert len(manager) == 6 and all(row["state"] == "retired" for row in manager)
+    assert len(manager) == 5 and all(row["state"] == "retired" for row in manager)
     return {"windows": final, "manager": manager, "runs": runs, "trace": trace,
             "first_acceptances": [worker_receipt, fast_receipt, deep_receipt],
             "retained_worker_cases": retention}
