@@ -6,6 +6,7 @@ use orkestr_v2_contracts::{ConversationId, EventId, MessageId, RunId, SessionId}
 mod admission;
 mod delegation;
 mod parent;
+mod retained_parent;
 mod types;
 pub use types::*;
 #[cfg(test)]
@@ -16,3 +17,12 @@ mod dispatch_tests;
 
 #[cfg(test)]
 mod metadata_tests;
+
+#[cfg(test)]
+mod completed_tests;
+
+#[cfg(test)]
+mod completed_fence_tests;
+
+#[cfg(test)]
+mod migration_tests;

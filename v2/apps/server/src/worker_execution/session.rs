@@ -37,14 +37,17 @@ impl WorkerSchedule {
         if parent.run_id.as_ref() != Some(&self.parent.run_id) {
             return Err("Worker parent scope changed");
         }
-        if parent.phase != ExecutionPhase::Running {
+        if parent.phase != ExecutionPhase::Running
+            && !(parent.phase == ExecutionPhase::AwaitingAcceptance
+                && matches!(phase, Phase::Running(_)))
+        {
             if matches!(phase, Phase::Pending)
                 && parent.phase == ExecutionPhase::Starting
                 && Instant::now() < self.deadline
             {
                 return Ok((phase, WorkerProgress::WaitingForParent));
             }
-            // Core's parent terminal transition fences descendants atomically.
+            // Revocation and failure still fence descendants atomically.
             // Owned local cleanup cannot fabricate a successful child Stop.
             self.quiesced = true;
             return self.terminal_only(phase).await;

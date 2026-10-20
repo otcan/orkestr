@@ -53,7 +53,10 @@ impl WorkerSchedule {
         }
     }
 
-    pub(super) fn accepted(running: Running) -> Result<(Phase, WorkerProgress), &'static str> {
+    pub(super) fn retire_proposal(
+        running: Running,
+        progress: WorkerProgress,
+    ) -> Result<(Phase, WorkerProgress), &'static str> {
         if running.pump.pending().is_some()
             || running.pump.pending_offline_python().is_some()
             || running
@@ -61,20 +64,19 @@ impl WorkerSchedule {
                 .as_ref()
                 .is_some_and(|tools| !tools.renewal_quiescent())
         {
-            return Err("Worker accepted with unresolved native effects");
+            return Err("Worker proposal has unresolved native effects");
         }
         running.control.disable();
         let broker = running
             .pump
             .retire_broker()
-            .map_err(|_| "Worker accepted broker retirement refused")?;
+            .map_err(|_| "Worker proposal broker retirement refused")?;
         // The consuming Runtime transition detached this exact child first.
+        // Retain its original wait proof, without accepting the proposal or
+        // releasing the durable occupied binding while the owner decides.
         drop(running.authority);
         Ok((
-            Phase::Retiring(Box::new(retirement::Retiring::new(
-                broker,
-                WorkerProgress::Completed,
-            ))),
+            Phase::Retiring(Box::new(retirement::Retiring::new(broker, progress))),
             WorkerProgress::Running,
         ))
     }
