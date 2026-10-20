@@ -659,3 +659,17 @@ test('worker reconnect forwards resetRuntime to the existing managed runtime', a
     assert.equal(calls[0][2].resetRuntime, true);
   }, mockBridge({ startLocalWhatsAppAccount: async (...args) => { calls.push(args); return { id: args[0], state: 'starting' }; } }));
 });
+
+test("standalone WA service refuses reply documents outside a scoped worker", async () => {
+  const home = await testHome("orkestr-wa-service-document-");
+  const calls = [];
+  await withWaService({ ORKESTR_HOME: home, ORKESTR_WA_SERVICE_AUTH_DISABLED: "1" }, async ({ bridgeUrl }) => {
+    const response = await fetch(`${bridgeUrl}/send-document`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ accountId: "sender", to: "120000000001@g.us", filename: "reply-0123456789.md", mimetype: "text/markdown", text: "full", requestId: "d1", parentId: "p1" }),
+    });
+    assert.equal(response.status, 404);
+    assert.equal(calls.length, 0);
+  }, mockBridge({ sendLocalWhatsAppScopedDocument: async (payload) => { calls.push(payload); return { ok: true, ids: ["x"] }; } }));
+});

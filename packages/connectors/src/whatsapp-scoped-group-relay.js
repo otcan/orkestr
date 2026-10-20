@@ -5,7 +5,7 @@ import path from 'node:path';
 import {createDeliveryRouteFence} from './whatsapp-delivery-route-fence.js';
 import {scopedRouteMembership} from './whatsapp-scoped-route-membership.js';
 import {DatabaseSync} from 'node:sqlite';
-import {scopedGroupReplyChunks} from './whatsapp-scoped-group-formatting.js';
+import {isReplyDocument, scopedGroupReplyChunks} from './whatsapp-scoped-group-formatting.js';
 
 const key = value => crypto.createHash('sha256').update(value).digest('hex');
 const progressPhases = new Set(['commentary', 'awaiting_approval']);
@@ -171,7 +171,10 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
       const requestId = `reply:${key(`${input.id}:${answer.id}:${index}`)}`;
       if (db.prepare("SELECT 1 FROM replies WHERE id=? AND state='sent'").get(requestId)) continue;
       await inputThread(input, group);
-      const result = await send({chatId: input.chat_id, requestId, parentId: input.id, text: chunks[index]});
+      // An entry is a text or, for a reply over the budget, its full-text document.
+      const entry = chunks[index];
+      const result = await send({chatId: input.chat_id, requestId, parentId: input.id,
+        ...(isReplyDocument(entry) ? {document: entry.document} : {text: entry})});
       if (result.ok !== true || !result.ids?.length) throw new Error('group_reply_unconfirmed');
       db.prepare("INSERT OR REPLACE INTO replies VALUES(?,'sent')").run(requestId);
       db.prepare('INSERT OR REPLACE INTO reply_receipts VALUES(?,?)').run(requestId, JSON.stringify(result.ids.map(String)));

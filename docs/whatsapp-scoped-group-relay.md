@@ -41,6 +41,7 @@ Config fields:
 | `heldInputIds` | Optional array of exact transport input IDs excluded before any API call or send; malformed values fail startup |
 | `replyPrefix` | Deployment's configured reply identity |
 | `appendDebugFooter` | Enable the shared WhatsApp model/quota/queue footer; per-thread suppression and tenant isolation still apply |
+| `maxReplyChars` | Optional single-message budget for new replies, 1000 to 60000 characters (default 20000, or `ORKESTR_WHATSAPP_MAX_REPLY_CHARS`) |
 | `forwardProgressUpdates` | Opt in to completed assistant commentary and approval updates on this transport; independent of the disabled legacy mirror |
 | `forwardProgressSince` | Required ISO activation cutoff when updates are enabled; older updates are not replayed |
 | `formattingModulePath` | Optional existing immutable Orkestr formatter module for a minimal transport install; defaults to the product module in the same repository |
@@ -96,8 +97,18 @@ uncertain send blindly. A confirmed receipt can be replayed locally by the same
 request ID without another external send.
 
 Formatted chunks are saved in the relay journal before dispatch, keeping retries
-byte-identical even when quota or load changes. The footer is appended once, at
-the end, without splitting its lines across chunks. Quota telemetry comes from
+byte-identical even when quota or load changes. A reply within the budget
+(`maxReplyChars`, default 20000) is sent as one message, never split. A longer
+reply is sent as one message with its first part, cut at the last paragraph or
+line break in the final quarter of the window (else a sentence end or space, and
+never inside a surrogate pair or emoji sequence), ending with
+`… (full reply attached)`, followed by the full text as a Markdown document
+`reply-<id>.md` in the same group. The document is one more journaled send with
+the same parent or timer-proof authorization, deduplication and uncertainty
+rules as a text; it needs a scoped native worker (`/send-document`). Timer
+notifications behave the same way. Payloads frozen by an older build keep their
+stored chunks on retry. The footer stays on the message and is not counted
+against the budget. Quota telemetry comes from
 the existing owner-scoped API and is optional. When upgrading an older relay,
 stop it gracefully and confirm every accepted transport send has a relay receipt
 and no partially delivered reply remains before enabling changed formatting.

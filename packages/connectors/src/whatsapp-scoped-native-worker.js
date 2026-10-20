@@ -4,6 +4,7 @@ import {createScopedGroupTransport} from './whatsapp-scoped-group-transport.js';
 import {createScopedPairingPermit} from './whatsapp-scoped-pairing.js';
 import {scopedRouteMembership} from './whatsapp-scoped-route-membership.js';
 import {createScopedDirectSender,validateScopedDirectChats} from './whatsapp-scoped-direct-chats.js';
+import {SCOPED_SEND_MAX_TEXT_LENGTH, validReplyDocument} from './whatsapp-scoped-group-formatting.js';
 const loaded=new Map();
 const fail=()=>{throw Object.assign(new Error('scoped_worker_operation_denied'),{statusCode:403});};
 // Inbound events are fire-and-forget, so a failing journal (for example a build
@@ -50,11 +51,15 @@ export function createScopedNativeWorkerPolicy(config,{createTransport=createSco
    if(method==='GET' && [...chats].some(g=>url.pathname===`/accounts/${a}/chats/${encodeURIComponent(g)}/history`) && (!url.searchParams.has('mark_seen') || url.searchParams.get('mark_seen')==='false')
       && Number(url.searchParams.get('limit')||30)>0 && Number(url.searchParams.get('limit')||30)<=50)return;
    if(method==='POST' && url.pathname==='/send-text' && body.accountId===config.workerAccountId && chats.has(body.to)
-      && typeof body.text==='string' && body.text.length<=3000 && typeof body.requestId==='string' && typeof body.parentId==='string'
+      && typeof body.text==='string' && body.text.length<=SCOPED_SEND_MAX_TEXT_LENGTH && typeof body.requestId==='string' && typeof body.parentId==='string'
       && Object.keys(body).every(k=>['accountId','to','text','requestId','parentId','notificationId'].includes(k)))return;
    if(method==='POST' && url.pathname==='/send-text' && ownsDirect(body.to,body.threadId) && body.accountId===config.workerAccountId
       && typeof body.text==='string' && body.text.length<=3000 && typeof body.requestId==='string'
       && Object.keys(body).every(k=>['accountId','to','text','requestId','threadId'].includes(k)))return;
+   // The full text of a long reply, as one Markdown document to the same group.
+   if(method==='POST' && url.pathname==='/send-document' && body.accountId===config.workerAccountId && chats.has(body.to)
+      && validReplyDocument({filename:body.filename,mimetype:body.mimetype,text:body.text}) && typeof body.requestId==='string' && typeof body.parentId==='string'
+      && Object.keys(body).every(k=>['accountId','to','filename','mimetype','text','requestId','parentId','notificationId'].includes(k)))return;
    fail();
   },
   observe(accountId,client,message){
@@ -77,6 +82,7 @@ export function createScopedNativeWorkerPolicy(config,{createTransport=createSco
    return get(accountId).sendText(client,chatId,text,'main',request);
   },
   directChatCount:()=>direct?.chats.size||0,
+  sendDocument(accountId,client,chatId,document,request,createMedia){return get(accountId).sendDocument(client,chatId,document,'main',request,createMedia);},
   close(){transport?.close();directSender?.close();},
  };
 }

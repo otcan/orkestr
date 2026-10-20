@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -233,13 +234,67 @@ test('shared footer includes model, both provider quotas and queue context once'
   assert.equal(text.match(/dbg:/g).length, 1);
 });
 
-test('long replies keep a single whole footer within the transport chunk bound', async t => {
+test('a long reply is one message with the footer plus the full text as a Markdown document', async t => {
   const {relay, state} = fixture(t, true);
-  state.pages['/api/threads/thread-1/messages?limit=200'] = {messages: [{...answer('final'), text: 'a'.repeat(2790)}]};
+  const text = Array.from({length: 4000}, (_, i) => `word${i}`).join(' ');
+  state.pages['/api/threads/thread-1/messages?limit=200'] = {messages: [{...answer('final'), text}]};
+  assert.equal((await relay.tick()).completed, 1);
+  assert.equal(state.sent.length, 2);
+  assert.ok(state.sent[0].text.length <= 20000 + 4000);
+  assert.match(state.sent[0].text, /^agent: word0 [\s\S]*\n\n… \(full reply attached\)\n\ndbg:.*\ncodex.*\nclaude.*\nq:/);
+  assert.equal(state.sent[1].text, undefined);
+  assert.deepEqual(state.sent[1].document, {filename: state.sent[1].document.filename, mimetype: 'text/markdown', text});
+  assert.match(state.sent[1].document.filename, /^reply-[0-9a-f]{10}\.md$/);
+  assert.notEqual(state.sent[0].requestId, state.sent[1].requestId);
   await relay.tick();
-  assert.ok(state.sent.every(x => [...x.text].length <= 1400));
-  assert.equal(state.sent.map(x => x.text).join('').match(/dbg:/g).length, 1);
-  assert.match(state.sent.at(-1).text, /dbg:.*\ncodex.*\nclaude.*\nq:/);
+  assert.equal(state.sent.length, 2, 'neither send repeats');
+});
+
+test('a 2500-character reply with its footer is delivered as one message', async t => {
+  const {relay, state} = fixture(t, true);
+  const text = Array.from({length: 400}, (_, i) => `word${i}`).join(' ').slice(0, 2500);
+  state.pages['/api/threads/thread-1/messages?limit=200'] = {messages: [{...answer('final'), text}]};
+  await relay.tick();
+  assert.equal(state.sent.length, 1);
+  assert.ok(state.sent[0].text.startsWith(`agent: ${text}`));
+  assert.match(state.sent[0].text, /\n\ndbg:/);
+});
+
+test('relay config maxReplyChars sets the budget for new payloads', async t => {
+  const {relay, state} = fixture(t, false, false, {maxReplyChars: 1000});
+  state.pages['/api/threads/thread-1/messages?limit=200'] = {messages: [{...answer('final'), text: 'b '.repeat(1500)}]};
+  await relay.tick();
+  assert.equal(state.sent.length, 2);
+  assert.ok(state.sent[0].text.length <= 1000);
+  assert.equal(state.sent[1].document.text, 'b '.repeat(1500).trim());
+});
+
+test('a document send that fails is retried from the frozen payload without resending the message', async t => {
+  const {relay, state, relayDb} = fixture(t);
+  state.pages['/api/threads/thread-1/messages?limit=200'] = {messages: [{...answer('final'), text: 'd '.repeat(15000)}]};
+  // The message is confirmed; the document send then fails before confirmation.
+  const original = state.sent.push.bind(state.sent);
+  state.sent.push = payload => { const n = original(payload); state.failReply = n === 2; return n; };
+  await relay.tick();
+  state.failReply = false; state.sent.push = original;
+  await relay.tick();
+  assert.equal(state.sent.length, 3);
+  assert.ok(state.sent[0].text);
+  assert.deepEqual(state.sent[2], state.sent[1], 'the retried document is byte-identical');
+  assert.equal(relayDb.prepare('SELECT count(*) n FROM reply_payloads').get().n, 1);
+});
+
+test('a payload frozen before the chunking change is retried with its stored chunks', async t => {
+  const {relay, state, relayDb} = fixture(t, true);
+  const legacy = ['agent: ' + 'c'.repeat(1393), 'c'.repeat(1400), 'c'.repeat(207)];
+  const key = value => crypto.createHash('sha256').update(value).digest('hex');
+  relayDb.prepare('INSERT INTO reply_payloads(id,chunks) VALUES(?,?)').run(key('wa-1:final'), JSON.stringify(legacy));
+  // The first legacy chunk was confirmed before the deploy.
+  relayDb.prepare("INSERT INTO replies VALUES(?,'sent')").run(`reply:${key('wa-1:final:0')}`);
+  state.pages['/api/threads/thread-1/messages?limit=200'] = {messages: [{...answer('final'), text: 'c'.repeat(3000)}]};
+  await relay.tick();
+  assert.deepEqual(state.sent.map(x => x.text), legacy.slice(1));
+  assert.equal(state.quotaCalls, 0, 'no new payload is built');
 });
 
 test('saved payload stays byte-identical when quota changes before a safe retry', async t => {

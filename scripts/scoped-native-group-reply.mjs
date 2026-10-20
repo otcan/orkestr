@@ -3,22 +3,49 @@
 // independently checks recipient, owner identity, original parent and dedupe.
 // `group-notify` carries a timer-run notification: the request id doubles as the
 // notification id, which the worker authorizes against its own proof store.
+// `group-send` reads one JSON payload from stdin instead of argv (no argument
+// size limit): {kind: 'reply'|'notify', to, requestId, parentId, text} or the
+// same with `document: {filename, mimetype, text}` for a long reply's full text.
 import fs from 'node:fs';
 import {requestWhatsAppWorker} from '../packages/connectors/src/whatsapp-worker-client.js';
+import {SCOPED_SEND_MAX_TEXT_LENGTH, validReplyDocument} from '../packages/connectors/src/whatsapp-scoped-group-formatting.js';
+
+const readStdin = async () => {
+  const chunks = [];
+  for await (const chunk of process.stdin) chunks.push(chunk);
+  return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+};
 
 try {
-  const [command, to, requestId, parentId, text, ...extra] = process.argv.slice(2);
+  const [command, ...args] = process.argv.slice(2);
   const config = JSON.parse(fs.readFileSync(process.env.ORKESTR_WA_SCOPED_GROUP_CONFIG, 'utf8'));
-  if (!['group-reply', 'group-notify'].includes(command) || extra.length || !config.workerAccountId
+  let request;
+  if (command === 'group-send' && !args.length) {
+    let input;
+    try { input = await readStdin(); } catch { throw new Error('scoped_reply_invalid'); }
+    request = {notify: input?.kind === 'notify', kind: input?.kind, to: input?.to, requestId: input?.requestId, parentId: input?.parentId,
+      text: input?.text, document: input?.document};
+  } else {
+    const [to, requestId, parentId, text, ...extra] = args;
+    if (extra.length) throw new Error('scoped_reply_invalid');
+    request = {notify: command === 'group-notify', kind: command === 'group-notify' ? 'notify' : command === 'group-reply' ? 'reply' : '', to, requestId, parentId, text};
+  }
+  const {to, requestId, parentId, text, document} = request;
+  const validBody = document === undefined
+    ? typeof text === 'string' && text && text.length <= SCOPED_SEND_MAX_TEXT_LENGTH
+    : text === undefined && validReplyDocument(document);
+  if (!['reply', 'notify'].includes(request.kind) || !config.workerAccountId
       || !config.groups.some(group => group.chatId === to)
-      || !requestId || !parentId || !text || text.length > 3000)
+      || typeof requestId !== 'string' || !requestId || typeof parentId !== 'string' || !parentId || !validBody)
     throw new Error('scoped_reply_invalid');
   const env = {...process.env, ORKESTR_WA_WORKER_URL: '',
     ORKESTR_WA_WORKER_TOKEN: process.env.ORKESTR_WA_WORKER_TOKEN || process.env.ORKESTR_WA_SERVICE_TOKEN
       || process.env.WHATSAPP_BRIDGE_TOKEN || process.env.WA_HTTP_TOKEN || process.env.ORKESTR_WHATSAPP_BRIDGE_TOKEN};
-  const result = await requestWhatsAppWorker('/send-text', {method: 'POST', timeoutMs: 40000,
-    body: {accountId: config.workerAccountId, to, requestId, parentId, text,
-      ...(command === 'group-notify' ? {notificationId: requestId} : {})}}, env);
+  const base = {accountId: config.workerAccountId, to, requestId, parentId, ...(request.notify ? {notificationId: requestId} : {})};
+  const result = document === undefined
+    ? await requestWhatsAppWorker('/send-text', {method: 'POST', timeoutMs: 40000, body: {...base, text}}, env)
+    : await requestWhatsAppWorker('/send-document', {method: 'POST', timeoutMs: 40000,
+      body: {...base, filename: document.filename, mimetype: document.mimetype, text: document.text}}, env);
   if (result.ok !== true || !Array.isArray(result.ids) || !result.ids.length)
     throw new Error('scoped_reply_unconfirmed');
   process.stdout.write(JSON.stringify({ok: true, ids: result.ids, duplicate: result.duplicate === true}));
