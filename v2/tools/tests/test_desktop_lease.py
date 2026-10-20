@@ -157,6 +157,19 @@ class DesktopLeaseClientTests(unittest.TestCase):
         self.assertEqual(json.loads(out.getvalue())['result']['fencing_token'], TOKEN)
         self.assertNotIn(GRANT, out.getvalue())
 
+    def test_hold_accepts_the_documented_and_options_first_orders(self):
+        seen = []
+        def fake_hold(client, slug, ttl_ms, command, purpose=None):
+            seen.append((slug, ttl_ms, command, purpose))
+            return 0
+        base = ['--v2-url', self.url, '--conversation', CONVERSATION, 'hold']
+        with unittest.mock.patch.object(LEASE, 'hold', fake_hold), \
+                unittest.mock.patch.dict(os.environ, {'ORKESTR_V2_DESKTOP_GRANT': GRANT}):
+            for argv in (['sales-nav', '--ttl-ms', '600000', '--purpose', 'x', '--', 'cmd', '--flag'],
+                         ['--ttl-ms', '600000', '--purpose', 'x', 'sales-nav', '--', 'cmd', '--flag']):
+                self.assertEqual(LEASE.main(base + argv), 0)
+        self.assertEqual(seen, [('sales-nav', 600000, ['cmd', '--flag'], 'x')] * 2)
+
 
 if __name__ == '__main__':
     sys.exit(unittest.main())

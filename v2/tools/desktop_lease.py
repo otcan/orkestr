@@ -169,16 +169,24 @@ def parser():
     holder.add_argument('slug')
     holder.add_argument('--ttl-ms', type=int, required=True)
     holder.add_argument('--purpose')
-    holder.add_argument('argv', nargs=argparse.REMAINDER)
+    holder.add_argument('argv', nargs='*')
     return root
 
 
 def main(argv=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
+    # Everything after the first `--` is the held command, so the documented
+    # `hold SLUG --ttl-ms N -- COMMAND` and `hold --ttl-ms N SLUG -- COMMAND`
+    # both parse; options are never taken from the command.
+    held = []
+    if '--' in argv:
+        index = argv.index('--')
+        argv, held = argv[:index], argv[index + 1:]
     args = parser().parse_args(argv)
     try:
         client = Client(args.v2_url, args.conversation, read_grant(args.grant_file))
         if args.action == 'hold':
-            command = args.argv[1:] if args.argv[:1] == ['--'] else args.argv
+            command = held or args.argv
             if not command:
                 raise LeaseError(0, 'command_required')
             return hold(client, args.slug, args.ttl_ms, command, args.purpose)
