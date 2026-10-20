@@ -151,7 +151,9 @@ export function whatsappWorkerConversation(accountId = "", conversationId = "", 
   const account = encodeURIComponent(clean(accountId || "sender"));
   const conversation = encodeURIComponent(clean(conversationId));
   if (action === "history") {
-    return requestWhatsAppWorker(`/accounts/${account}/chats/${conversation}/history?limit=${Math.max(1, Number(options.limit || 30) || 30)}`, {}, env);
+    // thread_id lets a scoped worker check that the chat belongs to the caller's thread.
+    const thread = clean(options.threadId) ? `&thread_id=${encodeURIComponent(clean(options.threadId))}` : "";
+    return requestWhatsAppWorker(`/accounts/${account}/chats/${conversation}/history?limit=${Math.max(1, Number(options.limit || 30) || 30)}${thread}`, {}, env);
   }
   if (action === "participants") return requestWhatsAppWorker(`/accounts/${account}/chats/${conversation}/participants`, {}, env);
   if (action === "add_participants" || action === "add-participants") {
@@ -200,14 +202,18 @@ export function whatsappWorkerGroupPictureAudit(accountId = "", chatIds = [], en
   }, env);
 }
 
-export function whatsappWorkerSend({ accountId = "", conversationId = "", text = "", attachmentPaths = [] } = {}, env = process.env) {
+export function whatsappWorkerSend({ accountId = "", conversationId = "", text = "", attachmentPaths = [], requestId = "", threadId = "" } = {}, env = process.env) {
+  // Text-only sends carry no empty `paths` list, and an idempotency request id
+  // when the caller has one: a scoped recovery worker accepts only that shape.
   return requestWhatsAppWorker(attachmentPaths.length ? "/send-media" : "/send-text", {
     method: "POST",
     body: {
       accountId: clean(accountId || "sender"),
       to: clean(conversationId),
       text: String(text || ""),
-      paths: attachmentPaths,
+      ...(attachmentPaths.length ? { paths: attachmentPaths } : {}),
+      ...(clean(requestId) ? { requestId: clean(requestId) } : {}),
+      ...(clean(threadId) ? { threadId: clean(threadId) } : {}),
     },
   }, env);
 }

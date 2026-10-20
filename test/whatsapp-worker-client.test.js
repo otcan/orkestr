@@ -144,3 +144,28 @@ test("whatsapp worker send is not capped by the short health deadline", async ()
     await closeServer(server);
   }
 });
+
+test("text sends carry the request id and no empty paths list", async () => {
+  const bodies = [];
+  const server = http.createServer((request, response) => {
+    let raw = "";
+    request.on("data", (chunk) => { raw += chunk; });
+    request.on("end", () => {
+      if (request.url === "/send-text") bodies.push(JSON.parse(raw || "{}"));
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ ok: true }));
+    });
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const env = { ORKESTR_WA_WORKER_URL: `http://127.0.0.1:${server.address().port}` };
+    await whatsappWorkerSend({ accountId: "sender", conversationId: "15550000001@c.us", text: "hello", requestId: "co_abc", threadId: "thread-1" }, env);
+    await whatsappWorkerSend({ accountId: "sender", conversationId: "15550000001@c.us", text: "hello" }, env);
+    assert.deepEqual(bodies, [
+      { accountId: "sender", to: "15550000001@c.us", text: "hello", requestId: "co_abc", threadId: "thread-1" },
+      { accountId: "sender", to: "15550000001@c.us", text: "hello" },
+    ]);
+  } finally {
+    await closeServer(server);
+  }
+});

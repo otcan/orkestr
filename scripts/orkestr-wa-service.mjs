@@ -600,7 +600,7 @@ async function handleRequest(req, res, env = process.env, bridge = defaultBridge
       mentions: Array.isArray(body.mentions) ? body.mentions.map(clean).filter(Boolean) : [],
       attachments: paths.map((filePath) => ({ path: filePath })),
       crossAccountEchoSuppression: body.crossAccountEchoSuppression !== false,
-      ...(scoped ? { scopedRequest: { requestId: body.requestId, parentId: body.parentId, ...(body.notificationId ? { notificationId: body.notificationId } : {}) } } : {}),
+      ...(scoped ? { scopedRequest: { requestId: body.requestId, parentId: body.parentId, ...(body.notificationId ? { notificationId: body.notificationId } : {}), ...(body.threadId ? { threadId: body.threadId } : {}) } } : {}),
       env,
     }));
   }
