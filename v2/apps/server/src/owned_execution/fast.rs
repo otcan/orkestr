@@ -158,12 +158,21 @@ impl ConfiguredExecution {
             // Zero is intentional: the durable Fast run ledger deduplicates
             // every admitted source, including unknown/failed attempts. A
             // volatile cursor must never skip a held input after release.
-            if let Some(source) = self
+            let source = self
                 .store
                 .next_fast_source(&self.token, &self.config.conversation_id, 0)
-                .await
-                .map_err(|_| "Fast input eligibility unavailable")?
-            {
+                .await;
+            let source = match source {
+                Ok(source) => source,
+                Err(
+                    orkestr_v2_application::runtime::RuntimeStoreError::Fenced
+                    | orkestr_v2_application::runtime::RuntimeStoreError::Expired,
+                ) if self.fast_window_due() => return Ok(None),
+                Err(_) => return Err("Fast input eligibility unavailable"),
+            };
+            // A query racing the shared retirement fence yields no next input.
+            // Original terminal/reap checks still decide whether close is legal.
+            if let Some(source) = source {
                 return Ok(Some(source));
             }
             tokio::select! {
