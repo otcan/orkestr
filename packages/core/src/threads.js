@@ -83,6 +83,7 @@ const messageStringFields = [
   "ownerSelfChatHomeThreadId",
   "originTransport",
   "senderParticipantId",
+  "senderLabel",
   "senderTrustLevel",
   "senderEffectiveRole",
   "senderPolicyMode",
