@@ -104,7 +104,13 @@ async fn pending() -> Pending {
 /// the unfinished window and marks it uncertain, exactly like the server does.
 async fn restart(w: &Window, expire: bool) -> Store {
     if expire {
-        shift(w, 900_001).await;
+        // Past the hard deadline and the acceptance grace, so the automatic
+        // path may abandon proposals still awaiting the owner.
+        shift(
+            w,
+            900_001 + crate::production_runtime::execution_window::stranded::ACCEPTANCE_GRACE_MS,
+        )
+        .await;
     }
     let fresh = Store::open(&w.f.root.join("core.sqlite3")).await.unwrap();
     let marked = fresh

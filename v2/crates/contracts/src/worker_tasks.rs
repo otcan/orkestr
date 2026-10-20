@@ -90,6 +90,19 @@ pub struct WorkerTaskStatus {
     pub title: Option<String>,
     pub instructions_available: bool,
     pub run_id: Option<RunId>,
+    /// Why a task that never ran ended `Failed`. Absent otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_cause: Option<WorkerTaskFailureCause>,
+}
+
+/// Recorded cause of a task that ended before it ever ran.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkerTaskFailureCause {
+    /// Its parent stopped running (for example it proposed) while the
+    /// Worker's native setup was still in progress; no new delegation is
+    /// admitted under a parent that no longer runs.
+    ParentLeftRunningDuringSetup,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -115,7 +128,9 @@ impl WorkerTaskStatus {
             && match self.phase {
                 WorkerTaskPhase::Queued | WorkerTaskPhase::Claimed => self.run_id.is_none(),
                 WorkerTaskPhase::Held => true,
-                _ => self.run_id.is_some(),
+                // A task that never ran ends Failed with its recorded cause.
+                WorkerTaskPhase::Failed if self.failure_cause.is_some() => self.run_id.is_none(),
+                _ => self.run_id.is_some() && self.failure_cause.is_none(),
             }
     }
 }

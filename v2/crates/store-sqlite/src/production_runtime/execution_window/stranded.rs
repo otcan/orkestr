@@ -58,7 +58,14 @@ struct Abandon {
 struct Plan {
     public: StrandedExecutionWindowPlan,
     kind: Kind,
+    /// The owner's acceptance grace after the hard deadline has passed.
+    abandon_grace_passed: bool,
 }
+
+/// Proposals awaiting acceptance stay acceptable this long after their
+/// window's hard deadline; only then may the automatic path abandon them.
+/// The owner may abandon earlier through the explicit endpoint.
+pub(super) const ACCEPTANCE_GRACE_MS: i64 = 86_400_000;
 
 enum Kind {
     Turns(Box<Turns>),
@@ -92,6 +99,8 @@ mod worker;
 use worker::{descendants_clear_except, failed_worker, Fail};
 #[path = "stranded_commit.rs"]
 mod commit;
+#[path = "stranded_lapse.rs"]
+mod lapse;
 use commit::commit_turns;
 
 fn decision_name(decision: Decision) -> &'static str {
@@ -268,10 +277,28 @@ async fn unconsumed_inputs(tx: &mut SqliteConnection, window: Uuid) -> Result<Ve
         .bind(window.to_string()).fetch_all(&mut *tx).await.map_err(db)
 }
 
+async fn lapsed_in(tx: &mut SqliteConnection, run: &str) -> Result<bool> {
+    let lapsed: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM production_run_lapses WHERE run_id=?")
+            .bind(run)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(db)?;
+    Ok(lapsed == 1)
+}
+
 fn startup_allowed(plan: &Plan, actor: Actor) -> Result<()> {
     // Automatic recovery only after the hard deadline: the window could never
     // have legitimately produced more work. Earlier abandonment is owner-only.
     if actor == Actor::Startup && !plan.public.hard_deadline_passed {
+        return Err(RuntimeStoreError::Fenced);
+    }
+    // A proposal the owner can still accept is never abandoned automatically
+    // before the acceptance grace has passed.
+    if actor == Actor::Startup
+        && !plan.public.abandoned_run_ids.is_empty()
+        && !plan.abandon_grace_passed
+    {
         return Err(RuntimeStoreError::Fenced);
     }
     Ok(())
@@ -444,6 +471,8 @@ async fn plan_in(
                 "accepted" => Outcome::Accepted,
                 "stopped" => Outcome::Stopped,
                 "abandoned" => Outcome::Abandoned,
+                // Only a lapsed Deep turn (0054) is a failed prior run.
+                "failed" if lapsed_in(tx, &prior_run).await? => Outcome::Failed,
                 _ => return Err(RuntimeStoreError::Fenced),
             };
             (outcome, t.get::<String, _>("event_id"))
@@ -490,5 +519,6 @@ async fn plan_in(
             fail,
             release,
         })),
+        abandon_grace_passed: w.get::<i64, _>("expires_at_ms") + ACCEPTANCE_GRACE_MS <= clock,
     })))
 }

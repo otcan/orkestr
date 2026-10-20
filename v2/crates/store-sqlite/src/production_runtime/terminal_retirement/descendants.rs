@@ -22,7 +22,7 @@ pub(in crate::production_runtime) async fn descendants_clear(
     }
     // Confirmed Worker setup without a terminal run is unresolved even if its
     // binding later became Lost. Binding labels/expiry are not cleanup proof.
-    let setup: i64 = sqlx::query_scalar("SELECT count(*) FROM production_readiness rd JOIN session_bindings b ON b.id=rd.session_id WHERE rd.context_id=? AND b.role='worker' AND NOT EXISTS(SELECT 1 FROM production_runs r JOIN production_terminal_evidence t ON t.run_id=r.id WHERE r.session_id=b.id AND r.context_id=rd.context_id AND b.generation=r.binding_generation+1)")
+    let setup: i64 = sqlx::query_scalar("SELECT count(*) FROM production_readiness rd JOIN session_bindings b ON b.id=rd.session_id WHERE rd.context_id=? AND b.role='worker' AND NOT EXISTS(SELECT 1 FROM worker_task_failures f WHERE f.setup_session_id=b.id AND b.state='lost') AND NOT EXISTS(SELECT 1 FROM production_runs r JOIN production_terminal_evidence t ON t.run_id=r.id WHERE r.session_id=b.id AND r.context_id=rd.context_id AND b.generation=r.binding_generation+1)")
         .bind(context).fetch_one(&mut *tx).await.map_err(db)?;
     if setup != 0 {
         return Ok(false);

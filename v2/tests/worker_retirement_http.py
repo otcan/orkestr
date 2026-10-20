@@ -145,7 +145,9 @@ def setup_only_child_refuses_even_without_durable_worker_run(case):
     case.stop_run(case.parent["id"], "stop-parent-during-setup")
     ordinary.wait_for(lambda: case.phase("cancelled"), "parent Stop missing during unproven setup")
     ordinary.wait_for(case.peer_gone, "setup child cleanup missing")
-    assert case.task(task, "held")
+    # The task never ran: it ends visibly failed with its recorded cause.
+    failed = ordinary.wait_for(lambda: case.task(task, "failed"), "setup task failure missing")
+    assert failed["failure_cause"] == "parent_left_running_during_setup" and failed["run_id"] is None
     case.clean_stop()
     refused(case)
 

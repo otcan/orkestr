@@ -201,6 +201,8 @@ pub(super) async fn plan(
             fence,
             release,
         })),
+        // Nothing of the window's own awaits acceptance.
+        abandon_grace_passed: true,
     })))
 }
 

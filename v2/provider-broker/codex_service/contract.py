@@ -90,9 +90,11 @@ def decode(raw):
     require(type(value["version"]) is int and value["version"] == VERSION, "version")
     key(value["request_id"])
     # A failed open has no run of its own: both run fields are exactly null.
-    runless = operation == "reconcile" and value.get("outcome") == "failed"
+    # A window whose last Deep turn lapsed is also `failed`, naming that turn.
+    runless = (operation == "reconcile" and value.get("outcome") == "failed"
+               and value.get("run_id") is None)
     if runless:
-        require(value["run_id"] is None and value["terminal_event_id"] is None, "terminal_run")
+        require(value["terminal_event_id"] is None, "terminal_run")
     for field in ("owner_id", "conversation_id", "window_id", "input_message_id", "input_event_id", "run_id", "terminal_event_id"):
         if field in value and not (runless and field in ("run_id", "terminal_event_id")):
             identifier(value[field])

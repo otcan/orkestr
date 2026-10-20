@@ -93,6 +93,8 @@ pub struct WorkerSchedule {
     key: String,
     deadline: Instant,
     task_claim: Option<WorkerTaskClaim>,
+    /// The claimed task, kept after its one-use claim is consumed.
+    task_id: Option<orkestr_v2_contracts::TaskId>,
     queue: Option<tasks::TaskQueue>,
     slot: Option<OwnedSemaphorePermit>,
     lifetime_ms: u32,
@@ -134,6 +136,7 @@ impl WorkerSchedule {
             key: format!("worker:{}", run.run_id),
             deadline: Instant::now() + Duration::from_secs(15),
             task_claim: None,
+            task_id: None,
             queue,
             slot: None,
             lifetime_ms,

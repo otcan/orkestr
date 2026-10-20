@@ -191,6 +191,15 @@ impl TaskHistory {
         self.list.as_ref()
     }
 }
+/// The phase, or for a task that never ran, its recorded cause.
+pub fn status_label(row: &orkestr_v2_contracts::WorkerTaskStatus) -> &'static str {
+    match row.failure_cause {
+        Some(orkestr_v2_contracts::WorkerTaskFailureCause::ParentLeftRunningDuringSetup) => {
+            "Not started: the parent finished while the Worker was still setting up"
+        }
+        None => phase_label(row.phase),
+    }
+}
 pub fn phase_label(phase: WorkerTaskPhase) -> &'static str {
     match phase {
         WorkerTaskPhase::Queued => "Queued intent",

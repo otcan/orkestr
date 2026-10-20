@@ -322,9 +322,10 @@ class Ledger:
         self._scope(request)
         require(request["outcome"] in RECONCILED_OUTCOMES, "terminal_outcome")
         # Only a failed open names no run; every other outcome names exactly one.
-        runless = request["outcome"] == "failed"
-        require(all((request[key] is None) == runless for key in ("run_id", "terminal_event_id")),
-                "terminal_run")
+        # A failed window may also name its lapsed last Deep turn.
+        runless = request["run_id"] is None
+        require((request["terminal_event_id"] is None) == runless, "terminal_run")
+        require(not runless or request["outcome"] == "failed", "terminal_run")
         with self.transaction():
             row = self._exact(request["window_id"], request["generation"])
             require(row["conversation"] == request["conversation_id"], "scope")

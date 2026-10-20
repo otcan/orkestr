@@ -132,7 +132,9 @@ def setup_without_worker_run_cannot_resume_parent(case):
     ordinary.wait_for(lambda: any(row["kind"] == "setup-held" for row in case.trace()), "setup child missing")
     assert not [row for row in case.snapshot()["runs"] if row["role"] == "worker"]
     stop_parent(case, "stop-parent-with-setup")
-    assert case.task(task, "held")
+    # The task never ran: it ends visibly failed with its recorded cause.
+    failed = ordinary.wait_for(lambda: case.task(task, "failed"), "setup task failure missing")
+    assert failed["failure_cause"] == "parent_left_running_during_setup" and failed["run_id"] is None
     refused_fresh_input(case)
 
 

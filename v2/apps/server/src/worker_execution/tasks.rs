@@ -147,6 +147,7 @@ impl WorkerSchedule {
             owner_budget_ms: claim.execution_budget_ms(),
             launch: None,
             quiesced: false,
+            task_id: Some(claim.task_id().clone()),
             task_claim: Some(claim),
             queue: None,
             slot: Some(slot),
