@@ -21,7 +21,7 @@ const relay = createScopedGroupRelay({
   },
   log,
 });
-const notifications = createScopedTimerNotifications({config,formatter,
+const notifications = createScopedTimerNotifications({config,formatter,minIntervalMs:10000,
   api:(url,options={})=>requestJson(url,{timeoutMs:15000,...options}),
   send:async({chatId,requestId,parentId,text})=>{
     const {stdout}=await execute('/usr/bin/node',[config.wrapperPath,'group-notify',chatId,requestId,parentId,text],{timeout:45000,maxBuffer:1024*1024});
