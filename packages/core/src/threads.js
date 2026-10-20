@@ -105,6 +105,8 @@ const messageStringFields = [
   "remoteThreadId",
   "remoteMessageId",
   "remoteParentMessageId",
+  "remoteKind",
+  "remoteExportSequence",
   "remoteRoutedAt",
   "remoteSyncedAt",
   "publicThreadId",
