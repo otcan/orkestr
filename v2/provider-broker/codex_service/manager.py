@@ -41,9 +41,16 @@ class Manager:
         package = self.package
         command = [str(Path("/usr/bin/python3").resolve()), "-I", "-S", "-B",
                    str(package.root / "codex_service/entry.py"), "server", str(os.getpid())]
+        # Host full access (operator opt-in) keeps the service user's real
+        # supplementary groups, like V1 executors; otherwise none.
+        groups = []
+        if type(package.beta.get("host_full_access")) is dict:
+            import pwd
+            groups = [g for g in os.getgrouplist(pwd.getpwuid(package.uid).pw_name, package.gid)
+                      if g != package.gid]
         # Retain trusted server diagnostics; contained provider stderr remains closed.
         self.child = subprocess.Popen(command, env={"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8"},
-            cwd="/", user=package.uid, group=package.gid, extra_groups=[], close_fds=True,
+            cwd="/", user=package.uid, group=package.gid, extra_groups=groups, close_fds=True,
             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=None,
             process_group=0)
         self.identity = process(self.child.pid)

@@ -50,6 +50,7 @@ pub struct WorkspaceExecSandbox {
 }
 
 const LAYOUT_MARKER: &[u8] = b"ORKESTR_SUPERVISOR_LAYOUT_V1";
+const HOST_MARKER: &[u8] = b"ORKESTR_SUPERVISOR_HOST_V1";
 
 pub(super) fn directory(path: &Path, root_only: bool) -> Result<PathBuf> {
     if !path.is_absolute() || path.canonicalize().ok().as_deref() != Some(path) {
@@ -70,6 +71,10 @@ impl WorkspaceExecSandbox {
     /// Only bounded metadata/FD checks. Provisioning owns the immutable image,
     /// controller delegation and writable common-ancestor migration permission.
     pub fn configured(cgroup_root: &Path, toolchain_root: &Path) -> Result<Self> {
+        Self::configured_with(cgroup_root, toolchain_root, false)
+    }
+
+    fn configured_with(cgroup_root: &Path, toolchain_root: &Path, reclaim: bool) -> Result<Self> {
         let image_path = directory(toolchain_root, true)?;
         let image = File::open(&image_path).map_err(|_| Error::InvalidConfig)?;
         let bwrap = Path::new("/usr/bin/bwrap");
@@ -99,7 +104,7 @@ impl WorkspaceExecSandbox {
             image_path,
             supervisor,
             image: Arc::new(image),
-            cgroups: cgroup::Root::configured(cgroup_root)?,
+            cgroups: cgroup::Root::configured_with(cgroup_root, reclaim)?,
             trusted: None,
         })
     }
@@ -111,7 +116,10 @@ impl WorkspaceExecSandbox {
         toolchain_root: &Path,
         profile: TrustedProfile,
     ) -> Result<Self> {
-        let mut sandbox = Self::configured(cgroup_root, toolchain_root)?;
+        // Host mode has no PID namespace: commands of a crashed previous server
+        // can outlive it in their job cgroups and are killed here before reuse.
+        let mut sandbox =
+            Self::configured_with(cgroup_root, toolchain_root, profile.host.is_some())?;
         profile
             .validate(&[cgroup_root, toolchain_root])
             .map_err(|_| Error::InvalidConfig)?;
@@ -120,12 +128,15 @@ impl WorkspaceExecSandbox {
         File::open(&sandbox.supervisor)
             .and_then(|file| file.take(256 * 1024).read_to_end(&mut text))
             .map_err(|_| Error::InvalidConfig)?;
-        if !text
-            .windows(LAYOUT_MARKER.len())
-            .any(|window| window == LAYOUT_MARKER)
-        {
+        let marker = if profile.host.is_some() {
+            HOST_MARKER
+        } else {
+            LAYOUT_MARKER
+        };
+        if !text.windows(marker.len()).any(|window| window == marker) {
             return Err(Error::InvalidConfig);
         }
+
         sandbox.trusted = Some(Arc::new(profile));
         Ok(sandbox)
     }
@@ -251,21 +262,28 @@ impl WorkspaceExecSandbox {
             .map_or(Resources::RESTRICTED, |p| p.resources);
         let policy = linux::filter(self.trusted.as_ref().is_some_and(|p| p.network))?;
         // Built (and credential files read) before any cgroup or process exists.
-        let layout = match &self.trusted {
-            Some(profile) => Some(linux::sealed(
-                c"orkestr-workspace-layout",
-                &layout::encode(&layout::trusted(
-                    profile,
-                    layout::Descriptors {
-                        policy: policy.as_raw_fd(),
-                        image: self.image.as_raw_fd(),
-                        workspace: directory.as_raw_fd(),
-                    },
-                    layout::credentials(profile)?,
-                )?),
+        let host = self.trusted.as_ref().and_then(|p| p.host.as_ref());
+        let layout = match (&self.trusted, host) {
+            (Some(profile), Some(access)) => Some(layout::host(
+                profile,
+                access,
+                directory.as_raw_fd(),
+                layout::credentials(profile)?,
             )?),
-            None => None,
+            (Some(profile), None) => Some(layout::trusted(
+                profile,
+                layout::Descriptors {
+                    policy: policy.as_raw_fd(),
+                    image: self.image.as_raw_fd(),
+                    workspace: directory.as_raw_fd(),
+                },
+                layout::credentials(profile)?,
+            )?),
+            (None, _) => None,
         };
+        let layout = layout
+            .map(|layout| linux::sealed(c"orkestr-workspace-layout", &layout::encode(&layout)))
+            .transpose()?;
         let job = self.cgroups.job(&resources)?;
         let deadline = Instant::now() + limits.timeout;
         let (readiness, notify) = std::os::unix::net::UnixStream::pair().map_err(|_| Error::Io)?;
@@ -300,6 +318,7 @@ impl WorkspaceExecSandbox {
                 Some(profile) => linux::Rlimits::trusted(limits.timeout, &profile.resources),
                 None => linux::Rlimits::restricted(limits.timeout),
             },
+            host.is_none(),
         );
         process::start(
             child,

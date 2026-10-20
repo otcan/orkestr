@@ -13,7 +13,7 @@ FIELDS = {'schema_version', 'owner_id', 'conversation_id', 'manager_socket',
           'launcher', 'launcher_sha256', 'workspace', 'namespace', 'supervisor_key'}
 
 
-TRUSTED_FLAGS = {'network', 'host_toolchain'}
+TRUSTED_FLAGS = {'network', 'host_toolchain', 'host_privileged'}
 TRUSTED_PATHS = {'workspace_target', 'home'}
 TRUSTED_PATH_LISTS = {'path', 'toolchain_mounts', 'cache_mounts', 'credential_mounts',
                       'credential_env_files', 'skill_mounts'}
@@ -44,6 +44,19 @@ def trusted(value):
     require(type(environment) is dict and len(environment) <= 64 and all(
         type(k) is str and re.fullmatch(r'[A-Z_][A-Z0-9_]{0,127}', k) and type(v) is str
         and '\x00' not in v for k, v in environment.items()), 'trusted profile environment required')
+    return value
+
+
+def host_full_access(value):
+    """Instance-level V1-equivalent access (equivalent to host root). Shape only."""
+    require(type(value) is dict and set(value) <= {'providers', 'environment'} and
+            type(value.get('providers', True)) is bool, 'closed host full access required')
+    environment = value.get('environment')
+    require(type(environment) is dict and {'HOME', 'PATH'} <= set(environment) and
+            len(environment) <= 256 and all(
+                type(k) is str and re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]{0,127}', k) and
+                type(v) is str and '\x00' not in v for k, v in environment.items()) and
+            absolute(environment['HOME']), 'host full access environment required')
     return value
 
 
@@ -87,7 +100,7 @@ def validate(raw):
     require(type(raw) is bytes and len(raw) <= 16384, 'bounded beta config required')
     value = json.loads(raw.decode('utf-8'), object_pairs_hook=unique,
                        parse_constant=lambda _: (_ for _ in ()).throw(RuntimeError('invalid beta number')))
-    require(type(value) is dict and set(value) - {'roles', 'workspace_exec', 'max_active_windows'} == FIELDS, 'closed beta config fields required')
+    require(type(value) is dict and set(value) - {'roles', 'workspace_exec', 'max_active_windows', 'host_full_access'} == FIELDS, 'closed beta config fields required')
     require(type(value['schema_version']) is int and value['schema_version'] == 1, 'beta schema version')
     for name in ('owner_id', 'conversation_id'):
         text = value[name]
@@ -121,7 +134,11 @@ def validate(raw):
     if 'max_active_windows' in value:
         capacity = value['max_active_windows']
         require(type(capacity) is int and 1 <= capacity <= 12, 'bounded beta window capacity required')
+    if 'host_full_access' in value:
+        host_full_access(value['host_full_access'])
     if 'workspace_exec' in value:
         require('roles' in value, 'workspace execution requires configured Worker roles')
         workspace_exec(value['workspace_exec'])
+        require(value['workspace_exec'].get('trusted', {}).get('host_privileged') is not True
+                or 'host_full_access' in value, 'host-privileged commands require host_full_access')
     return value

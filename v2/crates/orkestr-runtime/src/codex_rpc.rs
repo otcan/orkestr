@@ -116,7 +116,8 @@ impl CodexRpc {
             },
             "thread/start",
             json!({
-                "cwd":cwd,"approvalPolicy":"never","sandbox":"read-only",
+                "cwd":cwd,"approvalPolicy":"never",
+                "sandbox":crate::provider_access::current().request(),
                 "ephemeral":false,"modelProvider":"openai"
             }),
         )
@@ -225,11 +226,7 @@ impl CodexRpc {
                     || result.get("cwd").and_then(Value::as_str) != Some(cwd.as_str())
                     || result.pointer("/thread/cwd").and_then(Value::as_str) != Some(cwd.as_str())
                     || result.get("approvalPolicy").and_then(Value::as_str) != Some("never")
-                    || result.pointer("/sandbox/type").and_then(Value::as_str) != Some("readOnly")
-                    || !matches!(
-                        result.pointer("/sandbox/networkAccess"),
-                        None | Some(Value::Bool(false))
-                    )
+                    || !sandbox_reply(result, crate::provider_access::current())
                 {
                     return Err(Blocker::Protocol);
                 }
@@ -249,6 +246,40 @@ impl CodexRpc {
         };
         self.pending = None;
         Ok(notification)
+    }
+}
+
+/// The provider must report exactly the selected sandbox. Read-only must
+/// also keep network off; full access is unrestricted by definition.
+fn sandbox_reply(result: &Value, access: crate::provider_access::ProviderAccess) -> bool {
+    result.pointer("/sandbox/type").and_then(Value::as_str) == Some(access.reply())
+        && (access == crate::provider_access::ProviderAccess::HostFullAccess
+            || matches!(
+                result.pointer("/sandbox/networkAccess"),
+                None | Some(Value::Bool(false))
+            ))
+}
+
+#[cfg(test)]
+mod access_tests {
+    use super::*;
+    use crate::provider_access::ProviderAccess;
+    #[test]
+    fn each_mode_accepts_only_its_own_sandbox_reply() {
+        let read = json!({"sandbox":{"type":"readOnly","networkAccess":false}});
+        let full = json!({"sandbox":{"type":"dangerFullAccess"}});
+        let networked = json!({"sandbox":{"type":"readOnly","networkAccess":true}});
+        assert!(sandbox_reply(&read, ProviderAccess::ReadOnly));
+        assert!(!sandbox_reply(&full, ProviderAccess::ReadOnly));
+        assert!(!sandbox_reply(&networked, ProviderAccess::ReadOnly));
+        assert!(sandbox_reply(&full, ProviderAccess::HostFullAccess));
+        assert!(!sandbox_reply(&read, ProviderAccess::HostFullAccess));
+        assert_eq!(ProviderAccess::ReadOnly.request(), "read-only");
+        assert_eq!(
+            ProviderAccess::HostFullAccess.request(),
+            "danger-full-access"
+        );
+        assert_eq!(crate::provider_access::current(), ProviderAccess::ReadOnly);
     }
 }
 

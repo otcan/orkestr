@@ -89,7 +89,7 @@ class Package:
                 origin == f"http://127.0.0.1:{value['port']}") and len(origin) <= 512
                 and not any(ord(c) < 33 for c in origin) and not origin.endswith("/"), "trusted_origin")
         beta = self.beta
-        require(set(beta) - {"roles", "workspace_exec", "max_active_windows"} == {"schema_version", "owner_id", "conversation_id", "manager_socket",
+        require(set(beta) - {"roles", "workspace_exec", "max_active_windows", "host_full_access"} == {"schema_version", "owner_id", "conversation_id", "manager_socket",
                 "launcher", "launcher_sha256", "workspace", "namespace", "supervisor_key"}
                 and type(beta["schema_version"]) is int and beta["schema_version"] == 1,
                 "beta_format")
@@ -103,6 +103,14 @@ class Package:
             # Runtime's owner-wide capacity; the ledger's own ceiling stays above it.
             require(type(beta["max_active_windows"]) is int
                     and 0 < beta["max_active_windows"] <= MAX_RUNTIME_WINDOWS, "beta_window_capacity")
+        if "host_full_access" in beta:
+            access = beta["host_full_access"]
+            require(type(access) is dict and set(access) <= {"providers", "environment"}
+                    and type(access.get("providers", True)) is bool
+                    and type(access.get("environment")) is dict
+                    and {"HOME", "PATH"} <= set(access["environment"])
+                    and all(type(k) is str and type(v) is str and "\0" not in k + v
+                            for k, v in access["environment"].items()), "host_full_access")
         if "workspace_exec" in beta:
             command = beta["workspace_exec"]
             require(type(command) is dict and set(command) - {"trusted"} == {"conversation_id",

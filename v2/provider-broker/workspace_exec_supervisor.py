@@ -42,12 +42,26 @@ REQUIRED = ("--unshare-user", "--unshare-pid", "--unshare-ipc", "--unshare-uts",
             "--die-with-parent", "--new-session")
 
 
+def host(value, workspace):
+    """ORKESTR_SUPERVISOR_HOST_V1: operator host-privileged mode. No bwrap,
+    namespace, seccomp or no_new_privs; equivalent to host root when the
+    service user has sudo. Job cgroup, timeout, kill and reap still apply."""
+    env, passed = value["env"], value["pass"]
+    if (type(env) is not dict or not all(type(k) is str and type(v) is str
+            and "\0" not in k + v and "=" not in k and k for k, v in env.items())
+            or not {"HOME", "PATH", "PWD"} <= set(env) or passed != [workspace]):
+        raise ValueError("closed host layout required")
+    return None, env, (workspace,)
+
+
 def layout(fd, policy, workspace, image):
     with os.fdopen(fd, "rb", closefd=True) as stream:
         raw = stream.read(1024 * 1024 + 1)
     if len(raw) > 1024 * 1024:
         raise ValueError("layout bound")
     value = json.loads(raw.decode())
+    if type(value) is dict and set(value) == {"host", "env", "pass"} and value["host"] is True:
+        return host(value, workspace)
     if type(value) is not dict or set(value) != {"argv", "env", "pass"}:
         raise ValueError("closed layout required")
     argv, env, passed = value["argv"], value["env"], value["pass"]
@@ -79,9 +93,14 @@ def run(argv):
     policy, image, workspace, cgroup, ready = fds[:5]
     os.set_inheritable(ready, False)
     command = argv[count + 1]
+    directory = None
     if trusted:
         launch, environment, passed = layout(fds[5], policy, workspace, image)
-        launch = [*launch, "--", "/bin/sh", "-c", command]
+        if launch is None:
+            # Host mode: the project descriptor is only the initial cwd.
+            launch, directory, passed = ["/bin/sh", "-c", command], workspace, ()
+        else:
+            launch = [*launch, "--", "/bin/sh", "-c", command]
     else:
         launch = arguments(policy, image, workspace, command)
         environment = {"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8"}
@@ -104,6 +123,9 @@ def run(argv):
         if os.write(cgroup, b"0") != 1:
             raise OSError("job attach failed")
         os.set_inheritable(cgroup, False)
+        if directory is not None:
+            os.fchdir(directory)
+            os.setsid()
 
     child = None
     status = None
@@ -140,6 +162,7 @@ def run(argv):
 
 
 # ORKESTR_SUPERVISOR_LAYOUT_V1
+# ORKESTR_SUPERVISOR_HOST_V1
 def main():
     try:
         status = run(sys.argv[1:])

@@ -41,6 +41,7 @@ impl ConfiguredExecution {
                             .iter()
                             .flat_map(|roles| roles.launches().map(|r| r.workspace.clone())),
                     ),
+                    config.host_full_access.as_ref(),
                 )?;
                 // Private per-project job records beside the server's own state.
                 let jobs = home.join(format!("workspace-jobs-{}", profile.project_id));
