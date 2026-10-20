@@ -94,15 +94,23 @@ def run(case):
     tasks = path(first) + "/worker-tasks?parent_run_id=" + deep["run_id"]
     wait_for(lambda: expect(case, tasks)["can_create"], "owned Worker task scheduler")
     exact = ready(case, first, "deep", "running", run=deep["run_id"])
+    # Observe the original live native before allowing its immediate proposal
+    # retirement. Namespace trace rows are locators, never replacement witnesses.
+    case.fixture.write_private(case.workspaces["worker-0"] / "mode", b"hold")
     task = expect(case, path(first) + "/worker-tasks", 200, "POST",
                   {"parent_run_id": deep["run_id"], "expected_control_revision": exact["control_revision"],
                    "request_key": "synthetic:worker", "title": "Synthetic Worker task",
                    "instructions": "synthetic ordinary HTTP input 41", "lifetime_ms": 30000})
-    def task_proposal():
+    def task_row():
         found = [row for row in expect(case, tasks)["tasks"] if row["task"]["task_id"] == task["task_id"]]
         assert len(found) == 1
-        return found[0] if found[0]["phase"] == "awaiting_acceptance" else None
-    worker = wait_for(task_proposal, "real Worker proposal", 20)
+        return found[0]
+    live_worker = wait_for(lambda: (row if (row := task_row())["phase"] == "running" else None),
+                           "live original Worker", 20)
+    ready(case, first, "deep", "running", run=live_worker["run_id"])
+    (case.workspaces["worker-0"] / "release-41").touch()
+    worker = wait_for(lambda: (row if (row := task_row())["phase"] == "awaiting_acceptance" else None),
+                      "real Worker proposal", 20)
     worker_status = ready(case, first, "deep", run=worker["run_id"])
     assert worker_status["run_id"] not in (deep["run_id"], fast["run_id"])
     worker_receipt = accept(case, first, worker_status, "accept:worker")
@@ -149,13 +157,16 @@ def run(case):
     for role in ("deep", "fast"):
         assert [row["resumed"] for row in trace if row["kind"] == "ready" and row["role"] == role] == [False, False, True]
     assert case.rows("SELECT count(*) AS n FROM production_acceptances") == [{"n": 7}]
+    from service_roles_retention import run as retained_workers
+    retention = retained_workers(case)
     case.stop()
     final = windows(case)
-    assert len(final) == 3 and all(row["state"] == "closed" for row in final)
+    assert len(final) == 5 and all(row["state"] == "closed" for row in final)
     manager = case.rows("SELECT conversation,generation,state FROM windows ORDER BY rowid", manager=True)
-    assert len(manager) == 3 and all(row["state"] == "retired" for row in manager)
+    assert len(manager) == 5 and all(row["state"] == "retired" for row in manager)
     return {"windows": final, "manager": manager, "runs": runs, "trace": trace,
-            "first_acceptances": [worker_receipt, fast_receipt, deep_receipt]}
+            "first_acceptances": [worker_receipt, fast_receipt, deep_receipt],
+            "retained_worker_cases": retention}
 
 
 if __name__ == "__main__":
