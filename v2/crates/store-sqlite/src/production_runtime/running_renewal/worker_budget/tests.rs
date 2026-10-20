@@ -411,3 +411,6 @@ async fn host_budget_fences_before_first_renewal_without_extending_tools() {
         .await
         .is_err());
 }
+
+#[path = "retained_parent_tests.rs"]
+mod retained_parent;

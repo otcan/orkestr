@@ -124,18 +124,26 @@ impl Store {
             .checked_add(60_000)
             .ok_or(RuntimeStoreError::Unavailable)?
             .min(supervisor_deadline);
+        let mut retained = None;
         if provider.run.role == Role::Worker {
             let limit:i64=sqlx::query_scalar("SELECT expires_at_ms FROM worker_provider_delegations WHERE admitted_run_id=? AND state='admitted'")
                 .bind(admission.run_id.to_string()).fetch_one(&mut *tx).await.map_err(db)?;
             extended = if let Some(budget) = worker_budget {
-                self.worker_budget_deadline_in(&mut tx, &row, budget, supervisor_deadline)
-                    .await?
+                let (deadline, parent) = self
+                    .worker_budget_deadline_in(&mut tx, &row, budget, supervisor_deadline)
+                    .await?;
+                retained = parent;
+                deadline
             } else {
                 extended.min(limit)
             };
         }
         if extended <= admission.lease_deadline_ms {
             return Err(RuntimeStoreError::Busy);
+        }
+        if let Some(parent) = &retained {
+            self.extend_retained_parent_in(&mut tx, parent, extended)
+                .await?;
         }
         if worker_budget.is_some() {
             if provider.run.role != Role::Worker {

@@ -4,6 +4,7 @@ use orkestr_v2_store_sqlite::{ConsumedProviderDispatch, RunRenewalAuthority, Sto
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const REFRESH_INTERVAL: Duration = Duration::from_secs(10);
+const RETRY_INTERVAL: Duration = Duration::from_secs(1);
 const STOP_MARGIN_MS: u64 = 250;
 
 pub(super) struct WorkerLease {
@@ -47,6 +48,21 @@ impl WorkerLease {
         // A final lease already reaches the immutable budget. Attempting to
         // renew it would correctly refuse and consume the owned transport.
         self.lease_deadline_ms < self.hard_deadline_ms && now >= self.next_refresh
+    }
+
+    /// Ask Core (read-only) whether renewal can advance the lease now. When it
+    /// cannot (for example a parent or supervisor bound), keep the live child
+    /// on its current lease and ask again shortly; never spend it on a refusal.
+    /// A probe error is not a refusal of the child: it only defers the attempt.
+    pub(super) async fn extendable(&mut self, store: &Store) -> bool {
+        let extends = store
+            .worker_renewal_extends(&self.authority)
+            .await
+            .unwrap_or(false);
+        if !extends {
+            self.next_refresh = Instant::now() + RETRY_INTERVAL;
+        }
+        extends
     }
 
     pub(super) fn must_stop(&self, now: Instant) -> bool {
