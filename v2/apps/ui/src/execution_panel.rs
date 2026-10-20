@@ -61,9 +61,9 @@ pub fn ExecutionPanel(
                 }
             }
             if let Some(status) = model.control_status().filter(|_| allow_steer) {
-                details { class: "steer-drawer",
+                details { key: "{status.conversation_id}/{status.run_id:?}/{session_scope.read().generation()}/{model.selection_generation()}", class: "steer-drawer",
                     summary { "Steer running work" }
-                    crate::steering_view::SteeringView { key:"{status.conversation_id}/{status.run_id:?}/{session_scope.read().generation()}/{model.selection_generation()}", execution, session_scope, csrf:csrf.clone(), onexpired, now_ms }
+                    crate::steering_view::SteeringView { execution, session_scope, csrf:csrf.clone(), onexpired, now_ms }
                 }
             }
             if !compact { p { "A cancellation request is not a confirmed stop. Stale or disconnected status never implies completion." } }
