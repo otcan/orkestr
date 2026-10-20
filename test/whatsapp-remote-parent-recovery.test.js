@@ -169,3 +169,16 @@ test("a stale recovery snapshot cannot overwrite a concurrently recorded acknowl
   });
   assert.deepEqual(await getThreadMessage("example-thread", stale.id, f.env), current);
 });
+
+test("durable remote intake clears the forwarding error before model completion", async t => {
+  const f = await fixture(t);
+  f.setRows([{ ...f.remoteUser, state: "delivered" }]);
+  await syncRemoteWhatsAppThreadMessages(f.env, f.fetchImpl);
+  const parent = await getThreadMessage("example-thread", f.routed.message.id, f.env);
+  assert.equal(parent.remoteMessageId, f.remoteUser.id);
+  assert.equal(parent.state, "delivered");
+  assert.equal(parent.deliveryState, "delivered");
+  assert.equal(parent.error, null);
+  assert.equal(f.calls.input, 1);
+  assert.equal(f.calls.send.length, 0);
+});

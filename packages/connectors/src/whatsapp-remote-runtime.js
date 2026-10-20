@@ -292,7 +292,7 @@ async function updatePublicRemoteParent(thread, localMessage, remoteMessage, rem
   if (deliveryState) patch.deliveryState = deliveryState;
   if (observedVia) patch.observedVia = observedVia;
   if (deliveredAt) patch.deliveredAt = deliveredAt;
-  if (recovered && state === "completed" && deliveryState === "delivered") patch.error = null;
+  if (recovered && ["completed", "delivered"].includes(state) && deliveryState === "delivered") patch.error = null;
   return updateThreadMessage(thread.id, localMessage.id, patch, env, {
     expectedFields: remoteParentExpectedFields(localMessage),
   }).catch(() => null);
