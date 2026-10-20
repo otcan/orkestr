@@ -161,6 +161,7 @@ impl ConfiguredExecution {
             window: Some(context),
             window_workers: None,
             companion: Some(companion.clone()),
+            window_activated: std::sync::atomic::AtomicBool::new(false),
             fast_factory: None,
         };
         self.config.worker = Some(

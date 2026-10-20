@@ -17,6 +17,8 @@ use orkestr_v2_application::runtime::Binding;
 use orkestr_v2_store_sqlite::{BoundSessionMetadata, ClaudeProcessInitialization, Store};
 use std::path::Path;
 
+type SetupGate<'a> = &'a mut dyn FnMut(&MetadataChild) -> Result<(), SetupFailure>;
+
 pub struct PreparingClaude {
     authority: MetadataAuthority,
     child: Option<MetadataChild>,
@@ -44,6 +46,46 @@ impl PreparingClaude {
         directories: ChildDirectories,
         resources: Box<dyn Send + 'static>,
     ) -> Result<Self, SetupFailure> {
+        Self::open_gated(store, grant, launcher, directories, resources, None)
+    }
+
+    /// Execution-window launch: the fixed service launcher stops itself; the
+    /// trusted bind callback must have the root manager capture and continue
+    /// it before the broker session is opened. Failure never retries.
+    pub fn open_window_retained(
+        store: Store,
+        grant: BoundSessionMetadata,
+        launcher: &Path,
+        directories: ChildDirectories,
+        resources: Box<dyn Send + 'static>,
+        bind: impl FnOnce(crate::containment::metadata::BrokerChildLocator) -> Result<(), ()>,
+    ) -> Result<Self, SetupFailure> {
+        if grant.binding().role != orkestr_v2_application::runtime::Role::Deep {
+            return Err(Blocker::Protocol.into());
+        }
+        let mut bind = Some(bind);
+        let mut gate = |child: &MetadataChild| -> Result<(), SetupFailure> {
+            let locator = child.broker_locator()?;
+            bind.take().ok_or(Blocker::Protocol)?(locator).map_err(|_| Blocker::Protocol.into())
+        };
+        Self::open_gated(
+            store,
+            grant,
+            launcher,
+            directories,
+            resources,
+            Some(&mut gate),
+        )
+    }
+
+    fn open_gated(
+        store: Store,
+        grant: BoundSessionMetadata,
+        launcher: &Path,
+        directories: ChildDirectories,
+        resources: Box<dyn Send + 'static>,
+        gate: Option<SetupGate<'_>>,
+    ) -> Result<Self, SetupFailure> {
         if grant.provider() != ProviderKind::Claude {
             return Err(Blocker::Protocol.into());
         }
@@ -55,6 +97,9 @@ impl PreparingClaude {
             TransportBounds::default(),
             resources,
         )?;
+        if let Some(gate) = gate {
+            gate(&child)?;
+        }
         let open = child.open_broker_metadata()?;
         Ok(Self {
             authority,

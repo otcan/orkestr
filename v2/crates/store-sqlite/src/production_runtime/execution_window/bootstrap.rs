@@ -43,7 +43,7 @@ impl Store {
         conversation: &ConversationId,
         config: ProductionSupervisorConfig,
     ) -> Result<ExecutionWindowBootstrap> {
-        if config.provider != ProviderKind::Codex
+        if !window_provider(config.provider)
             || !matches!(config.takeover, ProductionTakeover::First)
             || !valid(&config.namespace)
             || !valid(&config.supervisor_key)
@@ -53,8 +53,8 @@ impl Store {
         let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
         let owner = browser_owner(self, &mut tx, browser_credential).await?;
         crate::runtime::scope(&mut tx, &owner, conversation).await?;
-        let history: i64 = sqlx::query_scalar("SELECT (SELECT count(*) FROM production_supervisors WHERE owner_id=? AND provider_kind='codex' AND namespace=? AND supervisor_key=?) + (SELECT count(*) FROM execution_windows WHERE owner_id=? AND conversation_id=?) + (SELECT count(*) FROM production_runs WHERE owner_id=? AND conversation_id=?) + (SELECT count(*) FROM session_bindings WHERE owner_id=? AND conversation_id=?)")
-            .bind(owner.to_string()).bind(&config.namespace).bind(&config.supervisor_key)
+        let history: i64 = sqlx::query_scalar("SELECT (SELECT count(*) FROM production_supervisors WHERE owner_id=? AND provider_kind=? AND namespace=? AND supervisor_key=?) + (SELECT count(*) FROM execution_windows WHERE owner_id=? AND conversation_id=?) + (SELECT count(*) FROM production_runs WHERE owner_id=? AND conversation_id=?) + (SELECT count(*) FROM session_bindings WHERE owner_id=? AND conversation_id=?)")
+            .bind(owner.to_string()).bind(provider_name(config.provider)?).bind(&config.namespace).bind(&config.supervisor_key)
             .bind(owner.to_string()).bind(conversation.to_string())
             .bind(owner.to_string()).bind(conversation.to_string())
             .bind(owner.to_string()).bind(conversation.to_string())
@@ -79,7 +79,7 @@ impl Store {
         let hash = crate::digest(&secret);
         let context = Context {
             owner: owner.clone(),
-            provider: ProviderKind::Codex,
+            provider: config.provider,
             namespace: config.namespace,
             key: config.supervisor_key,
             id: Uuid::new_v4().to_string(),
@@ -91,8 +91,8 @@ impl Store {
         let clock = now(&mut tx).await?;
         sqlx::query("INSERT INTO auth_sessions(token_hash,owner_id,expires_at) VALUES(?,?,unixepoch()+43200)")
             .bind(hash).bind(owner.to_string()).execute(&mut *tx).await.map_err(db)?;
-        sqlx::query("INSERT INTO production_supervisors(context_id,owner_id,provider_kind,namespace,supervisor_key,incarnation_id,generation,lease_deadline_ms) VALUES(?,?,'codex',?,?,?,1,?)")
-            .bind(&context.id).bind(owner.to_string()).bind(&context.namespace).bind(&context.key)
+        sqlx::query("INSERT INTO production_supervisors(context_id,owner_id,provider_kind,namespace,supervisor_key,incarnation_id,generation,lease_deadline_ms) VALUES(?,?,?,?,?,?,1,?)")
+            .bind(&context.id).bind(owner.to_string()).bind(provider_name(context.provider)?).bind(&context.namespace).bind(&context.key)
             .bind(&context.incarnation).bind(clock+60_000).execute(&mut *tx).await.map_err(db)?;
         let mut deep = None;
         // Same ordinary unconfigured Starting role records as ensure_role_bindings;

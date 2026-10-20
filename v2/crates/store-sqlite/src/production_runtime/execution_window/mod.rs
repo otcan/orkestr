@@ -14,8 +14,10 @@ mod guard;
 mod lifecycle;
 mod queue;
 pub(super) use queue::enqueue_timer_intent;
+mod provider_choice;
 mod switching;
 pub use credential::{ExecutionWindowCredential, ExecutionWindowRetirement};
+use provider_choice::window_provider;
 #[cfg(test)]
 mod queue_tests;
 #[cfg(test)]

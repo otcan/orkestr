@@ -56,6 +56,8 @@ pub struct ConfiguredExecution {
     window: Option<std::sync::Arc<crate::window_runtime::context::Context>>,
     window_workers: Option<crate::worker_execution::WindowWorkers>,
     companion: Option<std::sync::Arc<window_roles::Companion>>,
+    /// Claude windows activate on their first native setup only.
+    window_activated: std::sync::atomic::AtomicBool,
     fast_factory: Option<Box<ConfiguredExecution>>,
 }
 pub struct ExecutionTask {
@@ -203,6 +205,7 @@ impl ConfiguredExecution {
             window: None,
             window_workers: None,
             companion: None,
+            window_activated: std::sync::atomic::AtomicBool::new(false),
             fast_factory: None,
         })
     }

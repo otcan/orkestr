@@ -1,7 +1,7 @@
 //! In-process first-login authority. Nothing in this module is an HTTP DTO.
 use crate::beta_config::BetaConfig;
 use orkestr_v2_application::runtime::{
-    ProductionSupervisorConfig, ProductionTakeover, ProviderKind, RuntimeStoreError,
+    ProductionSupervisorConfig, ProductionTakeover, RuntimeStoreError,
 };
 use orkestr_v2_contracts::{
     ConversationId, ExecutionWindowAdmission, ExecutionWindowRequest, OwnerId,
@@ -15,6 +15,7 @@ pub(crate) struct InitialAuthority {
     namespace: String,
     supervisor_key: String,
     capacity: u32,
+    config: BetaConfig,
     state: Mutex<State>,
     last_request: Mutex<Option<String>>,
 }
@@ -42,6 +43,7 @@ impl InitialAuthority {
             namespace: config.namespace.clone(),
             supervisor_key: config.supervisor_key.clone(),
             capacity: config.active_windows(),
+            config: config.clone(),
             state: Mutex::new(State::Fresh),
             last_request: Mutex::new(None),
         })
@@ -71,9 +73,19 @@ impl InitialAuthority {
             {
                 return Err(RuntimeStoreError::Fenced);
             }
+            // The durable conversation choice (or instance default) selects the
+            // configured runtime; Core freezes it once a window exists.
+            let launch = store.conversation_turn_launch(owner, conversation).await?;
+            let native = store
+                .conversation_native_provider(owner, conversation)
+                .await?;
+            let provider = self
+                .config
+                .window_provider(&launch, native)
+                .map_err(|_| RuntimeStoreError::Conflict)?;
             *state = State::Attempted;
             let config = ProductionSupervisorConfig {
-                provider: ProviderKind::Codex,
+                provider,
                 namespace: self.namespace.clone(),
                 supervisor_key: self.supervisor_key.clone(),
                 takeover: ProductionTakeover::First,
@@ -241,7 +253,7 @@ mod tests {
                 "synthetic-browser",
                 &conversation,
                 ProductionSupervisorConfig {
-                    provider: ProviderKind::Codex,
+                    provider: orkestr_v2_application::runtime::ProviderKind::Codex,
                     namespace: "synthetic-beta".into(),
                     supervisor_key: "synthetic-supervisor".into(),
                     takeover: ProductionTakeover::First

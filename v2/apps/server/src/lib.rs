@@ -150,6 +150,11 @@ impl AppState {
         self.window_controller = Some(controller);
         self.initial_window = Some(initial);
         self.window_handles = Some(handles);
+        // An installed Claude window runtime is the Claude turn path for the
+        // owner's per-conversation provider setting.
+        if config.claude.is_some() {
+            self = self.with_claude_turns();
+        }
         Ok(self)
     }
     /// Trusted startup only: the private V1 desktop broker client configuration.

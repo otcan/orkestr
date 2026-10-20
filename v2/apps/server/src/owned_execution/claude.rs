@@ -32,6 +32,9 @@ pub(super) enum ClaudeExit {
         orkestr_v2_contracts::RunId,
         orkestr_runtime::containment::ReapedBroker,
     ),
+    /// Execution window reached its work deadline with a proposal pending;
+    /// the late owner decision already retired the window.
+    WindowClosed,
 }
 
 impl ConfiguredExecution {
@@ -103,6 +106,18 @@ impl ConfiguredExecution {
                     if *shutdown.borrow() {
                         return Ok(None);
                     }
+                    if self.window.as_ref().is_some_and(|window| window.work_due()) {
+                        // Same as Codex: reap the transport, then wait for the
+                        // owner's decision metadata-only and retire the window.
+                        drop(schedule);
+                        let retiring = live
+                            .retire_completed()
+                            .map_err(|_| "window proposal cleanup refused")?;
+                        let proof = self.reaped(retiring, &run, heartbeat).await?;
+                        self.wait_window_acceptance(&run, proof, heartbeat, shutdown)
+                            .await?;
+                        return Ok(Some(ClaudeExit::WindowClosed));
+                    }
                 }
                 ExecutionPhase::Failed | ExecutionPhase::Blocked | ExecutionPhase::Cancelled => {
                     return Err("Claude execution requires reconciliation");
@@ -116,7 +131,12 @@ impl ConfiguredExecution {
                     return Ok(Some(ClaudeExit::Stopped(run, proof)));
                 }
                 ExecutionPhase::Starting | ExecutionPhase::Running => {
-                    let cancellation = budget.cancellation_key(Instant::now());
+                    let cancellation =
+                        if self.window.as_ref().is_some_and(|window| window.work_due()) {
+                            Some("execution-window-work-deadline")
+                        } else {
+                            budget.cancellation_key(Instant::now())
+                        };
                     if let Some(key) = cancellation {
                         // Budget expiry uses the same issued control as
                         // owner Stop; no status-derived receipt is constructed.
@@ -265,13 +285,46 @@ impl ConfiguredExecution {
             &self.directory.join("tmp"),
         )
         .map_err(|_| "Claude child directories unavailable")?;
-        let mut setup = PreparingClaudeExecution::open_retained(
-            self.store.clone(),
-            grant,
-            &self.config.launcher,
-            directories,
-            self.children.retain(),
-        )
+        // The owner's model/effort for this conversation apply from the next
+        // native launch (each Claude turn is a new process), never mid-turn.
+        let launch = self
+            .store
+            .conversation_turn_launch(&self.owner, &self.config.conversation_id)
+            .await
+            .map_err(|_| "Claude turn settings unavailable")?;
+        let directories = if launch.provider == orkestr_v2_contracts::ConversationProvider::Claude {
+            directories
+                .with_claude_launch(launch.model.as_deref(), launch.reasoning_effort.as_deref())
+                .map_err(|_| "Claude turn settings invalid")?
+        } else {
+            directories
+        };
+        let mut setup = if let Some(context) = &self.window {
+            let store = self.store.clone();
+            let launcher = self.config.launcher.clone();
+            let resources = self.children.retain();
+            let context = context.clone();
+            tokio::task::spawn_blocking(move || {
+                PreparingClaudeExecution::open_window_retained(
+                    store,
+                    grant,
+                    &launcher,
+                    directories,
+                    resources,
+                    move |child| context.bind(&child),
+                )
+            })
+            .await
+            .map_err(|_| "Claude window setup worker lost")?
+        } else {
+            PreparingClaudeExecution::open_retained(
+                self.store.clone(),
+                grant,
+                &self.config.launcher,
+                directories,
+                self.children.retain(),
+            )
+        }
         .map_err(|_| "Claude broker setup refused")?;
         let deadline = Instant::now() + Duration::from_secs(15);
         loop {
@@ -293,10 +346,30 @@ impl ConfiguredExecution {
                 _ = shutdown.changed() => return Ok(None),
             }
         }
-        setup
+        let ready = setup
             .confirm()
             .await
-            .map(Some)
-            .map_err(|_| "Claude protocol readiness commit refused")
+            .map_err(|_| "Claude protocol readiness commit refused")?;
+        if let Some(context) = &self.window {
+            // Activation happens once per window, on its first native setup.
+            if !self
+                .window_activated
+                .swap(true, std::sync::atomic::Ordering::AcqRel)
+            {
+                context
+                    .activate_roles(
+                        &self.store,
+                        &self.token,
+                        crate::execution_registry::ExecutionScope {
+                            store: self.store.clone(),
+                            control: Some(self.control.clone()),
+                            tasks: None,
+                        },
+                        None,
+                    )
+                    .await?;
+            }
+        }
+        Ok(Some(ready))
     }
 }

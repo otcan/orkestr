@@ -344,6 +344,20 @@ impl ConversationController {
         }
         let status = &admission.status;
         let boot = ack.receipt.boot_id.to_string();
+        // Core refuses a provider change while this window exists.
+        let (owner, conversation) = (&self.config.owner_id, &self.config.conversation_id);
+        let launch = self
+            .store
+            .conversation_turn_launch(owner, conversation)
+            .await
+            .map_err(|_| "conversation settings unavailable")?;
+        let native = self
+            .store
+            .conversation_native_provider(owner, conversation)
+            .await
+            .map_err(|_| "conversation native provider unavailable")?;
+        let provider = self.config.window_provider(&launch, native)?;
+        let claude = provider == ProviderKind::Claude;
         let authority = self
             .initial
             .take()
@@ -368,7 +382,7 @@ impl ConversationController {
                     .bind_execution_window(cap.credential(), &grant)
                     .await
                     .map_err(|_| "initial window binding refused")?;
-                let workspace = match self.config.workspace_profile() {
+                let workspace = match self.config.workspace_profile().filter(|_| !claude) {
                     Some(profile) => {
                         let installation =
                             profile.installation(&self.home, self.native_workspaces())?;
@@ -409,43 +423,44 @@ impl ConversationController {
                     .await
                     .map_err(|_| "retired window credential refused")?;
                 let config = ProductionSupervisorConfig {
-                    provider: ProviderKind::Codex,
+                    provider,
                     namespace: self.config.namespace.clone(),
                     supervisor_key: self.config.supervisor_key.clone(),
                     takeover: ProductionTakeover::ExpiredPredecessor {
                         incarnation_id: cap.predecessor_incarnation().into(),
                     },
                 };
-                let (bound, metadata, workspace) = match self.config.workspace_profile() {
-                    Some(profile) => {
-                        let installation =
-                            profile.installation(&self.home, self.native_workspaces())?;
-                        let (bound, metadata, workspace) = self
-                            .store
-                            .reattach_terminal_supervisor_with_workspace(
-                                grant.credential(),
-                                config,
-                                cap.prior_run_id(),
-                                profile.project_id,
-                                installation,
-                            )
-                            .await
-                            .map_err(|_| "window workspace reattachment refused")?;
-                        (bound, metadata, Some(Arc::new(workspace)))
-                    }
-                    None => {
-                        let (bound, metadata) = self
-                            .store
-                            .reattach_terminal_supervisor(
-                                grant.credential(),
-                                config,
-                                cap.prior_run_id(),
-                            )
-                            .await
-                            .map_err(|_| "window predecessor reattachment refused")?;
-                        (bound, metadata, None)
-                    }
-                };
+                let (bound, metadata, workspace) =
+                    match self.config.workspace_profile().filter(|_| !claude) {
+                        Some(profile) => {
+                            let installation =
+                                profile.installation(&self.home, self.native_workspaces())?;
+                            let (bound, metadata, workspace) = self
+                                .store
+                                .reattach_terminal_supervisor_with_workspace(
+                                    grant.credential(),
+                                    config,
+                                    cap.prior_run_id(),
+                                    profile.project_id,
+                                    installation,
+                                )
+                                .await
+                                .map_err(|_| "window workspace reattachment refused")?;
+                            (bound, metadata, Some(Arc::new(workspace)))
+                        }
+                        None => {
+                            let (bound, metadata) = self
+                                .store
+                                .reattach_terminal_supervisor(
+                                    grant.credential(),
+                                    config,
+                                    cap.prior_run_id(),
+                                )
+                                .await
+                                .map_err(|_| "window predecessor reattachment refused")?;
+                            (bound, metadata, None)
+                        }
+                    };
                 (bound, grant, metadata, workspace, true)
             }
         };
@@ -458,6 +473,7 @@ impl ConversationController {
         ConfiguredExecution::from_window(
             &self.home,
             &self.config,
+            provider,
             WindowSetup {
                 store: bound,
                 token: credential.credential().to_owned(),

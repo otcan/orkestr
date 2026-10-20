@@ -53,6 +53,17 @@ class FullAccessConfigurationTests(unittest.TestCase):
             self.assertEqual(environment["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"], "1")
             self.assertGreater(session.max_provider_frame, 65536)
 
+    def test_owner_model_and_effort_reach_native_environment_closed(self):
+        from claude_connector import turn_preferences
+        self.assertEqual(turn_preferences({}), {})
+        self.assertEqual(turn_preferences({"ORKESTR_CLAUDE_MODEL": "claude-opus-5-5",
+                                           "ORKESTR_CLAUDE_EFFORT": "low"}),
+                         {"ANTHROPIC_MODEL": "claude-opus-5-5", "CLAUDE_CODE_EFFORT_LEVEL": "low"})
+        for bad in ({"ORKESTR_CLAUDE_MODEL": "bad model"}, {"ORKESTR_CLAUDE_MODEL": "123"},
+                    {"ORKESTR_CLAUDE_MODEL": ""}, {"ORKESTR_CLAUDE_EFFORT": "ultra"}):
+            with self.assertRaises(ValueError):
+                turn_preferences(bad)
+
     def test_environment_cannot_select_account_or_omit_home(self):
         for environment in ({"PATH": "/usr/bin"}, {"HOME": "relative", "PATH": "/usr/bin"},
                             dict(ENVIRONMENT, ANTHROPIC_API_KEY="synthetic"),

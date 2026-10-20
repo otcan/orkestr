@@ -15,10 +15,10 @@ impl ConfiguredExecution {
     /// Trusted window controller only, AFTER Core activation. Legacy startup
     /// keeps its existing task behavior. No browser DTO can call this method.
     pub(crate) fn start_window(self) -> Result<WindowTask, &'static str> {
-        if self.config.provider != config::Provider::Codex
-            || self.config.role != config::ExecutionRole::Deep
+        if self.config.role != config::ExecutionRole::Deep
+            || (self.config.provider == config::Provider::Claude && self.fast_factory.is_some())
         {
-            return Err("window execution requires configured Codex Deep primary");
+            return Err("window execution requires a configured Deep primary");
         }
         let (shutdown, receiver) = watch::channel(false);
         let children = self.children.clone();
