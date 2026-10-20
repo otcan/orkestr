@@ -3,6 +3,10 @@ from pathlib import Path
 import tempfile
 import unittest
 
+import hashlib
+from unittest.mock import patch
+
+from v2.compat.v1_runtime import worker as worker_module
 from v2.compat.v1_runtime.ledger import Ledger
 from v2.compat.v1_runtime.worker import Refused, Worker
 from v2.compat.v1_runtime.rust_client import ClientError
@@ -10,6 +14,7 @@ from v2.compat.v1_runtime.rust_client import ClientError
 
 class Peer:
     conversation = "conversation"
+    owner = "owner"
 
     def __init__(self):
         self.accepted, self.mutations = {}, []
@@ -199,6 +204,107 @@ class WorkerTests(unittest.TestCase):
         with self.assertRaisesRegex(Refused, "accepted_history_mismatch"):
             self.worker.step(self.data)
         self.assertNotIn("reply", self.ledger.next_input())
+
+
+class ExtensionTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.ledger = Ledger(Path(self.temp.name) / "ledger.sqlite3", {"test_scope": "one"})
+        self.peer = Peer()
+
+    def enqueue(self, **body):
+        base = dict(publicMessageId="public", publicThreadId="thread", chatId="chat", accountId="account", text="request")
+        return self.ledger.enqueue(dict(base, **body))[0]
+
+    def test_exact_no_reply_final_is_exported_as_silent(self):
+        original = self.peer.request
+        def request(method, route, **kwargs):
+            status, value = original(method, route, **kwargs)
+            if route == "/payloads/deep-payload":
+                value = dict(value, text="  NO_REPLY\n")
+            return status, value
+        self.peer.request = request
+        data = self.enqueue()
+        Worker(self.peer, self.ledger).step(data)
+        final = self.ledger.messages()[-1]
+        self.assertEqual((final["text"], final["noReply"]), ("NO_REPLY", True))
+
+    def test_progress_is_exported_only_when_enabled_for_the_matched_running_deep_run(self):
+        for enabled in (False, True):
+            with self.subTest(enabled=enabled):
+                ledger = Ledger(Path(self.temp.name) / ("p%s.sqlite3" % enabled), {"test_scope": "one"})
+                data = ledger.enqueue(dict(publicMessageId="public", publicThreadId="thread", chatId="chat",
+                                           accountId="account", text="request"))[0]
+                peer, phase = Peer(), ["running:p1"]
+                original = peer.request
+                def request(method, route, **kwargs):
+                    if route == "/execution" and phase[0].startswith("running"):
+                        return 200, dict(run_id="deep-run", revision=1, phase="running",
+                                         progress=dict(payload_id=phase[0].split(":")[1]))
+                    if route in ("/payloads/p1", "/payloads/p2", "/payloads/p3"):
+                        payload = route.rsplit("/", 1)[1]
+                        return 200, dict(run_id="deep-run", payload_id=payload,
+                                         text="NO_REPLY" if payload == "p2" else "working on " + payload)
+                    return original(method, route, **kwargs)
+                peer.request = request
+                worker = Worker(peer, ledger, progress_updates=enabled)
+                with patch.object(worker_module, "PROGRESS_INTERVAL_S", 0):
+                    for step in ("running:p1", "running:p1", "running:p2", "running:p3", "done"):
+                        phase[0] = step
+                        worker.step(ledger.next_input() or data)
+                rows = ledger.messages()
+                progress = [r["text"] for r in rows if r.get("kind") == "progress"]
+                self.assertEqual(progress, ["working on p1", "working on p3"] if enabled else [])
+                self.assertEqual(rows[-1]["text"], "deep result")
+                self.assertTrue(all(r["parentMessageId"] == data["remote_id"] for r in rows[1:]))
+
+    def test_progress_from_a_foreign_run_is_ignored(self):
+        data = self.enqueue()
+        worker = Worker(self.peer, self.ledger, progress_updates=True)
+        with patch.object(worker_module, "PROGRESS_INTERVAL_S", 0):
+            worker.capture_progress(data, dict(run_id="other-run", phase="running", progress=dict(payload_id="x")),
+                                    {"deep-run"})
+        self.assertEqual(len(self.ledger.messages()), 1)
+
+    def test_attachments_are_imported_once_with_a_frozen_request_before_intake(self):
+        content = b"synthetic bytes"
+        digest = hashlib.sha256(content).hexdigest()
+        upload, _ = self.ledger.stage_upload("public", "note.txt", "text/plain", content, digest)
+        data = self.enqueue(text="see file", attachments=[{"uploadId": upload, "sha256": digest}])
+        imports, lost = [], [True]
+        def import_attachments(request):
+            imports.append(copy.deepcopy(request))
+            if lost[0]:
+                lost[0] = False
+                raise ConnectionError("synthetic lost import response")
+            return {"import_id": "import", "manifest": request["target_manifest"], "mapping": request["mapping"],
+                    "source_manifest_id": request["source"]["manifest"]["manifest_id"]}
+        self.peer.import_attachments = import_attachments
+        worker = Worker(self.peer, self.ledger)
+        with self.assertRaises(ConnectionError):
+            worker.step(data)
+        worker.step(self.ledger.next_input())
+        self.assertEqual(len(imports), 2)
+        self.assertEqual(imports[0], imports[1])
+        self.assertEqual(bytes(imports[0]["source"]["contents"][0]["bytes"]), content)
+        target = imports[0]["target_manifest"]
+        self.assertEqual((target["owner_id"], target["conversation_id"]), ("owner", "conversation"))
+        self.assertIsNone(target["references"][0]["message_id"])
+        intake = [body for route, body in self.peer.mutations if route == "/messages"][0]
+        self.assertTrue(intake["text"].startswith("see file\n\n[WhatsApp attachments"))
+        self.assertIn(target["references"][0]["reference_id"], intake["text"])
+        self.assertIsNone(self.ledger.upload_bytes(upload))
+
+    def test_missing_attachment_bytes_block_instead_of_dropping_the_file(self):
+        content = b"x"
+        digest = hashlib.sha256(content).hexdigest()
+        upload, _ = self.ledger.stage_upload("public", "a.bin", "application/octet-stream", content, digest)
+        data = self.enqueue(attachments=[{"uploadId": upload, "sha256": digest}])
+        self.ledger.release_uploads([upload])
+        with self.assertRaisesRegex(Refused, "attachment_bytes_missing"):
+            Worker(self.peer, self.ledger).step(data)
+        self.assertFalse(any(route == "/messages" for route, _ in self.peer.mutations))
 
 
 if __name__ == "__main__":

@@ -1,25 +1,39 @@
-"""Loopback-only V1 compatibility surface. This process never sends WhatsApp."""
+"""Loopback-only V1 compatibility surface for many bindings. This process never sends WhatsApp."""
 import argparse
+import base64
+import binascii
+import hashlib
 import hmac
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import re
 import signal
 import threading
 from urllib.parse import parse_qs, urlsplit
 
 from .config import load
-from .ledger import Conflict, Ledger
-from .rust_client import RustClient
-from .worker import Worker
+from .ledger import MAX_ATTACHMENT_BYTES, OUTCOMES, Conflict
+from .registry import Registry
+from .rust_client import RustClient, RustSession
+
+MAX_INPUT_BYTES = 65536
+MAX_UPLOAD_BYTES = 4 * (MAX_ATTACHMENT_BYTES // 3 + 1) + 4096
+MEDIA_TOKEN = re.compile(r"^[A-Za-z0-9!#$&^_.+-]+/[A-Za-z0-9!#$&^_.+-]+$")
+SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 
 class Server(ThreadingHTTPServer):
     daemon_threads = True
     request_queue_size = 8
 
-    def __init__(self, config, ledger):
+    def __init__(self, config, registry):
         super().__init__(("127.0.0.1", config["listen_port"]), Handler)
-        self.config, self.ledger = config, ledger
+        self.config, self.registry = config, registry
+
+
+def valid_filename(name):
+    return (isinstance(name, str) and 0 < len(name.encode()) <= 255 and name not in (".", "..") and
+            not any(c in "/\\:" or ord(c) < 32 or ord(c) == 127 for c in name))
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -52,21 +66,43 @@ class Handler(BaseHTTPRequestHandler):
             return False
         return True
 
+    def route(self, path):
+        """(binding, action) for /threads/<remote>/<action>; unknown routes reveal nothing."""
+        parts = path.split("/")
+        if len(parts) != 4 or parts[0] or parts[1] != "threads":
+            return None, None
+        binding = self.server.registry.get(parts[2])
+        return (binding, parts[3]) if binding else (None, None)
+
+    def json_body(self, maximum):
+        lengths = self.headers.get_all("Content-Length", [])
+        if len(lengths) != 1 or not 1 <= int(lengths[0]) <= maximum or self.headers.get_content_type() != "application/json":
+            raise ValueError()
+        raw = self.rfile.read(int(lengths[0]))
+        if len(raw) != int(lengths[0]):
+            raise ValueError()
+        body = json.loads(raw)
+        if not isinstance(body, dict):
+            raise ValueError()
+        return body
+
     def do_GET(self):
         if not self.authorized():
             return
         target = urlsplit(self.path)
-        config = self.server.config
         if target.path == "/health" and not target.query:
-            current = self.server.ledger.next_input()
-            return self.answer(200, {"ok": True, "enabled": config["enabled"],
-                                     "phase": current["phase"] if current else "idle",
-                                     "blocked": bool(current and current.get("blocked"))})
-        prefix = "/threads/" + config["remote_thread_id"]
-        if target.path != prefix + "/messages":
+            return self.answer(200, dict(ok=True, **self.server.registry.status()))
+        binding, action = self.route(target.path)
+        if binding is None or action not in ("messages", "health"):
             return self.answer(404, {"ok": False, "error": "route_not_found"})
+        if action == "health" and not target.query:
+            return self.answer(200, dict(ok=True, state=binding.state, error=binding.error,
+                                         enabled=binding.state == "enabled", **binding.ledger.health()))
+        if binding.state in ("revoked", "refused"):
+            return self.answer(410 if binding.state == "revoked" else 503,
+                               {"ok": False, "error": binding.error or "binding_revoked"})
         try:
-            query = parse_qs(target.query, strict_parsing=True)
+            query = parse_qs(target.query, strict_parsing=True) if target.query else {}
             if set(query) - {"limit"} or len(query.get("limit", ["100"])) != 1:
                 raise ValueError()
             limit = int(query.get("limit", ["100"])[0])
@@ -74,27 +110,29 @@ class Handler(BaseHTTPRequestHandler):
                 raise ValueError()
         except ValueError:
             return self.answer(400, {"ok": False, "error": "invalid_limit"})
-        return self.answer(200, {"ok": True, "messages": self.server.ledger.messages(limit)})
+        return self.answer(200, dict(ok=True, **binding.ledger.listing(limit)))
 
     def do_POST(self):
         if not self.authorized():
             return
-        config = self.server.config
-        expected = "/threads/" + config["remote_thread_id"] + "/input"
-        if self.path != expected:
+        binding, action = self.route(self.path)
+        if binding is None or action not in ("input", "attachments", "mirror-acks"):
             return self.answer(404, {"ok": False, "error": "route_not_found"})
-        if not config["enabled"]:
-            return self.answer(503, {"ok": False, "error": "pilot_disabled"})
+        if action == "mirror-acks":
+            # Acknowledgements only record transport outcomes, so they stay open
+            # while a binding is paused or revoked; they can never cause a send.
+            return self.mirror_ack(binding)
+        if binding.state != "enabled":
+            status = {"disabled": 503, "revoked": 410, "refused": 503}[binding.state]
+            return self.answer(status, {"ok": False, "error": binding.error or "binding_" + binding.state})
+        if action == "attachments":
+            return self.upload(binding)
+        return self.intake(binding)
+
+    def intake(self, binding):
+        config = binding.config
         try:
-            lengths = self.headers.get_all("Content-Length", [])
-            if len(lengths) != 1 or not 1 <= int(lengths[0]) <= 65536 or self.headers.get_content_type() != "application/json":
-                raise ValueError()
-            raw = self.rfile.read(int(lengths[0]))
-            if len(raw) != int(lengths[0]):
-                raise ValueError()
-            body = json.loads(raw)
-            if not isinstance(body, dict):
-                raise ValueError()
+            body = self.json_body(MAX_INPUT_BYTES)
         except (ValueError, UnicodeError):
             return self.answer(400, {"ok": False, "error": "invalid_input"})
         # The authenticated backend is selected explicitly; forwarded flags such
@@ -102,7 +140,8 @@ class Handler(BaseHTTPRequestHandler):
         scope = {"publicThreadId": config["public_thread_id"], "chatId": config["chat_id"],
                  "accountId": config["account_id"], "source": "whatsapp_inbound", "connector": "whatsapp", "role": "user"}
         principal = body.get("externalPrincipal")
-        principal_scope = {"connector": "whatsapp", "accountId": config["account_id"], "chatId": config["chat_id"], "threadId": config["public_thread_id"]}
+        principal_scope = {"connector": "whatsapp", "accountId": config["account_id"], "chatId": config["chat_id"],
+                           "threadId": config["public_thread_id"]}
         sender = body.get("senderParticipantId")
         owner_verified = (isinstance(principal, dict) and
             all(principal.get(key) == value for key, value in principal_scope.items()) and
@@ -113,16 +152,70 @@ class Handler(BaseHTTPRequestHandler):
             return self.answer(403, {"ok": False, "error": "input_scope"})
         public_id = body.get("publicMessageId")
         text = body.get("text")
+        attachments = body.get("attachments") or []
         if not isinstance(public_id, str) or not 1 <= len(public_id) <= 256 or public_id in config["excluded_public_ids"]:
             return self.answer(409, {"ok": False, "error": "ineligible_input"})
-        if not isinstance(text, str) or not text.strip() or len(json.dumps({"client_message_id": "0" * 36, "text": text}).encode()) > 32768 or body.get("attachments") or body.get("promptFile"):
-            return self.answer(422, {"ok": False, "error": "text_only_pilot"})
+        if attachments and not config["attachments"]:
+            return self.answer(422, {"ok": False, "error": "text_only_binding"})
+        if (not isinstance(text, str) or (not text.strip() and not attachments) or body.get("promptFile") or
+                len(json.dumps({"client_message_id": "0" * 36, "text": text}).encode()) >
+                (28672 if config["attachments"] else 32768)):  # Room for the attachment note.
+            return self.answer(422, {"ok": False, "error": "text_only_pilot" if not config["attachments"] else "invalid_text"})
         try:
-            data, duplicate = self.server.ledger.enqueue(body)
+            data, duplicate = binding.ledger.enqueue(dict(body, attachments=attachments))
+        except Conflict as error:
+            return self.answer(409 if str(error) != "attachment_reference_invalid" else 422, {"ok": False, "error": str(error)})
+        return self.answer(200 if duplicate else 202, {"ok": True, "duplicate": duplicate,
+            "message": {"id": data["remote_id"], "role": "user", "state": "delivered", "deliveryState": "delivered",
+                        "observedVia": "rust-pilot-ledger"}})
+
+    def upload(self, binding):
+        if not binding.config["attachments"]:
+            return self.answer(422, {"ok": False, "error": "text_only_binding"})
+        try:
+            body = self.json_body(MAX_UPLOAD_BYTES)
+            if set(body) != {"publicMessageId", "filename", "mediaType", "size", "sha256", "contentBase64"}:
+                raise ValueError()
+            content = base64.b64decode(body["contentBase64"], validate=True)
+        except (ValueError, UnicodeError, binascii.Error, TypeError):
+            return self.answer(400, {"ok": False, "error": "invalid_upload"})
+        public_id, sha256 = body["publicMessageId"], body["sha256"]
+        if (not isinstance(public_id, str) or not 1 <= len(public_id) <= 256 or public_id in binding.config["excluded_public_ids"] or
+                not valid_filename(body["filename"]) or not isinstance(body["mediaType"], str) or len(body["mediaType"]) > 127 or
+                not MEDIA_TOKEN.match(body["mediaType"]) or not isinstance(sha256, str) or not SHA256.match(sha256)):
+            return self.answer(422, {"ok": False, "error": "invalid_upload"})
+        if (type(body["size"]) is not int or body["size"] != len(content) or len(content) > MAX_ATTACHMENT_BYTES or
+                hashlib.sha256(content).hexdigest() != sha256):
+            return self.answer(422, {"ok": False, "error": "upload_integrity"})
+        try:
+            upload_id, duplicate = binding.ledger.stage_upload(public_id, body["filename"], body["mediaType"], content, sha256)
         except Conflict as error:
             return self.answer(409, {"ok": False, "error": str(error)})
-        return self.answer(200 if duplicate else 202, {"ok": True, "duplicate": duplicate,
-            "message": {"id": data["remote_id"], "role": "user", "state": "delivered", "deliveryState": "delivered", "observedVia": "rust-pilot-ledger"}})
+        return self.answer(200 if duplicate else 201, {"ok": True, "duplicate": duplicate,
+                                                       "upload": {"uploadId": upload_id, "sha256": sha256, "size": len(content)}})
+
+    def mirror_ack(self, binding):
+        try:
+            body = self.json_body(16384)
+        except (ValueError, UnicodeError):
+            return self.answer(400, {"ok": False, "error": "invalid_ack"})
+        text = lambda key, size=256: isinstance(body.get(key), str) and 0 < len(body[key]) <= size
+        ids = body.get("connectorMessageIds", [])
+        if (not text("remoteMessageId") or not text("parentPublicMessageId") or not text("localMessageId") or
+                body.get("publicThreadId") != binding.config["public_thread_id"] or body.get("outcome") not in OUTCOMES or
+                not isinstance(ids, list) or len(ids) > 32 or not all(isinstance(x, str) and 0 < len(x) <= 256 for x in ids) or
+                any(key in body and not text(key) for key in ("outboxJobId", "deliveryState", "deliveredAt", "reason"))):
+            return self.answer(400, {"ok": False, "error": "invalid_ack"})
+        record = {key: body[key] for key in ("outcome", "parentPublicMessageId", "localMessageId", "outboxJobId",
+                                            "deliveryState", "deliveredAt", "reason") if key in body}
+        record["connectorMessageIds"] = ids
+        try:
+            result = binding.ledger.acknowledge(body["remoteMessageId"], record)
+        except LookupError:
+            return self.answer(404, {"ok": False, "error": "unknown_export"})
+        except Conflict as error:
+            return self.answer(409, {"ok": False, "error": str(error)})
+        return self.answer(200, dict(ok=True, **result))
 
     def do_PATCH(self):
         if self.authorized():
@@ -133,31 +226,29 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", required=True)
     args = parser.parse_args()
-    config = load(args.config)
-    scope_keys = ("expected_owner", "conversation_id", "public_thread_id", "chat_id", "account_id", "remote_thread_id",
-                  "allowed_principals", "excluded_public_ids", "automatic_accept_roles", "outbound_role")
-    ledger = Ledger(config["ledger_path"], {key: config[key] for key in scope_keys})
-    client = RustClient(**{key: config[key] for key in
-        ("origin", "loopback_url", "credentials_path", "expected_owner", "conversation_id", "expected_source")})
-    stop = threading.Event()
-    server = Server(config, ledger)
-    worker_thread = None
-    if config["enabled"]:
-        client.ensure_login()
-        worker_thread = threading.Thread(target=Worker(client, ledger).run, args=(stop,), daemon=True)
-        worker_thread.start()
+    config, static = load(args.config)
+    session = RustSession(**{key: config[key] for key in
+                             ("origin", "loopback_url", "credentials_path", "expected_owner", "expected_source")})
+    registry = Registry(config, lambda conversation: RustClient(conversation_id=conversation, session=session), static)
+    registry.reload()
+    stop, wake = threading.Event(), threading.Event()
+    server = Server(config, registry)
+    reloader = threading.Thread(target=registry.run, args=(stop, wake), daemon=True)
+    reloader.start()
     def shutdown(*_):
         stop.set()
+        wake.set()
         threading.Thread(target=server.shutdown, daemon=True).start()
     signal.signal(signal.SIGTERM, shutdown)
     signal.signal(signal.SIGINT, shutdown)
+    signal.signal(signal.SIGHUP, lambda *_: wake.set())
     try:
         server.serve_forever(poll_interval=0.5)
     finally:
         stop.set()
+        wake.set()
         server.server_close()
-        if worker_thread:
-            worker_thread.join(timeout=10)
+        registry.shutdown()
 
 
 if __name__ == "__main__":
