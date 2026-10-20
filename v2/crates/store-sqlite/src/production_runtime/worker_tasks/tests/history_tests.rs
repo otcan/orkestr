@@ -301,29 +301,30 @@ async fn history_current_session_owner_conversation_and_run_checks_do_not_mutate
         RuntimeStoreError::NotFound
     );
     for expire in [false, true] {
+        let credential = format!("browser:{}", if expire { "ce" } else { "cd" }.repeat(32));
         f.core
             .store
-            .save_session(&f.browser, &f.core.owner)
+            .save_session(&credential, &f.core.owner)
             .await
             .unwrap();
         assert_eq!(
-            f.core.store.authenticate(&f.browser).await.unwrap(),
+            f.core.store.authenticate(&credential).await.unwrap(),
             Some(f.core.owner.clone())
         );
         if expire {
             sqlx::query("UPDATE auth_sessions SET expires_at=0 WHERE token_hash=?")
-                .bind(crate::digest(&f.browser))
+                .bind(crate::digest(&credential))
                 .execute(&f.core.store.pool)
                 .await
                 .unwrap();
         } else {
-            f.core.store.revoke_session(&f.browser).await.unwrap();
+            f.core.store.revoke_session(&credential).await.unwrap();
         }
         assert_eq!(
             f.core
                 .store
                 .execution_run_history_authenticated(
-                    &f.browser,
+                    &credential,
                     &f.core.owner,
                     &f.core.conversation,
                     &f.parent.run.run_id,
@@ -337,7 +338,7 @@ async fn history_current_session_owner_conversation_and_run_checks_do_not_mutate
             f.core
                 .store
                 .worker_task_history_authenticated(
-                    &f.browser,
+                    &credential,
                     &f.core.owner,
                     &f.core.conversation,
                     &f.parent.run.run_id
