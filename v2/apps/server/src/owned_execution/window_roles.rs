@@ -175,8 +175,7 @@ impl ConfiguredExecution {
         match self.fast_factory.take() {
             None => self.run(shutdown).await,
             Some(fast) => {
-                tokio::try_join!(self.run_codex(shutdown.clone()), fast.run_fast(shutdown))?;
-                Ok(())
+                join_roles(self.run_codex(shutdown.clone()), fast.run_fast(shutdown)).await
             }
         }
     }
@@ -268,3 +267,30 @@ impl ConfiguredExecution {
         }
     }
 }
+
+/// Each role enters synchronous Core fences with `block_in_place`. They must
+/// have separate Tokio tasks: a sibling future in `try_join!` could otherwise
+/// retain a SQLite transaction while the other blocks waiting for its release.
+async fn join_roles(
+    deep: impl std::future::Future<Output = Result<(), &'static str>> + Send + 'static,
+    fast: impl std::future::Future<Output = Result<(), &'static str>> + Send + 'static,
+) -> Result<(), &'static str> {
+    let mut roles = tokio::task::JoinSet::new();
+    roles.spawn(deep);
+    roles.spawn(fast);
+    while let Some(result) = roles.join_next().await {
+        let result = result.unwrap_or(Err("window role task lost"));
+        if let Err(error) = result {
+            roles.abort_all();
+            while roles.join_next().await.is_some() {}
+            return Err(error);
+        }
+    }
+    // JoinSet also aborts retained tasks if this owning future is cancelled.
+    // Task completion never replaces the existing original-child reap barrier.
+    Ok(())
+}
+
+#[cfg(test)]
+#[path = "window_roles_tests.rs"]
+mod tests;
