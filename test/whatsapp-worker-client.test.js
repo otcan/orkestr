@@ -159,10 +159,10 @@ test("text sends carry the request id and no empty paths list", async () => {
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   try {
     const env = { ORKESTR_WA_WORKER_URL: `http://127.0.0.1:${server.address().port}` };
-    await whatsappWorkerSend({ accountId: "sender", conversationId: "15550000001@c.us", text: "hello", requestId: "co_abc" }, env);
+    await whatsappWorkerSend({ accountId: "sender", conversationId: "15550000001@c.us", text: "hello", requestId: "co_abc", threadId: "thread-1" }, env);
     await whatsappWorkerSend({ accountId: "sender", conversationId: "15550000001@c.us", text: "hello" }, env);
     assert.deepEqual(bodies, [
-      { accountId: "sender", to: "15550000001@c.us", text: "hello", requestId: "co_abc" },
+      { accountId: "sender", to: "15550000001@c.us", text: "hello", requestId: "co_abc", threadId: "thread-1" },
       { accountId: "sender", to: "15550000001@c.us", text: "hello" },
     ]);
   } finally {

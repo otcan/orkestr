@@ -232,6 +232,7 @@ async function runMessaging(input, auth, env) {
       text: input.text,
       attachmentPaths: attachments.map((item) => item.path),
       requestId: ensured.job.id,
+      threadId: auth.operator ? "" : auth.threadId,
     }, env);
     const job = await markConnectorOutboxJob(ensured.job.id, {
       state: "delivered",
@@ -292,6 +293,7 @@ async function runConversation(input, auth, env) {
       eventIds: input.event_ids,
       participantIds: input.participant_ids,
       title: input.name,
+      threadId: auth.operator ? "" : auth.threadId,
     }, env);
   }
   return connectorMcpStructuredResult({

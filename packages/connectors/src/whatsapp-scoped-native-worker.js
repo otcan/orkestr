@@ -43,14 +43,18 @@ export function createScopedNativeWorkerPolicy(config,{createTransport=createSco
    body ||= {};
    if(method==='GET' && ['/health','/accounts'].includes(url.pathname))return;
    const a=encodeURIComponent(config.workerAccountId);
-   if(method==='GET' && [...chats,...(direct?.chats.keys()||[])].some(g=>url.pathname===`/accounts/${a}/chats/${encodeURIComponent(g)}/history`) && (!url.searchParams.has('mark_seen') || url.searchParams.get('mark_seen')==='false')
+   const ownsDirect=(chatId,threadId)=>Boolean(direct?.chats.has(chatId)) && direct.chats.get(chatId)===threadId;
+   if(method==='GET' && [...(direct?.chats.keys()||[])].some(g=>url.pathname===`/accounts/${a}/chats/${encodeURIComponent(g)}/history` && ownsDirect(g,url.searchParams.get('thread_id')))
+      && (!url.searchParams.has('mark_seen') || url.searchParams.get('mark_seen')==='false')
+      && Number(url.searchParams.get('limit')||30)>0 && Number(url.searchParams.get('limit')||30)<=50)return;
+   if(method==='GET' && [...chats].some(g=>url.pathname===`/accounts/${a}/chats/${encodeURIComponent(g)}/history`) && (!url.searchParams.has('mark_seen') || url.searchParams.get('mark_seen')==='false')
       && Number(url.searchParams.get('limit')||30)>0 && Number(url.searchParams.get('limit')||30)<=50)return;
    if(method==='POST' && url.pathname==='/send-text' && body.accountId===config.workerAccountId && chats.has(body.to)
       && typeof body.text==='string' && body.text.length<=3000 && typeof body.requestId==='string' && typeof body.parentId==='string'
       && Object.keys(body).every(k=>['accountId','to','text','requestId','parentId','notificationId'].includes(k)))return;
-   if(method==='POST' && url.pathname==='/send-text' && direct?.chats.has(body.to) && body.accountId===config.workerAccountId
+   if(method==='POST' && url.pathname==='/send-text' && ownsDirect(body.to,body.threadId) && body.accountId===config.workerAccountId
       && typeof body.text==='string' && body.text.length<=3000 && typeof body.requestId==='string'
-      && Object.keys(body).every(k=>['accountId','to','text','requestId'].includes(k)))return;
+      && Object.keys(body).every(k=>['accountId','to','text','requestId','threadId'].includes(k)))return;
    fail();
   },
   observe(accountId,client,message){
@@ -66,7 +70,7 @@ export function createScopedNativeWorkerPolicy(config,{createTransport=createSco
   observeFailures:()=>({...failures}),
   send(accountId,client,chatId,text,request){
    if(direct?.chats.has(chatId)) {
-    if(accountId!==config.workerAccountId)fail();
+    if(accountId!==config.workerAccountId || direct.chats.get(chatId)!==request?.threadId)fail();
     directSender ||= createDirectSender({config,direct,now});
     return directSender.sendText(client,chatId,text,request);
    }
