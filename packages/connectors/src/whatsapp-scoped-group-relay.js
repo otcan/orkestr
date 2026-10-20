@@ -51,7 +51,9 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
     CREATE TABLE IF NOT EXISTS replies(id TEXT PRIMARY KEY,state TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS reply_payloads(id TEXT PRIMARY KEY,chunks TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS input_media_uploads(id TEXT PRIMARY KEY,attachments TEXT NOT NULL,created_at TEXT NOT NULL);
-    CREATE TABLE IF NOT EXISTS input_media_upload_attempts(id TEXT PRIMARY KEY,attempts INTEGER NOT NULL DEFAULT 0,state TEXT NOT NULL DEFAULT 'retrying');`);
+    CREATE TABLE IF NOT EXISTS input_media_upload_attempts(id TEXT PRIMARY KEY,attempts INTEGER NOT NULL DEFAULT 0,state TEXT NOT NULL DEFAULT 'retrying');
+    CREATE TABLE IF NOT EXISTS reply_receipts(id TEXT PRIMARY KEY,provider_ids TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS remote_delivery_reports(id TEXT PRIMARY KEY,reported_at TEXT NOT NULL);`);
   const routeFence = config.routeControl ? createDeliveryRouteFence({dbPath:config.routeControl.dbPath}) : null;
   const groups = new Map(config.groups.map(g => [g.chatId, g]));
   const errors = new Map();
@@ -249,7 +251,19 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
           const result = await send({chatId: input.chat_id, requestId, parentId: input.id, text: chunks[index]});
           if (result.ok !== true || !result.ids?.length) throw new Error('group_reply_unconfirmed');
           db.prepare("INSERT OR REPLACE INTO replies VALUES(?,'sent')").run(requestId);
+          db.prepare('INSERT OR REPLACE INTO reply_receipts VALUES(?,?)').run(requestId, JSON.stringify(result.ids.map(String)));
           log({event: 'reply_delivered', threadId: group.threadId, messageId: answer.id});
+        }
+        // A mirrored remote-runtime reply: report the confirmed send so V1 can
+        // acknowledge it to the runtime. A failed report retries on the next
+        // poll without resending (every chunk above is already 'sent').
+        if (answer.remoteMessageId && !db.prepare('SELECT 1 FROM remote_delivery_reports WHERE id=?').get(payloadId)) {
+          const requestIds = chunks.map((_, index) => `reply:${key(`${input.id}:${answer.id}:${index}`)}`);
+          const connectorMessageIds = requestIds.flatMap(id => JSON.parse(db.prepare('SELECT provider_ids FROM reply_receipts WHERE id=?').get(id)?.provider_ids || '[]'));
+          await api(`/api/threads/${encodeURIComponent(group.threadId)}/messages/${encodeURIComponent(answer.id)}/scoped-relay-delivery`,
+            {method: 'POST', body: {requestIds, connectorMessageIds, deliveredAt: new Date().toISOString()}});
+          db.prepare('INSERT OR IGNORE INTO remote_delivery_reports VALUES(?,?)').run(payloadId, new Date().toISOString());
+          log({event: 'remote_delivery_reported', threadId: group.threadId, messageId: answer.id});
         }
       }
       if (['final_answer', 'final'].includes(answer.phase)) db.prepare('UPDATE routed SET completed=1 WHERE id=?').run(input.id);

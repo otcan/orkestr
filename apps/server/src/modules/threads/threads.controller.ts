@@ -8,6 +8,7 @@ import { randomUUID } from "node:crypto";
 import { promisify } from "node:util";
 import { Body, Controller, Delete, Get, HttpCode, HttpException, Param, Post, Query, Req } from "@nestjs/common";
 import { deliverWhatsAppReplies } from "../../../../../packages/connectors/src/whatsapp.js";
+import { forwardScopedRelayInputToRemote, scopedRelayRemoteBinding } from "../../../../../packages/connectors/src/whatsapp-scoped-relay-remote.js";
 import { appendEvent } from "../../../../../packages/storage/src/store.js";
 import {
   completeCodexModeCommand,
@@ -999,7 +1000,29 @@ export class ThreadsController {
       await this.assertThreadSanitized("thread.worker-reply", principal, thread, { workerReplyDelivery: body.workerReplyDelivery });
     }
     body = await prepareWorkerReplyInput(thread, body, principal);
+    let scopedRemote: any = null;
+    try {
+      scopedRemote = scopedRelayRemoteBinding(thread, body);
+    } catch (error: any) {
+      throw httpError(error.message, error.statusCode || 409);
+    }
     const message = await enqueueThreadInputForPrincipal(thread.id, body, principal);
+    if (scopedRemote) {
+      // Delegated thread: the remote runtime is the only executor. The local
+      // dispatch fence keeps this row from running here.
+      let forwarded: any;
+      try {
+        forwarded = await forwardScopedRelayInputToRemote({ thread, message, remote: scopedRemote });
+      } catch (error: any) {
+        throw httpError(error.message, error.statusCode || 502);
+      }
+      return {
+        ...queuedInputResponse(thread, forwarded.message, forwarded.refused ? "remote_runtime_refused" : "remote_runtime_forwarded"),
+        remoteRuntime: true,
+        remoteBackend: scopedRemote.backendId,
+        remoteThreadId: scopedRemote.remoteThreadId,
+      };
+    }
     if (threadUsesApiAgent(thread)) {
       if (body.autoRun === false) {
         return { ...queuedInputResponse(thread, message, "auto_run_disabled"), threadId: thread.id, observedVia: message.observedVia || "auto_run_disabled" };

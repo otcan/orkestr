@@ -18,6 +18,7 @@ import { hydrateEncryptedPublishedAttachmentPaths, validateEncryptedPublishedAtt
 import { reissueEncryptedThreadAttachment } from "../../../../../packages/core/src/encrypted-attachment-reissue.js";
 import { publicEncryptedAttachment } from "../../../../../packages/core/src/encrypted-attachment-projection.js";
 import { storedThreadMessagePage } from "./thread-message-store-page.js";
+import { recordScopedRelayRemoteDelivery } from "../../../../../packages/connectors/src/whatsapp-scoped-relay-remote.js";
 import { ThreadActionSanitizerService } from "./thread-application.services.js";
 import { scheduleNativeCodexHistorySync, syncNativeCodexHistory, threadHistoryPayload, threadMessagePage } from "./thread-message-page.js";
 
@@ -51,6 +52,27 @@ export class ThreadMessagesController {
     scheduleNativeCodexHistorySync(thread);
     return await storedThreadMessagePage(thread, query, null) ||
       threadMessagePage(thread, await listThreadMessages(thread.id), query, null);
+  }
+
+  // The scoped group relay reports a confirmed provider send of a mirrored
+  // remote-runtime reply; the mirror acknowledgement then settles the input.
+  @Post(":threadId/messages/:messageId/scoped-relay-delivery")
+  @HttpCode(200)
+  async scopedRelayDelivery(
+    @Req() request: any,
+    @Param("threadId") threadId: string,
+    @Param("messageId") messageId: string,
+    @Body() body: Record<string, unknown> = {},
+  ) {
+    const thread = await getThreadForPrincipal(threadId, requestPrincipal(request));
+    if (!thread) throw httpError("thread_not_found", 404);
+    try {
+      const result = await recordScopedRelayRemoteDelivery({ thread, messageId, body });
+      return { ok: true, threadId: thread.id, duplicate: result.duplicate, messageId: result.message.id,
+        deliveryState: result.message.deliveryState };
+    } catch (error: any) {
+      throw httpError(error.message, error.statusCode || 500);
+    }
   }
 
   @Patch(":threadId/messages/:messageId/whatsapp-inbound-revision")
