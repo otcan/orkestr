@@ -6,7 +6,6 @@ import {createDeliveryRouteFence} from './whatsapp-delivery-route-fence.js';
 import {scopedRouteMembership} from './whatsapp-scoped-route-membership.js';
 import {DatabaseSync} from 'node:sqlite';
 import {scopedGroupReplyChunks} from './whatsapp-scoped-group-formatting.js';
-import {threadSuppressesWhatsAppUpdates} from './whatsapp-mirror-policy.js';
 
 const key = value => crypto.createHash('sha256').update(value).digest('hex');
 const progressPhases = new Set(['commentary', 'awaiting_approval']);
@@ -17,6 +16,17 @@ const lateSources = new Set(['api-session']);
 const finalPhases = new Set(['final_answer', 'final']);
 const LATE_REPLY_WINDOW_MS = 6 * 60 * 60 * 1000;
 const LATE_REPLY_POLL_MS = 10_000;
+// The binding flags of whatsapp-mirror-policy's update suppression, kept local
+// so the standalone bridge's import graph stays closed.
+const flagOn = value => value === true || /^(1|true|yes|on)$/i.test(String(value ?? '').trim());
+const flagOff = value => value === false || /^(0|false|no|off)$/i.test(String(value ?? '').trim());
+const threadSuppressesUpdates = (thread = {}) => {
+  const b = thread?.binding || {};
+  return ['suppressWhatsAppUpdates', 'suppressWhatsAppUpdateMessages', 'suppressUpdateMessages', 'whatsappSuppressUpdates', 'whatsappSuppressUpdateMessages']
+      .some(k => Object.hasOwn(b, k) && flagOn(b[k]))
+    || ['mirrorWhatsAppUpdates', 'mirrorWhatsAppProgress', 'mirrorUpdateMessages', 'whatsappMirrorUpdates']
+      .some(k => Object.hasOwn(b, k) && flagOff(b[k]));
+};
 const errorCode = error => /^[a-z_]+$/.test(error.message) ? error.message : 'operation_failed';
 const GROUP_IMAGE_MIMES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp']);
 const GROUP_MEDIA_MAX_BYTES = 10 * 1024 * 1024;
@@ -276,7 +286,7 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
       route = db.prepare('SELECT * FROM routed WHERE id=?').get(input.id);
       log({event: 'input_routed', threadId: group.threadId, messageId});
     }
-    const suppressUpdates = threadSuppressesWhatsAppUpdates(routeThread, group.chatId, env);
+    const suppressUpdates = threadSuppressesUpdates(routeThread);
     const {answers, messages} = await answersFor(group, route, suppressUpdates);
     for (const answer of answers) {
       await deliverAnswer(input, group, answer, messages);
