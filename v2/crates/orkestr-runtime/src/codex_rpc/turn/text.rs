@@ -206,10 +206,10 @@ impl TurnText {
             .as_array()
             .filter(|items| items.len() <= MAX_ITEMS)
             .ok_or(Blocker::Protocol)?;
-        let view = turn
-            .get("itemsView")
-            .and_then(Value::as_str)
-            .unwrap_or("full");
+        let view = match turn.get("itemsView") {
+            None => "full",
+            Some(value) => value.as_str().ok_or(Blocker::Protocol)?,
+        };
         if !matches!(view, "full" | "summary" | "notLoaded")
             || (view == "notLoaded" && !items.is_empty())
         {
@@ -217,6 +217,7 @@ impl TurnText {
         }
         let mut seen = Vec::new();
         for value in items {
+            value.as_object().ok_or(Blocker::Protocol)?;
             if value.get("type").and_then(Value::as_str) != Some("agentMessage") {
                 continue;
             }
@@ -229,7 +230,7 @@ impl TurnText {
             if seen.contains(&id)
                 || !item.completed
                 || value.get("text").and_then(Value::as_str) != Some(item.text.as_str())
-                || phase(value)? != item.phase
+                || phase(value)?.is_some_and(|phase| Some(phase) != item.phase)
             {
                 return Err(Blocker::Protocol);
             }

@@ -180,6 +180,37 @@ fn unknown_started_phase_can_become_final_and_completed_only_is_supported() {
 }
 
 #[test]
+fn unknown_completed_summary_phase_retains_the_known_final_boundary() {
+    let mut stream = active();
+    receive(
+        &mut stream,
+        item("item/started", "answer", "", json!("final_answer")),
+    );
+    receive(&mut stream, delta(Some("answer"), "Declared final."));
+    receive(
+        &mut stream,
+        item("item/completed", "answer", "Declared final.", Value::Null),
+    );
+    completed_item(
+        &mut stream,
+        "comment",
+        "Later commentary.",
+        json!("commentary"),
+    );
+    let mut terminal = done();
+    terminal["params"]["turn"]["itemsView"] = json!("summary");
+    terminal["params"]["turn"]["items"] = json!([{
+        "type":"agentMessage","id":"answer","text":"Declared final.","phase":null}]);
+    assert_eq!(
+        receive(&mut stream, terminal),
+        vec![
+            ProviderEvent::Progress("Declared final.".into()),
+            ProviderEvent::CompletedProposal { synthetic: false }
+        ]
+    );
+}
+
+#[test]
 fn native_terminal_selection_skips_later_whitespace_only_messages() {
     for phase in [Value::Null, json!("final_answer")] {
         let mut stream = active();
@@ -283,6 +314,12 @@ fn completed_item_and_terminal_summary_must_agree_with_deltas() {
         };
         terminal["params"]["turn"]["itemsView"] = json!("summary");
         refuse(&mut stream, terminal);
+    }
+    for (items, view) in [(json!([false]), json!("summary")), (json!([]), Value::Null)] {
+        let mut terminal = done();
+        terminal["params"]["turn"]["items"] = items;
+        terminal["params"]["turn"]["itemsView"] = view;
+        refuse(&mut active(), terminal);
     }
 }
 
