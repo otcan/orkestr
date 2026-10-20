@@ -150,6 +150,23 @@ class Windows(unittest.TestCase):
             self.assertEqual(self.ledger.status(request["conversation_id"])["state"], "reconciliation")
         self.assertTrue(FakeEndpoint.opened[0].closed)
 
+    def test_untraceable_descendants_close_only_their_window(self):
+        a, b = self.admit(self.home), self.admit(uid())
+        first, second = (self.manager.windows[r["window_id"]] for r in (a, b))
+
+        def overflow():
+            raise Refused("owned_child_bound")
+        first.children.observe = overflow
+        self.manager.child = SimpleNamespace(poll=lambda: None)
+        self.manager.tick()  # Never raises: the shared manager keeps serving.
+        self.assertTrue(first.egress_closed and first.children.cleaned)
+        receipt = self.ledger.status(self.home)
+        self.assertEqual((receipt["state"], receipt["reason"]), ("reconciliation", "cleanup_unknown"))
+        self.assertFalse(second.egress_closed or second.children.cleaned)
+        self.assertEqual(self.ledger.status(b["conversation_id"])["state"], "active")
+        self.assertFalse(self.manager.failed)
+        self.retire(b)
+
     def test_server_loss_marks_every_live_window(self):
         a, b = self.admit(self.home), self.admit(uid())
         self.manager.child = SimpleNamespace(poll=lambda: 0)

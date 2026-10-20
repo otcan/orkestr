@@ -25,7 +25,7 @@ def separate(plan):
     identities={identity for _,identity in credentials}
     require(len(identities)==2,'credential alias refused')
     # Check every top-level input before walking UI or reading any bytes.
-    artifacts=[canonical(plan[key]) for key in ('pair','server','native')]
+    artifacts=[canonical(plan[key]) for key in ('pair','server','native','code_mode_host') if key in plan]
     ui,_=canonical(plan['ui'],True)
     for secret,_ in credentials:
         require(secret!=ui and ui not in secret.parents,'credential inside UI refused')

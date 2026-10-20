@@ -18,6 +18,11 @@ FILES |= {"broker/" + name for name in BROKER}
 FILES |= {"isolation/" + name for name in ISOLATION}
 FILES |= {"codex_bounded/" + name for name in MODULES}
 FILES |= {"codex_service/" + name for name in MODULES_SERVICE}
+# Host full access only: Codex starts its code-mode host (every dynamic tool
+# call, for example orkestr_workspace_exec) from the native's own directory.
+# Pinned beside the native; the sandboxed provider forbids subprocesses.
+CODE_MODE_HOST = "codex-code-mode-host"
+HOST_FILES = {CODE_MODE_HOST}
 DEPENDENCIES = ("/usr/bin/python3", "/usr/bin/bwrap", "/usr/bin/prlimit",
                 "/etc/ssl/certs/ca-certificates.crt")
 
@@ -33,8 +38,8 @@ class Package:
                 and manifest["format"] == "orkestr-v2-codex-service-package-v1"
                 and type(manifest["source_commit"]) is str
                 and re.fullmatch(r"[0-9a-f]{40}", manifest["source_commit"]), "package_format")
-        require(type(manifest["files"]) is dict and set(manifest["files"]) in (FILES, FILES | ROLE_FILES),
-                "package_inventory")
+        require(type(manifest["files"]) is dict and set(manifest["files"]) - HOST_FILES
+                in (FILES, FILES | ROLE_FILES), "package_inventory")
         ui = manifest["ui"]
         require(type(ui) is dict and 0 < len(ui) <= 10000 and "index.html" in ui, "ui_inventory")
         for name in ui:
@@ -146,6 +151,13 @@ class Package:
             require(a != b and a not in b.parents and b not in a.parents, "state_scope_overlap")
         for name in ("server", "native", "manager.py", "launcher.py"):
             require((self.root / name).stat().st_mode & 0o111, "executable_required")
+        access = beta.get("host_full_access")
+        host_providers = type(access) is dict and access.get("providers", True) is True
+        packaged = CODE_MODE_HOST in self.manifest["files"]
+        # Host natives need their code-mode host; nothing else may carry one.
+        require(packaged == host_providers, "code_mode_host_inventory")
+        if packaged:
+            require((self.root / CODE_MODE_HOST).stat().st_mode & 0o111, "executable_required")
 
     def environment(self):
         return {"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8", "HOME": str(self.provider_home),
