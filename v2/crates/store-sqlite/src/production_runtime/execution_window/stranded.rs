@@ -53,6 +53,9 @@ struct Abandon {
     completion: String,
     session: String,
     binding_generation: i64,
+    /// The owner can read and accept it: it keeps the acceptance grace.
+    acceptable: bool,
+    worker: bool,
 }
 
 struct Plan {
@@ -295,10 +298,11 @@ fn startup_allowed(plan: &Plan, actor: Actor) -> Result<()> {
     }
     // A proposal the owner can still accept is never abandoned automatically
     // before the acceptance grace has passed.
-    if actor == Actor::Startup
-        && !plan.public.abandoned_run_ids.is_empty()
-        && !plan.abandon_grace_passed
-    {
+    let acceptable = match &plan.kind {
+        Kind::Turns(turns) => turns.abandon.iter().any(|a| a.acceptable),
+        Kind::Open(_) => false,
+    };
+    if actor == Actor::Startup && acceptable && !plan.abandon_grace_passed {
         return Err(RuntimeStoreError::Fenced);
     }
     Ok(())
@@ -382,23 +386,28 @@ async fn plan_in(
         .filter(|r| r.get::<Option<String>, _>("terminal").is_none())
         .collect();
     // Workers first: a Deep parent may only be abandoned once each of its
-    // admitted children is terminal or planned to fail here.
+    // admitted children is terminal or planned to fail or be abandoned here.
     let mut fail = Vec::new();
-    for r in unresolved
-        .iter()
-        .filter(|r| r.get::<&str, _>("role") == "worker")
-    {
-        fail.push(failed_worker(tx, owner, conversation, &context, r, clock).await?);
-    }
     let mut abandon = Vec::new();
-    for r in unresolved
+    let workers = unresolved
         .iter()
-        .filter(|r| r.get::<&str, _>("role") != "worker")
-    {
+        .filter(|r| r.get::<&str, _>("role") == "worker");
+    for r in workers.clone() {
+        if r.get::<&str, _>("state") != "awaiting_acceptance" {
+            fail.push(failed_worker(tx, owner, conversation, &context, r, clock).await?);
+        }
+    }
+    let proposals = workers
+        .filter(|r| r.get::<&str, _>("state") == "awaiting_acceptance")
+        .chain(
+            unresolved
+                .iter()
+                .filter(|r| r.get::<&str, _>("role") != "worker"),
+        );
+    for r in proposals {
         let run: String = r.get("id");
         if decision != Decision::AbandonUnaccepted
             || r.get::<&str, _>("state") != "awaiting_acceptance"
-            || !matches!(r.get::<&str, _>("role"), "deep" | "fast")
             || r.get::<String, _>("owner_id") != owner.to_string()
             || r.get::<String, _>("conversation_id") != conversation.to_string()
         {
@@ -415,27 +424,40 @@ async fn plan_in(
             .bind(r.get::<String, _>("provider_kind")).bind(r.get::<String, _>("role"))
             .bind(&context).bind(&incarnation)
             .fetch_one(&mut *tx).await.map_err(db)?;
-        if completions.len() != 1
-            || children.iter().any(|c| !fail.iter().any(|f| &f.run == c))
-            || busy != 1
-        {
+        let settled = |c: &String| {
+            fail.iter().any(|f| &f.run == c) || abandon.iter().any(|a: &Abandon| &a.run == c)
+        };
+        // A proposal without one readable completion is settled first.
+        if completions.len() != 1 || !children.iter().all(settled) {
             return Err(RuntimeStoreError::Fenced);
         }
+        // Readable and acceptable through the owner's surfaces: a Deep or
+        // Worker proposal on its own busy session. A Fast proposal of a window
+        // no process owns has no readable execution record (its status needs
+        // the window's live Fast scope), so the owner cannot accept it.
+        let acceptable = r.get::<&str, _>("role") != "fast" && busy == 1;
         abandon.push(Abandon {
             run,
             completion: completions[0].clone(),
             session: r.get("session_id"),
             binding_generation: r.get("binding_generation"),
+            acceptable,
+            worker: r.get::<&str, _>("role") == "worker",
         });
     }
-    // Failed Workers clear their own effects at commit; anything else pending
-    // (tasks, grants, tool effects) still refuses here.
+    // Failed or abandoned Workers clear their own effects at commit (the
+    // commit rechecks every descendant); anything else pending (tasks,
+    // tool effects) still refuses here.
+    let settled_workers = abandon.iter().any(|a| a.worker);
     if fail.is_empty()
+        && !settled_workers
         && !super::super::terminal_retirement::descendants_clear(tx, &context).await?
     {
         return Err(RuntimeStoreError::Fenced);
     }
-    if !fail.is_empty() && !descendants_clear_except(tx, &context, &fail).await? {
+    if (!fail.is_empty() || settled_workers)
+        && !descendants_clear_except(tx, &context, &fail).await?
+    {
         return Err(RuntimeStoreError::Fenced);
     }
     // The successor lineage is anchored on this window's own last Deep turn.

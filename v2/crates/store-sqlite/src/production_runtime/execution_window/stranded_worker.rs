@@ -110,7 +110,7 @@ pub(super) async fn descendants_clear_except(
         .bind(context).fetch_one(&mut *tx).await.map_err(db)?;
     let results: i64 = sqlx::query_scalar("SELECT count(*) FROM worker_tool_results x JOIN worker_tool_delegations d ON d.id=x.delegation_id WHERE d.context_id=? AND (x.state!='delivered' OR x.written_bytes=0)")
         .bind(context).fetch_one(&mut *tx).await.map_err(db)?;
-    let controls: Vec<String> = sqlx::query_scalar("SELECT o.run_id FROM production_control_outbox o JOIN production_runs r ON r.id=o.run_id WHERE r.context_id=? AND o.state!='acknowledged'")
+    let controls: Vec<String> = sqlx::query_scalar("SELECT o.run_id FROM production_control_outbox o JOIN production_runs r ON r.id=o.run_id WHERE r.context_id=? AND o.state!='acknowledged' AND NOT EXISTS(SELECT 1 FROM production_terminal_evidence t WHERE t.run_id=o.run_id AND t.terminal_kind='failed')")
         .bind(context).fetch_all(&mut *tx).await.map_err(db)?;
     Ok(pending == 0
         && tools == 0

@@ -172,6 +172,37 @@ ends it as follows:
   counts as unresolved setup, so the window still retires.
 - Runtime reaps the setup child as before.
 
+## Generalized settlement (0055)
+
+The rule is now general rather than per shape. It applies to a window in
+`reconciliation_required` that is past its hard deadline, with no live owner and
+no live manager budget:
+
+- **Lapsed runs fail.** Every nonterminal run of any role whose lease has passed
+  becomes `failed` with cause `lease_expired_process_gone`. This covers every
+  state: `starting`, `running`, `blocked`, `cancel_requested`, `failed`, and
+  `cancelled` without evidence, whatever the run's last observation and any
+  pending control.
+- **Proposals without a readable completion fail.** A proposal that does not
+  have exactly one readable completion becomes `failed` with cause
+  `proposal_execution_missing`.
+- **Settlement repeats.** A parent's terminal update can fence a child it held,
+  so settlement runs again until nothing lapsed is left.
+- **Proposals are split by whether the owner can accept them.**
+  - A Deep or Worker proposal on its own busy session can be read and accepted
+    by the owner. It keeps the 24-hour acceptance grace.
+  - A Fast proposal of a window no process owns has no readable execution
+    record: its status needs the window's live Fast scope. It is abandoned with
+    cause `proposal_execution_missing`.
+  - Every abandonment records its cause in `production_abandonment_causes`.
+  - Worker proposals can now be abandoned like Deep and Fast ones.
+- **The window always becomes terminal.** This happens once the grace has
+  passed, or earlier once the owner has accepted every acceptable proposal. The
+  next window then opens from the window's last Deep turn.
+
+A property test checks this for every combination of Fast × Deep × Worker ×
+state × observation, both within and after the grace.
+
 ## Not covered
 
 Any of the following refuses the reconciliation and changes nothing:
