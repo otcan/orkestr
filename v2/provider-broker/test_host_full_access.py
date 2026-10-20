@@ -72,6 +72,26 @@ class HostFullAccessTests(unittest.TestCase):
                 with self.assertRaises(Refused):
                     channel.provider(sub)
 
+    def test_host_natives_accept_large_command_output_items(self):
+        import types
+        from codex_service.profile import HOST_PROVIDER_FRAME
+        from protocol import MAX_FRAME
+        from transport import Pump
+        channel = setup(True)
+        start(channel, "danger-full-access")
+        reply(channel, {"type": "dangerFullAccess"})
+        item = {"method": "item/completed", "params": {"threadId": "synthetic-native", "turnId": "t",
+                "item": {"type": "commandExecution", "id": "exec-1", "aggregatedOutput": "x" * 200000}}}
+        raw = __import__("json").dumps(item).encode()
+        self.assertGreater(len(raw), MAX_FRAME)
+        host = Pump(types.SimpleNamespace(max_provider_frame=HOST_PROVIDER_FRAME), channel, incoming=10**6, outgoing=10**6 + 1)
+        self.assertEqual(host.limit(0), HOST_PROVIDER_FRAME)
+        self.assertEqual(host.limit(10**6), MAX_FRAME)  # parent input keeps the bound
+        host.line(0, raw)  # parsed and dropped: tool items are never forwarded
+        self.assertEqual(len(host.queues[10**6 + 1]), 0)
+        default = Pump(types.SimpleNamespace(), channel, incoming=10**6, outgoing=10**6 + 1)
+        self.assertEqual(default.limit(0), MAX_FRAME)
+
     def test_host_command_installs_exact_real_environment(self):
         from codex_service.profile import host_command
         command = host_command(Path("/opt/example/native"),
