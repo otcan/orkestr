@@ -11,6 +11,9 @@ SERVICE_FIELDS = {"origin", "loopback_url", "credentials_path", "expected_owner"
 SCOPE_FIELDS = {"conversation_id", "public_thread_id", "chat_id", "account_id", "remote_thread_id",
                 "allowed_principals", "excluded_public_ids", "automatic_accept_roles", "outbound_role"}
 BINDING_FIELDS = SCOPE_FIELDS | {"enabled", "revoked", "progress_updates", "attachments", "max_outstanding_inputs"}
+# Optional binding fields and their defaults.
+OPTIONAL_BINDING_FIELDS = {"max_input_age_seconds": 30 * 60}
+MAX_INPUT_AGE_RANGE = (60, 7 * 24 * 60 * 60)
 # The single-chat pilot file: service and one binding in one document.
 PILOT_FIELDS = (SERVICE_FIELDS - {"bindings_dir", "ledger_dir"}) | SCOPE_FIELDS | {"ledger_path", "enabled"}
 # Ledger identity keys. Identical to the pilot so its ledger can be adopted in place.
@@ -58,8 +61,12 @@ def _service(value):
 
 def binding(value, owner):
     """Validate one binding document; returns it with its pinned ledger scope."""
-    if not isinstance(value, dict) or set(value) != BINDING_FIELDS:
+    if not isinstance(value, dict) or set(value) - set(OPTIONAL_BINDING_FIELDS) != BINDING_FIELDS:
         raise ValueError("binding_fields")
+    value = dict(OPTIONAL_BINDING_FIELDS, **value)
+    age = value["max_input_age_seconds"]
+    if type(age) is not int or not MAX_INPUT_AGE_RANGE[0] <= age <= MAX_INPUT_AGE_RANGE[1]:
+        raise ValueError("config_input_age")
     for key in ("conversation_id", "remote_thread_id"):
         if str(uuid.UUID(value[key])) != value[key]:
             raise ValueError("binding_identity")

@@ -15,7 +15,7 @@ from .ledger import Ledger
 from .worker import Worker
 
 UNIQUE_KEYS = ("remote_thread_id", "conversation_id", "public_thread_id", "chat_id")
-MUTABLE_KEYS = ("enabled", "revoked", "progress_updates", "attachments", "max_outstanding_inputs")
+MUTABLE_KEYS = ("enabled", "revoked", "progress_updates", "attachments", "max_outstanding_inputs", "max_input_age_seconds")
 
 
 class Binding:
@@ -150,6 +150,7 @@ class Registry:
             client = self.client_factory(binding.config["conversation_id"])
             binding.worker = Worker(client, binding.ledger)
         binding.worker.progress_updates = binding.config["progress_updates"]
+        binding.worker.max_input_age_s = binding.config["max_input_age_seconds"]
         if binding.thread is None and self.workers:
             binding.thread = threading.Thread(target=binding.worker.run,
                                               args=(binding.stop, lambda: binding.state == "enabled"),
