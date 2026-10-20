@@ -1,4 +1,5 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { mcpServerOptions } from "../../shared/src/mcp-limits.js";
 import {
   connectorMcpCapabilities,
   connectorMcpToolResult,
@@ -28,7 +29,7 @@ export function createConnectorsMcpServer({ auth = {}, request = null, env = pro
     name: "orkestr-connectors",
     version: "1.0.0",
     websiteUrl: "https://orkestr.de",
-  });
+  }, mcpServerOptions);
 
   for (const descriptor of connectorsMcpToolDescriptors) {
     server.registerTool(descriptor.name, {
