@@ -398,7 +398,8 @@ pub(super) fn validate_metadata(
                     .and_then(Value::as_str)
                     .is_some_and(|cwd| std::path::Path::new(cwd) == workspace)
                 && params.get("approvalPolicy").and_then(Value::as_str) == Some("never")
-                && params.get("sandbox").and_then(Value::as_str) == Some("read-only")
+                && params.get("sandbox").and_then(Value::as_str)
+                    == Some(crate::provider_access::current().request())
                 && params.get("ephemeral") == Some(&Value::Bool(false))
         }
         _ => false,

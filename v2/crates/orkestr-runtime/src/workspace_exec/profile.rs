@@ -113,6 +113,26 @@ pub struct TrustedProfile {
     pub job_timeout: Duration,
     pub job_output: usize,
     pub max_jobs: usize,
+    /// Host-privileged mode: no namespaces, seccomp or no_new_privs; the
+    /// command runs as the service user with this real environment. Equivalent
+    /// to host root when that user has sudo. `None` keeps the sandbox.
+    pub host: Option<HostAccess>,
+}
+
+/// The operator's real executor environment (e.g. HOME, PATH) for host mode.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HostAccess {
+    pub environment: Vec<(String, String)>,
+}
+
+/// Any conventional variable name; host mode is not a boundary.
+pub fn host_environment_key_allowed(key: &str) -> bool {
+    let mut bytes = key.bytes();
+    bytes
+        .next()
+        .is_some_and(|b| b.is_ascii_alphabetic() || b == b'_')
+        && bytes.all(|b| b.is_ascii_alphanumeric() || b == b'_')
+        && key.len() <= 128
 }
 
 pub(crate) fn clean_absolute(path: &Path) -> bool {
@@ -157,6 +177,9 @@ impl TrustedProfile {
     /// `reserved` are host paths no mount may equal, contain or enter: the
     /// Orkestr home, cgroup root, provider workspaces and the project itself.
     pub fn validate(&self, reserved: &[&Path]) -> Result<(), &'static str> {
+        if let Some(host) = &self.host {
+            return self.validate_host(host);
+        }
         let fixed = [self.workspace_target.as_path(), self.home.as_path()];
         if self.sync_timeout.is_zero()
             || self.sync_timeout > MAX_SYNC_TIMEOUT
@@ -236,6 +259,41 @@ impl TrustedProfile {
         Ok(())
     }
 
+    /// Host mode checks operability bounds only: mount and credential lists
+    /// are not boundaries there (everything the user can reach is reachable).
+    fn validate_host(&self, host: &HostAccess) -> Result<(), &'static str> {
+        let mut seen = std::collections::BTreeSet::new();
+        if self.sync_timeout.is_zero()
+            || self.sync_timeout > MAX_SYNC_TIMEOUT
+            || !(1024..=MAX_SYNC_OUTPUT).contains(&self.sync_output)
+            || self.job_timeout > MAX_JOB_TIMEOUT
+            || self.max_jobs > MAX_JOBS
+            || (self.max_jobs > 0
+                && (self.job_timeout.is_zero()
+                    || !(1024..=MAX_JOB_OUTPUT).contains(&self.job_output)))
+            || !self.resources.valid()
+            || !clean_absolute(&self.workspace_target)
+            || self.credential_env_files.len() > 16
+            || !self.credential_env_files.iter().all(|f| clean_absolute(f))
+            || host.environment.len() > 256
+            || !host
+                .environment
+                .iter()
+                .chain(self.environment.iter())
+                .all(|(k, v)| {
+                    host_environment_key_allowed(k)
+                        && environment_value_allowed(v)
+                        && seen.insert(k)
+                })
+            || !["HOME", "PATH"]
+                .iter()
+                .all(|key| host.environment.iter().any(|(k, _)| k == key))
+        {
+            return Err("invalid host-privileged workspace command profile");
+        }
+        Ok(())
+    }
+
     pub fn credentials_exposed(&self) -> bool {
         !self.credential_env_files.is_empty()
             || self
@@ -279,6 +337,7 @@ mod tests {
             job_timeout: Duration::from_secs(1800),
             job_output: 1024 * 1024,
             max_jobs: 2,
+            host: None,
         }
     }
 
@@ -363,5 +422,30 @@ mod tests {
         let mut bad = profile();
         bad.workspace_target = "/tmp/project".into();
         assert!(bad.validate(&[]).is_err());
+    }
+
+    #[test]
+    fn host_mode_requires_real_home_and_path_but_ignores_mount_rules() {
+        let mut host = profile();
+        host.host = Some(HostAccess {
+            environment: vec![
+                ("HOME".into(), "/home/example".into()),
+                ("PATH".into(), "/usr/bin:/bin".into()),
+            ],
+        });
+        host.mounts.push(Mount {
+            kind: MountKind::Credential,
+            path: "/etc".into(),
+        });
+        host.validate(&[Path::new("/srv")]).unwrap();
+        let mut missing = host.clone();
+        missing.host.as_mut().unwrap().environment.pop();
+        assert!(missing.validate(&[]).is_err());
+        let mut duplicate = host.clone();
+        duplicate.environment.push(("HOME".into(), "/other".into()));
+        assert!(duplicate.validate(&[]).is_err());
+        let mut long = host;
+        long.job_timeout = MAX_JOB_TIMEOUT + Duration::from_secs(1);
+        assert!(long.validate(&[]).is_err());
     }
 }

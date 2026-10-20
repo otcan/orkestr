@@ -1,4 +1,5 @@
 //! Closed operator configuration; never accepted from HTTP.
+pub(crate) mod host_full_access;
 pub(crate) mod loading;
 pub(crate) mod roles;
 pub(crate) mod workspace_exec;
@@ -27,6 +28,9 @@ pub(crate) struct BetaConfig {
     /// with active Deep work). Further fresh-window intents queue durably.
     #[serde(default)]
     pub max_active_windows: Option<u32>,
+    /// Owner/instance-level V1-equivalent full access; absent by default.
+    #[serde(default)]
+    pub host_full_access: Option<host_full_access::HostFullAccess>,
 }
 /// Default number of conversations that may hold a live window at once.
 pub(crate) const DEFAULT_ACTIVE_WINDOWS: u32 = 8;
@@ -65,8 +69,11 @@ impl BetaConfig {
         {
             return Err("invalid beta window capacity");
         }
+        if let Some(access) = &self.host_full_access {
+            access.validate()?;
+        }
         if let Some(profile) = &self.workspace_exec {
-            profile.validate()?;
+            profile.validate_with(self.host_full_access.as_ref())?;
             if self.roles.is_none() {
                 return Err("workspace execution requires configured Worker roles");
             }

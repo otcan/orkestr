@@ -45,6 +45,13 @@ capabilities dropped, the sealed seccomp policy (mount, ptrace, io_uring, bpf,
 keyring, module and namespace syscalls refused), a fresh job cgroup with
 `cgroup.kill`, the outside subreaper and its reap witness.
 
+## Host-privileged mode
+
+`"host_privileged": true` (with instance-level `host_full_access`) replaces the
+sandbox with direct host execution as the service user; see "Host full access"
+in `workspace-exec.md`. It is equivalent to host root, and the mount and
+credential rules below do not apply as boundaries in that mode.
+
 ## Long-running work: detached jobs
 
 A Worker's run lease is about 30 seconds and is never renewed while a tool call

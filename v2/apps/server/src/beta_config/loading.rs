@@ -72,6 +72,7 @@ pub(crate) fn load(path: &Path, home: &Path) -> Result<BetaConfig, &'static str>
                     .iter()
                     .flat_map(|roles| roles.launches().map(|r| r.workspace.clone())),
             ),
+            config.host_full_access.as_ref(),
         )?;
         match trusted {
             Some(trusted) => {

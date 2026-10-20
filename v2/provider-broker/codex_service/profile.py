@@ -15,10 +15,17 @@ class Configuration:
         self.workspace_descriptor = None
         self.workspace = self.profile.workspace
         self.issued = False
+        access = package.beta.get("host_full_access")
+        # Operator instance opt-in: run the pinned native directly on the host
+        # with the real executor environment (V1-equivalent, host-root equivalent).
+        self.host_full_access = type(access) is dict and access.get("providers", True) is True
+        self.host_environment = dict(access["environment"]) if self.host_full_access else None
 
     def isolated_command(self):
         require(not self.issued, "isolated_command_already_issued")
         self.issued = True
+        if self.host_full_access:
+            return host_command(self.profile.native, self.host_environment), ()
         descriptor = policy.filter_fd(allow_inet=True)
         try:
             command = self.profile._command(descriptor, "codex-bounded")
@@ -31,3 +38,13 @@ class Configuration:
         except BaseException:
             os.close(descriptor)
             raise
+
+
+def host_command(native, environment):
+    """No namespace, seccomp, egress proxy or mounts: `env -i` installs exactly
+    the operator's real executor environment before the pinned native."""
+    require(type(environment) is dict and {"HOME", "PATH"} <= set(environment) and all(
+        type(k) is str and type(v) is str and k and "=" not in k and "\0" not in k + v
+        for k, v in environment.items()), "host_environment")
+    return ["/usr/bin/env", "-i", *(f"{k}={v}" for k, v in sorted(environment.items())),
+            str(native), "app-server", "--listen", "stdio://"]

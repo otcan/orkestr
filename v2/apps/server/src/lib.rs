@@ -87,6 +87,14 @@ impl AppState {
         home: &std::path::Path,
     ) -> Result<Self, &'static str> {
         let config = beta_config::loading::load(path, home)?;
+        if config
+            .host_full_access
+            .as_ref()
+            .is_some_and(|access| access.providers)
+        {
+            // Operator opt-in, before any provider session exists.
+            orkestr_runtime::provider_access::enable_host_full_access();
+        }
         let stat = std::fs::read_to_string("/proc/self/stat")
             .map_err(|_| "beta manager parent unavailable")?;
         let (_, fields) = stat
