@@ -1,5 +1,5 @@
 import { appendEvent } from "../../storage/src/store.js";
-import { remoteWhatsAppRuntimeBinding } from "../../connectors/src/whatsapp-remote-runtime.js";
+import { remoteWhatsAppRuntimeBinding } from "./thread-remote-runtime-binding.js";
 import { markConnectorDeliverySignal } from "./connector-delivery-signals.js";
 import { replyDeliveryProjectionParent } from "./reply-delivery-intent.js";
 import { parseThreadInputCommand } from "./thread-commands.js";

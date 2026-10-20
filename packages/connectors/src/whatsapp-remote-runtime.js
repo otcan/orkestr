@@ -2,7 +2,10 @@ import path from "node:path";
 import { appendEvent } from "../../storage/src/store.js";
 import { recordRouterTraceEvent } from "../../core/src/router-traces.js";
 import { appendThreadMessage, listThreadMessages, listThreads, updateThreadMessage } from "../../core/src/threads.js";
+import { remoteWhatsAppRuntimeBinding } from "../../core/src/thread-remote-runtime-binding.js";
 import { remoteParentExpectedFields, remoteParentRecoveryCandidate } from "./whatsapp-remote-parent.js";
+
+export { remoteWhatsAppRuntimeBinding };
 
 function pickString(...values) {
   for (const value of values) {
@@ -89,27 +92,6 @@ export function backendForBinding(binding = {}, env = process.env) {
     throw error;
   }
   return backend;
-}
-
-export function remoteWhatsAppRuntimeBinding(thread = null, env = process.env) {
-  const binding = thread?.binding || {};
-  if (String(binding.connector || "whatsapp").trim().toLowerCase() !== "whatsapp") return null;
-  if (binding.remoteRuntimeEnabled === false || binding.remoteRouterEnabled === false) return null;
-  const remoteThreadId = pickString(binding.remoteThreadId, binding.remoteRuntimeThreadId, binding.delegatedThreadId);
-  if (!remoteThreadId) return null;
-  const backendId = pickString(
-    binding.remoteBackend,
-    binding.remoteRuntimeBackend,
-    binding.runtimeBackend,
-    env.ORKESTR_REMOTE_THREAD_BACKEND_ID,
-    env.ORKESTR_REMOTE_RUNTIME_BACKEND_ID,
-    "default",
-  );
-  return {
-    backendId,
-    remoteThreadId,
-    binding,
-  };
 }
 
 export function remoteEndpointUrl(backend, endpointPath) {

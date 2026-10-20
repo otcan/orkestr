@@ -1,5 +1,5 @@
 import { withThreadQueueBoundary } from "./thread-queue-control.js";
-import { remoteWhatsAppRuntimeBinding } from "../../connectors/src/whatsapp-remote-runtime.js";
+import { remoteWhatsAppRuntimeBinding } from "./thread-remote-runtime-binding.js";
 import { randomUUID } from "node:crypto";
 import { checkSetupCodexSubscription } from "./setups/setup-dispatch-guard.js";
 import { resourceOwnerUserId } from "./policy.js";

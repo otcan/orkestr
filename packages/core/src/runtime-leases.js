@@ -21,7 +21,7 @@ import { ensureRuntimeAgentsFile } from "./agent-context.js";
 import { recordCodexRuntimeAuthInvalidSignal } from "./codex-auth-health.js";
 import { deployDrainActiveSync } from "./deploy-drain.js";
 import { assertCodexAuthenticated } from "../../connectors/src/codex.js";
-import { remoteWhatsAppRuntimeBinding } from "../../connectors/src/whatsapp-remote-runtime.js";
+import { remoteWhatsAppRuntimeBinding } from "./thread-remote-runtime-binding.js";
 import { ensureConnectorOutboxJob, listConnectorOutboxJobs } from "../../connectors/src/connector-outbox.js";
 import { setConnectorOutboxJobAdapter } from "./connector-outbox-adapter.js";
 import { clearPaneProgressCache, paneBackgroundWork, publicPaneProgress, samplePaneProgress } from "./pane-progress.js";
