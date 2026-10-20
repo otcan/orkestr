@@ -8,11 +8,13 @@ slot a separate private native home. Browsers cannot supply a launcher, native
 session, provider credential, or budget.
 
 All roles use the same authenticated owner, conversation, Core context, and
-execution window. The one aggregate window retains its original 900-second,
-32-attempt, 64-MiB limits in both proxy layers, including the 30-second,
-4-attempt, 1-MiB cleanup reserve. Adding roles or admitting another ordinary
-input does not create another budget. Only one conversation has an active
-aggregate window at a time.
+execution window. The root proxy shares one durable 900-second, 32-attempt,
+64-MiB budget across every role, including the 30-second, 4-attempt, 1-MiB
+cleanup reserve. Each inner proxy also has its existing finite limits; its
+traffic must pass the shared root budget. The inner counters are per native
+supervisor, not shared memory across processes. Adding roles or admitting
+another ordinary input does not renew the aggregate budget. Only one
+conversation has an active aggregate window at a time.
 
 ## Behavior
 
