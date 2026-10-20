@@ -13,6 +13,8 @@ pub(super) struct Descriptors {
 }
 
 pub(super) struct Layout {
+    /// Host-privileged: no bwrap; the supervisor runs `/bin/sh -c` directly.
+    pub host: bool,
     pub argv: Vec<String>,
     pub env: Vec<(String, String)>,
     /// Descriptors bwrap itself must inherit; everything else is closed.
@@ -129,7 +131,45 @@ pub(super) fn trusted(
         }
         env.push((key, value));
     }
-    Ok(Layout { argv, env, pass })
+    Ok(Layout {
+        host: false,
+        argv,
+        env,
+        pass,
+    })
+}
+
+/// Host-privileged layout: the real executor environment, then operator and
+/// credential additions, `PWD` at the real project path. Only the workspace
+/// descriptor (for `fchdir`) is passed; no namespace, seccomp or mount.
+pub(super) fn host(
+    profile: &TrustedProfile,
+    access: &super::profile::HostAccess,
+    workspace: i32,
+    credentials: Vec<(String, String)>,
+) -> Result<Layout> {
+    let mut env: Vec<(String, String)> = access
+        .environment
+        .iter()
+        .filter(|(k, _)| k != "PWD")
+        .cloned()
+        .collect();
+    env.push(("PWD".into(), text(&profile.workspace_target)?));
+    for (key, value) in profile.environment.iter().cloned().chain(credentials) {
+        if !super::profile::host_environment_key_allowed(&key)
+            || !environment_value_allowed(&value)
+            || env.iter().any(|(existing, _)| *existing == key)
+        {
+            return Err(Error::InvalidConfig);
+        }
+        env.push((key, value));
+    }
+    Ok(Layout {
+        host: true,
+        argv: vec![],
+        env,
+        pass: vec![workspace],
+    })
 }
 
 /// Bounded `KEY=VALUE` parser for an operator-listed credential file. Any
@@ -184,6 +224,17 @@ pub(super) fn credentials(profile: &TrustedProfile) -> Result<Vec<(String, Strin
 
 /// One compact JSON document for the supervisor's sealed layout descriptor.
 pub(super) fn encode(layout: &Layout) -> Vec<u8> {
+    let env: serde_json::Map<_, _> = layout
+        .env
+        .iter()
+        .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
+        .collect();
+    if layout.host {
+        return serde_json::to_vec(&serde_json::json!({
+            "host": true, "env": env, "pass": layout.pass,
+        }))
+        .unwrap_or_default();
+    }
     serde_json::to_vec(&serde_json::json!({
         "argv": layout.argv,
         "env": layout
@@ -231,6 +282,7 @@ mod tests {
             job_timeout: Duration::from_secs(60),
             job_output: 4096,
             max_jobs: 1,
+            host: None,
         }
     }
     fn fds() -> Descriptors {
@@ -332,6 +384,27 @@ mod tests {
         ] {
             assert!(trusted(&profile(), fds(), vec![(key.into(), value.into())]).is_err());
         }
+    }
+
+    #[test]
+    fn host_layout_uses_real_environment_and_only_the_workspace_descriptor() {
+        let access = super::super::profile::HostAccess {
+            environment: vec![
+                ("HOME".into(), "/home/example".into()),
+                ("PATH".into(), "/usr/local/bin:/usr/bin".into()),
+                ("PWD".into(), "/stale".into()),
+            ],
+        };
+        let layout = host(&profile(), &access, 12, vec![("TOKEN".into(), "x".into())]).unwrap();
+        assert!(layout.host && layout.argv.is_empty());
+        assert_eq!(layout.pass, vec![12]);
+        let keys: Vec<_> = layout.env.iter().map(|(k, _)| k.as_str()).collect();
+        assert_eq!(keys, ["HOME", "PATH", "PWD", "CARGO_HOME", "TOKEN"]);
+        assert_eq!(layout.env[2].1, "/srv/project");
+        let encoded: serde_json::Value = serde_json::from_slice(&encode(&layout)).unwrap();
+        assert_eq!(encoded["host"], true);
+        assert!(encoded.get("argv").is_none());
+        assert!(host(&profile(), &access, 12, vec![("HOME".into(), "/x".into())]).is_err());
     }
 
     #[test]

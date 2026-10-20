@@ -2,6 +2,7 @@ mod about;
 mod acceptance_button;
 mod accepted_results_bridge;
 mod accepted_results_view;
+mod archived_history_view;
 mod attachments_view;
 mod beta_bridge;
 mod beta_discovery;
@@ -18,6 +19,7 @@ mod held_inputs_view;
 mod history;
 mod host_resources_view;
 mod intelligence_view;
+mod page_memory_bridge;
 mod progress_view;
 mod send_admission;
 mod steering_view;
@@ -56,6 +58,41 @@ fn App() -> Element {
     let mut execution = use_signal(orkestr_v2_ui::execution::Execution::default);
     let mut host_resources = use_signal(orkestr_v2_ui::host_resources::HostResources::default);
     let mut held_inputs = use_signal(orkestr_v2_ui::held_inputs::HeldInputs::default);
+    // Tab-scoped reload recovery; writes start only after this owner's restore.
+    let mut memory_key = use_signal(|| None::<String>);
+    let mut restored = use_signal(|| false);
+    let mut recover = move |global: String| {
+        let key = orkestr_v2_ui::page_memory::key(&global);
+        restored.set(false);
+        memory_key.set(key.clone());
+        let Some(key) = key else { return };
+        spawn(async move {
+            let raw = page_memory_bridge::load(&key).await;
+            if memory_key.peek().as_deref() != Some(key.as_str()) {
+                return;
+            }
+            if let Some(raw) = raw {
+                orkestr_v2_ui::page_memory::restore(
+                    &raw,
+                    &mut drafts.write(),
+                    &mut saved_inputs.write(),
+                    &mut window_intent.write(),
+                );
+            }
+            restored.set(true);
+        });
+    };
+    use_effect(move || {
+        let drafts = drafts.read();
+        let saved = saved_inputs.read();
+        let intents = window_intent.read();
+        if let (Some(key), true) = (memory_key(), restored()) {
+            page_memory_bridge::store(
+                &key,
+                orkestr_v2_ui::page_memory::encode(&drafts, &saved, &intents),
+            );
+        }
+    });
     let mut notice = use_signal(|| "Sign in to your local server.".to_string());
     let mut refresh = use_signal(|| 0_u64);
     let mut resuming = use_signal(|| true);
@@ -84,6 +121,7 @@ fn App() -> Element {
                 task_drafts
                     .write()
                     .activate(session_scope.read().generation());
+                recover(session.global_conversation_id.clone());
                 global.set(String::new());
                 current.set(String::new());
                 csrf.set(session.csrf_token);
@@ -105,6 +143,7 @@ fn App() -> Element {
         held_inputs.write().clear_owner();
         task_drafts.write().clear_owner();
         session_scope.write().invalidate();
+        memory_key.set(None);
         global.set(String::new());
         current.set(String::new());
         requested_conversation.set(None);
@@ -135,6 +174,7 @@ fn App() -> Element {
                     task_drafts.write().clear_owner();
                     session_scope.write().activate(&session.global_conversation_id, &mut drafts.write());
                     task_drafts.write().activate(session_scope.read().generation());
+                    recover(session.global_conversation_id.clone());
                     refresh += 1;
                     global.set(String::new());
                     current.set(String::new());
@@ -173,6 +213,7 @@ fn App() -> Element {
                                     held_inputs.write().clear_owner();
                                     task_drafts.write().clear_owner();
                                     session_scope.write().invalidate();
+                                    if let Some(key) = memory_key.take() { page_memory_bridge::store(&key, None); }
                                     global.set(String::new()); current.set(String::new()); refresh += 1;
                                     requested_conversation.set(None); conversation_location::replace(None);
                                     csrf.set(String::new());

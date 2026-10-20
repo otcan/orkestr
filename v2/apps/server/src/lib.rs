@@ -87,6 +87,14 @@ impl AppState {
         home: &std::path::Path,
     ) -> Result<Self, &'static str> {
         let config = beta_config::loading::load(path, home)?;
+        if config
+            .host_full_access
+            .as_ref()
+            .is_some_and(|access| access.providers)
+        {
+            // Operator opt-in, before any provider session exists.
+            orkestr_runtime::provider_access::enable_host_full_access();
+        }
         let stat = std::fs::read_to_string("/proc/self/stat")
             .map_err(|_| "beta manager parent unavailable")?;
         let (_, fields) = stat
@@ -139,11 +147,19 @@ impl AppState {
         Ok(self)
     }
     /// The ordinary server owns the bounded controller task and its shutdown.
+    /// With a beta window runtime, every timer occurrence also queues its Deep
+    /// turn and wakes the window dispatcher; otherwise only the input is admitted.
     pub fn start_timers(&self, supervisor: Store) -> timer_lifecycle::TimerTask {
-        timer_lifecycle::TimerTask::start(
-            timer_http::durable::DurableTimerController::new(supervisor),
-            self.timers.ready.clone(),
-        )
+        let mut controller = timer_http::durable::DurableTimerController::new(supervisor);
+        if let Some(window) = &self.window_controller {
+            let window = Arc::downgrade(window);
+            controller = controller.with_window_dispatch(Arc::new(move || {
+                if let Some(window) = window.upgrade() {
+                    window.wake_dispatcher();
+                }
+            }));
+        }
+        timer_lifecycle::TimerTask::start(controller, self.timers.ready.clone())
     }
     pub fn new(
         store: Store,

@@ -10,5 +10,6 @@ pub mod claude_rpc;
 pub mod codex_rpc;
 pub mod containment;
 pub mod execution;
+pub mod provider_access;
 pub mod worker_sandbox;
 pub mod workspace_exec;

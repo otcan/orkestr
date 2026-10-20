@@ -14,6 +14,13 @@ pub enum TimerSchedule {
         weekly: bool,
         minute_of_day: u16,
     },
+    /// Local wall clock in an IANA zone. `weekday` (1=Monday..7=Sunday) makes it
+    /// weekly. Daylight-saving gaps resolve forward, repeated hours fire once.
+    ZonedClock {
+        timezone: String,
+        weekday: Option<u8>,
+        minute_of_day: u16,
+    },
     /// Unknown legacy cadence/timezone retained verbatim as bounded schedule metadata.
     Dormant {
         cadence: String,

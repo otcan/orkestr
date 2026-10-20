@@ -48,17 +48,14 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     let mut state = AppState::new(store.clone(), token, origin)?;
     let beta = std::env::var_os("ORKESTR_V2_BETA_CONFIG");
     if let Some(path) = &beta {
-        if [
-            "ORKESTR_V2_EXECUTION_CONFIG",
-            "ORKESTR_V2_EXECUTION_SET",
-            "ORKESTR_V2_TIMER_CONFIG",
-        ]
-        .iter()
-        .any(|key| std::env::var_os(key).is_some())
+        // Timers may run beside beta windows: occurrences queue their Deep turn
+        // through the same durable window queue as owner input.
+        if ["ORKESTR_V2_EXECUTION_CONFIG", "ORKESTR_V2_EXECUTION_SET"]
+            .iter()
+            .any(|key| std::env::var_os(key).is_some())
         {
             return Err(
-                "beta configuration cannot be combined with execution or timer configuration"
-                    .into(),
+                "beta configuration cannot be combined with execution configuration".into(),
             );
         }
         state = state.with_beta_config_file(&PathBuf::from(path), &home)?;

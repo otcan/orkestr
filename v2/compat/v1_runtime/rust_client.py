@@ -302,7 +302,8 @@ class RustClient:
         require(not path.scheme and not path.netloc, "route_refused")
         read = {"": ("after", "limit"), "/window": (), "/execution": ("run_id",),
                 "/fast/execution": ("run_id",), "/accepted-results": ("after_sequence", "limit"),
-                "/intelligence": (), "/held-inputs": (), "/events": ("after", "limit")}
+                "/intelligence": (), "/held-inputs": (), "/events": ("after", "limit"),
+                "/timer-inputs": ("after_sequence", "limit")}
         payload = path.path.startswith("/payloads/") and identity(path.path[10:])
         require((method == "GET" and (path.path in read or payload)) or
                 (method == "POST" and path.path in ("/messages", "/window", "/accept")), "route_refused")

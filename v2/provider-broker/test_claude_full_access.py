@@ -111,6 +111,21 @@ class FullAccessCodecTests(unittest.TestCase):
         subagent = dict(frames[2], parent_tool_use_id="toolu_1", uuid=str(uuid.uuid4()))
         self.assertIsNone(channel.provider(subagent))
 
+    def test_tool_progress_and_keep_alive_drain_during_long_tools(self):
+        channel, native, frames = tool_turn(True)
+        channel.provider(frames[0])
+        progress = {"type": "tool_progress", "tool_use_id": "toolu_1-heartbeat-0", "tool_name": "Bash",
+                    "parent_tool_use_id": "toolu_1", "elapsed_time_seconds": 30,
+                    "session_id": native, "uuid": str(uuid.uuid4())}
+        for _ in range(64):
+            self.assertIsNone(channel.provider(dict(progress, uuid=str(uuid.uuid4()))))
+            self.assertIsNone(channel.provider({"type": "keep_alive"}))
+        self.assertEqual(channel.provider(frames[2])["params"]["frame"]["message"]["content"],
+                         [{"type": "text", "text": "done"}])
+        with self.assertRaises(Refused):
+            channel, native, frames = tool_turn(True)
+            channel.provider(dict(progress, session_id="foreign"))
+
     def test_contained_session_still_refuses_tool_traffic(self):
         channel, _, frames = tool_turn(False)
         with self.assertRaises(Refused):

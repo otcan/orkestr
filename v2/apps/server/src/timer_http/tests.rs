@@ -3,7 +3,7 @@ use orkestr_v2_store_sqlite::history_import::timers::{TimerImportRequest, TimerS
 use sha2::Digest;
 use std::io::{Read, Write};
 const NOW: i64 = 1_767_225_600_000;
-async fn request(
+pub(super) async fn request(
     address: std::net::SocketAddr,
     method: &str,
     path: &str,

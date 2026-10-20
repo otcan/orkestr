@@ -49,4 +49,16 @@ impl RunningLease {
         self.next_refresh = Instant::now() + REFRESH_INTERVAL;
         Ok(result)
     }
+
+    /// Claude counterpart: the same native child, turn and cursor continue.
+    pub(super) async fn refresh_claude(
+        &mut self,
+        live: &mut crate::claude_execution::LiveClaudeExecution,
+    ) -> Result<(), &'static str> {
+        live.renew(&mut self.authority)
+            .await
+            .map_err(|_| "Claude liveness transfer refused; reconciliation required")?;
+        self.next_refresh = Instant::now() + REFRESH_INTERVAL;
+        Ok(())
+    }
 }

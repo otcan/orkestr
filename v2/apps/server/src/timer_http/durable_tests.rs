@@ -92,20 +92,21 @@ async fn registered_store_long_due_logout_restart_and_machine_revoke() {
     let mut controller = DurableTimerController::new(bound.clone());
     assert_eq!(
         controller.tick().await.unwrap(),
+        // Not due yet: nothing is scanned or retried.
         DurableTick {
-            scanned: 1,
+            scanned: 0,
             admitted: 0,
-            deferred: 1
+            deferred: 0
         }
     );
     store.revoke_session(BROWSER).await.unwrap();
     let mut restarted = DurableTimerController::new(bound.clone());
-    assert_eq!(restarted.tick().await.unwrap().scanned, 1);
+    assert_eq!(restarted.tick().await.unwrap(), DurableTick::default());
     // Simulates new controller plus freshly reopened Store attachment; no browser auth.
     let reopened = Store::open(&dir.join("core.sqlite3")).await.unwrap();
     let rebound = bound.reattach_supervisor(&reopened).await.unwrap();
     let mut restarted = DurableTimerController::new(rebound);
-    assert_eq!(restarted.tick().await.unwrap().deferred, 1);
+    assert_eq!(restarted.tick().await.unwrap(), DurableTick::default());
     let current = store
         .dormant_timer_receipt(MACHINE, &owner, namespace)
         .await
@@ -238,6 +239,71 @@ async fn trusted_controller_start_renews_current_service_and_retires_exact_conte
     assert!(bound.timer_scheduler_candidates(None, 1).await.is_err());
     let successor = store.authorize_timer_supervisor(MACHINE).await.unwrap();
     successor.retire_timer_supervisor().await.unwrap();
+    store.close().await;
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn retry_backoff_doubles_from_five_seconds_to_fifteen_minutes() {
+    let delays: Vec<u64> = (1..=10).map(|n| retry_delay(n).as_secs()).collect();
+    assert_eq!(delays, [5, 10, 20, 40, 80, 160, 320, 640, 900, 900]);
+    assert_eq!(retry_delay(u32::MAX), RETRY_MAX);
+}
+
+#[tokio::test]
+async fn due_occurrence_that_cannot_be_admitted_backs_off_without_rescanning() {
+    let (store, bound, owner, namespace, _conversation, dir) = fixture().await;
+    let database = dir.join("core.sqlite3");
+    let sql = |statement: String| {
+        let status = std::process::Command::new("python3")
+            .arg("-c")
+            .arg("import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.execute(sys.argv[2]); c.commit(); c.close()")
+            .arg(&database)
+            .arg(statement)
+            .status()
+            .unwrap();
+        assert!(status.success());
+    };
+    // Due now, but its Stop watermark no longer matches (as after an owner Stop).
+    sql(format!("UPDATE dormant_timers SET next_due_ms=next_due_ms-30*86400000 WHERE namespace='{namespace}'"));
+    sql(format!("UPDATE dormant_timer_input_guards SET stop_sequence=stop_sequence+7 WHERE namespace='{namespace}'"));
+    let woken = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+    let counter = woken.clone();
+    let mut controller = DurableTimerController::new(bound.clone()).with_window_dispatch(
+        std::sync::Arc::new(move || {
+            counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }),
+    );
+    assert_eq!(
+        controller.tick().await.unwrap(),
+        DurableTick {
+            scanned: 1,
+            admitted: 0,
+            deferred: 1
+        }
+    );
+    // Held in backoff: not rescanned on the next one-second tick.
+    assert_eq!(
+        controller.tick().await.unwrap(),
+        DurableTick {
+            scanned: 0,
+            admitted: 0,
+            deferred: 1
+        }
+    );
+    assert_eq!(woken.load(std::sync::atomic::Ordering::SeqCst), 0);
+    // A fresh controller (restart) retries once and admits after repair.
+    sql(format!("UPDATE dormant_timer_input_guards SET stop_sequence=stop_sequence-7 WHERE namespace='{namespace}'"));
+    let mut restarted = DurableTimerController::new(bound.clone());
+    assert_eq!(restarted.tick().await.unwrap().admitted, 1);
+    assert_eq!(
+        store
+            .dormant_timer_receipt(MACHINE, &owner, namespace)
+            .await
+            .unwrap()
+            .state,
+        orkestr_v2_store_sqlite::history_import::timers::TimerState::Enabled
+    );
     store.close().await;
     std::fs::remove_dir_all(dir).unwrap();
 }

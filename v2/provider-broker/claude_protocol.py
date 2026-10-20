@@ -7,6 +7,9 @@ from claude_telemetry import validate_telemetry
 from claude_control import ClaudeControl, canonical, text_blocks
 
 
+# Full-access tool traffic that never becomes Orkestr progress.
+TOOL_NOTICES = ("user", "tool_progress", "tool_use_summary", "prompt_suggestion")
+
 PROVIDER_ERRORS = ("authentication_failed", "billing_error", "rate_limit", "invalid_request",
                    "server_error", "max_output_tokens", "unknown")
 
@@ -40,6 +43,7 @@ class ClaudeChannel:
         # Operator full-access session: tools run natively; their frames drain.
         self.tools = getattr(session, "uncontained", False) is True
         self.tool_frames = 0
+        self.keepalives = 0
         self.system_notices = 0
 
     def client(self, request):
@@ -134,13 +138,20 @@ class ClaudeChannel:
                      "request_id": self.setup[1]}}
             return {"method": "BrokerOutput", "params": {"owned_handle": self.handle,
                     "request_id": self.setup[0], "frame": clean}}
-        require(frame.get("session_id") == self.native)
         kind = frame.get("type")
-        if self.tools and self.control is None and (kind == "user" or (
+        if kind == "keep_alive":
+            # Transport liveness during long native work; never readiness.
+            require(set(frame) <= {"type", "uuid", "session_id"} and self.keepalives < 65536)
+            self.keepalives += 1
+            return None
+        require(frame.get("session_id", self.native if kind in TOOL_NOTICES else None) == self.native)
+        if self.tools and self.control is None and (kind in TOOL_NOTICES or (
                 kind == "assistant" and frame.get("parent_tool_use_id") is not None)):
-            # Tool results and subagent turns of THIS joined turn: bounded discard.
+            # Tool results, tool progress and subagent turns of THIS joined
+            # turn: bounded discard.
             require(self.joined and self.active is not None and not self.terminal
-                    and self.tool_frames < 4096 and "sessionId" not in frame)
+                    and self.tool_frames < 65536 and "sessionId" not in frame
+                    and len(json.dumps(frame, allow_nan=False).encode()) <= 4 * 1024 * 1024)
             self.tool_frames += 1
             return None
         require("sessionId" not in frame)
@@ -164,7 +175,7 @@ class ClaudeChannel:
             self.telemetry_uuids.add(value)
             # Even post-terminal telemetry cannot advance readiness or execution state.
             return None
-        if self.control is not None and kind in ("user", "assistant", "stream_event"):
+        if self.control is not None and kind in ("user", "assistant", "stream_event", *TOOL_NOTICES):
             self.control.notice(frame, self.telemetry_uuids)
             return None
         if self.control is not None and kind == "result":

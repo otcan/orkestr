@@ -47,6 +47,8 @@ impl ConfiguredExecution {
             return Ok(None);
         };
         let run = capability.provider().run.run_id.clone();
+        // Capture before the consumed grant moves into Runtime, as for Codex.
+        let mut liveness = super::liveness::RunningLease::capture(&self.store, &capability).await?;
         let mut live = ready
             .attach(capability)
             .map_err(|_| "Claude attachment uncertain; automatic replay refused")?;
@@ -139,6 +141,16 @@ impl ConfiguredExecution {
                             )
                             .await?;
                         return Ok(Some(ClaudeExit::Stopped(run, proof)));
+                    }
+                    if status.phase == ExecutionPhase::Running
+                        && liveness.due(Instant::now())
+                        && live.renewal_quiescent()
+                    {
+                        // Same scheduling lock as HTTP Stop and observation.
+                        if let Err(reason) = liveness.refresh_claude(&mut live).await {
+                            run_control.disable();
+                            return Err(reason);
+                        }
                     }
                     match live.tick().await {
                         Ok(true) => budget.observed(Instant::now()),

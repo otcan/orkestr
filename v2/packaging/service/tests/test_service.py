@@ -158,6 +158,31 @@ class ServiceTests(unittest.TestCase):
         base['roles']={'fast':role('fast'),'workers':[role('w'+str(i)) for i in range(4)]}
         self.assertEqual(validate(json.dumps(base).encode())['workspace_exec'],profile)
 
+    def test_host_full_access_is_explicit_and_required_by_host_privileged(self):
+        from beta_config import validate, host_full_access
+        access={'environment':{'HOME':'/home/example','PATH':'/usr/bin:/bin'}}
+        self.assertEqual(host_full_access(access),access)
+        for bad in ({'environment':{'PATH':'/usr/bin'}},{'environment':{'HOME':'rel','PATH':'/x'}},
+                    dict(access,sandbox='off'),dict(access,providers='yes')):
+            with self.assertRaises(RuntimeError):host_full_access(bad)
+        role=lambda name:{'launcher':'/opt/example/'+name,'launcher_sha256':'b'*64,
+                          'workspace':'/srv/native-readonly'}
+        base={'schema_version':1,'owner_id':'11111111-1111-4111-8111-111111111111',
+              'conversation_id':'33333333-3333-4333-8333-333333333333',
+              'manager_socket':'/run/example/control.sock','launcher':'/opt/example/launcher',
+              'launcher_sha256':'a'*64,'workspace':'/srv/native-readonly',
+              'namespace':'synthetic','supervisor_key':'synthetic.deep',
+              'roles':{'fast':role('fast'),'workers':[role('w'+str(i)) for i in range(4)]},
+              'workspace_exec':{'conversation_id':'33333333-3333-4333-8333-333333333333',
+                 'project_id':'22222222-2222-4222-8222-222222222222',
+                 'workspace':'/srv/project','allowed_roots':['/srv/project'],
+                 'protected_roots':['/srv/provider-account'],
+                 'cgroup_root':'/sys/fs/cgroup/commands','toolchain_root':'/opt/command-image',
+                 'trusted':{'host_privileged':True}}}
+        with self.assertRaisesRegex(RuntimeError,'host_full_access'):validate(json.dumps(base).encode())
+        base['host_full_access']=access
+        self.assertEqual(validate(json.dumps(base).encode())['host_full_access'],access)
+
     def test_trusted_workspace_profile_is_closed_shape_with_empty_default_credentials(self):
         from beta_config import workspace_exec
         profile={'conversation_id':'11111111-1111-4111-8111-111111111111',

@@ -49,7 +49,10 @@ fn same(file: &File, path: &Path) -> Result<()> {
     Ok(())
 }
 impl Root {
-    pub(super) fn configured(path: &Path) -> Result<Self> {
+    /// Jobs of this same server process (e.g. detached jobs surviving a window
+    /// restart) are expected. Any other populated job subtree is refused, or
+    /// with `reclaim` (host-privileged mode) killed and removed first.
+    pub(super) fn configured_with(path: &Path, reclaim: bool) -> Result<Self> {
         let path = super::sandbox::directory(path, false)?;
         let directory = File::open(&path).map_err(|_| Error::InvalidConfig)?;
         super::linux::cgroup2(&directory)?;
@@ -61,12 +64,11 @@ impl Root {
         {
             return Err(Error::InvalidConfig);
         }
-        if !bounded(&open(&path.join("cgroup.events"), false)?)?
-            .lines()
-            .any(|line| line == "populated 0")
-        {
-            return Err(Error::InvalidConfig);
-        }
+        let root = Self {
+            path: path.clone(),
+            directory,
+        };
+        root.foreign_jobs(reclaim)?;
         let controllers = bounded(&open(&path.join("cgroup.subtree_control"), false)?)?;
         if ["cpu", "memory", "pids"]
             .iter()
@@ -74,8 +76,46 @@ impl Root {
         {
             return Err(Error::InvalidConfig);
         }
-        Ok(Self { path, directory })
+        Ok(root)
     }
+    fn foreign_jobs(&self, reclaim: bool) -> Result<()> {
+        same(&self.directory, &self.path)?;
+        let own = format!("job-{}-", std::process::id());
+        let entries = fs::read_dir(&self.path).map_err(|_| Error::InvalidConfig)?;
+        for entry in entries.flatten() {
+            if !entry
+                .file_type()
+                .is_ok_and(|t| t.is_dir() && !t.is_symlink())
+            {
+                continue;
+            }
+            let name = entry.file_name();
+            let name = name.to_str().ok_or(Error::InvalidConfig)?;
+            if name.starts_with(&own) {
+                continue;
+            }
+            if !name.starts_with("job-") {
+                return Err(Error::InvalidConfig);
+            }
+            let path = entry.path();
+            let mut stale = Job {
+                procs: open(&path.join("cgroup.procs"), true)?,
+                kill: open(&path.join("cgroup.kill"), true)?,
+                events: open(&path.join("cgroup.events"), false)?,
+                directory: File::open(&path).map_err(|_| Error::Io)?,
+                path,
+            };
+            if stale.populated()? {
+                if !reclaim {
+                    return Err(Error::InvalidConfig);
+                }
+                stale.kill_and_empty(Duration::from_secs(5))?;
+            }
+            drop(stale); // Drop removes the empty foreign directory.
+        }
+        Ok(())
+    }
+
     pub(super) fn job(&self, resources: &super::profile::Resources) -> Result<Job> {
         same(&self.directory, &self.path)?;
         let name = format!(

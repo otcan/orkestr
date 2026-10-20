@@ -120,7 +120,7 @@ impl Store {
     }
 }
 
-async fn store_clock(tx: &mut Transaction<'_, Sqlite>) -> Result<i64> {
+pub(crate) async fn store_clock(tx: &mut Transaction<'_, Sqlite>) -> Result<i64> {
     sqlx::query_scalar("SELECT CAST((julianday('now')-2440587.5)*86400000 AS INTEGER)")
         .fetch_one(&mut **tx)
         .await
@@ -128,7 +128,7 @@ async fn store_clock(tx: &mut Transaction<'_, Sqlite>) -> Result<i64> {
 }
 // The only production caller supplies the transaction's Store clock. Tests may
 // inject synthetic future observations here without granting an HTTP clock port.
-async fn admit_in_transaction(
+pub(crate) async fn admit_in_transaction(
     tx: &mut Transaction<'_, Sqlite>,
     owner: &OwnerId,
     namespace: Uuid,

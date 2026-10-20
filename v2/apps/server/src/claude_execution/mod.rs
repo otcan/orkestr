@@ -91,6 +91,36 @@ impl LiveClaudeExecution {
         }
         pump.step(&self.store).await
     }
+    /// Same-turn lease refresh under the caller's scheduling lock. The old
+    /// local authority is revoked only after the new fence transferred.
+    pub fn renewal_quiescent(&self) -> bool {
+        !self.quarantined
+            && self
+                .pump
+                .as_ref()
+                .is_some_and(ClaudePump::renewal_quiescent)
+    }
+    pub async fn renew(
+        &mut self,
+        authority: &mut orkestr_v2_store_sqlite::RunRenewalAuthority,
+    ) -> Result<(), orkestr_v2_application::runtime::RuntimeStoreError> {
+        let pump = self
+            .pump
+            .take()
+            .ok_or(orkestr_v2_application::runtime::RuntimeStoreError::Fenced)?;
+        match pump.renew_lease(self.store.clone(), authority).await {
+            Ok((owner, pump)) => {
+                let _ = self.authority.revoke();
+                self.authority = owner;
+                self.pump = Some(pump);
+                Ok(())
+            }
+            Err(error) => {
+                self.quarantined = true;
+                Err(error)
+            }
+        }
+    }
     /// The exact pump must have committed its genuine completion proposal.
     /// This only closes owned transport; Core separately requires acceptance.
     pub fn retire_completed(

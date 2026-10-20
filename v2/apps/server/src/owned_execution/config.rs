@@ -149,10 +149,8 @@ impl Config {
         {
             return Err("Fast presentation requires its own Codex factory without Workers");
         }
-        if config.provider == Provider::Claude
-            && (config.worker.is_some() || config.execution_budget.max_run_ms > 45_000)
-        {
-            return Err("Claude Worker execution and extended leases are not available");
+        if config.provider == Provider::Claude && config.worker.is_some() {
+            return Err("Claude Worker execution is not available");
         }
         canonical(&config.workspace)?;
         if !config.workspace.is_dir()

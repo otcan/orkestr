@@ -1,6 +1,7 @@
 //! Client presentation only. Accepted input is not model completion.
 pub mod acceptance;
 pub mod accepted_results;
+pub mod archived_history;
 pub mod payload;
 use orkestr_v2_contracts::{ConversationEvent, ConversationSnapshot, Message, MessageInput, Scope};
 use std::collections::BTreeMap;
@@ -239,6 +240,7 @@ pub mod memory_state;
 pub mod beta_window;
 
 pub mod beta_inputs;
+pub mod page_memory;
 
 pub mod chat_timeline;
 pub mod conversation_directory;

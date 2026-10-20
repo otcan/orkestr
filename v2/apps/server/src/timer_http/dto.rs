@@ -45,8 +45,21 @@ pub struct Read {}
 #[derive(Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Schedule {
-    Once { due_ms: i64 },
-    Interval { every_ms: i64 },
-    UtcClock { weekly: bool, minute_of_day: u16 },
+    Once {
+        due_ms: i64,
+    },
+    Interval {
+        every_ms: i64,
+    },
+    UtcClock {
+        weekly: bool,
+        minute_of_day: u16,
+    },
+    /// IANA wall clock; `weekday` 1=Monday..7=Sunday makes it weekly.
+    ZonedClock {
+        timezone: String,
+        weekday: Option<u8>,
+        minute_of_day: u16,
+    },
     Dormant,
 }
