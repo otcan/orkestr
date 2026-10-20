@@ -89,10 +89,13 @@ fn progress_and_pre_ack_buffer_are_bounded() {
         Err(Blocker::Protocol)
     );
     let mut stream = TurnStream::new("thread-a", 4).unwrap();
-    for _ in 0..4 {
-        stream.receive(&delta("x")).unwrap();
+    for size in [1, 2, 4, 8] {
+        stream.receive(&delta(&"x".repeat(size))).unwrap();
     }
-    assert_eq!(stream.receive(&delta("x")), Err(Blocker::QueueFull));
+    assert_eq!(
+        stream.receive(&delta(&"x".repeat(16))),
+        Err(Blocker::QueueFull)
+    );
     assert_eq!(stream.receive(&response()), Err(Blocker::Protocol));
 }
 #[test]

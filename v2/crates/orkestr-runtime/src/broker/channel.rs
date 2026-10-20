@@ -199,7 +199,9 @@ impl BrokerChannel {
     fn observe_turn(&mut self, frame: &Value) -> Result<(), Blocker> {
         let method = frame.get("method").and_then(Value::as_str);
         let turn = match method {
-            Some("item/agentMessage/delta") => frame.pointer("/params/turnId"),
+            Some("item/agentMessage/delta" | "item/started" | "item/completed") => {
+                frame.pointer("/params/turnId")
+            }
             Some("turn/started" | "turn/completed") => frame.pointer("/params/turn/id"),
             _ => return Err(Blocker::Protocol),
         }

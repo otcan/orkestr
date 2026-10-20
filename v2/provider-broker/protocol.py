@@ -55,6 +55,16 @@ def identifier(value):
     return isinstance(value, str) and 0 < len(value) <= 512
 
 
+def agent_item(item):
+    require(isinstance(item, dict) and item.get("type") == "agentMessage"
+            and identifier(item.get("id")) and isinstance(item.get("text"), str)
+            and len(item["text"].encode()) <= 8192
+            and item.get("phase") in (None, "commentary", "partial_answer", "final_answer"),
+            Failure.TURN_SCHEMA)
+    return {"type": "agentMessage", "id": item["id"], "text": item["text"],
+            "phase": item.get("phase")}
+
+
 def decode(raw):
     require(len(raw) <= MAX_FRAME, Failure.FRAME_BOUND)
     def unique(pairs):
@@ -275,14 +285,22 @@ class Channel:
             # Never pass server tool/approval requests through as notifications.
             require(isinstance(frame.get("method"), str) and "params" in frame,
                     Failure.PROVIDER_OUTER)
-            if frame["method"] not in ("turn/started", "turn/completed", "item/agentMessage/delta"):
+            item_event = frame["method"] in ("item/started", "item/completed")
+            if item_event:
+                params = frame["params"]
+                require(isinstance(params, dict) and isinstance(params.get("item"), dict),
+                        Failure.TURN_SCHEMA)
+                if params["item"].get("type") != "agentMessage":
+                    return None  # Tool items remain metadata, never an execution grant.
+            if not item_event and frame["method"] not in (
+                    "turn/started", "turn/completed", "item/agentMessage/delta"):
                 return None
             require(self.committed, Failure.BEFORE_COMMIT)
             require(not self.terminal, {
                 "turn/started": Failure.LATE_TURN_STARTED,
                 "turn/completed": Failure.LATE_TURN_COMPLETED,
                 "item/agentMessage/delta": Failure.LATE_AGENT_DELTA,
-            }[frame["method"]])
+            }.get(frame["method"], Failure.PROTOCOL))
             params = frame["params"]
             require(isinstance(params, dict), Failure.TURN_SCHEMA)
             require(params.get("threadId") == self.native, Failure.FOREIGN_THREAD)
@@ -293,6 +311,15 @@ class Channel:
                         and len(params["delta"].encode()) <= 8192, Failure.TURN_SCHEMA)
                 turn_id = params["turnId"]
                 clean = {k: params[k] for k in ("threadId", "turnId", "delta")}
+                if "itemId" in params:
+                    require(identifier(params["itemId"]), Failure.TURN_SCHEMA)
+                    clean["itemId"] = params["itemId"]
+            elif item_event:
+                item = params["item"]
+                require(identifier(params.get("turnId")), Failure.TURN_SCHEMA)
+                turn_id = params["turnId"]
+                clean = {"threadId": self.native, "turnId": turn_id,
+                         "item": agent_item(item)}
             else:
                 turn = params.get("turn")
                 require(isinstance(turn, dict), Failure.TURN_SCHEMA)
@@ -300,6 +327,14 @@ class Channel:
                 require(identifier(turn_id) and turn.get("status") in
                         ("inProgress", "completed", "failed", "interrupted"), Failure.TURN_SCHEMA)
                 clean = {"threadId": self.native, "turn": {"id": turn_id, "status": turn["status"]}}
+                if frame["method"] == "turn/completed" and "items" in turn:
+                    require(isinstance(turn["items"], list) and len(turn["items"]) <= 128
+                            and all(isinstance(item, dict) for item in turn["items"])
+                            and turn.get("itemsView", "full") in ("full", "summary", "notLoaded"),
+                            Failure.TURN_SCHEMA)
+                    clean["turn"]["items"] = [agent_item(item) for item in turn["items"]
+                                              if item.get("type") == "agentMessage"]
+                    clean["turn"]["itemsView"] = turn.get("itemsView", "full")
             require(turn_id not in self.retired_turns, Failure.RETIRED_TURN)
             if self.turn is not None:
                 require(turn_id == self.turn, Failure.TURN_MISMATCH)
