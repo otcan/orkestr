@@ -1,9 +1,19 @@
 """Separate Claude stream channel. Private pipe correlation is not Core proof."""
+import json
 import secrets
 import uuid
 from protocol import PROTOCOL, exact, identifier, require
 from claude_telemetry import validate_telemetry
-from claude_control import ClaudeControl, canonical
+from claude_control import ClaudeControl, canonical, text_blocks
+
+
+PROVIDER_ERRORS = ("authentication_failed", "billing_error", "rate_limit", "invalid_request",
+                   "server_error", "max_output_tokens", "unknown")
+
+
+def provider_error(value):
+    require(isinstance(value, str) and 0 < len(value) <= 64)
+    return value if value in PROVIDER_ERRORS else "unknown"
 
 
 class ClaudeChannel:
@@ -23,6 +33,14 @@ class ClaudeChannel:
         self.terminal = False
         self.telemetry_uuids = set()
         self.control = None
+        # Set once the active input's first assistant frame carries its exact
+        # user_message_uuid. The installed CLI omits the key on later blocks
+        # and on API messages after a tool result within the same turn.
+        self.joined = False
+        # Operator full-access session: tools run natively; their frames drain.
+        self.tools = getattr(session, "uncontained", False) is True
+        self.tool_frames = 0
+        self.system_notices = 0
 
     def client(self, request):
         require(not self.poisoned)
@@ -60,7 +78,7 @@ class ClaudeChannel:
                     and self.system_seen and self.active is not None and not self.terminal
                     and self.control is None)
             self.control = ClaudeControl(outer, params["frame"], self.native,
-                                         self.input_uuid, self.setup[1])
+                                         self.input_uuid, self.setup[1], self.tools)
             return params["frame"], None
         require(request["method"] == "CommitExecution")
         params = request["params"]
@@ -117,9 +135,24 @@ class ClaudeChannel:
             return {"method": "BrokerOutput", "params": {"owned_handle": self.handle,
                     "request_id": self.setup[0], "frame": clean}}
         require(frame.get("session_id") == self.native)
-        require(not any(key in frame for key in ("sessionId", "parent_tool_use_id"))
-                or frame.get("parent_tool_use_id") is None and "sessionId" not in frame)
         kind = frame.get("type")
+        if self.tools and self.control is None and (kind == "user" or (
+                kind == "assistant" and frame.get("parent_tool_use_id") is not None)):
+            # Tool results and subagent turns of THIS joined turn: bounded discard.
+            require(self.joined and self.active is not None and not self.terminal
+                    and self.tool_frames < 4096 and "sessionId" not in frame)
+            self.tool_frames += 1
+            return None
+        require("sessionId" not in frame)
+        require(self.tools and self.control is not None
+                or frame.get("parent_tool_use_id") is None)
+        if kind == "system" and frame.get("subtype") != "init":
+            # UI/retry/status notices: bounded discard, never readiness or output.
+            require(identifier(frame.get("subtype")) and len(frame["subtype"]) <= 64
+                    and self.system_notices < 256
+                    and len(json.dumps(frame, allow_nan=False).encode()) <= 16384)
+            self.system_notices += 1
+            return None
         if kind in ("command_lifecycle", "rate_limit_event"):
             validate_telemetry(frame, self.input_uuid)
             require(self.initialized and self.active is not None)
@@ -141,11 +174,17 @@ class ClaudeChannel:
             return {"method":"BrokerOutput", "params":{"owned_handle":self.handle,
                     "request_id":self.active, "frame":clean}}
         if kind in ("assistant", "result"):
-            # No relabeling even for unseen historical frames on a fresh reader.
-            require(self.input_uuid is not None
-                    and frame.get("user_message_uuid") == self.input_uuid)
-            if "user_message_uuids" in frame:
-                require(frame["user_message_uuids"] == [self.input_uuid])
+            # A fresh reader never relabels historical frames: an uncorrelated
+            # assistant frame is accepted only after this turn's own explicitly
+            # correlated frame. One channel carries exactly one native input.
+            require(self.input_uuid is not None)
+            if kind == "assistant" and "user_message_uuid" not in frame \
+                    and "user_message_uuids" not in frame:
+                require(self.joined)
+            else:
+                require(frame.get("user_message_uuid") == self.input_uuid)
+                if "user_message_uuids" in frame:
+                    require(frame["user_message_uuids"] == [self.input_uuid])
         if kind == "system":
             require(frame.get("subtype") == "init" and self.initialized and not self.system_seen)
             self.system_seen = True
@@ -156,14 +195,17 @@ class ClaudeChannel:
             require(isinstance(message, dict) and message.get("role") == "assistant")
             content = message.get("content")
             require(isinstance(content, list) and 0 < len(content) <= 128)
-            blocks = []
-            for block in content:
-                exact(block, ("type", "text"))
-                require(block["type"] == "text" and isinstance(block["text"], str)
-                        and len(block["text"].encode()) <= 8192)
-                blocks.append(block)
+            self.joined = True
+            blocks = text_blocks(content, self.tools)
+            if not blocks and "error" not in frame:
+                # Reasoning-only blocks are never forwarded or persisted.
+                return None
             clean = {"type": kind, "session_id": self.native,
                      "message": {"role": kind, "content": blocks}}
+            if "error" in frame:
+                # Closed native failure class (auth, quota, billing...); Runtime
+                # records Failed and never retries on another account/provider.
+                clean["error"] = provider_error(frame["error"])
         elif kind == "result":
             require(self.active is not None and not self.terminal)
             require(type(frame.get("is_error")) is bool)
@@ -182,5 +224,8 @@ class ClaudeChannel:
                 value = frame[key]
                 require(isinstance(value, str) and str(uuid.UUID(value)) == value)
                 clean[key] = value
+        if kind == "assistant":
+            # Joined above by explicit input UUID or this turn's prior join.
+            clean["user_message_uuid"] = self.input_uuid
         return {"method": "BrokerOutput", "params": {"owned_handle": self.handle,
                 "request_id": self.active, "frame": clean}}

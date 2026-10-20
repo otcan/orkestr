@@ -8,6 +8,27 @@ from pathlib import Path
 import uuid
 import json
 
+PATHS = ("executable", "account", "workspace", "home", "temporary")
+
+
+def host_environment(value):
+    """Operator-only real executor environment for host full access."""
+    if not isinstance(value, dict) or set(value) != {"environment"}:
+        raise ValueError("invalid host full access configuration")
+    environment = value["environment"]
+    if not isinstance(environment, dict) or not {"HOME", "PATH"} <= set(environment) \
+            or len(environment) > 256 or not all(
+                isinstance(k, str) and isinstance(v, str) and k and "=" not in k
+                and "\0" not in k + v and len(v) <= 16384 for k, v in environment.items()) \
+            or not Path(environment["HOME"]).is_absolute():
+        raise ValueError("invalid host full access environment")
+    # Account selection stays with the configured account reference: an
+    # inherited key/token would silently switch billing route or account.
+    if {"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN",
+            "CLAUDE_CONFIG_DIR"} & set(environment):
+        raise ValueError("host full access environment cannot select an account")
+    return dict(environment)
+
 
 @dataclass(frozen=True)
 class ClaudeConfiguration:
@@ -16,18 +37,23 @@ class ClaudeConfiguration:
     workspace: Path
     home: Path
     temporary: Path
+    # Operator instance opt-in (V1-equivalent YOLO): no namespace wrapper,
+    # --dangerously-skip-permissions and the full default tool set.
+    host_full_access: dict = None
 
     @classmethod
     def load(cls, path):
         value = json.loads(Path(path).read_text())
-        if not isinstance(value, dict) or set(value) != set(cls.__dataclass_fields__):
+        if not isinstance(value, dict) or set(value) - {"host_full_access"} != set(PATHS):
             raise ValueError("invalid private Claude configuration")
-        config = cls(**{key: Path(item) for key, item in value.items()})
+        access = value.pop("host_full_access", None)
+        config = cls(**{key: Path(item) for key, item in value.items()},
+                     host_full_access=None if access is None else host_environment(access))
         config.validate()
         return config
 
     def validate(self):
-        for name in self.__dataclass_fields__:
+        for name in PATHS:
             path = getattr(self, name)
             if not isinstance(path, Path) or not path.is_absolute():
                 raise ValueError("invalid trusted Claude configuration")
@@ -72,7 +98,23 @@ class ClaudeOwnedSession:
             raise ValueError("owned Claude process already issued")
         self._owned_child = child
 
+    @property
+    def max_provider_frame(self):
+        # Full-access init/tool-result frames carry real settings and outputs.
+        return 4 * 1024 * 1024 if self.uncontained else 65536
+
+    @property
+    def uncontained(self):
+        """Host full access launches the native directly, like V1 executors."""
+        return self._config.host_full_access is not None
+
     def command(self):
+        session = ["--resume" if self.resumed else "--session-id", str(self.native)]
+        if self.uncontained:
+            return [str(self._config.executable), "-p", "--input-format", "stream-json",
+                    "--output-format", "stream-json", "--verbose",
+                    "--dangerously-skip-permissions", "--no-chrome",
+                    "--prompt-suggestions", "false", *session]
         return [str(self._config.executable), "-p", "--input-format", "stream-json",
                 "--output-format", "stream-json", "--verbose",
                 "--permission-mode", "dontAsk", "--permission-prompts", "none",
@@ -88,6 +130,13 @@ class ClaudeOwnedSession:
         environment = {"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8",
                 "HOME": str(self._config.home), "TMPDIR": str(self._config.temporary),
                 "CLAUDE_CONFIG_DIR": str(self._config.account)}
+        if self.uncontained:
+            # The real executor environment; the account reference still wins.
+            # Each turn is a new process, so detached background tasks would be
+            # killed while the turn reports completion (same reason as V1).
+            environment = dict(self._config.host_full_access,
+                               CLAUDE_CONFIG_DIR=str(self._config.account),
+                               CLAUDE_CODE_DISABLE_BACKGROUND_TASKS="1")
 
         if self._account_environment is not None:
             # Trusted launcher-side callback only, never protocol/config JSON.

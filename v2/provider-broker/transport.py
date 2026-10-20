@@ -1,7 +1,9 @@
 """Bounded nonblocking stdio pump; provider shares Runtime-owned process group."""
-from reaping import become_subreaper, reap_owned, contained_command
+from reaping import become_subreaper, reap_owned, contained_command as lifetime_command
 from collections import deque
 import os
+import signal
+import time
 import array
 import socket
 import selectors
@@ -9,6 +11,60 @@ import subprocess
 from protocol import MAX_FRAME, Failure, Refused, decode, encode, require
 
 MAX_PENDING = 8
+
+
+def contained_command(command):
+    """Lifetime wrapper plus a private minimal /dev: the root bind is nodev and
+    Bun-based natives (the Claude CLI) abort without null/urandom."""
+    argv = lifetime_command(command)
+    at = argv.index("--proc")
+    return argv[:at] + ["--dev", "/dev"] + argv[at:]
+
+
+def adopted_children():
+    """Live direct children of this subreaper process."""
+    own, found = os.getpid(), []
+    for entry in os.listdir("/proc"):
+        if not entry.isdigit():
+            continue
+        try:
+            with open(f"/proc/{entry}/stat", "rb") as stat:
+                fields = stat.read().rsplit(b") ", 1)[1].split()
+        except OSError:
+            continue
+        if int(fields[1]) == own and fields[0] != b"Z":
+            found.append(int(entry))
+    return found
+
+
+def reap_uncontained(child, timeout=2.0):
+    """Host full access has no PID namespace. This broker spawned only the
+    native, so every other live child is an adopted descendant of the owned
+    tree (setsid tool shells included): kill it, then require ECHILD."""
+    try:
+        os.killpg(child.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    deadline = time.monotonic() + timeout
+    while True:
+        for pid in adopted_children():
+            if pid == child.pid:
+                continue
+            for kill in (os.killpg, os.kill):
+                try:
+                    kill(pid, signal.SIGKILL)
+                except (ProcessLookupError, PermissionError):
+                    pass
+        try:
+            pid, status = os.waitpid(-1, os.WNOHANG)
+        except ChildProcessError:
+            return True
+        if pid == child.pid:
+            child.returncode = os.waitstatus_to_exitcode(status)
+        if pid == 0:
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(0.005)
 
 
 def failure_exit(error, child, fallback=None):
@@ -55,6 +111,13 @@ class Pump:
         self.diagnostics = diagnostics
         self.failure_exit = 2
         self.failure_fallback = None
+        # Only the provider source may opt into a larger bound; parent input
+        # and every broker output keep MAX_FRAME.
+        self.provider_limit = getattr(config, "max_provider_frame", MAX_FRAME)
+        require(type(self.provider_limit) is int and MAX_FRAME <= self.provider_limit <= 16 * 1024 * 1024)
+
+    def limit(self, fd):
+        return MAX_FRAME if fd == self.incoming else self.provider_limit
 
     def queue(self, fd, value):
         queue = self.queues[fd]
@@ -64,7 +127,10 @@ class Pump:
     def launch(self):
         # A private native group can be killed without killing this subreaper.
         become_subreaper()
-        self.child = subprocess.Popen(contained_command(self.config.command()), env=self.config.environment(),
+        command = self.config.command()
+        if getattr(self.config, "uncontained", False) is not True:
+            command = contained_command(command)
+        self.child = subprocess.Popen(command, env=self.config.environment(),
                                       cwd=self.config.workspace, stdin=subprocess.PIPE,
                                       stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                                       close_fds=True, process_group=0)
@@ -97,7 +163,7 @@ class Pump:
 
     def line(self, fd, raw):
         try:
-            value = decode(raw)
+            value = decode(raw, self.limit(fd))
         except Refused as error:
             if self.diagnostics and fd == self.incoming:
                 error.failure = Failure.PARENT_INPUT
@@ -137,9 +203,9 @@ class Pump:
         buffer = self.buffers.get(fd, b"")
         while b"\n" in buffer and self.capacity():
             raw, buffer = buffer.split(b"\n", 1)
-            require(bool(raw) and len(raw) <= MAX_FRAME, Failure.FRAME_BOUND)
+            require(bool(raw) and len(raw) <= self.limit(fd), Failure.FRAME_BOUND)
             self.line(fd, raw)
-        require(len(buffer) <= MAX_FRAME, Failure.FRAME_BOUND)
+        require(len(buffer) <= self.limit(fd), Failure.FRAME_BOUND)
         self.buffers[fd] = buffer
 
     def read(self, fd):
@@ -147,7 +213,7 @@ class Pump:
         if not self.capacity() or b"\n" in self.buffers[fd]:
             return True
         try:
-            chunk = os.read(fd, MAX_FRAME + 1 - len(self.buffers[fd]))
+            chunk = os.read(fd, min(self.limit(fd) + 1 - len(self.buffers[fd]), 1024 * 1024))
         except BlockingIOError:
             return True
         except OSError:
@@ -216,4 +282,7 @@ class Pump:
                             pipe.close()
                     except OSError:
                         pass
-                self.reaped = reap_owned(self.child)
+                if getattr(self.config, "uncontained", False) is True:
+                    self.reaped = reap_uncontained(self.child)
+                else:
+                    self.reaped = reap_owned(self.child)

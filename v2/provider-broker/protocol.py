@@ -65,8 +65,8 @@ def agent_item(item):
             "phase": item.get("phase")}
 
 
-def decode(raw):
-    require(len(raw) <= MAX_FRAME, Failure.FRAME_BOUND)
+def decode(raw, limit=MAX_FRAME):
+    require(len(raw) <= limit, Failure.FRAME_BOUND)
     def unique(pairs):
         result = {}
         for key, value in pairs:
