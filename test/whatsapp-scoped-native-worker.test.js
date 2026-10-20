@@ -106,7 +106,7 @@ test('direct sends use their own journal: idempotent, never retried, uncertainty
  const {createScopedDirectSender}=await import('../packages/connectors/src/whatsapp-scoped-direct-chats.js');
  const p=createScopedNativeWorkerPolicy(directConfig(),{
   createTransport:()=>{throw new Error('group transport must not be used for direct chats');},
-  createDirectSender:args=>createScopedDirectSender({...args,timeoutMs:20}),
+  createDirectSender:args=>createScopedDirectSender({...args,timeoutMs:20,lookupDelayMs:1}),
  });
  assert.deepEqual(await p.send('existing',client,'15550000001@c.us','hi',{threadId:'thread1',requestId:'co_a'}),{ok:true,ids:['m1']});
  assert.deepEqual(await p.send('existing',client,'15550000001@c.us','hi',{threadId:'thread1',requestId:'co_a'}),{ok:true,ids:['m1'],duplicate:true});
@@ -155,4 +155,18 @@ test('a direct chat is reachable only by the thread whose route lists it',async(
  p.checkRequest('POST',url('/send-text'),{...body,threadId:'thread2'});
  assert.throws(()=>p.send('existing',{},'15550000002@c.us','hi',{requestId:'co_1',threadId:'thread1'}),/denied/);
  assert.deepEqual(await p.send('existing',{},'15550000002@c.us','hi',{requestId:'co_1',threadId:'thread2'}),{ok:true,ids:['m']});
+});
+
+test('a direct send that returned no message model is confirmed by exactly one acked own message, else stays uncertain',async()=>{
+ const {createScopedDirectSender,validateScopedDirectChats}=await import('../packages/connectors/src/whatsapp-scoped-direct-chats.js');
+ const cfg=directConfig();const direct=validateScopedDirectChats(cfg,new Set(['thread1']));
+ let history=[];const now=()=>Date.parse('2026-10-20T21:00:00Z');
+ const client={info:{wid:{_serialized:'15550000000@c.us'}},sendMessage:async(to,text)=>{history.push({fromMe:true,type:'chat',body:text,timestamp:now()/1000,ack:1,id:{_serialized:`true_${to}_${history.length}`}});return undefined;},
+  getChatById:async()=>({fetchMessages:async()=>history})};
+ const s=createScopedDirectSender({config:cfg,direct,now,lookupDelayMs:1});
+ assert.deepEqual(await s.sendText(client,'15550000001@c.us','hello',{requestId:'co_1'}),{ok:true,ids:['true_15550000001@c.us_0']});
+ // Two indistinguishable candidates: stays uncertain.
+ const twice={...client,sendMessage:async(to,text)=>{for(const n of [1,2])history.push({fromMe:true,type:'chat',body:text,timestamp:now()/1000,ack:1,id:{_serialized:`dup${n}`}});}};
+ await assert.rejects(s.sendText(twice,'15550000002@c.us','same',{requestId:'co_2'}),/delivery_uncertain/);
+ s.close();
 });

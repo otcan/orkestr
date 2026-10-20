@@ -57,7 +57,7 @@ export function scopedDirectChatsContract(config = {}) {
   return hash([config.ownChatId || '', config.directChats?.routes || []]);
 }
 
-export function createScopedDirectSender({config, direct, dbPath = direct.journalPath, now = Date.now, timeoutMs = SEND_TIMEOUT_MS}) {
+export function createScopedDirectSender({config, direct, dbPath = direct.journalPath, now = Date.now, timeoutMs = SEND_TIMEOUT_MS, lookupDelayMs = 1000}) {
   const db = new DatabaseSync(dbPath);
   db.exec(`PRAGMA journal_mode=WAL;
     CREATE TABLE IF NOT EXISTS direct_send(id TEXT PRIMARY KEY,hash TEXT NOT NULL,chat_id TEXT NOT NULL,state TEXT NOT NULL,provider_id TEXT,created_at TEXT NOT NULL);
@@ -75,6 +75,31 @@ export function createScopedDirectSender({config, direct, dbPath = direct.journa
     const next = tail.catch(() => {}).then(work);
     tail = next;
     return next;
+  };
+  // Same rule as the group transport: WhatsApp Web can deliver a message yet
+  // return no usable model. Accept exactly one matching own message created
+  // after the send started, not yet journaled, with a server ack.
+  async function confirmByLookup(client, to, text, startedAt) {
+    if (typeof client?.getChatById !== 'function') return null;
+    for (let attempt = 0; attempt < 6; attempt++) {
+      if (attempt) await new Promise(resolve => setTimeout(resolve, lookupDelayMs));
+      try {
+        const chat = await client.getChatById(to);
+        const found = (await chat.fetchMessages({limit: 20})).filter(message => {
+          const id = message?.id?._serialized;
+          return message?.fromMe === true && typeof id === 'string' && id && !id.startsWith('summary:')
+            && message.type === 'chat' && message.body === text && Number(message.timestamp) * 1000 >= startedAt - 5000
+            && !db.prepare('SELECT 1 FROM direct_send WHERE provider_id=?').get(id);
+        });
+        if (found.length > 1) return null;
+        if (found.length === 1 && Number(found[0].ack) >= 1) return found[0].id._serialized;
+      } catch { /* a failed lookup proves nothing; retry, then stay uncertain */ }
+    }
+    return null;
+  }
+  const settle = (requestId, id) => {
+    db.prepare("UPDATE direct_send SET state='sent',provider_id=? WHERE id=?").run(id, requestId);
+    return {ok: true, ids: [id]};
   };
   return {
     close: () => db.close(),
@@ -95,21 +120,20 @@ export function createScopedDirectSender({config, direct, dbPath = direct.journa
         db.prepare('INSERT INTO direct_send VALUES(?,?,?,?,?,?)')
           .run(request.requestId, material, to, 'sending', null, new Date(now()).toISOString());
         let timer;
+        const startedAt = now();
+        let sent = null;
         try {
-          const sent = await Promise.race([
+          sent = await Promise.race([
             client.sendMessage(to, text, {sendSeen: false}),
             new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('send_timeout')), timeoutMs); }),
           ]);
-          const id = sent?.id?._serialized;
-          if (typeof id !== 'string' || !id || id.startsWith('summary:')) throw new Error('provider_id_missing');
-          db.prepare("UPDATE direct_send SET state='sent',provider_id=? WHERE id=?").run(id, request.requestId);
-          return {ok: true, ids: [id]};
-        } catch {
-          db.prepare("UPDATE direct_send SET state='uncertain' WHERE id=?").run(request.requestId);
-          fail('delivery_uncertain');
-        } finally {
-          clearTimeout(timer);
-        }
+        } catch { sent = null; } finally { clearTimeout(timer); }
+        const id = sent?.id?._serialized;
+        if (typeof id === 'string' && id && !id.startsWith('summary:')) return settle(request.requestId, id);
+        const confirmed = await confirmByLookup(client, to, text, startedAt);
+        if (confirmed) return settle(request.requestId, confirmed);
+        db.prepare("UPDATE direct_send SET state='uncertain' WHERE id=?").run(request.requestId);
+        fail('delivery_uncertain');
       });
     },
   };
