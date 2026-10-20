@@ -1,13 +1,15 @@
 #!/usr/bin/env node
 // Adapter for the existing group relay's wrapper contract. The native worker
 // independently checks recipient, owner identity, original parent and dedupe.
+// `group-notify` carries a timer-run notification: the request id doubles as the
+// notification id, which the worker authorizes against its own proof store.
 import fs from 'node:fs';
 import {requestWhatsAppWorker} from '../packages/connectors/src/whatsapp-worker-client.js';
 
 try {
   const [command, to, requestId, parentId, text, ...extra] = process.argv.slice(2);
   const config = JSON.parse(fs.readFileSync(process.env.ORKESTR_WA_SCOPED_GROUP_CONFIG, 'utf8'));
-  if (command !== 'group-reply' || extra.length || !config.workerAccountId
+  if (!['group-reply', 'group-notify'].includes(command) || extra.length || !config.workerAccountId
       || !config.groups.some(group => group.chatId === to)
       || !requestId || !parentId || !text || text.length > 3000)
     throw new Error('scoped_reply_invalid');
@@ -15,7 +17,8 @@ try {
     ORKESTR_WA_WORKER_TOKEN: process.env.ORKESTR_WA_WORKER_TOKEN || process.env.ORKESTR_WA_SERVICE_TOKEN
       || process.env.WHATSAPP_BRIDGE_TOKEN || process.env.WA_HTTP_TOKEN || process.env.ORKESTR_WHATSAPP_BRIDGE_TOKEN};
   const result = await requestWhatsAppWorker('/send-text', {method: 'POST', timeoutMs: 40000,
-    body: {accountId: config.workerAccountId, to, requestId, parentId, text}}, env);
+    body: {accountId: config.workerAccountId, to, requestId, parentId, text,
+      ...(command === 'group-notify' ? {notificationId: requestId} : {})}}, env);
   if (result.ok !== true || !Array.isArray(result.ids) || !result.ids.length)
     throw new Error('scoped_reply_unconfirmed');
   process.stdout.write(JSON.stringify({ok: true, ids: result.ids, duplicate: result.duplicate === true}));

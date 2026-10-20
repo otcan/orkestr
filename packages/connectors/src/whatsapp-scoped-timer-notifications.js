@@ -106,7 +106,13 @@ export function createScopedTimerNotifications({config,api,send,formatter,env=pr
           const r=await send({chatId,requestId:id,notificationId:id,parentId:parent.id,text:row.text});
           if(r.ok!==true || !r.ids?.length)throw new Error('unconfirmed');
           proofs.mark(id,'sent');sent++;
-        }catch{
+        }catch(error){
+          if(error?.definitive===true) {
+            // Rejected before dispatch: nothing reached the provider. Close the
+            // run visibly instead of blocking all delivery as uncertain.
+            proofs.mark(id,'revoked');proofs.finish(event.messageId,'rejected',new Date(now()).toISOString());
+            throw new Error('timer_notification_send_rejected');
+          }
           const recovered=fence.unknown({id,hash:notificationKey([chatId,row.text,parent.id]),route:config.routeControl.routeId});
           if(recovered.providerId){proofs.mark(id,'sent');sent++;}
           else {proofs.mark(id,'uncertain');throw new Error('timer_notification_delivery_unresolved');}
