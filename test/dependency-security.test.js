@@ -25,11 +25,15 @@ test("framework and upload dependencies stay above the reviewed security floors"
     if (packagePath.endsWith("/node_modules/multer")) assert.equal(entry.version, "2.4.0", packagePath);
     if (packagePath.endsWith("/node_modules/qs")) assert.equal(entry.version, "6.16.0", packagePath);
   }
-  // GHSA-6qxp-vccf-f47h: 1.31.0, including the copy @angular/cli would nest
-  // (it pins 1.30.0; package.json overrides it).
-  assert.equal(versionAt("node_modules/@modelcontextprotocol/sdk"), "1.31.0");
+  // GHSA-6qxp-vccf-f47h, GHSA-22jm-h49p-29qw, GHSA-46jr-4wx8-v453: 1.32.1,
+  // including the copy @angular/cli would nest (package.json overrides it).
+  assert.equal(versionAt("node_modules/@modelcontextprotocol/sdk"), "1.32.1");
   for (const [packagePath, entry] of Object.entries(lock.packages)) {
-    if (packagePath.endsWith("/node_modules/@modelcontextprotocol/sdk")) assert.equal(entry.version, "1.31.0", packagePath);
+    if (packagePath.endsWith("/node_modules/@modelcontextprotocol/sdk")) assert.equal(entry.version, "1.32.1", packagePath);
+  }
+  // GHSA-587h-7wmj-h5pm: vite 7.3.7 (transitive via the Angular build, pinned by override).
+  for (const [packagePath, entry] of Object.entries(lock.packages)) {
+    if (packagePath.endsWith("node_modules/vite")) assert.equal(entry.version, "7.3.7", packagePath);
   }
   // GHSA-wq5f-xc86-pv6w (bundled librsvg): sharp 0.35.5 or later.
   const [sharpMajor, sharpMinor, sharpPatch] = versionAt("node_modules/sharp").split(".").map(Number);
