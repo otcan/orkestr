@@ -35,6 +35,7 @@ export function createTimerNotificationProofStore({path, db: supplied, readOnly 
     CREATE TABLE IF NOT EXISTS timer_notification_meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS timer_notification_runs(id TEXT PRIMARY KEY,event TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS timer_notification_done(id TEXT PRIMARY KEY,state TEXT NOT NULL,at TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS timer_notification_receipts(id TEXT PRIMARY KEY,provider_ids TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS timer_notification_proofs(id TEXT PRIMARY KEY,thread_id TEXT NOT NULL,chat_id TEXT NOT NULL,timer_id TEXT NOT NULL,parent_id TEXT NOT NULL,answer_id TEXT NOT NULL,text TEXT NOT NULL,created_at TEXT NOT NULL,run_at TEXT NOT NULL,expires_at TEXT NOT NULL,state TEXT NOT NULL);`);
   return {
     close() { if (!supplied) db.close(); },
@@ -60,6 +61,8 @@ export function createTimerNotificationProofStore({path, db: supplied, readOnly 
       if (!['sent','uncertain','revoked'].includes(state)) throw new Error('timer_notification_invalid_state');
       db.prepare('UPDATE timer_notification_proofs SET state=? WHERE id=?').run(state,id);
     },
+    receipt(id, ids) { db.prepare('INSERT OR REPLACE INTO timer_notification_receipts VALUES(?,?)').run(id,JSON.stringify((ids||[]).map(String))); },
+    receipts(ids) { return [...new Set(ids.flatMap(id=>JSON.parse(db.prepare('SELECT provider_ids FROM timer_notification_receipts WHERE id=?').get(id)?.provider_ids||'[]')))]; },
     authorize({scope,id,to,text,parentId}) {
       const p = this.get(id);
       if (p && (!Number.isFinite(Date.parse(p.created_at)) || !Number.isFinite(Date.parse(p.expires_at)) || !Number.isFinite(Date.parse(p.run_at)))) throw new Error('timer_notification_proof_denied');

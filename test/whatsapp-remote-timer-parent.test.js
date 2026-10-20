@@ -8,6 +8,7 @@ import test from "node:test";
 import { deliverWhatsAppReplies } from "../packages/connectors/src/whatsapp.js";
 import { appendThreadMessage, createThread, listThreadMessages } from "../packages/core/src/threads.js";
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
+import { listEvents } from "../packages/storage/src/store.js";
 
 const timerRowId = "0b6c1f5e-8f3a-4c2d-9e7b-1a2b3c4d5e6f";
 
@@ -128,6 +129,19 @@ test("a V2 timer row gives its reply one local parent that is mirrored and ackno
   assert.equal(again.find((row) => row.role === "user").state, "completed");
   assert.equal(f.sends.length, 1);
   assert.equal(f.runtime.acks.length, 1);
+});
+
+test("materializing a V2 timer parent records one server event for the relay's notification proof", async t => {
+  const f = await fixture(t, [timerRow()]);
+  await f.deliver();
+  await f.deliver();
+  const events = (await listEvents(f.env, 500)).filter((event) => event.type === "whatsapp_remote_timer_parent_materialized");
+  assert.equal(events.length, 1);
+  assert.equal(events[0].target, "example-thread");
+  assert.equal(events[0].targetType, "thread");
+  assert.equal(events[0].messageId, `v2timer-${timerRowId}`);
+  assert.equal(events[0].remoteThreadId, "example-remote-thread");
+  assert.equal(events[0].remoteMessageId, timerRowId);
 });
 
 for (const [name, overrides] of [

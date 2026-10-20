@@ -19,6 +19,11 @@ function timerNotFound() {
 export async function setTimerOwnership(id, body = {}, env = process.env, now = new Date(), options = {}) {
   const request = parseTimerOwnershipRequest(body);
   const timerId = String(id || "").trim();
+  // Agent Job schedules are read-only views outside timers.json; they cannot
+  // be handed to V2 and never enqueue thread input.
+  if (timerId.startsWith("agent-job:")) {
+    throw Object.assign(new Error("agent_job_schedule_read_only"), { statusCode: 409, code: "agent_job_schedule_read_only" });
+  }
   return withDueTimerPass(env, async () => {
     const timers = await listTimers(env);
     const index = timers.findIndex((timer) => timer.id === timerId);

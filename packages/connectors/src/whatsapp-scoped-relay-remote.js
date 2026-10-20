@@ -55,6 +55,21 @@ function definiteRefusal(error) {
   return status >= 400 && status < 500 && ![401, 403, 408, 425, 429].includes(status);
 }
 
+// A relay input the remote runtime keeps refusing transiently (a paused or
+// refused binding answers 503) is not retried forever: past this age it is
+// closed like a definite refusal, so it never runs stale and the owner is told.
+const defaultRelayInputMaxAgeMs = 30 * 60 * 1000;
+
+export function scopedRelayInputMaxAgeMs(env = process.env) {
+  const value = Number(env.ORKESTR_REMOTE_RELAY_INPUT_MAX_AGE_MS || 0);
+  return Number.isFinite(value) && value >= 60_000 ? value : defaultRelayInputMaxAgeMs;
+}
+
+function inputExpired(message, env, now = Date.now()) {
+  const at = Date.parse(message?.createdAt || "");
+  return Number.isFinite(at) && now - at > scopedRelayInputMaxAgeMs(env);
+}
+
 // Forwards one relay-posted local user message. Transient failures throw (the
 // relay retries the same idempotent input); a definite refusal is recorded and
 // answered once so the relay can tell the owner and close the turn.
@@ -88,13 +103,16 @@ export async function forwardScopedRelayInputToRemote({ thread, message, remote 
   try {
     result = await enqueueRemoteWhatsAppThreadInput({ thread, message, input }, env, fetchImpl);
   } catch (error) {
-    const reason = /^[a-z0-9_:-]{1,120}$/i.test(String(error?.message || "")) ? error.message : "remote_runtime_request_failed";
+    const definite = definiteRefusal(error);
+    const expired = !definite && inputExpired(message, env);
+    const failure = /^[a-z0-9_:-]{1,120}$/i.test(String(error?.message || "")) ? error.message : "remote_runtime_request_failed";
+    const reason = expired ? `remote_runtime_input_expired:${Number(error?.statusCode || 0) || "unavailable"}` : failure;
     await appendEvent({
       type: "whatsapp_scoped_relay_remote_forward_failed", threadId: thread.id, messageId: message.id,
-      remoteBackend: remote.backendId, remoteThreadId: remote.remoteThreadId, error: reason,
-      definite: definiteRefusal(error),
+      remoteBackend: remote.backendId, remoteThreadId: remote.remoteThreadId, error: failure,
+      definite, expired,
     }, env).catch(() => {});
-    if (!definiteRefusal(error)) throw statusError("scoped_relay_remote_unavailable", 502);
+    if (!definite && !expired) throw statusError("scoped_relay_remote_unavailable", 502);
     const refused = await updateThreadMessage(thread.id, message.id, {
       state: "failed", deliveryState: "failed", observedVia: "remote_runtime_refused", error: reason,
       remoteBackend: remote.backendId, remoteThreadId: remote.remoteThreadId,
@@ -134,8 +152,12 @@ function receiptIds(value) {
   return [...new Set(ids)];
 }
 
+const notSentOutcomes = new Set(["suppressed", "failed"]);
+
 // Records the relay's confirmed provider send for one mirrored remote reply. The
 // mirror acknowledgement loop then reports it as `delivered`. Never sends.
+// `outcome: "suppressed"|"failed"` instead records a definite non-send (an
+// expired or rejected notification) so the remote input can settle.
 export async function recordScopedRelayRemoteDelivery({ thread, messageId, body = {} }, env = process.env) {
   const remote = remoteWhatsAppRuntimeBinding(thread, env);
   if (!remote) throw statusError("scoped_relay_delivery_not_delegated", 409);
@@ -146,10 +168,13 @@ export async function recordScopedRelayRemoteDelivery({ thread, messageId, body 
       message.remoteBackend !== remote.backendId || message.remoteThreadId !== remote.remoteThreadId) {
     throw statusError("scoped_relay_delivery_target_invalid", 409);
   }
+  const outcome = pickString(body.outcome, "delivered");
+  if (outcome !== "delivered") return recordNotSent({ thread, message, remote, outcome, body }, env);
   const requestIds = receiptIds(body.requestIds);
   const providerIds = receiptIds(body.connectorMessageIds || []);
   if (!requestIds.length) throw statusError("scoped_relay_delivery_invalid", 400);
   const outboxJobId = `scoped-relay:${crypto.createHash("sha256").update(requestIds.join("\n")).digest("hex").slice(0, 40)}`;
+  if (notSentOutcomes.has(pickString(message.deliveryState))) throw statusError("scoped_relay_delivery_conflict", 409);
   if (pickString(message.deliveryState) === "delivered") {
     if (pickString(message.mirrorOutboxJobId) !== outboxJobId) throw statusError("scoped_relay_delivery_conflict", 409);
     return { message, duplicate: true };
@@ -165,6 +190,24 @@ export async function recordScopedRelayRemoteDelivery({ thread, messageId, body 
   await appendEvent({
     type: "whatsapp_scoped_relay_remote_delivery_recorded", threadId: thread.id, messageId: message.id,
     remoteBackend: remote.backendId, remoteThreadId: remote.remoteThreadId, outboxJobId, providerIds: providerIds.length,
+  }, env).catch(() => {});
+  return { message: updated, duplicate: false };
+}
+
+async function recordNotSent({ thread, message, remote, outcome, body }, env) {
+  if (!notSentOutcomes.has(outcome)) throw statusError("scoped_relay_delivery_invalid", 400);
+  const reason = /^[a-z0-9_:-]{1,120}$/i.test(String(body.reason || "")) ? String(body.reason) : outcome;
+  const current = pickString(message.deliveryState);
+  if (current === outcome) return { message, duplicate: true };
+  if (current === "delivered" || notSentOutcomes.has(current)) throw statusError("scoped_relay_delivery_conflict", 409);
+  const updated = await updateThreadMessage(thread.id, message.id, {
+    deliveryState: outcome,
+    deliveryReason: reason,
+    observedVia: "whatsapp_scoped_group_relay",
+  }, env);
+  await appendEvent({
+    type: "whatsapp_scoped_relay_remote_delivery_recorded", threadId: thread.id, messageId: message.id,
+    remoteBackend: remote.backendId, remoteThreadId: remote.remoteThreadId, outcome, reason,
   }, env).catch(() => {});
   return { message: updated, duplicate: false };
 }

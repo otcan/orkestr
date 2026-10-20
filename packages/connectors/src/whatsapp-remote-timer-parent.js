@@ -11,8 +11,12 @@
 // WhatsApp connector, chat or account, and is never queued, forwarded to the
 // remote runtime, or mirrored to WhatsApp.
 import { appendThreadMessage } from "../../core/src/threads.js";
+import { appendEvent } from "../../storage/src/store.js";
 
 export const remoteTimerParentSource = "orkestr-v2-timer";
+// Server receipt for a materialized parent; the scoped relay's timer
+// notifications deliver the reply to the bound chat from this proof chain.
+export const remoteTimerParentEvent = "whatsapp_remote_timer_parent_materialized";
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const maxTimerTextLength = 500;
 
@@ -67,5 +71,20 @@ export async function materializeRemoteTimerParent({ thread, remote, remoteMessa
     remoteSyncedAt: new Date().toISOString(),
   }, env);
   if (!compatibleTimerParent(appended, remote, remoteMessage.id)) return null;
-  return { message: appended, created: appended.duplicate !== true };
+  const created = appended.duplicate !== true;
+  if (created) {
+    await appendEvent({
+      type: remoteTimerParentEvent,
+      threadId: thread.id,
+      target: thread.id,
+      targetType: "thread",
+      ownerUserId: thread.ownerUserId || "",
+      messageId: appended.id,
+      remoteBackend: remote.backendId,
+      remoteThreadId: remote.remoteThreadId,
+      remoteMessageId: remoteMessage.id,
+      timerSourceId: clean(remoteMessage.timerSourceId),
+    }, env).catch(() => {});
+  }
+  return { message: appended, created };
 }

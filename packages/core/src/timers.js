@@ -10,6 +10,7 @@ import { applyTimerOwnershipFence, assertTimerNotOwnedByV2, isTimerOwnershipFiel
 import { enqueueAgentMessage } from "./messages.js";
 import { principalForUserId, userPrincipal } from "./principal.js";
 import { appendThreadSignal } from "./thread-signals.js";
+import { delegatedTimerTarget, pauseTimerForDelegatedThread, timerDelegationError } from "./timer-delegation-fence.js";
 import { enqueueThreadInput, getThread, getThreadForPrincipal, listThreadMessages, listThreads, listThreadsForPrincipal } from "./threads.js";
 import { assertResourceAccess, filterResourcesForPrincipal, isAdminPrincipal, policyError } from "./policy.js";
 import { adminUserId, normalizeUserId } from "./users.js";
@@ -705,6 +706,8 @@ async function enqueueTimerMessage(timer, source, env, principal = null, options
   };
   if (timer.targetType !== "thread") return enqueueAgentMessage(timer.target, input, env);
   const thread = await getThread(timer.target, env).catch(() => null);
+  const delegated = delegatedTimerTarget(timer, thread, env);
+  if (delegated) throw timerDelegationError(delegated.remote);
   return enqueueThreadInput(thread?.id || timer.target, whatsappTimerThreadDefaults(thread, input), env);
 }
 
@@ -970,6 +973,15 @@ async function markDueTimersPass(env, now, options) {
   for (const timer of timers) {
     if (timerOwnedByV2(timer) || !timer.enabled || !timer.nextRunAt || Date.parse(timer.nextRunAt) > now.getTime() || timerWaitingForRetry(timer, now)) {
       next.push(timer);
+      continue;
+    }
+    const delegated = timer.targetType === "thread"
+      ? delegatedTimerTarget(timer, await getThread(timer.target, env).catch(() => null), env)
+      : null;
+    if (delegated) {
+      // Paused with a visible notice instead of held for a late burst.
+      next.push(await pauseTimerForDelegatedThread(timer, delegated, env, now));
+      changed = true;
       continue;
     }
     try {

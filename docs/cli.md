@@ -149,7 +149,10 @@ delete with `409 timer_owned_by_v2`; `orkestr doctor timers` reports it as
 `409 timer_ownership_conflict`. `orkestr timers handback <id> --handoff-id <key>`
 returns it with the same key, restoring its previous enablement (or the one
 chosen with `--enable`/`--keep-disabled`) and restarting the schedule from now,
-without catching up runs missed during the handoff.
+without catching up runs missed during the handoff. Agent Job schedule rows
+cannot be handed off (`409 agent_job_schedule_read_only`). A V1 timer whose
+thread is delegated to a remote runtime is paused with a notice when it falls
+due. See [scoped group relay](whatsapp-scoped-group-relay.md#delegated-remote-runtime-threads).
 
 Both doctor commands support `--json` for scripts. They exit non-zero only when
 the reported status is `broken`; warnings stay visible but do not block local

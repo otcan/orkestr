@@ -198,3 +198,86 @@ test("the mirrored reply is never sent by the legacy outbox and is acknowledged 
   await deliverWhatsAppReplies(env, fetchImpl);
   assert.equal(runtime.acks.length, 1, "a settled report is not repeated");
 });
+
+test("a relay input the runtime keeps refusing transiently is closed with a notice once it is too old", async (t) => {
+  const { env, runtime, fetchImpl, relayInput } = await fixture(t);
+  const thread = await getThread("example-thread", env);
+  const remote = scopedRelayRemoteBinding(thread, relayBody, env);
+  const message = await relayInput();
+  runtime.inputStatus = 503;
+  await assert.rejects(forwardScopedRelayInputToRemote({ thread, message, remote }, env, fetchImpl), /scoped_relay_remote_unavailable/);
+  const old = { ...message, createdAt: new Date(Date.now() - 31 * 60 * 1000).toISOString() };
+  const expired = await forwardScopedRelayInputToRemote({ thread, message: old, remote }, env, fetchImpl);
+  assert.equal(expired.refused, true);
+  assert.equal(expired.error, "remote_runtime_input_expired:503");
+  const rows = await listThreadMessages("example-thread", env);
+  assert.equal(rows[0].state, "failed");
+  assert.equal(rows[0].observedVia, "remote_runtime_refused");
+  assert.equal(rows[1].parentMessageId, message.id);
+  assert.match(rows[1].text, /did not accept this message \(remote_runtime_input_expired:503\)\. It was not run\./);
+  // Closed: not forwarded again.
+  await forwardScopedRelayInputToRemote({ thread, message: rows[0], remote }, env, fetchImpl);
+  assert.equal(runtime.inputs.length, 2);
+  // The age limit is configurable and never below one minute.
+  const shortEnv = { ...env, ORKESTR_REMOTE_RELAY_INPUT_MAX_AGE_MS: "1000" };
+  const recent = { ...message, id: "example-other", createdAt: new Date(Date.now() - 5 * 60 * 1000).toISOString() };
+  await assert.rejects(forwardScopedRelayInputToRemote({ thread, message: recent, remote }, shortEnv, fetchImpl), /scoped_relay_remote_unavailable/);
+});
+
+test("an expired or rejected relay notification is recorded as not sent and acknowledged so the input settles", async (t) => {
+  const { env, runtime, fetchImpl, relayInput } = await fixture(t);
+  const thread = await getThread("example-thread", env);
+  const remote = scopedRelayRemoteBinding(thread, relayBody, env);
+  const message = await relayInput();
+  await forwardScopedRelayInputToRemote({ thread, message, remote }, env, fetchImpl);
+  runtime.exports.push({
+    id: "example-remote-reply", role: "assistant", phase: "final_answer", state: "completed", kind: "final",
+    text: "Synthetic Rust answer", parentMessageId: "example-remote-user", exportSequence: 1,
+  });
+  await deliverWhatsAppReplies(env, fetchImpl);
+  const reply = (await listThreadMessages("example-thread", env)).find((row) => row.role === "assistant");
+  await assert.rejects(recordScopedRelayRemoteDelivery({ thread, messageId: reply.id, body: { outcome: "uncertain" } }, env),
+    /scoped_relay_delivery_invalid/);
+  const body = { outcome: "suppressed", reason: "expired" };
+  const recorded = await recordScopedRelayRemoteDelivery({ thread, messageId: reply.id, body }, env);
+  assert.equal(recorded.message.deliveryState, "suppressed");
+  assert.equal(recorded.message.deliveryReason, "expired");
+  assert.equal((await recordScopedRelayRemoteDelivery({ thread, messageId: reply.id, body }, env)).duplicate, true);
+  await assert.rejects(recordScopedRelayRemoteDelivery({ thread, messageId: reply.id, body: { requestIds: ["reply:one"] } }, env),
+    /scoped_relay_delivery_conflict/);
+  await assert.rejects(recordScopedRelayRemoteDelivery({ thread, messageId: reply.id, body: { outcome: "failed" } }, env),
+    /scoped_relay_delivery_conflict/);
+  await deliverWhatsAppReplies(env, fetchImpl);
+  assert.equal(runtime.sends, 0);
+  assert.equal(runtime.acks.length, 1);
+  assert.equal(runtime.acks[0].outcome, "suppressed");
+  assert.equal(runtime.acks[0].parentPublicMessageId, message.id);
+});
+
+test("a V2 timer reply on a delegated relay thread is never sent by the outbox and settles from the relay's report", async (t) => {
+  const { env, runtime, fetchImpl } = await fixture(t);
+  const thread = await getThread("example-thread", env);
+  const timerId = "0b6c1f5e-8f3a-4c2d-9e7b-1a2b3c4d5e6f";
+  runtime.user = {
+    id: timerId, role: "user", text: "Scheduled timer: Morning brief", publicMessageId: `v2timer-${timerId}`,
+    publicThreadId: "example-thread", chatId: "example-group@g.us", accountId: "example-account",
+    source: "orkestr-v2-timer", connector: "orkestr-v2-timer", origin: "timer", state: "delivered", createdAt: "2026-10-20T08:00:00.000Z",
+  };
+  runtime.exports.push({
+    id: "example-timer-final", role: "assistant", phase: "final_answer", state: "completed", kind: "final",
+    text: "Good morning.", parentMessageId: timerId, exportSequence: 1, source: "rust-v2-pilot",
+  });
+  await deliverWhatsAppReplies(env, fetchImpl);
+  const reply = (await listThreadMessages("example-thread", env)).find((row) => row.role === "assistant");
+  assert.equal(reply.parentMessageId, `v2timer-${timerId}`);
+  assert.equal(runtime.sends, 0, "the legacy outbox never sends on a relay-delegated thread");
+  assert.equal(runtime.acks.length, 0);
+  await recordScopedRelayRemoteDelivery({ thread, messageId: reply.id,
+    body: { requestIds: ["timer:example:0"], connectorMessageIds: ["provider-1"] } }, env);
+  await deliverWhatsAppReplies(env, fetchImpl);
+  assert.equal(runtime.sends, 0);
+  assert.equal(runtime.acks.length, 1);
+  assert.equal(runtime.acks[0].outcome, "delivered");
+  assert.equal(runtime.acks[0].parentPublicMessageId, `v2timer-${timerId}`);
+  assert.deepEqual(runtime.acks[0].connectorMessageIds, ["provider-1"]);
+});
