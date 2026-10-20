@@ -1,4 +1,5 @@
 import { withThreadQueueBoundary } from "./thread-queue-control.js";
+import { remoteWhatsAppRuntimeBinding } from "./thread-remote-runtime-binding.js";
 import { randomUUID } from "node:crypto";
 import { checkSetupCodexSubscription } from "./setups/setup-dispatch-guard.js";
 import { resourceOwnerUserId } from "./policy.js";
@@ -1755,7 +1756,7 @@ export async function deliverCodexAppServerPendingInputs(thread, env = process.e
   try {
     delivered = await withThreadQueueBoundary(lockKey, async () => {
       const current = await getThread(lockKey, env);
-      if (current?.queueDispatchHold?.paused) return [];
+      if (current?.queueDispatchHold?.paused || remoteWhatsAppRuntimeBinding(current || thread, env)) return [];
       return deliverCodexAppServerPendingInputsUnlocked(current || thread, env);
     }, env);
   } finally {
@@ -1769,7 +1770,7 @@ export async function deliverCodexAppServerPendingInputs(thread, env = process.e
     return delivered;
   }
   const currentThread = await getThread(lockKey, env).catch(() => null) || thread;
-  if (currentThread?.queueDispatchHold?.paused) return delivered;
+  if (currentThread?.queueDispatchHold?.paused || remoteWhatsAppRuntimeBinding(currentThread, env)) return delivered;
   if (!threadReadyForInputRetry(currentThread) || !pendingInputEligibleForReadyRetry(pending)) return delivered;
   const attempt = Math.max(0, Number(pending.deliveryReadyRetryAttempt || 0)) + 1;
   const maxAttempts = codexAppServerReadyRetryMax(env);

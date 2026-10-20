@@ -1,4 +1,5 @@
 import { appendEvent } from "../../storage/src/store.js";
+import { remoteWhatsAppRuntimeBinding } from "./thread-remote-runtime-binding.js";
 import { markConnectorDeliverySignal } from "./connector-delivery-signals.js";
 import { replyDeliveryProjectionParent } from "./reply-delivery-intent.js";
 import { parseThreadInputCommand } from "./thread-commands.js";
@@ -122,6 +123,7 @@ export async function processQueuedExecutorCommands(thread, env = process.env, o
   for (const message of candidates) {
     const parsed = parseThreadInputCommand(message);
     const current = await getThread(thread.id, env) || thread;
+    if (remoteWhatsAppRuntimeBinding(current, env)) break;
     const result = chatSenderMayControl(message)
       ? await runExecutorCommand(current, parsed.text, { rawCommand: parsed.rawCommand, runtime: options.runtime }, env)
       : { ok: false, error: "executor_command_denied", replyText: "Only the thread owner or an Orkestr admin can switch executors." };
