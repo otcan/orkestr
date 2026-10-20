@@ -2,7 +2,6 @@
 import copy
 import hashlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-import importlib.util
 import json
 import os
 from pathlib import Path
@@ -12,10 +11,8 @@ import time
 import unittest
 from unittest.mock import patch
 
-spec = importlib.util.spec_from_file_location("rust_client", Path(__file__).with_name("rust_client.py"))
-client_module = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(client_module)
-RustClient, ClientError = client_module.RustClient, client_module.ClientError
+from v2.compat.v1_runtime import rust_client as client_module
+from v2.compat.v1_runtime.rust_client import ClientError, RustClient
 
 OWNER = "00000000-0000-4000-8000-000000000001"
 CONVERSATION = "00000000-0000-4000-8000-000000000002"
@@ -113,9 +110,11 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(len(self.posts(client_module.SESSION)), 1)
         self.assertEqual(self.client.request("GET", "/window", allowed=(200, 204)), (204, None))
         self.assertEqual(len(self.posts(client_module.SESSION)), 1)
-        for method, _, headers, _ in self.server.observed:
+        for method, path, headers, _ in self.server.observed:
             self.assertEqual(headers["Host"], "example.test")
             self.assertNotIn("Authorization", headers)
+            if path == "/api/v2/health":
+                self.assertNotIn("Cookie", headers)
             if method == "POST":
                 self.assertEqual(headers["Origin"], ORIGIN)
         headers = self.posts(PREFIX + "/messages")[0][2]

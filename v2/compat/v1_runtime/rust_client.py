@@ -133,7 +133,7 @@ class RustClient:
         require(data is None or len(data) <= 32768, "request_too_large")
         headers = {"Host": self.authority, "Accept": "text/event-stream" if events else "application/json",
                    "Connection": "close"}
-        if self._cookie:
+        if self._cookie and path != "/api/v2/health":
             headers["Cookie"] = self._cookie
         if method == "POST":
             headers.update({"Origin": self.origin, "Content-Type": "application/json"})
