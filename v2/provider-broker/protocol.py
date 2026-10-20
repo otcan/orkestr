@@ -324,6 +324,13 @@ class Channel:
             if not item_event and frame["method"] not in (
                     "turn/started", "turn/completed", "item/agentMessage/delta"):
                 return None
+            foreign = frame["params"].get("threadId") if isinstance(frame["params"], dict) else None
+            if (self.sandbox[1] == "dangerFullAccess" and self.native is not None
+                    and isinstance(foreign, str) and foreign and foreign != self.native):
+                # Host full access runs the operator's Codex with its own
+                # features, e.g. spawn_agent sub-agents. Their thread events are
+                # internal to this turn: never forwarded, never fatal.
+                return None
             require(self.committed, Failure.BEFORE_COMMIT)
             require(not self.terminal, {
                 "turn/started": Failure.LATE_TURN_STARTED,
