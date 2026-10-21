@@ -12,6 +12,7 @@ class FakeV2:
         self.sources = {}
         self.calls = []
         self.native = {}
+        self.lineage = {}
 
     def conversation(self):
         conversation = str(uuid.uuid4())
@@ -55,8 +56,25 @@ class FakeV2:
         return {'conversation_id': conversation, 'inserted': inserted, 'duplicates': duplicates,
                 'quarantined': quarantined, 'source': None}
 
+    def put(self, path, body):
+        from v2_client import ApiError
+        self.calls.append(('PUT', path, 0))
+        conversation = path.split('/')[4]
+        if (conversation, body['source_instance'], body['source_thread_id']) not in self.sources:
+            raise ApiError(409, 'lineage_source_not_imported')
+        known = self.lineage.get(conversation)
+        if known is None:
+            self.lineage[conversation] = dict(body)
+            return 201, body
+        if known == body:
+            return 200, body
+        raise ApiError(409, 'lineage_conflict')
+
     def get(self, path, query=None):
         self.calls.append(('GET', path, query))
+        if path == '/api/v2/conversations':
+            ids = sorted(self.conversations)
+            return {'conversations': [{'conversation_id': c} for c in ids], 'next_cursor': None}
         parts = path.split('/')
         conversation = parts[4]
         if conversation not in self.conversations:

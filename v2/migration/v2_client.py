@@ -91,3 +91,8 @@ class Client:
 
     def post(self, path, body):
         return self._send('POST', path, body)[1]
+
+    def put(self, path, body):
+        """Returns (status, body) so callers can tell created from replayed."""
+        status, value, _ = self._send('PUT', path, body)
+        return status, value

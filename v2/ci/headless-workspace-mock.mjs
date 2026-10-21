@@ -29,7 +29,7 @@ export function createState() {
   const queued = { [C]: [{ conversation_id: C, request_key: 'synthetic-queued', input_message_id: uuid(301), input_event_id: uuid(302),
     input_request_key: 'synthetic-input', state: 'queued', position: 2, queued_at_ms: 2000, window_id: null, withdrawal: null }] };
   // windowMode: 'accept' admits; 'uncertain' answers 503 after the request is seen.
-  return { archived, messages, window, queued, requests: [], intake: {}, windowPosts: [], windowMode: 'accept', windowDelayMs: 0 };
+  return { archived, messages, window, queued, requests: [], intake: {}, windowPosts: [], windowMode: 'accept', windowDelayMs: 0, marks: [] };
 }
 
 const json = (res, status, body) => { res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' }); res.end(JSON.stringify(body)); };
@@ -86,7 +86,41 @@ function liveMap() {
       workers: id === B ? [{ run_id: uuid(205), session_id: uuid(206), parent_run_id: uuid(204), state: 'running', recovery: 'current_incarnation' }] : [] })) };
 }
 
-function api(state, req, res, url) {
+// Synthetic sidebar: native conversations plus a linked V1 group (with a
+// coordinator attached) and its worker sub-chat, newest activity first.
+export const V1_GROUP = 'synthetic-group';
+export const V1_WORKER = 'worker-synthetic-group-0001';
+function sidebar(state) {
+  const now = Date.now();
+  const entry = (key, name, at, extra = {}) => ({ key, source: key.startsWith('v1:') ? 'v1' : 'v2', name,
+    conversation_id: key.startsWith('v2:') ? key.slice(3) : null, v1_thread_id: key.startsWith('v1:') ? key.slice(3) : null,
+    parent_key: null, last_activity_ms: at, preview: null, unread: 0, activity: { fast: false, deep: false, workers: 0 },
+    read_only: key.startsWith('v1:'), coordinator: false, read_marker: 0, ...extra });
+  const marked = key => state.marks.some(m => m.key === key);
+  return { schema_version: 1, observed_at_ms: now, v1_status: 'ready', truncated: false, entries: [
+    entry(`v1:${V1_WORKER}`, 'Synthetic group / Worker 1', now - 60000, { parent_key: `v1:${V1_GROUP}`, read_marker: 4,
+      preview: { author: 'assistant', text: 'Synthetic worker progress' } }),
+    entry(`v2:${B}`, names[B], now - 120000, { activity: { fast: false, deep: true, workers: 1 }, read_marker: 3,
+      preview: { author: 'owner', text: 'Synthetic research question' } }),
+    entry(`v1:${V1_GROUP}`, 'Synthetic group', now - 3 * 3600000, { coordinator: true, read_marker: 12,
+      preview: { author: 'assistant', text: 'Synthetic coordinator reply' }, unread: marked(`v1:${V1_GROUP}`) ? 0 : 1 }),
+    entry(`v2:${A}`, names[A], now - 26 * 3600000, { read_marker: state.messages[A].length,
+      preview: { author: 'assistant', text: 'Synthetic assistant answer' }, unread: marked(`v2:${A}`) ? 0 : 2 }),
+    entry(`v2:${C}`, names[C], now - 9 * 86400000, { unread: marked(`v2:${C}`) ? 0 : 3, read_marker: 0, preview: { author: 'assistant', text: 'Synthetic errand reply' } }),
+  ] };
+}
+
+function v1History(thread) {
+  const messages = thread === V1_GROUP ? [
+    { message_id: 'v1-m10', author: 'owner', text: 'Synthetic owner question on V1', created_at_ms: Date.now() - 4 * 3600000, phase: null, cursor: 10 },
+    { message_id: 'v1-m11', author: 'participant', text: 'Synthetic member note', created_at_ms: Date.now() - 3.5 * 3600000, phase: null, cursor: 11 },
+    { message_id: 'v1-m12', author: 'assistant', text: 'Synthetic coordinator reply', created_at_ms: Date.now() - 3 * 3600000, phase: 'final_answer', cursor: 12 },
+  ] : [];
+  return { thread_id: thread, name: thread === V1_GROUP ? 'Synthetic group' : 'Synthetic group / Worker 1',
+    coordinator: thread === V1_GROUP, messages, before_cursor: null, latest_cursor: messages.at(-1)?.cursor ?? 0 };
+}
+
+async function api(state, req, res, url) {
   const path = url.pathname, q = url.searchParams;
   state.requests.push(`${req.method} ${path.replace(/[0-9a-f-]{36}/g, ':id')}`);
   if (path === '/api/v2/browser/session' && req.method === 'GET') return json(res, 200, { csrf_token: 'synthetic-csrf', global_conversation_id: A });
@@ -97,6 +131,18 @@ function api(state, req, res, url) {
       controls: { stop: true, steer: true, accept: true }, limits: LIMITS, window: state.window[id] });
   }
   if (path === '/api/v2/live-map' && req.method === 'GET') return json(res, 200, liveMap());
+  if (path === '/api/v2/sidebar' && req.method === 'GET') return json(res, 200, sidebar(state));
+  if (path === '/api/v2/sidebar/read' && req.method === 'PUT') {
+    if (req.headers['x-orkestr-csrf'] !== 'synthetic-csrf') return json(res, 403, { code: 'csrf', message: 'CSRF required' });
+    const mark = JSON.parse(await body(req));
+    state.marks.push(mark);
+    return json(res, 200, mark);
+  }
+  const v1 = /^\/api\/v2\/v1-threads\/([A-Za-z0-9._:-]+)\/messages$/.exec(path);
+  if (v1 && req.method === 'GET') {
+    if (![V1_GROUP, V1_WORKER].includes(v1[1])) return missing(res);
+    return json(res, 200, v1History(v1[1]));
+  }
   if (path === '/api/v2/projects' && req.method === 'GET') return json(res, 200, { next_cursor: null, projects: [
     { project_id: uuid(601), conversation_id: C, name: 'Errand project', resources: { local_git: 'not_configured', local_oxrm: 'not_configured' } }] });
   if (path === '/api/v2/conversations' && req.method === 'GET') return json(res, 200, {

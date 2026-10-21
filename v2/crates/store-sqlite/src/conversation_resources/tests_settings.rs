@@ -3,7 +3,7 @@ use orkestr_v2_contracts::*;
 use std::path::PathBuf;
 use uuid::Uuid;
 
-pub(super) struct Case {
+pub(crate) struct Case {
     root: PathBuf,
     pub store: Store,
     pub owner: OwnerId,

@@ -1,4 +1,5 @@
 use dioxus::prelude::*;
+use orkestr_v2_contracts::SidebarEntry;
 use orkestr_v2_ui::{session_scope::SessionScope, Draft};
 use std::collections::BTreeMap;
 
@@ -30,31 +31,58 @@ pub fn Workspace(
     let mut tab = use_signal(|| "Chat".to_string());
     let mut sidebar = use_signal(|| false);
     let mut reload = use_signal(|| 0_u64);
+    // A linked V1 chat is shown read-only instead of a native conversation.
+    let mut linked = use_signal(|| None::<SidebarEntry>);
+    let mut live = use_signal(|| None::<SidebarEntry>);
+    let selected = match linked() {
+        Some(entry) => entry.key,
+        None => format!("v2:{}", current()),
+    };
+    let header = live();
+    let activity = header
+        .as_ref()
+        .and_then(|e| orkestr_v2_ui::sidebar::activity_label(&e.activity));
     rsx! {
         div { class: "workspace", "data-sidebar-open": "{sidebar}",
             crate::conversation_sidebar::ConversationSidebar {
-                selected: current(), csrf: csrf.clone(), session_scope, onexpired,
-                onloaded: move |rows: Vec<orkestr_v2_ui::conversation_directory::ConversationSummary>| {
-                    if let Some(row) = rows.iter().find(|row| row.conversation_id.to_string() == current()) { title.set(row.name.clone()); }
+                selected: selected.clone(), csrf: csrf.clone(), session_scope, onexpired,
+                onloaded: move |rows: Vec<SidebarEntry>| {
+                    let key = match linked.peek().as_ref() { Some(entry) => entry.key.clone(), None => format!("v2:{}", current.peek()) };
+                    let row = rows.into_iter().find(|row| row.key == key);
+                    if let Some(row) = &row { title.set(row.name.clone()); }
+                    live.set(row);
                 },
-                onselect: move |row: orkestr_v2_ui::conversation_directory::ConversationSummary| {
-                    let id = row.conversation_id.to_string();
+                onselect: move |row: SidebarEntry| {
+                    sidebar.set(false);
+                    tab.set("Chat".into());
+                    title.set(row.name.clone());
+                    live.set(Some(row.clone()));
+                    if row.read_only {
+                        linked.set(Some(row));
+                        return;
+                    }
+                    let Some(id) = row.conversation_id.as_ref().map(ToString::to_string) else { return };
+                    linked.set(None);
                     // Fence a late control response before the new keyed reader mounts.
                     execution.write().select(&id, "");
                     current.set(id);
                     crate::conversation_location::replace(Some(&current()));
-                    title.set(row.name);
-                    tab.set("Chat".into());
-                    sidebar.set(false);
                     reload += 1;
                 }
             }
             if sidebar() { button { class: "drawer-scrim", r#type: "button", "aria-label": "Close conversations", onclick: move |_| sidebar.set(false) } }
             div { class: "workspace-main",
                 header { class: "conversation-heading",
-                    button { class: "threads-toggle", "aria-expanded": "{sidebar}", onclick: move |_| sidebar.set(!sidebar()), "Conversations" }
-                    h2 { "{title}" }
-                    nav { "aria-label": "Main",
+                    button { class: "threads-toggle", "aria-expanded": "{sidebar}", "aria-label": "Conversations", onclick: move |_| sidebar.set(!sidebar()), span { "aria-hidden": "true", "☰" } }
+                    div { class: "heading-title",
+                        h2 { "{title}" }
+                        if let Some(label) = activity.clone() {
+                            p { class: "heading-activity", role: "status", "{label}" }
+                        } else if let Some(entry) = header.as_ref().filter(|e| e.read_only) {
+                            p { class: "heading-meta", if entry.coordinator { "On V1 · coordinator attached" } else { "On V1 · read-only" } }
+                        }
+                    }
+                    if linked().is_none() { nav { "aria-label": "Main",
                         for name in TABS {
                             button { "aria-current": if tab() == name { "page" } else { "false" }, onclick: move |_| {
                                 if tab() == name { return; }
@@ -62,9 +90,11 @@ pub fn Workspace(
                                 tab.set(name.into());
                             }, "{name}" }
                         }
-                    }
+                    } }
                 }
-                if tab() == "Chat" {
+                if let Some(entry) = linked() {
+                    crate::v1_thread_view::V1ThreadView { key: "{entry.key}-{session_scope.read().generation()}", entry, session_scope, onexpired }
+                } else if tab() == "Chat" {
                     SelectedConversation {
                         key: "{current()}-{session_scope.read().generation()}-{reload}",
                         id: current(), csrf, session_scope, execution, drafts, held_inputs, onexpired
@@ -78,6 +108,7 @@ pub fn Workspace(
                         } else if tab() == "Projects" {
                             crate::projects_view::Projects { key: "{session_scope.read().generation()}", csrf, session_scope, onexpired,
                                 onopen: move |(id, name): (String, String)| {
+                                    linked.set(None);
                                     execution.write().select(&id, "");
                                     current.set(id);
                                     crate::conversation_location::replace(Some(&current()));

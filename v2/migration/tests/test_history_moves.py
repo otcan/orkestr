@@ -11,6 +11,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import history_import
+import lineage
 import v1_export
 import v2_client
 import v2_rollback
@@ -98,6 +99,57 @@ class ImportTests(unittest.TestCase):
             history_import.import_thread(self.server, manifest, messages, 'alpha')
         with self.assertRaisesRegex(v1_export.ExportError, 'thread_not_in_bundle'):
             history_import.import_thread(self.server, manifest, messages, 'beta', create_name='x')
+
+    def test_imported_worker_sub_thread_keeps_its_parent_link(self):
+        self.home.thread('worker-alpha-0001', name='Synthetic thread / Worker 1',
+                         parentThreadId='alpha', threadKind='worker')
+        self.home.message('worker-alpha-0001', 'user', 'synthetic worker task')
+        path = self.root / 'worker-bundle'
+        v1_export.export(self.home.root, ['worker-alpha-0001'], path, 'synthetic-v1', now=NOW)
+        manifest, messages = v1_export.load(path)
+        plan = history_import.import_thread(self.server, manifest, messages, 'worker-alpha-0001',
+                                            create_name='Imported worker', apply=False)
+        self.assertEqual(plan['lineage'], {'parent_thread_id': 'alpha', 'state': 'planned'})
+        self.assertFalse(self.server.lineage)
+        report = history_import.import_thread(self.server, manifest, messages, 'worker-alpha-0001',
+                                              create_name='Imported worker', apply=True)
+        self.assertEqual(report['lineage']['state'], 'recorded')
+        self.assertEqual(self.server.lineage[report['conversation_id']], {
+            'source_instance': 'synthetic-v1', 'source_thread_id': 'worker-alpha-0001',
+            'source_parent_thread_id': 'alpha'})
+        again = history_import.import_thread(self.server, manifest, messages, 'worker-alpha-0001',
+                                             conversation=report['conversation_id'], apply=True)
+        self.assertEqual(again['lineage']['state'], 'unchanged')
+
+    def test_lineage_backfill_restores_lost_parent_links_from_the_v1_registry(self):
+        # A worker imported before lineage existed: the server has no link yet.
+        self.home.thread('worker-alpha-0002', name='Synthetic worker', parentThreadId='alpha',
+                         threadKind='worker')
+        self.home.thread('task-alpha-1', name='Synthetic task', parentThreadId='alpha',
+                         threadKind='task-agent')
+        for thread in ('worker-alpha-0002', 'task-alpha-1'):
+            self.home.message(thread, 'user', 'synthetic')
+        path = self.root / 'old-bundle'
+        v1_export.export(self.home.root, ['alpha', 'worker-alpha-0002', 'task-alpha-1'], path,
+                         'synthetic-v1', now=NOW)
+        manifest, messages = v1_export.load(path)
+        ids = {}
+        for thread in ('alpha', 'worker-alpha-0002', 'task-alpha-1'):
+            with mock.patch.object(lineage, 'record', return_value='unsupported'):
+                ids[thread] = history_import.import_thread(
+                    self.server, manifest, messages, thread, create_name=thread, apply=True)['conversation_id']
+        self.assertFalse(self.server.lineage)
+        dry = lineage.backfill(self.server, self.home.root, 'synthetic-v1')
+        self.assertEqual((dry['mode'], dry['with_parent']), ('dry_run', 1))
+        self.assertFalse(self.server.lineage)
+        applied = lineage.backfill(self.server, self.home.root, 'synthetic-v1', apply=True)
+        self.assertEqual({i['state'] for i in applied['conversations']}, {'recorded'})
+        self.assertEqual(self.server.lineage[ids['worker-alpha-0002']]['source_parent_thread_id'], 'alpha')
+        self.assertIsNone(self.server.lineage[ids['task-alpha-1']]['source_parent_thread_id'])
+        self.assertIsNone(self.server.lineage[ids['alpha']]['source_parent_thread_id'])
+        again = lineage.backfill(self.server, self.home.root, 'synthetic-v1', apply=True)
+        self.assertEqual({i['state'] for i in again['conversations']}, {'unchanged'})
+        self.assertNotIn('synthetic', json.dumps(applied).replace('synthetic-v1', ''))
 
     def test_credentials_file_must_be_private(self):
         path = self.root / 'credentials.json'

@@ -7,7 +7,7 @@ pub(crate) mod settings;
 #[cfg(test)]
 mod tests_desktops;
 #[cfg(test)]
-mod tests_settings;
+pub(crate) mod tests_settings;
 #[cfg(test)]
 mod tests_workers;
 

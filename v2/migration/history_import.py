@@ -10,6 +10,7 @@ import json
 
 import archive_digest
 from v1_export import ExportError
+import lineage
 
 BATCH_MESSAGES = 500
 BATCH_BYTES = 4 * 1024 * 1024
@@ -85,6 +86,11 @@ def import_thread(client, manifest, messages_by_thread, thread_id, conversation=
     planned = list(batches(delta))
     report['target_before'] = {k: before[k] for k in ('cursor', 'message_count', 'quarantined')} if before else None
     report['delta'] = {'messages': len(delta), 'batches': len(planned)}
+    # The V1 parent of a worker sub-thread travels with the import, so the
+    # conversation keeps its parent link (`PUT .../lineage`, write-once).
+    planned_lineage = lineage.from_registry(instance, thread_id, thread.get('registry'))
+    report['lineage'] = {'parent_thread_id': planned_lineage['source_parent_thread_id'],
+                         'state': 'planned'}
     if not apply:
         return report
     inserted = duplicates = 0
@@ -104,6 +110,8 @@ def import_thread(client, manifest, messages_by_thread, thread_id, conversation=
                         'quarantined': quarantined, 'quarantined_ids': quarantined_ids}
     report['target_after'] = {k: after[k] for k in ('cursor', 'message_count', 'quarantined', 'checksum')} if after else None
     report['verified'] = verify(after, sendable)
+    if after:
+        report['lineage']['state'] = lineage.record(client, conversation, planned_lineage)
     return report
 
 

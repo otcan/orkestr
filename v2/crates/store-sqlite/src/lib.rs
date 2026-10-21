@@ -18,6 +18,8 @@ pub use conversation_resources::{
 };
 mod conversation_export;
 mod conversations;
+mod sidebar;
+pub use sidebar::{SidebarConversation, SidebarConversations};
 pub mod fixture_runtime;
 pub use conversation_export::{
     ConversationExport, ConversationExportError, ConversationExportLimits,
