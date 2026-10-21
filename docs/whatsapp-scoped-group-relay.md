@@ -56,6 +56,52 @@ Changing that contract requires a deliberate journal migration; do not reset a
 journal to bypass an uncertain delivery. Keep the config, journals and account
 credentials private. `ORKESTR_ENV_FILE` selects the local CLI API credentials.
 
+## Dynamic group registration
+
+A group created for a Rust (V2) chat should not need a contract migration and a
+restart of every group's transport. With an optional block in the transport,
+relay and DE bridge configs:
+
+```json
+"dynamicGroups": {"enabled": true, "since": "<ISO activation>", "journals": ["<DE transport journal>"]}
+```
+
+groups may also be registered at runtime in the journal's `group_registered`
+table. The static `groups` allowlist and its contract hash are unchanged, so
+adding the block needs no journal migration. Each process reads its config at
+startup, so it takes effect at the next restart (once).
+
+**Registrar.** The relay is the only registrar. Every 30 s it reads V1's thread
+registry. It registers a group in the primary journal and in every
+`journals` entry (for example the DE bridge) when V1 shows all of these:
+
+- the thread belongs to `ownerUserId` and is not retired;
+- its WhatsApp binding is enabled, names a group chat and has
+  `mirrorToWhatsApp: false`;
+- the runtime is delegated to a remote backend (`remoteThreadId`, runtime on);
+- the thread was created after `since`.
+
+Existing threads (created before `since`) are never picked up. They stay
+operator-registered.
+
+**Removal.** When a thread stops being eligible (retired, binding disabled,
+delegation off), the relay marks its registration removed at the next poll.
+This is the archive path for a disposable chat: retire its V1 thread. Rows are
+kept for audit, and a group can be registered again later.
+
+**Safety.**
+- A registered group shares the route fence of the static groups when
+  `routeControl` is configured.
+- Messages sent before the registration (and before `since`) are never
+  imported.
+- The relay still checks each input against the thread binding before routing
+  it.
+- The native worker and the reply wrapper accept sends and history reads only
+  for static or currently registered groups.
+
+`SELECT chat_id,thread_id,registered_at,removed_at,reason FROM group_registered`
+on a journal lists the registrations.
+
 ## Delivery and recovery
 
 For an audited recovery, preserve private snapshots of the transport and relay

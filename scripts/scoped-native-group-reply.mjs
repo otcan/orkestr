@@ -16,6 +16,18 @@ const readStdin = async () => {
   return JSON.parse(Buffer.concat(chunks).toString('utf8'));
 };
 
+// A group registered at runtime (dynamicGroups) in the transport journal. The
+// modules load only then: node:sqlite warns on stderr, which carries the
+// wrapper's JSON error contract.
+async function registered(config, chatId) {
+  if (config.dynamicGroups === undefined || typeof chatId !== 'string') return false;
+  const [{DatabaseSync}, dynamic] = await Promise.all([import('node:sqlite'),
+    import('../packages/connectors/src/whatsapp-scoped-dynamic-groups.js')]);
+  if (!dynamic.validateDynamicGroups(config)) return false;
+  const db = new DatabaseSync(config.journalPath, {readOnly: true});
+  try { return dynamic.createDynamicGroupView(db).has(chatId); } finally { db.close(); }
+}
+
 try {
   const [command, ...args] = process.argv.slice(2);
   const config = JSON.parse(fs.readFileSync(process.env.ORKESTR_WA_SCOPED_GROUP_CONFIG, 'utf8'));
@@ -35,7 +47,7 @@ try {
     ? typeof text === 'string' && text && text.length <= SCOPED_SEND_MAX_TEXT_LENGTH
     : text === undefined && validReplyDocument(document);
   if (!['reply', 'notify'].includes(request.kind) || !config.workerAccountId
-      || !config.groups.some(group => group.chatId === to)
+      || !(config.groups.some(group => group.chatId === to) || await registered(config, to))
       || typeof requestId !== 'string' || !requestId || typeof parentId !== 'string' || !parentId || !validBody)
     throw new Error('scoped_reply_invalid');
   const env = {...process.env, ORKESTR_WA_WORKER_URL: '',
