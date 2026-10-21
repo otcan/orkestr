@@ -18,7 +18,7 @@ impl ClaudeInputCorrelation {
         let mut frame = json!({"type":"user",
             "session_id":cap.provider().binding.native_session_id,
             "parent_tool_use_id":null,
-            "message":{"role":"user","content":cap.text()}});
+            "message":{"role":"user","content":super::turn_text(cap.provider().binding.role, cap.text())}});
         if let Some(input) = &self.0 {
             frame["uuid"] = json!(input);
         }

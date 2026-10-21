@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import signal
 import socket
+import sys
 import subprocess
 import threading
 import time
@@ -232,12 +233,19 @@ class Manager:
                 return
             accepted = time.monotonic()
             deadline = accepted + 1
+            request = None
             try:
                 request = receive(connection, deadline)
                 if request["operation"] == "bind_child":
                     deadline = self._bind_deadline(request, accepted)
                 answer = self.dispatch(request, deadline)
-            except Refused:
+            except Refused as error:
+                # Static refusal codes only (never request values): the operator
+                # needs the reason a retirement or custody check refused.
+                operation = request.get("operation") if isinstance(request, dict) else None
+                if operation in ("retire", "reconcile", "extend", "uncertain", "bind_child"):
+                    sys.stderr.write("manager refused %s: %s\n" % (operation, str(error)[:64]))
+                    sys.stderr.flush()
                 answer = {"ok": False, "code": "control_refused", "receipt": self.ledger.status()}
             except (OSError, ValueError):
                 answer = {"ok": False, "code": "control_unavailable"}

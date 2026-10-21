@@ -62,12 +62,27 @@ fn execution_scope(
     )
 }
 
+/// Prefixed to every Fast turn: Fast answers quickly while Deep (and its
+/// Workers) does long work in parallel. A long command in Fast only holds the
+/// window and is stopped by Fast's short run budget.
+pub const FAST_TURN_NOTE: &str =
+    "[Fast reply: answer within about a minute. Do not start long-running commands, \
+waits or polling loops; a Deep turn is working on this message in parallel and handles long work.]";
+
+pub(crate) fn turn_text(role: orkestr_v2_contracts::runtime::Role, text: &str) -> String {
+    match role {
+        orkestr_v2_contracts::runtime::Role::Fast => format!("{FAST_TURN_NOTE}\n\n{text}"),
+        _ => text.to_owned(),
+    }
+}
+
 fn turn_frame(capability: &ConsumedProviderDispatch, request_id: u64) -> serde_json::Value {
     let provider = capability.provider();
+    let text = turn_text(provider.binding.role, capability.text());
     let mut frame = json!({"id":request_id,"method":"turn/start","params":{
         "threadId":provider.binding.native_session_id,
         "clientUserMessageId":capability.message_id().to_string(),
-        "input":[{"type":"text","text":capability.text(),"text_elements":[]}]}});
+        "input":[{"type":"text","text":text,"text_elements":[]}]}});
     // Owner conversation settings (V1 `turnStartParams`): per-turn overrides,
     // so a change applies from the next turn and never to a running one.
     if let Some((model, effort)) = capability.launch().and_then(|l| l.codex_overrides()) {

@@ -23,7 +23,7 @@ const REFUSED: &str = "beta configuration custody refused";
 pub(crate) fn load(path: &Path, home: &Path) -> Result<BetaConfig, &'static str> {
     let (uid, gid) = identity()?;
     let home_info = private_directory(home, uid, gid)?;
-    let raw = protected_bytes(path, gid, false, 16384)?;
+    let raw = protected_bytes(path, gid, false, super::MAX_BETA_CONFIG_BYTES)?;
     let config: BetaConfig = serde_json::from_slice(&raw).map_err(|_| REFUSED)?;
     config.validate()?;
     let workspace_info = private_directory(&config.workspace, uid, gid)?;

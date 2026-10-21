@@ -43,7 +43,8 @@ impl ConfiguredExecution {
             provider: config::Provider::Claude,
             role: config::ExecutionRole::Fast,
             execution_budget: budget::ExecutionBudget {
-                max_run_ms: 870_000,
+                // Fast stays quick; long work belongs to Deep or a Worker.
+                max_run_ms: FAST_MAX_RUN_MS,
                 max_idle_ms: None,
             },
             worker: None,

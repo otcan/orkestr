@@ -145,3 +145,14 @@ unanswered 20 minutes after it arrived gets one visible notice ("Still
 working ... the operator has been alerted"). The adapter also logs an
 `ALERT orkestr-v2-wa-adapter input_stalled` line and reports `stalledInputs` in
 binding health.
+
+### Fast stays quick
+
+Every Fast turn now starts with a short note: answer within about a minute,
+and start no long-running commands, waits or polling loops, because Deep is
+working on the same message in parallel. This applies to Codex and Claude.
+A window's Fast run budget is 4 minutes (`FAST_MAX_RUN_MS`), down from 14.5.
+When a broker's native-tree retirement is not proven, the server logs that
+broker's exit status. The manager logs the static refusal code of a
+`retire`, `reconcile`, `extend`, `uncertain` or `bind_child` request, so the
+next unclean Fast retirement can be diagnosed.

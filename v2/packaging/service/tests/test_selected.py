@@ -106,6 +106,7 @@ class Selected(unittest.TestCase):
         self.plan['roles']={'fast':roles[0],'workers':roles[1:]}
         self.plan['live_map']='/var/lib/synthetic-live-map/map.json'
         self.plan['desktop_broker']='/var/lib/synthetic-private/desktop-broker.json'
+        self.plan['timer_config']='/var/lib/synthetic-private/timers.json'
         selected.prepare(self.plan)
         with authority(REPO,source) as (_,manager,_):
             package=manager.Package(r/'release/package',sha(r/'release/package/manifest.json'))
@@ -113,6 +114,7 @@ class Selected(unittest.TestCase):
             self.assertEqual(package.environment()['ORKESTR_V2_LIVE_MAP'],'/var/lib/synthetic-live-map/map.json')
             self.assertEqual(package.environment()['ORKESTR_V2_DESKTOP_BROKER_CONFIG'],
                              '/var/lib/synthetic-private/desktop-broker.json')
+            self.assertEqual(package.environment()['ORKESTR_V2_TIMER_CONFIG'],'/var/lib/synthetic-private/timers.json')
         for role in ('fast','worker-0','worker-1','worker-2','worker-3'):
             self.assertIn('broker-'+role,(r/f'release/package/launcher-{role}.py').read_text())
         receipt=json.loads((r/'release/release.json').read_bytes())
@@ -121,6 +123,11 @@ class Selected(unittest.TestCase):
         for bad in ('relative/broker.json','/var/../broker.json',7):
             self.plan['desktop_broker']=bad
             with self.assertRaisesRegex(RuntimeError,'desktop broker path'):selected.prepare(self.plan)
+        self.assertFalse((self.root/'release').exists())
+    def test_timer_config_path_refused_before_any_artifact_read(self):
+        for bad in ('relative/timers.json','/var/../timers.json',7):
+            self.plan['timer_config']=bad
+            with self.assertRaisesRegex(RuntimeError,'timer config path'):selected.prepare(self.plan)
         self.assertFalse((self.root/'release').exists())
     def test_live_map_path_refused_before_any_artifact_read(self):
         for bad in ('relative/map.json','/var/../map.json',7):
@@ -227,6 +234,15 @@ class Selected(unittest.TestCase):
         with authority(REPO,source) as (_,manager,_):
             package=manager.Package(r/'release/package',sha(r/'release/package/manifest.json'))
             self.assertEqual(package.beta['additional_workspace_exec'],[second])
+        # Many conversations with their own workspace fit (bounded at 128).
+        many=[profile('%08d-5555-4555-8555-555555555555'%i,'%08d-6666-4666-8666-666666666666'%i,f'project-{i}')
+              for i in range(40)]
+        self.plan['additional_workspace_exec']=many
+        shutil.rmtree(r/'release')
+        selected.prepare(self.plan)
+        with authority(REPO,source) as (_,manager,_):
+            package=manager.Package(r/'release/package',sha(r/'release/package/manifest.json'))
+            self.assertEqual(len(package.beta['additional_workspace_exec']),40)
     def test_reserved_directories_retained(self):
         for name,mode in (('ledger',0o700),('ep',0o750)):
             p=self.root/name;p.mkdir();os.chown(p,0,986);p.chmod(mode)

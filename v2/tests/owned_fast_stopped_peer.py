@@ -63,6 +63,9 @@ for line in sys.stdin:
     else:
         assert method == "turn/start"
         text = frame["params"]["input"][0]["text"]
+        if role == "fast":
+            note, separator, text = text.partition("\n\n")
+            assert separator and note.startswith("[Fast reply:")
         prefix = "synthetic ordinary HTTP input"
         assert text == prefix or text.startswith(prefix + " ")
         number = 1 if text == prefix else int(text.removeprefix(prefix + " "))

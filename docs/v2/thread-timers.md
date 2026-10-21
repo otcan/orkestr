@@ -120,7 +120,9 @@ delete it after the move.
 - V2: deploy the server with migration `0049` and set
   `ORKESTR_V2_TIMER_CONFIG` (private `{"schema_version":1,"machine_token_file":…}`,
   machine token from `POST /api/v2/session`, renewed by the service hourly)
-  beside the beta configuration. Deploy the multi-chat adapter from the same
+  beside the beta configuration. In a selected-service plan, set
+  `timer_config` to the private config path; the packager passes it to the
+  server as `ORKESTR_V2_TIMER_CONFIG` and never opens it. Deploy the multi-chat adapter from the same
   commit before handing off a WhatsApp thread's timers.
 - V1: the ownership fence and timer-parent materialization ship through the
   release train; hand off nothing until that V1 release is live.
