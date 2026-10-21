@@ -6,6 +6,9 @@
   handoff     V1 ownedBy:v2 fence, then explicit V2 enable (fence first)
   handback    V2 disable, then lift the V1 fence and restore V1 enablement
   status      per-timer owner across V1 and V2; flags any double owner
+  calendar-plan / -apply / -rollback / -status
+              convert V1-style timers into ONE calendar timer from a recipe
+              (see calendar_convert.py); the old timers stay off for rollback
 
 Output is a JSON report of identifiers, states and schedule kinds; timer
 instructions, credentials and private paths are never printed.
@@ -17,6 +20,7 @@ import sys
 
 # Isolated mode (-I) omits the script directory; add only this reviewed directory.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import calendar_convert  # noqa: E402
 import timer_moves  # noqa: E402
 import v2_client  # noqa: E402
 
@@ -70,6 +74,37 @@ def _status(args):
         client, _v1(args), bundle, args.thread, args.conversation))
 
 
+class V1Snapshot:
+    """Read-only V1 state from a saved `orkestr timers list --json` (offline planning)."""
+
+    def __init__(self, path):
+        value = json.loads(Path(path).read_text())
+        self._timers = value['timers'] if isinstance(value, dict) else value
+
+    def timers(self):
+        return list(self._timers)
+
+    def handoff(self, *_):
+        raise timer_moves.MoveError('v1_snapshot_is_read_only')
+
+    handback = handoff
+
+
+def _calendar(args, action):
+    bundle = timer_moves.load_bundle(args.bundle)
+    recipe = calendar_convert.load_recipe(args.recipe)
+    inline = not args.no_inline_prompt_file
+    v1 = V1Snapshot(args.v1_timers_json) if getattr(args, 'v1_timers_json', None) else _v1(args)
+    if action == 'plan' and not args.v2_url:
+        return calendar_convert.plan(None, v1, bundle, recipe, args.conversation, inline)
+    return _with_client(args, lambda client: {
+        'plan': lambda: calendar_convert.plan(client, v1, bundle, recipe, args.conversation, inline),
+        'apply': lambda: calendar_convert.apply(client, v1, bundle, recipe, args.conversation, args.confirm, inline),
+        'rollback': lambda: calendar_convert.rollback(client, v1, bundle, recipe, args.conversation, args.to, inline),
+        'status': lambda: calendar_convert.status(client, v1, bundle, recipe, args.conversation, inline),
+    }[action]())
+
+
 def parser():
     root = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     commands = root.add_subparsers(dest='command', required=True)
@@ -119,6 +154,27 @@ def parser():
     stat = commands.add_parser('status')
     remote(stat)
     stat.set_defaults(run=_status)
+
+    for name, help_text in (('plan', 'read-only: rule in words, what is replaced, plan digest'),
+                            ('apply', 'fence/disable the old timers, then enable the calendar timer'),
+                            ('rollback', 'disable the calendar timer, restore the old timers'),
+                            ('status', 'which of old and new is active; flags a double owner')):
+        cal = commands.add_parser('calendar-' + name, help=help_text)
+        cal.add_argument('--bundle', required=True)
+        cal.add_argument('--recipe', required=True, help='calendar recipe JSON (see recipes/)')
+        cal.add_argument('--conversation', required=(name != 'plan'), help='target V2 conversation UUID')
+        cal.add_argument('--v2-url', required=(name != 'plan'))
+        cal.add_argument('--origin')
+        cal.add_argument('--credentials-file', required=(name != 'plan'))
+        cal.add_argument('--v1-cli', default='orkestr')
+        cal.add_argument('--v1-timers-json', help='saved `orkestr timers list --json` instead of the CLI')
+        cal.add_argument('--no-inline-prompt-file', action='store_true',
+                         help='use the V1 prompt text itself, not the file it points to')
+        if name == 'apply':
+            cal.add_argument('--confirm', required=True, help='plan_digest printed by calendar-plan')
+        if name == 'rollback':
+            cal.add_argument('--to', choices=('v2', 'v1'), default='v2')
+        cal.set_defaults(run=lambda a, n=name: _calendar(a, n))
     return root
 
 
@@ -126,6 +182,9 @@ def main(argv=None):
     args = parser().parse_args(argv)
     try:
         result = args.run(args)
+    except calendar_convert.ConvertError as error:
+        print(json.dumps({'ok': False, 'code': str(error)}), file=sys.stderr)
+        return 2
     except timer_moves.MoveError as error:
         print(json.dumps({'ok': False, 'code': str(error)}), file=sys.stderr)
         return 2
