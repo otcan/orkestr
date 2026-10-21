@@ -41,6 +41,7 @@ mod execution_registry;
 pub mod fast_execution;
 pub mod google_registry_metadata;
 mod held_inputs;
+pub mod host_metrics;
 mod intelligence_http;
 pub mod live_map;
 mod memory_service;
@@ -486,6 +487,7 @@ pub fn router_with_google_catalog(
         .merge(archived_history_http::router())
         .merge(conversation_resources_http::router())
         .merge(conversation_status_http::router())
+        .merge(host_metrics::router())
         .merge(desktop_http::router())
         .merge(sidebar_http::router())
         .merge(message_attachments::router())

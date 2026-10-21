@@ -128,6 +128,8 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(dist) = std::env::var_os("ORKESTR_V2_UI_DIST") {
         app = orkestr_v2_server::with_static_ui(app, &PathBuf::from(dist))?;
     }
+    // Host CPU, memory, disk, network and service samples for the metrics panel.
+    orkestr_v2_server::host_metrics::start(&home);
     // Request ids, per-request logs and metrics for the API and the UI assets.
     let app = orkestr_v2_server::observability::layer(app);
     if let Ok(bind) =

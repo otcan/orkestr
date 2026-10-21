@@ -20,6 +20,10 @@ mod fast_panel;
 mod held_inputs_poll;
 mod held_inputs_view;
 mod history;
+mod host_metrics_chart;
+mod host_metrics_fetch;
+mod host_metrics_panel;
+mod host_metrics_view;
 mod host_resources_view;
 mod intelligence_view;
 mod live_map_view;
@@ -80,6 +84,7 @@ fn App() -> Element {
     // Owner-scoped high-water marks outlive keyed conversation and tab remounts.
     let mut execution = use_signal(orkestr_v2_ui::execution::Execution::default);
     let mut host_resources = use_signal(orkestr_v2_ui::host_resources::HostResources::default);
+    let open_metrics = use_context_provider(|| host_metrics_panel::OpenHostMetrics(Signal::new(0)));
     let mut held_inputs = use_signal(orkestr_v2_ui::held_inputs::HeldInputs::default);
     // Tab-scoped reload recovery; writes start only after this owner's restore.
     let mut memory_key = use_signal(|| None::<String>);
@@ -178,8 +183,14 @@ fn App() -> Element {
     };
     rsx! {
         style { "{include_str!(\"style.css\")}" }
+        style { "{include_str!(\"host_metrics.css\")}" }
         main { class: "app-shell",
-            header { class: "app-heading", h1 { "Orkestr" } span { "Rust workspace · beta" } }
+            header { class: "app-heading", h1 { "Orkestr" } span { "Rust workspace · beta" }
+                if !csrf().is_empty() && !current().is_empty() {
+                    host_metrics_panel::HostMetricsPanel { key: "{session_scope.read().generation()}", session_scope, onexpired: expired,
+                        onopen: move |_| { let mut open = open_metrics.0; open += 1; } }
+                }
+            }
             if csrf().is_empty() || notice().contains("not confirmed") {
                 p { class: "app-notice", role: "status", "{notice}" }
             }

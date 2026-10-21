@@ -386,6 +386,19 @@ export const scenarios = [
     await page.evaluate(() => [...document.querySelectorAll('.v1-tabs button')].find(b => b.textContent === 'Chat').click());
     await page.waitForSelector('#v1-composer');
   }],
+  ['host-metrics', async label => {
+    // The heading panel is always visible and opens the details charts.
+    await page.waitForFunction(() => document.querySelector('.host-metrics-panel')?.textContent.includes('32%'), { timeout: 20000 });
+    await page.click('.host-metrics-panel');
+    await page.waitForFunction(() => document.querySelectorAll('.metric-chart').length >= 9, { timeout: 20000 });
+    await waitText('Synthetic probe');
+    assert.ok((await page.$$('.chart-line')).length > 10, 'Charts draw lines');
+    await clickText('7d');
+    await waitText('Collecting… history for this range starts');
+    await screenshot(label, 'host-metrics');
+    await noHorizontalScroll();
+    await clickText('Chat');
+  }],
   ['v1-deep-links', async label => {
     const open = ref => page.goto(`${origin}/instance/${V1_INSTANCE_REF}/thread/${ref}`, { waitUntil: 'domcontentloaded' });
     // A thread still on V1 opens its linked entry.

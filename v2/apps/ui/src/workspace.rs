@@ -27,6 +27,9 @@ pub fn Workspace(
     resources: Signal<orkestr_v2_ui::host_resources::HostResources>,
     onexpired: EventHandler<()>,
 ) -> Element {
+    // The heading's host metrics panel opens the details tab.
+    let open_metrics = use_context::<crate::host_metrics_panel::OpenHostMetrics>().0;
+    let mut seen_metrics = use_signal(|| *open_metrics.peek());
     let mut title = use_signal(|| "Assistant".to_string());
     let mut tab = use_signal(|| "Chat".to_string());
     let mut sidebar = use_signal(|| false);
@@ -37,6 +40,15 @@ pub fn Workspace(
     // An old V1 deep link: a migrated thread opens its conversation, a V1 one
     // its linked entry once the sidebar lists it.
     let mut v1_link = use_context::<Signal<Option<crate::V1Link>>>();
+    use_effect(move || {
+        let requested = open_metrics();
+        if requested != *seen_metrics.peek() {
+            seen_metrics.set(requested);
+            linked.set(None);
+            execution.write().select(&current.peek(), "");
+            tab.set("Host resources".into());
+        }
+    });
     let mut wanted = use_signal(|| None::<String>);
     let mut link_notice = use_signal(String::new);
     use_future(move || async move {
@@ -181,6 +193,7 @@ pub fn Workspace(
                         } else if tab() == "Live map" {
                             crate::live_map_view::LiveMapView { key: "{session_scope.read().generation()}", session_scope, onexpired }
                         } else if tab() == "Host resources" {
+                            crate::host_metrics_view::HostMetricsView { key: "{session_scope.read().generation()}", session_scope, onexpired }
                             crate::host_resources_view::HostResourcesView { session_scope, resources, onexpired }
                         } else {
                             crate::chat_settings_view::ChatSettings { key: "settings-{current()}-{session_scope.read().generation()}", conversation: current(), csrf, session_scope, onexpired }
