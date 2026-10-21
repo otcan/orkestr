@@ -29,7 +29,9 @@ export function createState() {
   const queued = { [C]: [{ conversation_id: C, request_key: 'synthetic-queued', input_message_id: uuid(301), input_event_id: uuid(302),
     input_request_key: 'synthetic-input', state: 'queued', position: 2, queued_at_ms: 2000, window_id: null, withdrawal: null }] };
   // windowMode: 'accept' admits; 'uncertain' answers 503 after the request is seen.
-  return { archived, messages, window, queued, requests: [], intake: {}, windowPosts: [], windowMode: 'accept', windowDelayMs: 0, marks: [] };
+  return { archived, messages, window, queued, requests: [], intake: {}, windowPosts: [], windowMode: 'accept', windowDelayMs: 0, marks: [],
+    // v1Posts: every POST seen; v1Inputs: admitted once per key. The first post's answer is lost (504).
+    v1Posts: [], v1Inputs: [], v1LoseFirst: true, v1Polls: 0 };
 }
 
 const json = (res, status, body) => { res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' }); res.end(JSON.stringify(body)); };
@@ -110,14 +112,25 @@ function sidebar(state) {
   ] };
 }
 
-function v1History(thread) {
+function v1History(state, thread) {
   const messages = thread === V1_GROUP ? [
     { message_id: 'v1-m10', author: 'owner', text: 'Synthetic owner question on V1', created_at_ms: Date.now() - 4 * 3600000, phase: null, cursor: 10 },
     { message_id: 'v1-m11', author: 'participant', text: 'Synthetic member note', created_at_ms: Date.now() - 3.5 * 3600000, phase: null, cursor: 11 },
     { message_id: 'v1-m12', author: 'assistant', text: 'Synthetic coordinator reply', created_at_ms: Date.now() - 3 * 3600000, phase: 'final_answer', cursor: 12 },
   ] : [];
+  // After owner input from the app: V1 works for two polls, then the
+  // coordinator's reply appears.
+  const inputs = state.v1Inputs.filter(x => x.thread === thread);
+  inputs.forEach((x, i) => messages.push({ message_id: `v1-input-${i}`, author: 'owner', text: x.text, created_at_ms: Date.now() - 1000, phase: null, cursor: 20 + 2 * i }));
+  let working = false;
+  if (inputs.length) {
+    state.v1Polls += 1;
+    working = state.v1Polls <= 2;
+    if (!working) messages.push({ message_id: 'v1-coordinator', author: 'assistant', text: 'Synthetic coordinator answer', created_at_ms: Date.now(), phase: 'final_answer', cursor: 21, coordinator: true });
+  }
   return { thread_id: thread, name: thread === V1_GROUP ? 'Synthetic group' : 'Synthetic group / Worker 1',
-    coordinator: thread === V1_GROUP, messages, before_cursor: null, latest_cursor: messages.at(-1)?.cursor ?? 0 };
+    coordinator: thread === V1_GROUP, messages, before_cursor: null, latest_cursor: messages.at(-1)?.cursor ?? 0,
+    writable: true, working };
 }
 
 async function api(state, req, res, url) {
@@ -141,7 +154,18 @@ async function api(state, req, res, url) {
   const v1 = /^\/api\/v2\/v1-threads\/([A-Za-z0-9._:-]+)\/messages$/.exec(path);
   if (v1 && req.method === 'GET') {
     if (![V1_GROUP, V1_WORKER].includes(v1[1])) return missing(res);
-    return json(res, 200, v1History(v1[1]));
+    return json(res, 200, v1History(state, v1[1]));
+  }
+  if (v1 && req.method === 'POST') {
+    if (req.headers['x-orkestr-csrf'] !== 'synthetic-csrf') return json(res, 403, { code: 'csrf', message: 'CSRF required' });
+    if (![V1_GROUP, V1_WORKER].includes(v1[1])) return missing(res);
+    const input = JSON.parse(await body(req));
+    state.v1Posts.push({ thread: v1[1], ...input });
+    let index = state.v1Inputs.findIndex(x => x.thread === v1[1] && x.client_message_id === input.client_message_id);
+    const duplicate = index >= 0;
+    if (!duplicate) { state.v1Inputs.push({ thread: v1[1], ...input }); index = state.v1Inputs.length - 1; }
+    if (state.v1LoseFirst) { state.v1LoseFirst = false; return json(res, 504, { code: 'v1_receipt_unknown', message: 'V1 did not confirm.' }); }
+    return json(res, duplicate ? 200 : 202, { thread_id: v1[1], message_id: `v1-input-${index}`, duplicate, state: 'queued' });
   }
   if (path === '/api/v2/projects' && req.method === 'GET') return json(res, 200, { next_cursor: null, projects: [
     { project_id: uuid(601), conversation_id: C, name: 'Errand project', resources: { local_git: 'not_configured', local_oxrm: 'not_configured' } }] });

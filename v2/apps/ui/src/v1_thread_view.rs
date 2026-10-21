@@ -1,16 +1,26 @@
 use dioxus::prelude::*;
-use orkestr_v2_contracts::{SidebarAuthor, SidebarEntry, V1HistoryMessage, V1HistoryPage};
-use orkestr_v2_ui::session_scope::SessionScope;
-use serde_json::Value;
+use orkestr_v2_contracts::{
+    SidebarAuthor, SidebarEntry, V1HistoryMessage, V1HistoryPage, V1ThreadInputReceipt,
+};
+use orkestr_v2_ui::{
+    session_scope::SessionScope,
+    v1_input::{self, Failed},
+    Draft,
+};
+use serde_json::{json, Value};
+use std::collections::BTreeMap;
 
-const POLL_MS: u32 = 8000;
-
-/// Read-only recent history of a linked V1 chat. It runs on V1 (for example
-/// with a coordinator session attached); nothing here sends to it.
+/// Recent history of a linked V1 chat and an owner composer. The chat runs on
+/// V1 (for example a fast layer that may wake an attached coordinator); a
+/// message sent here is V1 web UI input whose reply stays in the app. Replies,
+/// coordinator posts included, appear live. A chat delegated to V2 is shown
+/// without a composer.
 #[component]
 pub fn V1ThreadView(
     entry: SidebarEntry,
+    csrf: String,
     session_scope: Signal<SessionScope>,
+    drafts: Signal<BTreeMap<String, Draft>>,
     onexpired: EventHandler<()>,
 ) -> Element {
     let owner = session_scope.read().generation();
@@ -21,6 +31,9 @@ pub fn V1ThreadView(
     let mut notice = use_signal(String::new);
     let mut loading = use_signal(|| false);
     let mut loaded = use_signal(|| false);
+    let mut writable = use_signal(|| false);
+    let mut working = use_signal(|| false);
+    let mut quick = use_signal(|| 0_u32);
     use_drop(move || mounted.set(false));
     let path = move |thread: &str, before: Option<i64>| match before {
         Some(b) => format!("/api/v2/v1-threads/{thread}/messages?before={b}"),
@@ -48,6 +61,8 @@ pub fn V1ThreadView(
                         if !loaded() {
                             before.set(page.before_cursor);
                         }
+                        writable.set(page.writable);
+                        working.set(page.working);
                         let mut list = messages.write();
                         merge(&mut list, page.messages);
                         loaded.set(true);
@@ -60,7 +75,9 @@ pub fn V1ThreadView(
                     }
                     Err(error) => notice.set(format!("V1 history unavailable: {}", error.message)),
                 }
-                crate::transport::sleep(POLL_MS).await;
+                let left = *quick.peek();
+                quick.set(left.saturating_sub(1));
+                crate::transport::sleep(v1_input::poll_ms(*working.peek(), left)).await;
                 if !mounted() {
                     return;
                 }
@@ -78,7 +95,11 @@ pub fn V1ThreadView(
             div { class: "conversation-scroll", tabindex: "0", "aria-label": "V1 chat history",
                 div { class: "v1-banner", role: "note",
                     span { class: "source-badge", "{badge}" }
-                    p { "This chat still runs on V1. History is read-only here; reply in its WhatsApp group. It becomes a full conversation when it moves to V2." }
+                    if !loaded() || writable() {
+                        p { "This chat runs on V1. Messages you send here reach it as owner input, exactly like V1's web UI. It becomes a full conversation when it moves to V2." }
+                    } else {
+                        p { "This chat runs on V2. Write in its V2 conversation; nothing is sent from here." }
+                    }
                 }
                 if let Some(cursor) = before() {
                     button { class: "load-older", disabled: loading(), onclick: move |_| {
@@ -104,17 +125,88 @@ pub fn V1ThreadView(
                         li { key: "{message.cursor}", class: match message.author { SidebarAuthor::Owner => "user-message", _ => "assistant-message" },
                             "data-phase": message.phase.clone().unwrap_or_default(),
                             article {
-                                strong { match message.author { SidebarAuthor::Owner => "You", SidebarAuthor::Participant => "Group member", SidebarAuthor::Assistant => "Assistant" } }
+                                strong { match message.author { SidebarAuthor::Owner => "You", SidebarAuthor::Participant => "Group member", SidebarAuthor::Assistant if message.coordinator => "Coordinator", SidebarAuthor::Assistant => "Assistant" } }
                                 p { "{message.text}" }
                             }
                         }
                     }
                 }
+                if loaded() && working() { p { class: "v1-typing", role: "status", "typing…" } }
                 if loaded() && messages.read().is_empty() { p { class: "empty-conversation", "No messages yet." } }
                 if !loaded() && notice().is_empty() { p { class: "empty-conversation", "Loading V1 history…" } }
                 p { role: "status", class: "v1-notice", "{notice}" }
             }
             crate::scroll_pin::ScrollPin {}
+            if loaded() && writable() {
+                div { class: "composer-dock",
+                    V1Composer { thread: thread.clone(), csrf, session_scope, drafts, onexpired, onsent: move |_| quick.set(v1_input::QUICK_POLLS_AFTER_SEND) }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn V1Composer(
+    thread: String,
+    csrf: String,
+    session_scope: Signal<SessionScope>,
+    mut drafts: Signal<BTreeMap<String, Draft>>,
+    onexpired: EventHandler<()>,
+    onsent: EventHandler<()>,
+) -> Element {
+    let owner = session_scope.read().generation();
+    let key = v1_input::draft_key(&thread);
+    let mut sending = use_signal(|| false);
+    let mut status = use_signal(String::new);
+    let mut mounted = use_signal(|| true);
+    use_drop(move || mounted.set(false));
+    let draft = drafts.read().get(&key).cloned().unwrap_or_default();
+    let input_key = key.clone();
+    rsx! {
+        form { class: "message-composer v1-composer", onsubmit: move |event| {
+            event.prevent_default();
+            if sending() || !session_scope.read().is_current(owner) { return; }
+            sending.set(true);
+            status.set("Sending to V1…".into());
+            let (thread, key, csrf) = (thread.clone(), key.clone(), csrf.clone());
+            spawn(async move {
+                let current = || mounted() && session_scope.read().is_current(owner);
+                let result = async {
+                    let id = crate::transport::key().await?;
+                    let input = v1_input::prepare(drafts.write().entry(key.clone()).or_default(), id)
+                        .map_err(|m| crate::transport::Failure::from(m.to_string()))?;
+                    crate::transport::request::<V1ThreadInputReceipt>(
+                        "POST", &format!("/api/v2/v1-threads/{thread}/messages"), json!(input), &csrf, "",
+                    ).await
+                }.await;
+                if !current() { return; }
+                match result {
+                    Ok(receipt) if receipt.is_valid() && receipt.thread_id == thread => {
+                        drafts.write().entry(key).or_default().accepted();
+                        onsent.call(());
+                        status.set(if receipt.duplicate { "Already delivered to V1.".into() } else { "Sent to V1.".into() });
+                    }
+                    Ok(_) => status.set("V1 receipt could not be verified. Retry sends the same message once.".into()),
+                    Err(error) => match v1_input::failed(error.status) {
+                        Failed::Expired => { onexpired.call(()); return; }
+                        Failed::Refused => {
+                            drafts.write().entry(key).or_default().pending = None;
+                            status.set(error.message);
+                        }
+                        Failed::Retry => status.set(format!("{} Retry sends the same message once.", error.message)),
+                    },
+                }
+                sending.set(false);
+            });
+        },
+            label { r#for: "v1-composer", "Message to V1" }
+            textarea { id: "v1-composer", rows: 3, value: "{draft.text}", "aria-describedby": "v1-composer-help",
+                oninput: move |event| { if session_scope.read().is_current(owner) { drafts.write().entry(input_key.clone()).or_default().edit(event.value()); } }
+            }
+            p { id: "v1-composer-help", if draft.pending.is_some() { "Retry sends the original message once. Your newer edits stay in the composer." } else { "Sent as owner input to this V1 thread. The reply appears here, not in WhatsApp." } }
+            button { r#type: "submit", disabled: sending(), if draft.pending.is_some() { "Retry send" } else { "Send" } }
+            if !status().is_empty() { p { class: "composer-notice", role: "status", "{status}" } }
         }
     }
 }

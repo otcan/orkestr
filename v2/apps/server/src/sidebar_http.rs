@@ -1,7 +1,8 @@
 //! Owner conversation sidebar. Native conversations and linked V1 threads in
 //! one activity-ordered list with previews, unread counts and live activity;
-//! forward-only read marks; write-once lineage of imported conversations; and
-//! read-only recent history of linked V1 threads. Observation only.
+//! forward-only read marks; write-once lineage of imported conversations;
+//! recent history of linked V1 threads and owner input into them, which V1
+//! admits and runs exactly as input from its own web UI.
 use super::*;
 use crate::archived_history_http::owner_credential;
 use crate::sidebar_v1::{self, V1Thread};
@@ -17,7 +18,10 @@ pub(crate) fn router() -> Router<AppState> {
     Router::new()
         .route("/api/v2/sidebar", get(read))
         .route("/api/v2/sidebar/read", axum::routing::put(mark_read))
-        .route("/api/v2/v1-threads/{thread}/messages", get(v1_history))
+        .route(
+            "/api/v2/v1-threads/{thread}/messages",
+            get(v1_history).post(v1_send),
+        )
         .route(
             "/api/v2/conversations/{id}/lineage",
             axum::routing::put(record_lineage),
@@ -505,15 +509,43 @@ pub(crate) async fn v1_history(
     if !valid_v1_thread_id(&thread) || query.before.is_some_and(|b| b < 0) {
         return Err(invalid());
     }
+    let (broker, record) = listed_thread(&state, &owner, &credential, &thread).await?;
+    let linked = linked(&state).await;
+    let coordinator = coordinators(&linked.views).contains(&record.id);
+    let page = state
+        .sidebar_v1
+        .history(&broker, &record, coordinator, query.before)
+        .await
+        .map_err(|error| match error {
+            crate::desktop_broker::BrokerError::Denied => not_listed(),
+            _ => unavailable(),
+        })?;
+    if !page.is_valid() {
+        return Err(unavailable());
+    }
+    Ok(Json(page).into_response())
+}
+
+fn not_listed() -> Error {
+    Error(StatusCode::NOT_FOUND, "not_found", "V1 thread not listed")
+}
+
+/// The V1 client and a thread the sidebar lists (owner group threads and
+/// their sub-threads, not imported into V2). Anything else is not found.
+async fn listed_thread(
+    state: &AppState,
+    owner: &OwnerId,
+    credential: &str,
+    thread: &str,
+) -> Result<(Arc<crate::desktop_broker::Broker>, V1Thread), Error> {
     let broker = state.desktop_broker.clone().ok_or(Error(
         StatusCode::NOT_FOUND,
         "v1_unconfigured",
         "V1 history is not configured",
     ))?;
-    let not_found = || Error(StatusCode::NOT_FOUND, "not_found", "V1 thread not listed");
     let list = state
         .store
-        .sidebar_conversations(&credential, &owner)
+        .sidebar_conversations(credential, owner)
         .await
         .map_err(failure)?;
     let imported: HashSet<String> = list
@@ -535,21 +567,62 @@ pub(crate) async fn v1_history(
         .into_iter()
         .find(|t| t.id == thread)
         .cloned()
-        .ok_or_else(not_found)?;
-    let linked = linked(&state).await;
-    let coordinator = coordinators(&linked.views).contains(&record.id);
-    let page = state
-        .sidebar_v1
-        .history(&broker, &record, coordinator, query.before)
-        .await
-        .map_err(|error| match error {
-            crate::desktop_broker::BrokerError::Denied => not_found(),
-            _ => unavailable(),
-        })?;
-    if !page.is_valid() {
-        return Err(unavailable());
+        .ok_or_else(not_listed)?;
+    Ok((broker, record))
+}
+
+/// Owner input into a linked V1 thread, forwarded as V1 web UI input
+/// (`ui-input`): V1 records it as owner input and runs or routes it as usual
+/// (for a coordinated thread, its attached session sees it). Exactly once:
+/// the client key becomes V1's `clientMessageId`, which V1 dedupes, so a retry
+/// after an unknown outcome returns the first message. A thread delegated to
+/// V2 is refused: its input belongs to its V2 conversation, never to V1 too.
+pub(crate) async fn v1_send(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(thread): Path<String>,
+    body: Result<Json<V1ThreadInput>, JsonRejection>,
+) -> Result<Response, Error> {
+    let (owner, credential) = owner_credential(&state, &headers).await?;
+    let Json(input) = body.map_err(|_| invalid())?;
+    if !valid_v1_thread_id(&thread) || !input.is_valid() {
+        return Err(invalid());
     }
-    Ok(Json(page).into_response())
+    let (broker, record) = listed_thread(&state, &owner, &credential, &thread).await?;
+    if record.delegated {
+        return Err(Error(
+            StatusCode::CONFLICT,
+            "v1_thread_delegated",
+            "This chat runs on V2; write in its V2 conversation",
+        ));
+    }
+    match sidebar_v1::send_input(&broker, &record, &input).await {
+        Ok(receipt) if receipt.is_valid() => Ok((
+            if receipt.duplicate {
+                StatusCode::OK
+            } else {
+                StatusCode::ACCEPTED
+            },
+            Json(receipt),
+        )
+            .into_response()),
+        Ok(_) | Err(sidebar_v1::InputFailure::Unknown) => Err(Error(
+            StatusCode::GATEWAY_TIMEOUT,
+            "v1_receipt_unknown",
+            "V1 did not confirm; retry sends the same message once",
+        )),
+        Err(sidebar_v1::InputFailure::NotFound) => Err(not_listed()),
+        Err(sidebar_v1::InputFailure::KeyConflict) => Err(Error(
+            StatusCode::CONFLICT,
+            "idempotency_conflict",
+            "Message key already used for a different message",
+        )),
+        Err(sidebar_v1::InputFailure::Refused(_)) => Err(Error(
+            StatusCode::CONFLICT,
+            "v1_refused",
+            "V1 refused this message",
+        )),
+    }
 }
 
 #[cfg(test)]

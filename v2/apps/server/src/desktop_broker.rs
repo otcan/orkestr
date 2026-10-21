@@ -10,6 +10,8 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 const TIMEOUT: Duration = Duration::from_secs(3);
 const RESPONSE_MAX: usize = 1024 * 1024;
 const READ_TIMEOUT: Duration = Duration::from_secs(5);
+/// V1 admits input before it answers; a busy V1 can take a few seconds.
+const WRITE_TIMEOUT: Duration = Duration::from_secs(12);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum BrokerError {
@@ -195,6 +197,20 @@ impl Broker {
     /// Larger responses than the lease routes; same loopback credential.
     pub(crate) async fn read(&self, path: &str, cap: usize) -> Result<(u16, Value), BrokerError> {
         tokio::time::timeout(READ_TIMEOUT, self.exchange("GET", path, None, cap))
+            .await
+            .map_err(|_| BrokerError::Unavailable)?
+    }
+
+    /// Owner write forwarded to V1 (thread input). The caller supplies the
+    /// idempotency key in the body, so a timeout is retried, never guessed.
+    pub(crate) async fn write(
+        &self,
+        method: &str,
+        path: &str,
+        body: Value,
+        cap: usize,
+    ) -> Result<(u16, Value), BrokerError> {
+        tokio::time::timeout(WRITE_TIMEOUT, self.exchange(method, path, Some(body), cap))
             .await
             .map_err(|_| BrokerError::Unavailable)?
     }

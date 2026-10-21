@@ -11,6 +11,7 @@ pub mod host_resources;
 mod reconcile;
 pub mod session_scope;
 pub mod stop;
+pub mod v1_input;
 pub mod workers;
 pub use reconcile::reconcile;
 

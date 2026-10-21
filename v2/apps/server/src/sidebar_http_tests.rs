@@ -284,8 +284,66 @@ fn previews_are_one_bounded_line_without_connector_headers() {
     assert!(sidebar_v1::preview(SidebarAuthor::Owner, "\n \n").is_none());
 }
 
+/// A synthetic, valid client message id.
+fn synthetic_id(n: u128) -> String {
+    Uuid::from_u128(n).to_string()
+}
+
+/// The registry the synthetic V1 API serves: [`registry`] plus a group whose
+/// runtime is delegated to V2 but not imported here.
+fn served_registry() -> Value {
+    let mut value = registry();
+    let mut delegated = thread(
+        "group-delegated",
+        "Synthetic delegated group",
+        "2025-12-01T00:00:00Z",
+    );
+    delegated["binding"]["remoteThreadId"] = json!("00000000-0000-4000-8000-000000000001");
+    delegated["binding"]["remoteRuntimeEnabled"] = json!(true);
+    value["threads"].as_array_mut().unwrap().push(delegated);
+    value
+}
+
+/// Synthetic V1 `ui-input`: dedupes on `clientMessageId` per thread like V1.
+fn ui_input(
+    inputs: &StdArc<StdMutex<Vec<(String, Value)>>>,
+    thread: &str,
+    body: &Value,
+) -> (u16, Value) {
+    let key = body["clientMessageId"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned();
+    let mut inputs = inputs.lock().unwrap();
+    if let Some(index) = inputs
+        .iter()
+        .position(|(t, b)| t == thread && b["clientMessageId"] == key.as_str())
+    {
+        let first = &inputs[index].1;
+        return (
+            202,
+            json!({"ok": true, "message": {"id": format!("msg-{index}"), "role": "user",
+            "text": first["text"], "clientMessageId": key, "state": "queued",
+            "duplicate": true, "duplicateReason": "client_message_id"}}),
+        );
+    }
+    inputs.push((thread.to_owned(), body.clone()));
+    (
+        202,
+        json!({"ok": true, "queued": true, "message": {"id": format!("msg-{}", inputs.len() - 1),
+        "role": "user", "text": body["text"], "clientMessageId": key, "state": "queued"}}),
+    )
+}
+
 /// Synthetic V1 loopback API: the registry and per-thread messages.
 async fn fake_v1(calls: StdArc<StdMutex<Vec<String>>>) -> String {
+    fake_v1_with_inputs(calls, StdArc::new(StdMutex::new(Vec::new()))).await
+}
+
+async fn fake_v1_with_inputs(
+    calls: StdArc<StdMutex<Vec<String>>>,
+    inputs: StdArc<StdMutex<Vec<(String, Value)>>>,
+) -> String {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     tokio::spawn(async move {
@@ -299,25 +357,56 @@ async fn fake_v1(calls: StdArc<StdMutex<Vec<String>>>) -> String {
                 }
                 raw.extend_from_slice(&buf[..n]);
             }
-            let head = String::from_utf8_lossy(&raw).to_string();
+            let split = raw
+                .windows(4)
+                .position(|w| w == b"\r\n\r\n")
+                .unwrap_or(raw.len());
+            let head = String::from_utf8_lossy(&raw[..split]).to_string();
+            let length: usize = head
+                .lines()
+                .find_map(|l| l.strip_prefix("Content-Length: "))
+                .and_then(|v| v.trim().parse().ok())
+                .unwrap_or(0);
+            let mut body = raw.get(split + 4..).unwrap_or_default().to_vec();
+            while body.len() < length {
+                let n = socket.read(&mut buf).await.unwrap();
+                if n == 0 {
+                    break;
+                }
+                body.extend_from_slice(&buf[..n]);
+            }
+            let method = head.split(' ').next().unwrap_or_default().to_owned();
             let path = head.split(' ').nth(1).unwrap_or_default().to_owned();
+            let body: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
             let auth = head
                 .lines()
                 .any(|l| l == format!("Authorization: Bearer {V1_TOKEN}"));
             calls.lock().unwrap().push(path.clone());
             let (status, body) = if !auth {
                 (401, json!({}))
+            } else if method == "POST" {
+                match path
+                    .strip_prefix("/api/threads/")
+                    .and_then(|p| p.strip_suffix("/ui-input"))
+                {
+                    Some(thread) => ui_input(&inputs, thread, &body),
+                    None => (404, json!({"error": "not_found"})),
+                }
             } else if path.starts_with("/api/threads/summary") {
-                (200, registry())
+                (200, served_registry())
             } else if path.starts_with("/api/threads/group-coordinated/messages") {
-                (
-                    200,
-                    json!({"currentCursor": 7, "hasMoreBefore": true, "messages": [
-                        {"id": "m6", "role": "user", "text": "Synthetic question", "cursor": "6", "createdAt": "2026-01-03T00:00:00Z"},
-                        {"id": "m7", "role": "assistant", "text": "Synthetic answer", "cursor": 7, "phase": "final_answer", "createdAt": "2026-01-03T00:00:01Z"},
-                        {"id": "m5", "role": "user", "text": "Synthetic member note", "cursor": 5, "senderEffectiveRole": "member"},
-                    ]}),
-                )
+                let mut page = json!({"currentCursor": 7, "hasMoreBefore": true, "state": "ready", "messages": [
+                    {"id": "m6", "role": "user", "text": "Synthetic question", "cursor": "6", "createdAt": "2026-01-03T00:00:00Z"},
+                    {"id": "m7", "role": "assistant", "text": "Synthetic answer", "cursor": 7, "phase": "final_answer", "createdAt": "2026-01-03T00:00:01Z"},
+                    {"id": "m5", "role": "user", "text": "Synthetic member note", "cursor": 5, "senderEffectiveRole": "member"},
+                ]});
+                // After app input: the input waits and the coordinator posted.
+                if !inputs.lock().unwrap().is_empty() {
+                    let list = page["messages"].as_array_mut().unwrap();
+                    list.push(json!({"id": "m8", "role": "user", "source": "ui", "text": "Synthetic hello", "cursor": 8, "state": "queued"}));
+                    list.push(json!({"id": "m9", "role": "assistant", "source": "api-session", "text": "Synthetic coordinator note", "cursor": 9, "phase": "final_answer"}));
+                }
+                (200, page)
             } else if path.contains("/messages") {
                 (200, json!({"messages": []}))
             } else {
@@ -475,4 +564,205 @@ async fn sidebar_lists_linked_v1_threads_reads_history_and_keeps_marks() {
     let (status, _) = send(&case.state, "GET", "/api/v2/sidebar", &[], "").await;
     assert_eq!(status, 401);
     case.finish().await;
+}
+
+#[tokio::test]
+async fn owner_input_reaches_listed_v1_threads_exactly_once() {
+    let mut case = case().await;
+    let auth = case.auth();
+    let calls = StdArc::new(StdMutex::new(Vec::new()));
+    let inputs = StdArc::new(StdMutex::new(Vec::new()));
+    let url = fake_v1_with_inputs(calls.clone(), inputs.clone()).await;
+    let body = |id: &str, text: &str| json!({"client_message_id": id, "text": text}).to_string();
+    let first = synthetic_id(1);
+    let path = "/api/v2/v1-threads/group-coordinated/messages";
+    // Without the V1 client nothing is sent.
+    let (status, _) = send(
+        &case.state,
+        "POST",
+        path,
+        &[&auth],
+        &body(&first, "Synthetic hello"),
+    )
+    .await;
+    assert_eq!(status, 404);
+    case.state.desktop_broker = Some(Arc::new(
+        desktop_broker::Broker::new(&url, V1_TOKEN.into()).unwrap(),
+    ));
+
+    // The history page says the thread is writable and bound to a group.
+    let (status, page) = send(&case.state, "GET", path, &[&auth], "").await;
+    assert_eq!(status, 200, "{page}");
+    assert_eq!(
+        (page["writable"].as_bool(), page["working"].as_bool()),
+        (Some(true), Some(false))
+    );
+
+    let (status, receipt) = send(
+        &case.state,
+        "POST",
+        path,
+        &[&auth],
+        &body(&first, "Synthetic hello"),
+    )
+    .await;
+    assert_eq!(status, 202, "{receipt}");
+    let receipt: V1ThreadInputReceipt = serde_json::from_value(receipt).unwrap();
+    assert!(receipt.is_valid() && !receipt.duplicate);
+    assert_eq!(receipt.thread_id, "group-coordinated");
+    {
+        let inputs = inputs.lock().unwrap();
+        assert_eq!(inputs.len(), 1);
+        let (thread, sent) = &inputs[0];
+        assert_eq!(thread, "group-coordinated");
+        // Exactly the V1 web UI body: no role, source or trust fields.
+        assert_eq!(
+            sent,
+            &json!({"text": "Synthetic hello", "clientMessageId": format!("orkestr-v2-{first}"),
+                "replyDelivery": "ui_only"})
+        );
+    }
+    // A retry (unknown outcome in the browser) returns the first message.
+    let (status, again) = send(
+        &case.state,
+        "POST",
+        path,
+        &[&auth],
+        &body(&first, "Synthetic hello"),
+    )
+    .await;
+    assert_eq!(status, 200, "{again}");
+    assert_eq!(again["duplicate"], true);
+    assert_eq!(again["message_id"], receipt.message_id.as_str());
+    assert_eq!(inputs.lock().unwrap().len(), 1, "exactly once");
+    // The same key with other text is a conflict, never a second input.
+    let (status, conflict) = send(
+        &case.state,
+        "POST",
+        path,
+        &[&auth],
+        &body(&first, "Other text"),
+    )
+    .await;
+    assert_eq!(
+        (status, conflict["code"].as_str()),
+        (409, Some("idempotency_conflict"))
+    );
+
+    // The page now shows the waiting input and the coordinator's post.
+    let (status, page) = send(&case.state, "GET", path, &[&auth], "").await;
+    assert_eq!(status, 200, "{page}");
+    let page: V1HistoryPage = serde_json::from_value(page).unwrap();
+    assert!(page.working, "queued owner input means V1 is working");
+    let last = page.messages.last().unwrap();
+    assert!(last.coordinator && last.author == SidebarAuthor::Assistant);
+    assert!(!page.messages[page.messages.len() - 2].coordinator);
+
+    // Worker sub-threads take owner input too.
+    let worker = "/api/v2/v1-threads/worker-group-coordinated-0001/messages";
+    let other = synthetic_id(2);
+    let (status, _) = send(
+        &case.state,
+        "POST",
+        worker,
+        &[&auth],
+        &body(&other, "Synthetic worker note"),
+    )
+    .await;
+    assert_eq!(status, 202);
+
+    // Delegated to V2: refused here, so it can never be routed twice.
+    let delegated = "/api/v2/v1-threads/group-delegated/messages";
+    let (status, page) = send(&case.state, "GET", delegated, &[&auth], "").await;
+    assert_eq!((status, page["writable"].as_bool()), (200, Some(false)));
+    let third = synthetic_id(3);
+    let (status, refused) = send(
+        &case.state,
+        "POST",
+        delegated,
+        &[&auth],
+        &body(&third, "Synthetic"),
+    )
+    .await;
+    assert_eq!(
+        (status, refused["code"].as_str()),
+        (409, Some("v1_thread_delegated"))
+    );
+    // Unlisted, imported-elsewhere or malformed targets and bodies.
+    for hidden in ["unbound", "retired-worker", "task-group-quiet-1"] {
+        let (status, _) = send(
+            &case.state,
+            "POST",
+            &format!("/api/v2/v1-threads/{hidden}/messages"),
+            &[&auth],
+            &body(&third, "Synthetic"),
+        )
+        .await;
+        assert_eq!(status, 404, "{hidden}");
+    }
+    for bad in [
+        body("not-a-uuid", "Synthetic"),
+        body(&third, "   "),
+        json!({"client_message_id": &third, "text": "x", "role": "assistant"}).to_string(),
+        json!({"client_message_id": &third, "text": "x", "reply_to_whatsapp": true}).to_string(),
+        body(&third, &"x".repeat(V1_INPUT_TEXT_MAX + 1)),
+    ] {
+        let (status, _) = send(&case.state, "POST", path, &[&auth], &bad).await;
+        assert_eq!(status, 400);
+    }
+    let (status, _) = send(&case.state, "POST", path, &[], &body(&third, "Synthetic")).await;
+    assert_eq!(status, 401);
+    assert_eq!(
+        inputs.lock().unwrap().len(),
+        2,
+        "no refused request reached V1"
+    );
+    case.finish().await;
+}
+
+#[test]
+fn v1_receipts_are_bounded_and_refusals_are_definite() {
+    let threads = sidebar_v1::parse_registry(&served_registry()).unwrap();
+    let delegated = threads.iter().find(|t| t.id == "group-delegated").unwrap();
+    assert!(delegated.delegated);
+    let group = threads
+        .iter()
+        .find(|t| t.id == "group-coordinated")
+        .unwrap();
+    assert!(!group.delegated && group.whatsapp);
+    assert_eq!(
+        sidebar_v1::input_body(&V1ThreadInput {
+            client_message_id: synthetic_id(1),
+            text: "Synthetic".into(),
+        })["replyDelivery"],
+        "ui_only",
+        "replies to app input never go to WhatsApp"
+    );
+    // A remote id with the runtime switched off runs on V1 again.
+    let mut local = thread("local-again", "Synthetic", "2026-01-01T00:00:00Z");
+    local["binding"]["remoteThreadId"] = json!("x");
+    local["binding"]["remoteRuntimeEnabled"] = json!(false);
+    assert!(!sidebar_v1::parse_thread(&local).unwrap().delegated);
+    let input = V1ThreadInput {
+        client_message_id: synthetic_id(1),
+        text: "Synthetic".into(),
+    };
+    use sidebar_v1::{input_receipt, InputFailure};
+    assert_eq!(
+        input_receipt(group, &input, 404, &json!({})),
+        Err(InputFailure::NotFound)
+    );
+    assert_eq!(
+        input_receipt(group, &input, 409, &json!({"error": "thread_busy"})),
+        Err(InputFailure::Refused("thread_busy".into()))
+    );
+    assert_eq!(
+        input_receipt(group, &input, 502, &json!({})),
+        Err(InputFailure::Unknown)
+    );
+    let handled = input_receipt(group, &input, 202, &json!({"ok": true})).unwrap();
+    assert_eq!(
+        handled.message_id,
+        format!("orkestr-v2-{}", input.client_message_id)
+    );
 }
