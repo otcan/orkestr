@@ -11,7 +11,7 @@ import signal
 import threading
 from urllib.parse import parse_qs, urlsplit
 
-from . import local_inputs, participants
+from . import local_inputs, participants, provisioning
 from .config import load
 from .ledger import MAX_ATTACHMENT_BYTES, OUTCOMES, Conflict
 from .registry import Registry
@@ -221,6 +221,20 @@ class Handler(BaseHTTPRequestHandler):
         except Conflict as error:
             return self.answer(409, {"ok": False, "error": str(error)})
         return self.answer(200, dict(ok=True, **result))
+
+    def do_PUT(self):
+        """Create one new binding: `PUT /bindings/<remote_thread_id>` with its document."""
+        if not self.authorized():
+            return
+        parts = urlsplit(self.path).path.split("/")
+        if len(parts) != 3 or parts[0] or parts[1] != "bindings" or urlsplit(self.path).query:
+            return self.answer(404, {"ok": False, "error": "route_not_found"})
+        try:
+            body = self.json_body(MAX_INPUT_BYTES)
+        except (ValueError, TypeError):
+            return self.answer(400, {"ok": False, "error": "invalid_binding"})
+        status, value = provisioning.create(self.server.registry, self.server.config, parts[2], body)
+        return self.answer(status, value)
 
     def do_PATCH(self):
         if self.authorized():

@@ -340,6 +340,22 @@ operator review. No
 alternate provider, local executor, or direct WhatsApp send is used as a
 fallback.
 
+### Creating a binding over the loopback API
+
+`PUT /bindings/<remote_thread_id>` (adapter bearer token, JSON binding document)
+adds one new binding without an operator writing the file. The Rust server's
+"New WhatsApp chat" uses it for a freshly created group thread.
+- The document is validated like a file, then written to
+  `<bindings_dir>/<remote_thread_id>.json` (0600, created exclusively) and the
+  registry reloads. The answer is the binding's `state` and `error`.
+- Create-only: if the file exists, an identical document returns `200` and a
+  different one returns `409 binding_exists`. The file is never changed.
+- A document that shares an identity (route, conversation, V1 thread or chat)
+  with another binding is removed again and refused with `409 binding_conflict`.
+  The incumbent keeps running.
+- Pausing, revoking and every other edit stay operator file edits. A pilot
+  configuration without `bindings_dir` answers `409 bindings_dir_unconfigured`.
+
 ## Migrating the single-chat pilot
 
 The pilot's single-file configuration still loads as one static binding
