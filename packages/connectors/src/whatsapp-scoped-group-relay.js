@@ -6,6 +6,7 @@ import {createDeliveryRouteFence} from './whatsapp-delivery-route-fence.js';
 import {scopedRouteMembership} from './whatsapp-scoped-route-membership.js';
 import {DatabaseSync} from 'node:sqlite';
 import {isReplyDocument, scopedGroupReplyChunks} from './whatsapp-scoped-group-formatting.js';
+import {createDynamicGroupRegistry, createDynamicGroupView, eligibleGroups, validateDynamicGroups} from './whatsapp-scoped-dynamic-groups.js';
 
 const key = value => crypto.createHash('sha256').update(value).digest('hex');
 const progressPhases = new Set(['commentary', 'awaiting_approval']);
@@ -16,6 +17,8 @@ const lateSources = new Set(['api-session']);
 const finalPhases = new Set(['final_answer', 'final']);
 const LATE_REPLY_WINDOW_MS = 6 * 60 * 60 * 1000;
 const LATE_REPLY_POLL_MS = 10_000;
+// How often the relay reconciles registered groups with V1's thread registry.
+const REGISTRATION_POLL_MS = 30_000;
 // The binding flags of whatsapp-mirror-policy's update suppression, kept local
 // so the standalone bridge's import graph stays closed.
 const flagOn = value => value === true || /^(1|true|yes|on)$/i.test(String(value ?? '').trim());
@@ -44,7 +47,8 @@ function readGroupInputs(inbox) {
     FROM group_input i ${join} ORDER BY i.created_at`).all();
 }
 
-export function createScopedGroupRelay({config, api, send, log = () => {}, inboxDb, relayDb, formatter, env = process.env, readMediaFile = fs.readFile, now = Date.now}) {
+export function createScopedGroupRelay({config, api, send, log = () => {}, inboxDb, relayDb, formatter, env = process.env, readMediaFile = fs.readFile, now = Date.now,
+    openRegistry = path => createDynamicGroupRegistry(path, {now, staticGroups: config.groups})}) {
   // Operator holds are exclusions, not delivery/completion receipts. Validate
   // before opening either journal and snapshot the policy for this process.
   const heldIds = config.heldInputIds === undefined ? [] : config.heldInputIds;
@@ -75,8 +79,57 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
     CREATE TABLE IF NOT EXISTS reply_receipts(id TEXT PRIMARY KEY,provider_ids TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS remote_delivery_reports(id TEXT PRIMARY KEY,reported_at TEXT NOT NULL);`);
   const routeFence = config.routeControl ? createDeliveryRouteFence({dbPath:config.routeControl.dbPath}) : null;
-  const groups = new Map(config.groups.map(g => [g.chatId, g]));
+  const staticGroups = new Map(config.groups.map(g => [g.chatId, g]));
+  // With dynamicGroups, groups registered in the transport journal join live.
+  const dynamic = validateDynamicGroups(config);
+  const groups = dynamic ? createDynamicGroupView(inbox, {static: staticGroups, now}) : staticGroups;
+  const fencedGroup = group => Boolean(group) && (fencedThreads?.has(group.threadId) || (Boolean(routeFence) && group.dynamic === true));
   const errors = new Map();
+
+  // Registrar: keep each journal's registered groups equal to V1's eligible
+  // delegated owner group threads (created after `since`). Registration and
+  // removal are idempotent; a failing journal or V1 read changes nothing.
+  const registries = new Map();
+  let lastRegistration = 0;
+  async function reconcileRegistrations() {
+    if (!dynamic || now() - lastRegistration < REGISTRATION_POLL_MS) return;
+    lastRegistration = now();
+    let wanted;
+    try {
+      const summary = await api('/api/threads/summary?includeRetired=1');
+      if (!Array.isArray(summary?.threads)) throw new Error('group_registry_unavailable');
+      wanted = eligibleGroups(summary.threads, {ownerUserId: config.ownerUserId, since: dynamic.since});
+    } catch (error) {
+      const code = errorCode(error);
+      if (errors.get('registration') !== code) log({event: 'group_registration_error', code});
+      errors.set('registration', code);
+      return;
+    }
+    errors.delete('registration');
+    for (const path of [config.journalPath, ...dynamic.journals]) {
+      try {
+        if (!registries.has(path)) registries.set(path, openRegistry(path));
+        const registry = registries.get(path);
+        const active = new Map(registry.active().map(g => [g.chatId, g]));
+        for (const [chatId, group] of wanted) {
+          if (staticGroups.has(chatId)) continue;
+          const result = registry.register(group);
+          if (result.registered) log({event: 'group_registered', threadId: group.threadId, journal: path === config.journalPath ? 'primary' : 'mirror'});
+        }
+        for (const [chatId, group] of active) {
+          if (wanted.get(chatId)?.threadId === group.threadId) continue;
+          if (registry.remove(chatId, 'thread_not_eligible').removed)
+            log({event: 'group_registration_removed', threadId: group.threadId, journal: path === config.journalPath ? 'primary' : 'mirror'});
+        }
+        errors.delete(`registration:${path}`);
+      } catch (error) {
+        const code = errorCode(error);
+        if (errors.get(`registration:${path}`) !== code) log({event: 'group_registration_error', code});
+        errors.set(`registration:${path}`, code);
+      }
+    }
+    groups.refresh?.();
+  }
 
   async function removeStagedFile(mediaPath, realRoot = '') {
     if (!mediaPath) return;
@@ -194,7 +247,7 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
   }
 
   async function routeInput(input, group) {
-    if (routeFence && fencedThreads.has(group.threadId)) {
+    if (routeFence && fencedGroup(group)) {
       const active = routeFence.current();
       if (active?.route !== config.routeControl.routeId || !Number.isFinite(Date.parse(input.created_at)) || Date.parse(input.created_at) < Date.parse(active.since)) return;
     }
@@ -311,7 +364,7 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
       if (!Number.isFinite(at) || now() - at > LATE_REPLY_WINDOW_MS) continue;
       const route = db.prepare('SELECT * FROM routed WHERE id=? AND completed=1').get(input.id);
       if (!route || now() - (lastLatePoll.get(chatId) || 0) < LATE_REPLY_POLL_MS) continue;
-      if (routeFence && fencedThreads.has(group.threadId)) {
+      if (routeFence && fencedGroup(group)) {
         const active = routeFence.current();
         if (active?.route !== config.routeControl.routeId || at < Date.parse(active.since)) continue;
       }
@@ -334,8 +387,9 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
   }
 
   return {
-    close() { routeFence?.close(); if (!relayDb) db.close(); if (!inboxDb) inbox.close(); },
+    close() { routeFence?.close(); for (const registry of registries.values()) registry.close?.(); if (!relayDb) db.close(); if (!inboxDb) inbox.close(); },
     async tick() {
+      await reconcileRegistrations();
       if (inbox.prepare("SELECT 1 FROM group_send WHERE state IN ('sending','uncertain') LIMIT 1").get())
         return {ok: false, error: 'group_delivery_requires_review'};
       const inputs = readGroupInputs(inbox);

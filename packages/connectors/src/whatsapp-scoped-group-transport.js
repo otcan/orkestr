@@ -11,6 +11,7 @@ import {createDeliveryRouteFence} from './whatsapp-delivery-route-fence.js';
 import {notificationScope, createTimerNotificationProofStore} from './whatsapp-timer-notification-proof.js';
 import {downloadScopedGroupMedia} from './whatsapp-scoped-group-media.js';
 import {validateCoordinatorConfig, coordinatorTokenMatches, createCoordinatorAccess} from './whatsapp-scoped-coordinator.js';
+import {DYNAMIC_GROUPS_TABLE, createDynamicGroupView, validateDynamicGroups} from './whatsapp-scoped-dynamic-groups.js';
 
 const fail=code=>{throw new Error(`group_transport_${code}`);};
 const hash=value=>crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -41,7 +42,8 @@ export function validateScopedGroupConfig(config,now=Date.now) {
   const fencedThreads=scopedRouteMembership(config);
   if(fencedThreads && [...fencedThreads].some(id=>!config.groups.some(g=>g.threadId===id)))fail('route_thread_invalid');
   const coordinator=validateCoordinatorConfig(config);
-  return {groups,authors,participants,scope,fencedThreads,coordinator};
+  const dynamic=validateDynamicGroups(config);
+  return {groups,authors,participants,scope,fencedThreads,coordinator,dynamic};
 }
 
 export function createScopedGroupTransport({config,token,base,dbPath=config.journalPath,now=Date.now,routeFence: suppliedFence,proofStore: suppliedProof,sendLookupDelayMs=1000,
@@ -49,7 +51,7 @@ export function createScopedGroupTransport({config,token,base,dbPath=config.jour
   if(!token)fail('configuration_invalid');
   // Validate the whole contract before opening durable state: a build that
   // rejects the live configuration must leave the journal untouched.
-  const {groups,authors,participants,scope,fencedThreads,coordinator}=validateScopedGroupConfig(config,now);
+  const {groups: staticGroups,authors,participants,scope,fencedThreads,coordinator,dynamic}=validateScopedGroupConfig(config,now);
   // The coordinator bearer must be a dedicated credential, never the transport token.
   if(coordinatorTokenMatches(coordinator,token))fail('configuration_invalid');
   const db=new DatabaseSync(dbPath);db.exec(`PRAGMA journal_mode=WAL;
@@ -58,10 +60,14 @@ export function createScopedGroupTransport({config,token,base,dbPath=config.jour
     CREATE TABLE IF NOT EXISTS group_input_author(id TEXT PRIMARY KEY,proof TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS group_meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);
     ${MEDIA_TABLE};`);
+  // Registered groups (dynamicGroups) join the static allowlist live. The
+  // contract below stays the static one, so enabling this needs no migration.
+  if(dynamic)db.exec(DYNAMIC_GROUPS_TABLE);
+  const groups=dynamic ? createDynamicGroupView(db,{static:staticGroups,now}) : staticGroups;
   const mediaDir=path.resolve(config.mediaDir || (dbPath===':memory:'
     ? path.join(os.tmpdir(),`orkestr-scoped-group-media-${process.pid}`)
     : `${dbPath}.media`));
-  const contract=hash([config.ownChatId,config.activatedAt,config.groups]);
+  const contract=hash([config.ownChatId,config.activatedAt,config.groups]);  // static groups only
   const prior=db.prepare('SELECT value FROM group_meta WHERE key=?').get('contract');
   if(prior && prior.value!==contract)fail('configuration_changed');
   db.prepare('INSERT OR IGNORE INTO group_meta VALUES(?,?)').run('contract',contract);
@@ -73,7 +79,8 @@ export function createScopedGroupTransport({config,token,base,dbPath=config.jour
   }
   db.prepare("UPDATE group_send SET state='uncertain' WHERE state='sending'").run();
   const routeFence=config.routeControl ? suppliedFence || createDeliveryRouteFence({dbPath:config.routeControl.dbPath,now}) : null;
-  const fenced=to=>routeFence && fencedThreads.has(groups.get(to)?.threadId);
+  // A registered group shares the route fence of the static groups.
+  const fenced=to=>Boolean(routeFence) && (fencedThreads.has(groups.get(to)?.threadId) || groups.get(to)?.dynamic===true);
   if(routeFence)routeFence.recover(config.routeControl.routeId);
   const proofStore=scope ? suppliedProof || createTimerNotificationProofStore({path:scope.proofDbPath,readOnly:true,now}) : null;
   let tail=Promise.resolve();
@@ -83,7 +90,7 @@ export function createScopedGroupTransport({config,token,base,dbPath=config.jour
   // Owner-authorized coordinator: its own bearer, routes, and send journal table.
   const coordinatorAccess=coordinator ? createCoordinatorAccess({config,coordinator,db,serial,now,lookupDelayMs:sendLookupDelayMs}) : null;
   return {
-    ...base,enabled:true,groupsMode:true,close:()=>{db.close();if(!suppliedFence)routeFence?.close();if(!suppliedProof)proofStore?.close();},blocked:uncertain,
+    ...base,enabled:true,groupsMode:true,hasGroup:chatId=>groups.has(chatId),close:()=>{db.close();if(!suppliedFence)routeFence?.close();if(!suppliedProof)proofStore?.close();},blocked:uncertain,
     assertClient,
     middleware(req,res,next) {
       const matchToken=String(req.get('authorization')||'').match(/^Bearer (.+)$/i);
@@ -132,9 +139,12 @@ export function createScopedGroupTransport({config,token,base,dbPath=config.jour
         const id=message?.id?._serialized,chatId=message?.fromMe===true?message?.to:message?.from;
         const ts=Number(message?.timestamp)*1000;
         const hasMedia=message?.hasMedia===true;
-        if(!groups.has(chatId) || typeof id!=='string' || !id || id.startsWith('summary:')
+        const group=groups.get(chatId);
+        if(!group || typeof id!=='string' || !id || id.startsWith('summary:')
             || typeof message.body!=='string' || (!message.body.trim()&&!hasMedia) || message.body.length>32000
             || !Number.isFinite(ts) || ts<=Date.parse(config.activatedAt) || ts>now()+5000)return false;
+        // A registered group starts at its registration: older history is never imported.
+        if(group.dynamic && (ts<=Date.parse(group.registeredAt) || ts<=dynamic.since))return false;
         if(db.prepare('SELECT 1 FROM group_input WHERE id=?').get(id))return false;
         const remote=message?.id?.remote?._serialized || message?.id?.remote;
         if(remote && remote!==chatId)return false;
@@ -209,7 +219,7 @@ export function createScopedGroupTransport({config,token,base,dbPath=config.jour
         {sendSeen:false,sendMediaAsDocument:true}),valid,
         message=>message?.type==='document' && message?._data?.filename===document?.filename);
     },
-    policyFields(buildHash) {return {version:1,transportOnly:true,groupsOnly:true,groupCount:groups.size,additionalOwnerAuthors:authors.count,participantGroups:participants.count,timerNotifications:!!scope,routeFence:!!routeFence,sendAttempts:1,textOnly:true,maxTextLength:SCOPED_SEND_MAX_TEXT_LENGTH,markSeen:false,automaticRouting:false,strictBearer:true,coordinator:!!coordinatorAccess,buildHash};},
+    policyFields(buildHash) {return {version:1,transportOnly:true,groupsOnly:true,groupCount:groups.size,dynamicGroups:Boolean(dynamic),additionalOwnerAuthors:authors.count,participantGroups:participants.count,timerNotifications:!!scope,routeFence:!!routeFence,sendAttempts:1,textOnly:true,maxTextLength:SCOPED_SEND_MAX_TEXT_LENGTH,markSeen:false,automaticRouting:false,strictBearer:true,coordinator:!!coordinatorAccess,buildHash};},
     diagnostics(client,buildHash) {return {identityMatches:client?.info?.wid?._serialized===config.ownChatId,...this.policyFields(buildHash)};},
   };
   // `text` is the canonical payload string: the message itself, or a

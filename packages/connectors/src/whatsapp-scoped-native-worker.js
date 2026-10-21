@@ -44,6 +44,15 @@ export function createScopedNativeWorkerPolicy(config,{createTransport=createSco
    body ||= {};
    if(method==='GET' && ['/health','/accounts'].includes(url.pathname))return;
    const a=encodeURIComponent(config.workerAccountId);
+   // Static groups, or groups registered at runtime (dynamicGroups) in the journal.
+   const groupAllowed=chatId=>chats.has(chatId) || (Boolean(config.dynamicGroups) && get(config.workerAccountId).hasGroup?.(chatId)===true);
+   const historyChat=(()=>{
+    const prefix=`/accounts/${a}/chats/`,suffix='/history';
+    if(!url.pathname.startsWith(prefix) || !url.pathname.endsWith(suffix))return null;
+    const raw=url.pathname.slice(prefix.length,-suffix.length);
+    if(!raw || raw.includes('/'))return null;
+    try {return decodeURIComponent(raw);} catch {return null;}
+   })();
    const ownsDirect=(chatId,threadId)=>Boolean(direct?.chats.has(chatId)) && direct.chats.get(chatId)===threadId;
    // Owner-authorized read-all threads: paged list of every chat/contact and paged
    // history of any chat; read-only, never marks seen, only fixed parameters.
@@ -57,16 +66,16 @@ export function createScopedNativeWorkerPolicy(config,{createTransport=createSco
    if(method==='GET' && [...(direct?.chats.keys()||[])].some(g=>url.pathname===`/accounts/${a}/chats/${encodeURIComponent(g)}/history` && ownsDirect(g,url.searchParams.get('thread_id')))
       && (!url.searchParams.has('mark_seen') || url.searchParams.get('mark_seen')==='false')
       && Number(url.searchParams.get('limit')||30)>0 && Number(url.searchParams.get('limit')||30)<=50)return;
-   if(method==='GET' && [...chats].some(g=>url.pathname===`/accounts/${a}/chats/${encodeURIComponent(g)}/history`) && (!url.searchParams.has('mark_seen') || url.searchParams.get('mark_seen')==='false')
+   if(method==='GET' && historyChat && groupAllowed(historyChat) && url.pathname===`/accounts/${a}/chats/${encodeURIComponent(historyChat)}/history` && (!url.searchParams.has('mark_seen') || url.searchParams.get('mark_seen')==='false')
       && Number(url.searchParams.get('limit')||30)>0 && Number(url.searchParams.get('limit')||30)<=50)return;
-   if(method==='POST' && url.pathname==='/send-text' && body.accountId===config.workerAccountId && chats.has(body.to)
+   if(method==='POST' && url.pathname==='/send-text' && body.accountId===config.workerAccountId && groupAllowed(body.to)
       && typeof body.text==='string' && body.text.length<=SCOPED_SEND_MAX_TEXT_LENGTH && typeof body.requestId==='string' && typeof body.parentId==='string'
       && Object.keys(body).every(k=>['accountId','to','text','requestId','parentId','notificationId'].includes(k)))return;
    if(method==='POST' && url.pathname==='/send-text' && ownsDirect(body.to,body.threadId) && body.accountId===config.workerAccountId
       && typeof body.text==='string' && body.text.length<=3000 && typeof body.requestId==='string'
       && Object.keys(body).every(k=>['accountId','to','text','requestId','threadId'].includes(k)))return;
    // The full text of a long reply, as one Markdown document to the same group.
-   if(method==='POST' && url.pathname==='/send-document' && body.accountId===config.workerAccountId && chats.has(body.to)
+   if(method==='POST' && url.pathname==='/send-document' && body.accountId===config.workerAccountId && groupAllowed(body.to)
       && validReplyDocument({filename:body.filename,mimetype:body.mimetype,text:body.text}) && typeof body.requestId==='string' && typeof body.parentId==='string'
       && Object.keys(body).every(k=>['accountId','to','filename','mimetype','text','requestId','parentId','notificationId'].includes(k)))return;
    fail();

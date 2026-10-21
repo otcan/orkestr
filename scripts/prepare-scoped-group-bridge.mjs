@@ -57,6 +57,7 @@ const files = ['packages/connectors/src/whatsapp-scoped-group-transport.js',
   'packages/connectors/src/whatsapp-inbound-media-diagnostics.js',
   'packages/connectors/src/whatsapp-media-self-decrypt.js',
   'packages/connectors/src/whatsapp-scoped-coordinator.js',
+  'packages/connectors/src/whatsapp-scoped-dynamic-groups.js',
   'packages/connectors/src/whatsapp-scoped-direct-chats.js',
   'packages/connectors/src/whatsapp-scoped-group-relay.js', 'scripts/scoped-group-relay.mjs', 'apps/cli/src/api-client.js'];
 const buildHash = crypto.createHash('sha256').update(bridge.replace(/const transportOnlyBuildHash = '[a-f0-9]+';/, '')).update(wrapper);
