@@ -328,7 +328,10 @@ class Worker:
             self.import_attachments(data)
         if "intake" not in data:
             text = data.get("intake_text") or compose(data)
-            intake = self.call("POST", "/messages", {"client_message_id": data["keys"]["message"], "text": text}, (200, 202))
+            request = {"client_message_id": data["keys"]["message"], "text": text}
+            if data.get("reply_to"):
+                request["reply_to"] = data["reply_to"]
+            intake = self.call("POST", "/messages", request, (200, 202))
             if intake.get("status") != "accepted" or not all(intake.get(k) for k in ("message_id", "event_id", "sequence")):
                 raise Refused("intake_receipt")
             data.update(intake=intake, cursor=intake["sequence"] - 1, phase="admitted", admitted_at=time.time())

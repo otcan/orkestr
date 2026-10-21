@@ -54,7 +54,26 @@ function hostSummary() {
   const spark = Array.from({ length: 60 }, (_, i) => Math.round(wave(i, 0) * 10) / 10);
   return { schema_version: 1, collecting: false, observed_at_ms: Date.now() - 2000, interval_ms: 5000, cores: 12, cpu_percent: 31.5,
     memory_used_bytes: 24 * GIB, memory_total_bytes: 64 * GIB, disk_used_bytes: 600 * GIB, disk_free_bytes: 200 * GIB, disk_total_bytes: 846 * GIB,
-    spark_cpu: spark, spark_memory: spark.map(() => 37.5), spark_disk: spark.map(() => 75) };
+    spark_cpu: spark, spark_memory: spark.map(() => 37.5), spark_disk: spark.map(() => 75),
+    swap_used_bytes: 2 * GIB, swap_total_bytes: 32 * GIB, load: [3.1, 2.8, 2.5],
+    mounts: hostDisks().mounts, cpu_cores_percent: Array.from({ length: 12 }, (_, c) => Math.round(wave(c, c))),
+    disk_read_bps: 2e5, disk_write_bps: 1.5e6, net_rx_bps: 3e4, net_tx_bps: 2e4 };
+}
+function hostConsumers() {
+  const spark = Array.from({ length: 30 }, (_, i) => Math.round(wave(i, 1) / 5 * 10) / 10);
+  const row = (key, kind, label, extra) => ({ key, kind, label, conversation_id: null, roles: [], cpu_percent: 4.2, cores: 0.5,
+    rss_bytes: 2 * GIB, io_read_bps: 1000, io_write_bps: 4000, processes: 3, top_command: 'node', spark_cpu: spark, ...extra });
+  return { schema_version: 1, collecting: false, observed_at_ms: Date.now() - 3000, interval_ms: 10000, cores: 12, consumers: [
+    row(`conversation:${A}`, 'conversation', 'Assistant', { conversation_id: A, roles: ['deep', 'fast'], cpu_percent: 12.5, cores: 1.5 }),
+    row('service:synthetic-v1.service', 'service', 'Synthetic V1 UI', {}),
+    row('workspace:synthetic-pa', 'workspace', 'Workspace synthetic-pa', { io_read_bps: null, io_write_bps: null }),
+  ] };
+}
+function hostDisks() {
+  return { schema_version: 1,
+    mounts: [{ mount: '/', fs_type: 'ext4', device: '/dev/synthetic', total_bytes: 846 * GIB, used_bytes: 600 * GIB, free_bytes: 200 * GIB }],
+    directories: { observed_at_ms: Date.now() - 600000, running: false, readable_bytes: 400 * GIB,
+      entries: [{ path: '/home', bytes: 200 * GIB }, { path: '/opt', bytes: 60 * GIB }, { path: '/var', bytes: 40 * GIB }] } };
 }
 function hostHistory(range) {
   const step = HOST_STEPS[range], now = Math.floor(Date.now() / step) * step;
@@ -190,6 +209,8 @@ async function api(state, req, res, url) {
   }
   if (path === '/api/v2/live-map' && req.method === 'GET') return json(res, 200, liveMap());
   if (path === '/api/v2/host-metrics' && req.method === 'GET') return json(res, 200, hostSummary());
+  if (path === '/api/v2/host-metrics/consumers' && req.method === 'GET') return json(res, 200, hostConsumers());
+  if (path === '/api/v2/host-metrics/disks' && req.method === 'GET') return json(res, 200, hostDisks());
   if (path === '/api/v2/host-metrics/history' && req.method === 'GET') {
     const range = q.get('range');
     if (!HOST_STEPS[range]) return json(res, 400, { code: 'invalid_range', message: 'Range', request_id: 'synthetic', retryable: false });

@@ -19,10 +19,11 @@ enum Notice {
 #[component]
 pub fn HostMetricsView(
     session_scope: Signal<SessionScope>,
+    /// The URL keeps the range (`#host/details?range=…`).
+    mut range: Signal<HostMetricsRange>,
     onexpired: EventHandler<()>,
 ) -> Element {
     let owner = session_scope.read().generation();
-    let mut range = use_signal(|| HostMetricsRange::Hour1);
     let mut history = use_signal(|| None::<HostMetricsHistory>);
     let mut notice = use_signal(|| Notice::Loading);
     let mut now = use_signal(|| 0_i64);
@@ -102,7 +103,7 @@ pub fn HostMetricsView(
         };
         return rsx! {
             section { class: "host-metrics", "aria-label": "Host metrics",
-                header { class: "hm-header", h2 { "Host metrics" } {ranges} }
+                header { class: "hm-header", h2 { "Charts" } {ranges} }
                 p { class: "hm-empty", role: "status", "{text}" }
             }
         };
@@ -134,7 +135,7 @@ pub fn HostMetricsView(
         section { class: "host-metrics", "aria-label": "Host metrics",
             header { class: "hm-header",
                 div {
-                    h2 { "Host metrics" }
+                    h2 { "Charts" }
                     p { class: "hm-sub",
                         "Whole host · {cores} cores · RAM {model::bytes(h.memory_total_bytes as f64)} · swap {model::bytes(h.swap_total_bytes as f64)} · / {model::bytes(h.disk_total_bytes as f64)}"
                     }

@@ -22,6 +22,11 @@ fn notifications_before_response_are_held_and_completion_is_only_a_proposal() {
     assert_eq!(stream.next_event(), None);
     stream.receive(&response()).unwrap();
     assert_eq!(stream.next_event(), Some(ProviderEvent::Started));
+    // A completion without any text replies with the explicit notice.
+    assert!(matches!(
+        stream.next_event(),
+        Some(ProviderEvent::Progress(text)) if text.starts_with("(The turn completed without a reply")
+    ));
     assert_eq!(
         stream.next_event(),
         Some(ProviderEvent::CompletedProposal { synthetic: false })

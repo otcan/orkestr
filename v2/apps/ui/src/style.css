@@ -323,3 +323,7 @@ details[open] > summary { margin-bottom: .4rem; }
 .message-time-details { display: flex; flex-direction: column; align-items: flex-end; flex-basis: 100%; font-size: .68rem; color: var(--muted); }
 .user-message .message-time-details { color: inherit; opacity: .8; }
 .archived-message header .message-meta { margin: 0; }
+
+.reply-quote { margin: .2rem 0 .4rem; padding: .3rem .6rem; border-left: .25rem solid currentColor; background: rgba(0,0,0,.08); border-radius: .4rem; font-size: .9em; opacity: .85; }
+.reply-quote cite { display: block; font-style: normal; font-weight: 600; opacity: .8; }
+.reply-quote p { margin: .15rem 0 0; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; white-space: pre-wrap; }

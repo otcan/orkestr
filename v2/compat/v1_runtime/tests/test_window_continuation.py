@@ -95,6 +95,18 @@ class DeadlineContinuationTests(Case):
         self.assertTrue(messages[1]["text"].startswith(CONTINUE_PREFIX))
         self.assertEqual(self.ledger.messages()[-1]["text"], "deep result")
 
+    def test_quoted_reply_context_reaches_rust_and_survives_the_requeue(self):
+        quoted = dict(message_id="true_chat_ABC", author="orkestr", sent_at="2026-01-02T21:50:00Z", text="earlier", is_own_reply=True, unavailable=False)
+        self.data["reply_to"] = quoted
+        self.stop_by_deadline()
+        self.worker.step(self.data)
+        resumed = self.ledger.next_input()
+        self.peer.deep_phase, self.peer.current = None, None
+        self.peer.accepted.clear()
+        self.worker.step(resumed)
+        messages = [body for route, body in self.peer.mutations if route == "/messages"]
+        self.assertEqual([m.get("reply_to") for m in messages], [quoted, quoted])
+
     def test_second_deadline_stop_refuses_visibly(self):
         self.stop_by_deadline()
         self.worker.step(self.data)

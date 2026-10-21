@@ -180,7 +180,24 @@ fn respond(method: Method, uri: Uri, request_headers: &HeaderMap, assets: &Asset
     if gzip.is_some() {
         headers.insert(header::CONTENT_ENCODING, HeaderValue::from_static("gzip"));
     }
-    headers.insert(header::CACHE_CONTROL, cache::POLICY.parse().unwrap());
+    // `?v=<first 16 hex of the content digest>` (written by the UI bundle
+    // into index.html) names this exact content: it may be kept for good.
+    let pinned = uri
+        .query()
+        .and_then(|q| q.strip_prefix("v="))
+        .is_some_and(|v| {
+            v.len() == 16
+                && asset
+                    .etag
+                    .to_str()
+                    .is_ok_and(|tag| tag.trim_matches('"').starts_with(v))
+        });
+    headers.insert(
+        header::CACHE_CONTROL,
+        if pinned { cache::PINNED } else { cache::POLICY }
+            .parse()
+            .unwrap(),
+    );
     headers.insert(header::X_CONTENT_TYPE_OPTIONS, "nosniff".parse().unwrap());
     response
 }

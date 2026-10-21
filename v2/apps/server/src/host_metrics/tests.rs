@@ -264,3 +264,116 @@ async fn endpoints_are_owner_only_and_say_collecting_without_history() {
     assert!(history_of(&Shared::default(), HostMetricsRange::Hour1, 0).collecting);
     case.finish().await;
 }
+
+#[test]
+fn processes_are_attributed_to_conversations_workspaces_and_units() {
+    let stat = "4242 (codex app (x)) S 77 4242 4242 0 -1 4194560 1 0 0 0 150 50 0 0 20 0 11 0 98765 1 300 18446744073709551615";
+    assert_eq!(
+        consumers::parse_stat(stat),
+        Some(consumers::Stat {
+            ppid: 77,
+            ticks: 200,
+            start: 98765,
+            rss_pages: 300
+        })
+    );
+    assert_eq!(
+        consumers::parse_io("rchar: 9\nread_bytes: 4096\nwrite_bytes: 8192\n"),
+        Some((4096, 8192))
+    );
+    let id = "a73a655e-8e02-4748-a903-d9183d819ea4";
+    let env = |home: &str| format!("PATH=/usr/bin\0HOME={home}\0LANG=C\0").into_bytes();
+    assert_eq!(
+        consumers::owned_execution(&env(&format!("/var/lib/x/owned-executions/fast-{id}/home"))),
+        Some((id.into(), "fast".into()))
+    );
+    assert_eq!(
+        consumers::owned_execution(&env(&format!("/var/lib/x/owned-executions/{id}/home"))),
+        Some((id.into(), "deep".into()))
+    );
+    assert_eq!(consumers::owned_execution(&env("/home/orkestr")), None);
+    assert_eq!(
+        consumers::owned_execution(&env("/x/owned-executions/not-a-uuid/home")),
+        None
+    );
+    assert_eq!(
+        consumers::workspace("/opt/orkestr/workspace/otcanclaw-pa-1234/src"),
+        Some("otcanclaw-pa-1234".into())
+    );
+    assert_eq!(consumers::workspace("/home/orkestr"), None);
+    let users = |uid: u32| {
+        if uid == 995 {
+            "orkestr".to_string()
+        } else {
+            uid.to_string()
+        }
+    };
+    use consumers::Group;
+    let unit = |c: &str| consumers::cgroup_group(c, &users);
+    assert_eq!(
+        unit("0::/system.slice/caddy.service"),
+        (
+            Group::Service("caddy.service".into()),
+            Some("/system.slice/caddy.service".into())
+        )
+    );
+    assert_eq!(
+        unit("0::/system.slice/orkestr-v2-pilot.service/manager").0,
+        Group::Service("orkestr-v2-pilot.service".into())
+    );
+    assert_eq!(
+        unit("0::/system.slice/system-orkestr\\x2dwa.slice/orkestr-wa-worker@sender.service").0,
+        Group::Service("orkestr-wa-worker@sender.service".into())
+    );
+    assert_eq!(
+        unit("0::/system.slice/docker-0123456789abcdef0123.scope").0,
+        Group::Container("0123456789ab".into())
+    );
+    assert_eq!(
+        unit("0::/user.slice/user-995.slice/session-4.scope").0,
+        Group::Session("orkestr".into())
+    );
+    assert_eq!(unit("0::/").0, Group::Other("kernel".into()));
+    let devices: std::collections::HashSet<String> = ["259:0".to_string()].into();
+    assert_eq!(
+        consumers::parse_io_stat(
+            "9:0 rbytes=5 wbytes=6\n259:0 rbytes=100 wbytes=200 rios=1\n",
+            &devices
+        ),
+        (100, 200)
+    );
+}
+
+#[test]
+fn live_scan_attributes_this_test_process() {
+    let mut scanner = consumers::Scanner::new();
+    let labels = std::collections::HashMap::new();
+    assert!(scanner.sample(&labels));
+    assert!(scanner.sample(&labels));
+    let top = scanner.top();
+    assert!(!top.is_empty());
+    assert!(top
+        .iter()
+        .all(|c| c.cpu_percent >= 0.0 && c.spark_cpu.len() == 1));
+}
+
+#[test]
+fn mounts_and_du_output_parse_like_df_and_du() {
+    let mounts = "proc /proc proc rw 0 0\n/dev/md1 /boot ext3 rw 0 0\n/dev/md2 / ext4 rw 0 0\ntmpfs /run tmpfs rw 0 0\n/dev/md2 /var/lib/docker/x ext4 rw 0 0\n/dev/sdb1 /mnt/my\\040disk xfs rw 0 0\n";
+    let parsed = disks::parse_mounts(mounts);
+    assert_eq!(
+        parsed
+            .iter()
+            .map(|(m, _, _)| m.as_str())
+            .collect::<Vec<_>>(),
+        vec!["/", "/boot", "/mnt/my disk"]
+    );
+    let (root, entries) = disks::parse_du("1000\t/home\n5000\t/opt\n8000\t/\n200\t/opt/x\n");
+    assert_eq!(root, 8000);
+    assert_eq!(entries[0].path, "/opt");
+    assert_eq!(entries.len(), 3);
+    let live = disks::read_mounts();
+    assert!(live
+        .iter()
+        .any(|m| m.mount == "/" && m.used_bytes <= m.total_bytes));
+}

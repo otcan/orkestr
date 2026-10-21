@@ -1,19 +1,12 @@
 use dioxus::prelude::*;
+use orkestr_v2_contracts::HostMetricsRange;
 use orkestr_v2_contracts::{SidebarEntry, V1LinkTarget};
-use orkestr_v2_ui::{session_scope::SessionScope, Draft};
+use orkestr_v2_ui::{
+    route::{Route, Tab},
+    session_scope::SessionScope,
+    Draft,
+};
 use std::collections::BTreeMap;
-
-const TABS: [&str; 9] = [
-    "Chat",
-    "Work",
-    "History",
-    "Projects",
-    "Timers",
-    "Memory",
-    "Live map",
-    "Host resources",
-    "Settings",
-];
 
 /// Navigation changes presentation only. Work admission remains an explicit action.
 #[component]
@@ -24,14 +17,25 @@ pub fn Workspace(
     mut execution: Signal<orkestr_v2_ui::execution::Execution>,
     drafts: Signal<BTreeMap<String, Draft>>,
     held_inputs: Signal<orkestr_v2_ui::held_inputs::HeldInputs>,
-    resources: Signal<orkestr_v2_ui::host_resources::HostResources>,
     onexpired: EventHandler<()>,
 ) -> Element {
     // The heading's host metrics panel opens the details tab.
     let open_metrics = use_context::<crate::host_metrics_panel::OpenHostMetrics>().0;
     let mut seen_metrics = use_signal(|| *open_metrics.peek());
+    let initial = use_context::<crate::InitialRoute>().0.peek().clone();
     let mut title = use_signal(|| "Assistant".to_string());
-    let mut tab = use_signal(|| "Chat".to_string());
+    let mut tab = use_signal(|| match &initial {
+        Some(Route::Conversation { tab, .. }) => *tab,
+        Some(Route::Host { .. }) => Tab::Host,
+        _ => Tab::Chat,
+    });
+    let mut host_charts = use_signal(|| matches!(initial, Some(Route::Host { charts: true, .. })));
+    let mut host_range = use_signal(|| match &initial {
+        Some(Route::Host { range, .. }) => *range,
+        _ => HostMetricsRange::Hour1,
+    });
+    // Sidebar rows of the last poll, to open a V1 chat named by the URL at once.
+    let mut rows_seen = use_signal(Vec::<SidebarEntry>::new);
     let mut sidebar = use_signal(|| false);
     let mut reload = use_signal(|| 0_u64);
     // A linked V1 chat is shown read-only instead of a native conversation.
@@ -46,10 +50,87 @@ pub fn Workspace(
             seen_metrics.set(requested);
             linked.set(None);
             execution.write().select(&current.peek(), "");
-            tab.set("Host resources".into());
+            host_charts.set(false);
+            tab.set(Tab::Host);
         }
     });
-    let mut wanted = use_signal(|| None::<String>);
+    let mut wanted = use_signal(|| match &initial {
+        Some(Route::V1Thread { thread }) => Some(thread.clone()),
+        _ => None,
+    });
+    // The URL follows the view: each change the owner makes is a history entry.
+    let mut shown = use_signal(|| None::<Route>);
+    use_effect(move || {
+        let route = match linked() {
+            Some(entry) => match entry.v1_thread_id {
+                Some(thread) => Route::V1Thread { thread },
+                None => return,
+            },
+            None if tab() == Tab::Host => Route::Host {
+                charts: host_charts(),
+                range: host_range(),
+            },
+            None if current().is_empty() => return,
+            None => Route::Conversation {
+                id: current(),
+                tab: tab(),
+            },
+        };
+        if wanted.peek().is_some() {
+            return; // a V1 chat named by the URL is still being opened
+        }
+        if shown.peek().as_ref() != Some(&route) {
+            if shown.peek().is_some() {
+                crate::conversation_location::push(&route);
+            }
+            shown.set(Some(route));
+        }
+    });
+    // Back and forward restore the view the fragment names.
+    use_future(move || async move {
+        loop {
+            let Some(hash) = crate::conversation_location::next_navigation().await else {
+                return;
+            };
+            let Some(route) = Route::parse(&hash) else {
+                continue;
+            };
+            shown.set(Some(route.clone()));
+            match route {
+                Route::Conversation {
+                    id,
+                    tab: wanted_tab,
+                } => {
+                    linked.set(None);
+                    if *current.peek() != id {
+                        execution.write().select(&id, "");
+                        current.set(id);
+                        reload += 1;
+                    }
+                    tab.set(wanted_tab);
+                }
+                Route::Host { charts, range } => {
+                    linked.set(None);
+                    host_charts.set(charts);
+                    host_range.set(range);
+                    tab.set(Tab::Host);
+                }
+                Route::V1Thread { thread } => {
+                    match rows_seen
+                        .peek()
+                        .iter()
+                        .find(|row| row.key == format!("v1:{thread}"))
+                    {
+                        Some(row) => {
+                            tab.set(Tab::Chat);
+                            linked.set(Some(row.clone()));
+                        }
+                        None => wanted.set(Some(thread)),
+                    }
+                }
+            }
+        }
+    });
     let mut link_notice = use_signal(String::new);
     use_future(move || async move {
         let Some(crate::V1Link((instance, thread))) = v1_link.peek().clone() else {
@@ -104,11 +185,12 @@ pub fn Workspace(
             crate::conversation_sidebar::ConversationSidebar {
                 selected: selected.clone(), csrf: csrf.clone(), session_scope, onexpired,
                 onloaded: move |rows: Vec<SidebarEntry>| {
+                    rows_seen.set(rows.clone());
                     let pending = wanted.peek().clone();
                     if let Some(thread) = pending {
+                        wanted.set(None);
                         if let Some(row) = rows.iter().find(|row| row.key == format!("v1:{thread}")) {
-                            wanted.set(None);
-                            tab.set("Chat".into());
+                            tab.set(Tab::Chat);
                             linked.set(Some(row.clone()));
                         }
                     }
@@ -119,7 +201,7 @@ pub fn Workspace(
                 },
                 onselect: move |row: SidebarEntry| {
                     sidebar.set(false);
-                    tab.set("Chat".into());
+                    tab.set(Tab::Chat);
                     title.set(row.name.clone());
                     live.set(Some(row.clone()));
                     if row.read_only {
@@ -131,7 +213,6 @@ pub fn Workspace(
                     // Fence a late control response before the new keyed reader mounts.
                     execution.write().select(&id, "");
                     current.set(id);
-                    crate::conversation_location::replace(Some(&current()));
                     reload += 1;
                 }
             }
@@ -152,49 +233,48 @@ pub fn Workspace(
                         }
                     }
                     if linked().is_none() { nav { "aria-label": "Main",
-                        for name in TABS {
+                        for name in Tab::ALL {
                             button { "aria-current": if tab() == name { "page" } else { "false" }, onclick: move |_| {
                                 if tab() == name { return; }
                                 execution.write().select(&current(), "");
-                                tab.set(name.into());
-                            }, "{name}" }
+                                if name == Tab::Host { host_charts.set(false); }
+                                tab.set(name);
+                            }, "{name.label()}" }
                         }
                     } }
                 }
                 if let Some(entry) = linked() {
                     crate::v1_thread_view::V1ThreadView { key: "{entry.key}-{session_scope.read().generation()}", entry, csrf: csrf.clone(), session_scope, drafts, onexpired }
-                } else if tab() == "Chat" {
+                } else if tab() == Tab::Chat {
                     SelectedConversation {
                         key: "{current()}-{session_scope.read().generation()}-{reload}",
                         id: current(), csrf, session_scope, execution, drafts, held_inputs, onexpired
                     }
                 } else {
                     div { class: "workspace-page",
-                        if tab() == "Work" {
+                        if tab() == Tab::Work {
                             crate::work_view::WorkView { key: "{current()}-{session_scope.read().generation()}", id: current(), csrf, session_scope, execution, onexpired }
-                        } else if tab() == "History" {
+                        } else if tab() == Tab::History {
                             crate::history::History { key: "{current()}", id: current(), csrf, session_scope, onexpired }
-                        } else if tab() == "Projects" {
+                        } else if tab() == Tab::Projects {
                             crate::projects_view::Projects { key: "{session_scope.read().generation()}", csrf, session_scope, onexpired,
                                 onopen: move |(id, name): (String, String)| {
                                     linked.set(None);
                                     execution.write().select(&id, "");
                                     current.set(id);
-                                    crate::conversation_location::replace(Some(&current()));
-                                    title.set(name);
-                                    tab.set("Chat".into());
+                                                    title.set(name);
+                                    tab.set(Tab::Chat);
                                     reload += 1;
                                 }
                             }
-                        } else if tab() == "Timers" {
+                        } else if tab() == Tab::Timers {
                             crate::timer_screen::Timers { key: "{current()}-{session_scope.read().generation()}", conversation: current(), csrf, session_scope, onexpired }
-                        } else if tab() == "Memory" {
+                        } else if tab() == Tab::Memory {
                             crate::memory_view::MemoryView { key: "{session_scope.read().generation()}", csrf, project: None, session_scope, onexpired }
-                        } else if tab() == "Live map" {
+                        } else if tab() == Tab::LiveMap {
                             crate::live_map_view::LiveMapView { key: "{session_scope.read().generation()}", session_scope, onexpired }
-                        } else if tab() == "Host resources" {
-                            crate::host_metrics_view::HostMetricsView { key: "{session_scope.read().generation()}", session_scope, onexpired }
-                            crate::host_resources_view::HostResourcesView { session_scope, resources, onexpired }
+                        } else if tab() == Tab::Host {
+                            crate::host_dashboard::HostDashboard { key: "{session_scope.read().generation()}", session_scope, charts: host_charts, range: host_range, onexpired }
                         } else {
                             crate::chat_settings_view::ChatSettings { key: "settings-{current()}-{session_scope.read().generation()}", conversation: current(), csrf, session_scope, onexpired }
                             crate::beta_settings::BetaSettings {}
