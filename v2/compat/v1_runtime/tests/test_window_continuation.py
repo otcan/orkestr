@@ -234,3 +234,12 @@ class OrphanedFollowUpTests(Case):
                                  work_deadline_ms=int(time.time() * 1000) + 600_000)
         self.worker.step(self.ledger.next_input())
         self.assertEqual(self.ledger.next_input()["phase"], "running")
+
+
+class RefusalSettlesFastTests(Case):
+    def test_failed_deep_refusal_accepts_its_own_pending_fast(self):
+        self.peer.deep_phase = "failed"
+        with self.assertRaisesRegex(Refused, "execution_requires_review"):
+            self.worker.step(self.data)
+        self.assertIn("fast", self.peer.accepted)
+        self.assertNotIn("deep", self.peer.accepted)

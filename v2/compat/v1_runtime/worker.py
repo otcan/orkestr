@@ -371,6 +371,7 @@ class Worker:
             if not value or value.get("run_id") not in ids:
                 return
             if value.get("phase") in ("failed", "lost", "cancelled", "blocked", "stopped", "interrupted", "completed"):
+                self.settle_own_fast(data, statuses.get("fast"), ids)
                 raise Refused("execution_requires_review")
             if value.get("phase") != "awaiting_acceptance":
                 return
@@ -460,6 +461,16 @@ class Worker:
         deadline = current.get("work_deadline_ms")
         return (current.get("state") == "active" and type(deadline) is int and
                 deadline <= time.time() * 1000)
+
+    def settle_own_fast(self, data, fast, ids):
+        """Before refusing an input, accept its own pending Fast proposal so the
+        window is not held open for an answer nobody will accept."""
+        if (isinstance(fast, dict) and fast.get("run_id") in ids and fast.get("phase") == "awaiting_acceptance"
+                and "fast" not in data.get("accepted", {})):
+            try:
+                self.accept_role(data, "fast", ids)
+            except Exception:
+                pass
 
     def requeue_orphaned(self, data, ids):
         """Send an input again once when its window ended before any run of it

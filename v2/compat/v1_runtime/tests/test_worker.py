@@ -201,7 +201,9 @@ class WorkerTests(unittest.TestCase):
                     return original(method, route, **kwargs)
                 peer.request = request
                 Worker(peer, ledger).run(Stop())
-                self.assertFalse(any(route == "/accept" for route, _ in peer.mutations))
+                # Only this input's own Fast may be settled; a refused Deep never is.
+                self.assertFalse(any(route == "/accept" and body["run_id"] == "deep-run"
+                                     for route, body in peer.mutations))
                 if failure == "session_revoked":
                     # A revoked owner session is not the input's fault: it waits
                     # for the restarted service instead of being refused.
