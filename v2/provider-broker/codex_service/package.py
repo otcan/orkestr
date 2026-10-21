@@ -149,7 +149,11 @@ class Package:
                     and 0 < beta["max_active_windows"] <= MAX_RUNTIME_WINDOWS, "beta_window_capacity")
         if "host_full_access" in beta:
             access = beta["host_full_access"]
-            require(type(access) is dict and set(access) <= {"providers", "environment"}
+            require(type(access) is dict and set(access) <= {"providers", "environment", "environment_files"}
+                    and type(access.get("environment_files", [])) is list
+                    and len(access.get("environment_files", [])) <= 8
+                    and all(type(f) is str and f.startswith("/") and "\0" not in f and ".." not in Path(f).parts
+                            for f in access.get("environment_files", []))
                     and type(access.get("providers", True)) is bool
                     and type(access.get("environment")) is dict
                     and {"HOME", "PATH"} <= set(access["environment"])

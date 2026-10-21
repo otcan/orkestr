@@ -16,6 +16,10 @@ pub(crate) struct HostFullAccess {
     /// The real executor environment (must include HOME and PATH), e.g. the
     /// V1 executors' HOME, CODEX_HOME and PATH. Host-specific: private config.
     pub environment: BTreeMap<String, String>,
+    /// Private env files the host provider sources at launch (paths only;
+    /// the provider broker checks ownership and mode and never logs values).
+    #[serde(default)]
+    pub environment_files: Vec<std::path::PathBuf>,
 }
 
 fn enabled() -> bool {
@@ -34,6 +38,8 @@ impl HostFullAccess {
                 .iter()
                 .all(|(k, v)| name(k) && !v.contains('\0') && v.len() <= 16384)
             || !std::path::Path::new(&self.environment["HOME"]).is_absolute()
+            || self.environment_files.len() > 8
+            || !self.environment_files.iter().all(|f| f.is_absolute())
         {
             return Err("invalid host full access environment");
         }
@@ -51,6 +57,27 @@ impl HostFullAccess {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn environment_files_are_absolute_and_bounded() {
+        let parse = |files: serde_json::Value| -> HostFullAccess {
+            serde_json::from_value(serde_json::json!({
+                "environment": {"HOME": "/home/example", "PATH": "/usr/bin:/bin"},
+                "environment_files": files
+            }))
+            .unwrap()
+        };
+        assert!(parse(serde_json::json!(["/var/lib/example/tool.env"]))
+            .validate()
+            .is_ok());
+        assert!(parse(serde_json::json!(["relative/tool.env"]))
+            .validate()
+            .is_err());
+        let many: Vec<String> = (0..9)
+            .map(|i| format!("/var/lib/example/{i}.env"))
+            .collect();
+        assert!(parse(serde_json::json!(many)).validate().is_err());
+    }
 
     #[test]
     fn requires_real_home_and_path_and_is_closed() {
