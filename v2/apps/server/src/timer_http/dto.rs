@@ -61,5 +61,17 @@ pub enum Schedule {
         weekday: Option<u8>,
         minute_of_day: u16,
     },
+    /// Calendar rule; `summary` is the rule in plain words.
+    Calendar {
+        timezone: String,
+        weekdays: Vec<u8>,
+        start_minute: u16,
+        end_minute: u16,
+        every_hours: u8,
+        minutes: Vec<u8>,
+        summary: String,
+    },
+    /// Runs only on trigger events.
+    Event,
     Dormant,
 }
