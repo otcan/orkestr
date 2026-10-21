@@ -17,6 +17,8 @@ mod sidebar;
 pub use sidebar::*;
 mod message_attachments;
 pub use message_attachments::*;
+mod message_times;
+pub use message_times::*;
 mod whatsapp_chats;
 pub use whatsapp_chats::*;
 mod v1_manage;

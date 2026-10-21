@@ -306,6 +306,59 @@ impl Store {
     }
 }
 
+/// One owner input or accepted reply with its durable event time.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EventTime {
+    pub sequence: i64,
+    pub reply: bool,
+    pub event_id: String,
+    pub occurred_at: String,
+}
+
+impl Store {
+    /// Event times of owner inputs and accepted replies after `after`.
+    pub async fn message_times(
+        &self,
+        credential: &str,
+        owner: &OwnerId,
+        conversation: &ConversationId,
+        after: i64,
+        limit: u32,
+    ) -> Result<(Vec<EventTime>, bool)> {
+        if after < 0 || !(1..=200).contains(&limit) {
+            return Err(ResourceError::Invalid);
+        }
+        let mut tx = self
+            .owner_scope(credential, owner, conversation, false)
+            .await?;
+        let mut rows = sqlx::query(
+            "SELECT sequence,kind,id,occurred_at FROM events WHERE conversation_id=? AND owner_id=? AND sequence>? \
+             AND kind IN ('message_accepted','execution_accepted') ORDER BY sequence LIMIT ?",
+        )
+        .bind(conversation.to_string())
+        .bind(owner.to_string())
+        .bind(after)
+        .bind(i64::from(limit) + 1)
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(unavailable)?;
+        tx.commit().await.map_err(unavailable)?;
+        let more = rows.len() > limit as usize;
+        rows.truncate(limit as usize);
+        Ok((
+            rows.iter()
+                .map(|r| EventTime {
+                    sequence: r.get("sequence"),
+                    reply: r.get::<String, _>("kind") == "execution_accepted",
+                    event_id: r.get("id"),
+                    occurred_at: r.get("occurred_at"),
+                })
+                .collect(),
+            more,
+        ))
+    }
+}
+
 #[cfg(test)]
 #[path = "sidebar_tests.rs"]
 mod tests;

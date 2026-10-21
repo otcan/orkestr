@@ -4,9 +4,10 @@
 //! listed thread as V1 web UI input. Nothing here admits V2 work.
 use crate::desktop_broker::{Broker, BrokerError};
 use orkestr_v2_contracts::{
-    valid_v1_instance_ref, valid_v1_thread_id, valid_v1_thread_ref, SidebarAuthor, SidebarPreview,
-    V1HistoryMessage, V1HistoryPage, V1ThreadInput, V1ThreadInputReceipt, SIDEBAR_NAME_MAX,
-    SIDEBAR_PREVIEW_MAX, V1_HISTORY_MAX, V1_HISTORY_TEXT_MAX,
+    valid_v1_instance_ref, valid_v1_thread_id, valid_v1_thread_ref, MessageReceipt,
+    MessageReceiptKind, SidebarAuthor, SidebarPreview, V1HistoryMessage, V1HistoryPage,
+    V1ThreadInput, V1ThreadInputReceipt, SIDEBAR_NAME_MAX, SIDEBAR_PREVIEW_MAX, V1_HISTORY_MAX,
+    V1_HISTORY_TEXT_MAX,
 };
 use serde_json::Value;
 use std::{
@@ -251,6 +252,80 @@ const WORKING_STATES: [&str; 4] = ["working", "running", "busy", "thinking"];
 const PENDING_INPUT: [&str; 4] = ["queued", "pending_delivery", "awaiting_ack", "running"];
 
 /// V1 `GET /api/threads/:id/messages` → bounded page.
+fn at(m: &Value, key: &str) -> Option<i64> {
+    text(m, key)
+        .and_then(|t| crate::live_map::timestamp_ms(&t))
+        .filter(|t| *t > 0)
+}
+
+/// Receipts V1 recorded on one message, in the order they happened. Only
+/// recorded states count; a missing time stays missing.
+pub(crate) fn receipts(m: &Value) -> Vec<MessageReceipt> {
+    use MessageReceiptKind as K;
+    let mut out = Vec::new();
+    if let Some(ack) = m.get("remoteMirrorAck").filter(|a| a.is_object()) {
+        let kind = match ack.get("outcome").and_then(Value::as_str) {
+            Some("delivered") => Some(K::HandedToV1),
+            Some("suppressed") => Some(K::SuppressedByV1),
+            Some("failed") => Some(K::Failed),
+            _ => None,
+        };
+        if let Some(kind) = kind {
+            out.push(MessageReceipt {
+                kind,
+                at_ms: at(ack, "acknowledgedAt"),
+            });
+        }
+    }
+    let whatsapp = text(m, "connector").as_deref() == Some("whatsapp")
+        || m.get("whatsappMessageIds")
+            .and_then(Value::as_array)
+            .is_some_and(|ids| !ids.is_empty());
+    // An owner's inbound WhatsApp message has nothing to deliver.
+    let outbound = m.get("role").and_then(Value::as_str) == Some("assistant");
+    match text(m, "deliveryState").as_deref() {
+        Some("delivered") if outbound => out.push(MessageReceipt {
+            kind: if whatsapp {
+                K::SentToWhatsapp
+            } else {
+                K::DeliveredInApp
+            },
+            at_ms: at(m, "deliveredAt"),
+        }),
+        Some("failed" | "delivery_failed" | "dead_letter") if outbound => {
+            out.push(MessageReceipt {
+                kind: K::Failed,
+                at_ms: at(m, "deliveryLastAttemptAt"),
+            })
+        }
+        Some("pending_delivery" | "awaiting_ack" | "queued_delivery" | "delivering")
+            if outbound =>
+        {
+            out.push(MessageReceipt {
+                kind: K::Pending,
+                at_ms: None,
+            })
+        }
+        _ => {}
+    }
+    out.truncate(8);
+    out
+}
+
+/// Receipts of V2 replies exported to V1, keyed by the V2 acceptance event
+/// (`remoteMessageId`), from one V1 messages page.
+pub(crate) fn export_receipts(value: &Value) -> HashMap<String, Vec<MessageReceipt>> {
+    value
+        .get("messages")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|m| text(m, "remoteBackend").is_some())
+        .filter_map(|m| Some((text(m, "remoteMessageId")?, receipts(m))))
+        .filter(|(_, r)| !r.is_empty())
+        .collect()
+}
+
 pub(crate) fn history(
     thread: &V1Thread,
     coordinator: bool,
@@ -277,6 +352,7 @@ pub(crate) fn history(
                 cursor,
                 coordinator: m.get("role").and_then(Value::as_str) == Some("assistant")
                     && text(m, "source").as_deref() == Some("api-session"),
+                receipts: receipts(m),
             })
         })
         .collect();

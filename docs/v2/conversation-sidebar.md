@@ -229,3 +229,29 @@ their initials.
 The owner-wide "N of M work slots in use" line is no longer shown in the chat
 list. It remains in a conversation's "Connection and work details"
 diagnostics.
+
+## Message times and receipts
+
+Every message shows its time in Europe/Berlin, with EU summer time: switch
+at 01:00 UTC on the last Sunday of March and of October. Today's messages
+show `16:42`; older ones `21 Oct, 16:42` or `21 Oct 2025, 16:42`. Hovering
+(title) or tapping the time shows the full date (`Tue 21 Oct 2026, 16:42:05 CEST`)
+and any recorded receipts.
+
+- **Native conversations.** `GET /api/v2/conversations/{id}/message-times?after=&limit=`
+  returns the durable event time (`events.occurred_at`) of each owner input
+  (`message_accepted`) and each accepted reply (`execution_accepted`), keyed
+  by conversation sequence.
+- **Receipts for exported replies.** For a reply exported to V1 (a
+  WhatsApp-delegated conversation), the receipts are what V1 recorded on its
+  mirror message, matched by `remoteMessageId` = the acceptance event:
+  - `remoteMirrorAck` (`delivered` becomes "✓ Handed to V1"; `suppressed`
+    becomes "Not sent (no reply)"), with `acknowledgedAt`;
+  - V1 `deliveryState: delivered` with `deliveredAt` becomes "✓ Sent to
+    WhatsApp", or "✓ Delivered in the app" without a WhatsApp send.
+- **Linked V1 chats.** Their history carries `created_at_ms` and the same
+  receipts per message.
+- **Archived (imported) messages** show their V1 `createdAt` the same way.
+- **Nothing is inferred.** A receipt without a recorded time shows no time.
+  Owner inputs carry no delivery receipts. WhatsApp's own delivered and read
+  acknowledgements are not recorded by V1, so they are never shown.

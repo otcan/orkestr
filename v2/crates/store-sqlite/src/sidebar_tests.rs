@@ -224,3 +224,48 @@ async fn imported_sub_threads_keep_a_write_once_parent_link() {
         .is_err());
     case.finish().await;
 }
+
+#[tokio::test]
+async fn message_times_list_inputs_and_replies_with_their_event_times() {
+    let case = Case::new().await;
+    let chat = case.conversation("synthetic-times").await;
+    case.store
+        .admit(
+            &case.owner,
+            &chat,
+            &MessageInput {
+                client_message_id: "t-1".into(),
+                text: "Synthetic question".into(),
+            },
+        )
+        .await
+        .unwrap();
+    accepted_reply(&case, &chat, 2).await;
+    let (times, more) = case
+        .store
+        .message_times(&case.token, &case.owner, &chat, 0, 200)
+        .await
+        .unwrap();
+    assert!(!more);
+    assert_eq!(
+        times
+            .iter()
+            .map(|t| (t.sequence, t.reply))
+            .collect::<Vec<_>>(),
+        vec![(1, false), (2, true)]
+    );
+    assert!(times.iter().all(|t| t.occurred_at.ends_with('Z')));
+    let (page, more) = case
+        .store
+        .message_times(&case.token, &case.owner, &chat, 0, 1)
+        .await
+        .unwrap();
+    assert_eq!((page.len(), more), (1, true));
+    assert_eq!(
+        case.store
+            .message_times("wrong", &case.owner, &chat, 0, 10)
+            .await,
+        Err(ResourceError::Unauthorized)
+    );
+    case.finish().await;
+}

@@ -84,6 +84,20 @@ export const scenarios = [
     assert.match(sent, /orkestr-v2-synthetic-pixel\.png \(image\/png, \d+ bytes.*local file \/synthetic\/attachments\//);
     assert.equal(await page.$$eval('.attachment-chip', n => n.length), 0, 'Sent attachments leave the composer');
   }],
+  ['message-times', async label => {
+    // Native message: short Berlin time for an older day, full date on hover/tap.
+    await page.waitForFunction(() => [...document.querySelectorAll('.chat-messages .user-message')].some(li => li.textContent.includes('Native synthetic message') && li.querySelector('.message-time')), { timeout: 20000 });
+    const native = () => page.evaluate(() => {
+      const li = [...document.querySelectorAll('.chat-messages .user-message')].find(l => l.textContent.includes('Native synthetic message'));
+      const button = li.querySelector('.message-time');
+      return { text: button.textContent, title: button.title, details: li.querySelector('.message-time-details')?.textContent ?? null };
+    });
+    assert.deepEqual(await native(), { text: '1 Jul 2025, 16:42', title: 'Tue 1 Jul 2025, 16:42:05 CEST', details: null });
+    await page.evaluate(() => [...document.querySelectorAll('.chat-messages .user-message')].find(l => l.textContent.includes('Native synthetic message')).querySelector('.message-time').click());
+    await page.waitForFunction(() => document.querySelector('.message-time-details'));
+    assert.equal((await native()).details, 'Tue 1 Jul 2025, 16:42:05 CEST', 'no receipts are invented for owner input');
+    await screenshot(label, 'message-times');
+  }],
   ['scroll-pin', async () => {
     // Opening a conversation shows the newest message.
     await page.waitForFunction(() => document.querySelectorAll('.archived-messages > li').length >= 50);
@@ -230,6 +244,17 @@ export const scenarios = [
     await choose('Synthetic group');
     await page.waitForSelector('.v1-banner');
     await page.waitForSelector('.conversation-heading > img.avatar-icon');
+    // V1 messages carry their time and the receipts V1 recorded.
+    await page.waitForFunction(() => [...document.querySelectorAll('.v1-thread .chat-messages li')].some(l => l.textContent.includes('Synthetic coordinator reply') && l.querySelector('.message-time')));
+    const v1reply = await page.evaluate(() => {
+      const li = [...document.querySelectorAll('.v1-thread .chat-messages li')].find(l => l.textContent.includes('Synthetic coordinator reply'));
+      const b = li.querySelector('.message-time'); b.click(); return { text: b.textContent, title: b.title };
+    });
+    assert.equal(v1reply.text, '1 Jul 2025, 16:42 ✓');
+    assert.match(v1reply.title, /Tue 1 Jul 2025, 16:42:05 CEST\n✓ Sent to WhatsApp · Tue 1 Jul 2025, 16:42:09 CEST/);
+    await page.waitForFunction(() => /✓ Sent to WhatsApp · 1 Jul 2025, 16:42/.test(document.querySelector('.v1-thread .message-time-details')?.textContent ?? ''));
+    const v1owner = await page.evaluate(() => [...document.querySelectorAll('.v1-thread .chat-messages li')].find(l => l.textContent.includes('Synthetic owner question on V1')).querySelector('.receipt-mark') !== null);
+    assert.equal(v1owner, false, 'owner messages carry no delivery mark');
     await page.waitForFunction(() => document.querySelectorAll('.v1-thread .chat-messages > li').length === 3);
     assert.match(await text('.v1-thread .chat-messages'), /Synthetic member note/);
     assert.equal(await page.$('#composer'), null, 'Linked V1 chats have no V2 composer');

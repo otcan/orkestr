@@ -19,7 +19,7 @@ pub use conversation_resources::{
 mod conversation_export;
 mod conversations;
 mod sidebar;
-pub use sidebar::{SidebarConversation, SidebarConversations};
+pub use sidebar::{EventTime, SidebarConversation, SidebarConversations};
 mod whatsapp_chats;
 pub use whatsapp_chats::WhatsAppChatIdentity;
 pub mod fixture_runtime;

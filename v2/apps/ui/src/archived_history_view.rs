@@ -39,6 +39,7 @@ pub fn ArchivedHistory(
     let mut more = use_signal(|| 0_u64);
     let mut limit = use_signal(|| 50_u32);
     let mut busy = use_signal(|| false);
+    let now = crate::message_time_view::use_now();
     let mut notice = use_signal(String::new);
     let ticket = use_hook(|| Rc::new(Cell::new(0_u64)));
     use_drop(move || {
@@ -108,7 +109,9 @@ pub fn ArchivedHistory(
                         article {
                             header {
                                 strong { "{role_label(&entry.message.role)}" }
-                                if let Some(at) = entry.message.created_at.as_ref() { time { "{at}" } }
+                                if let Some(at) = entry.message.created_at.as_deref().and_then(orkestr_v2_ui::message_time::parse) {
+                                    crate::message_time_view::MessageTime { at_ms: at, now_ms: now() }
+                                } else if let Some(at) = entry.message.created_at.as_ref() { time { "{at}" } }
                                 span { class: "archived-badge", "Archived" }
                             }
                             {

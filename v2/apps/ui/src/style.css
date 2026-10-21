@@ -312,3 +312,12 @@ details[open] > summary { margin-bottom: .4rem; }
  .live-view { padding: .3rem .45rem; }
  .jump-latest { right: .8rem; }
 }
+/* Message times: short Berlin time; full date and receipts on hover or tap. */
+.message-meta { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: baseline; gap: .1rem .5rem; margin-top: .15rem; }
+.chat-messages .message-time, .archived-message .message-time { min-height: 0; min-width: 0; padding: 0 .1rem; border: 0; background: transparent; font-size: .68rem; line-height: 1.4; color: var(--faint); font-variant-numeric: tabular-nums; cursor: pointer; }
+.user-message .message-time { color: inherit; opacity: .7; }
+.chat-messages .message-time:hover:not(:disabled) { background: transparent; color: var(--muted); }
+.receipt-mark { color: var(--accent-text); }
+.message-time-details { display: flex; flex-direction: column; align-items: flex-end; flex-basis: 100%; font-size: .68rem; color: var(--muted); }
+.user-message .message-time-details { color: inherit; opacity: .8; }
+.archived-message header .message-meta { margin: 0; }
