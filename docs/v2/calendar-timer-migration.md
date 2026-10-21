@@ -1,7 +1,7 @@
 # Migrating V1-style timers into one calendar timer
 
 Status: tool only; nothing here runs by itself. The calendar timer model is in
-[calendar-timers.md](calendar-timers.md) (server migration `0062` and the
+[calendar-timers.md](calendar-timers.md) (server migration `0063` and the
 `POST /api/v2/timers/calendar` route must be deployed before `calendar-apply`).
 
 `v2/migration/thread_timers.py calendar-*` turns a group of handed-off or V1
