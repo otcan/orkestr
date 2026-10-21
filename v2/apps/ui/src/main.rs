@@ -27,6 +27,7 @@ mod memory_view;
 mod page_memory_bridge;
 mod progress_view;
 mod projects_view;
+mod scroll_pin;
 mod send_admission;
 mod steering_view;
 mod stop_button;

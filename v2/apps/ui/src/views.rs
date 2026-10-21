@@ -222,6 +222,7 @@ pub fn Conversation(
                     p { "Latest 100 saved inputs. History has earlier pages. Unsent drafts remain in this page." }
                 }
             }
+            crate::scroll_pin::ScrollPin {}
             div { class: "composer-dock",
                 crate::execution_panel::ExecutionPanel { execution, now_ms: now(), parent_tasks: false, csrf: csrf.clone(), session_scope, onexpired, compact: true, onaccepted: Some(EventHandler::new(move |revision| accepted_revision.set(revision))) }
                 crate::composer::Composer { key: "composer-{id}-{generation}", id: id.clone(), csrf: csrf.clone(), session_scope, drafts, onexpired }

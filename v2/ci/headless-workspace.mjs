@@ -42,7 +42,26 @@ const noHorizontalScroll = async () => {
   assert.ok(scroll <= width, `Horizontal page scroll at ${width}px (${scroll}px content)`);
 };
 
+const transcript = () => page.$eval('.conversation-pane > .conversation-scroll', el =>
+  ({ gap: el.scrollHeight - el.scrollTop - el.clientHeight, pinned: el.dataset.pinned, scrollable: el.scrollHeight > el.clientHeight + 100 }));
+
 export const scenarios = [
+  ['scroll-pin', async () => {
+    // Opening a conversation shows the newest message.
+    await page.waitForFunction(() => document.querySelectorAll('.archived-messages > li').length >= 50);
+    await page.waitForFunction(() => {
+      const el = document.querySelector('.conversation-pane > .conversation-scroll');
+      return el && el.dataset.pinned === 'true' && el.scrollHeight - el.scrollTop - el.clientHeight <= 72;
+    });
+    assert.ok((await transcript()).scrollable, 'Synthetic transcript must overflow');
+    // Scrolling up releases the pin and offers a jump back.
+    await page.$eval('.conversation-pane > .conversation-scroll', el => { el.scrollTop = 0; el.dispatchEvent(new Event('scroll')); });
+    await page.waitForFunction(() => document.querySelector('.conversation-pane > .conversation-scroll').dataset.pinned === 'false');
+    assert.ok(await page.$eval('.jump-latest', b => getComputedStyle(b).display !== 'none'), 'Jump to latest is offered');
+    await page.click('.jump-latest');
+    await page.waitForFunction(() => document.querySelector('.conversation-pane > .conversation-scroll').dataset.pinned === 'true');
+    assert.ok(await page.$eval('.jump-latest', b => getComputedStyle(b).display === 'none'));
+  }],
   ['archived-history', async () => {
     await page.waitForSelector('.archived-history li');
     await page.waitForFunction(() => document.querySelectorAll('.archived-messages > li').length === 50);
@@ -191,6 +210,16 @@ try {
     }
     stage = `${label}:layout`;
     await noHorizontalScroll();
+    stage = `${label}:dark`;
+    await page.emulateMediaFeatures([{ name: 'prefers-color-scheme', value: 'dark' }]);
+    await new Promise(resolve => setTimeout(resolve, 400)); // let color transitions settle
+    const background = await page.evaluate(() => getComputedStyle(document.body).backgroundColor);
+    const [r, g, b] = background.match(/\d+/g).map(Number);
+    assert.ok(r + g + b < 120, `Dark mode background expected, got ${background}`);
+    await screenshot(label, 'chat-dark');
+    if (label === 'phone') await openDrawer(label);
+    await screenshot(label, 'sidebar-dark');
+    await page.emulateMediaFeatures([]);
     await page.close();
   }
   assert.deepEqual(errors, [], 'Browser rendering errors');
