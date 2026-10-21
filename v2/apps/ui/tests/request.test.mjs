@@ -138,3 +138,29 @@ test('message attachments and V1 uploads are allowed paths',async()=>{
         await assert.rejects(execute({recv:async()=>({...base,path})},()=>assert.fail('fetch must not run')),/Invalid API path/);
     }
 });
+
+test('GET polls revalidate with the last ETag and a 304 returns the kept body',async()=>{
+    const path='/api/v2/sidebar';
+    const get={...base,method:'GET',path,body:null};
+    const first=await execute({recv:async()=>get},async(_,options)=>{
+        assert.equal(options.headers['If-None-Match'],undefined);
+        return new Response('{"entries":[1]}',{status:200,headers:{etag:'W/"synthetic-1"'}});
+    });
+    assert.deepEqual(first,{status:200,body:{entries:[1]}});
+    const second=await execute({recv:async()=>get},async(_,options)=>{
+        assert.equal(options.headers['If-None-Match'],'W/"synthetic-1"');
+        assert.equal(options.cache,'no-store');
+        return new Response(null,{status:304});
+    });
+    assert.deepEqual(second,{status:200,body:{entries:[1]}});
+    // A failure forgets the kept body; writes never revalidate.
+    await execute({recv:async()=>get},async()=>new Response('{"code":"x"}',{status:503}));
+    await execute({recv:async()=>get},async(_,options)=>{
+        assert.equal(options.headers['If-None-Match'],undefined);
+        return new Response('{}');
+    });
+    await execute({recv:async()=>({...base,path:'/api/v2/sidebar/read',method:'PUT',body:{}})},async(_,options)=>{
+        assert.equal(options.headers['If-None-Match'],undefined);
+        return new Response('{}');
+    });
+});
