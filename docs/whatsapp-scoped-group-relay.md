@@ -340,3 +340,21 @@ It never sends free text. Bootstrap the group with one message, so the
 sender bridge has a recorded parent. Run the probe every 15 minutes from a
 timer, and set `ORKESTR_WA_DEPLOY_PROBE_COMMAND` so connector deploys roll
 back when it fails.
+
+## Operator notices
+
+Host alerts (disk, memory, health watchers) can be posted into explicitly listed
+owner groups without a parent message or a timer proof. This is a separate, opt-in
+send class of the scoped transport and native worker:
+
+```json
+{ "operatorNotifications": { "enabled": true, "chatIds": ["120000000001@g.us"], "maxPerHour": 60 } }
+```
+
+- Every `chatIds` entry must be a statically configured scoped group.
+- `POST /send-text` with `operatorNotice: true`, `requestId` of the form `opnotice:<id>`,
+  `accountId`, `to` and `text` only. Parent, thread and notification ids are refused.
+- Journaled in `group_send` with parent `operator-notice`; deduped by request id; an
+  uncertain result blocks retries; at most `maxPerHour` per transport.
+- `scripts/scoped-native-group-reply.mjs group-send` accepts `{kind: "operator", to, requestId, text}`.
+- It never reads, marks seen or counts as owner input. No proof rows are written or needed.
