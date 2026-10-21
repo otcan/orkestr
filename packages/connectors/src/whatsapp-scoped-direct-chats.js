@@ -41,14 +41,17 @@ export function validateScopedDirectChats(config = {}, threads = new Set()) {
   for (const route of direct.routes) {
     if (!route || typeof route !== 'object' || typeof route.threadId !== 'string' || !threads.has(route.threadId)
         || !Array.isArray(route.chatIds) || !route.chatIds.length || route.chatIds.length > MAX_CHATS_PER_ROUTE
-        || Object.keys(route).some(key => !['threadId', 'chatIds'].includes(key)))
+        || (route.readAll !== undefined && route.readAll !== true)
+        || Object.keys(route).some(key => !['threadId', 'chatIds', 'readAll'].includes(key)))
       fail('direct_configuration_invalid');
     for (const chatId of route.chatIds) {
       if (typeof chatId !== 'string' || !DIRECT_CHAT.test(chatId) || chats.has(chatId)) fail('direct_configuration_invalid');
       chats.set(chatId, route.threadId);
     }
   }
-  return {chats, journalPath: direct.journalPath, contract: hash([config.ownChatId || '', direct.routes])};
+  // Owner-authorized read-all threads: read every chat (metadata list + history), never send beyond chatIds.
+  const readAll = new Set(direct.routes.filter(route => route.readAll === true).map(route => route.threadId));
+  return {chats, readAll, journalPath: direct.journalPath, contract: hash([config.ownChatId || '', direct.routes])};
 }
 
 // The fingerprint an operator migration compares before and after editing
@@ -139,26 +142,105 @@ export function createScopedDirectSender({config, direct, dbPath = direct.journa
   };
 }
 
-// Recent-activity list for one thread's approved direct chats. Metadata only:
-// no message text, no other chats, never marks anything seen (it only reads
-// chat models). A chat the client cannot resolve is reported as unavailable.
-export async function summarizeDirectChats(client, chatIds = []) {
-  const chats = [];
-  for (const chatId of chatIds) {
-    try {
-      const chat = await client.getChatById(chatId);
-      const last = chat?.lastMessage;
-      const seconds = Number(chat?.timestamp || last?.timestamp || 0);
-      chats.push({
-        chatId,
-        label: typeof chat?.name === 'string' ? chat.name.slice(0, 80) : '',
-        unreadCount: Math.max(0, Number(chat?.unreadCount) || 0),
-        lastMessageAt: seconds > 0 ? new Date(seconds * 1000).toISOString() : null,
-        lastFromThem: last ? last.fromMe !== true : null,
-      });
-    } catch {
-      chats.push({chatId, unavailable: true});
-    }
+// ---- Owner-authorized read-all access (one route may set `readAll: true`) ----
+// Metadata listing of every chat or contact with stable cursor paging, and
+// chat history paging with a before-cursor. Never sends, never marks seen.
+export const READ_ALL_PAGE_MAX = 100;
+export const HISTORY_PAGE_MAX = 50;
+export const HISTORY_WINDOW_MAX = 1000;
+
+function pageError(code) {
+  throw Object.assign(new Error(`scoped_worker_${code}`), {statusCode: 400});
+}
+
+export function encodeCursor(value) {
+  return Buffer.from(JSON.stringify(value), 'utf8').toString('base64url');
+}
+
+export function decodeCursor(cursor) {
+  if (cursor === undefined || cursor === null || cursor === '') return null;
+  try {
+    if (!/^[A-Za-z0-9_-]{1,400}$/.test(String(cursor))) throw new Error('shape');
+    const value = JSON.parse(Buffer.from(String(cursor), 'base64url').toString('utf8'));
+    if (!value || typeof value !== 'object' || typeof value.id !== 'string' || !Number.isFinite(value.t)) throw new Error('shape');
+    return value;
+  } catch {
+    return pageError('invalid_cursor');
   }
-  return chats;
+}
+
+export function pageLimit(value, max) {
+  if (value === undefined || value === null || value === '') return max;
+  const n = Number(value);
+  if (!Number.isInteger(n) || n < 1 || n > max) pageError('invalid_page_size');
+  return n;
+}
+
+// Items sorted newest first (t desc, id asc). The cursor names the last item
+// returned; the next page starts strictly after it, so pages never overlap or
+// skip when the cursor item still exists, and an unknown position still works.
+export function pageByCursor(items, {cursor, limit}) {
+  const sorted = [...items].sort((a, b) => (b.t - a.t) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  const after = decodeCursor(cursor);
+  const start = after ? sorted.findIndex(item => item.t < after.t || (item.t === after.t && item.id > after.id)) : 0;
+  const from = start < 0 ? sorted.length : start;
+  const page = sorted.slice(from, from + limit);
+  const hasMore = from + page.length < sorted.length;
+  const last = page.at(-1);
+  return {page, hasMore, nextCursor: hasMore && last ? encodeCursor({t: last.t, id: last.id}) : null, total: sorted.length};
+}
+
+export async function listAllChats(client, {source = 'chats', cursor, limit} = {}) {
+  const size = pageLimit(limit, READ_ALL_PAGE_MAX);
+  if (source === 'contacts') {
+    const contacts = await client.getContacts();
+    const items = contacts.filter(c => typeof c?.id?._serialized === 'string' && !c.isMe)
+      .map(c => ({t: 0, id: c.id._serialized, label: String(c.name || c.pushname || '').slice(0, 80), isMyContact: c.isMyContact === true, isGroup: c.isGroup === true}));
+    const {page, hasMore, nextCursor, total} = pageByCursor(items, {cursor, limit: size});
+    return {source, contacts: page.map(({t, ...rest}) => rest), hasMore, nextCursor, total};
+  }
+  if (source !== 'chats') pageError('invalid_source');
+  const chats = await client.getChats();
+  const items = chats.filter(c => typeof c?.id?._serialized === 'string').map(c => {
+    const last = c.lastMessage;
+    const seconds = Number(c.timestamp || last?.timestamp || 0);
+    return {t: Number.isFinite(seconds) ? seconds : 0, id: c.id._serialized, label: String(c.name || '').slice(0, 80), isGroup: c.isGroup === true,
+      unreadCount: Math.max(0, Number(c.unreadCount) || 0), lastMessageAt: seconds > 0 ? new Date(seconds * 1000).toISOString() : null,
+      lastFromThem: last ? last.fromMe !== true : null};
+  });
+  const {page, hasMore, nextCursor, total} = pageByCursor(items, {cursor, limit: size});
+  return {source, chats: page.map(({t, id, ...rest}) => ({chatId: id, ...rest})), hasMore, nextCursor, total};
+}
+
+// History page strictly older than `before` (a message id), newest first.
+// The window grows until the cursor message is found; past the window the
+// cursor is reported invalid instead of returning a silently wrong page.
+export async function historyPage(chat, {before, limit} = {}) {
+  const size = pageLimit(limit, HISTORY_PAGE_MAX);
+  if (before !== undefined && before !== null && before !== '' && !/^[A-Za-z0-9@._:-]{1,200}$/.test(String(before))) pageError('invalid_cursor');
+  let window = Math.min(HISTORY_WINDOW_MAX, before ? Math.max(size * 2, 100) : size + 1);
+  for (;;) {
+    const fetched = await chat.fetchMessages({limit: window});
+    const ordered = [...fetched].sort((a, b) => Number(b.timestamp) - Number(a.timestamp));
+    let older = ordered;
+    if (before) {
+      const index = ordered.findIndex(m => m?.id?._serialized === before);
+      if (index < 0) {
+        if (fetched.length < window) pageError('invalid_cursor');
+        if (window >= HISTORY_WINDOW_MAX) pageError('history_window_exceeded');
+        window = Math.min(HISTORY_WINDOW_MAX, window * 2);
+        continue;
+      }
+      older = ordered.slice(index + 1);
+    }
+    const exhausted = fetched.length < window;
+    // Not enough older messages loaded yet: widen the window before answering.
+    if (older.length < size && !exhausted && window < HISTORY_WINDOW_MAX) {
+      window = Math.min(HISTORY_WINDOW_MAX, window * 2);
+      continue;
+    }
+    const page = older.slice(0, size);
+    const hasMore = older.length > size || (!exhausted && page.length === size);
+    return {messages: page, hasMore, nextCursor: hasMore && page.length ? page.at(-1).id._serialized : null};
+  }
 }

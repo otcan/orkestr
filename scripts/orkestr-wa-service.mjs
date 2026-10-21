@@ -16,7 +16,8 @@ import {
   getLocalWhatsAppBridgeStatus,
   getLocalWhatsAppQrSvg,
   listLocalWhatsAppChatMessages,
-  summarizeLocalWhatsAppDirectChats,
+  pageLocalWhatsAppChats,
+  pageLocalWhatsAppChatHistory,
   listLocalWhatsAppChats,
   listLocalWhatsAppChatParticipants,
   logoutLocalWhatsAppAccount,
@@ -335,7 +336,8 @@ const defaultBridge = {
   getLocalWhatsAppBridgeStatus,
   getLocalWhatsAppQrSvg,
   listLocalWhatsAppChatMessages,
-  summarizeLocalWhatsAppDirectChats,
+  pageLocalWhatsAppChats,
+  pageLocalWhatsAppChatHistory,
   listLocalWhatsAppChats,
   listLocalWhatsAppChatParticipants,
   logoutLocalWhatsAppAccount,
@@ -417,16 +419,31 @@ async function handleRequest(req, res, env = process.env, bridge = defaultBridge
     return json(res, 200, await bridge.listLocalWhatsAppChats(params.accountId, env));
   }
 
-  params = routeMatch(url.pathname, "/accounts/:accountId/direct-chats/summary");
+  params = routeMatch(url.pathname, "/accounts/:accountId/chats/page");
   if (method === "GET" && params) {
     requireAuth(req, env);
-    // Only a scoped worker has approved direct chats; the policy already checked the thread.
-    const chatIds = scoped ? scoped.directChatIds(clean(url.searchParams.get("thread_id"))) : [];
-    if (!chatIds.length) return json(res, 403, { ok: false, error: "direct_chats_not_configured" });
-    return json(res, 200, { ...(await bridge.summarizeLocalWhatsAppDirectChats({ accountId: params.accountId, chatIds, env })), ok: true });
+    // Only reachable on a scoped worker for an owner-authorized read-all thread (policy checked above).
+    if (!scoped) return json(res, 403, { ok: false, error: "read_all_not_configured" });
+    return json(res, 200, { ...(await bridge.pageLocalWhatsAppChats({
+      accountId: params.accountId,
+      source: clean(url.searchParams.get("source")) || "chats",
+      cursor: clean(url.searchParams.get("cursor")),
+      limit: url.searchParams.get("limit") ?? undefined,
+      env,
+    })), ok: true });
   }
 
   params = routeMatch(url.pathname, "/accounts/:accountId/chats/:chatId/history");
+  if (method === "GET" && params && scoped && url.searchParams.get("page") === "1") {
+    requireAuth(req, env);
+    return json(res, 200, { ...(await bridge.pageLocalWhatsAppChatHistory({
+      accountId: params.accountId,
+      chatId: params.chatId,
+      before: clean(url.searchParams.get("before")),
+      limit: url.searchParams.get("limit") ?? undefined,
+      env,
+    })), ok: true });
+  }
   if (method === "GET" && params) {
     requireAuth(req, env);
     requireServicePolicy(req, url, env, {}, { accounts: [params.accountId], recipients: [params.chatId], recipientScope: "history" });

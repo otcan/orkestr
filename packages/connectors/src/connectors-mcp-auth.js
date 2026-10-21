@@ -198,8 +198,8 @@ function requiredScopes(tool = "", action = "", service = "") {
   if (tool === "orkestr_runtime") {
     return ["*", "runtime:*", "runtime:write", "connectors:manage"];
   }
-  // The approved-chat activity list is its own grant; plain read access does not include it.
-  if (tool === "orkestr_conversation" && action === "list_approved") return ["*", "connectors:*", `${service}:list-approved`];
+  // Listing every chat is its own owner-authorized grant; plain read access does not include it.
+  if (tool === "orkestr_conversation" && action === "list_all") return ["*", "connectors:*", `${service}:read-all`];
   const read = action === "status" || ["list", "history", "participants"].includes(action);
   const kind = tool === "orkestr_messaging" ? "send" : read ? "read" : "manage";
   return [
@@ -234,7 +234,11 @@ export function assertConnectorMcpScope(auth = {}, tool = "", input = {}) {
 
   const conversationId = clean(input.conversation_id);
   const allowed = [...list(auth.allowedChatIds), ...list(auth.allowedRecipients), ...list(auth.chatId)];
-  if (conversationId && !auth.operator && !includesComparable(allowed, conversationId)) scopeDenied("conversation_scope_denied");
+  // An owner-authorized read-all grant lifts the conversation allowlist for reads
+  // only (history, list_all) and only for a thread-bound token; sends stay scoped.
+  const readAll = !auth.operator && clean(auth.threadId) && scopes.includes(`${service}:read-all`)
+    && tool === "orkestr_conversation" && ["history", "list_all"].includes(action);
+  if (conversationId && !auth.operator && !readAll && !includesComparable(allowed, conversationId)) scopeDenied("conversation_scope_denied");
   return {
     ...auth,
     service,
