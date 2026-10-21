@@ -45,6 +45,15 @@ export function createScopedNativeWorkerPolicy(config,{createTransport=createSco
    if(method==='GET' && ['/health','/accounts'].includes(url.pathname))return;
    const a=encodeURIComponent(config.workerAccountId);
    const ownsDirect=(chatId,threadId)=>Boolean(direct?.chats.has(chatId)) && direct.chats.get(chatId)===threadId;
+   // Owner-authorized read-all threads: paged list of every chat/contact and paged
+   // history of any chat; read-only, never marks seen, only fixed parameters.
+   const readAllThread=Boolean(direct?.readAll.has(url.searchParams.get('thread_id')));
+   const onlyParams=keys=>[...url.searchParams.keys()].every(k=>keys.includes(k));
+   if(method==='GET' && readAllThread && url.pathname===`/accounts/${a}/chats/page` && onlyParams(['thread_id','source','cursor','limit','unread']))return;
+   if(method==='GET' && readAllThread && url.pathname.startsWith(`/accounts/${a}/chats/`) && url.pathname.endsWith('/history')
+      && url.pathname.split('/').length===6 && url.searchParams.get('page')==='1'
+      && (!url.searchParams.has('mark_seen') || url.searchParams.get('mark_seen')==='false')
+      && onlyParams(['thread_id','page','before','limit','mark_seen']))return;
    if(method==='GET' && [...(direct?.chats.keys()||[])].some(g=>url.pathname===`/accounts/${a}/chats/${encodeURIComponent(g)}/history` && ownsDirect(g,url.searchParams.get('thread_id')))
       && (!url.searchParams.has('mark_seen') || url.searchParams.get('mark_seen')==='false')
       && Number(url.searchParams.get('limit')||30)>0 && Number(url.searchParams.get('limit')||30)<=50)return;

@@ -147,13 +147,25 @@ export function whatsappWorkerConversations(accountId = "", env = process.env) {
   return requestWhatsAppWorker(`/accounts/${encodeURIComponent(clean(accountId || "sender"))}/chats`, {}, env);
 }
 
+// Owner-authorized read-all: one page of chat or contact metadata (no content).
+export function whatsappWorkerChatPage(accountId = "", threadId = "", { source = "chats", cursor = "", limit, unreadOnly = false } = {}, env = process.env) {
+  const account = encodeURIComponent(clean(accountId || "sender"));
+  const query = new URLSearchParams({ thread_id: clean(threadId), source: clean(source) || "chats" });
+  if (clean(cursor)) query.set("cursor", clean(cursor));
+  if (limit !== undefined && limit !== null) query.set("limit", String(limit));
+  if (unreadOnly) query.set("unread", "1");
+  return requestWhatsAppWorker(`/accounts/${account}/chats/page?${query}`, {}, env);
+}
+
 export function whatsappWorkerConversation(accountId = "", conversationId = "", action = "history", options = {}, env = process.env) {
   const account = encodeURIComponent(clean(accountId || "sender"));
   const conversation = encodeURIComponent(clean(conversationId));
   if (action === "history") {
     // thread_id lets a scoped worker check that the chat belongs to the caller's thread.
     const thread = clean(options.threadId) ? `&thread_id=${encodeURIComponent(clean(options.threadId))}` : "";
-    return requestWhatsAppWorker(`/accounts/${account}/chats/${conversation}/history?limit=${Math.max(1, Number(options.limit || 30) || 30)}${thread}`, {}, env);
+    // Paged mode (read-all threads): newest-first pages older than `before`, never marking seen.
+    const paged = options.paged ? `&page=1&mark_seen=false${clean(options.before) ? `&before=${encodeURIComponent(clean(options.before))}` : ""}` : "";
+    return requestWhatsAppWorker(`/accounts/${account}/chats/${conversation}/history?limit=${Math.max(1, Number(options.limit || 30) || 30)}${thread}${paged}`, {}, env);
   }
   if (action === "participants") return requestWhatsAppWorker(`/accounts/${account}/chats/${conversation}/participants`, {}, env);
   if (action === "add_participants" || action === "add-participants") {

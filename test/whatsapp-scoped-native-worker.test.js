@@ -170,3 +170,90 @@ test('a direct send that returned no message model is confirmed by exactly one a
  await assert.rejects(s.sendText(twice,'15550000002@c.us','same',{requestId:'co_2'}),/delivery_uncertain/);
  s.close();
 });
+
+test('read-all: only an owner-authorized thread may page chats and any history, read-only; sends stay on the approved list',async()=>{
+ const cfg=directConfig({directChats:{journalPath:':memory:',routes:[{threadId:'thread1',chatIds:['15550000001@c.us'],readAll:true}]}});
+ const p=createScopedNativeWorkerPolicy(cfg);
+ const url=s=>new URL(s,'http://local');
+ p.checkRequest('GET',url('/accounts/existing/chats/page?thread_id=thread1&source=chats&limit=100'));
+ p.checkRequest('GET',url('/accounts/existing/chats/page?thread_id=thread1&cursor=abc'));
+ p.checkRequest('GET',url('/accounts/existing/chats/19990000000%40c.us/history?thread_id=thread1&page=1&mark_seen=false&limit=50&before=x'));
+ for(const bad of ['/accounts/existing/chats/page','/accounts/existing/chats/page?thread_id=thread2','/accounts/existing/chats/page?thread_id=thread1&mark_seen=true',
+   '/accounts/existing/chats/19990000000%40c.us/history?thread_id=thread1&page=1&mark_seen=true',
+   '/accounts/existing/chats/19990000000%40c.us/history?thread_id=thread1',
+   '/accounts/existing/chats/19990000000%40c.us/history?thread_id=thread2&page=1',
+   '/accounts/existing/chats?thread_id=thread1'])
+  assert.throws(()=>p.checkRequest('GET',url(bad)),/denied/,bad);
+ // Reading everything never widens sending.
+ const send={accountId:'existing',to:'19990000000@c.us',text:'x',requestId:'co_1',threadId:'thread1'};
+ assert.throws(()=>p.checkRequest('POST',url('/send-text'),send),/denied/);
+ p.checkRequest('POST',url('/send-text'),{...send,to:'15550000001@c.us'});
+ // Without readAll the same thread has no listing.
+ assert.throws(()=>createScopedNativeWorkerPolicy(directConfig()).checkRequest('GET',url('/accounts/existing/chats/page?thread_id=thread1')),/denied/);
+ assert.throws(()=>createScopedNativeWorkerPolicy({...config,directChats:{journalPath:':memory:',routes:[{threadId:'thread1',chatIds:['15550000001@c.us'],readAll:'yes'}]}}),/direct_configuration_invalid/);
+ // At most one read-all thread per worker.
+ const two={...config,groups:[{threadId:'thread1',chatId:'120000000001@g.us'},{threadId:'thread2',chatId:'120000000002@g.us'}],routeControl:{threadIds:['thread1','thread2']},
+  directChats:{journalPath:':memory:',routes:[{threadId:'thread1',chatIds:['15550000001@c.us'],readAll:true},{threadId:'thread2',chatIds:['15550000002@c.us'],readAll:true}]}};
+ assert.throws(()=>createScopedNativeWorkerPolicy(two),/direct_configuration_invalid/);
+});
+
+test('chat listing pages by cursor: multiple pages, explicit end, invalid cursor and page size errors, no content',async()=>{
+ const {listAllChats,READ_ALL_PAGE_MAX}=await import('../packages/connectors/src/whatsapp-scoped-direct-chats.js');
+ const chats=Array.from({length:7},(_,i)=>({id:{_serialized:`1555000000${i}@c.us`},name:`C${i}`,unreadCount:i%2,timestamp:1000+(i<2?5:i),
+  lastMessage:{fromMe:i%3===0,body:`secret ${i}`}}));
+ const seen=[];const client={getChats:async()=>chats.map(c=>({...c,sendSeen:async()=>seen.push(c)})),getContacts:async()=>[
+  {id:{_serialized:'a@c.us'},name:'A',isMyContact:true},{id:{_serialized:'me@c.us'},isMe:true},{id:{_serialized:'b@c.us'},pushname:'B'}]};
+ const ids=[];let cursor;let pages=0;
+ do {
+  const page=await listAllChats(client,{cursor,limit:3});pages++;
+  ids.push(...page.chats.map(c=>c.chatId));
+  assert.equal(page.total,7);
+  assert.equal(page.hasMore,Boolean(page.nextCursor));
+  for(const chat of page.chats)assert.deepEqual(Object.keys(chat).sort(),['chatId','isGroup','label','lastFromThem','lastMessageAt','unreadCount']);
+  cursor=page.nextCursor;
+ } while(cursor);
+ assert.equal(pages,3);
+ assert.equal(new Set(ids).size,7,'no overlap, nothing skipped');
+ assert.deepEqual(ids.slice(0,4),['15550000006@c.us','15550000000@c.us','15550000001@c.us','15550000005@c.us'],'newest first, ties by id');
+ const last=await listAllChats(client,{limit:7});assert.equal(last.hasMore,false);assert.equal(last.nextCursor,null);
+ await assert.rejects(listAllChats(client,{cursor:'not a cursor!'}),/invalid_cursor/);
+ await assert.rejects(listAllChats(client,{cursor:Buffer.from('{"x":1}').toString('base64url')}),/invalid_cursor/);
+ await assert.rejects(listAllChats(client,{limit:READ_ALL_PAGE_MAX+1}),/invalid_page_size/);
+ await assert.rejects(listAllChats(client,{source:'groups'}),/invalid_source/);
+ // unreadOnly filters before paging: pages and totals describe only unread chats.
+ const unreadIds=[];let uc;do{const pg=await listAllChats(client,{cursor:uc,limit:1,unreadOnly:true});assert.equal(pg.total,3);assert.equal(pg.chats.length,1);unreadIds.push(pg.chats[0].chatId);uc=pg.nextCursor;}while(uc);
+ assert.deepEqual(unreadIds,['15550000001@c.us','15550000005@c.us','15550000003@c.us']);
+ const contacts=await listAllChats(client,{source:'contacts',limit:1});
+ assert.equal(contacts.contacts.length,1);assert.equal(contacts.total,2);assert.equal(contacts.hasMore,true);
+ assert.doesNotMatch(JSON.stringify(ids)+JSON.stringify(contacts),/secret/);
+ assert.deepEqual(seen,[]);
+});
+
+test('history pages older than a before-cursor, grows its window, and rejects unknown or too-deep cursors',async()=>{
+ const {historyPage}=await import('../packages/connectors/src/whatsapp-scoped-direct-chats.js');
+ const all=Array.from({length:130},(_,i)=>({id:{_serialized:`m${i}`},timestamp:i,fromMe:false,body:'x'}));
+ const fetches=[];const chat={fetchMessages:async({limit})=>{fetches.push(limit);return all.slice(-limit);}};
+ const first=await historyPage(chat,{limit:50});
+ assert.deepEqual([first.messages[0].id._serialized,first.messages.at(-1).id._serialized],['m129','m80']);
+ assert.equal(first.hasMore,true);assert.equal(first.nextCursor,'m80');
+ const second=await historyPage(chat,{before:first.nextCursor,limit:50});
+ assert.deepEqual([second.messages[0].id._serialized,second.messages.at(-1).id._serialized],['m79','m30']);
+ const third=await historyPage(chat,{before:second.nextCursor,limit:50});
+ assert.equal(third.messages.length,30);assert.equal(third.hasMore,false);assert.equal(third.nextCursor,null);
+ await assert.rejects(historyPage(chat,{before:'no-such-id',limit:5}),/invalid_cursor/);
+ await assert.rejects(historyPage(chat,{before:'bad cursor/..',limit:5}),/invalid_cursor/);
+ await assert.rejects(historyPage(chat,{limit:51}),/invalid_page_size/);
+ const deep={fetchMessages:async({limit})=>Array.from({length:limit},(_,i)=>({id:{_serialized:`d${i}`},timestamp:i}))};
+ await assert.rejects(historyPage(deep,{before:'older-than-window',limit:10}),/history_window_exceeded/);
+ // A burst of messages in the same second pages without skipping or repeating any.
+ const burst=Array.from({length:240},(_,i)=>({id:{_serialized:`s${i}`},timestamp:7000}));
+ const burstChat={fetchMessages:async({limit})=>burst.slice(-limit)};
+ const got=[];let bc;
+ do{const pg=await historyPage(burstChat,{before:bc,limit:50});got.push(...pg.messages.map(m=>m.id._serialized));bc=pg.nextCursor;}while(bc);
+ assert.deepEqual(got,burst.map(m=>m.id._serialized).reverse());
+ // A valid cursor at the oldest message of the maximum window must not report the end of the chat.
+ const big={fetchMessages:async({limit})=>Array.from({length:limit},(_,i)=>({id:{_serialized:`b${5001-limit+i}`},timestamp:5001-limit+i}))};
+ const edge=await historyPage(big,{before:'b4002',limit:2});
+ assert.deepEqual([edge.messages.map(m=>m.id._serialized),edge.hasMore,edge.nextCursor],[['b4001'],true,'b4001']);
+ await assert.rejects(historyPage(big,{before:'b4001',limit:2}),/history_window_exceeded/);
+});
