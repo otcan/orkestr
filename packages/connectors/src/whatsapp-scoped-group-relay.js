@@ -69,7 +69,7 @@ export function buildReplyTo(input, {own = null, ownChatId = '', timeZone = 'Eur
     return {replyTo: {messageId: quotedId, author: input.quote_author || null, sentAt: input.quote_sent_at || null, text: '', isOwnReply: false, unavailable: true},
       line: '[Replying to an unavailable message]'};
   }
-  const sentAt = input.quote_sent_at || null;
+  const sentAt = input.quote_sent_at || own?.sentAt || null;
   const authorDigits = String(input.quote_author || '').split('@')[0];
   const ownerAuthored = !own && Boolean(authorDigits) && authorDigits === String(ownChatId).split('@')[0];
   const replyTo = {messageId: quotedId, author: own ? 'orkestr' : (input.quote_author || null), sentAt, text: clip(body, REPLY_TEXT_MAX), isOwnReply: Boolean(own)};
@@ -294,9 +294,9 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
     const id = String(quotedId || '');
     if (!id) return null;
     const suffix = id.includes('_') ? null : `_${id}`;
-    const exact = db.prepare('SELECT text FROM reply_sent_text WHERE provider_id=?').get(id)
-      || (suffix && db.prepare('SELECT text FROM reply_sent_text WHERE substr(provider_id,-?)=?').get(suffix.length, suffix));
-    if (exact) return {text: exact.text};
+    const exact = db.prepare('SELECT text,sent_at FROM reply_sent_text WHERE provider_id=?').get(id)
+      || (suffix && db.prepare('SELECT text,sent_at FROM reply_sent_text WHERE substr(provider_id,-?)=?').get(suffix.length, suffix));
+    if (exact) return {text: exact.text, sentAt: exact.sent_at};
     // Replies sent before the text journal existed: the receipt still proves it is ours.
     const receipts = db.prepare('SELECT provider_ids FROM reply_receipts').all();
     return receipts.some(row => JSON.parse(row.provider_ids || '[]').some(p => p === id || (suffix && String(p).endsWith(suffix)))) ? {text: ''} : null;
@@ -389,7 +389,7 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
         ? `[Image attached: ${String(input.media_filename || 'image')}]`
         : '[WhatsApp attachment received]';
       const own = input.quote_row ? ownReplyFor(input.quote_id) : null;
-      const quoted = buildReplyTo(input, {own: own ? {text: own.text || input.quote_body || ''} : null,
+      const quoted = buildReplyTo(input, {own: own ? {text: own.text || input.quote_body || '', sentAt: own.sentAt || null} : null,
         ownChatId: config.ownChatId, timeZone: config.timeZone || env.ORKESTR_TIMEZONE || 'Europe/Istanbul'});
       const response = await api(`/api/threads/${encodeURIComponent(group.threadId)}/input`, {method: 'POST', body: {
         ...metadata, text: `[WhatsApp: ${group.name}]\n\n${quoted ? `${quoted.line}\n\n` : ''}${inputBody}`,

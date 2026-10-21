@@ -536,7 +536,7 @@ test('a reply-quote of an Orkestr reply reaches the thread as structured replyTo
   const {relay, state, inboxDb, relayDb} = fixture(t, false, false, {ownChatId: '15550000001@c.us', timeZone: 'UTC'});
   inboxDb.exec(`CREATE TABLE group_input_quote(id TEXT PRIMARY KEY,quoted_id TEXT,author TEXT,sent_at TEXT,body TEXT,from_me INTEGER,resolved INTEGER NOT NULL);
     INSERT INTO group_input(id,chat_id,body,created_at) VALUES('wa-2','group-1','no need','2026-01-03');
-    INSERT INTO group_input_quote VALUES('wa-2','true_group-1_SENT1','15550000001@c.us','2026-01-02T21:50:00Z','short wa body',1,1);
+    INSERT INTO group_input_quote VALUES('wa-2','true_group-1_SENT1','15550000001@c.us',NULL,'short wa body',1,1);
     INSERT INTO group_input(id,chat_id,body,created_at) VALUES('wa-3','group-1','what?','2026-01-04');
     INSERT INTO group_input_quote VALUES('wa-3','GONE',NULL,NULL,NULL,0,0);`);
   relayDb.exec(`CREATE TABLE IF NOT EXISTS reply_sent_text(provider_id TEXT PRIMARY KEY,request_id TEXT NOT NULL,text TEXT NOT NULL,sent_at TEXT NOT NULL);
