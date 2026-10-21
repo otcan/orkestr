@@ -241,8 +241,14 @@ test('history pages older than a before-cursor, grows its window, and rejects un
  await assert.rejects(historyPage(chat,{limit:51}),/invalid_page_size/);
  const deep={fetchMessages:async({limit})=>Array.from({length:limit},(_,i)=>({id:{_serialized:`d${i}`},timestamp:i}))};
  await assert.rejects(historyPage(deep,{before:'older-than-window',limit:10}),/history_window_exceeded/);
+ // A burst of messages in the same second pages without skipping or repeating any.
+ const burst=Array.from({length:240},(_,i)=>({id:{_serialized:`s${i}`},timestamp:7000}));
+ const burstChat={fetchMessages:async({limit})=>burst.slice(-limit)};
+ const got=[];let bc;
+ do{const pg=await historyPage(burstChat,{before:bc,limit:50});got.push(...pg.messages.map(m=>m.id._serialized));bc=pg.nextCursor;}while(bc);
+ assert.deepEqual(got,burst.map(m=>m.id._serialized).reverse());
  // A valid cursor at the oldest message of the maximum window must not report the end of the chat.
- const big={fetchMessages:async({limit})=>Array.from({length:limit},(_,i)=>({id:{_serialized:`b${5000-i}`},timestamp:5000-i}))};
+ const big={fetchMessages:async({limit})=>Array.from({length:limit},(_,i)=>({id:{_serialized:`b${5001-limit+i}`},timestamp:5001-limit+i}))};
  const edge=await historyPage(big,{before:'b4002',limit:2});
  assert.deepEqual([edge.messages.map(m=>m.id._serialized),edge.hasMore,edge.nextCursor],[['b4001'],true,'b4001']);
  await assert.rejects(historyPage(big,{before:'b4001',limit:2}),/history_window_exceeded/);

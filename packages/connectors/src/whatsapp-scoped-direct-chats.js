@@ -222,7 +222,10 @@ export async function historyPage(chat, {before, limit} = {}) {
   let window = Math.min(HISTORY_WINDOW_MAX, before ? Math.max(size * 2, 100) : size + 1);
   for (;;) {
     const fetched = await chat.fetchMessages({limit: window});
-    const ordered = [...fetched].sort((a, b) => Number(b.timestamp) - Number(a.timestamp));
+    // fetchMessages returns provider order (oldest to newest); reverse it rather than
+    // sorting by second-level timestamps, so same-second bursts keep their order and a
+    // larger window only adds older messages after the cursor.
+    const ordered = [...fetched].reverse();
     let older = ordered;
     if (before) {
       const index = ordered.findIndex(m => m?.id?._serialized === before);
