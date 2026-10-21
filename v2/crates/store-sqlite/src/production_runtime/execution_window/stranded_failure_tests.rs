@@ -652,3 +652,6 @@ mod lapse;
 
 #[path = "stranded_property_tests.rs"]
 mod property;
+
+#[path = "auto_accept_window_tests.rs"]
+mod auto_accept;

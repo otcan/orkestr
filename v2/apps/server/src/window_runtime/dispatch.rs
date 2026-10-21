@@ -79,14 +79,14 @@ impl QueueState {
         }
         self.wake.notify_one();
     }
-    pub(super) fn forget(&self, browser: &str) {
+    fn forget(&self, browser: &str) {
         if let Ok(mut credential) = self.credential.lock() {
             if credential.as_deref() == Some(browser) {
                 *credential = None;
             }
         }
     }
-    pub(super) fn credential(&self) -> Option<String> {
+    fn credential(&self) -> Option<String> {
         self.credential.lock().ok()?.clone()
     }
     pub(super) fn wake(&self) {

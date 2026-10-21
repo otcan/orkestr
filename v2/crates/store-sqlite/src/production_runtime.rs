@@ -14,6 +14,8 @@ pub use execution_window::{
     EXECUTION_WINDOW_MAX_LIFETIME_MS,
 };
 mod acceptance;
+mod auto_acceptance;
+pub use auto_acceptance::auto_accept_request_key;
 #[cfg(all(test, unix))]
 mod acceptance_process_tests;
 #[cfg(test)]

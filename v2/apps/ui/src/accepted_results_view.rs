@@ -264,6 +264,6 @@ fn AcceptedReply(
         strong { "Assistant" }
         span { class: "reply-state", if row.payload_removed { "Reply output removed." } else { "{notice}" } }
         if !row.payload_removed { if let Some(text)=output.read().text.as_ref(){pre { "data-accepted-output": "true", "{text}"}} }
-        details {summary {"Reply details"} p {"Run: {row.run_id}"} p {"Completion: {row.completion_event_id}"} p {"Acceptance: {row.acceptance_event_id}"}}
+        details {summary {"Reply details"} p {"Run: {row.run_id}"} p {"Completion: {row.completion_event_id}"} p {"Acceptance: {row.acceptance_event_id}"} p { if row.auto_accepted { "Accepted automatically by the server for you." } else { "Accepted by you." } }}
     } }
 }

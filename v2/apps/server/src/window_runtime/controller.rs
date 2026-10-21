@@ -134,6 +134,21 @@ impl Controller {
         Ok(())
     }
 
+    /// Retained controllers with their conversations (no Core access).
+    pub(super) fn entries_by_conversation(
+        &self,
+    ) -> Vec<(ConversationId, Arc<ConversationController>)> {
+        self.conversations
+            .lock()
+            .map(|entries| {
+                entries
+                    .iter()
+                    .map(|(id, entry)| (id.clone(), entry.clone()))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     fn entries(&self) -> Vec<Arc<ConversationController>> {
         self.conversations
             .lock()
