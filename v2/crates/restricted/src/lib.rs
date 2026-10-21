@@ -8,6 +8,7 @@ pub mod action;
 pub mod agent;
 pub mod broker;
 pub mod exec;
+pub mod gpu;
 pub mod llm;
 pub mod netcheck;
 pub mod paths;

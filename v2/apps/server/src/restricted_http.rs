@@ -218,6 +218,15 @@ struct RestrictedConfig {
     deny_roots: Vec<PathBuf>,
     #[serde(default = "default_approval_secs")]
     approval_timeout_secs: u64,
+    /// Host helper that starts the GPU after the owner approves (`orkestr-llm`).
+    #[serde(default)]
+    gpu: Option<GpuConfig>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GpuConfig {
+    /// Absolute path of the helper. The helper enforces every cost rule itself.
+    command: String,
 }
 fn default_network() -> String {
     "bridge".into()
@@ -280,6 +289,19 @@ impl RestrictedRuntime {
                 }) as _,
             );
         }
+        let gpu: Arc<dyn orkestr_v2_restricted::broker::GpuControl> = match config.gpu {
+            Some(g)
+                if g.command.starts_with('/')
+                    && !g
+                        .command
+                        .chars()
+                        .any(|c| c.is_control() || c.is_whitespace()) =>
+            {
+                Arc::new(orkestr_v2_restricted::gpu::CliGpu { command: g.command })
+            }
+            Some(_) => return Err("restricted gpu command must be an absolute path"),
+            None => Arc::new(NoChannel),
+        };
         let docker = config.docker;
         let searcher: Arc<dyn Searcher> = match config.search_url {
             Some(base) => Arc::new(JsonSearch { base }),
@@ -290,7 +312,7 @@ impl RestrictedRuntime {
             fetcher: Arc::new(CurlFetcher),
             searcher,
             sender: Arc::new(NoChannel),
-            gpu: Arc::new(NoChannel),
+            gpu,
         };
         let broker_config = BrokerConfig {
             deny_roots: config.deny_roots,

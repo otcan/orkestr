@@ -58,6 +58,16 @@ async fn policy_routes_need_the_owner_and_a_configured_installation() {
         .clone()
         .with_restricted_config_file(&unknown_field)
         .is_err());
+    let relative_gpu = config(
+        &case.root,
+        0o600,
+        r#"{"endpoints":{},"gpu":{"command":"orkestr-llm"}}"#,
+    );
+    assert!(case
+        .state
+        .clone()
+        .with_restricted_config_file(&relative_gpu)
+        .is_err());
     let good = config(&case.root, 0o600, GOOD);
     case.state = case
         .state
