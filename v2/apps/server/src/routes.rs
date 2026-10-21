@@ -103,12 +103,13 @@ pub async fn message(
     State(s): State<AppState>,
     headers: HeaderMap,
     Path(id): Path<String>,
-    body: Result<Json<MessageInput>, JsonRejection>,
+    body: Result<Json<MessageRequest>, JsonRejection>,
 ) -> Result<impl IntoResponse, Error> {
     let owner = owner(&s, &headers).await?;
+    let (input, reply_to) = json(body)?.into_parts();
     let admitted = s
         .store
-        .admit(&owner, &conversation(id)?, &json(body)?)
+        .admit_with_reply_to(&owner, &conversation(id)?, &input, reply_to.as_ref())
         .await?;
     Ok((
         if admitted.duplicate {

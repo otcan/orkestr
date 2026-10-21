@@ -49,6 +49,16 @@ One owner session is shared by all bindings. A 401 revokes it for every
 binding (operator review, restart required); a conversation that does not
 match its binding refuses only that binding.
 
+## Quoted replies
+
+When the owner (or a member) answers an earlier WhatsApp message with a
+reply/quote, V1 sends `replyTo` (`messageId`, `author`, `sentAt`, `text` of at
+most 500 characters, `isOwnReply`, `unavailable`) beside the input; the visible
+`[Replying to ...]` line is already part of `text`. The adapter keeps it in the
+ledger (not in the identity digest) and posts it to Rust as `reply_to` with the
+message, where it is stored with the input and shown as a quoted bubble. An
+unresolvable quote arrives as `unavailable: true` and is never guessed.
+
 ## Binding files
 
 Each binding is `<bindings_dir>/<remote_thread_id>.json`:

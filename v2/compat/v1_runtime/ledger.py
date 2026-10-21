@@ -157,6 +157,21 @@ class Ledger:
         return result
 
     # Intake ------------------------------------------------------------
+    @staticmethod
+    def reply_to(value):
+        """The quoted message V1 relayed with an input, as Rust's `reply_to`, or None.
+
+        Bounded and shape-checked; anything else is dropped rather than guessed."""
+        if not isinstance(value, dict):
+            return None
+        def text(key, size):
+            item = value.get(key)
+            return item.strip()[:size] if isinstance(item, str) and item.strip() else None
+        result = {"message_id": text("messageId", 300), "author": text("author", 200), "sent_at": text("sentAt", 40),
+                  "text": (value.get("text") or "").strip()[:500] if isinstance(value.get("text"), str) else "",
+                  "is_own_reply": value.get("isOwnReply") is True, "unavailable": value.get("unavailable") is True}
+        return result if result["message_id"] or result["text"] or result["unavailable"] else None
+
     def enqueue(self, body, author=None):
         """Record one verified input. `author` is the verified sender
         ({role, id, label, labelled, phone?}); it is kept with the input and
@@ -188,6 +203,9 @@ class Ledger:
                     "phase": "queued", "queued_at": time.time(), "keys": {k: str(uuid.uuid4()) for k in keys}}
             if attachments:
                 data["attachments"] = attachments
+            quoted = self.reply_to(body.get("replyTo"))
+            if quoted:  # Not part of the digest: it is transport context, not identity.
+                data["reply_to"] = quoted
             if author:
                 data["author"] = {k: author[k] for k in ("role", "id", "label", "labelled", "phone", "source") if author.get(k) is not None}
             db.execute("INSERT INTO inputs VALUES (?,?,?,?)", (body["publicMessageId"], digest, remote_id, json.dumps(data)))
@@ -466,7 +484,7 @@ class Ledger:
             message = json.loads(message)
             message.pop("text", None)
             db.execute("UPDATE exports SET message=? WHERE seq=?", (json.dumps(dict(message, pruned=True)), seq))
-        for key in ("text", "intake_text", "fast_payload", "deep_payload"):
+        for key in ("text", "intake_text", "fast_payload", "deep_payload", "reply_to"):
             data.pop(key, None)
         if isinstance(data.get("reply"), dict):
             data["reply"].pop("text", None)

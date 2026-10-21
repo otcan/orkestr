@@ -10,6 +10,7 @@ fn canonical_byte_count_matches_ascii_escaping_for_unicode_and_controls() {
             sequence: 1,
             actor_kind: "owner".into(),
             text: String::new(),
+            reply_to: None,
         }],
         last_sequence: 1,
         next_cursor: None,

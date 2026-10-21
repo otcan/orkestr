@@ -206,6 +206,7 @@ async fn crash_child() {
             sequence: 1,
             actor_kind: "owner".into(),
             text: "Synthetic crash history".into(),
+            reply_to: None,
         }],
     };
     request.source_digest = history_source_digest(&request).unwrap();
