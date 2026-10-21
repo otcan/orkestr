@@ -191,6 +191,10 @@ test('read-all: only an owner-authorized thread may page chats and any history, 
  // Without readAll the same thread has no listing.
  assert.throws(()=>createScopedNativeWorkerPolicy(directConfig()).checkRequest('GET',url('/accounts/existing/chats/page?thread_id=thread1')),/denied/);
  assert.throws(()=>createScopedNativeWorkerPolicy({...config,directChats:{journalPath:':memory:',routes:[{threadId:'thread1',chatIds:['15550000001@c.us'],readAll:'yes'}]}}),/direct_configuration_invalid/);
+ // At most one read-all thread per worker.
+ const two={...config,groups:[{threadId:'thread1',chatId:'120000000001@g.us'},{threadId:'thread2',chatId:'120000000002@g.us'}],routeControl:{threadIds:['thread1','thread2']},
+  directChats:{journalPath:':memory:',routes:[{threadId:'thread1',chatIds:['15550000001@c.us'],readAll:true},{threadId:'thread2',chatIds:['15550000002@c.us'],readAll:true}]}};
+ assert.throws(()=>createScopedNativeWorkerPolicy(two),/direct_configuration_invalid/);
 });
 
 test('chat listing pages by cursor: multiple pages, explicit end, invalid cursor and page size errors, no content',async()=>{

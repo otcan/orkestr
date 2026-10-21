@@ -51,6 +51,8 @@ export function validateScopedDirectChats(config = {}, threads = new Set()) {
   }
   // Owner-authorized read-all threads: read every chat (metadata list + history), never send beyond chatIds.
   const readAll = new Set(direct.routes.filter(route => route.readAll === true).map(route => route.threadId));
+  // Read-all is an owner authorization for one thread; a second one is a configuration error.
+  if (readAll.size > 1) fail('direct_configuration_invalid');
   return {chats, readAll, journalPath: direct.journalPath, contract: hash([config.ownChatId || '', direct.routes])};
 }
 
