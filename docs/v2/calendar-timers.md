@@ -1,6 +1,6 @@
 # Calendar timers, silent runs, pauses and event triggers
 
-Status: implemented on `v2/rust-rewrite` (migration `0062`). Builds on the
+Status: implemented on `v2/rust-rewrite` (migration `0063`). Builds on the
 per-thread timer moves in [thread-timers.md](thread-timers.md): calendar timers
 are ordinary durable timers (same owner grant, Stop fence, claim and window
 queue); only the schedule, a small policy and the handling of results are new.
@@ -98,11 +98,11 @@ rule of a natively created timer (not an imported V1 one) and replans it.
 
 ## Deployment
 
-- Server: migration `0062`; no new configuration. Restart with the existing
+- Server: migration `0063`; no new configuration. Restart with the existing
   `ORKESTR_V2_TIMER_CONFIG` supervisor.
 - Adapter (`v2/compat/v1_runtime`): redeploy from the same commit to get silent
   runs, digests and message triggers. An adapter without the new routes keeps
   the old behaviour; a server without them is tolerated by the new adapter.
 - Rollback: the new tables are additive. An older binary must not open a schema
-  62 database (same rule as every migration); disable calendar timers and
+  63 database (same rule as every migration); disable calendar timers and
   restore the pre-deploy rollback directory instead.
