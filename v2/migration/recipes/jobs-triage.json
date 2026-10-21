@@ -1,0 +1,10 @@
+{
+  "schema": "orkestr.calendar-recipe.v1",
+  "name": "jobs-triage",
+  "thread": "157ea1bfc66836fd",
+  "label": "Jobseeker Gmail triage",
+  "replace": {"label_prefix": ["Jobseeker Gmail triage "]},
+  "retire": {"label_prefix": ["Jobseeker weekday enable", "Jobseeker weekend disable"]},
+  "schedule": {"derive": true, "weekdays": [1, 2, 3, 4, 5]},
+  "policy": {"silent": true}
+}

@@ -1,0 +1,9 @@
+{
+  "schema": "orkestr.calendar-recipe.v1",
+  "name": "swing-inbox",
+  "thread": "89d8601a-679a-48a6-8c5f-df4426eab0c3",
+  "label": "swing inbox hourly",
+  "replace": {"ids": ["52f90e21-b3fa-43bf-a8fc-f6744c8216d8"]},
+  "schedule": {"timezone": "Europe/Istanbul", "weekdays": [], "start": "09:00", "end": "23:00", "every_hours": 1, "minutes": [37]},
+  "policy": {"silent": true, "digest": {"times": ["09:00"], "timezone": "Europe/Istanbul"}}
+}
