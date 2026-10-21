@@ -469,6 +469,7 @@ impl ConversationController {
             self.handles.clone(),
             status,
             boot,
+            self.config.window_max_lifetime_ms(),
         )?);
         ConfiguredExecution::from_window(
             &self.home,

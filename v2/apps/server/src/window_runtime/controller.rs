@@ -197,11 +197,17 @@ impl Controller {
         self.queue.remember(browser);
         let entry = self.entry(conversation)?;
         if input.window_id.is_some() && !self.waiting(browser, conversation).await? {
-            // A follow-up joins this conversation's live window; no new slot.
-            return entry
-                .process(browser, owner, conversation, input)
-                .await
-                .map(WindowOutcome::Admitted);
+            if self.joinable(browser, conversation, input).await? {
+                // A follow-up joins this conversation's live window; no new slot.
+                return entry
+                    .process(browser, owner, conversation, input)
+                    .await
+                    .map(WindowOutcome::Admitted);
+            }
+            // Under ten minutes of work time left even with extension: queue
+            // durably. The dispatcher opens the successor window, which
+            // resumes the same native session, once this one closes.
+            return self.enqueue(browser, conversation, input).await;
         }
         let _opening = self.opening.lock().await;
         self.sweep(browser).await;
@@ -223,6 +229,15 @@ impl Controller {
                 .await
                 .map(WindowOutcome::Admitted);
         }
+        self.enqueue(browser, conversation, input).await
+    }
+
+    async fn enqueue(
+        &self,
+        browser: &str,
+        conversation: &ConversationId,
+        input: &ExecutionWindowRequest,
+    ) -> Result<WindowOutcome, &'static str> {
         let queued = self
             .store
             .enqueue_execution_window_authenticated(browser, conversation, input)
@@ -230,6 +245,34 @@ impl Controller {
             .map_err(|_| "window queue unavailable")?;
         self.queue.wake();
         Ok(WindowOutcome::Queued(queued))
+    }
+
+    /// Whether the live window this follow-up names still leaves it enough
+    /// work time. Any other state is left to Core admission, unchanged.
+    async fn joinable(
+        &self,
+        browser: &str,
+        conversation: &ConversationId,
+        input: &ExecutionWindowRequest,
+    ) -> Result<bool, &'static str> {
+        let status = self
+            .store
+            .execution_window_status_authenticated(browser, conversation)
+            .await
+            .map_err(|_| "selected conversation or intent unavailable")?;
+        Ok(match status {
+            Some(status)
+                if Some(status.window_id) == input.window_id
+                    && status.state == orkestr_v2_contracts::ExecutionWindowState::Active =>
+            {
+                super::dispatch::joinable(
+                    &status,
+                    super::dispatch::now_ms(),
+                    self.config.window_max_lifetime_ms_for(conversation),
+                )
+            }
+            _ => true,
+        })
     }
 
     async fn live(&self, browser: &str) -> Result<u32, &'static str> {

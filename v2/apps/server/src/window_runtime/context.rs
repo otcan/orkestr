@@ -10,8 +10,17 @@ use orkestr_v2_contracts::ExecutionWindowStatus;
 use orkestr_v2_store_sqlite::Store;
 use std::time::Instant;
 
+/// Extend when less than this much work time is left and work is still running.
+const EXTEND_BELOW_MS: i64 = 600_000;
+/// Each extension adds at least this much (and leaves at least EXTEND_BELOW_MS).
+const EXTEND_STEP_MS: i64 = 600_000;
+
 pub(crate) struct Context {
     pub(crate) manager: ManagerClient,
+    /// Total lifetime ceiling for this window (opening to hard deadline).
+    max_lifetime_ms: i64,
+    /// Set once the ceiling is reached or an extension was refused.
+    extension_closed: std::sync::atomic::AtomicBool,
     pub(crate) window: Window,
     pub(crate) boot: String,
     handles: Handles,
@@ -25,6 +34,7 @@ impl Context {
         handles: Handles,
         status: &ExecutionWindowStatus,
         boot: String,
+        max_lifetime_ms: i64,
     ) -> Result<Self, &'static str> {
         let wall = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -33,6 +43,8 @@ impl Context {
         let wall = i64::try_from(wall).map_err(|_| "window clock overflow")?;
         Ok(Self {
             manager,
+            max_lifetime_ms,
+            extension_closed: std::sync::atomic::AtomicBool::new(false),
             handles,
             window: Window {
                 window_id: status.window_id,
@@ -52,6 +64,65 @@ impl Context {
     }
     pub(crate) fn cleanup_deadline(&self) -> tokio::time::Instant {
         self.clock.cleanup_deadline()
+    }
+    /// While a Deep or Worker run of this window is still working, keep at
+    /// least EXTEND_BELOW_MS of work time by extending in steps, up to the
+    /// window's lifetime ceiling. The manager records it first (a longer
+    /// manager deadline is safe), then Core, then the local clock. Any refusal
+    /// stops further attempts; the existing deadline handling then applies.
+    pub(crate) async fn extend_while_working(&self, store: &Store, token: &str) -> bool {
+        use std::sync::atomic::Ordering;
+        if self.extension_closed.load(Ordering::Acquire) || self.is_closed() || self.work_due() {
+            return false;
+        }
+        let Some(now) = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()
+            .and_then(|d| i64::try_from(d.as_millis()).ok())
+        else {
+            return false;
+        };
+        let current = self.clock.work_deadline_ms();
+        if current - now >= EXTEND_BELOW_MS {
+            return false;
+        }
+        let ceiling = self.clock.opened_at_ms() + self.max_lifetime_ms
+            - orkestr_v2_store_sqlite::EXECUTION_WINDOW_CLEANUP_MS;
+        let target = (current + EXTEND_STEP_MS)
+            .max(now + EXTEND_BELOW_MS)
+            .min(ceiling);
+        if target <= current {
+            self.extension_closed.store(true, Ordering::Release);
+            return false;
+        }
+        let deadline = Instant::now() + std::time::Duration::from_secs(5);
+        let extended = self
+            .manager
+            .extend(
+                &format!("extend:{}", uuid::Uuid::new_v4()),
+                &self.window,
+                target + orkestr_v2_store_sqlite::EXECUTION_WINDOW_CLEANUP_MS,
+                deadline,
+            )
+            .await
+            .is_ok()
+            && store
+                .extend_execution_window(
+                    token,
+                    self.window.window_id,
+                    self.window.generation,
+                    &self.boot,
+                    target,
+                    self.max_lifetime_ms,
+                )
+                .await
+                .is_ok_and(|status| status.work_deadline_ms == target)
+            && self.clock.extend_to(target).is_ok();
+        if !extended {
+            eprintln!("owned window extension refused; the current deadline applies");
+            self.extension_closed.store(true, Ordering::Release);
+        }
+        extended
     }
     pub(crate) fn bind(&self, child: &BrokerChildLocator) -> Result<(), ()> {
         if self.work_due() {

@@ -8,6 +8,8 @@ VERSION = 1
 MAX_FRAME = 8192
 HEADER = struct.Struct("!I")
 LIFETIME_SECONDS = 900
+# An active window may be extended by its opener up to this total lifetime.
+MAX_LIFETIME_SECONDS = 14400
 DRAIN_SECONDS = 30
 MAX_ATTEMPTS = 32
 DRAIN_ATTEMPTS = 4
@@ -84,6 +86,7 @@ def decode(raw):
         "retire": {"window_id", "generation", "outcome", "run_id", "terminal_event_id"},
         "reconcile": {"window_id", "generation", "outcome", "run_id", "terminal_event_id"},
         "uncertain": {"window_id", "generation", "reason"},
+        "extend": {"window_id", "generation", "expires_at_ms"},
     }
     require(type(operation) is str and operation in fields, "operation")
     require(set(value) == common | fields[operation], "fields")
@@ -122,6 +125,8 @@ def decode(raw):
                 "broker_start")
         require(type(value["bind_deadline_ms"]) is int and 0 < value["bind_deadline_ms"] < 2**53,
                 "bind_deadline")
+    if operation == "extend":
+        require(type(value["expires_at_ms"]) is int and 0 < value["expires_at_ms"] < 2**53, "timestamp")
     if operation == "uncertain":
         require(value["reason"] in ("runtime_refused", "auth_revoked", "cleanup_unknown", "server_lost"),
                 "uncertainty_reason")

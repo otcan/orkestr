@@ -100,7 +100,9 @@ impl ConfiguredExecution {
                 },
                 role: config::ExecutionRole::Deep,
                 execution_budget: budget::ExecutionBudget {
-                    max_run_ms: 870_000,
+                    // The window deadline bounds the turn; while it keeps
+                    // working the window may be extended to its ceiling.
+                    max_run_ms: config.window_max_lifetime_ms() as u64,
                     max_idle_ms: None,
                 },
                 worker: None,

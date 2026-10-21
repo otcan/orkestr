@@ -55,7 +55,10 @@ pub(super) fn dates(open: i64, work: i64, end: i64) -> bool {
     [open, work, end]
         .iter()
         .all(|n| *n >= 0 && (*n as u64) < INTEGER_LIMIT)
-        && end.checked_sub(open) == Some(900_000)
+        // Opened with 15 minutes; an active window may be extended up to 4 hours.
+        && end
+            .checked_sub(open)
+            .is_some_and(|lifetime| (900_000..=14_400_000).contains(&lifetime))
         && end.checked_sub(work) == Some(30_000)
 }
 pub(super) fn id(v: &Value) -> Result<Uuid> {

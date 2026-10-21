@@ -96,7 +96,15 @@ impl Controller {
 
     async fn live_owner(&self, conversation: &ConversationId) -> bool {
         match self.existing(conversation) {
-            Some(entry) => entry.has_local_task().await,
+            Some(entry) => {
+                // Observe a task that already ended (for example after its
+                // Fast companion failed) before reporting it as the live
+                // owner; otherwise the window could never be reconciled
+                // without a restart. The result only says whether it needs
+                // reconciliation, which is what follows.
+                let _ = entry.refresh().await;
+                entry.has_local_task().await
+            }
             None => false,
         }
     }

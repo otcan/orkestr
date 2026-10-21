@@ -266,6 +266,13 @@ class ClientTests(unittest.TestCase):
         active = self.client.window_request(INTAKE, "input:1", "window:1", window)
         self.assertEqual((active["expected_generation"], active["window_id"], active["predecessor_window_id"]),
                          (1, WINDOW, None))
+        # An extended window keeps its exact 30-second cleanup margin.
+        extended = dict(window, work_deadline_ms=3571000, expires_at_ms=3601000)
+        self.assertEqual(self.client.window_request(INTAKE, "input:1", "window:1", extended)["window_id"], WINDOW)
+        for work, end in ((3571000, 3600000), (14371001, 14401001), (870999, 900999)):
+            with self.subTest(work=work), self.assertRaises(ClientError):
+                self.client.window_request(INTAKE, "input:1", "window:1",
+                                           dict(window, work_deadline_ms=work, expires_at_ms=end))
         window["state"] = "closed"
         closed = self.client.window_request(INTAKE, "input:1", "window:1", window)
         self.assertEqual((closed["expected_generation"], closed["window_id"], closed["predecessor_window_id"]),

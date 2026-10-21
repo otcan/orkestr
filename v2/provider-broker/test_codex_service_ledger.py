@@ -10,6 +10,7 @@ import uuid
 
 from codex_service import contract
 from codex_service.budget import WindowBudget
+from codex_service.contract import Refused
 from codex_service.ledger import Ledger
 from isolation.bounded_budget import Refused as ProxyRefused
 
@@ -69,6 +70,32 @@ class LedgerTests(unittest.TestCase):
         return {**{key: request[key] for key in ("owner_id", "conversation_id", "window_id", "generation")},
                 "outcome": "accepted", "run_id": uid(), "terminal_event_id": uid()}
 
+    def test_active_window_extends_forward_within_the_lifetime_ceiling(self):
+        request = self.admit()
+        opened = request["opened_at_ms"]
+        extend = lambda expires: self.ledger.extend({**{k: request[k] for k in (
+            "owner_id", "conversation_id", "window_id", "generation")}, "expires_at_ms": expires})
+        receipt = extend(opened + 1_800_000)
+        self.assertEqual((receipt["state"], receipt["expires_at_ms"], receipt["work_deadline_ms"]),
+                         ("active", opened + 1_800_000, opened + 1_770_000))
+        self.assertEqual(extend(opened + 1_800_000)["expires_at_ms"], opened + 1_800_000)  # replay
+        for bad in (opened + 900_000, opened + 14_400_001):
+            with self.assertRaisesRegex(Refused, "window_extension"):
+                extend(bad)
+        # The old 15-minute deadline passes without expiry; the extended one holds.
+        self.clock.advance(1000)
+        self.assertEqual(self.ledger.tick(request["window_id"], 1)["state"], "active")
+        # Without a cached sample the opening is derived from the extended
+        # deadline minus its lifetime, so the same clocks are never "changed".
+        self.ledger.last_clocks.clear()
+        self.assertEqual(self.ledger.tick(request["window_id"], 1)["state"], "active")
+        self.clock.advance(780)
+        self.assertEqual(self.ledger.tick(request["window_id"], 1)["state"], "draining")
+        with self.assertRaisesRegex(Refused, "window_not_extendable"):
+            extend(opened + 3_600_000)
+        self.clock.advance(30)
+        self.assertEqual(self.ledger.tick(request["window_id"], 1)["state"], "expired")
+
     def test_exact_replay_is_read_evidence_never_another_admission(self):
         request = self.admit()
         self.assertFalse(self.ledger.admit(request)[1])
@@ -105,6 +132,19 @@ class LedgerTests(unittest.TestCase):
         self.ledger.drain(request["window_id"], 1)
         with self.assertRaisesRegex(contract.Refused, "window_not_accepting_inputs"):
             self.ledger.admit({**followup, "request_id": uid(), "input_message_id": uid(), "input_event_id": uid()})
+
+    def test_live_budget_follows_an_extension_past_the_original_deadline(self):
+        request = self.admit()
+        budget = WindowBudget(self.ledger, request["window_id"], 1)
+        self.ledger.extend({**{k: request[k] for k in ("owner_id", "conversation_id", "window_id", "generation")},
+                            "expires_at_ms": request["opened_at_ms"] + 1_800_000})
+        self.clock.advance(1000)
+        budget.check()  # Past the original deadline: still live, no clock change.
+        self.assertEqual(budget._row["deadline_wall_ns"], (request["opened_at_ms"] + 1_800_000) * 1_000_000)
+        self.assertEqual(budget.attempt(), 1)
+        self.clock.advance(800)
+        with self.assertRaises(ProxyRefused):
+            budget.check()
 
     def test_transport_delay_cannot_extend_core_deadline(self):
         request = self.request()

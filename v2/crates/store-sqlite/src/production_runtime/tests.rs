@@ -425,3 +425,50 @@ async fn exact_expired_predecessor_cas_fences_without_recreating_native_identity
     f.store.close().await;
     std::fs::remove_dir_all(f.root).unwrap();
 }
+
+/// Undo 0056 exactly: rebuild `execution_windows` under the fixed-deadline
+/// definition that migrations up to 0055 produce, keeping every row.
+pub(super) async fn downgrade_window_deadlines(store: &Store) {
+    use sqlx::{migrate::Migrate, Connection};
+    let mut reference = sqlx::SqliteConnection::connect("sqlite::memory:")
+        .await
+        .unwrap();
+    reference.ensure_migrations_table().await.unwrap();
+    for migration in sqlx::migrate!("./migrations").iter() {
+        if migration.version < 56 {
+            sqlx::raw_sql(&migration.sql)
+                .execute(&mut reference)
+                .await
+                .unwrap();
+        }
+    }
+    let definition = |name: &'static str| {
+        sqlx::query_scalar::<_, String>("SELECT sql FROM sqlite_schema WHERE name=?").bind(name)
+    };
+    let table = definition("execution_windows")
+        .fetch_one(&mut reference)
+        .await
+        .unwrap();
+    let index = definition("execution_window_unresolved")
+        .fetch_one(&mut reference)
+        .await
+        .unwrap();
+    reference.close().await.unwrap();
+    let mut tx = store.pool.begin().await.unwrap();
+    sqlx::query("PRAGMA defer_foreign_keys = ON")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    for statement in [
+        "CREATE TEMP TABLE windows_copy AS SELECT * FROM execution_windows",
+        "DROP TABLE execution_windows",
+        &table,
+        "INSERT INTO execution_windows SELECT * FROM windows_copy",
+        "DROP TABLE windows_copy",
+        &index,
+        "DELETE FROM _sqlx_migrations WHERE version=56",
+    ] {
+        sqlx::query(statement).execute(&mut *tx).await.unwrap();
+    }
+    tx.commit().await.unwrap();
+}

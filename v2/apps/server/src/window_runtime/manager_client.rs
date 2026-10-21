@@ -246,6 +246,26 @@ impl ManagerClient {
         )
         .await
     }
+    /// Extend this active window's hard deadline (and work deadline, 30 s
+    /// before it). The manager refuses shortening, a passed deadline and
+    /// anything beyond its own lifetime ceiling; an equal request is a replay.
+    pub async fn extend(
+        &self,
+        request_id: &str,
+        window: &Window,
+        expires_at_ms: i64,
+        deadline: Instant,
+    ) -> Result<WindowReceipt> {
+        let mut request = self.request("extend", request_id, Some(window))?;
+        request["expires_at_ms"] = json!(expires_at_ms);
+        let receipt = self
+            .mutation(request, window, WindowState::Active, deadline)
+            .await?;
+        if receipt.expires_at_ms != expires_at_ms {
+            return Err(ManagerError::Protocol);
+        }
+        Ok(receipt)
+    }
     pub async fn uncertain(
         &self,
         request_id: &str,

@@ -28,6 +28,22 @@ const MAX_FAILURES: u32 = 3;
 const MAX_ROUNDS: usize = 32;
 /// A follow-up needs this much remaining work time, else it waits for close.
 const FOLLOW_UP_MARGIN_MS: i64 = 5_000;
+/// A follow-up joins a live window only if it can still get this much work
+/// time there (now, or by extension within the window's lifetime ceiling).
+/// Otherwise it waits and opens the successor window, which resumes the same
+/// native session.
+pub(super) const FOLLOW_UP_MIN_WORK_MS: i64 = 600_000;
+
+/// Whether a follow-up may join this live window rather than its successor.
+pub(super) fn joinable(status: &ExecutionWindowStatus, now_ms: i64, max_lifetime_ms: i64) -> bool {
+    let ceiling = status
+        .opened_at_ms
+        .saturating_add(max_lifetime_ms)
+        .saturating_sub(orkestr_v2_store_sqlite::EXECUTION_WINDOW_CLEANUP_MS);
+    status.state == ExecutionWindowState::Active
+        && status.work_deadline_ms > now_ms.saturating_add(FOLLOW_UP_MARGIN_MS)
+        && status.work_deadline_ms.max(ceiling) >= now_ms.saturating_add(FOLLOW_UP_MIN_WORK_MS)
+}
 
 pub(crate) struct QueueState {
     credential: Mutex<Option<String>>,
@@ -113,7 +129,12 @@ enum Plan {
 }
 
 /// Rebuild the request against the conversation's current durable window.
-fn plan(row: &ExecutionWindowQueued, status: Option<&ExecutionWindowStatus>, now_ms: i64) -> Plan {
+fn plan(
+    row: &ExecutionWindowQueued,
+    status: Option<&ExecutionWindowStatus>,
+    now_ms: i64,
+    max_lifetime_ms: i64,
+) -> Plan {
     let mut request = ExecutionWindowRequest {
         request_key: row.request_key.clone(),
         input_message_id: row.input_message_id.clone(),
@@ -131,9 +152,7 @@ fn plan(row: &ExecutionWindowQueued, status: Option<&ExecutionWindowStatus>, now
                 ExecutionWindowState::Closed => {
                     request.predecessor_window_id = Some(status.window_id)
                 }
-                ExecutionWindowState::Active
-                    if status.work_deadline_ms > now_ms.saturating_add(FOLLOW_UP_MARGIN_MS) =>
-                {
+                ExecutionWindowState::Active if joinable(status, now_ms, max_lifetime_ms) => {
                     request.window_id = Some(status.window_id)
                 }
                 ExecutionWindowState::ReconciliationRequired => {
@@ -146,7 +165,7 @@ fn plan(row: &ExecutionWindowQueued, status: Option<&ExecutionWindowStatus>, now
     Plan::Admit(request)
 }
 
-fn now_ms() -> i64 {
+pub(super) fn now_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .ok()
@@ -287,7 +306,8 @@ impl Controller {
                 .store
                 .execution_window_status_authenticated(browser, conversation)
                 .await?;
-            let request = match plan(&row, status.as_ref(), now_ms()) {
+            let lifetime = self.config.window_max_lifetime_ms_for(conversation);
+            let request = match plan(&row, status.as_ref(), now_ms(), lifetime) {
                 Plan::Wait => continue,
                 Plan::Withdraw(reason) => {
                     self.withdraw(browser, &row, reason).await?;

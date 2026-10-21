@@ -5,6 +5,11 @@ use orkestr_v2_contracts::{
     ExecutionWindowRequest, ExecutionWindowState, ExecutionWindowStatus, MessageId, RunId,
 };
 use sqlx::sqlite::SqliteRow;
+/// A window opens with 15 minutes (14.5 of work plus a 30-second cleanup margin).
+pub const EXECUTION_WINDOW_BASE_LIFETIME_MS: i64 = 900_000;
+/// Hard ceiling for an extended window, matching the schema CHECK.
+pub const EXECUTION_WINDOW_MAX_LIFETIME_MS: i64 = 14_400_000;
+pub const EXECUTION_WINDOW_CLEANUP_MS: i64 = 30_000;
 mod admission;
 mod bootstrap;
 pub use bootstrap::ExecutionWindowBootstrap;

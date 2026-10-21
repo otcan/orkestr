@@ -9,7 +9,7 @@ fn between<'a>(sql: &'a str, start: &str, end: Option<&str>) -> &'a str {
     }
 }
 
-/// Undo 0055 exactly: the schema-54 lapse CHECKs and evidence view.
+/// Undo 0056 and 0055 exactly: the schema-54 lapse CHECKs and evidence view.
 pub(super) async fn downgrade_to_schema54(store: &Store) {
     let v54 = include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -20,6 +20,7 @@ pub(super) async fn downgrade_to_schema54(store: &Store) {
         "CREATE TABLE production_run_lapses (",
         Some("CREATE TABLE production_lapsed_retirements"),
     );
+    crate::production_runtime::tests::downgrade_window_deadlines(store).await;
     let mut tx = store.pool.begin().await.unwrap();
     sqlx::query("PRAGMA defer_foreign_keys = ON")
         .execute(&mut *tx)
@@ -172,7 +173,7 @@ async fn schema51_stranded_workbench_reconciles_after_upgrade() {
     let fresh = restart(w, true).await;
     assert_eq!(
         count(&fresh, "SELECT max(version) FROM _sqlx_migrations").await,
-        55
+        56
     );
     for table in [
         "production_run_failures",

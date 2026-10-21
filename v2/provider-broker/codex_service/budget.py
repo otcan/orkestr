@@ -25,8 +25,8 @@ class WindowBudget:
         self.reason = None
         self._last_tick = 0.0
         self._row = row
-        self._last_clock = (row["created_wall_ns"],
-                            row["deadline_mono_ns"] - 900_000_000_000)
+        self._last_clock = (row["created_wall_ns"], row["deadline_mono_ns"] -
+                            (row["deadline_wall_ns"] - row["created_wall_ns"]))
 
     def check(self):
         with self.lock:
@@ -52,6 +52,10 @@ class WindowBudget:
                 if row["state"] not in ("active", "draining"):
                     self.stop("window_closed")
                     raise Refused("window_closed")
+                if row["expires_at_ms"] * 1_000_000 > self._row["deadline_wall_ns"]:
+                    # The opener extended this window: both deadlines moved by
+                    # the same delta, so the clock skew stays comparable.
+                    self._row = self.ledger.details(self.window, self.generation)
 
     def attempt(self):
         with self.lock:

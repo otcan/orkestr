@@ -47,6 +47,57 @@ impl Store {
         tx.commit().await.map_err(db)?;
         Ok(result)
     }
+    /// The opener extends its own active window's work deadline (and the exact
+    /// 30-second cleanup margin with it) while it still has work. Never past
+    /// `max_lifetime_ms` from the opening, never after the current work deadline
+    /// passed, and never backwards; a repeated request is idempotent.
+    pub async fn extend_execution_window(
+        &self,
+        credential: &str,
+        window: Uuid,
+        generation: u64,
+        boot: &str,
+        work_deadline_ms: i64,
+        max_lifetime_ms: i64,
+    ) -> Result<ExecutionWindowStatus> {
+        self.worker_credential(credential)?;
+        if !(EXECUTION_WINDOW_BASE_LIFETIME_MS..=EXECUTION_WINDOW_MAX_LIFETIME_MS)
+            .contains(&max_lifetime_ms)
+        {
+            return Err(RuntimeStoreError::InvalidInput);
+        }
+        let c = self.context()?;
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        c.validate(&mut tx).await?;
+        let w = window_in(&mut tx, c, window, generation).await?;
+        if w.get::<Option<String>, _>("boot_id").as_deref() != Some(boot)
+            || w.get::<Option<String>, _>("credential_hash").as_deref() != Some(&c.token_hash)
+            || w.get::<i64, _>("credential_bound") != 1
+            || w.get::<&str, _>("state") != "active"
+        {
+            return Err(RuntimeStoreError::Fenced);
+        }
+        let opened = w.get::<i64, _>("opened_at_ms");
+        let current = w.get::<i64, _>("work_deadline_ms");
+        let ceiling = opened + max_lifetime_ms - EXECUTION_WINDOW_CLEANUP_MS;
+        if work_deadline_ms > current {
+            if current <= now(&mut tx).await? || work_deadline_ms > ceiling {
+                return Err(RuntimeStoreError::Fenced);
+            }
+            sqlx::query("UPDATE execution_windows SET work_deadline_ms=?,expires_at_ms=? WHERE id=? AND state='active' AND work_deadline_ms=?")
+                .bind(work_deadline_ms)
+                .bind(work_deadline_ms + EXECUTION_WINDOW_CLEANUP_MS)
+                .bind(window.to_string())
+                .bind(current)
+                .execute(&mut *tx)
+                .await
+                .map_err(db)?;
+        }
+        let w = window_in(&mut tx, c, window, generation).await?;
+        let result = status(&w)?;
+        tx.commit().await.map_err(db)?;
+        Ok(result)
+    }
     pub async fn activate_execution_window(
         &self,
         credential: &str,

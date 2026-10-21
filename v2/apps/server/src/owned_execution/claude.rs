@@ -167,6 +167,9 @@ impl ConfiguredExecution {
                     return Ok(Some(ClaudeExit::Stopped(run, proof)));
                 }
                 ExecutionPhase::Starting | ExecutionPhase::Running => {
+                    if self.config.role != super::config::ExecutionRole::Fast {
+                        self.extend_window_while_working().await;
+                    }
                     let cancellation = if self.claude_window_due() {
                         Some("execution-window-work-deadline")
                     } else {

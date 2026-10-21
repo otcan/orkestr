@@ -221,6 +221,9 @@ pub fn valid_status(value: &orkestr_v2_contracts::ExecutionWindowStatus, id: &st
         && value.generation < 9_007_199_254_740_992
         && value.limits == Default::default()
         && value.opened_at_ms >= 0
-        && value.work_deadline_ms.checked_sub(value.opened_at_ms) == Some(870_000)
-        && value.expires_at_ms.checked_sub(value.opened_at_ms) == Some(900_000)
+        && value
+            .work_deadline_ms
+            .checked_sub(value.opened_at_ms)
+            .is_some_and(|work| (870_000..=14_370_000).contains(&work))
+        && value.expires_at_ms.checked_sub(value.work_deadline_ms) == Some(30_000)
 }
