@@ -480,6 +480,19 @@ async fn chats_unavailable_or_refused(
 }
 
 #[test]
+fn an_unknown_group_outcome_is_reported_as_such() {
+    assert!(chats::outcome_unknown(
+        &json!({"provisioning": {"state": "outcome_unknown"}})
+    ));
+    assert!(chats::outcome_unknown(
+        &json!({"groupCreateFailure": {"externalOutcome": "outcome_unknown"}})
+    ));
+    assert!(!chats::outcome_unknown(
+        &json!({"provisioning": {"state": "rejected"}})
+    ));
+}
+
+#[test]
 fn group_answers_must_name_the_chat_and_account() {
     assert!(chats::group_from(
         &json!({"chat": {"id": "1@g.us"}, "binding": {"responderAccountId": "a"}})

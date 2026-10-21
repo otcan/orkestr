@@ -210,7 +210,21 @@ impl Broker {
         body: Value,
         cap: usize,
     ) -> Result<(u16, Value), BrokerError> {
-        tokio::time::timeout(WRITE_TIMEOUT, self.exchange(method, path, Some(body), cap))
+        self.write_within(WRITE_TIMEOUT, method, path, body, cap)
+            .await
+    }
+
+    /// [`Self::write`] with an explicit deadline, for V1 operations that wait
+    /// on WhatsApp (group creation takes well over the default).
+    pub(crate) async fn write_within(
+        &self,
+        deadline: Duration,
+        method: &str,
+        path: &str,
+        body: Value,
+        cap: usize,
+    ) -> Result<(u16, Value), BrokerError> {
+        tokio::time::timeout(deadline, self.exchange(method, path, Some(body), cap))
             .await
             .map_err(|_| BrokerError::Unavailable)?
     }
