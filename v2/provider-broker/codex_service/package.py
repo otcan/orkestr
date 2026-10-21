@@ -43,6 +43,8 @@ DESKTOP_BROKER_ENV = "ORKESTR_V2_DESKTOP_BROKER_CONFIG"
 # Private durable-timer scheduler config (0600, service user; names the machine
 # token file). The server validates and reads it, the package never does.
 TIMER_CONFIG_ENV = "ORKESTR_V2_TIMER_CONFIG"
+# Read-only V1 chat icon directory (operator-granted read access only).
+V1_CHAT_ICONS_ENV = "ORKESTR_V2_V1_CHAT_ICONS_DIR"
 # Private "New WhatsApp chat" file (adapter token, owner numbers); the server
 # validates and reads it, the package never does.
 WHATSAPP_CHATS_ENV = "ORKESTR_V2_WHATSAPP_CHATS_CONFIG"
@@ -101,7 +103,7 @@ class Package:
 
     def _bind(self):
         value = self.runtime
-        require(set(value) - {"live_map", "desktop_broker", "timer_config", "whatsapp_chats"} == {"format", "uid", "gid", "owner_id", "conversation_id", "home",
+        require(set(value) - {"live_map", "desktop_broker", "timer_config", "v1_chat_icons_dir", "whatsapp_chats"} == {"format", "uid", "gid", "owner_id", "conversation_id", "home",
                 "bootstrap_file", "ledger_directory", "endpoint_directory", "port", "trusted_origin"}
                 and value["format"] == "orkestr-v2-codex-service-v1", "service_format")
         self.live_map = live_map_path(value["live_map"]) if "live_map" in value else None
@@ -109,6 +111,8 @@ class Package:
                                if "desktop_broker" in value else None)
         self.timer_config = (live_map_path(value["timer_config"])
                              if "timer_config" in value else None)
+        self.v1_chat_icons_dir = (live_map_path(value["v1_chat_icons_dir"])
+                                  if "v1_chat_icons_dir" in value else None)
         self.whatsapp_chats = (live_map_path(value["whatsapp_chats"])
                                if "whatsapp_chats" in value else None)
         require(all(type(value[k]) is int and 0 < value[k] < 2**31 for k in ("uid", "gid")),
@@ -254,4 +258,6 @@ class Package:
                 **({TIMER_CONFIG_ENV: self.timer_config}
                    if getattr(self, "timer_config", None) else {}),
                 **({WHATSAPP_CHATS_ENV: self.whatsapp_chats}
-                   if getattr(self, "whatsapp_chats", None) else {})}
+                   if getattr(self, "whatsapp_chats", None) else {}),
+                **({V1_CHAT_ICONS_ENV: self.v1_chat_icons_dir}
+                   if getattr(self, "v1_chat_icons_dir", None) else {})}

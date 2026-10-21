@@ -107,6 +107,7 @@ class Selected(unittest.TestCase):
         self.plan['live_map']='/var/lib/synthetic-live-map/map.json'
         self.plan['desktop_broker']='/var/lib/synthetic-private/desktop-broker.json'
         self.plan['timer_config']='/var/lib/synthetic-private/timers.json'
+        self.plan['v1_chat_icons_dir']='/var/lib/synthetic-v1/chat-icons'
         self.plan['whatsapp_chats']='/var/lib/synthetic-private/whatsapp-chats.json'
         selected.prepare(self.plan)
         with authority(REPO,source) as (_,manager,_):
@@ -116,6 +117,7 @@ class Selected(unittest.TestCase):
             self.assertEqual(package.environment()['ORKESTR_V2_DESKTOP_BROKER_CONFIG'],
                              '/var/lib/synthetic-private/desktop-broker.json')
             self.assertEqual(package.environment()['ORKESTR_V2_TIMER_CONFIG'],'/var/lib/synthetic-private/timers.json')
+            self.assertEqual(package.environment()['ORKESTR_V2_V1_CHAT_ICONS_DIR'],'/var/lib/synthetic-v1/chat-icons')
             self.assertEqual(package.environment()['ORKESTR_V2_WHATSAPP_CHATS_CONFIG'],
                              '/var/lib/synthetic-private/whatsapp-chats.json')
         for role in ('fast','worker-0','worker-1','worker-2','worker-3'):
