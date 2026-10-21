@@ -172,6 +172,27 @@ impl Metrics {
             .window(window, Instant::now())
     }
 
+    /// Every non-streaming request of the last `window` (static assets
+    /// excluded): the host metrics panel's request latency and error rate.
+    pub fn overall(&self, window: Duration) -> Option<Window> {
+        let now = Instant::now();
+        let map = self.http.lock().ok()?;
+        let mut all = Series::default();
+        for ((_, route), series) in map.iter() {
+            if series.streaming || route == "static" {
+                continue;
+            }
+            all.recent.extend(
+                series
+                    .recent
+                    .iter()
+                    .filter(|s| now.duration_since(s.at) <= window),
+            );
+        }
+        all.recent.make_contiguous().sort_by_key(|s| s.at);
+        all.window(window, now)
+    }
+
     /// JSON summary over the last `window`: per route, per upstream and overall.
     pub fn summary(&self, window: Duration, slow: Duration) -> Value {
         let now = Instant::now();

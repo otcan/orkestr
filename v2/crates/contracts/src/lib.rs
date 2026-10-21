@@ -41,6 +41,8 @@ mod production_events;
 pub use production_events::*;
 mod resource_health;
 pub use resource_health::*;
+mod host_metrics;
+pub use host_metrics::*;
 mod stopped;
 pub use cancellation::*;
 pub use stopped::*;

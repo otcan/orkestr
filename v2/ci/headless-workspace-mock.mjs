@@ -45,6 +45,33 @@ export function createState() {
     v1WhatsApp: { reply_prefix: 'synthetic:', suppress_updates: true, suppress_debug_footer: false, additional_participants_enabled: false, additional_participant_ids: [] } };
 }
 
+// Synthetic host metrics: a fixed 12-core host with gentle waves; the 7 d
+// range has history only for its last part ("collecting" shading).
+const GIB = 1024 ** 3, HOST_STEPS = { '15m': 5000, '1h': 10000, '24h': 300000, '7d': 1800000 };
+const HOST_SPAN = { '15m': 900000, '1h': 3600000, '24h': 86400000, '7d': 604800000 };
+const wave = (i, n) => 30 + 20 * Math.sin(i / 7 + n);
+function hostSummary() {
+  const spark = Array.from({ length: 60 }, (_, i) => Math.round(wave(i, 0) * 10) / 10);
+  return { schema_version: 1, collecting: false, observed_at_ms: Date.now() - 2000, interval_ms: 5000, cores: 12, cpu_percent: 31.5,
+    memory_used_bytes: 24 * GIB, memory_total_bytes: 64 * GIB, disk_used_bytes: 600 * GIB, disk_free_bytes: 200 * GIB, disk_total_bytes: 846 * GIB,
+    spark_cpu: spark, spark_memory: spark.map(() => 37.5), spark_disk: spark.map(() => 75) };
+}
+function hostHistory(range) {
+  const step = HOST_STEPS[range], now = Math.floor(Date.now() / step) * step;
+  const count = Math.min(range === '7d' ? 200 : 360, HOST_SPAN[range] / step);
+  const points = Array.from({ length: count }, (_, k) => {
+    const i = k - count + 1, cpu = wave(i, 0);
+    return { t_ms: now + i * step, cpu, cores: Array.from({ length: 12 }, (_, c) => Math.max(0, Math.min(100, wave(i, c)))),
+      load1: cpu / 8, load5: cpu / 9, load15: cpu / 10, mem_used: 24 * GIB, mem_cache: 30 * GIB, swap_used: 2 * GIB, disk_used: 600 * GIB,
+      disk_read_bps: 2e5, disk_write_bps: 1.5e6, net_rx_bps: 3e4, net_tx_bps: 2e4, req_rate: 1.5, req_p50_ms: 2, req_p95_ms: 40 + cpu, req_error_rate: 0 };
+  });
+  return { schema_version: 1, range, step_ms: step, collecting: false, observed_at_ms: now, history_from_ms: points[0].t_ms, cores: 12,
+    memory_total_bytes: 64 * GIB, swap_total_bytes: 32 * GIB, disk_total_bytes: 846 * GIB, points,
+    services: [{ label: 'Synthetic adapter', unit: 'synthetic-adapter.service', state: 'active', sub_state: 'running', result: 'success', since_ms: now - 3600000, restarts: 0, healthy: true },
+      { label: 'Synthetic probe', unit: 'synthetic-probe.service', state: 'failed', sub_state: 'failed', result: 'exit-code', since_ms: now - 60000, restarts: 0, healthy: false }],
+    services_observed_at_ms: now };
+}
+
 const json = (res, status, body) => { res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' }); res.end(JSON.stringify(body)); };
 const missing = res => json(res, 404, { code: 'not_found', message: 'Endpoint not found', request_id: 'synthetic', retryable: false });
 
@@ -162,6 +189,12 @@ async function api(state, req, res, url) {
       controls: { stop: true, steer: true, accept: true }, limits: LIMITS, window: state.window[id] });
   }
   if (path === '/api/v2/live-map' && req.method === 'GET') return json(res, 200, liveMap());
+  if (path === '/api/v2/host-metrics' && req.method === 'GET') return json(res, 200, hostSummary());
+  if (path === '/api/v2/host-metrics/history' && req.method === 'GET') {
+    const range = q.get('range');
+    if (!HOST_STEPS[range]) return json(res, 400, { code: 'invalid_range', message: 'Range', request_id: 'synthetic', retryable: false });
+    return json(res, 200, hostHistory(range));
+  }
   if (path === '/api/v2/sidebar' && req.method === 'GET') return json(res, 200, sidebar(state));
   if (path === '/api/v2/sidebar/read' && req.method === 'PUT') {
     if (req.headers['x-orkestr-csrf'] !== 'synthetic-csrf') return json(res, 403, { code: 'csrf', message: 'CSRF required' });

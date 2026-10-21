@@ -3753,6 +3753,7 @@ dependencies = [
  "orkestr-v2-application",
  "orkestr-v2-contracts",
  "orkestr-v2-store-sqlite",
+ "rustix",
  "serde",
  "serde_json",
  "sha1",
