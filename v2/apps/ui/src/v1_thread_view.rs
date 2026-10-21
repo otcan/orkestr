@@ -34,6 +34,7 @@ pub fn V1ThreadView(
     let mut writable = use_signal(|| false);
     let mut working = use_signal(|| false);
     let mut quick = use_signal(|| 0_u32);
+    let mut mode = use_signal(|| "chat");
     use_drop(move || mounted.set(false));
     let path = move |thread: &str, before: Option<i64>| match before {
         Some(b) => format!("/api/v2/v1-threads/{thread}/messages?before={b}"),
@@ -91,6 +92,12 @@ pub fn V1ThreadView(
         "On V1"
     };
     rsx! {
+        nav { class: "v1-tabs", "aria-label": "V1 chat sections",
+            for (value, name) in [("chat", "Chat"), ("settings", "Settings"), ("timers", "Timers")] {
+                button { r#type: "button", "aria-current": if mode() == value { "page" } else { "false" }, onclick: move |_| mode.set(value), "{name}" }
+            }
+        }
+        if mode() == "chat" {
         section { class: "conversation-pane v1-thread", "aria-label": "Linked V1 chat",
             div { class: "conversation-scroll", tabindex: "0", "aria-label": "V1 chat history",
                 div { class: "v1-banner", role: "note",
@@ -139,7 +146,16 @@ pub fn V1ThreadView(
             crate::scroll_pin::ScrollPin {}
             if loaded() && writable() {
                 div { class: "composer-dock",
-                    V1Composer { thread: thread.clone(), csrf, session_scope, drafts, onexpired, onsent: move |_| quick.set(v1_input::QUICK_POLLS_AFTER_SEND) }
+                    V1Composer { thread: thread.clone(), csrf: csrf.clone(), session_scope, drafts, onexpired, onsent: move |_| quick.set(v1_input::QUICK_POLLS_AFTER_SEND) }
+                }
+            }
+        }
+        } else {
+            div { class: "conversation-scroll v1-manage",
+                if mode() == "settings" {
+                    crate::v1_manage_view::V1Settings { thread: thread.clone(), csrf: csrf.clone(), session_scope, onexpired }
+                } else {
+                    crate::v1_manage_view::V1Timers { thread: thread.clone(), csrf: csrf.clone(), session_scope, onexpired }
                 }
             }
         }

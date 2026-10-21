@@ -37,7 +37,12 @@ export function createState() {
     // Chat settings, desktops and timers of conversation A.
     settings: { schema_version: 1, conversation_id: A, revision: 2, provider: 'codex', model: 'synthetic-model', reasoning_effort: 'medium',
       honor_no_reply: true, reply_prefix: 'synthetic:', reply_footer: null, provider_generation: 0, updated_at_ms: 1 },
-    settingsPuts: [], bindingPuts: [] };
+    settingsPuts: [], bindingPuts: [],
+    // Linked V1 chat management (synthetic V1 state behind the server).
+    v1Model: { model: 'synthetic-model', effort: 'low' }, v1Calls: [],
+    v1Timers: [{ id: 'timer-1', label: 'Synthetic digest', cadence: 'daily', time: '08:00', every: null, timezone: 'Europe/Berlin',
+      run_at: null, prompt: 'Synthetic prompt', enabled: true, owned_by_v2: false, next_run_at: '2026-01-02T07:00:00Z', last_run_at: null, last_error: null }],
+    v1WhatsApp: { reply_prefix: 'synthetic:', suppress_updates: true, suppress_debug_footer: false, additional_participants_enabled: false, additional_participant_ids: [] } };
 }
 
 const json = (res, status, body) => { res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' }); res.end(JSON.stringify(body)); };
@@ -180,6 +185,35 @@ async function api(state, req, res, url) {
     if (link[1] === V1_LINKS.group) return json(res, 200, { kind: 'v1_thread', thread_id: V1_GROUP });
     if (link[1] === V1_LINKS.migrated) return json(res, 200, { kind: 'conversation', conversation_id: B });
     return json(res, 404, { code: 'not_found', message: 'Link not found' });
+  }
+  const manage = /^\/api\/v2\/v1-threads\/([A-Za-z0-9._:-]+)\/(settings|whatsapp|desktops|timers)(?:\/([A-Za-z0-9._:-]+)(?:\/(pause|resume))?)?$/.exec(path);
+  if (manage) {
+    const [, thread, area, timer, action] = manage;
+    if (thread !== V1_GROUP) return missing(res);
+    if (req.method !== 'GET' && req.headers['x-orkestr-csrf'] !== 'synthetic-csrf') return json(res, 403, { code: 'csrf', message: 'CSRF required' });
+    const input = req.method === 'GET' || req.method === 'DELETE' ? null : JSON.parse(await body(req) || '{}');
+    state.v1Calls.push({ method: req.method, area, timer: timer ?? null, action: action ?? null, input });
+    if (area === 'settings') {
+      if (req.method === 'PUT') state.v1Model = { model: input.model, effort: input.effort };
+      return json(res, 200, { thread_id: thread, ...state.v1Model, read_only: false, read_only_reason: null,
+        models: [{ id: 'synthetic-model', efforts: ['low', 'high'], default_effort: 'low' }, { id: 'synthetic-large', efforts: ['medium'], default_effort: 'medium' }] });
+    }
+    if (area === 'whatsapp') {
+      if (req.method === 'PUT') state.v1WhatsApp = input;
+      return json(res, 200, { thread_id: thread, chat_id: '000@g.us', display_name: 'Synthetic group', enabled: true, delegated: false, ...state.v1WhatsApp });
+    }
+    if (area === 'desktops') return json(res, 200, { thread_id: thread, grants: [{ slug: 'synthetic-desk', permissions: ['discover', 'acquire'], expires_at: null }], leases: [] });
+    if (!timer && req.method === 'GET') return json(res, 200, { thread_id: thread, timers: state.v1Timers });
+    if (!timer && req.method === 'POST') {
+      const created = { id: `timer-${state.v1Timers.length + 1}`, label: input.label, cadence: input.cadence, time: input.time ?? null, every: input.every ?? null,
+        timezone: input.timezone ?? null, run_at: input.run_at ?? null, prompt: input.prompt, enabled: true, owned_by_v2: false, next_run_at: null, last_run_at: null, last_error: null };
+      state.v1Timers.push(created); return json(res, 201, created);
+    }
+    const index = state.v1Timers.findIndex(t => t.id === timer);
+    if (index < 0) return missing(res);
+    if (req.method === 'DELETE') { state.v1Timers.splice(index, 1); res.writeHead(204); return res.end(); }
+    if (action) state.v1Timers[index].enabled = action === 'resume';
+    return json(res, 200, state.v1Timers[index]);
   }
   const v1 = /^\/api\/v2\/v1-threads\/([A-Za-z0-9._:-]+)\/messages$/.exec(path);
   if (v1 && req.method === 'GET') {
