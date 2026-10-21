@@ -7877,6 +7877,22 @@ function localWhatsAppOutboundAttachmentMaxBytes(env = process.env) {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 25 * 1024 * 1024;
 }
 
+// Scoped native workers only: create an owner-only group through the worker's
+// journaled, owner-authorized group creation (`groupCreate` config block).
+export async function createLocalWhatsAppScopedGroup({ request = {}, env = process.env } = {}) {
+  const scoped = scopedNativeWorker(env);
+  if (!scoped) throw Object.assign(new Error("scoped_worker_required"), { statusCode: 403 });
+  const selectedAccountId = await normalizeManagedAccountId(request.senderAccountId || request.accountId || scoped.accountId, env);
+  const runtime = selectedAccountId ? runtimes.get(selectedAccountId) : null;
+  const state = selectedAccountId ? accountStates.get(selectedAccountId) : null;
+  if (!runtime?.client || !state?.ready || state?.runtimeUsable === false) {
+    const error = new Error("whatsapp_local_bridge_not_ready");
+    error.statusCode = 400;
+    throw error;
+  }
+  return scoped.createGroup(selectedAccountId, runtime.client, request);
+}
+
 // Scoped native workers only: send the full text of a long group reply as one
 // Markdown document through the scoped transport's journaled send.
 export async function sendLocalWhatsAppScopedDocument({ chatId = "", accountId = "", document = {}, env = process.env, scopedRequest = {} } = {}) {

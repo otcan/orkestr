@@ -9,6 +9,7 @@ import {
   addLocalWhatsAppGroupParticipants,
   completeLocalWhatsAppGroupSetup,
   createLocalWhatsAppChat,
+  createLocalWhatsAppScopedGroup,
   demoteLocalWhatsAppGroupParticipants,
   generateLocalWhatsAppChatPicture,
   getLocalWhatsAppGroupInvite,
@@ -329,6 +330,7 @@ const defaultBridge = {
   addLocalWhatsAppGroupParticipants,
   completeLocalWhatsAppGroupSetup,
   createLocalWhatsAppChat,
+  createLocalWhatsAppScopedGroup,
   demoteLocalWhatsAppGroupParticipants,
   generateLocalWhatsAppChatPicture,
   getLocalWhatsAppGroupInvite,
@@ -356,7 +358,7 @@ async function handleRequest(req, res, env = process.env, bridge = defaultBridge
   const method = clean(req.method || "GET").toUpperCase();
   const url = new URL(req.url || "/", "http://orkestr-wa.local");
   const scoped = scopedNativeWorker(env);
-  if (scoped && !(method === "POST" && ["/send-text", "/send-document"].includes(url.pathname))) scoped.checkRequest(method, url);
+  if (scoped && !(method === "POST" && ["/send-text", "/send-document", "/chats"].includes(url.pathname))) scoped.checkRequest(method, url);
   if (method === "GET" && (url.pathname === "/" || url.pathname === "/health")) {
     requireAuth(req, env);
     const health = publicHealth(await bridge.getLocalWhatsAppBridgeStatus(env, { probeChatOps: false }), env);
@@ -695,6 +697,11 @@ async function handleRequest(req, res, env = process.env, bridge = defaultBridge
   if (method === "POST" && url.pathname === "/chats") {
     requireAuth(req, env);
     const body = await readJsonBody(req);
+    if (scoped) {
+      // Owner-only groups through the worker's journaled creation; anything else is denied.
+      scoped.checkRequest(method, url, body);
+      return json(res, 201, await bridge.createLocalWhatsAppScopedGroup({ request: body, env }));
+    }
     const participants = Array.isArray(body.participantIds) ? body.participantIds.map(clean).filter(Boolean) : [];
     requireServicePolicy(req, url, env, body, {
       accounts: [body.senderAccountId || body.accountId, body.responderAccountId].filter(Boolean),
