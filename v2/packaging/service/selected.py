@@ -76,7 +76,7 @@ def pair_bytes(plan):
 
 OPTIONAL = {'roles', 'preserve_state', 'workspace_exec', 'additional_workspace_exec', 'max_active_windows', 'host_full_access',
             'window_max_minutes', 'conversation_window_max_minutes',
-            'code_mode_host', 'code_mode_host_sha256', 'claude', 'live_map', 'desktop_broker'}
+            'code_mode_host', 'code_mode_host_sha256', 'claude', 'live_map', 'desktop_broker', 'timer_config'}
 CLAUDE_PATHS = ('executable', 'account', 'workspace', 'home', 'temporary')
 # Account selection stays with the Claude account reference, never the env.
 CLAUDE_FORBIDDEN_ENV = {'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN',
@@ -142,6 +142,12 @@ def prepare(plan):
         live=plan['live_map']
         require(type(live) is str and live.startswith('/') and 1<len(live)<=4096 and '\0' not in live
                 and '..' not in Path(live).parts and not any(ord(c)<32 for c in live),'live map path')
+    if 'timer_config' in plan:
+        # Private durable-timer scheduler config (names the machine token
+        # file): path only, never opened by the packager; the server validates it.
+        timer=plan['timer_config']
+        require(type(timer) is str and timer.startswith('/') and 1<len(timer)<=4096 and '\0' not in timer
+                and '..' not in Path(timer).parts and not any(ord(c)<32 for c in timer),'timer config path')
     if 'desktop_broker' in plan:
         # Private V1 desktop broker client file (holds a V1 token): path only,
         # never opened or hashed by the packager; the server validates it.
@@ -263,6 +269,8 @@ def prepare(plan):
                 runtime['live_map']=plan['live_map']
             if 'desktop_broker' in plan:
                 runtime['desktop_broker']=plan['desktop_broker']
+            if 'timer_config' in plan:
+                runtime['timer_config']=plan['timer_config']
             if claude_plan:
                 launcher=inner/'launcher-claude.py'
                 write(launcher,entry(inner,'broker-claude'),gid,True)

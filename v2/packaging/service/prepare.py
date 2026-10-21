@@ -13,7 +13,7 @@ from urllib.parse import urlsplit
 
 sys.path.insert(0,str(Path(__file__).resolve().parent))
 from closure import elf_files, pin, python_files, require
-from beta_config import validate as validate_beta_config
+from beta_config import MAX_BETA_CONFIG_BYTES, validate as validate_beta_config
 
 
 def inventory(root):
@@ -76,7 +76,7 @@ def prepare(pair, pair_sha, binary, ui, output, home, origin, port, uid, beta_co
         require(not beta_config.is_symlink(),'beta config symlink refused')
         st=beta_config.stat()
         require(st.st_uid==0 and st.st_gid==config['gid'] and st.st_nlink==1 and (st.st_mode&0o777)==0o640,'root-managed service-group-readable private beta config required')
-        require(st.st_size<=16384,'bounded beta config required')
+        require(st.st_size<=MAX_BETA_CONFIG_BYTES,'bounded beta config required')
         validate_beta_config(beta_config.read_bytes())
         config['beta_config']=pin(beta_config)
         config['environment']['ORKESTR_V2_BETA_CONFIG']=str(beta_config.resolve())

@@ -41,7 +41,8 @@ for line in sys.stdin:
  elif m=='thread/start':
   reply={'id':f['id'],'result':{'modelProvider':'openai','thread':{'modelProvider':'openai','id':'synthetic-fast-native','ephemeral':False,'cwd':os.getcwd()},'cwd':os.getcwd(),'approvalPolicy':'never','sandbox':{'type':'readOnly'}}}
  elif m=='turn/start':
-  assert f['params']['input'][0]['text']=='synthetic isolated input'
+  note,sep,text=f['params']['input'][0]['text'].partition('\n\n')
+  assert sep and note.startswith('[Fast reply:') and text=='synthetic isolated input'
   with open('turns.log','a') as log: log.write('turn\n')
   reply={'id':f['id'],'result':{'turn':{'id':'fast-turn','status':'inProgress'}}}
  elif m!='initialized': raise RuntimeError('unexpected method')

@@ -72,7 +72,9 @@ def main():
                 assert frame["params"]["threadId"] == native
                 items = frame["params"]["input"]
                 assert len(items) == 1 and set(items[0]) == {"type", "text", "text_elements"}
-                text = items[0]["text"]
+                note, separator, text = items[0]["text"].partition("\n\n")
+                # Every Fast turn carries the quick-reply note before the input.
+                assert separator and note.startswith("[Fast reply:")
                 assert items[0]["type"] == "text" and items[0]["text_elements"] == []
                 number = int(text.rsplit(" ", 1)[1])
                 assert text == f"synthetic Fast source {number}" and 1 <= number <= 8

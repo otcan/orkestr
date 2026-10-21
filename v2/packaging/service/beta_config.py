@@ -13,6 +13,10 @@ FIELDS = {'schema_version', 'owner_id', 'conversation_id', 'manager_socket',
           'launcher', 'launcher_sha256', 'workspace', 'namespace', 'supervisor_key'}
 
 
+# Room for many per-conversation command profiles (each conversation with its
+# own workspace); the server, packager and manager share these bounds.
+MAX_BETA_CONFIG_BYTES = 262144
+MAX_ADDITIONAL_WORKSPACE_EXEC = 128
 TRUSTED_FLAGS = {'network', 'host_toolchain', 'host_privileged'}
 TRUSTED_PATHS = {'workspace_target', 'home'}
 TRUSTED_PATH_LISTS = {'path', 'toolchain_mounts', 'cache_mounts', 'credential_mounts',
@@ -97,7 +101,7 @@ def unique(pairs):
 
 
 def validate(raw):
-    require(type(raw) is bytes and len(raw) <= 16384, 'bounded beta config required')
+    require(type(raw) is bytes and len(raw) <= MAX_BETA_CONFIG_BYTES, 'bounded beta config required')
     value = json.loads(raw.decode('utf-8'), object_pairs_hook=unique,
                        parse_constant=lambda _: (_ for _ in ()).throw(RuntimeError('invalid beta number')))
     require(type(value) is dict and set(value) - {'roles', 'workspace_exec', 'additional_workspace_exec', 'max_active_windows', 'host_full_access', 'claude', 'window_max_minutes', 'conversation_window_max_minutes'} == FIELDS, 'closed beta config fields required')
@@ -179,7 +183,7 @@ def additional_workspace_exec(value):
     primary profile's kind (trusted or not; one Worker tool schema)."""
     extra = value['additional_workspace_exec']
     primary = value.get('workspace_exec')
-    require(type(extra) is list and 0 < len(extra) <= 8 and type(primary) is dict,
+    require(type(extra) is list and 0 < len(extra) <= MAX_ADDITIONAL_WORKSPACE_EXEC and type(primary) is dict,
             'additional workspace execution requires workspace_exec')
     profiles = [primary]
     for profile in extra:

@@ -14,6 +14,10 @@ MODULES_SERVICE = ("__init__.py", "contract.py", "ledger.py", "budget.py", "cust
                    "channel.py", "package.py", "ownership.py", "egress.py", "manager.py",
                    "server_child.py", "broker.py", "profile.py", "entry.py", "role_profiles.py",
                    "claude_broker.py")
+# Shared with the server and packager: room for many per-conversation
+# command profiles.
+MAX_BETA_CONFIG_BYTES = 262144
+MAX_ADDITIONAL_WORKSPACE_EXEC = 128
 FILES = {"server", "native", "manager.py", "launcher.py", "service.json", "profile.json", "beta.json"}
 FILES |= {"broker/" + name for name in BROKER}
 FILES |= {"isolation/" + name for name in ISOLATION}
@@ -36,6 +40,9 @@ LIVE_MAP_ENV = "ORKESTR_V2_LIVE_MAP"
 # Private V1 desktop lease broker client file (0600, service user); the server
 # validates and reads it, the package never does.
 DESKTOP_BROKER_ENV = "ORKESTR_V2_DESKTOP_BROKER_CONFIG"
+# Private durable-timer scheduler config (0600, service user; names the machine
+# token file). The server validates and reads it, the package never does.
+TIMER_CONFIG_ENV = "ORKESTR_V2_TIMER_CONFIG"
 
 
 def live_map_path(value):
@@ -85,18 +92,20 @@ class Package:
         self.manifest = manifest
         self.runtime = metadata(self.root / "service.json")
         self.profile = metadata(self.root / "profile.json")
-        self.beta = metadata(self.root / "beta.json")
+        self.beta = metadata(self.root / "beta.json", MAX_BETA_CONFIG_BYTES)
         self._bind()
         bind_roles(self)
 
     def _bind(self):
         value = self.runtime
-        require(set(value) - {"live_map", "desktop_broker"} == {"format", "uid", "gid", "owner_id", "conversation_id", "home",
+        require(set(value) - {"live_map", "desktop_broker", "timer_config"} == {"format", "uid", "gid", "owner_id", "conversation_id", "home",
                 "bootstrap_file", "ledger_directory", "endpoint_directory", "port", "trusted_origin"}
                 and value["format"] == "orkestr-v2-codex-service-v1", "service_format")
         self.live_map = live_map_path(value["live_map"]) if "live_map" in value else None
         self.desktop_broker = (live_map_path(value["desktop_broker"])
                                if "desktop_broker" in value else None)
+        self.timer_config = (live_map_path(value["timer_config"])
+                             if "timer_config" in value else None)
         require(all(type(value[k]) is int and 0 < value[k] < 2**31 for k in ("uid", "gid")),
                 "service_identity")
         require(type(value["port"]) is int and 1024 <= value["port"] <= 65535, "service_port")
@@ -144,7 +153,7 @@ class Package:
         additional = beta.get("additional_workspace_exec", [])
         # Further conversations' projects: same closed shape and the same
         # command profile kind (one tool schema for every Worker broker).
-        require(type(additional) is list and len(additional) <= 8
+        require(type(additional) is list and len(additional) <= MAX_ADDITIONAL_WORKSPACE_EXEC
                 and (not additional or "workspace_exec" in beta), "workspace_exec_config")
         for command in ([beta["workspace_exec"]] if "workspace_exec" in beta else []) + additional:
             require(type(command) is dict and set(command) - {"trusted"} == {"conversation_id",
@@ -232,4 +241,6 @@ class Package:
                 "ORKESTR_V2_ORIGIN": self.runtime["trusted_origin"],
                 **({LIVE_MAP_ENV: self.live_map} if self.live_map else {}),
                 **({DESKTOP_BROKER_ENV: self.desktop_broker}
-                   if getattr(self, "desktop_broker", None) else {})}
+                   if getattr(self, "desktop_broker", None) else {}),
+                **({TIMER_CONFIG_ENV: self.timer_config}
+                   if getattr(self, "timer_config", None) else {})}

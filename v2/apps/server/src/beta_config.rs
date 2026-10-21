@@ -64,6 +64,10 @@ pub(crate) struct ClaudeWindow {
     pub fast: bool,
 }
 /// Default total window lifetime while work is still running (minutes).
+/// Beta config file bound: room for many per-conversation command profiles.
+pub(crate) const MAX_BETA_CONFIG_BYTES: u64 = 262_144;
+/// Conversations with their own workspace besides the primary profile.
+pub(crate) const MAX_ADDITIONAL_WORKSPACE_EXEC: usize = 128;
 pub(crate) const DEFAULT_WINDOW_MAX_MINUTES: u32 = 60;
 /// Default number of conversations that may hold a live window at once.
 pub(crate) const DEFAULT_ACTIVE_WINDOWS: u32 = 8;
@@ -134,6 +138,9 @@ impl BetaConfig {
             }
         } else if !self.additional_workspace_exec.is_empty() {
             return Err("additional workspace execution requires workspace_exec");
+        }
+        if self.additional_workspace_exec.len() > MAX_ADDITIONAL_WORKSPACE_EXEC {
+            return Err("too many additional workspace execution profiles");
         }
         workspace_exec::validate_set(
             self.workspace_profiles().collect(),

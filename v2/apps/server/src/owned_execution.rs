@@ -37,6 +37,11 @@ use std::{
     time::Duration,
 };
 use tokio::{sync::watch, task::JoinHandle};
+
+/// Run budget of a window's Fast companion. Fast answers quickly; a long
+/// command belongs to Deep or a Worker, and a Fast left running only holds
+/// the window.
+pub(crate) const FAST_MAX_RUN_MS: u64 = 240_000;
 pub(crate) use window_task::WindowTask;
 
 /// Not serializable, clonable or constructible from a browser DTO.

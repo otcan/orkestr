@@ -71,6 +71,12 @@ impl RetiringBroker {
         self.child.shared.active.fetch_sub(1, Ordering::AcqRel);
         self.completed = true;
         if exit.code != Some(73) || exit.signal.is_some() {
+            // Exit status only (a broker failure class 80..217, 0 or a signal):
+            // the one diagnostic for an unconfirmed native-tree retirement.
+            eprintln!(
+                "broker retirement not proven: exit code {:?} signal {:?}",
+                exit.code, exit.signal
+            );
             return Err(Error::AuthorityProtocol);
         }
         Ok(Some(ReapedBroker {
