@@ -24,8 +24,11 @@ const FRESH: Duration = Duration::from_secs(15);
 const STALE: Duration = Duration::from_secs(120);
 /// Preview reads per background fill; the rest fill in on later polls.
 pub(crate) const PREVIEW_READS: usize = 8;
-/// How long a sidebar request waits for a preview fill it started or found.
+/// How long a sidebar request waits for previews it has never shown (first
+/// paint only); changed threads keep their old preview until the fill lands.
 const PREVIEW_WAIT: Duration = Duration::from_millis(150);
+/// A failed preview read is retried after this long.
+const PREVIEW_RETRY: Duration = STALE;
 
 /// One V1 thread, reduced to what the sidebar shows.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -406,8 +409,25 @@ struct CacheState {
     refreshing: bool,
     /// A background preview fill is running; resolves to `true` when done.
     filling: Option<tokio::sync::watch::Receiver<bool>>,
-    /// thread id -> (last V1 message id, preview)
-    previews: HashMap<String, (String, Option<SidebarPreview>)>,
+    /// thread id -> the preview read for the thread's last V1 message.
+    previews: HashMap<String, CachedPreview>,
+}
+
+/// A resolved preview: read for `last` (V1's last message id). `preview` is
+/// `None` for a thread without text. A failed read keeps the previous preview
+/// and counts as resolved until `PREVIEW_RETRY` has passed, so a V1 error or
+/// a retired thread never makes every sidebar request wait again.
+#[derive(Clone)]
+struct CachedPreview {
+    last: String,
+    preview: Option<SidebarPreview>,
+    failed_at: Option<Instant>,
+}
+
+impl CachedPreview {
+    fn resolves(&self, last: &str) -> bool {
+        self.last == last && self.failed_at.is_none_or(|at| at.elapsed() < PREVIEW_RETRY)
+    }
 }
 
 /// Process-wide cache. The registry is read from V1 at most once per
@@ -497,22 +517,26 @@ impl V1Cache {
 
     /// Cached previews for `threads` (newest first). Missing or outdated
     /// ones are read from V1 by one background fill (at most `PREVIEW_READS`
-    /// sequential reads; V1 serves them one at a time anyway). The request
-    /// waits for that fill only up to `PREVIEW_WAIT`, so a slow V1 delays
-    /// previews to a later poll instead of delaying the sidebar.
+    /// sequential reads; V1 serves them one at a time anyway). A request waits
+    /// for that fill, up to `PREVIEW_WAIT`, only when a thread has never had a
+    /// preview read; otherwise it answers at once with what is cached.
     pub(crate) async fn previews(
         &self,
         broker: &Arc<Broker>,
         threads: &[&V1Thread],
     ) -> HashMap<String, SidebarPreview> {
-        let wanted: Vec<(String, String)> = {
+        let (wanted, unseen) = {
             let state = self.lock();
-            threads
+            let wanted: Vec<(String, String)> = threads
                 .iter()
                 .filter_map(|t| Some((t.id.clone(), t.last_message_id.clone()?)))
-                .filter(|(id, last)| state.previews.get(id).is_none_or(|(seen, _)| seen != last))
+                .filter(|(id, last)| state.previews.get(id).is_none_or(|c| !c.resolves(last)))
                 .take(PREVIEW_READS)
-                .collect()
+                .collect();
+            let unseen = wanted
+                .iter()
+                .any(|(id, _)| !state.previews.contains_key(id));
+            (wanted, unseen)
         };
         if !wanted.is_empty() {
             let mut done = {
@@ -526,10 +550,23 @@ impl V1Cache {
                         tokio::spawn(async move {
                             for (id, last) in wanted {
                                 let path = format!("/api/threads/{id}/messages?limit=3");
-                                if let Ok((200, value)) = broker.read(&path, MESSAGES_CAP).await {
-                                    let preview = latest_preview(&value);
-                                    cache.lock().previews.insert(id, (last, preview));
-                                }
+                                let read = broker.read(&path, MESSAGES_CAP).await;
+                                let mut state = cache.lock();
+                                let previous =
+                                    state.previews.get(&id).and_then(|c| c.preview.clone());
+                                let entry = match read {
+                                    Ok((200, value)) => CachedPreview {
+                                        last,
+                                        preview: latest_preview(&value),
+                                        failed_at: None,
+                                    },
+                                    _ => CachedPreview {
+                                        last,
+                                        preview: previous,
+                                        failed_at: Some(Instant::now()),
+                                    },
+                                };
+                                state.previews.insert(id, entry);
                             }
                             cache.lock().filling = None;
                             let _ = finished.send(true);
@@ -538,15 +575,15 @@ impl V1Cache {
                     }
                 }
             };
-            let _ = tokio::time::timeout(PREVIEW_WAIT, done.wait_for(|finished| *finished)).await;
+            if unseen {
+                let _ =
+                    tokio::time::timeout(PREVIEW_WAIT, done.wait_for(|finished| *finished)).await;
+            }
         }
         let state = self.lock();
         threads
             .iter()
-            .filter_map(|t| {
-                let (_, preview) = state.previews.get(&t.id)?;
-                Some((t.id.clone(), preview.clone()?))
-            })
+            .filter_map(|t| Some((t.id.clone(), state.previews.get(&t.id)?.preview.clone()?)))
             .collect()
     }
 
@@ -679,3 +716,7 @@ pub(crate) async fn send_input(
         Err(_) => Err(InputFailure::Unknown),
     }
 }
+
+#[cfg(test)]
+#[path = "sidebar_v1_preview_tests.rs"]
+mod preview_tests;
