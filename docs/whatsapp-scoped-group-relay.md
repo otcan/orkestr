@@ -102,6 +102,32 @@ kept for audit, and a group can be registered again later.
 `SELECT chat_id,thread_id,registered_at,removed_at,reason FROM group_registered`
 on a journal lists the registrations.
 
+## Owner-only group creation
+
+A scoped native worker never creates chats unless its config has:
+
+```json
+"groupCreate": {"enabled": true, "authorizedAt": "<ISO owner authorization>", "ownerParticipantIds": ["<owner number>@c.us"]}
+```
+
+With this block, V1's thread-groups `POST /chats` (reached through the
+connectors gateway) creates exactly one kind of group:
+
+- **Who is in it.** The worker account is the creator. Every other participant
+  must be one of `ownerParticipantIds`, the owner's own numbers. Extra
+  participants are refused. The owner members become admins, and the group is
+  opened so they can post.
+- **Idempotent.** The V1 `operationId` is journaled in `group_create`. A repeat
+  returns the recorded group.
+- **Lost answers.** When the answer is lost, the attempt is settled by reading
+  the account's groups back. It takes exactly one new group with this title and
+  these participants, created after the attempt started.
+- **No global block.** An attempt that stays unsettled refuses that operation
+  id only (`409 scoped_group_create_outcome_unsettled`). It never blocks other
+  creates or any send.
+
+The new group still needs relay registration (static, or `dynamicGroups`).
+
 ## Delivery and recovery
 
 For an audited recovery, preserve private snapshots of the transport and relay

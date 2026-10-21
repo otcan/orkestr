@@ -5,6 +5,7 @@ import {createScopedPairingPermit} from './whatsapp-scoped-pairing.js';
 import {scopedRouteMembership} from './whatsapp-scoped-route-membership.js';
 import {createScopedDirectSender,validateScopedDirectChats} from './whatsapp-scoped-direct-chats.js';
 import {SCOPED_SEND_MAX_TEXT_LENGTH, validReplyDocument} from './whatsapp-scoped-group-formatting.js';
+import {createScopedGroupCreator, scopedGroupCreateRequest, validateScopedGroupCreate} from './whatsapp-scoped-group-create.js';
 const loaded=new Map();
 const fail=()=>{throw Object.assign(new Error('scoped_worker_operation_denied'),{statusCode:403});};
 // Inbound events are fire-and-forget, so a failing journal (for example a build
@@ -13,7 +14,7 @@ const fail=()=>{throw Object.assign(new Error('scoped_worker_operation_denied'),
 export function observeFailureCode(error) {
  return String(error?.message || error || 'unknown').replace(/\d{6,}/g,'#').slice(0,160);
 }
-export function createScopedNativeWorkerPolicy(config,{createTransport=createScopedGroupTransport,createDirectSender=createScopedDirectSender,report=entry=>console.error(JSON.stringify(entry)),now=Date.now}={}) {
+export function createScopedNativeWorkerPolicy(config,{createTransport=createScopedGroupTransport,createDirectSender=createScopedDirectSender,createGroupCreator=createScopedGroupCreator,report=entry=>console.error(JSON.stringify(entry)),now=Date.now}={}) {
  const threads=scopedRouteMembership(config),groups=config.groups || [];
  if(!config.workerAccountId || !threads || !groups.length || groups.length!==threads.size
      || new Set(groups.map(g=>g.chatId)).size!==groups.length
@@ -21,6 +22,9 @@ export function createScopedNativeWorkerPolicy(config,{createTransport=createSco
  const chats=new Set(groups.map(g=>g.chatId));
  // Owner-approved 1:1 chats (optional). Validated up front so a bad config fails at startup.
  const direct=validateScopedDirectChats(config,threads);
+ // Owner-authorized creation of owner-only groups (optional, validated up front).
+ const groupCreate=validateScopedGroupCreate(config);
+ let groupCreator;
  let transport,directSender,started=false;
  const reported=new Map(),failures={total:0,last:null};
  const pairing=createScopedPairingPermit(config);
@@ -68,6 +72,7 @@ export function createScopedNativeWorkerPolicy(config,{createTransport=createSco
       && Number(url.searchParams.get('limit')||30)>0 && Number(url.searchParams.get('limit')||30)<=50)return;
    if(method==='GET' && historyChat && groupAllowed(historyChat) && url.pathname===`/accounts/${a}/chats/${encodeURIComponent(historyChat)}/history` && (!url.searchParams.has('mark_seen') || url.searchParams.get('mark_seen')==='false')
       && Number(url.searchParams.get('limit')||30)>0 && Number(url.searchParams.get('limit')||30)<=50)return;
+   if(method==='POST' && url.pathname==='/chats' && scopedGroupCreateRequest(groupCreate,config.workerAccountId,body))return;
    if(method==='POST' && url.pathname==='/send-text' && body.accountId===config.workerAccountId && groupAllowed(body.to)
       && typeof body.text==='string' && body.text.length<=SCOPED_SEND_MAX_TEXT_LENGTH && typeof body.requestId==='string' && typeof body.parentId==='string'
       && Object.keys(body).every(k=>['accountId','to','text','requestId','parentId','notificationId'].includes(k)))return;
@@ -100,8 +105,16 @@ export function createScopedNativeWorkerPolicy(config,{createTransport=createSco
    return get(accountId).sendText(client,chatId,text,'main',request);
   },
   directChatCount:()=>direct?.chats.size||0,
+  // Owner-only group creation; `body` already passed checkRequest.
+  createGroup(accountId,client,body){
+   if(accountId!==config.workerAccountId)fail();
+   const request=scopedGroupCreateRequest(groupCreate,config.workerAccountId,body);
+   if(!request)fail();
+   groupCreator ||= createGroupCreator({config,now});
+   return groupCreator.create(client,request,config.workerAccountId);
+  },
   sendDocument(accountId,client,chatId,document,request,createMedia){return get(accountId).sendDocument(client,chatId,document,'main',request,createMedia);},
-  close(){transport?.close();directSender?.close();},
+  close(){transport?.close();directSender?.close();groupCreator?.close();},
  };
 }
 export function scopedNativeWorker(env=process.env) {
