@@ -276,6 +276,48 @@ impl V1HistoryPage {
 
 pub const V1_INPUT_TEXT_MAX: usize = 16 * 1024;
 
+/// V1 public references (`packages/storage/src/public-references.js`):
+/// a prefix and 22 base64url characters (16 random bytes).
+fn public_ref(value: &str, prefix: &str) -> bool {
+    value.strip_prefix(prefix).is_some_and(|token| {
+        token.len() == 22
+            && token
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+            // 16 bytes in 22 base64url characters leave 4 zero bits at the end.
+            && token
+                .bytes()
+                .last()
+                .is_some_and(|b| b"AQgw".contains(&b))
+    })
+}
+/// `thr_<22 base64url>`: an old V1 thread deep link reference.
+pub fn valid_v1_thread_ref(value: &str) -> bool {
+    public_ref(value, "thr_")
+}
+/// `ins_<22 base64url>`: an old V1 instance deep link reference.
+pub fn valid_v1_instance_ref(value: &str) -> bool {
+    public_ref(value, "ins_")
+}
+
+/// `GET /api/v2/v1-links/{thr_ref}`: where an old V1 deep link opens.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum V1LinkTarget {
+    /// The thread moved to V2: open its conversation.
+    Conversation { conversation_id: ConversationId },
+    /// Still on V1: open its linked entry (`v1:<thread_id>`).
+    V1Thread { thread_id: String },
+}
+impl V1LinkTarget {
+    pub fn is_valid(&self) -> bool {
+        match self {
+            Self::Conversation { conversation_id } => !conversation_id.0.is_nil(),
+            Self::V1Thread { thread_id } => valid_v1_thread_id(thread_id),
+        }
+    }
+}
+
 /// `POST /api/v2/v1-threads/{thread}/messages`: owner input into a linked V1
 /// thread, admitted by V1 as web UI input with UI-only reply delivery (the
 /// reply is shown here, never sent to the thread's WhatsApp group).
@@ -319,6 +361,27 @@ impl V1ThreadInputReceipt {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn v1_public_refs_match_v1_generation() {
+        // base64url of 16 bytes: 0x00.. and 0xff.. (last char carries 2 bits).
+        assert!(valid_v1_thread_ref("thr_AAAAAAAAAAAAAAAAAAAAAA"));
+        assert!(valid_v1_thread_ref("thr______________________w"));
+        assert!(valid_v1_instance_ref("ins_Ab-_0123456789abcdefgQ"));
+        for bad in [
+            "thr_AAAAAAAAAAAAAAAAAAAAA",
+            "thr_AAAAAAAAAAAAAAAAAAAAAB",
+            "thr_AAAAAAAAAAAAAAAAAAAA/A",
+            "ins_AAAAAAAAAAAAAAAAAAAAAA",
+            "thr_AAAAAAAAAAAAAAAAAAAAAAA",
+            "",
+        ] {
+            assert!(!valid_v1_thread_ref(bad), "{bad}");
+        }
+        let target: V1LinkTarget =
+            serde_json::from_str(r#"{"kind":"v1_thread","thread_id":"synthetic-1"}"#).unwrap();
+        assert!(target.is_valid());
+    }
 
     fn v1(id: &str) -> SidebarEntry {
         SidebarEntry {

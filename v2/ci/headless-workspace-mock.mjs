@@ -92,6 +92,9 @@ function liveMap() {
 // coordinator attached) and its worker sub-chat, newest activity first.
 export const V1_GROUP = 'synthetic-group';
 export const V1_WORKER = 'worker-synthetic-group-0001';
+// Synthetic V1 public references of old deep links.
+export const V1_INSTANCE_REF = 'ins_AAAAAAAAAAAAAAAAAAAAAA';
+export const V1_LINKS = { group: 'thr_AAAAAAAAAAAAAAAAAAAAAQ', migrated: 'thr_AAAAAAAAAAAAAAAAAAAAAg', unknown: 'thr_AAAAAAAAAAAAAAAAAAAAAw' };
 function sidebar(state) {
   const now = Date.now();
   const entry = (key, name, at, extra = {}) => ({ key, source: key.startsWith('v1:') ? 'v1' : 'v2', name,
@@ -150,6 +153,13 @@ async function api(state, req, res, url) {
     const mark = JSON.parse(await body(req));
     state.marks.push(mark);
     return json(res, 200, mark);
+  }
+  const link = /^\/api\/v2\/v1-links\/(thr_[A-Za-z0-9_-]{22})$/.exec(path);
+  if (link && req.method === 'GET') {
+    if (q.get('instance') !== V1_INSTANCE_REF) return missing(res);
+    if (link[1] === V1_LINKS.group) return json(res, 200, { kind: 'v1_thread', thread_id: V1_GROUP });
+    if (link[1] === V1_LINKS.migrated) return json(res, 200, { kind: 'conversation', conversation_id: B });
+    return json(res, 404, { code: 'not_found', message: 'Link not found' });
   }
   const v1 = /^\/api\/v2\/v1-threads\/([A-Za-z0-9._:-]+)\/messages$/.exec(path);
   if (v1 && req.method === 'GET') {
@@ -213,6 +223,8 @@ export async function startMock(bundle, state = createState()) {
   const server = createServer(async (req, res) => {
     const url = new URL(req.url, 'http://127.0.0.1');
     if (url.pathname.startsWith('/api/')) return api(state, req, res, url);
+    const deep = /^\/instance\/(ins_[A-Za-z0-9_-]{22})\/thread\/(thr_[A-Za-z0-9_-]{22})$/.exec(url.pathname);
+    if (deep) { res.writeHead(303, { location: `/#v1-link/${deep[1]}/${deep[2]}`, 'cache-control': 'no-store' }); return res.end(); }
     const file = normalize(url.pathname === '/' ? '/index.html' : url.pathname);
     if (file.includes('..')) return missing(res);
     try {

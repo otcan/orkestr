@@ -50,12 +50,18 @@ fn main() {
     dioxus::launch(App);
 }
 
+/// `(instance ref, thread ref)` of an old V1 deep link.
+#[derive(Clone, PartialEq)]
+pub struct V1Link(pub (String, String));
 #[component]
 fn App() -> Element {
     let mut csrf = use_signal(String::new);
     let mut global = use_signal(String::new);
     let mut current = use_signal(String::new);
     let mut requested_conversation = use_signal(|| None::<String>);
+    // An old V1 deep link (instance, thread refs), opened once the workspace mounts.
+    let mut v1_link = use_signal(|| None::<V1Link>);
+    use_context_provider(move || v1_link);
     let mut drafts = use_signal(BTreeMap::<String, Draft>::new);
     let mut session_scope = use_signal(SessionScope::default);
     let mut saved_inputs = use_signal(orkestr_v2_ui::beta_inputs::SavedInputs::default);
@@ -111,6 +117,7 @@ fn App() -> Element {
     let mut logging_out = use_signal(|| false);
     use_future(move || async move {
         requested_conversation.set(conversation_location::read().await);
+        v1_link.set(conversation_location::read_v1_link().await.map(V1Link));
         match transport::request::<transport::BrowserSession>(
             "GET",
             "/api/v2/browser/session",

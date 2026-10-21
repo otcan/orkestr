@@ -1,5 +1,5 @@
 use dioxus::prelude::*;
-use orkestr_v2_contracts::SidebarEntry;
+use orkestr_v2_contracts::{SidebarEntry, V1LinkTarget};
 use orkestr_v2_ui::{session_scope::SessionScope, Draft};
 use std::collections::BTreeMap;
 
@@ -34,6 +34,51 @@ pub fn Workspace(
     // A linked V1 chat is shown read-only instead of a native conversation.
     let mut linked = use_signal(|| None::<SidebarEntry>);
     let mut live = use_signal(|| None::<SidebarEntry>);
+    // An old V1 deep link: a migrated thread opens its conversation, a V1 one
+    // its linked entry once the sidebar lists it.
+    let mut v1_link = use_context::<Signal<Option<crate::V1Link>>>();
+    let mut wanted = use_signal(|| None::<String>);
+    let mut link_notice = use_signal(String::new);
+    use_future(move || async move {
+        let Some(crate::V1Link((instance, thread))) = v1_link.peek().clone() else {
+            return;
+        };
+        v1_link.set(None);
+        let path = format!("/api/v2/v1-links/{thread}?instance={instance}");
+        let owner = session_scope.peek().generation();
+        let result = crate::transport::request::<V1LinkTarget>(
+            "GET",
+            &path,
+            serde_json::Value::Null,
+            "",
+            "",
+        )
+        .await;
+        if !session_scope.peek().is_current(owner) {
+            return;
+        }
+        match result {
+            Ok(target) if target.is_valid() => match target {
+                V1LinkTarget::Conversation { conversation_id } => {
+                    let id = conversation_id.to_string();
+                    linked.set(None);
+                    execution.write().select(&id, "");
+                    current.set(id);
+                    reload += 1;
+                }
+                V1LinkTarget::V1Thread { thread_id } => wanted.set(Some(thread_id)),
+            },
+            Err(error) if error.status == 401 => {
+                onexpired.call(());
+                return;
+            }
+            _ => link_notice.set(
+                "This V1 link does not open here: the chat is retired, unknown or not yours."
+                    .into(),
+            ),
+        }
+        crate::conversation_location::replace(Some(&current.peek()));
+    });
     let selected = match linked() {
         Some(entry) => entry.key,
         None => format!("v2:{}", current()),
@@ -47,6 +92,14 @@ pub fn Workspace(
             crate::conversation_sidebar::ConversationSidebar {
                 selected: selected.clone(), csrf: csrf.clone(), session_scope, onexpired,
                 onloaded: move |rows: Vec<SidebarEntry>| {
+                    let pending = wanted.peek().clone();
+                    if let Some(thread) = pending {
+                        if let Some(row) = rows.iter().find(|row| row.key == format!("v1:{thread}")) {
+                            wanted.set(None);
+                            tab.set("Chat".into());
+                            linked.set(Some(row.clone()));
+                        }
+                    }
                     let key = match linked.peek().as_ref() { Some(entry) => entry.key.clone(), None => format!("v2:{}", current.peek()) };
                     let row = rows.into_iter().find(|row| row.key == key);
                     if let Some(row) = &row { title.set(row.name.clone()); }
@@ -72,6 +125,7 @@ pub fn Workspace(
             }
             if sidebar() { button { class: "drawer-scrim", r#type: "button", "aria-label": "Close conversations", onclick: move |_| sidebar.set(false) } }
             div { class: "workspace-main",
+                if !link_notice().is_empty() { p { class: "app-notice link-notice", role: "status", "{link_notice}" } }
                 header { class: "conversation-heading",
                     button { class: "threads-toggle", "aria-expanded": "{sidebar}", "aria-label": "Conversations", onclick: move |_| sidebar.set(!sidebar()), span { "aria-hidden": "true", "☰" } }
                     div { class: "heading-title",
