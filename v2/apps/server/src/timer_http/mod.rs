@@ -1,4 +1,5 @@
 //! Leaf router. Deep owns registration under existing auth/origin/CSRF guard.
+mod calendar;
 mod conversation;
 pub mod durable;
 mod owner_controller;
@@ -104,6 +105,16 @@ async fn detail(controller: &DurableOwnerController, value: TimerDetail) -> dto:
                 weekday,
                 minute_of_day,
             },
+            TimerSchedule::Calendar(rule) => dto::Schedule::Calendar {
+                summary: rule.describe(),
+                timezone: rule.timezone,
+                weekdays: rule.weekdays,
+                start_minute: rule.start_minute,
+                end_minute: rule.end_minute,
+                every_hours: rule.every_hours,
+                minutes: rule.minutes,
+            },
+            TimerSchedule::Event => dto::Schedule::Event,
             TimerSchedule::Dormant { .. } => dto::Schedule::Dormant,
         },
         conversation_id: value.conversation_id,
@@ -222,9 +233,42 @@ pub fn routes(controller: DurableOwnerController) -> Router<AppState> {
         )
         .route("/api/v2/timers/{namespace}/enable", post(enable))
         .route("/api/v2/timers/{namespace}/control", post(control))
+        .route("/api/v2/timers/calendar", post(calendar::create))
+        .route("/api/v2/timers/calendar/preview", post(calendar::preview))
+        .route("/api/v2/timers/{namespace}/schedule", post(calendar::edit))
+        .route(
+            "/api/v2/timers/{namespace}/policy",
+            get(calendar::policy_read).put(calendar::policy_put),
+        )
+        .route(
+            "/api/v2/timers/{namespace}/pause",
+            post(calendar::pause_timer),
+        )
+        .route(
+            "/api/v2/conversations/{id}/timer-pause",
+            post(calendar::pause_conversation),
+        )
+        .route(
+            "/api/v2/conversations/{id}/timer-triggers",
+            post(calendar::trigger),
+        )
+        .route(
+            "/api/v2/conversations/{id}/timer-outcomes",
+            post(calendar::outcome),
+        )
+        .route(
+            "/api/v2/conversations/{id}/timer-digests",
+            get(calendar::digests),
+        )
+        .route(
+            "/api/v2/conversations/{id}/timer-digests/{digest}/delivered",
+            post(calendar::digest_delivered),
+        )
         .layer(Extension(controller))
 }
 
+#[cfg(test)]
+mod calendar_tests;
 #[cfg(test)]
 mod conversation_tests;
 #[cfg(test)]

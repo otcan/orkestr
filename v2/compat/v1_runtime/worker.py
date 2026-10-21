@@ -7,7 +7,7 @@ import sys
 import time
 import uuid
 
-from .ledger import DEFAULT_MAX_INPUT_AGE_S, PROGRESS_LIMIT, no_reply
+from .ledger import DEFAULT_MAX_INPUT_AGE_S, DIGEST_NAMESPACE as DIGEST_REPLY_NAMESPACE, PROGRESS_LIMIT, no_reply
 from .participants import compose
 from .rust_client import ClientError
 
@@ -234,6 +234,65 @@ class Worker:
         if cursor is None:
             self.ledger.set_timer_cursor(start)
 
+    def timer_final(self, data, raw):
+        """Final text to deliver, or None when silent. A timer run's answer is
+        classified by Rust first (silent unless changed, NO_REPLY, digest-held);
+        a server without the route keeps the ordinary reply settings only."""
+        claim = (data.get("timer") or {}).get("claim_id") if data.get("origin") == "timer" else None
+        if claim:
+            try:
+                value = self.call("POST", "/timer-outcomes", {"claim_id": claim, "text": raw})
+            except ClientError as error:
+                if error.status != 404:
+                    raise
+                value = None
+            if value is not None:
+                if not isinstance(value, dict) or type(value.get("deliver")) is not bool:
+                    raise Refused("outcome_shape")
+                if not value["deliver"]:
+                    return None
+        return self.render_final(raw)
+
+    def fire_trigger(self, data):
+        """Tell Rust a new inbound message arrived, for event-triggered timers.
+        Best effort and idempotent by message id: a failure never blocks the input."""
+        author = data.get("author") or {}
+        if data.get("origin") or data.get("trigger_sent") or author.get("role") == "v1_agent":
+            return
+        try:
+            self.call("POST", "/timer-triggers", {"source": "message", "event_key": str(data["public_id"])[:128]})
+        except ClientError as error:
+            if error.status is None or error.status >= 500:
+                return
+        except Exception:
+            return
+        data["trigger_sent"] = True
+        self.ledger.save(data)
+
+    def discover_digests(self):
+        """Adopt digests Rust created for this conversation and acknowledge them
+        once the ledger holds them; the ledger exports each as a normal reply."""
+        value = self.call("GET", "/timer-digests?limit=20")
+        rows = value.get("digests") if isinstance(value, dict) else None
+        if not isinstance(rows, list) or len(rows) > 20:
+            raise Refused("timer_digests_shape")
+        for row in rows:
+            if not (isinstance(row, dict) and all(isinstance(row.get(k), str) and row[k] for k in ("id", "namespace", "text"))):
+                raise Refused("timer_digests_shape")
+            self.ledger.enqueue_digest(row)
+            self.client.request("POST", "/timer-digests/%s/delivered" % row["id"], body={}, allowed=(200,))
+
+    def finish_digest(self, data):
+        digest = data["digest"]
+        text = self.render_final(digest["text"])
+        if text is None:
+            self.ledger.finish_silently(data, "suppressed")
+            return
+        reply = {"id": str(uuid.uuid5(DIGEST_REPLY_NAMESPACE, digest["id"])), "role": "assistant", "state": "completed",
+                 "phase": "final_answer", "source": "rust-v2-pilot", "parentMessageId": data["remote_id"], "text": text}
+        reply.update(self.provider_identity())
+        self.ledger.complete(data, reply)
+
     def timer_window(self, data):
         """Server-queued Deep turn for a timer occurrence. Returns True to continue."""
         sequence = data["intake"]["sequence"]
@@ -261,6 +320,8 @@ class Worker:
     def step(self, data):
         if data.get("blocked"):
             return
+        if data.get("digest"):
+            return self.finish_digest(data)
         if data.get("attachments") and "attachment_receipt" not in data:
             self.import_attachments(data)
         if "intake" not in data:
@@ -270,6 +331,7 @@ class Worker:
                 raise Refused("intake_receipt")
             data.update(intake=intake, cursor=intake["sequence"] - 1, phase="admitted", admitted_at=time.time())
             self.ledger.save(data)
+        self.fire_trigger(data)
         if data.get("origin") == "timer" and "window" not in data and "window_request" not in data:
             if not self.timer_window(data):
                 return
@@ -398,7 +460,7 @@ class Worker:
             after = cursor
         if len(matches) != 1 or matches[0].get("payload_removed") is not False or any(matches[0].get(k) != deep[k] for k in ("run_id", "completion_event_id")) or matches[0].get("payload_id") != data["deep_payload"]["payload_id"]:
             raise Refused("accepted_history_mismatch")
-        text = self.render_final(data["deep_payload"]["text"])
+        text = self.timer_final(data, data["deep_payload"]["text"])
         reply = {"id": deep["acceptance_event_id"], "role": "assistant", "state": "completed",
                  "phase": "final_answer", "source": "rust-v2-pilot", "parentMessageId": data["remote_id"], "text": text}
         reply.update(self.provider_identity())
@@ -647,6 +709,11 @@ class Worker:
             self.discover_timers()
         except Exception:
             # Discovery is retried every pass; it never blocks existing inputs.
+            pass
+        try:
+            self.discover_digests()
+        except Exception:
+            # Same: a missing route (older server) or a failure is retried later.
             pass
         try:
             for data in self.ledger.mark_stalled(STALL_NOTICE_AFTER_S, STALL_NOTICE):

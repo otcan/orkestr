@@ -4,6 +4,7 @@ import tempfile
 import unittest
 
 from v2.compat.v1_runtime.ledger import Conflict, Ledger
+from v2.compat.v1_runtime.rust_client import ClientError
 from v2.compat.v1_runtime.worker import Refused, Worker
 from v2.compat.v1_runtime.tests.test_worker import Peer
 
@@ -22,6 +23,7 @@ class TimerPeer(Peer):
     def __init__(self):
         super().__init__()
         self.timer_rows, self.reads = [], []
+        self.digests, self.acked = [], []
 
     def matching_run_ids(self, events, intake):
         return ["fast-run", "deep-run"]
@@ -35,16 +37,24 @@ class TimerPeer(Peer):
             return 200, {"conversation_id": self.conversation, "inputs": rows}
         if route == "/messages":
             raise AssertionError("a timer occurrence is already admitted; it is never re-sent")
+        if route.startswith("/timer-digests?"):
+            return 200, {"conversation_id": self.conversation, "digests": [dict(d) for d in self.digests if d["id"] not in self.acked]}
+        if route.startswith("/timer-digests/"):
+            self.acked.append(route.split("/")[2])
+            return 200, {"delivered": True}
         return super().request(method, route, body, allowed)
 
 
-class TimerRelayTests(unittest.TestCase):
+class Base(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.ledger = Ledger(Path(self.temp.name) / "ledger.sqlite3", SCOPE)
         self.peer = TimerPeer()
         self.worker = Worker(self.peer, self.ledger)
+
+
+class TimerRelayTests(Base):
 
     def test_first_scan_records_position_without_backfill(self):
         self.peer.timer_rows = [occurrence(3), occurrence(5)]
@@ -130,6 +140,133 @@ class TimerRelayTests(unittest.TestCase):
         data = self.ledger.next_input()
         with self.assertRaises(Refused):
             self.worker.step(data)
+
+
+class SilentTimerTests(Base):
+    """Rust classifies each timer answer; silent ones are acknowledged as no_reply."""
+
+    def run_occurrence(self, deliver, summary="x"):
+        self.peer.outcome = lambda body: {"outcome": "delivered" if deliver else "silent", "deliver": deliver,
+                                          "summary": summary, "replay": False}
+        self.ledger.set_timer_cursor(0)
+        self.peer.timer_rows = [occurrence(2)]
+        self.worker.run_once(_Stop())
+        return [m for m in self.ledger.messages() if m["role"] == "assistant"]
+
+    def test_silent_answer_is_exported_as_no_reply_and_reports_the_raw_text(self):
+        replies = self.run_occurrence(False)
+        self.assertEqual(len(replies), 1)
+        self.assertTrue(replies[0]["noReply"])
+        self.assertEqual(replies[0]["text"], "NO_REPLY")
+        self.assertEqual(self.peer.outcomes, [{"claim_id": occurrence(2)["claim_id"], "text": "deep result"}])
+        user = [m for m in self.ledger.messages() if m["role"] == "user"][0]
+        result = self.ledger.acknowledge(replies[0]["id"], {"outcome": "no_reply", "parentPublicMessageId": user["publicMessageId"]})
+        self.assertTrue(result["settled"])
+
+    def test_answer_with_news_is_delivered_normally(self):
+        replies = self.run_occurrence(True)
+        self.assertEqual(replies[0]["text"], "deep result")
+        self.assertNotIn("noReply", replies[0])
+
+    def test_server_without_the_route_keeps_the_ordinary_reply_rules(self):
+        self.ledger.set_timer_cursor(0)
+        self.peer.timer_rows = [occurrence(2)]
+        self.worker.run_once(_Stop())
+        replies = [m for m in self.ledger.messages() if m["role"] == "assistant"]
+        self.assertEqual(replies[0]["text"], "deep result")
+
+    def test_malformed_outcome_is_refused_not_guessed(self):
+        self.peer.outcome = lambda body: {"deliver": "yes"}
+        self.ledger.set_timer_cursor(0)
+        self.peer.timer_rows = [occurrence(2)]
+        self.worker.run_once(_Stop())
+        replies = [m for m in self.ledger.messages() if m["role"] == "assistant"]
+        self.assertEqual(replies[0]["kind"], "notice")
+
+
+class DigestTests(Base):
+    def digest(self, text="Digest: Jobs - 3 quiet runs since the last digest."):
+        return {"id": "d0000000-0000-4000-8000-000000000001", "namespace": occurrence(1)["namespace"],
+                "slot_ms": 1_800_000_000_000, "text": text, "item_count": 3}
+
+    def test_digest_is_adopted_acknowledged_and_exported_once(self):
+        self.peer.digests = [self.digest()]
+        self.worker.run_once(_Stop())
+        self.assertEqual(self.peer.acked, ["d0000000-0000-4000-8000-000000000001"])
+        messages = self.ledger.messages()
+        user, reply = messages[0], messages[-1]
+        self.assertEqual((user["role"], user["origin"]), ("user", "timer"))
+        self.assertEqual(reply["text"], "Digest: Jobs - 3 quiet runs since the last digest.")
+        self.assertEqual(reply["parentMessageId"], user["id"])
+        # A replay (lost acknowledgement) adopts nothing new.
+        self.peer.acked.clear()
+        self.worker.run_once(_Stop())
+        self.assertEqual(len([m for m in self.ledger.messages() if m["role"] == "assistant"]), 1)
+        done = self.ledger.acknowledge(reply["id"], {"outcome": "delivered", "outboxJobId": "job",
+                                                     "parentPublicMessageId": user["publicMessageId"]})
+        self.assertTrue(done["settled"])
+        self.assertEqual(self.ledger.messages(), [])
+
+    def test_changed_digest_identity_conflicts(self):
+        self.ledger.enqueue_digest(self.digest())
+        with self.assertRaises(Conflict):
+            self.ledger.enqueue_digest(self.digest("Something else"))
+
+    def test_digest_honours_reply_settings(self):
+        self.peer.reply_settings = dict(prefix="[Orkestr]", footer=None, honor_no_reply=True)
+        self.peer.digests = [self.digest()]
+        self.worker.run_once(_Stop())
+        reply = self.ledger.messages()[-1]
+        self.assertTrue(reply["text"].startswith("[Orkestr] Digest"))
+
+
+class TriggerTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.ledger = Ledger(Path(self.temp.name) / "ledger.sqlite3", SCOPE)
+        self.peer = Peer()
+        self.worker = Worker(self.peer, self.ledger)
+
+    def inbound(self, public_id="wa-msg-1"):
+        return self.ledger.enqueue({"publicThreadId": "v1-thread", "publicMessageId": public_id, "chatId": "chat@g.us",
+                                    "accountId": "account", "text": "hello"})[0]
+
+    def test_inbound_message_fires_one_idempotent_trigger(self):
+        data = self.inbound()
+        self.worker.fire_trigger(data)
+        self.worker.fire_trigger(data)
+        self.assertEqual(self.peer.triggers, [{"source": "message", "event_key": "wa-msg-1"}])
+
+    def test_a_normal_step_fires_it_before_running(self):
+        data = self.inbound()
+        self.worker.step(data)
+        self.assertEqual(self.peer.triggers, [{"source": "message", "event_key": "wa-msg-1"}])
+
+    def test_trigger_failure_never_blocks_the_input_and_is_retried(self):
+        data = self.inbound()
+        original = self.peer.request
+        failures = [True]
+
+        def flaky(method, route, body=None, allowed=(200,)):
+            if route == "/timer-triggers" and failures:
+                failures.pop()
+                raise ClientError("unreachable")
+            return original(method, route, body, allowed)
+        self.peer.request = flaky
+        self.worker.fire_trigger(data)
+        self.assertFalse(data.get("trigger_sent"))
+        self.worker.fire_trigger(data)
+        self.assertTrue(data["trigger_sent"])
+        self.assertEqual(len(self.peer.triggers), 1)
+
+    def test_timer_and_agent_inputs_do_not_trigger(self):
+        timer = self.ledger.enqueue_timer(occurrence(2))[0]
+        self.worker.fire_trigger(timer)
+        data = self.inbound("agent-1")
+        data["author"] = {"role": "v1_agent", "id": "a", "label": "agent"}
+        self.worker.fire_trigger(data)
+        self.assertEqual(self.peer.triggers, [])
 
 
 class _Stop:

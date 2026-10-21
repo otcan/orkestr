@@ -1,14 +1,22 @@
 //! Ordinary durable schedule ledger. Claims are inert records, never execution admissions.
 //! Core registers this child module and owns the authoritative SQL migration.
 pub mod authority;
+mod calendar;
+pub mod calendar_timer;
 mod claim;
 mod control;
 mod detail;
+pub mod digest;
+pub use calendar::local_time_label;
 pub use detail::TimerDetail;
 mod import;
 pub mod input;
+pub mod outcome;
+pub mod policy;
+mod policy_pause;
 mod schedule;
 mod target;
+pub mod trigger;
 pub use target::{TimerInputRecord, TimerListing, TimerTarget};
 #[cfg(test)]
 mod tests;

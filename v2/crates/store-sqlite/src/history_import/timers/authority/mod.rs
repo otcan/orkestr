@@ -18,7 +18,7 @@ pub struct DurableTimerAuthority {
     pub instruction_digest: String,
     pub duplicate: bool,
 }
-fn instruction_digest(instruction: &str) -> String {
+pub(super) fn instruction_digest(instruction: &str) -> String {
     hash(&serde_json::json!(["orkestr.timer.owner-instruction.v1", instruction]).to_string())
 }
 fn authority(row: &SqliteRow, duplicate: bool) -> Result<DurableTimerAuthority> {
@@ -156,6 +156,15 @@ pub(crate) async fn admit_in_transaction(
         return Err(HistoryError::Conflict);
     }
     let due = timer.next_due_ms.ok_or(HistoryError::Conflict)?;
+    // A pause or skip date set after the scheduler chose this occurrence wins.
+    let conversation: String = current.get("conversation_id");
+    let schedule = schedule::decode(current.get("schedule_json"))?;
+    if policy_pause::load(tx, owner, namespace, &schedule, Some(&conversation))
+        .await?
+        .blocks(due)
+    {
+        return Err(HistoryError::Conflict);
+    }
     let request = TimerInputRequest {
         claim: TimerClaimRequest {
             namespace,

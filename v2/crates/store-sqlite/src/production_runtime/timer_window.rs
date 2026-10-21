@@ -30,11 +30,13 @@ impl Store {
             .map_err(|_| HistoryError::Unauthorized)?;
         let now = authority::store_clock(&mut tx).await?;
         let namespaces: Vec<String> = sqlx::query_scalar(
-            "SELECT a.namespace FROM durable_timer_authorities a JOIN dormant_timers t ON t.owner_id=a.owner_id AND t.namespace=a.namespace AND t.generation=a.generation WHERE a.owner_id=? AND t.state='enabled' AND t.next_due_ms<=? AND a.namespace>? ORDER BY a.namespace LIMIT ?",
+            "SELECT a.namespace FROM durable_timer_authorities a JOIN dormant_timers t ON t.owner_id=a.owner_id AND t.namespace=a.namespace AND t.generation=a.generation WHERE a.owner_id=? AND t.state='enabled' AND t.next_due_ms<=? AND a.namespace>? AND NOT EXISTS(SELECT 1 FROM timer_policies p WHERE p.owner_id=t.owner_id AND p.namespace=t.namespace AND p.pause_until_ms>?) AND NOT EXISTS(SELECT 1 FROM conversation_timer_pauses c WHERE c.owner_id=t.owner_id AND c.conversation_id=t.conversation_id AND c.pause_until_ms>?) ORDER BY a.namespace LIMIT ?",
         )
         .bind(context.owner.to_string())
         .bind(now)
         .bind(after.map(|id| id.to_string()).unwrap_or_default())
+        .bind(now)
+        .bind(now)
         .bind(i64::from(limit))
         .fetch_all(&mut *tx)
         .await

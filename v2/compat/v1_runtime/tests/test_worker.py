@@ -24,6 +24,7 @@ class Peer:
         self.saved_window = None
         self.reply_settings = dict(prefix=None, footer=None, honor_no_reply=True)
         self.render_missing = False
+        self.triggers, self.outcome = [], None
 
     def window_request(self, intake, input_key, request_key, current):
         return dict(request_key=request_key, input_message_id=intake["message_id"], input_event_id=intake["event_id"],
@@ -36,6 +37,14 @@ class Peer:
         return [] if self.foreign else ["fast-run", "deep-run"]
 
     def request(self, method, route, body=None, allowed=(200,)):
+        if route == "/timer-triggers":
+            self.triggers.append(copy.deepcopy(body))
+            return 200, {"accepted": 0}
+        if route == "/timer-outcomes":
+            self.outcomes = getattr(self, "outcomes", []) + [copy.deepcopy(body)]
+            if self.outcome is None:
+                raise ClientError("unexpected_status", 404)
+            return 200, self.outcome(body)
         if method == "POST":
             self.mutations.append((route, copy.deepcopy(body)))
         if route == "/messages":

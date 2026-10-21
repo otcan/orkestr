@@ -96,7 +96,8 @@ async fn registered_store_long_due_logout_restart_and_machine_revoke() {
         DurableTick {
             scanned: 0,
             admitted: 0,
-            deferred: 0
+            deferred: 0,
+            ..Default::default()
         }
     );
     store.revoke_session(BROWSER).await.unwrap();
@@ -279,7 +280,8 @@ async fn due_occurrence_that_cannot_be_admitted_backs_off_without_rescanning() {
         DurableTick {
             scanned: 1,
             admitted: 0,
-            deferred: 1
+            deferred: 1,
+            ..Default::default()
         }
     );
     // Held in backoff: not rescanned on the next one-second tick.
@@ -288,7 +290,8 @@ async fn due_occurrence_that_cannot_be_admitted_backs_off_without_rescanning() {
         DurableTick {
             scanned: 0,
             admitted: 0,
-            deferred: 1
+            deferred: 1,
+            ..Default::default()
         }
     );
     assert_eq!(woken.load(std::sync::atomic::Ordering::SeqCst), 0);

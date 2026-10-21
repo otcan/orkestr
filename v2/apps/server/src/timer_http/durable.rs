@@ -23,6 +23,10 @@ pub struct DurableTick {
     pub admitted: u32,
     /// Not due or concurrently disabled/stopped; no authority is recreated.
     pub deferred: u32,
+    /// Runs started by inbound trigger events.
+    pub triggered: u32,
+    /// Digests created with content.
+    pub digests: u32,
 }
 /// Own exactly one per authenticated supervisor lifecycle. Not a cloned task pool.
 pub struct DurableTimerController {
@@ -33,7 +37,10 @@ pub struct DurableTimerController {
     /// When a window dispatcher runs, each occurrence also queues its Deep turn.
     queue_window: bool,
     wake: Option<Arc<dyn Fn() + Send + Sync>>,
+    /// Digests are due at most a few times a day; check twice a minute.
+    digest_checked: Option<Instant>,
 }
+const DIGEST_CHECK: Duration = Duration::from_secs(30);
 impl DurableTimerController {
     /// A normal/worker Store cannot pass Core's subsequent context validation.
     pub fn new(supervisor: Store) -> Self {
@@ -43,6 +50,7 @@ impl DurableTimerController {
             backoff: HashMap::new(),
             queue_window: false,
             wake: None,
+            digest_checked: None,
         }
     }
     /// Queue a Deep window intent with every admitted occurrence and wake the
@@ -51,6 +59,11 @@ impl DurableTimerController {
         self.queue_window = true;
         self.wake = Some(wake);
         self
+    }
+    /// Test hook: make the next pass check for due digests regardless of spacing.
+    #[cfg(test)]
+    pub(crate) fn check_digests_next_pass(&mut self) {
+        self.digest_checked = None;
     }
     /// One bounded page; cursor is process-local fairness metadata, never authority.
     pub async fn tick(&mut self) -> Result<DurableTick, HistoryError> {
@@ -112,12 +125,69 @@ impl DurableTimerController {
             // Issuer drops here; no instruction or credential is retained locally.
         }
         self.after = next;
-        if result.admitted > 0 {
+        self.triggers(&mut result, now).await?;
+        if self
+            .digest_checked
+            .is_none_or(|at| at.elapsed() >= DIGEST_CHECK)
+        {
+            result.digests = self.supervisor.generate_timer_digests().await?;
+            self.digest_checked = Some(Instant::now());
+        }
+        if result.admitted + result.triggered > 0 {
             if let Some(wake) = &self.wake {
                 wake();
             }
         }
         Ok(result)
+    }
+    /// Runs for recorded inbound events (new message or email). Same fresh
+    /// issuer, backoff and window queue as clock occurrences.
+    async fn triggers(
+        &mut self,
+        result: &mut DurableTick,
+        now: Instant,
+    ) -> Result<(), HistoryError> {
+        for namespace in self
+            .supervisor
+            .pending_timer_trigger_namespaces(PAGE)
+            .await?
+        {
+            if self
+                .backoff
+                .get(&namespace)
+                .is_some_and(|(_, retry)| *retry > now)
+            {
+                continue;
+            }
+            let issuer = self
+                .supervisor
+                .authorize_timer_scheduler(namespace)
+                .await
+                .map_err(|error| match error {
+                    RuntimeStoreError::Unavailable => HistoryError::Unavailable,
+                    _ => HistoryError::Unauthorized,
+                })?;
+            match self
+                .supervisor
+                .admit_authorized_trigger_turn(&issuer, namespace, self.queue_window)
+                .await
+            {
+                Ok(admitted) => {
+                    self.backoff.remove(&namespace);
+                    result.triggered += u32::from(admitted.is_some_and(|r| !r.duplicate));
+                }
+                Err(
+                    HistoryError::Conflict | HistoryError::NotFound | HistoryError::Unavailable,
+                ) => {
+                    let failures = self.backoff.get(&namespace).map_or(0, |(n, _)| *n) + 1;
+                    self.backoff
+                        .insert(namespace, (failures, now + retry_delay(failures)));
+                    result.deferred += 1;
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(())
     }
     /// No runtime registration here. Caller must join this future on shutdown.
     /// Auth/context failure terminates; trusted bootstrap must provide a fresh context.
