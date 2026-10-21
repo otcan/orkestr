@@ -12,6 +12,10 @@ const RESPONSE_MAX: usize = 1024 * 1024;
 const READ_TIMEOUT: Duration = Duration::from_secs(5);
 /// V1 admits input before it answers; a busy V1 can take a few seconds.
 const WRITE_TIMEOUT: Duration = Duration::from_secs(12);
+/// V1 acquire prepares the desktop (8-20 s observed for `pa`) before it
+/// answers. A same-thread acquire renews the same lease, so a retry after a
+/// timeout never creates a second one.
+const ACQUIRE_TIMEOUT: Duration = Duration::from_secs(45);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum BrokerError {
@@ -122,9 +126,17 @@ impl Broker {
             "purpose": purpose.unwrap_or("orkestr-v2"),
             "metadata": {"orkestrV2ConversationId": conversation},
         });
-        let (status, value) = self
-            .send("POST", &format!("/api/desktops/{slug}/acquire"), Some(body))
-            .await?;
+        let (status, value) = tokio::time::timeout(
+            ACQUIRE_TIMEOUT,
+            self.exchange(
+                "POST",
+                &format!("/api/desktops/{slug}/acquire"),
+                Some(body),
+                RESPONSE_MAX,
+            ),
+        )
+        .await
+        .map_err(|_| BrokerError::Unavailable)??;
         match status {
             200 | 201 => {}
             409 => return Err(BrokerError::Leased),
@@ -332,4 +344,48 @@ pub(crate) fn parse_response(raw: &[u8]) -> Option<(u16, Value)> {
         serde_json::from_slice(&body).ok()?
     };
     Some((status, value))
+}
+
+#[cfg(test)]
+mod acquire_timeout_tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    /// A V1 that answers acquire only after `delay` (like a slow `pa` desk).
+    async fn slow_v1(delay: Duration) -> std::net::SocketAddr {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut buffer = vec![0u8; 8192];
+            let _ = socket.read(&mut buffer).await.unwrap();
+            tokio::time::sleep(delay).await;
+            let body = serde_json::json!({"lease": {"id": "lease-1", "threadId": "thread-1",
+                "desktopSlug": "pa", "fencingToken": "fence-1", "fencingVersion": 3,
+                "expiresAt": "2026-10-21T15:00:00Z"}})
+            .to_string();
+            let response = format!(
+                "HTTP/1.1 201 Created\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            socket.write_all(response.as_bytes()).await.unwrap();
+        });
+        address
+    }
+
+    #[tokio::test]
+    async fn slow_v1_acquire_is_awaited_past_the_ordinary_request_timeout() {
+        // Longer than the 3 s ordinary request bound, well inside 45 s.
+        let address = slow_v1(TIMEOUT + Duration::from_secs(2)).await;
+        let broker = Broker::new(&format!("http://{address}"), "t".repeat(32)).unwrap();
+        let grant = broker
+            .acquire("thread-1", "pa", 600_000, Some("test"), "conversation")
+            .await
+            .unwrap();
+        assert_eq!(
+            (grant.lease_id.as_str(), grant.fencing_version),
+            ("lease-1", 3)
+        );
+    }
 }

@@ -53,7 +53,7 @@ def read_grant(path=None, environ=os.environ):
 
 
 class Client:
-    def __init__(self, base_url, conversation, grant, timeout=15):
+    def __init__(self, base_url, conversation, grant, timeout=60):
         parsed = parse.urlsplit(base_url)
         if parsed.scheme not in {'http', 'https'} or not parsed.netloc or parsed.path not in {'', '/'}:
             raise LeaseError(0, 'invalid_base_url')
