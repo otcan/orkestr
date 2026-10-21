@@ -356,8 +356,15 @@ async fn guard(
     {
         return error.into_response();
     }
-    let mut response = match tokio::time::timeout(Duration::from_secs(10), next.run(request)).await
-    {
+    // V1 desktop acquire (and a renewing heartbeat) can take 8-20 s while V1
+    // prepares the desktop. Dropping it at 10 s would leave a V1 lease that
+    // V2 never recorded, so these two get a longer, still bounded deadline.
+    let deadline = if desktop_slow_path(request.uri().path()) {
+        Duration::from_secs(60)
+    } else {
+        Duration::from_secs(10)
+    };
+    let mut response = match tokio::time::timeout(deadline, next.run(request)).await {
         Ok(response) => response,
         Err(_) => {
             return Error(
@@ -376,6 +383,39 @@ async fn guard(
         .insert(header::X_CONTENT_TYPE_OPTIONS, "nosniff".parse().unwrap());
     response
 }
+/// `/api/v2/conversations/{id}/desktops/{slug}/acquire` or `/heartbeat`.
+fn desktop_slow_path(path: &str) -> bool {
+    let parts: Vec<&str> = path.trim_start_matches('/').split('/').collect();
+    matches!(
+        parts.as_slice(),
+        [
+            "api",
+            "v2",
+            "conversations",
+            _,
+            "desktops",
+            _,
+            "acquire" | "heartbeat"
+        ]
+    )
+}
+
+#[cfg(test)]
+#[test]
+fn only_desktop_acquire_and_heartbeat_get_the_long_deadline() {
+    assert!(desktop_slow_path(
+        "/api/v2/conversations/c/desktops/pa/acquire"
+    ));
+    assert!(desktop_slow_path(
+        "/api/v2/conversations/c/desktops/pa/heartbeat"
+    ));
+    assert!(!desktop_slow_path(
+        "/api/v2/conversations/c/desktops/pa/release"
+    ));
+    assert!(!desktop_slow_path("/api/v2/conversations/c/desktops"));
+    assert!(!desktop_slow_path("/api/v2/conversations/c/messages"));
+}
+
 pub fn router(state: AppState) -> Router {
     router_with_google_catalog(state, google_registry_metadata::RegistryCatalog::empty())
 }
