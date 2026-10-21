@@ -66,7 +66,8 @@ async function dropHeldInput(thread, message, remote, fence, env, now) {
   return updated;
 }
 
-// Forwards (or fences) every held local input of one delegated thread. Safe to
+// Forwards (with `options.forward`, see connectors/whatsapp-remote-local-input.js)
+// or fences every held local input of one delegated thread. Safe to
 // call repeatedly and concurrently: forwarding is idempotent per message and a
 // pass already running for this thread is not duplicated in this process.
 // Returns { forwarded, dropped, failed, held } message ids.
@@ -81,8 +82,8 @@ export async function routeHeldLocalInputs(thread, env = process.env, options = 
     const now = options.now || new Date();
     const candidates = (await listThreadMessageCandidates(thread.id, { states: pendingStates }, env)).filter(heldLocalInput);
     if (!candidates.length) return result;
-    const forward = options.forward ||
-      (await import("../../connectors/src/whatsapp-remote-local-input.js")).forwardLocalInputToRemote;
+    // The connector layer supplies the forwarder; without one, input waits.
+    const forward = options.forward || (async () => ({ held: null }));
     for (const message of candidates) {
       const fence = fencedLocalInputReason(message);
       if (fence) {

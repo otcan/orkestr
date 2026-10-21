@@ -3951,7 +3951,8 @@ export async function deliverPendingThreadInputs(threadId, env = process.env, op
   if (remoteWhatsAppRuntimeBinding(thread, env)) {
     // Never run here: forward local input to the remote runtime (V1 timers and
     // executor commands are fenced), so nothing bursts after a handback.
-    await routeHeldLocalInputs(thread, env).catch(() => null);
+    const { forwardLocalInputToRemote } = await import("../../connectors/src/whatsapp-remote-local-input.js");
+    await routeHeldLocalInputs(thread, env, { forward: forwardLocalInputToRemote }).catch(() => null);
     return [];
   }
   if (String(thread.retiredAt || "").trim() || ["retiring", "retired"].includes(String(thread.state || "").trim().toLowerCase())) {

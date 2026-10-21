@@ -6,7 +6,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { resetLocalInputKindsCacheForTest } from "../packages/connectors/src/whatsapp-remote-local-input.js";
+import { forwardLocalInputToRemote, resetLocalInputKindsCacheForTest } from "../packages/connectors/src/whatsapp-remote-local-input.js";
 import { syncRemoteWhatsAppThreadMessages } from "../packages/connectors/src/whatsapp-remote-runtime.js";
 import { routeHeldLocalInputs } from "../packages/core/src/remote-runtime-held-inputs.js";
 import { deliverPendingThreadInputs, resetThreadInputDeliveryTimersForTest } from "../packages/core/src/runtime-leases.js";
@@ -109,7 +109,7 @@ test("every non-WhatsApp input type is forwarded with its source and origin; V1 
     timer: await queue(env, { source: "timer_due", timerId: "example-timer", text: "Example timer run" }),
     executor: await queue(env, { source: "ui", text: "/codex" }),
   };
-  const routed = await routeHeldLocalInputs(await thread(env), env, { fetchImpl: adapter.fetch });
+  const routed = await routeHeldLocalInputs(await thread(env), env, { fetchImpl: adapter.fetch, forward: forwardLocalInputToRemote });
   assert.deepEqual(routed.dropped.sort(), [rows.timer.id, rows.executor.id].sort());
   assert.equal(routed.forwarded.length, 8);
   const posted = Object.fromEntries(adapter.posts.map(body => [body.publicMessageId, body]));
@@ -144,7 +144,7 @@ test("every non-WhatsApp input type is forwarded with its source and origin; V1 
   }
   assert.equal((await events(env, "remote_runtime_local_input_forwarded")).length, 8);
   // Acknowledged inputs are never forwarded again.
-  await routeHeldLocalInputs(await thread(env), env, { fetchImpl: adapter.fetch });
+  await routeHeldLocalInputs(await thread(env), env, { fetchImpl: adapter.fetch, forward: forwardLocalInputToRemote });
   await deliverPendingThreadInputs("example-thread", env);
   assert.equal(adapter.posts.length, 8);
 });
@@ -154,7 +154,7 @@ test("a lost acknowledgement is re-sent once and the adapter answers with the sa
   const adapter = fakeAdapter();
   const row = await queue(env, { source: "mailbox_route", connector: "mailbox", text: "Example mail signal" });
   adapter.loseResponse = true;
-  const first = await routeHeldLocalInputs(await thread(env), env, { fetchImpl: adapter.fetch });
+  const first = await routeHeldLocalInputs(await thread(env), env, { fetchImpl: adapter.fetch, forward: forwardLocalInputToRemote });
   assert.deepEqual(first.held, [row.id]);
   assert.equal((await getThreadMessage("example-thread", row.id, env)).state, "queued");
   // The periodic sync (as after a restart) retries the same idempotent input.
@@ -171,7 +171,7 @@ test("a lost acknowledgement is also recovered from the adapter listing without 
   const adapter = fakeAdapter();
   const row = await queue(env, { source: "ui", text: "Example UI message" });
   adapter.loseResponse = true;
-  await routeHeldLocalInputs(await thread(env), env, { fetchImpl: adapter.fetch });
+  await routeHeldLocalInputs(await thread(env), env, { fetchImpl: adapter.fetch, forward: forwardLocalInputToRemote });
   // An operator hold stops forwarding; the listing still maps the parent.
   await updateThread("example-thread", { queueDispatchHold: { paused: true } }, env);
   await syncRemoteWhatsAppThreadMessages(env, adapter.fetch);
@@ -187,7 +187,7 @@ test("the reply reaches the requesting thread as its watch result, stays off Wha
   await createThreadWatch({ watcherThreadId: "example-requester", targetThreadId: "example-thread", mode: "once", on: "final" }, env);
   const request = await queue(env, { source: "cli", text: "What is the KDP status?", reportSourceThreadId: "example-requester" });
   const silent = await queue(env, { source: "mailbox_route", connector: "mailbox", text: "Example mail signal" });
-  await routeHeldLocalInputs(await thread(env), env, { fetchImpl: adapter.fetch });
+  await routeHeldLocalInputs(await thread(env), env, { fetchImpl: adapter.fetch, forward: forwardLocalInputToRemote });
   adapter.reply(request.id, "KDP is on track.");
   adapter.reply(silent.id, "NO_REPLY", { noReply: true });
   await syncRemoteWhatsAppThreadMessages(env, adapter.fetch);
@@ -217,9 +217,9 @@ test("an adapter without v1_local holds input queued, then fails it visibly afte
   const env = await fixture(t);
   const adapter = fakeAdapter({ kinds: ["whatsapp_inbound"] });
   const row = await queue(env, { source: "ui", text: "Example UI message" });
-  const first = await routeHeldLocalInputs(await thread(env), env, { fetchImpl: adapter.fetch });
+  const first = await routeHeldLocalInputs(await thread(env), env, { fetchImpl: adapter.fetch, forward: forwardLocalInputToRemote });
   assert.deepEqual(first.held, [row.id]);
-  await routeHeldLocalInputs(await thread(env), env, { fetchImpl: adapter.fetch });
+  await routeHeldLocalInputs(await thread(env), env, { fetchImpl: adapter.fetch, forward: forwardLocalInputToRemote });
   assert.equal(adapter.posts.length, 0);
   const held = await getThreadMessage("example-thread", row.id, env);
   assert.equal(held.state, "queued");
@@ -227,7 +227,7 @@ test("an adapter without v1_local holds input queued, then fails it visibly afte
   assert.equal((await events(env, "remote_runtime_local_input_held")).length, 1);
   const later = new Date(Date.parse(row.createdAt) + 25 * 60 * 60 * 1000);
   resetLocalInputKindsCacheForTest();
-  const expired = await routeHeldLocalInputs(await thread(env), env, { fetchImpl: adapter.fetch, now: later });
+  const expired = await routeHeldLocalInputs(await thread(env), env, { fetchImpl: adapter.fetch, forward: forwardLocalInputToRemote, now: later });
   assert.deepEqual(expired.failed, [row.id]);
   const failed = await getThreadMessage("example-thread", row.id, env);
   assert.equal(failed.state, "failed");
@@ -240,11 +240,11 @@ test("transient refusals keep input queued; a definite refusal fails it visibly"
   const row = await queue(env, { source: "ui", text: "Example UI message" });
   for (const fail of [{ status: 503, error: "binding_disabled" }, { status: 409, error: "binding_capacity_reached" }]) {
     adapter.fail = fail;
-    await routeHeldLocalInputs(await thread(env), env, { fetchImpl: adapter.fetch });
+    await routeHeldLocalInputs(await thread(env), env, { fetchImpl: adapter.fetch, forward: forwardLocalInputToRemote });
     assert.equal((await getThreadMessage("example-thread", row.id, env)).state, "queued");
   }
   adapter.fail = { status: 422, error: "invalid_text" };
-  const refused = await routeHeldLocalInputs(await thread(env), env, { fetchImpl: adapter.fetch });
+  const refused = await routeHeldLocalInputs(await thread(env), env, { fetchImpl: adapter.fetch, forward: forwardLocalInputToRemote });
   assert.deepEqual(refused.failed, [row.id]);
   const current = await getThreadMessage("example-thread", row.id, env);
   assert.equal(current.state, "failed");
@@ -256,7 +256,7 @@ test("an operator queue hold holds forwarding", async t => {
   const adapter = fakeAdapter();
   await queue(env, { source: "ui", text: "Example UI message" });
   await updateThread("example-thread", { queueDispatchHold: { paused: true } }, env);
-  const routed = await routeHeldLocalInputs(await thread(env), env, { fetchImpl: adapter.fetch });
+  const routed = await routeHeldLocalInputs(await thread(env), env, { fetchImpl: adapter.fetch, forward: forwardLocalInputToRemote });
   assert.deepEqual(routed, { forwarded: [], dropped: [], failed: [], held: [] });
   assert.equal(adapter.posts.length, 0);
 });

@@ -4,6 +4,7 @@ import { recordRouterTraceEvent } from "../../core/src/router-traces.js";
 import { appendThreadMessage, listThreadMessages, listThreads, updateThreadMessage } from "../../core/src/threads.js";
 import { remoteWhatsAppRuntimeBinding } from "../../core/src/thread-remote-runtime-binding.js";
 import { routeHeldLocalInputs } from "../../core/src/remote-runtime-held-inputs.js";
+import { forwardLocalInputToRemote } from "./whatsapp-remote-local-input.js";
 import { remoteParentExpectedFields, remoteParentRecoveryCandidate } from "./whatsapp-remote-parent.js";
 import { acknowledgeRemoteMirrorDeliveries, remoteMirrorAckSupported } from "./whatsapp-remote-mirror-ack.js";
 import { uploadRemoteInputAttachments } from "./whatsapp-remote-attachment-upload.js";
@@ -113,7 +114,7 @@ export function remoteHeaders(backend, extra = {}) {
   };
 }
 
-async function remoteJson(backend, endpointPath, fetchImpl, options = {}) {
+export async function remoteJson(backend, endpointPath, fetchImpl, options = {}) {
   const response = await fetchImpl(remoteEndpointUrl(backend, endpointPath), {
     ...options,
     headers: remoteHeaders(backend, options.headers || {}),
@@ -204,46 +205,6 @@ export async function enqueueRemoteWhatsAppThreadInput({ thread, message, input 
     message: payload?.message || payload?.commandMessage || payload?.input || null,
     thread: payload?.thread || null,
   };
-}
-
-// Input V1 queued for a delegated thread that did not come from the WhatsApp
-// group (thread-to-thread, agent, mailbox, CLI, UI ...). `body` is built by
-// whatsapp-remote-local-input.js; files go through the same upload route.
-export async function enqueueRemoteLocalThreadInput({ thread, message, body = {} } = {}, env = process.env, fetchImpl = fetch) {
-  const remote = remoteWhatsAppRuntimeBinding(thread, env);
-  if (!remote) return null;
-  const backend = backendForBinding(remote.binding, env);
-  const threadPath = `threads/${encodeURIComponent(remote.remoteThreadId)}`;
-  const uploaded = backend.attachmentUpload
-    ? await uploadRemoteInputAttachments({
-        thread,
-        message,
-        env,
-        post: (upload) => remoteJson(backend, `${threadPath}/attachments`, fetchImpl, { method: "POST", body: JSON.stringify(upload) }),
-      })
-    : null;
-  const payload = await remoteJson(backend, `${threadPath}/input`, fetchImpl, {
-    method: "POST",
-    body: JSON.stringify({
-      ...body,
-      ...(uploaded?.length ? { attachments: uploaded } : {}),
-      inputKind: "v1_local",
-      role: "user",
-      connector: "orkestr-v1",
-      publicThreadId: thread?.id || "",
-      publicMessageId: message?.id || "",
-    }),
-  });
-  return { ...remote, backend, payload, message: payload?.message || null };
-}
-
-// The input kinds the remote runtime accepts for this thread (its health route).
-export async function remoteThreadInputKinds(thread, env = process.env, fetchImpl = fetch) {
-  const remote = remoteWhatsAppRuntimeBinding(thread, env);
-  if (!remote) return [];
-  const backend = backendForBinding(remote.binding, env);
-  const payload = await remoteJson(backend, `threads/${encodeURIComponent(remote.remoteThreadId)}/health`, fetchImpl, { method: "GET" });
-  return Array.isArray(payload?.inputKinds) ? payload.inputKinds.map((kind) => pickString(kind)).filter(Boolean) : [];
 }
 
 export async function updateRemoteWhatsAppThreadInput({ thread, message, revisionId = "" } = {}, env = process.env, fetchImpl = fetch) {
@@ -402,7 +363,7 @@ export async function syncRemoteWhatsAppThreadMessages(env = process.env, fetchI
     const remote = remoteWhatsAppRuntimeBinding(thread, env);
     if (!remote || remote.binding.remoteMirrorEnabled === false) continue;
     // Retry V1-local input whose forward did not complete (restart, outage).
-    await routeHeldLocalInputs(thread, env, { fetchImpl }).catch(() => null);
+    await routeHeldLocalInputs(thread, env, { fetchImpl, forward: forwardLocalInputToRemote }).catch(() => null);
     try {
       const { backend, payload, messages: remoteMessages } = await fetchRemoteThreadMessages(remote, env, fetchImpl);
       const localMessages = await listThreadMessages(thread.id, env);

@@ -16,7 +16,8 @@
 // the adapter answers with the same remote id.
 import { appendEvent } from "../../storage/src/store.js";
 import { getThread, updateThreadMessage } from "../../core/src/threads.js";
-import { backendForBinding, enqueueRemoteLocalThreadInput, remoteThreadInputKinds } from "./whatsapp-remote-runtime.js";
+import { backendForBinding, remoteJson, remoteWhatsAppRuntimeBinding } from "./whatsapp-remote-runtime.js";
+import { uploadRemoteInputAttachments } from "./whatsapp-remote-attachment-upload.js";
 import { scopedRelayRemoteAccountId } from "./whatsapp-scoped-relay-remote.js";
 
 export const localInputKind = "v1_local";
@@ -104,6 +105,46 @@ export function localInputText(thread, message = {}, { attachmentUpload = false 
   const files = attachmentUpload ? [] : attachmentLines(message);
   if (files.length) text = `${text}${text ? "\n\n" : ""}Attachments (files on the Orkestr host):\n${files.join("\n")}`;
   return text;
+}
+
+// Input V1 queued for a delegated thread that did not come from the WhatsApp
+// group (thread-to-thread, agent, mailbox, CLI, UI ...). `body` is built by
+// whatsapp-remote-local-input.js; files go through the same upload route.
+export async function enqueueRemoteLocalThreadInput({ thread, message, body = {} } = {}, env = process.env, fetchImpl = fetch) {
+  const remote = remoteWhatsAppRuntimeBinding(thread, env);
+  if (!remote) return null;
+  const backend = backendForBinding(remote.binding, env);
+  const threadPath = `threads/${encodeURIComponent(remote.remoteThreadId)}`;
+  const uploaded = backend.attachmentUpload
+    ? await uploadRemoteInputAttachments({
+        thread,
+        message,
+        env,
+        post: (upload) => remoteJson(backend, `${threadPath}/attachments`, fetchImpl, { method: "POST", body: JSON.stringify(upload) }),
+      })
+    : null;
+  const payload = await remoteJson(backend, `${threadPath}/input`, fetchImpl, {
+    method: "POST",
+    body: JSON.stringify({
+      ...body,
+      ...(uploaded?.length ? { attachments: uploaded } : {}),
+      inputKind: "v1_local",
+      role: "user",
+      connector: "orkestr-v1",
+      publicThreadId: thread?.id || "",
+      publicMessageId: message?.id || "",
+    }),
+  });
+  return { ...remote, backend, payload, message: payload?.message || null };
+}
+
+// The input kinds the remote runtime accepts for this thread (its health route).
+export async function remoteThreadInputKinds(thread, env = process.env, fetchImpl = fetch) {
+  const remote = remoteWhatsAppRuntimeBinding(thread, env);
+  if (!remote) return [];
+  const backend = backendForBinding(remote.binding, env);
+  const payload = await remoteJson(backend, `threads/${encodeURIComponent(remote.remoteThreadId)}/health`, fetchImpl, { method: "GET" });
+  return Array.isArray(payload?.inputKinds) ? payload.inputKinds.map((kind) => clean(kind)).filter(Boolean) : [];
 }
 
 export function localInputMaxAgeMs(env = process.env) {
