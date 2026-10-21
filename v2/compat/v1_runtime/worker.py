@@ -362,6 +362,10 @@ class Worker:
         for role, value in statuses.items():
             if role in accepted or role + "_accept_request" in data:
                 continue
+            if self.accepted_elsewhere(value, ids):
+                # The server accepted this input's own proposal (owner
+                # auto-accept): adopt that receipt below, never refuse.
+                continue
             if role == "fast" and self.fast_unusable(value, ids):
                 # A Fast that is gone, failed or stranded never holds the Deep
                 # reply: wait for Deep, then skip Fast after a short grace.
@@ -408,9 +412,16 @@ class Worker:
         return (not value or value.get("run_id") not in ids or
                 value.get("phase") in FAST_UNUSABLE_PHASES)
 
+    @staticmethod
+    def accepted_elsewhere(value, ids):
+        """This input's own run already accepted (by the server's owner
+        auto-accept or the owner's browser); its receipt is adopted."""
+        return isinstance(value, dict) and value.get("run_id") in ids and value.get("phase") == "completed"
+
     def skip_fast(self, data, deep, ids):
         """Skip this input's unusable Fast once its Deep proposal is ready."""
-        if not isinstance(deep, dict) or deep.get("run_id") not in ids or deep.get("phase") != "awaiting_acceptance":
+        if (not isinstance(deep, dict) or deep.get("run_id") not in ids or
+                deep.get("phase") not in ("awaiting_acceptance", "completed")):
             return False
         now = time.time()
         if "fast_unusable_since" not in data:
@@ -429,6 +440,9 @@ class Worker:
         if frozen_key not in data:
             route = "/fast/execution" if role == "fast" else "/execution"
             value = self.call("GET", route)
+            if self.accepted_elsewhere(value, ids):
+                self.adopt_acceptance(data, role, value["run_id"], ids)
+                return
             if value.get("run_id") not in ids or value.get("phase") != "awaiting_acceptance":
                 raise Refused("proposal_replaced")
             candidate = value.get("acceptance_candidate", {})
@@ -443,10 +457,60 @@ class Worker:
                                 "expected_revision": value["revision"], "request_key": data["keys"][role]}
             self.ledger.save(data)
         request = data[frozen_key]
-        receipt = self.call("POST", "/accept", request)
+        try:
+            receipt = self.call("POST", "/accept", request)
+        except ClientError as error:
+            if error.status != 409:
+                raise
+            # The server may have accepted this same run first (owner
+            # auto-accept); a conflict for any other reason still refuses.
+            self.adopt_acceptance(data, role, request["run_id"], ids)
+            return
         if receipt.get("outcome") != "succeeded" or any(receipt.get(k) != request[k] for k in ("run_id", "completion_event_id", "request_key")) or receipt.get("requested_revision") != request["expected_revision"] or not receipt.get("acceptance_event_id"):
             raise Refused("acceptance_receipt")
         accepted[role] = receipt
+        self.ledger.save(data)
+
+    def adopt_acceptance(self, data, role, run_id, ids):
+        """Record the canonical acceptance of this input's own run, made by
+        the server (owner auto-accept) before this adapter's own request."""
+        if run_id not in ids:
+            raise Refused("proposal_replaced")
+        frozen = data.get(role + "_accept_request")
+        if frozen is not None and frozen.get("run_id") != run_id:
+            raise Refused("proposal_replaced")
+        after, rows = data["intake"]["sequence"], []
+        for _ in range(10):
+            history = self.call("GET", "/accepted-results?limit=50&after_sequence=" + str(after))
+            rows.extend(row for row in history.get("results", []) if row.get("run_id") == run_id)
+            cursor = history.get("next_after_sequence")
+            if cursor is None or rows:
+                break
+            if type(cursor) is not int or cursor <= after:
+                raise Refused("history_cursor")
+            after = cursor
+        if not rows:
+            # Completed without an acceptance: not ours to mirror.
+            raise Refused("execution_requires_review")
+        if len(rows) != 1:
+            raise Refused("acceptance_receipt")
+        row = rows[0]
+        if (not all(isinstance(row.get(k), str) and row[k] for k in ("acceptance_event_id", "completion_event_id")) or
+                (frozen is not None and row["completion_event_id"] != frozen["completion_event_id"])):
+            raise Refused("acceptance_receipt")
+        # Only the Deep reply is mirrored, so only its payload is frozen here.
+        if role == "deep" and "deep_payload" not in data:
+            payload_id = row.get("payload_id")
+            if not payload_id or row.get("payload_removed") is not False:
+                raise Refused("payload_mismatch")
+            payload = self.call("GET", "/payloads/" + payload_id)
+            if (payload.get("run_id") != run_id or payload.get("payload_id") != payload_id or
+                    not isinstance(payload.get("text"), str) or not payload["text"].strip()):
+                raise Refused("payload_mismatch")
+            data[role + "_payload"] = payload
+        data.setdefault("accepted", {})[role] = {
+            "outcome": "succeeded", "run_id": run_id, "completion_event_id": row["completion_event_id"],
+            "acceptance_event_id": row["acceptance_event_id"], "adopted": True}
         self.ledger.save(data)
 
     def deadline_stopped(self, data):

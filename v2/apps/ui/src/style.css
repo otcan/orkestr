@@ -175,6 +175,8 @@ details[open] > summary { margin-bottom: .4rem; }
 .assistant-proposal h3 { color: var(--accent-text); font-size: .78rem; }
 .assistant-proposal > section { padding: 0; }
 .assistant-proposal details { font-size: .8rem; }
+.assistant-proposal.run-failed { background: var(--danger-soft); border: 1px solid var(--danger-border); color: var(--danger-text); }
+.assistant-proposal.run-failed h3 { color: var(--danger-text); }
 .jump-latest-anchor { position: relative; height: 0; z-index: 2; }
 .jump-latest { position: absolute; right: max(1rem, calc((100% - 52rem) / 2)); bottom: .8rem; display: none; min-height: 2.4rem; padding: .35rem 1rem; border-radius: 1.2rem; font-size: .8rem; font-weight: 600; background: var(--surface); box-shadow: var(--shadow); }
 .conversation-pane:has(> .conversation-scroll[data-pinned=false]) .jump-latest { display: block; }

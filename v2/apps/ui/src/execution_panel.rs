@@ -13,25 +13,37 @@ pub fn ExecutionPanel(
     onexpired: EventHandler<()>,
     #[props(default)] onaccepted: Option<EventHandler<i64>>,
     #[props(default = true)] allow_steer: bool,
+    /// The conversation accepts replies automatically: no Accept prompt here.
+    #[props(default)]
+    auto_accept: bool,
 ) -> Element {
     let model = execution.read();
     let summary = if compact && model.fresh(now_ms) {
         use orkestr_v2_contracts::ExecutionPhase::*;
         model
             .control_status()
-            .map(|s| match s.phase {
-                Queued => "Queued",
-                Starting => "Starting…",
-                Running => "Working",
-                CancelRequested => "Stop requested; waiting for confirmation",
-                Cancelled => "Stopped",
-                AwaitingAcceptance => "Reply ready",
-                Completed => "Result accepted",
-                Failed => "Work failed",
-                Blocked => "Work needs attention",
+            .map(|s| match (s.phase, &s.failure) {
+                (AwaitingAcceptance, _) if auto_accept => {
+                    "Reply ready; accepting automatically".into()
+                }
+                (Failed, Some(f)) => format!(
+                    "Work failed: {}",
+                    orkestr_v2_ui::execution::failure_label(f.class)
+                ),
+                (phase, _) => match phase {
+                    Queued => "Queued",
+                    Starting => "Starting…",
+                    Running => "Working",
+                    CancelRequested => "Stop requested; waiting for confirmation",
+                    Cancelled => "Stopped",
+                    AwaitingAcceptance => "Reply ready",
+                    Completed => "Result accepted",
+                    Failed => "Work failed",
+                    Blocked => "Work needs attention",
+                }
+                .to_string(),
             })
-            .unwrap_or("Checking work status")
-            .to_string()
+            .unwrap_or_else(|| "Checking work status".into())
     } else if compact && model.control_status().is_none() {
         "Waiting for current work status".into()
     } else {
@@ -46,7 +58,7 @@ pub fn ExecutionPanel(
             if let Some(status) = model.control_status().filter(|s| !compact && s.progress.is_some()) {
                 crate::progress_view::ProgressView { key: "{status.conversation_id}/{status.progress.as_ref().unwrap().payload_id}", status, csrf: csrf.clone(), execution, session_scope, onexpired }
             }
-            if !compact || model.control_status().is_some_and(|s| s.phase == orkestr_v2_contracts::ExecutionPhase::AwaitingAcceptance) {
+            if !compact || (!auto_accept && model.control_status().is_some_and(|s| s.phase == orkestr_v2_contracts::ExecutionPhase::AwaitingAcceptance)) {
                 crate::acceptance_button::AcceptanceButton { execution, csrf: csrf.clone(), session_scope, onexpired, now_ms, onaccepted }
             }
             if parent_tasks {

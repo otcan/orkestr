@@ -261,3 +261,21 @@ fn failure_cause_requires_failed_phase() {
     });
     assert!(!status.is_valid());
 }
+#[test]
+fn failed_run_has_a_visible_owner_notice_and_other_phases_none() {
+    use orkestr_v2_ui::execution::failure_notice;
+    let mut status = wire();
+    assert_eq!(failure_notice(&status), None);
+    status.phase = orkestr_v2_contracts::ExecutionPhase::AwaitingAcceptance;
+    assert_eq!(failure_notice(&status), None);
+    status.phase = orkestr_v2_contracts::ExecutionPhase::Failed;
+    let plain = failure_notice(&status).unwrap();
+    assert!(plain.starts_with("This reply failed: the run ended with an error."));
+    assert!(plain.contains("Nothing was accepted"));
+    status.failure = Some(orkestr_v2_contracts::ExecutionFailure {
+        class: orkestr_v2_contracts::ExecutionFailureClass::Quota,
+    });
+    assert!(failure_notice(&status)
+        .unwrap()
+        .starts_with("This reply failed: provider usage limit reached."));
+}

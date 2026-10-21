@@ -88,7 +88,9 @@ def select_claude(case, real):
     assert current["provider"] == "codex" and current["revision"] == 0
     update = {"expected_revision": 0, "provider": "claude",
               "model": None if real else "synthetic-claude-model",
-              "reasoning_effort": "low", "honor_no_reply": True}
+              "reasoning_effort": "low", "honor_no_reply": True,
+              # This fixture accepts each proposal by hand (no owner auto-accept).
+              "review_before_accepting": True}
     selected = expect(case, path(case.conversation) + "/settings", 200, "PUT", update)
     assert selected["provider"] == "claude" and selected["provider_generation"] == 1, selected
 

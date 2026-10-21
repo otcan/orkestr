@@ -2,6 +2,7 @@
 //!
 //! Local handles select a transport; only Core's current window and credential
 //! fences authorize effects. The root manager independently bounds egress.
+mod auto_accept;
 mod clock;
 #[cfg(test)]
 mod cold_process_tests;

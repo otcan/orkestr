@@ -69,6 +69,27 @@ pub fn Conversation(
     let mut projection = use_signal(Projection::default);
     let mut status = use_signal(|| "Loading history…".to_string());
     let mut accepted_revision = use_signal(|| 0_i64);
+    // Default auto-accept (V1): no Accept prompt unless the owner asked to review.
+    let mut auto_accept = use_signal(|| false);
+    let settings_path = format!("/api/v2/conversations/{id}/settings");
+    use_resource(move || {
+        let path = settings_path.clone();
+        async move {
+            let result = transport::request::<orkestr_v2_contracts::ConversationSettings>(
+                "GET",
+                &path,
+                Value::Null,
+                "",
+                "",
+            )
+            .await;
+            if session_scope.read().is_current(generation) {
+                auto_accept.set(orkestr_v2_ui::chat_settings::auto_accepts(
+                    result.ok().as_ref(),
+                ));
+            }
+        }
+    });
     let stream_id = id.clone();
     let stream_csrf = csrf.clone();
     use_future(move || {
@@ -197,17 +218,26 @@ pub fn Conversation(
         .read()
         .control_status()
         .filter(|s| s.conversation_id.to_string() == id);
+    let failure = live_status
+        .as_ref()
+        .and_then(orkestr_v2_ui::execution::failure_notice);
     rsx! {
         section { class: "conversation-pane", "aria-label": "Conversation",
             crate::execution_poll::ExecutionPoll { key: "{id}-{generation}", id: id.clone(), csrf: csrf.clone(), session_scope, execution, worker_tasks: false, headless: true, clock: Some(now), onexpired }
             div { class: "conversation-scroll", tabindex: "0", "aria-label": "Conversation transcript",
                 crate::archived_history_view::ArchivedHistory { key: "archived-{id}-{generation}", id: id.clone(), session_scope, onexpired }
-                crate::intelligence_view::IntelligencePanel { key:"intelligence-{id}-{generation}", id:id.clone(), csrf:csrf.clone(), session_scope, execution, onexpired, onaccepted:move |revision|accepted_revision.set(revision) }
+                crate::intelligence_view::IntelligencePanel { key:"intelligence-{id}-{generation}", id:id.clone(), csrf:csrf.clone(), session_scope, execution, onexpired, onaccepted:move |revision|accepted_revision.set(revision), auto_accept: auto_accept() }
                 crate::accepted_results_view::AcceptedReplies { key: "accepted-{id}-{generation}", id: id.clone(), session_scope, messages, update: Some(accepted_revision), inline: true, onexpired }
                 if let Some(current) = live_status.filter(|s| s.progress.is_some() && s.phase != orkestr_v2_contracts::ExecutionPhase::Completed) {
                     article { key: "{current.conversation_id}/{current.progress.as_ref().unwrap().payload_id}", class: "assistant-proposal",
                         h3 { "Assistant" }
                         crate::progress_view::ProgressView { status: current, csrf: csrf.clone(), execution, session_scope, onexpired }
+                    }
+                }
+                if let Some(notice) = failure {
+                    article { class: "assistant-proposal run-failed", role: "alert",
+                        h3 { "Reply failed" }
+                        p { "{notice}" }
                     }
                 }
                 details { class: "conversation-tools",
@@ -224,7 +254,7 @@ pub fn Conversation(
             }
             crate::scroll_pin::ScrollPin {}
             div { class: "composer-dock",
-                crate::execution_panel::ExecutionPanel { execution, now_ms: now(), parent_tasks: false, csrf: csrf.clone(), session_scope, onexpired, compact: true, onaccepted: Some(EventHandler::new(move |revision| accepted_revision.set(revision))) }
+                crate::execution_panel::ExecutionPanel { execution, now_ms: now(), parent_tasks: false, csrf: csrf.clone(), session_scope, onexpired, compact: true, auto_accept: auto_accept(), onaccepted: Some(EventHandler::new(move |revision| accepted_revision.set(revision))) }
                 crate::composer::Composer { key: "composer-{id}-{generation}", id: id.clone(), csrf: csrf.clone(), session_scope, drafts, onexpired }
             }
         }

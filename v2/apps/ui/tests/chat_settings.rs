@@ -37,10 +37,36 @@ fn the_form_round_trips_and_guards_the_revision() {
 }
 
 #[test]
+fn review_before_accepting_defaults_off_and_round_trips() {
+    let form = SettingsForm::from_settings(&settings());
+    assert!(!form.review_before_accepting, "auto-accept is the default");
+    assert!(!form.update().unwrap().review_before_accepting);
+    let mut value = settings();
+    value.review_before_accepting = true;
+    let mut form = SettingsForm::from_settings(&value);
+    assert!(form.update().unwrap().review_before_accepting);
+    form.review_before_accepting = false;
+    assert!(!form.update().unwrap().review_before_accepting);
+}
+
+#[test]
 fn slugs_are_split_and_deduplicated() {
     assert_eq!(
         slugs("sales-nav, gmail  sales-nav\nlinkedin"),
         vec!["sales-nav", "gmail", "linkedin"]
     );
     assert!(slugs(" , ").is_empty());
+}
+
+#[test]
+fn only_known_settings_without_review_auto_accept() {
+    use orkestr_v2_ui::chat_settings::auto_accepts;
+    assert!(
+        !auto_accepts(None),
+        "unknown settings keep the Accept prompt"
+    );
+    let mut value = settings();
+    assert!(auto_accepts(Some(&value)));
+    value.review_before_accepting = true;
+    assert!(!auto_accepts(Some(&value)));
 }

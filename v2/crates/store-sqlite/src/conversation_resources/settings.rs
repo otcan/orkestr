@@ -29,6 +29,10 @@ async fn current(
         reply_footer: row.get("reply_footer"),
         provider_generation: row.get("provider_generation"),
         updated_at_ms: Some(row.get("updated_at_ms")),
+        // Absent only on a test store downgraded below 0060: the default.
+        review_before_accepting: row
+            .try_get::<i64, _>("review_before_accepting")
+            .is_ok_and(|value| value == 1),
     })
 }
 
@@ -91,6 +95,7 @@ impl Store {
                 && s.honor_no_reply == update.honor_no_reply
                 && s.reply_prefix == update.reply_prefix
                 && s.reply_footer == update.reply_footer
+                && s.review_before_accepting == update.review_before_accepting
         };
         if before.revision != update.expected_revision {
             if before.revision == update.expected_revision + 1 && same(&before) {
@@ -101,11 +106,12 @@ impl Store {
         }
         let generation = before.provider_generation + i64::from(before.provider != update.provider);
         sqlx::query(
-            "INSERT INTO conversation_settings(conversation_id,owner_id,revision,provider,model,reasoning_effort,honor_no_reply,reply_prefix,reply_footer,provider_generation,updated_at_ms)
-             VALUES(?,?,?,?,?,?,?,?,?,?,?)
+            "INSERT INTO conversation_settings(conversation_id,owner_id,revision,provider,model,reasoning_effort,honor_no_reply,reply_prefix,reply_footer,provider_generation,updated_at_ms,review_before_accepting)
+             VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
              ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision,provider=excluded.provider,model=excluded.model,
              reasoning_effort=excluded.reasoning_effort,honor_no_reply=excluded.honor_no_reply,reply_prefix=excluded.reply_prefix,
-             reply_footer=excluded.reply_footer,provider_generation=excluded.provider_generation,updated_at_ms=excluded.updated_at_ms",
+             reply_footer=excluded.reply_footer,provider_generation=excluded.provider_generation,updated_at_ms=excluded.updated_at_ms,
+             review_before_accepting=excluded.review_before_accepting",
         )
         .bind(conversation.to_string())
         .bind(owner.to_string())
@@ -118,6 +124,7 @@ impl Store {
         .bind(&update.reply_footer)
         .bind(generation)
         .bind(now_ms())
+        .bind(i64::from(update.review_before_accepting))
         .execute(&mut *tx)
         .await
         .map_err(unavailable)?;

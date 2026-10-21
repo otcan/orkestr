@@ -10,6 +10,7 @@ pub fn FastPanel(
     session_scope: Signal<SessionScope>,
     onexpired: EventHandler<()>,
     #[props(default)] onaccepted: Option<EventHandler<i64>>,
+    #[props(default)] auto_accept: bool,
 ) -> Element {
     let model = execution.read();
     rsx! {
@@ -27,7 +28,11 @@ pub fn FastPanel(
                 crate::acceptance_button::AcceptanceButton {
                     execution, fast_reply: true, now_ms, csrf, session_scope, onexpired, onaccepted
                 }
-                p { "A Fast reply needs your review before it can continue. Accepting it does not complete Deep work or a Worker task." }
+                if auto_accept {
+                    p { "Fast replies in this chat are accepted automatically. Turn on \"Review replies before accepting\" in Settings to review each one." }
+                } else {
+                    p { "A Fast reply needs your review before it can continue. Accepting it does not complete Deep work or a Worker task." }
+                }
             } else {
                 p { role: "status", "No Fast reply is available for this conversation yet." }
             }

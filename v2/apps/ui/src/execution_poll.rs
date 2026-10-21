@@ -17,6 +17,7 @@ pub fn ExecutionPoll(
     onexpired: EventHandler<()>,
     #[props(default)] onaccepted: Option<EventHandler<i64>>,
     #[props(default = true)] allow_steer: bool,
+    #[props(default)] auto_accept: bool,
 ) -> Element {
     let parent_tasks = worker_tasks && run.is_empty() && !fast;
     let generation = session_scope.read().generation();
@@ -98,7 +99,7 @@ pub fn ExecutionPoll(
     if headless {
         rsx! {}
     } else if fast {
-        rsx! { crate::fast_panel::FastPanel { execution, now_ms: now(), csrf, session_scope, onexpired, onaccepted } }
+        rsx! { crate::fast_panel::FastPanel { execution, now_ms: now(), csrf, session_scope, onexpired, onaccepted, auto_accept } }
     } else {
         rsx! { crate::execution_panel::ExecutionPanel { execution, now_ms: now(), csrf, session_scope, onexpired, parent_tasks, onaccepted, allow_steer } }
     }

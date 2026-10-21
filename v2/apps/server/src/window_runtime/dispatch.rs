@@ -79,14 +79,14 @@ impl QueueState {
         }
         self.wake.notify_one();
     }
-    fn forget(&self, browser: &str) {
+    pub(super) fn forget(&self, browser: &str) {
         if let Ok(mut credential) = self.credential.lock() {
             if credential.as_deref() == Some(browser) {
                 *credential = None;
             }
         }
     }
-    fn credential(&self) -> Option<String> {
+    pub(super) fn credential(&self) -> Option<String> {
         self.credential.lock().ok()?.clone()
     }
     pub(super) fn wake(&self) {
@@ -200,6 +200,7 @@ impl Controller {
                     return;
                 }
                 controller.dispatch_once().await;
+                controller.auto_accept_once().await;
             }
         });
         if let Ok(mut slot) = self.queue.task.lock() {

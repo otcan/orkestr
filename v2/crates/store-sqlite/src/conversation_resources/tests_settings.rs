@@ -72,6 +72,7 @@ fn update(revision: i64, provider: ConversationProvider) -> ConversationSettings
         honor_no_reply: true,
         reply_prefix: Some("orkestr:".into()),
         reply_footer: None,
+        review_before_accepting: false,
     }
 }
 
@@ -132,8 +133,33 @@ async fn defaults_revisions_and_provider_generation() {
         ),
         (3, 1, false)
     );
+    // Auto-accept is the default; review is an explicit, persisted opt-in.
+    assert!(!quiet.review_before_accepting);
+    let mut review = switch.clone();
+    review.expected_revision = 3;
+    review.honor_no_reply = false;
+    review.review_before_accepting = true;
+    let reviewed = case
+        .store
+        .update_conversation_settings(t, o, c, &review)
+        .await
+        .unwrap();
+    assert_eq!(
+        (reviewed.revision, reviewed.review_before_accepting),
+        (4, true)
+    );
+    assert_eq!(
+        case.store.conversation_settings(t, o, c).await.unwrap(),
+        reviewed
+    );
+    let replay = case
+        .store
+        .update_conversation_settings(t, o, c, &review)
+        .await
+        .unwrap();
+    assert_eq!(replay, reviewed);
     // Effort must belong to the provider.
-    let mut wrong = update(3, ConversationProvider::Claude);
+    let mut wrong = update(4, ConversationProvider::Claude);
     wrong.reasoning_effort = Some("xhigh".into());
     assert_eq!(
         case.store
