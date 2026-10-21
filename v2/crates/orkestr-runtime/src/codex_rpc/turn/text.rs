@@ -4,6 +4,12 @@ use orkestr_v2_application::runtime::MAX_PROVIDER_PROGRESS_BYTES;
 use serde_json::Value;
 
 const MAX_ITEMS: usize = 128;
+/// Marks a reply taken from the last progress message of a turn that ended
+/// without a final answer.
+pub(crate) const NO_FINAL_NOTE: &str = "(Ended without a final answer; last update:)";
+/// Reply for a completed turn that produced no message at all.
+pub(crate) const NO_TEXT_NOTICE: &str =
+    "(The turn completed without a reply. Ask for a status update if you need one.)";
 
 /// Static reason for a refused turn (diagnostics only; never provider text).
 fn refused(reason: &'static str) -> Blocker {
@@ -257,20 +263,36 @@ impl TurnText {
     pub(super) fn finish(&mut self, turn: &Value) -> Result<Option<String>, Blocker> {
         self.terminal_items(turn)?;
         if self.items.is_empty() {
-            return Ok(None); // Completion without text never invents a payload.
+            // The turn completed with tool work but no message at all: say so
+            // explicitly rather than failing or leaving the owner without a reply.
+            return Ok(Some(NO_TEXT_NOTICE.to_owned()));
         }
         let lifecycle = self.items.iter().any(|item| item.boundary);
         let index = if lifecycle {
             if self.items.iter().any(|item| !item.completed) {
                 return Err(refused("agent message never completed"));
             }
-            self.final_item
-                .or_else(|| {
-                    self.items
-                        .iter()
-                        .rposition(|item| item.phase.is_none() && !item.text.trim().is_empty())
-                })
-                .ok_or(Blocker::Protocol)?
+            match self.final_item.or_else(|| {
+                self.items
+                    .iter()
+                    .rposition(|item| item.phase.is_none() && !item.text.trim().is_empty())
+            }) {
+                Some(index) => index,
+                // A completed turn with commentary but no final answer (V1 shows
+                // the last message): use the last non-empty agent message, marked.
+                None => {
+                    return Ok(Some(
+                        match self
+                            .items
+                            .iter()
+                            .rposition(|item| !item.text.trim().is_empty())
+                        {
+                            Some(last) => format!("{NO_FINAL_NOTE}\n\n{}", self.items[last].text),
+                            None => NO_TEXT_NOTICE.to_owned(),
+                        },
+                    ))
+                }
+            }
         } else {
             // Legacy missing-phase/ID streams retain only their last message;
             // known commentary/partial phases are never promoted to an answer.
