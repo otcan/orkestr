@@ -79,6 +79,9 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(path) = std::env::var_os(orkestr_v2_server::whatsapp_chats::CONFIG_ENV) {
         state = state.with_whatsapp_chats_file(&PathBuf::from(path))?;
     }
+    if let Some(path) = std::env::var_os(orkestr_v2_server::restricted_http::CONFIG_ENV) {
+        state = state.with_restricted_config_file(&PathBuf::from(path))?;
+    }
     let listener = tokio::net::TcpListener::bind(bind).await?;
     let catalog = match std::env::var_os("ORKESTR_V2_GOOGLE_CATALOG") {
         Some(path) => {
@@ -124,6 +127,7 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     );
     let beta_state = state.clone();
     let timer_state = state.clone();
+    let restricted_state = state.clone();
     let mut app = router_with_google_catalog(state, catalog);
     if let Some(dist) = std::env::var_os("ORKESTR_V2_UI_DIST") {
         app = orkestr_v2_server::with_static_ui(app, &PathBuf::from(dist))?;
@@ -150,6 +154,7 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     let execution = execution.map(ConfiguredExecutions::start);
+    let restricted = restricted_state.start_restricted();
     let mut timers = timer_supervisor.map(|supervisor| timer_state.start_timers(supervisor));
     let (shutdown, mut requested) = tokio::sync::watch::channel(false);
     let mut serving = tokio::spawn(async move {
@@ -167,6 +172,9 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     // An open SSE connection must not delay the owned execution fence/cleanup.
     // Stop accepting HTTP and stop the supervisor before waiting for HTTP drain.
     let _ = shutdown.send(true);
+    if let Some(restricted) = restricted {
+        restricted.shutdown().await;
+    }
     let beta_cleanup = beta_state.shutdown_beta_window().await;
     let timer_cleanup = match timers {
         Some(timers) => timers.shutdown().await,

@@ -48,6 +48,19 @@ pub(crate) async fn admit(
     if !input.is_valid() {
         return Err(invalid());
     }
+    // A restricted thread's model runs only through the broker, never in a window.
+    if state
+        .store
+        .is_restricted_conversation(&conversation)
+        .await
+        .unwrap_or(true)
+    {
+        return Err(Error(
+            StatusCode::CONFLICT,
+            "restricted_conversation",
+            "Restricted threads do not use execution windows",
+        ));
+    }
     // The task owns admission and startup across HTTP disconnect/cancellation.
     // Dropping this join handle does not cancel its durable handoff.
     let outcome = tokio::spawn(async move {

@@ -54,6 +54,7 @@ pub mod owned_execution;
 mod provider_payload;
 mod resource_health;
 mod response_shaping;
+pub mod restricted_http;
 mod routes;
 mod sidebar_http;
 mod sidebar_v1;
@@ -101,6 +102,8 @@ pub struct AppState {
     v1_timers: v1_manage_http::CreatedTimers,
     /// Whether this installation can run a conversation's turns on Claude.
     claude_turns: bool,
+    /// Restricted-thread broker task and its endpoints (private configuration).
+    restricted: Option<Arc<restricted_http::RestrictedRuntime>>,
 }
 impl AppState {
     pub async fn shutdown_beta_window(&self) -> Result<(), &'static str> {
@@ -273,6 +276,7 @@ impl AppState {
             whatsapp_chats: None,
             v1_timers: Default::default(),
             claude_turns: false,
+            restricted: None,
         })
     }
 }
@@ -496,6 +500,7 @@ pub fn router_with_google_catalog(
         .merge(v1_links::router())
         .merge(v1_manage_http::router())
         .merge(whatsapp_chats_http::router())
+        .merge(restricted_http::router())
         .merge(google_registry_metadata::router(catalog))
         // Labels each matched request with its route template for logs and metrics.
         .route_layer(middleware::from_fn(observability::record_route))
