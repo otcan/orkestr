@@ -58,6 +58,8 @@ pub mod timer_bootstrap;
 pub mod timer_http;
 mod timer_lifecycle;
 mod v1_links;
+pub mod whatsapp_chats;
+mod whatsapp_chats_http;
 mod window_http;
 mod window_runtime;
 mod worker_discovery;
@@ -82,6 +84,8 @@ pub struct AppState {
     live_map: Option<Arc<std::path::PathBuf>>,
     desktop_broker: Option<Arc<desktop_broker::Broker>>,
     sidebar_v1: sidebar_v1::V1Cache,
+    /// "New WhatsApp chat": owner numbers, accounts and the adapter client.
+    whatsapp_chats: Option<Arc<whatsapp_chats::WhatsAppChats>>,
     /// Whether this installation can run a conversation's turns on Claude.
     claude_turns: bool,
 }
@@ -171,6 +175,15 @@ impl AppState {
         self.desktop_broker = Some(Arc::new(desktop_broker::Broker::load(path)?));
         Ok(self)
     }
+    /// Trusted startup only: the private "New WhatsApp chat" configuration
+    /// (owner numbers, accounts, adapter URL and token).
+    pub fn with_whatsapp_chats_file(
+        mut self,
+        path: &std::path::Path,
+    ) -> Result<Self, &'static str> {
+        self.whatsapp_chats = Some(Arc::new(whatsapp_chats::WhatsAppChats::load(path)?));
+        Ok(self)
+    }
     /// Trusted startup only: the Claude execution path for conversation turns
     /// is installed, so owners may select Claude in conversation settings.
     pub fn with_claude_turns(mut self) -> Self {
@@ -231,6 +244,7 @@ impl AppState {
             live_map: None,
             desktop_broker: None,
             sidebar_v1: sidebar_v1::V1Cache::default(),
+            whatsapp_chats: None,
             claude_turns: false,
         })
     }
@@ -406,6 +420,7 @@ pub fn router_with_google_catalog(
         .merge(desktop_http::router())
         .merge(sidebar_http::router())
         .merge(v1_links::router())
+        .merge(whatsapp_chats_http::router())
         .merge(google_registry_metadata::router(catalog))
         .fallback(|| async { Error(StatusCode::NOT_FOUND,"not_found","Endpoint not found") })
         .layer(DefaultBodyLimit::max(40 * 1024))

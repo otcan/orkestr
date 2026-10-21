@@ -55,6 +55,37 @@ pub async fn request<T: DeserializeOwned>(
         .map_err(|_| Failure::from("Unexpected API contract".to_string()))
 }
 
+/// Like [`request`], also returning the success status (for example 201 vs
+/// 202 when a multi-stage operation stopped early).
+pub async fn request_status<T: DeserializeOwned>(
+    method: &str,
+    path: &str,
+    body: Value,
+    csrf: &str,
+) -> Result<(u16, T), Failure> {
+    let eval = document::eval(include_str!("request.js"));
+    eval.send(json!({"method":method,"path":path,"body":body,"csrf":csrf,"bootstrap":""}))
+        .map_err(|_| Failure::from("Browser bridge unavailable".to_string()))?;
+    let response: Response = eval.join().await.map_err(|_| {
+        Failure::from(
+            "Connection interrupted; outcome unknown. Retry continues the same request."
+                .to_string(),
+        )
+    })?;
+    if !(200..300).contains(&response.status) {
+        return Err(Failure {
+            status: response.status,
+            message: response.body["message"]
+                .as_str()
+                .unwrap_or("API request rejected")
+                .into(),
+        });
+    }
+    serde_json::from_value(response.body)
+        .map(|value| (response.status, value))
+        .map_err(|_| Failure::from("Unexpected API contract".to_string()))
+}
+
 pub async fn key() -> Result<String, Failure> {
     document::eval("return crypto.randomUUID();")
         .join()

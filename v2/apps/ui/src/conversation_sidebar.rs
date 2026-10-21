@@ -46,6 +46,7 @@ pub fn ConversationSidebar(
     let mut notice = use_signal(String::new);
     let mut create = use_signal(Creation::default);
     let mut open = use_signal(|| false);
+    let mut open_whatsapp = use_signal(|| false);
     let mut busy = use_signal(|| false);
     let mut filter = use_signal(String::new);
     let mut expanded = use_signal(BTreeSet::<String>::new);
@@ -174,7 +175,15 @@ pub fn ConversationSidebar(
     rsx! { aside { class:"conversation-sidebar", "aria-label":"Conversations",
         div { class:"sidebar-heading",
             h2 {"Chats"}
-            button { class:"new-chat", "aria-expanded":"{open}", onclick:move |_|open.set(!open()), "New conversation" }
+            div { class:"new-actions",
+                button { class:"new-chat", "aria-expanded":"{open}", onclick:move |_|{open.set(!open());open_whatsapp.set(false);}, "New conversation" }
+                button { class:"new-chat new-whatsapp", "aria-expanded":"{open_whatsapp}", onclick:move |_|{open_whatsapp.set(!open_whatsapp());open.set(false);}, "New WhatsApp chat" }
+            }
+        }
+        if open_whatsapp() {
+            crate::new_whatsapp_chat::NewWhatsAppChat { csrf: csrf.clone(), session_scope, onexpired,
+                oncreated: move |_| tick += 1,
+                onselect: move |entry: SidebarEntry| { open_whatsapp.set(false); onselect.call(entry); } }
         }
         if open() {
             form { class:"new-conversation", onsubmit:move |event|{

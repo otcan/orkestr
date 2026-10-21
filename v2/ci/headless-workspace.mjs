@@ -213,6 +213,28 @@ export const scenarios = [
     await page.waitForSelector('#composer');
     await screenshot(label, 'chat');
   }],
+  ['new-whatsapp-chat', async label => {
+    await openDrawer(label);
+    await clickText('New WhatsApp chat');
+    await page.waitForSelector('#whatsapp-chat-name');
+    assert.match(await text('.new-whatsapp-chat'), /your 2 WhatsApp number/);
+    await page.type('#whatsapp-chat-name', 'Synthetic WhatsApp chat');
+    await page.select('#whatsapp-chat-effort', 'low');
+    await page.type('#whatsapp-chat-workspace', '/srv/synthetic');
+    await screenshot(label, 'new-whatsapp-chat');
+    await clickText('Create WhatsApp chat');
+    // The first attempt stops at the adapter; Retry continues the same request.
+    await waitText('Retry continues from there');
+    await screenshot(label, 'new-whatsapp-chat-stopped');
+    await clickText('Retry');
+    await page.waitForFunction(() => document.querySelector('.heading-title h2')?.textContent === 'Synthetic WhatsApp chat', { timeout: 20000 });
+    assert.equal(state.chatPosts.length, 2);
+    assert.equal(state.chatPosts[0].client_request_id, state.chatPosts[1].client_request_id, 'Retry keeps the request id');
+    assert.deepEqual({ ...state.chatPosts[0], client_request_id: 'k' }, { client_request_id: 'k', name: 'Synthetic WhatsApp chat',
+      provider: 'codex', model: null, reasoning_effort: 'low', workspace: '/srv/synthetic' });
+    await page.waitForSelector('#composer');
+    await noHorizontalScroll();
+  }],
   ['v1-deep-links', async label => {
     const open = ref => page.goto(`${origin}/instance/${V1_INSTANCE_REF}/thread/${ref}`, { waitUntil: 'domcontentloaded' });
     // A thread still on V1 opens its linked entry.

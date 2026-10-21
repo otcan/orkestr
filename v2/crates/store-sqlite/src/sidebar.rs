@@ -22,7 +22,8 @@ pub struct SidebarConversation {
     /// Accepted replies after max(read mark, the owner's latest message).
     pub unread: u32,
     pub preview: Option<(SidebarAuthor, String)>,
-    /// First archived source thread (the V1 thread it was imported from).
+    /// First archived source thread (the V1 thread it was imported from), or
+    /// the V1 group thread created for it by "New WhatsApp chat".
     pub source_thread_id: Option<String>,
     pub lineage: Option<ConversationLineage>,
 }
@@ -44,8 +45,9 @@ const LIST: &str = "SELECT d.conversation_id,d.name,c.sequence,
    AND e.sequence>max(
      coalesce((SELECT r.marker FROM sidebar_read_marks r WHERE r.owner_id=d.owner_id AND r.entry_key='v2:'||d.conversation_id),0),
      coalesce((SELECT max(o.sequence) FROM messages o WHERE o.conversation_id=d.conversation_id AND o.owner_id=d.owner_id),0))) AS unread,
- (SELECT s.source_thread_id FROM archived_history_sources s WHERE s.conversation_id=d.conversation_id AND s.owner_id=d.owner_id
-   ORDER BY s.row_sequence LIMIT 1) AS source_thread_id,
+ coalesce((SELECT s.source_thread_id FROM archived_history_sources s WHERE s.conversation_id=d.conversation_id AND s.owner_id=d.owner_id
+   ORDER BY s.row_sequence LIMIT 1),
+  (SELECT p.v1_thread_id FROM whatsapp_chat_provisions p WHERE p.owner_id=d.owner_id AND p.conversation_id=d.conversation_id)) AS source_thread_id,
  l.source_instance AS lineage_instance,l.source_thread_id AS lineage_thread,l.source_parent_thread_id AS lineage_parent
  FROM conversation_directory d
  JOIN conversations c ON c.id=d.conversation_id AND c.owner_id=d.owner_id

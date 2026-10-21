@@ -15,6 +15,8 @@ mod legacy_workers;
 pub use legacy_workers::*;
 mod sidebar;
 pub use sidebar::*;
+mod whatsapp_chats;
+pub use whatsapp_chats::*;
 mod beta;
 pub use beta::*;
 mod intelligence;

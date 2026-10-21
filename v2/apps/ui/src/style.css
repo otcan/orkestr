@@ -64,6 +64,13 @@ details[open] > summary { margin-bottom: .4rem; }
 .sidebar-heading h2 { font-size: 1.35rem; letter-spacing: -.025em; }
 .sidebar-heading button { background: var(--accent); color: var(--accent-contrast); border-color: transparent; font-size: .8rem; min-height: 2.4rem; border-radius: 1.2rem; font-weight: 600; }
 .sidebar-heading button:hover:not(:disabled) { background: var(--accent-strong); }
+.new-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: .35rem; }
+.sidebar-heading .new-whatsapp { background: var(--surface); color: var(--accent-text); border-color: var(--accent); }
+.sidebar-heading .new-whatsapp:hover:not(:disabled) { background: var(--accent-soft); }
+.new-whatsapp-chat .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: .5rem; }
+.new-whatsapp-chat label { font-size: .75rem; color: var(--muted); }
+.new-whatsapp-chat .field-help { font-size: .72rem; color: var(--faint); }
+.whatsapp-chat-status { font-size: .78rem; color: var(--accent-text); }
 .sidebar-search { padding: 0 .2rem; }
 .sidebar-search input { margin: 0; min-height: 2.5rem; padding: .45rem 1rem; border-radius: 1.3rem; background: var(--surface-2); border-color: transparent; }
 .new-conversation { display: grid; gap: .5rem; padding: .7rem; margin: 0 .2rem; border-radius: var(--radius); background: var(--surface-2); }
