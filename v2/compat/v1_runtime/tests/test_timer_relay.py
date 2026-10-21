@@ -207,6 +207,15 @@ class DigestTests(Base):
         self.assertTrue(done["settled"])
         self.assertEqual(self.ledger.messages(), [])
 
+    def test_digests_are_polled_every_fifteen_seconds_not_every_pass(self):
+        self.worker.run_once(_Stop())
+        self.worker.run_once(_Stop())
+        polls = [r for r in self.peer.reads if r[1].startswith("/timer-digests?")]
+        self.assertEqual(len(polls), 1)
+        self.worker._digest_checked -= 16
+        self.worker.run_once(_Stop())
+        self.assertEqual(len([r for r in self.peer.reads if r[1].startswith("/timer-digests?")]), 2)
+
     def test_changed_digest_identity_conflicts(self):
         self.ledger.enqueue_digest(self.digest())
         with self.assertRaises(Conflict):

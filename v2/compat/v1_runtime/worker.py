@@ -14,6 +14,7 @@ from .rust_client import ClientError
 PROGRESS_INTERVAL_S = 60
 PROGRESS_MAX_CHARS = 3500
 TIMER_PAGE = 50
+DIGEST_POLL_S = 15
 # Window states that are neither open for a follow-up nor closed for a successor.
 UNSETTLED_WINDOW_STATES = ("opening", "retiring", "reconciliation_required")
 # A Fast in these phases (or missing) can never become this input's proposal.
@@ -130,6 +131,7 @@ class Worker:
         self.attachment_dir, self.attachment_gid = attachment_dir, attachment_gid
         self.progress_updates = progress_updates
         self.max_input_age_s = max_input_age_s
+        self._digest_checked = None
 
     def import_attachments(self, data):
         if "attachment_request" not in data:
@@ -710,11 +712,14 @@ class Worker:
         except Exception:
             # Discovery is retried every pass; it never blocks existing inputs.
             pass
-        try:
-            self.discover_digests()
-        except Exception:
-            # Same: a missing route (older server) or a failure is retried later.
-            pass
+        # Digests are due a few times a day: look every 15 s, not every pass.
+        if self._digest_checked is None or time.monotonic() - self._digest_checked >= DIGEST_POLL_S:
+            self._digest_checked = time.monotonic()
+            try:
+                self.discover_digests()
+            except Exception:
+                # A missing route (older server) or a failure is retried at the next check.
+                pass
         try:
             for data in self.ledger.mark_stalled(STALL_NOTICE_AFTER_S, STALL_NOTICE):
                 print("ALERT orkestr-v2-wa-adapter input_stalled conversation=%s input=%s phase=%s"
