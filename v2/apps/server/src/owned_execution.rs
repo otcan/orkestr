@@ -41,6 +41,12 @@ use tokio::{sync::watch, task::JoinHandle};
 /// Run budget of a window's Fast companion. Fast answers quickly; a long
 /// command belongs to Deep or a Worker, and a Fast left running only holds
 /// the window.
+/// Static diagnostic for a refused observation: the store error variant or
+/// provider blocker class only, never provider content or identifiers.
+pub(crate) fn observation_refused(role: &str, error: &orkestr_runtime::supervisor::Error) {
+    eprintln!("{role} observation refused by {error:?}");
+}
+
 pub(crate) const FAST_MAX_RUN_MS: u64 = 240_000;
 pub(crate) use window_task::WindowTask;
 

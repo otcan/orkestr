@@ -312,7 +312,10 @@ impl ConfiguredExecution {
                 Err(orkestr_runtime::supervisor::Error::Store(
                     RuntimeStoreError::Busy | RuntimeStoreError::Unavailable,
                 )) => false,
-                Err(_) => return Err("execution observation refused; reconciliation required"),
+                Err(error) => {
+                    super::observation_refused("execution", &error);
+                    return Err("execution observation refused; reconciliation required");
+                }
             };
             let phase = if committed {
                 budget.observed(Instant::now());
