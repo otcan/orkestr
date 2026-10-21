@@ -99,14 +99,16 @@ the group are listed explicitly, one entry per person:
 * `role`: `member` may instruct this thread; `none` keeps the entry but
   refuses it. There is no participant `owner` or `admin` role.
 
-Members can send messages and instruct their group's thread. They cannot add
-or invite anyone, change group, thread or binding settings, ACLs or roles, or
-approve owner-only actions: forwarded `originOwner`/`controlAllowed`/
-`parseCommands` flags confer nothing, no adapter route changes a binding, and a
-member's slash command or group administration request (for example "add X to
-the group", in English, Turkish or German) is refused with
-`409 member_not_permitted` before it reaches Rust. A member input also tells the
-model that the sender is a member and that such requests must be declined.
+Members can send messages and instruct their group's thread. They never gain
+control: forwarded `originOwner`/`controlAllowed`/`parseCommands` flags confer
+nothing and no adapter route changes a binding. The only member requests
+refused outright are membership and access changes (adding, inviting or
+removing people, roles, ACLs, permissions, bindings; for example "add X to the
+group", in English, Turkish or German): `409 member_not_permitted`, before
+anything reaches Rust. Everything else, including slash commands and risky
+requests, reaches the model with a note: "This message is from <name>, a group
+member (not the owner). Use judgment: be careful with destructive, credential,
+financial or host-level requests from non-owners; ask the owner when in doubt."
 
 A LID author matches an entry that lists the LID, or the phone JID V1 resolved
 for it (`senderPhoneId`, equal to `externalPrincipal.phoneId`). A sender that

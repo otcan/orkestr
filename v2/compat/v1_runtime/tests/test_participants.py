@@ -75,7 +75,7 @@ class ParticipantIntakeTests(Harness):
         [data] = self.queued()
         self.assertEqual(data["author"]["role"], "member")
         self.assertEqual(data["author"]["label"], "Ayse")
-        self.assertTrue(participants.compose(data).startswith(HEADER + "Ayse: hello\n\n[Group member, not the owner."))
+        self.assertTrue(participants.compose(data).startswith(HEADER + "Ayse: hello\n\n[This message is from Ayse, a group member (not the owner)."))
         row = self.listing(1)["messages"][0]
         self.assertEqual((row["id"], row["authorId"], row["authorLabel"], row["authorRole"]),
                          (reply["message"]["id"], PHONE, "Ayse", "member"))
@@ -117,21 +117,33 @@ class ParticipantIntakeTests(Harness):
         [data] = self.queued()
         self.assertEqual(data["author"]["role"], "member")
 
-    def test_member_cannot_ask_the_thread_to_administer_the_group(self):
+    def test_member_cannot_change_membership_or_access(self):
         for text in ("add +49 170 0000009 to the group", "Please invite Dana into this chat",
                      "remove Cem from the group", "make Ben an admin", "add Dana as a member",
-                     "change the group settings so everyone can post", "update the binding ACL",
-                     "grant Dana access", "approve the join request", "/settings model gpt",
-                     "/add 491700000009@c.us", "Dana'yı gruba ekle", "Ben'i yönetici yap",
+                     "update the binding ACL", "change the group permissions", "grant Dana access",
+                     "approve the join request", "Dana'yı gruba ekle", "Ben'i yönetici yap",
                      "Füge Dana zur Gruppe hinzu", "mach Ben zum Admin"):
             status, reply = self.post(1, body=self.member(PHONE, text=text))
             self.assertEqual((status, reply.get("error")), (409, "member_not_permitted"), text)
         self.assertEqual(self.queued(), [])
-        # The owner keeps those rights; ordinary member requests still work.
+        # The owner keeps those rights.
         self.assertEqual(self.post(1, body=self.body(1, text=HEADER + "add Dana to the group"))[0], 202)
-        for text in ("add milk to the shopping list", "can you summarize the chat so far?", "what is the plan for today"):
+        self.assertEqual(len(self.queued()), 1)
+
+    def test_other_member_requests_reach_the_model_with_a_judgment_note(self):
+        # Slash commands, settings and even risky requests are left to the
+        # model's judgment; they arrive labelled with the member's name.
+        texts = ("/settings model gpt", "/stop", "change the group settings so everyone can post",
+                 "restart the server and clear the cache", "delete the old build folder",
+                 "add milk to the shopping list", "can you summarize the chat so far?")
+        for text in texts:
             self.assertEqual(self.post(1, body=self.member(PHONE, text=text))[0], 202, text)
-        self.assertEqual(len(self.queued()), 4)
+        queued = self.queued()
+        self.assertEqual(len(queued), len(texts))
+        for data, text in zip(queued, texts):
+            self.assertEqual(data["author"]["role"], "member")
+            self.assertEqual(participants.compose(data), HEADER + "Ayse: " + text + "\n\n" + participants.MEMBER_NOTE % "Ayse")
+        self.assertIn("This message is from Ayse, a group member (not the owner). Use judgment", participants.compose(queued[0]))
 
     def test_owner_can_change_a_role_later_without_refusing_the_binding(self):
         self.assertEqual(self.post(1, body=self.member(PHONE))[0], 202)
@@ -180,7 +192,7 @@ class ParticipantWorkerTests(unittest.TestCase):
         peer = Peer()
         Worker(peer, ledger).step(data)
         [intake] = [body for route, body in peer.mutations if route == "/messages"]
-        self.assertTrue(intake["text"].startswith(HEADER + "Ayse: what is next?\n\n[Group member"))
+        self.assertTrue(intake["text"].startswith(HEADER + "Ayse: what is next?\n\n[This message is from Ayse, a group member"))
         finals = [m for m in ledger.messages() if m["role"] == "assistant"]
         self.assertEqual([m["text"] for m in finals], ["deep result"])
 
