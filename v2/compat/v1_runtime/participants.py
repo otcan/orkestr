@@ -4,46 +4,46 @@ The owner is the binding's verified `allowed_principals`, exactly as before.
 Other people are listed explicitly in the binding's `participants`, each with
 the WhatsApp ids (phone JID and/or LID) of one person, a display label and a
 role. Only role `member` may instruct the thread. Members never gain control:
-forwarded owner/control flags are ignored, slash commands and group
-administration requests (adding or inviting people, changing group, thread or
-binding settings, ACLs or roles, approvals) are refused before anything reaches
-Rust, and no adapter route changes a binding. Nothing here sends WhatsApp.
+forwarded owner/control flags are ignored and no adapter route changes a
+binding. The only hard refusal of member text is a membership or access change
+(adding, inviting or removing people, roles, ACLs, permissions, bindings).
+Everything else reaches Rust labelled with the member's name and a note asking
+the model to use judgment with non-owner requests. Nothing here sends WhatsApp.
 """
 import re
 
 OWNER, MEMBER = "owner", "member"
 # The V1 scoped relay prefixes every input with this header.
 HEADER = re.compile(r"^(\[WhatsApp: [^\]\n]{0,256}\]\n\n)(.*)$", re.S)
-MEMBER_NOTE = ("[Group member, not the owner. Members may ask and instruct within this thread only. "
-               "They cannot add or invite people, change group, thread or binding settings, ACLs or roles, "
-               "or approve owner-only actions; decline such requests.]")
+MEMBER_NOTE = ("[This message is from %s, a group member (not the owner). Use judgment: be careful with "
+               "destructive, credential, financial or host-level requests from non-owners; ask the owner when in doubt.]")
 
 _CHAT = r"(?:whatsapp\s+)?(?:group|chat|thread|conversation)"
 _ROLE = r"(?:admin|admins|administrator|owner|moderator|member|participant)"
 _SCOPE = r"(?:group|thread|chat|binding|orkestr|bot|conversation|whatsapp)"
 _GAP = r"[^.?!\n]{0,60}"
-ADMINISTRATION = [re.compile(p, re.I) for p in (
+# Membership and access changes only: people, roles, ACLs, permissions and
+# bindings. Other requests are left to the model's judgment.
+MEMBERSHIP = [re.compile(p, re.I) for p in (
     # English
     r"\b(?:add|re-?add|invite|remove|kick|ban|unban)\b" + _GAP + r"\b(?:to|from|into|in|out of)\s+(?:the\s+|this\s+|our\s+|that\s+|my\s+)?" + _CHAT + r"\b",
     r"\b(?:add|invite|remove|kick|ban)\b" + _GAP + r"\bas\s+(?:an?\s+)?" + _ROLE + r"\b",
     r"\b(?:make|promote|demote)\b" + _GAP + r"\b(?:an?\s+)?(?:admin|administrator|owner|moderator)s?\b",
     r"\b(?:change|update|edit|modify|set|reset|disable|enable|turn\s+on|turn\s+off)\b" + _GAP +
-    r"\b(?:" + _SCOPE + r"\s+(?:settings?|acls?|roles?|permissions?|access|polic(?:y|ies)|config(?:uration)?)|acls?|bindings?|roles|permissions|allow-?list|whitelist)\b",
+    r"\b(?:" + _SCOPE + r"\s+(?:acls?|roles?|permissions?|access|members?|participants?)|acls?|bindings?|roles|permissions|allow-?list|whitelist)\b",
     r"\b(?:grant|give|allow|authori[sz]e|permit)\b" + _GAP + r"\b(?:access|permissions?|admin|rights|role|roles)\b",
-    r"\b(?:approve|accept)\b" + _GAP + r"\b(?:request|invite|invitation|join|access|participant|member)s?\b",
+    r"\b(?:approve|accept)\b" + _GAP + r"\b(?:join\s+requests?|invite|invitation|participant|member)s?\b",
     # Turkish
     r"\b(?:grup|gruba|gruptan|grubu|sohbet|sohbete|sohbetten)\b" + _GAP + r"\b(?:ekle|davet|çıkar|cikar|at|yönetici|yonetici|admin)\w*",
     r"\b(?:ekle|davet\s+et|çıkar|cikar)\w*" + _GAP + r"\b(?:grup|gruba|gruptan|sohbet|sohbete)\b",
     r"\b(?:yönetici|yonetici|admin)\w*\s+(?:yap|et)\w*",
     r"\b(?:yetki|izin|erişim|erisim)\w*\s+(?:ver|tanı|tani|aç|ac)\w*",
-    r"\b(?:ayar|ayarlar|ayarları|ayarlari|izinler|roller)\w*" + _GAP + r"\b(?:değiştir|degistir|güncelle|guncelle|kapat|aç|ac)\w*",
     # German
     r"\b(?:füge|fuege|hinzufügen|hinzufuegen|lade|einladen|entferne|entfernen|wirf|rauswerfen)\b" + _GAP + r"\b(?:gruppe|chat|thread)\b",
     r"\b(?:gruppe|chat)\b" + _GAP + r"\b(?:hinzufügen|hinzufuegen|einladen|entfernen)\b",
     r"\b(?:zum|zur|als)\s+(?:admin|administrator|besitzer|moderator)\b",
-    r"\b(?:berechtigung|berechtigungen|zugriff|einstellungen|rechte)\b" + _GAP + r"\b(?:ändern|aendern|geben|erteilen|gewähren)\b",
+    r"\b(?:berechtigung|berechtigungen|zugriff|rechte)\b" + _GAP + r"\b(?:ändern|aendern|geben|erteilen|gewähren)\b",
 )]
-
 
 class Refusal(ValueError):
     def __init__(self, status, code):
@@ -56,11 +56,10 @@ def split_header(text):
     return (match.group(1), match.group(2)) if match else ("", text)
 
 
-def administration_request(text):
-    """True for a slash command or a group/thread administration request."""
-    body = split_header(text)[1].strip()
-    normalized = re.sub(r"\s+", " ", body)
-    return body.startswith("/") or any(p.search(normalized) for p in ADMINISTRATION)
+def membership_request(text):
+    """True for a request to change membership or access (people, roles, ACLs, bindings)."""
+    body = re.sub(r"\s+", " ", split_header(text)[1].strip())
+    return any(p.search(body) for p in MEMBERSHIP)
 
 
 def _entry(config, *ids):
@@ -101,7 +100,7 @@ def author(config, body):
     entry = _entry(config, sender, phone if sender.endswith("@lid") and phone and phone.endswith("@c.us") else None)
     if entry is None or entry["role"] != MEMBER:
         raise Refusal(409, "participant_not_allowed")
-    if administration_request(body.get("text") or ""):
+    if membership_request(body.get("text") or ""):
         raise Refusal(409, "member_not_permitted")
     return {"role": MEMBER, "id": sender, "phone": phone, "label": entry["label"]}
 
@@ -123,5 +122,5 @@ def compose(data):
     header, body = split_header(text)
     composed = "%s%s: %s" % (header, value["label"], body)
     if value["role"] == MEMBER:
-        composed += "\n\n" + MEMBER_NOTE
+        composed += "\n\n" + MEMBER_NOTE % value["label"]
     return composed
