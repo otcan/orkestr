@@ -52,7 +52,7 @@ impl HostMetricsRange {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HostMetricsSummary {
     pub schema_version: u32,
@@ -72,6 +72,26 @@ pub struct HostMetricsSummary {
     pub spark_cpu: Vec<f32>,
     pub spark_memory: Vec<f32>,
     pub spark_disk: Vec<f32>,
+    #[serde(default)]
+    pub swap_used_bytes: Option<u64>,
+    #[serde(default)]
+    pub swap_total_bytes: Option<u64>,
+    #[serde(default)]
+    pub load: Option<(f32, f32, f32)>,
+    /// Local filesystems (`/` first).
+    #[serde(default)]
+    pub mounts: Vec<HostMount>,
+    /// Busy percent of each CPU thread (logical core) in the last sample.
+    #[serde(default)]
+    pub cpu_cores_percent: Vec<f32>,
+    #[serde(default)]
+    pub disk_read_bps: Option<f32>,
+    #[serde(default)]
+    pub disk_write_bps: Option<f32>,
+    #[serde(default)]
+    pub net_rx_bps: Option<f32>,
+    #[serde(default)]
+    pub net_tx_bps: Option<f32>,
 }
 
 /// One bucket of the history. Rates are per second; byte counts are averages
@@ -170,5 +190,108 @@ impl HostMetricsSummary {
             && [&self.spark_cpu, &self.spark_memory, &self.spark_disk]
                 .iter()
                 .all(|s| s.len() <= HOST_METRICS_SPARK_POINTS)
+    }
+}
+
+/// One mounted local filesystem, as `df` reports it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HostMount {
+    pub mount: String,
+    pub fs_type: String,
+    pub device: String,
+    pub total_bytes: u64,
+    pub used_bytes: u64,
+    /// Available to unprivileged users (df "Avail").
+    pub free_bytes: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HostDirectory {
+    pub path: String,
+    pub bytes: u64,
+}
+
+/// Largest directories on `/` (two levels), measured hourly at idle I/O
+/// priority. Only what the service user can read is counted.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HostDirectories {
+    pub observed_at_ms: Option<i64>,
+    /// A measurement is running now.
+    pub running: bool,
+    /// Bytes under `/` the service user could read (compare with `used`).
+    pub readable_bytes: u64,
+    pub entries: Vec<HostDirectory>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HostDisks {
+    pub schema_version: u32,
+    pub mounts: Vec<HostMount>,
+    pub directories: HostDirectories,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConsumerKind {
+    /// Provider sessions and Workers of one V2 conversation.
+    Conversation,
+    /// Processes working in one workspace directory (V1 threads, tools).
+    Workspace,
+    Service,
+    Container,
+    Session,
+    Other,
+}
+
+/// CPU, memory and I/O of one owner-meaningful group of processes.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HostConsumer {
+    pub key: String,
+    pub kind: ConsumerKind,
+    pub label: String,
+    /// For conversation groups: the V2 conversation, to link to.
+    pub conversation_id: Option<String>,
+    /// For conversation groups: running roles (`deep`, `fast`, `worker`).
+    pub roles: Vec<String>,
+    /// Share of the whole host (all cores), percent.
+    pub cpu_percent: f32,
+    /// Cores in use (100 % of one core = 1.0).
+    pub cores: f32,
+    /// Sum of resident memory of the group's processes.
+    pub rss_bytes: u64,
+    /// `None` when the kernel does not let the service user read it.
+    pub io_read_bps: Option<f32>,
+    pub io_write_bps: Option<f32>,
+    pub processes: u32,
+    /// Command name of the group's busiest process (e.g. `node`, `cargo`).
+    #[serde(default)]
+    pub top_command: Option<String>,
+    /// Last samples, oldest first: CPU percent of host.
+    pub spark_cpu: Vec<f32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HostConsumers {
+    pub schema_version: u32,
+    pub collecting: bool,
+    pub observed_at_ms: Option<i64>,
+    pub interval_ms: u64,
+    pub cores: u32,
+    pub consumers: Vec<HostConsumer>,
+}
+
+impl HostConsumers {
+    pub fn is_valid(&self) -> bool {
+        self.schema_version == 1
+            && self.consumers.len() <= 64
+            && self.consumers.iter().all(|c| {
+                c.spark_cpu.len() <= HOST_METRICS_SPARK_POINTS && c.cpu_percent.is_finite()
+            })
     }
 }

@@ -238,3 +238,41 @@ async fn compressible_assets_are_served_precompressed_with_their_own_validator()
     let _ = task.await;
     result.unwrap();
 }
+
+#[test]
+fn content_versioned_urls_are_cached_for_good_and_others_revalidate() {
+    let mut assets = Assets::new();
+    assets.insert(
+        "/app.js".into(),
+        Asset::new("text/javascript", Bytes::from_static(b"versioned bundle")),
+    );
+    let tag = assets["/app.js"]
+        .etag
+        .to_str()
+        .unwrap()
+        .trim_matches('"')
+        .to_owned();
+    let get = |uri: &str| {
+        respond(
+            Method::GET,
+            uri.parse().unwrap(),
+            &HeaderMap::new(),
+            &assets,
+        )
+    };
+    assert_eq!(
+        get(&format!("/app.js?v={}", &tag[..16])).headers()[header::CACHE_CONTROL],
+        cache::PINNED
+    );
+    for uri in [
+        "/app.js".to_string(),
+        "/app.js?v=0000000000000000".into(),
+        format!("/app.js?v={}", &tag[..15]),
+    ] {
+        assert_eq!(
+            get(&uri).headers()[header::CACHE_CONTROL],
+            cache::POLICY,
+            "{uri}"
+        );
+    }
+}

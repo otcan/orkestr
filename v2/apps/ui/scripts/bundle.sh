@@ -23,10 +23,14 @@ mkdir -- "$UI_BUNDLE_DIR"
 # The name and producers sections are debugging metadata only (about a
 # third of the download); browsers do not need them to run the bundle.
 wasm-bindgen "$CARGO_TARGET_DIR/wasm32-unknown-unknown/wasm-release/orkestr-v2-ui.wasm" --target web --out-dir "$UI_BUNDLE_DIR" --out-name orkestr_v2_ui --no-typescript --remove-name-section --remove-producers-section
-cat > "$UI_BUNDLE_DIR/index.html" <<'HTML'
+# Content-versioned URLs: index.html is always revalidated, so a new build
+# can never run against a stale cached script or WebAssembly module.
+js_version=$(sha256sum "$UI_BUNDLE_DIR/orkestr_v2_ui.js" | cut -c1-16)
+wasm_version=$(sha256sum "$UI_BUNDLE_DIR/orkestr_v2_ui_bg.wasm" | cut -c1-16)
+cat > "$UI_BUNDLE_DIR/index.html" <<HTML
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content"><title>Orkestr</title></head>
-<body><div id="main"></div><script type="module">import init from './orkestr_v2_ui.js'; await init();</script></body></html>
+<body><div id="main"></div><script type="module">import init from './orkestr_v2_ui.js?v=$js_version'; await init({module_or_path: './orkestr_v2_ui_bg.wasm?v=$wasm_version'});</script></body></html>
 HTML
 python3 - "$UI_BUNDLE_DIR" <<'PYTHON'
 from pathlib import Path

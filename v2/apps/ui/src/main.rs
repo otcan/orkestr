@@ -20,11 +20,13 @@ mod fast_panel;
 mod held_inputs_poll;
 mod held_inputs_view;
 mod history;
+mod host_dashboard;
 mod host_metrics_chart;
 mod host_metrics_fetch;
 mod host_metrics_panel;
+mod host_metrics_poll;
 mod host_metrics_view;
-mod host_resources_view;
+mod host_overview;
 mod intelligence_view;
 mod live_map_view;
 mod memory_export_guard;
@@ -59,6 +61,10 @@ fn main() {
     dioxus::launch(App);
 }
 
+/// The view named by the URL fragment when the page loaded.
+#[derive(Clone, Copy)]
+pub struct InitialRoute(pub Signal<Option<orkestr_v2_ui::route::Route>>);
+
 /// `(instance ref, thread ref)` of an old V1 deep link.
 #[derive(Clone, PartialEq)]
 pub struct V1Link(pub (String, String));
@@ -85,6 +91,8 @@ fn App() -> Element {
     let mut execution = use_signal(orkestr_v2_ui::execution::Execution::default);
     let mut host_resources = use_signal(orkestr_v2_ui::host_resources::HostResources::default);
     let open_metrics = use_context_provider(|| host_metrics_panel::OpenHostMetrics(Signal::new(0)));
+    // The view named by the URL at load; the workspace opens it once mounted.
+    let mut initial_route = use_context_provider(|| InitialRoute(Signal::new(None)));
     let mut held_inputs = use_signal(orkestr_v2_ui::held_inputs::HeldInputs::default);
     // Tab-scoped reload recovery; writes start only after this owner's restore.
     let mut memory_key = use_signal(|| None::<String>);
@@ -127,6 +135,9 @@ fn App() -> Element {
     let mut logging_out = use_signal(|| false);
     use_future(move || async move {
         requested_conversation.set(conversation_location::read().await);
+        initial_route
+            .0
+            .set(conversation_location::read_route().await);
         v1_link.set(conversation_location::read_v1_link().await.map(V1Link));
         match transport::request::<transport::BrowserSession>(
             "GET",
@@ -228,7 +239,7 @@ fn App() -> Element {
                 }
                 if requested_conversation().is_some() { button { onclick: move |_| { requested_conversation.set(None); refresh += 1; conversation_location::replace(None); }, "Open default conversation" } }
             } else {
-                workspace::Workspace { key: "{session_scope.read().generation()}-{refresh}", current, csrf: csrf(), session_scope, execution, drafts, held_inputs, resources: host_resources, onexpired: expired }
+                workspace::Workspace { key: "{session_scope.read().generation()}-{refresh}", current, csrf: csrf(), session_scope, execution, drafts, held_inputs, onexpired: expired }
             }
             if !csrf().is_empty() {
                     button { class: "sign-out", disabled: logging_out(), onclick: move |_| {
