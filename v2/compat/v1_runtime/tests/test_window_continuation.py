@@ -6,6 +6,7 @@ import time
 import unittest
 
 from v2.compat.v1_runtime.ledger import Ledger
+from v2.compat.v1_runtime.rust_client import ClientError
 from v2.compat.v1_runtime.worker import CONTINUE_NOTICE, CONTINUE_PREFIX, Refused, Worker
 from v2.compat.v1_runtime.tests.test_worker import Peer
 
@@ -243,3 +244,82 @@ class RefusalSettlesFastTests(Case):
             self.worker.step(self.data)
         self.assertIn("fast", self.peer.accepted)
         self.assertNotIn("deep", self.peer.accepted)
+
+
+class ServerAcceptedPeer(Peer):
+    """The server's owner auto-accept settles proposals before the adapter."""
+
+    def __init__(self, roles, *, before_freeze=True):
+        super().__init__()
+        self.server_roles, self.before_freeze = set(roles), before_freeze
+
+    def server_accept(self, role):
+        self.accepted.setdefault(role, dict(run_id=role + "-run", completion_event_id=role + "-completion",
+                                            request_key="auto-accept:" + role + "-run", outcome="succeeded",
+                                            acceptance_event_id=role + "-auto-accepted"))
+
+    def request(self, method, route, body=None, allowed=(200,)):
+        if route in ("/execution", "/fast/execution") and self.before_freeze:
+            role = "fast" if route.startswith("/fast") else "deep"
+            if role in self.server_roles:
+                self.server_accept(role)
+        if route == "/accept" and body["run_id"].split("-")[0] in self.server_roles:
+            self.mutations.append((route, copy.deepcopy(body)))
+            self.server_accept(body["run_id"].split("-")[0])
+            raise ClientError("unexpected_status", 409)
+        if route.startswith("/accepted-results?"):
+            return 200, dict(results=[dict(run_id=role + "-run", completion_event_id=role + "-completion",
+                acceptance_event_id=receipt["acceptance_event_id"], payload_id=role + "-payload",
+                payload_removed=False) for role, receipt in self.accepted.items()], next_after_sequence=None)
+        return super().request(method, route, body=body, allowed=allowed)
+
+
+class ServerAcceptanceTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.ledger = Ledger(Path(self.temp.name) / "ledger.sqlite3", {"test_scope": "one"})
+        self.data, _ = self.ledger.enqueue(dict(publicMessageId="public", publicThreadId="thread", chatId="chat",
+                                                accountId="account", text="request"))
+
+    def assert_mirrored(self, peer):
+        self.assertEqual(self.data["phase"], "completed")
+        reply = [m for m in self.ledger.messages() if m["role"] == "assistant"]
+        self.assertEqual(len(reply), 1)
+        self.assertEqual(reply[0]["text"], "deep result")
+        self.assertEqual(reply[0]["id"], "deep-auto-accepted")
+        deep = self.data["accepted"]["deep"]
+        self.assertEqual((deep["run_id"], deep["completion_event_id"], deep["acceptance_event_id"]),
+                         ("deep-run", "deep-completion", "deep-auto-accepted"))
+
+    def test_already_completed_runs_are_adopted_and_mirrored(self):
+        peer = ServerAcceptedPeer({"fast", "deep"})
+        Worker(peer, self.ledger).step(self.data)
+        self.assert_mirrored(peer)
+        self.assertFalse([route for route, _ in peer.mutations if route == "/accept"])
+
+    def test_conflicting_accept_adopts_the_server_acceptance(self):
+        peer = ServerAcceptedPeer({"deep"}, before_freeze=False)
+        Worker(peer, self.ledger).step(self.data)
+        self.assert_mirrored(peer)
+        self.assertEqual([body["run_id"] for route, body in peer.mutations if route == "/accept"], ["fast-run", "deep-run"])
+        self.assertEqual(self.data["accepted"]["fast"]["acceptance_event_id"], "fast-accepted")
+
+    def test_completed_run_without_acceptance_still_refuses(self):
+        peer = ServerAcceptedPeer(set())
+        original = peer.request
+        def request(method, route, body=None, allowed=(200,)):
+            if route == "/execution":
+                return 200, dict(run_id="deep-run", revision=10, phase="completed")
+            return original(method, route, body=body, allowed=allowed)
+        peer.request = request
+        with self.assertRaisesRegex(Refused, "execution_requires_review"):
+            Worker(peer, self.ledger).step(self.data)
+        self.assertNotIn("reply", self.data)
+
+    def test_foreign_completed_run_is_never_adopted(self):
+        peer = ServerAcceptedPeer({"fast", "deep"})
+        peer.foreign = True
+        Worker(peer, self.ledger).step(self.data)
+        self.assertFalse(self.data.get("accepted"))
+        self.assertNotIn("reply", self.data)

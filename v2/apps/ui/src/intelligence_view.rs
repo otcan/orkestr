@@ -20,6 +20,7 @@ pub fn IntelligencePanel(
     execution: Signal<Execution>,
     onexpired: EventHandler<()>,
     onaccepted: EventHandler<i64>,
+    #[props(default)] auto_accept: bool,
 ) -> Element {
     let owner = session_scope.read().generation();
     let mut capabilities = use_signal(|| None::<IntelligenceCapabilities>);
@@ -99,7 +100,7 @@ pub fn IntelligencePanel(
                     summary { "Fast reply" }
                     p { "Fast responds to the same message. Review or stop its reply independently of Deep." }
                     if caps.fast.configured {
-                        crate::execution_poll::ExecutionPoll { key:"fast-{id}-{owner}", id:id.clone(), fast:true, worker_tasks:false, csrf:csrf.clone(), session_scope, execution:fast_execution, onexpired, onaccepted:Some(onaccepted) }
+                        crate::execution_poll::ExecutionPoll { key:"fast-{id}-{owner}", id:id.clone(), fast:true, worker_tasks:false, csrf:csrf.clone(), session_scope, execution:fast_execution, onexpired, onaccepted:Some(onaccepted), auto_accept }
                     } else { p { "Fast is not configured on this server." } }
                 }
                 details { class:"intelligence-layer",

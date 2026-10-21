@@ -9,7 +9,7 @@ use orkestr_v2_ui::{
 use serde_json::{json, Value};
 
 /// Settings of the open native conversation: thread settings (provider,
-/// model, effort, NO_REPLY, prefix/footer) and its V1 desktop binding with the
+/// model, effort, NO_REPLY, prefix/footer, review before accepting) and its V1 desktop binding with the
 /// current leases. Changes are explicit saves guarded by revision.
 #[component]
 pub fn ChatSettings(
@@ -114,6 +114,11 @@ fn ThreadSettings(
                 input { r#type: "checkbox", checked: current.honor_no_reply, onchange: move |e| if let Some(f) = form.write().as_mut() { f.honor_no_reply = e.checked(); } }
                 "Never deliver an exact NO_REPLY answer"
             }
+            label { class: "checkbox",
+                input { r#type: "checkbox", checked: current.review_before_accepting, onchange: move |e| if let Some(f) = form.write().as_mut() { f.review_before_accepting = e.checked(); } }
+                "Review replies before accepting"
+            }
+            p { class: "field-help", "Off (default): replies are accepted automatically, like V1. On: each reply waits for your Accept." }
             label { r#for: "settings-prefix", "Reply prefix" }
             input { id: "settings-prefix", value: "{current.reply_prefix}", maxlength: 64,
                 oninput: move |e| if let Some(f) = form.write().as_mut() { f.reply_prefix = e.value(); } }

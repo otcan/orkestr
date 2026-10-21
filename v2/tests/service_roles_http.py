@@ -70,6 +70,15 @@ def accept(case, conversation, projection, key):
     return result
 
 
+def review(case, conversation):
+    """These fixtures accept each proposal by hand: opt the conversation out of
+    the default server owner auto-accept before any of its turns runs."""
+    update = {"expected_revision": 0, "provider": "codex", "honor_no_reply": True,
+              "review_before_accepting": True}
+    settings = expect(case, path(conversation) + "/settings", 200, "PUT", update)
+    assert settings["review_before_accepting"] is True, settings
+
+
 def windows(case):
     return case.rows("SELECT id,conversation_id,generation,state,terminal_run_id FROM execution_windows ORDER BY rowid")
 
@@ -79,6 +88,8 @@ def run(case):
     second = expect(case, "/api/v2/conversations", 201, "POST",
                     {"client_request_id": "synthetic:second", "name": "Synthetic second thread"})["conversation_id"]
     assert first != second
+    review(case, first)
+    review(case, second)
     assert expect(case, "/api/v2/beta?conversation_id=" + second)["conversation_id"] == second
     key = "first:1"
     admission = expect(case, path(first) + "/window", 201, "POST", window_request(intake(case, first, key, 1), key))
@@ -130,6 +141,7 @@ def run(case):
     # Capacity is two: a third conversation's intent is durably queued, not refused.
     third = expect(case, "/api/v2/conversations", 201, "POST",
                    {"client_request_id": "synthetic:third", "name": "Synthetic third thread"})["conversation_id"]
+    review(case, third)
     ckey = "third:1"
     pending_c = window_request(intake(case, third, ckey, 4), ckey)
     queued = expect(case, path(third) + "/window", 202, "POST", pending_c)

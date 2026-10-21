@@ -331,10 +331,12 @@ export const scenarios = [
     await page.select('#settings-effort', 'high');
     await page.$eval('#settings-prefix', n => { n.value = ''; });
     await page.type('#settings-prefix', 'synthetic-new:');
+    // Auto-accept (V1) is the default; review before accepting is an opt-in.
+    await waitText('Review replies before accepting');
     await clickText('Save settings');
     await waitText('Saved (revision 3)');
     assert.deepEqual(state.settingsPuts.at(-1), { expected_revision: 2, provider: 'codex', model: 'synthetic-model', reasoning_effort: 'high',
-      honor_no_reply: true, reply_prefix: 'synthetic-new:', reply_footer: null });
+      honor_no_reply: true, reply_prefix: 'synthetic-new:', reply_footer: null, review_before_accepting: false });
     // Desktops of the chat: binding and current lease.
     await waitText('synthetic-desk');
     assert.equal(await page.$eval('#desktop-thread', n => n.value), 'synthetic-thread');

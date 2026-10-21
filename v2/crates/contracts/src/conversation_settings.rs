@@ -68,6 +68,10 @@ pub struct ConversationSettingsUpdate {
     pub reply_prefix: Option<String>,
     #[serde(default)]
     pub reply_footer: Option<String>,
+    /// When true, proposals wait for an explicit owner "Accept". The default
+    /// (false) auto-accepts owner turns like V1; see `ConversationSettings`.
+    #[serde(default)]
+    pub review_before_accepting: bool,
 }
 
 fn model_valid(value: &str) -> bool {
@@ -124,6 +128,12 @@ pub struct ConversationSettings {
     /// on the selected provider with a one-time handoff (V1 `orkestr switch`).
     pub provider_generation: i64,
     pub updated_at_ms: Option<i64>,
+    /// Owner delegation of acceptance. False (the default, V1 behaviour): the
+    /// server accepts each completed proposal of this conversation on the
+    /// owner's behalf with the owner's own browser session. True: proposals
+    /// wait for a manual "Accept".
+    #[serde(default)]
+    pub review_before_accepting: bool,
 }
 impl ConversationSettings {
     pub fn defaults(conversation_id: ConversationId) -> Self {
@@ -139,6 +149,7 @@ impl ConversationSettings {
             reply_footer: None,
             provider_generation: 0,
             updated_at_ms: None,
+            review_before_accepting: false,
         }
     }
 
@@ -260,6 +271,7 @@ mod tests {
             honor_no_reply: true,
             reply_prefix: Some("orkestr:".into()),
             reply_footer: Some("-- sent by Orkestr\nreply STOP".into()),
+            review_before_accepting: false,
         }
     }
 

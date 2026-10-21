@@ -20,7 +20,7 @@ import time
 
 from owned_execution_http import wait_for
 from service_roles_case import ServiceRolesCase
-from service_roles_http import accept, expect, intake, path, ready, window_request, windows
+from service_roles_http import accept, expect, intake, path, ready, review, window_request, windows
 
 
 def restart(case):
@@ -53,6 +53,9 @@ def run(case):
     second = expect(case, "/api/v2/conversations", 201, "POST",
                     {"client_request_id": "synthetic:stranded-second",
                      "name": "Synthetic stranded second"})["conversation_id"]
+    # Proposals must stay unaccepted across the stop: no owner auto-accept.
+    review(case, first)
+    review(case, second)
     case.fixture.write_private(case.workspaces["deep"] / "mode", b"complete")
     key = "first:1"
     a = expect(case, path(first) + "/window", 201, "POST",

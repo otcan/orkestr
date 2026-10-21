@@ -1,5 +1,6 @@
 //! Owner settings of a native conversation (V1 thread-settings parity):
-//! provider, model, effort, NO_REPLY handling and reply prefix/footer. The
+//! provider, model, effort, NO_REPLY handling, reply prefix/footer and
+//! whether replies wait for review before acceptance. The
 //! form is a full replacement guarded by the revision it was read at.
 use orkestr_v2_contracts::{
     ConversationProvider, ConversationSettings, ConversationSettingsUpdate,
@@ -14,6 +15,8 @@ pub struct SettingsForm {
     pub honor_no_reply: bool,
     pub reply_prefix: String,
     pub reply_footer: String,
+    /// Off (default): owner turns are accepted automatically, like V1.
+    pub review_before_accepting: bool,
 }
 
 fn optional(value: &str) -> Option<String> {
@@ -31,6 +34,7 @@ impl SettingsForm {
             honor_no_reply: value.honor_no_reply,
             reply_prefix: value.reply_prefix.clone().unwrap_or_default(),
             reply_footer: value.reply_footer.clone().unwrap_or_default(),
+            review_before_accepting: value.review_before_accepting,
         }
     }
     /// Switching provider keeps the effort only when the new provider has it.
@@ -49,6 +53,7 @@ impl SettingsForm {
             honor_no_reply: self.honor_no_reply,
             reply_prefix: optional(&self.reply_prefix),
             reply_footer: optional(&self.reply_footer),
+            review_before_accepting: self.review_before_accepting,
         };
         if update.is_valid() {
             Ok(update)
@@ -71,4 +76,10 @@ pub fn slugs(value: &str) -> Vec<String> {
         }
     }
     out
+}
+
+/// Whether this conversation's replies are accepted automatically (the
+/// default). Unknown settings keep the manual Accept prompt.
+pub fn auto_accepts(settings: Option<&ConversationSettings>) -> bool {
+    settings.is_some_and(|s| !s.review_before_accepting)
 }
