@@ -61,7 +61,7 @@ const clip = (value, max) => { const text = collapse(value); return text.length 
 // An unresolvable quote is marked `unavailable` instead of guessed. `own` is the
 // text Orkestr itself sent (from the relay's journal) when the quote is one of
 // its replies. The visible line is what the model reads.
-export function buildReplyTo(input, {own = null, ownChatId = '', timeZone = 'Europe/Istanbul'} = {}) {
+export function buildReplyTo(input, {own = null, ownChatId = '', timeZone = 'Europe/Berlin'} = {}) {
   if (!input.quote_row) return null;
   const quotedId = input.quote_id || null;
   const body = own?.text || input.quote_body || '';
@@ -390,7 +390,7 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
         : '[WhatsApp attachment received]';
       const own = input.quote_row ? ownReplyFor(input.quote_id) : null;
       const quoted = buildReplyTo(input, {own: own ? {text: own.text || input.quote_body || '', sentAt: own.sentAt || null} : null,
-        ownChatId: config.ownChatId, timeZone: config.timeZone || env.ORKESTR_TIMEZONE || 'Europe/Istanbul'});
+        ownChatId: config.ownChatId, timeZone: config.timeZone || env.ORKESTR_TIMEZONE || 'Europe/Berlin'});
       const response = await api(`/api/threads/${encodeURIComponent(group.threadId)}/input`, {method: 'POST', body: {
         ...metadata, text: `[WhatsApp: ${group.name}]\n\n${quoted ? `${quoted.line}\n\n` : ''}${inputBody}`,
         ...(quoted ? {replyTo: quoted.replyTo} : {}), ...(attachments.length ? {attachments} : {}), source: 'whatsapp_group_relay',
