@@ -159,3 +159,73 @@ once after deploying.
 
 Retiring and archiving sub-chats later is planned in
 [sub-thread-archive-plan.md](sub-thread-archive-plan.md).
+
+## Sub-chat toggle placement
+
+A parent's sub-chat toggle (`N ▸`) sits at the right edge of its row. Earlier
+the toggle sat at the left and pushed the parent's avatar and name to the
+right, so a top-level chat with sub-chats (for example "Orkestr Rust") looked
+indented under the chat above it. The data was correct; only the rendering
+misled. Top-level rows now always share one avatar column (checked headlessly),
+and only real sub-chats are indented, with a guide line.
+
+## Chat icons
+
+Chats show their Orkestr icon from the V1 app: "ORKESTR" over the chat name,
+or "W<n>" for worker sub-threads, on the green WhatsApp-style disc.
+`GET /api/v2/thread-icons/{thread}` (owner cookie or Bearer) serves it for
+any V1 thread the sidebar knows. That covers linked V1 chats and the V1
+sources of imported conversations. Native chats without a V1 thread keep
+their initials.
+
+- **V1's saved picture.** When the operator makes V1's saved icon directory
+  readable (`ORKESTR_V2_V1_CHAT_ICONS_DIR=<V1 home>/whatsapp-bridge/outbound-media/chat-icons`),
+  the server serves V1's own JPG. The file is found through V1's association:
+  `<name>-<sha1(chatId:title)[..10]>.jpg`, where the title is the binding
+  display name.
+- **Drawn icon.** Otherwise, and for chats V1 never saved a picture for, the
+  server draws the same SVG with V1's algorithm. Long lines are squeezed
+  into the canvas when V1's narrow font is unavailable.
+- **Label.** As in the V1 web UI, the binding display name labels a chat
+  (or its chat id, if there is no display name), and a worker uses its
+  thread name.
+
+## Composer: Enter, Attach and Paste text
+
+- **Enter and Shift+Enter.** Enter sends; Shift+Enter inserts a newline.
+  Enter never sends while an input method is composing (`isComposing`, or
+  keyCode 229) or while the composer is busy. This applies to both the native
+  and the linked V1 composer.
+- **Attach.** Opens the file picker: up to 8 files and 16 MiB per message.
+- **Paste text.** Opens a box for long text, which is attached as
+  `pasted-text-<time>.txt`. Files upload at once and show as removable chips
+  until the message is sent.
+- **Native conversations** (`POST /api/v2/conversations/{id}/message-attachments`):
+  - **Storage.** The server stores the files in the conversation attachment
+    store, idempotent per request key.
+  - **Local copy.** It writes each file as
+    `<dir>/<conversation>/<sha256><ext>`. `<dir>` is
+    `ORKESTR_V2_ATTACHMENT_EXPORT_DIR`, or `<home>/message-attachments` by
+    default; the group is `ORKESTR_V2_ATTACHMENT_EXPORT_GROUP`. The provider
+    must be able to read that directory.
+  - **Note.** The server returns a note in the WhatsApp adapter's format:
+    file name, type, size, reference and local file. The composer appends
+    the note to the message, so the model opens the file with its file or
+    image tool. The note is part of the frozen input, so a retry resends the
+    same text.
+- **Linked V1 chats** (`POST /api/v2/v1-threads/{thread}/uploads`):
+  - **Upload.** The server uploads the files to V1 as the V1 web UI does:
+    `POST /api/threads/:id/uploads` with base64 file contents.
+  - **Upload ids.** It keeps V1's attachment descriptors for an hour under
+    upload ids. The composer sends those ids with the input
+    (`attachment_ids`), and the server passes the descriptors to V1
+    `ui-input` as `attachments`.
+  - **Rules.** Ids belong to their thread. Unknown or expired ids are refused
+    with `409 v1_upload_expired` before V1 is contacted. A message with
+    files but no text is sent as `Attached: <names>`.
+
+## Work slots
+
+The owner-wide "N of M work slots in use" line is no longer shown in the chat
+list. It remains in a conversation's "Connection and work details"
+diagnostics.

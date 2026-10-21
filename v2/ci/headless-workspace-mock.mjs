@@ -31,7 +31,7 @@ export function createState() {
   // windowMode: 'accept' admits; 'uncertain' answers 503 after the request is seen.
   return { archived, messages, window, queued, requests: [], intake: {}, windowPosts: [], windowMode: 'accept', windowDelayMs: 0, marks: [],
     // v1Posts: every POST seen; v1Inputs: admitted once per key. The first post's answer is lost (504).
-    v1Posts: [], v1Inputs: [], v1LoseFirst: true, v1Polls: 0,
+    v1Posts: [], v1Inputs: [], v1LoseFirst: true, v1Polls: 0, uploads: [],
     // "New WhatsApp chat": the first attempt stops at the adapter binding.
     chatPosts: [], chatStopFirst: true,
     // Chat settings, desktops and timers of conversation A.
@@ -113,6 +113,8 @@ function sidebar(state) {
     parent_key: null, last_activity_ms: at, preview: null, unread: 0, activity: { fast: false, deep: false, workers: 0 },
     read_only: key.startsWith('v1:'), coordinator: false, read_marker: 0, ...extra });
   const marked = key => state.marks.some(m => m.key === key);
+  if (state.sidebarEntries) return { schema_version: 1, observed_at_ms: now, v1_status: 'ready', truncated: false,
+    entries: state.sidebarEntries(entry, now) };
   return { schema_version: 1, observed_at_ms: now, v1_status: 'ready', truncated: false, entries: [
     entry(`v1:${V1_WORKER}`, 'Synthetic group / Worker 1', now - 60000, { parent_key: `v1:${V1_GROUP}`, read_marker: 4,
       preview: { author: 'assistant', text: 'Synthetic worker progress' } }),
@@ -142,6 +144,7 @@ function v1History(state, thread) {
     working = state.v1Polls <= 2;
     if (!working) messages.push({ message_id: 'v1-coordinator', author: 'assistant', text: 'Synthetic coordinator answer', created_at_ms: Date.now(), phase: 'final_answer', cursor: 21, coordinator: true });
   }
+  messages.sort((a, b) => a.cursor - b.cursor);
   return { thread_id: thread, name: thread === V1_GROUP ? 'Synthetic group' : 'Synthetic group / Worker 1',
     coordinator: thread === V1_GROUP, messages, before_cursor: null, latest_cursor: messages.at(-1)?.cursor ?? 0,
     writable: true, working };
@@ -214,6 +217,25 @@ async function api(state, req, res, url) {
     if (req.method === 'DELETE') { state.v1Timers.splice(index, 1); res.writeHead(204); return res.end(); }
     if (action) state.v1Timers[index].enabled = action === 'resume';
     return json(res, 200, state.v1Timers[index]);
+  }
+  // V1 chat icons: any listed V1 thread gets the V1 design (synthetic SVG here).
+  const icon = /^\/api\/v2\/thread-icons\/([A-Za-z0-9._:-]+)$/.exec(path);
+  if (icon && req.method === 'GET') {
+    if (![V1_GROUP, V1_WORKER].includes(icon[1])) return missing(res);
+    res.writeHead(200, { 'content-type': 'image/svg+xml', 'cache-control': 'private, max-age=3600' });
+    return res.end('<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><rect width="64" height="64" fill="#061006"/><text x="32" y="38" fill="#25d366" font-size="12" text-anchor="middle">ORKESTR</text></svg>');
+  }
+  // Attach / Paste text: native uploads return the model note; V1 uploads return ids.
+  const upload = /^\/api\/v2\/(?:conversations\/([0-9a-f-]{36})\/message-attachments|v1-threads\/([A-Za-z0-9._:-]+)\/uploads)$/.exec(path);
+  if (upload && req.method === 'POST') {
+    if (req.headers['x-orkestr-csrf'] !== 'synthetic-csrf') return json(res, 403, { code: 'csrf', message: 'CSRF required' });
+    const request = JSON.parse(await body(req));
+    state.uploads.push({ target: upload[1] ?? `v1:${upload[2]}`, ...request });
+    const attachments = request.files.map((f, i) => ({ attachment_id: uuid(700 + state.uploads.length * 10 + i), filename: f.filename,
+      media_type: f.media_type, byte_length: Buffer.from(f.content_base64, 'base64').length }));
+    const note = upload[1] ? `[Files attached in the Orkestr app, manifest ${uuid(799)}:\n` +
+      attachments.map(a => `- ${a.filename} (${a.media_type}, ${a.byte_length} bytes, reference ${a.attachment_id}, local file /synthetic/attachments/${a.filename})`).join('\n') + ']' : '';
+    return json(res, 200, { manifest_id: upload[1] ? uuid(799) : null, attachments, note });
   }
   const v1 = /^\/api\/v2\/v1-threads\/([A-Za-z0-9._:-]+)\/messages$/.exec(path);
   if (v1 && req.method === 'GET') {

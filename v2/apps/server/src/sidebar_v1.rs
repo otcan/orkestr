@@ -46,6 +46,9 @@ pub(crate) struct V1Thread {
     pub public_ref: Option<String>,
     /// The instance reference of its canonical path (`/instance/ins_…/…`).
     pub instance_ref: Option<String>,
+    /// Bound WhatsApp chat id and the label V1 draws its chat icon from.
+    pub chat_id: Option<String>,
+    pub icon_title: String,
 }
 
 fn text(value: &Value, key: &str) -> Option<String> {
@@ -108,7 +111,21 @@ pub(crate) fn parse_thread(value: &Value) -> Option<V1Thread> {
         .iter()
         .find_map(|k| text(value, k).and_then(|t| crate::live_map::timestamp_ms(&t)))
         .filter(|t| *t > 0);
+    // V1 web UI: a chat-bound thread is labelled by its chat display name
+    // (or chat id), any other thread by its own name.
+    let chat_id = binding
+        .and_then(|b| text(b, "chatId"))
+        .filter(|c| c.len() <= 200 && !c.chars().any(char::is_control));
+    let icon_title = match &chat_id {
+        Some(chat) => binding
+            .and_then(|b| text(b, "displayName"))
+            .map(|n| display(&n, SIDEBAR_NAME_MAX))
+            .unwrap_or_else(|| chat.clone()),
+        None => name.clone(),
+    };
     Some(V1Thread {
+        chat_id,
+        icon_title,
         parent: text(value, "parentThreadId").filter(|p| valid_v1_thread_id(p) && *p != id),
         kind: text(value, "threadKind"),
         last_activity_ms,
@@ -426,12 +443,16 @@ pub(crate) fn v1_client_message_id(input: &V1ThreadInput) -> String {
 /// its WhatsApp reply switch off. `ui_only` creates no reply delivery intent,
 /// and the scoped group relay only answers inputs it routed itself, so the
 /// reply stays in the app.
-pub(crate) fn input_body(input: &V1ThreadInput) -> Value {
-    serde_json::json!({
+pub(crate) fn input_body(input: &V1ThreadInput, attachments: &[Value]) -> Value {
+    let mut body = serde_json::json!({
         "text": input.text,
         "clientMessageId": v1_client_message_id(input),
         "replyDelivery": "ui_only",
-    })
+    });
+    if !attachments.is_empty() {
+        body["attachments"] = Value::Array(attachments.to_vec());
+    }
+    body
 }
 
 /// V1's answer to [`input_body`] as a bounded receipt.
@@ -498,10 +519,11 @@ pub(crate) async fn send_input(
     broker: &Broker,
     thread: &V1Thread,
     input: &V1ThreadInput,
+    attachments: &[Value],
 ) -> Result<V1ThreadInputReceipt, InputFailure> {
     let path = format!("/api/threads/{}/ui-input", thread.id);
     match broker
-        .write("POST", &path, input_body(input), MESSAGES_CAP)
+        .write("POST", &path, input_body(input, attachments), MESSAGES_CAP)
         .await
     {
         Ok((status, value)) => input_receipt(thread, input, status, &value),

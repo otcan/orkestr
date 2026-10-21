@@ -43,6 +43,7 @@ mod held_inputs;
 mod intelligence_http;
 pub mod live_map;
 mod memory_service;
+pub mod message_attachments;
 pub mod offline_python;
 pub mod owned_children;
 pub mod owned_execution;
@@ -54,6 +55,7 @@ mod sidebar_v1;
 mod steering_http;
 mod steering_registry;
 pub mod stop_execution;
+pub mod thread_icons;
 pub mod timer_bootstrap;
 pub mod timer_http;
 mod timer_lifecycle;
@@ -85,6 +87,9 @@ pub struct AppState {
     live_map: Option<Arc<std::path::PathBuf>>,
     desktop_broker: Option<Arc<desktop_broker::Broker>>,
     sidebar_v1: sidebar_v1::V1Cache,
+    v1_uploads: message_attachments::V1Uploads,
+    attachment_export: Option<Arc<message_attachments::ExportDir>>,
+    v1_chat_icons: Option<Arc<std::path::PathBuf>>,
     /// "New WhatsApp chat": owner numbers, accounts and the adapter client.
     whatsapp_chats: Option<Arc<whatsapp_chats::WhatsAppChats>>,
     /// Linked V1 timers created per owner request (idempotent create).
@@ -170,6 +175,16 @@ impl AppState {
         }
         Ok(self)
     }
+    /// Trusted startup only: V1's saved chat icon directory (read-only).
+    pub fn with_v1_chat_icons(mut self, dir: std::path::PathBuf) -> Self {
+        self.v1_chat_icons = Some(Arc::new(dir));
+        self
+    }
+    /// Trusted startup only: where attached files are written for the provider.
+    pub fn with_attachment_export(mut self, export: message_attachments::ExportDir) -> Self {
+        self.attachment_export = Some(Arc::new(export));
+        self
+    }
     /// Trusted startup only: the private V1 desktop broker client configuration.
     pub fn with_desktop_broker_file(
         mut self,
@@ -247,6 +262,9 @@ impl AppState {
             live_map: None,
             desktop_broker: None,
             sidebar_v1: sidebar_v1::V1Cache::default(),
+            v1_uploads: Default::default(),
+            attachment_export: None,
+            v1_chat_icons: None,
             whatsapp_chats: None,
             v1_timers: Default::default(),
             claude_turns: false,
@@ -423,6 +441,8 @@ pub fn router_with_google_catalog(
         .merge(conversation_resources_http::router())
         .merge(desktop_http::router())
         .merge(sidebar_http::router())
+        .merge(message_attachments::router())
+        .merge(thread_icons::router())
         .merge(v1_links::router())
         .merge(v1_manage_http::router())
         .merge(whatsapp_chats_http::router())

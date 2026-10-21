@@ -10,6 +10,7 @@ mod beta_settings;
 mod beta_window_view;
 mod chat_settings_view;
 mod composer;
+mod composer_tools;
 mod conversation_location;
 mod conversation_sidebar;
 mod conversation_status_poll;

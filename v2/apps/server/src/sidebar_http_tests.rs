@@ -4,7 +4,7 @@ use serde_json::{json, Value};
 use std::sync::{Arc as StdArc, Mutex as StdMutex};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-const V1_TOKEN: &str = "bbbbbbbbbbbbbbbbbbbbbbbb";
+pub(crate) const V1_TOKEN: &str = "bbbbbbbbbbbbbbbbbbbbbbbb";
 
 fn thread(id: &str, name: &str, at: &str) -> Value {
     json!({"id": id, "name": name, "lastActivityAt": at, "lastMessageAt": at,
@@ -340,7 +340,7 @@ async fn fake_v1(calls: StdArc<StdMutex<Vec<String>>>) -> String {
     fake_v1_with_inputs(calls, StdArc::new(StdMutex::new(Vec::new()))).await
 }
 
-async fn fake_v1_with_inputs(
+pub(crate) async fn fake_v1_with_inputs(
     calls: StdArc<StdMutex<Vec<String>>>,
     inputs: StdArc<StdMutex<Vec<(String, Value)>>>,
 ) -> String {
@@ -385,12 +385,23 @@ async fn fake_v1_with_inputs(
             let (status, body) = if !auth {
                 (401, json!({}))
             } else if method == "POST" {
-                match path
-                    .strip_prefix("/api/threads/")
-                    .and_then(|p| p.strip_suffix("/ui-input"))
-                {
-                    Some(thread) => ui_input(&inputs, thread, &body),
-                    None => (404, json!({"error": "not_found"})),
+                let rest = path.strip_prefix("/api/threads/").unwrap_or_default();
+                if let Some(thread) = rest.strip_suffix("/ui-input") {
+                    ui_input(&inputs, thread, &body)
+                } else if let Some(thread) = rest.strip_suffix("/uploads") {
+                    // Like V1: files saved under the thread's upload directory.
+                    let files = body["files"].as_array().cloned().unwrap_or_default();
+                    let attachments: Vec<Value> = files.iter().map(|f| json!({
+                        "name": f["name"], "filename": f["name"], "mimetype": f["type"],
+                        "size": f["contentBase64"].as_str().map_or(0, |b| b.len() / 4 * 3),
+                        "path": format!("/synthetic-v1/uploads/{thread}/{}", f["name"].as_str().unwrap_or("x")),
+                        "source": "browser_upload"})).collect();
+                    (
+                        200,
+                        json!({"ok": true, "threadId": thread, "attachments": attachments}),
+                    )
+                } else {
+                    (404, json!({"error": "not_found"}))
                 }
             } else if path.starts_with("/api/threads/summary") {
                 (200, served_registry())
@@ -731,10 +742,14 @@ fn v1_receipts_are_bounded_and_refusals_are_definite() {
         .unwrap();
     assert!(!group.delegated && group.whatsapp);
     assert_eq!(
-        sidebar_v1::input_body(&V1ThreadInput {
-            client_message_id: synthetic_id(1),
-            text: "Synthetic".into(),
-        })["replyDelivery"],
+        sidebar_v1::input_body(
+            &V1ThreadInput {
+                client_message_id: synthetic_id(1),
+                text: "Synthetic".into(),
+                attachment_ids: vec![],
+            },
+            &[]
+        )["replyDelivery"],
         "ui_only",
         "replies to app input never go to WhatsApp"
     );
@@ -746,6 +761,7 @@ fn v1_receipts_are_bounded_and_refusals_are_definite() {
     let input = V1ThreadInput {
         client_message_id: synthetic_id(1),
         text: "Synthetic".into(),
+        attachment_ids: vec![],
     };
     use sidebar_v1::{input_receipt, InputFailure};
     assert_eq!(

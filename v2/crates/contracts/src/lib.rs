@@ -15,6 +15,8 @@ mod legacy_workers;
 pub use legacy_workers::*;
 mod sidebar;
 pub use sidebar::*;
+mod message_attachments;
+pub use message_attachments::*;
 mod whatsapp_chats;
 pub use whatsapp_chats::*;
 mod v1_manage;

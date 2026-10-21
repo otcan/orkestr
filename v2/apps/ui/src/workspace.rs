@@ -128,6 +128,9 @@ pub fn Workspace(
                 if !link_notice().is_empty() { p { class: "app-notice link-notice", role: "status", "{link_notice}" } }
                 header { class: "conversation-heading",
                     button { class: "threads-toggle", "aria-expanded": "{sidebar}", "aria-label": "Conversations", onclick: move |_| sidebar.set(!sidebar()), span { "aria-hidden": "true", "☰" } }
+                    if let Some(entry) = header.as_ref() {
+                        crate::conversation_sidebar::Avatar { key: "{entry.key}", name: entry.name.clone(), thread: entry.v1_thread_id.clone() }
+                    }
                     div { class: "heading-title",
                         h2 { "{title}" }
                         if let Some(label) = activity.clone() {

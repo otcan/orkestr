@@ -129,3 +129,12 @@ test('sidebar, read marks and linked V1 history are the only new paths',async()=
         await assert.rejects(execute({recv:async()=>({...base,path})},()=>assert.fail('fetch must not run')),/Invalid API path/);
     }
 });
+
+test('message attachments and V1 uploads are allowed paths',async()=>{
+    for(const path of ['/api/v2/conversations/00000000-0000-4000-8000-00000000000a/message-attachments','/api/v2/v1-threads/synthetic-group/uploads']) {
+        await execute({recv:async()=>({...base,method:'POST',path,body:{},csrf:'synthetic-csrf'})},async(seen,options)=>{assert.equal(seen,path);assert.equal(options.headers['x-orkestr-csrf'],'synthetic-csrf');return new Response('{}');});
+    }
+    for(const path of ['/api/v2/v1-threads/../uploads','/api/v2/conversations/x/message-attachments','/api/v2/v1-threads/a/uploads?x=1']) {
+        await assert.rejects(execute({recv:async()=>({...base,path})},()=>assert.fail('fetch must not run')),/Invalid API path/);
+    }
+});

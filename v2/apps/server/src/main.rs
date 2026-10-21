@@ -64,6 +64,15 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         // Opt-in: absent means the live map endpoint reports "not configured".
         state = state.with_live_map_file(&PathBuf::from(path))?;
     }
+    state = state.with_attachment_export(
+        orkestr_v2_server::message_attachments::ExportDir::from_env(&home),
+    );
+    if let Some(dir) = std::env::var_os(orkestr_v2_server::thread_icons::V1_ICONS_ENV)
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
+    {
+        state = state.with_v1_chat_icons(dir);
+    }
     if let Some(path) = std::env::var_os("ORKESTR_V2_DESKTOP_BROKER_CONFIG") {
         state = state.with_desktop_broker_file(&PathBuf::from(path))?;
     }

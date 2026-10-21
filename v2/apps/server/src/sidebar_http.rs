@@ -596,7 +596,16 @@ pub(crate) async fn v1_send(
             "This chat runs on V2; write in its V2 conversation",
         ));
     }
-    match sidebar_v1::send_input(&broker, &record, &input).await {
+    let attachments = state
+        .v1_uploads
+        .resolve(&record.id, &input.attachment_ids)
+        .await
+        .ok_or(Error(
+            StatusCode::CONFLICT,
+            "v1_upload_expired",
+            "An attached file expired; attach it again",
+        ))?;
+    match sidebar_v1::send_input(&broker, &record, &input, &attachments).await {
         Ok(receipt) if receipt.is_valid() => Ok((
             if receipt.duplicate {
                 StatusCode::OK
@@ -627,4 +636,4 @@ pub(crate) async fn v1_send(
 
 #[cfg(test)]
 #[path = "sidebar_http_tests.rs"]
-mod tests;
+pub(crate) mod tests;
