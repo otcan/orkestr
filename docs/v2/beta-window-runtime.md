@@ -156,3 +156,12 @@ When a broker's native-tree retirement is not proven, the server logs that
 broker's exit status. The manager logs the static refusal code of a
 `retire`, `reconcile`, `extend`, `uncertain` or `bind_child` request, so the
 next unclean Fast retirement can be diagnosed.
+
+### Host provider environment files
+
+`host_full_access.environment_files` (at most 8 absolute paths) names private
+env files that the host Codex provider sources just before `exec`. A typical
+use is a tool account's variables, such as `GOG_*` for Gmail. Values never
+appear in an argv, plan, package or log. The broker refuses any file that is
+not a regular file owned by the service user with no group or other access.
+Write each file in POSIX shell syntax (`KEY='value'`).

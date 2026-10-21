@@ -53,8 +53,15 @@ def trusted(value):
 
 def host_full_access(value):
     """Instance-level V1-equivalent access (equivalent to host root). Shape only."""
-    require(type(value) is dict and set(value) <= {'providers', 'environment'} and
+    require(type(value) is dict and set(value) <= {'providers', 'environment', 'environment_files'} and
             type(value.get('providers', True)) is bool, 'closed host full access required')
+    # Private env files (paths only; never opened by the packager): the host
+    # provider sources them at launch, so their values never enter argv,
+    # plans or packages.
+    files = value.get('environment_files', [])
+    require(type(files) is list and len(files) <= 8 and len(set(files)) == len(files) and
+            all(type(f) is str and absolute(f) and '\x00' not in f for f in files),
+            'host full access environment files required')
     environment = value.get('environment')
     require(type(environment) is dict and {'HOME', 'PATH'} <= set(environment) and
             len(environment) <= 256 and all(

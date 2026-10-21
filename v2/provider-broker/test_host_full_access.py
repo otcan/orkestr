@@ -106,6 +106,33 @@ class HostFullAccessTests(unittest.TestCase):
 NATIVE = "01a15956-93a3-7730-83a6-84853f05bb69"
 
 
+class HostEnvironmentFileTests(unittest.TestCase):
+    def test_private_env_file_reaches_the_native_but_never_its_argv(self):
+        import os, subprocess, tempfile
+        from codex_service.profile import host_command
+        from codex_service.contract import Refused as ContractRefused
+        with tempfile.TemporaryDirectory() as root:
+            env = Path(root) / "tool.env"
+            env.write_text("GOG_ACCOUNT='owner@example.invalid'\nGOG_CLIENT=\"synthetic client\"\n")
+            env.chmod(0o600)
+            native = Path(root) / "native"
+            native.write_text("#!/bin/sh\nprintf '%s|%s|%s|%s' \"$GOG_ACCOUNT\" \"$GOG_CLIENT\" \"$HOME\" \"$*\"\n")
+            native.chmod(0o700)
+            command = host_command(native, {"HOME": "/home/example", "PATH": "/usr/bin:/bin"}, [str(env)])
+            self.assertFalse(any("owner@example.invalid" in part or "synthetic client" in part for part in command))
+            output = subprocess.run(command, capture_output=True, text=True, check=True).stdout
+            self.assertEqual(output, "owner@example.invalid|synthetic client|/home/example|app-server --listen stdio://")
+            for mode in (0o640, 0o604):
+                env.chmod(mode)
+                with self.assertRaises(ContractRefused):
+                    host_command(native, {"HOME": "/home/example", "PATH": "/usr/bin:/bin"}, [str(env)])
+            env.chmod(0o600)
+            link = Path(root) / "link.env"
+            link.symlink_to(env)
+            with self.assertRaises(ContractRefused):
+                host_command(native, {"HOME": "/home/example", "PATH": "/usr/bin:/bin"}, [str(link)])
+
+
 class HostResumeTests(unittest.TestCase):
     """A thread the sandboxed provider created in a role's private state must
     resume under the host CODEX_HOME (Codex: `no rollout found` otherwise)."""
