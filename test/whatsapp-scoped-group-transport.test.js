@@ -238,3 +238,23 @@ test('voice notes and videos are skipped without downloading', async t => {
  assert.equal(calls,0);
  assert.equal(reports.length,0);
 });
+
+test('a WhatsApp reply-quote is captured beside the input, and an unreadable quote is marked unresolved',async t=>{
+ const now=Date.now(),own='15550000001@c.us',group='120000000001@g.us';
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'quote-'));const dbPath=path.join(dir,'t.sqlite');
+ const config={ownChatId:own,activatedAt:new Date(now-1000).toISOString(),groups:[{chatId:group,threadId:'thread-1'}]};
+ const p=createScopedGroupTransport({config,token:'test-token',base:{},dbPath,now:()=>now});
+ t.after(()=>{p.close();fs.rmSync(dir,{recursive:true,force:true});});
+ const client={info:{wid:{_serialized:own}}};
+ const message={id:{_serialized:'owner-1'},fromMe:true,to:group,body:'no need',timestamp:now/1000};
+ const quoted={id:{_serialized:'true_g_SENT1'},author:own,timestamp:Math.floor(now/1000)-600,body:'earlier text',fromMe:true};
+ assert.equal(await p.observe(client,{...message,id:{_serialized:'q1'},hasQuotedMsg:true,getQuotedMessage:async()=>quoted}),true);
+ assert.equal(await p.observe(client,{...message,id:{_serialized:'q2'},hasQuotedMsg:true,getQuotedMessage:async()=>{throw new Error('gone');},_data:{quotedStanzaID:'STANZA9'}}),true);
+ assert.equal(await p.observe(client,{...message,id:{_serialized:'q3'}}),true);
+ const db=new DatabaseSync(dbPath,{readOnly:true});t.after(()=>db.close());
+ const rows=Object.fromEntries(db.prepare('SELECT * FROM group_input_quote').all().map(r=>[r.id,r]));
+ assert.equal(rows.q1.quoted_id,'true_g_SENT1');assert.equal(rows.q1.body,'earlier text');assert.equal(rows.q1.resolved,1);assert.equal(rows.q1.from_me,1);
+ assert.equal(rows.q2.quoted_id,'STANZA9');assert.equal(rows.q2.resolved,0);
+ assert.equal(rows.q3,undefined);
+ assert.deepEqual(db.prepare('PRAGMA table_info(group_input)').all().map(c=>c.name),['id','chat_id','body','created_at'],'group_input keeps its four columns');
+});

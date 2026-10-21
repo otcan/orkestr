@@ -62,6 +62,7 @@ export function serializeMessage(message) {
     body: typeof message?.body === 'string' ? message.body : '',
     hasMedia: message?.hasMedia === true,
     hasQuotedMsg: message?.hasQuotedMsg === true,
+    quotedMessageId: message?.hasQuotedMsg === true && typeof message?._data?.quotedStanzaID === 'string' ? message._data.quotedStanzaID : null,
     ack: Number.isFinite(Number(message?.ack)) ? Number(message.ack) : null,
   };
 }
@@ -101,13 +102,14 @@ export function createCoordinatorAccess({config, coordinator, db, serial, now = 
   }
 
   function send(client, body = {}) {
-    const {to, text, requestId} = body;
-    if (Object.keys(body).some(key => !['to', 'text', 'requestId'].includes(key)) || typeof to !== 'string' || !SEND_CHAT.test(to)
+    const {to, text, requestId, replyTo} = body;
+    if (Object.keys(body).some(key => !['to', 'text', 'requestId', 'replyTo'].includes(key))
+        || (replyTo !== undefined && (typeof replyTo !== 'string' || !PROVIDER_ID.test(replyTo))) || typeof to !== 'string' || !SEND_CHAT.test(to)
         || typeof text !== 'string' || !text.trim() || text.length > SCOPED_SEND_MAX_TEXT_LENGTH || !REQUEST_ID.test(requestId || ''))
       deny('send_invalid', 400);
     return serial(async () => {
       assertClient(client);
-      const material = hash([to, text]);
+      const material = replyTo === undefined ? hash([to, text]) : hash([to, text, replyTo]);
       const previous = db.prepare('SELECT * FROM coordinator_send WHERE id=?').get(requestId);
       if (previous) {
         if (previous.hash !== material) deny('request_conflict', 409);
@@ -122,7 +124,7 @@ export function createCoordinatorAccess({config, coordinator, db, serial, now = 
       let sent = null, timer;
       try {
         sent = await Promise.race([
-          client.sendMessage(to, text, {sendSeen: false}),
+          client.sendMessage(to, text, {sendSeen: false, ...(replyTo ? {quotedMessageId: replyTo} : {})}),
           new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('send_timeout')), timeoutMs); }),
         ]);
       } catch { sent = null; } finally { clearTimeout(timer); }

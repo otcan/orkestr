@@ -349,3 +349,21 @@ test("a participant the remote runtime does not list is answered once with a vis
   assert.match(rows[1].text, /did not accept this message/);
   assert.equal(runtime.inputs.length, 1);
 });
+
+test("a quoted-reply context is stored on the V1 message and forwarded to the remote runtime", async (t) => {
+  const { env, runtime, fetchImpl } = await fixture(t);
+  const thread = await getThread("example-thread", env);
+  const remote = scopedRelayRemoteBinding(thread, relayBody, env);
+  const replyTo = { messageId: "true_group_ABC", author: "orkestr", sentAt: "2026-01-02T21:50:00.000Z", text: "x".repeat(900), isOwnReply: true, junk: "dropped" };
+  const message = await appendThreadMessage("example-thread", {
+    role: "user", state: "queued", source: "whatsapp_group_relay", text: "[Replying to Orkestr message from 21:50: \"x\"]\n\nno need",
+    clientMessageId: "group:quoted", replyTo,
+  }, env);
+  assert.equal(message.replyTo.text.length, 500);
+  assert.equal(message.replyTo.isOwnReply, true);
+  assert.equal(message.replyTo.junk, undefined);
+  await forwardScopedRelayInputToRemote({ thread, message, remote }, env, fetchImpl);
+  assert.deepEqual(runtime.inputs[0].replyTo, message.replyTo);
+  const plain = await appendThreadMessage("example-thread", { role: "user", state: "queued", source: "whatsapp_group_relay", text: "hi", clientMessageId: "group:plain", replyTo: "nope" }, env);
+  assert.equal(plain.replyTo, undefined);
+});

@@ -126,6 +126,7 @@ export async function forwardScopedRelayInputToRemote({ thread, message, remote 
       senderId: principal, participantId: principal, fromMe: !participant,
       ...(participant ? { phoneId: participant.phoneId } : {}),
     },
+    ...(message.replyTo ? { replyTo: message.replyTo } : {}),
     senderParticipantId: principal,
     senderTrustLevel: participant ? "trusted" : "owner",
     senderEffectiveRole: participant ? "trusted" : "owner",

@@ -43,8 +43,43 @@ function readGroupInputs(inbox) {
   const side = name => tables.has('group_input_media') ? `m.${name}` : 'NULL';
   const join = tables.has('group_input_media') ? 'LEFT JOIN group_input_media m ON m.id=i.id' : '';
   const field = name => `COALESCE(${side(name)},${legacy(name)}) AS media_${name}`;
-  return inbox.prepare(`SELECT i.id,i.chat_id,i.body,i.created_at,${['path','filename','mimetype','size'].map(field).join(',')}
-    FROM group_input i ${join} ORDER BY i.created_at`).all();
+  const hasQuote = tables.has('group_input_quote');
+  const quoteColumns = hasQuote
+    ? ',q.id AS quote_row,q.quoted_id AS quote_id,q.author AS quote_author,q.sent_at AS quote_sent_at,q.body AS quote_body,q.from_me AS quote_from_me,q.resolved AS quote_resolved'
+    : '';
+  const quoteJoin = hasQuote ? 'LEFT JOIN group_input_quote q ON q.id=i.id' : '';
+  return inbox.prepare(`SELECT i.id,i.chat_id,i.body,i.created_at,${['path','filename','mimetype','size'].map(field).join(',')}${quoteColumns}
+    FROM group_input i ${join} ${quoteJoin} ORDER BY i.created_at`).all();
+}
+
+const REPLY_TEXT_MAX = 500;
+const REPLY_SNIPPET_MAX = 80;
+const collapse = value => String(value || '').replace(/\s+/g, ' ').trim();
+const clip = (value, max) => { const text = collapse(value); return text.length > max ? `${text.slice(0, max - 1).trimEnd()}\u2026` : text; };
+
+// The structured reply-to for an input that quoted another message, or null.
+// An unresolvable quote is marked `unavailable` instead of guessed. `own` is the
+// text Orkestr itself sent (from the relay's journal) when the quote is one of
+// its replies. The visible line is what the model reads.
+export function buildReplyTo(input, {own = null, ownChatId = '', timeZone = 'Europe/Istanbul'} = {}) {
+  if (!input.quote_row) return null;
+  const quotedId = input.quote_id || null;
+  const body = own?.text || input.quote_body || '';
+  if (!Number(input.quote_resolved) && !own) {
+    return {replyTo: {messageId: quotedId, author: input.quote_author || null, sentAt: input.quote_sent_at || null, text: '', isOwnReply: false, unavailable: true},
+      line: '[Replying to an unavailable message]'};
+  }
+  const sentAt = input.quote_sent_at || null;
+  const authorDigits = String(input.quote_author || '').split('@')[0];
+  const ownerAuthored = !own && Boolean(authorDigits) && authorDigits === String(ownChatId).split('@')[0];
+  const replyTo = {messageId: quotedId, author: own ? 'orkestr' : (input.quote_author || null), sentAt, text: clip(body, REPLY_TEXT_MAX), isOwnReply: Boolean(own)};
+  let time = '';
+  if (sentAt) {
+    try { time = new Intl.DateTimeFormat('en-GB', {hour: '2-digit', minute: '2-digit', hour12: false, timeZone}).format(new Date(sentAt)); } catch { time = ''; }
+  }
+  const who = own ? 'Orkestr message' : (ownerAuthored ? 'your message' : 'earlier message');
+  const line = `[Replying to ${who}${time ? ` from ${time}` : ''}: "${clip(body, REPLY_SNIPPET_MAX)}"]`;
+  return {replyTo, line};
 }
 
 export function createScopedGroupRelay({config, api, send, log = () => {}, inboxDb, relayDb, formatter, env = process.env, readMediaFile = fs.readFile, now = Date.now,
@@ -77,6 +112,7 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
     CREATE TABLE IF NOT EXISTS input_media_uploads(id TEXT PRIMARY KEY,attachments TEXT NOT NULL,created_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS input_media_upload_attempts(id TEXT PRIMARY KEY,attempts INTEGER NOT NULL DEFAULT 0,state TEXT NOT NULL DEFAULT 'retrying');
     CREATE TABLE IF NOT EXISTS reply_receipts(id TEXT PRIMARY KEY,provider_ids TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS reply_sent_text(provider_id TEXT PRIMARY KEY,request_id TEXT NOT NULL,text TEXT NOT NULL,sent_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS remote_delivery_reports(id TEXT PRIMARY KEY,reported_at TEXT NOT NULL);`);
   const routeFence = config.routeControl ? createDeliveryRouteFence({dbPath:config.routeControl.dbPath}) : null;
   const staticGroups = new Map(config.groups.map(g => [g.chatId, g]));
@@ -231,6 +267,11 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
       if (result.ok !== true || !result.ids?.length) throw new Error('group_reply_unconfirmed');
       db.prepare("INSERT OR REPLACE INTO replies VALUES(?,'sent')").run(requestId);
       db.prepare('INSERT OR REPLACE INTO reply_receipts VALUES(?,?)').run(requestId, JSON.stringify(result.ids.map(String)));
+      // The full text Orkestr sent under each provider id, so a later WhatsApp
+      // reply-quote of it can be resolved to what was actually said.
+      const sentText = isReplyDocument(entry) ? String(entry.document?.text || '') : String(entry || '');
+      for (const providerId of result.ids.map(String))
+        db.prepare('INSERT OR IGNORE INTO reply_sent_text VALUES(?,?,?,?)').run(providerId, requestId, sentText, new Date().toISOString());
       log({event: 'reply_delivered', threadId: group.threadId, messageId: answer.id});
     }
     // A mirrored remote-runtime reply: report the confirmed send so V1 can
@@ -244,6 +285,21 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
       db.prepare('INSERT OR IGNORE INTO remote_delivery_reports VALUES(?,?)').run(payloadId, new Date().toISOString());
       log({event: 'remote_delivery_reported', threadId: group.threadId, messageId: answer.id});
     }
+  }
+
+  // The text Orkestr sent that a reply-quote points at, or null when the quoted
+  // message is not one of our recorded replies. The quote id is the serialized
+  // provider id when WhatsApp resolved it, else the bare stanza id.
+  function ownReplyFor(quotedId) {
+    const id = String(quotedId || '');
+    if (!id) return null;
+    const suffix = id.includes('_') ? null : `_${id}`;
+    const exact = db.prepare('SELECT text FROM reply_sent_text WHERE provider_id=?').get(id)
+      || (suffix && db.prepare('SELECT text FROM reply_sent_text WHERE substr(provider_id,-?)=?').get(suffix.length, suffix));
+    if (exact) return {text: exact.text};
+    // Replies sent before the text journal existed: the receipt still proves it is ours.
+    const receipts = db.prepare('SELECT provider_ids FROM reply_receipts').all();
+    return receipts.some(row => JSON.parse(row.provider_ids || '[]').some(p => p === id || (suffix && String(p).endsWith(suffix)))) ? {text: ''} : null;
   }
 
   async function routeInput(input, group) {
@@ -332,8 +388,12 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
       if (!inputBody) inputBody = attachments.length
         ? `[Image attached: ${String(input.media_filename || 'image')}]`
         : '[WhatsApp attachment received]';
+      const own = input.quote_row ? ownReplyFor(input.quote_id) : null;
+      const quoted = buildReplyTo(input, {own: own ? {text: own.text || input.quote_body || ''} : null,
+        ownChatId: config.ownChatId, timeZone: config.timeZone || env.ORKESTR_TIMEZONE || 'Europe/Istanbul'});
       const response = await api(`/api/threads/${encodeURIComponent(group.threadId)}/input`, {method: 'POST', body: {
-        ...metadata, text: `[WhatsApp: ${group.name}]\n\n${inputBody}`, ...(attachments.length ? {attachments} : {}), source: 'whatsapp_group_relay',
+        ...metadata, text: `[WhatsApp: ${group.name}]\n\n${quoted ? `${quoted.line}\n\n` : ''}${inputBody}`,
+        ...(quoted ? {replyTo: quoted.replyTo} : {}), ...(attachments.length ? {attachments} : {}), source: 'whatsapp_group_relay',
         parseCommands: false, controlAllowed: false, idempotencyKey: `group:${key(input.id)}`,
       }});
       const messageId = response.message?.id || response.messageId;
