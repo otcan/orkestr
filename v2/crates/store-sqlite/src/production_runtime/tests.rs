@@ -426,7 +426,7 @@ async fn exact_expired_predecessor_cas_fences_without_recreating_native_identity
     std::fs::remove_dir_all(f.root).unwrap();
 }
 
-/// Undo 0063 (calendar timers: policies, pauses, outcomes, digests, trigger events), 0061 (auto-acceptance audit), 0060 (review-before-accepting setting), 0059 (read-path indexes), 0058 (WhatsApp chat provisions) and 0057
+/// Undo 0063 (calendar timers: policies, pauses, outcomes, digests, trigger events), 0062 (quoted-reply context), 0061 (auto-acceptance audit), 0060 (review-before-accepting setting), 0059 (read-path indexes), 0058 (WhatsApp chat provisions) and 0057
 /// (sidebar read marks and lineage); tests never write them. Then undo 0056 exactly: rebuild `execution_windows` under the fixed-deadline
 /// definition that migrations up to 0055 produce, keeping every row.
 pub(super) async fn downgrade_window_deadlines(store: &Store) {
@@ -437,6 +437,8 @@ pub(super) async fn downgrade_window_deadlines(store: &Store) {
         "DROP TABLE conversation_timer_pauses",
         "DROP TABLE timer_policies",
         "DELETE FROM _sqlx_migrations WHERE version=63",
+        "DROP TABLE message_reply_to",
+        "DELETE FROM _sqlx_migrations WHERE version=62",
         "DROP TABLE production_auto_acceptances",
         "DELETE FROM _sqlx_migrations WHERE version=61",
         "ALTER TABLE conversation_settings DROP COLUMN review_before_accepting",

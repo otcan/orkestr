@@ -17,6 +17,7 @@ fn summary(collecting: bool, observed: Option<i64>) -> HostMetricsSummary {
         spark_cpu: vec![],
         spark_memory: vec![],
         spark_disk: vec![],
+        ..Default::default()
     }
 }
 

@@ -255,5 +255,6 @@ pub mod host_metrics;
 pub mod intelligence;
 pub mod live_map;
 pub mod message_time;
+pub mod route;
 pub mod send_intent;
 pub mod sidebar;

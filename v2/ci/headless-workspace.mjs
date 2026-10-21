@@ -445,17 +445,40 @@ export const scenarios = [
     await page.waitForSelector('#v1-composer');
   }],
   ['host-metrics', async label => {
-    // The heading panel is always visible and opens the details charts.
+    // The heading panel is always visible and opens the host overview.
     await page.waitForFunction(() => document.querySelector('.host-metrics-panel')?.textContent.includes('32%'), { timeout: 20000 });
     await page.click('.host-metrics-panel');
-    await page.waitForFunction(() => document.querySelectorAll('.metric-chart').length >= 9, { timeout: 20000 });
+    await page.waitForFunction(() => location.hash === '#host');
+    await waitText('Top consumers');
+    await page.waitForFunction(() => document.querySelectorAll('.hd-gauge').length >= 5 && document.querySelectorAll('.thread-bars li').length === 12);
+    await waitText('Synthetic V1 UI');
+    await waitText('/home');
     await waitText('Synthetic probe');
-    assert.ok((await page.$$('.chart-line')).length > 10, 'Charts draw lines');
+    assert.equal(await page.$eval('.consumer-row .who a', a => a.getAttribute('href')), '#conversation/00000000-0000-4000-8000-00000000000a');
+    await screenshot(label, 'host-overview');
+    await noHorizontalScroll();
+    // Charts are a deep link of their own, range included; back returns.
+    await clickText('Charts');
+    await page.waitForFunction(() => document.querySelectorAll('.metric-chart').length >= 9, { timeout: 20000 });
     await clickText('7d');
+    await page.waitForFunction(() => location.hash === '#host/details?range=7d');
     await waitText('Collecting… history for this range starts');
     await screenshot(label, 'host-metrics');
     await noHorizontalScroll();
+    await page.goBack();
+    await page.waitForFunction(() => location.hash === '#host/details?range=1h');
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.waitForFunction(() => location.hash === '#host/details?range=1h' && document.querySelectorAll('.metric-chart').length >= 9, { timeout: 30000 });
+    await page.goto(`${origin}/#conversation/00000000-0000-4000-8000-00000000000a/timers`, { waitUntil: 'domcontentloaded' });
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await waitText('Saved timer ID', 30000);
     await clickText('Chat');
+    await page.waitForFunction(() => location.hash === '#conversation/00000000-0000-4000-8000-00000000000a');
+    await page.goBack();
+    await page.waitForFunction(() => location.hash.endsWith('/timers'));
+    await waitText('Saved timer ID');
+    await clickText('Chat');
+    await page.waitForSelector('#composer');
   }],
   ['v1-deep-links', async label => {
     const open = ref => page.goto(`${origin}/instance/${V1_INSTANCE_REF}/thread/${ref}`, { waitUntil: 'domcontentloaded' });
@@ -463,7 +486,8 @@ export const scenarios = [
     await open(V1_LINKS.group);
     await page.waitForSelector('.v1-banner', { timeout: 20000 });
     await page.waitForFunction(() => document.querySelector('.heading-title h2')?.textContent === 'Synthetic group');
-    assert.match(await page.evaluate(() => location.hash), /^#conversation\//, 'The V1 fragment is replaced');
+    // The old V1 fragment gives way to the chat's own deep link.
+    await page.waitForFunction(() => /^#v1\/[A-Za-z0-9._:-]+$/.test(location.hash));
     await screenshot(label, 'v1-link-v1');
     // A migrated thread opens its V2 conversation.
     await open(V1_LINKS.migrated);

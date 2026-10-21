@@ -3,6 +3,8 @@ use axum::http::{header, HeaderMap, HeaderValue};
 use sha2::{Digest, Sha256};
 
 pub(super) const POLICY: &str = "public, no-cache";
+/// A content-versioned URL (`?v=<digest prefix>`) never changes meaning.
+pub(super) const PINNED: &str = "public, max-age=31536000, immutable";
 
 pub(super) fn etag(data: &[u8]) -> HeaderValue {
     format!("\"{:x}\"", Sha256::digest(data)).parse().unwrap()

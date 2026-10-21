@@ -34,6 +34,33 @@ impl Store {
         ))
     }
 }
+impl Store {
+    /// Admit an input and, in the same transaction, keep the message it quoted.
+    pub async fn admit_with_reply_to(
+        &self,
+        owner: &OwnerId,
+        conversation: &ConversationId,
+        input: &MessageInput,
+        reply_to: Option<&ReplyTo>,
+    ) -> Result<Admission> {
+        if reply_to.is_some_and(|r| !r.valid()) {
+            return Err(StoreError::Invalid);
+        }
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let admission = admit_in_transaction(&mut tx, owner, conversation, input).await?;
+        if let Some(reply_to) = reply_to {
+            // First writer wins; a retry of the same input never rewrites it.
+            sqlx::query("INSERT OR IGNORE INTO message_reply_to(message_id,reply_to) VALUES (?,?)")
+                .bind(admission.receipt.message_id.to_string())
+                .bind(serde_json::to_string(reply_to).map_err(|_| StoreError::Invalid)?)
+                .execute(&mut *tx)
+                .await
+                .map_err(db)?;
+        }
+        tx.commit().await.map_err(db)?;
+        Ok(admission)
+    }
+}
 impl IntakeStore for Store {
     async fn admit(
         &self,
@@ -121,7 +148,7 @@ impl IntakeStore for Store {
             return Err(StoreError::Invalid);
         }
         let limit = limit.clamp(1, 100);
-        let mut rows = sqlx::query("SELECT id,sequence,actor_kind,text FROM messages WHERE conversation_id=? AND owner_id=? AND sequence>? AND sequence<=? ORDER BY sequence LIMIT ?")
+        let mut rows = sqlx::query("SELECT m.id,m.sequence,m.actor_kind,m.text,r.reply_to FROM messages m LEFT JOIN message_reply_to r ON r.message_id=m.id WHERE m.conversation_id=? AND m.owner_id=? AND m.sequence>? AND m.sequence<=? ORDER BY m.sequence LIMIT ?")
             .bind(conversation.to_string()).bind(owner.to_string()).bind(after).bind(last_sequence).bind(limit+1).fetch_all(&self.pool).await.map_err(db)?;
         let more = rows.len() > limit as usize;
         rows.truncate(limit as usize);
@@ -133,6 +160,9 @@ impl IntakeStore for Store {
                     sequence: r.get("sequence"),
                     actor_kind: r.get("actor_kind"),
                     text: r.get("text"),
+                    reply_to: r
+                        .get::<Option<String>, _>("reply_to")
+                        .and_then(|json| serde_json::from_str(&json).ok()),
                 })
             })
             .collect::<Result<Vec<_>>>()?;
@@ -227,3 +257,7 @@ pub(crate) async fn admit_in_transaction(
         },
     })
 }
+
+#[cfg(test)]
+#[path = "reply_to_tests.rs"]
+mod reply_to_tests;
