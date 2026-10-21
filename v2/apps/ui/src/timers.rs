@@ -24,6 +24,19 @@ pub enum Schedule {
         weekday: Option<u8>,
         minute_of_day: u16,
     },
+    /// Weekdays, an hour window and minute offsets in a zone; `summary` is the
+    /// server's plain-words rendering of the same rule.
+    Calendar {
+        timezone: String,
+        weekdays: Vec<u8>,
+        start_minute: u16,
+        end_minute: u16,
+        every_hours: u8,
+        minutes: Vec<u8>,
+        summary: String,
+    },
+    /// Runs only when a trigger event arrives.
+    Event,
     Dormant,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
@@ -48,45 +61,151 @@ impl State {
         }
     }
 }
+/// Per-timer behaviour: silent mode, pause, skip dates, digest, trigger.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct Policy {
+    pub revision: i64,
+    /// `off` or `unless_changed`.
+    pub silent_mode: String,
+    pub pause_until_ms: Option<i64>,
+    #[serde(default)]
+    pub skip_dates: Vec<String>,
+    pub skip_timezone: Option<String>,
+    pub digest: Option<DigestRule>,
+    pub trigger: Option<TriggerRule>,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct DigestRule {
+    pub timezone: String,
+    pub minutes: Vec<u16>,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct TriggerRule {
+    /// `message`, `email` or `other`.
+    pub sources: Vec<String>,
+    #[serde(default)]
+    pub min_interval_s: u32,
+}
+/// Latest result and the quiet streak of one timer.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct Stats {
+    /// `delivered`, `silent` or `digest`.
+    pub last_kind: Option<String>,
+    pub last_summary: Option<String>,
+    pub last_at_ms: Option<i64>,
+    pub silent_runs: i64,
+    pub total_runs: i64,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct Digest {
+    pub id: String,
+    pub text: String,
+    pub item_count: i64,
+    pub created_ms: i64,
+    pub delivered_ms: Option<i64>,
+}
+/// Server-formatted local times (the timer's own zone), so the page never
+/// computes zone arithmetic.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LocalTimes {
+    pub next: Option<String>,
+    pub last_result: Option<String>,
+    pub pause_until: Option<String>,
+}
 /// One row of `GET /api/v2/conversations/{id}/timers`: the timer detail plus
-/// its V1 source label.
+/// its source label, policy and run statistics (absent from older servers).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Listed {
     pub detail: Detail,
     pub label: Option<String>,
+    pub policy: Option<Policy>,
+    pub stats: Option<Stats>,
+    pub local: LocalTimes,
+    /// Created here (editable), not imported from V1.
+    pub native: bool,
 }
-const LISTED_EXTRA: [&str; 5] = [
+const LISTED_EXTRA: [&str; 11] = [
     "label",
     "source_thread_id",
     "source_namespace",
     "source_timer_id",
     "source_enabled",
+    "policy",
+    "stats",
+    "next_due_local",
+    "last_result_local",
+    "pause_until_local",
+    "native",
 ];
+/// A conversation's timers with its conversation-wide pause and recent digests.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Listing {
+    pub rows: Vec<Listed>,
+    pub pause_until_ms: Option<i64>,
+    pub pause_until_local: Option<String>,
+    pub digests: Vec<Digest>,
+}
 /// The conversation's timers; `None` when the answer is not a valid listing.
 pub fn listing(value: &Value, conversation: &str) -> Option<Vec<Listed>> {
+    full_listing(value, conversation).map(|l| l.rows)
+}
+pub fn full_listing(value: &Value, conversation: &str) -> Option<Listing> {
     if value.get("conversation_id")?.as_str()? != conversation {
         return None;
     }
-    value
+    let text = |row: &serde_json::Map<String, Value>, key: &str| {
+        row.get(key).and_then(Value::as_str).map(str::to_owned)
+    };
+    let rows = value
         .get("timers")?
         .as_array()?
         .iter()
         .map(|row| {
             let mut detail = row.as_object()?.clone();
-            let label = detail
-                .get("label")
-                .and_then(Value::as_str)
-                .map(str::to_owned);
+            let label = text(&detail, "label");
+            let local = LocalTimes {
+                next: text(&detail, "next_due_local"),
+                last_result: text(&detail, "last_result_local"),
+                pause_until: text(&detail, "pause_until_local"),
+            };
+            let native = detail
+                .get("native")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let policy = detail
+                .get("policy")
+                .and_then(|v| serde_json::from_value(v.clone()).ok());
+            let stats = detail
+                .get("stats")
+                .and_then(|v| serde_json::from_value(v.clone()).ok());
             for key in LISTED_EXTRA {
                 detail.remove(key);
             }
             let detail: Detail = serde_json::from_value(Value::Object(detail)).ok()?;
             let namespace = detail.namespace.clone();
-            detail
-                .valid_for(&namespace)
-                .then_some(Listed { detail, label })
+            detail.valid_for(&namespace).then_some(Listed {
+                detail,
+                label,
+                policy,
+                stats,
+                local,
+                native,
+            })
         })
-        .collect()
+        .collect::<Option<Vec<_>>>()?;
+    let digests = match value.get("digests") {
+        Some(list) => serde_json::from_value(list.clone()).ok()?,
+        None => Vec::new(),
+    };
+    Some(Listing {
+        rows,
+        pause_until_ms: value.get("pause_until_ms").and_then(Value::as_i64),
+        pause_until_local: value
+            .get("pause_until_local")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        digests,
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -141,6 +260,27 @@ impl Detail {
                         && timezone.len() <= 64
                         && weekday.is_none_or(|day| (1..=7).contains(&day))
                 }
+                Schedule::Calendar {
+                    ref timezone,
+                    ref weekdays,
+                    start_minute,
+                    end_minute,
+                    every_hours,
+                    ref minutes,
+                    ref summary,
+                } => {
+                    !timezone.is_empty()
+                        && timezone.len() <= 64
+                        && weekdays.iter().all(|d| (1..=7).contains(d))
+                        && !minutes.is_empty()
+                        && minutes.iter().all(|m| *m < 60)
+                        && start_minute <= end_minute
+                        && end_minute < 1440
+                        && (1..=24).contains(&every_hours)
+                        && !summary.is_empty()
+                        && summary.len() <= 300
+                }
+                Schedule::Event => true,
                 Schedule::Dormant => true,
             }
     }

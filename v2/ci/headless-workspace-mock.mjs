@@ -37,7 +37,7 @@ export function createState() {
     // Chat settings, desktops and timers of conversation A.
     settings: { schema_version: 1, conversation_id: A, revision: 2, provider: 'codex', model: 'synthetic-model', reasoning_effort: 'medium',
       honor_no_reply: true, reply_prefix: 'synthetic:', reply_footer: null, provider_generation: 0, updated_at_ms: 1 },
-    settingsPuts: [], bindingPuts: [],
+    settingsPuts: [], bindingPuts: [], timerCalls: [], timerPause: null, chatTimerPause: null,
     // Linked V1 chat management (synthetic V1 state behind the server).
     v1Model: { model: 'synthetic-model', effort: 'low' }, v1Calls: [],
     v1Timers: [{ id: 'timer-1', label: 'Synthetic digest', cadence: 'daily', time: '08:00', every: null, timezone: 'Europe/Berlin',
@@ -292,6 +292,15 @@ async function api(state, req, res, url) {
   if (path === '/api/v2/conversations' && req.method === 'GET') return json(res, 200, {
     conversations: [A, B, C].map((id, i) => ({ conversation_id: id, name: names[id], scope: { kind: 'global' }, last_sequence: state.messages[id].length + i })),
     next_cursor: null });
+  const calendar = /^\/api\/v2\/timers\/(calendar(?:\/preview)?|[0-9a-f-]{36}\/(?:pause|policy|schedule))$/.exec(path);
+  if (calendar) {
+    if (req.headers['x-orkestr-csrf'] !== 'synthetic-csrf') return json(res, 403, { code: 'csrf', message: 'CSRF required' });
+    const request = JSON.parse(await body(req)); state.timerCalls.push({ route: calendar[1].replace(/[0-9a-f-]{36}/, ':id'), method: req.method, ...request });
+    if (calendar[1] === 'calendar/preview') return json(res, 200, { summary: 'Hourly at :00', runs_ms: [1, 2, 3],
+      runs_local: ['Wed 21 Oct 14:00 CEST', 'Wed 21 Oct 15:00 CEST', 'Wed 21 Oct 16:00 CEST'] });
+    if (calendar[1].endsWith('/pause')) { state.timerPause = request.until_ms; return json(res, 200, { revision: 4, pause_until_ms: request.until_ms }); }
+    return json(res, 200, calendar[1] === 'calendar' ? { namespace: uuid(703), state: 'enabled' } : { revision: 4 });
+  }
   const m = /^\/api\/v2\/conversations\/([0-9a-f-]{36})(\/.*)?$/.exec(path);
   if (!m || !names[m[1]]) return missing(res);
   const [, id, rest = ''] = m;
@@ -340,11 +349,28 @@ async function api(state, req, res, url) {
     return json(res, 200, { schema_version: 1, conversation_id: id, revision: request.expected_revision + 1, v1_thread_id: request.v1_thread_id,
       desktop_slugs: request.desktop_slugs, grant_issued: false, grant_generation: 0 });
   }
-  if (rest === '/timers' && req.method === 'GET') return json(res, 200, { conversation_id: id, timers: id !== A ? [] : [
+  if (rest === '/timers' && req.method === 'GET') return json(res, 200, { conversation_id: id, pause_until_ms: id === A ? state.chatTimerPause : null,
+    pause_until_local: state.chatTimerPause ? 'Thu 22 Oct 09:00 CEST' : null, digests: id !== A ? [] : [
+      { id: uuid(711), namespace: uuid(702), slot_ms: 1000, text: 'Digest: Synthetic triage - 3 quiet runs since the last digest.\nNothing new in 3 runs.', item_count: 3, created_ms: 2000, delivered_ms: null }],
+    timers: id !== A ? [] : [
+    { namespace: uuid(702), source_digest: 'synthetic-calendar', schedule: { kind: 'calendar', timezone: 'Europe/Berlin', weekdays: [1, 2, 3, 4, 5],
+        start_minute: 480, end_minute: 1140, every_hours: 1, minutes: [0], summary: 'Hourly at :00, Mon\u2013Fri, 08:00\u201319:00 Europe/Berlin' },
+      conversation_id: id, state: 'enabled', dormant_reason: null, revision: 2, generation: 1, next_due_ms: Date.now() + 1800000,
+      controller_armed: true, controller_hold: null, label: 'Synthetic triage', source_thread_id: 'orkestr:calendar', source_namespace: 'orkestr:calendar',
+      source_timer_id: uuid(702), source_enabled: false, native: true,
+      policy: { revision: 3, silent_mode: 'unless_changed', pause_until_ms: state.timerPause, skip_dates: ['2026-12-25'], skip_timezone: null,
+        digest: { timezone: 'Europe/Berlin', minutes: [540] }, digest_since_ms: 1, trigger: null, updated_ms: 1 },
+      stats: { last_kind: 'silent', last_summary: 'no news', last_at_ms: Date.now() - 3600000, silent_runs: 4, total_runs: 9 },
+      next_due_local: 'Wed 21 Oct 14:00 CEST', last_result_local: 'Wed 21 Oct 13:00 CEST', pause_until_local: state.timerPause ? 'Thu 22 Oct 09:00 CEST' : null },
     { namespace: uuid(701), source_digest: 'synthetic-digest', schedule: { kind: 'zoned_clock', timezone: 'Europe/Berlin', weekday: null, minute_of_day: 420 },
       conversation_id: id, state: 'enabled', dormant_reason: null, revision: 3, generation: 2, next_due_ms: Date.now() + 3600000,
       controller_armed: true, controller_hold: null, label: 'Synthetic morning brief', source_thread_id: 'synthetic-thread',
       source_namespace: 'synthetic', source_timer_id: 'timer-1', source_enabled: true }] });
+  if (rest === '/timer-pause' && req.method === 'POST') {
+    if (req.headers['x-orkestr-csrf'] !== 'synthetic-csrf') return json(res, 403, { code: 'csrf', message: 'CSRF required' });
+    const request = JSON.parse(await body(req)); state.timerCalls.push({ scope: 'chat', ...request });
+    state.chatTimerPause = request.until_ms; return json(res, 200, { pause_until_ms: request.until_ms });
+  }
   if (rest === '/messages' && req.method === 'POST') return intake(state, req, res, id);
   if (rest === '/window' && req.method === 'POST') return admit(state, req, res, id);
   if (rest === '/window' && req.method === 'GET') {

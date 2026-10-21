@@ -323,3 +323,44 @@ details[open] > summary { margin-bottom: .4rem; }
 .message-time-details { display: flex; flex-direction: column; align-items: flex-end; flex-basis: 100%; font-size: .68rem; color: var(--muted); }
 .user-message .message-time-details { color: inherit; opacity: .8; }
 .archived-message header .message-meta { margin: 0; }
+
+/* Calendar timers: per-chat list, pause picker and editor */
+.timers-screen { display: grid; gap: .9rem; max-width: 52rem; }
+.timer-chatbar { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem .8rem; padding: .6rem .8rem; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
+.timer-chatbar p { margin: 0; font-size: .85rem; }
+.timer-cards { gap: .6rem; }
+.timer-card { display: grid; gap: .45rem; padding: .8rem .9rem; border: 1px solid var(--border); border-left-width: 3px; border-radius: var(--radius); background: var(--surface); }
+.timer-card[data-status=running] { border-left-color: var(--accent); }
+.timer-card[data-status=paused] { border-left-color: var(--faint); }
+.timer-card[data-status=off] { opacity: .8; }
+.timer-card-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: .3rem .6rem; }
+.timer-rule { margin: 0; font-size: .9rem; }
+.timer-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr)); gap: .35rem .9rem; margin: 0; }
+.timer-facts div { min-width: 0; }
+.timer-facts dt { font-size: .7rem; text-transform: uppercase; letter-spacing: .04em; color: var(--faint); }
+.timer-facts dd { margin: 0; font-size: .85rem; overflow-wrap: anywhere; }
+.timer-tags { display: flex; flex-wrap: wrap; gap: .3rem; }
+.timer-tags:empty { display: none; }
+.timer-actions button.quiet, button.quiet { background: transparent; color: var(--muted); }
+.pause-picker { display: inline-block; }
+.pause-picker summary { cursor: pointer; font-size: .78rem; padding: .35rem .8rem; border: 1px solid var(--border); border-radius: 1.1rem; list-style: none; min-height: 2.1rem; display: inline-flex; align-items: center; }
+.pause-picker[open] { display: block; flex-basis: 100%; }
+.pause-presets, .pause-custom { display: flex; flex-wrap: wrap; align-items: center; gap: .35rem; margin-top: .4rem; }
+.pause-custom label { font-size: .75rem; color: var(--muted); }
+.pause-custom input { width: auto; min-height: 2.1rem; }
+.timer-editor .weekday-row { display: flex; flex-wrap: wrap; gap: .3rem .8rem; border: 0; padding: 0; margin: 0; }
+.timer-editor .weekday-row legend { font-size: .78rem; color: var(--muted); padding: 0; }
+.timer-editor .field-row-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.timer-preview { margin: .2rem 0; padding: .5rem .7rem; border-radius: calc(var(--radius) / 1.5); background: var(--accent-soft); color: var(--accent-text); font-size: .88rem; }
+.timer-error { color: var(--danger-text); }
+.timer-runs { margin: 0; padding-left: 1.1rem; font-size: .82rem; color: var(--muted); }
+.timer-digest pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; font-size: .82rem; margin: .2rem 0 .6rem; padding: .5rem .7rem; background: var(--surface-2); border-radius: calc(var(--radius) / 1.5); }
+.timer-new { justify-self: start; }
+.timer-advanced summary, .timer-digests summary { cursor: pointer; font-size: .85rem; color: var(--muted); }
+@media (max-width: 52rem) {
+ .timers-screen { padding-bottom: 1rem; }
+ .timer-facts { grid-template-columns: minmax(0, 1fr); }
+ .timer-editor .field-row, .timer-editor .field-row-3 { grid-template-columns: minmax(0, 1fr); }
+ .timer-actions button, .pause-picker summary, .pause-presets button { min-height: 2.75rem; }
+ .pause-custom input { flex: 1 1 12rem; min-height: 2.75rem; }
+}

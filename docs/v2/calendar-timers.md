@@ -1,6 +1,6 @@
 # Calendar timers, silent runs, pauses and event triggers
 
-Status: implemented on `v2/rust-rewrite` (migration `0063`). Builds on the
+Status: implemented on `v2/rust-rewrite` (migration `0063`; UI in the Timers tab). Builds on the
 per-thread timer moves in [thread-timers.md](thread-timers.md): calendar timers
 are ordinary durable timers (same owner grant, Stop fence, claim and window
 queue); only the schedule, a small policy and the handling of results are new.
@@ -95,6 +95,23 @@ to a conversation with its policy and, when `text` (the instruction) is given,
 enables it (durable owner grant). `POST /api/v2/timers/{ns}/schedule` edits the
 rule of a natively created timer (not an imported V1 one) and replans it.
 `POST /api/v2/timers/calendar/preview` returns the next runs of a rule.
+
+## UI
+
+The Timers tab of a chat lists its timers as cards: the rule in plain words
+(the server's wording), status (Running, Paused until ..., Chat paused until ...,
+Disabled), next run and last result in the timer's own zone, the silent-run
+count since the last delivered message, and the policy tags (silent, digest,
+skipped dates). Each timer can be paused (1 hour, tomorrow 09:00, next week, until
+resumed, or an exact local date and time) and resumed; the whole chat can be
+paused the same way. "New timer" and "Edit" open one form (days, window, hours
+step, minute offsets, zone, event triggers, silent mode, digest, skip dates,
+instructions) with a live plain-words preview and a server-computed list of the
+next runs. A timer's instructions are fixed at creation; to change them, create
+a new timer and turn the old one off. The older enable/disable/stop controls and
+"open by timer ID" remain under "Advanced". The page never sends a clock, a due
+time or a claim: pauses carry only their end instant, which the browser derives
+from the owner's input.
 
 ## Deployment
 
