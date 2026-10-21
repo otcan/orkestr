@@ -92,6 +92,25 @@ existing escalation. Nothing routes it to another runtime.
 - Other refusals: `404` (not listed, or V1 does not know the thread), `409
   v1_refused` (a definite V1 4xx), `400` (malformed body or key).
 
+## Old V1 deep links
+
+V1 links such as `/instance/ins_…/thread/thr_…` keep working on the Rust app's
+domain. The public references are V1's (`packages/storage/src/public-references.js`:
+a prefix and 22 base64url characters); V1 reports them as `publicRef` and
+`canonicalPath` in its thread summary.
+
+- `GET /instance/{ins}/thread/{thr}` (also with a trailing slash) answers
+  `303` to `/#v1-link/{ins}/{thr}` without authentication and reveals nothing.
+  Malformed references are a plain `404`.
+- After sign-in the UI calls `GET /api/v2/v1-links/{thr}?instance={ins}` (owner
+  only). A thread imported into a V2 conversation (lineage or archived source)
+  answers `{"kind":"conversation","conversation_id":…}`. A thread the sidebar
+  lists answers `{"kind":"v1_thread","thread_id":…}` and opens its linked
+  entry. Anything else is `404`: unknown, retired, task agent, another
+  instance, or V1 not configured.
+- The UI then replaces the fragment with the conversation's own. When a link does
+  not resolve, it says so and keeps the default conversation.
+
 ## Read marks
 
 `PUT /api/v2/sidebar/read {"key": "...", "marker": N}` (cookie + CSRF, or

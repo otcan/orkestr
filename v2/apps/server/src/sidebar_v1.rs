@@ -4,9 +4,9 @@
 //! listed thread as V1 web UI input. Nothing here admits V2 work.
 use crate::desktop_broker::{Broker, BrokerError};
 use orkestr_v2_contracts::{
-    valid_v1_thread_id, SidebarAuthor, SidebarPreview, V1HistoryMessage, V1HistoryPage,
-    V1ThreadInput, V1ThreadInputReceipt, SIDEBAR_NAME_MAX, SIDEBAR_PREVIEW_MAX, V1_HISTORY_MAX,
-    V1_HISTORY_TEXT_MAX,
+    valid_v1_instance_ref, valid_v1_thread_id, valid_v1_thread_ref, SidebarAuthor, SidebarPreview,
+    V1HistoryMessage, V1HistoryPage, V1ThreadInput, V1ThreadInputReceipt, SIDEBAR_NAME_MAX,
+    SIDEBAR_PREVIEW_MAX, V1_HISTORY_MAX, V1_HISTORY_TEXT_MAX,
 };
 use serde_json::Value;
 use std::{
@@ -42,6 +42,10 @@ pub(crate) struct V1Thread {
     /// backend. Its owner input belongs to the V2 conversation, not V1.
     pub delegated: bool,
     pub retired: bool,
+    /// V1 public reference (`thr_…`) of old deep links.
+    pub public_ref: Option<String>,
+    /// The instance reference of its canonical path (`/instance/ins_…/…`).
+    pub instance_ref: Option<String>,
 }
 
 fn text(value: &Value, key: &str) -> Option<String> {
@@ -117,6 +121,13 @@ pub(crate) fn parse_thread(value: &Value) -> Option<V1Thread> {
         whatsapp,
         delegated,
         retired: flag(value, "retired"),
+        public_ref: text(value, "publicRef").filter(|r| valid_v1_thread_ref(r)),
+        instance_ref: text(value, "canonicalPath").and_then(|path| {
+            path.strip_prefix("/instance/")
+                .and_then(|rest| rest.split('/').next())
+                .filter(|r| valid_v1_instance_ref(r))
+                .map(str::to_owned)
+        }),
         id,
         name,
     })

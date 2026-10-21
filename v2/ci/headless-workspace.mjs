@@ -2,7 +2,7 @@
 // Exercises the real WASM bundle at desktop and phone widths; no provider runs.
 import assert from 'node:assert/strict';
 import puppeteer from 'puppeteer';
-import { A, C, createState, startMock } from './headless-workspace-mock.mjs';
+import { A, C, V1_INSTANCE_REF, V1_LINKS, createState, startMock } from './headless-workspace-mock.mjs';
 import { mkdir } from 'node:fs/promises';
 
 assert.equal(process.env.CI, 'true', 'Run only in isolated CI');
@@ -212,6 +212,25 @@ export const scenarios = [
     await choose('Assistant');
     await page.waitForSelector('#composer');
     await screenshot(label, 'chat');
+  }],
+  ['v1-deep-links', async label => {
+    const open = ref => page.goto(`${origin}/instance/${V1_INSTANCE_REF}/thread/${ref}`, { waitUntil: 'domcontentloaded' });
+    // A thread still on V1 opens its linked entry.
+    await open(V1_LINKS.group);
+    await page.waitForSelector('.v1-banner', { timeout: 20000 });
+    await page.waitForFunction(() => document.querySelector('.heading-title h2')?.textContent === 'Synthetic group');
+    assert.match(await page.evaluate(() => location.hash), /^#conversation\//, 'The V1 fragment is replaced');
+    await screenshot(label, 'v1-link-v1');
+    // A migrated thread opens its V2 conversation.
+    await open(V1_LINKS.migrated);
+    await page.waitForFunction(() => document.querySelector('.heading-title h2')?.textContent === 'Research notes', { timeout: 20000 });
+    await page.waitForSelector('#composer');
+    assert.equal(await page.$('.v1-banner'), null);
+    // An unknown link explains itself and keeps the default conversation.
+    await open(V1_LINKS.unknown);
+    await waitText('This V1 link does not open here');
+    await screenshot(label, 'v1-link-unknown');
+    await noHorizontalScroll();
   }],
 ];
 

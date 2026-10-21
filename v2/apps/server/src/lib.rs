@@ -57,6 +57,7 @@ pub mod stop_execution;
 pub mod timer_bootstrap;
 pub mod timer_http;
 mod timer_lifecycle;
+mod v1_links;
 mod window_http;
 mod window_runtime;
 mod worker_discovery;
@@ -404,6 +405,7 @@ pub fn router_with_google_catalog(
         .merge(conversation_resources_http::router())
         .merge(desktop_http::router())
         .merge(sidebar_http::router())
+        .merge(v1_links::router())
         .merge(google_registry_metadata::router(catalog))
         .fallback(|| async { Error(StatusCode::NOT_FOUND,"not_found","Endpoint not found") })
         .layer(DefaultBodyLimit::max(40 * 1024))
