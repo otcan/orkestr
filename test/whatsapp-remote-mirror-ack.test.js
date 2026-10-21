@@ -9,6 +9,7 @@ import { remoteMirrorAckReport } from "../packages/connectors/src/whatsapp-remot
 import { remoteAttachmentFilename, remoteAttachmentMediaType } from "../packages/connectors/src/whatsapp-remote-attachment-upload.js";
 import { shouldMirrorWhatsAppProgress, shouldMirrorWhatsAppReply } from "../packages/connectors/src/whatsapp-mirror-policy.js";
 import { createThread, listThreadMessages } from "../packages/core/src/threads.js";
+import { whatsappDebugFooter } from "../packages/connectors/src/whatsapp-formatting.js";
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
 
 // A synthetic acknowledging runtime: replies stay listed until a terminal report.
@@ -219,4 +220,17 @@ test("only explicitly remote progress changes mirror policy", () => {
   assert.equal(remoteAttachmentFilename("../a:b\u0001.txt"), "a_b_.txt");
   assert.equal(remoteAttachmentMediaType("image/jpeg; charset=x"), "image/jpeg");
   assert.equal(remoteAttachmentMediaType("not a type"), "application/octet-stream");
+});
+
+test("a mirrored reply keeps the remote provider and model for the debug footer", async t => {
+  const f = await fixture(t);
+  await f.route();
+  f.exportRow({ id: "example-model-final", phase: "final_answer", text: "Answer.", provider: "codex", model: "example-model-1" });
+  await deliver(f);
+  const reply = (await listThreadMessages("example-thread", f.env)).find((row) => row.role === "assistant");
+  assert.equal(reply.remoteProvider, "codex");
+  assert.equal(reply.remoteModel, "example-model-1");
+  const footer = whatsappDebugFooter({ message: reply, thread: {}, messages: [], deliveryType: "final", env: {} });
+  assert.equal(reply.remoteBackend, "example");
+  assert.match(footer, /^dbg: example\/codex\/example-model-1 · rt:example · msg:\*final\*/);
 });
