@@ -109,11 +109,14 @@ test("agent job schedules cannot be handed to V2", async t => {
     error => error.message === "agent_job_schedule_read_only" && error.statusCode === 409);
 });
 
-test("held local input on a delegated thread is dropped with an audit and never bursts after handback", async t => {
+test("a held V1 timer run on a delegated thread is dropped with an audit; other local input waits for forwarding", async t => {
   const env = await fixture(t);
-  const held = [];
-  for (const source of ["timer_due", "ui", "api"]) {
-    held.push(await appendThreadMessage("example-thread", { role: "user", source, text: `Example ${source} input`, state: "queued", timerId: source === "timer_due" ? "example-timer" : undefined }, env));
+  const timerRun = await appendThreadMessage("example-thread", { role: "user", source: "timer_due", text: "Example timer_due input", state: "queued", timerId: "example-timer" }, env);
+  // No remote backend is configured here: UI and API input stay queued for
+  // forwarding (see remote-runtime-local-input.test.js) and are never run locally.
+  const local = [];
+  for (const source of ["ui", "api"]) {
+    local.push(await appendThreadMessage("example-thread", { role: "user", source, text: `Example ${source} input`, state: "queued" }, env));
   }
   const forwarded = await appendThreadMessage("example-thread", {
     role: "user", source: "whatsapp_inbound", connector: "whatsapp", text: "Owner input", state: "queued",
@@ -121,22 +124,26 @@ test("held local input on a delegated thread is dropped with an audit and never 
   }, env);
   const relay = await appendThreadMessage("example-thread", { role: "user", source: "whatsapp_group_relay", text: "Relay input", state: "queued" }, env);
   assert.deepEqual(await deliverPendingThreadInputs("example-thread", env), []);
-  for (const row of held) {
+  const dropped = await getThreadMessage("example-thread", timerRun.id, env);
+  assert.equal(dropped.state, "failed");
+  assert.equal(dropped.deliveryState, "dropped");
+  assert.equal(dropped.error, "thread_delegated_to_remote_runtime");
+  for (const row of local) {
     const current = await getThreadMessage("example-thread", row.id, env);
-    assert.equal(current.state, "failed");
-    assert.equal(current.deliveryState, "dropped");
-    assert.equal(current.error, "thread_delegated_to_remote_runtime");
+    assert.equal(current.state, "queued");
+    assert.equal(current.remoteForwardHeld, "whatsapp_remote_backend_not_configured:example-backend");
   }
   assert.deepEqual(await getThreadMessage("example-thread", forwarded.id, env), forwarded);
   assert.deepEqual(await getThreadMessage("example-thread", relay.id, env), relay);
   const audit = await events(env, "thread_input_dropped_delegated");
-  assert.deepEqual(audit.map(e => e.messageId).sort(), held.map(m => m.id).sort());
-  assert.equal(audit.find(e => e.source === "timer_due").timerId, "example-timer");
-  assert.ok(audit.every(e => e.remoteThreadId === "example-remote-thread"));
+  assert.deepEqual(audit.map(e => e.messageId), [timerRun.id]);
+  assert.equal(audit[0].timerId, "example-timer");
+  assert.equal(audit[0].fence, "v1_timer");
+  assert.equal(audit[0].remoteThreadId, "example-remote-thread");
   // A second pass is a no-op.
   await deliverPendingThreadInputs("example-thread", env);
-  assert.equal((await events(env, "thread_input_dropped_delegated")).length, 3);
-  // Handback: dropped input is no longer pending, so nothing bursts.
+  assert.equal((await events(env, "thread_input_dropped_delegated")).length, 1);
+  // Handback: the dropped timer run is no longer pending, so it never bursts.
   await updateThread("example-thread", { binding: { ...delegatedBinding, remoteRuntimeEnabled: false } }, env);
-  for (const row of held) assert.equal((await getThreadMessage("example-thread", row.id, env)).state, "failed");
+  assert.equal((await getThreadMessage("example-thread", timerRun.id, env)).state, "failed");
 });

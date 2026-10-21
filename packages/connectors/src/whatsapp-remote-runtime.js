@@ -3,6 +3,8 @@ import { appendEvent } from "../../storage/src/store.js";
 import { recordRouterTraceEvent } from "../../core/src/router-traces.js";
 import { appendThreadMessage, listThreadMessages, listThreads, updateThreadMessage } from "../../core/src/threads.js";
 import { remoteWhatsAppRuntimeBinding } from "../../core/src/thread-remote-runtime-binding.js";
+import { routeHeldLocalInputs } from "../../core/src/remote-runtime-held-inputs.js";
+import { forwardLocalInputToRemote } from "./whatsapp-remote-local-input.js";
 import { remoteParentExpectedFields, remoteParentRecoveryCandidate } from "./whatsapp-remote-parent.js";
 import { acknowledgeRemoteMirrorDeliveries, remoteMirrorAckSupported } from "./whatsapp-remote-mirror-ack.js";
 import { uploadRemoteInputAttachments } from "./whatsapp-remote-attachment-upload.js";
@@ -112,7 +114,7 @@ export function remoteHeaders(backend, extra = {}) {
   };
 }
 
-async function remoteJson(backend, endpointPath, fetchImpl, options = {}) {
+export async function remoteJson(backend, endpointPath, fetchImpl, options = {}) {
   const response = await fetchImpl(remoteEndpointUrl(backend, endpointPath), {
     ...options,
     headers: remoteHeaders(backend, options.headers || {}),
@@ -281,6 +283,7 @@ async function updatePublicRemoteParent(thread, localMessage, remoteMessage, rem
     remoteThreadId: remote.remoteThreadId,
     remoteMessageId: pickString(remoteMessage.id, remoteMessage.messageId, localMessage.remoteMessageId),
     remoteSyncedAt: new Date().toISOString(),
+    ...(remoteMessage.origin === "v1_local" ? { remoteInputKind: "v1_local" } : {}),
   };
   const state = pickString(remoteMessage.state);
   const deliveryState = pickString(remoteMessage.deliveryState);
@@ -296,9 +299,18 @@ async function updatePublicRemoteParent(thread, localMessage, remoteMessage, rem
   }).catch(() => null);
 }
 
+// On a relay-bound thread (legacy mirror off) a reply to V1-local input
+// (thread, agent, mailbox, CLI, UI) stays in this thread, where its requester
+// reads it, exactly as a V1 reply to such input; it is never sent to the group.
+export function remoteLocalInputParent(thread = null, parent = null) {
+  return thread?.binding?.mirrorToWhatsApp === false &&
+    parent?.role === "user" && pickString(parent.remoteInputKind) === "v1_local";
+}
+
 async function appendRemoteAssistantMessage({ thread, remote, remoteMessage, parentMessageId, parent, env }) {
   const binding = thread?.binding || {};
   const attachments = remoteRuntimeAttachmentsForMessage(remote, remoteMessage);
+  const local = remoteLocalInputParent(thread, parent);
   const appended = await appendThreadMessage(thread.id, {
     role: "assistant",
     source: pickString(remoteMessage.source, "remote-runtime"),
@@ -306,11 +318,17 @@ async function appendRemoteAssistantMessage({ thread, remote, remoteMessage, par
     state: "completed",
     text: pickString(remoteMessage.text),
     parentMessageId,
-    connector: "whatsapp",
+    ...(local ? {
+      // Recorded as not sent: the mirror acknowledgement reports `suppressed`.
+      deliveryState: "suppressed",
+      observedVia: "remote_runtime_local_reply",
+    } : {
+      connector: "whatsapp",
+      chatId: pickString(remoteMessage.chatId, binding.chatId),
+      accountId: pickString(binding.responderAccountId, binding.outboundAccountId, remoteMessage.accountId),
+    }),
     routerTraceId: pickString(remoteMessage.routerTraceId, parent?.routerTraceId),
     turnId: pickString(remoteMessage.turnId, parent?.turnId),
-    chatId: pickString(remoteMessage.chatId, binding.chatId),
-    accountId: pickString(binding.responderAccountId, binding.outboundAccountId, remoteMessage.accountId),
     createdAt: messageTimestamp(remoteMessage),
     remoteBackend: remote.backendId,
     remoteThreadId: remote.remoteThreadId,
@@ -324,6 +342,7 @@ async function appendRemoteAssistantMessage({ thread, remote, remoteMessage, par
     remoteSyncedAt: new Date().toISOString(),
     ...(attachments.length ? { attachments } : {}),
   }, env);
+  if (local) return appended;
   await recordRouterTraceEvent({
     routerTraceId: appended.routerTraceId,
     turnId: appended.turnId,
@@ -343,6 +362,8 @@ export async function syncRemoteWhatsAppThreadMessages(env = process.env, fetchI
   for (const thread of await listThreads(env)) {
     const remote = remoteWhatsAppRuntimeBinding(thread, env);
     if (!remote || remote.binding.remoteMirrorEnabled === false) continue;
+    // Retry V1-local input whose forward did not complete (restart, outage).
+    await routeHeldLocalInputs(thread, env, { fetchImpl, forward: forwardLocalInputToRemote }).catch(() => null);
     try {
       const { backend, payload, messages: remoteMessages } = await fetchRemoteThreadMessages(remote, env, fetchImpl);
       const localMessages = await listThreadMessages(thread.id, env);
