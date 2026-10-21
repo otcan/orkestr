@@ -5,7 +5,7 @@ from owned_native_probe import process_start
 
 def run(case):
     # Import after the entry module has defined its shared finite HTTP helpers.
-    from service_roles_http import accept, expect, intake, path, ready, status, window_request
+    from service_roles_http import accept, expect, intake, path, ready, review, status, window_request
 
     results = []
     for parent_first, number in [(False, 51), (True, 52)]:
@@ -13,6 +13,7 @@ def run(case):
             "client_request_id": f"retained:{number}",
             "name": f"Synthetic retained Worker {number}",
         })["conversation_id"]
+        review(case, conversation)
         case.fixture.write_private(case.workspaces["deep"] / "mode", b"hold")
         case.fixture.write_private(case.workspaces["worker-0"] / "mode", b"hold")
         key = f"retained:input:{number}"
