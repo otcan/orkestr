@@ -195,3 +195,51 @@ class StallNoticeTests(Case):
         self.worker.step(self.ledger.next_input())
         self.assertEqual(self.ledger.messages()[-1]["text"], "deep result")
         self.assertEqual(self.ledger.health()["stalledInputs"], 0)
+
+
+class OrphanedFollowUpTests(Case):
+    def test_follow_up_whose_window_ended_unstarted_is_sent_again_once(self):
+        self.peer.foreign = True  # No run of this input ever starts.
+        self.worker.step(self.data)
+        data = self.ledger.next_input()
+        self.assertEqual(data["phase"], "running")
+        self.assertIn("unstarted_since", data)
+        # Still inside the grace period, or the window still open: wait.
+        self.peer.current = dict(window_id="window", state="closed", conversation_id="conversation")
+        self.worker.step(data)
+        data = self.ledger.next_input()
+        self.assertEqual(data["phase"], "running")
+        data["unstarted_since"] -= 61
+        self.ledger.save(data)
+        self.worker.step(self.ledger.next_input())
+        data = self.ledger.next_input()
+        self.assertEqual(data["phase"], "queued")
+        self.assertIn("requeued", data)
+        self.assertFalse(data["intake_text"].startswith("[The previous turn"))
+        self.assertEqual(self.notices(), [])
+        # The new turn runs normally.
+        self.peer.foreign, self.peer.current = False, None
+        self.worker.step(data)
+        self.assertEqual(self.ledger.messages()[-1]["text"], "deep result")
+        messages = [body for route, body in self.peer.mutations if route == "/messages"]
+        self.assertEqual(len(messages), 2)
+
+    def test_open_window_keeps_waiting(self):
+        self.peer.foreign = True
+        self.worker.step(self.data)
+        data = self.ledger.next_input()
+        data["unstarted_since"] -= 61
+        self.ledger.save(data)
+        self.peer.current = dict(window_id="window", state="active", conversation_id="conversation",
+                                 work_deadline_ms=int(time.time() * 1000) + 600_000)
+        self.worker.step(self.ledger.next_input())
+        self.assertEqual(self.ledger.next_input()["phase"], "running")
+
+
+class RefusalSettlesFastTests(Case):
+    def test_failed_deep_refusal_accepts_its_own_pending_fast(self):
+        self.peer.deep_phase = "failed"
+        with self.assertRaisesRegex(Refused, "execution_requires_review"):
+            self.worker.step(self.data)
+        self.assertIn("fast", self.peer.accepted)
+        self.assertNotIn("deep", self.peer.accepted)
