@@ -3,6 +3,8 @@
 //! reads the listed systemd units every 30 s and persists the downsampled
 //! tiers every 5 minutes so a restart keeps the 24 h and 7 d charts. Requests
 //! only read the in-memory state: page loads never wait for a sample.
+pub(crate) mod consumers;
+pub(crate) mod disks;
 pub(crate) mod history;
 pub(crate) mod procfs;
 pub(crate) mod services;
@@ -18,8 +20,8 @@ use axum::{
 };
 use history::{History, Sample, SAMPLE_MS};
 use orkestr_v2_contracts::{
-    HostMetricsHistory, HostMetricsRange, HostMetricsSummary, ServiceHealth,
-    HOST_METRICS_SPARK_POINTS,
+    HostConsumer, HostConsumers, HostDirectories, HostDisks, HostMetricsHistory, HostMetricsRange,
+    HostMetricsSummary, HostMount, ServiceHealth, HOST_METRICS_SPARK_POINTS,
 };
 use std::{
     path::{Path, PathBuf},
@@ -38,6 +40,10 @@ pub(crate) struct Shared {
     cores: u32,
     services: Vec<ServiceHealth>,
     services_at_ms: Option<i64>,
+    mounts: Vec<HostMount>,
+    consumers: Vec<HostConsumer>,
+    consumers_at_ms: Option<i64>,
+    directories: Option<HostDirectories>,
 }
 
 static SHARED: LazyLock<Arc<Mutex<Shared>>> = LazyLock::new(Default::default);
@@ -136,6 +142,9 @@ pub fn start(home: &Path) {
                 .await
                 .unwrap_or_default()
         };
+        let labels = consumers::unit_labels(&units);
+        let scanner = Arc::new(Mutex::new(consumers::Scanner::new()));
+        let mut directories_at: Option<Instant> = None;
         let mut ticker = tokio::time::interval(Duration::from_millis(SAMPLE_MS as u64));
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let mut previous: Option<(Instant, procfs::Reading)> = None;
@@ -173,6 +182,51 @@ pub fn start(home: &Path) {
             } else {
                 previous = None;
             }
+            if let Ok(mounts) = tokio::task::spawn_blocking(disks::read_mounts).await {
+                shared().mounts = mounts;
+            }
+            // Process attribution every 10 s (every second tick).
+            if tick % 2 == 1 {
+                let (scanner, labels) = (scanner.clone(), labels.clone());
+                let top = tokio::task::spawn_blocking(move || {
+                    let mut scanner = scanner.lock().unwrap_or_else(|p| p.into_inner());
+                    scanner.sample(&labels).then(|| scanner.top())
+                })
+                .await
+                .ok()
+                .flatten();
+                if let Some(top) = top {
+                    let mut shared = shared();
+                    shared.consumers = top;
+                    shared.consumers_at_ms = Some(now_ms());
+                }
+            }
+            // Largest directories: two minutes after start, then hourly, one at a time.
+            let due = match directories_at {
+                None => tick >= 24,
+                Some(at) => at.elapsed() >= disks::DIRECTORY_EVERY,
+            };
+            if due {
+                directories_at = Some(Instant::now());
+                shared()
+                    .directories
+                    .get_or_insert_with(disks::empty_directories)
+                    .running = true;
+                tokio::task::spawn_blocking(|| {
+                    let measured = disks::measure_directories();
+                    let mut shared = shared();
+                    let directories = shared
+                        .directories
+                        .get_or_insert_with(disks::empty_directories);
+                    directories.running = false;
+                    if let Some((readable, entries)) = measured {
+                        directories.readable_bytes = readable;
+                        directories.entries = entries;
+                        directories.observed_at_ms = Some(now_ms());
+                    }
+                });
+            }
+
             if tick % SERVICES_EVERY == 1 {
                 let units = units.clone();
                 if let Ok(services) =
@@ -195,6 +249,8 @@ pub(crate) fn router() -> Router<AppState> {
     Router::new()
         .route("/api/v2/host-metrics", get(summary))
         .route("/api/v2/host-metrics/history", get(history))
+        .route("/api/v2/host-metrics/consumers", get(consumers_read))
+        .route("/api/v2/host-metrics/disks", get(disks_read))
 }
 
 fn percent(part: u64, whole: u64) -> f32 {
@@ -236,6 +292,17 @@ pub(crate) fn summary_of(shared: &Shared) -> HostMetricsSummary {
             .iter()
             .map(|s| percent(s.disk_used, disk_whole))
             .collect(),
+        swap_used_bytes: known.then_some(g.swap_used),
+        swap_total_bytes: known.then_some(g.swap_total),
+        load: latest.map(|s| s.load),
+        mounts: shared.mounts.clone(),
+        cpu_cores_percent: latest
+            .map(|s| s.cores.iter().map(|v| (v * 10.0).round() / 10.0).collect())
+            .unwrap_or_default(),
+        disk_read_bps: latest.map(|s| s.disk_read_bps.round()),
+        disk_write_bps: latest.map(|s| s.disk_write_bps.round()),
+        net_rx_bps: latest.map(|s| s.net_rx_bps.round()),
+        net_tx_bps: latest.map(|s| s.net_tx_bps.round()),
     }
 }
 
@@ -290,4 +357,68 @@ pub(crate) async fn history(
             "Range must be 15m, 1h, 24h or 7d",
         ))?;
     Ok(Json(history_of(&shared(), range, now_ms())))
+}
+
+/// Top consumers by CPU and memory, with conversation names for the owner.
+pub(crate) async fn consumers_read(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<HostConsumers>, Error> {
+    owner(&state, &headers).await?;
+    let (mut consumers, observed_at_ms, cores) = {
+        let shared = shared();
+        (
+            shared.consumers.clone(),
+            shared.consumers_at_ms,
+            shared.cores,
+        )
+    };
+    if consumers.iter().any(|c| c.conversation_id.is_some()) {
+        if let Ok(credential) = crate::browser::credential(&headers) {
+            if let Ok(page) = state
+                .store
+                .conversations_authenticated(
+                    &credential,
+                    0,
+                    orkestr_v2_contracts::LIVE_MAP_MAX_CONVERSATIONS as u32,
+                )
+                .await
+            {
+                for consumer in &mut consumers {
+                    if let Some(found) = page
+                        .conversations
+                        .iter()
+                        .find(|c| Some(c.conversation_id.to_string()) == consumer.conversation_id)
+                    {
+                        consumer.label = found.name.clone();
+                    }
+                }
+            }
+        }
+    }
+    Ok(Json(HostConsumers {
+        schema_version: 1,
+        collecting: observed_at_ms.is_none(),
+        observed_at_ms,
+        interval_ms: consumers::SAMPLE_EVERY.as_millis() as u64,
+        cores,
+        consumers,
+    }))
+}
+
+/// Filesystems and the largest directories on `/`.
+pub(crate) async fn disks_read(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<HostDisks>, Error> {
+    owner(&state, &headers).await?;
+    let (mounts, directories) = {
+        let shared = shared();
+        (shared.mounts.clone(), shared.directories.clone())
+    };
+    Ok(Json(HostDisks {
+        schema_version: 1,
+        mounts,
+        directories: directories.unwrap_or_else(disks::empty_directories),
+    }))
 }

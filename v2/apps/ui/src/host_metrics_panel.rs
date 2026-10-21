@@ -96,21 +96,11 @@ pub fn HostMetricsPanel(
         .and_then(|s| s.observed_at_ms)
         .map(|at| format!("Updated {}", model::ago(now(), at)))
         .unwrap_or_else(|| "No sample yet".into());
-    let s = current.unwrap_or(HostMetricsSummary {
+    let s = current.unwrap_or_else(|| HostMetricsSummary {
         schema_version: 1,
         collecting: true,
-        observed_at_ms: None,
         interval_ms: 5000,
-        cores: 0,
-        cpu_percent: None,
-        memory_used_bytes: None,
-        memory_total_bytes: None,
-        disk_used_bytes: None,
-        disk_free_bytes: None,
-        disk_total_bytes: None,
-        spark_cpu: Vec::new(),
-        spark_memory: Vec::new(),
-        spark_disk: Vec::new(),
+        ..Default::default()
     });
     let cpu = s
         .cpu_percent
