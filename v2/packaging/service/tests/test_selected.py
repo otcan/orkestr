@@ -107,6 +107,7 @@ class Selected(unittest.TestCase):
         self.plan['live_map']='/var/lib/synthetic-live-map/map.json'
         self.plan['desktop_broker']='/var/lib/synthetic-private/desktop-broker.json'
         self.plan['timer_config']='/var/lib/synthetic-private/timers.json'
+        self.plan['whatsapp_chats']='/var/lib/synthetic-private/whatsapp-chats.json'
         selected.prepare(self.plan)
         with authority(REPO,source) as (_,manager,_):
             package=manager.Package(r/'release/package',sha(r/'release/package/manifest.json'))
@@ -115,6 +116,8 @@ class Selected(unittest.TestCase):
             self.assertEqual(package.environment()['ORKESTR_V2_DESKTOP_BROKER_CONFIG'],
                              '/var/lib/synthetic-private/desktop-broker.json')
             self.assertEqual(package.environment()['ORKESTR_V2_TIMER_CONFIG'],'/var/lib/synthetic-private/timers.json')
+            self.assertEqual(package.environment()['ORKESTR_V2_WHATSAPP_CHATS_CONFIG'],
+                             '/var/lib/synthetic-private/whatsapp-chats.json')
         for role in ('fast','worker-0','worker-1','worker-2','worker-3'):
             self.assertIn('broker-'+role,(r/f'release/package/launcher-{role}.py').read_text())
         receipt=json.loads((r/'release/release.json').read_bytes())
@@ -128,6 +131,11 @@ class Selected(unittest.TestCase):
         for bad in ('relative/timers.json','/var/../timers.json',7):
             self.plan['timer_config']=bad
             with self.assertRaisesRegex(RuntimeError,'timer config path'):selected.prepare(self.plan)
+        self.assertFalse((self.root/'release').exists())
+    def test_whatsapp_chats_path_refused_before_any_artifact_read(self):
+        for bad in ('relative/chats.json','/var/../chats.json',7):
+            self.plan['whatsapp_chats']=bad
+            with self.assertRaisesRegex(RuntimeError,'whatsapp chats path'):selected.prepare(self.plan)
         self.assertFalse((self.root/'release').exists())
     def test_live_map_path_refused_before_any_artifact_read(self):
         for bad in ('relative/map.json','/var/../map.json',7):

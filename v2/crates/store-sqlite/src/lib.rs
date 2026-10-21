@@ -20,6 +20,8 @@ mod conversation_export;
 mod conversations;
 mod sidebar;
 pub use sidebar::{SidebarConversation, SidebarConversations};
+mod whatsapp_chats;
+pub use whatsapp_chats::WhatsAppChatIdentity;
 pub mod fixture_runtime;
 pub use conversation_export::{
     ConversationExport, ConversationExportError, ConversationExportLimits,

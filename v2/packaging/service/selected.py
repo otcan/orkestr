@@ -76,7 +76,7 @@ def pair_bytes(plan):
 
 OPTIONAL = {'roles', 'preserve_state', 'workspace_exec', 'additional_workspace_exec', 'max_active_windows', 'host_full_access',
             'window_max_minutes', 'conversation_window_max_minutes',
-            'code_mode_host', 'code_mode_host_sha256', 'claude', 'live_map', 'desktop_broker', 'timer_config'}
+            'code_mode_host', 'code_mode_host_sha256', 'claude', 'live_map', 'desktop_broker', 'timer_config', 'whatsapp_chats'}
 CLAUDE_PATHS = ('executable', 'account', 'workspace', 'home', 'temporary')
 # Account selection stays with the Claude account reference, never the env.
 CLAUDE_FORBIDDEN_ENV = {'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN',
@@ -154,6 +154,12 @@ def prepare(plan):
         broker=plan['desktop_broker']
         require(type(broker) is str and broker.startswith('/') and 1<len(broker)<=4096 and '\0' not in broker
                 and '..' not in Path(broker).parts and not any(ord(c)<32 for c in broker),'desktop broker path')
+    if 'whatsapp_chats' in plan:
+        # Private "New WhatsApp chat" file (adapter token, owner numbers): path
+        # only, never opened or hashed by the packager; the server validates it.
+        chats=plan['whatsapp_chats']
+        require(type(chats) is str and chats.startswith('/') and 1<len(chats)<=4096 and '\0' not in chats
+                and '..' not in Path(chats).parts and not any(ord(c)<32 for c in chats),'whatsapp chats path')
     preserve=plan.get('preserve_state',False)
     require(type(preserve) is bool,'explicit preserve_state boolean required')
     separate(plan)  # Metadata only: MUST precede every artifact read/hash.
@@ -271,6 +277,8 @@ def prepare(plan):
                 runtime['desktop_broker']=plan['desktop_broker']
             if 'timer_config' in plan:
                 runtime['timer_config']=plan['timer_config']
+            if 'whatsapp_chats' in plan:
+                runtime['whatsapp_chats']=plan['whatsapp_chats']
             if claude_plan:
                 launcher=inner/'launcher-claude.py'
                 write(launcher,entry(inner,'broker-claude'),gid,True)

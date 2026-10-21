@@ -43,6 +43,9 @@ DESKTOP_BROKER_ENV = "ORKESTR_V2_DESKTOP_BROKER_CONFIG"
 # Private durable-timer scheduler config (0600, service user; names the machine
 # token file). The server validates and reads it, the package never does.
 TIMER_CONFIG_ENV = "ORKESTR_V2_TIMER_CONFIG"
+# Private "New WhatsApp chat" file (adapter token, owner numbers); the server
+# validates and reads it, the package never does.
+WHATSAPP_CHATS_ENV = "ORKESTR_V2_WHATSAPP_CHATS_CONFIG"
 
 
 def live_map_path(value):
@@ -98,7 +101,7 @@ class Package:
 
     def _bind(self):
         value = self.runtime
-        require(set(value) - {"live_map", "desktop_broker", "timer_config"} == {"format", "uid", "gid", "owner_id", "conversation_id", "home",
+        require(set(value) - {"live_map", "desktop_broker", "timer_config", "whatsapp_chats"} == {"format", "uid", "gid", "owner_id", "conversation_id", "home",
                 "bootstrap_file", "ledger_directory", "endpoint_directory", "port", "trusted_origin"}
                 and value["format"] == "orkestr-v2-codex-service-v1", "service_format")
         self.live_map = live_map_path(value["live_map"]) if "live_map" in value else None
@@ -106,6 +109,8 @@ class Package:
                                if "desktop_broker" in value else None)
         self.timer_config = (live_map_path(value["timer_config"])
                              if "timer_config" in value else None)
+        self.whatsapp_chats = (live_map_path(value["whatsapp_chats"])
+                               if "whatsapp_chats" in value else None)
         require(all(type(value[k]) is int and 0 < value[k] < 2**31 for k in ("uid", "gid")),
                 "service_identity")
         require(type(value["port"]) is int and 1024 <= value["port"] <= 65535, "service_port")
@@ -243,4 +248,6 @@ class Package:
                 **({DESKTOP_BROKER_ENV: self.desktop_broker}
                    if getattr(self, "desktop_broker", None) else {}),
                 **({TIMER_CONFIG_ENV: self.timer_config}
-                   if getattr(self, "timer_config", None) else {})}
+                   if getattr(self, "timer_config", None) else {}),
+                **({WHATSAPP_CHATS_ENV: self.whatsapp_chats}
+                   if getattr(self, "whatsapp_chats", None) else {})}

@@ -31,7 +31,9 @@ export function createState() {
   // windowMode: 'accept' admits; 'uncertain' answers 503 after the request is seen.
   return { archived, messages, window, queued, requests: [], intake: {}, windowPosts: [], windowMode: 'accept', windowDelayMs: 0, marks: [],
     // v1Posts: every POST seen; v1Inputs: admitted once per key. The first post's answer is lost (504).
-    v1Posts: [], v1Inputs: [], v1LoseFirst: true, v1Polls: 0 };
+    v1Posts: [], v1Inputs: [], v1LoseFirst: true, v1Polls: 0,
+    // "New WhatsApp chat": the first attempt stops at the adapter binding.
+    chatPosts: [], chatStopFirst: true };
 }
 
 const json = (res, status, body) => { res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' }); res.end(JSON.stringify(body)); };
@@ -153,6 +155,20 @@ async function api(state, req, res, url) {
     const mark = JSON.parse(await body(req));
     state.marks.push(mark);
     return json(res, 200, mark);
+  }
+  if (path === '/api/v2/whatsapp-chats' && req.method === 'GET')
+    return json(res, 200, { available: true, providers: ['codex', 'claude'], participants: 2, provisions: [] });
+  if (path === '/api/v2/whatsapp-chats' && req.method === 'POST') {
+    if (req.headers['x-orkestr-csrf'] !== 'synthetic-csrf') return json(res, 403, { code: 'csrf', message: 'CSRF required' });
+    const request = JSON.parse(await body(req));
+    state.chatPosts.push(request);
+    const D = uuid(901);
+    names[D] = request.name; state.messages[D] = state.messages[D] ?? []; state.window[D] = null;
+    const stopped = state.chatStopFirst; state.chatStopFirst = false;
+    return json(res, stopped ? 202 : 201, { client_request_id: request.client_request_id, conversation_id: D, name: request.name,
+      v1_thread_id: 'synthetic-new-thread', remote_thread_id: uuid(902), workspace: request.workspace ?? null,
+      chat_id: '120000000000000009@g.us', stage: stopped ? 'group' : 'relay_pending', error: stopped ? 'adapter_binding_conflict' : null,
+      archived: false, created_at_ms: Date.now(), updated_at_ms: Date.now() });
   }
   const link = /^\/api\/v2\/v1-links\/(thr_[A-Za-z0-9_-]{22})$/.exec(path);
   if (link && req.method === 'GET') {

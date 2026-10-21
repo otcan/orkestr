@@ -9,7 +9,7 @@ fn between<'a>(sql: &'a str, start: &str, end: Option<&str>) -> &'a str {
     }
 }
 
-/// Undo 0057, 0056 and 0055 exactly: the schema-54 lapse CHECKs and evidence view.
+/// Undo 0058, 0057, 0056 and 0055 exactly: the schema-54 lapse CHECKs and evidence view.
 pub(super) async fn downgrade_to_schema54(store: &Store) {
     let v54 = include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -173,7 +173,7 @@ async fn schema51_stranded_workbench_reconciles_after_upgrade() {
     let fresh = restart(w, true).await;
     assert_eq!(
         count(&fresh, "SELECT max(version) FROM _sqlx_migrations").await,
-        57
+        58
     );
     for table in [
         "production_run_failures",
