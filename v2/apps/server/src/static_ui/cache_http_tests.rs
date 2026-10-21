@@ -151,3 +151,90 @@ async fn new_snapshot_changes_validator_and_unchanged_returns_no_bytes() {
         "version two"
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn compressible_assets_are_served_precompressed_with_their_own_validator() {
+    let root =
+        Directory(std::env::temp_dir().join(format!("v2-static-gzip-{}", uuid::Uuid::new_v4())));
+    let dist = root.0.join("dist");
+    fs::create_dir_all(&dist).unwrap();
+    let script = "export const synthetic = 'bundle';\n".repeat(200);
+    fs::write(dist.join("index.html"), b"<html>public UI</html>").unwrap();
+    fs::write(dist.join("app.js"), &script).unwrap();
+    fs::write(dist.join("icon.png"), vec![7u8; 4096]).unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let state = AppState::new(
+        Store::open(&root.0.join("core.sqlite3")).await.unwrap(),
+        "synthetic-bootstrap-for-static-cache-tests".into(),
+        format!("http://{address}"),
+    )
+    .unwrap();
+    let app = with_static_ui(router(state), &dist).unwrap();
+    let task = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let result = tokio::task::spawn_blocking(move || {
+        let get = |path: &str, headers: &[&str]| {
+            let mut socket = TcpStream::connect_timeout(&address, Duration::from_secs(5)).unwrap();
+            let mut input =
+                format!("GET {path} HTTP/1.1\r\nHost: {address}\r\nConnection: close\r\n");
+            for header in headers {
+                input.push_str(header);
+                input.push_str("\r\n");
+            }
+            input.push_str("\r\n");
+            socket.write_all(input.as_bytes()).unwrap();
+            let mut output = Vec::new();
+            socket.read_to_end(&mut output).unwrap();
+            let split = output.windows(4).position(|w| w == b"\r\n\r\n").unwrap();
+            let head = String::from_utf8(output[..split].to_vec())
+                .unwrap()
+                .to_ascii_lowercase();
+            (head, output[split + 4..].to_vec())
+        };
+        let (plain_head, plain) = get("/app.js", &[]);
+        assert_eq!(plain, script.as_bytes());
+        assert!(!plain_head.contains("content-encoding"));
+        assert!(plain_head.contains("vary: accept-encoding"));
+        let (head, body) = get("/app.js", &["Accept-Encoding: gzip, deflate"]);
+        assert!(head.contains("content-encoding: gzip"));
+        let mut decoded = String::new();
+        flate2::read::GzDecoder::new(body.as_slice())
+            .read_to_string(&mut decoded)
+            .unwrap();
+        assert_eq!(decoded, script);
+        let tag = head
+            .lines()
+            .find_map(|l| l.strip_prefix("etag: "))
+            .unwrap()
+            .to_owned();
+        assert!(tag.ends_with("-gzip\""));
+        assert!(!plain_head.contains(&tag));
+        let (cached, empty) = get(
+            "/app.js",
+            &["Accept-Encoding: gzip", &format!("If-None-Match: {tag}")],
+        );
+        assert!(cached.starts_with("http/1.1 304"));
+        assert!(empty.is_empty());
+        // The identity validator does not match the gzip representation.
+        let plain_tag = plain_head
+            .lines()
+            .find_map(|l| l.strip_prefix("etag: "))
+            .unwrap()
+            .to_owned();
+        let (other, _) = get(
+            "/app.js",
+            &[
+                "Accept-Encoding: gzip",
+                &format!("If-None-Match: {plain_tag}"),
+            ],
+        );
+        assert!(other.starts_with("http/1.1 200"));
+        // Images are not recompressed.
+        let (image, _) = get("/icon.png", &["Accept-Encoding: gzip"]);
+        assert!(!image.contains("content-encoding"));
+    })
+    .await;
+    task.abort();
+    let _ = task.await;
+    result.unwrap();
+}

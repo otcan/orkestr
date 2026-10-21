@@ -22,14 +22,33 @@ struct Asset {
     content_type: &'static str,
     data: Bytes,
     etag: HeaderValue,
+    /// gzip representation, compressed once at startup, with its own tag.
+    gzip: Option<(Bytes, HeaderValue)>,
+}
+/// Text and WebAssembly compress well; images and fonts already are.
+fn compressible(content_type: &str) -> bool {
+    content_type.starts_with("text/")
+        || content_type.starts_with("application/json")
+        || content_type == "application/wasm"
+        || content_type == "image/svg+xml"
 }
 impl Asset {
     fn new(content_type: &'static str, data: Bytes) -> Self {
         let etag = cache::etag(&data);
+        let gzip = (compressible(content_type) && data.len() >= 1024)
+            .then(|| crate::response_shaping::gzip(&data))
+            .flatten()
+            // Keep it only when it saves at least a tenth.
+            .filter(|gz| gz.len() * 10 < data.len() * 9)
+            .map(|gz| {
+                let tag = cache::gzip_etag(&etag);
+                (Bytes::from(gz), tag)
+            });
         Self {
             content_type,
             data,
             etag,
+            gzip,
         }
     }
 }
@@ -129,11 +148,19 @@ fn respond(method: Method, uri: Uri, request_headers: &HeaderMap, assets: &Asset
     let Some(asset) = assets.get(key) else {
         return StatusCode::NOT_FOUND.into_response();
     };
-    let unchanged = cache::unchanged(request_headers, &asset.etag);
+    let gzip = asset
+        .gzip
+        .as_ref()
+        .filter(|_| crate::response_shaping::accepts_gzip(request_headers));
+    let (data, etag) = match gzip {
+        Some((data, etag)) => (data, etag),
+        None => (&asset.data, &asset.etag),
+    };
+    let unchanged = cache::unchanged(request_headers, etag);
     let mut response = Response::new(if method == Method::HEAD || unchanged {
         Body::empty()
     } else {
-        Body::from(asset.data.clone())
+        Body::from(data.clone())
     });
     if unchanged {
         *response.status_mut() = StatusCode::NOT_MODIFIED;
@@ -144,9 +171,15 @@ fn respond(method: Method, uri: Uri, request_headers: &HeaderMap, assets: &Asset
     // length of zero. Setting it also prevents middleware synthesizing zero.
     headers.insert(
         header::CONTENT_LENGTH,
-        asset.data.len().to_string().parse().unwrap(),
+        data.len().to_string().parse().unwrap(),
     );
-    headers.insert(header::ETAG, asset.etag.clone());
+    headers.insert(header::ETAG, etag.clone());
+    if asset.gzip.is_some() {
+        headers.insert(header::VARY, HeaderValue::from_static("accept-encoding"));
+    }
+    if gzip.is_some() {
+        headers.insert(header::CONTENT_ENCODING, HeaderValue::from_static("gzip"));
+    }
     headers.insert(header::CACHE_CONTROL, cache::POLICY.parse().unwrap());
     headers.insert(header::X_CONTENT_TYPE_OPTIONS, "nosniff".parse().unwrap());
     response

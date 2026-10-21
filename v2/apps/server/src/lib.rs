@@ -31,6 +31,7 @@ pub mod claude_execution;
 pub mod control_dispatch;
 pub mod control_registry;
 mod conversation_resources_http;
+mod conversation_status_http;
 mod conversations_http;
 mod desktop_broker;
 mod desktop_http;
@@ -45,11 +46,13 @@ pub mod live_map;
 mod memory_service;
 pub mod message_attachments;
 mod message_times_http;
+pub mod observability;
 pub mod offline_python;
 pub mod owned_children;
 pub mod owned_execution;
 mod provider_payload;
 mod resource_health;
+mod response_shaping;
 mod routes;
 mod sidebar_http;
 mod sidebar_v1;
@@ -280,7 +283,9 @@ impl IntoResponse for Error {
             Json(ApiError {
                 code: self.1.into(),
                 message: self.2.into(),
-                request_id: Uuid::new_v4().to_string(),
+                // The id the observing layer returns in `x-request-id`.
+                request_id: observability::request_id()
+                    .unwrap_or_else(|| Uuid::new_v4().to_string()),
                 retryable: self.0 == StatusCode::SERVICE_UNAVAILABLE,
             }),
         )
@@ -480,6 +485,7 @@ pub fn router_with_google_catalog(
         .merge(memory_service::router(state.clone()))
         .merge(archived_history_http::router())
         .merge(conversation_resources_http::router())
+        .merge(conversation_status_http::router())
         .merge(desktop_http::router())
         .merge(sidebar_http::router())
         .merge(message_attachments::router())
@@ -489,8 +495,11 @@ pub fn router_with_google_catalog(
         .merge(v1_manage_http::router())
         .merge(whatsapp_chats_http::router())
         .merge(google_registry_metadata::router(catalog))
+        // Labels each matched request with its route template for logs and metrics.
+        .route_layer(middleware::from_fn(observability::record_route))
         .fallback(|| async { Error(StatusCode::NOT_FOUND,"not_found","Endpoint not found") })
         .layer(DefaultBodyLimit::max(40 * 1024))
         .layer(middleware::from_fn_with_state(state.clone(),guard))
+        .layer(middleware::from_fn(response_shaping::shape))
         .with_state(state)
 }

@@ -128,6 +128,25 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(dist) = std::env::var_os("ORKESTR_V2_UI_DIST") {
         app = orkestr_v2_server::with_static_ui(app, &PathBuf::from(dist))?;
     }
+    // Request ids, per-request logs and metrics for the API and the UI assets.
+    let app = orkestr_v2_server::observability::layer(app);
+    if let Ok(bind) =
+        std::env::var(orkestr_v2_server::observability::metrics_http::METRICS_BIND_ENV)
+    {
+        // Observability never blocks serving: a bad or busy port is logged.
+        match orkestr_v2_server::observability::metrics_http::parse_bind(&bind) {
+            Ok(address) => {
+                match orkestr_v2_server::observability::metrics_http::spawn(address).await {
+                    Ok(bound) => eprintln!("orkestr-v2-server metrics=http://{bound}/metrics"),
+                    Err(error) => eprintln!(
+                        "orkestr-v2-server metrics=unavailable bind_error={}",
+                        error.kind()
+                    ),
+                }
+            }
+            Err(reason) => eprintln!("orkestr-v2-server metrics=unavailable reason={reason:?}"),
+        }
+    }
     let execution = execution.map(ConfiguredExecutions::start);
     let mut timers = timer_supervisor.map(|supervisor| timer_state.start_timers(supervisor));
     let (shutdown, mut requested) = tokio::sync::watch::channel(false);

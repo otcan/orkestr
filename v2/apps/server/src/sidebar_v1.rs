@@ -22,8 +22,10 @@ const MESSAGES_CAP: usize = 2 * 1024 * 1024;
 const FRESH: Duration = Duration::from_secs(15);
 /// A stale registry is still better than none while V1 restarts.
 const STALE: Duration = Duration::from_secs(120);
-/// Preview reads per sidebar request; the rest fill in on later polls.
-pub(crate) const PREVIEW_READS: usize = 6;
+/// Preview reads per background fill; the rest fill in on later polls.
+pub(crate) const PREVIEW_READS: usize = 8;
+/// How long a sidebar request waits for a preview fill it started or found.
+const PREVIEW_WAIT: Duration = Duration::from_millis(150);
 
 /// One V1 thread, reduced to what the sidebar shows.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -400,32 +402,58 @@ pub(crate) fn latest_preview(value: &Value) -> Option<SidebarPreview> {
 #[derive(Default)]
 struct CacheState {
     registry: Option<(Instant, Arc<Vec<V1Thread>>)>,
+    /// A background registry read is running.
+    refreshing: bool,
+    /// A background preview fill is running; resolves to `true` when done.
+    filling: Option<tokio::sync::watch::Receiver<bool>>,
     /// thread id -> (last V1 message id, preview)
     previews: HashMap<String, (String, Option<SidebarPreview>)>,
 }
 
-/// Process-wide cache; one V1 registry read per `FRESH` interval.
+/// Process-wide cache. The registry is read from V1 at most once per
+/// `FRESH` interval; after that the cached copy is served at once while one
+/// background read replaces it, so no sidebar request waits for V1's
+/// multi-megabyte registry unless no copy younger than `STALE` exists.
 #[derive(Default, Clone)]
-pub(crate) struct V1Cache(Arc<tokio::sync::Mutex<CacheState>>);
+pub(crate) struct V1Cache {
+    state: Arc<std::sync::Mutex<CacheState>>,
+    /// Single flight: concurrent cold callers share one registry read.
+    fetch: Arc<tokio::sync::Mutex<()>>,
+}
+
+async fn read_registry(broker: &Broker) -> Option<Arc<Vec<V1Thread>>> {
+    match broker
+        .read("/api/threads/summary?includeRetired=1", REGISTRY_CAP)
+        .await
+    {
+        Ok((200, value)) => parse_registry(&value).map(Arc::new),
+        _ => None,
+    }
+}
 
 impl V1Cache {
-    pub(crate) async fn registry(&self, broker: &Broker) -> Option<Arc<Vec<V1Thread>>> {
-        let mut state = self.0.lock().await;
-        if let Some((at, threads)) = &state.registry {
-            if at.elapsed() < FRESH {
-                return Some(threads.clone());
-            }
-        }
-        let fetched = match broker
-            .read("/api/threads/summary?includeRetired=1", REGISTRY_CAP)
-            .await
-        {
-            Ok((200, value)) => parse_registry(&value),
-            _ => None,
-        };
+    fn lock(&self) -> std::sync::MutexGuard<'_, CacheState> {
+        self.state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// A copy younger than `limit`, if any.
+    fn cached(&self, limit: Duration) -> Option<Arc<Vec<V1Thread>>> {
+        self.lock()
+            .registry
+            .as_ref()
+            .filter(|(at, _)| at.elapsed() < limit)
+            .map(|(_, threads)| threads.clone())
+    }
+
+    /// One registry read; keeps the previous copy when V1 does not answer.
+    async fn refresh(&self, broker: &Broker) -> Option<Arc<Vec<V1Thread>>> {
+        let fetched = read_registry(broker).await;
+        let mut state = self.lock();
+        state.refreshing = false;
         match fetched {
             Some(threads) => {
-                let threads = Arc::new(threads);
                 state.registry = Some((Instant::now(), threads.clone()));
                 Some(threads)
             }
@@ -437,44 +465,89 @@ impl V1Cache {
         }
     }
 
-    /// Previews for `threads` (newest first); at most `PREVIEW_READS` V1 reads.
-    pub(crate) async fn previews(
-        &self,
-        broker: &Broker,
-        threads: &[&V1Thread],
-    ) -> HashMap<String, SidebarPreview> {
-        let mut reads = 0;
-        let mut out = HashMap::new();
-        for thread in threads {
-            let Some(last) = thread.last_message_id.clone() else {
-                continue;
-            };
-            let cached = self.0.lock().await.previews.get(&thread.id).cloned();
-            let value = match cached {
-                Some((id, preview)) if id == last => preview,
-                _ if reads < PREVIEW_READS => {
-                    reads += 1;
-                    let path = format!("/api/threads/{}/messages?limit=3", thread.id);
-                    match broker.read(&path, MESSAGES_CAP).await {
-                        Ok((200, value)) => {
-                            let preview = latest_preview(&value);
-                            self.0
-                                .lock()
-                                .await
-                                .previews
-                                .insert(thread.id.clone(), (last, preview.clone()));
-                            preview
-                        }
-                        _ => cached.and_then(|(_, p)| p),
-                    }
+    pub(crate) async fn registry(&self, broker: &Arc<Broker>) -> Option<Arc<Vec<V1Thread>>> {
+        {
+            let mut state = self.lock();
+            if let Some((at, threads)) = &state.registry {
+                let age = at.elapsed();
+                if age < FRESH {
+                    return Some(threads.clone());
                 }
-                _ => cached.and_then(|(_, p)| p),
-            };
-            if let Some(value) = value {
-                out.insert(thread.id.clone(), value);
+                if age < STALE {
+                    let threads = threads.clone();
+                    if !state.refreshing {
+                        state.refreshing = true;
+                        let (cache, broker) = (self.clone(), broker.clone());
+                        tokio::spawn(async move {
+                            let _single = cache.fetch.lock().await;
+                            cache.refresh(&broker).await;
+                        });
+                    }
+                    return Some(threads);
+                }
             }
         }
-        out
+        // No usable copy: wait for one read, shared with concurrent callers.
+        let _single = self.fetch.lock().await;
+        if let Some(threads) = self.cached(FRESH) {
+            return Some(threads);
+        }
+        self.refresh(broker).await
+    }
+
+    /// Cached previews for `threads` (newest first). Missing or outdated
+    /// ones are read from V1 by one background fill (at most `PREVIEW_READS`
+    /// sequential reads; V1 serves them one at a time anyway). The request
+    /// waits for that fill only up to `PREVIEW_WAIT`, so a slow V1 delays
+    /// previews to a later poll instead of delaying the sidebar.
+    pub(crate) async fn previews(
+        &self,
+        broker: &Arc<Broker>,
+        threads: &[&V1Thread],
+    ) -> HashMap<String, SidebarPreview> {
+        let wanted: Vec<(String, String)> = {
+            let state = self.lock();
+            threads
+                .iter()
+                .filter_map(|t| Some((t.id.clone(), t.last_message_id.clone()?)))
+                .filter(|(id, last)| state.previews.get(id).is_none_or(|(seen, _)| seen != last))
+                .take(PREVIEW_READS)
+                .collect()
+        };
+        if !wanted.is_empty() {
+            let mut done = {
+                let mut state = self.lock();
+                match &state.filling {
+                    Some(done) => done.clone(),
+                    None => {
+                        let (finished, done) = tokio::sync::watch::channel(false);
+                        state.filling = Some(done.clone());
+                        let (cache, broker) = (self.clone(), broker.clone());
+                        tokio::spawn(async move {
+                            for (id, last) in wanted {
+                                let path = format!("/api/threads/{id}/messages?limit=3");
+                                if let Ok((200, value)) = broker.read(&path, MESSAGES_CAP).await {
+                                    let preview = latest_preview(&value);
+                                    cache.lock().previews.insert(id, (last, preview));
+                                }
+                            }
+                            cache.lock().filling = None;
+                            let _ = finished.send(true);
+                        });
+                        done
+                    }
+                }
+            };
+            let _ = tokio::time::timeout(PREVIEW_WAIT, done.wait_for(|finished| *finished)).await;
+        }
+        let state = self.lock();
+        threads
+            .iter()
+            .filter_map(|t| {
+                let (_, preview) = state.previews.get(&t.id)?;
+                Some((t.id.clone(), preview.clone()?))
+            })
+            .collect()
     }
 
     pub(crate) async fn history(

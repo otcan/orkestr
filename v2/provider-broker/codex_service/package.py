@@ -48,6 +48,12 @@ V1_CHAT_ICONS_ENV = "ORKESTR_V2_V1_CHAT_ICONS_DIR"
 # Private "New WhatsApp chat" file (adapter token, owner numbers); the server
 # validates and reads it, the package never does.
 WHATSAPP_CHATS_ENV = "ORKESTR_V2_WHATSAPP_CHATS_CONFIG"
+# Local-only request metrics (Prometheus text and JSON) on the loopback port
+# after the API port. The public proxy only forwards the API port; a busy
+# metrics port is logged by the server and never blocks startup.
+METRICS_BIND_ENV = "ORKESTR_V2_METRICS_BIND"
+# One structured journal line per request (route template, status, timings).
+ACCESS_LOG_ENV = "ORKESTR_V2_ACCESS_LOG"
 
 
 def live_map_path(value):
@@ -252,6 +258,9 @@ class Package:
                 "ORKESTR_V2_BETA_CONFIG": str(self.root / "beta.json"),
                 "ORKESTR_V2_UI_DIST": str(self.root / "ui"),
                 "ORKESTR_V2_ORIGIN": self.runtime["trusted_origin"],
+                ACCESS_LOG_ENV: "all",
+                **({METRICS_BIND_ENV: f"127.0.0.1:{self.runtime['port'] + 1}"}
+                   if self.runtime["port"] < 65535 else {}),
                 **({LIVE_MAP_ENV: self.live_map} if self.live_map else {}),
                 **({DESKTOP_BROKER_ENV: self.desktop_broker}
                    if getattr(self, "desktop_broker", None) else {}),

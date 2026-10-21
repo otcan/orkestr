@@ -56,17 +56,25 @@ const LIST: &str = "SELECT d.conversation_id,d.name,c.sequence,
 
 /// Latest owner message or accepted reply; the reply text is the last
 /// progress payload before completion, as accepted results present it.
+/// CROSS JOIN fixes the join order (acceptance, its run's payloads, their
+/// observation by key); the planner otherwise scanned every observation.
 const NATIVE_PREVIEW: &str = "SELECT e.kind,m.text AS owner_text,
- (SELECT p.text FROM production_acceptances a JOIN production_payloads p ON p.run_id=a.run_id AND p.owner_id=a.owner_id
-   JOIN production_observations o ON o.event_id=p.event_id AND o.kind='progress'
+ (SELECT p.text FROM production_acceptances a CROSS JOIN production_payloads p ON p.run_id=a.run_id AND p.owner_id=a.owner_id
+   CROSS JOIN production_observations o ON o.event_id=p.event_id AND o.kind='progress'
    WHERE a.event_id=e.id ORDER BY o.run_sequence DESC LIMIT 1) AS reply_text
  FROM events e LEFT JOIN messages m ON m.id=e.message_id AND m.owner_id=e.owner_id
  WHERE e.conversation_id=? AND e.owner_id=? AND e.kind IN ('message_accepted','execution_accepted')
  ORDER BY e.sequence DESC LIMIT 1";
 
+/// Last message of the newest source that has any: the source first, then
+/// one indexed step on `(source_row,source_position)`. Sorting the joined
+/// rows instead read every archived message of the conversation.
 const ARCHIVED_PREVIEW: &str = "SELECT m.role,m.text FROM archived_history_messages m
- JOIN archived_history_sources s ON s.row_sequence=m.source_row
- WHERE s.conversation_id=? AND s.owner_id=? ORDER BY s.row_sequence DESC,m.source_position DESC LIMIT 1";
+ WHERE m.source_row=(SELECT s.row_sequence FROM archived_history_sources s
+   WHERE s.conversation_id=? AND s.owner_id=?
+   AND EXISTS(SELECT 1 FROM archived_history_messages x WHERE x.source_row=s.row_sequence)
+   ORDER BY s.row_sequence DESC LIMIT 1)
+ ORDER BY m.source_position DESC LIMIT 1";
 
 async fn session(
     tx: &mut Transaction<'_, Sqlite>,
