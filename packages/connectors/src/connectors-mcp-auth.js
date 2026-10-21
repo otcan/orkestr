@@ -247,6 +247,9 @@ export function assertConnectorMcpScope(auth = {}, tool = "", input = {}) {
     instanceId: auth.instanceId || clean(input.instance_id),
     ownerUserId: auth.ownerUserId || clean(input.user_id),
     threadId: auth.threadId || clean(input.thread_id),
+    // The bearer's own thread binding. Unlike threadId it never comes from the
+    // request, so thread-owned worker scopes (direct chats, read-all) use only this.
+    tokenThreadId: auth.operator ? "" : clean(auth.threadId),
     conversationId,
   };
 }

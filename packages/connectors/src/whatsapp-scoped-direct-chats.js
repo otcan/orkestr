@@ -239,8 +239,11 @@ export async function historyPage(chat, {before, limit} = {}) {
       window = Math.min(HISTORY_WINDOW_MAX, window * 2);
       continue;
     }
+    // At the maximum window with nothing older loaded, more history may exist
+    // beyond it: say so explicitly rather than reporting the end of the chat.
+    if (!older.length && !exhausted) pageError('history_window_exceeded');
     const page = older.slice(0, size);
-    const hasMore = older.length > size || (!exhausted && page.length === size);
+    const hasMore = older.length > size || !exhausted;
     return {messages: page, hasMore, nextCursor: hasMore && page.length ? page.at(-1).id._serialized : null};
   }
 }

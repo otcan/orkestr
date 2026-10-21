@@ -233,7 +233,7 @@ async function runMessaging(input, auth, env) {
       text: input.text,
       attachmentPaths: attachments.map((item) => item.path),
       requestId: ensured.job.id,
-      threadId: auth.operator ? "" : auth.threadId,
+      threadId: clean(auth.tokenThreadId),
     }, env);
     const job = await markConnectorOutboxJob(ensured.job.id, {
       state: "delivered",
@@ -278,8 +278,8 @@ async function runConversation(input, auth, env) {
   if (input.action === "list") payload = filterConversations(await whatsappWorkerConversations(accountId, env), auth);
   else if (input.action === "list_all") {
     // Owner-authorized read-all: paged chat/contact metadata for this thread's account.
-    if (auth.operator || !clean(auth.threadId)) throw Object.assign(new Error("connector_read_all_thread_required"), { statusCode: 403 });
-    const page = await whatsappWorkerChatPage(accountId, auth.threadId, { source: input.source || "chats", cursor: input.cursor || "", limit: input.limit ?? undefined }, env);
+    if (auth.operator || !clean(auth.tokenThreadId)) throw Object.assign(new Error("connector_read_all_thread_required"), { statusCode: 403 });
+    const page = await whatsappWorkerChatPage(accountId, auth.tokenThreadId, { source: input.source || "chats", cursor: input.cursor || "", limit: input.limit ?? undefined }, env);
     const items = page?.chats || page?.contacts || [];
     payload = {
       ready: page?.ready !== false,
@@ -301,7 +301,7 @@ async function runConversation(input, auth, env) {
     }, env);
   } else {
     if (!clean(input.conversation_id)) throw Object.assign(new Error("connector_conversation_id_required"), { statusCode: 400 });
-    const readAll = !auth.operator && clean(auth.threadId) && (auth.scopes || []).includes(`${input.service}:read-all`);
+    const readAll = !auth.operator && clean(auth.tokenThreadId) && (auth.scopes || []).includes(`${input.service}:read-all`);
     payload = await whatsappWorkerConversation(accountId, input.conversation_id, input.action, {
       paged: readAll && input.action === "history",
       before: input.before,
@@ -311,7 +311,7 @@ async function runConversation(input, auth, env) {
       eventIds: input.event_ids,
       participantIds: input.participant_ids,
       title: input.name,
-      threadId: auth.operator ? "" : auth.threadId,
+      threadId: clean(auth.tokenThreadId),
     }, env);
   }
   return connectorMcpStructuredResult({

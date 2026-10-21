@@ -238,4 +238,9 @@ test('history pages older than a before-cursor, grows its window, and rejects un
  await assert.rejects(historyPage(chat,{limit:51}),/invalid_page_size/);
  const deep={fetchMessages:async({limit})=>Array.from({length:limit},(_,i)=>({id:{_serialized:`d${i}`},timestamp:i}))};
  await assert.rejects(historyPage(deep,{before:'older-than-window',limit:10}),/history_window_exceeded/);
+ // A valid cursor at the oldest message of the maximum window must not report the end of the chat.
+ const big={fetchMessages:async({limit})=>Array.from({length:limit},(_,i)=>({id:{_serialized:`b${5000-i}`},timestamp:5000-i}))};
+ const edge=await historyPage(big,{before:'b4002',limit:2});
+ assert.deepEqual([edge.messages.map(m=>m.id._serialized),edge.hasMore,edge.nextCursor],[['b4001'],true,'b4001']);
+ await assert.rejects(historyPage(big,{before:'b4001',limit:2}),/history_window_exceeded/);
 });

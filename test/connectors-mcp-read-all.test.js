@@ -53,8 +53,14 @@ test("read-all pages every chat and any history; plain read stays on the allowli
   await assert.rejects(run({ action: "history", conversation_id: "19990000000@c.us" }, plain, env), /conversation_scope_denied/);
   assert.equal(worker.calls.length, before);
   // A threadless token cannot use read-all.
-  const threadless = await run({ action: "list_all" }, auth(["whatsapp:read-all"], { threadId: "" }), env);
-  assert.equal(threadless.status, "error");
+  // A threadless bearer cannot use read-all, even by naming a thread in the request.
+  const calls = worker.calls.length;
+  for (const input of [{ action: "list_all" }, { action: "list_all", thread_id: "thread-swing" }]) {
+    const threadless = await run(input, auth(["whatsapp:read-all"], { threadId: "" }), env);
+    assert.equal(threadless.status, "error", JSON.stringify(input));
+  }
+  await assert.rejects(run({ action: "history", conversation_id: "19990000000@c.us", thread_id: "thread-swing" }, auth(["whatsapp:read", "whatsapp:read-all"], { threadId: "" }), env), /conversation_scope_denied/);
+  assert.equal(worker.calls.length, calls);
 });
 
 test("read-all never widens sending: send to a non-approved chat stays denied", () => {
