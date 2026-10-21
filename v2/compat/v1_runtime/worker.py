@@ -24,6 +24,12 @@ FAST_GRACE_S = 60
 STALL_NOTICE_AFTER_S = 20 * 60
 STALL_NOTICE = ("Still working on this message after more than 20 minutes. It may be stuck; "
                 "Orkestr keeps retrying and the operator has been alerted.")
+# Frozen per-attempt state dropped when an input is sent again as a new turn.
+RESET_KEYS = ("intake", "cursor", "window", "window_request", "previous_window", "matched_runs", "accepted",
+              "fast_accept_request", "deep_accept_request", "fast_payload", "deep_payload", "admitted_at",
+              "progress_at", "fast_unusable_since")
+# An admitted input whose window ended without starting any run of it.
+ORPHAN_GRACE_S = 60
 # Deep phases a window work deadline leaves behind.
 DEADLINE_STOP_PHASES = ("cancelled", "stopped", "interrupted")
 CONTINUE_NOTICE = ("Continuing in a new turn: the previous turn reached its time limit "
@@ -351,7 +357,7 @@ class Worker:
                     (("fast", "/fast/execution"), ("deep", "/execution"))}
         self.capture_progress(data, statuses["deep"], ids)
         accepted = data.setdefault("accepted", {})
-        if self.continue_after_deadline(data, statuses, ids):
+        if self.continue_after_deadline(data, statuses, ids) or self.requeue_orphaned(data, ids):
             return
         for role, value in statuses.items():
             if role in accepted or role + "_accept_request" in data:
@@ -455,6 +461,29 @@ class Worker:
         return (current.get("state") == "active" and type(deadline) is int and
                 deadline <= time.time() * 1000)
 
+    def requeue_orphaned(self, data, ids):
+        """Send an input again once when its window ended before any run of it
+        started (for example a follow-up that joined a window held by another
+        input's unaccepted proposals). Nothing of it ran, so no notice."""
+        if ids or data.get("requeued") or data.get("origin") == "timer" or "window" not in data:
+            return False
+        now = time.time()
+        since = data.setdefault("unstarted_since", now)
+        if since == now:
+            self.ledger.save(data)
+        if now - since < ORPHAN_GRACE_S or not self.deadline_stopped(data):
+            return False
+        text = data.get("intake_text") or compose(data)
+        previous = data["intake"]["message_id"]
+        for key in RESET_KEYS + ("unstarted_since",):
+            data.pop(key, None)
+        for key in ("message", "window", "fast", "deep"):
+            data["keys"][key] = str(uuid.uuid4())
+        data.update(intake_text=text, phase="queued", queued_at=now,
+                    requeued={"previous_message_id": previous, "at": now})
+        self.ledger.save(data)
+        return True
+
     def continue_after_deadline(self, data, statuses, ids):
         """Re-queue an input once when a window deadline stopped its Deep turn.
 
@@ -479,9 +508,7 @@ class Worker:
                 pass
         text = data.get("intake_text") or compose(data)
         previous = data["intake"]["message_id"]
-        for key in ("intake", "cursor", "window", "window_request", "previous_window", "matched_runs", "accepted",
-                    "fast_accept_request", "deep_accept_request", "fast_payload", "deep_payload", "admitted_at",
-                    "progress_at"):
+        for key in RESET_KEYS:
             data.pop(key, None)
         for key in ("message", "window", "fast", "deep"):
             data["keys"][key] = str(uuid.uuid4())
