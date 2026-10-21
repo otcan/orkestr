@@ -19,6 +19,7 @@ pub fn prepare(draft: &mut Draft, key: String) -> Result<V1ThreadInput, &'static
     let input = V1ThreadInput {
         client_message_id: input.client_message_id,
         text: input.text,
+        attachment_ids: Vec::new(),
     };
     if input.is_valid() {
         Ok(input)

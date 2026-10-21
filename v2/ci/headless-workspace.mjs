@@ -46,6 +46,44 @@ const transcript = () => page.$eval('.conversation-pane > .conversation-scroll',
   ({ gap: el.scrollHeight - el.scrollTop - el.clientHeight, pinned: el.dataset.pinned, scrollable: el.scrollHeight > el.clientHeight + 100 }));
 
 export const scenarios = [
+  ['composer-tools', async label => {
+    await page.waitForSelector('#composer');
+    // Enter sends; Shift+Enter inserts a newline; IME composition never sends.
+    const posts = () => Object.keys(state.intake).length;
+    const before = posts();
+    await page.focus('#composer');
+    await page.keyboard.type('Synthetic first line');
+    await page.keyboard.down('Shift'); await page.keyboard.press('Enter'); await page.keyboard.up('Shift');
+    await page.keyboard.type('second line');
+    assert.equal(await page.$eval('#composer', n => n.value), 'Synthetic first line\nsecond line');
+    assert.equal(posts(), before, 'Shift+Enter does not send');
+    await page.$eval('#composer', n => n.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', isComposing: true, bubbles: true, cancelable: true })));
+    await new Promise(r => setTimeout(r, 300));
+    assert.equal(posts(), before, 'Enter during IME composition does not send');
+    // Attach an image through the file picker and paste long text as a file.
+    const file = '/tmp/orkestr-v2-synthetic-pixel.png';
+    await import('node:fs/promises').then(fs => fs.writeFile(file, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==', 'base64')));
+    const [chooser] = await Promise.all([page.waitForFileChooser(), page.click('.message-composer .tool-button')]);
+    await chooser.accept([file]);
+    await page.waitForFunction(() => document.querySelector('.attachment-chip .chip-name')?.textContent === 'orkestr-v2-synthetic-pixel.png');
+    await clickText('Paste text');
+    await page.type('#paste-text', 'Synthetic long pasted text');
+    await clickText('Attach as text file');
+    await page.waitForFunction(() => document.querySelectorAll('.attachment-chip').length === 2);
+    assert.match(await text('.composer-tools'), /pasted-text-\d{14}\.txt/);
+    const uploads = state.uploads.filter(u => u.target === A);
+    assert.equal(uploads.at(-2).files[0].media_type, 'image/png');
+    assert.equal(Buffer.from(uploads.at(-1).files[0].content_base64, 'base64').toString(), 'Synthetic long pasted text');
+    await screenshot(label, 'composer-attachments');
+    await page.focus('#composer');
+    await page.keyboard.press('Enter');
+    await waitText('Sent. Waiting for a reply.');
+    assert.equal(posts(), before + 1, 'Enter sends once');
+    const sent = state.messages[A].at(-1).text;
+    assert.match(sent, /^Synthetic first line\nsecond line\n\n\[Files attached in the Orkestr app/);
+    assert.match(sent, /orkestr-v2-synthetic-pixel\.png \(image\/png, \d+ bytes.*local file \/synthetic\/attachments\//);
+    assert.equal(await page.$$eval('.attachment-chip', n => n.length), 0, 'Sent attachments leave the composer');
+  }],
   ['scroll-pin', async () => {
     // Opening a conversation shows the newest message.
     await page.waitForFunction(() => document.querySelectorAll('.archived-messages > li').length >= 50);
@@ -111,7 +149,8 @@ export const scenarios = [
       [r.querySelector('.conversation-name')?.textContent, r.querySelector('.conversation-status')?.textContent ?? ''])));
     assert.equal(badges['Research notes'], 'Working');
     assert.equal(badges['Queued errands'], 'Queued #2');
-    assert.match(await text('.slot-summary'), /2 of 2 work slots in use · 3 queued/);
+    assert.equal(await page.$('.slot-summary'), null, 'Work slot usage is not part of the chat UI');
+    assert.ok(!(await page.evaluate(() => document.querySelector('.conversation-sidebar').textContent)).includes('work slots'));
     await page.evaluate(() => [...document.querySelectorAll('.conversation-choice')].find(b => b.textContent.includes('Research notes')).click());
     await page.waitForFunction(() => document.querySelector('.conversation-heading h2')?.textContent === 'Research notes');
     if (label === 'phone') assert.equal(await page.$eval('.workspace', n => n.dataset.sidebarOpen), 'false', 'Selecting closes the phone drawer');
@@ -160,7 +199,17 @@ export const scenarios = [
     assert.deepEqual(order, ['Synthetic group', 'Research notes', 'Assistant', 'Queued errands']);
     assert.equal(await rowText('Synthetic group', '.choice-time'), '1m');
     assert.equal(await rowText('Assistant', '.choice-time'), '1d');
-    assert.match(await rowText('Synthetic group', '.choice-badges'), /On V1.*Coordinator.*1 sub-chats/);
+    assert.match(await rowText('Synthetic group', '.choice-badges'), /On V1.*Coordinator/);
+    assert.match(await rowText('Synthetic group', '.group-toggle'), /^1 ▸$/);
+    // A parent with sub-chats stays aligned with every other top-level chat:
+    // nothing indents it under the chat above.
+    // V1 chats show their Orkestr icon from V1; native chats keep initials.
+    await page.waitForFunction(() => [...document.querySelectorAll('.conversation-row[data-source=v1] img.avatar-icon')].every(i => i.complete && i.naturalWidth > 0)
+      && document.querySelectorAll('.conversation-row[data-source=v1] img.avatar-icon').length >= 1);
+    assert.match(await page.$eval('.conversation-row[data-source=v1] img.avatar-icon', i => i.getAttribute('src')), /^\/api\/v2\/thread-icons\/synthetic-group$/);
+    assert.equal(await page.$$eval('.conversation-row[data-source=v2] img.avatar-icon', n => n.length), 0);
+    const lefts = await page.$$eval('.conversation-row[data-depth="0"] .avatar', n => [...new Set(n.map(a => Math.round(a.getBoundingClientRect().left)))]);
+    assert.equal(lefts.length, 1, `top-level avatars misaligned: ${lefts}`);
     assert.equal(await rowText('Research notes', '.choice-activity'), 'thinking… · 1 worker');
     // Unread replies until viewed; the open conversation (from Projects) is read.
     assert.equal(await rowText('Synthetic group', '.unread-badge'), '1');
@@ -180,6 +229,7 @@ export const scenarios = [
     await openDrawer(label);
     await choose('Synthetic group');
     await page.waitForSelector('.v1-banner');
+    await page.waitForSelector('.conversation-heading > img.avatar-icon');
     await page.waitForFunction(() => document.querySelectorAll('.v1-thread .chat-messages > li').length === 3);
     assert.match(await text('.v1-thread .chat-messages'), /Synthetic member note/);
     assert.equal(await page.$('#composer'), null, 'Linked V1 chats have no V2 composer');
@@ -206,6 +256,17 @@ export const scenarios = [
     await page.waitForFunction(() => !document.querySelector('.v1-typing'));
     assert.equal(await page.evaluate(() => [...document.querySelectorAll('.v1-thread .chat-messages strong')].at(-1).textContent), 'Coordinator');
     await screenshot(label, 'v1-chat');
+    // Attach to the V1 chat: V1 upload ids travel with the input; Enter sends.
+    const [v1chooser] = await Promise.all([page.waitForFileChooser(), page.click('.v1-composer .tool-button')]);
+    await v1chooser.accept(['/tmp/orkestr-v2-synthetic-pixel.png']);
+    await page.waitForSelector('.v1-composer .attachment-chip');
+    await page.focus('#v1-composer');
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(() => !document.querySelector('.v1-composer .attachment-chip'));
+    const v1post = state.v1Posts.at(-1);
+    assert.equal(v1post.text, 'Attached: orkestr-v2-synthetic-pixel.png');
+    assert.equal(v1post.attachment_ids.length, 1);
+    assert.equal(state.uploads.at(-1).target, 'v1:synthetic-group');
     await noHorizontalScroll();
     // Back to a native conversation.
     await openDrawer(label);

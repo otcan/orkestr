@@ -176,13 +176,28 @@ fn V1Composer(
     let mut sending = use_signal(|| false);
     let mut status = use_signal(String::new);
     let mut mounted = use_signal(|| true);
+    let mut attached = use_signal(Vec::<orkestr_v2_ui::composer_attachments::Attached>::new);
+    // Upload ids frozen with the pending input, so a retry resends them.
+    let mut frozen = use_signal(Vec::<String>::new);
     use_drop(move || mounted.set(false));
     let draft = drafts.read().get(&key).cloned().unwrap_or_default();
     let input_key = key.clone();
+    let attach_thread = thread.clone();
+    let attach_csrf = csrf.clone();
     rsx! {
         form { class: "message-composer v1-composer", onsubmit: move |event| {
             event.prevent_default();
             if sending() || !session_scope.read().is_current(owner) { return; }
+            if drafts.peek().get(&key).is_none_or(|d| d.pending.is_none()) {
+                let files = attached.peek().clone();
+                if !files.is_empty() {
+                    let mut all = drafts.write();
+                    let draft = all.entry(key.clone()).or_default();
+                    let text = orkestr_v2_ui::composer_attachments::v1_text(&draft.text, &files);
+                    if text != draft.text { draft.edit(text); }
+                }
+                frozen.set(orkestr_v2_ui::composer_attachments::ids(&files));
+            }
             sending.set(true);
             status.set("Sending to V1…".into());
             let (thread, key, csrf) = (thread.clone(), key.clone(), csrf.clone());
@@ -190,8 +205,9 @@ fn V1Composer(
                 let current = || mounted() && session_scope.read().is_current(owner);
                 let result = async {
                     let id = crate::transport::key().await?;
-                    let input = v1_input::prepare(drafts.write().entry(key.clone()).or_default(), id)
+                    let mut input = v1_input::prepare(drafts.write().entry(key.clone()).or_default(), id)
                         .map_err(|m| crate::transport::Failure::from(m.to_string()))?;
+                    input.attachment_ids = frozen.peek().clone();
                     crate::transport::request::<V1ThreadInputReceipt>(
                         "POST", &format!("/api/v2/v1-threads/{thread}/messages"), json!(input), &csrf, "",
                     ).await
@@ -200,6 +216,8 @@ fn V1Composer(
                 match result {
                     Ok(receipt) if receipt.is_valid() && receipt.thread_id == thread => {
                         drafts.write().entry(key).or_default().accepted();
+                        attached.set(Vec::new());
+                        frozen.set(Vec::new());
                         onsent.call(());
                         status.set(if receipt.duplicate { "Already delivered to V1.".into() } else { "Sent to V1.".into() });
                     }
@@ -208,6 +226,7 @@ fn V1Composer(
                         Failed::Expired => { onexpired.call(()); return; }
                         Failed::Refused => {
                             drafts.write().entry(key).or_default().pending = None;
+                            frozen.set(Vec::new());
                             status.set(error.message);
                         }
                         Failed::Retry => status.set(format!("{} Retry sends the same message once.", error.message)),
@@ -220,7 +239,9 @@ fn V1Composer(
             textarea { id: "v1-composer", rows: 3, value: "{draft.text}", "aria-describedby": "v1-composer-help",
                 oninput: move |event| { if session_scope.read().is_current(owner) { drafts.write().entry(input_key.clone()).or_default().edit(event.value()); } }
             }
-            p { id: "v1-composer-help", if draft.pending.is_some() { "Retry sends the original message once. Your newer edits stay in the composer." } else { "Sent as owner input to this V1 thread. The reply appears here, not in WhatsApp." } }
+            crate::composer_tools::AttachTools { target: crate::composer_tools::AttachTarget::V1(attach_thread.clone()), csrf: attach_csrf.clone(), attached, disabled: sending() || draft.pending.is_some() }
+            crate::composer_tools::EnterSend { id: "v1-composer" }
+            p { id: "v1-composer-help", if draft.pending.is_some() { "Retry sends the original message once. Your newer edits stay in the composer." } else { "Enter sends · Shift+Enter adds a new line. Sent as owner input to this V1 thread; the reply appears here, not in WhatsApp." } }
             button { r#type: "submit", disabled: sending(), if draft.pending.is_some() { "Retry send" } else { "Send" } }
             if !status().is_empty() { p { class: "composer-notice", role: "status", "{status}" } }
         }

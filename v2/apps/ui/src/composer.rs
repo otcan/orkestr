@@ -27,6 +27,7 @@ pub fn Composer(
     let mut intents = use_context::<Signal<WindowIntents>>();
     let mut sending = use_signal(|| false);
     let mut status = use_signal(String::new);
+    let mut attached = use_signal(Vec::<orkestr_v2_ui::composer_attachments::Attached>::new);
     let channel = use_signal(|| None::<document::Eval>);
     let live = use_hook(|| Rc::new(Cell::new(true)));
     let dropped = live.clone();
@@ -42,10 +43,21 @@ pub fn Composer(
     let review = intents.read().refused(&id);
     let full = saved.read().is_full() && retained.is_none();
     let input_id = id.clone();
+    let attach_id = id.clone();
+    let attach_csrf = csrf.clone();
     rsx! {
         form { class: "message-composer", onsubmit: move |event| {
             event.prevent_default();
             if sending() || !live.get() || !session_scope.read().is_current(owner) { return; }
+            // Attached files join the message text (names and local paths)
+            // before the input is frozen, so a retry resends the same text.
+            if drafts.peek().get(&id).is_none_or(|d| d.pending.is_none()) && !attached.peek().is_empty() {
+                let mut all = drafts.write();
+                let draft = all.entry(id.clone()).or_default();
+                let text = orkestr_v2_ui::composer_attachments::native_text(&draft.text, &attached.peek());
+                draft.edit(text);
+                attached.set(Vec::new());
+            }
             sending.set(true);
             status.set("Sending…".into());
             let id = id.clone(); let csrf = csrf.clone(); let live = live.clone();
@@ -94,7 +106,9 @@ pub fn Composer(
             textarea { id: "composer", rows: 3, value: "{draft.text}", "aria-describedby": "composer-help",
                 oninput: move |event| { if session_scope.read().is_current(owner) { drafts.write().entry(input_id.clone()).or_default().edit(event.value()); } }
             }
-            p { id: "composer-help", if retained.is_some() && !sending() { "Message saved; work has not started yet. Retry send to start it. Your newer edits stay in the composer." } else if draft.pending.is_some() { "Retry sends the original message. Your newer edits stay in the composer." } else { "Send starts work. Enter adds a new line." } }
+            crate::composer_tools::AttachTools { target: crate::composer_tools::AttachTarget::Native(attach_id.clone()), csrf: attach_csrf.clone(), attached, disabled: sending() || draft.pending.is_some() }
+            crate::composer_tools::EnterSend { id: "composer" }
+            p { id: "composer-help", if retained.is_some() && !sending() { "Message saved; work has not started yet. Retry send to start it. Your newer edits stay in the composer." } else if draft.pending.is_some() { "Retry sends the original message. Your newer edits stay in the composer." } else { "Enter sends · Shift+Enter adds a new line." } }
             button { r#type: "submit", disabled: sending() || full, if review { "Review and retry send" } else if draft.pending.is_some() { "Retry send" } else { "Send" } }
             if !status().is_empty() { p { class: "composer-notice", role: "status", "{status}" } }
         }

@@ -3754,6 +3754,7 @@ dependencies = [
  "orkestr-v2-store-sqlite",
  "serde",
  "serde_json",
+ "sha1",
  "sha2",
  "tokio",
  "uuid",

@@ -328,6 +328,9 @@ impl V1LinkTarget {
 pub struct V1ThreadInput {
     pub client_message_id: String,
     pub text: String,
+    /// Upload ids from `POST /api/v2/v1-threads/{thread}/uploads`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachment_ids: Vec<String>,
 }
 impl V1ThreadInput {
     pub fn is_valid(&self) -> bool {
@@ -336,6 +339,10 @@ impl V1ThreadInput {
             && !self.text.trim().is_empty()
             && self.text.len() <= V1_INPUT_TEXT_MAX
             && !self.text.contains('\0')
+            && self.attachment_ids.len() <= crate::MESSAGE_ATTACHMENT_FILES_MAX
+            && self.attachment_ids.iter().all(|id| {
+                uuid::Uuid::parse_str(id).is_ok_and(|u| u.hyphenated().to_string() == *id)
+            })
     }
 }
 

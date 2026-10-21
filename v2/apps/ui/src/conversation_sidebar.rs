@@ -233,7 +233,6 @@ pub fn ConversationSidebar(
             input { id:"conversation-filter", r#type:"search", placeholder:"Search chats", value:"{filter}", oninput:move|e|filter.set(e.value()) }
         }
         for key in [poll_key] { crate::conversation_status_poll::StatusPoll { key:"{key}", ids: ids.clone(), session_scope, statuses, slots, onexpired } }
-        if let Some(slots)=slots() { p {class:"slot-summary", "{slots.label()}"} }
         nav { class:"conversation-list", "aria-label":"Conversation list",
             for row in visible {
                 SidebarRow {
@@ -270,13 +269,6 @@ fn SidebarRow(
     } else {
         entry.unread + row.hidden_unread
     });
-    let initial: String = entry
-        .name
-        .trim_start_matches(|c: char| !c.is_alphanumeric())
-        .chars()
-        .next()
-        .map(|c| c.to_uppercase().collect())
-        .unwrap_or_else(|| "#".into());
     let preview = entry.preview.as_ref().map(|p| {
         let who = match p.author {
             orkestr_v2_contracts::SidebarAuthor::Owner => "You: ",
@@ -289,16 +281,9 @@ fn SidebarRow(
     rsx! {
         div { class: "conversation-row", "data-depth": "{row.depth}", "data-source": if v1 { "v1" } else { "v2" },
             "data-unread": if unread.is_some() { "true" } else { "false" },
-            if row.descendants > 0 {
-                button { class: "group-toggle", r#type: "button", "aria-expanded": "{row.expanded}",
-                    "aria-label": if row.expanded { "Hide sub-chats of {entry.name}" } else { "Show {row.descendants} sub-chats of {entry.name}" },
-                    onclick: move |_| ontoggle.call(key.clone()),
-                    span { "aria-hidden": "true", if row.expanded { "▾" } else { "▸" } }
-                }
-            }
             button { class: "conversation-choice", r#type: "button", "aria-current": if selected { "page" } else { "false" },
                 onclick: { let entry = entry.clone(); move |_| onselect.call(entry.clone()) },
-                span { class: "avatar", "aria-hidden": "true", "{initial}" }
+                Avatar { name: entry.name.clone(), thread: entry.v1_thread_id.clone() }
                 span { class: "choice-body",
                     span { class: "choice-top",
                         span { class: "conversation-name", "{entry.name}" }
@@ -317,11 +302,37 @@ fn SidebarRow(
                     span { class: "choice-badges",
                         if v1 { span { class: "source-badge", "On V1" } }
                         if entry.coordinator { span { class: "source-badge coordinator-badge", "Coordinator" } }
-                        if row.descendants > 0 && !row.expanded { span { class: "group-count", "{row.descendants} sub-chats" } }
                         if let Some(status) = status.clone() { span { class: "conversation-status {status.tone.class()}", "{status.label}" } }
                     }
                 }
             }
+            if row.descendants > 0 {
+                button { class: "group-toggle", r#type: "button", "aria-expanded": "{row.expanded}",
+                    "aria-label": if row.expanded { "Hide sub-chats of {entry.name}" } else { "Show {row.descendants} sub-chats of {entry.name}" },
+                    onclick: move |_| ontoggle.call(key.clone()),
+                    span { class: "toggle-count", "{row.descendants}" } span { "aria-hidden": "true", if row.expanded { " ▾" } else { " ▸" } }
+                }
+            }
         }
+    }
+}
+
+/// The chat's Orkestr icon from the V1 app (served by the V2 server for any
+/// chat with a V1 thread, including imported ones); initials otherwise.
+#[component]
+pub fn Avatar(name: String, thread: Option<String>) -> Element {
+    let mut failed = use_signal(|| None::<String>);
+    let initial: String = name
+        .trim_start_matches(|c: char| !c.is_alphanumeric())
+        .chars()
+        .next()
+        .map(|c| c.to_uppercase().collect())
+        .unwrap_or_else(|| "#".into());
+    match thread.filter(|t| failed.read().as_deref() != Some(t.as_str())) {
+        Some(thread) => rsx! {
+            img { class: "avatar avatar-icon", src: "/api/v2/thread-icons/{thread}", alt: "", "aria-hidden": "true",
+                loading: "lazy", decoding: "async", onerror: move |_| failed.set(Some(thread.clone())) }
+        },
+        None => rsx! { span { class: "avatar", "aria-hidden": "true", "{initial}" } },
     }
 }
