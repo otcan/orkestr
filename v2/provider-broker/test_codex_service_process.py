@@ -232,3 +232,24 @@ def load_tests(loader, _tests, _pattern):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class UnreapedChildDiagnosticTests(__import__("unittest").TestCase):
+    def test_live_owned_child_is_named_by_pid_and_comm_only(self):
+        import io
+        from contextlib import redirect_stderr
+        from codex_service.ownership import Children
+        children = object.__new__(Children)
+        live = SimpleNamespace(identity={"pid": os.getpid()}, gone=lambda: False)
+        dead = SimpleNamespace(identity={"pid": 1}, gone=lambda: True)
+        children.records = {(os.getpid(), 1): live, (1, 1): dead}
+        err = io.StringIO()
+        with redirect_stderr(err):
+            self.assertEqual(Children._log_live(children), [live])
+        comm = Path(f"/proc/{os.getpid()}/comm").read_text().strip()[:15]
+        self.assertEqual(err.getvalue(), "manager owned child not reaped: %d:%s\n" % (os.getpid(), comm))
+        children.records = {(1, 1): dead}
+        err = io.StringIO()
+        with redirect_stderr(err):
+            self.assertEqual(Children._log_live(children), [])
+        self.assertEqual(err.getvalue(), "")
