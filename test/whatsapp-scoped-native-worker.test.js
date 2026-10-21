@@ -216,6 +216,9 @@ test('chat listing pages by cursor: multiple pages, explicit end, invalid cursor
  await assert.rejects(listAllChats(client,{cursor:Buffer.from('{"x":1}').toString('base64url')}),/invalid_cursor/);
  await assert.rejects(listAllChats(client,{limit:READ_ALL_PAGE_MAX+1}),/invalid_page_size/);
  await assert.rejects(listAllChats(client,{source:'groups'}),/invalid_source/);
+ // unreadOnly filters before paging: pages and totals describe only unread chats.
+ const unreadIds=[];let uc;do{const pg=await listAllChats(client,{cursor:uc,limit:1,unreadOnly:true});assert.equal(pg.total,3);assert.equal(pg.chats.length,1);unreadIds.push(pg.chats[0].chatId);uc=pg.nextCursor;}while(uc);
+ assert.deepEqual(unreadIds,['15550000001@c.us','15550000005@c.us','15550000003@c.us']);
  const contacts=await listAllChats(client,{source:'contacts',limit:1});
  assert.equal(contacts.contacts.length,1);assert.equal(contacts.total,2);assert.equal(contacts.hasMore,true);
  assert.doesNotMatch(JSON.stringify(ids)+JSON.stringify(contacts),/secret/);

@@ -6842,10 +6842,10 @@ function readyRuntimeOrNull(accountId, env) {
 }
 
 // Owner-authorized read-all: paged metadata of every chat or contact (no content).
-export async function pageLocalWhatsAppChats({ accountId = "", source = "chats", cursor = "", limit, env = process.env } = {}) {
+export async function pageLocalWhatsAppChats({ accountId = "", source = "chats", cursor = "", limit, unreadOnly = false, env = process.env } = {}) {
   const { normalized, client } = readyRuntimeOrNull(accountId, env);
   if (!client) return { accountId: normalized, ready: false, hasMore: false, nextCursor: null };
-  return { accountId: normalized, ready: true, ...(await listAllChats(client, { source, cursor, limit })) };
+  return { accountId: normalized, ready: true, ...(await listAllChats(client, { source, cursor, limit, unreadOnly })) };
 }
 
 // Owner-authorized read-all: one history page older than `before`; never marks seen.

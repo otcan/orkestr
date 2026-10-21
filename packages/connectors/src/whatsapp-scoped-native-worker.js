@@ -49,7 +49,7 @@ export function createScopedNativeWorkerPolicy(config,{createTransport=createSco
    // history of any chat; read-only, never marks seen, only fixed parameters.
    const readAllThread=Boolean(direct?.readAll.has(url.searchParams.get('thread_id')));
    const onlyParams=keys=>[...url.searchParams.keys()].every(k=>keys.includes(k));
-   if(method==='GET' && readAllThread && url.pathname===`/accounts/${a}/chats/page` && onlyParams(['thread_id','source','cursor','limit']))return;
+   if(method==='GET' && readAllThread && url.pathname===`/accounts/${a}/chats/page` && onlyParams(['thread_id','source','cursor','limit','unread']))return;
    if(method==='GET' && readAllThread && url.pathname.startsWith(`/accounts/${a}/chats/`) && url.pathname.endsWith('/history')
       && url.pathname.split('/').length===6 && url.searchParams.get('page')==='1'
       && (!url.searchParams.has('mark_seen') || url.searchParams.get('mark_seen')==='false')

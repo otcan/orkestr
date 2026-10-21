@@ -148,11 +148,12 @@ export function whatsappWorkerConversations(accountId = "", env = process.env) {
 }
 
 // Owner-authorized read-all: one page of chat or contact metadata (no content).
-export function whatsappWorkerChatPage(accountId = "", threadId = "", { source = "chats", cursor = "", limit } = {}, env = process.env) {
+export function whatsappWorkerChatPage(accountId = "", threadId = "", { source = "chats", cursor = "", limit, unreadOnly = false } = {}, env = process.env) {
   const account = encodeURIComponent(clean(accountId || "sender"));
   const query = new URLSearchParams({ thread_id: clean(threadId), source: clean(source) || "chats" });
   if (clean(cursor)) query.set("cursor", clean(cursor));
   if (limit !== undefined && limit !== null) query.set("limit", String(limit));
+  if (unreadOnly) query.set("unread", "1");
   return requestWhatsAppWorker(`/accounts/${account}/chats/page?${query}`, {}, env);
 }
 

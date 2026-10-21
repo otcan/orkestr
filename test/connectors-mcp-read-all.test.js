@@ -40,8 +40,8 @@ test("read-all pages every chat and any history; plain read stays on the allowli
   assert.deepEqual([second.data.chats.length, second.data.hasMore, second.data.nextCursor], [1, false, null]);
   assert.match(worker.calls[1], /cursor=next-1/);
   assert.match(worker.calls[0], /thread_id=thread-swing/);
-  const unread = await run({ action: "list_all", unread_only: true }, readAll, env);
-  assert.deepEqual(unread.data.chats.map((chat) => chat.chatId), ["a@c.us"]);
+  await run({ action: "list_all", unread_only: true }, readAll, env);
+  assert.match(worker.calls.at(-1), /unread=1/, "unread filtering happens in the worker, before paging");
   const history = await run({ action: "history", conversation_id: "19990000000@c.us", limit: 1, before: "m9" }, readAll, env);
   assert.equal(history.status, "ok");
   assert.match(worker.calls.at(-1), /page=1&mark_seen=false&before=m9/);

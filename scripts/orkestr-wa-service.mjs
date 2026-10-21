@@ -429,6 +429,7 @@ async function handleRequest(req, res, env = process.env, bridge = defaultBridge
       source: clean(url.searchParams.get("source")) || "chats",
       cursor: clean(url.searchParams.get("cursor")),
       limit: url.searchParams.get("limit") ?? undefined,
+      unreadOnly: url.searchParams.get("unread") === "1",
       env,
     })), ok: true });
   }

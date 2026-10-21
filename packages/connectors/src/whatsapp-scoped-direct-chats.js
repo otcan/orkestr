@@ -190,7 +190,7 @@ export function pageByCursor(items, {cursor, limit}) {
   return {page, hasMore, nextCursor: hasMore && last ? encodeCursor({t: last.t, id: last.id}) : null, total: sorted.length};
 }
 
-export async function listAllChats(client, {source = 'chats', cursor, limit} = {}) {
+export async function listAllChats(client, {source = 'chats', cursor, limit, unreadOnly = false} = {}) {
   const size = pageLimit(limit, READ_ALL_PAGE_MAX);
   if (source === 'contacts') {
     const contacts = await client.getContacts();
@@ -201,7 +201,8 @@ export async function listAllChats(client, {source = 'chats', cursor, limit} = {
   }
   if (source !== 'chats') pageError('invalid_source');
   const chats = await client.getChats();
-  const items = chats.filter(c => typeof c?.id?._serialized === 'string').map(c => {
+  // unreadOnly filters before paging, so page, hasMore, nextCursor and total describe the unread set.
+  const items = chats.filter(c => typeof c?.id?._serialized === 'string' && (!unreadOnly || Number(c.unreadCount) > 0)).map(c => {
     const last = c.lastMessage;
     const seconds = Number(c.timestamp || last?.timestamp || 0);
     return {t: Number.isFinite(seconds) ? seconds : 0, id: c.id._serialized, label: String(c.name || '').slice(0, 80), isGroup: c.isGroup === true,

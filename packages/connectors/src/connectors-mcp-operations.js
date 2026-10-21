@@ -279,12 +279,12 @@ async function runConversation(input, auth, env) {
   else if (input.action === "list_all") {
     // Owner-authorized read-all: paged chat/contact metadata for this thread's account.
     if (auth.operator || !clean(auth.tokenThreadId)) throw Object.assign(new Error("connector_read_all_thread_required"), { statusCode: 403 });
-    const page = await whatsappWorkerChatPage(accountId, auth.tokenThreadId, { source: input.source || "chats", cursor: input.cursor || "", limit: input.limit ?? undefined }, env);
+    const page = await whatsappWorkerChatPage(accountId, auth.tokenThreadId, { source: input.source || "chats", cursor: input.cursor || "", limit: input.limit ?? undefined, unreadOnly: input.unread_only === true }, env);
     const items = page?.chats || page?.contacts || [];
     payload = {
       ready: page?.ready !== false,
       source: page?.source || input.source || "chats",
-      [page?.contacts ? "contacts" : "chats"]: input.unread_only && page?.chats ? items.filter((chat) => Number(chat.unreadCount) > 0) : items,
+      [page?.contacts ? "contacts" : "chats"]: items,
       hasMore: page?.hasMore === true,
       nextCursor: page?.nextCursor || null,
       total: Number(page?.total || 0),
