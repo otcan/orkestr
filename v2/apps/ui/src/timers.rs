@@ -48,6 +48,47 @@ impl State {
         }
     }
 }
+/// One row of `GET /api/v2/conversations/{id}/timers`: the timer detail plus
+/// its V1 source label.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Listed {
+    pub detail: Detail,
+    pub label: Option<String>,
+}
+const LISTED_EXTRA: [&str; 5] = [
+    "label",
+    "source_thread_id",
+    "source_namespace",
+    "source_timer_id",
+    "source_enabled",
+];
+/// The conversation's timers; `None` when the answer is not a valid listing.
+pub fn listing(value: &Value, conversation: &str) -> Option<Vec<Listed>> {
+    if value.get("conversation_id")?.as_str()? != conversation {
+        return None;
+    }
+    value
+        .get("timers")?
+        .as_array()?
+        .iter()
+        .map(|row| {
+            let mut detail = row.as_object()?.clone();
+            let label = detail
+                .get("label")
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+            for key in LISTED_EXTRA {
+                detail.remove(key);
+            }
+            let detail: Detail = serde_json::from_value(Value::Object(detail)).ok()?;
+            let namespace = detail.namespace.clone();
+            detail
+                .valid_for(&namespace)
+                .then_some(Listed { detail, label })
+        })
+        .collect()
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Detail {

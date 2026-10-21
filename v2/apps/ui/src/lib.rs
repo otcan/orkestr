@@ -6,6 +6,7 @@ pub mod payload;
 use orkestr_v2_contracts::{ConversationEvent, ConversationSnapshot, Message, MessageInput, Scope};
 use std::collections::BTreeMap;
 
+pub mod chat_settings;
 pub mod execution;
 pub mod host_resources;
 mod reconcile;
