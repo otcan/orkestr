@@ -76,7 +76,7 @@ def pair_bytes(plan):
 
 OPTIONAL = {'roles', 'preserve_state', 'workspace_exec', 'additional_workspace_exec', 'max_active_windows', 'host_full_access',
             'window_max_minutes', 'conversation_window_max_minutes',
-            'code_mode_host', 'code_mode_host_sha256', 'claude', 'live_map', 'desktop_broker', 'timer_config', 'whatsapp_chats'}
+            'code_mode_host', 'code_mode_host_sha256', 'claude', 'live_map', 'desktop_broker', 'timer_config', 'whatsapp_chats', 'v1_chat_icons_dir'}
 CLAUDE_PATHS = ('executable', 'account', 'workspace', 'home', 'temporary')
 # Account selection stays with the Claude account reference, never the env.
 CLAUDE_FORBIDDEN_ENV = {'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN',
@@ -142,6 +142,11 @@ def prepare(plan):
         live=plan['live_map']
         require(type(live) is str and live.startswith('/') and 1<len(live)<=4096 and '\0' not in live
                 and '..' not in Path(live).parts and not any(ord(c)<32 for c in live),'live map path')
+    if 'v1_chat_icons_dir' in plan:
+        # Read-only V1 chat icon directory: path only, never read by the packager.
+        icons=plan['v1_chat_icons_dir']
+        require(type(icons) is str and icons.startswith('/') and 1<len(icons)<=4096 and '\0' not in icons
+                and '..' not in Path(icons).parts and not any(ord(c)<32 for c in icons),'v1 chat icons path')
     if 'timer_config' in plan:
         # Private durable-timer scheduler config (names the machine token
         # file): path only, never opened by the packager; the server validates it.
@@ -277,6 +282,8 @@ def prepare(plan):
                 runtime['desktop_broker']=plan['desktop_broker']
             if 'timer_config' in plan:
                 runtime['timer_config']=plan['timer_config']
+            if 'v1_chat_icons_dir' in plan:
+                runtime['v1_chat_icons_dir']=plan['v1_chat_icons_dir']
             if 'whatsapp_chats' in plan:
                 runtime['whatsapp_chats']=plan['whatsapp_chats']
             if claude_plan:
