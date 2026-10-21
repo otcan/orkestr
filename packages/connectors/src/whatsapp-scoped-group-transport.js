@@ -9,6 +9,7 @@ import {SCOPED_SEND_MAX_TEXT_LENGTH, encodeReplyEntry, validReplyDocument} from 
 import {DatabaseSync} from 'node:sqlite';
 import {createDeliveryRouteFence} from './whatsapp-delivery-route-fence.js';
 import {notificationScope, createTimerNotificationProofStore} from './whatsapp-timer-notification-proof.js';
+import {OPERATOR_NOTICE_PARENT, validateOperatorNotifications, operatorNoticeRequestValid, operatorNoticeBodyValid} from './whatsapp-scoped-operator-notices.js';
 import {downloadScopedGroupMedia} from './whatsapp-scoped-group-media.js';
 import {validateCoordinatorConfig, coordinatorTokenMatches, createCoordinatorAccess} from './whatsapp-scoped-coordinator.js';
 import {DYNAMIC_GROUPS_TABLE, createDynamicGroupView, validateDynamicGroups} from './whatsapp-scoped-dynamic-groups.js';
@@ -43,7 +44,8 @@ export function validateScopedGroupConfig(config,now=Date.now) {
   if(fencedThreads && [...fencedThreads].some(id=>!config.groups.some(g=>g.threadId===id)))fail('route_thread_invalid');
   const coordinator=validateCoordinatorConfig(config);
   const dynamic=validateDynamicGroups(config);
-  return {groups,authors,participants,scope,fencedThreads,coordinator,dynamic};
+  const operator=validateOperatorNotifications(config);
+  return {groups,authors,participants,scope,fencedThreads,coordinator,dynamic,operator};
 }
 
 export function createScopedGroupTransport({config,token,base,dbPath=config.journalPath,now=Date.now,routeFence: suppliedFence,proofStore: suppliedProof,sendLookupDelayMs=1000,
@@ -51,7 +53,7 @@ export function createScopedGroupTransport({config,token,base,dbPath=config.jour
   if(!token)fail('configuration_invalid');
   // Validate the whole contract before opening durable state: a build that
   // rejects the live configuration must leave the journal untouched.
-  const {groups: staticGroups,authors,participants,scope,fencedThreads,coordinator,dynamic}=validateScopedGroupConfig(config,now);
+  const {groups: staticGroups,authors,participants,scope,fencedThreads,coordinator,dynamic,operator}=validateScopedGroupConfig(config,now);
   // The coordinator bearer must be a dedicated credential, never the transport token.
   if(coordinatorTokenMatches(coordinator,token))fail('configuration_invalid');
   const db=new DatabaseSync(dbPath);db.exec(`PRAGMA journal_mode=WAL;
@@ -111,9 +113,10 @@ export function createScopedGroupTransport({config,token,base,dbPath=config.jour
       if(req.method==='POST' && req.path==='/send-text') {
         const b=req.body || {};
         allowed=groups.has(b.to) && b.accountId==='main' && typeof b.text==='string' && b.text.trim() && b.text.length<=SCOPED_SEND_MAX_TEXT_LENGTH
-          && typeof b.requestId==='string' && typeof b.parentId==='string'
+          && ((typeof b.requestId==='string' && typeof b.parentId==='string'
           && Object.keys(b).every(k=>['to','text','accountId','requestId','parentId','notificationId'].includes(k))
-          && (b.notificationId===undefined || (scope?.allowsChat(b.to) && b.notificationId===b.requestId));
+          && (b.notificationId===undefined || (scope?.allowsChat(b.to) && b.notificationId===b.requestId)))
+            || operatorNoticeBodyValid(operator,b,'main'));
       }
       return allowed?next():res.status(403).json({ok:false,error:'group_transport_scope_denied'});
     },
@@ -219,7 +222,7 @@ export function createScopedGroupTransport({config,token,base,dbPath=config.jour
         {sendSeen:false,sendMediaAsDocument:true}),valid,
         message=>message?.type==='document' && message?._data?.filename===document?.filename);
     },
-    policyFields(buildHash) {return {version:1,transportOnly:true,groupsOnly:true,groupCount:groups.size,dynamicGroups:Boolean(dynamic),additionalOwnerAuthors:authors.count,participantGroups:participants.count,timerNotifications:!!scope,routeFence:!!routeFence,sendAttempts:1,textOnly:true,maxTextLength:SCOPED_SEND_MAX_TEXT_LENGTH,markSeen:false,automaticRouting:false,strictBearer:true,coordinator:!!coordinatorAccess,buildHash};},
+    policyFields(buildHash) {return {version:1,transportOnly:true,groupsOnly:true,groupCount:groups.size,dynamicGroups:Boolean(dynamic),additionalOwnerAuthors:authors.count,participantGroups:participants.count,timerNotifications:!!scope,operatorNotices:!!operator,routeFence:!!routeFence,sendAttempts:1,textOnly:true,maxTextLength:SCOPED_SEND_MAX_TEXT_LENGTH,markSeen:false,automaticRouting:false,strictBearer:true,coordinator:!!coordinatorAccess,buildHash};},
     diagnostics(client,buildHash) {return {identityMatches:client?.info?.wid?._serialized===config.ownChatId,...this.policyFields(buildHash)};},
   };
   // `text` is the canonical payload string: the message itself, or a
@@ -252,7 +255,12 @@ export function createScopedGroupTransport({config,token,base,dbPath=config.jour
         assertClient(client);
         if(!valid || !groups.has(to) || accountId!=='main' || !/^[a-zA-Z0-9:._-]{1,200}$/.test(request.requestId || ''))fail('scope_denied');
         let parent;
-        if(request.notificationId!==undefined) {
+        if(request.operatorNotice!==undefined) {
+          // Operator notice: no parent and no proof. Narrow by config, request id shape and an hourly cap.
+          if(!operatorNoticeRequestValid(operator,to,request))fail('operator_notice_denied');
+          request={...request,parentId:OPERATOR_NOTICE_PARENT};
+          parent={id:OPERATOR_NOTICE_PARENT,created_at:new Date(now()).toISOString()};
+        } else if(request.notificationId!==undefined) {
           if(!scope || request.notificationId!==request.requestId)fail('notification_denied');
           parent=proofStore.authorize({scope,id:request.notificationId,to,text,parentId:request.parentId});
         } else {
@@ -269,6 +277,8 @@ export function createScopedGroupTransport({config,token,base,dbPath=config.jour
           fail('delivery_uncertain');
         }
         if(uncertain())fail('delivery_uncertain');
+        if(parent.id===OPERATOR_NOTICE_PARENT && db.prepare('SELECT count(*) n FROM group_send WHERE parent_id=? AND created_at>=?')
+            .get(OPERATOR_NOTICE_PARENT,new Date(now()-3600000).toISOString()).n>=operator.maxPerHour)fail('operator_notice_rate_limited');
         const routed=fenced(to);
         const shared=routed ? routeFence.reserve({id:request.requestId,hash:material,route:config.routeControl.routeId,createdAt:parent.run_at || parent.created_at}) : null;
         if(shared?.duplicate)return {ok:true,ids:[shared.providerId],duplicate:true};
