@@ -46,14 +46,51 @@ These are the owner's chats that still run on V1:
 - **Previews.** At most 6 V1 preview reads per request. The rest fill in on
   later polls.
 
-Opening a linked chat shows its recent history read-only:
+Opening a linked chat shows its recent history:
 `GET /api/v2/v1-threads/{thread}/messages[?before=<cursor>]`, 50 messages per
 page, oldest first, with each text capped at 16 KiB. Only threads that the
 sidebar lists can be read. Any other thread returns `404`, whether it is
-unbound, retired, a task agent or belongs to someone else. The view polls every
-8 s and labels the chat "On V1" or "On V1 · coordinator". It offers no
-composer: replies go through the chat's WhatsApp group until the thread moves
-to V2.
+unbound, retired, a task agent or belongs to someone else. The page carries:
+
+- `writable`: false for a thread whose V1 binding delegates its runtime to V2
+  (`remoteThreadId` set and `remoteRuntimeEnabled` not `false`);
+- `working`: V1 reports a running turn, or an owner input is still queued;
+- per message, `coordinator`: an assistant post from the attached coordinator
+  session (V1 source `api-session`), labelled "Coordinator".
+
+The view polls every 2.5 s while V1 works and for about two minutes after a
+send, otherwise every 8 s, and shows "typing…" while `working`.
+
+## Writing to a linked V1 chat
+
+`POST /api/v2/v1-threads/{thread}/messages` with
+`{"client_message_id": "<uuid>", "text": "…"}` (at most 16 KiB) posts owner input
+into the same V1 thread. The server forwards it through the private loopback
+client as V1 web UI input, `POST /api/threads/{thread}/ui-input`, with
+`clientMessageId: "orkestr-v2-<uuid>"` and `replyDelivery: "ui_only"`. V1 records
+it as owner input and runs it as usual: for "Orkestr Rust" the V1 fast layer
+(its Codex executor) answers, and it may wake the coordinator through its
+existing escalation. Nothing routes it to another runtime.
+
+- **Exactly once.** V1 dedupes on `clientMessageId` per thread. The composer
+  keeps the key until V1 answers definitely, so a retry after a timeout or a lost
+  response (`504 v1_receipt_unknown`) returns the first message (`200`,
+  `duplicate: true`) instead of creating a second one. The same key with other
+  text is `409 idempotency_conflict`.
+- **Delegated threads.** A thread delegated to V2 is refused with
+  `409 v1_thread_delegated`, and the view hides the composer. Migrated threads
+  are normally listed as their V2 conversation, and the UI writes to that
+  conversation directly. So an input never reaches both V1 and V2.
+- **Replies stay in the app.** `ui_only` creates no WhatsApp reply-delivery
+  intent. The scoped group relay sends only replies whose parent is an input it
+  routed itself. So the fast layer's answer to app input is not sent to the group.
+  - **Caveat (#164).** A coordinator `api-session` post without an explicit
+    parent is parented to the newest relay-routed owner input of the last 6 h
+    (`ORKESTR_API_SESSION_RELAY_PARENT_MAX_AGE_MS`). The relay then delivers it
+    once to WhatsApp, even when the coordinator was answering a message sent
+    from this app. This is accepted behaviour.
+- Other refusals: `404` (not listed, or V1 does not know the thread), `409
+  v1_refused` (a definite V1 4xx), `400` (malformed body or key).
 
 ## Read marks
 

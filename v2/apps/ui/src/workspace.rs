@@ -93,7 +93,7 @@ pub fn Workspace(
                     } }
                 }
                 if let Some(entry) = linked() {
-                    crate::v1_thread_view::V1ThreadView { key: "{entry.key}-{session_scope.read().generation()}", entry, session_scope, onexpired }
+                    crate::v1_thread_view::V1ThreadView { key: "{entry.key}-{session_scope.read().generation()}", entry, csrf: csrf.clone(), session_scope, drafts, onexpired }
                 } else if tab() == "Chat" {
                     SelectedConversation {
                         key: "{current()}-{session_scope.read().generation()}-{reload}",

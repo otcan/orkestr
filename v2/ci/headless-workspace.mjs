@@ -182,8 +182,29 @@ export const scenarios = [
     await page.waitForSelector('.v1-banner');
     await page.waitForFunction(() => document.querySelectorAll('.v1-thread .chat-messages > li').length === 3);
     assert.match(await text('.v1-thread .chat-messages'), /Synthetic member note/);
-    assert.equal(await page.$('#composer'), null, 'Linked V1 chats are read-only');
+    assert.equal(await page.$('#composer'), null, 'Linked V1 chats have no V2 composer');
     assert.match(await text('.heading-meta'), /On V1 · coordinator attached/);
+    // Owner input into the V1 thread: an unknown first outcome is retried
+    // with the same key, and V1 admits the message exactly once.
+    await page.waitForSelector('#v1-composer');
+    await page.type('#v1-composer', 'Synthetic owner note to V1');
+    await clickText('Send');
+    await waitText('Retry sends the same message once.');
+    await screenshot(label, 'v1-chat-retry');
+    await clickText('Retry send');
+    await waitText('Already delivered to V1.');
+    assert.equal(state.v1Inputs.length, 1, 'Exactly one V1 input');
+    assert.equal(state.v1Posts.length, 2);
+    assert.equal(state.v1Posts[0].client_message_id, state.v1Posts[1].client_message_id, 'Retry reuses the key');
+    assert.deepEqual({ ...state.v1Posts[0], client_message_id: 'k' },
+      { thread: 'synthetic-group', client_message_id: 'k', text: 'Synthetic owner note to V1' });
+    assert.equal(await page.$eval('#v1-composer', n => n.value), '', 'Accepted text leaves the composer');
+    // V1 works on it (typing…), then the coordinator's reply appears live.
+    await page.waitForSelector('.v1-typing');
+    await screenshot(label, 'v1-chat-typing');
+    await waitText('Synthetic coordinator answer', 20000);
+    await page.waitForFunction(() => !document.querySelector('.v1-typing'));
+    assert.equal(await page.evaluate(() => [...document.querySelectorAll('.v1-thread .chat-messages strong')].at(-1).textContent), 'Coordinator');
     await screenshot(label, 'v1-chat');
     await noHorizontalScroll();
     // Back to a native conversation.

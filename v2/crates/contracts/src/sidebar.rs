@@ -1,7 +1,7 @@
 //! Owner conversation sidebar: native conversations and linked V1 threads in
 //! one activity-ordered list. Observation only: a sidebar entry never admits
-//! input, starts execution or grants authority. Linked V1 entries are
-//! read-only until their thread moves to V2.
+//! input, starts execution or grants authority. Linked V1 entries accept owner
+//! input only through [`V1ThreadInput`], which V1 itself admits and runs.
 use crate::ConversationId;
 use serde::{Deserialize, Serialize};
 
@@ -231,6 +231,9 @@ pub struct V1HistoryMessage {
     /// V1 `phase` (`commentary`, `final_answer`, …) when present.
     pub phase: Option<String>,
     pub cursor: i64,
+    /// Posted by the attached coordinator session (V1 `api-session`).
+    #[serde(default)]
+    pub coordinator: bool,
 }
 
 /// `GET /api/v2/v1-threads/{thread}/messages`: recent read-only V1 history.
@@ -245,6 +248,14 @@ pub struct V1HistoryPage {
     /// Pass as `before` to read older messages.
     pub before_cursor: Option<i64>,
     pub latest_cursor: i64,
+    /// The owner may post input here (`POST` on the same path). False for a
+    /// thread whose runtime is delegated to V2: that one is written to its V2
+    /// conversation directly, never through V1.
+    #[serde(default)]
+    pub writable: bool,
+    /// V1 is working on the thread (a turn runs or owner input waits).
+    #[serde(default)]
+    pub working: bool,
 }
 impl V1HistoryPage {
     pub fn is_valid(&self) -> bool {
@@ -260,6 +271,48 @@ impl V1HistoryPage {
             && self.messages.windows(2).all(|w| w[0].cursor < w[1].cursor)
             && self.before_cursor.is_none_or(|c| c >= 0)
             && self.latest_cursor >= 0
+    }
+}
+
+pub const V1_INPUT_TEXT_MAX: usize = 16 * 1024;
+
+/// `POST /api/v2/v1-threads/{thread}/messages`: owner input into a linked V1
+/// thread, admitted by V1 as web UI input with UI-only reply delivery (the
+/// reply is shown here, never sent to the thread's WhatsApp group).
+/// `client_message_id` is the idempotency key: a retry with the same key
+/// never creates a second input.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct V1ThreadInput {
+    pub client_message_id: String,
+    pub text: String,
+}
+impl V1ThreadInput {
+    pub fn is_valid(&self) -> bool {
+        uuid::Uuid::parse_str(&self.client_message_id)
+            .is_ok_and(|id| !id.is_nil() && id.hyphenated().to_string() == self.client_message_id)
+            && !self.text.trim().is_empty()
+            && self.text.len() <= V1_INPUT_TEXT_MAX
+            && !self.text.contains('\0')
+    }
+}
+
+/// V1's receipt for [`V1ThreadInput`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct V1ThreadInputReceipt {
+    pub thread_id: String,
+    pub message_id: String,
+    /// V1 already held this key: nothing new was admitted.
+    pub duplicate: bool,
+    /// V1 message state (`queued`, `running`, `completed`, …).
+    pub state: String,
+}
+impl V1ThreadInputReceipt {
+    pub fn is_valid(&self) -> bool {
+        valid_v1_thread_id(&self.thread_id)
+            && label(&self.message_id, 256)
+            && label(&self.state, 64)
     }
 }
 

@@ -1,11 +1,12 @@
-//! Read-only view of the V1 thread registry for the sidebar. V1 stays the
-//! authority for its threads; this module only reads (through the private
-//! loopback V1 client), bounds and caches what the sidebar shows. Nothing
-//! here writes to V1 or admits V2 work.
+//! View of the V1 thread registry for the sidebar. V1 stays the authority for
+//! its threads; this module reads (through the private loopback V1 client),
+//! bounds and caches what the sidebar shows, and forwards owner input into a
+//! listed thread as V1 web UI input. Nothing here admits V2 work.
 use crate::desktop_broker::{Broker, BrokerError};
 use orkestr_v2_contracts::{
     valid_v1_thread_id, SidebarAuthor, SidebarPreview, V1HistoryMessage, V1HistoryPage,
-    SIDEBAR_NAME_MAX, SIDEBAR_PREVIEW_MAX, V1_HISTORY_MAX, V1_HISTORY_TEXT_MAX,
+    V1ThreadInput, V1ThreadInputReceipt, SIDEBAR_NAME_MAX, SIDEBAR_PREVIEW_MAX, V1_HISTORY_MAX,
+    V1_HISTORY_TEXT_MAX,
 };
 use serde_json::Value;
 use std::{
@@ -37,6 +38,9 @@ pub(crate) struct V1Thread {
     pub working: bool,
     /// Bound to an enabled WhatsApp chat (an owner group thread).
     pub whatsapp: bool,
+    /// The V1 binding delegates this thread's runtime to a remote (V2)
+    /// backend. Its owner input belongs to the V2 conversation, not V1.
+    pub delegated: bool,
     pub retired: bool,
 }
 
@@ -82,6 +86,20 @@ pub(crate) fn parse_thread(value: &Value) -> Option<V1Thread> {
             && b.get("enabled").and_then(Value::as_bool) != Some(false)
             && !flag(b, "retired")
     });
+    // Mirrors V1 `remoteWhatsAppRuntimeBinding()`: a remote thread id and a
+    // runtime switch that is not off. Fails closed: any remote id counts
+    // unless V1 says the runtime is explicitly disabled.
+    let delegated = binding.is_some_and(|b| {
+        [
+            "remoteThreadId",
+            "remoteRuntimeThreadId",
+            "delegatedThreadId",
+        ]
+        .iter()
+        .any(|k| text(b, k).is_some())
+            && b.get("remoteRuntimeEnabled").and_then(Value::as_bool) != Some(false)
+            && b.get("remoteRouterEnabled").and_then(Value::as_bool) != Some(false)
+    });
     let last_activity_ms = ["lastActivityAt", "lastMessageAt", "updatedAt"]
         .iter()
         .find_map(|k| text(value, k).and_then(|t| crate::live_map::timestamp_ms(&t)))
@@ -97,6 +115,7 @@ pub(crate) fn parse_thread(value: &Value) -> Option<V1Thread> {
             || flag(value, "foregroundWorking")
             || number(value, "runningCount").is_some_and(|n| n > 0),
         whatsapp,
+        delegated,
         retired: flag(value, "retired"),
         id,
         name,
@@ -198,7 +217,12 @@ fn bounded(value: &str) -> String {
     value[..end].to_owned()
 }
 
-/// V1 `GET /api/threads/:id/messages` → bounded, read-only page.
+/// V1 thread runtime states that mean a turn is running.
+const WORKING_STATES: [&str; 4] = ["working", "running", "busy", "thinking"];
+/// V1 owner-input states before its turn has answered.
+const PENDING_INPUT: [&str; 4] = ["queued", "pending_delivery", "awaiting_ack", "running"];
+
+/// V1 `GET /api/threads/:id/messages` → bounded page.
 pub(crate) fn history(
     thread: &V1Thread,
     coordinator: bool,
@@ -223,6 +247,8 @@ pub(crate) fn history(
                 phase: text(m, "phase")
                     .filter(|p| p.len() <= 64 && !p.chars().any(char::is_control)),
                 cursor,
+                coordinator: m.get("role").and_then(Value::as_str) == Some("assistant")
+                    && text(m, "source").as_deref() == Some("api-session"),
             })
         })
         .collect();
@@ -245,6 +271,13 @@ pub(crate) fn history(
         messages,
         before_cursor,
         latest_cursor: number(value, "currentCursor").unwrap_or(latest).max(latest),
+        writable: !thread.delegated,
+        working: thread.working
+            || text(value, "state").is_some_and(|s| WORKING_STATES.contains(&s.as_str()))
+            || raw.iter().any(|m| {
+                m.get("role").and_then(Value::as_str) == Some("user")
+                    && text(m, "state").is_some_and(|s| PENDING_INPUT.contains(&s.as_str()))
+            }),
     })
 }
 
@@ -356,5 +389,111 @@ impl V1Cache {
             (404, _) => Err(BrokerError::Denied),
             _ => Err(BrokerError::Unavailable),
         }
+    }
+}
+
+/// Why V1 did not confirm an owner input.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum InputFailure {
+    /// V1 does not know the thread or refuses this principal.
+    NotFound,
+    /// The key is already used for a different text.
+    KeyConflict,
+    /// V1 answered with a definite refusal (its code, when it gave one).
+    Refused(String),
+    /// No answer: the input may or may not be admitted. Retry with the key.
+    Unknown,
+}
+
+/// The V1 idempotency key for one V2 owner input. V1 dedupes per thread on
+/// `clientMessageId`, so a retried request returns the first message.
+pub(crate) fn v1_client_message_id(input: &V1ThreadInput) -> String {
+    format!("orkestr-v2-{}", input.client_message_id)
+}
+
+/// V1 `POST /api/threads/:id/ui-input` body, what the V1 web UI sends with
+/// its WhatsApp reply switch off. `ui_only` creates no reply delivery intent,
+/// and the scoped group relay only answers inputs it routed itself, so the
+/// reply stays in the app.
+pub(crate) fn input_body(input: &V1ThreadInput) -> Value {
+    serde_json::json!({
+        "text": input.text,
+        "clientMessageId": v1_client_message_id(input),
+        "replyDelivery": "ui_only",
+    })
+}
+
+/// V1's answer to [`input_body`] as a bounded receipt.
+pub(crate) fn input_receipt(
+    thread: &V1Thread,
+    input: &V1ThreadInput,
+    status: u16,
+    value: &Value,
+) -> Result<V1ThreadInputReceipt, InputFailure> {
+    match status {
+        200..=299 => {}
+        404 | 403 => return Err(InputFailure::NotFound),
+        400..=499 => {
+            let code = text(value, "error")
+                .or_else(|| text(value, "code"))
+                .filter(|c| c.len() <= 64 && c.bytes().all(|b| b.is_ascii_graphic()))
+                .unwrap_or_else(|| "v1_refused".into());
+            return Err(InputFailure::Refused(code));
+        }
+        _ => return Err(InputFailure::Unknown),
+    }
+    let key = v1_client_message_id(input);
+    let Some(message) = value.get("message").filter(|m| m.is_object()) else {
+        // Commands V1 handles without a message row (for example settings)
+        // are keyed on the same client id.
+        return Ok(V1ThreadInputReceipt {
+            thread_id: thread.id.clone(),
+            message_id: key,
+            duplicate: false,
+            state: "handled".into(),
+        });
+    };
+    let duplicate = flag(message, "duplicate");
+    if duplicate {
+        let same_key = text(message, "clientMessageId")
+            .or_else(|| text(message, "client_message_id"))
+            .is_none_or(|k| k == key);
+        let same_text = message
+            .get("text")
+            .and_then(Value::as_str)
+            .is_none_or(|t| t.trim() == input.text.trim());
+        if !same_key || !same_text {
+            return Err(InputFailure::KeyConflict);
+        }
+    }
+    let message_id = text(message, "id")
+        .filter(|id| id.len() <= 256 && !id.chars().any(char::is_control))
+        .unwrap_or(key);
+    let state = text(message, "state")
+        .or_else(|| text(value, "state"))
+        .filter(|s| s.len() <= 64 && !s.chars().any(char::is_control))
+        .unwrap_or_else(|| "queued".into());
+    Ok(V1ThreadInputReceipt {
+        thread_id: thread.id.clone(),
+        message_id,
+        duplicate,
+        state,
+    })
+}
+
+/// Forwards one owner input to V1. The caller has checked that the thread is
+/// listed and not delegated.
+pub(crate) async fn send_input(
+    broker: &Broker,
+    thread: &V1Thread,
+    input: &V1ThreadInput,
+) -> Result<V1ThreadInputReceipt, InputFailure> {
+    let path = format!("/api/threads/{}/ui-input", thread.id);
+    match broker
+        .write("POST", &path, input_body(input), MESSAGES_CAP)
+        .await
+    {
+        Ok((status, value)) => input_receipt(thread, input, status, &value),
+        Err(_) => Err(InputFailure::Unknown),
     }
 }

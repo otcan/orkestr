@@ -200,6 +200,8 @@ details[open] > summary { margin-bottom: .4rem; }
 .load-older { display: block; margin: 0 auto .9rem; font-size: .78rem; min-height: 2.2rem; border-radius: 1.1rem; }
 .v1-notice { font-size: .78rem; color: var(--danger-text); text-align: center; }
 .v1-notice:empty { display: none; }
+.v1-typing { max-width: 52rem; margin: .2rem auto; padding: 0 .4rem; font-size: .8rem; font-style: italic; color: var(--accent-text); }
+.v1-typing::before { content: ""; display: inline-block; width: .45rem; height: .45rem; margin-right: .4rem; border-radius: 50%; background: var(--accent); vertical-align: .05rem; animation: pulse 1.4s ease-in-out infinite; }
 
 /* Pages */
 .work-view > section, .projects-view > * { margin-bottom: 1rem; }
