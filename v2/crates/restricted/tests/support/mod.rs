@@ -18,6 +18,7 @@ pub struct Fakes {
     pub sent: Mutex<Vec<(String, String)>>,
     pub gpu_starts: Mutex<Vec<String>>,
     pub fetched: Mutex<Vec<String>>,
+    pub gpu_block: Mutex<Option<String>>,
 }
 pub struct Fake(pub Arc<Fakes>);
 #[async_trait]
@@ -43,6 +44,12 @@ impl GpuControl for Fake {
     async fn start(&self, reason: &str) -> Result<String, String> {
         self.0.gpu_starts.lock().unwrap().push(reason.into());
         Ok("gpu starting".into())
+    }
+    async fn precheck(&self) -> Result<String, String> {
+        match self.0.gpu_block.lock().unwrap().clone() {
+            Some(reason) => Err(reason),
+            None => Ok("Provider test offers an L40S at about $0.81/h.".into()),
+        }
     }
 }
 #[async_trait]
