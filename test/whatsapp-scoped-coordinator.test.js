@@ -154,3 +154,14 @@ test('the coordinator handler refuses requests the middleware did not authorize'
   assert.equal(result.status,403);
   assert.equal((await request(p,null,{path:'/coordinator/chats'})).status,503);
 });
+
+test('a coordinator send can quote a message, journaled with the quoted id', async t => {
+  const {p,client,calls}=fixture(t);
+  const sent=await request(p,client,{method:'POST',path:'/coordinator/send',body:{to:other,text:'ack',requestId:'q-1',replyTo:'true_chat_ABC'}});
+  assert.equal(sent.status,200);
+  assert.equal(calls.sent.at(-1).options.quotedMessageId,'true_chat_ABC');
+  const conflict=await request(p,client,{method:'POST',path:'/coordinator/send',body:{to:other,text:'ack',requestId:'q-1'}});
+  assert.equal(conflict.status,409,'the quoted id is part of the request identity');
+  const bad=await request(p,client,{method:'POST',path:'/coordinator/send',body:{to:other,text:'ack',requestId:'q-2',replyTo:'bad id'}});
+  assert.equal(bad.status,400);
+});

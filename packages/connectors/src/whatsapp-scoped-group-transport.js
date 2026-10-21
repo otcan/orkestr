@@ -28,6 +28,31 @@ const safeMediaName=value=>path.basename(String(value||'image').replace(/[\\/\0]
 // made a rollback to an earlier build fail every insert (and drop all input).
 const MEDIA_TABLE='CREATE TABLE IF NOT EXISTS group_input_media(id TEXT PRIMARY KEY,path TEXT NOT NULL,filename TEXT,mimetype TEXT,size INTEGER)';
 
+// Reply-quote evidence (WhatsApp "reply") is likewise a side table keyed by the
+// input id. `resolved=0` records that the message quoted something we could not
+// read, so the relay can say so instead of guessing.
+const QUOTE_TABLE='CREATE TABLE IF NOT EXISTS group_input_quote(id TEXT PRIMARY KEY,quoted_id TEXT,author TEXT,sent_at TEXT,body TEXT,from_me INTEGER,resolved INTEGER NOT NULL)';
+const QUOTE_LOOKUP_MS=5000;
+const QUOTE_BODY_MAX=4000;
+const quoteText=value=>typeof value==='string'?value.slice(0,QUOTE_BODY_MAX):'';
+// Best-effort quoted-message capture; never throws. Null when the message quotes nothing.
+export async function captureQuote(message) {
+  const data=message?._data || {};
+  if(message?.hasQuotedMsg!==true && !data.quotedStanzaID)return null;
+  let quoted=null,timer;
+  try {
+    if(typeof message.getQuotedMessage==='function')
+      quoted=await Promise.race([message.getQuotedMessage(),new Promise(resolve=>{timer=setTimeout(()=>resolve(null),QUOTE_LOOKUP_MS);})]);
+  } catch {quoted=null;} finally {clearTimeout(timer);}
+  const embedded=data.quotedMsg || {};
+  const body=quoteText(quoted?.body) || quoteText(embedded.body) || quoteText(embedded.caption);
+  const quotedId=quoted?.id?._serialized || (typeof data.quotedStanzaID==='string' && data.quotedStanzaID ? data.quotedStanzaID : null);
+  const seconds=Number(quoted?.timestamp || embedded.t);
+  const author=String(quoted?.author || quoted?.from || data.quotedParticipant?._serialized || data.quotedParticipant || embedded.from?._serialized || '') || null;
+  return {quotedId,author,sentAt:Number.isFinite(seconds) && seconds>0 ? new Date(seconds*1000).toISOString() : null,body,
+    fromMe:quoted?.fromMe===true,resolved:Boolean(body) && Boolean(quotedId)};
+}
+
 // An explicitly configured, existing-account transport. The surrounding bridge
 // keeps its legacy router disabled; only explicitly authorized, fresh group input enters.
 // Pure contract validation: no files are opened. Shared by the transport and
@@ -61,7 +86,8 @@ export function createScopedGroupTransport({config,token,base,dbPath=config.jour
     CREATE TABLE IF NOT EXISTS group_send(id TEXT PRIMARY KEY,hash TEXT NOT NULL,chat_id TEXT NOT NULL,parent_id TEXT NOT NULL,state TEXT NOT NULL,provider_id TEXT,created_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS group_input_author(id TEXT PRIMARY KEY,proof TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS group_meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);
-    ${MEDIA_TABLE};`);
+    ${MEDIA_TABLE};
+    ${QUOTE_TABLE};`);
   // Registered groups (dynamicGroups) join the static allowlist live. The
   // contract below stays the static one, so enabling this needs no migration.
   if(dynamic)db.exec(DYNAMIC_GROUPS_TABLE);
@@ -162,6 +188,7 @@ export function createScopedGroupTransport({config,token,base,dbPath=config.jour
         }
         if(uncertain())fail('delivery_uncertain');
         if(db.prepare('SELECT 1 FROM group_send WHERE provider_id=?').get(id))return false;
+        const quote=await captureQuote(message);
         let body=message.body,mediaPath='',mediaFilename='',mediaMimetype='',mediaSize=0;
         if(hasMedia) {
           const type=String(message?.type||'').toLowerCase();
@@ -201,6 +228,8 @@ export function createScopedGroupTransport({config,token,base,dbPath=config.jour
             .run(id,chatId,body,new Date(ts).toISOString());
           if(result.changes && mediaPath) db.prepare('INSERT INTO group_input_media(id,path,filename,mimetype,size) VALUES(?,?,?,?,?)')
             .run(id,mediaPath,mediaFilename||null,mediaMimetype||null,mediaSize||null);
+          if(result.changes && quote) db.prepare('INSERT OR IGNORE INTO group_input_quote(id,quoted_id,author,sent_at,body,from_me,resolved) VALUES(?,?,?,?,?,?,?)')
+            .run(id,quote.quotedId,quote.author,quote.sentAt,quote.body||null,quote.fromMe?1:0,quote.resolved?1:0);
           if(result.changes && participant) db.prepare('INSERT INTO group_input_author VALUES(?,?)').run(id,JSON.stringify(participant));
           db.exec('COMMIT');
           return Boolean(result.changes);

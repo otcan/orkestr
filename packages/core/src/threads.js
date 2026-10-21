@@ -882,6 +882,8 @@ export async function appendThreadMessage(threadId, input, env = process.env) {
       const value = String(input[key] || "").trim();
       if (value) nextMessage[key] = value;
     }
+    const replyTo = normalizeReplyTo(input.replyTo);
+    if (replyTo) nextMessage.replyTo = replyTo;
     if (input.ownerSelfChatDedicatedTransport === true) nextMessage.ownerSelfChatDedicatedTransport = true;
     if (input.bridgeWhatsAppReply === true || input.bridgeWhatsAppReply === false) {
       nextMessage.bridgeWhatsAppReply = input.bridgeWhatsAppReply;
@@ -974,6 +976,24 @@ export async function appendThreadMessage(threadId, input, env = process.env) {
   await updateThread(thread.id, { state: activeInputStates.has(message.state) ? message.state : thread.state }, env);
   await appendEvent({ type: `thread_message_${message.state}`, threadId: thread.id, messageId: message.id, source: message.source, role: message.role, ownerUserId: message.ownerUserId }, env);
   return message;
+}
+
+// The message an inbound chat reply quoted ({messageId, author, sentAt, text,
+// isOwnReply}); `unavailable` marks a quote that could not be resolved.
+const replyToTextMax = 500;
+export function normalizeReplyTo(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const str = (item, max) => String(item ?? "").trim().slice(0, max);
+  const sentAt = str(value.sentAt, 40);
+  const replyTo = {
+    messageId: str(value.messageId, 300) || null,
+    author: str(value.author, 200) || null,
+    sentAt: Number.isFinite(Date.parse(sentAt)) ? sentAt : null,
+    text: str(value.text, replyToTextMax),
+    isOwnReply: value.isOwnReply === true,
+  };
+  if (value.unavailable === true) replyTo.unavailable = true;
+  return replyTo.messageId || replyTo.text || replyTo.unavailable ? replyTo : null;
 }
 
 function compactInputText(value) {

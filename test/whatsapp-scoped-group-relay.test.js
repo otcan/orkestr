@@ -531,3 +531,24 @@ test('a late reply is not sent while any transport delivery is uncertain', async
   assert.equal((await relay.tick()).error, 'group_delivery_requires_review');
   assert.equal(state.sent.length, 1);
 });
+
+test('a reply-quote of an Orkestr reply reaches the thread as structured replyTo plus a visible line', async t => {
+  const {relay, state, inboxDb, relayDb} = fixture(t, false, false, {ownChatId: '15550000001@c.us', timeZone: 'UTC'});
+  inboxDb.exec(`CREATE TABLE group_input_quote(id TEXT PRIMARY KEY,quoted_id TEXT,author TEXT,sent_at TEXT,body TEXT,from_me INTEGER,resolved INTEGER NOT NULL);
+    INSERT INTO group_input(id,chat_id,body,created_at) VALUES('wa-2','group-1','no need','2026-01-03');
+    INSERT INTO group_input_quote VALUES('wa-2','true_group-1_SENT1','15550000001@c.us','2026-01-02T21:50:00Z','short wa body',1,1);
+    INSERT INTO group_input(id,chat_id,body,created_at) VALUES('wa-3','group-1','what?','2026-01-04');
+    INSERT INTO group_input_quote VALUES('wa-3','GONE',NULL,NULL,NULL,0,0);`);
+  relayDb.exec(`CREATE TABLE IF NOT EXISTS reply_sent_text(provider_id TEXT PRIMARY KEY,request_id TEXT NOT NULL,text TEXT NOT NULL,sent_at TEXT NOT NULL);
+    INSERT INTO reply_sent_text VALUES('true_group-1_SENT1','r','Should I look into gulsah next? Full sentence follows here.','2026-01-02T21:50:00Z');`);
+  await relay.tick();
+  const own = state.posts.find(p => /no need/.test(p.body.text));
+  assert.deepEqual(own.body.replyTo, {messageId: 'true_group-1_SENT1', author: 'orkestr', sentAt: '2026-01-02T21:50:00Z',
+    text: 'Should I look into gulsah next? Full sentence follows here.', isOwnReply: true});
+  assert.match(own.body.text, /\[Replying to Orkestr message from 21:50: "Should I look into gulsah next\?[^"]*"\]\n\nno need$/);
+  const gone = state.posts.find(p => /what\?/.test(p.body.text));
+  assert.equal(gone.body.replyTo.unavailable, true);
+  assert.match(gone.body.text, /\[Replying to an unavailable message\]/);
+  const plain = state.posts.find(p => /hello/.test(p.body.text));
+  assert.equal(plain.body.replyTo, undefined);
+});
