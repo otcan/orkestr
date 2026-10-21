@@ -216,8 +216,9 @@ impl ConfiguredExecution {
                         | Err(orkestr_runtime::supervisor::Error::Store(
                             RuntimeStoreError::Busy | RuntimeStoreError::Unavailable,
                         )) => {}
-                        Err(_) => {
-                            return Err("Claude observation refused; reconciliation required")
+                        Err(error) => {
+                            super::observation_refused("Claude", &error);
+                            return Err("Claude observation refused; reconciliation required");
                         }
                     }
                 }
