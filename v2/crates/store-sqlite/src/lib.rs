@@ -36,21 +36,21 @@ mod production_runtime;
 mod replay;
 mod runtime;
 pub use production_runtime::{
-    AutomaticReplyConsumption, AutomaticReplyDelivery, AutomaticReplyProducer,
-    AutomaticReplyReservation, AutomaticReplyReservationResult, BoundSessionMetadata,
-    ClaudeProcessInitialization, CompletedToolDelivery, ConsumedOfflinePython,
-    ConsumedProviderDispatch, ExecutionConsumption, ExecutionWindowBootstrap,
-    ExecutionWindowCredential, ExecutionWindowRetirement, FastAdmissionInput, FastSource,
-    OfflinePythonAdmission, OfflinePythonConsumption, OfflinePythonDelegation,
-    OfflinePythonNativeCall, OfflinePythonNativeRequestId, OfflinePythonOutcome,
-    OfflinePythonOutput, OfflinePythonParent, OfflinePythonReceipt, OfflinePythonResultConsumption,
-    OfflinePythonResultPreparation, OfflinePythonResultReservation, OfflinePythonState,
-    ProductionSupervisorStore, ReadySessionTransition, RetiredExecutionWindowContext,
-    RunLeaseTransition, RunRenewalAuthority, StrandedExecutionWindow, StrandedExecutionWindowPlan,
-    TimerSchedulerIssuer, WorkerAdmissionInput, WorkerDelegation, WorkerDelegationReceipt,
-    WorkerDelegationResult, WorkerDelegationState, WorkerTaskClaim,
-    EXECUTION_WINDOW_BASE_LIFETIME_MS, EXECUTION_WINDOW_CLEANUP_MS,
-    EXECUTION_WINDOW_MAX_LIFETIME_MS,
+    auto_accept_request_key, AutomaticReplyConsumption, AutomaticReplyDelivery,
+    AutomaticReplyProducer, AutomaticReplyReservation, AutomaticReplyReservationResult,
+    BoundSessionMetadata, ClaudeProcessInitialization, CompletedToolDelivery,
+    ConsumedOfflinePython, ConsumedProviderDispatch, ExecutionConsumption,
+    ExecutionWindowBootstrap, ExecutionWindowCredential, ExecutionWindowRetirement,
+    FastAdmissionInput, FastSource, OfflinePythonAdmission, OfflinePythonConsumption,
+    OfflinePythonDelegation, OfflinePythonNativeCall, OfflinePythonNativeRequestId,
+    OfflinePythonOutcome, OfflinePythonOutput, OfflinePythonParent, OfflinePythonReceipt,
+    OfflinePythonResultConsumption, OfflinePythonResultPreparation, OfflinePythonResultReservation,
+    OfflinePythonState, ProductionSupervisorStore, ReadySessionTransition,
+    RetiredExecutionWindowContext, RunLeaseTransition, RunRenewalAuthority,
+    StrandedExecutionWindow, StrandedExecutionWindowPlan, TimerSchedulerIssuer,
+    WorkerAdmissionInput, WorkerDelegation, WorkerDelegationReceipt, WorkerDelegationResult,
+    WorkerDelegationState, WorkerTaskClaim, EXECUTION_WINDOW_BASE_LIFETIME_MS,
+    EXECUTION_WINDOW_CLEANUP_MS, EXECUTION_WINDOW_MAX_LIFETIME_MS,
 };
 
 pub use production_runtime::inspection::{

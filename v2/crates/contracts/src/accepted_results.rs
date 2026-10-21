@@ -13,6 +13,10 @@ pub struct AcceptedResult {
     /// Last canonical progress payload before this exact completion, if any.
     pub payload_id: Option<PayloadId>,
     pub payload_removed: bool,
+    /// The server accepted this proposal for the owner (owner auto-accept,
+    /// audited separately); false for an owner's own browser decision.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub auto_accepted: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

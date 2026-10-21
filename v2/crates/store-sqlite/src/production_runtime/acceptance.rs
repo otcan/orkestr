@@ -5,6 +5,16 @@ use orkestr_v2_contracts::{
     ExecutionAcceptanceRequest,
 };
 
+/// Who decides. The owner through their own boundary (a browser credential,
+/// or trusted composition that already authenticated them), or the server's
+/// system principal acting for the owner under the conversation's auto-accept
+/// setting and the live window's private credential.
+#[derive(Clone, Copy)]
+pub(super) enum Principal<'a> {
+    Owner(Option<&'a str>),
+    AutoAccept,
+}
+
 impl Store {
     /// HTTP-facing owner decision. Credential validity is checked again under
     /// the same immediate transaction as both fresh acceptance and receipt replay.
@@ -49,14 +59,27 @@ impl Store {
         input: &ExecutionAcceptanceRequest,
         credential: Option<&str>,
     ) -> Result<ExecutionAcceptanceReceipt> {
-        if self.authority.is_some() {
+        self.accept_as(owner, conversation, input, Principal::Owner(credential))
+            .await
+    }
+
+    pub(super) async fn accept_as(
+        &self,
+        owner: &OwnerId,
+        conversation: &ConversationId,
+        input: &ExecutionAcceptanceRequest,
+        principal: Principal<'_>,
+    ) -> Result<ExecutionAcceptanceReceipt> {
+        // Only the owner's own boundary (unbound Store) or the server's
+        // window-bound system principal may decide; never a provider port.
+        if matches!(principal, Principal::Owner(_)) == self.authority.is_some() {
             return Err(RuntimeStoreError::Unauthorized);
         }
         if !input.is_valid() || conversation.0.is_nil() {
             return Err(RuntimeStoreError::InvalidInput);
         }
         let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
-        if let Some(credential) = credential {
+        if let Principal::Owner(Some(credential)) = principal {
             let authorized: i64 = sqlx::query_scalar("SELECT count(*) FROM auth_sessions WHERE token_hash=? AND owner_id=? AND expires_at>unixepoch()")
                 .bind(crate::digest(credential)).bind(owner.to_string())
                 .fetch_one(&mut *tx).await.map_err(db)?;
@@ -65,6 +88,19 @@ impl Store {
             }
         }
         crate::runtime::scope(&mut tx, owner, conversation).await?;
+        let auto = match principal {
+            Principal::Owner(_) => None,
+            Principal::AutoAccept => Some(
+                super::auto_acceptance::authorize(
+                    self,
+                    &mut tx,
+                    owner,
+                    conversation,
+                    &input.run_id,
+                )
+                .await?,
+            ),
+        };
         if let Some(row)=sqlx::query("SELECT * FROM production_acceptances WHERE owner_id=? AND conversation_id=? AND request_key=?")
             .bind(owner.to_string()).bind(conversation.to_string()).bind(&input.request_key).fetch_optional(&mut *tx).await.map_err(db)? {
             if row.get::<String,_>("run_id")!=input.run_id.to_string()
@@ -124,6 +160,9 @@ impl Store {
         sqlx::query("INSERT INTO production_acceptances(run_id,owner_id,conversation_id,completion_event_id,event_id,request_key,requested_revision,receipt_revision) VALUES(?,?,?,?,?,?,?,?)")
             .bind(input.run_id.to_string()).bind(owner.to_string()).bind(conversation.to_string()).bind(input.completion_event_id.to_string())
             .bind(event.to_string()).bind(&input.request_key).bind(input.expected_revision).bind(revision).execute(&mut *tx).await.map_err(db)?;
+        if let Some(auto) = &auto {
+            auto.record(&mut tx, &input.run_id).await?;
+        }
         #[cfg(all(test, unix))]
         super::process_tests::checkpoint("acceptance-before-commit");
         #[cfg(feature = "fixture-test-controls")]

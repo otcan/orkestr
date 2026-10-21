@@ -129,9 +129,10 @@ pub struct ConversationSettings {
     pub provider_generation: i64,
     pub updated_at_ms: Option<i64>,
     /// Owner delegation of acceptance. False (the default, V1 behaviour): the
-    /// server accepts each completed proposal of this conversation on the
-    /// owner's behalf with the owner's own browser session. True: proposals
-    /// wait for a manual "Accept".
+    /// server (a system principal authorized by this setting and the live
+    /// window's private credential, audited as `auto_accept`) accepts each
+    /// completed Worker, Fast and Deep proposal of this conversation on the
+    /// owner's behalf. True: proposals wait for a manual "Accept".
     #[serde(default)]
     pub review_before_accepting: bool,
 }
