@@ -17,9 +17,12 @@ if [[ ${UI_EXECUTION_CONTROLS:-0} == 1 ]]; then
     [[ ${UI_SERVER_CANDIDATE:-} =~ ^[0-9a-f]{40}$ ]] || { echo 'Control bundle requires an exact registered matching server candidate SHA' >&2; exit 2; }
     features=web,execution-controls
 fi
-"$V2_CARGO" build --release --offline --locked -p orkestr-v2-ui --no-default-features --features "$features" --target wasm32-unknown-unknown
+# wasm-release (workspace Cargo.toml): size-optimized, LTO, one codegen unit.
+"$V2_CARGO" build --profile wasm-release --offline --locked -p orkestr-v2-ui --no-default-features --features "$features" --target wasm32-unknown-unknown
 mkdir -- "$UI_BUNDLE_DIR"
-wasm-bindgen "$CARGO_TARGET_DIR/wasm32-unknown-unknown/release/orkestr-v2-ui.wasm" --target web --out-dir "$UI_BUNDLE_DIR" --out-name orkestr_v2_ui --no-typescript
+# The name and producers sections are debugging metadata only (about a
+# third of the download); browsers do not need them to run the bundle.
+wasm-bindgen "$CARGO_TARGET_DIR/wasm32-unknown-unknown/wasm-release/orkestr-v2-ui.wasm" --target web --out-dir "$UI_BUNDLE_DIR" --out-name orkestr_v2_ui --no-typescript --remove-name-section --remove-producers-section
 cat > "$UI_BUNDLE_DIR/index.html" <<'HTML'
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content"><title>Orkestr</title></head>

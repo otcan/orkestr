@@ -9,6 +9,12 @@ if (!route.test(input.path) && !manage.test(input.path) && !(sidebar.test(input.
 const headers = {"Content-Type": "application/json"};
 if (input.csrf && !["GET", "HEAD"].includes(input.method)) headers["x-orkestr-csrf"] = input.csrf;
 if (input.bootstrap) headers["x-orkestr-bootstrap"] = input.bootstrap;
+// Poll reads revalidate: the last body per GET path is kept in memory with
+// its ETag, and a 304 answers with that body. The server's tag is a digest of
+// what it would send this session, so a match is always the current body.
+const etags = (globalThis.__orkestrEtags ??= new Map());
+const revalidate = input.method === "GET" ? etags.get(input.path) : undefined;
+if (revalidate) headers["If-None-Match"] = revalidate.etag;
 const controller = new AbortController();
 const timer = setTimeout(() => controller.abort(), 15000);
 try {
@@ -18,6 +24,7 @@ try {
         body: input.body === null ? undefined : JSON.stringify(input.body)
     });
     if (response.status === 204) return {status: 204, body: null};
+    if (response.status === 304 && revalidate) return {status: 200, body: revalidate.body};
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let bytes = 0, text = "";
@@ -33,5 +40,13 @@ try {
     let body;
     try { body = JSON.parse(text); }
     catch { body = {code: "invalid_response", message: "Unexpected server response"}; }
+    const etag = response.headers.get("etag");
+    if (input.method === "GET") {
+        etags.delete(input.path);
+        if (response.status === 200 && etag) {
+            etags.set(input.path, {etag, body});
+            if (etags.size > 32) etags.delete(etags.keys().next().value);
+        }
+    }
     return {status: response.status, body};
 } finally { clearTimeout(timer); }

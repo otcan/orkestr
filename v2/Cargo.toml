@@ -17,3 +17,11 @@ sha2 = "=0.10.9"
 
 thiserror = "=2.0.17"
 tempfile = "=3.23.0"
+
+# Browser bundle only (selected by apps/ui/scripts/bundle.sh): smallest code
+# for the WebAssembly download; the server keeps the plain release profile.
+[profile.wasm-release]
+inherits = "release"
+opt-level = "s"
+lto = true
+codegen-units = 1
