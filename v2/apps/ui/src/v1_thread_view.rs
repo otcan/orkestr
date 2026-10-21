@@ -114,6 +114,7 @@ pub fn V1ThreadView(
                 if !loaded() && notice().is_empty() { p { class: "empty-conversation", "Loading V1 history…" } }
                 p { role: "status", class: "v1-notice", "{notice}" }
             }
+            crate::scroll_pin::ScrollPin {}
         }
     }
 }
