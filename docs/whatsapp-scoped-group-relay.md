@@ -138,6 +138,42 @@ keep the turn open, use the same durable payload/receipt journal and label their
 footer `msg:*update*`. A final supersedes any unsent progress already in history.
 Enabling updates does not reopen completed turns or change legacy group bindings.
 
+## Owner-authorized coordinator access
+
+Only when the account owner explicitly grants one operator agent full use of
+their own account, add a `coordinator` block to the transport config:
+
+```json
+"coordinator": {"tokenSha256": "<sha256 hex of a dedicated bearer>", "authorizedAt": "<ISO time of the owner's grant>"}
+```
+
+The coordinator bearer is a separate credential (it must differ from the
+transport token; only its hash is in the config). It reaches only
+`/coordinator/*`, and the transport token never reaches those routes:
+
+| Route | Purpose |
+| --- | --- |
+| `GET /coordinator/health` | Readiness, identity match, uncertain coordinator sends |
+| `GET /coordinator/chats?cursor=&limit=&unread_only=1` | Every chat, metadata only, newest first, cursor paging (max 100) |
+| `GET /coordinator/chats/<chat>/messages?before=&limit=` | History page older than `before` (max 50); never marks seen |
+| `GET /coordinator/groups/<group>/members` | Group participants and admin flags |
+| `POST /coordinator/send` `{to, text, requestId}` | Originate a text to any individual or group chat; no reply parent needed |
+| `GET /coordinator/sends?state=uncertain` | Recent coordinator send journal rows |
+| `POST /coordinator/resolve` `{requestId, outcome, providerId?}` | Operator decision for an uncertain send after reading the chat |
+
+Coordinator sends use their own journal table. A request ID is sent at most
+once; a retry with the same text returns the recorded receipt, a different
+text conflicts. A send without a usable receipt is confirmed by reading the
+chat back (same rule as group replies); otherwise it is `uncertain` and blocks
+further coordinator sends to that one chat only. It never blocks group replies
+or other chats. A coordinator text in an allowlisted group is admitted as owner
+input like a message typed on the phone, so do not run a second relay on the
+same group input.
+
+The bridge mounts these routes through `transportOnly.routes(app, getClient)`,
+added by `prepare-scoped-group-bridge.mjs`. Without a `coordinator` block,
+nothing is mounted and the bearer rules are unchanged.
+
 ## Replies after the turn (bound api-session)
 
 An assistant message posted with `orkestr api-session message` on a WhatsApp

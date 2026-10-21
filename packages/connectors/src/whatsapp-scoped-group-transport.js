@@ -10,6 +10,7 @@ import {DatabaseSync} from 'node:sqlite';
 import {createDeliveryRouteFence} from './whatsapp-delivery-route-fence.js';
 import {notificationScope, createTimerNotificationProofStore} from './whatsapp-timer-notification-proof.js';
 import {downloadScopedGroupMedia} from './whatsapp-scoped-group-media.js';
+import {validateCoordinatorConfig, coordinatorTokenMatches, createCoordinatorAccess} from './whatsapp-scoped-coordinator.js';
 
 const fail=code=>{throw new Error(`group_transport_${code}`);};
 const hash=value=>crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -39,7 +40,8 @@ export function validateScopedGroupConfig(config,now=Date.now) {
   const scope=notificationScope(config);
   const fencedThreads=scopedRouteMembership(config);
   if(fencedThreads && [...fencedThreads].some(id=>!config.groups.some(g=>g.threadId===id)))fail('route_thread_invalid');
-  return {groups,authors,participants,scope,fencedThreads};
+  const coordinator=validateCoordinatorConfig(config);
+  return {groups,authors,participants,scope,fencedThreads,coordinator};
 }
 
 export function createScopedGroupTransport({config,token,base,dbPath=config.journalPath,now=Date.now,routeFence: suppliedFence,proofStore: suppliedProof,sendLookupDelayMs=1000,
@@ -47,7 +49,9 @@ export function createScopedGroupTransport({config,token,base,dbPath=config.jour
   if(!token)fail('configuration_invalid');
   // Validate the whole contract before opening durable state: a build that
   // rejects the live configuration must leave the journal untouched.
-  const {groups,authors,participants,scope,fencedThreads}=validateScopedGroupConfig(config,now);
+  const {groups,authors,participants,scope,fencedThreads,coordinator}=validateScopedGroupConfig(config,now);
+  // The coordinator bearer must be a dedicated credential, never the transport token.
+  if(coordinatorTokenMatches(coordinator,token))fail('configuration_invalid');
   const db=new DatabaseSync(dbPath);db.exec(`PRAGMA journal_mode=WAL;
     CREATE TABLE IF NOT EXISTS group_input(id TEXT PRIMARY KEY,chat_id TEXT NOT NULL,body TEXT NOT NULL,created_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS group_send(id TEXT PRIMARY KEY,hash TEXT NOT NULL,chat_id TEXT NOT NULL,parent_id TEXT NOT NULL,state TEXT NOT NULL,provider_id TEXT,created_at TEXT NOT NULL);
@@ -76,12 +80,20 @@ export function createScopedGroupTransport({config,token,base,dbPath=config.jour
   const serial=work=>{const next=tail.catch(()=>{}).then(work);tail=next;return next;};
   const uncertain=()=>Boolean(db.prepare("SELECT 1 FROM group_send WHERE state='uncertain' LIMIT 1").get());
   const assertClient=client=>{if(client?.info?.wid?._serialized!==config.ownChatId)fail('account_mismatch');};
+  // Owner-authorized coordinator: its own bearer, routes, and send journal table.
+  const coordinatorAccess=coordinator ? createCoordinatorAccess({config,coordinator,db,serial,now,lookupDelayMs:sendLookupDelayMs}) : null;
   return {
     ...base,enabled:true,groupsMode:true,close:()=>{db.close();if(!suppliedFence)routeFence?.close();if(!suppliedProof)proofStore?.close();},blocked:uncertain,
     assertClient,
     middleware(req,res,next) {
       const matchToken=String(req.get('authorization')||'').match(/^Bearer (.+)$/i);
       const supplied=Buffer.from(matchToken?.[1] || ''),expected=Buffer.from(token);
+      // The coordinator bearer reaches only /coordinator/*; the transport token never does.
+      if(coordinatorAccess && matchToken && coordinatorTokenMatches(coordinator,matchToken[1])) {
+        if(!req.path.startsWith('/coordinator/'))return res.status(403).json({ok:false,error:'coordinator_scope_denied'});
+        req.orkestrCoordinator=true;
+        return next();
+      }
       if(!matchToken || supplied.length!==expected.length || !crypto.timingSafeEqual(supplied,expected))return res.status(401).json({ok:false,error:'group_transport_unauthorized'});
       let allowed=req.method==='GET' && ['/health','/api/accounts'].includes(req.path);
       const match=req.path.match(/^\/api\/chats\/([^/]+)\/(history|meta)$/);
@@ -98,6 +110,9 @@ export function createScopedGroupTransport({config,token,base,dbPath=config.jour
       }
       return allowed?next():res.status(403).json({ok:false,error:'group_transport_scope_denied'});
     },
+    // Mounted by the bridge right after `middleware`, before its own routes.
+    routes(app,getClient) {if(coordinatorAccess)app.use(coordinatorAccess.handler(getClient));},
+    coordinator:coordinatorAccess,
     historyClient(client,chatId) {assertClient(client);if(!groups.has(chatId))fail('group_denied');return client;},
     async reconcile(client) {
       assertClient(client);
@@ -194,7 +209,7 @@ export function createScopedGroupTransport({config,token,base,dbPath=config.jour
         {sendSeen:false,sendMediaAsDocument:true}),valid,
         message=>message?.type==='document' && message?._data?.filename===document?.filename);
     },
-    policyFields(buildHash) {return {version:1,transportOnly:true,groupsOnly:true,groupCount:groups.size,additionalOwnerAuthors:authors.count,participantGroups:participants.count,timerNotifications:!!scope,routeFence:!!routeFence,sendAttempts:1,textOnly:true,maxTextLength:SCOPED_SEND_MAX_TEXT_LENGTH,markSeen:false,automaticRouting:false,strictBearer:true,buildHash};},
+    policyFields(buildHash) {return {version:1,transportOnly:true,groupsOnly:true,groupCount:groups.size,additionalOwnerAuthors:authors.count,participantGroups:participants.count,timerNotifications:!!scope,routeFence:!!routeFence,sendAttempts:1,textOnly:true,maxTextLength:SCOPED_SEND_MAX_TEXT_LENGTH,markSeen:false,automaticRouting:false,strictBearer:true,coordinator:!!coordinatorAccess,buildHash};},
     diagnostics(client,buildHash) {return {identityMatches:client?.info?.wid?._serialized===config.ownChatId,...this.policyFields(buildHash)};},
   };
   // `text` is the canonical payload string: the message itself, or a
