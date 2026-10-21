@@ -26,6 +26,8 @@ use std::path::Path;
 pub const CONFIG_ENV: &str = "ORKESTR_V2_WHATSAPP_CHATS_CONFIG";
 const MAX_PARTICIPANTS: usize = 16;
 const RESPONSE_CAP: usize = 2 * 1024 * 1024;
+/// V1 creates the group on WhatsApp before it answers (observed: over 12 s).
+const GROUP_DEADLINE: std::time::Duration = std::time::Duration::from_secs(90);
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -255,11 +257,28 @@ async fn call(
 ) -> Result<Value, StageError> {
     match client.write(method, path, body, RESPONSE_CAP).await {
         Ok((200..=299, value)) => Ok(value),
+        Ok((_, value)) if outcome_unknown(&value) => {
+            Err(StageError("whatsapp_group_outcome_unknown"))
+        }
         Ok(_) | Err(BrokerError::Leased | BrokerError::Lost | BrokerError::Denied) => {
             Err(StageError(code))
         }
         Err(BrokerError::Unavailable) => Err(StageError(code)),
     }
+}
+
+/// V1's group provisioning reports an unknown external outcome: the group may
+/// exist. V1 keeps the operation and reconciles it on the next attempt; it
+/// needs an operator review before anything else is created.
+pub(crate) fn outcome_unknown(value: &Value) -> bool {
+    ["provisioning", "groupCreateFailure", "failure"]
+        .iter()
+        .any(|key| {
+            value.get(*key).is_some_and(|p| {
+                text(p, "externalOutcome").as_deref() == Some("outcome_unknown")
+                    || text(p, "state").as_deref() == Some("outcome_unknown")
+            })
+        })
 }
 
 /// Stage 2: the V1 thread under the provision's own id.
@@ -322,14 +341,24 @@ pub(crate) async fn create_group(
     thread_id: &str,
     name: &str,
 ) -> Result<Group, StageError> {
-    let value = call(
-        v1,
-        "POST",
-        "/api/connectors/whatsapp/thread-groups",
-        group_body(chats, thread_id, name),
-        "whatsapp_group_failed",
-    )
-    .await?;
+    let value = match v1
+        .write_within(
+            GROUP_DEADLINE,
+            "POST",
+            "/api/connectors/whatsapp/thread-groups",
+            group_body(chats, thread_id, name),
+            RESPONSE_CAP,
+        )
+        .await
+    {
+        Ok((200..=299, value)) => value,
+        Ok((_, value)) if outcome_unknown(&value) => {
+            return Err(StageError("whatsapp_group_outcome_unknown"))
+        }
+        Ok(_) => return Err(StageError("whatsapp_group_failed")),
+        // No answer: V1 may still be creating it; the retry reconciles.
+        Err(_) => return Err(StageError("whatsapp_group_unconfirmed")),
+    };
     group_from(&value).ok_or(StageError("whatsapp_group_unconfirmed"))
 }
 
