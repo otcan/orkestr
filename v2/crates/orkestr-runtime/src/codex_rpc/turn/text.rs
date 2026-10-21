@@ -5,6 +5,12 @@ use serde_json::Value;
 
 const MAX_ITEMS: usize = 128;
 
+/// Static reason for a refused turn (diagnostics only; never provider text).
+fn refused(reason: &'static str) -> Blocker {
+    eprintln!("codex turn text refused: {reason}");
+    Blocker::Protocol
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Phase {
     Commentary,
@@ -205,39 +211,45 @@ impl TurnText {
         let items = items
             .as_array()
             .filter(|items| items.len() <= MAX_ITEMS)
-            .ok_or(Blocker::Protocol)?;
+            .ok_or_else(|| refused("terminal items over bound"))?;
         let view = match turn.get("itemsView") {
             None => "full",
-            Some(value) => value.as_str().ok_or(Blocker::Protocol)?,
+            Some(value) => value
+                .as_str()
+                .ok_or_else(|| refused("terminal itemsView type"))?,
         };
         if !matches!(view, "full" | "summary" | "notLoaded")
             || (view == "notLoaded" && !items.is_empty())
         {
-            return Err(Blocker::Protocol);
+            return Err(refused("terminal itemsView value"));
         }
         let mut seen = Vec::new();
         for value in items {
-            value.as_object().ok_or(Blocker::Protocol)?;
+            value
+                .as_object()
+                .ok_or_else(|| refused("terminal item shape"))?;
             if value.get("type").and_then(Value::as_str) != Some("agentMessage") {
                 continue;
             }
-            let id = identifier(value.get("id").ok_or(Blocker::Protocol)?)?;
+            let id = identifier(value.get("id").ok_or_else(|| refused("terminal item id"))?)?;
             let item = self
                 .items
                 .iter()
                 .find(|item| item.id.as_deref() == Some(id))
-                .ok_or(Blocker::Protocol)?;
+                .ok_or_else(|| refused("terminal agent message never observed"))?;
             if seen.contains(&id)
                 || !item.completed
                 || value.get("text").and_then(Value::as_str) != Some(item.text.as_str())
                 || phase(value)?.is_some_and(|phase| Some(phase) != item.phase)
             {
-                return Err(Blocker::Protocol);
+                return Err(refused("terminal agent message differs from observed"));
             }
             seen.push(id);
         }
         if view == "full" && seen.len() != self.items.len() {
-            return Err(Blocker::Protocol);
+            return Err(refused(
+                "observed agent message missing from full terminal items",
+            ));
         }
         Ok(())
     }
@@ -250,7 +262,7 @@ impl TurnText {
         let lifecycle = self.items.iter().any(|item| item.boundary);
         let index = if lifecycle {
             if self.items.iter().any(|item| !item.completed) {
-                return Err(Blocker::Protocol);
+                return Err(refused("agent message never completed"));
             }
             self.final_item
                 .or_else(|| {
