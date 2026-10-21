@@ -160,3 +160,75 @@ fn conversation_listing_keeps_labels_and_refuses_foreign_or_malformed_rows() {
     bad["claim"] = json!("forbidden");
     assert!(listing(&json!({"conversation_id":ID,"timers":[bad]}), ID).is_none());
 }
+
+fn server_listing(timer_extra: serde_json::Value) -> serde_json::Value {
+    let mut timer = json!({"namespace":ID,"source_digest":"synthetic-digest","schedule":{"kind":"calendar","timezone":"Europe/Berlin",
+        "weekdays":[1,2,3,4,5],"start_minute":540,"end_minute":1200,"every_hours":1,"minutes":[0],
+        "summary":"Hourly at :00, Mon–Fri, 09:00–20:00 Europe/Berlin"},"conversation_id":ID,"state":"enabled","dormant_reason":null,
+        "revision":2,"generation":1,"next_due_ms":1792652400000_i64,"controller_armed":true,"controller_hold":null,
+        "label":"Jobs","source_thread_id":"orkestr:calendar","source_namespace":"orkestr:calendar","source_timer_id":ID,"source_enabled":false});
+    timer
+        .as_object_mut()
+        .unwrap()
+        .extend(timer_extra.as_object().unwrap().clone());
+    json!({"conversation_id":ID,"timers":[timer]})
+}
+#[test]
+fn listing_reads_policy_stats_local_times_and_digests() {
+    let mut value = server_listing(json!({"native":true,
+        "policy":{"revision":1,"silent_mode":"unless_changed","pause_until_ms":null,"skip_dates":[],"skip_timezone":null,"digest":{"timezone":"Europe/Berlin","minutes":[540]},"trigger":null,"digest_since_ms":1,"updated_ms":1},
+        "stats":{"last_kind":"silent","last_summary":"no news","last_at_ms":1792650000000_i64,"silent_runs":4,"total_runs":9},
+        "next_due_local":"Thu 22 Oct 09:00 CEST","last_result_local":"Thu 22 Oct 08:00 CEST","pause_until_local":null}));
+    value["pause_until_ms"] = json!(1792700000000_i64);
+    value["pause_until_local"] = json!("Thu 22 Oct 22:53 CEST");
+    value["digests"] = json!([{"id":ID,"namespace":ID,"slot_ms":1,"text":"Digest: Jobs","item_count":3,"created_ms":2,"delivered_ms":null}]);
+    let listing = orkestr_v2_ui::timers::full_listing(&value, ID).unwrap();
+    let row = &listing.rows[0];
+    assert!(row.native);
+    assert_eq!(row.stats.as_ref().unwrap().silent_runs, 4);
+    assert_eq!(
+        row.policy
+            .as_ref()
+            .unwrap()
+            .digest
+            .as_ref()
+            .unwrap()
+            .minutes,
+        vec![540]
+    );
+    assert_eq!(row.local.next.as_deref(), Some("Thu 22 Oct 09:00 CEST"));
+    assert_eq!(listing.pause_until_ms, Some(1792700000000));
+    assert_eq!(listing.digests[0].item_count, 3);
+    assert_eq!(orkestr_v2_ui::timers::listing(&value, ID).unwrap().len(), 1);
+}
+#[test]
+fn an_older_server_without_policy_still_lists() {
+    let listing = orkestr_v2_ui::timers::full_listing(&server_listing(json!({})), ID).unwrap();
+    let row = &listing.rows[0];
+    assert!(row.policy.is_none() && row.stats.is_none() && !row.native);
+    assert!(listing.digests.is_empty());
+}
+#[test]
+fn malformed_calendar_rules_and_foreign_listings_are_refused() {
+    let mut value = server_listing(json!({}));
+    assert!(
+        orkestr_v2_ui::timers::full_listing(&value, "00000000-0000-4000-8000-000000000002")
+            .is_none()
+    );
+    for (field, bad) in [
+        ("weekdays", json!([8])),
+        ("minutes", json!([60])),
+        ("every_hours", json!(0)),
+        ("end_minute", json!(1440)),
+        ("start_minute", json!(1300)),
+    ] {
+        value = server_listing(json!({}));
+        value["timers"][0]["schedule"][field] = bad;
+        assert!(
+            orkestr_v2_ui::timers::full_listing(&value, ID).is_none(),
+            "{field}"
+        );
+    }
+    value = server_listing(json!({"claim":"forbidden"}));
+    assert!(orkestr_v2_ui::timers::full_listing(&value, ID).is_none());
+}

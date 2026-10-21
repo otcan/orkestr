@@ -37,6 +37,14 @@ const screenshot = async (label, name) => {
   await mkdir(dir, { recursive: true });
   await page.screenshot({ path: `${dir}/${label}-${name}.png` });
 };
+const clickWithin = async (scope, label) => {
+  const found = await page.evaluate((scope, label) => {
+    const button = [...document.querySelectorAll(`${scope} button`)].find(b => b.textContent.trim() === label && !b.disabled);
+    if (!button) return false;
+    button.click(); return true;
+  }, scope, label);
+  assert.ok(found, `Missing button in ${scope}: ${label}`);
+};
 const noHorizontalScroll = async () => {
   const { scroll, width } = await page.evaluate(() => ({ scroll: document.documentElement.scrollWidth, width: window.innerWidth }));
   assert.ok(scroll <= width, `Horizontal page scroll at ${width}px (${scroll}px content)`);
@@ -171,7 +179,7 @@ export const scenarios = [
     await page.waitForSelector('#composer');
   }],
   ['tabs', async () => {
-    for (const [tab, expected] of [['Work', 'Provider'], ['Projects', 'Create project'], ['Timers', 'Saved timer ID'], ['Memory', 'Optional saved facts'], ['Chat', 'Message']]) {
+    for (const [tab, expected] of [['Work', 'Provider'], ['Projects', 'Create project'], ['Timers', 'New timer'], ['Memory', 'Optional saved facts'], ['Chat', 'Message']]) {
       await clickText(tab);
       await waitText(expected);
     }
@@ -349,7 +357,55 @@ export const scenarios = [
     // Timers of the chat are listed; selecting one opens its controls.
     await clickText('Timers');
     await waitText('Synthetic morning brief');
+    // Calendar timer: rule in plain words, next run, last result, silent-run count.
+    await waitText('Hourly at :00, Mon\u2013Fri, 08:00\u201319:00 Europe/Berlin');
+    await waitText('Wed 21 Oct 14:00 CEST');
+    await waitText('Silent: no news');
+    await waitText('4 silent runs since the last message');
+    await waitText('Silent unless new');
+    await waitText('Recent digests (1)');
     await screenshot(label, 'timers');
+    await noHorizontalScroll();
+    // Pause the timer for an hour, see it paused, resume it.
+    await page.evaluate(() => [...document.querySelectorAll('.timer-card summary')].find(n => n.textContent.startsWith('Pause Synthetic triage')).click());
+    await clickWithin('.timer-card', '1 hour');
+    await page.waitForFunction(() => document.body.textContent.includes('Paused until Thu 22 Oct 09:00 CEST'));
+    const pause = state.timerCalls.find(c => c.route === ':id/pause');
+    assert.ok(Number.isSafeInteger(pause.until_ms) && pause.until_ms > Date.now(), 'pause until a future instant');
+    assert.deepEqual(Object.keys(pause).sort(), ['method', 'route', 'until_ms'], 'only the end of the pause is sent');
+    await clickWithin('.timer-card', 'Resume');
+    await page.waitForFunction(() => !document.body.textContent.includes('Paused until'));
+    assert.equal(state.timerCalls.filter(c => c.route === ':id/pause').at(-1).until_ms, null);
+    // Whole-chat pause and resume.
+    await page.evaluate(() => [...document.querySelectorAll('.timer-chatbar summary')][0].click());
+    await clickWithin('.timer-chatbar', 'Until I resume');
+    await waitText('Timers in this chat are paused');
+    await clickText('Resume all');
+    await page.waitForFunction(() => !document.body.textContent.includes('Timers in this chat are paused'));
+    assert.deepEqual(state.timerCalls.filter(c => c.scope === 'chat').map(c => c.until_ms), [4102444800000, null]);
+    // Editor: live plain-words preview, next runs from the server, nothing sent until saved.
+    await clickText('New timer');
+    await page.waitForSelector('#timer-name');
+    await page.type('#timer-name', 'Evening check');
+    await page.$eval('#timer-start', n => { n.value = ''; });
+    await page.type('#timer-start', '09:00');
+    await page.$eval('#timer-end', n => { n.value = ''; });
+    await page.type('#timer-end', '20:00');
+    await waitText('Hourly at :00, Mon\u2013Fri, 09:00\u201320:00 Europe/Berlin');
+    await clickText('Show next runs');
+    await waitText('Wed 21 Oct 15:00 CEST');
+    await page.type('#timer-text', 'Look for news');
+    await screenshot(label, 'timer-editor');
+    await noHorizontalScroll();
+    await clickText('Create and start');
+    await page.waitForFunction(() => document.body.textContent.includes('Saved.'));
+    const created = state.timerCalls.find(c => c.route === 'calendar' && c.method === 'POST');
+    assert.equal(created.label, 'Evening check');
+    assert.equal(created.schedule.start_minute, 540);
+    assert.equal(created.schedule.end_minute, 1200);
+    assert.equal(created.text, 'Look for news');
+    assert.equal(created.policy.silent_mode, 'unless_changed');
+    assert.ok(!('next_due_ms' in created) && !('generation' in created), 'no clock or claim from the page');
     await clickText('Chat');
   }],
   ['v1-manage', async label => {
