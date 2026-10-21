@@ -30,6 +30,9 @@ pub fn AcceptedReplies(
     let read_ticket = use_hook(|| Rc::new(Cell::new(0_u64)));
     let mut notice = use_signal(String::new);
     let mut busy = use_signal(|| false);
+    let mut window_start = use_signal(|| 0_i64);
+    let now = crate::message_time_view::use_now();
+    let times = crate::message_time_view::use_message_times(id.clone(), window_start);
     use_drop(move || {
         mounted.set(false);
         if let Some(eval) = channel.read().as_ref() {
@@ -116,6 +119,16 @@ pub fn AcceptedReplies(
             .unwrap_or_default()
     };
     let rows = chat_timeline::ordered(&messages, &results);
+    // Times start just before the oldest row on screen.
+    let first = rows
+        .as_ref()
+        .ok()
+        .and_then(|r| r.first().map(|row| row.sequence() - 1))
+        .unwrap_or(0);
+    if *window_start.peek() != first {
+        window_start.set(first);
+    }
+    let times_now = times.read();
     rsx! { section { class: if inline { "chat-transcript" } else { "accepted-history" }, "aria-label":"Accepted replies",
         if !inline { h2 { "Accepted replies" } }
         if let Ok(rows) = rows {
@@ -129,6 +142,9 @@ pub fn AcceptedReplies(
                                 p { "{input.text}" }
                             } },
                             Row::Reply(reply) => rsx! { AcceptedReply { conversation:id.clone(), row:reply.clone(), session_scope, onexpired } },
+                        }
+                        if let Some(time) = times_now.get(&row.sequence()) {
+                            crate::message_time_view::MessageTime { at_ms: time.at_ms, now_ms: now(), receipts: time.receipts.clone() }
                         }
                     }
                 }

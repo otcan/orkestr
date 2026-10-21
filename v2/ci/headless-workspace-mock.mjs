@@ -132,7 +132,8 @@ function v1History(state, thread) {
   const messages = thread === V1_GROUP ? [
     { message_id: 'v1-m10', author: 'owner', text: 'Synthetic owner question on V1', created_at_ms: Date.now() - 4 * 3600000, phase: null, cursor: 10 },
     { message_id: 'v1-m11', author: 'participant', text: 'Synthetic member note', created_at_ms: Date.now() - 3.5 * 3600000, phase: null, cursor: 11 },
-    { message_id: 'v1-m12', author: 'assistant', text: 'Synthetic coordinator reply', created_at_ms: Date.now() - 3 * 3600000, phase: 'final_answer', cursor: 12 },
+    { message_id: 'v1-m12', author: 'assistant', text: 'Synthetic coordinator reply', created_at_ms: Date.parse('2025-07-01T14:42:05Z'), phase: 'final_answer', cursor: 12,
+      receipts: [{ kind: 'sent_to_whatsapp', at_ms: Date.parse('2025-07-01T14:42:09Z') }] },
   ] : [];
   // After owner input from the app: V1 works for two polls, then the
   // coordinator's reply appears.
@@ -276,6 +277,13 @@ async function api(state, req, res, url) {
     const rows = state.archived.filter(x => x.archive_sequence > after).slice(0, limit);
     const more = state.archived.some(x => x.archive_sequence > (rows.at(-1)?.archive_sequence ?? after));
     return json(res, 200, { conversation_id: id, entries: rows, next_after: more ? rows.at(-1).archive_sequence : null });
+  }
+  // Message times: the first native message has a fixed past time (Berlin summer).
+  if (rest === '/message-times' && req.method === 'GET') {
+    const after = Number(q.get('after') ?? 0);
+    const times = state.messages[id].filter(m => m.sequence > after).map(m => ({ sequence: m.sequence, kind: 'input',
+      at_ms: m.sequence === 1 ? Date.parse('2025-07-01T14:42:05Z') : Date.now(), receipts: [] }));
+    return json(res, 200, { conversation_id: id, times, next_after: null });
   }
   if (rest === '/execution' && req.method === 'GET') {
     if (id !== B) { res.writeHead(204, { 'cache-control': 'no-store' }); return res.end(); }

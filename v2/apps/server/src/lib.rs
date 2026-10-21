@@ -44,6 +44,7 @@ mod intelligence_http;
 pub mod live_map;
 mod memory_service;
 pub mod message_attachments;
+mod message_times_http;
 pub mod offline_python;
 pub mod owned_children;
 pub mod owned_execution;
@@ -482,6 +483,7 @@ pub fn router_with_google_catalog(
         .merge(desktop_http::router())
         .merge(sidebar_http::router())
         .merge(message_attachments::router())
+        .merge(message_times_http::router())
         .merge(thread_icons::router())
         .merge(v1_links::router())
         .merge(v1_manage_http::router())

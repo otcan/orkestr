@@ -252,5 +252,6 @@ pub mod conversation_directory;
 pub mod conversation_status;
 pub mod intelligence;
 pub mod live_map;
+pub mod message_time;
 pub mod send_intent;
 pub mod sidebar;

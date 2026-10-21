@@ -25,6 +25,7 @@ pub fn V1ThreadView(
 ) -> Element {
     let owner = session_scope.read().generation();
     let thread = entry.v1_thread_id.clone().unwrap_or_default();
+    let now = crate::message_time_view::use_now();
     let mut mounted = use_signal(|| true);
     let mut messages = use_signal(Vec::<V1HistoryMessage>::new);
     let mut before = use_signal(|| None::<i64>);
@@ -134,6 +135,9 @@ pub fn V1ThreadView(
                             article {
                                 strong { match message.author { SidebarAuthor::Owner => "You", SidebarAuthor::Participant => "Group member", SidebarAuthor::Assistant if message.coordinator => "Coordinator", SidebarAuthor::Assistant => "Assistant" } }
                                 p { "{message.text}" }
+                            }
+                            if let Some(at) = message.created_at_ms {
+                                crate::message_time_view::MessageTime { at_ms: at, now_ms: now(), receipts: message.receipts.clone() }
                             }
                         }
                     }

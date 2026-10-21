@@ -234,6 +234,9 @@ pub struct V1HistoryMessage {
     /// Posted by the attached coordinator session (V1 `api-session`).
     #[serde(default)]
     pub coordinator: bool,
+    /// Delivery receipts V1 recorded for this message (none if it recorded none).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub receipts: Vec<crate::MessageReceipt>,
 }
 
 /// `GET /api/v2/v1-threads/{thread}/messages`: recent read-only V1 history.
