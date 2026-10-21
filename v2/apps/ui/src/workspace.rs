@@ -180,6 +180,7 @@ pub fn Workspace(
                         } else if tab() == "Host resources" {
                             crate::host_resources_view::HostResourcesView { session_scope, resources, onexpired }
                         } else {
+                            crate::chat_settings_view::ChatSettings { key: "settings-{current()}-{session_scope.read().generation()}", conversation: current(), csrf, session_scope, onexpired }
                             crate::beta_settings::BetaSettings {}
                         }
                     }

@@ -33,7 +33,11 @@ export function createState() {
     // v1Posts: every POST seen; v1Inputs: admitted once per key. The first post's answer is lost (504).
     v1Posts: [], v1Inputs: [], v1LoseFirst: true, v1Polls: 0,
     // "New WhatsApp chat": the first attempt stops at the adapter binding.
-    chatPosts: [], chatStopFirst: true };
+    chatPosts: [], chatStopFirst: true,
+    // Chat settings, desktops and timers of conversation A.
+    settings: { schema_version: 1, conversation_id: A, revision: 2, provider: 'codex', model: 'synthetic-model', reasoning_effort: 'medium',
+      honor_no_reply: true, reply_prefix: 'synthetic:', reply_footer: null, provider_generation: 0, updated_at_ms: 1 },
+    settingsPuts: [], bindingPuts: [] };
 }
 
 const json = (res, status, body) => { res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' }); res.end(JSON.stringify(body)); };
@@ -222,6 +226,28 @@ async function api(state, req, res, url) {
     return json(res, 200, { schema_version: 1, conversation_id: B, run_id: uuid(204), revision: 3, observed_at_ms: Date.now(), phase: 'running',
       queue_age_ms: null, progress: null, resources: null, capabilities: { stop: true, steer: true } });
   }
+  if (rest === '/settings' && req.method === 'GET') return json(res, 200, { ...state.settings, conversation_id: id });
+  if (rest === '/settings' && req.method === 'PUT') {
+    const update = JSON.parse(await body(req)); state.settingsPuts.push(update);
+    if (update.expected_revision !== state.settings.revision) return json(res, 409, { code: 'settings_revision_conflict', message: 'Settings changed elsewhere.' });
+    const { expected_revision, ...fields } = update;
+    state.settings = { ...state.settings, ...fields, revision: state.settings.revision + 1 };
+    return json(res, 200, state.settings);
+  }
+  if (rest === '/desktops' && req.method === 'GET') return json(res, 200, { schema_version: 1, conversation_id: id,
+    binding: { schema_version: 1, conversation_id: id, revision: 1, v1_thread_id: 'synthetic-thread', desktop_slugs: ['synthetic-desk'], grant_issued: false, grant_generation: 0 },
+    leases: [{ conversation_id: id, desktop_slug: 'synthetic-desk', v1_thread_id: 'synthetic-thread', v1_lease_id: 'lease-1', fencing_version: 1,
+      state: 'active', expires_at: '2026-01-01T00:10:00Z', acquired_at_ms: 1, heartbeat_at_ms: 2, ended_at_ms: null, end_reason: null }] });
+  if (rest === '/desktop-binding' && req.method === 'PUT') {
+    const request = JSON.parse(await body(req)); state.bindingPuts.push(request);
+    return json(res, 200, { schema_version: 1, conversation_id: id, revision: request.expected_revision + 1, v1_thread_id: request.v1_thread_id,
+      desktop_slugs: request.desktop_slugs, grant_issued: false, grant_generation: 0 });
+  }
+  if (rest === '/timers' && req.method === 'GET') return json(res, 200, { conversation_id: id, timers: id !== A ? [] : [
+    { namespace: uuid(701), source_digest: 'synthetic-digest', schedule: { kind: 'zoned_clock', timezone: 'Europe/Berlin', weekday: null, minute_of_day: 420 },
+      conversation_id: id, state: 'enabled', dormant_reason: null, revision: 3, generation: 2, next_due_ms: Date.now() + 3600000,
+      controller_armed: true, controller_hold: null, label: 'Synthetic morning brief', source_thread_id: 'synthetic-thread',
+      source_namespace: 'synthetic', source_timer_id: 'timer-1', source_enabled: true }] });
   if (rest === '/messages' && req.method === 'POST') return intake(state, req, res, id);
   if (rest === '/window' && req.method === 'POST') return admit(state, req, res, id);
   if (rest === '/window' && req.method === 'GET') {

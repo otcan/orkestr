@@ -235,6 +235,35 @@ export const scenarios = [
     await page.waitForSelector('#composer');
     await noHorizontalScroll();
   }],
+  ['chat-settings', async label => {
+    await openDrawer(label);
+    await choose('Assistant');
+    await page.waitForSelector('#composer');
+    await clickText('Settings');
+    await page.waitForSelector('#settings-model');
+    assert.equal(await page.$eval('#settings-model', n => n.value), 'synthetic-model');
+    await page.select('#settings-effort', 'high');
+    await page.$eval('#settings-prefix', n => { n.value = ''; });
+    await page.type('#settings-prefix', 'synthetic-new:');
+    await clickText('Save settings');
+    await waitText('Saved (revision 3)');
+    assert.deepEqual(state.settingsPuts.at(-1), { expected_revision: 2, provider: 'codex', model: 'synthetic-model', reasoning_effort: 'high',
+      honor_no_reply: true, reply_prefix: 'synthetic-new:', reply_footer: null });
+    // Desktops of the chat: binding and current lease.
+    await waitText('synthetic-desk');
+    assert.equal(await page.$eval('#desktop-thread', n => n.value), 'synthetic-thread');
+    await page.type('#desktop-slugs', ', other-desk');
+    await clickText('Save desktops');
+    await waitText('Desktops saved (revision 2)');
+    assert.deepEqual(state.bindingPuts.at(-1).desktop_slugs, ['synthetic-desk', 'other-desk']);
+    await screenshot(label, 'chat-settings');
+    await noHorizontalScroll();
+    // Timers of the chat are listed; selecting one opens its controls.
+    await clickText('Timers');
+    await waitText('Synthetic morning brief');
+    await screenshot(label, 'timers');
+    await clickText('Chat');
+  }],
   ['v1-deep-links', async label => {
     const open = ref => page.goto(`${origin}/instance/${V1_INSTANCE_REF}/thread/${ref}`, { waitUntil: 'domcontentloaded' });
     // A thread still on V1 opens its linked entry.

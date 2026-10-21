@@ -1,7 +1,8 @@
 use dioxus::prelude::*;
 use orkestr_v2_ui::{
     session_scope::SessionScope,
-    timers::{valid_namespace, Detail},
+    timer_labels::{schedule_label, state_label, utc_time},
+    timers::{listing, valid_namespace, Detail, Listed},
 };
 use serde_json::{json, Value};
 use std::{cell::Cell, rc::Rc};
@@ -15,9 +16,50 @@ pub fn Timers(
 ) -> Element {
     let mut entered = use_signal(String::new);
     let mut selected = use_signal(String::new);
+    let owner = session_scope.read().generation();
+    let mut timers = use_signal(|| None::<Vec<Listed>>);
+    let mut list_notice = use_signal(String::new);
+    let list_conversation = conversation.clone();
+    use_resource(move || {
+        let conversation = list_conversation.clone();
+        async move {
+            let path = format!("/api/v2/conversations/{conversation}/timers");
+            let result =
+                crate::transport::request::<Value>("GET", &path, Value::Null, "", "").await;
+            if !session_scope.read().is_current(owner) {
+                return;
+            }
+            match result {
+                Ok(value) => match listing(&value, &conversation) {
+                    Some(rows) => timers.set(Some(rows)),
+                    None => list_notice.set("Timer list could not be verified.".into()),
+                },
+                Err(error) if error.status == 401 => onexpired.call(()),
+                Err(error) => list_notice.set(format!("Timer list unavailable: {}", error.message)),
+            }
+        }
+    });
     rsx! {
         section { "aria-label":"Timers", h2 { "Timers" }
-            p { "Open a saved timer using its ID from the import receipt. A timer list is not available here yet." }
+            if let Some(rows) = timers() {
+                if rows.is_empty() { p { class: "field-help", "This chat has no timers." } }
+                ul { class: "timer-list",
+                    for (row, label) in rows.into_iter().map(|r| { let label = r.label.clone().unwrap_or_else(|| "Timer".to_owned()); (r, label) }) {
+                        li { key: "{row.detail.namespace}",
+                            button { class: "timer-row", "aria-current": if selected() == row.detail.namespace { "true" } else { "false" },
+                                onclick: { let id = row.detail.namespace.clone(); move |_| selected.set(id.clone()) },
+                                strong { "{label}" }
+                                span { class: "source-badge", "{state_label(row.detail.state.as_str())}" }
+                                span { class: "field-help", "{schedule_label(&row.detail.schedule)}" }
+                                if let Some(due) = row.detail.next_due_ms { span { class: "field-help", "Next: {utc_time(due)}" } }
+                            }
+                        }
+                    }
+                }
+            } else {
+                p { class: "field-help", if list_notice().is_empty() { "Loading timers…" } else { "{list_notice}" } }
+            }
+            p { "Select a timer to pause (disable), resume (enable with fresh instructions), stop or roll it back. Or open a saved timer by its ID." }
             form { onsubmit:move |event| {event.prevent_default();if valid_namespace(&entered()) {selected.set(entered().to_ascii_lowercase());}},
                 label { r#for:"timer-id", "Saved timer ID" }
                 input { id:"timer-id", value:"{entered}", oninput:move |event|entered.set(event.value()), required:true }

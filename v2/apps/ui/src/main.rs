@@ -8,6 +8,7 @@ mod beta_bridge;
 mod beta_discovery;
 mod beta_settings;
 mod beta_window_view;
+mod chat_settings_view;
 mod composer;
 mod conversation_location;
 mod conversation_sidebar;

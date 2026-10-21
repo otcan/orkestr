@@ -138,3 +138,25 @@ fn durable_hold_validation_preserves_armed_guard() {
     d.controller_hold = Some("invented_readiness".into());
     assert!(!d.valid_for(ID));
 }
+
+#[test]
+fn conversation_listing_keeps_labels_and_refuses_foreign_or_malformed_rows() {
+    use orkestr_v2_ui::timers::listing;
+    let row = json!({"namespace":ID,"source_digest":"synthetic-digest","schedule":{"kind":"interval","every_ms":60000},
+        "conversation_id":ID,"state":"enabled","dormant_reason":null,"revision":2,"generation":1,"next_due_ms":5,
+        "controller_armed":true,"controller_hold":null,"label":"Synthetic daily","source_thread_id":"t",
+        "source_namespace":"n","source_timer_id":"s","source_enabled":true});
+    let rows = listing(&json!({"conversation_id":ID,"timers":[row.clone()]}), ID).unwrap();
+    assert_eq!(
+        (rows[0].label.as_deref(), rows[0].detail.revision),
+        (Some("Synthetic daily"), 2)
+    );
+    assert!(listing(
+        &json!({"conversation_id":"other","timers":[row.clone()]}),
+        ID
+    )
+    .is_none());
+    let mut bad = row;
+    bad["claim"] = json!("forbidden");
+    assert!(listing(&json!({"conversation_id":ID,"timers":[bad]}), ID).is_none());
+}
