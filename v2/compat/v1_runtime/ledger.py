@@ -32,6 +32,10 @@ NOTICE_NAMESPACE = uuid.UUID("5d0c3f7e-8a41-4c2b-9e6d-1b7f2a9c4e83")
 NOT_STARTED = ("queued", "admitted", "waiting_for_window")
 DEFAULT_MAX_INPUT_AGE_S = 30 * 60
 RECENT_REFUSALS = 10
+# V1-local input (see local_inputs.py); listed with its own source and connector.
+LOCAL_KIND = "v1_local"
+LOCAL_CONNECTOR = "orkestr-v1"
+LOCAL_ROLES = ("v1_owner", "v1_agent", "v1_external")
 
 
 def refusal_notice(reason):
@@ -185,7 +189,7 @@ class Ledger:
             if attachments:
                 data["attachments"] = attachments
             if author:
-                data["author"] = {k: author[k] for k in ("role", "id", "label", "labelled", "phone") if author.get(k) is not None}
+                data["author"] = {k: author[k] for k in ("role", "id", "label", "labelled", "phone", "source") if author.get(k) is not None}
             db.execute("INSERT INTO inputs VALUES (?,?,?,?)", (body["publicMessageId"], digest, remote_id, json.dumps(data)))
             return data, False
 
@@ -395,12 +399,16 @@ class Ledger:
                                                    "ORDER BY seq", (data["remote_id"],)).fetchall():
                         rows.append(dict(json.loads(message), exportSequence=seq))
                     continue
+                author = data.get("author")
+                local = bool(author) and author.get("role") in LOCAL_ROLES
                 row = {"id": data["remote_id"], "role": "user", "text": data["text"],
                        "publicMessageId": data["public_id"], "publicThreadId": data["public_thread_id"],
                        "chatId": data["chat_id"], "accountId": data["account_id"],
-                       "source": "whatsapp_inbound", "connector": "whatsapp",
+                       "source": author["source"] if local else "whatsapp_inbound",
+                       "connector": LOCAL_CONNECTOR if local else "whatsapp",
                        "state": "delivered", "deliveryState": "delivered", "observedVia": "rust-pilot-ledger"}
-                author = data.get("author")
+                if local:
+                    row["origin"] = LOCAL_KIND
                 if author:
                     row.update(authorId=author["id"], authorLabel=author["label"], authorRole=author["role"])
                 rows.append(row)

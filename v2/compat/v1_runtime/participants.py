@@ -117,6 +117,9 @@ def compose(data):
     """Text sent to Rust: `<label>: <text>` (after the relay header) for authored input."""
     text = data["text"]
     value = data.get("author")
+    from . import local_inputs  # Imports Refusal from here.
+    if local_inputs.is_local_author(value):
+        return local_inputs.compose(data)
     if not value or not value.get("labelled"):
         return text
     header, body = split_header(text)

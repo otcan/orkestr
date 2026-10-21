@@ -11,7 +11,7 @@ import signal
 import threading
 from urllib.parse import parse_qs, urlsplit
 
-from . import participants
+from . import local_inputs, participants
 from .config import load
 from .ledger import MAX_ATTACHMENT_BYTES, OUTCOMES, Conflict
 from .registry import Registry
@@ -21,6 +21,8 @@ MAX_INPUT_BYTES = 65536
 MAX_UPLOAD_BYTES = 4 * (MAX_ATTACHMENT_BYTES // 3 + 1) + 4096
 MEDIA_TOKEN = re.compile(r"^[A-Za-z0-9!#$&^_.+-]+/[A-Za-z0-9!#$&^_.+-]+$")
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
+# Advertised so V1 forwards local input only to an adapter that accepts it.
+INPUT_KINDS = ["whatsapp_inbound", local_inputs.KIND]
 
 
 class Server(ThreadingHTTPServer):
@@ -92,13 +94,13 @@ class Handler(BaseHTTPRequestHandler):
             return
         target = urlsplit(self.path)
         if target.path == "/health" and not target.query:
-            return self.answer(200, dict(ok=True, **self.server.registry.status()))
+            return self.answer(200, dict(ok=True, inputKinds=INPUT_KINDS, **self.server.registry.status()))
         binding, action = self.route(target.path)
         if binding is None or action not in ("messages", "health"):
             return self.answer(404, {"ok": False, "error": "route_not_found"})
         if action == "health" and not target.query:
             members = sum(entry["role"] == participants.MEMBER for entry in binding.config["participants"])
-            return self.answer(200, dict(ok=True, state=binding.state, error=binding.error,
+            return self.answer(200, dict(ok=True, state=binding.state, error=binding.error, inputKinds=INPUT_KINDS,
                                          enabled=binding.state == "enabled", members=members, **binding.ledger.health()))
         if binding.state in ("revoked", "refused"):
             return self.answer(410 if binding.state == "revoked" else 503,
@@ -139,15 +141,19 @@ class Handler(BaseHTTPRequestHandler):
             return self.answer(400, {"ok": False, "error": "invalid_input"})
         # The authenticated backend is selected explicitly; forwarded flags such
         # as originOwner/controlAllowed are never treated as authorization.
+        local = local_inputs.is_local(body)
         scope = {"publicThreadId": config["public_thread_id"], "chatId": config["chat_id"],
                  "accountId": config["account_id"], "source": "whatsapp_inbound", "connector": "whatsapp", "role": "user"}
-        if any(body.get(key) != value for key, value in scope.items()):
+        if not local and any(body.get(key) != value for key, value in scope.items()):
             return self.answer(403, {"ok": False, "error": "input_scope"})
         try:
-            author = participants.author(config, body)
+            # V1-local input (thread, agent, mailbox, CLI, UI ...) states its own
+            # origin; WhatsApp input must be a verified owner alias or member.
+            author = local_inputs.author(config, body) if local else participants.author(config, body)
         except participants.Refusal as refusal:
             return self.answer(refusal.status, {"ok": False, "error": refusal.code})
-        author["labelled"] = participants.labelled(config, author)
+        if not local:
+            author["labelled"] = participants.labelled(config, author)
         public_id = body.get("publicMessageId")
         text = body.get("text")
         attachments = body.get("attachments") or []

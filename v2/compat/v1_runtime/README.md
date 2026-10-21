@@ -149,6 +149,34 @@ and only admits input from the binding's account, group, V1 thread and
 verified owner aliases or listed members. Forwarded `originOwner`, command and control flags
 confer no additional permission. Edits receive explicit refusals.
 
+### V1-local input
+
+Everything else V1 queues for a delegated thread (thread-to-thread and agent
+messages, watch results, Worker assignments, mailbox and job signals, CLI
+`orkestr send`, the V1 web UI) is posted to the same route with
+`inputKind: "v1_local"`:
+
+```json
+{ "inputKind": "v1_local", "role": "user", "connector": "orkestr-v1",
+  "publicThreadId", "publicMessageId", "chatId", "accountId", "externalId",
+  "source": "cli|thread_watch|mailbox_route|ui|…", "text",
+  "origin": { "role": "owner|agent|external", "label": "KDP", "senderRef": "<V1 thread or agent id>" } }
+```
+
+The scope (thread, group, account) must match the binding; WhatsApp sources
+are refused (422 `invalid_local_input`). The origin is pinned with the input
+(a changed origin under the same public ID is `input_identity_changed`) and
+grants no control. Rust receives `[Orkestr V1: <label>]`, the text and a note:
+the owner's own V1 input is marked as such, agent input carries the member-style
+judgment note, and `external` (mailbox, job and e-mail signals) is marked as
+untrusted data. The listed user row carries the V1 `source`, `connector:
+"orkestr-v1"` and `origin: "v1_local"`. The reply is exported like any other;
+V1 keeps it in the V1 thread, where the requester receives it (for example as
+its watch result), and acknowledges it as `suppressed` (or `no_reply`), which
+settles the input. It is never posted to the WhatsApp group. `GET /health` and
+`GET /threads/<id>/health` list the accepted `inputKinds`; V1 forwards local
+input only when `v1_local` is listed.
+
 POST intake commits an idempotent ledger entry before acknowledging delivery.
 A changed body under the same public message ID is refused, also after the
 input is settled. Remote user rows retain their original public message ID and
