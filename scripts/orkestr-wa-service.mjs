@@ -16,6 +16,7 @@ import {
   getLocalWhatsAppBridgeStatus,
   getLocalWhatsAppQrSvg,
   listLocalWhatsAppChatMessages,
+  summarizeLocalWhatsAppDirectChats,
   listLocalWhatsAppChats,
   listLocalWhatsAppChatParticipants,
   logoutLocalWhatsAppAccount,
@@ -334,6 +335,7 @@ const defaultBridge = {
   getLocalWhatsAppBridgeStatus,
   getLocalWhatsAppQrSvg,
   listLocalWhatsAppChatMessages,
+  summarizeLocalWhatsAppDirectChats,
   listLocalWhatsAppChats,
   listLocalWhatsAppChatParticipants,
   logoutLocalWhatsAppAccount,
@@ -413,6 +415,15 @@ async function handleRequest(req, res, env = process.env, bridge = defaultBridge
     requireAuth(req, env);
     requireServicePolicy(req, url, env, {}, { accounts: [params.accountId] });
     return json(res, 200, await bridge.listLocalWhatsAppChats(params.accountId, env));
+  }
+
+  params = routeMatch(url.pathname, "/accounts/:accountId/direct-chats/summary");
+  if (method === "GET" && params) {
+    requireAuth(req, env);
+    // Only a scoped worker has approved direct chats; the policy already checked the thread.
+    const chatIds = scoped ? scoped.directChatIds(clean(url.searchParams.get("thread_id"))) : [];
+    if (!chatIds.length) return json(res, 403, { ok: false, error: "direct_chats_not_configured" });
+    return json(res, 200, { ...(await bridge.summarizeLocalWhatsAppDirectChats({ accountId: params.accountId, chatIds, env })), ok: true });
   }
 
   params = routeMatch(url.pathname, "/accounts/:accountId/chats/:chatId/history");

@@ -147,6 +147,11 @@ export function whatsappWorkerConversations(accountId = "", env = process.env) {
   return requestWhatsAppWorker(`/accounts/${encodeURIComponent(clean(accountId || "sender"))}/chats`, {}, env);
 }
 
+export function whatsappWorkerDirectChatSummary(accountId = "", threadId = "", env = process.env) {
+  const account = encodeURIComponent(clean(accountId || "sender"));
+  return requestWhatsAppWorker(`/accounts/${account}/direct-chats/summary?thread_id=${encodeURIComponent(clean(threadId))}`, {}, env);
+}
+
 export function whatsappWorkerConversation(accountId = "", conversationId = "", action = "history", options = {}, env = process.env) {
   const account = encodeURIComponent(clean(accountId || "sender"));
   const conversation = encodeURIComponent(clean(conversationId));

@@ -22,6 +22,7 @@ export function createScopedNativeWorkerPolicy(config,{createTransport=createSco
  // Owner-approved 1:1 chats (optional). Validated up front so a bad config fails at startup.
  const direct=validateScopedDirectChats(config,threads);
  let transport,directSender,started=false;
+ const directIdsFor=threadId=>direct && threadId ? [...direct.chats].filter(([,owner])=>owner===threadId).map(([chatId])=>chatId) : [];
  const reported=new Map(),failures={total:0,last:null};
  const pairing=createScopedPairingPermit(config);
  const get=accountId=>{
@@ -45,6 +46,9 @@ export function createScopedNativeWorkerPolicy(config,{createTransport=createSco
    if(method==='GET' && ['/health','/accounts'].includes(url.pathname))return;
    const a=encodeURIComponent(config.workerAccountId);
    const ownsDirect=(chatId,threadId)=>Boolean(direct?.chats.has(chatId)) && direct.chats.get(chatId)===threadId;
+   // Approved-chat activity list: only the caller thread's own route, no other parameters.
+   if(method==='GET' && url.pathname===`/accounts/${a}/direct-chats/summary` && directIdsFor(url.searchParams.get('thread_id')).length
+      && [...url.searchParams.keys()].every(k=>k==='thread_id'))return;
    if(method==='GET' && [...(direct?.chats.keys()||[])].some(g=>url.pathname===`/accounts/${a}/chats/${encodeURIComponent(g)}/history` && ownsDirect(g,url.searchParams.get('thread_id')))
       && (!url.searchParams.has('mark_seen') || url.searchParams.get('mark_seen')==='false')
       && Number(url.searchParams.get('limit')||30)>0 && Number(url.searchParams.get('limit')||30)<=50)return;
@@ -82,6 +86,7 @@ export function createScopedNativeWorkerPolicy(config,{createTransport=createSco
    return get(accountId).sendText(client,chatId,text,'main',request);
   },
   directChatCount:()=>direct?.chats.size||0,
+  directChatIds:threadId=>directIdsFor(threadId),
   sendDocument(accountId,client,chatId,document,request,createMedia){return get(accountId).sendDocument(client,chatId,document,'main',request,createMedia);},
   close(){transport?.close();directSender?.close();},
  };

@@ -138,3 +138,27 @@ export function createScopedDirectSender({config, direct, dbPath = direct.journa
     },
   };
 }
+
+// Recent-activity list for one thread's approved direct chats. Metadata only:
+// no message text, no other chats, never marks anything seen (it only reads
+// chat models). A chat the client cannot resolve is reported as unavailable.
+export async function summarizeDirectChats(client, chatIds = []) {
+  const chats = [];
+  for (const chatId of chatIds) {
+    try {
+      const chat = await client.getChatById(chatId);
+      const last = chat?.lastMessage;
+      const seconds = Number(chat?.timestamp || last?.timestamp || 0);
+      chats.push({
+        chatId,
+        label: typeof chat?.name === 'string' ? chat.name.slice(0, 80) : '',
+        unreadCount: Math.max(0, Number(chat?.unreadCount) || 0),
+        lastMessageAt: seconds > 0 ? new Date(seconds * 1000).toISOString() : null,
+        lastFromThem: last ? last.fromMe !== true : null,
+      });
+    } catch {
+      chats.push({chatId, unavailable: true});
+    }
+  }
+  return chats;
+}

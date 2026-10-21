@@ -198,6 +198,8 @@ function requiredScopes(tool = "", action = "", service = "") {
   if (tool === "orkestr_runtime") {
     return ["*", "runtime:*", "runtime:write", "connectors:manage"];
   }
+  // The approved-chat activity list is its own grant; plain read access does not include it.
+  if (tool === "orkestr_conversation" && action === "list_approved") return ["*", "connectors:*", `${service}:list-approved`];
   const read = action === "status" || ["list", "history", "participants"].includes(action);
   const kind = tool === "orkestr_messaging" ? "send" : read ? "read" : "manage";
   return [

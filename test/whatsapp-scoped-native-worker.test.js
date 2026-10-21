@@ -170,3 +170,28 @@ test('a direct send that returned no message model is confirmed by exactly one a
  await assert.rejects(s.sendText(twice,'15550000002@c.us','same',{requestId:'co_2'}),/delivery_uncertain/);
  s.close();
 });
+
+test('approved-chat activity list: only the owning thread, no extra parameters, metadata only, never marks seen',async()=>{
+ const p=createScopedNativeWorkerPolicy(directConfig());
+ const url=s=>new URL(s,'http://local');
+ p.checkRequest('GET',url('/accounts/existing/direct-chats/summary?thread_id=thread1'));
+ for(const bad of ['/accounts/existing/direct-chats/summary','/accounts/existing/direct-chats/summary?thread_id=thread2',
+   '/accounts/existing/direct-chats/summary?thread_id=thread1&mark_seen=true','/accounts/other/direct-chats/summary?thread_id=thread1'])
+  assert.throws(()=>p.checkRequest('GET',url(bad)),/denied/,bad);
+ assert.deepEqual(p.directChatIds('thread1'),['15550000001@c.us','15550000002@c.us']);
+ assert.deepEqual(p.directChatIds('thread2'),[]);
+ assert.deepEqual(createScopedNativeWorkerPolicy(config).directChatIds('thread1'),[]);
+ const {summarizeDirectChats}=await import('../packages/connectors/src/whatsapp-scoped-direct-chats.js');
+ const seen=[];
+ const client={getChatById:async id=>{
+  if(id==='15550000002@c.us')throw new Error('chat not found');
+  return {name:'Contact One',unreadCount:2,timestamp:1792530000,lastMessage:{fromMe:false,body:'private words',timestamp:1792530000},
+   sendSeen:async()=>seen.push(id),markUnread:async()=>seen.push(id)};
+ }};
+ const chats=await summarizeDirectChats(client,p.directChatIds('thread1'));
+ assert.deepEqual(chats,[
+  {chatId:'15550000001@c.us',label:'Contact One',unreadCount:2,lastMessageAt:new Date(1792530000*1000).toISOString(),lastFromThem:true},
+  {chatId:'15550000002@c.us',unavailable:true}]);
+ assert.doesNotMatch(JSON.stringify(chats),/private words/);
+ assert.deepEqual(seen,[]);
+});

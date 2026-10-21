@@ -18,6 +18,7 @@ import {
   whatsappWorkerAuth,
   whatsappWorkerConversation,
   whatsappWorkerConversations,
+  whatsappWorkerDirectChatSummary,
   whatsappWorkerCreateConversation,
   whatsappWorkerHealth,
   whatsappWorkerSend,
@@ -275,6 +276,25 @@ async function runConversation(input, auth, env) {
   const accountId = auth.accountId || clean(input.account_id) || "sender";
   let payload;
   if (input.action === "list") payload = filterConversations(await whatsappWorkerConversations(accountId, env), auth);
+  else if (input.action === "list_approved") {
+    // Metadata for the caller thread's approved chats only, filtered again here
+    // against the token's own allowlist; never marks anything seen.
+    if (auth.operator || !auth.threadId) throw Object.assign(new Error("connector_list_approved_thread_required"), { statusCode: 403 });
+    const allowed = allowedConversationIds(auth);
+    const summary = await whatsappWorkerDirectChatSummary(accountId, auth.threadId, env);
+    const chats = (Array.isArray(summary?.chats) ? summary.chats : [])
+      .filter((chat) => allowed.has(clean(chat?.chatId).toLowerCase()))
+      .map((chat) => chat.unavailable ? { chatId: clean(chat.chatId), unavailable: true } : {
+        chatId: clean(chat.chatId),
+        label: clean(chat.label),
+        unreadCount: Math.max(0, Number(chat.unreadCount) || 0),
+        lastMessageAt: chat.lastMessageAt || null,
+        lastFromThem: typeof chat.lastFromThem === "boolean" ? chat.lastFromThem : null,
+      })
+      .filter((chat) => !input.unread_only || chat.unreadCount > 0)
+      .sort((a, b) => String(b.lastMessageAt || "").localeCompare(String(a.lastMessageAt || "")));
+    payload = { ready: summary?.ready !== false, chats };
+  }
   else if (input.action === "create") {
     payload = await whatsappWorkerCreateConversation({
       accountId,

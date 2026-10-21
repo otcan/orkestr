@@ -1,4 +1,5 @@
 import { scopedNativeWorker, createPreservingNativeAuth } from './whatsapp-scoped-native-worker.js';
+import { summarizeDirectChats } from './whatsapp-scoped-direct-chats.js';
 import { authenticationFailureEvidence } from './whatsapp-auth-failure-evidence.js';
 import { autoConnectHomeChat } from "./whatsapp-auto-home-chat.js";
 import { chromeLockFromOtherHost, chromeLockHost, retireLoggedOutSession } from "./whatsapp-session-recovery.js";
@@ -6816,6 +6817,17 @@ export async function listLocalWhatsAppChats(accountId = "", env = process.env) 
     ready: true,
     chats: [...merged.values()],
   };
+}
+
+// Metadata-only activity list for a scoped thread's approved direct chats.
+export async function summarizeLocalWhatsAppDirectChats({ accountId = "", chatIds = [], env = process.env } = {}) {
+  const normalized = normalizeAccountId(accountId, env);
+  const runtime = runtimes.get(normalized);
+  const state = accountStates.get(normalized) || defaultAccountState(normalized);
+  if (!runtime?.client || !state.ready || state.chatOpsReady === false || state.runtimeUsable === false) {
+    return { accountId: normalized, ready: false, chats: [] };
+  }
+  return { accountId: normalized, ready: true, chats: await summarizeDirectChats(runtime.client, chatIds) };
 }
 
 export async function listLocalWhatsAppChatMessages({ accountId = "", chatId = "", limit = 30, env = process.env } = {}) {

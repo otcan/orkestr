@@ -40,7 +40,7 @@ export const connectorsMcpInputSchemas = {
   }).strict(),
   orkestr_conversation: z.object({
     ...contextShape,
-    action: z.enum(["list", "history", "participants", "recover", "create", "promote_admins", "demote_admins", "set_picture"]),
+    action: z.enum(["list", "list_approved", "history", "participants", "recover", "create", "promote_admins", "demote_admins", "set_picture"]),
     conversation_id: cleanString.nullish(),
     name: cleanString.nullish(),
     participant_ids: z.array(cleanString.min(1)).max(100).nullish(),
