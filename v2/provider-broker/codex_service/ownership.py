@@ -5,6 +5,7 @@ from functools import wraps
 from pathlib import Path
 import select
 import signal
+import sys
 import time
 import threading
 from codex_bounded.trust import belongs, exists, process
@@ -189,14 +190,34 @@ class Children:
     def proven_gone(self):
         self.observe()
         require(self.brokers and not self.forced and not self.uncertain, "original_cleanup_proof_missing")
-        require(all(record.gone() for record in self.records.values()), "owned_child_not_reaped")
+        live = self._log_live()
+        require(not live, "owned_child_not_reaped")
         return True
 
     @serialized
     def released(self):
         """Every original identity reaped and cleanup certain. Not graceful proof."""
         self.observe()
-        return not self.uncertain and all(record.gone() for record in self.records.values())
+        return not self.uncertain and not self._log_live()
+
+    def _log_live(self):
+        """Owned identities still alive. Operator diagnostic on stderr: pid and
+        kernel command name (comm, at most 15 bytes) only, never arguments,
+        environment or paths."""
+        live = [record for record in self.records.values() if not record.gone()]
+        if live:
+            names = []
+            for record in live[:8]:
+                pid = record.identity["pid"]
+                try:
+                    comm = Path(f"/proc/{pid}/comm").read_text()[:15].strip()
+                except OSError:
+                    comm = "?"
+                names.append("%d:%s" % (pid, "".join(c if c.isprintable() else "?" for c in comm)))
+            more = " (+%d more)" % (len(live) - 8) if len(live) > 8 else ""
+            sys.stderr.write("manager owned child not reaped: %s%s\n" % (" ".join(names), more))
+            sys.stderr.flush()
+        return live
 
     @serialized
     def cleanup(self, seconds=2):
