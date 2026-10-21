@@ -12,6 +12,7 @@ fn request() -> HistoryImportRequest {
             sequence: 3,
             actor_kind: "owner".into(),
             text: "Synthetic history é".into(),
+            reply_to: None,
         }],
     };
     request.source_digest = history_source_digest(&request).unwrap();

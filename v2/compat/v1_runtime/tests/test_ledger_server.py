@@ -119,6 +119,22 @@ class PilotPropertyTests(Harness):
         self.assertEqual(self.post(1, body=self.body(1, text="different command"))[0], 409)
         self.assertEqual(reopened.next_input()["text"], "new request")
 
+    def test_quoted_reply_context_is_kept_bounded_and_not_part_of_identity(self):
+        quoted = dict(messageId="true_chat_ABC", author="orkestr", sentAt="2026-01-02T21:50:00Z", text="x" * 900, isOwnReply=True, junk=1)
+        status, first = self.post(1, body=self.body(1, replyTo=quoted))
+        self.assertEqual(status, 202)
+        stored = self.binding(1).ledger.next_input()["reply_to"]
+        self.assertEqual(stored, dict(message_id="true_chat_ABC", author="orkestr", sent_at="2026-01-02T21:50:00Z",
+                                      text="x" * 500, is_own_reply=True, unavailable=False))
+        # A retry (with or without the context) is the same input.
+        self.assertEqual(self.post(1, body=self.body(1, replyTo=quoted))[1]["message"]["id"], first["message"]["id"])
+        self.assertEqual(self.post(1)[1]["message"]["id"], first["message"]["id"])
+        status, _ = self.post(1, body=self.body(1, publicMessageId="m2", replyTo=dict(unavailable=True, messageId=None, text="")))
+        self.assertEqual(status, 202)
+        self.assertEqual(self.binding(1).ledger.next_input()["remote_id"], first["message"]["id"])
+        self.assertIsNone(Ledger.reply_to("nope"))
+        self.assertIsNone(Ledger.reply_to(dict(author="someone")))
+
     def test_wrong_scope_principal_and_forwarded_owner_flag_do_not_authorize(self):
         for changed in (self.body(1, chatId="elsewhere"), self.body(1, publicThreadId="other"),
                         self.body(1, senderTrustLevel="unknown", originOwner=True, controlAllowed=True),
