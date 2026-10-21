@@ -43,10 +43,10 @@ class V1Home:
         self.registry.executescript(REGISTRY)
         self.positions = {}
 
-    def thread(self, thread_id, name='Synthetic thread', migrated=True):
+    def thread(self, thread_id, name='Synthetic thread', migrated=True, **extra):
         record = {'id': thread_id, 'name': name, 'createdAt': '2026-01-01T00:00:00.000Z',
                   'executor': {'codexThreadId': 'synthetic-native'}, 'chatId': SECRET_MARKER,
-                  'binding': {'route': SECRET_MARKER}}
+                  'binding': {'route': SECRET_MARKER}, **extra}
         self.registry.execute('insert into orkestr_threads(id,name,created_at,updated_at,data) values(?,?,?,?,?)',
                               (thread_id, name, record['createdAt'], record['createdAt'], json.dumps(record)))
         if migrated:

@@ -426,9 +426,17 @@ async fn exact_expired_predecessor_cas_fences_without_recreating_native_identity
     std::fs::remove_dir_all(f.root).unwrap();
 }
 
-/// Undo 0056 exactly: rebuild `execution_windows` under the fixed-deadline
+/// Undo 0057 (sidebar read marks and lineage; tests never write them) and
+/// 0056 exactly: rebuild `execution_windows` under the fixed-deadline
 /// definition that migrations up to 0055 produce, keeping every row.
 pub(super) async fn downgrade_window_deadlines(store: &Store) {
+    for statement in [
+        "DROP TABLE sidebar_read_marks",
+        "DROP TABLE conversation_lineage",
+        "DELETE FROM _sqlx_migrations WHERE version=57",
+    ] {
+        sqlx::query(statement).execute(&store.pool).await.unwrap();
+    }
     use sqlx::{migrate::Migrate, Connection};
     let mut reference = sqlx::SqliteConnection::connect("sqlite::memory:")
         .await

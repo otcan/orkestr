@@ -9,6 +9,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 const TIMEOUT: Duration = Duration::from_secs(3);
 const RESPONSE_MAX: usize = 1024 * 1024;
+const READ_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum BrokerError {
@@ -190,13 +191,21 @@ impl Broker {
         }
     }
 
+    /// Read-only V1 GET for the sidebar (thread registry, recent messages).
+    /// Larger responses than the lease routes; same loopback credential.
+    pub(crate) async fn read(&self, path: &str, cap: usize) -> Result<(u16, Value), BrokerError> {
+        tokio::time::timeout(READ_TIMEOUT, self.exchange("GET", path, None, cap))
+            .await
+            .map_err(|_| BrokerError::Unavailable)?
+    }
+
     async fn send(
         &self,
         method: &str,
         path: &str,
         body: Option<Value>,
     ) -> Result<(u16, Value), BrokerError> {
-        tokio::time::timeout(TIMEOUT, self.exchange(method, path, body))
+        tokio::time::timeout(TIMEOUT, self.exchange(method, path, body, RESPONSE_MAX))
             .await
             .map_err(|_| BrokerError::Unavailable)?
     }
@@ -206,6 +215,7 @@ impl Broker {
         method: &str,
         path: &str,
         body: Option<Value>,
+        cap: usize,
     ) -> Result<(u16, Value), BrokerError> {
         let payload = body.map(|b| b.to_string()).unwrap_or_default();
         let mut request = format!(
@@ -226,11 +236,11 @@ impl Broker {
             .map_err(|_| BrokerError::Unavailable)?;
         let mut raw = Vec::new();
         socket
-            .take(RESPONSE_MAX as u64 + 1)
+            .take(cap as u64 + 1)
             .read_to_end(&mut raw)
             .await
             .map_err(|_| BrokerError::Unavailable)?;
-        if raw.len() > RESPONSE_MAX {
+        if raw.len() > cap {
             return Err(BrokerError::Unavailable);
         }
         parse_response(&raw).ok_or(BrokerError::Unavailable)

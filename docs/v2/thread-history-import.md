@@ -65,6 +65,13 @@ digest on read. Archived rows are not native input: the conversation sequence,
 messages, events, reasoning inbox and outbox are untouched, so nothing can be
 dispatched, replayed or delivered from an import.
 
+**Lineage.** After an applied import, `v2-import` records the thread's V1
+lineage (`PUT …/lineage`: source thread and, for a worker sub-thread, its V1
+`parentThreadId`; task agents get no parent). It is write-once, so the import
+keeps its parent link for the sidebar's sub-chat grouping. `v2-lineage`
+backfills conversations imported earlier from the V1 registry (read-only).
+See [conversation-sidebar.md](conversation-sidebar.md).
+
 **Rollback.** `v2-export` pages the native conversation (owner inputs plus
 accepted replies with payload text) after an optional sequence into a private
 digest-sealed archive. `v1-append` appends those entries to an already

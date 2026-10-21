@@ -62,6 +62,13 @@ pub async fn key() -> Result<String, Failure> {
         .map_err(|_| Failure::from("Secure request ID generation unavailable".to_string()))
 }
 
+pub async fn sleep(ms: u32) {
+    let _ = document::eval(&format!(
+        "await new Promise(resolve => setTimeout(resolve, {ms})); return null;"
+    ))
+    .await;
+}
+
 pub async fn delay() {
     let _ = document::eval("await new Promise(resolve => setTimeout(resolve, 1500)); return null;")
         .await;

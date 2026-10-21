@@ -53,4 +53,14 @@ jobs:
       - name: CI headless rendering with synthetic data
         run: node v2/ci/headless-rendering.mjs
       - name: CI configured workspace rendering against a synthetic API
+        env:
+          SCREENSHOT_DIR: ${{ runner.temp }}/v2-screenshots
         run: node v2/ci/headless-workspace.mjs
+      - name: Retain synthetic desktop and phone screenshots
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: v2-ui-screenshots-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/v2-screenshots/*.png
+          if-no-files-found: ignore
+          retention-days: 14

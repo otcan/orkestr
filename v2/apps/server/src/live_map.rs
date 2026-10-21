@@ -121,7 +121,7 @@ async fn native(
     Ok((out, truncated))
 }
 
-async fn conversation(
+pub(crate) async fn conversation(
     state: &AppState,
     owner: &OwnerId,
     credential: &str,

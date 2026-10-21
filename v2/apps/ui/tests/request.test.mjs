@@ -120,3 +120,12 @@ test('rejected or uncertain logout cannot become a successful bridge result',asy
     assert.equal(result.body.code,'csrf_rejected');
     await assert.rejects(execute({recv:async()=>input},async()=>{throw new Error('synthetic connection lost');}),/connection lost/);
 });
+
+test('sidebar, read marks and linked V1 history are the only new paths',async()=>{
+    for(const path of ['/api/v2/sidebar','/api/v2/sidebar/read','/api/v2/v1-threads/worker-synthetic-1/messages','/api/v2/v1-threads/synthetic/messages?before=12']) {
+        await execute({recv:async()=>({...base,method:'GET',path,body:null})},async(seen)=>{assert.equal(seen,path);return new Response('{}');});
+    }
+    for(const path of ['/api/v2/v1-threads/../messages','/api/v2/v1-threads/a/b/messages','/api/v2/v1-threads/a%2Fb/messages','/api/v2/v1-threads/a/messages?before=-1','/api/v2/sidebar?x=1','/api/v2/sidebar/other']) {
+        await assert.rejects(execute({recv:async()=>({...base,path})},()=>assert.fail('fetch must not run')),/Invalid API path/);
+    }
+});

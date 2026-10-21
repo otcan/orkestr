@@ -6,6 +6,7 @@
   v2-status   archived-history cursors/counts/checksums for a conversation
   v2-export   V2-era conversation messages -> private rollback archive
   v1-append   rollback archive -> inert archived rows on a migrated V1 sqlite thread
+  v2-lineage  record V1 lineage (source thread, V1 parent) of imported conversations
 
 Output is a JSON report of counts, identifiers and checksums; message text,
 credentials and private paths are never printed.
@@ -18,6 +19,7 @@ import sys
 # Isolated mode (-I) omits the script directory; add only this reviewed directory.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import history_import  # noqa: E402
+import lineage  # noqa: E402
 import v1_export  # noqa: E402
 import v2_client  # noqa: E402
 import v2_rollback  # noqa: E402
@@ -72,6 +74,11 @@ def _v2_export(args):
     return _with_client(args, run)
 
 
+def _v2_lineage(args):
+    return _with_client(args, lambda client: lineage.backfill(
+        client, args.v1_home, args.source_instance, args.conversation, apply=args.apply))
+
+
 def _v1_append(args):
     return v2_rollback.append_to_v1(v2_rollback.read_archive(args.archive), args.v1_db,
                                     args.thread, apply=args.apply)
@@ -118,6 +125,15 @@ def parser():
     out.add_argument('--after-sequence', type=int, default=0)
     remote(out)
     out.set_defaults(run=_v2_export)
+
+    lineage_command = commands.add_parser('v2-lineage')
+    lineage_command.add_argument('--v1-home', required=True, help='V1 home; threads.sqlite is read-only')
+    lineage_command.add_argument('--source-instance', required=True)
+    lineage_command.add_argument('--conversation', action='append',
+                                 help='limit to these conversations (default: all)')
+    lineage_command.add_argument('--apply', action='store_true')
+    remote(lineage_command)
+    lineage_command.set_defaults(run=_v2_lineage)
 
     append = commands.add_parser('v1-append')
     append.add_argument('--archive', required=True)

@@ -248,3 +248,4 @@ pub mod conversation_status;
 pub mod intelligence;
 pub mod live_map;
 pub mod send_intent;
+pub mod sidebar;

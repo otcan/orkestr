@@ -2,7 +2,8 @@
 // Exercises the real WASM bundle at desktop and phone widths; no provider runs.
 import assert from 'node:assert/strict';
 import puppeteer from 'puppeteer';
-import { A, createState, startMock } from './headless-workspace-mock.mjs';
+import { A, C, createState, startMock } from './headless-workspace-mock.mjs';
+import { mkdir } from 'node:fs/promises';
 
 assert.equal(process.env.CI, 'true', 'Run only in isolated CI');
 assert.ok(process.env.UI_BUNDLE_DIR, 'UI_BUNDLE_DIR is required');
@@ -18,6 +19,23 @@ const clickText = async label => {
     button.click(); return true;
   }, label);
   assert.ok(found, `Missing button: ${label}`);
+};
+const openDrawer = async label => {
+  if (label !== 'phone') return;
+  await page.click('.threads-toggle');
+  await page.waitForFunction(() => document.querySelector('.workspace')?.dataset.sidebarOpen === 'true');
+};
+const rowText = async (name, selector) => page.evaluate((name, selector) => {
+  const row = [...document.querySelectorAll('.conversation-row')].find(r => r.querySelector('.conversation-name')?.textContent === name);
+  return row?.querySelector(selector)?.textContent ?? null;
+}, name, selector);
+const choose = name => page.evaluate(name => [...document.querySelectorAll('.conversation-choice')]
+  .find(b => b.querySelector('.conversation-name')?.textContent === name).click(), name);
+const screenshot = async (label, name) => {
+  const dir = process.env.SCREENSHOT_DIR;
+  if (!dir) return;
+  await mkdir(dir, { recursive: true });
+  await page.screenshot({ path: `${dir}/${label}-${name}.png` });
 };
 const noHorizontalScroll = async () => {
   const { scroll, width } = await page.evaluate(() => ({ scroll: document.documentElement.scrollWidth, width: window.innerWidth }));
@@ -68,7 +86,7 @@ export const scenarios = [
     assert.equal(await draft(), 'Draft survives reload + edit while busy', 'Edits made after Send are kept');
   }],
   ['conversation-list', async label => {
-    if (label === 'phone') await clickText('Conversations');
+    await openDrawer(label);
     await page.waitForFunction(() => document.querySelectorAll('.conversation-status').length >= 2, { timeout: 20000 });
     const badges = await page.$$eval('.conversation-choice', rows => Object.fromEntries(rows.map(r =>
       [r.querySelector('.conversation-name')?.textContent, r.querySelector('.conversation-status')?.textContent ?? ''])));
@@ -114,6 +132,46 @@ export const scenarios = [
     await noHorizontalScroll();
     await clickText('Chat');
     await page.waitForSelector('#composer');
+  }],
+  ['sidebar', async label => {
+    await openDrawer(label);
+    await page.waitForFunction(() => document.querySelectorAll('.conversation-row').length >= 4, { timeout: 20000 });
+    // Newest activity first: the V1 group carries its worker's newer activity.
+    const order = await page.$$eval('.conversation-row[data-depth="0"] .conversation-name', n => n.map(x => x.textContent));
+    assert.deepEqual(order, ['Synthetic group', 'Research notes', 'Assistant', 'Queued errands']);
+    assert.equal(await rowText('Synthetic group', '.choice-time'), '1m');
+    assert.equal(await rowText('Assistant', '.choice-time'), '1d');
+    assert.match(await rowText('Synthetic group', '.choice-badges'), /On V1.*Coordinator.*1 sub-chats/);
+    assert.equal(await rowText('Research notes', '.choice-activity'), 'thinking… · 1 worker');
+    // Unread replies until viewed; the open conversation (from Projects) is read.
+    assert.equal(await rowText('Synthetic group', '.unread-badge'), '1');
+    assert.equal(await rowText('Assistant', '.unread-badge'), null, 'Viewed at load');
+    assert.equal(await rowText('Queued errands', '.unread-badge'), null, 'Open conversation');
+    assert.equal(await rowText('Assistant', '.choice-preview'), 'Synthetic assistant answer');
+    for (const id of [A, C]) assert.ok(state.marks.some(m => m.key === `v2:${id}`), 'Opening marks read on the server');
+    // Sub-chats are collapsed under the parent until expanded.
+    assert.equal(await page.$$eval('.conversation-row[data-depth="1"]', n => n.length), 0);
+    await page.evaluate(() => [...document.querySelectorAll('.group-toggle')][0].click());
+    await page.waitForFunction(() => document.querySelector('.conversation-row[data-depth="1"] .conversation-name')?.textContent === 'Synthetic group / Worker 1');
+    await screenshot(label, 'sidebar');
+    // The header shows live activity of the open conversation.
+    await choose('Research notes');
+    await page.waitForFunction(() => document.querySelector('.heading-activity')?.textContent === 'thinking… · 1 worker');
+    // A linked V1 chat opens read-only with its recent history and badge.
+    await openDrawer(label);
+    await choose('Synthetic group');
+    await page.waitForSelector('.v1-banner');
+    await page.waitForFunction(() => document.querySelectorAll('.v1-thread .chat-messages > li').length === 3);
+    assert.match(await text('.v1-thread .chat-messages'), /Synthetic member note/);
+    assert.equal(await page.$('#composer'), null, 'Linked V1 chats are read-only');
+    assert.match(await text('.heading-meta'), /On V1 · coordinator attached/);
+    await screenshot(label, 'v1-chat');
+    await noHorizontalScroll();
+    // Back to a native conversation.
+    await openDrawer(label);
+    await choose('Assistant');
+    await page.waitForSelector('#composer');
+    await screenshot(label, 'chat');
   }],
 ];
 

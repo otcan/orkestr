@@ -49,6 +49,8 @@ pub mod owned_execution;
 mod provider_payload;
 mod resource_health;
 mod routes;
+mod sidebar_http;
+mod sidebar_v1;
 mod steering_http;
 mod steering_registry;
 pub mod stop_execution;
@@ -78,6 +80,7 @@ pub struct AppState {
     timers: timer_http::DurableOwnerController,
     live_map: Option<Arc<std::path::PathBuf>>,
     desktop_broker: Option<Arc<desktop_broker::Broker>>,
+    sidebar_v1: sidebar_v1::V1Cache,
     /// Whether this installation can run a conversation's turns on Claude.
     claude_turns: bool,
 }
@@ -226,6 +229,7 @@ impl AppState {
             resources: resource_health::ResourceSampler::new(),
             live_map: None,
             desktop_broker: None,
+            sidebar_v1: sidebar_v1::V1Cache::default(),
             claude_turns: false,
         })
     }
@@ -399,6 +403,7 @@ pub fn router_with_google_catalog(
         .merge(archived_history_http::router())
         .merge(conversation_resources_http::router())
         .merge(desktop_http::router())
+        .merge(sidebar_http::router())
         .merge(google_registry_metadata::router(catalog))
         .fallback(|| async { Error(StatusCode::NOT_FOUND,"not_found","Endpoint not found") })
         .layer(DefaultBodyLimit::max(40 * 1024))

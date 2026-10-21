@@ -15,7 +15,7 @@ ATTACHMENTS_MAX = 32
 ATTACHMENT_BYTES_MAX = 512 * 1024 * 1024
 # Registry fields copied for provenance; everything else (executor, bindings,
 # routes, chat IDs, workspaces, credentials) is excluded by construction.
-THREAD_FIELDS = ('id', 'name', 'publicRef', 'createdAt', 'updatedAt', 'parentThreadId', 'kind')
+THREAD_FIELDS = ('id', 'name', 'publicRef', 'createdAt', 'updatedAt', 'parentThreadId', 'kind', 'threadKind')
 
 
 def safe_thread_id(thread_id):

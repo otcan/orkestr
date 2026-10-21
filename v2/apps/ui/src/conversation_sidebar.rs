@@ -1,11 +1,13 @@
 use dioxus::prelude::*;
+use orkestr_v2_contracts::{SidebarEntry, SidebarPage, SidebarSource, SidebarV1Status};
 use orkestr_v2_ui::{
-    conversation_directory::{ConversationPage, ConversationSummary, Creation},
+    conversation_directory::{ConversationSummary, Creation},
     session_scope::SessionScope,
+    sidebar,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
-use std::{cell::Cell, rc::Rc};
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Deserialize)]
 struct Reply {
@@ -21,89 +23,159 @@ fn start(input: Value) -> document::Eval {
     eval
 }
 
+/// Sidebar refresh interval: live activity and new replies appear within it.
+const POLL_MS: u32 = 4000;
+
+/// Messaging-style list of native conversations and linked V1 chats, newest
+/// activity first, sub-chats grouped under their parent. Selecting a row is
+/// navigation only; it never admits work.
 #[component]
 pub fn ConversationSidebar(
     selected: String,
     csrf: String,
     session_scope: Signal<SessionScope>,
-    onselect: EventHandler<ConversationSummary>,
-    onloaded: EventHandler<Vec<ConversationSummary>>,
+    onselect: EventHandler<SidebarEntry>,
+    onloaded: EventHandler<Vec<SidebarEntry>>,
     onexpired: EventHandler<()>,
 ) -> Element {
     let owner = session_scope.read().generation();
     let mut mounted = use_signal(|| true);
-    let mut page = use_signal(|| None::<ConversationPage>);
-    let mut after = use_signal(|| 0_i64);
-    let mut refresh = use_signal(|| 0_u64);
-    let mut reading = use_signal(|| None::<document::Eval>);
+    let mut page = use_signal(|| None::<SidebarPage>);
+    let mut tick = use_signal(|| 0_u64);
     let mut writing = use_signal(|| None::<document::Eval>);
     let mut notice = use_signal(String::new);
     let mut create = use_signal(Creation::default);
     let mut open = use_signal(|| false);
     let mut busy = use_signal(|| false);
-    let read_ticket = use_hook(|| Rc::new(Cell::new(0_u64)));
+    let mut filter = use_signal(String::new);
+    let mut expanded = use_signal(BTreeSet::<String>::new);
+    // Last mark sent per entry, so a poll never repeats a write.
+    let mut marked = use_signal(BTreeMap::<String, i64>::new);
     let statuses = use_signal(
         std::collections::BTreeMap::<String, orkestr_v2_ui::conversation_status::RowStatus>::new,
     );
     let slots = use_signal(|| None::<orkestr_v2_ui::conversation_status::Slots>);
     use_drop(move || {
         mounted.set(false);
-        for channel in [reading(), writing()].into_iter().flatten() {
+        if let Some(channel) = writing() {
             let _ = channel.send(json!({"stop":true}));
         }
     });
-    use_resource(move || {
-        let cursor = after();
-        let _ = refresh();
-        let ticket = read_ticket.get() + 1;
-        read_ticket.set(ticket);
-        let read_ticket = read_ticket.clone();
-        async move {
-            if let Some(old) = reading.peek().as_ref() {
-                let _ = old.send(json!({"stop":true}));
-            }
-            let channel = start(json!({"method":"GET","after":cursor.to_string(),"body":null}));
-            reading.set(Some(channel));
-            let result = channel.join::<Reply>().await;
-            if !mounted() || !session_scope.read().is_current(owner) || read_ticket.get() != ticket
-            {
+    use_future(move || async move {
+        loop {
+            crate::transport::sleep(POLL_MS).await;
+            if !mounted() || !session_scope.read().is_current(owner) {
                 return;
             }
-            reading.set(None);
+            tick += 1;
+        }
+    });
+    // Props do not re-run hooks: follow the selection and refresh at once.
+    let mut current_key = use_signal(|| selected.clone());
+    use_effect(use_reactive((&selected,), move |(selected,)| {
+        if *current_key.peek() != selected {
+            current_key.set(selected);
+            tick += 1;
+        }
+    }));
+    let csrf_for_marks = csrf.clone();
+    use_resource(move || {
+        let _ = tick();
+        let selected = current_key.peek().clone();
+        let csrf = csrf_for_marks.clone();
+        async move {
+            let result = crate::transport::request::<SidebarPage>(
+                "GET",
+                "/api/v2/sidebar",
+                Value::Null,
+                "",
+                "",
+            )
+            .await;
+            if !mounted() || !session_scope.read().is_current(owner) {
+                return;
+            }
             match result {
-                Ok(reply) if reply.status == 200 => {
-                    match serde_json::from_str::<ConversationPage>(&reply.text) {
-                        Ok(value) if value.valid(cursor) => {
-                            onloaded.call(value.conversations.clone());
-                            page.set(Some(value));
-                            notice.set(String::new());
-                        }
-                        _ => {
-                            page.set(None);
-                            notice.set("Conversation list could not be verified.".into());
+                Ok(value) if sidebar::valid(&value) => {
+                    onloaded.call(value.entries.clone());
+                    let mark = value
+                        .entries
+                        .iter()
+                        .find(|e| e.key == selected)
+                        .map(|e| (e.key.clone(), e.read_marker, e.unread));
+                    page.set(Some(value));
+                    notice.set(String::new());
+                    // The open conversation is read up to what this poll saw.
+                    if let Some((key, marker, unread)) = mark {
+                        let known = marked.peek().get(&key).copied();
+                        if known.is_none_or(|k| marker > k) || unread > 0 {
+                            marked.write().insert(key.clone(), marker);
+                            let _ = crate::transport::request::<Value>(
+                                "PUT",
+                                "/api/v2/sidebar/read",
+                                json!({"key": key, "marker": marker}),
+                                &csrf,
+                                "",
+                            )
+                            .await;
                         }
                     }
                 }
-                Ok(reply) if reply.status == 401 => onexpired.call(()),
-                _ => notice.set("Conversations unavailable. Refresh to try again.".into()),
+                Ok(_) => notice.set("Conversation list could not be verified.".into()),
+                Err(error) if error.status == 401 => onexpired.call(()),
+                Err(_) => notice.set("Conversations unavailable. Retrying…".into()),
             }
         }
     });
-    let next = page.read().as_ref().and_then(|p| p.next_cursor);
+    let now = page.read().as_ref().map_or(0, |p| p.observed_at_ms);
+    let v1_note = page.read().as_ref().and_then(|p| match p.v1_status {
+        SidebarV1Status::Unavailable => Some("V1 chats are unavailable right now."),
+        SidebarV1Status::MapOnly => Some("V1 chats from the live map only."),
+        _ => None,
+    });
+    let query = filter().trim().to_lowercase();
+    let visible: Vec<sidebar::Row> = page
+        .read()
+        .as_ref()
+        .map(|p| {
+            if query.is_empty() {
+                sidebar::rows(&p.entries, &expanded.read(), &selected)
+            } else {
+                // Search lists matches flat, newest first.
+                p.entries
+                    .iter()
+                    .filter(|e| e.name.to_lowercase().contains(&query))
+                    .map(|e| sidebar::Row {
+                        entry: e.clone(),
+                        depth: 0,
+                        descendants: 0,
+                        group_activity_ms: e.last_activity_ms,
+                        hidden_unread: 0,
+                        hidden_activity: false,
+                        expanded: false,
+                    })
+                    .collect()
+            }
+        })
+        .unwrap_or_default();
     let ids: Vec<String> = page
         .read()
         .as_ref()
         .map(|p| {
-            p.conversations
+            p.entries
                 .iter()
-                .map(|c| c.conversation_id.to_string())
+                .filter_map(|e| e.conversation_id.as_ref().map(ToString::to_string))
+                .take(50)
                 .collect()
         })
         .unwrap_or_default();
     // A list item, so a changed page always remounts the poller with its new ids.
     let poll_key = format!("{owner}-{}", ids.join(","));
     rsx! { aside { class:"conversation-sidebar", "aria-label":"Conversations",
-        div { class:"sidebar-heading", h2 {"Conversations"} button { onclick:move |_|open.set(!open()), "New conversation" } }
+        div { class:"sidebar-heading",
+            h2 {"Chats"}
+            button { class:"new-chat", "aria-expanded":"{open}", onclick:move |_|open.set(!open()), "New conversation" }
+        }
         if open() {
             form { class:"new-conversation", onsubmit:move |event|{
                 event.prevent_default();if busy()||!session_scope.read().is_current(owner){return;}
@@ -128,7 +200,18 @@ pub fn ConversationSidebar(
                     }.await;
                     if !mounted()||!session_scope.read().is_current(owner){return;}
                     writing.set(None);busy.set(false);
-                    match result { Ok(Some(row))=>{create.set(Creation::default());open.set(false);refresh+=1;onselect.call(row);}, Ok(None)=>{}, Err(error)=>notice.set(error.message) }
+                    match result {
+                        Ok(Some(row))=>{
+                            create.set(Creation::default());open.set(false);tick+=1;
+                            onselect.call(SidebarEntry {
+                                key: format!("v2:{}", row.conversation_id), source: SidebarSource::V2,
+                                name: row.name, conversation_id: Some(row.conversation_id), v1_thread_id: None,
+                                parent_key: None, last_activity_ms: None, preview: None, unread: 0,
+                                activity: Default::default(), read_only: false, coordinator: false,
+                                read_marker: row.last_sequence,
+                            });
+                        },
+                        Ok(None)=>{}, Err(error)=>notice.set(error.message) }
                 });
             },
                 label {r#for:"conversation-name","Conversation name"}
@@ -136,23 +219,100 @@ pub fn ConversationSidebar(
                 button {r#type:"submit",disabled:busy(),if busy(){"Creating…"}else if create.read().pending.is_some(){"Retry creation"}else{"Create conversation"}}
             }
         }
+        div { class:"sidebar-search",
+            label { r#for:"conversation-filter", class:"visually-hidden", "Search chats" }
+            input { id:"conversation-filter", r#type:"search", placeholder:"Search chats", value:"{filter}", oninput:move|e|filter.set(e.value()) }
+        }
         for key in [poll_key] { crate::conversation_status_poll::StatusPoll { key:"{key}", ids: ids.clone(), session_scope, statuses, slots, onexpired } }
         if let Some(slots)=slots() { p {class:"slot-summary", "{slots.label()}"} }
-        nav { "aria-label":"Conversation list",
-            if let Some(value)=page.read().as_ref(){for row in &value.conversations {
-                button {key:"{row.conversation_id}",class:"conversation-choice","aria-current":if row.conversation_id.to_string()==selected{"page"}else{"false"},onclick:{let row=row.clone();move |_|{if session_scope.read().is_current(owner){onselect.call(row.clone());}}},
-                    span {class:"conversation-name","{row.name}"}
-                    if let Some(status)=statuses.read().get(&row.conversation_id.to_string()) {
-                        span {class:"conversation-status {status.tone.class()}","{status.label}"}
+        nav { class:"conversation-list", "aria-label":"Conversation list",
+            for row in visible {
+                SidebarRow {
+                    key:"{row.entry.key}", row: row.clone(), now, selected: row.entry.key == selected,
+                    status: row.entry.conversation_id.as_ref().and_then(|id| statuses.read().get(&id.to_string()).cloned()),
+                    ontoggle: move |key: String| { let mut set = expanded.write(); if !set.remove(&key) { set.insert(key); } },
+                    onselect: move |entry: SidebarEntry| { if session_scope.read().is_current(owner) { onselect.call(entry); } },
+                }
+            }
+            if page.read().is_none() && notice().is_empty() { p { class:"sidebar-loading", "Loading chats…" } }
+        }
+        if let Some(note) = v1_note { p { class:"sidebar-note", "{note}" } }
+        p {role:"status", class:"sidebar-notice", "{notice}"}
+    }}
+}
+
+#[component]
+fn SidebarRow(
+    row: sidebar::Row,
+    now: i64,
+    selected: bool,
+    status: Option<orkestr_v2_ui::conversation_status::RowStatus>,
+    ontoggle: EventHandler<String>,
+    onselect: EventHandler<SidebarEntry>,
+) -> Element {
+    let entry = row.entry.clone();
+    let time = sidebar::relative_time(now, row.group_activity_ms);
+    let activity = sidebar::activity_label(&entry.activity).or_else(|| {
+        row.hidden_activity
+            .then(|| "sub-chat thinking…".to_string())
+    });
+    let unread = sidebar::unread_label(if selected {
+        row.hidden_unread
+    } else {
+        entry.unread + row.hidden_unread
+    });
+    let initial: String = entry
+        .name
+        .trim_start_matches(|c: char| !c.is_alphanumeric())
+        .chars()
+        .next()
+        .map(|c| c.to_uppercase().collect())
+        .unwrap_or_else(|| "#".into());
+    let preview = entry.preview.as_ref().map(|p| {
+        let who = match p.author {
+            orkestr_v2_contracts::SidebarAuthor::Owner => "You: ",
+            _ => "",
+        };
+        format!("{who}{}", p.text)
+    });
+    let v1 = entry.source == SidebarSource::V1;
+    let key = entry.key.clone();
+    rsx! {
+        div { class: "conversation-row", "data-depth": "{row.depth}", "data-source": if v1 { "v1" } else { "v2" },
+            "data-unread": if unread.is_some() { "true" } else { "false" },
+            if row.descendants > 0 {
+                button { class: "group-toggle", r#type: "button", "aria-expanded": "{row.expanded}",
+                    "aria-label": if row.expanded { "Hide sub-chats of {entry.name}" } else { "Show {row.descendants} sub-chats of {entry.name}" },
+                    onclick: move |_| ontoggle.call(key.clone()),
+                    span { "aria-hidden": "true", if row.expanded { "▾" } else { "▸" } }
+                }
+            }
+            button { class: "conversation-choice", r#type: "button", "aria-current": if selected { "page" } else { "false" },
+                onclick: { let entry = entry.clone(); move |_| onselect.call(entry.clone()) },
+                span { class: "avatar", "aria-hidden": "true", "{initial}" }
+                span { class: "choice-body",
+                    span { class: "choice-top",
+                        span { class: "conversation-name", "{entry.name}" }
+                        if !time.is_empty() { time { class: "choice-time", "{time}" } }
+                    }
+                    span { class: "choice-bottom",
+                        if let Some(label) = activity.clone() {
+                            span { class: "choice-activity", "{label}" }
+                        } else if let Some(text) = preview.clone() {
+                            span { class: "choice-preview", "{text}" }
+                        } else {
+                            span { class: "choice-preview choice-empty", if v1 { "Linked V1 chat" } else { "No messages yet" } }
+                        }
+                        if let Some(count) = unread.clone() { span { class: "unread-badge", "aria-label": "{count} unread", "{count}" } }
+                    }
+                    span { class: "choice-badges",
+                        if v1 { span { class: "source-badge", "On V1" } }
+                        if entry.coordinator { span { class: "source-badge coordinator-badge", "Coordinator" } }
+                        if row.descendants > 0 && !row.expanded { span { class: "group-count", "{row.descendants} sub-chats" } }
+                        if let Some(status) = status.clone() { span { class: "conversation-status {status.tone.class()}", "{status.label}" } }
                     }
                 }
-            }}
+            }
         }
-        p {role:"status","{notice}"}
-        div {class:"directory-pagination",
-            button {disabled:after()==0,onclick:move |_|after.set(0),"First"}
-            button {disabled:next.is_none(),onclick:move |_|{if let Some(next)=next{after.set(next);}},"More"}
-            button {onclick:move |_|refresh+=1,"Refresh"}
-        }
-    }}
+    }
 }

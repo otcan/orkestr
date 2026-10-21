@@ -13,6 +13,8 @@ mod desktop_leases;
 pub use desktop_leases::*;
 mod legacy_workers;
 pub use legacy_workers::*;
+mod sidebar;
+pub use sidebar::*;
 mod beta;
 pub use beta::*;
 mod intelligence;
