@@ -100,7 +100,7 @@ def validate(raw):
     require(type(raw) is bytes and len(raw) <= 16384, 'bounded beta config required')
     value = json.loads(raw.decode('utf-8'), object_pairs_hook=unique,
                        parse_constant=lambda _: (_ for _ in ()).throw(RuntimeError('invalid beta number')))
-    require(type(value) is dict and set(value) - {'roles', 'workspace_exec', 'additional_workspace_exec', 'max_active_windows', 'host_full_access', 'claude'} == FIELDS, 'closed beta config fields required')
+    require(type(value) is dict and set(value) - {'roles', 'workspace_exec', 'additional_workspace_exec', 'max_active_windows', 'host_full_access', 'claude', 'window_max_minutes', 'conversation_window_max_minutes'} == FIELDS, 'closed beta config fields required')
     require(type(value['schema_version']) is int and value['schema_version'] == 1, 'beta schema version')
     for name in ('owner_id', 'conversation_id'):
         text = value[name]
@@ -134,6 +134,7 @@ def validate(raw):
     if 'max_active_windows' in value:
         capacity = value['max_active_windows']
         require(type(capacity) is int and 1 <= capacity <= 12, 'bounded beta window capacity required')
+    window_lifetimes(value)
     if 'host_full_access' in value:
         host_full_access(value['host_full_access'])
     if 'claude' in value:
@@ -151,6 +152,25 @@ def validate(raw):
                 or 'host_full_access' in value, 'host-privileged commands require host_full_access')
     if 'additional_workspace_exec' in value:
         additional_workspace_exec(value)
+    return value
+
+
+def window_lifetimes(value):
+    """Optional window lifetime ceilings (minutes, 15..240), instance-wide and
+    per conversation. Runtime extends a working window only up to these."""
+    if 'window_max_minutes' in value:
+        minutes = value['window_max_minutes']
+        require(type(minutes) is int and 15 <= minutes <= 240, 'window lifetime ceiling')
+    if 'conversation_window_max_minutes' in value:
+        table = value['conversation_window_max_minutes']
+        require(type(table) is dict and len(table) <= 64, 'window lifetime ceilings')
+        for conversation, minutes in table.items():
+            try:
+                identifier = uuid.UUID(conversation)
+            except (ValueError, TypeError, AttributeError):
+                raise RuntimeError('window lifetime conversation') from None
+            require(str(identifier) == conversation and identifier.int != 0
+                    and type(minutes) is int and 15 <= minutes <= 240, 'window lifetime ceilings')
     return value
 
 

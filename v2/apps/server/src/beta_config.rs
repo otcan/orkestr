@@ -35,6 +35,14 @@ pub(crate) struct BetaConfig {
     /// Owner/instance-level V1-equivalent full access; absent by default.
     #[serde(default)]
     pub host_full_access: Option<host_full_access::HostFullAccess>,
+    /// Total window lifetime (minutes) an active window may be extended to
+    /// while its Deep or Worker runs are still working. Default 60, at most 240.
+    #[serde(default)]
+    pub window_max_minutes: Option<u32>,
+    /// Per-conversation override of `window_max_minutes` (for example long
+    /// desk and bank flows).
+    #[serde(default)]
+    pub conversation_window_max_minutes: std::collections::HashMap<ConversationId, u32>,
     /// Optional Claude Deep runtime for conversations that select it (or all
     /// conversations without a choice when `default` is set).
     #[serde(default)]
@@ -55,6 +63,8 @@ pub(crate) struct ClaudeWindow {
     #[serde(default)]
     pub fast: bool,
 }
+/// Default total window lifetime while work is still running (minutes).
+pub(crate) const DEFAULT_WINDOW_MAX_MINUTES: u32 = 60;
 /// Default number of conversations that may hold a live window at once.
 pub(crate) const DEFAULT_ACTIVE_WINDOWS: u32 = 8;
 /// Upper bound; the root manager's independent ceiling stays above it.
@@ -94,6 +104,15 @@ impl BetaConfig {
         }
         if let Some(access) = &self.host_full_access {
             access.validate()?;
+        }
+        if self
+            .window_max_minutes
+            .iter()
+            .chain(self.conversation_window_max_minutes.values())
+            .any(|minutes| !(15..=240).contains(minutes))
+            || self.conversation_window_max_minutes.len() > 64
+        {
+            return Err("invalid window lifetime ceiling");
         }
         if let Some(claude) = &self.claude {
             if !claude.launcher.is_absolute()
@@ -157,6 +176,22 @@ impl BetaConfig {
             return Err("conversation provider switch requires a handoff window");
         }
         Ok(selected)
+    }
+
+    /// This conversation's window lifetime ceiling in milliseconds.
+    pub(crate) fn window_max_lifetime_ms(&self) -> i64 {
+        self.window_max_lifetime_ms_for(&self.conversation_id)
+    }
+
+    /// The window lifetime ceiling of any conversation in milliseconds.
+    pub(crate) fn window_max_lifetime_ms_for(&self, conversation: &ConversationId) -> i64 {
+        let minutes = self
+            .conversation_window_max_minutes
+            .get(conversation)
+            .copied()
+            .or(self.window_max_minutes)
+            .unwrap_or(DEFAULT_WINDOW_MAX_MINUTES);
+        i64::from(minutes) * 60_000
     }
 
     pub(crate) fn active_windows(&self) -> u32 {
@@ -245,6 +280,26 @@ mod tests {
             claude.window_provider(&launch, Some(ProviderKind::Claude)),
             Ok(ProviderKind::Claude)
         );
+    }
+    #[test]
+    fn window_lifetime_ceiling_defaults_overrides_and_bounds() {
+        let primary = "22222222-2222-4222-8222-222222222222";
+        let other = ConversationId("33333333-3333-4333-8333-333333333333".parse().unwrap());
+        let config: BetaConfig = serde_json::from_value(input()).unwrap();
+        assert_eq!(config.window_max_lifetime_ms(), 3_600_000);
+        let mut value = input();
+        value["window_max_minutes"] = serde_json::json!(30);
+        value["conversation_window_max_minutes"] = serde_json::json!({ primary: 120 });
+        let config: BetaConfig = serde_json::from_value(value.clone()).unwrap();
+        config.validate().unwrap();
+        assert_eq!(config.window_max_lifetime_ms(), 7_200_000);
+        assert_eq!(config.window_max_lifetime_ms_for(&other), 1_800_000);
+        for bad in [14, 241] {
+            let mut value = value.clone();
+            value["conversation_window_max_minutes"] = serde_json::json!({ primary: bad });
+            let config: BetaConfig = serde_json::from_value(value).unwrap();
+            assert!(config.validate().is_err(), "{bad}");
+        }
     }
     #[test]
     fn each_conversation_finds_only_its_own_command_profile() {

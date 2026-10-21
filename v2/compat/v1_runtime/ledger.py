@@ -316,6 +316,46 @@ class Ledger:
             self.save(data, db)
             self._export(db, data, "final", "final:" + data["remote_id"], reply)
 
+    def mark_stalled(self, after_s, text, now=None):
+        """Give each unanswered input older than after_s one visible notice.
+
+        Returns the inputs newly marked, for the operator alert.
+        """
+        now = time.time() if now is None else now
+        marked = []
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            rows = db.execute("SELECT data FROM inputs WHERE json_extract(data,'$.phase') != 'completed' AND "
+                              "json_extract(data,'$.settled') IS NULL AND json_extract(data,'$.stalled') IS NULL "
+                              "ORDER BY rowid").fetchall()
+            for (raw,) in rows:
+                data = json.loads(raw)
+                since = data.get("queued_at", data.get("admitted_at"))
+                if not isinstance(since, (int, float)) or now - since < after_s:
+                    continue
+                data["stalled"] = {"at": now, "phase": data.get("phase")}
+                self.save(data, db)
+                message = {"id": str(uuid.uuid5(NOTICE_NAMESPACE, "stalled:" + data["remote_id"])),
+                           "role": "assistant", "state": "completed", "phase": "commentary", "kind": "progress",
+                           "source": "rust-v2-adapter", "parentMessageId": data["remote_id"], "text": text}
+                self._export(db, data, "progress", "stalled:" + data["remote_id"], message)
+                marked.append(data)
+        return marked
+
+    def continue_notice(self, data, text):
+        """Save a re-queued input and tell the owner, in one transaction.
+
+        Not bounded by the progress limit: an input continues at most once.
+        """
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            self.save(data, db)
+            message = {"id": str(uuid.uuid5(NOTICE_NAMESPACE, "continued:" + data["remote_id"])),
+                       "role": "assistant", "state": "completed", "phase": "commentary", "kind": "progress",
+                       "source": "rust-v2-adapter", "parentMessageId": data["remote_id"], "text": text}
+            self._export(db, data, "progress", "continued:" + data["remote_id"], message)
+            return message
+
     def add_progress(self, data, payload_id, text):
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
@@ -433,6 +473,8 @@ class Ledger:
             outstanding = db.execute("SELECT count(*) FROM inputs WHERE json_extract(data,'$.settled') IS NULL").fetchone()[0]
             cursor = self._acked_through(db)
             refused = db.execute("SELECT count(*) FROM inputs WHERE json_extract(data,'$.refused') IS NOT NULL").fetchone()[0]
+            stalled = db.execute("SELECT count(*) FROM inputs WHERE json_extract(data,'$.stalled') IS NOT NULL AND "
+                                 "json_extract(data,'$.phase') != 'completed'").fetchone()[0]
             recent = [json.loads(raw) for (raw,) in db.execute(
                 "SELECT data FROM inputs WHERE json_extract(data,'$.refused') IS NOT NULL ORDER BY rowid DESC LIMIT ?",
                 (RECENT_REFUSALS,)).fetchall()]
@@ -441,7 +483,7 @@ class Ledger:
                 "outstandingInputs": outstanding, "maxOutstandingInputs": self.max_outstanding, "ackedThrough": cursor,
                 "pendingExports": outcomes.get("pending", 0), "uncertainDeliveries": outcomes.get("uncertain", 0),
                 "failedDeliveries": outcomes.get("failed", 0), "revoked": self.revoked(),
-                "refusedInputs": refused,
+                "refusedInputs": refused, "stalledInputs": stalled,
                 "recentRefusals": [{"publicMessageId": d["public_id"], "reason": d["refused"]["reason"],
                                     "phase": d["refused"].get("phase"), "atMs": d["refused"]["atMs"],
                                     "settled": bool(d.get("settled"))} for d in recent]}

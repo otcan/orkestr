@@ -393,8 +393,9 @@ class RustClient:
             require(isinstance(current, dict) and current.get("conversation_id") == self.conversation and
                     current.get("state") in ("active", "closed") and integer(current.get("generation"), 1) and
                     current.get("limits") == LIMITS and integer(current.get("opened_at_ms")) and
-                    current.get("work_deadline_ms") == current["opened_at_ms"] + 870000 and
-                    current.get("expires_at_ms") == current["opened_at_ms"] + 900000, "window_refused")
+                    integer(current.get("work_deadline_ms")) and
+                    870000 <= current["work_deadline_ms"] - current["opened_at_ms"] <= 14370000 and
+                    current.get("expires_at_ms") == current["work_deadline_ms"] + 30000, "window_refused")
             identity(current.get("window_id"))
         return dict(request_key=request_key, input_message_id=intake["message_id"],
                     input_event_id=intake["event_id"], input_request_key=input_request_key,

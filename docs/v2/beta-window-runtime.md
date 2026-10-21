@@ -46,6 +46,29 @@ boundary and uses at most 28 attempts and 63 MiB. The root manager reserves
 before forwarding, never refunds uncertainty, and owns its durable budget.
 Runtime does not maintain a competing attempt counter or restart a deadline.
 
+### Work-time extension (schema 56)
+
+A window opens with 870 seconds of work time. While a Deep or Worker run of the
+window is still producing work and less than ten minutes of work time remain,
+the server's window opener extends the work deadline in ten-minute steps up to
+the conversation's lifetime ceiling: 60 minutes by default, `window_max_minutes`
+in the beta config for every conversation, and `conversation_window_max_minutes`
+for one conversation (15 to 240 minutes). The manager moves its wall and
+monotonic deadlines first, then Core (`extend_execution_window`), then the local
+clock. Each step only moves deadlines later. The 30-second cleanup margin stays
+exact. A refused step leaves the current deadline in force, and the server tries
+no further steps for that window. Attempt and byte limits are not raised.
+
+A follow-up joins a live window only if it can still get ten minutes of work
+time there, either now or by extension under the ceiling. Otherwise Core queues
+it durably (HTTP 202), and the dispatcher opens the successor window, which
+resumes the same native session, once the current window closes.
+
+If a deadline still stops this input's Deep turn, the WhatsApp adapter
+re-sends that input once as a new turn. It tells the owner "Continuing in a new
+turn". A second deadline stop, an owner Stop before the deadline, or any other
+failure refuses the input as before, with a visible notice.
+
 Running work uses existing issued Stop, genuine terminal evidence and original
 owned-tree reap. Awaiting owner acceptance stays awaiting owner acceptance;
 expiry, local exit and an ACK do not fabricate a terminal or acceptance.
@@ -104,3 +127,21 @@ than recovering the capability.
 state defaults to no holder. This slice does not yet connect config custody
 loading, manager ACK, private issue/bind, native metadata, or activation. HTTP
 responses contain only the canonical public admission DTO.
+
+### Stranded Fast companion and silent waits
+
+If the Fast companion fails while Deep keeps the window, its Core run can stay
+`running` without a local owner. The WhatsApp adapter no longer waits for such
+a Fast run. When the Fast status is missing, foreign or in a terminal phase, the
+adapter waits for the Deep proposal. It then skips Fast after a 60-second grace
+and accepts and delivers Deep alone. When the window task has ended, the server
+notices it before any reconciliation (automatic after the hard deadline, or by
+the owner) and no longer reports a live owner that is gone. Before this change,
+only a restart cleared that state.
+
+The adapter waits, and does not refuse, while the conversation's previous
+window is `opening`, `retiring` or `reconciliation_required`. Any input still
+unanswered 20 minutes after it arrived gets one visible notice ("Still
+working ... the operator has been alerted"). The adapter also logs an
+`ALERT orkestr-v2-wa-adapter input_stalled` line and reports `stalledInputs` in
+binding health.

@@ -40,6 +40,13 @@ impl ConfiguredExecution {
             .transpose()
     }
 
+    /// Best effort; a refusal leaves the current deadline in force.
+    pub(super) async fn extend_window_while_working(&self) {
+        if let Some(window) = &self.window {
+            window.extend_while_working(&self.store, &self.token).await;
+        }
+    }
+
     pub(super) fn quiesce_worker(worker: &mut Option<WorkerSchedule>) {
         if let Some(worker) = worker {
             worker.quiesce();

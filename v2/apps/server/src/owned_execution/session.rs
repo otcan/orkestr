@@ -221,6 +221,13 @@ impl ConfiguredExecution {
                 // turns and their original cleanup through the owner decision.
                 Self::poll_worker(&mut worker).await;
                 drop(schedule);
+                if worker
+                    .as_ref()
+                    .is_some_and(crate::worker_execution::WorkerSchedule::is_working)
+                {
+                    // A Worker of this proposal is still working: keep the window.
+                    self.extend_window_while_working().await;
+                }
                 if self.window.as_ref().is_some_and(|window| window.work_due()) {
                     self.drain_worker(&mut worker, heartbeat).await?;
                     let retiring = pump
@@ -266,6 +273,9 @@ impl ConfiguredExecution {
                 // killing a local helper is never reported as provider Stopped.
                 break;
             }
+            // The Deep turn is still running: keep at least ten minutes of work
+            // time up to the window's lifetime ceiling before any deadline stop.
+            self.extend_window_while_working().await;
             let cancellation = if self.window.as_ref().is_some_and(|window| window.work_due()) {
                 Some("execution-window-work-deadline")
             } else if *shutdown.borrow() {

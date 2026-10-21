@@ -104,6 +104,14 @@ pub struct WorkerSchedule {
 }
 
 impl WorkerSchedule {
+    /// A Worker of this parent is still being set up, running or stopping.
+    /// Used only to keep the window open longer, never as authority.
+    pub fn is_working(&self) -> bool {
+        matches!(
+            self.phase,
+            Phase::Preparing(_) | Phase::Running(_) | Phase::Stopping(_)
+        ) || self.queue.as_ref().is_some_and(|queue| queue.is_working())
+    }
     /// Called once before the Deep capability is moved into Runtime attachment.
     /// Both source IDs come from the actual consumed parent, never browser JSON.
     /// No provider is started and no dispatch capability is retained here.

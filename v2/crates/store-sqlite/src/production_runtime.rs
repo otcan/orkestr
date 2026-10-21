@@ -10,6 +10,8 @@ mod historical_guard_fixture;
 pub use execution_window::{
     ExecutionWindowBootstrap, ExecutionWindowCredential, ExecutionWindowRetirement,
     RetiredExecutionWindowContext, StrandedExecutionWindow, StrandedExecutionWindowPlan,
+    EXECUTION_WINDOW_BASE_LIFETIME_MS, EXECUTION_WINDOW_CLEANUP_MS,
+    EXECUTION_WINDOW_MAX_LIFETIME_MS,
 };
 mod acceptance;
 #[cfg(all(test, unix))]

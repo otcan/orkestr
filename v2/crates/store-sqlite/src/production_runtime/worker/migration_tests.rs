@@ -17,6 +17,7 @@ async fn proposal_migration_preserves_old_blocked_children_and_every_prior_row()
         .split("CREATE TEMP TABLE")
         .next()
         .unwrap();
+    crate::production_runtime::tests::downgrade_window_deadlines(&f.store).await;
     let mut tx = f.store.pool.begin().await.unwrap();
     sqlx::query("DROP TRIGGER worker_provider_parent_fence")
         .execute(&mut *tx)
@@ -108,5 +109,5 @@ async fn proposal_migration_preserves_old_blocked_children_and_every_prior_row()
         .fetch_one(&reopened.pool)
         .await
         .unwrap();
-    assert_eq!(latest, 55);
+    assert_eq!(latest, 56);
 }

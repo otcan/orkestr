@@ -467,7 +467,7 @@ async fn populated_payload_prefix_upgrade_preserves_all_rows_and_foreign_links()
             .fetch_one(&mut conn)
             .await
             .unwrap(),
-        55
+        56
     );
     for table in [
         "history_imports",

@@ -46,3 +46,19 @@ fn active_expired_extended_or_changed_limits_refuse_reconstruction() {
     limits.limits.cleanup_ms += 1;
     assert!(Clock::opening(&limits, limits.opened_at_ms, now).is_err());
 }
+
+#[test]
+fn extension_moves_both_deadlines_later_only() {
+    let now = Instant::now();
+    let clock = Clock::opening(&opening(), 1_005_000, now).unwrap();
+    clock.extend_to(2_470_000).unwrap(); // +10 minutes
+    assert!(!clock.work_due(now + Duration::from_secs(1464)));
+    assert!(clock.work_due(now + Duration::from_secs(1465)));
+    assert_eq!(
+        clock.cleanup_deadline().into_std(),
+        now + Duration::from_secs(1495)
+    );
+    clock.extend_to(2_000_000).unwrap(); // earlier: ignored
+    assert_eq!(clock.work_deadline_ms(), 2_470_000);
+    assert_eq!(clock.opened_at_ms(), 1_000_000);
+}

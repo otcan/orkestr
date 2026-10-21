@@ -45,6 +45,8 @@ pub use production_runtime::{
     RunLeaseTransition, RunRenewalAuthority, StrandedExecutionWindow, StrandedExecutionWindowPlan,
     TimerSchedulerIssuer, WorkerAdmissionInput, WorkerDelegation, WorkerDelegationReceipt,
     WorkerDelegationResult, WorkerDelegationState, WorkerTaskClaim,
+    EXECUTION_WINDOW_BASE_LIFETIME_MS, EXECUTION_WINDOW_CLEANUP_MS,
+    EXECUTION_WINDOW_MAX_LIFETIME_MS,
 };
 
 pub use production_runtime::inspection::{

@@ -200,6 +200,9 @@ fn construction_and_request_edges_refuse_before_io() {
     assert!(c.binding("x", &window(), 2, INTEGER_LIMIT).is_err());
     assert!(c.binding("x", &window(), 1, 1).is_err());
     assert!(!dates(0, 870_001, 900_000));
+    assert!(dates(0, 3_570_000, 3_600_000));
+    assert!(!dates(0, 14_370_001, 14_400_001));
+    assert!(!dates(0, 869_000, 899_000));
     assert!(!dates(-1, 869_999, 899_999));
 }
 

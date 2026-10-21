@@ -151,6 +151,9 @@ class Manager:
                 self._terminate(window)
                 raise Refused("broker_binding") from None
             return {"ok": True, "receipt": self.ledger.status(request["conversation_id"]), "fresh_child": fresh}
+        if operation == "extend":
+            require(window is not None and not window.egress_closed, "window_not_extendable")
+            return {"ok": True, "receipt": self.ledger.extend(request)}
         if operation == "drain":
             return {"ok": True, "receipt": self.ledger.drain(request["window_id"], request["generation"])}
         if operation == "uncertain":

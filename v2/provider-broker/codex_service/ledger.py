@@ -12,7 +12,7 @@ import threading
 import time
 import uuid
 
-from .contract import (CREDIT_BYTES, DRAIN_ATTEMPTS, DRAIN_BYTES, DRAIN_SECONDS,
+from .contract import (MAX_LIFETIME_SECONDS, CREDIT_BYTES, DRAIN_ATTEMPTS, DRAIN_BYTES, DRAIN_SECONDS,
                        LIFETIME_SECONDS, MAX_ATTEMPTS, MAX_BYTES, MAX_LIVE_WINDOWS,
                        RECONCILED_OUTCOMES, Refused, canonical, generation, identifier, require)
 
@@ -162,8 +162,9 @@ class Ledger:
 
     def _clock(self, row):
         boot, wall, mono = self.clock.sample()
+        # Monotonic opening = deadline_mono minus the (possibly extended) lifetime.
         previous = self.last_clocks.get(row["id"], (row["created_wall_ns"],
-            row["deadline_mono_ns"] - LIFETIME_SECONDS * 1_000_000_000))
+            row["deadline_mono_ns"] - (row["deadline_wall_ns"] - row["created_wall_ns"])))
         # Wall and monotonic clocks share a captured offset. Small scheduling/
         # clock-slew differences never extend either hard deadline. Discontinuity
         # or reversal loses authority permanently, including during late retire.
@@ -277,6 +278,27 @@ class Ledger:
             self.db.execute("INSERT INTO reservations VALUES(?,?,?,?)", (reservation, window, kind, amount))
             self.db.execute(f"UPDATE windows SET {column}={column}+? WHERE id=?", (amount, window))
             return row[column] + amount
+
+    def extend(self, request):
+        """The opener moves an active window's hard deadline later, keeping the
+        captured wall/monotonic offset. Never shorter, never past the total
+        lifetime ceiling, never once draining or expired. Equal is a replay."""
+        self._scope(request)
+        with self.transaction():
+            row = self._exact(request["window_id"], request["generation"])
+            require(row["conversation"] == request["conversation_id"], "scope")
+            require(row["state"] == "active", "window_not_extendable")
+            self._live_clock(row)
+            target = request["expires_at_ms"] * 1_000_000
+            current = row["deadline_wall_ns"]
+            require(target >= current and
+                    target - row["created_wall_ns"] <= MAX_LIFETIME_SECONDS * 1_000_000_000,
+                    "window_extension")
+            if target > current:
+                delta = target - current
+                self.db.execute("UPDATE windows SET deadline_wall_ns=?,deadline_mono_ns=deadline_mono_ns+? WHERE id=? AND deadline_wall_ns=?",
+                                (target, delta, row["id"], current))
+            return self._receipt(self._exact(request["window_id"], request["generation"]))
 
     def drain(self, window, selected_generation):
         with self.transaction():

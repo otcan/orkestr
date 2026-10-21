@@ -167,6 +167,16 @@ class Windows(unittest.TestCase):
         self.assertFalse(self.manager.failed)
         self.retire(b)
 
+    def test_extend_needs_live_custody_of_that_window(self):
+        a = self.admit(self.home)
+        extend = {**{k: a[k] for k in ("version", "owner_id", "conversation_id", "window_id", "generation")},
+                  "operation": "extend", "request_id": uid(), "expires_at_ms": a["opened_at_ms"] + 1_800_000}
+        answer = self.manager.dispatch(extend)
+        self.assertEqual(answer["receipt"]["expires_at_ms"], a["opened_at_ms"] + 1_800_000)
+        self.manager.windows[a["window_id"]].egress_closed = True
+        with self.assertRaisesRegex(Refused, "window_not_extendable"):
+            self.manager.dispatch({**extend, "request_id": uid(), "expires_at_ms": a["opened_at_ms"] + 2_700_000})
+
     def test_server_loss_marks_every_live_window(self):
         a, b = self.admit(self.home), self.admit(uid())
         self.manager.child = SimpleNamespace(poll=lambda: 0)

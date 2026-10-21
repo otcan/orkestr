@@ -306,12 +306,17 @@ fn queued_intent_is_rebuilt_against_current_window_state() {
         expires_at_ms: deadline + 30_000,
         limits: ExecutionWindowLimits::default(),
     };
-    let Plan::Admit(first) = plan(&row, None, 1_000) else {
+    const HOUR: i64 = 3_600_000;
+    let Plan::Admit(first) = plan(&row, None, 1_000, HOUR) else {
         panic!("no window starts generation one")
     };
     assert_eq!((first.expected_generation, first.window_id), (0, None));
-    let Plan::Admit(next) = plan(&row, Some(&status(ExecutionWindowState::Closed, 0)), 1_000)
-    else {
+    let Plan::Admit(next) = plan(
+        &row,
+        Some(&status(ExecutionWindowState::Closed, 0)),
+        1_000,
+        HOUR,
+    ) else {
         panic!("closed predecessor starts a successor")
     };
     assert_eq!(next.expected_generation, 4);
@@ -320,6 +325,7 @@ fn queued_intent_is_rebuilt_against_current_window_state() {
         &row,
         Some(&status(ExecutionWindowState::Active, 100_000)),
         1_000,
+        HOUR,
     ) else {
         panic!("a live window takes the follow-up")
     };
@@ -331,15 +337,39 @@ fn queued_intent_is_rebuilt_against_current_window_state() {
         (ExecutionWindowState::Retiring, 100_000),
     ] {
         assert!(matches!(
-            plan(&row, Some(&status(state, deadline)), 1_000),
+            plan(&row, Some(&status(state, deadline)), 1_000, HOUR),
             Plan::Wait
         ));
     }
+    // Less than ten minutes of work left: a follow-up joins only if the
+    // window can still be extended that far, else it opens the successor.
+    let short = status(ExecutionWindowState::Active, 870_000);
+    assert!(matches!(
+        plan(&row, Some(&short), 300_000, 900_000),
+        Plan::Wait
+    ));
+    assert!(matches!(
+        plan(&row, Some(&short), 300_000, HOUR),
+        Plan::Admit(ExecutionWindowRequest {
+            window_id: Some(_),
+            ..
+        })
+    ));
+    let capped = status(ExecutionWindowState::Active, HOUR - 30_000);
+    assert!(matches!(
+        plan(&row, Some(&capped), HOUR - 500_000, HOUR),
+        Plan::Wait
+    ));
+    assert!(matches!(
+        plan(&row, Some(&capped), HOUR - 700_000, HOUR),
+        Plan::Admit(_)
+    ));
     assert!(matches!(
         plan(
             &row,
             Some(&status(ExecutionWindowState::ReconciliationRequired, 0)),
-            1_000
+            1_000,
+            HOUR
         ),
         Plan::Withdraw(QueuedWindowWithdrawal::ReconciliationRequired)
     ));

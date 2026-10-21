@@ -88,6 +88,10 @@ impl TaskQueue {
         })
     }
 
+    pub(super) fn is_working(&self) -> bool {
+        self.children.iter().any(WorkerSchedule::is_working)
+    }
+
     pub(super) fn quiesce(&mut self) {
         self.closed = true;
         self.registration.take();

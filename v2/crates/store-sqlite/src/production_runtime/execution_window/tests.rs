@@ -513,3 +513,94 @@ async fn first_window_issues_before_native_readiness_and_activates_last() {
         .unwrap();
     assert_eq!(claim.event_id, request.input_event_id);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn opener_extends_an_active_window_forward_up_to_its_ceiling() {
+    let f = fixtures::setup().await;
+    let browser = browser(&f).await;
+    let _binding = fixtures::ready(&f).await;
+    let request = input(&f, "long-turn").await;
+    let a = f
+        .store
+        .admit_execution_window_authenticated(&browser, &f.conversation, &request)
+        .await
+        .unwrap();
+    let grant = f
+        .handle
+        .issue_execution_window_credential(
+            &f.token,
+            a.status.window_id,
+            1,
+            "synthetic-boot",
+            a.status.expires_at_ms,
+            &"a".repeat(64),
+        )
+        .await
+        .unwrap();
+    let bound = f
+        .handle
+        .bind_execution_window(&f.token, &grant)
+        .await
+        .unwrap();
+    let opened = a.status.opened_at_ms;
+    let extend = |work: i64, cap: i64, boot: &'static str| {
+        let bound = bound.clone();
+        let credential = grant.credential().to_owned();
+        let window = a.status.window_id;
+        async move {
+            bound
+                .extend_execution_window(&credential, window, 1, boot, work, cap)
+                .await
+        }
+    };
+    // Not active yet: an opening window is never extended.
+    assert!(extend(opened + 1_470_000, 3_600_000, "synthetic-boot")
+        .await
+        .is_err());
+    bound
+        .activate_execution_window(grant.credential(), a.status.window_id, 1, "synthetic-boot")
+        .await
+        .unwrap();
+    let status = extend(opened + 1_470_000, 3_600_000, "synthetic-boot")
+        .await
+        .unwrap();
+    assert_eq!(
+        (status.work_deadline_ms, status.expires_at_ms),
+        (opened + 1_470_000, opened + 1_500_000)
+    );
+    // Smaller or equal requests replay the current deadline; never shorten it.
+    let status = extend(opened + 900_000, 3_600_000, "synthetic-boot")
+        .await
+        .unwrap();
+    assert_eq!(status.work_deadline_ms, opened + 1_470_000);
+    // Past this window's ceiling, a foreign boot or an invalid ceiling: refused.
+    assert!(extend(opened + 3_570_001, 3_600_000, "synthetic-boot")
+        .await
+        .is_err());
+    assert!(extend(opened + 2_000_000, 3_600_000, "other-boot")
+        .await
+        .is_err());
+    assert!(extend(opened + 2_000_000, 14_400_001, "synthetic-boot")
+        .await
+        .is_err());
+    // A Worker lease and admission see the extended deadline in Core.
+    let current = f
+        .store
+        .execution_window_status_authenticated(&browser, &f.conversation)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(current.work_deadline_ms, opened + 1_470_000);
+    bound
+        .begin_execution_window_retirement(
+            grant.credential(),
+            a.status.window_id,
+            1,
+            "synthetic-boot",
+        )
+        .await
+        .unwrap();
+    assert!(extend(opened + 2_000_000, 3_600_000, "synthetic-boot")
+        .await
+        .is_err());
+}
