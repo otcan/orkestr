@@ -120,8 +120,20 @@ pub struct ServiceHealth {
     pub result: String,
     pub since_ms: Option<i64>,
     pub restarts: u32,
-    /// Running, or a one-shot job whose last run succeeded.
+    /// Running, or a one-shot (timer) job whose last run succeeded.
     pub healthy: bool,
+    /// A one-shot job (`Type=oneshot` or started by a timer): judged by its
+    /// last run, not by being inactive between runs.
+    #[serde(default)]
+    pub oneshot: bool,
+    /// End of the last run and its exit status (one-shot jobs).
+    #[serde(default)]
+    pub last_run_ms: Option<i64>,
+    #[serde(default)]
+    pub last_exit_status: Option<i32>,
+    /// Whether the triggering timer is still scheduled, when there is one.
+    #[serde(default)]
+    pub timer_active: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

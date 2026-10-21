@@ -1,6 +1,8 @@
 //! Host metrics panel: units, freshness and chart geometry. Pure functions,
 //! so the numbers the owner reads are tested without a browser.
-use orkestr_v2_contracts::{HostMetricsHistory, HostMetricsRange, HostMetricsSummary};
+use orkestr_v2_contracts::{
+    HostMetricsHistory, HostMetricsRange, HostMetricsSummary, ServiceHealth, ServiceState,
+};
 
 /// The compact panel refreshes this often.
 pub const SUMMARY_REFRESH_MS: u64 = 10_000;
@@ -212,5 +214,42 @@ pub fn coverage(history: &HostMetricsHistory, now_ms: i64) -> f64 {
     match history.history_from_ms {
         Some(from) => (((now_ms - from) as f64) / span).clamp(0.0, 1.0),
         None => 0.0,
+    }
+}
+
+/// One line of service state. Timer (one-shot) jobs are idle between runs
+/// by design, so they read by their last run: "idle – last run OK at 18:22".
+pub fn service_label(service: &ServiceHealth, offset_minutes: i64) -> String {
+    let at = |t: Option<i64>| {
+        t.map(|t| format!(" at {}", clock(t, offset_minutes, false)))
+            .unwrap_or_default()
+    };
+    if service.oneshot {
+        if service.timer_active == Some(false) {
+            return "timer stopped – job will not run".into();
+        }
+        return match service.state {
+            ServiceState::Active | ServiceState::Activating => "running now".into(),
+            ServiceState::Inactive if service.healthy => match service.last_run_ms {
+                Some(_) => format!("idle – last run OK{}", at(service.last_run_ms)),
+                None => "idle – not run yet".into(),
+            },
+            ServiceState::Unknown => "unknown".into(),
+            _ => match service.last_exit_status.filter(|s| *s != 0) {
+                Some(code) => format!("last run failed (exit {code}){}", at(service.last_run_ms)),
+                None => format!(
+                    "last run failed ({}){}",
+                    service.result,
+                    at(service.last_run_ms)
+                ),
+            },
+        };
+    }
+    match service.state {
+        ServiceState::Active => service.sub_state.clone(),
+        ServiceState::Inactive => format!("stopped · {}", service.result),
+        ServiceState::Failed => format!("failed · {}", service.result),
+        ServiceState::Activating => format!("starting · {}", service.sub_state),
+        ServiceState::Unknown => "unknown".into(),
     }
 }

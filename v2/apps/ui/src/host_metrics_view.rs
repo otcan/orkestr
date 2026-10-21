@@ -203,15 +203,8 @@ pub fn HostMetricsView(
                                 span { class: "svc-dot", "aria-hidden": "true" }
                                 span { class: "svc-name", strong { "{service.label}" } small { "{service.unit}" } }
                                 span { class: "svc-state",
-                                    {match service.state {
-                                        ServiceState::Active => service.sub_state.clone(),
-                                        ServiceState::Inactive if service.healthy => "last run succeeded".to_string(),
-                                        ServiceState::Inactive => format!("stopped · {}", service.result),
-                                        ServiceState::Failed => format!("failed · {}", service.result),
-                                        ServiceState::Activating => format!("starting · {}", service.sub_state),
-                                        ServiceState::Unknown => "unknown".to_string(),
-                                    }}
-                                    if let Some(at) = service.since_ms { small { " · since {model::ago(now(), at)}" } }
+                                    "{model::service_label(service, offset())}"
+                                    if let Some(at) = service.since_ms.filter(|_| !service.oneshot) { small { " · since {model::ago(now(), at)}" } }
                                     if service.restarts > 0 { small { " · {service.restarts} restarts" } }
                                 }
                             }

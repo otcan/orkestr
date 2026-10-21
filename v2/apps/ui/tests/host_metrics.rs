@@ -123,3 +123,33 @@ fn chart_geometry_follows_time_and_breaks_at_gaps() {
     assert_eq!(coverage(&history, 3_600_000), 0.5);
     assert_eq!(history_refresh_ms(HostMetricsRange::Days7), 60_000);
 }
+
+#[test]
+fn timer_jobs_read_by_their_last_run() {
+    let probe: orkestr_v2_contracts::ServiceHealth = serde_json::from_value(serde_json::json!({
+        "label": "Group probe", "unit": "orkestr-wa-group-probe.service", "state": "inactive", "sub_state": "dead",
+        "result": "success", "since_ms": 1_792_599_736_000_i64, "restarts": 0, "healthy": true, "oneshot": true,
+        "last_run_ms": 1_792_599_736_000_i64, "last_exit_status": 0, "timer_active": true})).unwrap();
+    assert_eq!(service_label(&probe, -120), "idle – last run OK at 18:22");
+    let mut failed = probe.clone();
+    failed.state = orkestr_v2_contracts::ServiceState::Failed;
+    failed.healthy = false;
+    failed.result = "exit-code".into();
+    failed.last_exit_status = Some(2);
+    assert_eq!(
+        service_label(&failed, -120),
+        "last run failed (exit 2) at 18:22"
+    );
+    let mut stopped = probe.clone();
+    stopped.timer_active = Some(false);
+    assert_eq!(
+        service_label(&stopped, 0),
+        "timer stopped – job will not run"
+    );
+    // Older servers without the one-shot fields still parse.
+    let old: orkestr_v2_contracts::ServiceHealth = serde_json::from_value(serde_json::json!({
+        "label": "Adapter", "unit": "a.service", "state": "active", "sub_state": "running",
+        "result": "success", "since_ms": null, "restarts": 0, "healthy": true}))
+    .unwrap();
+    assert_eq!(service_label(&old, 0), "running");
+}
