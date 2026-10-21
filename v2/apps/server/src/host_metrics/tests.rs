@@ -160,21 +160,67 @@ fn units_file_is_bounded_and_systemctl_blocks_map_to_health() {
     ] {
         assert!(services::parse(bad).is_none());
     }
-    let show = "Type=simple\nResult=success\nNRestarts=2\nId=orkestr-v2-wa-adapter.service\nActiveState=active\nSubState=running\nStateChangeTimestamp=@1792589713\n\n\
-Type=oneshot\nResult=success\nNRestarts=0\nId=orkestr-wa-group-probe.service\nActiveState=inactive\nSubState=dead\nStateChangeTimestamp=@1792591020\n\n\
-Type=simple\nResult=exit-code\nNRestarts=5\nId=orkestr-wa-worker@sender.service\nActiveState=failed\nSubState=failed\nStateChangeTimestamp=@1792591021\n";
-    let health = services::parse_show(show, &units);
+    let show = "Type=simple\nResult=success\nNRestarts=2\nId=orkestr-v2-wa-adapter.service\nActiveState=active\nSubState=running\nStateChangeTimestamp=@1792589713\nExecMainStatus=0\nExecMainExitTimestamp=\nTriggeredBy=\n\n\
+Type=oneshot\nResult=success\nNRestarts=0\nId=orkestr-wa-group-probe.service\nActiveState=inactive\nSubState=dead\nStateChangeTimestamp=@1792599736\nExecMainStatus=0\nExecMainExitTimestamp=@1792599736\nTriggeredBy=orkestr-wa-group-probe.timer\n\n\
+Type=simple\nResult=exit-code\nNRestarts=5\nId=orkestr-wa-worker@sender.service\nActiveState=failed\nSubState=failed\nStateChangeTimestamp=@1792591021\nExecMainStatus=1\nExecMainExitTimestamp=@1792591021\nTriggeredBy=\n";
+    let timers = "Id=orkestr-wa-group-probe.timer\nActiveState=active\nSubState=waiting\n";
+    let health = services::parse_show(show, timers, &units);
     assert_eq!(health.len(), 4);
     assert!(
         health[0].healthy
             && health[0].restarts == 2
             && health[0].since_ms == Some(1_792_589_713_000)
     );
-    assert!(
-        health[1].healthy,
-        "a probe between successful runs is healthy"
+    assert!(!health[0].oneshot && health[0].last_run_ms.is_none());
+    // A timer job idle between successful runs is healthy, with its last run.
+    let probe = &health[1];
+    assert!(probe.healthy && probe.oneshot, "{probe:?}");
+    assert_eq!(
+        (
+            probe.last_run_ms,
+            probe.last_exit_status,
+            probe.timer_active
+        ),
+        (Some(1_792_599_736_000), Some(0), Some(true))
     );
     assert!(!health[2].healthy && health[2].state == orkestr_v2_contracts::ServiceState::Failed);
+    // A failed last run, a non-zero exit or a stopped timer is not healthy.
+    for (shown, timer) in [
+        (
+            show.replace("ActiveState=inactive", "ActiveState=failed")
+                .replace(
+                    "Result=success\nNRestarts=0",
+                    "Result=exit-code\nNRestarts=0",
+                ),
+            timers.to_string(),
+        ),
+        (
+            show.replace(
+                "ExecMainStatus=0\nExecMainExitTimestamp=@1792599736",
+                "ExecMainStatus=3\nExecMainExitTimestamp=@1792599736",
+            ),
+            timers.to_string(),
+        ),
+        (
+            show.to_string(),
+            timers.replace("ActiveState=active", "ActiveState=inactive"),
+        ),
+    ] {
+        assert!(
+            !services::parse_show(&shown, &timer, &units)[1].healthy,
+            "{shown}\n{timer}"
+        );
+    }
+    // Running right now is fine.
+    let running = show.replace(
+        "ActiveState=inactive\nSubState=dead",
+        "ActiveState=activating\nSubState=start",
+    );
+    assert!(services::parse_show(&running, timers, &units)[1].healthy);
+    assert_eq!(
+        services::trigger("TriggeredBy=a.timer evil;rm.timer"),
+        Some("a.timer".into())
+    );
     assert_eq!(health[3].state, orkestr_v2_contracts::ServiceState::Unknown);
 }
 
