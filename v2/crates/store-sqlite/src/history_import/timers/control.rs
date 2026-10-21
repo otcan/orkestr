@@ -97,6 +97,15 @@ pub(super) async fn enable_in_transaction(
     }
     let schedule = schedule::decode(current.get("schedule_json"))?;
     let due = schedule::next(&schedule, now_ms)?;
+    let due = policy_pause::adjust_next(
+        tx,
+        owner,
+        request.namespace,
+        &schedule,
+        &request.conversation_id.to_string(),
+        due,
+    )
+    .await?;
     let rev = revision(result.revision)?;
     let generation = revision(result.generation)?;
     sqlx::query("UPDATE dormant_timers SET state='enabled',revision=?,generation=?,conversation_id=?,next_due_ms=? WHERE owner_id=? AND namespace=?")

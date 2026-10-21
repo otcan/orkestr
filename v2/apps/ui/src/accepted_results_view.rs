@@ -139,6 +139,12 @@ pub fn AcceptedReplies(
                         match &row {
                             Row::Input(input) => rsx! { article { "data-message-id": "{input.id}",
                                 strong { if input.actor == "owner" { "You" } else { "{input.actor}" } }
+                                if let Some(quote) = &input.reply_to {
+                                    blockquote { class: "reply-quote", "data-reply-quote": "true", "data-reply-unavailable": "{quote.unavailable}",
+                                        cite { "{chat_timeline::quote_label(quote)}" }
+                                        if !quote.unavailable { p { "{quote.text}" } }
+                                    }
+                                }
                                 p { "{input.text}" }
                             } },
                             Row::Reply(reply) => rsx! { AcceptedReply { conversation:id.clone(), row:reply.clone(), session_scope, onexpired } },

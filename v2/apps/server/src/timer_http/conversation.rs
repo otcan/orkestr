@@ -65,11 +65,24 @@ pub struct Listed {
     pub source_namespace: String,
     pub source_timer_id: String,
     pub source_enabled: bool,
+    pub policy: orkestr_v2_store_sqlite::history_import::timers::policy::TimerPolicy,
+    pub stats: orkestr_v2_store_sqlite::history_import::timers::outcome::RunStats,
+    /// Created natively (editable here), not imported from V1.
+    pub native: bool,
+    /// Times in the timer's own zone, for display only.
+    pub next_due_local: Option<String>,
+    pub last_result_local: Option<String>,
+    pub pause_until_local: Option<String>,
 }
 #[derive(Serialize)]
 pub struct Listing {
     pub conversation_id: ConversationId,
+    /// Conversation-wide pause end; absent when timers are running.
+    pub pause_until_ms: Option<i64>,
+    pub pause_until_local: Option<String>,
     pub timers: Vec<Listed>,
+    /// Most recent digests, delivered or not.
+    pub digests: Vec<super::calendar::Digest>,
 }
 #[derive(Serialize)]
 pub struct Input {
@@ -148,13 +161,41 @@ fn conversation(id: &str) -> Result<ConversationId, Error> {
         .ok_or_else(|| error(HistoryError::Invalid))
 }
 async fn listed(controller: &DurableOwnerController, value: TimerListing) -> Listed {
+    use orkestr_v2_store_sqlite::history_import::timers::{
+        calendar_timer::CALENDAR_SOURCE,
+        local_time_label,
+        policy::{display_zone, FOREVER_MS},
+    };
+    let zone = display_zone(&value.detail.schedule, &value.policy);
+    let now = super::calendar::now_ms();
+    let next_due_local = value
+        .detail
+        .receipt
+        .next_due_ms
+        .filter(|due| *due < FOREVER_MS)
+        .and_then(|due| local_time_label(&zone, due));
+    let last_result_local = value
+        .stats
+        .last_at_ms
+        .and_then(|at| local_time_label(&zone, at));
+    let pause_until_local = value
+        .policy
+        .pause_until_ms
+        .filter(|until| *until > now && *until < FOREVER_MS)
+        .and_then(|until| local_time_label(&zone, until));
     Listed {
+        native: value.source_namespace == CALENDAR_SOURCE,
+        next_due_local,
+        last_result_local,
+        pause_until_local,
         detail: detail(controller, value.detail).await,
         label: value.label,
         source_thread_id: value.source_thread_id,
         source_namespace: value.source_namespace,
         source_timer_id: value.source_timer_id,
         source_enabled: value.source_enabled,
+        policy: value.policy,
+        stats: value.stats,
     }
 }
 fn input(value: TimerInputRecord) -> Input {
@@ -230,13 +271,49 @@ pub(super) async fn list(
         .conversation_timers(&credential, &owner, &conversation)
         .await
         .map_err(error)?;
+    let conversation_zone = rows
+        .iter()
+        .map(|row| {
+            orkestr_v2_store_sqlite::history_import::timers::policy::display_zone(
+                &row.detail.schedule,
+                &row.policy,
+            )
+        })
+        .find(|zone| zone != "UTC")
+        .unwrap_or_else(|| "UTC".into());
     let mut timers = Vec::with_capacity(rows.len());
     for row in rows {
         timers.push(listed(&c, row).await);
     }
+    let pause_until_ms = s
+        .store
+        .conversation_timer_pause(&credential, &owner, &conversation)
+        .await
+        .map_err(error)?;
+    let pause_until_local = pause_until_ms
+        .filter(|until| {
+            *until < orkestr_v2_store_sqlite::history_import::timers::policy::FOREVER_MS
+        })
+        .and_then(|until| {
+            orkestr_v2_store_sqlite::history_import::timers::local_time_label(
+                &conversation_zone,
+                until,
+            )
+        });
+    let digests = s
+        .store
+        .recent_timer_digests(&credential, &owner, &conversation, 5)
+        .await
+        .map_err(error)?
+        .into_iter()
+        .map(super::calendar::digest)
+        .collect();
     Ok(Json(Listing {
         conversation_id: conversation,
+        pause_until_ms,
+        pause_until_local,
         timers,
+        digests,
     }))
 }
 

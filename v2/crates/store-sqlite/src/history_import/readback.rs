@@ -40,6 +40,7 @@ pub(super) async fn verified(
             sequence: row.get("source_sequence"),
             actor_kind: row.get("actor_kind"),
             text: row.get("text"),
+            reply_to: None,
         });
     }
     let conversation: String = row.get("source_conversation_id");

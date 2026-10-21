@@ -9,6 +9,10 @@ pub use conversations::*;
 pub use live_map::*;
 mod conversation_settings;
 pub use conversation_settings::*;
+mod calendar_rule;
+pub use calendar_rule::*;
+mod timer_results;
+pub use timer_results::*;
 mod desktop_leases;
 pub use desktop_leases::*;
 mod legacy_workers;
@@ -89,6 +93,61 @@ pub struct MessageInput {
     pub client_message_id: String,
     pub text: String,
 }
+/// The earlier chat message an owner input replied to (WhatsApp "reply"/quote),
+/// kept with the input so the quoted context is never lost. `unavailable` marks a
+/// quote that could not be resolved; nothing is guessed in that case.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReplyTo {
+    #[serde(default)]
+    pub message_id: Option<String>,
+    #[serde(default)]
+    pub author: Option<String>,
+    #[serde(default)]
+    pub sent_at: Option<String>,
+    #[serde(default)]
+    pub text: String,
+    #[serde(default)]
+    pub is_own_reply: bool,
+    #[serde(default)]
+    pub unavailable: bool,
+}
+impl ReplyTo {
+    pub const TEXT_MAX: usize = 500;
+    const FIELD_MAX: usize = 300;
+    /// Bounded and non-empty: an empty or oversized quote is refused, not trimmed silently.
+    pub fn valid(&self) -> bool {
+        let field = |v: &Option<String>| {
+            v.as_ref()
+                .is_none_or(|s| !s.is_empty() && s.len() <= Self::FIELD_MAX)
+        };
+        field(&self.message_id)
+            && field(&self.author)
+            && field(&self.sent_at)
+            && self.text.len() <= Self::TEXT_MAX * 4
+            && (self.message_id.is_some() || !self.text.is_empty() || self.unavailable)
+    }
+}
+/// `POST /messages` body: the input plus its optional quoted context.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MessageRequest {
+    pub client_message_id: String,
+    pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reply_to: Option<ReplyTo>,
+}
+impl MessageRequest {
+    pub fn into_parts(self) -> (MessageInput, Option<ReplyTo>) {
+        (
+            MessageInput {
+                client_message_id: self.client_message_id,
+                text: self.text,
+            },
+            self.reply_to,
+        )
+    }
+}
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AcceptanceStatus {
@@ -130,6 +189,8 @@ pub struct Message {
     pub sequence: i64,
     pub actor_kind: String,
     pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reply_to: Option<ReplyTo>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConversationSnapshot {

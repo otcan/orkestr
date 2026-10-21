@@ -303,10 +303,14 @@ class RustClient:
         read = {"": ("after", "limit"), "/window": (), "/execution": ("run_id",),
                 "/fast/execution": ("run_id",), "/accepted-results": ("after_sequence", "limit"),
                 "/intelligence": (), "/held-inputs": (), "/events": ("after", "limit"),
-                "/timer-inputs": ("after_sequence", "limit"), "/settings": ()}
+                "/timer-inputs": ("after_sequence", "limit"), "/settings": (),
+                "/timer-digests": ("limit",)}
         payload = path.path.startswith("/payloads/") and identity(path.path[10:])
-        require((method == "GET" and (path.path in read or payload)) or
-                (method == "POST" and path.path in ("/messages", "/window", "/accept", "/settings/render")), "route_refused")
+        digest_ack = (method == "POST" and path.path.startswith("/timer-digests/") and
+                      path.path.endswith("/delivered") and identity(path.path[15:-10]))
+        require((method == "GET" and (path.path in read or payload)) or digest_ack or
+                (method == "POST" and path.path in ("/messages", "/window", "/accept", "/settings/render",
+                                                    "/timer-outcomes", "/timer-triggers")), "route_refused")
         try:
             query = parse_qsl(path.query, strict_parsing=True, max_num_fields=2)
         except ValueError:

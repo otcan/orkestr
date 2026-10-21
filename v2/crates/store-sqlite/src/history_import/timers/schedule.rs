@@ -1,6 +1,8 @@
 use super::*;
 use serde_json::{json, Value};
 const DAY: i64 = 86_400_000;
+/// An event-triggered timer is never due by the clock.
+pub(super) const EVENT_HORIZON_MS: i64 = 4_102_444_800_000;
 // Bounded schedule horizon; arithmetic cannot wrap or silently create catch-up.
 pub(super) fn clock(now_ms: i64) -> Result<()> {
     if !(0..=4_102_444_800_000).contains(&now_ms) {
@@ -42,6 +44,25 @@ pub(super) fn encode(schedule: &TimerSchedule) -> Result<String> {
             }
             json!(["zoned_clock", timezone, weekday, minute_of_day])
         }
+        TimerSchedule::Calendar(rule) => {
+            let normal = rule
+                .clone()
+                .normalized()
+                .map_err(|_| HistoryError::Invalid)?;
+            if &normal != rule || !zoned::valid_zone(&rule.timezone) {
+                return Err(HistoryError::Invalid);
+            }
+            json!([
+                "calendar",
+                rule.timezone,
+                rule.weekdays,
+                rule.start_minute,
+                rule.end_minute,
+                rule.every_hours,
+                rule.minutes
+            ])
+        }
+        TimerSchedule::Event => json!(["event"]),
         TimerSchedule::Dormant {
             cadence,
             timezone,
@@ -97,6 +118,18 @@ pub(super) fn decode(encoded: &str) -> Result<TimerSchedule> {
         }
     };
     let schedule = match array.first().and_then(Value::as_str) {
+        Some("event") if array.len() == 1 => TimerSchedule::Event,
+        Some("calendar") if array.len() == 7 => TimerSchedule::Calendar(CalendarRule {
+            timezone: array[1].as_str().ok_or_else(invalid)?.into(),
+            weekdays: serde_json::from_value(array[2].clone()).map_err(unavailable)?,
+            start_minute: u16::try_from(array[3].as_u64().ok_or_else(invalid)?)
+                .map_err(unavailable)?,
+            end_minute: u16::try_from(array[4].as_u64().ok_or_else(invalid)?)
+                .map_err(unavailable)?,
+            every_hours: u8::try_from(array[5].as_u64().ok_or_else(invalid)?)
+                .map_err(unavailable)?,
+            minutes: serde_json::from_value(array[6].clone()).map_err(unavailable)?,
+        }),
         Some("once") if array.len() == 2 => TimerSchedule::Once {
             due_ms: array[1].as_i64().ok_or_else(invalid)?,
         },
@@ -162,6 +195,8 @@ pub(super) fn next(schedule: &TimerSchedule, now_ms: i64) -> Result<i64> {
             weekday,
             minute_of_day,
         } => zoned::next(timezone, *weekday, *minute_of_day, now_ms)?,
+        TimerSchedule::Calendar(rule) => calendar::next(rule, now_ms)?,
+        TimerSchedule::Event => EVENT_HORIZON_MS,
         _ => return Err(HistoryError::Conflict),
     };
     clock(due)?;

@@ -176,6 +176,7 @@ impl Store {
                     sequence: row.get("sequence"),
                     actor_kind: row.get("actor_kind"),
                     text: row.get("text"),
+                    reply_to: None,
                 });
             }
             let snapshot = ConversationSnapshot {

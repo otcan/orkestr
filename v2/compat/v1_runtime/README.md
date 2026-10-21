@@ -49,6 +49,16 @@ One owner session is shared by all bindings. A 401 revokes it for every
 binding (operator review, restart required); a conversation that does not
 match its binding refuses only that binding.
 
+## Quoted replies
+
+When the owner (or a member) answers an earlier WhatsApp message with a
+reply/quote, V1 sends `replyTo` (`messageId`, `author`, `sentAt`, `text` of at
+most 500 characters, `isOwnReply`, `unavailable`) beside the input; the visible
+`[Replying to ...]` line is already part of `text`. The adapter keeps it in the
+ledger (not in the identity digest) and posts it to Rust as `reply_to` with the
+message, where it is stored with the input and shown as a quoted bubble. An
+unresolvable quote arrives as `unavailable: true` and is never guessed.
+
 ## Binding files
 
 Each binding is `<bindings_dir>/<remote_thread_id>.json`:
@@ -266,6 +276,25 @@ materializes once as the reply's local parent; acknowledgements then settle it
 normally. A held occurrence (timer disabled or handed back before it ran)
 settles silently with nothing exported. The first scan of a ledger records
 the current position and adopts nothing older.
+
+### Silent runs, digests and message triggers
+
+For calendar timers (`docs/v2/calendar-timers.md`) the adapter does three more
+things, all through the same loopback client and all optional on the server side:
+
+- **Silent runs.** Before exporting a timer run's accepted answer it posts the
+  raw text to `POST /timer-outcomes {claim_id, text}`. A `deliver: false` answer
+  (`NO_REPLY`, or `NO_NEWS` / held `LOW_SIGNAL` for a timer that is silent unless
+  changed) is exported as `NO_REPLY` and acknowledged `no_reply`, so V1 sends
+  nothing. A server without the route (404) keeps the ordinary reply rules.
+- **Digests.** Every 15 s it reads `GET /timer-digests`, records each digest as a
+  pseudo timer input (`origin: "timer"`, deterministic ids, idempotent by digest
+  id) answered by the digest text, acknowledges it to Rust once the ledger holds
+  it, and exports it like any reply (reply prefix and footer apply).
+- **Message triggers.** After Core admits an inbound message (not a timer
+  occurrence or an agent message) it posts `POST /timer-triggers
+  {source: "message", event_key: <public message id>}`, best effort and
+  idempotent; a failure never blocks the input.
 
 ## Progress, NO_REPLY and attachments
 

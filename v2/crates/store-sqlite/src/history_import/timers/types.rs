@@ -1,4 +1,5 @@
 use super::*;
+pub use orkestr_v2_contracts::CalendarRule;
 
 /// Schedule-only provenance: no prompts, paths, routes, native sessions or credentials.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -21,6 +22,10 @@ pub enum TimerSchedule {
         weekday: Option<u8>,
         minute_of_day: u16,
     },
+    /// Calendar rule: weekdays, an hour window and minute offsets in an IANA zone.
+    Calendar(CalendarRule),
+    /// Runs only on trigger events (see `trigger`), never on the clock.
+    Event,
     /// Unknown legacy cadence/timezone retained verbatim as bounded schedule metadata.
     Dormant {
         cadence: String,

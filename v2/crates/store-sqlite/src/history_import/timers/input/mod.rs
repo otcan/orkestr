@@ -134,7 +134,29 @@ pub(super) async fn admit_in_transaction(
     request: &TimerInputRequest,
     now_ms: i64,
 ) -> Result<TimerInputReceipt> {
-    let claim = claim::in_transaction(tx, owner, &request.claim, now_ms).await?;
+    admit_with(tx, owner, request, now_ms, false).await
+}
+/// Same admission for a trigger-event occurrence (see `claim::event_in_transaction`).
+pub(super) async fn admit_event_in_transaction(
+    tx: &mut Transaction<'_, Sqlite>,
+    owner: &OwnerId,
+    request: &TimerInputRequest,
+    now_ms: i64,
+) -> Result<TimerInputReceipt> {
+    admit_with(tx, owner, request, now_ms, true).await
+}
+async fn admit_with(
+    tx: &mut Transaction<'_, Sqlite>,
+    owner: &OwnerId,
+    request: &TimerInputRequest,
+    now_ms: i64,
+    event: bool,
+) -> Result<TimerInputReceipt> {
+    let claim = if event {
+        claim::event_in_transaction(tx, owner, &request.claim, now_ms).await?
+    } else {
+        claim::in_transaction(tx, owner, &request.claim, now_ms).await?
+    };
     guard(
         tx,
         owner,

@@ -20,6 +20,8 @@ pub struct TimerListing {
     pub source_timer_id: String,
     /// Enablement in the source system when imported; never V2 enablement.
     pub source_enabled: bool,
+    pub policy: super::policy::TimerPolicy,
+    pub stats: super::outcome::RunStats,
 }
 /// One timer occurrence admitted as ordinary owner input. Metadata only.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -108,7 +110,10 @@ impl Store {
             .fetch_all(&mut *tx).await.map_err(unavailable)?;
         let mut result = Vec::with_capacity(rows.len());
         for row in &rows {
+            let namespace = Uuid::parse_str(row.get("namespace")).map_err(unavailable)?;
             result.push(TimerListing {
+                policy: super::policy::read_in(&mut tx, owner, namespace).await?,
+                stats: super::outcome::stats_in(&mut tx, owner, namespace).await?,
                 detail: detail_in(&mut tx, owner, row).await?,
                 label: row.get("target_label"),
                 source_thread_id: row.get("target_thread"),

@@ -88,3 +88,73 @@
 .svc-state { font-size: .78rem; color: var(--muted); }
 .svc.bad .svc-state { color: var(--danger-text); }
 @media (max-width: 52rem) { .chart-y { min-width: 2.8rem; } .chart-x { margin-left: 3.2rem; } .chart-svg, .chart-y { height: 7.5rem; } }
+
+/* Host dashboard: overview cards, gauges, consumers, disks. */
+.host-dashboard { display: grid; gap: 1rem; }
+.hd-views { display: inline-flex; justify-self: start; padding: .2rem; gap: .2rem; border: 1px solid var(--border); border-radius: 1.2rem; background: var(--surface-2); }
+.hd-views button { min-height: 2.1rem; padding: .2rem 1rem; border: 0; border-radius: 1rem; background: transparent; color: var(--muted); font-weight: 600; font-size: .85rem; }
+.hd-views button[aria-pressed=true] { background: var(--surface); color: var(--text); box-shadow: var(--shadow); }
+.host-overview { display: grid; gap: 1rem; }
+.hd-header { display: flex; align-items: center; justify-content: space-between; gap: .75rem; }
+.hd-header h2 { margin: 0; }
+.hd-state { font-size: .72rem; text-transform: uppercase; letter-spacing: .05em; padding: .2rem .6rem; border-radius: .8rem; font-weight: 600; }
+.hd-state.live { background: var(--accent-soft); color: var(--accent-text); }
+.hd-state.stale { background: var(--warn-soft); color: var(--warn-text); }
+.hd-state.collecting { background: var(--info-soft); color: var(--info-text); }
+.hd-gauges { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 15.5rem), 1fr)); gap: .8rem; }
+.hd-gauge { display: flex; align-items: center; gap: .8rem; padding: .8rem .9rem; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); box-shadow: var(--shadow); --band: var(--accent); }
+.hd-gauge.warn { --band: var(--series-warn); } .hd-gauge.bad { --band: var(--series-danger); } .hd-gauge.idle { --band: var(--faint); }
+.gauge-ring { width: 4.6rem; height: 4.6rem; flex: none; }
+.gauge-track { fill: none; stroke: var(--surface-3); stroke-width: 9; }
+.gauge-value { fill: none; stroke: var(--band); stroke-width: 9; stroke-linecap: round; transition: stroke-dasharray .4s ease; }
+.gauge-text { fill: var(--text); font-size: 19px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.gauge-body { min-width: 0; display: grid; gap: .15rem; }
+.gauge-body h3 { margin: 0; font-size: .9rem; }
+.gauge-body p { margin: 0; color: var(--muted); font-size: .78rem; font-variant-numeric: tabular-nums; }
+.gauge-body .sparkline { width: 100%; max-width: 9rem; height: 1.3rem; }
+.hd-card { padding: .85rem .95rem; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); box-shadow: var(--shadow); min-width: 0; }
+.hd-card > header { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: .4rem .8rem; margin-bottom: .6rem; }
+.hd-card h3 { margin: 0; font-size: .98rem; }
+.hd-card h4 { margin: .9rem 0 .4rem; font-size: .85rem; color: var(--muted); }
+.thread-bars { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(1.4rem, 1fr)); gap: .3rem; align-items: end; }
+.thread-bars li { display: grid; justify-items: center; gap: .15rem; }
+.thread-bars .bar { display: block; width: 100%; max-width: 1.6rem; min-height: 2px; border-radius: .25rem .25rem 0 0; background: var(--accent); align-self: end; }
+.thread-bars li { height: 5.5rem; grid-template-rows: 1fr auto; }
+.thread-bars li.warn .bar { background: var(--series-warn); } .thread-bars li.bad .bar { background: var(--series-danger); }
+.thread-bars small { font-size: .62rem; color: var(--faint); font-variant-numeric: tabular-nums; }
+.consumer-table { display: grid; font-size: .82rem; }
+.consumer-row { display: grid; grid-template-columns: minmax(0, 2.4fr) 1fr 4.5rem .8fr 1.3fr 2.8rem; gap: .5rem; align-items: center; padding: .42rem .25rem; border-top: 1px solid var(--border); }
+.consumer-row.head { border-top: 0; color: var(--faint); font-size: .7rem; text-transform: uppercase; letter-spacing: .04em; }
+.consumer-row .who { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.consumer-row .who a { font-weight: 600; color: var(--accent-text); }
+.consumer-row .who small { color: var(--faint); }
+.consumer-row .num { font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+.consumer-row .num small { color: var(--faint); }
+.consumer-row .cpu.warn { color: var(--warn-text); } .consumer-row .cpu.bad { color: var(--danger-text); font-weight: 700; }
+.consumer-row .spark .sparkline { width: 100%; height: 1.2rem; }
+.kind { display: inline-block; margin-right: .4rem; padding: 0 .4rem; border-radius: .5rem; font-size: .66rem; font-weight: 600; background: var(--surface-3); color: var(--muted); vertical-align: .08rem; }
+.kind.k-conversation { background: var(--accent-soft); color: var(--accent-text); }
+.kind.k-workspace { background: var(--info-soft); color: var(--info-text); }
+.kind.k-container, .kind.k-session { background: var(--warn-soft); color: var(--warn-text); }
+.hd-two { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 24rem), 1fr)); gap: 1rem; align-items: start; }
+.mount-row { display: grid; gap: .25rem; padding: .45rem 0; --band: var(--accent); }
+.mount-row.warn { --band: var(--series-warn); } .mount-row.bad { --band: var(--series-danger); }
+.mount-head { display: flex; align-items: baseline; gap: .4rem; }
+.mount-head small { color: var(--faint); flex: 1; }
+.mount-row > small { color: var(--muted); font-size: .76rem; }
+.meter { display: block; height: .5rem; border-radius: .3rem; background: var(--surface-3); overflow: hidden; }
+.meter > span { display: block; height: 100%; background: var(--band, var(--series-3)); border-radius: .3rem; }
+.dir-list { list-style: none; margin: 0; padding: 0; display: grid; gap: .3rem; font-size: .8rem; }
+.dir-list li { display: grid; grid-template-columns: minmax(0, 1.6fr) 1fr 4.4rem; gap: .5rem; align-items: center; }
+.dir-list .path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .76rem; }
+.dir-list .meter > span { background: var(--series-3); }
+.dir-list .num { text-align: right; font-variant-numeric: tabular-nums; }
+.hd-open-charts { margin-top: .8rem; width: 100%; }
+@media (max-width: 52rem) {
+ .consumer-row { grid-template-columns: minmax(0, 1fr) 4.2rem 4.6rem; }
+ .consumer-row > :nth-child(3), .consumer-row > :nth-child(5), .consumer-row > :nth-child(6) { display: none; }
+ .consumer-row .num small { display: none; }
+ .gauge-ring { width: 3.8rem; height: 3.8rem; }
+ .hd-gauges { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .55rem; }
+ .hd-gauge { flex-direction: column; align-items: flex-start; padding: .65rem; gap: .4rem; }
+}

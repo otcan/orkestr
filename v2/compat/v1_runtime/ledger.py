@@ -26,6 +26,8 @@ TIMER_NAMESPACE = uuid.UUID("0c6f7a52-5d8e-4b1f-9a3c-2e7d4b8f1a60")
 TIMER_PREFIX = "v2timer-"
 TIMER_SOURCE = "orkestr-v2-timer"
 TIMER_TEXT_LIMIT = 500
+# Deterministic IDs for timer digests (one pseudo timer input and one reply each).
+DIGEST_NAMESPACE = uuid.UUID("9b1e6a44-3c2d-4f8a-8d57-0a6c1e4b7f32")
 # Deterministic IDs for the owner notice that closes a refused input.
 NOTICE_NAMESPACE = uuid.UUID("5d0c3f7e-8a41-4c2b-9e6d-1b7f2a9c4e83")
 # Phases in which no Rust execution window was opened for the input yet.
@@ -157,6 +159,21 @@ class Ledger:
         return result
 
     # Intake ------------------------------------------------------------
+    @staticmethod
+    def reply_to(value):
+        """The quoted message V1 relayed with an input, as Rust's `reply_to`, or None.
+
+        Bounded and shape-checked; anything else is dropped rather than guessed."""
+        if not isinstance(value, dict):
+            return None
+        def text(key, size):
+            item = value.get(key)
+            return item.strip()[:size] if isinstance(item, str) and item.strip() else None
+        result = {"message_id": text("messageId", 300), "author": text("author", 200), "sent_at": text("sentAt", 40),
+                  "text": (value.get("text") or "").strip()[:500] if isinstance(value.get("text"), str) else "",
+                  "is_own_reply": value.get("isOwnReply") is True, "unavailable": value.get("unavailable") is True}
+        return result if result["message_id"] or result["text"] or result["unavailable"] else None
+
     def enqueue(self, body, author=None):
         """Record one verified input. `author` is the verified sender
         ({role, id, label, labelled, phone?}); it is kept with the input and
@@ -188,6 +205,9 @@ class Ledger:
                     "phase": "queued", "queued_at": time.time(), "keys": {k: str(uuid.uuid4()) for k in keys}}
             if attachments:
                 data["attachments"] = attachments
+            quoted = self.reply_to(body.get("replyTo"))
+            if quoted:  # Not part of the digest: it is transport context, not identity.
+                data["reply_to"] = quoted
             if author:
                 data["author"] = {k: author[k] for k in ("role", "id", "label", "labelled", "phone", "source") if author.get(k) is not None}
             db.execute("INSERT INTO inputs VALUES (?,?,?,?)", (body["publicMessageId"], digest, remote_id, json.dumps(data)))
@@ -223,6 +243,33 @@ class Ledger:
                     "cursor": record["sequence"] - 1, "phase": "admitted", "admitted_at": time.time(),
                     "keys": {"message": record["request_key"], "window": str(uuid.uuid4()),
                              "fast": str(uuid.uuid4()), "deep": str(uuid.uuid4())}}
+            db.execute("INSERT INTO inputs VALUES (?,?,?,?)", (public_id, digest, remote_id, json.dumps(data)))
+            return data, False
+
+    def enqueue_digest(self, record):
+        """Adopt one digest Rust created: a pseudo timer input that is answered by
+        the digest text itself, so it is exported and acknowledged like any reply.
+        Idempotent by digest id."""
+        digest_id = record["id"]
+        digest = hashlib.sha256(json.dumps({k: record.get(k) for k in ("id", "namespace", "text")},
+                                           sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        remote_id = str(uuid.uuid5(TIMER_NAMESPACE, "digest:" + digest_id))
+        public_id = TIMER_PREFIX + remote_id
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute("SELECT digest,data FROM inputs WHERE public_id=?", (public_id,)).fetchone()
+            if row:
+                if row[0] != digest:
+                    raise Conflict("digest_identity_changed")
+                return json.loads(row[1]), True
+            data = {"remote_id": remote_id, "public_id": public_id, "origin": "timer", "text": "Scheduled digest",
+                    "public_thread_id": self.scope.get("public_thread_id"), "chat_id": self.scope.get("chat_id"),
+                    "account_id": self.scope.get("account_id"),
+                    "timer": {"namespace": record["namespace"], "claim_id": None, "source_timer_id": "digest",
+                              "label": "Digest", "due_ms": record.get("slot_ms")},
+                    "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    "digest": {"id": digest_id, "text": record["text"]},
+                    "phase": "digest_ready", "admitted_at": time.time(), "keys": {}}
             db.execute("INSERT INTO inputs VALUES (?,?,?,?)", (public_id, digest, remote_id, json.dumps(data)))
             return data, False
 
@@ -466,10 +513,12 @@ class Ledger:
             message = json.loads(message)
             message.pop("text", None)
             db.execute("UPDATE exports SET message=? WHERE seq=?", (json.dumps(dict(message, pruned=True)), seq))
-        for key in ("text", "intake_text", "fast_payload", "deep_payload"):
+        for key in ("text", "intake_text", "fast_payload", "deep_payload", "reply_to"):
             data.pop(key, None)
         if isinstance(data.get("reply"), dict):
             data["reply"].pop("text", None)
+        if isinstance(data.get("digest"), dict):
+            data["digest"].pop("text", None)
         data["settled"] = {"outcome": outcome, "atMs": int(time.time() * 1000)}
         self.save(data, db)
         ids = [a["upload_id"] for a in data.get("attachments", [])]

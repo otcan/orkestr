@@ -3,7 +3,7 @@
 use super::{HistoryError, Result};
 use jiff::{civil, tz::TimeZone, Timestamp, ToSpan};
 
-fn zone(name: &str) -> Option<TimeZone> {
+pub(super) fn zone(name: &str) -> Option<TimeZone> {
     // Only canonical-looking area names; no POSIX strings, paths or offsets.
     if name.is_empty()
         || name.len() > 64

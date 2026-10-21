@@ -231,7 +231,12 @@ fn native_terminal_selection_skips_later_whitespace_only_messages() {
     for phase in [Value::Null, json!("final_answer")] {
         let mut stream = active();
         completed_item(&mut stream, "empty", " \t ", phase);
-        refuse(&mut stream, done());
+        // Whitespace-only output completes with the explicit no-reply notice.
+        let events = receive(&mut stream, done());
+        assert!(
+            matches!(&events[..], [ProviderEvent::Progress(text), ProviderEvent::CompletedProposal { .. }]
+            if text.starts_with("(The turn completed without a reply"))
+        );
     }
 }
 
@@ -360,14 +365,41 @@ fn missing_item_completion_commentary_only_and_cross_scope_refuse() {
     );
     receive(&mut stream, delta(Some("a"), "unfinished"));
     refuse(&mut stream, done());
-    let mut stream = active();
-    completed_item(&mut stream, "a", "Commentary only", json!("commentary"));
-    refuse(&mut stream, done());
     for key in ["threadId", "turnId"] {
         let mut bad = item("item/started", "a", "", Value::Null);
         bad["params"][key] = json!("foreign");
         refuse(&mut active(), bad);
     }
+}
+
+#[test]
+fn commentary_only_or_textless_completion_replies_instead_of_failing() {
+    let mut stream = active();
+    completed_item(&mut stream, "a", "Checked the inbox.", json!("commentary"));
+    completed_item(
+        &mut stream,
+        "b",
+        "Collected the evidence.",
+        json!("commentary"),
+    );
+    let events = receive(&mut stream, done());
+    assert_eq!(
+        events.last(),
+        Some(&ProviderEvent::CompletedProposal { synthetic: false })
+    );
+    let ProviderEvent::Progress(text) = &events[0] else {
+        panic!("reply expected")
+    };
+    assert!(
+        text.starts_with("(Ended without a final answer")
+            && text.ends_with("Collected the evidence.")
+    );
+    let mut stream = active();
+    let events = receive(&mut stream, done());
+    assert!(
+        matches!(&events[..], [ProviderEvent::Progress(text), ProviderEvent::CompletedProposal { .. }]
+        if text.starts_with("(The turn completed without a reply"))
+    );
 }
 
 #[test]

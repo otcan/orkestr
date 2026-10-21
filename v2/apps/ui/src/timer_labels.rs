@@ -118,6 +118,116 @@ pub fn schedule_label(schedule: &crate::timers::Schedule) -> String {
             minute_of_day % 60,
             timezone
         ),
+        Schedule::Calendar { summary, .. } => summary.clone(),
+        Schedule::Event => "Runs when something arrives".into(),
         Schedule::Dormant => "Saved schedule needs review".into(),
+    }
+}
+
+/// What starts the timer besides (or instead of) the clock.
+pub fn trigger_label(policy: Option<&crate::timers::Policy>) -> Option<String> {
+    let trigger = policy?.trigger.as_ref()?;
+    let names: Vec<&str> = trigger
+        .sources
+        .iter()
+        .map(|s| match s.as_str() {
+            "message" => "a new message",
+            "email" => "a new email",
+            _ => "another event",
+        })
+        .collect();
+    let mut text = format!("Also runs on {}", names.join(" or "));
+    if trigger.min_interval_s > 0 {
+        text.push_str(&format!(
+            ", at most every {}",
+            span(i64::from(trigger.min_interval_s))
+        ));
+    }
+    Some(text)
+}
+
+fn span(seconds: i64) -> String {
+    match seconds {
+        s if s % 3600 == 0 => format!("{} h", s / 3600),
+        s if s % 60 == 0 => format!("{} min", s / 60),
+        s => format!("{s} s"),
+    }
+}
+
+/// The last run's outcome in words, or `None` before the first result.
+pub fn last_result_label(
+    stats: Option<&crate::timers::Stats>,
+    local: Option<&str>,
+) -> Option<String> {
+    let stats = stats?;
+    let kind = match stats.last_kind.as_deref()? {
+        "delivered" => "Sent",
+        "silent" => "Silent",
+        "digest" => "Held for digest",
+        _ => "Result",
+    };
+    let mut text = kind.to_owned();
+    if let Some(summary) = stats.last_summary.as_deref().filter(|s| !s.is_empty()) {
+        text.push_str(": ");
+        text.push_str(&summary.chars().take(120).collect::<String>());
+    }
+    if let Some(at) = local
+        .map(str::to_owned)
+        .or_else(|| stats.last_at_ms.map(utc_time))
+    {
+        text.push_str(&format!(" ({at})"));
+    }
+    Some(text)
+}
+
+/// "3 silent runs since the last message", or `None` when there are none.
+pub fn silent_runs_label(stats: Option<&crate::timers::Stats>) -> Option<String> {
+    let n = stats?.silent_runs;
+    (n > 0).then(|| {
+        format!(
+            "{n} silent run{} since the last message",
+            if n == 1 { "" } else { "s" }
+        )
+    })
+}
+
+/// Whether the timer is running, and if not, why and until when.
+/// `now_ms` is only used to ignore a pause that has already ended.
+pub fn run_status(
+    row: &crate::timers::Listed,
+    conversation_pause_ms: Option<i64>,
+    conversation_local: Option<&str>,
+    now_ms: i64,
+) -> String {
+    use crate::timers::State;
+    if row.detail.state != State::Enabled {
+        return state_label(row.detail.state.as_str()).to_owned();
+    }
+    let own = row
+        .policy
+        .as_ref()
+        .and_then(|p| p.pause_until_ms)
+        .filter(|until| *until > now_ms);
+    let chat = conversation_pause_ms.filter(|until| *until > now_ms);
+    match (own, chat) {
+        (None, None) => "Running".into(),
+        (Some(own), Some(chat)) if chat > own => {
+            format!("Chat paused{}", pause_tail(chat, conversation_local))
+        }
+        (Some(own), _) => pause_text(own, row.local.pause_until.as_deref()),
+        (None, Some(chat)) => format!("Chat paused{}", pause_tail(chat, conversation_local)),
+    }
+}
+fn pause_text(until: i64, local: Option<&str>) -> String {
+    format!("Paused{}", pause_tail(until, local))
+}
+fn pause_tail(until: i64, local: Option<&str>) -> String {
+    if until >= 4_102_444_800_000 {
+        " until resumed".into()
+    } else {
+        format!(
+            " until {}",
+            local.map_or_else(|| utc_time(until), str::to_owned)
+        )
     }
 }

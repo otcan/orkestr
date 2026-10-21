@@ -253,3 +253,27 @@ pub fn service_label(service: &ServiceHealth, offset_minutes: i64) -> String {
         ServiceState::Unknown => "unknown".into(),
     }
 }
+
+/// Colour band of a usage percent: below 70 calm, below 90 warning, then alarm.
+pub fn level(percent: f64) -> &'static str {
+    if percent >= 90.0 {
+        "bad"
+    } else if percent >= 70.0 {
+        "warn"
+    } else {
+        "ok"
+    }
+}
+
+/// Short label of a consumer group's kind.
+pub fn kind_label(kind: orkestr_v2_contracts::ConsumerKind) -> &'static str {
+    use orkestr_v2_contracts::ConsumerKind::*;
+    match kind {
+        Conversation => "Conversation",
+        Workspace => "Workspace",
+        Service => "Service",
+        Container => "Container",
+        Session => "Login session",
+        Other => "Other",
+    }
+}
