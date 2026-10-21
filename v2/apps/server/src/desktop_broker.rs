@@ -259,11 +259,29 @@ impl Broker {
         body: Option<Value>,
         cap: usize,
     ) -> Result<(u16, Value), BrokerError> {
+        let started = std::time::Instant::now();
+        let result = self.exchange_once(method, path, body, cap).await;
+        let status = result.as_ref().map_or(0, |(status, _)| *status);
+        crate::observability::upstream("v1", route_template(method, path), status, started);
+        result
+    }
+
+    async fn exchange_once(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<Value>,
+        cap: usize,
+    ) -> Result<(u16, Value), BrokerError> {
         let payload = body.map(|b| b.to_string()).unwrap_or_default();
         let mut request = format!(
             "{method} {path} HTTP/1.1\r\nHost: {}\r\nAuthorization: Bearer {}\r\nAccept: application/json\r\nConnection: close\r\nContent-Length: {}\r\n",
             self.host, self.token, payload.len()
         );
+        // Correlates V1's logs with this request; ids are plain [A-Za-z0-9._-].
+        if let Some(id) = crate::observability::request_id() {
+            request.push_str(&format!("X-Request-Id: {id}\r\n"));
+        }
         if !payload.is_empty() {
             request.push_str("Content-Type: application/json\r\n");
         }
@@ -285,8 +303,37 @@ impl Broker {
         if raw.len() > cap {
             return Err(BrokerError::Unavailable);
         }
+        // The thread registry is megabytes of JSON: parse it off the async workers.
+        if raw.len() > PARSE_INLINE_MAX {
+            return tokio::task::spawn_blocking(move || parse_response(&raw))
+                .await
+                .ok()
+                .flatten()
+                .ok_or(BrokerError::Unavailable);
+        }
         parse_response(&raw).ok_or(BrokerError::Unavailable)
     }
+}
+
+const PARSE_INLINE_MAX: usize = 256 * 1024;
+
+/// `METHOD /path/{id}/…` without query or identifiers, for logs and metrics.
+pub(crate) fn route_template(method: &str, path: &str) -> String {
+    let path = path.split('?').next().unwrap_or("");
+    let mut previous = "";
+    let segments: Vec<&str> = path
+        .split('/')
+        .map(|segment| {
+            let keep = !matches!(previous, "threads" | "desktops") || segment == "summary";
+            previous = segment;
+            if keep {
+                segment
+            } else {
+                "{id}"
+            }
+        })
+        .collect();
+    format!("{method} {}", segments.join("/"))
 }
 
 fn current_uid() -> u32 {

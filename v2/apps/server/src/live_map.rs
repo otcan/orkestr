@@ -46,7 +46,7 @@ pub(crate) async fn read(
         "live_map_unconfigured",
         "Live map is not configured",
     ))?;
-    let host = tokio::task::spawn_blocking(move || read_host(&path, MAX_FILE_BYTES))
+    let host = tokio::task::spawn_blocking(move || read_host_cached(&path, MAX_FILE_BYTES))
         .await
         .map_err(|_| unavailable())?;
     let (conversations, truncated) = native(&state, &owner, &credential).await?;
@@ -224,6 +224,45 @@ fn host(status: HostLiveMapStatus, modified_at_ms: Option<i64>) -> HostLiveMap {
         modified_at_ms,
         views: Vec::new(),
     }
+}
+
+/// Identity of one version of the external file (it is replaced, never edited).
+type FileKey = (u64, u64, i64, i64, u64);
+
+/// [`read_host`] through a cache keyed by the file's identity: the generator
+/// replaces the file about every 15 s while sidebar and map polls read it
+/// far more often. Missing or unreadable files are never cached.
+pub(crate) fn read_host_cached(path: &Path, cap: u64) -> HostLiveMap {
+    use std::os::unix::fs::MetadataExt;
+    static CACHE: std::sync::Mutex<Option<(std::path::PathBuf, FileKey, HostLiveMap)>> =
+        std::sync::Mutex::new(None);
+    let Ok(metadata) = std::fs::metadata(path) else {
+        return read_host(path, cap);
+    };
+    let key = (
+        metadata.dev(),
+        metadata.ino(),
+        metadata.mtime(),
+        metadata.mtime_nsec(),
+        metadata.len(),
+    );
+    if let Ok(cache) = CACHE.lock() {
+        if let Some((cached_path, cached_key, map)) = cache.as_ref() {
+            if cached_path == path && *cached_key == key {
+                return map.clone();
+            }
+        }
+    }
+    let map = read_host(path, cap);
+    if matches!(
+        map.status,
+        HostLiveMapStatus::Ready | HostLiveMapStatus::Invalid | HostLiveMapStatus::TooLarge
+    ) {
+        if let Ok(mut cache) = CACHE.lock() {
+            *cache = Some((path.to_owned(), key, map.clone()));
+        }
+    }
+    map
 }
 
 /// Read-only, capped read of the external file. Never follows into a parse

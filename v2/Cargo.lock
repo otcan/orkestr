@@ -3748,6 +3748,7 @@ dependencies = [
  "argon2",
  "async-stream",
  "axum",
+ "flate2",
  "orkestr-runtime",
  "orkestr-v2-application",
  "orkestr-v2-contracts",

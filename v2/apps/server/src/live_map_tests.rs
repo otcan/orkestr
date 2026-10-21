@@ -324,3 +324,38 @@ async fn endpoint_links_delegated_view_and_never_serves_transcripts() {
     state.store.close().await;
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn cached_host_map_follows_replaced_files() {
+    let root = std::env::temp_dir().join(format!("live-map-cache-{}", Uuid::new_v4()));
+    std::fs::create_dir(&root).unwrap();
+    let path = root.join("map.json");
+    let write = |name: &str| {
+        let next = root.join("map.json.next");
+        std::fs::write(
+            &next,
+            serde_json::json!({"generatedAt": "2026-01-03T00:00:00Z",
+                "views": [{"view": "synthetic", "name": name}]})
+            .to_string(),
+        )
+        .unwrap();
+        std::fs::rename(&next, &path).unwrap();
+    };
+    write("first");
+    let first = read_host_cached(&path, MAX_FILE_BYTES);
+    assert_eq!(first.views[0].name.as_deref(), Some("first"));
+    assert_eq!(read_host_cached(&path, MAX_FILE_BYTES), first);
+    write("second");
+    assert_eq!(
+        read_host_cached(&path, MAX_FILE_BYTES).views[0]
+            .name
+            .as_deref(),
+        Some("second")
+    );
+    std::fs::remove_file(&path).unwrap();
+    assert_eq!(
+        read_host_cached(&path, MAX_FILE_BYTES).status,
+        HostLiveMapStatus::Missing
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}

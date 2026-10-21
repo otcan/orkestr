@@ -359,7 +359,7 @@ struct Linked {
 async fn linked(state: &AppState) -> Linked {
     let views = match state.live_map.clone() {
         Some(path) => tokio::task::spawn_blocking(move || {
-            crate::live_map::read_host(&path, crate::live_map::MAX_FILE_BYTES)
+            crate::live_map::read_host_cached(&path, crate::live_map::MAX_FILE_BYTES)
         })
         .await
         .map(|h| h.views)
@@ -386,17 +386,23 @@ pub(crate) async fn read(
     headers: HeaderMap,
 ) -> Result<Response, Error> {
     let (owner, credential) = owner_credential(&state, &headers).await?;
+    let started = std::time::Instant::now();
     let list = state
         .store
         .sidebar_conversations(&credential, &owner)
         .await
         .map_err(failure)?;
+    crate::observability::span("db_list", started);
+    let started = std::time::Instant::now();
     let mut native = Vec::with_capacity(list.conversations.len());
     for row in list.conversations {
         let activity = native_activity(&state, &owner, &credential, &row).await;
         native.push(Native { row, activity });
     }
+    crate::observability::span("db_activity", started);
+    let started = std::time::Instant::now();
     let linked = linked(&state).await;
+    crate::observability::span("linked", started);
     let coordinator = coordinators(&linked.views);
     let mut previews = HashMap::new();
     let source = match (&linked.registry, linked.status) {
@@ -414,7 +420,9 @@ pub(crate) async fn read(
                     .collect();
                 let mut shown = sidebar_v1::listed(threads, &|id| imported.contains(id));
                 shown.sort_by_key(|t| std::cmp::Reverse(t.last_activity_ms));
+                let started = std::time::Instant::now();
                 previews = state.sidebar_v1.previews(broker, &shown).await;
+                crate::observability::span("previews", started);
             }
             LinkedSource::Registry(threads)
         }

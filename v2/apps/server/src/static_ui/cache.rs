@@ -8,6 +8,15 @@ pub(super) fn etag(data: &[u8]) -> HeaderValue {
     format!("\"{:x}\"", Sha256::digest(data)).parse().unwrap()
 }
 
+/// Tag of the gzip representation: a different representation needs a
+/// different strong validator (RFC 9110 §8.8.3).
+pub(super) fn gzip_etag(etag: &HeaderValue) -> HeaderValue {
+    let raw = etag.to_str().unwrap_or("\"\"");
+    format!("{}-gzip\"", raw.trim_end_matches('"'))
+        .parse()
+        .unwrap()
+}
+
 pub(super) fn unchanged(headers: &HeaderMap, etag: &HeaderValue) -> bool {
     let mut combined = Vec::new();
     for value in headers.get_all(header::IF_NONE_MATCH) {

@@ -13,7 +13,7 @@ from codex_bounded.trust import digest, exists, process, protected, Refused as T
 from codex_service.contract import Refused
 from codex_service.custody import StateLock, OwnedSocket
 from codex_service.manager import Manager
-from codex_service.package import DESKTOP_BROKER_ENV, TIMER_CONFIG_ENV, V1_CHAT_ICONS_ENV, LIVE_MAP_ENV, WHATSAPP_CHATS_ENV, Package, live_map_path
+from codex_service.package import DESKTOP_BROKER_ENV, TIMER_CONFIG_ENV, V1_CHAT_ICONS_ENV, LIVE_MAP_ENV, METRICS_BIND_ENV, ACCESS_LOG_ENV, WHATSAPP_CHATS_ENV, Package, live_map_path
 from codex_service_fixture import ServiceFixture, UID, GID
 
 
@@ -28,6 +28,8 @@ class LiveMapPathTests(unittest.TestCase):
         stub.runtime = {"port": 19842, "trusted_origin": "https://example.invalid"}
         stub.live_map = None
         self.assertNotIn(LIVE_MAP_ENV, Package.environment(stub))
+        self.assertEqual(Package.environment(stub)[METRICS_BIND_ENV], "127.0.0.1:19843")
+        self.assertEqual(Package.environment(stub)[ACCESS_LOG_ENV], "all")
         stub.live_map = "/var/lib/synthetic/map.json"
         self.assertEqual(Package.environment(stub)[LIVE_MAP_ENV], "/var/lib/synthetic/map.json")
         self.assertNotIn(DESKTOP_BROKER_ENV, Package.environment(stub))
