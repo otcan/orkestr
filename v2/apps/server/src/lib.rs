@@ -58,6 +58,7 @@ pub mod timer_bootstrap;
 pub mod timer_http;
 mod timer_lifecycle;
 mod v1_links;
+mod v1_manage_http;
 pub mod whatsapp_chats;
 mod whatsapp_chats_http;
 mod window_http;
@@ -86,6 +87,8 @@ pub struct AppState {
     sidebar_v1: sidebar_v1::V1Cache,
     /// "New WhatsApp chat": owner numbers, accounts and the adapter client.
     whatsapp_chats: Option<Arc<whatsapp_chats::WhatsAppChats>>,
+    /// Linked V1 timers created per owner request (idempotent create).
+    v1_timers: v1_manage_http::CreatedTimers,
     /// Whether this installation can run a conversation's turns on Claude.
     claude_turns: bool,
 }
@@ -245,6 +248,7 @@ impl AppState {
             desktop_broker: None,
             sidebar_v1: sidebar_v1::V1Cache::default(),
             whatsapp_chats: None,
+            v1_timers: Default::default(),
             claude_turns: false,
         })
     }
@@ -420,6 +424,7 @@ pub fn router_with_google_catalog(
         .merge(desktop_http::router())
         .merge(sidebar_http::router())
         .merge(v1_links::router())
+        .merge(v1_manage_http::router())
         .merge(whatsapp_chats_http::router())
         .merge(google_registry_metadata::router(catalog))
         .fallback(|| async { Error(StatusCode::NOT_FOUND,"not_found","Endpoint not found") })

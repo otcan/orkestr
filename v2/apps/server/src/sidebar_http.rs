@@ -526,13 +526,13 @@ pub(crate) async fn v1_history(
     Ok(Json(page).into_response())
 }
 
-fn not_listed() -> Error {
+pub(crate) fn not_listed() -> Error {
     Error(StatusCode::NOT_FOUND, "not_found", "V1 thread not listed")
 }
 
 /// The V1 client and a thread the sidebar lists (owner group threads and
 /// their sub-threads, not imported into V2). Anything else is not found.
-async fn listed_thread(
+pub(crate) async fn listed_thread(
     state: &AppState,
     owner: &OwnerId,
     credential: &str,

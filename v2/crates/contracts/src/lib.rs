@@ -17,6 +17,8 @@ mod sidebar;
 pub use sidebar::*;
 mod whatsapp_chats;
 pub use whatsapp_chats::*;
+mod v1_manage;
+pub use v1_manage::*;
 mod beta;
 pub use beta::*;
 mod intelligence;

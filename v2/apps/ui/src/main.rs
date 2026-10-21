@@ -36,6 +36,7 @@ mod stop_button;
 mod timer_detail_view;
 mod timer_screen;
 mod transport;
+mod v1_manage_view;
 mod v1_thread_view;
 mod views;
 mod work_view;

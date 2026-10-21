@@ -264,6 +264,42 @@ export const scenarios = [
     await screenshot(label, 'timers');
     await clickText('Chat');
   }],
+  ['v1-manage', async label => {
+    await openDrawer(label);
+    await choose('Synthetic group');
+    await page.waitForSelector('.v1-tabs');
+    await clickText('Settings');
+    await page.waitForSelector('#v1-model');
+    await page.select('#v1-effort', 'high');
+    await clickText('Save model and effort');
+    await waitText('Saved in V1.');
+    assert.deepEqual(state.v1Calls.find(c => c.area === 'settings' && c.method === 'PUT').input, { model: 'synthetic-model', effort: 'high' });
+    await page.click('#v1-participants');
+    await page.type('#v1-participants', '10000000001@c.us');
+    await clickText('Save WhatsApp options');
+    await page.waitForFunction(() => document.querySelectorAll('.settings-status').length >= 2);
+    assert.deepEqual(state.v1Calls.find(c => c.area === 'whatsapp' && c.method === 'PUT').input.additional_participant_ids, ['10000000001@c.us']);
+    await waitText('synthetic-desk');
+    await screenshot(label, 'v1-settings');
+    await noHorizontalScroll();
+    await page.evaluate(() => [...document.querySelectorAll('.v1-tabs button')].find(b => b.textContent === 'Timers').click());
+    await waitText('Synthetic digest');
+    await clickText('Pause');
+    await page.waitForFunction(() => [...document.querySelectorAll('.v1-timer .source-badge')].some(b => b.textContent === 'paused'));
+    await clickText('New timer');
+    await page.type('#v1-timer-label', 'Synthetic evening');
+    await page.$eval('#v1-timer-time', n => { n.value = ''; });
+    await page.type('#v1-timer-time', '19:30');
+    await page.type('#v1-timer-prompt', 'Synthetic evening prompt');
+    await clickText('Save timer');
+    await waitText('Synthetic evening');
+    const created = state.v1Calls.find(c => c.area === 'timers' && c.method === 'POST' && !c.timer).input;
+    assert.equal(created.time, '19:30'); assert.equal(created.cadence, 'daily'); assert.ok(created.client_request_id);
+    await screenshot(label, 'v1-timers');
+    await noHorizontalScroll();
+    await page.evaluate(() => [...document.querySelectorAll('.v1-tabs button')].find(b => b.textContent === 'Chat').click());
+    await page.waitForSelector('#v1-composer');
+  }],
   ['v1-deep-links', async label => {
     const open = ref => page.goto(`${origin}/instance/${V1_INSTANCE_REF}/thread/${ref}`, { waitUntil: 'domcontentloaded' });
     // A thread still on V1 opens its linked entry.

@@ -13,6 +13,7 @@ mod reconcile;
 pub mod session_scope;
 pub mod stop;
 pub mod v1_input;
+pub mod v1_manage;
 pub mod whatsapp_chat;
 pub mod workers;
 pub use reconcile::reconcile;
