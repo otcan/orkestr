@@ -672,3 +672,143 @@ async fn editing_the_schedule_replans_and_refuses_imported_timers() {
     ));
     finish(f).await;
 }
+
+async fn enable_old(f: &Case, key: &str) -> Uuid {
+    let namespace = Uuid::new_v4();
+    f.store
+        .import_dormant_timer_for(
+            &f.token,
+            &f.owner,
+            &TimerImportRequest {
+                namespace,
+                source_namespace: "synthetic-v1".into(),
+                source_timer_id: format!("old-{key}"),
+                source_enabled: true,
+                schedule: TimerSchedule::Interval {
+                    every_ms: 3_600_000,
+                },
+            },
+            &TimerTarget {
+                conversation_id: f.conversation.clone(),
+                label: format!("Old {key}"),
+                source_thread_id: "synthetic-thread".into(),
+            },
+        )
+        .await
+        .unwrap();
+    f.store
+        .enable_durable_timer(
+            &f.token,
+            &f.owner,
+            &DurableTimerEnable {
+                timer: TimerEnableRequest {
+                    namespace,
+                    expected_revision: 1,
+                    request_key: format!("enable-old-{key}"),
+                    conversation_id: f.conversation.clone(),
+                },
+                instruction: "Old instruction".into(),
+            },
+        )
+        .await
+        .unwrap();
+    namespace
+}
+
+#[tokio::test]
+async fn handing_a_timer_over_never_fires_old_and_new_for_the_same_slot() {
+    let f = setup().await;
+    let old = enable_old(&f, "triage").await;
+    // The old timer had already produced one run before the handoff.
+    make_overdue(&f, old).await;
+    let before = fire(&f, old).await;
+    // Handoff, fence first: the new timer exists paused, the old one goes off.
+    let new = Uuid::new_v4();
+    let receipt = f
+        .store
+        .create_calendar_timer(
+            &f.token,
+            &f.owner,
+            &CalendarTimerCreate {
+                namespace: new,
+                conversation_id: f.conversation.clone(),
+                label: "Synthetic new".into(),
+                schedule: TimerSchedule::Calendar(every_hour_utc()),
+                policy: quiet(),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(receipt.state, TimerState::Paused);
+    make_overdue(&f, old).await;
+    assert_eq!(
+        due_now(&f).await,
+        vec![old],
+        "only the old timer is live before the switch"
+    );
+    f.store
+        .revoke_durable_timer(&f.token, &f.owner, old, 2, "handoff-off".into())
+        .await
+        .unwrap();
+    // Old is off even though its slot is overdue; the new timer is not yet enabled.
+    assert!(due_now(&f).await.is_empty());
+    f.store
+        .enable_durable_timer(
+            &f.token,
+            &f.owner,
+            &DurableTimerEnable {
+                timer: TimerEnableRequest {
+                    namespace: new,
+                    expected_revision: receipt.revision,
+                    request_key: "handoff-on".into(),
+                    conversation_id: f.conversation.clone(),
+                },
+                instruction: "Old instruction".into(),
+            },
+        )
+        .await
+        .unwrap();
+    make_overdue(&f, new).await;
+    make_overdue(&f, old).await;
+    assert_eq!(
+        due_now(&f).await,
+        vec![new],
+        "after the switch only the new timer can fire"
+    );
+    let first = fire(&f, new).await;
+    assert!(!first.duplicate);
+    // The old timer can neither be admitted nor claimed again.
+    let issuer = f.handle.authorize_timer_scheduler(old).await.unwrap();
+    assert!(f
+        .handle
+        .admit_authorized_timer_turn(&issuer, old, true)
+        .await
+        .is_err());
+    // Replaying the new timer's slot admits nothing more.
+    let issuer = f.handle.authorize_timer_scheduler(new).await.unwrap();
+    assert!(f
+        .handle
+        .admit_authorized_timer_turn(&issuer, new, true)
+        .await
+        .is_err());
+    let inputs = f
+        .store
+        .conversation_timer_inputs(&f.token, &f.owner, &f.conversation, 0, 10)
+        .await
+        .unwrap();
+    assert_eq!(inputs.len(), 2);
+    let held = |namespace: Uuid| {
+        inputs
+            .iter()
+            .find(|i| i.namespace == namespace)
+            .unwrap()
+            .held
+    };
+    assert!(
+        held(old),
+        "the old timer's outstanding run is held and never executes"
+    );
+    assert!(!held(new));
+    assert_eq!(before.claim.namespace, old);
+    finish(f).await;
+}
