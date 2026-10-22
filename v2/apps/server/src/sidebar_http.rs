@@ -12,12 +12,16 @@ use axum::extract::{
 };
 use orkestr_v2_contracts::runtime::RunState;
 use orkestr_v2_store_sqlite::{ResourceError, SidebarConversation};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 pub(crate) fn router() -> Router<AppState> {
     Router::new()
         .route("/api/v2/sidebar", get(read))
         .route("/api/v2/sidebar/read", axum::routing::put(mark_read))
+        .route(
+            "/api/v2/sidebar/visibility",
+            axum::routing::put(set_visibility),
+        )
         .route(
             "/api/v2/v1-threads/{thread}/messages",
             get(v1_history).post(v1_send),
@@ -226,6 +230,7 @@ pub(crate) fn compose(
                 coordinator: false,
                 read_marker: row.sequence.max(0),
                 whatsapp,
+                hidden: false,
             },
             parent,
         ));
@@ -257,6 +262,7 @@ pub(crate) fn compose(
                         coordinator: coordinator.contains(&thread.id),
                         read_marker: thread.last_cursor,
                         whatsapp: thread.whatsapp_group(),
+                        hidden: false,
                     },
                     thread.parent.clone(),
                 ));
@@ -302,6 +308,7 @@ pub(crate) fn compose(
                         coordinator: coordinator.contains(id),
                         read_marker: 0,
                         whatsapp: None,
+                        hidden: false,
                     },
                     sidebar_v1::encoded_parent(id, &|p| ids.contains(p)),
                 ));
@@ -345,6 +352,47 @@ pub(crate) fn compose(
         v1_status,
         entries: out,
         truncated,
+        hidden_count: 0,
+    }
+}
+
+/// Marks the entries the owner hid as system chats, and their sub-chats.
+/// An entry is hidden by its own key or by the V1 thread it stands for
+/// (`v1:<thread>`), so a hidden V1 chat stays hidden after it moves to V2.
+/// Without `include`, hidden entries leave the page and are only counted.
+pub(crate) fn apply_visibility(page: &mut SidebarPage, hidden: &BTreeSet<String>, include: bool) {
+    let own = |e: &SidebarEntry| {
+        hidden.contains(&e.key)
+            || e.v1_thread_id
+                .as_ref()
+                .is_some_and(|t| hidden.contains(&format!("v1:{t}")))
+    };
+    let parents: HashMap<String, Option<String>> = page
+        .entries
+        .iter()
+        .map(|e| (e.key.clone(), e.parent_key.clone()))
+        .collect();
+    let marked: HashSet<String> = page
+        .entries
+        .iter()
+        .filter(|e| own(e))
+        .map(|e| e.key.clone())
+        .collect();
+    for entry in &mut page.entries {
+        // Bounded walk up the parent chain (parent links may form a cycle).
+        let mut key = Some(entry.key.clone());
+        for _ in 0..16 {
+            let Some(current) = key else { break };
+            if marked.contains(&current) {
+                entry.hidden = true;
+                break;
+            }
+            key = parents.get(&current).cloned().flatten();
+        }
+    }
+    page.hidden_count = page.entries.iter().filter(|e| e.hidden).count() as u32;
+    if !include {
+        page.entries.retain(|e| !e.hidden);
     }
 }
 
@@ -408,11 +456,21 @@ async fn linked(state: &AppState) -> Linked {
     }
 }
 
+#[derive(Default, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SidebarQuery {
+    /// List hidden system chats too (each with `hidden: true`).
+    #[serde(default)]
+    include_hidden: bool,
+}
+
 pub(crate) async fn read(
     State(state): State<AppState>,
     headers: HeaderMap,
+    query: Result<Query<SidebarQuery>, QueryRejection>,
 ) -> Result<Response, Error> {
     let (owner, credential) = owner_credential(&state, &headers).await?;
+    let Query(query) = query.map_err(|_| invalid())?;
     let started = std::time::Instant::now();
     let list = state
         .store
@@ -453,7 +511,7 @@ pub(crate) async fn read(
         }
         _ => LinkedSource::None,
     };
-    let page = compose(
+    let mut page = compose(
         native,
         source,
         &list.v1_marks,
@@ -463,6 +521,7 @@ pub(crate) async fn read(
         list.truncated,
         now_ms(),
     );
+    apply_visibility(&mut page, &list.hidden, query.include_hidden);
     if !page.is_valid() {
         return Err(unavailable());
     }
@@ -489,6 +548,40 @@ pub(crate) async fn mark_read(
         marker,
     })
     .into_response())
+}
+
+/// Hide a sidebar entry as a system chat, or show it again. Visibility only:
+/// the chat keeps running, keeps its WhatsApp binding and opens by its URL.
+pub(crate) async fn set_visibility(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Result<Json<SidebarVisibility>, JsonRejection>,
+) -> Result<Response, Error> {
+    let (owner, credential) = owner_credential(&state, &headers).await?;
+    let Json(request) = body.map_err(|_| invalid())?;
+    let key = SidebarKey::parse(&request.key)
+        .filter(|_| request.is_valid())
+        .ok_or_else(invalid)?;
+    let changed = state
+        .store
+        .set_sidebar_hidden(
+            &credential,
+            &owner,
+            &key,
+            request.hidden,
+            request.reason.as_deref(),
+        )
+        .await
+        .map_err(failure)?;
+    Ok((
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "key": key.to_string(),
+            "hidden": request.hidden,
+            "changed": changed,
+        })),
+    )
+        .into_response())
 }
 
 pub(crate) async fn record_lineage(

@@ -81,7 +81,7 @@ pub fn NewWhatsAppChat(
                                 whatsapp: Some(provision.name.clone()),
                                 name: provision.name, conversation_id: Some(provision.conversation_id), v1_thread_id: None,
                                 parent_key: None, last_activity_ms: None, preview: None, unread: 0,
-                                activity: Default::default(), read_only: false, coordinator: false, read_marker: 0,
+                                activity: Default::default(), read_only: false, coordinator: false, read_marker: 0, hidden: false,
                             });
                         }
                     }

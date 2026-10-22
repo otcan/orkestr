@@ -127,6 +127,11 @@ pub struct SidebarEntry {
     /// or a V2 conversation whose V1 thread (imported or delegated) is one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub whatsapp: Option<String>,
+    /// A system/technical chat (probe, rehearsal, test) the owner marked
+    /// hidden, or a sub-chat of one. It keeps running and stays reachable by
+    /// its URL; the sidebar lists it only when system chats are shown.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hidden: bool,
 }
 impl SidebarEntry {
     pub fn is_valid(&self) -> bool {
@@ -181,6 +186,10 @@ pub struct SidebarPage {
     /// Newest activity first; parents and children are both listed flat.
     pub entries: Vec<SidebarEntry>,
     pub truncated: bool,
+    /// Hidden (system) entries: left out of `entries` unless the request
+    /// asked for them (`?include_hidden=true`), then listed with `hidden`.
+    #[serde(default)]
+    pub hidden_count: u32,
 }
 impl SidebarPage {
     pub fn is_valid(&self) -> bool {
@@ -188,6 +197,8 @@ impl SidebarPage {
         self.schema_version == 1
             && self.observed_at_ms > 0
             && self.entries.len() <= SIDEBAR_MAX_ENTRIES
+            && self.hidden_count as usize <= SIDEBAR_MAX_ENTRIES
+            && self.entries.iter().filter(|e| e.hidden).count() <= self.hidden_count as usize
             && self
                 .entries
                 .iter()
@@ -206,6 +217,32 @@ pub struct SidebarReadMark {
 impl SidebarReadMark {
     pub fn is_valid(&self) -> bool {
         SidebarKey::parse(&self.key).is_some() && self.marker >= 0
+    }
+}
+
+pub const SIDEBAR_HIDDEN_REASON_MAX: usize = 200;
+
+/// `PUT /api/v2/sidebar/visibility`: mark a sidebar entry (`v2:<uuid>` or
+/// `v1:<thread>`) as a hidden system chat, or show it again. Visibility only:
+/// a hidden chat keeps running, keeps its bindings and opens by its URL.
+/// Hiding a V1 thread also hides the V2 conversation it later moves to.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SidebarVisibility {
+    pub key: String,
+    pub hidden: bool,
+    /// Why it is hidden (ops note, e.g. "WhatsApp health probe").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+impl SidebarVisibility {
+    pub fn is_valid(&self) -> bool {
+        SidebarKey::parse(&self.key).is_some()
+            && self
+                .reason
+                .as_deref()
+                .is_none_or(|r| label(r, SIDEBAR_HIDDEN_REASON_MAX))
+            && (self.hidden || self.reason.is_none())
     }
 }
 
@@ -417,7 +454,77 @@ mod tests {
             coordinator: true,
             read_marker: 3,
             whatsapp: None,
+            hidden: false,
         }
+    }
+
+    #[test]
+    fn hidden_is_omitted_when_false_and_counted_on_the_page() {
+        let mut entry = v1("thread-a");
+        assert!(serde_json::to_value(&entry)
+            .unwrap()
+            .get("hidden")
+            .is_none());
+        entry.hidden = true;
+        let json = serde_json::to_value(&entry).unwrap();
+        assert_eq!(json["hidden"], true);
+        let mut page = SidebarPage {
+            schema_version: 1,
+            observed_at_ms: 1,
+            v1_status: SidebarV1Status::Ready,
+            entries: vec![entry],
+            truncated: false,
+            hidden_count: 0,
+        };
+        assert!(!page.is_valid(), "a listed hidden entry is counted");
+        page.hidden_count = 1;
+        assert!(page.is_valid());
+        // Older pages without the field still parse.
+        let old: SidebarPage = serde_json::from_str(
+            r#"{"schema_version":1,"observed_at_ms":1,"v1_status":"ready","entries":[],"truncated":false}"#,
+        )
+        .unwrap();
+        assert_eq!(old.hidden_count, 0);
+    }
+
+    #[test]
+    fn visibility_requests_name_a_valid_key_and_a_bounded_reason() {
+        let ok = SidebarVisibility {
+            key: "v1:f2a722b4-probe".into(),
+            hidden: true,
+            reason: Some("WhatsApp health probe".into()),
+        };
+        assert!(ok.is_valid());
+        for bad in [
+            SidebarVisibility {
+                key: "v3:x".into(),
+                ..ok.clone()
+            },
+            SidebarVisibility {
+                reason: Some("".into()),
+                ..ok.clone()
+            },
+            SidebarVisibility {
+                reason: Some("a\nb".into()),
+                ..ok.clone()
+            },
+            SidebarVisibility {
+                reason: Some("x".repeat(SIDEBAR_HIDDEN_REASON_MAX + 1)),
+                ..ok.clone()
+            },
+            SidebarVisibility {
+                hidden: false,
+                ..ok.clone()
+            },
+        ] {
+            assert!(!bad.is_valid(), "{bad:?}");
+        }
+        assert!(SidebarVisibility {
+            hidden: false,
+            reason: None,
+            ..ok
+        }
+        .is_valid());
     }
 
     #[test]
@@ -485,6 +592,7 @@ mod tests {
             v1_status: SidebarV1Status::Ready,
             entries: vec![v1("a"), v1("a")],
             truncated: false,
+            hidden_count: 0,
         };
         assert!(!page.is_valid());
         let lineage = ConversationLineage {
