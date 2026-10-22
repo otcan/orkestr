@@ -30,7 +30,7 @@ test('prepared standalone group bridge includes its complete transport import gr
   const prepared=spawnSync(process.execPath,[script,dir],options);
   assert.equal(prepared.status,0,prepared.stderr);
   assert.match(fs.readFileSync(path.join(dir,'scripts/wa_web_bridge.mjs'),'utf8'),/transportOnly\.routes\?\.\(app,/);
-  for(const file of ['whatsapp-scoped-group-transport.js','whatsapp-scoped-group-relay.js','whatsapp-scoped-timer-notifications.js','whatsapp-scoped-coordinator.js']) {
+  for(const file of ['whatsapp-scoped-group-transport.js','whatsapp-scoped-group-relay.js','whatsapp-scoped-timer-notifications.js','whatsapp-scoped-coordinator.js','whatsapp-scoped-delegates.js']) {
     const url=pathToFileURL(path.join(dir,'packages/connectors/src',file)).href;
     const imported=spawnSync(process.execPath,['--input-type=module','--eval',`await import(${JSON.stringify(url)})`],options);
     assert.equal(imported.status,0,imported.stderr);
