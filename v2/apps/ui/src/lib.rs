@@ -26,6 +26,8 @@ pub struct Draft {
     pub text: String,
     pub revision: u64,
     pub pending: Option<Submission>,
+    /// The message this draft replies to (web UI reply), sent with it.
+    pub quote: Option<orkestr_v2_contracts::ReplyTo>,
 }
 
 #[derive(Clone)]
@@ -256,6 +258,7 @@ pub mod host_metrics;
 pub mod intelligence;
 pub mod live_map;
 pub mod message_time;
+pub mod outbox;
 pub mod rich_text;
 pub mod route;
 pub mod send_intent;

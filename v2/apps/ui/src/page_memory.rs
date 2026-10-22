@@ -120,6 +120,7 @@ pub fn restore(
                 text: draft.text,
                 revision: if edited { 2 } else { 1 },
                 pending: draft.pending.map(|input| Submission { input, revision: 1 }),
+                quote: None,
             },
         );
         counts.0 += 1;

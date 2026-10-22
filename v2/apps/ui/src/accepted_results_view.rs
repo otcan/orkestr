@@ -136,7 +136,7 @@ pub fn AcceptedReplies(
             if inline && rows.is_empty() && !busy() { p { class: "empty-conversation", "Start a conversation. Your messages and accepted replies will appear here." } }
             ol { class: if inline { "chat-messages" } else { "messages" },
                 for row in rows {
-                    li { key: "{row.key()}", class: match &row { Row::Input(_) => "user-message", Row::Reply(_) => "assistant-message", Row::Post(_) => "assistant-message post-message" },
+                    li { key: "{row.key()}", class: match &row { Row::Input(_) => "user-message", Row::Reply(_) => "assistant-message", Row::Post(_) => "assistant-message post-message" }, "data-replyable": "{inline && !matches!(row, Row::Post(_))}",
                         match &row {
                             Row::Input(input) => rsx! { article { "data-message-id": "{input.id}",
                                 strong { if input.actor == "owner" { "You" } else { "{input.actor}" } }
@@ -147,6 +147,11 @@ pub fn AcceptedReplies(
                                     }
                                 }
                                 crate::rich_text_view::RichText { text: input.text.clone() }
+                                if inline {
+                                    crate::outbox_view::ReplyButton { draft_key: id.clone(), composer: "composer", message_id: input.id.clone(),
+                                        author: if input.actor == "owner" { chat_timeline::QuoteAuthor::Owner } else { chat_timeline::QuoteAuthor::Other }, text: input.text.clone() }
+                                }
+                                crate::outbox_view::TimelineDelivery { message_id: input.id.clone() }
                             } },
                             Row::Reply(reply) => rsx! { AcceptedReply { conversation:id.clone(), row:reply.clone(), session_scope, onexpired } },
                             Row::Post(post) => rsx! { crate::conversation_posts_view::PostBubble { post: post.clone() } },
@@ -160,6 +165,9 @@ pub fn AcceptedReplies(
                 }
             }
         } else { p { role: "alert", "Conversation order could not be verified. Reload history." } }
+        if inline {
+            crate::outbox_view::OutboxBubbles { target: orkestr_v2_ui::outbox::Target::Native(id.clone()), shown: messages.iter().map(|m| m.id.clone()).collect::<Vec<_>>() }
+        }
         details { class: "transcript-pages",
             summary { "Reply history pages" }
             p { role:"status", "{notice}" }
@@ -196,6 +204,7 @@ fn AcceptedReply(
             let _ = eval.send(json!({"stop":true}));
         }
     });
+    let reply_conversation = conversation.clone();
     let load_row = row.clone();
     use_future(move || {
         let row = load_row.clone();
@@ -274,6 +283,9 @@ fn AcceptedReply(
         strong { "Assistant" }
         span { class: "reply-state", if row.payload_removed { "Reply output removed." } else { "{notice}" } }
         if !row.payload_removed { if let Some(text)=output.read().text.clone(){div { class: "accepted-output", "data-accepted-output": "true", crate::rich_text_view::RichText { text } }} }
+        if !row.payload_removed { if let Some(text)=output.read().text.clone(){
+            crate::outbox_view::ReplyButton { draft_key: reply_conversation.clone(), composer: "composer", message_id: row.completion_event_id.to_string(), author: chat_timeline::QuoteAuthor::Assistant, text }
+        } }
         details {summary {"Reply details"} p {"Run: {row.run_id}"} p {"Completion: {row.completion_event_id}"} p {"Acceptance: {row.acceptance_event_id}"} p { if row.auto_accepted { "Accepted automatically by the server for you." } else { "Accepted by you." } }}
     } }
 }

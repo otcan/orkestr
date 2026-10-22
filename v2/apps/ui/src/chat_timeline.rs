@@ -78,9 +78,97 @@ pub fn quote_label(quote: &ReplyTo) -> &'static str {
         "Replying to an unavailable message"
     } else if quote.is_own_reply {
         "Replying to Orkestr"
+    } else if quote.author.as_deref() == Some(OWNER_AUTHOR) {
+        "Replying to you"
     } else {
         "Replying to an earlier message"
     }
+}
+
+/// `author` of a quote of the owner's own message, set by the web UI.
+pub const OWNER_AUTHOR: &str = "owner";
+/// Characters of the quoted text in the visible `[Replying to …]` line (as the WhatsApp relay).
+pub const REPLY_SNIPPET_MAX: usize = 80;
+
+/// Who wrote a message the owner replies to from the web UI.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuoteAuthor {
+    Owner,
+    Assistant,
+    Other,
+}
+
+/// Collapse whitespace and cut to `max` characters with an ellipsis.
+pub fn clip(text: &str, max: usize) -> String {
+    let collapsed = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if collapsed.chars().count() <= max {
+        return collapsed;
+    }
+    let cut: String = collapsed.chars().take(max.saturating_sub(1)).collect();
+    format!("{}\u{2026}", cut.trim_end())
+}
+
+/// The quote kept with a web UI reply, shaped like a WhatsApp reply's.
+pub fn quote(message_id: &str, author: QuoteAuthor, text: &str) -> ReplyTo {
+    let message_id: String = message_id.chars().take(300).collect();
+    ReplyTo {
+        message_id: (!message_id.is_empty()).then_some(message_id),
+        author: Some(match author {
+            QuoteAuthor::Owner => OWNER_AUTHOR.into(),
+            QuoteAuthor::Assistant => "orkestr".into(),
+            QuoteAuthor::Other => "participant".into(),
+        }),
+        sent_at: None,
+        text: clip(text, ReplyTo::TEXT_MAX),
+        is_own_reply: author == QuoteAuthor::Assistant,
+        unavailable: false,
+    }
+}
+
+/// The visible line the model reads, in the WhatsApp relay's format.
+pub fn reply_line(quote: &ReplyTo) -> String {
+    if quote.unavailable {
+        return "[Replying to an unavailable message]".into();
+    }
+    let who = if quote.is_own_reply {
+        "Orkestr message"
+    } else if quote.author.as_deref() == Some(OWNER_AUTHOR) {
+        "your message"
+    } else {
+        "earlier message"
+    };
+    format!(
+        "[Replying to {who}: \"{}\"]",
+        clip(&quote.text, REPLY_SNIPPET_MAX)
+    )
+}
+
+/// Message text for a reply: the reply line, a blank line, then the text.
+pub fn with_reply_line(text: &str, quote: &ReplyTo) -> String {
+    format!("{}\n\n{text}", reply_line(quote))
+}
+
+/// A leading `[Replying to …]` line of a message that has no structured
+/// quote (V1 history): `(label, quoted snippet, remaining text)`.
+pub fn split_reply_line(text: &str) -> Option<(String, String, String)> {
+    let (first, rest) = text.split_once("\n\n")?;
+    let line = first.trim();
+    if !line.starts_with("[Replying to ") || !line.ends_with(']') || line.contains('\n') {
+        return None;
+    }
+    let inner = &line["[Replying to ".len()..line.len() - 1];
+    let (who, snippet) = match inner.split_once(": \"") {
+        Some((who, snippet)) => (who, snippet.strip_suffix('"').unwrap_or(snippet)),
+        None => (inner, ""),
+    };
+    let who = who.split(" from ").next().unwrap_or(who);
+    let label = match who {
+        "Orkestr message" => "Replying to Orkestr",
+        "your message" => "Replying to you",
+        "an unavailable message" => "Replying to an unavailable message",
+        _ => "Replying to an earlier message",
+    };
+    Some((label.into(), snippet.into(), rest.to_string()))
 }
 impl From<&Message> for Input {
     fn from(value: &Message) -> Self {

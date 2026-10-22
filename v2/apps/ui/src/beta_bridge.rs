@@ -5,6 +5,9 @@ use serde_json::json;
 pub struct Reply {
     pub status: u16,
     pub text: String,
+    /// Fixed refusal code the bridge may surface (`restricted_conversation`).
+    #[serde(default)]
+    pub code: String,
 }
 pub fn start(method: &str, conversation: &str, csrf: &str, body: Option<String>) -> document::Eval {
     start_route("window", method, conversation, csrf, body)
