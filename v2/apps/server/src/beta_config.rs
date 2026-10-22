@@ -95,10 +95,12 @@ pub(crate) const MAX_BETA_CONFIG_BYTES: u64 = 262_144;
 /// Conversations with their own workspace besides the primary profile.
 pub(crate) const MAX_ADDITIONAL_WORKSPACE_EXEC: usize = 128;
 pub(crate) const DEFAULT_WINDOW_MAX_MINUTES: u32 = 60;
-/// Default number of conversations that may hold a live window at once.
-pub(crate) const DEFAULT_ACTIVE_WINDOWS: u32 = 8;
+/// Safety backstop on conversations holding a live window at once. It is not
+/// the admission policy: new windows open by live host pressure (see
+/// `window_runtime::pressure`), so this is not expected to be reached.
+pub(crate) const DEFAULT_ACTIVE_WINDOWS: u32 = 64;
 /// Upper bound; the root manager's independent ceiling stays above it.
-pub(crate) const MAX_ACTIVE_WINDOWS: u32 = 12;
+pub(crate) const MAX_ACTIVE_WINDOWS: u32 = 64;
 impl BetaConfig {
     pub(crate) fn validate(&self) -> Result<(), &'static str> {
         let key = |s: &str| {
@@ -414,7 +416,7 @@ mod tests {
     fn window_capacity_defaults_and_is_bounded() {
         let valid: BetaConfig = serde_json::from_value(input()).unwrap();
         assert_eq!(valid.active_windows(), DEFAULT_ACTIVE_WINDOWS);
-        for (value, ok) in [(1, true), (12, true), (0, false), (13, false)] {
+        for (value, ok) in [(1, true), (12, true), (64, true), (0, false), (65, false)] {
             let mut config = input();
             config["max_active_windows"] = serde_json::json!(value);
             let config: BetaConfig = serde_json::from_value(config).unwrap();

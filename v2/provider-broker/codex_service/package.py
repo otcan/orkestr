@@ -7,7 +7,7 @@ from codex_bounded.configuration import BROKER, ISOLATION, MODULES, HOSTS
 from codex_bounded.trust import digest, metadata, private, protected, system_dependency
 from .contract import identifier, require
 
-MAX_RUNTIME_WINDOWS = 12
+MAX_RUNTIME_WINDOWS = 64
 from .role_profiles import ROLE_FILES, bind as bind_roles
 
 MODULES_SERVICE = ("__init__.py", "contract.py", "ledger.py", "budget.py", "custody.py",

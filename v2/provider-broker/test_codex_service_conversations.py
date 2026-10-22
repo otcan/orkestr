@@ -122,7 +122,7 @@ class Conversations(unittest.TestCase):
         self.assertTrue(ledger.admit(self.request(self.other))[1])
 
     def test_live_window_bound_is_closed(self):
-        for value in (0, 17, True, "2", None):
+        for value in (0, 73, True, "2", None):
             with self.subTest(value=value), self.assertRaisesRegex(Refused, "live_window_bound"):
                 Ledger(self.path, self.owner, self.home, clock=self.clock, live_windows=value)
 

@@ -33,6 +33,7 @@ fn request(inactive: bool) -> HistoryRecoveryRestoreRequest {
                 actor_kind: "owner".into(),
                 text: "Synthetic retained history é".into(),
                 reply_to: None,
+                origin: None,
             }],
         };
         request.source_digest = history_source_digest(&request).unwrap();

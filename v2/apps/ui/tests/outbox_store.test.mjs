@@ -19,6 +19,9 @@ test('items are stored one entry per key and read back only under the owner pref
   assert.deepEqual(loadOutbox(prefix, storage).sort(), ['{"a":1}', '{"b":2}']);
   assert.ok(storeOutbox(prefix, [['k-1', null]], storage));
   assert.deepEqual(loadOutbox(prefix, storage), ['{"b":2}']);
+  // Composer messages use `web:<uuid>` request keys; they persist too.
+  assert.ok(storeOutbox(prefix, [['web:00000000-0000-4000-8000-000000000001', '{"c":3}']], storage));
+  assert.deepEqual(loadOutbox(prefix, storage).sort(), ['{"b":2}', '{"c":3}']);
 });
 
 test('bad prefixes, keys and failing storage never throw', () => {
