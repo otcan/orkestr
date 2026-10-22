@@ -60,8 +60,12 @@ impl Store {
             return Err(RuntimeStoreError::Fenced);
         }
         let clock = now(&mut tx).await?;
-        // Only once the window could never legitimately produce more work.
-        if w.get::<i64, _>("expires_at_ms") > clock {
+        // Automatically only once the window could never legitimately produce
+        // more work. The owner side (an explicit decision, or Runtime after
+        // its task ended and every original child was reaped and the manager
+        // closed the window's egress) may settle earlier: each run's own lease
+        // must still have passed, so no live child can still answer.
+        if actor == Actor::Startup && w.get::<i64, _>("expires_at_ms") > clock {
             return Err(RuntimeStoreError::Fenced);
         }
         // Every nonterminal run whose lease passed, in any role and state, and

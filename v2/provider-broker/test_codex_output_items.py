@@ -35,6 +35,17 @@ class OutputItems(unittest.TestCase):
             self.assertEqual(clean["itemId"], "answer")
             self.assertNotIn("unrelated", clean)
 
+    def test_async_question_delivery_survives_and_unknown_delivery_refuses(self):
+        frame = item()
+        frame["params"]["item"]["delivery"] = "async"
+        frame["params"]["item"]["questions"] = [{"title": "Which period?"}]
+        clean = active().provider(frame)["params"]["frame"]["params"]["item"]
+        self.assertEqual(clean, {"type": "agentMessage", "id": "answer", "text": "Whole answer.",
+                                 "phase": "final_answer", "delivery": "async"})
+        frame["params"]["item"]["delivery"] = "later"
+        with self.assertRaises(Refused):
+            active().provider(frame)
+
     def test_terminal_summary_retains_only_bounded_agent_items(self):
         channel = active()
         frame = {"method": "turn/completed", "params": {"threadId": "synthetic-native",

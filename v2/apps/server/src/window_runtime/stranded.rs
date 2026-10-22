@@ -36,6 +36,17 @@ use orkestr_v2_contracts::{
 use orkestr_v2_store_sqlite::StrandedExecutionWindow;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+/// Which plans a reconciliation attempt may carry out.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Scope {
+    /// Any plan Core allows for the actor.
+    Any,
+    /// Only a failed open (nothing of the window's own ever ran).
+    FailedOpenOnly,
+    /// Only a plan that abandons nothing the owner could still accept.
+    NothingToAbandon,
+}
+
 pub(crate) enum ReconcileError {
     /// The current conversation's task in this process still owns the window.
     LiveOwner,
@@ -59,7 +70,16 @@ impl Controller {
             .map(|d| d.as_millis() as i64)
             .unwrap_or(0);
         for window in windows {
-            if window.expires_at_ms > now || self.live_owner(&window.conversation_id).await {
+            if self.live_owner(&window.conversation_id).await {
+                continue;
+            }
+            if window.expires_at_ms > now {
+                // Before the deadline only a window whose task in this process
+                // already ended with every original child reaped: its provider
+                // is gone, so waiting for expiry only strands the conversation.
+                if self.custody_released(&window.conversation_id).await {
+                    let _ = self.reconcile_released(browser, &window).await;
+                }
                 continue;
             }
             // A refused window remains blocked exactly as before; the owner can
@@ -102,9 +122,56 @@ impl Controller {
                 &status,
                 Decision::AbandonUnaccepted,
                 Actor::Owner,
-                true,
+                Scope::FailedOpenOnly,
             )
             .await;
+    }
+
+    /// Whether this process ran (or observed) the conversation's window and
+    /// now provably holds nothing of it.
+    async fn custody_released(&self, conversation: &ConversationId) -> bool {
+        match self.existing(conversation) {
+            Some(entry) => entry.custody_released().await && entry.released_attempt_due(),
+            None => false,
+        }
+    }
+
+    /// Immediate reconciliation of a window whose provider is provably gone
+    /// (this process's task ended and reaped every original child). The
+    /// manager first closes the window's egress and reports it uncertain, so
+    /// lapsed runs settle and its custody check passes; then Core may close it
+    /// at once, but only when that abandons nothing the owner could still
+    /// accept. Anything else keeps waiting for the owner or the deadline.
+    async fn reconcile_released(
+        &self,
+        browser: &str,
+        window: &ExecutionWindowStatus,
+    ) -> Result<ExecutionWindowReconciliation, &'static str> {
+        let manager = self
+            .manager
+            .for_conversation(window.conversation_id.clone())
+            .map_err(|_| "manager scope refused")?;
+        // Idempotent; a window the manager already retired or marked keeps
+        // its committed state.
+        let _ = manager
+            .uncertain(
+                &format!("released:{}", uuid::Uuid::new_v4()),
+                &Window {
+                    window_id: window.window_id,
+                    generation: window.generation,
+                },
+                super::super::manager_client::Uncertainty::RuntimeRefused,
+                Instant::now() + Duration::from_secs(5),
+            )
+            .await;
+        self.reconcile_planned(
+            browser,
+            window,
+            Decision::AbandonUnaccepted,
+            Actor::Owner,
+            Scope::NothingToAbandon,
+        )
+        .await
     }
 
     /// Owner-authenticated explicit decision (HTTP). Never touches a window
@@ -155,19 +222,19 @@ impl Controller {
         decision: Decision,
         actor: Actor,
     ) -> Result<ExecutionWindowReconciliation, &'static str> {
-        self.reconcile_planned(browser, window, decision, actor, false)
+        self.reconcile_planned(browser, window, decision, actor, Scope::Any)
             .await
     }
 
-    /// `failed_open_only`: stop before any manager or Core decision unless
-    /// Core planned a failed open (nothing of the window's own ever ran).
+    /// `scope` limits which planned decision may be carried out; a refused
+    /// scope stops before any manager or Core decision.
     async fn reconcile_planned(
         &self,
         browser: &str,
         window: &ExecutionWindowStatus,
         decision: Decision,
         actor: Actor,
-        failed_open_only: bool,
+        scope: Scope,
     ) -> Result<ExecutionWindowReconciliation, &'static str> {
         let conversation = &window.conversation_id;
         if window.state != ExecutionWindowState::Closed
@@ -212,10 +279,15 @@ impl Controller {
             )
             .await
             .map_err(|_| "stranded window plan refused")?;
-        if failed_open_only
+        if scope == Scope::FailedOpenOnly
             && matches!(&plan, StrandedExecutionWindow::Pending(p) if p.open_failure_cause.is_none())
         {
             return Err("window ran turns; only its deadline or the owner decides");
+        }
+        if scope == Scope::NothingToAbandon
+            && matches!(&plan, StrandedExecutionWindow::Pending(p) if !p.abandoned_run_ids.is_empty())
+        {
+            return Err("an acceptable proposal remains; only its deadline or the owner decides");
         }
         let (outcome, run, event) = match &plan {
             StrandedExecutionWindow::Pending(p) => (

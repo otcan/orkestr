@@ -30,7 +30,11 @@ pub(super) struct ConversationController {
     handles: Handles,
     state: Mutex<State>,
     operation: Mutex<()>,
+    /// Last immediate reconciliation attempt of a released window (spacing).
+    released_attempt: std::sync::Mutex<Option<Instant>>,
 }
+/// Spacing of immediate reconciliation attempts for one released window.
+const RELEASED_RETRY: Duration = Duration::from_secs(10);
 enum State {
     Idle,
     Starting,
@@ -45,6 +49,23 @@ enum State {
 impl ConversationController {
     pub(super) fn handles(&self) -> &Handles {
         &self.handles
+    }
+    /// This process's task for the window ended and every original child was
+    /// reaped (or it never ran one): nothing local can still use the window.
+    pub(super) async fn custody_released(&self) -> bool {
+        matches!(&*self.state.lock().await, State::Released)
+    }
+    /// At most one immediate reconciliation attempt per `RELEASED_RETRY`.
+    pub(super) fn released_attempt_due(&self) -> bool {
+        let Ok(mut last) = self.released_attempt.lock() else {
+            return false;
+        };
+        let now = Instant::now();
+        if last.is_some_and(|at| now.saturating_duration_since(at) < RELEASED_RETRY) {
+            return false;
+        }
+        *last = Some(now);
+        true
     }
     /// A task this process started (or is starting) may still own the window.
     pub(super) async fn has_local_task(&self) -> bool {
@@ -70,6 +91,7 @@ impl ConversationController {
             manager,
             state: Mutex::new(State::Idle),
             operation: Mutex::new(()),
+            released_attempt: std::sync::Mutex::new(None),
         }
     }
     pub(crate) async fn process(
