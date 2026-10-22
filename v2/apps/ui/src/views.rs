@@ -293,9 +293,8 @@ pub fn Conversation(
                 crate::intelligence_view::IntelligencePanel { key:"intelligence-{id}-{generation}", id:id.clone(), csrf:csrf.clone(), session_scope, execution, onexpired, onaccepted:move |_revision| { let next = *accepted_revision.peek() + 1; accepted_revision.set(next); }, auto_accept: auto_accept() }
                 crate::accepted_results_view::AcceptedReplies { key: "accepted-{id}-{generation}", id: id.clone(), session_scope, messages, posts: posts(), update: Some(accepted_revision), inline: true, onexpired }
                 if let Some(current) = live_status.filter(|s| s.progress.is_some() && s.phase != orkestr_v2_contracts::ExecutionPhase::Completed) {
-                    article { key: "{current.conversation_id}/{current.progress.as_ref().unwrap().payload_id}", class: "assistant-proposal",
-                        h3 { "Assistant" }
-                        crate::progress_view::ProgressView { status: current, csrf: csrf.clone(), execution, session_scope, onexpired }
+                    div { key: "{current.conversation_id}/{current.progress.as_ref().unwrap().payload_id}", class: "chat-messages live-answer-row",
+                        crate::progress_view::ProgressView { status: current, csrf: csrf.clone(), execution, session_scope, onexpired, plain: true }
                     }
                 }
                 if let Some(notice) = failure {

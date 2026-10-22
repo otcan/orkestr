@@ -351,6 +351,21 @@ async function api(state, req, res, url) {
     const after = Number(q.get('after') ?? 0), rows = state.messages[id].filter(x => x.sequence > after);
     return json(res, 200, { conversation_id: id, scope: { kind: 'global' }, messages: rows, last_sequence: state.messages[id].length, next_cursor: null });
   }
+  // Accepted answers: Queued errands has 25 (more than one 20-row page), so
+  // the chat must follow the pages to show the newest answer.
+  if (rest === '/accepted-results' && req.method === 'GET') {
+    const after = Number(q.get('after_sequence') ?? 0), limit = Number(q.get('limit') ?? 20);
+    const all = id === C ? Array.from({ length: 25 }, (_, i) => ({ run_id: uuid(7001 + i), completion_event_id: uuid(7101 + i),
+      acceptance_event_id: uuid(7201 + i), acceptance_sequence: i + 1, payload_id: uuid(7301 + i), payload_removed: false, auto_accepted: true })) : [];
+    const rows = all.filter(r => r.acceptance_sequence > after).slice(0, limit);
+    const more = all.some(r => r.acceptance_sequence > (rows.at(-1)?.acceptance_sequence ?? after));
+    return json(res, 200, { conversation_id: id, results: rows, next_after_sequence: more ? rows.at(-1).acceptance_sequence : null });
+  }
+  const answer = /^\/payloads\/([0-9a-f-]{36})$/.exec(rest);
+  if (answer && req.method === 'GET' && id === C) {
+    const n = Number(answer[1].slice(-4)) - 7300;
+    if (n >= 1 && n <= 25) return json(res, 200, { payload_id: answer[1], conversation_id: C, run_id: uuid(7000 + n), text: `Synthetic answer ${n}` });
+  }
   if (rest === '/events') {
     res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store' });
     res.write(': synthetic keep-alive\n\n');

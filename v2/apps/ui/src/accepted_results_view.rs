@@ -188,12 +188,12 @@ pub fn AcceptedReplies(
         if inline {
             crate::outbox_view::OutboxBubbles { target: orkestr_v2_ui::outbox::Target::Native(id.clone()), shown: messages.iter().map(|m| m.id.clone()).collect::<Vec<_>>() }
         }
-        details { class: "transcript-pages",
+        if !inline { details { class: "transcript-pages",
             summary { "Reply history pages" }
             p { role:"status", "{notice}" }
             button { disabled:busy(), onclick:move |_|{after.set(0);reload+=1;}, "Refresh accepted replies" }
             button { disabled:busy()||next.is_none(), onclick:move |_|{if let Some(cursor)=next{after.set(cursor);}}, "Next 20 accepted replies" }
-        }
+        } }
     } }
 }
 
@@ -209,11 +209,11 @@ fn AcceptedReply(
     let mut output = use_signal(Output::default);
     let mut notice = use_signal(|| {
         if row.payload_removed {
-            "Reply output removed."
+            "Answer text removed."
         } else if row.payload_id.is_none() {
-            "No output was recorded for this accepted reply."
+            "No text was recorded for this answer."
         } else {
-            "Loading accepted reply…"
+            "Loading…"
         }
         .to_string()
     });
@@ -257,9 +257,9 @@ fn AcceptedReply(
                                 output.write().observed(payload.text);
                                 notice.set(
                                     if output.read().removed() {
-                                        "Reply output removed."
+                                        "Answer text removed."
                                     } else {
-                                        "Accepted reply"
+                                        ""
                                     }
                                     .into(),
                                 );
@@ -269,7 +269,7 @@ fn AcceptedReply(
                             }
                             _ => {
                                 output.write().unavailable();
-                                notice.set("Accepted reply unavailable.".into());
+                                notice.set("This answer could not be loaded.".into());
                             }
                         }
                     }
@@ -280,7 +280,7 @@ fn AcceptedReply(
                     }
                     _ => {
                         output.write().unavailable();
-                        notice.set("Accepted reply unavailable. Checking again…".into());
+                        notice.set("Loading this answer again…".into());
                     }
                 }
                 let _ = document::eval(
@@ -301,11 +301,10 @@ fn AcceptedReply(
         "data-acceptance-event-id": "{row.acceptance_event_id}",
         "data-payload-id": "{payload_id}",
         strong { "Assistant" }
-        span { class: "reply-state", if row.payload_removed { "Reply output removed." } else { "{notice}" } }
+        span { class: "reply-state", if row.payload_removed { "Answer text removed." } else { "{notice}" } }
         if !row.payload_removed { if let Some(text)=output.read().text.clone(){div { class: "accepted-output", "data-accepted-output": "true", crate::rich_text_view::RichText { text } }} }
         if !row.payload_removed { if let Some(text)=output.read().text.clone(){
             crate::outbox_view::ReplyButton { draft_key: reply_conversation.clone(), composer: "composer", message_id: row.completion_event_id.to_string(), author: chat_timeline::QuoteAuthor::Assistant, text }
         } }
-        details {summary {"Reply details"} p {"Run: {row.run_id}"} p {"Completion: {row.completion_event_id}"} p {"Acceptance: {row.acceptance_event_id}"} p { if row.auto_accepted { "Accepted automatically by the server for you." } else { "Accepted by you." } }}
     } }
 }
