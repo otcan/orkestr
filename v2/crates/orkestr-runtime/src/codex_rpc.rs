@@ -3,7 +3,7 @@
 use crate::ports::Blocker;
 use serde_json::{json, Value};
 mod turn;
-pub use turn::TurnStream;
+pub use turn::{TurnStream, ASYNC_QUESTION_PREFIX};
 
 const MAX_FRAME: usize = 64 * 1024;
 

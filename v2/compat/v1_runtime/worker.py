@@ -20,6 +20,13 @@ DIGEST_POLL_S = 15
 POST_POLL_S = 3
 POST_PAGE = 20
 POST_AUTHORS = ("coordinator", "operator")
+# Runtime marker of an asynchronous question (Codex `request_user_input_async`)
+# in a progress payload; must equal the runtime's ASYNC_QUESTION_PREFIX. Such a
+# question is sent at once as its own message, never as the input's final.
+QUESTION_PREFIX = "\u2753 Question while I keep working:\n\n"
+QUESTION_LABEL = "Question"
+# Progress payloads inspected per input for questions (bounded state).
+QUESTION_SCAN_LIMIT = 1024
 # Window states that are neither open for a follow-up nor closed for a successor.
 UNSETTLED_WINDOW_STATES = ("opening", "retiring", "reconciliation_required")
 # A Fast in these phases (or missing) can never become this input's proposal.
@@ -33,7 +40,7 @@ STALL_NOTICE = ("Still working on this message after more than 20 minutes. It ma
 # Frozen per-attempt state dropped when an input is sent again as a new turn.
 RESET_KEYS = ("intake", "cursor", "window", "window_request", "previous_window", "matched_runs", "accepted",
               "fast_accept_request", "deep_accept_request", "fast_payload", "deep_payload", "admitted_at",
-              "progress_at", "fast_unusable_since", "intake_rules")
+              "progress_at", "fast_unusable_since", "intake_rules", "questions_scanned")
 # An admitted input whose window ended without starting any run of it.
 ORPHAN_GRACE_S = 60
 # How often an input whose window ended before any run of it started is sent again.
@@ -208,6 +215,40 @@ class Worker:
         if len(text) > PROGRESS_MAX_CHARS:
             text = text[:PROGRESS_MAX_CHARS].rstrip() + " …"
         self.ledger.add_progress(data, payload_id, text)
+
+    def capture_questions(self, data, events, ids):
+        """Send each asynchronous question of this input's runs at once.
+
+        A question is a marked progress payload. It is exported like a
+        conversation post (its own message, not this input's final) whatever
+        `progress_updates` says and without the progress spacing or limit, so
+        the owner sees it while the turn continues to its single final.
+        """
+        scanned = data.setdefault("questions_scanned", [])
+        for event in events:
+            payload = event.get("payload_ref_or_safe_payload") or {}
+            observation = payload.get("observation") or {}
+            payload_id = observation.get("payload_id")
+            if (payload.get("kind") != "provider_observed" or event.get("schema_version") != 8 or
+                    observation.get("kind") != "progress_ref" or payload.get("run_id") not in ids or
+                    not isinstance(payload_id, str) or payload_id in scanned or len(scanned) >= QUESTION_SCAN_LIMIT):
+                continue
+            try:
+                value = self.call("GET", "/payloads/" + payload_id)
+            except ClientError as error:
+                if error.status not in (404, 410):
+                    raise
+                value = {}  # Removed payload: nothing left to send.
+            scanned.append(payload_id)
+            text = value.get("text") if value.get("payload_id") == payload_id else None
+            if value and value.get("run_id") != payload["run_id"]:
+                raise Refused("progress_payload_mismatch")
+            if isinstance(text, str) and text.startswith(QUESTION_PREFIX) and text[len(QUESTION_PREFIX):].strip():
+                uuid.UUID(payload_id)
+                self.ledger.enqueue_post({"id": payload_id, "author": "assistant_question", "label": QUESTION_LABEL,
+                                          "text": text, "provider": None, "model": None,
+                                          "created_ms": int(time.time() * 1000)}, self.provider_identity())
+            self.ledger.save(data)
 
     def call(self, method, route, body=None, allowed=(200,)):
         return self.client.request(method, route, body=body, allowed=allowed)[1]
@@ -472,6 +513,7 @@ class Worker:
         data["matched_runs"] = sorted(ids)
         data["cursor"] = max([data["cursor"]] + [event["sequence"] for event in events])
         self.ledger.save(data)
+        self.capture_questions(data, events, ids)
         statuses = {role: self.call("GET", route, allowed=(200, 204)) for role, route in
                     (("fast", "/fast/execution"), ("deep", "/execution"))}
         self.capture_progress(data, statuses["deep"], ids)

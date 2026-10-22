@@ -1,6 +1,6 @@
 //! Synthetic native notifications only: full final output is immutable evidence.
 use orkestr_runtime::{
-    codex_rpc::TurnStream,
+    codex_rpc::{TurnStream, ASYNC_QUESTION_PREFIX},
     ports::{Blocker, ProviderEvent},
 };
 use serde_json::{json, Value};
@@ -412,4 +412,142 @@ fn text_bytes_and_number_of_items_remain_bounded() {
         receive(&mut stream, delta(Some(&format!("item-{index}")), "x"));
     }
     refuse(&mut stream, delta(Some("item-129"), "x"));
+}
+
+/// `request_user_input_async` as Codex 0.163 reports it: a completed agent
+/// message with `phase: final_answer` and `delivery: async`.
+fn question(id: &str, text: &str) -> Value {
+    let mut value = item("item/completed", id, text, json!("final_answer"));
+    value["params"]["item"]["delivery"] = json!("async");
+    value["params"]["item"]["questions"] = json!([{"title": text}]);
+    value
+}
+fn progress(events: &[ProviderEvent]) -> Vec<&str> {
+    events
+        .iter()
+        .filter_map(|event| match event {
+            ProviderEvent::Progress(text) => Some(text.as_str()),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn async_question_then_final_is_one_final_with_the_question_delivered_first() {
+    // PA gen 20: a question at 05:55, the real final five minutes later.
+    let mut stream = active();
+    completed_item(
+        &mut stream,
+        "c",
+        "Reading the booking.",
+        json!("commentary"),
+    );
+    let asked = receive(
+        &mut stream,
+        question("call_q", "Which flight did you take?"),
+    );
+    assert_eq!(
+        progress(&asked),
+        vec![format!("{ASYNC_QUESTION_PREFIX}Which flight did you take?").as_str()]
+    );
+    completed_item(
+        &mut stream,
+        "c2",
+        "Drafting the complaint.",
+        json!("commentary"),
+    );
+    completed_item(
+        &mut stream,
+        "answer",
+        "The complaint is drafted.",
+        json!("final_answer"),
+    );
+    let mut terminal = done();
+    terminal["params"]["turn"]["itemsView"] = json!("summary");
+    terminal["params"]["turn"]["items"] = json!([{"type":"agentMessage","id":"call_q",
+        "text":"Which flight did you take?","phase":"final_answer","delivery":"async"}]);
+    let events = receive(&mut stream, terminal);
+    let ProviderEvent::Progress(reply) = &events[0] else {
+        panic!("final payload expected")
+    };
+    assert!(reply.starts_with("The complaint is drafted."));
+    assert!(reply.ends_with("1. Which flight did you take?"));
+    assert_eq!(
+        events.last(),
+        Some(&ProviderEvent::CompletedProposal { synthetic: false })
+    );
+    stream.finish().unwrap();
+}
+
+#[test]
+fn two_async_questions_never_count_as_two_finals() {
+    // PA gen 22: two questions two minutes apart, refused before this fix.
+    let mut stream = active();
+    receive(
+        &mut stream,
+        question("q1", "Where is the German passport scan?"),
+    );
+    let second = receive(&mut stream, question("q2", "Did you show both passports?"));
+    assert_eq!(
+        progress(&second),
+        vec![format!("{ASYNC_QUESTION_PREFIX}Did you show both passports?").as_str()]
+    );
+    // A final that already repeats a question does not repeat it again.
+    completed_item(
+        &mut stream,
+        "answer",
+        "Draft ready. Did you show both passports?",
+        json!("final_answer"),
+    );
+    let events = receive(&mut stream, done());
+    let ProviderEvent::Progress(reply) = &events[0] else {
+        panic!("final payload expected")
+    };
+    assert!(reply.starts_with("Draft ready. Did you show both passports?"));
+    assert!(reply.contains("1. Where is the German passport scan?"));
+    assert!(!reply.contains("2."));
+    stream.finish().unwrap();
+}
+
+#[test]
+fn async_question_with_item_lifecycle_and_questions_only_turn_reply_with_the_questions() {
+    let mut stream = active();
+    let mut started = item("item/started", "q", "", json!("final_answer"));
+    started["params"]["item"]["delivery"] = json!("async");
+    assert!(receive(&mut stream, started).is_empty());
+    assert!(receive(&mut stream, delta(Some("q"), "Which period?")).is_empty());
+    let asked = receive(&mut stream, question("q", "Which period?"));
+    assert_eq!(progress(&asked).len(), 1);
+    let events = receive(&mut stream, done());
+    let ProviderEvent::Progress(reply) = &events[0] else {
+        panic!("reply expected")
+    };
+    assert!(!reply.starts_with("(Ended without a final answer"));
+    assert!(reply.ends_with("1. Which period?"));
+}
+
+#[test]
+fn async_delivery_cannot_change_or_be_unknown() {
+    let mut bad = question("q", "Which?");
+    bad["params"]["item"]["delivery"] = json!("later");
+    refuse(&mut active(), bad);
+    // An item started as a plain final cannot complete as a question.
+    let mut stream = active();
+    receive(
+        &mut stream,
+        item("item/started", "a", "", json!("final_answer")),
+    );
+    refuse(&mut stream, question("a", "Which?"));
+    // Two real finals are still refused.
+    let mut stream = active();
+    receive(&mut stream, question("q", "Which?"));
+    completed_item(&mut stream, "a", "First", json!("final_answer"));
+    receive(
+        &mut stream,
+        item("item/started", "b", "", json!("final_answer")),
+    );
+    refuse(
+        &mut stream,
+        item("item/completed", "b", "Second", json!("final_answer")),
+    );
 }

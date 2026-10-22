@@ -320,6 +320,41 @@ class ExtensionTests(unittest.TestCase):
                 self.assertEqual(rows[-1]["text"], "deep result")
                 self.assertTrue(all(r["parentMessageId"] == data["remote_id"] for r in rows[1:]))
 
+    def test_async_questions_are_sent_at_once_as_their_own_messages_never_as_the_final(self):
+        # PA gen 22: two `request_user_input_async` questions, then the final.
+        q1, q2, plain, foreign = ("b0000000-0000-4000-8000-00000000000%d" % n for n in range(1, 5))
+        def ref(sequence, run, payload):
+            return {"sequence": sequence, "schema_version": 8, "payload_ref_or_safe_payload": {
+                "kind": "provider_observed", "run_id": run, "observation": {"kind": "progress_ref", "payload_id": payload}}}
+        self.peer.read_events = lambda after, maximum: [
+            ref(2, "deep-run", q1), ref(3, "deep-run", plain), ref(4, "other-run", foreign), ref(5, "deep-run", q2)]
+        texts = {q1: worker_module.QUESTION_PREFIX + "Where is the German passport scan?",
+                 q2: worker_module.QUESTION_PREFIX + "Did you show both passports?",
+                 plain: "Searching Gmail.", foreign: worker_module.QUESTION_PREFIX + "Not this input."}
+        fetched, original = [], self.peer.request
+        def request(method, route, **kwargs):
+            payload = route.rsplit("/", 1)[1]
+            if route.startswith("/payloads/") and payload in texts:
+                fetched.append(payload)
+                return 200, dict(run_id="other-run" if payload == foreign else "deep-run", payload_id=payload,
+                                 text=texts[payload])
+            return original(method, route, **kwargs)
+        self.peer.request = request
+        data = self.enqueue()
+        worker = Worker(self.peer, self.ledger)  # progress_updates off: questions still go out
+        worker.step(data)
+        worker.step(self.ledger.next_input() or data)
+        rows = self.ledger.messages()
+        replies = [r for r in rows if r["role"] == "assistant"]
+        questions = [r["text"] for r in replies if r["text"].startswith(worker_module.QUESTION_PREFIX)]
+        self.assertEqual(questions, [texts[q1], texts[q2]])
+        # Each question has its own pseudo parent; only the Deep result answers the input.
+        finals = [r for r in replies if r["parentMessageId"] == data["remote_id"]]
+        self.assertEqual([r["text"] for r in finals], ["deep result"])
+        self.assertTrue(all(r["parentMessageId"] != data["remote_id"] for r in replies if r["text"] in questions))
+        self.assertEqual(sorted(fetched), sorted([q1, plain, q2]), "each payload once, foreign runs never")
+        self.assertNotIn(texts[foreign], str(rows))
+
     def test_progress_from_a_foreign_run_is_ignored(self):
         data = self.enqueue()
         worker = Worker(self.peer, self.ledger, progress_updates=True)

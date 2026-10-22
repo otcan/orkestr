@@ -479,3 +479,72 @@ async fn pending_parent() -> Parent {
         deep,
     }
 }
+
+/// PA gen 22 (7dd23255): the Deep turn's observation was refused, its task
+/// ended and its process was reaped, yet the window waited ~20 minutes for
+/// its hard deadline. Once the lease has passed, the owner-side decision
+/// closes it at once (nothing acceptable is abandoned); Startup still waits.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn lapsed_deep_closes_before_the_window_deadline_on_the_owner_side() {
+    let w = Window::open().await;
+    w.activate().await;
+    let deep = deep_dispatch(&w, "early-deep").await.provider().clone();
+    w.bound
+        .append_provider_event(
+            &w.f.owner,
+            &deep,
+            &observation(&deep, 1, ProviderEvent::Started),
+        )
+        .await
+        .unwrap();
+    let window = w.status.window_id;
+    // A process that no longer owns the window marks it; no deadline moves.
+    let fresh = Store::open(&w.f.root.join("core.sqlite3")).await.unwrap();
+    fresh
+        .reconcile_execution_window_authenticated(
+            &w.browser_credential,
+            &w.f.conversation,
+            window,
+            1,
+        )
+        .await
+        .unwrap();
+    expire(&fresh, &deep).await;
+    let settled = fresh
+        .settle_lapsed_runs_authenticated(
+            &w.browser_credential,
+            &w.f.conversation,
+            window,
+            1,
+            Actor::Owner,
+        )
+        .await
+        .unwrap();
+    assert_eq!(settled, vec![deep.run.run_id.clone()]);
+    assert!(matches!(
+        reconcile(&fresh, &w, Decision::AbandonUnaccepted, Actor::Startup).await,
+        Err(RuntimeStoreError::Fenced)
+    ));
+    let plan = match fresh
+        .plan_stranded_execution_window_authenticated(
+            &w.browser_credential,
+            &w.f.conversation,
+            window,
+            1,
+            Decision::AbandonUnaccepted,
+            Actor::Owner,
+        )
+        .await
+        .unwrap()
+    {
+        StrandedExecutionWindow::Pending(plan) => plan,
+        StrandedExecutionWindow::Reconciled(_) => panic!("pending plan expected"),
+    };
+    assert!(!plan.hard_deadline_passed);
+    assert!(plan.abandoned_run_ids.is_empty());
+    let receipt = reconcile(&fresh, &w, Decision::AbandonUnaccepted, Actor::Owner)
+        .await
+        .unwrap();
+    assert_eq!(receipt.outcome, Outcome::Failed);
+    assert_eq!(window_state(&fresh, window).await, "closed");
+}

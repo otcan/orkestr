@@ -3,6 +3,7 @@ use crate::{ports::Blocker, ports::ProviderEvent};
 use serde_json::Value;
 use std::collections::VecDeque;
 mod text;
+pub use text::ASYNC_QUESTION_PREFIX;
 
 /// One fresh owned native thread and one submitted request, never a resumed
 /// connection. Native identifiers and output are deliberately absent from Debug.

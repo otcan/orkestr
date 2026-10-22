@@ -62,10 +62,15 @@ def agent_item(item):
     require(isinstance(item, dict) and item.get("type") == "agentMessage"
             and identifier(item.get("id")) and isinstance(item.get("text"), str)
             and len(item["text"].encode()) <= 8192
-            and item.get("phase") in (None, "commentary", "partial_answer", "final_answer"),
+            and item.get("phase") in (None, "commentary", "partial_answer", "final_answer")
+            and item.get("delivery") in (None, "async"),
             Failure.TURN_SCHEMA)
-    return {"type": "agentMessage", "id": item["id"], "text": item["text"],
-            "phase": item.get("phase")}
+    clean = {"type": "agentMessage", "id": item["id"], "text": item["text"],
+             "phase": item.get("phase")}
+    # `request_user_input_async`: an interim question, not the turn's final.
+    if item.get("delivery") == "async":
+        clean["delivery"] = "async"
+    return clean
 
 
 def decode(raw, limit=MAX_FRAME):
