@@ -441,13 +441,17 @@ pub(super) fn selected_config(
         config.supervisor_key = derive("supervisor", &base.supervisor_key);
         config.conversation_id = conversation.clone();
     }
-    // A configured per-conversation directory replaces the Codex Deep and Fast
-    // working directory of this conversation only. Workers and Claude keep
-    // their own configured workspaces.
+    // A configured per-conversation directory replaces the Codex and Claude
+    // Deep and Fast working directory of this conversation only. Workers keep
+    // their own configured workspaces. The Claude launcher accepts it only as
+    // one of the same operator-pinned directories (host full access).
     if let Some(workspace) = base.conversation_workspaces.get(conversation) {
         config.workspace = workspace.clone();
         if let Some(roles) = config.roles.as_mut() {
             roles.fast.workspace = workspace.clone();
+        }
+        if let Some(claude) = config.claude.as_mut() {
+            claude.workspace = workspace.clone();
         }
     }
     config.validate()?;

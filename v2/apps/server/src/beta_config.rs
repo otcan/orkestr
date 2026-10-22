@@ -47,9 +47,9 @@ pub(crate) struct BetaConfig {
     /// conversations without a choice when `default` is set).
     #[serde(default)]
     pub claude: Option<ClaudeWindow>,
-    /// Per-conversation Codex Deep/Fast working directory (for example a
-    /// migrated V1 thread's workspace with its AGENTS.md). Host full access
-    /// only; Workers and Claude keep their own configured workspaces.
+    /// Per-conversation Codex and Claude Deep/Fast working directory (for
+    /// example a migrated V1 thread's workspace with its AGENTS.md or
+    /// CLAUDE.md). Host full access only; Workers keep their own workspaces.
     #[serde(default)]
     pub conversation_workspaces: std::collections::HashMap<ConversationId, PathBuf>,
 }
@@ -68,7 +68,7 @@ pub(crate) struct ClaudeWindow {
     #[serde(default)]
     pub fast: bool,
 }
-/// Bound on per-conversation Codex working directories.
+/// Bound on per-conversation Deep/Fast working directories.
 pub(crate) const MAX_CONVERSATION_WORKSPACES: usize = 128;
 
 /// Absolute, normalized and bounded; never the filesystem root.

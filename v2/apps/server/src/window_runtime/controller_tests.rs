@@ -297,3 +297,42 @@ fn conversation_workspace_replaces_only_that_conversations_deep_and_fast_directo
         std::path::PathBuf::from("/srv/synthetic/workspace")
     );
 }
+
+#[test]
+fn conversation_workspace_replaces_only_that_conversations_claude_directory() {
+    let mut value = serde_json::json!({
+        "schema_version":1,"owner_id":Uuid::new_v4(),"conversation_id":Uuid::new_v4(),
+        "manager_socket":"/run/synthetic/control.sock","launcher":"/opt/synthetic/launcher",
+        "launcher_sha256":"a".repeat(64),"workspace":"/srv/synthetic/workspace",
+        "namespace":"synthetic-native","supervisor_key":"synthetic-supervisor",
+        "host_full_access":{"environment":{"HOME":"/home/example","PATH":"/usr/bin"}},
+        "claude":{"launcher":"/opt/synthetic/launcher-claude","launcher_sha256":"c".repeat(64),
+            "workspace":"/srv/synthetic/claude-workspace","default":true,"fast":true}
+    });
+    let mapped = ConversationId(Uuid::new_v4());
+    let other = ConversationId(Uuid::new_v4());
+    value["conversation_workspaces"] =
+        serde_json::json!({ mapped.to_string(): "/srv/v1/workspaces/claude-thread" });
+    let base: BetaConfig = serde_json::from_value(value).unwrap();
+    base.validate().unwrap();
+    // Claude Deep and its Fast companion both take the window's Claude
+    // workspace, so one replacement covers both roles.
+    let selected = selected_config(&base, &mapped).unwrap();
+    let claude = selected.claude.as_ref().unwrap();
+    assert_eq!(
+        claude.workspace,
+        std::path::PathBuf::from("/srv/v1/workspaces/claude-thread")
+    );
+    // Launcher pin and switches are unchanged.
+    assert_eq!(
+        claude.launcher,
+        std::path::PathBuf::from("/opt/synthetic/launcher-claude")
+    );
+    assert_eq!(claude.launcher_sha256, "c".repeat(64));
+    assert!(claude.default && claude.fast);
+    let unmapped = selected_config(&base, &other).unwrap();
+    assert_eq!(
+        unmapped.claude.as_ref().unwrap().workspace,
+        std::path::PathBuf::from("/srv/synthetic/claude-workspace")
+    );
+}

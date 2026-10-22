@@ -80,6 +80,42 @@ class FullAccessConfigurationTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 ClaudeConfiguration.load(path)
 
+    def test_pinned_conversation_workspace_is_the_only_alternative_cwd(self):
+        from codex_service.claude_broker import conversation_workspace
+        from codex_service.contract import Refused as BrokerRefused
+        with tempfile.TemporaryDirectory(prefix="claude-full-access-") as root:
+            root = Path(root).resolve()
+            thread = root / "v1-thread"
+            thread.mkdir()
+            elsewhere = root / "elsewhere"
+            elsewhere.mkdir()
+            config = ClaudeConfiguration.load(self.write(
+                root, host_full_access={"environment": ENVIRONMENT}))
+            beta = {"host_full_access": {"environment": ENVIRONMENT},
+                    "conversation_workspaces": {INPUT: str(thread)}}
+            # The configured workspace stays valid and unchanged.
+            self.assertIs(conversation_workspace(config, beta, root / "workspace"), config)
+            self.assertIs(conversation_workspace(config, {}, root / "workspace"), config)
+            selected = conversation_workspace(config, beta, thread)
+            self.assertEqual(selected.workspace, thread)
+            self.assertEqual(selected.account, config.account)
+            session = selected.new_session()
+            self.assertEqual(session.workspace, thread)
+            self.assertTrue(session.uncontained)
+            # Any other directory, or a pin without host full access, is refused.
+            for cwd, table in ((elsewhere, beta), (thread, {}),
+                               (thread, {"conversation_workspaces": {INPUT: str(thread)}})):
+                with self.assertRaises(BrokerRefused):
+                    conversation_workspace(config, table, cwd)
+            contained = ClaudeConfiguration.load(self.write(root))
+            with self.assertRaises(BrokerRefused):
+                conversation_workspace(contained, beta, thread)
+            # A pinned directory that no longer exists is refused.
+            gone = root / "gone"
+            with self.assertRaises((ValueError, OSError)):
+                conversation_workspace(config, dict(beta, conversation_workspaces={INPUT: str(gone)}),
+                                       gone)
+
 
 def tool_turn(tools):
     native = "11111111-1111-4111-8111-111111111111"
