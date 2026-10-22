@@ -131,6 +131,16 @@ test("a V2 timer row gives its reply one local parent that is mirrored and ackno
   assert.equal(f.runtime.acks.length, 1);
 });
 
+test("a V2 conversation post row keeps its known author on the local parent", async t => {
+  for (const [postAuthor, expected] of [["operator", "operator"], ["coordinator", "coordinator"], ["someone-else", undefined]]) {
+    const f = await fixture(t, [timerRow({ text: "Operator", timerSourceId: "post", postAuthor })]);
+    await f.deliver();
+    const parent = (await listThreadMessages("example-thread", f.env)).find((row) => row.role === "user");
+    assert.equal(parent.timerId, "post");
+    assert.equal(parent.postAuthor, expected);
+  }
+});
+
 test("materializing a V2 timer parent records one server event for the relay's notification proof", async t => {
   const f = await fixture(t, [timerRow()]);
   await f.deliver();

@@ -73,6 +73,7 @@ const messageStringFields = [
   "runtimeGeneration",
   "failedTurnId",
   "timerId",
+  "postAuthor",
   "replayedFromMessageId",
   "previousCodexThreadId",
   "previousRecoveryNoticeId",
