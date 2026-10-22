@@ -62,6 +62,7 @@ fn thread(id: &str, last: &str) -> V1Thread {
         working: false,
         whatsapp: true,
         delegated: false,
+        delegated_to: None,
         retired: false,
         public_ref: None,
         instance_ref: None,

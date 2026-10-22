@@ -47,6 +47,8 @@ pub(crate) struct V1Thread {
     /// The V1 binding delegates this thread's runtime to a remote (V2)
     /// backend. Its owner input belongs to the V2 conversation, not V1.
     pub delegated: bool,
+    /// The remote (V2 conversation) id a delegated thread runs in.
+    pub delegated_to: Option<String>,
     pub retired: bool,
     /// V1 public reference (`thr_…`) of old deep links.
     pub public_ref: Option<String>,
@@ -102,17 +104,19 @@ pub(crate) fn parse_thread(value: &Value) -> Option<V1Thread> {
     // Mirrors V1 `remoteWhatsAppRuntimeBinding()`: a remote thread id and a
     // runtime switch that is not off. Fails closed: any remote id counts
     // unless V1 says the runtime is explicitly disabled.
-    let delegated = binding.is_some_and(|b| {
-        [
+    let delegated_to = binding.and_then(|b| {
+        let remote = [
             "remoteThreadId",
             "remoteRuntimeThreadId",
             "delegatedThreadId",
         ]
         .iter()
-        .any(|k| text(b, k).is_some())
-            && b.get("remoteRuntimeEnabled").and_then(Value::as_bool) != Some(false)
-            && b.get("remoteRouterEnabled").and_then(Value::as_bool) != Some(false)
+        .find_map(|k| text(b, k))?;
+        (b.get("remoteRuntimeEnabled").and_then(Value::as_bool) != Some(false)
+            && b.get("remoteRouterEnabled").and_then(Value::as_bool) != Some(false))
+        .then_some(remote)
     });
+    let delegated = delegated_to.is_some();
     let last_activity_ms = ["lastActivityAt", "lastMessageAt", "updatedAt"]
         .iter()
         .find_map(|k| text(value, k).and_then(|t| crate::live_map::timestamp_ms(&t)))
@@ -143,6 +147,7 @@ pub(crate) fn parse_thread(value: &Value) -> Option<V1Thread> {
             || number(value, "runningCount").is_some_and(|n| n > 0),
         whatsapp,
         delegated,
+        delegated_to,
         retired: flag(value, "retired"),
         public_ref: text(value, "publicRef").filter(|r| valid_v1_thread_ref(r)),
         instance_ref: text(value, "canonicalPath").and_then(|path| {
@@ -584,6 +589,16 @@ impl V1Cache {
         threads
             .iter()
             .filter_map(|t| Some((t.id.clone(), state.previews.get(&t.id)?.preview.clone()?)))
+            .collect()
+    }
+
+    /// Previews already cached for these threads. Never reads V1.
+    pub(crate) fn cached_previews<'a>(
+        &self,
+        ids: impl Iterator<Item = &'a str>,
+    ) -> HashMap<String, SidebarPreview> {
+        let state = self.lock();
+        ids.filter_map(|id| Some((id.to_owned(), state.previews.get(id)?.preview.clone()?)))
             .collect()
     }
 

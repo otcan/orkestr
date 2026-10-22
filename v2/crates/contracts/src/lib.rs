@@ -29,6 +29,8 @@ mod whatsapp_chats;
 pub use whatsapp_chats::*;
 mod v1_manage;
 pub use v1_manage::*;
+mod v1_workers;
+pub use v1_workers::*;
 mod beta;
 pub use beta::*;
 mod intelligence;

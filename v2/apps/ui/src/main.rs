@@ -53,6 +53,7 @@ mod timer_screen;
 mod transport;
 mod v1_manage_view;
 mod v1_thread_view;
+mod v1_workers_view;
 mod views;
 mod work_view;
 mod worker_tasks_panel;
