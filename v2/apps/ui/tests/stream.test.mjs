@@ -92,3 +92,43 @@ test('owner acceptance has its own canonical SSE name',async()=>{
  const {result}=await run([`id: ${body.sequence}\nevent: execution_accepted\ndata: ${JSON.stringify(body)}\n\n`]);
  assert.equal(result.event,'execution_accepted');assert.deepEqual(result.body,body);
 });
+
+test('a quiet stream ends as idle rather than an error', async () => {
+    const input = {path:'/api/v2/conversations/00000000-0000-4000-8000-000000000003/events',cursor:7};
+    const realSetTimeout = globalThis.setTimeout;
+    let fire;
+    globalThis.setTimeout = (fn, ms) => { if (ms === 25000) { fire = fn; return 0; } return realSetTimeout(fn, ms); };
+    try {
+        const fetch = async (path, options) => new Response(new ReadableStream({
+            start(controller) {
+                controller.enqueue(new TextEncoder().encode(': keepalive\n\n'));
+                options.signal.addEventListener('abort', () => controller.error(new DOMException('aborted', 'AbortError')));
+                realSetTimeout(() => fire(), 5);
+            },
+        }), {status:200,headers:{'Content-Type':'text/event-stream'}});
+        const result = await new AsyncFunction('dioxus','fetch',code)({recv:async()=>input},fetch);
+        assert.deepEqual(result, {status:200,event:'idle'});
+    } finally { globalThis.setTimeout = realSetTimeout; }
+});
+
+test('Retry and coming back online wake the stream for a catch-up', async () => {
+    const input = {path:'/api/v2/conversations/00000000-0000-4000-8000-000000000003/events',cursor:7};
+    const target = new EventTarget();
+    globalThis.window = target;
+    try {
+        const fetch = async (path, options) => new Response(new ReadableStream({
+            start(controller) {
+                options.signal.addEventListener('abort', () => controller.error(new DOMException('aborted', 'AbortError')));
+                setTimeout(() => target.dispatchEvent(new Event('orkestr-stream-retry')), 5);
+            },
+        }), {status:200,headers:{'Content-Type':'text/event-stream'}});
+        const result = await new AsyncFunction('dioxus','fetch',code)({recv:async()=>input},fetch);
+        assert.deepEqual(result, {status:200,event:'wake'});
+    } finally { delete globalThis.window; }
+});
+
+test('network failures still surface as errors for backoff', async () => {
+    const input = {path:'/api/v2/conversations/00000000-0000-4000-8000-000000000003/events',cursor:7};
+    const fetch = async () => { throw new TypeError('Failed to fetch'); };
+    await assert.rejects(new AsyncFunction('dioxus','fetch',code)({recv:async()=>input},fetch), /Failed to fetch/);
+});

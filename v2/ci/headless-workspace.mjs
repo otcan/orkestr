@@ -678,6 +678,53 @@ export const scenarios = [
     await screenshot(label, 'message-formatting');
     await noHorizontalScroll();
   }],
+  ['chat-first-details-drawer', async label => {
+    await page.goto(`${origin}/#conversation/${A}`, { waitUntil: 'domcontentloaded' });
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('#composer');
+    await page.evaluate(() => { try { localStorage.removeItem('orkestr.v2.conversationDetailsOpen'); } catch {} });
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('.details-toggle');
+    // Technical panels start hidden and never sit inside the transcript.
+    const drawer = () => page.evaluate(() => {
+      const aside = document.querySelector('.conversation-details');
+      return { shown: !!aside && getComputedStyle(aside).display !== 'none', expanded: document.querySelector('.details-toggle').getAttribute('aria-expanded'),
+        inTranscript: !!document.querySelector('.conversation-scroll .conversation-tools'),
+        stored: (() => { try { return localStorage.getItem('orkestr.v2.conversationDetailsOpen'); } catch { return 'unavailable'; } })() };
+    });
+    assert.deepEqual(await drawer(), { shown: false, expanded: 'false', inTranscript: false, stored: null });
+    assert.ok(!(await page.evaluate(() => document.querySelector('.conversation-pane').innerText)).includes('Thread files'), 'Thread files are hidden in the chat');
+    assert.ok(!(await page.evaluate(() => document.body.textContent)).includes('Result accepted'), 'no acceptance jargon');
+    await screenshot(label, 'chat-details-closed');
+    // Details opens a drawer and remembers it for this viewer.
+    await page.click('.details-toggle');
+    await page.waitForFunction(() => getComputedStyle(document.querySelector('.conversation-details')).display !== 'none');
+    assert.deepEqual(await drawer(), { shown: true, expanded: 'true', inTranscript: false, stored: '1' });
+    await waitText('Thread files');
+    await screenshot(label, 'chat-details-open');
+    await noHorizontalScroll();
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.waitForFunction(() => document.querySelector('.details-toggle')?.getAttribute('aria-expanded') === 'true', { timeout: 15000 });
+    await page.click('.details-toggle');
+    await page.waitForFunction(() => getComputedStyle(document.querySelector('.conversation-details')).display === 'none');
+    assert.equal((await drawer()).stored, '0');
+  }],
+  ['live-catch-up', async label => {
+    await page.waitForSelector('#composer');
+    await page.waitForFunction(() => document.querySelectorAll('.chat-messages .user-message').length > 0);
+    // The synthetic stream only sends keep-alives. A message written while it
+    // is quiet still shows once the stream is woken (Retry, focus, tab shown).
+    const text = `Written while the stream was quiet (${label})`;
+    state.messages[A].push({ message_id: `00000000-0000-4000-8000-0000000009${label === 'phone' ? '02' : '01'}`, sequence: state.messages[A].length + 1, actor_kind: 'owner', text });
+    await page.evaluate(() => window.dispatchEvent(new Event('orkestr-stream-retry')));
+    await page.waitForFunction(t => [...document.querySelectorAll('.chat-messages .user-message')].some(li => li.textContent.includes(t)), { timeout: 8000 }, text);
+    // The newest message is in view.
+    await page.waitForFunction(() => {
+      const el = document.querySelector('.conversation-pane > .conversation-scroll');
+      return el.scrollHeight - el.scrollTop - el.clientHeight <= 72;
+    });
+    assert.equal(await page.$('.connection-bar'), null, 'no reconnect bar while connected');
+  }],
 ];
 
 try {

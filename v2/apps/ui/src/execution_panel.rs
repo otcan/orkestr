@@ -37,7 +37,7 @@ pub fn ExecutionPanel(
                     CancelRequested => "Stop requested; waiting for confirmation",
                     Cancelled => "Stopped",
                     AwaitingAcceptance => "Reply ready",
-                    Completed => "Result accepted",
+                    Completed => "Done",
                     Failed => "Work failed",
                     Blocked => "Work needs attention",
                 }

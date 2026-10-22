@@ -5,7 +5,21 @@ if (!/^\/api\/v2\/conversations\/[a-f0-9-]+\/events$/.test(input.path)) {
     throw new Error("Invalid stream path");
 }
 const controller = new AbortController();
-const timer = setTimeout(() => controller.abort(), 25000);
+// A quiet stream ends as "idle" (not an error) so Rust re-reads history after
+// its cursor and reconnects. Showing the tab, regaining focus, coming back
+// online or pressing Retry ends it as "wake" for the same catch-up.
+let reason = null;
+const end = why => { if (!reason) { reason = why; controller.abort(); } };
+const timer = setTimeout(() => end("idle"), 25000);
+const opened = Date.now();
+const wake = () => { if (Date.now() - opened > 2000) end("wake"); };
+const page = globalThis.document, view = globalThis.window;
+const visible = () => { if (page?.visibilityState === "visible") wake(); };
+const retry = () => end("wake");
+page?.addEventListener("visibilitychange", visible);
+view?.addEventListener("focus", wake);
+view?.addEventListener("online", retry);
+view?.addEventListener("orkestr-stream-retry", retry);
 let reader;
 try {
     const response = await fetch(input.path, {
@@ -56,8 +70,15 @@ try {
         }
         if (buffer.length > 65536) throw new Error("SSE frame exceeds client limit");
     }
+} catch (error) {
+    if (reason) return {status: 200, event: reason};
+    throw error;
 } finally {
     clearTimeout(timer);
+    page?.removeEventListener("visibilitychange", visible);
+    view?.removeEventListener("focus", wake);
+    view?.removeEventListener("online", retry);
+    view?.removeEventListener("orkestr-stream-retry", retry);
     controller.abort();
     if (reader) await reader.cancel().catch(() => {});
 }

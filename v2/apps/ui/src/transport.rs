@@ -154,8 +154,45 @@ pub async fn event(id: &str, cursor: i64) -> Result<StreamItem, Failure> {
     let eval = document::eval(include_str!("stream.js"));
     eval.send(json!({"path":format!("/api/v2/conversations/{id}/events"),"cursor":cursor}))
         .map_err(|_| Failure::from("Stream bridge unavailable".to_string()))?;
-    let raw: Value = eval.join().await.map_err(|_| {
-        Failure::from("Disconnected; reconnecting from last applied cursor".to_string())
-    })?;
+    let raw: Value = eval
+        .join()
+        .await
+        .map_err(|_| Failure::from("Connection lost. Reconnecting…".to_string()))?;
     Ok(orkestr_v2_ui::decode_stream(raw))
+}
+
+/// Waits up to `ms` (with jitter), returning early when the tab becomes
+/// visible, the window regains focus, the browser comes back online, or the
+/// owner presses Retry.
+pub async fn wait_for_wake(ms: u32) {
+    let _ = document::eval(&include_str!("stream_wake.js").replace("__WAIT_MS__", &ms.to_string()))
+        .await;
+}
+
+/// Wakes a stream that is waiting to reconnect (the Retry button).
+pub fn retry_stream() {
+    let _ = document::eval(&format!(
+        "window.dispatchEvent(new Event({:?})); return null;",
+        orkestr_v2_ui::live_stream::RETRY_EVENT
+    ));
+}
+
+/// A per-viewer preference; `None` when storage is unavailable or blocked.
+pub async fn stored_flag(key: &str) -> Option<bool> {
+    let script = format!(
+        "try {{ const v = localStorage.getItem({key:?}); return v === null ? null : v === '1'; }} catch {{ return null; }}"
+    );
+    document::eval(&script)
+        .join::<Option<bool>>()
+        .await
+        .ok()
+        .flatten()
+}
+
+/// Remembers a per-viewer preference; storage failures are ignored.
+pub fn store_flag(key: &str, value: bool) {
+    let v = if value { "1" } else { "0" };
+    let _ = document::eval(&format!(
+        "try {{ localStorage.setItem({key:?}, {v:?}); }} catch {{}} return null;"
+    ));
 }

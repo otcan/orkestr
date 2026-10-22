@@ -3,7 +3,7 @@ use dioxus::prelude::*;
 use orkestr_v2_contracts::{AcceptedResult, AcceptedResults, ConversationPost, ProviderPayload};
 use orkestr_v2_ui::chat_timeline::{self, Input, Row};
 use orkestr_v2_ui::{
-    accepted_results::{bound_payload, valid_page},
+    accepted_results::{bound_payload, next_chat_page, refresh_cursor, valid_page, CHAT_PAGES},
     payload::Output,
     session_scope::SessionScope,
 };
@@ -42,11 +42,12 @@ pub fn AcceptedReplies(
     });
     let read_id = id.clone();
     use_resource(move || {
-        let cursor = after();
+        let fallback = after();
         let _ = reload();
         let accepted = update.map_or(0, |view| view());
         let is_live = inline && accepted > revision.get();
-        let cursor = if is_live { accepted - 1 } else { cursor };
+        let newest_shown = collected.peek().keys().next_back().copied();
+        let cursor = refresh_cursor(newest_shown, is_live, fallback);
         if is_live {
             revision.set(accepted);
         }
@@ -60,54 +61,73 @@ pub fn AcceptedReplies(
             }
             busy.set(true);
             notice.set("Loading accepted replies…".into());
-            let eval = start(json!({"conversation":id,"after":cursor.to_string()}), false);
-            channel.set(Some(eval));
-            let result = eval.join::<Value>().await;
-            if !mounted() || !session_scope.read().is_current(owner) || read_ticket.get() != ticket
-            {
-                return;
-            }
-            busy.set(false);
-            channel.set(None);
-            match result {
-                Ok(value) if value["status"] == 200 => {
-                    match serde_json::from_str::<AcceptedResults>(
-                        value["text"].as_str().unwrap_or(""),
-                    ) {
-                        Ok(results) if valid_page(&results, &id, cursor) => {
-                            notice.set(
-                                if results.results.is_empty() {
-                                    "No accepted replies on this page."
-                                } else {
-                                    "Replies you explicitly accepted."
+            let mut cursor = cursor;
+            for _ in 0..CHAT_PAGES {
+                let eval = start(json!({"conversation":id,"after":cursor.to_string()}), false);
+                channel.set(Some(eval));
+                let result = eval.join::<Value>().await;
+                if !mounted()
+                    || !session_scope.read().is_current(owner)
+                    || read_ticket.get() != ticket
+                {
+                    return;
+                }
+                channel.set(None);
+                match result {
+                    Ok(value) if value["status"] == 200 => {
+                        match serde_json::from_str::<AcceptedResults>(
+                            value["text"].as_str().unwrap_or(""),
+                        ) {
+                            Ok(results) if valid_page(&results, &id, cursor) => {
+                                notice.set(
+                                    if results.results.is_empty() {
+                                        "No accepted replies on this page."
+                                    } else {
+                                        "Replies you explicitly accepted."
+                                    }
+                                    .into(),
+                                );
+                                if inline
+                                    && chat_timeline::merge_replies(
+                                        &mut collected.write(),
+                                        &results.results,
+                                    )
+                                    .is_err()
+                                {
+                                    notice.set(
+                                        "Accepted reply identity changed. Reload history.".into(),
+                                    );
+                                    break;
                                 }
-                                .into(),
-                            );
-                            if inline
-                                && chat_timeline::merge_replies(
-                                    &mut collected.write(),
-                                    &results.results,
-                                )
-                                .is_err()
-                            {
-                                notice
-                                    .set("Accepted reply identity changed. Reload history.".into());
-                                return;
+                                let next = next_chat_page(&results, inline, cursor);
+                                if !is_live {
+                                    page.set(Some(results));
+                                }
+                                match next {
+                                    Some(next) => cursor = next,
+                                    None => break,
+                                }
                             }
-                            if !is_live {
-                                page.set(Some(results));
+                            _ => {
+                                notice.set(
+                                    "Accepted replies could not be verified. Refresh to retry."
+                                        .into(),
+                                );
+                                break;
                             }
                         }
-                        _ => notice.set(
-                            "Accepted replies could not be verified. Refresh to retry.".into(),
-                        ),
+                    }
+                    Ok(value) if matches!(value["status"].as_u64(), Some(401 | 403)) => {
+                        onexpired.call(());
+                        break;
+                    }
+                    _ => {
+                        notice.set("Accepted replies unavailable. Refresh to retry.".into());
+                        break;
                     }
                 }
-                Ok(value) if matches!(value["status"].as_u64(), Some(401 | 403)) => {
-                    onexpired.call(())
-                }
-                _ => notice.set("Accepted replies unavailable. Refresh to retry.".into()),
             }
+            busy.set(false);
         }
     });
     let next = page.read().as_ref().and_then(|p| p.next_after_sequence);
