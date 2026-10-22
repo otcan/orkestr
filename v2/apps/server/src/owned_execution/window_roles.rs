@@ -15,8 +15,16 @@ pub(super) struct Companion {
     started: AtomicBool,
     retiring: AtomicBool,
     failed: AtomicBool,
+    /// Fast claimed its first dispatch (between input and `started`).
+    starting: AtomicBool,
+    /// Serializes Fast's claims with Deep's abandonment decision, so Fast
+    /// never becomes ready or dispatches after Deep went on without it.
+    setup: Mutex<()>,
     proof: Mutex<Option<ReapedBroker>>,
 }
+
+/// How long Deep waits for each Fast setup stage before going on alone.
+pub(super) const COMPANION_SETUP_TIMEOUT: Duration = Duration::from_secs(15);
 
 impl Companion {
     pub(super) fn new(scope: ExecutionScope) -> Arc<Self> {
@@ -27,14 +35,82 @@ impl Companion {
             started: AtomicBool::new(false),
             retiring: AtomicBool::new(false),
             failed: AtomicBool::new(false),
+            starting: AtomicBool::new(false),
+            setup: Mutex::new(()),
             proof: Mutex::new(None),
         })
     }
     pub(super) fn scope(&self) -> ExecutionScope {
         self.scope.clone()
     }
-    pub(super) fn ready(&self) {
-        self.ready.store(true, Ordering::Release);
+    /// Fast reports a ready native. `false`: Deep already went on without
+    /// it, so the companion must not present anything in this window.
+    pub(super) fn claim_ready(&self) -> bool {
+        self.claim(&self.ready)
+    }
+    /// Fast is about to dispatch its first presentation. `false` as above.
+    pub(super) fn claim_start(&self) -> bool {
+        self.claim(&self.starting)
+    }
+    fn claim(&self, stage: &AtomicBool) -> bool {
+        let Ok(_setup) = self.setup.lock() else {
+            return false;
+        };
+        if self.failed.load(Ordering::Acquire) {
+            return false;
+        }
+        stage.store(true, Ordering::Release);
+        true
+    }
+    /// Deep's setup wait timed out: mark the companion failed unless Fast
+    /// already claimed the awaited stage (`ready`, or a dispatch in flight).
+    /// `true` when it is now failed and Deep proceeds alone.
+    fn abandon(&self, ready: bool) -> bool {
+        let Ok(_setup) = self.setup.lock() else {
+            return false;
+        };
+        let claimed = if ready { &self.ready } else { &self.starting };
+        if claimed.load(Ordering::Acquire) {
+            return false;
+        }
+        self.failed.store(true, Ordering::Release);
+        true
+    }
+    /// One step of Deep's wait for a Fast setup stage (`ready`: a ready
+    /// native, else its first presentation). `None`: keep waiting.
+    ///
+    /// A failed companion never holds Deep. Core's window activation never
+    /// needs Fast either: Fast waits for Deep's activation, not the reverse.
+    /// So a Fast that neither reached the stage nor failed in time (for
+    /// example one that never got its presentation) is failed here and Deep
+    /// keeps the window alone. Deep keeps waiting only while a dispatch Fast
+    /// already claimed is in flight; shutdown or the work deadline still end
+    /// the setup.
+    pub(super) fn setup_progress(
+        &self,
+        ready: bool,
+        interrupted: bool,
+        timed_out: bool,
+    ) -> Option<Result<(), &'static str>> {
+        let observed = if ready { &self.ready } else { &self.started };
+        if observed.load(Ordering::Acquire) || self.failed.load(Ordering::Acquire) {
+            return Some(Ok(()));
+        }
+        if interrupted {
+            return Some(Err("Fast companion setup incomplete"));
+        }
+        if timed_out && self.abandon(ready) {
+            eprintln!(
+                "owned window Fast companion failed: {} not reached in time; Deep continues alone",
+                if ready {
+                    "readiness"
+                } else {
+                    "first presentation"
+                }
+            );
+            return Some(Ok(()));
+        }
+        None
     }
     pub(super) fn activate(&self) {
         self.active.store(true, Ordering::Release);
@@ -220,26 +296,27 @@ impl ConfiguredExecution {
         let Some(companion) = &self.companion else {
             return Ok(());
         };
-        let deadline = Instant::now() + Duration::from_secs(15);
+        let deadline = Instant::now() + COMPANION_SETUP_TIMEOUT;
         loop {
-            let observed = if ready {
-                &companion.ready
-            } else {
-                &companion.started
-            };
-            // A failed companion never holds Deep: it proceeds without it.
-            if observed.load(Ordering::Acquire) || companion.failed.load(Ordering::Acquire) {
-                return Ok(());
-            }
-            if *shutdown.borrow()
-                || Instant::now() >= deadline
-                || self.window.as_ref().is_none_or(|window| window.work_due())
+            let interrupted =
+                *shutdown.borrow() || self.window.as_ref().is_none_or(|window| window.work_due());
+            if let Some(result) =
+                companion.setup_progress(ready, interrupted, Instant::now() >= deadline)
             {
-                return Err("Fast companion setup incomplete");
+                return result;
             }
             self.maintain(heartbeat).await?;
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
+    }
+
+    /// The Fast scope Deep installs at activation: none once the companion
+    /// failed, so no control is ever routed to an abandoned Fast.
+    pub(super) fn companion_scope(&self) -> Option<ExecutionScope> {
+        self.companion
+            .as_ref()
+            .filter(|companion| !companion.has_failed())
+            .map(|companion| companion.scope())
     }
 
     pub(super) async fn wait_window_active(
@@ -250,8 +327,12 @@ impl ConfiguredExecution {
         let Some(companion) = &self.companion else {
             return Ok(());
         };
-        let deadline = Instant::now() + Duration::from_secs(15);
+        let deadline = Instant::now() + COMPANION_SETUP_TIMEOUT;
         while !companion.active.load(Ordering::Acquire) {
+            // Deep went on without this companion: it never presents here.
+            if companion.has_failed() {
+                return Err("Fast companion failed before Deep activation");
+            }
             if *shutdown.borrow()
                 || Instant::now() >= deadline
                 || self.window.as_ref().is_none_or(|window| window.work_due())

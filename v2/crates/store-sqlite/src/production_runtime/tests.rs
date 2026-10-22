@@ -426,11 +426,25 @@ async fn exact_expired_predecessor_cas_fences_without_recreating_native_identity
     std::fs::remove_dir_all(f.root).unwrap();
 }
 
-/// Undo 0067 (sidebar hidden entries), 0066 (conversation posts), 0065 (attachment encryption), 0064 (restricted threads), 0063 (calendar timers: policies, pauses, outcomes, digests, trigger events), 0062 (quoted-reply context), 0061 (auto-acceptance audit), 0060 (review-before-accepting setting), 0059 (read-path indexes), 0058 (WhatsApp chat provisions) and 0057
+/// Undo 0068 (one archived open-failure row per failure), 0067 (sidebar hidden entries), 0066 (conversation posts), 0065 (attachment encryption), 0064 (restricted threads), 0063 (calendar timers: policies, pauses, outcomes, digests, trigger events), 0062 (quoted-reply context), 0061 (auto-acceptance audit), 0060 (review-before-accepting setting), 0059 (read-path indexes), 0058 (WhatsApp chat provisions) and 0057
 /// (sidebar read marks and lineage); tests never write them. Then undo 0056 exactly: rebuild `execution_windows` under the fixed-deadline
 /// definition that migrations up to 0055 produce, keeping every row.
 pub(super) async fn downgrade_window_deadlines(store: &Store) {
+    let v52 = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/migrations/0052_stranded_window_failures.sql"
+    ));
+    let start = v52
+        .find("CREATE TABLE execution_window_open_failure_inputs")
+        .unwrap();
+    let end = start + v52[start..].find(");").unwrap() + 2;
     for statement in [
+        "CREATE TABLE open_failure_inputs_copy AS SELECT * FROM execution_window_open_failure_inputs",
+        "DROP TABLE execution_window_open_failure_inputs",
+        &v52[start..end],
+        "INSERT INTO execution_window_open_failure_inputs SELECT * FROM open_failure_inputs_copy",
+        "DROP TABLE open_failure_inputs_copy",
+        "DELETE FROM _sqlx_migrations WHERE version=68",
         "DROP TABLE sidebar_hidden_entries",
         "DELETE FROM _sqlx_migrations WHERE version=67",
         "DROP TABLE conversation_posts",

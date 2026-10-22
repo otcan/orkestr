@@ -115,8 +115,23 @@ bootstraps again: the supervisor is taken over at the next generation, and the
 never-used Fast and Deep bindings are `retired` for fresh ones.
 
 Inputs the failed window admitted are released for re-admission
-(`execution_window_open_failure_inputs`), and its credential is revoked. The
-manager records the window `retired` with outcome `failed` and no run.
+(`execution_window_open_failure_inputs`, one row per failure since 0068), and
+its credential is revoked. The manager records the window `retired` with
+outcome `failed` and no run.
+
+A released **timer occurrence** has no sender who could send it again, so the
+same commit puts its dispatched queue intent back in line (`queued`), once.
+This happens only when no run of any role exists for its event (its Deep turn
+never executed, and Fast only ever gets a fixed note for a timer), the input
+is not held, and no earlier failed opening released it. The dispatcher then
+opens the next window for it. If that window fails to open too, the input is
+released again but stays `dispatched`; the WhatsApp adapter refuses it as
+`timer_window_ended_without_run` with its `input_failed` operator alert.
+
+Every committed failed open logs one operator alert line on the server:
+`ALERT orkestr-v2-server window_open_failed conversation=… window=…
+generation=… cause=… actor=… released_inputs=… timer_retries=…`
+(identifiers only).
 
 ## Lapsed runs (0054)
 

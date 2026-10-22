@@ -1,7 +1,7 @@
 use super::*;
 use crate::history_import::timers::{authority::DurableTimerEnable, *};
-use crate::production_runtime::tests::{setup, Case};
-use orkestr_v2_contracts::ConversationId;
+use crate::production_runtime::tests::{config, ready, setup, Case};
+use orkestr_v2_contracts::{ConversationId, ExecutionWindowRequest};
 
 async fn enabled(f: &Case, schedule: TimerSchedule, key: &str) -> Uuid {
     let namespace = Uuid::new_v4();
@@ -444,4 +444,251 @@ async fn fast_presentation_of_a_timer_never_carries_its_instructions() {
     assert!(!capability.text().contains("side effects"));
     f.store.close().await;
     std::fs::remove_dir_all(f.root).unwrap();
+}
+
+/// The opener lost the window before any run: a fresh process marks it
+/// uncertain past its deadline and closes it as a failed open.
+async fn fail_open(
+    f: &Case,
+    browser: &str,
+    window: Uuid,
+    generation: u64,
+) -> orkestr_v2_contracts::ExecutionWindowReconciliation {
+    use orkestr_v2_contracts::{
+        ExecutionWindowReconciliationActor as Actor,
+        ExecutionWindowReconciliationDecision as Decision,
+    };
+    sqlx::query("UPDATE execution_windows SET opened_at_ms=opened_at_ms-900001,work_deadline_ms=work_deadline_ms-900001,expires_at_ms=expires_at_ms-900001 WHERE id=?")
+        .bind(window.to_string())
+        .execute(&f.store.pool)
+        .await
+        .unwrap();
+    let fresh = Store::open(&f.root.join("core.sqlite3")).await.unwrap();
+    fresh
+        .reconcile_execution_window_authenticated(browser, &f.conversation, window, generation)
+        .await
+        .unwrap();
+    let StrandedExecutionWindow::Pending(plan) = fresh
+        .plan_stranded_execution_window_authenticated(
+            browser,
+            &f.conversation,
+            window,
+            generation,
+            Decision::AbandonUnaccepted,
+            Actor::Startup,
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("a failed open must plan")
+    };
+    fresh
+        .reconcile_stranded_execution_window_authenticated(
+            browser,
+            &plan,
+            Decision::AbandonUnaccepted,
+            Actor::Startup,
+        )
+        .await
+        .unwrap()
+}
+
+async fn queue_row(f: &Case) -> (String, Option<String>) {
+    sqlx::query_as("SELECT state,window_id FROM execution_window_queue")
+        .fetch_one(&f.store.pool)
+        .await
+        .unwrap()
+}
+
+/// Production 04:43Z/05:43Z: a timer window failed to open (its Fast
+/// companion never became ready) and the occurrence was written off. Nothing
+/// of it ran, so its Deep intent is queued again, exactly once.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_timer_whose_window_failed_to_open_is_retried_once() {
+    use orkestr_v2_contracts::ExecutionWindowOpenFailureCause as Cause;
+    let f = setup().await;
+    let browser = "synthetic-browser-timer-retry";
+    f.store.save_session(browser, &f.owner).await.unwrap();
+    ready(&f).await;
+    let namespace = enabled(&f, TimerSchedule::Interval { every_ms: 60_000 }, "retry").await;
+    overdue(&f, namespace, 1).await;
+    let issuer = f.handle.authorize_timer_scheduler(namespace).await.unwrap();
+    let timer = f
+        .handle
+        .admit_authorized_timer_turn(&issuer, namespace, true)
+        .await
+        .unwrap();
+    let event = timer.input.event_id.clone();
+    // Exactly what the server's queue dispatcher admits for the intent.
+    let request = |generation: u64, predecessor: Option<Uuid>| ExecutionWindowRequest {
+        request_key: format!("timer-window:{}", event.0),
+        input_message_id: timer.input.message_id.clone(),
+        input_event_id: event.clone(),
+        input_request_key: format!("timer:{}", timer.claim.claim_id),
+        expected_generation: generation,
+        window_id: None,
+        predecessor_window_id: predecessor,
+    };
+    let first = f
+        .store
+        .admit_execution_window_authenticated(browser, &f.conversation, &request(0, None))
+        .await
+        .unwrap()
+        .status;
+    assert_eq!(
+        queue_row(&f).await,
+        ("dispatched".into(), Some(first.window_id.to_string()))
+    );
+    let credential = f
+        .handle
+        .issue_execution_window_credential(
+            &f.token,
+            first.window_id,
+            1,
+            "timer-retry-boot",
+            first.expires_at_ms,
+            &"a".repeat(64),
+        )
+        .await
+        .unwrap();
+    f.handle
+        .bind_execution_window(&f.token, &credential)
+        .await
+        .unwrap();
+    // Setup fails before any run; the window is closed as a failed open.
+    let failed = fail_open(&f, browser, first.window_id, 1).await;
+    assert_eq!(failed.open_failure_cause, Some(Cause::SetupIncomplete));
+    assert_eq!(failed.released_input_event_ids, vec![event.clone()]);
+    assert_eq!(queue_row(&f).await, ("queued".into(), None));
+    let listed = f
+        .store
+        .conversation_timer_inputs(browser, &f.owner, &f.conversation, 0, 10)
+        .await
+        .unwrap();
+    assert_eq!(listed[0].window.as_deref(), Some("queued"));
+    // The dispatcher opens the next window for the same occurrence.
+    let fresh = Store::open(&f.root.join("core.sqlite3")).await.unwrap();
+    let bootstrap = fresh
+        .rebootstrap_execution_window_authenticated(
+            browser,
+            &f.conversation,
+            config(ProductionTakeover::First),
+        )
+        .await
+        .unwrap();
+    let second = fresh
+        .admit_execution_window_authenticated(
+            browser,
+            &f.conversation,
+            &request(1, Some(first.window_id)),
+        )
+        .await
+        .unwrap()
+        .status;
+    assert_eq!(second.generation, 2);
+    assert_eq!(
+        queue_row(&f).await,
+        ("dispatched".into(), Some(second.window_id.to_string()))
+    );
+    let grant = bootstrap
+        .store()
+        .issue_execution_window_credential(
+            bootstrap.credential(),
+            second.window_id,
+            2,
+            "timer-retry-boot-2",
+            second.expires_at_ms,
+            &"d".repeat(64),
+        )
+        .await
+        .unwrap();
+    bootstrap
+        .store()
+        .bind_execution_window(bootstrap.credential(), &grant)
+        .await
+        .unwrap();
+    // The retry fails to open too: it is still closed and released (one
+    // archive row per failure), but never queued a third time.
+    let again = fail_open(&f, browser, second.window_id, 2).await;
+    assert_eq!(again.open_failure_cause, Some(Cause::SetupIncomplete));
+    assert_eq!(again.released_input_event_ids, vec![event.clone()]);
+    assert_eq!(
+        queue_row(&f).await,
+        ("dispatched".into(), Some(second.window_id.to_string()))
+    );
+    assert_eq!(
+        count(
+            &f,
+            "SELECT count(*) FROM execution_window_open_failure_inputs"
+        )
+        .await,
+        2
+    );
+    // Nothing ever ran for it: no run of any role exists.
+    assert_eq!(count(&f, "SELECT count(*) FROM production_runs").await, 0);
+}
+
+/// A user input released by a failed open is never queued again by Core:
+/// its sender (the adapter or the browser) decides.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_failed_open_requeues_only_timer_occurrences() {
+    use orkestr_v2_application::IntakeStore;
+    use orkestr_v2_contracts::MessageInput;
+    let f = setup().await;
+    let browser = "synthetic-browser-user-open";
+    f.store.save_session(browser, &f.owner).await.unwrap();
+    ready(&f).await;
+    let receipt = f
+        .store
+        .admit(
+            &f.owner,
+            &f.conversation,
+            &MessageInput {
+                client_message_id: "user-open".into(),
+                text: "synthetic user input".into(),
+            },
+        )
+        .await
+        .unwrap()
+        .receipt;
+    let request = ExecutionWindowRequest {
+        request_key: "window:user-open".into(),
+        input_message_id: receipt.message_id,
+        input_event_id: receipt.event_id,
+        input_request_key: "user-open".into(),
+        expected_generation: 0,
+        window_id: None,
+        predecessor_window_id: None,
+    };
+    f.store
+        .enqueue_execution_window_authenticated(browser, &f.conversation, &request)
+        .await
+        .unwrap();
+    let first = f
+        .store
+        .admit_execution_window_authenticated(browser, &f.conversation, &request)
+        .await
+        .unwrap()
+        .status;
+    let credential = f
+        .handle
+        .issue_execution_window_credential(
+            &f.token,
+            first.window_id,
+            1,
+            "user-open-boot",
+            first.expires_at_ms,
+            &"a".repeat(64),
+        )
+        .await
+        .unwrap();
+    f.handle
+        .bind_execution_window(&f.token, &credential)
+        .await
+        .unwrap();
+    fail_open(&f, browser, first.window_id, 1).await;
+    assert_eq!(
+        queue_row(&f).await,
+        ("dispatched".into(), Some(first.window_id.to_string()))
+    );
 }

@@ -55,6 +55,30 @@ pub(crate) enum ReconcileError {
     Refused,
 }
 
+/// The operator alert for a committed failed open, in the `ALERT <source>
+/// <kind> key=value` form the adapter's stall alerts use. Identifiers only:
+/// never input text, tokens or paths. None for any other decision.
+pub(in crate::window_runtime) fn open_failure_alert(
+    receipt: &ExecutionWindowReconciliation,
+    timer_retries: usize,
+) -> Option<String> {
+    let cause = receipt.open_failure_cause?;
+    let actor = match receipt.actor {
+        Actor::Startup => "startup",
+        Actor::Owner => "owner",
+    };
+    Some(format!(
+        "ALERT orkestr-v2-server window_open_failed conversation={} window={} generation={} cause={} actor={} released_inputs={} timer_retries={}",
+        receipt.conversation_id,
+        receipt.window_id,
+        receipt.generation,
+        cause.as_str(),
+        actor,
+        receipt.released_input_event_ids.len(),
+        timer_retries,
+    ))
+}
+
 impl Controller {
     /// Best-effort automatic path; the caller holds `self.opening`.
     pub(in crate::window_runtime) async fn reconcile_expired_locked(&self, browser: &str) {
@@ -337,6 +361,29 @@ impl Controller {
                 .await
                 .map_err(|_| "stranded window reconciliation refused")?,
         };
+        if receipt.open_failure_cause.is_some() && !receipt.duplicate {
+            // Every failed open, whatever opened the window, reaches the
+            // operator once: the committed decision is the single place
+            // that knows it. Timer occurrences queued again are named.
+            let retried = match self
+                .store
+                .execution_window_queue_authenticated(browser, Some(conversation))
+                .await
+            {
+                Ok(rows) => rows
+                    .iter()
+                    .filter(|row| {
+                        receipt
+                            .released_input_event_ids
+                            .contains(&row.input_event_id)
+                    })
+                    .count(),
+                Err(_) => 0,
+            };
+            if let Some(alert) = open_failure_alert(&receipt, retried) {
+                eprintln!("{alert}");
+            }
+        }
         self.reset_current_if(conversation)?;
         Ok(receipt)
     }
@@ -379,3 +426,7 @@ impl Controller {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "stranded_alert_tests.rs"]
+mod alert_tests;

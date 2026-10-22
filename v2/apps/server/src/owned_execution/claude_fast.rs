@@ -103,12 +103,17 @@ impl ConfiguredExecution {
             else {
                 return Ok(());
             };
-            companion.ready();
+            if !companion.claim_ready() {
+                return Err(super::fast::ABANDONED);
+            }
             self.wait_window_active(&mut shutdown, &mut heartbeat)
                 .await?;
             let Some(input) = self.fast_input(&mut shutdown, &mut heartbeat).await? else {
                 return Ok(());
             };
+            if !companion.claim_start() {
+                return Err(super::fast::ABANDONED);
+            }
             let capability =
                 match crate::fast_execution::consume_fast(&self.store, &self.token, &input)
                     .await

@@ -1,4 +1,4 @@
-use super::join_roles;
+use super::{join_roles, Companion};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -111,4 +111,90 @@ async fn a_failed_fast_companion_never_aborts_its_deep_owner() {
         Ok(())
     );
     assert_eq!(*reported.lock().unwrap(), Some("synthetic Fast lost"));
+}
+
+async fn companion() -> (Arc<Companion>, std::path::PathBuf) {
+    use orkestr_v2_contracts::{ConversationId, OwnerId};
+    let directory = std::env::temp_dir().join(format!("window-companion-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir(&directory).unwrap();
+    let store = orkestr_v2_store_sqlite::Store::open(&directory.join("core.sqlite3"))
+        .await
+        .unwrap();
+    let companion = Companion::new(crate::execution_registry::ExecutionScope {
+        store,
+        control: Some(crate::control_registry::ControlRegistry::new(
+            OwnerId(uuid::Uuid::new_v4()),
+            ConversationId(uuid::Uuid::new_v4()),
+        )),
+        tasks: None,
+    });
+    (companion, directory)
+}
+
+/// Production 04:43Z/05:43Z: a Fast companion that never got its timer
+/// presentation neither started nor failed, and Deep aborted the whole window
+/// ("Fast companion setup incomplete"). Now Deep fails Fast and goes on alone.
+#[tokio::test]
+async fn deep_fails_a_silent_fast_companion_and_continues_alone() {
+    for ready in [true, false] {
+        let (companion, directory) = companion().await;
+        if !ready {
+            // Fast became ready but never presented anything.
+            assert!(companion.claim_ready());
+        }
+        assert_eq!(companion.setup_progress(ready, false, false), None);
+        assert_eq!(companion.setup_progress(ready, false, true), Some(Ok(())));
+        assert!(companion.has_failed());
+        // The abandoned companion never becomes ready or presents later.
+        assert!(!companion.claim_ready());
+        assert!(!companion.claim_start());
+        // Retirement no longer waits for its proof or start.
+        assert!(!companion.ready_to_close());
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+}
+
+#[tokio::test]
+async fn shutdown_or_work_deadline_still_ends_companion_setup() {
+    let (companion, directory) = companion().await;
+    assert_eq!(
+        companion.setup_progress(true, true, true),
+        Some(Err("Fast companion setup incomplete"))
+    );
+    assert!(!companion.has_failed());
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[tokio::test]
+async fn a_claimed_fast_stage_is_never_abandoned() {
+    let (companion, directory) = companion().await;
+    assert!(companion.claim_ready());
+    assert_eq!(companion.setup_progress(true, false, true), Some(Ok(())));
+    // A dispatch in flight keeps Deep waiting for its start, not failing it.
+    assert!(companion.claim_start());
+    assert_eq!(companion.setup_progress(false, false, true), None);
+    assert!(!companion.has_failed());
+    companion.started();
+    assert_eq!(companion.setup_progress(false, false, true), Some(Ok(())));
+    assert!(companion.ready_to_close());
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+/// Fast's claim and Deep's timeout race: exactly one of them wins, so a Fast
+/// never dispatches after Deep went on without it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn fast_claim_and_deep_abandonment_are_exclusive() {
+    let (first, directory) = companion().await;
+    for _ in 0..200 {
+        let companion = Companion::new(first.scope());
+        assert!(companion.claim_ready());
+        let fast = companion.clone();
+        let claim = tokio::task::spawn_blocking(move || fast.claim_start());
+        let deep = companion.clone();
+        let abandon = tokio::task::spawn_blocking(move || deep.setup_progress(false, false, true));
+        let (claimed, decided) = (claim.await.unwrap(), abandon.await.unwrap());
+        assert_ne!(claimed, companion.has_failed());
+        assert_eq!(decided.is_some(), companion.has_failed());
+    }
+    std::fs::remove_dir_all(directory).unwrap();
 }

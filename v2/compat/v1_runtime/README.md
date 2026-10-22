@@ -309,7 +309,10 @@ adopted and classified as usual (silent answers settle as `no_reply`). An
 occurrence that has no Deep run of its own once every window of the
 conversation is closed (for example a window whose setup failed) is refused as
 `timer_window_ended_without_run`, so it never holds later occurrences behind
-it. Refused occurrences (that one, a failed or lost run, a malformed outcome)
+it. When Core queued the occurrence again after its window failed to open
+(once; nothing of it ran), the adapter waits for that retry window instead
+(`waiting_for_timer_retry`) and refuses only if the retry ends without a run
+as well. Refused occurrences (that one, a failed or lost run, a malformed outcome)
 keep a terminal `stalled` marker with `failed: <reason>` and log
 `ALERT orkestr-v2-wa-adapter input_failed`, so the operator stall watch reports
 them once. A window still open or a run past its deadline stays a normal

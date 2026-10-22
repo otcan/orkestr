@@ -46,7 +46,11 @@ selection in conversation settings (`with_claude_turns`).
   stay Codex-only for Claude conversations.
 - A lost or failed Fast companion (Codex or Claude) fails alone: it is logged,
   marked failed and stops presenting; Deep and Workers keep the window and keep
-  serving turns. Retiring that window still goes through Core, which refuses
+  serving turns. A Fast that is neither ready nor presenting 15 s after Deep
+  starts waiting for it (for example one that never gets its input) is marked
+  failed the same way, and Deep activates the window without a Fast scope.
+  Core's activation never needed Fast; only Fast waits for Deep's activation.
+  A dispatch Fast already claimed is never abandoned mid-flight. Retiring that window still goes through Core, which refuses
   an unresolved Fast run, so the window ends in reconciliation, not closed.
 - Claude account rate-limit telemetry is drained with only a size/shape bound:
   the installed CLI added `overageEnabled`, and the closed field list lost a
