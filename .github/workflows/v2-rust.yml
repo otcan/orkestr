@@ -34,7 +34,8 @@ jobs:
       - name: Isolate candidate data and build output
         run: |
           echo "ORKESTR_V2_HOME=$RUNNER_TEMP/orkestr-v2-intake" >> "$GITHUB_ENV"
-          echo "CARGO_TARGET_DIR=$RUNNER_TEMP/orkestr-v2-target" >> "$GITHUB_ENV"
+          # Outside the checkout, at a fixed path relative to it so rust-cache can save it.
+          echo "CARGO_TARGET_DIR=$(dirname "$GITHUB_WORKSPACE")/orkestr-v2-target" >> "$GITHUB_ENV"
       - name: Install namespace test prerequisite
         run: |
           sudo apt-get update
@@ -47,6 +48,12 @@ jobs:
         run: python3 tests/probe_lifetime_namespaces.py
       - name: Install pinned Rust
         run: rustup toolchain install 1.99.1 --profile minimal --component rustfmt --component clippy
+      - name: Restore Rust dependency cache
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: v2 -> ../../orkestr-v2-target
+          # Only the integration branch saves; PRs restore its dependency build.
+          save-if: ${{ github.ref == 'refs/heads/v2/rust-rewrite' }}
       - name: Architecture boundaries
         run: python3 tests/check_boundaries.py
       - name: Persistent manager ledger and owned-process regressions
