@@ -187,7 +187,7 @@ def window_lifetimes(value):
 
 
 def conversation_workspaces(value):
-    """Optional per-conversation Codex Deep/Fast working directories (for a
+    """Optional per-conversation Codex and Claude Deep/Fast working directories (for a
     migrated V1 thread's workspace). Host full access only."""
     if 'conversation_workspaces' not in value:
         return value
