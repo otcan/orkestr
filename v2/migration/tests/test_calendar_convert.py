@@ -180,6 +180,13 @@ class ConvertTests(unittest.TestCase):
             with self.assertRaises(cc.ConvertError):
                 cc.normalize(dict({'timezone': 'UTC', 'weekdays': [], 'start_minute': 0, 'end_minute': 100, 'minutes': [0]}, **bad))
 
+    def test_instruction_suffix_is_only_appended_and_changes_the_digest(self):
+        base = cc.plan(self.v2, self.v1, self.bundle, self.recipe, CONVERSATION, False)['plan_digest']
+        self.recipe['instruction_suffix'] = 'Start with NO_NEWS: <summary> when nothing needs action.'
+        resolved = cc.resolve(self.bundle, self.recipe, False)
+        self.assertEqual(resolved['instruction'], PROMPT + '\n\nStart with NO_NEWS: <summary> when nothing needs action.')
+        self.assertNotEqual(cc.plan(self.v2, self.v1, self.bundle, self.recipe, CONVERSATION, False)['plan_digest'], base)
+
     def test_instructions_must_be_identical_or_the_conversion_stops(self):
         v1 = FakeV1(jobs_timers(extra_prompt='A different instruction'))
         bundle = self.export(v1, 'differs.json')

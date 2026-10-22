@@ -196,6 +196,13 @@ def resolve(bundle, recipe, inline_prompt_file=True):
     texts = {timer_moves.instruction_for(t, inline_prompt_file) for t in replaced}
     if len(texts) != 1:
         raise ConvertError('instructions_differ')
+    instruction = texts.pop()
+    suffix = str(recipe.get('instruction_suffix') or '').strip()
+    if suffix:
+        # Only ever appended: the carried-over V1 prompt (and its guards) stays byte for byte.
+        instruction = instruction + '\n\n' + suffix
+        if len(instruction.encode()) > timer_moves.MAX_INSTRUCTION:
+            raise ConvertError('instruction_too_long')
     options = recipe.get('policy') or {}
     policy = {'silent_mode': 'unless_changed' if options.get('silent', True) else 'off',
               'skip_dates': sorted(options.get('skip_dates') or []), 'digest': None, 'trigger': None}
@@ -206,7 +213,7 @@ def resolve(bundle, recipe, inline_prompt_file=True):
     if options.get('trigger'):
         policy['trigger'] = {'sources': sorted(set(options['trigger']['sources'])),
                              'min_interval_s': int(options['trigger'].get('min_interval_s', 60))}
-    return {'rule': rule, 'policy': policy, 'instruction': texts.pop(), 'replaced': replaced, 'retired': retired,
+    return {'rule': rule, 'policy': policy, 'instruction': instruction, 'replaced': replaced, 'retired': retired,
             'namespace': new_namespace(bundle, recipe)}
 
 
