@@ -8,6 +8,7 @@ import time
 import uuid
 
 from .ledger import DEFAULT_MAX_INPUT_AGE_S, DIGEST_NAMESPACE as DIGEST_REPLY_NAMESPACE, PROGRESS_LIMIT, no_reply
+from . import instructions
 from .participants import compose
 from .rust_client import ClientError
 
@@ -15,6 +16,10 @@ PROGRESS_INTERVAL_S = 60
 PROGRESS_MAX_CHARS = 3500
 TIMER_PAGE = 50
 DIGEST_POLL_S = 15
+# Conversation posts are interactive (a coordinator or an operator alert).
+POST_POLL_S = 3
+POST_PAGE = 20
+POST_AUTHORS = ("coordinator", "operator")
 # Window states that are neither open for a follow-up nor closed for a successor.
 UNSETTLED_WINDOW_STATES = ("opening", "retiring", "reconciliation_required")
 # A Fast in these phases (or missing) can never become this input's proposal.
@@ -28,9 +33,11 @@ STALL_NOTICE = ("Still working on this message after more than 20 minutes. It ma
 # Frozen per-attempt state dropped when an input is sent again as a new turn.
 RESET_KEYS = ("intake", "cursor", "window", "window_request", "previous_window", "matched_runs", "accepted",
               "fast_accept_request", "deep_accept_request", "fast_payload", "deep_payload", "admitted_at",
-              "progress_at", "fast_unusable_since")
+              "progress_at", "fast_unusable_since", "intake_rules")
 # An admitted input whose window ended without starting any run of it.
 ORPHAN_GRACE_S = 60
+# How often an input whose window ended before any run of it started is sent again.
+MAX_ORPHAN_REQUEUES = 3
 # Deep phases a window work deadline leaves behind.
 DEADLINE_STOP_PHASES = ("cancelled", "stopped", "interrupted")
 CONTINUE_NOTICE = ("Continuing in a new turn: the previous turn reached its time limit "
@@ -132,6 +139,10 @@ class Worker:
         self.progress_updates = progress_updates
         self.max_input_age_s = max_input_age_s
         self._digest_checked = None
+        self._posts_checked = None
+        # Optional per-binding chat rules file (see instructions.py); not pinned.
+        self.instructions_path = None
+        self.instructions_error = None
 
     def import_attachments(self, data):
         if "attachment_request" not in data:
@@ -284,6 +295,45 @@ class Worker:
             self.ledger.enqueue_digest(row)
             self.client.request("POST", "/timer-digests/%s/delivered" % row["id"], body={}, allowed=(200,))
 
+    def with_rules(self, data, text):
+        """Prefix the binding's chat rules line, frozen with the input on first
+        send so a retry resends exactly the same text. A missing or unreadable
+        file sends without the line and is reported as `instructionsError`."""
+        if "intake_rules" not in data:
+            rules = ""
+            if self.instructions_path:
+                try:
+                    rules = instructions.line(self.instructions_path)
+                    self.instructions_error = None
+                except ValueError as error:
+                    self.instructions_error = str(error)
+            else:
+                self.instructions_error = None
+            data["intake_rules"] = rules
+            self.ledger.save(data)
+        return data["intake_rules"] + "\n\n" + text if data["intake_rules"] else text
+
+    def discover_posts(self):
+        """Adopt conversation posts (assistant-side messages from outside a run)
+        and acknowledge each once the ledger holds it. Adoption exports the post
+        text unchanged as a final reply; V1 adds its own prefix and footer."""
+        value = self.call("GET", "/posts?pending=true&limit=%d" % POST_PAGE)
+        rows = value.get("posts") if isinstance(value, dict) else None
+        if not isinstance(rows, list) or len(rows) > POST_PAGE:
+            raise Refused("posts_shape")
+        identity = None
+        for row in rows:
+            if not (isinstance(row, dict) and all(isinstance(row.get(k), str) and row[k].strip() for k in ("id", "label", "text"))
+                    and row.get("author") in POST_AUTHORS and row.get("conversation_id") == self.client.conversation and
+                    all(row.get(k) is None or (isinstance(row[k], str) and re.fullmatch("[A-Za-z0-9._:-]{1,64}", row[k]))
+                        for k in ("provider", "model"))):
+                raise Refused("posts_shape")
+            uuid.UUID(row["id"])
+            if not row.get("provider") and identity is None:
+                identity = self.provider_identity()
+            self.ledger.enqueue_post(row, identity)
+            self.client.request("POST", "/posts/%s/delivered" % row["id"], body={}, allowed=(200,))
+
     def finish_digest(self, data):
         digest = data["digest"]
         text = self.render_final(digest["text"])
@@ -328,6 +378,8 @@ class Worker:
             self.import_attachments(data)
         if "intake" not in data:
             text = data.get("intake_text") or compose(data)
+            if data.get("origin") != "timer":
+                text = self.with_rules(data, text)
             request = {"client_message_id": data["keys"]["message"], "text": text}
             if data.get("reply_to"):
                 request["reply_to"] = data["reply_to"]
@@ -603,25 +655,45 @@ class Worker:
             except Exception:
                 pass
 
+    def window_ended(self, data):
+        """Whether this input's window is over: closed or retiring, past its work
+        deadline, replaced by another window, or no window exists any more."""
+        window = data.get("window") or {}
+        own = (window.get("status") or {}).get("window_id") or window.get("window_id")
+        current = self.call("GET", "/window", allowed=(200, 204))
+        if not isinstance(current, dict) or (own is not None and current.get("window_id") != own):
+            return True
+        if current.get("state") in ("retiring", "closed"):
+            return True
+        deadline = current.get("work_deadline_ms")
+        return (current.get("state") == "active" and type(deadline) is int and
+                deadline <= time.time() * 1000)
+
     def requeue_orphaned(self, data, ids):
-        """Send an input again once when its window ended before any run of it
-        started (for example a follow-up that joined a window held by another
-        input's unaccepted proposals). Nothing of it ran, so no notice."""
-        if ids or data.get("requeued") or data.get("origin") == "timer" or "window" not in data:
+        """Send an input again when its window ended before any run of it started
+        (for example a follow-up that joined a window held by another input's
+        unaccepted proposals, or a window whose setup failed). Nothing of it ran,
+        so no notice. At most MAX_ORPHAN_REQUEUES times per input; after that it
+        is refused with the owner notice so it settles and later inputs proceed.
+        Ledgers written before the counter count an existing `requeued` as one."""
+        if ids or data.get("origin") == "timer" or "window" not in data:
             return False
         now = time.time()
         since = data.setdefault("unstarted_since", now)
         if since == now:
             self.ledger.save(data)
-        if now - since < ORPHAN_GRACE_S or not self.deadline_stopped(data):
+        if now - since < ORPHAN_GRACE_S or not self.window_ended(data):
             return False
+        count = data.get("requeue_count", 1 if data.get("requeued") else 0)
+        if count >= MAX_ORPHAN_REQUEUES:
+            raise Refused("window_setup_failed")
         text = data.get("intake_text") or compose(data)
         previous = data["intake"]["message_id"]
         for key in RESET_KEYS + ("unstarted_since",):
             data.pop(key, None)
         for key in ("message", "window", "fast", "deep"):
             data["keys"][key] = str(uuid.uuid4())
-        data.update(intake_text=text, phase="queued", queued_at=now,
+        data.update(intake_text=text, phase="queued", queued_at=now, requeue_count=count + 1,
                     requeued={"previous_message_id": previous, "at": now})
         self.ledger.save(data)
         return True
@@ -720,6 +792,15 @@ class Worker:
             self._digest_checked = time.monotonic()
             try:
                 self.discover_digests()
+            except Exception:
+                # A missing route (older server) or a failure is retried at the next check.
+                pass
+        # Posts are interactive: look every 3 s. A paused binding (run() skips
+        # run_once) leaves them pending in Rust until it is enabled again.
+        if self._posts_checked is None or time.monotonic() - self._posts_checked >= POST_POLL_S:
+            self._posts_checked = time.monotonic()
+            try:
+                self.discover_posts()
             except Exception:
                 # A missing route (older server) or a failure is retried at the next check.
                 pass

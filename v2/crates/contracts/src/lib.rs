@@ -23,6 +23,8 @@ mod message_attachments;
 pub use message_attachments::*;
 mod message_times;
 pub use message_times::*;
+mod conversation_posts;
+pub use conversation_posts::*;
 mod restricted;
 pub use restricted::*;
 mod whatsapp_chats;

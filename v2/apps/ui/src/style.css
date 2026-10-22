@@ -166,6 +166,7 @@ details[open] > summary { margin-bottom: .4rem; }
 .assistant-message { align-self: flex-start; max-width: min(92%, 46rem); background: var(--bubble-in); border: 1px solid var(--bubble-in-border); padding: .65rem .95rem; border-radius: 1.1rem 1.1rem 1.1rem .3rem; box-shadow: var(--shadow); }
 .assistant-message details { margin-top: .3rem; }
 .reply-state { font-size: .72rem; color: var(--faint); }
+.post-badge { margin-left: .4rem; font-size: .62rem; line-height: 1.5; padding: 0 .45rem; border-radius: 1rem; border: 1px solid var(--info-border); background: var(--info-soft); color: var(--info-text); white-space: nowrap; vertical-align: middle; }
 .reply-state:empty { display: none; }
 .chat-messages details, .transcript-pages, .conversation-tools { font-size: .8rem; }
 .chat-messages details p { color: var(--muted); overflow-wrap: anywhere; }

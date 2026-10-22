@@ -178,9 +178,14 @@ class ClientTests(unittest.TestCase):
                        "/messages?run_id=" + RUN, "/execution?run_id=bad",
                        "/execution?run_id=" + RUN + "&run_id=" + RUN,
                        "/accepted-results?limit=101", "/payloads/%2e%2e",
-                       "/timer-inputs?after=1", "/timer-inputs?limit=101", "/timer-inputs?after_sequence=-1"):
+                       "/timer-inputs?after=1", "/timer-inputs?limit=101", "/timer-inputs?after_sequence=-1",
+                       "/posts?pending=false", "/posts?pending=1", "/posts?after_ms=1", "/posts?limit=101"):
             with self.subTest(suffix=suffix), self.assertRaises(ClientError):
                 self.client.request("GET", suffix)
+        self.assertEqual(self.server.observed, [])
+        for suffix in ("/posts/not-a-uuid/delivered", "/posts/" + RUN, "/posts"):
+            with self.subTest(suffix=suffix), self.assertRaises(ClientError):
+                self.client.request("POST", suffix, body={})
         self.assertEqual(self.server.observed, [])
 
     def test_redirect_scope_type_and_body_bounds_are_refused(self):

@@ -367,6 +367,8 @@ async function api(state, req, res, url) {
       at_ms: m.sequence === 1 ? Date.parse('2025-07-01T14:42:05Z') : Date.now(), receipts: [] }));
     return json(res, 200, { conversation_id: id, times, next_after: null });
   }
+  // Conversation posts: none in the synthetic workspace.
+  if (rest === '/posts' && req.method === 'GET') return json(res, 200, { conversation_id: id, posts: [] });
   // V1 workers of the linked V1 thread (Research notes only): one working
   // worker, one nested idle worker and one retired worker.
   if (rest === '/v1-workers' && req.method === 'GET') {

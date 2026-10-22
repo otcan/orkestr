@@ -7,13 +7,16 @@ import stat
 import uuid
 from urllib.parse import urlsplit
 
+from . import instructions
+
 SERVICE_FIELDS = {"origin", "loopback_url", "credentials_path", "expected_owner", "expected_source",
                   "token_path", "listen_port", "bindings_dir", "ledger_dir"}
 SCOPE_FIELDS = {"conversation_id", "public_thread_id", "chat_id", "account_id", "remote_thread_id",
                 "allowed_principals", "excluded_public_ids", "automatic_accept_roles", "outbound_role"}
 BINDING_FIELDS = SCOPE_FIELDS | {"enabled", "revoked", "progress_updates", "attachments", "max_outstanding_inputs"}
 # Optional binding fields and their defaults.
-OPTIONAL_BINDING_FIELDS = {"max_input_age_seconds": 30 * 60, "participants": [], "owner_label": "Owner"}
+OPTIONAL_BINDING_FIELDS = {"max_input_age_seconds": 30 * 60, "participants": [], "owner_label": "Owner",
+                           "instructions_path": None}
 # Group participants other than the owner. The owner is only ever the verified
 # `allowed_principals`; a participant can never hold the owner role.
 PARTICIPANT_ROLES = ("member", "none")
@@ -130,6 +133,7 @@ def binding(value, owner):
         raise ValueError("config_capacity")
     participants(value["participants"], value["allowed_principals"])
     label(value["owner_label"])
+    instructions.check_path(value["instructions_path"])
     if value["owner_label"].casefold() in {p["label"].casefold() for p in value["participants"]}:
         raise ValueError("config_participant_label")
     value = dict(value)

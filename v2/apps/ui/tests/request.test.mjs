@@ -139,6 +139,14 @@ test('message attachments and V1 uploads are allowed paths',async()=>{
     }
 });
 
+test('conversation posts are read with one fixed page and never written from the browser bridge path list',async()=>{
+    const path='/api/v2/conversations/00000000-0000-4000-8000-00000000000a/posts?limit=50';
+    await execute({recv:async()=>({...base,method:'GET',path,body:null})},async(seen)=>{assert.equal(seen,path);return new Response('{}');});
+    for(const bad of ['/api/v2/conversations/00000000-0000-4000-8000-00000000000a/posts','/api/v2/conversations/00000000-0000-4000-8000-00000000000a/posts?limit=51','/api/v2/conversations/00000000-0000-4000-8000-00000000000a/posts?pending=true&limit=50','/api/v2/conversations/x/posts?limit=50']) {
+        await assert.rejects(execute({recv:async()=>({...base,path:bad})},()=>assert.fail('fetch must not run')),/Invalid API path/);
+    }
+});
+
 test('GET polls revalidate with the last ETag and a 304 returns the kept body',async()=>{
     const path='/api/v2/sidebar';
     const get={...base,method:'GET',path,body:null};

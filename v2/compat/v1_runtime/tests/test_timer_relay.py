@@ -24,6 +24,7 @@ class TimerPeer(Peer):
         super().__init__()
         self.timer_rows, self.reads = [], []
         self.digests, self.acked = [], []
+        self.posts, self.posts_acked = [], []
 
     def matching_run_ids(self, events, intake):
         return ["fast-run", "deep-run"]
@@ -39,6 +40,11 @@ class TimerPeer(Peer):
             raise AssertionError("a timer occurrence is already admitted; it is never re-sent")
         if route.startswith("/timer-digests?"):
             return 200, {"conversation_id": self.conversation, "digests": [dict(d) for d in self.digests if d["id"] not in self.acked]}
+        if route.startswith("/posts?"):
+            return 200, {"conversation_id": self.conversation, "posts": [dict(p) for p in self.posts if p["id"] not in self.posts_acked]}
+        if route.startswith("/posts/"):
+            self.posts_acked.append(route.split("/")[2])
+            return 200, {"id": route.split("/")[2], "delivered_ms": 1}
         if route.startswith("/timer-digests/"):
             self.acked.append(route.split("/")[2])
             return 200, {"delivered": True}

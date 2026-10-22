@@ -17,6 +17,8 @@ pub use conversation_resources::{
     DesktopCaller, DesktopFence, PreparedAcquire, ResourceError, V1LeaseGrant,
 };
 mod conversation_export;
+pub mod conversation_posts;
+pub use conversation_posts::{PostListing, PostReceipt};
 mod conversations;
 mod restricted;
 pub use restricted::{

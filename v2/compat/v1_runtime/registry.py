@@ -16,7 +16,7 @@ from .worker import Worker, attachment_export_settings
 
 UNIQUE_KEYS = ("remote_thread_id", "conversation_id", "public_thread_id", "chat_id")
 MUTABLE_KEYS = ("enabled", "revoked", "progress_updates", "attachments", "max_outstanding_inputs", "max_input_age_seconds",
-                "participants", "owner_label")
+                "participants", "owner_label", "instructions_path")
 
 
 class Binding:
@@ -153,6 +153,7 @@ class Registry:
             binding.worker = Worker(client, binding.ledger, attachment_dir=directory, attachment_gid=gid)
         binding.worker.progress_updates = binding.config["progress_updates"]
         binding.worker.max_input_age_s = binding.config["max_input_age_seconds"]
+        binding.worker.instructions_path = binding.config["instructions_path"]
         if binding.thread is None and self.workers:
             binding.thread = threading.Thread(target=binding.worker.run,
                                               args=(binding.stop, lambda: binding.state == "enabled"),
