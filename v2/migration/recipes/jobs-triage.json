@@ -6,5 +6,6 @@
   "replace": {"label_prefix": ["Jobseeker Gmail triage "]},
   "retire": {"label_prefix": ["Jobseeker weekday enable", "Jobseeker weekend disable"]},
   "schedule": {"derive": true, "weekdays": [1, 2, 3, 4, 5]},
-  "policy": {"silent": true}
+  "policy": {"silent": true},
+  "instruction_suffix": "If nothing needs the owner's action, start your answer with `NO_NEWS: <one-line summary>` (this keeps the hourly check silent); otherwise report normally."
 }

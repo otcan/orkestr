@@ -709,6 +709,28 @@ export const scenarios = [
     await page.waitForFunction(() => getComputedStyle(document.querySelector('.conversation-details')).display === 'none');
     assert.equal((await drawer()).stored, '0');
   }],
+  ['every-answer-inline', async label => {
+    // 25 accepted answers span two pages; all show inline, newest included,
+    // as plain messages without paging or acceptance wording.
+    await page.goto(`${origin}/#conversation/${C}`, { waitUntil: 'domcontentloaded' });
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.waitForFunction(() => [...document.querySelectorAll('.chat-messages .assistant-message')].some(li => li.textContent.includes('Synthetic answer 25')), { timeout: 20000 });
+    const view = await page.evaluate(() => ({
+      answers: [...document.querySelectorAll('.chat-messages .assistant-message .accepted-output')].map(n => n.textContent.trim()),
+      text: document.querySelector('.conversation-pane').innerText }));
+    assert.equal(view.answers.length, 25, 'every accepted answer is inline');
+    assert.equal(view.answers[0], 'Synthetic answer 1');
+    assert.equal(view.answers.at(-1), 'Synthetic answer 25', 'in order, newest last');
+    for (const jargon of ['Reply history pages', 'Accepted reply', 'Reply details', 'Provider output', 'review before accepting', 'Result accepted'])
+      assert.ok(!view.text.includes(jargon), `no "${jargon}" in the chat`);
+    await page.waitForFunction(() => {
+      const el = document.querySelector('.conversation-pane > .conversation-scroll');
+      return el.scrollHeight - el.scrollTop - el.clientHeight <= 72;
+    });
+    await screenshot(label, 'every-answer-inline');
+    await page.goto(`${origin}/#conversation/${A}`, { waitUntil: 'domcontentloaded' });
+    await page.reload({ waitUntil: 'domcontentloaded' });
+  }],
   ['live-catch-up', async label => {
     await page.waitForSelector('#composer');
     await page.waitForFunction(() => document.querySelectorAll('.chat-messages .user-message').length > 0);

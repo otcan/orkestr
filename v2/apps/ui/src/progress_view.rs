@@ -9,7 +9,12 @@ pub fn ProgressView(
     execution: Signal<Execution>,
     session_scope: Signal<SessionScope>,
     onexpired: EventHandler<()>,
+    /// Chat view: the answer as a normal assistant message, without review
+    /// controls or provider wording.
+    #[props(default)]
+    plain: bool,
 ) -> Element {
+    let phase = status.phase;
     let mut output = use_signal(orkestr_v2_ui::payload::Output::default);
     let mut output_reference = use_signal(|| None::<(String, String, String)>);
     let mut notice = use_signal(|| "Loading provider output…".to_string());
@@ -93,6 +98,26 @@ pub fn ProgressView(
             }
         }
     });
+    if plain {
+        use orkestr_v2_contracts::ExecutionPhase::*;
+        let state = match phase {
+            Queued | Starting | Running => "Writing…",
+            CancelRequested => "Stopping…",
+            Cancelled => "Stopped",
+            Failed | Blocked => "Not finished",
+            AwaitingAcceptance | Completed => "",
+        };
+        let text = output.read().text.clone();
+        return rsx! {
+            article { class: "assistant-message live-answer", "aria-label": "Assistant answer",
+                strong { "Assistant" }
+                if let Some(text) = text {
+                    crate::rich_text_view::RichText { text }
+                }
+                if !state.is_empty() { p { class: "reply-state", "{state}" } }
+            }
+        };
+    }
     rsx! {
         section { "aria-label":"Provider output",
             p { role:"status", "{notice}" }
