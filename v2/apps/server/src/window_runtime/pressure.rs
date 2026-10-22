@@ -7,7 +7,7 @@
 //! Reading never fails admission: an unreadable /proc admits (the backstop
 //! still applies), so a container without PSI behaves like before.
 use orkestr_v2_contracts::{HostBusyReason, WindowHostAdmission};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 /// Who is asking for a new window.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -106,7 +106,7 @@ impl Default for Source {
 }
 impl Source {
     #[cfg(test)]
-    pub(crate) fn at(proc_root: &Path) -> Self {
+    pub(crate) fn at(proc_root: &std::path::Path) -> Self {
         Self {
             proc_root: Some(proc_root.to_path_buf()),
         }
