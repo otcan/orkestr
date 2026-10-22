@@ -1,5 +1,5 @@
 use orkestr_v2_contracts::*;
-use orkestr_v2_ui::sidebar::{activity_label, relative_time, rows, unread_label};
+use orkestr_v2_ui::sidebar::{activity_label, relative_time, rows, shown, unread_label};
 use std::collections::BTreeSet;
 
 fn entry(key: &str, parent: Option<&str>, at: Option<i64>, unread: u32) -> SidebarEntry {
@@ -25,6 +25,7 @@ fn entry(key: &str, parent: Option<&str>, at: Option<i64>, unread: u32) -> Sideb
         coordinator: false,
         read_marker: 0,
         whatsapp: None,
+        hidden: false,
     }
 }
 
@@ -111,4 +112,30 @@ fn labels_for_time_activity_and_unread() {
     assert_eq!(unread_label(0), None);
     assert_eq!(unread_label(7).unwrap(), "7");
     assert_eq!(unread_label(140).unwrap(), "99+");
+}
+
+#[test]
+fn hidden_system_chats_are_left_out_unless_shown_or_open() {
+    let mut probe = entry("v1:probe", None, Some(30), 1);
+    probe.hidden = true;
+    let mut probe_worker = entry("v1:probe-worker", Some("v1:probe"), Some(40), 0);
+    probe_worker.hidden = true;
+    let real = entry("v1:real", None, Some(10), 0);
+    let all = vec![probe.clone(), probe_worker.clone(), real.clone()];
+    let keys = |list: Vec<SidebarEntry>| list.into_iter().map(|e| e.key).collect::<Vec<_>>();
+    assert_eq!(keys(shown(&all, false, "v1:real")), vec!["v1:real"]);
+    // The open chat stays listed even when hidden (opened by its URL).
+    assert_eq!(
+        keys(shown(&all, false, "v1:probe")),
+        vec!["v1:probe", "v1:real"]
+    );
+    assert_eq!(
+        keys(shown(&all, true, "v1:real")),
+        vec!["v1:probe", "v1:probe-worker", "v1:real"]
+    );
+    // Hidden chats never add to the visible parents' unread or grouping.
+    let visible = shown(&all, false, "");
+    let grouped = rows(&visible, &BTreeSet::new(), "");
+    assert_eq!(grouped.len(), 1);
+    assert_eq!(grouped[0].hidden_unread, 0);
 }

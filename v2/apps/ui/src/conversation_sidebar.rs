@@ -49,6 +49,8 @@ pub fn ConversationSidebar(
     let mut open_whatsapp = use_signal(|| false);
     let mut busy = use_signal(|| false);
     let mut filter = use_signal(String::new);
+    // Hidden system chats (probes, rehearsals, tests) are listed on demand.
+    let mut show_system = use_signal(|| false);
     let mut expanded = use_signal(BTreeSet::<String>::new);
     // Last mark sent per entry, so a poll never repeats a write.
     let mut marked = use_signal(BTreeMap::<String, i64>::new);
@@ -87,7 +89,7 @@ pub fn ConversationSidebar(
         async move {
             let result = crate::transport::request::<SidebarPage>(
                 "GET",
-                "/api/v2/sidebar",
+                "/api/v2/sidebar?include_hidden=true",
                 Value::Null,
                 "",
                 "",
@@ -135,15 +137,17 @@ pub fn ConversationSidebar(
         _ => None,
     });
     let query = filter().trim().to_lowercase();
+    let hidden_count = page.read().as_ref().map_or(0, |p| p.hidden_count);
     let visible: Vec<sidebar::Row> = page
         .read()
         .as_ref()
         .map(|p| {
+            let listed = sidebar::shown(&p.entries, show_system(), &selected);
             if query.is_empty() {
-                sidebar::rows(&p.entries, &expanded.read(), &selected)
+                sidebar::rows(&listed, &expanded.read(), &selected)
             } else {
                 // Search lists matches flat, newest first.
-                p.entries
+                listed
                     .iter()
                     .filter(|e| {
                         e.name.to_lowercase().contains(&query)
@@ -222,7 +226,7 @@ pub fn ConversationSidebar(
                                 name: row.name, conversation_id: Some(row.conversation_id), v1_thread_id: None,
                                 parent_key: None, last_activity_ms: None, preview: None, unread: 0,
                                 activity: Default::default(), read_only: false, coordinator: false,
-                                read_marker: row.last_sequence, whatsapp: None,
+                                read_marker: row.last_sequence, whatsapp: None, hidden: false,
                             });
                         },
                         Ok(None)=>{}, Err(error)=>notice.set(error.message) }
@@ -248,6 +252,12 @@ pub fn ConversationSidebar(
                 }
             }
             if page.read().is_none() && notice().is_empty() { p { class:"sidebar-loading", "Loading chats…" } }
+        }
+        if hidden_count > 0 {
+            button { class:"system-toggle", r#type:"button", "aria-pressed":"{show_system}",
+                onclick: move |_| show_system.set(!show_system()),
+                if show_system() { "Hide system threads ({hidden_count})" } else { "Show system threads ({hidden_count})" }
+            }
         }
         if let Some(note) = v1_note { p { class:"sidebar-note", "{note}" } }
         p {role:"status", class:"sidebar-notice", "{notice}"}
@@ -310,6 +320,7 @@ fn SidebarRow(
                                 if group == entry.name { "WhatsApp" } else { "WhatsApp · {group}" } }
                         }
                         if v1 { span { class: "source-badge", "On V1" } }
+                        if entry.hidden { span { class: "source-badge system-badge", title: "Hidden system thread", "System" } }
                         if entry.coordinator { span { class: "source-badge coordinator-badge", "Coordinator" } }
                         if let Some(status) = status.clone() { span { class: "conversation-status {status.tone.class()}", "{status.label}" } }
                     }

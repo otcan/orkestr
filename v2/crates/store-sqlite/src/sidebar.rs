@@ -34,6 +34,8 @@ pub struct SidebarConversations {
     pub truncated: bool,
     /// `v1:<thread>` marks, keyed by thread id.
     pub v1_marks: std::collections::BTreeMap<String, i64>,
+    /// Entry keys (`v2:<uuid>`, `v1:<thread>`) the owner marked hidden.
+    pub hidden: std::collections::BTreeSet<String>,
 }
 
 const LIST: &str = "SELECT d.conversation_id,d.name,c.sequence,
@@ -193,12 +195,67 @@ impl Store {
             .iter()
             .map(|r| (r.get::<String, _>("thread"), r.get::<i64, _>("marker")))
             .collect();
+        let hidden = sqlx::query_scalar::<_, String>(
+            "SELECT entry_key FROM sidebar_hidden_entries WHERE owner_id=?",
+        )
+        .bind(&owner_id)
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(unavailable)?
+        .into_iter()
+        .collect();
         tx.commit().await.map_err(unavailable)?;
         Ok(SidebarConversations {
             conversations,
             truncated,
             v1_marks,
+            hidden,
         })
+    }
+
+    /// Hides a sidebar entry (a system chat) or shows it again. A native key
+    /// must name an owned conversation; a V1 key any valid thread id (the V1
+    /// thread may move to V2 later and stays hidden there). Returns whether
+    /// anything changed; repeating the same request is a no-op.
+    pub async fn set_sidebar_hidden(
+        &self,
+        credential: &str,
+        owner: &OwnerId,
+        key: &SidebarKey,
+        hidden: bool,
+        reason: Option<&str>,
+    ) -> Result<bool> {
+        if reason.is_some_and(|r| r.trim().is_empty() || r.chars().count() > 200) {
+            return Err(ResourceError::Invalid);
+        }
+        let mut tx = self.sidebar_scope(credential, owner, true).await?;
+        if let SidebarKey::V2(conversation) = key {
+            crate::conversation_resources::owned(&mut tx, owner, conversation).await?;
+        }
+        let changed = if hidden {
+            sqlx::query(
+                "INSERT INTO sidebar_hidden_entries(owner_id,entry_key,reason,hidden_at_ms) VALUES(?,?,?,?)
+                 ON CONFLICT(owner_id,entry_key) DO UPDATE SET reason=excluded.reason
+                 WHERE excluded.reason IS NOT sidebar_hidden_entries.reason",
+            )
+            .bind(owner.to_string())
+            .bind(key.to_string())
+            .bind(reason)
+            .bind(now_ms())
+            .execute(&mut *tx)
+            .await
+        } else {
+            sqlx::query("DELETE FROM sidebar_hidden_entries WHERE owner_id=? AND entry_key=?")
+                .bind(owner.to_string())
+                .bind(key.to_string())
+                .execute(&mut *tx)
+                .await
+        }
+        .map_err(unavailable)?
+        .rows_affected()
+            > 0;
+        tx.commit().await.map_err(unavailable)?;
+        Ok(changed)
     }
 
     /// Forward-only read mark. A native mark is bounded by the conversation's

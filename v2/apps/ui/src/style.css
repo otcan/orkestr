@@ -137,6 +137,9 @@ details[open] > summary { margin-bottom: .4rem; }
 .sidebar-note, .sidebar-loading { font-size: .75rem; color: var(--muted); padding: 0 .5rem; }
 .sidebar-notice { font-size: .78rem; color: var(--danger-text); padding: 0 .5rem; }
 .sidebar-notice:empty { display: none; }
+.system-toggle { align-self: flex-start; margin: .25rem .5rem; padding: .2rem .55rem; font-size: .72rem; color: var(--muted); background: none; border: 1px dashed var(--border-strong); border-radius: 1rem; cursor: pointer; }
+.system-toggle[aria-pressed="true"] { border-style: solid; }
+.system-badge { border-style: dashed; }
 
 /* Conversation */
 .workspace-main { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--bg); }

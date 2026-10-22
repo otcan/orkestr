@@ -24,6 +24,16 @@ pub fn valid(page: &SidebarPage) -> bool {
     page.is_valid()
 }
 
+/// Entries the list shows: hidden system chats only when `show_hidden`, but
+/// always the open one (a hidden chat opened by its URL stays selectable).
+pub fn shown(entries: &[SidebarEntry], show_hidden: bool, selected: &str) -> Vec<SidebarEntry> {
+    entries
+        .iter()
+        .filter(|e| show_hidden || !e.hidden || e.key == selected)
+        .cloned()
+        .collect()
+}
+
 struct Node<'a> {
     entry: &'a SidebarEntry,
     children: Vec<usize>,

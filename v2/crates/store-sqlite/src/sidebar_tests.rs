@@ -303,3 +303,61 @@ async fn v1_links_name_each_conversations_linked_thread() {
     );
     case.finish().await;
 }
+
+#[tokio::test]
+async fn hidden_entries_are_owner_marks_that_never_touch_the_chat() {
+    let case = Case::new().await;
+    let chat = case.conversation("synthetic-probe").await;
+    let native = SidebarKey::V2(chat.clone());
+    let linked = SidebarKey::V1("synthetic-probe-thread".into());
+    let hide = |key: &SidebarKey, hidden: bool, reason: Option<&'static str>| {
+        let (store, token, owner, key) = (&case.store, &case.token, &case.owner, key.clone());
+        async move {
+            store
+                .set_sidebar_hidden(token, owner, &key, hidden, reason)
+                .await
+        }
+    };
+    assert_eq!(hide(&native, true, Some("synthetic probe")).await, Ok(true));
+    assert_eq!(
+        hide(&native, true, Some("synthetic probe")).await,
+        Ok(false)
+    );
+    assert_eq!(hide(&native, true, Some("renamed reason")).await, Ok(true));
+    assert_eq!(hide(&linked, true, None).await, Ok(true));
+    let list = case
+        .store
+        .sidebar_conversations(&case.token, &case.owner)
+        .await
+        .unwrap();
+    assert_eq!(
+        list.hidden.iter().cloned().collect::<Vec<_>>(),
+        vec![linked.to_string(), native.to_string()]
+    );
+    // The conversation itself is still listed (the server filters), unchanged.
+    assert!(list.conversations.iter().any(|c| c.conversation_id == chat));
+    assert_eq!(hide(&linked, false, None).await, Ok(true));
+    assert_eq!(hide(&linked, false, None).await, Ok(false));
+    let list = case
+        .store
+        .sidebar_conversations(&case.token, &case.owner)
+        .await
+        .unwrap();
+    assert_eq!(list.hidden.len(), 1);
+    // Unknown conversations, bad reasons and wrong credentials are refused.
+    let unknown = SidebarKey::V2(ConversationId(uuid::Uuid::new_v4()));
+    assert_eq!(
+        hide(&unknown, true, None).await,
+        Err(ResourceError::NotFound)
+    );
+    assert_eq!(
+        hide(&native, true, Some("  ")).await,
+        Err(ResourceError::Invalid)
+    );
+    assert_eq!(
+        case.store
+            .set_sidebar_hidden("wrong-credential", &case.owner, &native, false, None)
+            .await,
+        Err(ResourceError::Unauthorized)
+    );
+}

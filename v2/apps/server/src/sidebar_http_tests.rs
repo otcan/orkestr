@@ -996,3 +996,161 @@ fn v1_receipts_are_bounded_and_refusals_are_definite() {
         format!("orkestr-v2-{}", input.client_message_id)
     );
 }
+
+#[test]
+fn visibility_hides_marked_entries_their_sub_chats_and_moved_v1_threads() {
+    let threads = sidebar_v1::parse_registry(&registry()).unwrap();
+    let plain = row("Synthetic native", Some("2026-01-02T12:00:00.000Z"));
+    let mut moved = row("Synthetic imported group", None);
+    moved.source_thread_id = Some("group-imported".into());
+    let (plain_key, moved_key) = (
+        format!("v2:{}", plain.conversation_id),
+        format!("v2:{}", moved.conversation_id),
+    );
+    let page = || {
+        compose(
+            vec![native(plain.clone()), native(moved.clone())],
+            LinkedSource::Registry(&threads),
+            &BTreeMap::new(),
+            &HashMap::new(),
+            &HashSet::new(),
+            SidebarV1Status::Ready,
+            false,
+            1,
+        )
+    };
+    let all = page();
+    let total = all.entries.len();
+    assert!(all.entries.iter().all(|e| !e.hidden));
+    // A V1 group with a worker sub-chat, and a V1 thread that moved to V2.
+    let hidden: BTreeSet<String> = ["v1:group-coordinated", "v1:group-imported"]
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+    let mut shown = page();
+    apply_visibility(&mut shown, &hidden, false);
+    let keys: Vec<&str> = shown.entries.iter().map(|e| e.key.as_str()).collect();
+    for gone in [
+        "v1:group-coordinated",
+        "v1:worker-group-coordinated-0001",
+        moved_key.as_str(),
+    ] {
+        assert!(!keys.contains(&gone), "{gone} listed");
+    }
+    assert!(keys.contains(&plain_key.as_str()));
+    assert_eq!(shown.hidden_count, 3);
+    assert_eq!(shown.entries.len(), total - 3);
+    assert!(shown.is_valid());
+    let mut everything = page();
+    apply_visibility(&mut everything, &hidden, true);
+    assert_eq!(everything.entries.len(), total);
+    assert_eq!(everything.hidden_count, 3);
+    assert!(by_key(&everything, "v1:worker-group-coordinated-0001").hidden);
+    assert!(by_key(&everything, &moved_key).hidden);
+    assert!(!by_key(&everything, &plain_key).hidden);
+    assert!(everything.is_valid());
+    // Nothing hidden: the page is unchanged.
+    let mut same = page();
+    apply_visibility(&mut same, &BTreeSet::new(), false);
+    assert_eq!(same, all);
+}
+
+#[tokio::test]
+async fn hidden_system_chats_leave_the_default_list_but_stay_reachable() {
+    let mut case = case().await;
+    let auth = case.auth();
+    let calls = StdArc::new(StdMutex::new(Vec::new()));
+    let url = fake_v1(calls.clone()).await;
+    case.state.desktop_broker = Some(Arc::new(
+        desktop_broker::Broker::new(&url, V1_TOKEN.into()).unwrap(),
+    ));
+    let native_key = format!("v2:{}", case.conversation);
+    let put = |body: Value| {
+        let (state, auth) = (case.state.clone(), auth.clone());
+        async move {
+            send(
+                &state,
+                "PUT",
+                "/api/v2/sidebar/visibility",
+                &[&auth],
+                &body.to_string(),
+            )
+            .await
+        }
+    };
+    let (status, body) = put(json!({"key": "v1:group-coordinated", "hidden": true,
+        "reason": "Synthetic health probe"}))
+    .await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["changed"], true);
+    let (status, body) = put(json!({"key": native_key, "hidden": true})).await;
+    assert_eq!((status, body["changed"].as_bool()), (200, Some(true)));
+    // Invalid keys, a reason on show, unknown fields and unknown chats.
+    for bad in [
+        json!({"key": "v9:x", "hidden": true}),
+        json!({"key": "v1:group-quiet", "hidden": false, "reason": "x"}),
+        json!({"key": "v1:group-quiet", "hidden": true, "extra": 1}),
+    ] {
+        assert_eq!(put(bad.clone()).await.0, 400, "{bad}");
+    }
+    let unknown = format!("v2:{}", Uuid::new_v4());
+    assert_eq!(put(json!({"key": unknown, "hidden": true})).await.0, 404);
+
+    let (status, page) = send(&case.state, "GET", "/api/v2/sidebar", &[&auth], "").await;
+    assert_eq!(status, 200, "{page}");
+    let page: SidebarPage = serde_json::from_value(page).unwrap();
+    assert!(page.is_valid());
+    let keys: Vec<&str> = page.entries.iter().map(|e| e.key.as_str()).collect();
+    assert!(!keys.contains(&"v1:group-coordinated"));
+    assert!(!keys.contains(&"v1:worker-group-coordinated-0001"));
+    assert!(!keys.contains(&native_key.as_str()));
+    assert!(keys.contains(&"v1:group-quiet"));
+    assert_eq!(page.hidden_count, 3);
+    let (status, page) = send(
+        &case.state,
+        "GET",
+        "/api/v2/sidebar?include_hidden=true",
+        &[&auth],
+        "",
+    )
+    .await;
+    assert_eq!(status, 200, "{page}");
+    let page: SidebarPage = serde_json::from_value(page).unwrap();
+    assert!(page.is_valid());
+    assert_eq!(page.entries.iter().filter(|e| e.hidden).count(), 3);
+    assert!(by_key(&page, "v1:group-coordinated").hidden);
+    assert!(!by_key(&page, "v1:group-quiet").hidden);
+    let (status, _) = send(&case.state, "GET", "/api/v2/sidebar?other=1", &[&auth], "").await;
+    assert_eq!(status, 400);
+
+    // Still reachable: its history opens and the native chat reads normally.
+    let (status, _) = send(
+        &case.state,
+        "GET",
+        "/api/v2/v1-threads/group-coordinated/messages",
+        &[&auth],
+        "",
+    )
+    .await;
+    assert_eq!(status, 200);
+    let (status, _) = send(&case.state, "GET", &case.path(""), &[&auth], "").await;
+    assert_eq!(status, 200);
+
+    // Showing again restores the default list; unauthenticated writes fail.
+    let (status, body) = put(json!({"key": native_key, "hidden": false})).await;
+    assert_eq!((status, body["changed"].as_bool()), (200, Some(true)));
+    let (_, page) = send(&case.state, "GET", "/api/v2/sidebar", &[&auth], "").await;
+    let page: SidebarPage = serde_json::from_value(page).unwrap();
+    assert!(page.entries.iter().any(|e| e.key == native_key));
+    assert_eq!(page.hidden_count, 2);
+    let (status, _) = send(
+        &case.state,
+        "PUT",
+        "/api/v2/sidebar/visibility",
+        &[],
+        r#"{"key":"v1:group-quiet","hidden":true}"#,
+    )
+    .await;
+    assert_eq!(status, 401);
+    case.finish().await;
+}
