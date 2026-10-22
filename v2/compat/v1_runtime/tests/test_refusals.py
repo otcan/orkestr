@@ -54,9 +54,10 @@ class RefusalTests(unittest.TestCase):
 
     def test_refused_input_notifies_owner_and_later_input_proceeds(self):
         first, _ = self.ledger.enqueue(body("first"))
-        self.ledger.enqueue(body("second"))
         self.fail_route("/window", response=(409, {"error": {"code": "window_stale"}}))
         self.worker.run_once(Stop())
+        # Sent after the first went to Rust, so it is not part of its burst.
+        self.ledger.enqueue(body("second"))
         notice = self.assistant()
         self.assertEqual([m["parentMessageId"] for m in notice], [first["remote_id"]])
         self.assertEqual(notice[0]["refusal"], "window_refused")

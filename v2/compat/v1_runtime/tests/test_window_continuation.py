@@ -279,10 +279,11 @@ class RepeatedOrphanTests(Case):
             self.orphan_once()
 
     def test_limit_refusal_through_run_once_lets_the_next_input_proceed(self):
-        later, _ = self.ledger.enqueue(dict(publicMessageId="later", publicThreadId="thread", chatId="chat",
-                                            accountId="account", text="next"))
         for _ in range(3):
             self.orphan_once()
+        # Arrives after the first input went to Rust, so it runs on its own.
+        later, _ = self.ledger.enqueue(dict(publicMessageId="later", publicThreadId="thread", chatId="chat",
+                                            accountId="account", text="next"))
         data = self.ledger.next_input()
         self.worker.step(data)
         data = self.ledger.next_input()
