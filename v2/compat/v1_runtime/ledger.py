@@ -52,6 +52,13 @@ class Conflict(ValueError):
     pass
 
 
+def arrived(data, default=None):
+    """When an input arrived: queued for a WhatsApp input, admitted for a V2
+    timer occurrence (which is never queued here)."""
+    since = data.get("queued_at", data.get("admitted_at"))
+    return since if isinstance(since, (int, float)) else default
+
+
 def no_reply(text):
     return isinstance(text, str) and text.strip() == "NO_REPLY"
 
@@ -325,12 +332,14 @@ class Ledger:
             data["phase"] = "completed"
             self._settle(db, data, outcome)
 
-    def refuse(self, data, reason):
+    def refuse(self, data, reason, alert=False):
         """Close an input that will not get a reply, with a visible owner notice.
 
         The notice is exported as the input's final reply, so V1 delivers it
         like any other and its acknowledgement settles the input. Later inputs
-        are no longer held behind it. Nothing is resent to Rust.
+        are no longer held behind it. Nothing is resent to Rust. With `alert`
+        the input also keeps a terminal `stalled` marker (`failed` set), which
+        the operator stall watch reports once although the input is completed.
         """
         reason = str(reason)[:200] or "refused"
         with self.connect() as db:
@@ -342,6 +351,9 @@ class Ledger:
                        "phase": "final_answer", "kind": "notice", "source": "rust-v2-adapter",
                        "parentMessageId": data["remote_id"], "refusal": reason, "text": refusal_notice(reason)}
             data.pop("blocked", None)
+            if alert:
+                now = time.time()
+                data["stalled"] = {"at": now, "phase": data.get("phase"), "since": arrived(data, now), "failed": reason}
             data.update(phase="completed", refused={"reason": reason, "phase": data.get("phase"), "atMs": int(time.time() * 1000)})
             self.save(data, db)
             self._export(db, data, "final", "final:" + data["remote_id"], message)
@@ -426,10 +438,10 @@ class Ledger:
                               "ORDER BY rowid").fetchall()
             for (raw,) in rows:
                 data = json.loads(raw)
-                since = data.get("queued_at", data.get("admitted_at"))
+                since = arrived(data)
                 if not isinstance(since, (int, float)) or now - since < after_s:
                     continue
-                data["stalled"] = {"at": now, "phase": data.get("phase")}
+                data["stalled"] = {"at": now, "phase": data.get("phase"), "since": since}
                 self.save(data, db)
                 message = {"id": str(uuid.uuid5(NOTICE_NAMESPACE, "stalled:" + data["remote_id"])),
                            "role": "assistant", "state": "completed", "phase": "commentary", "kind": "progress",

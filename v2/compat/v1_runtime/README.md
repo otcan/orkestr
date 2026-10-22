@@ -278,6 +278,21 @@ normally. A held occurrence (timer disabled or handed back before it ran)
 settles silently with nothing exported. The first scan of a ledger records
 the current position and adopts nothing older.
 
+Occurrences of a binding are driven one at a time, so an occurrence is often
+driven after later ones already ran. Its Fast and Deep status is therefore read
+by run ID (`/execution?run_id=`, `/fast/execution?run_id=`), never through the
+conversation's current view, and an answer the server already accepted is
+adopted and classified as usual (silent answers settle as `no_reply`). An
+occurrence that has no Deep run of its own once every window of the
+conversation is closed (for example a window whose setup failed) is refused as
+`timer_window_ended_without_run`, so it never holds later occurrences behind
+it. Refused occurrences (that one, a failed or lost run, a malformed outcome)
+keep a terminal `stalled` marker with `failed: <reason>` and log
+`ALERT orkestr-v2-wa-adapter input_failed`, so the operator stall watch reports
+them once. A window still open or a run past its deadline stays a normal
+20-minute stall. Every `stalled` marker records `since`, when the input arrived
+(queued for WhatsApp input, admitted for a timer occurrence).
+
 ### Silent runs, digests and message triggers
 
 For calendar timers (`docs/v2/calendar-timers.md`) the adapter does three more
