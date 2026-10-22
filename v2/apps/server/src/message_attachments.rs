@@ -7,9 +7,11 @@
 //! UI appends it to the message, so the model sees the file. Nothing here
 //! admits input.
 //!
-//! Linked V1 chat: the files are uploaded to V1 (`POST /api/threads/:id/uploads`,
-//! as the V1 web UI does) and kept here for an hour under an upload id; the
-//! owner input then names those ids and V1 attaches the files to the message.
+//! Linked V1 chat: the files are uploaded to V1 as the V1 web UI does it — through
+//! V1's encrypted inbound sessions when V1 requires attachment encryption, else
+//! `POST /api/threads/:id/uploads` — and V1's attachment descriptors are kept here
+//! for an hour under an upload id; the owner input then names those ids and V1
+//! attaches the files to the message.
 use super::*;
 use crate::archived_history_http::owner_credential;
 use axum::extract::{rejection::JsonRejection, DefaultBodyLimit, Path};
@@ -364,6 +366,11 @@ pub(crate) async fn native_upload(
                 E::Unauthorized => unauthorized(),
                 E::NotFound => Error(StatusCode::NOT_FOUND, "not_found", "Conversation not found"),
                 E::Invalid => invalid(),
+                E::EncryptionKeyRequired => Error(
+                    StatusCode::CONFLICT,
+                    "attachment_encryption_key_required",
+                    "Attachments are stored encrypted for your browser keys, and none is enrolled. Open the app in your browser to enroll it, then retry",
+                ),
                 E::Conflict | E::Removed => Error(
                     StatusCode::CONFLICT,
                     "attachment_conflict",
@@ -431,41 +438,10 @@ pub(crate) async fn v1_upload(
             "This chat runs on V2; attach files in its V2 conversation",
         ));
     }
-    let files: Vec<Value> = upload
-        .files
-        .iter()
-        .map(|f| json!({"name": f.filename, "type": f.media_type, "contentBase64": f.content_base64}))
-        .collect();
-    let path = format!("/api/threads/{}/uploads", record.id);
-    let (status, value) = broker
-        .write("POST", &path, json!({ "files": files }), 4 * 1024 * 1024)
-        .await
-        .map_err(|_| {
-            Error(
-                StatusCode::GATEWAY_TIMEOUT,
-                "v1_upload_unknown",
-                "V1 did not confirm the upload; try again",
-            )
-        })?;
-    let attachments = match status {
-        200..=299 => value
-            .get("attachments")
-            .and_then(Value::as_array)
-            .cloned()
-            .filter(|a| a.len() == contents.len())
-            .ok_or(Error(
-                StatusCode::BAD_GATEWAY,
-                "v1_upload_unverified",
-                "V1 upload reply could not be verified",
-            ))?,
-        413 => return Err(too_large()),
-        _ => {
-            return Err(Error(
-                StatusCode::BAD_GATEWAY,
-                "v1_upload_refused",
-                "V1 refused the upload",
-            ))
-        }
+    let attachments = if v1_requires_encryption(&broker, &record.id).await? {
+        v1_encrypted_upload(&broker, &record.id, &upload, &contents).await?
+    } else {
+        v1_plain_upload(&broker, &record.id, &upload, contents.len()).await?
     };
     let mut summaries = Vec::with_capacity(attachments.len());
     for (i, (attachment, bytes)) in attachments.into_iter().zip(&contents).enumerate() {
@@ -488,6 +464,277 @@ pub(crate) async fn v1_upload(
         note: String::new(),
     })
     .into_response())
+}
+
+/// V1 encrypted inbound uploads take longer than a plain write: the
+/// ciphertext is up to 25 MiB and `process` decrypts and validates it.
+const V1_INBOUND_DEADLINE: Duration = Duration::from_secs(60);
+const V1_INBOUND_REPLY_MAX: usize = 1024 * 1024;
+/// V1 framing inside the age payload (`browser-inbound-attachment-payload.js`).
+const V1_INBOUND_MAGIC: &str = "ORKESTR-INBOUND-UPLOAD/1";
+
+fn v1_refused() -> Error {
+    Error(
+        StatusCode::BAD_GATEWAY,
+        "v1_upload_refused",
+        "V1 refused the upload",
+    )
+}
+fn v1_unknown() -> Error {
+    Error(
+        StatusCode::GATEWAY_TIMEOUT,
+        "v1_upload_unknown",
+        "V1 did not confirm the upload; try again",
+    )
+}
+fn v1_unverified() -> Error {
+    Error(
+        StatusCode::BAD_GATEWAY,
+        "v1_upload_unverified",
+        "V1 upload reply could not be verified",
+    )
+}
+
+/// Whether V1 takes files only through its encrypted inbound sessions
+/// (`ORKESTR_ATTACHMENT_ENCRYPTION_*`). Like the V1 web UI: a V1 without the
+/// inbound API or with it disabled keeps the plain upload.
+async fn v1_requires_encryption(
+    broker: &crate::desktop_broker::Broker,
+    thread: &str,
+) -> Result<bool, Error> {
+    let path = format!("/api/attachment-encryption/inbound/status?threadId={thread}");
+    let (status, value) = broker
+        .read(&path, V1_INBOUND_REPLY_MAX)
+        .await
+        .map_err(|_| v1_unknown())?;
+    match status {
+        200 => {}
+        404 => return Ok(false),
+        _ => return Err(v1_refused()),
+    }
+    if value.get("enabled").and_then(Value::as_bool) != Some(true) {
+        return Ok(false);
+    }
+    if value.get("ready").and_then(Value::as_bool) != Some(true) {
+        return Err(Error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "v1_upload_not_ready",
+            "V1 encrypted uploads are not ready; try again shortly",
+        ));
+    }
+    Ok(true)
+}
+
+/// `POST /api/threads/:id/uploads` (V1 without required encryption).
+async fn v1_plain_upload(
+    broker: &crate::desktop_broker::Broker,
+    thread: &str,
+    upload: &MessageAttachmentUpload,
+    count: usize,
+) -> Result<Vec<Value>, Error> {
+    let files: Vec<Value> = upload
+        .files
+        .iter()
+        .map(|f| json!({"name": f.filename, "type": f.media_type, "contentBase64": f.content_base64}))
+        .collect();
+    let path = format!("/api/threads/{thread}/uploads");
+    let (status, value) = broker
+        .write("POST", &path, json!({ "files": files }), 4 * 1024 * 1024)
+        .await
+        .map_err(|_| v1_unknown())?;
+    match status {
+        200..=299 => value
+            .get("attachments")
+            .and_then(Value::as_array)
+            .cloned()
+            .filter(|a| a.len() == count)
+            .ok_or_else(v1_unverified),
+        413 => Err(too_large()),
+        _ => Err(v1_refused()),
+    }
+}
+
+/// V1's encrypted inbound upload, as its web UI does it: one session per
+/// file, the framed file age-encrypted to the session recipient V1 issued,
+/// the ciphertext uploaded, then processed. Session idempotency keys derive
+/// from the request key, so a retry resumes the same sessions.
+async fn v1_encrypted_upload(
+    broker: &crate::desktop_broker::Broker,
+    thread: &str,
+    upload: &MessageAttachmentUpload,
+    contents: &[Vec<u8>],
+) -> Result<Vec<Value>, Error> {
+    let files: Vec<Value> = contents
+        .iter()
+        .enumerate()
+        .map(|(i, bytes)| {
+            json!({
+                "idempotencyKey": derived(&upload.request_key, &format!("v1-inbound-{thread}-{i}")).to_string(),
+                "plaintextSize": bytes.len(),
+            })
+        })
+        .collect();
+    let (status, value) = broker
+        .write_within(
+            V1_INBOUND_DEADLINE,
+            "POST",
+            "/api/attachment-encryption/inbound/sessions",
+            json!({ "threadId": thread, "files": files }),
+            V1_INBOUND_REPLY_MAX,
+        )
+        .await
+        .map_err(|_| v1_unknown())?;
+    let sessions = match status {
+        200..=299 => value
+            .get("sessions")
+            .and_then(Value::as_array)
+            .cloned()
+            .filter(|s| s.len() == contents.len())
+            .ok_or_else(v1_unverified)?,
+        413 => return Err(too_large()),
+        _ => return Err(v1_refused()),
+    };
+    let mut attachments = Vec::with_capacity(sessions.len());
+    for (i, mut session) in sessions.into_iter().enumerate() {
+        let id = session_id(&session)?;
+        if state(&session) == "receiving" {
+            let descriptor = session
+                .get("descriptor")
+                .cloned()
+                .ok_or_else(v1_unverified)?;
+            let file = &upload.files[i];
+            let ciphertext = inbound_ciphertext(
+                &descriptor,
+                &file.filename,
+                &file.media_type,
+                contents[i].clone(),
+            )
+            .await?;
+            session = inbound_step(
+                broker
+                    .write_bytes_within(
+                        V1_INBOUND_DEADLINE,
+                        "PUT",
+                        &format!("/api/attachment-encryption/inbound/sessions/{id}/ciphertext"),
+                        "application/age",
+                        ciphertext,
+                        V1_INBOUND_REPLY_MAX,
+                    )
+                    .await,
+            )?;
+        }
+        if matches!(state(&session), "quarantined" | "retryable") {
+            session = inbound_step(
+                broker
+                    .write_within(
+                        V1_INBOUND_DEADLINE,
+                        "POST",
+                        &format!("/api/attachment-encryption/inbound/sessions/{id}/process"),
+                        json!({}),
+                        V1_INBOUND_REPLY_MAX,
+                    )
+                    .await,
+            )?;
+        }
+        match (state(&session), session.get("attachment")) {
+            ("ready", Some(attachment)) if attachment.is_object() => {
+                attachments.push(attachment.clone())
+            }
+            _ => return Err(v1_refused()),
+        }
+    }
+    Ok(attachments)
+}
+
+fn state(session: &Value) -> &str {
+    session.get("state").and_then(Value::as_str).unwrap_or("")
+}
+
+/// A V1 session id, checked before it becomes part of a request path.
+fn session_id(session: &Value) -> Result<String, Error> {
+    session
+        .get("id")
+        .and_then(Value::as_str)
+        .filter(|id| {
+            !id.is_empty()
+                && id.len() <= 128
+                && id
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+        })
+        .map(str::to_owned)
+        .ok_or_else(v1_unverified)
+}
+
+fn inbound_step(
+    reply: Result<(u16, Value), crate::desktop_broker::BrokerError>,
+) -> Result<Value, Error> {
+    let (status, value) = reply.map_err(|_| v1_unknown())?;
+    match status {
+        200..=299 => value.get("session").cloned().ok_or_else(v1_unverified),
+        413 => Err(too_large()),
+        _ => Err(v1_refused()),
+    }
+}
+
+/// The V1 inbound payload (`ORKESTR-INBOUND-UPLOAD/1\n<len>\n<json><bytes>`)
+/// age-encrypted to the recipient in V1's signed session descriptor.
+async fn inbound_ciphertext(
+    descriptor: &Value,
+    filename: &str,
+    media_type: &str,
+    bytes: Vec<u8>,
+) -> Result<Vec<u8>, Error> {
+    let text = |key: &str| descriptor.get(key).and_then(Value::as_str).unwrap_or("");
+    let number = |key: &str| descriptor.get(key).and_then(Value::as_u64).unwrap_or(0);
+    let recipient: age::x25519::Recipient =
+        text("recipient").parse().map_err(|_| v1_unverified())?;
+    if text("sessionId").is_empty() || text("keyId").is_empty() || text("signature").is_empty() {
+        return Err(v1_unverified());
+    }
+    let header = json!({
+        "version": 1,
+        "sessionId": text("sessionId"),
+        "keyId": text("keyId"),
+        "filename": filename,
+        "mimetype": media_type.to_ascii_lowercase(),
+        "plaintextSize": bytes.len(),
+        "descriptor": {
+            "version": number("version"),
+            "sessionId": text("sessionId"),
+            "keyId": text("keyId"),
+            "keyVersion": number("keyVersion"),
+            "recipient": text("recipient"),
+            "purpose": text("purpose"),
+            "expiresAt": text("expiresAt"),
+            "maxPlaintextBytes": number("maxPlaintextBytes"),
+            "signature": text("signature"),
+        },
+    })
+    .to_string();
+    tokio::task::spawn_blocking(move || {
+        use std::io::Write;
+        let mut plain = Vec::with_capacity(bytes.len() + header.len() + 64);
+        plain.extend_from_slice(format!("{V1_INBOUND_MAGIC}\n{}\n", header.len()).as_bytes());
+        plain.extend_from_slice(header.as_bytes());
+        plain.extend_from_slice(&bytes);
+        let encryptor =
+            age::Encryptor::with_recipients(std::iter::once(&recipient as &dyn age::Recipient))
+                .ok()?;
+        let mut out = Vec::with_capacity(plain.len() + 1024);
+        let mut writer = encryptor.wrap_output(&mut out).ok()?;
+        writer.write_all(&plain).ok()?;
+        writer.finish().ok()?;
+        Some(out)
+    })
+    .await
+    .ok()
+    .flatten()
+    .ok_or(Error(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "v1_upload_encrypt_failed",
+        "Could not encrypt the file for V1",
+    ))
 }
 
 #[cfg(test)]

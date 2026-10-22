@@ -252,6 +252,30 @@ impl Broker {
             .map_err(|_| BrokerError::Unavailable)?
     }
 
+    /// Raw-body write forwarded to V1 (an `application/age` ciphertext for
+    /// the encrypted inbound upload), with an explicit deadline.
+    pub(crate) async fn write_bytes_within(
+        &self,
+        deadline: Duration,
+        method: &str,
+        path: &str,
+        content_type: &str,
+        bytes: Vec<u8>,
+        cap: usize,
+    ) -> Result<(u16, Value), BrokerError> {
+        let started = std::time::Instant::now();
+        let result = tokio::time::timeout(
+            deadline,
+            self.exchange_once(method, path, Some((content_type, bytes)), cap),
+        )
+        .await
+        .map_err(|_| BrokerError::Unavailable)
+        .and_then(|r| r);
+        let status = result.as_ref().map_or(0, |(status, _)| *status);
+        crate::observability::upstream("v1", route_template(method, path), status, started);
+        result
+    }
+
     async fn exchange(
         &self,
         method: &str,
@@ -260,6 +284,7 @@ impl Broker {
         cap: usize,
     ) -> Result<(u16, Value), BrokerError> {
         let started = std::time::Instant::now();
+        let body = body.map(|b| ("application/json", b.to_string().into_bytes()));
         let result = self.exchange_once(method, path, body, cap).await;
         let status = result.as_ref().map_or(0, |(status, _)| *status);
         crate::observability::upstream("v1", route_template(method, path), status, started);
@@ -270,10 +295,10 @@ impl Broker {
         &self,
         method: &str,
         path: &str,
-        body: Option<Value>,
+        body: Option<(&str, Vec<u8>)>,
         cap: usize,
     ) -> Result<(u16, Value), BrokerError> {
-        let payload = body.map(|b| b.to_string()).unwrap_or_default();
+        let (content_type, payload) = body.unwrap_or_default();
         let mut request = format!(
             "{method} {path} HTTP/1.1\r\nHost: {}\r\nAuthorization: Bearer {}\r\nAccept: application/json\r\nConnection: close\r\nContent-Length: {}\r\n",
             self.host, self.token, payload.len()
@@ -283,15 +308,18 @@ impl Broker {
             request.push_str(&format!("X-Request-Id: {id}\r\n"));
         }
         if !payload.is_empty() {
-            request.push_str("Content-Type: application/json\r\n");
+            request.push_str(&format!("Content-Type: {content_type}\r\n"));
         }
         request.push_str("\r\n");
-        request.push_str(&payload);
         let mut socket = tokio::net::TcpStream::connect(self.address)
             .await
             .map_err(|_| BrokerError::Unavailable)?;
         socket
             .write_all(request.as_bytes())
+            .await
+            .map_err(|_| BrokerError::Unavailable)?;
+        socket
+            .write_all(&payload)
             .await
             .map_err(|_| BrokerError::Unavailable)?;
         let mut raw = Vec::new();
@@ -324,7 +352,8 @@ pub(crate) fn route_template(method: &str, path: &str) -> String {
     let segments: Vec<&str> = path
         .split('/')
         .map(|segment| {
-            let keep = !matches!(previous, "threads" | "desktops") || segment == "summary";
+            let keep =
+                !matches!(previous, "threads" | "desktops" | "sessions") || segment == "summary";
             previous = segment;
             if keep {
                 segment

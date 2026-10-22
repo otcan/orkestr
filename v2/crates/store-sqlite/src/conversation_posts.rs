@@ -1,4 +1,4 @@
-//! Conversation posts (migration 0065): assistant-side messages from outside a
+//! Conversation posts (migration 0066): assistant-side messages from outside a
 //! run. Writing one records a row and nothing else: no message, event, input,
 //! wake, steer or execution. The delivery adapter lists pending rows and marks
 //! each delivered once its own ledger holds it.

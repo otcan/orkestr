@@ -146,7 +146,7 @@ pub fn AcceptedReplies(
                                         if !quote.unavailable { p { "{quote.text}" } }
                                     }
                                 }
-                                p { "{input.text}" }
+                                crate::rich_text_view::RichText { text: input.text.clone() }
                             } },
                             Row::Reply(reply) => rsx! { AcceptedReply { conversation:id.clone(), row:reply.clone(), session_scope, onexpired } },
                             Row::Post(post) => rsx! { crate::conversation_posts_view::PostBubble { post: post.clone() } },
@@ -273,7 +273,7 @@ fn AcceptedReply(
         "data-payload-id": "{payload_id}",
         strong { "Assistant" }
         span { class: "reply-state", if row.payload_removed { "Reply output removed." } else { "{notice}" } }
-        if !row.payload_removed { if let Some(text)=output.read().text.as_ref(){pre { "data-accepted-output": "true", "{text}"}} }
+        if !row.payload_removed { if let Some(text)=output.read().text.clone(){div { class: "accepted-output", "data-accepted-output": "true", crate::rich_text_view::RichText { text } }} }
         details {summary {"Reply details"} p {"Run: {row.run_id}"} p {"Completion: {row.completion_event_id}"} p {"Acceptance: {row.acceptance_event_id}"} p { if row.auto_accepted { "Accepted automatically by the server for you." } else { "Accepted by you." } }}
     } }
 }

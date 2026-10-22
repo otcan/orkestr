@@ -117,8 +117,10 @@ pub fn ArchivedHistory(
                             {
                                 let (head, cut) = preview(&entry.message.text);
                                 rsx! {
-                                    p { "{head}" }
-                                    if cut { details { summary { "Show full message" } p { "{entry.message.text}" } } }
+                                    if cut {
+                                        crate::rich_text_view::RichText { text: head.to_string() }
+                                        details { summary { "Show full message" } crate::rich_text_view::RichText { text: entry.message.text.clone() } }
+                                    } else { crate::rich_text_view::RichText { text: entry.message.text.clone() } }
                                 }
                             }
                             if !entry.message.attachments.is_empty() {

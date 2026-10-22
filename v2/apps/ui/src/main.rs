@@ -3,6 +3,7 @@ mod acceptance_button;
 mod accepted_results_bridge;
 mod accepted_results_view;
 mod archived_history_view;
+mod attachment_keys_view;
 mod attachments_view;
 mod beta_bridge;
 mod beta_discovery;
@@ -39,6 +40,7 @@ mod page_memory_bridge;
 mod progress_view;
 mod projects_view;
 mod restricted_view;
+mod rich_text_view;
 mod scroll_pin;
 mod send_admission;
 mod steering_view;
@@ -248,6 +250,7 @@ fn App() -> Element {
                 workspace::Workspace { key: "{session_scope.read().generation()}-{refresh}", current, csrf: csrf(), session_scope, execution, drafts, held_inputs, onexpired: expired }
             }
             if !csrf().is_empty() {
+                    attachment_keys_view::AttachmentKeyEnrollment { key: "keys-{session_scope.read().generation()}", csrf: csrf() }
                     button { class: "sign-out", disabled: logging_out(), onclick: move |_| {
                         if logging_out() { return; }
                         logging_out.set(true);

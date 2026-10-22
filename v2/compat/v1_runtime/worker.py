@@ -36,6 +36,8 @@ RESET_KEYS = ("intake", "cursor", "window", "window_request", "previous_window",
               "progress_at", "fast_unusable_since", "intake_rules")
 # An admitted input whose window ended without starting any run of it.
 ORPHAN_GRACE_S = 60
+# How often an input whose window ended before any run of it started is sent again.
+MAX_ORPHAN_REQUEUES = 3
 # Deep phases a window work deadline leaves behind.
 DEADLINE_STOP_PHASES = ("cancelled", "stopped", "interrupted")
 CONTINUE_NOTICE = ("Continuing in a new turn: the previous turn reached its time limit "
@@ -653,25 +655,45 @@ class Worker:
             except Exception:
                 pass
 
+    def window_ended(self, data):
+        """Whether this input's window is over: closed or retiring, past its work
+        deadline, replaced by another window, or no window exists any more."""
+        window = data.get("window") or {}
+        own = (window.get("status") or {}).get("window_id") or window.get("window_id")
+        current = self.call("GET", "/window", allowed=(200, 204))
+        if not isinstance(current, dict) or (own is not None and current.get("window_id") != own):
+            return True
+        if current.get("state") in ("retiring", "closed"):
+            return True
+        deadline = current.get("work_deadline_ms")
+        return (current.get("state") == "active" and type(deadline) is int and
+                deadline <= time.time() * 1000)
+
     def requeue_orphaned(self, data, ids):
-        """Send an input again once when its window ended before any run of it
-        started (for example a follow-up that joined a window held by another
-        input's unaccepted proposals). Nothing of it ran, so no notice."""
-        if ids or data.get("requeued") or data.get("origin") == "timer" or "window" not in data:
+        """Send an input again when its window ended before any run of it started
+        (for example a follow-up that joined a window held by another input's
+        unaccepted proposals, or a window whose setup failed). Nothing of it ran,
+        so no notice. At most MAX_ORPHAN_REQUEUES times per input; after that it
+        is refused with the owner notice so it settles and later inputs proceed.
+        Ledgers written before the counter count an existing `requeued` as one."""
+        if ids or data.get("origin") == "timer" or "window" not in data:
             return False
         now = time.time()
         since = data.setdefault("unstarted_since", now)
         if since == now:
             self.ledger.save(data)
-        if now - since < ORPHAN_GRACE_S or not self.deadline_stopped(data):
+        if now - since < ORPHAN_GRACE_S or not self.window_ended(data):
             return False
+        count = data.get("requeue_count", 1 if data.get("requeued") else 0)
+        if count >= MAX_ORPHAN_REQUEUES:
+            raise Refused("window_setup_failed")
         text = data.get("intake_text") or compose(data)
         previous = data["intake"]["message_id"]
         for key in RESET_KEYS + ("unstarted_since",):
             data.pop(key, None)
         for key in ("message", "window", "fast", "deep"):
             data["keys"][key] = str(uuid.uuid4())
-        data.update(intake_text=text, phase="queued", queued_at=now,
+        data.update(intake_text=text, phase="queued", queued_at=now, requeue_count=count + 1,
                     requeued={"previous_message_id": previous, "at": now})
         self.ledger.save(data)
         return True

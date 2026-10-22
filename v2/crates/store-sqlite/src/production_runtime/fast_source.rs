@@ -12,6 +12,8 @@ pub struct FastSource {
 impl Store {
     /// Exclusive journal-sequence cursor. Select the earliest immutable owner
     /// input not already scheduled as Fast and not held by Stop/timer authority.
+    /// Timer occurrences are Deep-only: Fast never presents a timer input, so
+    /// one occurrence executes its instructions exactly once.
     /// Absence grants no readiness. A source selected before Stop can still be
     /// refused by admission; a caller must never convert that refusal to retry I/O.
     pub async fn next_fast_source(
@@ -31,7 +33,7 @@ impl Store {
         let window = self
             .execution_window_input_in(&mut tx, conversation, None)
             .await?;
-        let row = sqlx::query("SELECT e.id,e.message_id,e.sequence FROM events e JOIN messages m ON m.id=e.message_id WHERE e.owner_id=? AND e.conversation_id=? AND m.owner_id=e.owner_id AND m.conversation_id=e.conversation_id AND e.kind='message_accepted' AND m.actor_kind='owner' AND e.sequence>? AND (? IS NULL OR EXISTS(SELECT 1 FROM execution_window_inputs i WHERE i.window_id=? AND i.event_id=e.id)) AND NOT EXISTS(SELECT 1 FROM production_runs r WHERE r.owner_id=e.owner_id AND r.event_id=e.id AND r.role='fast') AND NOT EXISTS(SELECT 1 FROM ordinary_input_holds h WHERE h.event_id=e.id) ORDER BY e.sequence LIMIT 1")
+        let row = sqlx::query("SELECT e.id,e.message_id,e.sequence FROM events e JOIN messages m ON m.id=e.message_id WHERE e.owner_id=? AND e.conversation_id=? AND m.owner_id=e.owner_id AND m.conversation_id=e.conversation_id AND e.kind='message_accepted' AND m.actor_kind='owner' AND e.sequence>? AND (? IS NULL OR EXISTS(SELECT 1 FROM execution_window_inputs i WHERE i.window_id=? AND i.event_id=e.id)) AND NOT EXISTS(SELECT 1 FROM production_runs r WHERE r.owner_id=e.owner_id AND r.event_id=e.id AND r.role='fast') AND NOT EXISTS(SELECT 1 FROM ordinary_input_holds h WHERE h.event_id=e.id) AND NOT EXISTS(SELECT 1 FROM dormant_timer_inputs t WHERE t.event_id=e.id) ORDER BY e.sequence LIMIT 1")
             .bind(c.owner.to_string()).bind(conversation.to_string()).bind(after_sequence)
             .bind(&window).bind(&window)
             .fetch_optional(&mut *tx).await.map_err(db)?;

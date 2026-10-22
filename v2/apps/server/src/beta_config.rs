@@ -47,6 +47,11 @@ pub(crate) struct BetaConfig {
     /// conversations without a choice when `default` is set).
     #[serde(default)]
     pub claude: Option<ClaudeWindow>,
+    /// Per-conversation Codex Deep/Fast working directory (for example a
+    /// migrated V1 thread's workspace with its AGENTS.md). Host full access
+    /// only; Workers and Claude keep their own configured workspaces.
+    #[serde(default)]
+    pub conversation_workspaces: std::collections::HashMap<ConversationId, PathBuf>,
 }
 
 /// Operator-pinned Claude service launcher. Account and full-access
@@ -63,6 +68,27 @@ pub(crate) struct ClaudeWindow {
     #[serde(default)]
     pub fast: bool,
 }
+/// Bound on per-conversation Codex working directories.
+pub(crate) const MAX_CONVERSATION_WORKSPACES: usize = 128;
+
+/// Absolute, normalized and bounded; never the filesystem root.
+pub(crate) fn conversation_workspace_path(path: &std::path::Path) -> bool {
+    use std::path::Component;
+    path.is_absolute()
+        && path != std::path::Path::new("/")
+        && path.to_str().is_some_and(|text| {
+            !text.contains('\0')
+                && text.len() <= 4096
+                && !text.ends_with('/')
+                && !text.ends_with("/.")
+                && !text.contains("/./")
+                && !text.contains("//")
+        })
+        && path
+            .components()
+            .all(|c| matches!(c, Component::RootDir | Component::Normal(_)))
+}
+
 /// Default total window lifetime while work is still running (minutes).
 /// Beta config file bound: room for many per-conversation command profiles.
 pub(crate) const MAX_BETA_CONFIG_BYTES: u64 = 262_144;
@@ -117,6 +143,18 @@ impl BetaConfig {
             || self.conversation_window_max_minutes.len() > 64
         {
             return Err("invalid window lifetime ceiling");
+        }
+        if !self.conversation_workspaces.is_empty()
+            && (self.host_full_access.is_none()
+                || self.conversation_workspaces.len() > MAX_CONVERSATION_WORKSPACES
+                || self
+                    .conversation_workspaces
+                    .iter()
+                    .any(|(conversation, path)| {
+                        conversation.0.is_nil() || !conversation_workspace_path(path)
+                    }))
+        {
+            return Err("invalid conversation workspaces");
         }
         if let Some(claude) = &self.claude {
             if !claude.launcher.is_absolute()
@@ -307,6 +345,29 @@ mod tests {
             let config: BetaConfig = serde_json::from_value(value).unwrap();
             assert!(config.validate().is_err(), "{bad}");
         }
+    }
+    #[test]
+    fn conversation_workspaces_require_host_access_and_normal_paths() {
+        let primary = "22222222-2222-4222-8222-222222222222";
+        let mut value = input();
+        value["conversation_workspaces"] = serde_json::json!({ primary: "/srv/v1-thread" });
+        let config: BetaConfig = serde_json::from_value(value.clone()).unwrap();
+        assert!(config.validate().is_err(), "requires host_full_access");
+        value["host_full_access"] =
+            serde_json::json!({"environment":{"HOME":"/home/example","PATH":"/usr/bin"}});
+        let config: BetaConfig = serde_json::from_value(value.clone()).unwrap();
+        config.validate().unwrap();
+        for bad in ["relative", "/", "/srv/../etc", "/srv/./x", "/srv/x/"] {
+            let mut value = value.clone();
+            value["conversation_workspaces"] = serde_json::json!({ primary: bad });
+            let config: BetaConfig = serde_json::from_value(value).unwrap();
+            assert!(config.validate().is_err(), "{bad}");
+        }
+        let mut value = value.clone();
+        value["conversation_workspaces"] =
+            serde_json::json!({ "00000000-0000-0000-0000-000000000000": "/srv/x" });
+        let config: BetaConfig = serde_json::from_value(value).unwrap();
+        assert!(config.validate().is_err(), "nil conversation");
     }
     #[test]
     fn each_conversation_finds_only_its_own_command_profile() {

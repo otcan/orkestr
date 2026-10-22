@@ -1,6 +1,6 @@
 # Conversation posts
 
-Status: implemented on `v2/rust-rewrite` (migration `0065`).
+Status: implemented on `v2/rust-rewrite` (migration `0066`).
 
 A conversation post is an assistant-side message written into a V2
 conversation from outside any run: an external coordinator session, or
@@ -13,7 +13,7 @@ wakes or steers a provider and never starts execution.
 
 ## Storage
 
-Table `conversation_posts` (migration `0065_conversation_posts.sql`):
+Table `conversation_posts` (migration `0066_conversation_posts.sql`):
 
 | Column | Meaning |
 | --- | --- |

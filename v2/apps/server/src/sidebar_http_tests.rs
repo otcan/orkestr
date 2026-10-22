@@ -346,6 +346,10 @@ pub(crate) async fn fake_v1_with_inputs(
 ) -> String {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
+    // Like production V1 with ORKESTR_ATTACHMENT_ENCRYPTION_REQUIRED=1: files
+    // only through encrypted inbound sessions, plain uploads refused.
+    let identity = age::x25519::Identity::generate();
+    let mut sessions = std::collections::HashMap::<String, Value>::new();
     tokio::spawn(async move {
         while let Ok((mut socket, _)) = listener.accept().await {
             let mut raw = Vec::new();
@@ -377,6 +381,7 @@ pub(crate) async fn fake_v1_with_inputs(
             }
             let method = head.split(' ').next().unwrap_or_default().to_owned();
             let path = head.split(' ').nth(1).unwrap_or_default().to_owned();
+            let raw_body = body.clone();
             let body: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
             let auth = head
                 .lines()
@@ -384,22 +389,22 @@ pub(crate) async fn fake_v1_with_inputs(
             calls.lock().unwrap().push(path.clone());
             let (status, body) = if !auth {
                 (401, json!({}))
+            } else if let Some(rest) = path.strip_prefix("/api/attachment-encryption/inbound/") {
+                fake_inbound(
+                    &identity,
+                    &mut sessions,
+                    &method,
+                    rest,
+                    &head,
+                    &body,
+                    &raw_body,
+                )
             } else if method == "POST" {
                 let rest = path.strip_prefix("/api/threads/").unwrap_or_default();
                 if let Some(thread) = rest.strip_suffix("/ui-input") {
                     ui_input(&inputs, thread, &body)
-                } else if let Some(thread) = rest.strip_suffix("/uploads") {
-                    // Like V1: files saved under the thread's upload directory.
-                    let files = body["files"].as_array().cloned().unwrap_or_default();
-                    let attachments: Vec<Value> = files.iter().map(|f| json!({
-                        "name": f["name"], "filename": f["name"], "mimetype": f["type"],
-                        "size": f["contentBase64"].as_str().map_or(0, |b| b.len() / 4 * 3),
-                        "path": format!("/synthetic-v1/uploads/{thread}/{}", f["name"].as_str().unwrap_or("x")),
-                        "source": "browser_upload"})).collect();
-                    (
-                        200,
-                        json!({"ok": true, "threadId": thread, "attachments": attachments}),
-                    )
+                } else if rest.ends_with("/uploads") {
+                    (409, json!({"error": "inbound_upload_encryption_required"}))
                 } else {
                     (404, json!({"error": "not_found"}))
                 }
@@ -429,6 +434,117 @@ pub(crate) async fn fake_v1_with_inputs(
         }
     });
     format!("http://{address}")
+}
+
+/// Synthetic V1 encrypted inbound uploads: a session per file with a signed
+/// descriptor, the age ciphertext decrypted and its framing checked, then
+/// `process` publishes the attachment under the thread's upload directory.
+fn fake_inbound(
+    identity: &age::x25519::Identity,
+    sessions: &mut std::collections::HashMap<String, Value>,
+    method: &str,
+    rest: &str,
+    head: &str,
+    body: &Value,
+    raw: &[u8],
+) -> (u16, Value) {
+    if method == "GET" && rest.starts_with("status?threadId=") {
+        return (
+            200,
+            json!({"ok": true, "enabled": true, "required": true, "ready": true,
+            "processingMode": "transport", "limits": {"maxFileBytes": 26214400, "maxFiles": 20}}),
+        );
+    }
+    if method == "POST" && rest == "sessions" {
+        let thread = body["threadId"].as_str().unwrap_or_default().to_owned();
+        let recipient = identity.to_public().to_string();
+        let out: Vec<Value> = body["files"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+            .iter()
+            .map(|f| {
+                let id = format!("inbound-{}", f["idempotencyKey"].as_str().unwrap_or("x"));
+                sessions
+                    .entry(id.clone())
+                    .or_insert_with(|| {
+                        json!({"id": id, "state": "receiving", "threadId": thread, "attachment": null,
+                        "descriptor": {"version": 1, "sessionId": id, "keyId": "synthetic-key",
+                        "keyVersion": 1, "recipient": recipient, "purpose": "inbound_attachment_upload",
+                        "expiresAt": "2099-01-01T00:00:00Z", "maxPlaintextBytes": f["plaintextSize"],
+                        "signature": "synthetic-signature"}})
+                    })
+                    .clone()
+            })
+            .collect();
+        return (201, json!({"ok": true, "sessions": out}));
+    }
+    let Some((id, action)) = rest
+        .strip_prefix("sessions/")
+        .and_then(|r| r.split_once('/'))
+    else {
+        return (404, json!({"error": "not_found"}));
+    };
+    let Some(session) = sessions.get_mut(id) else {
+        return (404, json!({"error": "not_found"}));
+    };
+    match (method, action) {
+        ("PUT", "ciphertext") if session["state"] == "receiving" => {
+            if !head.lines().any(|l| l == "Content-Type: application/age") {
+                return (
+                    415,
+                    json!({"error": "inbound_upload_ciphertext_content_type_required"}),
+                );
+            }
+            let Some(plain) = age::Decryptor::new(raw).ok().and_then(|d| {
+                let mut out = Vec::new();
+                std::io::Read::read_to_end(
+                    &mut d
+                        .decrypt(std::iter::once(identity as &dyn age::Identity))
+                        .ok()?,
+                    &mut out,
+                )
+                .ok()?;
+                Some(out)
+            }) else {
+                return (400, json!({"error": "inbound_upload_decrypt_failed"}));
+            };
+            let text = String::from_utf8_lossy(&plain).to_string();
+            let mut lines = text.splitn(3, '\n');
+            let (magic, length) = (
+                lines.next(),
+                lines.next().and_then(|l| l.parse::<usize>().ok()),
+            );
+            let prefix = format!("{}\n{}\n", magic.unwrap_or(""), length.unwrap_or(0));
+            let header: Value = plain
+                .get(prefix.len()..prefix.len() + length.unwrap_or(0))
+                .and_then(|h| serde_json::from_slice(h).ok())
+                .unwrap_or(Value::Null);
+            let content = plain.len() - prefix.len() - length.unwrap_or(0);
+            if magic != Some("ORKESTR-INBOUND-UPLOAD/1")
+                || header["sessionId"] != id
+                || header["descriptor"] != session["descriptor"]
+                || header["plaintextSize"].as_u64() != Some(content as u64)
+            {
+                return (400, json!({"error": "inbound_upload_payload_invalid"}));
+            }
+            session["state"] = json!("quarantined");
+            session["header"] = header;
+            (201, json!({"ok": true, "session": session}))
+        }
+        ("POST", "process") if session["state"] == "quarantined" => {
+            let header = session["header"].clone();
+            let name = header["filename"].as_str().unwrap_or("x");
+            session["state"] = json!("ready");
+            session["attachment"] = json!({"id": format!("inbound-attachment-{id}"),
+                "name": name, "filename": name, "mimetype": header["mimetype"],
+                "size": header["plaintextSize"],
+                "path": format!("/synthetic-v1/uploads/{}/{name}", session["threadId"].as_str().unwrap_or("")),
+                "source": "browser_encrypted_inbound", "uploadSessionId": id});
+            (201, json!({"ok": true, "session": session}))
+        }
+        _ => (409, json!({"error": "inbound_upload_state_invalid"})),
+    }
 }
 
 #[tokio::test]

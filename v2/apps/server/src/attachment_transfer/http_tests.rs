@@ -219,9 +219,10 @@ async fn http_persisted_bytes_replay_removal_and_revocation() {
     let export = format!("/conversations/{conversation}/attachment-manifests/{manifest}/export");
     let (status, body) = call(&socket, &token, "GET", &export, b"").await;
     assert_eq!(status, 200);
-    let bundle: AttachmentBundle = serde_json::from_slice(&body).unwrap();
+    let bundle: StoredAttachmentBundle = serde_json::from_slice(&body).unwrap();
     assert_eq!(bundle.manifest, request.target_manifest);
     assert_eq!(bundle.contents[0].bytes, request.source.contents[0].bytes);
+    assert_eq!(bundle.contents[0].format, StoredAttachmentFormat::Plain);
     let foreign = download.replace(&conversation.to_string(), &Uuid::new_v4().to_string());
     assert_eq!(call(&socket, &token, "GET", &foreign, b"").await.0, 404);
     assert_eq!(
@@ -366,7 +367,12 @@ async fn owned_http_process_kill_reopen_preserves_exact_bytes() {
         )
         .await
         .unwrap();
-    assert_eq!(bytes, request.source.contents[0].bytes);
+    assert_eq!(
+        bytes,
+        orkestr_v2_store_sqlite::attachment_store::StoredObject::Plain(
+            request.source.contents[0].bytes.clone()
+        )
+    );
     assert_eq!(
         reopened
             .import_attachment_bundle_authenticated(
@@ -381,4 +387,176 @@ async fn owned_http_process_kill_reopen_preserves_exact_bytes() {
         request.target_manifest
     );
     reopened.close().await;
+}
+
+/// Browser enrollment and sealed objects over real HTTP: the download and the
+/// export carry age ciphertext only; without an active key, uploads fail closed.
+#[tokio::test]
+async fn http_sealed_download_enrollment_and_fail_closed() {
+    use std::io::Read;
+    let (home, state, token) = tests::state().await;
+    let owner = state
+        .store
+        .credentials("synthetic-owner")
+        .await
+        .unwrap()
+        .unwrap()
+        .0;
+    let conversation = state.store.global(&owner).await.unwrap();
+    let socket = home.0.join("sealed.sock");
+    let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+    let app = crate::router(state.clone());
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let json = |body: Vec<u8>| serde_json::from_slice::<serde_json::Value>(&body).unwrap();
+    let decrypt = |identity: &age::x25519::Identity, bytes: &[u8]| -> Option<Vec<u8>> {
+        let mut out = Vec::new();
+        age::Decryptor::new(bytes)
+            .ok()?
+            .decrypt(std::iter::once(identity as &dyn age::Identity))
+            .ok()?
+            .read_to_end(&mut out)
+            .ok()?;
+        Some(out)
+    };
+    // Requiring encryption needs an enrolled key first.
+    let (status, body) = call(
+        &socket,
+        &token,
+        "POST",
+        "/attachment-keys/policy",
+        br#"{"required":true}"#,
+    )
+    .await;
+    assert_eq!(
+        (status, json(body)["code"].clone()),
+        (409, "attachment_encryption_key_required".into())
+    );
+    let identity = age::x25519::Identity::generate();
+    let recipient = identity.to_public().to_string();
+    let registration = serde_json::json!({"recipient": recipient, "label": "Synthetic browser"});
+    let (status, body) = call(
+        &socket,
+        &token,
+        "POST",
+        "/attachment-keys",
+        registration.to_string().as_bytes(),
+    )
+    .await;
+    assert_eq!(status, 200);
+    let pending = json(body);
+    assert_eq!(pending["status"], "pending_verification");
+    let challenge = crate::message_attachments::decode_base64(
+        pending["challenge"]["ciphertext_base64"].as_str().unwrap(),
+    )
+    .unwrap();
+    let proof = String::from_utf8(decrypt(&identity, &challenge).unwrap()).unwrap();
+    let id = pending["id"].as_str().unwrap();
+    let verify = format!("/attachment-keys/{id}/verify");
+    let (status, _) = call(&socket, &token, "POST", &verify, br#"{"proof":"wrong"}"#).await;
+    assert_eq!(status, 400);
+    let (status, body) = call(
+        &socket,
+        &token,
+        "POST",
+        &verify,
+        serde_json::json!({"proof": proof}).to_string().as_bytes(),
+    )
+    .await;
+    assert_eq!(
+        (status, json(body)["status"].clone()),
+        (200, "active".into())
+    );
+    let (status, body) = call(
+        &socket,
+        &token,
+        "POST",
+        "/attachment-keys/policy",
+        br#"{"required":true}"#,
+    )
+    .await;
+    assert_eq!((status, json(body)["required"].clone()), (200, true.into()));
+
+    let request = request(owner, conversation.clone());
+    let plain = request.source.contents[0].bytes.clone();
+    let imports = format!("/conversations/{conversation}/attachment-imports");
+    let (status, _) = call(
+        &socket,
+        &token,
+        "POST",
+        &imports,
+        &serde_json::to_vec(&request).unwrap(),
+    )
+    .await;
+    assert_eq!(status, 200);
+    let manifest = request.target_manifest.manifest_id;
+    let reference = request.target_manifest.references[0].reference_id;
+    let download = format!("/conversations/{conversation}/attachments/{manifest}/{reference}");
+    let (status, ciphertext) = call(&socket, &token, "GET", &download, b"").await;
+    assert_eq!(status, 200);
+    assert!(ciphertext.starts_with(b"age-encryption.org/v1\n"));
+    assert!(!ciphertext
+        .windows(b"synthetic".len())
+        .any(|w| w == b"synthetic"));
+    let payload = decrypt(&identity, &ciphertext).unwrap();
+    assert!(payload.starts_with(b"ORKESTR-ATTACHMENT-PAYLOAD/1\n"));
+    assert!(payload.ends_with(&plain));
+    let export = format!("/conversations/{conversation}/attachment-manifests/{manifest}/export");
+    let (status, body) = call(&socket, &token, "GET", &export, b"").await;
+    assert_eq!(status, 200);
+    let bundle: StoredAttachmentBundle = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        bundle.contents[0].format,
+        StoredAttachmentFormat::AgeX25519V1
+    );
+    assert_eq!(bundle.contents[0].bytes, ciphertext);
+    let (status, body) = call(&socket, &token, "GET", "/attachment-keys", b"").await;
+    let status_body = json(body);
+    assert_eq!(status, 200);
+    assert_eq!(
+        (
+            status_body["plaintext_objects"].clone(),
+            status_body["sealed_objects"].clone()
+        ),
+        (0.into(), 1.into())
+    );
+    assert!(status_body["keys"][0].get("challenge").unwrap().is_null());
+
+    // Revoking the only key leaves the required policy: new uploads fail closed.
+    let (status, _) = call(
+        &socket,
+        &token,
+        "POST",
+        &format!("/attachment-keys/{id}/revoke"),
+        br#"{"reason":"synthetic"}"#,
+    )
+    .await;
+    assert_eq!(status, 200);
+    let mut later = request.clone();
+    later.request_key = "after-revoke".into();
+    later.target_manifest.manifest_id = Uuid::new_v4();
+    later.target_manifest.references[0].reference_id = Uuid::new_v4();
+    later.mapping[0].target_reference_id = later.target_manifest.references[0].reference_id;
+    let (status, body) = call(
+        &socket,
+        &token,
+        "POST",
+        &imports,
+        &serde_json::to_vec(&later).unwrap(),
+    )
+    .await;
+    assert_eq!(
+        (status, json(body)["error"].clone()),
+        (409, "attachment_encryption_key_required".into())
+    );
+    let (status, _) = call(
+        &socket,
+        "cd".repeat(32).as_str(),
+        "GET",
+        "/attachment-keys",
+        b"",
+    )
+    .await;
+    assert_eq!(status, 401);
+    server.abort();
+    state.store.close().await;
 }

@@ -2,7 +2,7 @@
 -- coordinator session or operator alert tooling). A post never creates an
 -- input, never wakes or steers a provider and never starts execution. The UI
 -- shows it after the conversation event at `after_sequence`; the WhatsApp
--- delivery adapter exports it once and marks it delivered. 0064 precedes it.
+-- delivery adapter exports it once and marks it delivered. 0065 precedes it.
 CREATE TABLE conversation_posts (
  id TEXT PRIMARY KEY CHECK(length(id)=36),
  owner_id TEXT NOT NULL,

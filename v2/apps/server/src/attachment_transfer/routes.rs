@@ -8,7 +8,7 @@ use axum::{
     Json, Router,
 };
 use orkestr_v2_contracts::*;
-use orkestr_v2_store_sqlite::attachment_store::AttachmentError;
+use orkestr_v2_store_sqlite::attachment_store::{AttachmentError, StoredObject};
 use serde::Deserialize;
 use uuid::Uuid;
 
@@ -45,6 +45,13 @@ pub(super) fn failure(error: AttachmentError) -> Response {
         Removed => StatusCode::GONE,
         Inert | Conflict => StatusCode::CONFLICT,
         Unavailable => StatusCode::SERVICE_UNAVAILABLE,
+        EncryptionKeyRequired => {
+            return (
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({"error":"attachment_encryption_key_required"})),
+            )
+                .into_response()
+        }
     };
     (
         status,
@@ -121,7 +128,15 @@ async fn bytes(
         .download_attachment_authenticated(&credential, &owner, &conversation, manifest, reference)
         .await
     {
-        Ok((reference, bytes)) => download::response(&reference, bytes)
+        Ok((reference, StoredObject::Plain(bytes))) => download::response(&reference, bytes)
+            .unwrap_or_else(|_| failure(AttachmentError::Unavailable)),
+        Ok((
+            reference,
+            StoredObject::Sealed {
+                ciphertext,
+                recipient_fingerprints,
+            },
+        )) => download::sealed_response(&reference, ciphertext, &recipient_fingerprints)
             .unwrap_or_else(|_| failure(AttachmentError::Unavailable)),
         Err(e) => failure(e),
     }
