@@ -358,3 +358,90 @@ async fn mapping_is_immutable_and_enable_must_target_it() {
     f.store.close().await;
     std::fs::remove_dir_all(f.root).unwrap();
 }
+
+#[tokio::test]
+async fn timer_occurrence_is_deep_only_and_never_presented_to_fast() {
+    use orkestr_v2_application::IntakeStore;
+    use orkestr_v2_contracts::MessageInput;
+    let f = setup().await;
+    let roles = f
+        .handle
+        .ensure_role_bindings(&f.owner, &f.conversation)
+        .await
+        .unwrap();
+    let fast = f
+        .handle
+        .confirm_native_session(NativeSessionConfirmation {
+            session_id: roles.fast.session_id,
+            expected_generation: roles.fast.generation,
+            native_session_id: "synthetic-native-fast".into(),
+            protocol_version: "codex-rpc-1".into(),
+            source_event_key: "fast-ready:1".into(),
+        })
+        .await
+        .unwrap();
+    let namespace = enabled(
+        &f,
+        TimerSchedule::Interval {
+            every_ms: 3_600_000,
+        },
+        "deep-only",
+    )
+    .await;
+    overdue(&f, namespace, 5_000).await;
+    let issuer = f.handle.authorize_timer_scheduler(namespace).await.unwrap();
+    let receipt = f
+        .handle
+        .admit_authorized_timer_turn(&issuer, namespace, false)
+        .await
+        .unwrap();
+    // The timer occurrence is never a Fast source.
+    assert!(f
+        .handle
+        .next_fast_source(&f.token, &f.conversation, 0)
+        .await
+        .unwrap()
+        .is_none());
+    // A forged Fast admission of the timer input is refused without effect.
+    let before = count(&f, "SELECT count(*) FROM production_runs").await;
+    assert!(matches!(
+        f.handle
+            .admit_fast(
+                &f.token,
+                &FastAdmissionInput {
+                    source_message_id: receipt.input.message_id.clone(),
+                    source_event_id: receipt.input.event_id.clone(),
+                    fast_binding_id: fast.session_id.clone(),
+                    expected_binding_generation: fast.generation,
+                    request_key: format!("fast-http:{}", receipt.input.event_id.0),
+                },
+            )
+            .await,
+        Err(RuntimeStoreError::Fenced)
+    ));
+    assert_eq!(
+        count(&f, "SELECT count(*) FROM production_runs").await,
+        before
+    );
+    // A later ordinary owner message is still presented to Fast.
+    f.store
+        .admit(
+            &f.owner,
+            &f.conversation,
+            &MessageInput {
+                client_message_id: "owner-after-timer".into(),
+                text: "ordinary owner input".into(),
+            },
+        )
+        .await
+        .unwrap();
+    let source = f
+        .handle
+        .next_fast_source(&f.token, &f.conversation, 0)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_ne!(source.event_id, receipt.input.event_id);
+    f.store.close().await;
+    std::fs::remove_dir_all(f.root).unwrap();
+}
