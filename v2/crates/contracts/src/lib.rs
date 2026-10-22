@@ -279,6 +279,9 @@ pub use attachments::*;
 mod attachment_transfer;
 pub use attachment_transfer::*;
 
+mod attachment_keys;
+pub use attachment_keys::*;
+
 mod browser_session;
 pub use browser_session::BrowserSessionProjection;
 

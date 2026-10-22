@@ -20,3 +20,5 @@ sha2.workspace = true
 uuid = { workspace = true, features = ["v4"] }
 # IANA zone rules are bundled so timer DST arithmetic never depends on host tzdata.
 jiff = { version = "=0.2.37", default-features = false, features = ["std", "tzdb-bundle-always"] }
+# age file format (X25519 recipients) for attachment objects at rest.
+age = { version = "=0.11.2", default-features = false }

@@ -104,13 +104,17 @@ async fn persisted_roundtrip_reopen_replay_removal_does_not_resurrect() {
         .download_attachment_authenticated("synthetic-token", &o, &c, id, reference)
         .await
         .unwrap();
-    assert_eq!(bytes, r.source.contents[0].bytes);
+    assert_eq!(
+        bytes,
+        StoredObject::Plain(r.source.contents[0].bytes.clone())
+    );
     let b = s
         .export_attachment_bundle_authenticated("synthetic-token", &o, &c, id)
         .await
         .unwrap();
     assert_eq!(b.manifest, r.target_manifest);
-    assert_eq!(b.contents[0].bytes, bytes);
+    assert_eq!(b.contents[0].bytes, r.source.contents[0].bytes);
+    assert_eq!(b.contents[0].format, StoredAttachmentFormat::Plain);
     let before = audit(&s).await;
     s.close().await;
     let s = Store::open(&d.join("store.sqlite3")).await.unwrap();
@@ -273,8 +277,8 @@ async fn inert_legacy_and_empty_available_survive_copy() {
     s.import_attachment_bundle_authenticated("synthetic-token", &o, &c, &r)
         .await
         .unwrap();
-    assert!(s
-        .download_attachment_authenticated(
+    assert!(
+        s.download_attachment_authenticated(
             "synthetic-token",
             &o,
             &c,
@@ -283,8 +287,8 @@ async fn inert_legacy_and_empty_available_survive_copy() {
         )
         .await
         .unwrap()
-        .1
-        .is_empty());
+        .1 == StoredObject::Plain(Vec::new())
+    );
     s.close().await;
     std::fs::remove_dir_all(d).unwrap();
 }

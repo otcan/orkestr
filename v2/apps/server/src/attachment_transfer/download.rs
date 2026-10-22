@@ -45,6 +45,46 @@ pub(super) fn response(
         .map_err(|_| ())
 }
 
+/// Header naming the stored format of a sealed download.
+pub(super) const FORMAT_HEADER: &str = "x-orkestr-attachment-format";
+/// Comma-separated fingerprints of the recipients a sealed object was sealed to.
+pub(super) const RECIPIENTS_HEADER: &str = "x-orkestr-attachment-recipients";
+
+/// Sealed object: the age ciphertext only, under an opaque filename. The
+/// browser decrypts it and verifies the plaintext against the manifest.
+pub(super) fn sealed_response(
+    reference: &AttachmentReference,
+    ciphertext: Vec<u8>,
+    recipient_fingerprints: &[String],
+) -> Result<Response<Body>, ()> {
+    if !reference.is_valid()
+        || reference.state != AttachmentState::Available
+        || recipient_fingerprints.is_empty()
+        || recipient_fingerprints
+            .iter()
+            .any(|f| f.is_empty() || !f.bytes().all(|b| b.is_ascii_alphanumeric() || b == b':'))
+    {
+        return Err(());
+    }
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "application/age")
+        .header(header::CONTENT_LENGTH, ciphertext.len())
+        .header(
+            header::CONTENT_DISPOSITION,
+            format!(
+                "attachment; filename=\"attachment-{}.age\"",
+                reference.reference_id
+            ),
+        )
+        .header(header::CACHE_CONTROL, "private, no-store")
+        .header(header::X_CONTENT_TYPE_OPTIONS, "nosniff")
+        .header(FORMAT_HEADER, "age-x25519-v1")
+        .header(RECIPIENTS_HEADER, recipient_fingerprints.join(","))
+        .body(Body::from(ciphertext))
+        .map_err(|_| ())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -101,5 +141,28 @@ mod tests {
             response(&reference(b""), vec![]).unwrap().headers()[header::CONTENT_LENGTH],
             "0"
         );
+    }
+    #[tokio::test]
+    async fn sealed_download_is_opaque_ciphertext() {
+        let reference = reference(b"synthetic");
+        let response = sealed_response(
+            &reference,
+            b"age-encryption.org/v1\nsynthetic".to_vec(),
+            &["SHA256:0123456789abcdef0123456789abcdef".into()],
+        )
+        .unwrap();
+        let headers = response.headers();
+        assert_eq!(headers[header::CONTENT_TYPE], "application/age");
+        assert_eq!(headers[FORMAT_HEADER], "age-x25519-v1");
+        assert_eq!(
+            headers[RECIPIENTS_HEADER],
+            "SHA256:0123456789abcdef0123456789abcdef"
+        );
+        assert!(!headers[header::CONTENT_DISPOSITION]
+            .to_str()
+            .unwrap()
+            .contains("synthetic"));
+        assert!(sealed_response(&reference, vec![1], &[]).is_err());
+        assert!(sealed_response(&reference, vec![1], &["a\r\nb".into()]).is_err());
     }
 }

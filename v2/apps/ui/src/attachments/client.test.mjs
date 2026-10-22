@@ -93,3 +93,26 @@ test('route-specific metadata bounds reject oversized bodies and cancel readers'
   assert.equal(cancelled,true);
  }
 });
+test('sealed download and export are opened locally and verified against the manifest',async()=>{
+ const sealed=new Uint8Array([97,103,101,0,1]);const opened=[];
+ const make=(bytes)=>{let live=true;const calls=[];let handler;
+  const client=createAttachmentClient({conversation:id(2),csrf:'synthetic-csrf',current:()=>live,hash,random:()=>id(200),
+   open:async c=>{opened.push([...c]);return {filename:'ignored',mimetype:'x/y',bytes};},fetcher:async(p,o)=>{calls.push(p);return handler(p,o);}});
+  return {client,calls,setHandler:h=>handler=h};};
+ const base=await fixture();
+ const age=()=>new Response(sealed,{headers:{'Content-Type':'application/age','X-Content-Type-Options':'nosniff','Content-Length':'5'}});
+ const routes=f=>f.setHandler(path=>path.includes('?')?json(base.page()):path.includes('/attachments/')?age():path.endsWith('/export')?json({manifest:base.manifest,contents:[{reference_id:id(4),format:'age-x25519-v1',bytes:[...sealed],recipient_fingerprints:['SHA256:00']}]}):json(base.manifest));
+ const good=make(base.bytes);routes(good);await good.client.list();
+ const verified=await good.client.download(base.manifest,id(4));
+ assert.deepEqual([verified.state,verified.filename,[...verified.bytes]],['verified','copy.bin',[1,2,3]]);
+ assert.deepEqual(opened[0],[...sealed]);
+ const bundle=await good.client.exportCopy(base.manifest);
+ assert.deepEqual(bundle.contents,[{reference_id:id(4),bytes:[1,2,3]}]);
+ // Plaintext that does not match the manifest digest is refused.
+ const bad=make(new Uint8Array([9,9,9]));routes(bad);await bad.client.list();
+ await assert.rejects(bad.client.download(base.manifest,id(4)),/digest mismatch/);
+ await assert.rejects(bad.client.exportCopy(base.manifest),/digest mismatch/);
+ // Without an opener the sealed bytes are never treated as the file.
+ const none=createAttachmentClient({conversation:id(2),csrf:'synthetic-csrf',current:()=>true,hash,fetcher:async p=>p.includes('?')?json(base.page()):p.includes('/attachments/')?age():json(base.manifest)});
+ await none.list();await assert.rejects(none.download(base.manifest,id(4)),/decryption unavailable/);
+});

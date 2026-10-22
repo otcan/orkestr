@@ -20,6 +20,7 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 mod accepted_results_http;
 mod archived_history_http;
+pub mod attachment_keys_http;
 mod attachment_transfer;
 mod auth;
 mod automatic_reply_control;
@@ -495,6 +496,7 @@ pub fn router_with_google_catalog(
         .merge(desktop_http::router())
         .merge(sidebar_http::router())
         .merge(message_attachments::router())
+        .merge(attachment_keys_http::router())
         .merge(message_times_http::router())
         .merge(thread_icons::router())
         .merge(v1_links::router())

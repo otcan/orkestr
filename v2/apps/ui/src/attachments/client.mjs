@@ -9,7 +9,10 @@ export const ATTACHMENT_MANIFEST_JSON_LIMIT = 1024 + 128 * (6 * (4096 + 1024 + 1
 export const ATTACHMENT_PAGE_JSON_LIMIT = 1024 + 16 * ATTACHMENT_MANIFEST_JSON_LIMIT;
 export const ATTACHMENT_RECEIPT_JSON_LIMIT = ATTACHMENT_MANIFEST_JSON_LIMIT + 128 * 256 + 1024;
 
-export function createAttachmentClient({owner,conversation,csrf,current,fetcher=fetch,random=()=>crypto.randomUUID(),hash=bytes=>crypto.subtle.digest('SHA-256',bytes)}) {
+// Sealed objects (application/age) are opened by `open(ciphertext)`, which
+// returns the decoded V1 payload {filename,mimetype,bytes}; the bytes are then
+// verified against the manifest like a plaintext download.
+export function createAttachmentClient({owner,conversation,csrf,current,fetcher=fetch,random=()=>crypto.randomUUID(),hash=bytes=>crypto.subtle.digest('SHA-256',bytes),open=async()=>{throw new Error('File decryption unavailable');}}) {
  const uuid=/^(?!00000000-0000-0000-0000-000000000000$)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
  if((owner!=null&&!uuid.test(owner))||!uuid.test(conversation)||!csrf)throw new Error('File session unavailable');
  const canonical=value=>JSON.stringify(value,(_,v)=>v&&typeof v==='object'&&!Array.isArray(v)?Object.fromEntries(Object.entries(v).sort(([a],[b])=>a.localeCompare(b))):v);
@@ -43,7 +46,7 @@ export function createAttachmentClient({owner,conversation,csrf,current,fetcher=
   if(page.next_after_id!==null&&(page.manifests.length!==16||page.next_after_id!==previous))throw new Error('File list cursor mismatch');
   return page;
  }
- async function open(id){const m=await request(`${root}/attachment-manifests/${identifier(id)}`,{limit:ATTACHMENT_MANIFEST_JSON_LIMIT});validate(m);if(m.manifest_id!==id)throw new Error("File collection identity mismatch");return m;}
+ async function openManifest(id){const m=await request(`${root}/attachment-manifests/${identifier(id)}`,{limit:ATTACHMENT_MANIFEST_JSON_LIMIT});validate(m);if(m.manifest_id!==id)throw new Error("File collection identity mismatch");return m;}
  function validate(m){
   if(!Array.isArray(m.references))throw new Error('File metadata invalid');
   // Validate empty manifests too, using the missing-reference result only after scope checks.
@@ -96,15 +99,45 @@ export function createAttachmentClient({owner,conversation,csrf,current,fetcher=
   if(pending.kind!=='remove'||pending.manifest!==m.manifest_id||pending.reference!==id)throw new Error('Finish the pending file request first');return commit();
  }
  async function download(m,id){
-  const version=revision;const latest=await open(m.manifest_id);const ref=referenceFor(latest,scope(latest),id);
+  const version=revision;const latest=await openManifest(m.manifest_id);const ref=referenceFor(latest,scope(latest),id);
   if(ref.state!=='available')throw new Error(ref.state==='inert'?'Saved reference only; no file bytes':'File removed');
   const result=await request(`${root}/attachments/${identifier(latest.manifest_id)}/${identifier(id)}`,{raw:async response=>{
-   if(response.headers.get('content-length')!==String(ref.byte_length)||response.headers.get('x-content-type-options')!=='nosniff'||response.headers.get('content-type')!==ref.media_type)throw new Error('File response metadata mismatch');
-   return verifyBytes({manifest:latest,scope:scope(latest),referenceId:id,reader:response.body.getReader(),current:()=>!closed&&current()&&version===revision,digest:hash});
+   const live=()=>!closed&&current()&&version===revision;
+   if(response.headers.get('x-content-type-options')!=='nosniff')throw new Error('File response metadata mismatch');
+   if(response.headers.get('content-type')==='application/age'){
+    const ciphertext=await readSealed(response.body.getReader(),sealedLimit(ref.byte_length),live);
+    const opened=await open(ciphertext);if(!live())throw new Error('File selection changed');
+    return verifyBytes({manifest:latest,scope:scope(latest),referenceId:id,reader:once(opened.bytes),current:live,digest:hash});
+   }
+   if(response.headers.get('content-length')!==String(ref.byte_length)||response.headers.get('content-type')!==ref.media_type)throw new Error('File response metadata mismatch');
+   return verifyBytes({manifest:latest,scope:scope(latest),referenceId:id,reader:response.body.getReader(),current:live,digest:hash});
   }});
   // Removal leaves identity/digest unchanged: revalidate tombstone immediately before save.
-  const final=await open(latest.manifest_id);if(referenceFor(final,scope(final),id).state!=='available'||version!==revision)throw new Error('File removed or selection changed');check();return result;
+  const final=await openManifest(latest.manifest_id);if(referenceFor(final,scope(final),id).state!=='available'||version!==revision)throw new Error('File removed or selection changed');check();return result;
  }
- async function exportCopy(m){const bundle=await request(`${root}/attachment-manifests/${identifier(m.manifest_id)}/export`,{limit:68*1024*1024});validate(bundle.manifest);if(bundle.manifest.manifest_id!==m.manifest_id)throw new Error("File collection identity mismatch");await validateBundle(bundle);return bundle;}
- return {list,open,upload,prepareCopy,commit,remove,download,exportCopy,pending:()=>pending,close(){closed=true;revision++;for(const controller of active)controller.abort();active.clear();pending=null;}};
+ // The saved archive holds plaintext copies: sealed contents are opened here.
+ async function exportCopy(m){
+  const stored=await request(`${root}/attachment-manifests/${identifier(m.manifest_id)}/export`,{limit:72*1024*1024});validate(stored.manifest);if(stored.manifest.manifest_id!==m.manifest_id)throw new Error("File collection identity mismatch");
+  if(!Array.isArray(stored.contents)||stored.contents.length>128)throw new Error('Invalid file archive');
+  const contents=[];
+  for(const part of stored.contents){
+   if(!part||!Array.isArray(part.bytes))throw new Error('Invalid file archive');
+   if(part.format==='plain')contents.push({reference_id:part.reference_id,bytes:part.bytes});
+   else if(part.format==='age-x25519-v1'){const opened=await open(Uint8Array.from(part.bytes));check();contents.push({reference_id:part.reference_id,bytes:Array.from(opened.bytes)});}
+   else throw new Error('Unsupported file format');
+  }
+  const bundle={manifest:stored.manifest,contents};await validateBundle(bundle);return bundle;
+ }
+ return {list,open:openManifest,upload,prepareCopy,commit,remove,download,exportCopy,pending:()=>pending,close(){closed=true;revision++;for(const controller of active)controller.abort();active.clear();pending=null;}};
 }
+
+// age adds a header (per recipient) and 16 bytes per 64 KiB chunk; the V1
+// payload adds a small JSON header. Anything larger is refused unread.
+export const sealedLimit=length=>length+256*1024+16*(Math.ceil(length/65536)+2);
+async function readSealed(reader,limit,live){
+ const parts=[];let size=0,reads=0;
+ try{while(true){if(++reads>65536)throw new Error('File response read limit');const part=await reader.read();if(!live())throw new Error('File selection changed');if(part.done)break;if(!(part.value instanceof Uint8Array))throw new Error('File response invalid');size+=part.value.byteLength;if(size>limit)throw new Error('File response too large');parts.push(part.value);}}
+ finally{void reader.cancel().catch(()=>{});}
+ const out=new Uint8Array(size);let at=0;for(const p of parts){out.set(p,at);at+=p.length;}return out;
+}
+function once(bytes){let sent=false;return {read:async()=>sent?{done:true}:(sent=true,{done:false,value:bytes}),cancel:async()=>{}};}

@@ -44,6 +44,8 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     let store = Store::open(&home.join("core.sqlite3"))
         .await
         .map_err(|_| "store startup failed")?;
+    // Import operator-supplied V1 browser recipients and seal plaintext residue.
+    orkestr_v2_server::attachment_keys_http::startup(&store, &home).await;
     let origin = config.origin;
     let mut state = AppState::new(store.clone(), token, origin)?;
     let beta = std::env::var_os("ORKESTR_V2_BETA_CONFIG");
