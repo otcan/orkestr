@@ -6,7 +6,7 @@ import test from "node:test";
 import { listEvents } from "../packages/storage/src/store.js";
 import { createLlmAccountProfile, updateLlmAccountProfileState } from "../packages/core/src/llm-account-profiles.js";
 import { getClaudeCodeSession } from "../packages/core/src/claude-code-sessions.js";
-import { CLAUDE_CODE_INTERRUPT_RESUME_NOTE } from "../packages/core/src/claude-code-interrupt-resume.js";
+import { CLAUDE_CODE_INTERRUPT_RESUME_NOTE, claudeCodeBurstNote } from "../packages/core/src/claude-code-interrupt-resume.js";
 import {
   deliverClaudeCodePendingInputs,
   hasActiveClaudeCodeSupervisor,
@@ -153,7 +153,7 @@ test("steer input gracefully interrupts, persists the session, and coalesces fol
   assert.equal(recorded.filter((entry) => entry.signal === "SIGINT").length, 1);
   assert.equal(turns[0].resumed, "");
   assert.equal(turns[1].resumed, "claude_session_fresh");
-  assert.equal(turns[1].prompt, [CLAUDE_CODE_INTERRUPT_RESUME_NOTE, "first follow-up", "second follow-up", "third follow-up"].join("\n\n"));
+  assert.equal(turns[1].prompt, [CLAUDE_CODE_INTERRUPT_RESUME_NOTE, claudeCodeBurstNote(3), "first follow-up", "second follow-up", "third follow-up"].join("\n\n"));
 
   const current = await getThread(thread.id, env);
   assert.equal(await getClaudeCodeSession(current, env), "claude_session_fresh");
@@ -260,7 +260,7 @@ test("a result emitted during the SIGINT grace window is kept as a natural compl
 });
 
 test("the kill switch restores plain queueing for steer input while /now still interrupts", async (t) => {
-  const { env, calls, thread } = await fixture(t, "kill-switch", { ORKESTR_CLAUDE_CODE_INSTANT_INTERRUPT: "0" });
+  const { env, calls, thread } = await fixture(t, "kill-switch", { ORKESTR_CLAUDE_CODE_INSTANT_INTERRUPT: "0", ORKESTR_THREAD_INPUT_DEBOUNCE_MS: "0" });
   const first = await enqueueThreadInput(thread.id, { text: "long task queued", source: "test" }, env);
   const owner = deliverClaudeCodePendingInputs(thread, env);
   await waitForStarted(calls, thread.id);
@@ -270,7 +270,8 @@ test("the kill switch restores plain queueing for steer input while /now still i
   assert.deepEqual(await owner, [first.id, second.id, third.id]);
   const recorded = await readCalls(calls);
   assert.equal(recorded.some((entry) => entry.signal), false);
-  assert.deepEqual(recorded.filter((entry) => entry.turn).map((entry) => entry.prompt), ["long task queued", "queued one", "queued two"]);
+  // Queued behind the running turn, the two inputs become one follow-up turn.
+  assert.deepEqual(recorded.filter((entry) => entry.turn).map((entry) => entry.prompt), ["long task queued", [claudeCodeBurstNote(2), "queued one", "queued two"].join("\n\n")]);
 
   const fourth = await enqueueThreadInput(thread.id, { text: "long task again", source: "test" }, env);
   const nextOwner = deliverClaudeCodePendingInputs(thread, env);

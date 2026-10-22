@@ -159,6 +159,8 @@ process.stdin.on("end", () => {
     ORKESTR_CLAUDE_CODE_ENABLED: "1",
     ORKESTR_CLAUDE_CODE_BIN: fake,
     ORKESTR_CLAUDE_CODE_LOGIN_TRANSPORT: "pipe",
+    // These tests drive single inputs; burst debouncing has its own tests.
+    ORKESTR_THREAD_INPUT_DEBOUNCE_MS: "0",
     ANTHROPIC_API_KEY: "must-not-reach-subscription-runtime",
     // A Codex thread's own connector/env config living alongside this Claude
     // thread on the same host process -- must never reach the Claude child.
