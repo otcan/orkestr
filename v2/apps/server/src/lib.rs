@@ -35,6 +35,7 @@ mod conversation_posts_http;
 mod conversation_resources_http;
 mod conversation_status_http;
 mod conversations_http;
+pub mod deploy_drain;
 mod desktop_broker;
 mod desktop_http;
 mod execution;
@@ -107,8 +108,14 @@ pub struct AppState {
     claude_turns: bool,
     /// Restricted-thread broker task and its endpoints (private configuration).
     restricted: Option<Arc<restricted_http::RestrictedRuntime>>,
+    /// Operator deploy drain shared by window admission and timer fires.
+    deploy_drain: Arc<deploy_drain::DeployDrain>,
 }
 impl AppState {
+    /// The process-wide deploy drain (inert until bound to a home directory).
+    pub fn deploy_drain(&self) -> Arc<deploy_drain::DeployDrain> {
+        self.deploy_drain.clone()
+    }
     pub async fn shutdown_beta_window(&self) -> Result<(), &'static str> {
         match &self.window_controller {
             Some(controller) => controller.shutdown().await,
@@ -167,14 +174,17 @@ impl AppState {
             manager_pid,
         )
         .map_err(|_| "beta manager identity refused")?;
-        let controller = Arc::new(window_runtime::Controller::new(
-            config.clone(),
-            home.to_owned(),
-            self.store.clone(),
-            initial.clone(),
-            handles.clone(),
-            manager,
-        ));
+        let controller = Arc::new(
+            window_runtime::Controller::new(
+                config.clone(),
+                home.to_owned(),
+                self.store.clone(),
+                initial.clone(),
+                handles.clone(),
+                manager,
+            )
+            .with_deploy_drain(self.deploy_drain.clone()),
+        );
         controller.start_dispatcher();
         self.window_controller = Some(controller);
         self.initial_window = Some(initial);
@@ -223,7 +233,10 @@ impl AppState {
     /// With a beta window runtime, every timer occurrence also queues its Deep
     /// turn and wakes the window dispatcher; otherwise only the input is admitted.
     pub fn start_timers(&self, supervisor: Store) -> timer_lifecycle::TimerTask {
-        let mut controller = timer_http::durable::DurableTimerController::new(supervisor);
+        let drain = self.deploy_drain.clone();
+        // A deploy drain defers fires: due occurrences stay due in Core.
+        let mut controller = timer_http::durable::DurableTimerController::new(supervisor)
+            .with_pause(Arc::new(move || drain.is_draining()));
         if let Some(window) = &self.window_controller {
             let window = Arc::downgrade(window);
             controller = controller.with_window_dispatch(Arc::new(move || {
@@ -280,6 +293,7 @@ impl AppState {
             v1_timers: Default::default(),
             claude_turns: false,
             restricted: None,
+            deploy_drain: Arc::default(),
         })
     }
 }

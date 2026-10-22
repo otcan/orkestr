@@ -37,6 +37,9 @@ pub struct DurableTimerController {
     /// When a window dispatcher runs, each occurrence also queues its Deep turn.
     queue_window: bool,
     wake: Option<Arc<dyn Fn() + Send + Sync>>,
+    /// While true (an operator deploy drain) no occurrence fires; due ones
+    /// stay due in Core and fire on a later pass or in the next process.
+    paused: Option<Arc<dyn Fn() -> bool + Send + Sync>>,
     /// Digests are due at most a few times a day; check twice a minute.
     digest_checked: Option<Instant>,
 }
@@ -50,8 +53,14 @@ impl DurableTimerController {
             backoff: HashMap::new(),
             queue_window: false,
             wake: None,
+            paused: None,
             digest_checked: None,
         }
+    }
+    /// Defer every fire while `paused` answers true (deploy drain).
+    pub fn with_pause(mut self, paused: Arc<dyn Fn() -> bool + Send + Sync>) -> Self {
+        self.paused = Some(paused);
+        self
     }
     /// Queue a Deep window intent with every admitted occurrence and wake the
     /// dispatcher. Only the trusted server composition selects this.
@@ -67,6 +76,9 @@ impl DurableTimerController {
     }
     /// One bounded page; cursor is process-local fairness metadata, never authority.
     pub async fn tick(&mut self) -> Result<DurableTick, HistoryError> {
+        if self.paused.as_ref().is_some_and(|paused| paused()) {
+            return Ok(DurableTick::default());
+        }
         tokio::time::timeout(Duration::from_secs(5), self.pass())
             .await
             .map_err(|_| HistoryError::Unavailable)?

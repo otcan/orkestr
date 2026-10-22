@@ -297,3 +297,110 @@ fn conversation_workspace_replaces_only_that_conversations_deep_and_fast_directo
         std::path::PathBuf::from("/srv/synthetic/workspace")
     );
 }
+
+#[tokio::test]
+async fn deploy_drain_queues_fresh_input_durably_and_reports_drained() {
+    use orkestr_v2_application::IntakeStore;
+    use orkestr_v2_contracts::MessageInput;
+    let root = std::env::temp_dir().join(format!("controller-drain-{}", Uuid::new_v4()));
+    std::fs::create_dir(&root).unwrap();
+    let store = Store::open(&root.join("core.sqlite3")).await.unwrap();
+    let conversation = store.setup("owner", "synthetic-hash").await.unwrap();
+    let owner = store.credentials("owner").await.unwrap().unwrap().0;
+    store
+        .save_session("synthetic-browser", &owner)
+        .await
+        .unwrap();
+    let intake = store
+        .admit(
+            &owner,
+            &conversation,
+            &MessageInput {
+                client_message_id: "drained-input".into(),
+                text: "synthetic message".into(),
+            },
+        )
+        .await
+        .unwrap()
+        .receipt;
+    let mut config = config();
+    config.owner_id = owner.clone();
+    config.conversation_id = conversation.clone();
+    let stat = std::fs::read_to_string("/proc/self/stat").unwrap();
+    let parent = stat
+        .rsplit_once(')')
+        .unwrap()
+        .1
+        .split_whitespace()
+        .nth(1)
+        .unwrap()
+        .parse()
+        .unwrap();
+    let manager = ManagerClient::new(
+        config.manager_socket.clone(),
+        owner.clone(),
+        conversation.clone(),
+        parent,
+    )
+    .unwrap();
+    let drain = Arc::new(crate::deploy_drain::DeployDrain::default());
+    drain.set(true);
+    let controller = Controller::new(
+        config.clone(),
+        root.clone(),
+        store.clone(),
+        Arc::new(InitialAuthority::new(&config).unwrap()),
+        Handles::new(owner.clone(), conversation.clone()).unwrap(),
+        manager,
+    )
+    .with_deploy_drain(drain.clone());
+    let input = ExecutionWindowRequest {
+        request_key: "drained-window".into(),
+        input_message_id: intake.message_id,
+        input_event_id: intake.event_id,
+        input_request_key: "drained-input".into(),
+        expected_generation: 0,
+        window_id: None,
+        predecessor_window_id: None,
+    };
+    // A fresh window would have room, but the drain queues it in Core.
+    let WindowOutcome::Queued(queued) = controller
+        .process("synthetic-browser", &owner, &conversation, &input)
+        .await
+        .unwrap()
+    else {
+        panic!("a drained controller must queue, never open")
+    };
+    assert_eq!(queued.request_key, "drained-window");
+    assert!(store
+        .execution_window_status_authenticated("synthetic-browser", &conversation)
+        .await
+        .unwrap()
+        .is_none());
+    // Replaying the same intent while draining stays queued (idempotent).
+    assert!(matches!(
+        controller
+            .process("synthetic-browser", &owner, &conversation, &input)
+            .await
+            .unwrap(),
+        WindowOutcome::Queued(_)
+    ));
+    // A drain pass admits nothing and reports Core: no window, one intent.
+    controller.drain_step().await;
+    let status = drain.status();
+    assert!(status.drained);
+    assert_eq!(status.unresolved_windows, 0);
+    assert_eq!(status.queued_intents, 1);
+    assert_eq!(
+        store
+            .execution_window_queue_authenticated("synthetic-browser", None)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    controller.shutdown().await.unwrap();
+    drop(controller);
+    drop(store);
+    std::fs::remove_dir_all(root).unwrap();
+}
