@@ -22,7 +22,8 @@ pub fn ChatSettings(
         section { class: "chat-settings", "aria-label": "Chat settings",
             h2 { "Chat settings" }
             ThreadSettings { conversation: conversation.clone(), csrf: csrf.clone(), session_scope, onexpired }
-            Desktops { conversation, csrf, session_scope, onexpired }
+            Desktops { conversation: conversation.clone(), csrf: csrf.clone(), session_scope, onexpired }
+            crate::restricted_view::RestrictedPanel { conversation, csrf, session_scope, onexpired }
         }
     }
 }

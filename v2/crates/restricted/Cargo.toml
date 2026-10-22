@@ -1,0 +1,18 @@
+[package]
+name = "orkestr-v2-restricted"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+orkestr-v2-contracts = { path = "../contracts" }
+orkestr-v2-store-sqlite = { path = "../store-sqlite" }
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+uuid = { workspace = true, features = ["v4"] }
+async-trait = "=0.1.89"
+
+[dev-dependencies]
+orkestr-v2-application = { path = "../application" }
