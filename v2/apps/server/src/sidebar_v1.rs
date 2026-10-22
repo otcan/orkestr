@@ -59,6 +59,29 @@ pub(crate) struct V1Thread {
     pub icon_title: String,
 }
 
+impl V1Thread {
+    /// The WhatsApp group name of an owner group thread: the chat's display
+    /// name, else the thread name (never the raw chat id).
+    pub(crate) fn whatsapp_group(&self) -> Option<String> {
+        self.whatsapp.then(|| {
+            if self.chat_id.as_deref() == Some(self.icon_title.as_str()) {
+                self.name.clone()
+            } else {
+                self.icon_title.clone()
+            }
+        })
+    }
+
+    /// The V2 conversation this thread's runtime is delegated to, when the
+    /// V1 binding names it directly (`remoteThreadId` = conversation id).
+    pub(crate) fn delegated_conversation(&self) -> Option<uuid::Uuid> {
+        self.delegated_to
+            .as_deref()
+            .and_then(|id| uuid::Uuid::parse_str(id).ok())
+            .filter(|id| !id.is_nil())
+    }
+}
+
 fn text(value: &Value, key: &str) -> Option<String> {
     value
         .get(key)

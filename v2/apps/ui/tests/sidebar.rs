@@ -24,6 +24,7 @@ fn entry(key: &str, parent: Option<&str>, at: Option<i64>, unread: u32) -> Sideb
         read_only: v1.is_some(),
         coordinator: false,
         read_marker: 0,
+        whatsapp: None,
     }
 }
 

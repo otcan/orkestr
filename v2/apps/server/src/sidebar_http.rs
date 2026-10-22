@@ -122,6 +122,33 @@ pub(crate) fn coordinators(views: &[LiveView]) -> HashSet<String> {
         .collect()
 }
 
+/// Conversation id -> the live V1 thread whose binding delegates its runtime
+/// to it by id (V1 `remoteThreadId`). Covers delegated chats that have no
+/// recorded lineage yet.
+pub(crate) fn delegations(threads: &[V1Thread]) -> HashMap<uuid::Uuid, String> {
+    let mut out = HashMap::new();
+    for thread in threads.iter().filter(|t| !t.retired) {
+        if let Some(conversation) = thread.delegated_conversation() {
+            out.entry(conversation).or_insert_with(|| thread.id.clone());
+        }
+    }
+    out
+}
+
+/// The V1 thread a conversation stands for: its durable lineage, its import
+/// or provisioning source, else the V1 thread delegated to it.
+pub(crate) fn linked_thread(
+    row: &SidebarConversation,
+    delegated: &HashMap<uuid::Uuid, String>,
+) -> Option<String> {
+    row.lineage
+        .as_ref()
+        .map(|l| l.source_thread_id.clone())
+        .or_else(|| row.source_thread_id.clone())
+        .or_else(|| delegated.get(&row.conversation_id.0).cloned())
+        .filter(|t| valid_v1_thread_id(t))
+}
+
 /// Build the page. Pure: every input was read before.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn compose(
@@ -134,34 +161,31 @@ pub(crate) fn compose(
     truncated: bool,
     observed_at_ms: i64,
 ) -> SidebarPage {
-    // V1 thread -> native entry it was imported into.
+    let registry: HashMap<&str, &V1Thread> = match &linked {
+        LinkedSource::Registry(threads) => threads.iter().map(|t| (t.id.as_str(), t)).collect(),
+        _ => HashMap::new(),
+    };
+    let delegated = match &linked {
+        LinkedSource::Registry(threads) => delegations(threads),
+        _ => HashMap::new(),
+    };
+    // V1 thread -> native entry it was imported into or delegated to.
     let mut imported: HashMap<String, String> = HashMap::new();
     for n in &native {
-        let thread = n
-            .row
-            .lineage
-            .as_ref()
-            .map(|l| l.source_thread_id.clone())
-            .or_else(|| n.row.source_thread_id.clone());
-        if let Some(thread) = thread.filter(|t| valid_v1_thread_id(t)) {
+        if let Some(thread) = linked_thread(&n.row, &delegated) {
             imported
                 .entry(thread)
                 .or_insert_with(|| format!("v2:{}", n.row.conversation_id));
         }
     }
-    let registry: HashMap<&str, &V1Thread> = match &linked {
-        LinkedSource::Registry(threads) => threads.iter().map(|t| (t.id.as_str(), t)).collect(),
-        _ => HashMap::new(),
-    };
     let mut entries: Vec<(SidebarEntry, Option<String>)> = Vec::new();
     for n in native {
         let row = n.row;
-        let thread = row
-            .lineage
-            .as_ref()
-            .map(|l| l.source_thread_id.clone())
-            .or(row.source_thread_id.clone())
-            .filter(|t| valid_v1_thread_id(t));
+        let thread = linked_thread(&row, &delegated);
+        let whatsapp = thread
+            .as_deref()
+            .and_then(|t| registry.get(t))
+            .and_then(|record| record.whatsapp_group());
         // Durable lineage first; the V1 registry fills a link not yet recorded.
         let parent = row
             .lineage
@@ -201,6 +225,7 @@ pub(crate) fn compose(
                 read_only: false,
                 coordinator: false,
                 read_marker: row.sequence.max(0),
+                whatsapp,
             },
             parent,
         ));
@@ -231,6 +256,7 @@ pub(crate) fn compose(
                         read_only: true,
                         coordinator: coordinator.contains(&thread.id),
                         read_marker: thread.last_cursor,
+                        whatsapp: thread.whatsapp_group(),
                     },
                     thread.parent.clone(),
                 ));
@@ -275,6 +301,7 @@ pub(crate) fn compose(
                         read_only: true,
                         coordinator: coordinator.contains(id),
                         read_marker: 0,
+                        whatsapp: None,
                     },
                     sidebar_v1::encoded_parent(id, &|p| ids.contains(p)),
                 ));
@@ -408,15 +435,10 @@ pub(crate) async fn read(
     let source = match (&linked.registry, linked.status) {
         (Some(threads), _) => {
             if let Some(broker) = &state.desktop_broker {
+                let delegated = delegations(threads);
                 let imported: HashSet<String> = native
                     .iter()
-                    .filter_map(|n| {
-                        n.row
-                            .lineage
-                            .as_ref()
-                            .map(|l| l.source_thread_id.clone())
-                            .or_else(|| n.row.source_thread_id.clone())
-                    })
+                    .filter_map(|n| linked_thread(&n.row, &delegated))
                     .collect();
                 let mut shown = sidebar_v1::listed(threads, &|id| imported.contains(id));
                 shown.sort_by_key(|t| std::cmp::Reverse(t.last_activity_ms));
@@ -556,21 +578,17 @@ pub(crate) async fn listed_thread(
         .sidebar_conversations(credential, owner)
         .await
         .map_err(failure)?;
-    let imported: HashSet<String> = list
-        .conversations
-        .iter()
-        .filter_map(|c| {
-            c.lineage
-                .as_ref()
-                .map(|l| l.source_thread_id.clone())
-                .or_else(|| c.source_thread_id.clone())
-        })
-        .collect();
     let threads = state
         .sidebar_v1
         .registry(&broker)
         .await
         .ok_or_else(unavailable)?;
+    let delegated = delegations(&threads);
+    let imported: HashSet<String> = list
+        .conversations
+        .iter()
+        .filter_map(|c| linked_thread(c, &delegated))
+        .collect();
     let record = sidebar_v1::listed(&threads, &|id| imported.contains(id))
         .into_iter()
         .find(|t| t.id == thread)

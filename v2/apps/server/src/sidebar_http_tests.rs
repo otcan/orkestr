@@ -146,6 +146,104 @@ fn composes_activity_order_linked_v1_threads_and_sub_chats() {
 }
 
 #[test]
+fn whatsapp_linked_conversations_carry_the_group_and_hide_their_v1_thread() {
+    let conversation = Uuid::new_v4();
+    let route = Uuid::new_v4();
+    let mut delegated_by_id = thread(
+        "group-delegated",
+        "Synthetic delegated",
+        "2026-01-02T00:00:00Z",
+    );
+    delegated_by_id["binding"]["displayName"] = json!("Synthetic delegated group");
+    delegated_by_id["binding"]["remoteBackend"] = json!("rust-v2");
+    delegated_by_id["binding"]["remoteThreadId"] = json!(conversation.to_string());
+    delegated_by_id["binding"]["remoteRuntimeEnabled"] = json!(true);
+    // Migrated chat: the V1 binding names an adapter route, the V2 lineage
+    // names the thread.
+    let mut migrated = thread(
+        "group-migrated",
+        "Synthetic migrated",
+        "2026-01-03T00:00:00Z",
+    );
+    migrated["binding"]["displayName"] = json!("Synthetic migrated group");
+    migrated["binding"]["remoteThreadId"] = json!(route.to_string());
+    let registry = json!({"threads": [
+        delegated_by_id,
+        migrated,
+        thread("group-v1", "Synthetic V1 group", "2026-01-01T00:00:00Z"),
+        worker("worker-group-migrated-0001", "group-migrated", "Synthetic migrated / Worker 1", "2026-01-04T00:00:00Z"),
+        {"id": "unbound", "name": "Synthetic unbound"},
+    ]});
+    let threads = sidebar_v1::parse_registry(&registry).unwrap();
+    let mut by_id = row(
+        "Synthetic delegated conversation",
+        Some("2026-01-02T00:00:00.000Z"),
+    );
+    by_id.conversation_id = ConversationId(conversation);
+    let mut by_lineage = row("Synthetic migrated", Some("2026-01-03T00:00:00.000Z"));
+    by_lineage.lineage = Some(ConversationLineage {
+        source_instance: "synthetic-v1".into(),
+        source_thread_id: "group-migrated".into(),
+        source_parent_thread_id: None,
+    });
+    let mut plain = row("Synthetic native", None);
+    plain.source_thread_id = Some("unbound".into());
+    let (id_key, lineage_key, plain_key) = (
+        format!("v2:{}", by_id.conversation_id),
+        format!("v2:{}", by_lineage.conversation_id),
+        format!("v2:{}", plain.conversation_id),
+    );
+    let page = compose(
+        vec![native(by_id), native(by_lineage), native(plain)],
+        LinkedSource::Registry(&threads),
+        &BTreeMap::new(),
+        &HashMap::new(),
+        &HashSet::new(),
+        SidebarV1Status::Ready,
+        false,
+        1,
+    );
+    assert!(page.is_valid());
+    let delegated = by_key(&page, &id_key);
+    assert_eq!(
+        delegated.whatsapp.as_deref(),
+        Some("Synthetic delegated group")
+    );
+    assert_eq!(delegated.v1_thread_id.as_deref(), Some("group-delegated"));
+    assert!(!delegated.read_only);
+    let migrated = by_key(&page, &lineage_key);
+    assert_eq!(
+        migrated.whatsapp.as_deref(),
+        Some("Synthetic migrated group")
+    );
+    // Each delegated V1 thread appears once: as its V2 conversation.
+    for hidden in ["v1:group-delegated", "v1:group-migrated"] {
+        assert!(page.entries.iter().all(|e| e.key != hidden), "{hidden}");
+    }
+    // Its sub-chats move under the V2 conversation.
+    assert_eq!(
+        by_key(&page, "v1:worker-group-migrated-0001")
+            .parent_key
+            .as_deref(),
+        Some(lineage_key.as_str())
+    );
+    assert_eq!(
+        by_key(&page, "v1:worker-group-migrated-0001").whatsapp,
+        None
+    );
+    // A V1 group without a chat display name is labelled by its thread name.
+    assert_eq!(
+        by_key(&page, "v1:group-v1").whatsapp.as_deref(),
+        Some("Synthetic V1 group")
+    );
+    assert_eq!(
+        by_key(&page, &plain_key).whatsapp,
+        None,
+        "not a group thread"
+    );
+}
+
+#[test]
 fn registry_fills_a_parent_link_not_yet_recorded_and_parents_may_be_native() {
     let threads = sidebar_v1::parse_registry(&registry()).unwrap();
     let mut parent = row("Synthetic quiet group", Some("2026-01-01T00:00:00Z"));
