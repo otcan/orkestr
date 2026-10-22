@@ -129,6 +129,7 @@ details[open] > summary { margin-bottom: .4rem; }
 .choice-badges:empty { display: none; }
 .source-badge { font-size: .62rem; line-height: 1.5; padding: 0 .45rem; border-radius: 1rem; border: 1px solid var(--border-strong); color: var(--muted); white-space: nowrap; }
 .coordinator-badge { border-color: var(--info-border); background: var(--info-soft); color: var(--info-text); }
+.whatsapp-badge { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-text); max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
 .conversation-status { flex: none; font-size: .62rem; line-height: 1.5; padding: 0 .45rem; border-radius: 1rem; border: 1px solid transparent; }
 .status-working { background: var(--accent-soft); color: var(--accent-text); border-color: transparent; }
 .status-queued { background: var(--warn-soft); color: var(--warn-text); border-color: var(--warn-border); }

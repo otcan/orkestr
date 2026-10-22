@@ -123,6 +123,10 @@ pub struct SidebarEntry {
     pub coordinator: bool,
     /// Value to report as read when the owner opens this entry.
     pub read_marker: i64,
+    /// Name of the WhatsApp group this chat is bound to: a V1 group thread,
+    /// or a V2 conversation whose V1 thread (imported or delegated) is one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub whatsapp: Option<String>,
 }
 impl SidebarEntry {
     pub fn is_valid(&self) -> bool {
@@ -148,6 +152,10 @@ impl SidebarEntry {
             && self.last_activity_ms.is_none_or(|t| t > 0)
             && self.preview.as_ref().is_none_or(SidebarPreview::is_valid)
             && self.read_marker >= 0
+            && self
+                .whatsapp
+                .as_deref()
+                .is_none_or(|g| label(g, SIDEBAR_NAME_MAX))
     }
 }
 
@@ -408,7 +416,25 @@ mod tests {
             read_only: true,
             coordinator: true,
             read_marker: 3,
+            whatsapp: None,
         }
+    }
+
+    #[test]
+    fn whatsapp_group_name_is_optional_bounded_display_text() {
+        let mut entry = v1("thread-a");
+        let json = serde_json::to_value(&entry).unwrap();
+        assert!(json.get("whatsapp").is_none(), "omitted when absent");
+        let parsed: SidebarEntry = serde_json::from_value(json).unwrap();
+        assert_eq!(parsed.whatsapp, None);
+        entry.whatsapp = Some("Synthetic group".into());
+        assert!(entry.is_valid());
+        for bad in ["", "  ", "a\nb"] {
+            entry.whatsapp = Some(bad.into());
+            assert!(!entry.is_valid(), "{bad:?}");
+        }
+        entry.whatsapp = Some("x".repeat(SIDEBAR_NAME_MAX + 1));
+        assert!(!entry.is_valid());
     }
 
     #[test]

@@ -78,6 +78,7 @@ pub fn NewWhatsAppChat(
                             form.set(ChatForm::default());
                             onselect.call(SidebarEntry {
                                 key: format!("v2:{}", provision.conversation_id), source: SidebarSource::V2,
+                                whatsapp: Some(provision.name.clone()),
                                 name: provision.name, conversation_id: Some(provision.conversation_id), v1_thread_id: None,
                                 parent_key: None, last_activity_ms: None, preview: None, unread: 0,
                                 activity: Default::default(), read_only: false, coordinator: false, read_marker: 0,

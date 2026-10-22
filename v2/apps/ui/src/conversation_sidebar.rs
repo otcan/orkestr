@@ -145,7 +145,12 @@ pub fn ConversationSidebar(
                 // Search lists matches flat, newest first.
                 p.entries
                     .iter()
-                    .filter(|e| e.name.to_lowercase().contains(&query))
+                    .filter(|e| {
+                        e.name.to_lowercase().contains(&query)
+                            || e.whatsapp
+                                .as_ref()
+                                .is_some_and(|g| g.to_lowercase().contains(&query))
+                    })
                     .map(|e| sidebar::Row {
                         entry: e.clone(),
                         depth: 0,
@@ -217,7 +222,7 @@ pub fn ConversationSidebar(
                                 name: row.name, conversation_id: Some(row.conversation_id), v1_thread_id: None,
                                 parent_key: None, last_activity_ms: None, preview: None, unread: 0,
                                 activity: Default::default(), read_only: false, coordinator: false,
-                                read_marker: row.last_sequence,
+                                read_marker: row.last_sequence, whatsapp: None,
                             });
                         },
                         Ok(None)=>{}, Err(error)=>notice.set(error.message) }
@@ -300,6 +305,10 @@ fn SidebarRow(
                         if let Some(count) = unread.clone() { span { class: "unread-badge", "aria-label": "{count} unread", "{count}" } }
                     }
                     span { class: "choice-badges",
+                        if let Some(group) = entry.whatsapp.clone() {
+                            span { class: "source-badge whatsapp-badge", title: "WhatsApp group: {group}", "aria-label": "WhatsApp group {group}",
+                                if group == entry.name { "WhatsApp" } else { "WhatsApp · {group}" } }
+                        }
                         if v1 { span { class: "source-badge", "On V1" } }
                         if entry.coordinator { span { class: "source-badge coordinator-badge", "Coordinator" } }
                         if let Some(status) = status.clone() { span { class: "conversation-status {status.tone.class()}", "{status.label}" } }
