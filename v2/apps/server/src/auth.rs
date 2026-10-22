@@ -42,12 +42,7 @@ fn credentials(body: Result<Json<Credentials>, JsonRejection>) -> Result<Credent
     }
     Ok(c)
 }
-pub async fn setup(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    body: Result<Json<Credentials>, JsonRejection>,
-) -> Result<impl IntoResponse, Error> {
-    rate_limit(&state).await?;
+fn bootstrap(state: &AppState, headers: &HeaderMap) -> Result<(), Error> {
     let supplied = headers
         .get("x-orkestr-bootstrap")
         .and_then(|s| s.to_str().ok())
@@ -62,6 +57,30 @@ pub async fn setup(
     if differs != 0 {
         return Err(unauthorized());
     }
+    Ok(())
+}
+/// First-run state for the holder of the bootstrap token (the desktop app),
+/// so it hands the token to its UI only while no owner exists. Without the
+/// token nothing is disclosed.
+pub async fn setup_status(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, Error> {
+    rate_limit(&state).await?;
+    bootstrap(&state, &headers)?;
+    let configured = state.store.owner_configured().await?;
+    Ok((
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(serde_json::json!({ "setup_required": !configured })),
+    ))
+}
+pub async fn setup(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Result<Json<Credentials>, JsonRejection>,
+) -> Result<impl IntoResponse, Error> {
+    rate_limit(&state).await?;
+    bootstrap(&state, &headers)?;
     let c = credentials(body)?;
     let hash = tokio::task::spawn_blocking(move || {
         Argon2::default()
@@ -123,4 +142,44 @@ pub(crate) async fn verify_credentials(
     }
     let (owner, _) = record.ok_or_else(unauthorized)?;
     Ok(owner)
+}
+
+#[cfg(test)]
+mod setup_status_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn setup_status_needs_the_token_and_flips_after_setup() {
+        let home = std::path::PathBuf::from(std::env::var_os("ORKESTR_V2_HOME").unwrap());
+        std::fs::create_dir_all(&home).unwrap();
+        let path = home.join(format!("setup-status-{}.sqlite3", Uuid::new_v4()));
+        let store = Store::open(&path).await.unwrap();
+        let token = "synthetic-bootstrap-setup-status-test-only";
+        let state =
+            AppState::new(store.clone(), token.into(), "http://127.0.0.1:47110".into()).unwrap();
+        let status = |value: &str| {
+            let mut headers = HeaderMap::new();
+            if !value.is_empty() {
+                headers.insert("x-orkestr-bootstrap", value.parse().unwrap());
+            }
+            setup_status(State(state.clone()), headers)
+        };
+        assert!(status("").await.is_err());
+        assert!(status("synthetic-wrong-token-of-sufficient-length")
+            .await
+            .is_err());
+        let body = |response: axum::response::Response| async move {
+            let bytes = axum::body::to_bytes(response.into_body(), 1024)
+                .await
+                .unwrap();
+            serde_json::from_slice::<serde_json::Value>(&bytes).unwrap()
+        };
+        let before = status(token).await.ok().unwrap().into_response();
+        assert_eq!(body(before).await["setup_required"], true);
+        store.setup("owner", "synthetic-hash").await.unwrap();
+        let after = status(token).await.ok().unwrap().into_response();
+        assert_eq!(body(after).await["setup_required"], false);
+        store.close().await;
+        std::fs::remove_file(path).unwrap();
+    }
 }
