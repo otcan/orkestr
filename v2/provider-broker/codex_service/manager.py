@@ -81,7 +81,7 @@ class Manager:
             # Join outside the guard: the listener takes it on every loop.
             endpoint.close()
 
-    def _terminate(self, window):
+    def _terminate(self, window, wait=2):
         """Emergency cleanup of one window; others keep their custody."""
         errors = []
         try:
@@ -89,7 +89,7 @@ class Manager:
         except Exception:
             errors.append("egress_cleanup")
         try:
-            if not window.children.cleanup() or window.children.forced:
+            if not window.children.cleanup(wait) or window.children.forced:
                 errors.append("child_cleanup")
         except Exception:
             errors.append("child_cleanup")
@@ -149,7 +149,10 @@ class Manager:
                                              deadline - BIND_REPLY_SECONDS)
             except Exception:
                 self._uncertain(window.window, window.generation, "cleanup_unknown")
-                self._terminate(window)
+                # The refused broker is the waiting server's child: it cannot be
+                # reaped before this reply, so a long wait here only stalls every
+                # other conversation's control request. Reconcile re-checks reap.
+                self._terminate(window, wait=0.25)
                 raise Refused("broker_binding") from None
             return {"ok": True, "receipt": self.ledger.status(request["conversation_id"]), "fresh_child": fresh}
         if operation == "extend":
@@ -165,10 +168,18 @@ class Manager:
         if operation == "reconcile":
             if row["state"] != "retired" and window is not None:
                 # This window still has custody in this manager (same manager
-                # life). Its egress must be closed and every original child
-                # reaped; uncertain cleanup is never promoted. A fresh manager
-                # never holds custody of a previous life's window. An exact
-                # replay of a retired record needs no custody check.
+                # life). Runtime reconciles only a window its own task no
+                # longer owns (for example a failed broker bind or Fast setup)
+                # after Core committed the audited decision. Close what is
+                # still open here first, exactly like an uncertainty report,
+                # so the conversation recovers without a manager restart.
+                # Every original child must still be reaped; uncertain cleanup
+                # is never promoted. A fresh manager never holds custody of a
+                # previous life's window. An exact replay of a retired record
+                # needs no custody check.
+                if not window.egress_closed:
+                    self._uncertain(window.window, window.generation, "runtime_refused")
+                    self._terminate(window)
                 require(window.egress_closed, "window_egress_owned")
                 require(window.children.released(), "owned_child_not_reaped")
             receipt = self.ledger.reconcile(request)

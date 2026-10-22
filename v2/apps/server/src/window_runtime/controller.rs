@@ -227,8 +227,15 @@ impl Controller {
         let _opening = self.opening.lock().await;
         self.sweep(browser).await;
         // Windows stranded by a previous process past their hard deadline are
-        // abandoned (audited) so their conversations can open again.
+        // abandoned (audited) so their conversations can open again, and
+        // this conversation's failed open (for example a refused broker bind)
+        // is closed as failed by the owner's new message.
         self.reconcile_expired_locked(browser).await;
+        self.reconcile_failed_open_locked(browser, conversation)
+            .await;
+        // Reconciliation drops this conversation's poisoned controller; take
+        // the fresh one so this very attempt opens the next window.
+        let entry = self.entry(conversation)?;
         // Earlier durable intents (any conversation) take free slots first.
         self.drain_locked(browser).await;
         let mut room = input.window_id.is_some() || self.live(browser).await? < self.capacity;

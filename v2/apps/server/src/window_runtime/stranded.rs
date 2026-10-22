@@ -19,6 +19,13 @@
 //! window request after start and only for windows past their hard deadline.
 //! Core needs the owner's browser credential for every mutation, so there is
 //! deliberately no credential-less boot-time path.
+//!
+//! A window whose open failed (for example a refused broker bind or Fast
+//! setup) never ran anything of its own. The owner's next message to that
+//! conversation is the owner's decision to continue: it closes exactly such a
+//! failed open as `failed` (`Actor::Owner`, the same decision the explicit
+//! endpoint records) instead of leaving the conversation blocked until the
+//! hard deadline. Any other plan is left untouched for the deadline path.
 use super::super::manager_client::{TerminalOutcome, Window};
 use super::Controller;
 use orkestr_v2_contracts::{
@@ -66,6 +73,38 @@ impl Controller {
                 )
                 .await;
         }
+    }
+
+    /// The owner's new message: close this conversation's failed open (and
+    /// only a failed open) so this attempt can open the next window. The
+    /// caller holds `self.opening`; a refusal leaves everything unchanged.
+    pub(in crate::window_runtime) async fn reconcile_failed_open_locked(
+        &self,
+        browser: &str,
+        conversation: &ConversationId,
+    ) {
+        if self.live_owner(conversation).await {
+            return;
+        }
+        let Ok(Some(status)) = self
+            .store
+            .execution_window_status_authenticated(browser, conversation)
+            .await
+        else {
+            return;
+        };
+        if status.state != ExecutionWindowState::ReconciliationRequired {
+            return;
+        }
+        let _ = self
+            .reconcile_planned(
+                browser,
+                &status,
+                Decision::AbandonUnaccepted,
+                Actor::Owner,
+                true,
+            )
+            .await;
     }
 
     /// Owner-authenticated explicit decision (HTTP). Never touches a window
@@ -116,6 +155,20 @@ impl Controller {
         decision: Decision,
         actor: Actor,
     ) -> Result<ExecutionWindowReconciliation, &'static str> {
+        self.reconcile_planned(browser, window, decision, actor, false)
+            .await
+    }
+
+    /// `failed_open_only`: stop before any manager or Core decision unless
+    /// Core planned a failed open (nothing of the window's own ever ran).
+    async fn reconcile_planned(
+        &self,
+        browser: &str,
+        window: &ExecutionWindowStatus,
+        decision: Decision,
+        actor: Actor,
+        failed_open_only: bool,
+    ) -> Result<ExecutionWindowReconciliation, &'static str> {
         let conversation = &window.conversation_id;
         if window.state != ExecutionWindowState::Closed
             && window.state != ExecutionWindowState::ReconciliationRequired
@@ -159,6 +212,11 @@ impl Controller {
             )
             .await
             .map_err(|_| "stranded window plan refused")?;
+        if failed_open_only
+            && matches!(&plan, StrandedExecutionWindow::Pending(p) if p.open_failure_cause.is_none())
+        {
+            return Err("window ran turns; only its deadline or the owner decides");
+        }
         let (outcome, run, event) = match &plan {
             StrandedExecutionWindow::Pending(p) => (
                 p.outcome,

@@ -30,7 +30,7 @@ class FakeChildren:
         self.proved = True
         return True
 
-    def cleanup(self):
+    def cleanup(self, seconds=2):
         self.cleaned = True
         return True
 

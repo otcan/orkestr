@@ -106,6 +106,56 @@ class PackageTests(unittest.TestCase):
         with self.assertRaisesRegex(Refused, "profile_binding"):
             Package(self.root)
 
+    def test_os_managed_dependencies_are_held_to_custody_not_bytes(self):
+        # An unattended ca-certificates/python/bwrap update must not refuse the
+        # release: the packaging-time hash is evidence, custody is enforced.
+        from codex_service_fixture import packager
+        manifest = self.root / "manifest.json"
+        value = json.loads(manifest.read_text())
+        for name in value["dependencies"]:
+            value["dependencies"][name] = "0" * 64
+        manifest.write_bytes(packager.encoded(value))
+        package = Package(self.root, digest(manifest))
+        self.assertEqual(set(package.manifest["dependencies"]), set(value["dependencies"]))
+        value["dependencies"][next(iter(value["dependencies"]))] = "not-a-hash"
+        manifest.write_bytes(packager.encoded(value))
+        with self.assertRaisesRegex(Refused, "dependency_hash"):
+            Package(self.root, digest(manifest))
+
+    def test_manager_seal_lets_children_skip_rehash_but_never_hides_changes(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("sealed_entry", self.root / "codex_service/entry.py")
+        entry = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(entry)
+        time.sleep(1.1)  # Only settled ctimes are sealed.
+        manifest_digest, records = entry.verified(self.root, self.receipt["manifest_sha256"])
+        self.assertEqual(manifest_digest, self.receipt["manifest_sha256"])
+        self.assertTrue(records)
+        self.assertNotIn(str(Path("/etc/ssl/certs/ca-certificates.crt").resolve()),
+                         {key[0] for key in records})  # OS files: custody only.
+        self.assertTrue(entry.write_seal(self.fixture.endpoint, GID, self.root, manifest_digest, records))
+        seal = self.fixture.endpoint / entry.SEAL
+        self.assertEqual((seal.stat().st_uid, seal.stat().st_gid, seal.stat().st_mode & 0o777), (0, GID, 0o640))
+        hashed = []
+        original = entry.digest
+        def counting(path):
+            hashed.append(str(path))
+            return original(path)
+        with patch.object(entry, "digest", counting):
+            entry.verified(self.root, None, sealed=True)
+        self.assertEqual(hashed, [str(self.root / "manifest.json")])
+        # A rewritten file has a new identity: it is hashed and refused.
+        source = self.root / "codex_service/contract.py"
+        source.write_bytes(source.read_bytes() + b"\n# synthetic drift\n")
+        with patch.object(entry, "digest", counting), self.assertRaisesRegex(ValueError, "package digest"):
+            entry.verified(self.root, None, sealed=True)
+        self.assertIn(str(source), hashed)
+        # A seal for another release root is ignored.
+        value = json.loads(seal.read_text())
+        value["root"] = "/elsewhere"
+        seal.write_text(json.dumps(value))
+        self.assertEqual(entry.read_seal(self.root, manifest_digest), {})
+
     def test_host_natives_carry_exactly_their_pinned_code_mode_host(self):
         from codex_service_fixture import packager
         access = {"providers": True, "environment": {"HOME": "/synthetic", "PATH": "/usr/bin:/bin"}}

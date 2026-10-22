@@ -221,7 +221,13 @@ class Children:
 
     @serialized
     def cleanup(self, seconds=2):
-        """Emergency owned cleanup. Forced signals permanently lose proof."""
+        """Emergency owned cleanup. Forced signals permanently lose retirement
+        proof. A child not yet reaped by the deadline only makes THIS call
+        report failure: a killed broker is the Runtime server's child and stays
+        a zombie until the server reaps it, which it cannot do while it waits
+        for this very reply. `released()` re-observes later, so reconciliation
+        succeeds once every original identity is reaped. Only a descendant tree
+        that could not be followed (`observe`) stays permanently uncertain."""
         self.observe()
         live = [record for record in self.records.values() if not record.exited()]
         if live:
@@ -239,7 +245,6 @@ class Children:
                     except ChildProcessError:
                         pass
             if time.monotonic() >= deadline:
-                self.uncertain = True
                 break
             time.sleep(0.01)
         return not self.uncertain and all(record.gone() for record in self.records.values())

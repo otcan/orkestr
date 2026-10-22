@@ -3,7 +3,7 @@ from pathlib import Path
 import re
 import stat
 import uuid
-from .trust import digest, metadata, private, protected, require
+from .trust import digest, metadata, private, protected, require, system_dependency
 
 HOSTS = ("chatgpt.com",)
 HELPERS = ("bounded_budget.py", "bounded_io.py", "bounded_pool.py", "bounded_dns.py", "bounded_proxy.py")
@@ -52,7 +52,9 @@ class Package:
             "/etc/ssl/certs/ca-certificates.crt")}
         require(set(manifest["dependencies"]) == dependencies, "dependency_inventory")
         for name, sha in manifest["dependencies"].items():
-            require(digest(protected(name)) == sha, "dependency_hash")
+            # OS-managed: custody, never bytes (see trust.system_dependency).
+            require(type(sha) is str and re.fullmatch(r"[0-9a-f]{64}", sha), "dependency_hash")
+            system_dependency(name)
         self.manifest = manifest
         self.runtime = metadata(self.root / "runtime.json")
         if self.two_roles:
