@@ -17,7 +17,7 @@ fn input(sequence: i64) -> Input {
 }
 #[test]
 fn transcript_interleaves_input_and_accepted_reply_by_canonical_event_order() {
-    let rows = ordered(&[input(9), input(1)], &[reply(5)]).unwrap();
+    let rows = ordered(&[input(9), input(1)], &[reply(5)], &[]).unwrap();
     assert_eq!(
         rows.iter().map(Row::sequence).collect::<Vec<_>>(),
         [1, 5, 9]
@@ -27,8 +27,8 @@ fn transcript_interleaves_input_and_accepted_reply_by_canonical_event_order() {
 }
 #[test]
 fn conflicting_and_noncanonical_order_is_not_presented_as_chat() {
-    assert!(ordered(&[input(5)], &[reply(5)]).is_err());
-    assert!(ordered(&[input(0)], &[]).is_err());
+    assert!(ordered(&[input(5)], &[reply(5)], &[]).is_err());
+    assert!(ordered(&[input(0)], &[], &[]).is_err());
 }
 #[test]
 fn accepted_identity_cannot_be_replaced_and_removal_is_sticky() {
@@ -89,5 +89,69 @@ fn a_quoted_reply_shows_as_a_bubble_without_the_duplicate_relay_line() {
     assert_eq!(
         orkestr_v2_ui::chat_timeline::quote_label(&gone),
         "Replying to an unavailable message"
+    );
+}
+
+fn post(after_sequence: i64, created_ms: i64, n: u8) -> orkestr_v2_contracts::ConversationPost {
+    serde_json::from_value(
+        json!({"id": format!("00000000-0000-4000-8000-0000000000{n:02}"),
+        "conversation_id": "00000000-0000-4000-8000-0000000000aa", "request_key": format!("k{n}"),
+        "author": "coordinator", "label": "Coordinator", "provider": null, "model": null,
+        "text": "Deploy finished.", "after_sequence": after_sequence, "created_ms": created_ms,
+        "delivered_ms": null}),
+    )
+    .unwrap()
+}
+
+#[test]
+fn posts_follow_their_event_and_are_ordered_by_creation_time() {
+    // Two posts after the reply at 5 (given out of order), one after the input at 9.
+    let rows = ordered(
+        &[input(9), input(1)],
+        &[reply(5)],
+        &[post(5, 30, 2), post(9, 40, 3), post(5, 20, 1)],
+    )
+    .unwrap();
+    let keys: Vec<_> = rows
+        .iter()
+        .map(|row| match row {
+            Row::Input(i) => format!("i{}", i.sequence),
+            Row::Reply(r) => format!("r{}", r.acceptance_sequence),
+            Row::Post(p) => p.request_key.clone(),
+        })
+        .collect();
+    assert_eq!(keys, ["i1", "r5", "k1", "k2", "i9", "k3"]);
+    // A post written before anything happened leads an empty or full history.
+    let rows = ordered(&[input(1)], &[], &[post(0, 10, 4)]).unwrap();
+    assert!(matches!(rows[0], Row::Post(_)));
+    assert_eq!(ordered(&[], &[], &[post(0, 10, 4)]).unwrap().len(), 1);
+    // Posts older than the row before the oldest one on screen are left out.
+    let rows = ordered(&[input(50)], &[], &[post(10, 10, 5), post(49, 11, 6)]).unwrap();
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0].key(), "post-00000000-0000-4000-8000-000000000006");
+    // Event order conflicts are still refused with posts present.
+    assert!(ordered(&[input(5)], &[reply(5)], &[post(5, 1, 7)]).is_err());
+}
+
+#[test]
+fn the_adapter_chat_rules_line_is_hidden_from_the_owner_bubble() {
+    use orkestr_v2_contracts::Message;
+    use orkestr_v2_ui::chat_timeline::without_rules_line;
+    let rules = "[Chat rules v0123456789ab: before answering, read /srv/chat/CHAT.md (cat it) unless you already read this version in this session, and follow it.]";
+    let message = Message {
+        message_id: serde_json::from_value(json!("00000000-0000-4000-8000-000000000002")).unwrap(),
+        sequence: 1,
+        actor_kind: "owner".into(),
+        text: format!("{rules}\n\n[WhatsApp: Group]\n\nhello"),
+        reply_to: None,
+    };
+    assert_eq!(Input::from(&message).text, "[WhatsApp: Group]\n\nhello");
+    assert_eq!(
+        without_rules_line("[Chat rules are fun]"),
+        "[Chat rules are fun]"
+    );
+    assert_eq!(
+        without_rules_line("hello\n\n[Chat rules v1: x]"),
+        "hello\n\n[Chat rules v1: x]"
     );
 }

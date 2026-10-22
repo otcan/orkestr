@@ -12,6 +12,7 @@ mod chat_settings_view;
 mod composer;
 mod composer_tools;
 mod conversation_location;
+mod conversation_posts_view;
 mod conversation_sidebar;
 mod conversation_status_poll;
 mod execution_panel;

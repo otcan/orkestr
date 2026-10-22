@@ -11,7 +11,7 @@ import signal
 import threading
 from urllib.parse import parse_qs, urlsplit
 
-from . import local_inputs, participants, provisioning
+from . import instructions, local_inputs, participants, provisioning
 from .config import load
 from .ledger import MAX_ATTACHMENT_BYTES, OUTCOMES, Conflict
 from .registry import Registry
@@ -101,7 +101,9 @@ class Handler(BaseHTTPRequestHandler):
         if action == "health" and not target.query:
             members = sum(entry["role"] == participants.MEMBER for entry in binding.config["participants"])
             return self.answer(200, dict(ok=True, state=binding.state, error=binding.error, inputKinds=INPUT_KINDS,
-                                         enabled=binding.state == "enabled", members=members, **binding.ledger.health()))
+                                         enabled=binding.state == "enabled", members=members,
+                                         instructionsError=getattr(binding.worker, "instructions_error", None),
+                                         **binding.ledger.health()))
         if binding.state in ("revoked", "refused"):
             return self.answer(410 if binding.state == "revoked" else 503,
                                {"ok": False, "error": binding.error or "binding_revoked"})
@@ -163,7 +165,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.answer(422, {"ok": False, "error": "text_only_binding"})
         if (not isinstance(text, str) or (not text.strip() and not attachments) or body.get("promptFile") or
                 len(json.dumps({"client_message_id": "0" * 36,
-                                "text": participants.compose({"text": text, "author": author})}).encode()) >
+                                "text": participants.compose({"text": text, "author": author})}).encode()) +
+                instructions.reserve(config.get("instructions_path")) >
                 (28672 if config["attachments"] else 32768)):  # Room for the attachment note.
             return self.answer(422, {"ok": False, "error": "text_only_pilot" if not config["attachments"] else "invalid_text"})
         try:

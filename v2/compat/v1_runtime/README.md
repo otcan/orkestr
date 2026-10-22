@@ -80,6 +80,7 @@ Each binding is `<bindings_dir>/<remote_thread_id>.json`:
 | `max_input_age_seconds` | Optional, 60–604800 (default 1800): how long an input may wait without a Rust window before it is refused as `input_expired` |
 | `participants` | Optional (default `[]`): other people in the group, see [Group participants](#group-participants) |
 | `owner_label` | Optional (default `"Owner"`): the owner's label once the binding has participants |
+| `instructions_path` | Optional (default `null`): absolute path to a regular file (at most 32 KiB) with chat rules, see [Chat rules](#chat-rules) |
 
 `conversation_id`, `remote_thread_id`, `public_thread_id` and `chat_id` must be
 unique across bindings. A newcomer that collides with a serving binding is
@@ -295,6 +296,60 @@ things, all through the same loopback client and all optional on the server side
   occurrence or an agent message) it posts `POST /timer-triggers
   {source: "message", event_key: <public message id>}`, best effort and
   idempotent; a failure never blocks the input.
+
+## Chat rules
+
+V2 Fast and Deep sessions run in one shared role workspace, so a migrated chat
+has no per-conversation `AGENTS.md`. A binding may name `instructions_path`
+instead. The file must exist, be a regular file readable by the adapter and be
+at most 32 KiB when the binding is loaded. Like `participants` it is not pinned
+in the ledger: edit the file (or the field) and send SIGHUP.
+
+Every intake the adapter sends to Rust for that binding (owner, member and
+V1-local input; never timer occurrences or conversation posts) then starts with
+one line, a blank line, and the otherwise unchanged text (`[WhatsApp: ...]`
+header, member label and note, reply line):
+
+```
+[Chat rules v<first 12 hex of the file's SHA-256>: before answering, read <path> (cat it) unless you already read this version in this session, and follow it.]
+```
+
+The line is computed when the input is first sent and frozen with it, so a
+retry resends exactly the same text; a re-queued turn (deadline continuation,
+orphan requeue) reads the file again. It is never part of the ledger's identity
+digest, so a V1 retry after the file changed is still the same input. If the
+file is missing or unreadable at send time the input is sent without the line
+and `GET /threads/<id>/health` reports `instructionsError`
+(`instructions_unreadable`, `instructions_not_regular`,
+`instructions_too_large`) until a later send succeeds. The V2 chat view hides
+this leading paragraph from the owner's bubble; the model still receives it.
+
+## Conversation posts
+
+A conversation post is an assistant-side message written into a V2
+conversation from outside any run (an external coordinator session, operator
+alert tooling); see `docs/v2/conversation-posts.md`. Every 3 s (posts are
+interactive; digests use 15 s) the adapter reads
+`GET /posts?pending=true&limit=20`. For each post it writes, in one ledger
+transaction, a pseudo timer input and its final reply, then acknowledges it
+with `POST /posts/<id>/delivered`:
+
+- Parent: exactly the timer row shape V1 already materializes (`origin:
+  "timer"`, `source`/`connector` `orkestr-v2-timer`, `publicMessageId:
+  "v2timer-<uuid5>"`, `timerSourceId: "post"`) with the post's label as its
+  text. V1 (`whatsapp-remote-timer-parent.js`) accepts no other parent shape for
+  a reply without a WhatsApp input, so no V1 change is needed. V1 shows it as
+  `[Timer: <label>]` above the text.
+- Reply: `phase: "final_answer"`, text exactly the post text (Rust's reply
+  settings are not applied; V1 adds its own prefix and footer), and
+  `provider`/`model` from the post, or from the conversation settings when the
+  post has no provider, for V1's debug footer.
+
+Ids are deterministic (uuid5 of the post id), so a lost acknowledgement or a
+restart adopts nothing new. A post never waits behind a running input, never
+reaches Rust as input and never wakes a provider. While a binding is paused
+(`enabled: false`) the adapter does not poll: posts stay pending in Rust and
+are delivered after it is enabled again (the same as digests).
 
 ## Progress, NO_REPLY and attachments
 

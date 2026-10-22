@@ -348,6 +348,8 @@ async function api(state, req, res, url) {
       at_ms: m.sequence === 1 ? Date.parse('2025-07-01T14:42:05Z') : Date.now(), receipts: [] }));
     return json(res, 200, { conversation_id: id, times, next_after: null });
   }
+  // Conversation posts: none in the synthetic workspace.
+  if (rest === '/posts' && req.method === 'GET') return json(res, 200, { conversation_id: id, posts: [] });
   if (rest === '/execution' && req.method === 'GET') {
     if (id !== B) { res.writeHead(204, { 'cache-control': 'no-store' }); return res.end(); }
     return json(res, 200, { schema_version: 1, conversation_id: B, run_id: uuid(204), revision: 3, observed_at_ms: Date.now(), phase: 'running',

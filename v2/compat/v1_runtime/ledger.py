@@ -28,6 +28,9 @@ TIMER_SOURCE = "orkestr-v2-timer"
 TIMER_TEXT_LIMIT = 500
 # Deterministic IDs for timer digests (one pseudo timer input and one reply each).
 DIGEST_NAMESPACE = uuid.UUID("9b1e6a44-3c2d-4f8a-8d57-0a6c1e4b7f32")
+# Deterministic IDs for conversation posts (one pseudo timer input and one reply each).
+POST_NAMESPACE = uuid.UUID("3e8a1d5c-7b24-4f69-8c0e-5a9d2b6f4c17")
+POST_SOURCE_ID = "post"
 # Deterministic IDs for the owner notice that closes a refused input.
 NOTICE_NAMESPACE = uuid.UUID("5d0c3f7e-8a41-4c2b-9e6d-1b7f2a9c4e83")
 # Phases in which no Rust execution window was opened for the input yet.
@@ -272,6 +275,48 @@ class Ledger:
                     "phase": "digest_ready", "admitted_at": time.time(), "keys": {}}
             db.execute("INSERT INTO inputs VALUES (?,?,?,?)", (public_id, digest, remote_id, json.dumps(data)))
             return data, False
+
+    def enqueue_post(self, record, identity=None):
+        """Adopt one conversation post and export it at once as its own final reply.
+
+        V1 accepts a listed parent only in the timer shape, so a post is a pseudo
+        timer input (`origin: "timer"`, `v2timer-<uuid5>`) whose text is the
+        post's label; the reply text is exactly the post text. Input and export
+        are written in one transaction, so the post never waits behind a running
+        input and a replay after a lost acknowledgement adopts nothing new.
+        `identity` (provider/model) only fills the reply when the post has none
+        and is not part of the post's identity. Returns (reply, existed).
+        """
+        post_id = record["id"]
+        digest = hashlib.sha256(json.dumps({k: record.get(k) for k in ("id", "author", "label", "text", "provider", "model")},
+                                           sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        remote_id = str(uuid.uuid5(POST_NAMESPACE, "post:" + post_id))
+        public_id = TIMER_PREFIX + remote_id
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute("SELECT digest,data FROM inputs WHERE public_id=?", (public_id,)).fetchone()
+            if row:
+                if row[0] != digest:
+                    raise Conflict("post_identity_changed")
+                return json.loads(row[1]).get("reply"), True
+            label = (record.get("label") or "Coordinator")[:TIMER_TEXT_LIMIT]
+            reply = {"id": str(uuid.uuid5(POST_NAMESPACE, "reply:" + post_id)), "role": "assistant", "state": "completed",
+                     "phase": "final_answer", "source": "rust-v2-pilot", "parentMessageId": remote_id, "text": record["text"]}
+            footer = {k: record[k] for k in ("provider", "model") if record.get(k)}
+            if "provider" not in footer:
+                footer = dict(identity or {}, **footer)
+            reply.update({k: footer[k] for k in ("provider", "model") if footer.get(k)})
+            data = {"remote_id": remote_id, "public_id": public_id, "origin": "timer", "text": label,
+                    "public_thread_id": self.scope.get("public_thread_id"), "chat_id": self.scope.get("chat_id"),
+                    "account_id": self.scope.get("account_id"),
+                    "timer": {"namespace": None, "claim_id": None, "source_timer_id": POST_SOURCE_ID,
+                              "label": label, "due_ms": record.get("created_ms")},
+                    "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    "post": {"id": post_id, "author": record.get("author")},
+                    "phase": "completed", "admitted_at": time.time(), "keys": {}, "reply": reply}
+            db.execute("INSERT INTO inputs VALUES (?,?,?,?)", (public_id, digest, remote_id, json.dumps(data)))
+            self._export(db, data, "final", "final:" + remote_id, reply)
+            return reply, False
 
     def finish_silently(self, data, outcome):
         """A timer occurrence that will never run (held/withdrawn by Core): nothing to export."""

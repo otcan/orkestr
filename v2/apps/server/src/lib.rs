@@ -30,6 +30,7 @@ pub mod build_identity;
 pub mod claude_execution;
 pub mod control_dispatch;
 pub mod control_registry;
+mod conversation_posts_http;
 mod conversation_resources_http;
 mod conversation_status_http;
 mod conversations_http;
@@ -496,6 +497,7 @@ pub fn router_with_google_catalog(
         .merge(sidebar_http::router())
         .merge(message_attachments::router())
         .merge(message_times_http::router())
+        .merge(conversation_posts_http::router())
         .merge(thread_icons::router())
         .merge(v1_links::router())
         .merge(v1_manage_http::router())

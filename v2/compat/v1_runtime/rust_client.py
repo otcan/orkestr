@@ -304,11 +304,13 @@ class RustClient:
                 "/fast/execution": ("run_id",), "/accepted-results": ("after_sequence", "limit"),
                 "/intelligence": (), "/held-inputs": (), "/events": ("after", "limit"),
                 "/timer-inputs": ("after_sequence", "limit"), "/settings": (),
-                "/timer-digests": ("limit",)}
+                "/timer-digests": ("limit",), "/posts": ("pending", "limit")}
         payload = path.path.startswith("/payloads/") and identity(path.path[10:])
         digest_ack = (method == "POST" and path.path.startswith("/timer-digests/") and
                       path.path.endswith("/delivered") and identity(path.path[15:-10]))
-        require((method == "GET" and (path.path in read or payload)) or digest_ack or
+        post_ack = (method == "POST" and path.path.startswith("/posts/") and
+                    path.path.endswith("/delivered") and identity(path.path[7:-10]))
+        require((method == "GET" and (path.path in read or payload)) or digest_ack or post_ack or
                 (method == "POST" and path.path in ("/messages", "/window", "/accept", "/settings/render",
                                                     "/timer-outcomes", "/timer-triggers")), "route_refused")
         try:
@@ -321,6 +323,8 @@ class RustClient:
         for key, value in query:
             if key == "run_id":
                 identity(value)
+            elif key == "pending":
+                require(value == "true", "query_refused")
             else:
                 require(value.isdecimal() and integer(int(value), 1 if key == "limit" else 0) and
                         (key != "limit" or int(value) <= 100), "query_refused")

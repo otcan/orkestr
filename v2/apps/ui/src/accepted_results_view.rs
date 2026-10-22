@@ -1,6 +1,6 @@
 use crate::accepted_results_bridge::start;
 use dioxus::prelude::*;
-use orkestr_v2_contracts::{AcceptedResult, AcceptedResults, ProviderPayload};
+use orkestr_v2_contracts::{AcceptedResult, AcceptedResults, ConversationPost, ProviderPayload};
 use orkestr_v2_ui::chat_timeline::{self, Input, Row};
 use orkestr_v2_ui::{
     accepted_results::{bound_payload, valid_page},
@@ -14,6 +14,7 @@ use std::{cell::Cell, collections::BTreeMap, rc::Rc};
 pub fn AcceptedReplies(
     id: String,
     #[props(default)] messages: Vec<Input>,
+    #[props(default)] posts: Vec<ConversationPost>,
     #[props(default)] update: Option<Signal<i64>>,
     #[props(default)] inline: bool,
     session_scope: Signal<SessionScope>,
@@ -118,7 +119,7 @@ pub fn AcceptedReplies(
             .map(|p| p.results.clone())
             .unwrap_or_default()
     };
-    let rows = chat_timeline::ordered(&messages, &results);
+    let rows = chat_timeline::ordered(&messages, &results, &posts);
     // Times start just before the oldest row on screen.
     let first = rows
         .as_ref()
@@ -135,7 +136,7 @@ pub fn AcceptedReplies(
             if inline && rows.is_empty() && !busy() { p { class: "empty-conversation", "Start a conversation. Your messages and accepted replies will appear here." } }
             ol { class: if inline { "chat-messages" } else { "messages" },
                 for row in rows {
-                    li { key: "{row.key()}", class: match &row { Row::Input(_) => "user-message", Row::Reply(_) => "assistant-message" },
+                    li { key: "{row.key()}", class: match &row { Row::Input(_) => "user-message", Row::Reply(_) => "assistant-message", Row::Post(_) => "assistant-message post-message" },
                         match &row {
                             Row::Input(input) => rsx! { article { "data-message-id": "{input.id}",
                                 strong { if input.actor == "owner" { "You" } else { "{input.actor}" } }
@@ -148,8 +149,11 @@ pub fn AcceptedReplies(
                                 p { "{input.text}" }
                             } },
                             Row::Reply(reply) => rsx! { AcceptedReply { conversation:id.clone(), row:reply.clone(), session_scope, onexpired } },
+                            Row::Post(post) => rsx! { crate::conversation_posts_view::PostBubble { post: post.clone() } },
                         }
-                        if let Some(time) = times_now.get(&row.sequence()) {
+                        if let Row::Post(post) = &row {
+                            crate::message_time_view::MessageTime { at_ms: post.created_ms, now_ms: now() }
+                        } else if let Some(time) = times_now.get(&row.sequence()) {
                             crate::message_time_view::MessageTime { at_ms: time.at_ms, now_ms: now(), receipts: time.receipts.clone() }
                         }
                     }

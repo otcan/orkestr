@@ -208,6 +208,7 @@ pub fn Conversation(
         }
     });
     let now = use_signal(|| 0_u64);
+    let posts = crate::conversation_posts_view::use_conversation_posts(id.clone(), session_scope);
     let messages = projection
         .read()
         .messages
@@ -227,7 +228,7 @@ pub fn Conversation(
             div { class: "conversation-scroll", tabindex: "0", "aria-label": "Conversation transcript",
                 crate::archived_history_view::ArchivedHistory { key: "archived-{id}-{generation}", id: id.clone(), session_scope, onexpired }
                 crate::intelligence_view::IntelligencePanel { key:"intelligence-{id}-{generation}", id:id.clone(), csrf:csrf.clone(), session_scope, execution, onexpired, onaccepted:move |revision|accepted_revision.set(revision), auto_accept: auto_accept() }
-                crate::accepted_results_view::AcceptedReplies { key: "accepted-{id}-{generation}", id: id.clone(), session_scope, messages, update: Some(accepted_revision), inline: true, onexpired }
+                crate::accepted_results_view::AcceptedReplies { key: "accepted-{id}-{generation}", id: id.clone(), session_scope, messages, posts: posts(), update: Some(accepted_revision), inline: true, onexpired }
                 if let Some(current) = live_status.filter(|s| s.progress.is_some() && s.phase != orkestr_v2_contracts::ExecutionPhase::Completed) {
                     article { key: "{current.conversation_id}/{current.progress.as_ref().unwrap().payload_id}", class: "assistant-proposal",
                         h3 { "Assistant" }
