@@ -31,6 +31,13 @@ DIGEST_NAMESPACE = uuid.UUID("9b1e6a44-3c2d-4f8a-8d57-0a6c1e4b7f32")
 # Deterministic IDs for conversation posts (one pseudo timer input and one reply each).
 POST_NAMESPACE = uuid.UUID("3e8a1d5c-7b24-4f69-8c0e-5a9d2b6f4c17")
 POST_SOURCE_ID = "post"
+# Deterministic IDs for web-UI owner messages mirrored to the group: one pseudo
+# timer input for the message itself, one for its answer, one per progress note.
+WEB_NAMESPACE = uuid.UUID("7c2e9b14-6d3a-4f8e-a1b5-9e0d4c7f2a68")
+WEB_SOURCE_ID = "web"
+WEB_LABEL = "\U0001f5a5\ufe0f (web)"
+WEB_TEXT_LIMIT = 3500
+WEB_EXCERPT_CHARS = 60
 # Deterministic IDs for the owner notice that closes a refused input.
 NOTICE_NAMESPACE = uuid.UUID("5d0c3f7e-8a41-4c2b-9e6d-1b7f2a9c4e83")
 # Phases in which no Rust execution window was opened for the input yet.
@@ -111,6 +118,9 @@ class Ledger:
                        "message TEXT NOT NULL, outcome TEXT, ack TEXT)")
             db.execute("CREATE TABLE IF NOT EXISTS uploads (upload_id TEXT PRIMARY KEY, public_id TEXT NOT NULL, sha256 TEXT NOT NULL, "
                        "filename TEXT NOT NULL, media_type TEXT NOT NULL, size INTEGER NOT NULL, bytes BLOB, created_ms INTEGER NOT NULL)")
+            # Web-UI messages whose answer is still awaited; never listed to V1
+            # and never in the serial input queue (see Worker.drive_web).
+            db.execute("CREATE TABLE IF NOT EXISTS web_watch (message_id TEXT PRIMARY KEY, data TEXT NOT NULL)")
             version = db.execute("SELECT value FROM ledger_meta WHERE key='schema'").fetchone()
             if version is None:
                 # Pilot ledgers (schema 1) kept the accepted reply inside the input row.
@@ -338,6 +348,112 @@ class Ledger:
             db.execute("INSERT INTO inputs VALUES (?,?,?,?)", (public_id, digest, remote_id, json.dumps(data)))
             self._export(db, data, "final", "final:" + remote_id, reply)
             return reply, False
+
+    # Web-UI owner messages -------------------------------------------------
+    def web_cursor(self):
+        with self.connect() as db:
+            row = db.execute("SELECT value FROM ledger_meta WHERE key='web_cursor'").fetchone()
+        return int(row[0]) if row else None
+
+    def set_web_cursor(self, sequence):
+        with self.connect() as db:
+            db.execute("INSERT INTO ledger_meta VALUES ('web_cursor',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                       (str(int(sequence)),))
+
+    def own_message_ids(self):
+        """Core message IDs this adapter itself admitted (every attempt of every
+        input), so a WhatsApp or V1-local input is never mirrored back."""
+        own = set()
+        with self.connect() as db:
+            for (raw,) in db.execute("SELECT data FROM inputs").fetchall():
+                data = json.loads(raw)
+                own.update(m for m in data.get("own_messages", []) if isinstance(m, str))
+                for item in (data.get("intake"), data.get("requeued"), data.get("continued")):
+                    if isinstance(item, dict):
+                        own.update(v for k, v in item.items() if k in ("message_id", "previous_message_id") and isinstance(v, str))
+        return own
+
+    def _pseudo_timer(self, db, remote_id, label, created_ms, extra, reply):
+        """One completed pseudo timer input (V1's only parent shape for a reply
+        without a WhatsApp input) and its final export, in the caller's transaction."""
+        data = {"remote_id": remote_id, "public_id": TIMER_PREFIX + remote_id, "origin": "timer", "text": label[:TIMER_TEXT_LIMIT],
+                "public_thread_id": self.scope.get("public_thread_id"), "chat_id": self.scope.get("chat_id"),
+                "account_id": self.scope.get("account_id"),
+                "timer": {"namespace": None, "claim_id": None, "source_timer_id": WEB_SOURCE_ID,
+                          "label": label[:TIMER_TEXT_LIMIT], "due_ms": created_ms},
+                "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "phase": "completed", "admitted_at": time.time(), "keys": {}, "reply": reply}
+        data.update(extra)
+        digest = hashlib.sha256(json.dumps({"web": remote_id}, sort_keys=True).encode()).hexdigest()
+        if db.execute("INSERT OR IGNORE INTO inputs VALUES (?,?,?,?)",
+                      (data["public_id"], digest, remote_id, json.dumps(data))).rowcount != 1:
+            return False
+        self._export(db, data, "final", "final:" + remote_id, reply)
+        return True
+
+    def enqueue_web(self, message, text, identity=None):
+        """Mirror one web-UI owner message at once and start awaiting its answer.
+
+        Written in one transaction and keyed by the Core message ID, so a replay
+        after a restart adopts nothing new. Returns True when newly adopted."""
+        message_id = message["message_id"]
+        remote_id = str(uuid.uuid5(WEB_NAMESPACE, "mirror:" + message_id))
+        reply = {"id": str(uuid.uuid5(WEB_NAMESPACE, "mirror-reply:" + message_id)), "role": "assistant",
+                 "state": "completed", "phase": "final_answer", "source": "rust-v2-web-mirror",
+                 "parentMessageId": remote_id, "text": text}
+        reply.update({k: v for k, v in (identity or {}).items() if k in ("provider", "model") and v})
+        excerpt = " ".join(text.split())
+        excerpt = excerpt if len(excerpt) <= WEB_EXCERPT_CHARS else excerpt[:WEB_EXCERPT_CHARS].rstrip() + "\u2026"
+        watch = {"message_id": message_id, "sequence": message["sequence"], "excerpt": excerpt,
+                 "since": time.time(), "cursor": message["sequence"] - 1, "runs": [], "progress": []}
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            created = self._pseudo_timer(db, remote_id, WEB_LABEL, int(time.time() * 1000),
+                                         {"web": {"message_id": message_id, "kind": "message"}}, reply)
+            if created:
+                db.execute("INSERT OR IGNORE INTO web_watch VALUES (?,?)", (message_id, json.dumps(watch)))
+            return created
+
+    def web_watches(self, limit=8):
+        with self.connect() as db:
+            rows = db.execute("SELECT data FROM web_watch ORDER BY rowid LIMIT ?", (limit,)).fetchall()
+        return [json.loads(raw) for (raw,) in rows]
+
+    def save_web_watch(self, watch):
+        with self.connect() as db:
+            db.execute("UPDATE web_watch SET data=? WHERE message_id=?", (json.dumps(watch), watch["message_id"]))
+
+    def drop_web_watch(self, message_id):
+        with self.connect() as db:
+            db.execute("DELETE FROM web_watch WHERE message_id=?", (message_id,))
+
+    def web_progress(self, watch, payload_id, text):
+        """One intermediate note of a web message's Deep run, as its own message."""
+        message_id = watch["message_id"]
+        remote_id = str(uuid.uuid5(WEB_NAMESPACE, "progress:%s:%s" % (message_id, payload_id)))
+        reply = {"id": str(uuid.uuid5(WEB_NAMESPACE, "progress-reply:%s:%s" % (message_id, payload_id))),
+                 "role": "assistant", "state": "completed", "phase": "final_answer", "source": "rust-v2-web-mirror",
+                 "parentMessageId": remote_id, "text": text}
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            self._pseudo_timer(db, remote_id, "%s progress: %s" % (WEB_LABEL, watch["excerpt"]), int(time.time() * 1000),
+                               {"web": {"message_id": message_id, "kind": "progress"}}, reply)
+            watch.setdefault("progress", []).append(payload_id)
+            db.execute("UPDATE web_watch SET data=? WHERE message_id=?", (json.dumps(watch), message_id))
+
+    def complete_web(self, watch, text, identity=None):
+        """Export the accepted answer to a web message and stop awaiting it."""
+        message_id = watch["message_id"]
+        remote_id = str(uuid.uuid5(WEB_NAMESPACE, "answer:" + message_id))
+        reply = {"id": str(uuid.uuid5(WEB_NAMESPACE, "answer-reply:" + message_id)), "role": "assistant",
+                 "state": "completed", "phase": "final_answer", "source": "rust-v2-pilot",
+                 "parentMessageId": remote_id, "text": text}
+        reply.update({k: v for k, v in (identity or {}).items() if k in ("provider", "model") and v})
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            self._pseudo_timer(db, remote_id, "%s \u21a9 %s" % (WEB_LABEL, watch["excerpt"]), int(time.time() * 1000),
+                               {"web": {"message_id": message_id, "kind": "answer"}}, reply)
+            db.execute("DELETE FROM web_watch WHERE message_id=?", (message_id,))
 
     def finish_silently(self, data, outcome):
         """A timer occurrence that will never run (held/withdrawn by Core): nothing to export."""
@@ -639,6 +755,7 @@ class Ledger:
             refused = db.execute("SELECT count(*) FROM inputs WHERE json_extract(data,'$.refused') IS NOT NULL").fetchone()[0]
             stalled = db.execute("SELECT count(*) FROM inputs WHERE json_extract(data,'$.stalled') IS NOT NULL AND "
                                  "json_extract(data,'$.phase') != 'completed'").fetchone()[0]
+            web = db.execute("SELECT count(*) FROM web_watch").fetchone()[0]
             recent = [json.loads(raw) for (raw,) in db.execute(
                 "SELECT data FROM inputs WHERE json_extract(data,'$.refused') IS NOT NULL ORDER BY rowid DESC LIMIT ?",
                 (RECENT_REFUSALS,)).fetchall()]
@@ -647,7 +764,7 @@ class Ledger:
                 "outstandingInputs": outstanding, "maxOutstandingInputs": self.max_outstanding, "ackedThrough": cursor,
                 "pendingExports": outcomes.get("pending", 0), "uncertainDeliveries": outcomes.get("uncertain", 0),
                 "failedDeliveries": outcomes.get("failed", 0), "revoked": self.revoked(),
-                "refusedInputs": refused, "stalledInputs": stalled,
+                "refusedInputs": refused, "stalledInputs": stalled, "webAnswersAwaited": web,
                 "recentRefusals": [{"publicMessageId": d["public_id"], "reason": d["refused"]["reason"],
                                     "phase": d["refused"].get("phase"), "atMs": d["refused"]["atMs"],
                                     "settled": bool(d.get("settled"))} for d in recent]}
