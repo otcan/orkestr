@@ -23,7 +23,8 @@ export function storeOutbox(prefix, changes, storage = globalThis.localStorage) 
   if (typeof prefix !== 'string' || !PREFIX.test(prefix) || !Array.isArray(changes)) return false;
   let ok = true;
   for (const [key, value] of changes) {
-    if (typeof key !== 'string' || !/^[A-Za-z0-9-]{1,128}$/.test(key)) { ok = false; continue; }
+    // Request keys as Core accepts them, e.g. `web:<uuid>` for composer messages.
+    if (typeof key !== 'string' || !/^[A-Za-z0-9:_.-]{1,128}$/.test(key)) { ok = false; continue; }
     try {
       if (value === null) storage.removeItem(prefix + key);
       else if (typeof value === 'string' && value.length <= 262144) storage.setItem(prefix + key, value);
