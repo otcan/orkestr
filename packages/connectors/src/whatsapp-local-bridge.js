@@ -7911,6 +7911,24 @@ export async function sendLocalWhatsAppScopedDocument({ chatId = "", accountId =
     ({ mimetype, data, filename }) => new MessageMedia(mimetype, data, filename));
 }
 
+// Scoped native workers only: send a file the assistant attached to a group
+// reply, read by the scoped transport from the thread's outbound snapshot.
+export async function sendLocalWhatsAppScopedFile({ chatId = "", accountId = "", file = {}, env = process.env, scopedRequest = {} } = {}) {
+  const scoped = scopedNativeWorker(env);
+  if (!scoped) throw Object.assign(new Error("scoped_worker_required"), { statusCode: 403 });
+  const selectedAccountId = await normalizeManagedAccountId(accountId, env);
+  const runtime = selectedAccountId ? runtimes.get(selectedAccountId) : null;
+  const state = selectedAccountId ? accountStates.get(selectedAccountId) : null;
+  if (!runtime?.client || !state?.ready || state?.runtimeUsable === false) {
+    const error = new Error("whatsapp_local_bridge_not_ready");
+    error.statusCode = 400;
+    throw error;
+  }
+  const MessageMedia = runtime.MessageMedia || (await loadBridgeDependencies()).whatsapp.MessageMedia;
+  return scoped.sendFile(selectedAccountId, runtime.client, chatId, file, scopedRequest,
+    ({ mimetype, data, filename }) => new MessageMedia(mimetype, data, filename));
+}
+
 /**
  * @param {{ chatId?: string, text?: string, accountId?: string, mentions?: string[], attachments?: Array<Record<string, unknown>>, env?: Record<string, string | undefined>, crossAccountEchoSuppression?: boolean, routeSentMessage?: boolean, scopedRequest?: Record<string, unknown> }} [options]
  */

@@ -552,3 +552,24 @@ test('a reply-quote of an Orkestr reply reaches the thread as structured replyTo
   const plain = state.posts.find(p => /hello/.test(p.body.text));
   assert.equal(plain.body.replyTo, undefined);
 });
+
+test('reply files follow the text once each and unresolved files are skipped', async t => {
+  const {relay, state} = fixture(t, false, false, {replyMediaRoot: '/srv/uploads'});
+  const final = {...answer('final'), attachments: [{id: 'att-1', encrypted: true}, {id: 'att-2', encrypted: true}, {id: 'att-3'}]};
+  state.pages['/api/threads/thread-1/messages?limit=200'] = {messages: [final]};
+  const file = {path: '/srv/uploads/thread-1/artifacts/abc-report.pdf', filename: 'report.pdf', mimetype: 'application/pdf', sha256: 'a'.repeat(64)};
+  state.pages['/api/threads/thread-1/messages/final/scoped-relay-files'] = {files: [{id: 'att-1', ...file}, {id: 'att-3', ...file, filename: 'list.xlsx'}]};
+  assert.equal((await relay.tick()).completed, 1);
+  await relay.tick();
+  assert.deepEqual(state.sent.map(s => s.text ?? s.file?.filename), ['agent: answer', 'report.pdf', 'list.xlsx']);
+  assert.deepEqual(state.sent[1].file, file);
+  assert.equal(state.sent[1].parentId, 'wa-1');
+  assert.notEqual(state.sent[1].requestId, state.sent[2].requestId);
+});
+
+test('without a media root, reply files are not sent', async t => {
+  const {relay, state} = fixture(t);
+  state.pages['/api/threads/thread-1/messages?limit=200'] = {messages: [{...answer('final'), attachments: [{id: 'att-1'}]}]};
+  await relay.tick();
+  assert.deepEqual(state.sent.map(s => s.text), ['agent: answer']);
+});

@@ -6,10 +6,12 @@
 // `group-send` reads one JSON payload from stdin instead of argv (no argument
 // size limit): {kind: 'reply'|'notify', to, requestId, parentId, text}; or {kind: 'operator', to, requestId, text}
 // for an operator notice (requestId `opnotice:<id>`, no parent; needs `operatorNotifications` in the config) or the
-// same with `document: {filename, mimetype, text}` for a long reply's full text.
+// same with `document: {filename, mimetype, text}` for a long reply's full text, or
+// `file: {path, filename, mimetype, sha256}` for a file the assistant attached to the reply.
 import fs from 'node:fs';
 import {requestWhatsAppWorker} from '../packages/connectors/src/whatsapp-worker-client.js';
 import {SCOPED_SEND_MAX_TEXT_LENGTH, validReplyDocument} from '../packages/connectors/src/whatsapp-scoped-group-formatting.js';
+import {validReplyFileShape} from '../packages/connectors/src/whatsapp-scoped-reply-files.js';
 
 const readStdin = async () => {
   const chunks = [];
@@ -37,16 +39,16 @@ try {
     let input;
     try { input = await readStdin(); } catch { throw new Error('scoped_reply_invalid'); }
     request = {notify: input?.kind === 'notify', kind: input?.kind, to: input?.to, requestId: input?.requestId, parentId: input?.parentId,
-      text: input?.text, document: input?.document};
+      text: input?.text, document: input?.document, file: input?.file};
   } else {
       const [to, requestId, parentId, text, ...extra] = args;
       if (extra.length) throw new Error('scoped_reply_invalid');
       request = {notify: command === 'group-notify', kind: command === 'group-notify' ? 'notify' : command === 'group-reply' ? 'reply' : '', to, requestId, parentId, text};
     }
-    const {to, requestId, parentId, text, document} = request;
+    const {to, requestId, parentId, text, document, file} = request;
     if (request.kind === 'operator') {
       if (!config.workerAccountId || typeof text !== 'string' || !text.trim() || text.length > SCOPED_SEND_MAX_TEXT_LENGTH || parentId !== undefined
-          || document !== undefined || !/^opnotice:[A-Za-z0-9._-]{8,150}$/.test(requestId || '') || !config.groups.some(group => group.chatId === to))
+          || document !== undefined || file !== undefined || !/^opnotice:[A-Za-z0-9._-]{8,150}$/.test(requestId || '') || !config.groups.some(group => group.chatId === to))
         throw new Error('scoped_reply_invalid');
       const operatorEnv = {...process.env, ORKESTR_WA_WORKER_URL: '',
         ORKESTR_WA_WORKER_TOKEN: process.env.ORKESTR_WA_WORKER_TOKEN || process.env.ORKESTR_WA_SERVICE_TOKEN
@@ -56,9 +58,11 @@ try {
       if (sent.ok !== true || !Array.isArray(sent.ids) || !sent.ids.length) throw new Error('scoped_reply_unconfirmed');
       process.stdout.write(JSON.stringify({ok: true, ids: sent.ids, duplicate: sent.duplicate === true}));
     } else {
-    const validBody = document === undefined
-      ? typeof text === 'string' && text && text.length <= SCOPED_SEND_MAX_TEXT_LENGTH
-      : text === undefined && validReplyDocument(document);
+    const validBody = file !== undefined
+      ? text === undefined && document === undefined && request.kind === 'reply' && validReplyFileShape(file)
+      : document === undefined
+        ? typeof text === 'string' && text && text.length <= SCOPED_SEND_MAX_TEXT_LENGTH
+        : text === undefined && validReplyDocument(document);
     if (!['reply', 'notify'].includes(request.kind) || !config.workerAccountId
         || !(config.groups.some(group => group.chatId === to) || await registered(config, to))
         || typeof requestId !== 'string' || !requestId || typeof parentId !== 'string' || !parentId || !validBody)
@@ -67,7 +71,10 @@ try {
       ORKESTR_WA_WORKER_TOKEN: process.env.ORKESTR_WA_WORKER_TOKEN || process.env.ORKESTR_WA_SERVICE_TOKEN
         || process.env.WHATSAPP_BRIDGE_TOKEN || process.env.WA_HTTP_TOKEN || process.env.ORKESTR_WHATSAPP_BRIDGE_TOKEN};
     const base = {accountId: config.workerAccountId, to, requestId, parentId, ...(request.notify ? {notificationId: requestId} : {})};
-    const result = document === undefined
+    const result = file !== undefined
+      ? await requestWhatsAppWorker('/send-file', {method: 'POST', timeoutMs: 120000,
+        body: {...base, path: file.path, filename: file.filename, mimetype: file.mimetype, sha256: file.sha256}}, env)
+      : document === undefined
       ? await requestWhatsAppWorker('/send-text', {method: 'POST', timeoutMs: 40000, body: {...base, text}}, env)
       : await requestWhatsAppWorker('/send-document', {method: 'POST', timeoutMs: 40000,
         body: {...base, filename: document.filename, mimetype: document.mimetype, text: document.text}}, env);
