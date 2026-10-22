@@ -4,7 +4,7 @@ import re
 import stat
 
 from codex_bounded.configuration import BROKER, ISOLATION, MODULES, HOSTS
-from codex_bounded.trust import digest, metadata, private, protected
+from codex_bounded.trust import digest, metadata, private, protected, system_dependency
 from .contract import identifier, require
 
 MAX_RUNTIME_WINDOWS = 12
@@ -99,7 +99,9 @@ class Package:
         require(type(manifest["dependencies"]) is dict and set(manifest["dependencies"]) == dependencies,
                 "dependency_inventory")
         for name, value in manifest["dependencies"].items():
-            require(digest(protected(name)) == value, "dependency_hash")
+            # OS-managed: custody, never bytes (see trust.system_dependency).
+            require(type(value) is str and re.fullmatch(r"[0-9a-f]{64}", value), "dependency_hash")
+            system_dependency(name)
         self.manifest = manifest
         self.runtime = metadata(self.root / "service.json")
         self.profile = metadata(self.root / "profile.json")

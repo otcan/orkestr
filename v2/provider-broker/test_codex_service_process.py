@@ -85,6 +85,25 @@ class ProcessTests(unittest.TestCase):
         with self.assertRaisesRegex(Refused, "original_cleanup_proof_missing"):
             self.children.proven_gone()
 
+    def test_unreaped_zombie_at_cleanup_deadline_recovers_once_reaped(self):
+        # A refused broker is the server's child: it stays a zombie until the
+        # server reaps it, which happens only after the manager replied.
+        self.entry.write_text("import os,signal,time\nos.kill(os.getpid(),signal.SIGSTOP)\ntime.sleep(30)\n")
+        children = Children(self.package, process(os.getpid()))
+        self.addCleanup(children.close)
+        child = self.spawn()
+        identity = process(child.pid)
+        self.assertTrue(children.bind(child.pid, identity["start"], time.monotonic() + 2))
+        with unittest.mock.patch("codex_service.ownership.os.waitid", side_effect=ChildProcessError):
+            self.assertFalse(children.cleanup(0.2))  # Killed, not yet reaped.
+        self.assertTrue(children.forced)
+        self.assertFalse(children.uncertain)
+        self.assertFalse(children.released())
+        child.wait(3)  # The server reaps it after the reply.
+        self.assertTrue(children.released())
+        with self.assertRaisesRegex(Refused, "original_cleanup_proof_missing"):
+            children.proven_gone()  # Never graceful retirement proof.
+
     def host_children(self):
         package = SimpleNamespace(root=self.root, uid=os.getuid(), beta={
             "host_full_access": {"environment": {"HOME": "/synthetic", "PATH": "/usr/bin:/bin"}}})

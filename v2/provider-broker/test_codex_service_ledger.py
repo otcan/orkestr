@@ -332,16 +332,22 @@ class LedgerTests(unittest.TestCase):
         self.ledger.uncertain(request["window_id"], 1, "server_lost")
         manager = Manager.__new__(Manager)
         manager.ledger, manager.guard = self.ledger, threading.Lock()
-        closed = []
-        window = SimpleNamespace(window=request["window_id"], egress_closed=False,
-                                 children=SimpleNamespace(released=lambda: True,
+        closed, cleaned = [], []
+        window = SimpleNamespace(window=request["window_id"], generation=1, egress_closed=False,
+                                 close_egress=lambda: setattr(window, "egress_closed", True),
+                                 children=SimpleNamespace(released=lambda: False,
+                                                          forced=True,
+                                                          cleanup=lambda seconds=2: cleaned.append(seconds) or True,
                                                           close=lambda: closed.append(1)))
-        manager.windows = {request["window_id"]: window}
+        manager.windows, manager.egress = {request["window_id"]: window}, None
         decision = {**self.reconciliation(request), "operation": "reconcile"}
-        with self.assertRaisesRegex(contract.Refused, "window_egress_owned"):
+        # Runtime reconciles a window its task no longer owns (a failed bind):
+        # the manager closes the still-open custody itself instead of refusing
+        # until a restart, but every original child must still be reaped.
+        with self.assertRaisesRegex(contract.Refused, "owned_child_not_reaped"):
             manager.dispatch(decision)
-        window.egress_closed = True
-        window.children.released = lambda: False
+        self.assertTrue(window.egress_closed)
+        self.assertEqual(cleaned, [2])
         with self.assertRaisesRegex(contract.Refused, "owned_child_not_reaped"):
             manager.dispatch(decision)
         self.assertEqual(self.ledger.status()["state"], "reconciliation")
