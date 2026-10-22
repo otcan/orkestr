@@ -53,6 +53,8 @@ mod resource_health;
 pub use resource_health::*;
 mod host_metrics;
 pub use host_metrics::*;
+mod ai_usage;
+pub use ai_usage::*;
 mod stopped;
 pub use cancellation::*;
 pub use stopped::*;

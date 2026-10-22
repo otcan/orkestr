@@ -19,6 +19,8 @@ pub use conversation_resources::{
 mod conversation_export;
 pub mod conversation_posts;
 pub use conversation_posts::{PostListing, PostReceipt};
+mod ai_usage;
+pub use ai_usage::UsageDirectory;
 mod conversations;
 mod restricted;
 pub use restricted::{

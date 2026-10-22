@@ -57,6 +57,10 @@ pub(crate) struct V1Thread {
     /// Bound WhatsApp chat id and the label V1 draws its chat icon from.
     pub chat_id: Option<String>,
     pub icon_title: String,
+    /// The thread's Codex thread (session) id, for usage attribution.
+    pub codex_thread_id: Option<String>,
+    /// The thread's working directory, for usage attribution (never shown).
+    pub workspace: Option<String>,
 }
 
 impl V1Thread {
@@ -159,6 +163,10 @@ pub(crate) fn parse_thread(value: &Value) -> Option<V1Thread> {
     Some(V1Thread {
         chat_id,
         icon_title,
+        codex_thread_id: text(value, "codexThreadId").filter(|t| t.len() <= 120),
+        workspace: text(value, "workspace")
+            .or_else(|| text(value, "cwd"))
+            .filter(|w| w.starts_with('/') && w.len() <= 4096),
         parent: text(value, "parentThreadId").filter(|p| valid_v1_thread_id(p) && *p != id),
         kind: text(value, "threadKind"),
         last_activity_ms,

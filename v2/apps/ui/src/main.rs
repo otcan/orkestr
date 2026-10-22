@@ -22,6 +22,7 @@ mod fast_panel;
 mod held_inputs_poll;
 mod held_inputs_view;
 mod history;
+mod ai_usage_view;
 mod host_dashboard;
 mod host_metrics_chart;
 mod host_metrics_fetch;
@@ -211,6 +212,7 @@ fn App() -> Element {
     rsx! {
         style { "{include_str!(\"style.css\")}" }
         style { "{include_str!(\"host_metrics.css\")}" }
+        style { "{include_str!(\"ai_usage.css\")}" }
         main { class: "app-shell",
             header { class: "app-heading", h1 { "Orkestr" } span { "Rust workspace · beta" }
                 if !csrf().is_empty() && !current().is_empty() {

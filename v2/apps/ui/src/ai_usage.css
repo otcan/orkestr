@@ -1,0 +1,59 @@
+/* Claude & Codex usage on the host overview. Reuses the host page tokens
+   (cards, gauges, legends, series colours) defined in host_metrics.css. */
+.ai-usage { display: grid; gap: .9rem; padding-top: .4rem; }
+.ai-usage > header h2 { margin: 0; }
+.ai-providers { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 26rem), 1fr)); gap: 1rem; align-items: start; }
+.ai-provider { display: grid; gap: .6rem; }
+.ai-provider > header { margin-bottom: 0; }
+.ai-claude { border-top: 3px solid var(--series-4); }
+.ai-codex { border-top: 3px solid var(--series-1); }
+.ai-burn { display: flex; flex-wrap: wrap; align-items: baseline; gap: .2rem .5rem; font-variant-numeric: tabular-nums; }
+.ai-burn-label { color: var(--muted); font-size: .78rem; width: 100%; }
+.ai-burn strong { font-size: 1.25rem; }
+.ai-burn span:last-child { color: var(--muted); }
+.ai-limits { display: grid; gap: .6rem; }
+.ai-limit { box-shadow: none; align-items: flex-start; }
+.ai-limit .gauge-ring { flex: 0 0 4.6rem; width: 4.6rem; height: 4.6rem; }
+.ai-limit h4 { margin: 0 0 .15rem; font-size: .9rem; color: var(--text); }
+.ai-limit h4 small { color: var(--faint); font-weight: 400; }
+.ai-limit p { margin: .1rem 0; font-size: .8rem; }
+.ai-left { font-weight: 600; font-variant-numeric: tabular-nums; }
+.ai-reset { color: var(--muted); font-variant-numeric: tabular-nums; }
+.ai-pace { color: var(--text); }
+.ai-note { color: var(--faint); font-size: .74rem !important; }
+.ai-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr)); gap: .7rem; }
+.ai-tile { display: grid; gap: .1rem; padding: .7rem .85rem; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); box-shadow: var(--shadow); min-width: 0; }
+.ai-tile span { color: var(--muted); font-size: .78rem; }
+.ai-tile strong { font-size: 1.45rem; font-variant-numeric: tabular-nums; line-height: 1.2; }
+.ai-tile small { color: var(--faint); font-size: .72rem; overflow-wrap: anywhere; }
+.ai-kinds { display: flex; gap: 2px; height: .7rem; border-radius: .35rem; overflow: hidden; background: var(--surface-3); }
+.ai-kind-seg { display: block; height: 100%; background: var(--c); min-width: 0; }
+.ai-kind-legend { margin-top: -.3rem; }
+.ai-kind-legend small { color: var(--faint); }
+.ai-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 26rem), 1fr)); gap: 1rem; align-items: start; }
+.ai-bar { fill: var(--c); }
+.ai-bar:hover { opacity: .75; }
+.ai-models table { width: 100%; border-collapse: collapse; font-size: .8rem; font-variant-numeric: tabular-nums; }
+.ai-models th { color: var(--faint); font-size: .68rem; text-transform: uppercase; letter-spacing: .04em; font-weight: 600; text-align: right; padding: .2rem .3rem; }
+.ai-models td { text-align: right; padding: .35rem .3rem; border-top: 1px solid var(--border); white-space: nowrap; }
+.ai-models th:first-child, .ai-models td:first-child { text-align: left; white-space: normal; }
+.swatch-dot { display: inline-block; width: .6rem; height: .6rem; border-radius: 50%; background: var(--c); margin-right: .4rem; vertical-align: .02rem; }
+.ai-table .consumer-row { grid-template-columns: minmax(0, 2.6fr) 1fr 1fr 1.1fr; }
+.ai-table .consumer-row .meter { margin-top: .25rem; height: .3rem; }
+.ai-table .consumer-row .meter > span { background: var(--series-1); }
+.kind.ai-kind-conversation { background: var(--accent-soft); color: var(--accent-text); }
+.kind.ai-kind-thread { background: var(--info-soft); color: var(--info-text); }
+.kind.ai-kind-coordinator { background: var(--warn-soft); color: var(--warn-text); }
+.ai-list { list-style: none; margin: 0; padding: 0; display: grid; gap: .1rem; }
+.ai-list li { padding: .45rem .1rem; border-top: 1px solid var(--border); min-width: 0; overflow-wrap: anywhere; }
+.ai-list li:first-child { border-top: 0; }
+.ai-list li a { font-weight: 600; color: var(--accent-text); }
+.ai-list small { color: var(--faint); }
+.ai-meta { display: block; color: var(--muted); font-size: .76rem; font-variant-numeric: tabular-nums; margin-top: .1rem; }
+@media (max-width: 40rem) {
+ .ai-table .consumer-row { grid-template-columns: minmax(0, 1fr) 4.2rem 4.2rem; }
+ .ai-table .consumer-row > :nth-child(3) { display: block; }
+ .ai-table .consumer-row > :nth-child(4) { display: none; }
+ .ai-models th:nth-child(4), .ai-models td:nth-child(4), .ai-models th:nth-child(5), .ai-models td:nth-child(5) { display: none; }
+ .ai-limit { flex-direction: row; }
+}

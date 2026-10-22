@@ -170,6 +170,7 @@ pub fn HostOverview(
                         spark: if m.mount == "/" { s.spark_disk.clone() } else { Vec::new() }, spark_class: "series-3" }
                 }
             }
+            crate::ai_usage_view::AiUsageSection { session_scope, onexpired }
             article { class: "hd-card hd-threads",
                 header { h3 { "CPU threads" } span { class: "hm-sub", "busy % per logical CPU, last 5 s" } }
                 if s.cpu_cores_percent.is_empty() {

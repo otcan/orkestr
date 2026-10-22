@@ -68,6 +68,8 @@ fn thread(id: &str, last: &str) -> V1Thread {
         instance_ref: None,
         chat_id: None,
         icon_title: id.into(),
+        codex_thread_id: None,
+        workspace: None,
     }
 }
 

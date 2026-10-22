@@ -1,7 +1,7 @@
 // Owner host metrics: one bounded, cookie-only GET that revalidates with the
 // last ETag; 304 answers carry no body and the caller keeps its copy.
 export const HOST_METRICS_LIMIT = 2 * 1024 * 1024;
-const paths = /^\/api\/v2\/host-metrics(?:\/history\?range=(?:15m|1h|24h|7d)|\/consumers|\/disks)?$/;
+const paths = /^\/api\/v2\/(?:host-metrics(?:\/history\?range=(?:15m|1h|24h|7d)|\/consumers|\/disks)?|host\/ai-usage)$/;
 export async function hostMetricsRequest({path, etag, signal} = {}, fetcher = fetch) {
  if (typeof path !== 'string' || !paths.test(path)) throw Error('Invalid host metrics path');
  const controller = new AbortController(), cancel = () => controller.abort();

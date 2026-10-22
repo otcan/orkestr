@@ -3,6 +3,7 @@
 //! reads the listed systemd units every 30 s and persists the downsampled
 //! tiers every 5 minutes so a restart keeps the 24 h and 7 d charts. Requests
 //! only read the in-memory state: page loads never wait for a sample.
+pub(crate) mod ai_usage;
 pub(crate) mod consumers;
 pub(crate) mod disks;
 pub(crate) mod history;
@@ -126,6 +127,8 @@ fn persist(path: &Path) {
 
 /// Starts the sampler for the life of the process (trusted startup only).
 pub fn start(home: &Path) {
+    // Claude and Codex usage: its own niced thread, once a minute.
+    ai_usage::start(home);
     let home: PathBuf = home.to_owned();
     tokio::spawn(async move {
         let file = home.join(PERSIST_FILE);
@@ -251,6 +254,7 @@ pub(crate) fn router() -> Router<AppState> {
         .route("/api/v2/host-metrics/history", get(history))
         .route("/api/v2/host-metrics/consumers", get(consumers_read))
         .route("/api/v2/host-metrics/disks", get(disks_read))
+        .merge(ai_usage::router())
 }
 
 fn percent(part: u64, whole: u64) -> f32 {
