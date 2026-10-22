@@ -11,8 +11,14 @@ export function createThreadMessageSnapshot(threadId, env = process.env) {
   const repository = createThreadMessageRepository(env);
   const messages = [];
   let revision = null;
+  let loads = 0;
   return {
     messages,
+    // Bumped whenever `messages` is reloaded from the store, so per-pass
+    // lookup indexes over it know to rebuild.
+    get loads() {
+      return loads;
+    },
     run(operation) {
       return withThreadMessageMutation(threadId, env, async () => {
         try {
@@ -21,6 +27,7 @@ export function createThreadMessageSnapshot(threadId, env = process.env) {
             const fresh = await repository.list(threadId);
             messages.length = 0;
             for (const message of fresh) messages.push(message);
+            loads += 1;
           }
           const result = await operation(messages);
           revision = await repository.fingerprint(threadId);

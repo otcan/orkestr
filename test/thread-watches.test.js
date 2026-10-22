@@ -53,7 +53,9 @@ test("a once watch delivers the next final in full and then closes", async (t) =
   const inputs = await watchInputs(env);
   assert.equal(inputs.length, 1);
   assert.equal(inputs[0].role, "user");
-  assert.equal(inputs[0].state, "queued");
+  // The pump also requests immediate delivery, which may already have claimed
+  // the input by now; either way it is a pending, undelivered input.
+  assert.ok(["queued", "pending_delivery"].includes(inputs[0].state), inputs[0].state);
   assert.equal(inputs[0].clientMessageId, `thread-watch:${watch.id}:${done.id}`);
   assert.equal(inputs[0].threadWatchSourceThreadId, target.id);
   assert.match(inputs[0].text, /Worker 1 final answer/);

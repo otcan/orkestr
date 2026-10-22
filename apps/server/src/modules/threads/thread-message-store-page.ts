@@ -15,7 +15,10 @@ import {
 
 // Messages fetched per round trip while walking a thread newest first.
 const chunkSize = 200;
-const maxCachedSummaries = 8;
+// Pollers walk more threads than a handful, and a miss on a long thread re-reads
+// every row, so bound the cache by entries (~50 bytes each) rather than threads.
+const maxCachedSummaries = 128;
+const maxCachedSummaryEntries = 1_000_000;
 
 type Entry = { position: number; cursor: number; ms: number };
 type ThreadSummary = {
@@ -32,11 +35,39 @@ type ThreadSummary = {
 
 // Sorted per-thread summaries keyed by the store revision, so polling an unchanged thread skips the scan.
 const summaries = new Map<string, ThreadSummary>();
+let cachedSummaryEntries = 0;
+
+function forgetSummary(key: string) {
+  const summary = summaries.get(key);
+  if (!summary) return;
+  cachedSummaryEntries -= summary.ordered.length;
+  summaries.delete(key);
+}
+
+// Least recently used first; the newest summary is always kept.
+function rememberSummary(key: string, summary: ThreadSummary) {
+  forgetSummary(key);
+  summaries.set(key, summary);
+  cachedSummaryEntries += summary.ordered.length;
+  while (summaries.size > 1 && (summaries.size > maxCachedSummaries || cachedSummaryEntries > maxCachedSummaryEntries)) {
+    forgetSummary(summaries.keys().next().value as string);
+  }
+}
+
+// Number of cached thread summaries, for tests.
+export function cachedThreadSummaryCount() {
+  return summaries.size;
+}
 
 function threadSummary(store: any): ThreadSummary {
   const revision = store.revision();
   const cached = summaries.get(store.key);
-  if (cached && cached.revision === revision) return cached;
+  if (cached && cached.revision === revision) {
+    // Keep recently polled threads at the young end of the eviction order.
+    summaries.delete(store.key);
+    summaries.set(store.key, cached);
+    return cached;
+  }
   const rows = store.summaries();
   const entries: Entry[] = rows.map((row: any, index: number) => ({
     position: row.position,
@@ -58,9 +89,7 @@ function threadSummary(store: any): ThreadSummary {
     supersededMessageIds: rows.filter((row: any) => row.supersededBy).map((row: any) => row.id),
     turns: new Map<string, any[]>(),
   };
-  summaries.delete(store.key);
-  summaries.set(store.key, summary);
-  if (summaries.size > maxCachedSummaries) summaries.delete(summaries.keys().next().value as string);
+  rememberSummary(store.key, summary);
   return summary;
 }
 
