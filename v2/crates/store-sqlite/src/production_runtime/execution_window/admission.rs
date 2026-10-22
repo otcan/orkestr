@@ -115,6 +115,71 @@ impl Store {
     }
 }
 
+impl Store {
+    /// Undo a follow-up's Core join that the window's runtime could not take
+    /// over (for example the manager refused it as draining). The input returns
+    /// to ordinary admission, so it opens or joins the successor window instead
+    /// of waiting, unrunnable, inside this one. `Ok(false)`: a Deep run already
+    /// took the input, so it legitimately belongs to this window.
+    pub async fn withdraw_unstarted_window_join_authenticated(
+        &self,
+        credential: &str,
+        conversation: &ConversationId,
+        input: &ExecutionWindowRequest,
+    ) -> Result<bool> {
+        let Some(window) = input.window_id.filter(|_| input.is_valid()) else {
+            return Err(RuntimeStoreError::InvalidInput);
+        };
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let owner = browser_owner(self, &mut tx, credential).await?;
+        crate::runtime::scope(&mut tx, &owner, conversation).await?;
+        let digest = crate::digest(&serde_json::to_string(input).map_err(db)?);
+        let Some(row) = sqlx::query("SELECT semantic_digest,window_id,event_id FROM execution_window_inputs WHERE owner_id=? AND conversation_id=? AND request_key=?")
+            .bind(owner.to_string()).bind(conversation.to_string()).bind(&input.request_key)
+            .fetch_optional(&mut *tx).await.map_err(db)? else {
+            tx.commit().await.map_err(db)?;
+            return Ok(true);
+        };
+        if row.get::<String, _>("semantic_digest") != digest
+            || row.get::<String, _>("window_id") != window.to_string()
+            || row.get::<String, _>("event_id") != input.input_event_id.to_string()
+        {
+            return Err(RuntimeStoreError::Conflict);
+        }
+        if !release_unstarted(&mut tx, window, &input.input_event_id.to_string()).await? {
+            tx.commit().await.map_err(db)?;
+            return Ok(false);
+        }
+        tx.commit().await.map_err(db)?;
+        Ok(true)
+    }
+}
+
+/// Return one window input that no Deep run took (still `queued`, never the
+/// window's own opening input) to ordinary admission: drop its window
+/// membership and put a dispatched queue intent back in line for the
+/// successor. `false` when a run already took it (nothing changes).
+pub(super) async fn release_unstarted(
+    tx: &mut SqliteConnection,
+    window: Uuid,
+    event: &str,
+) -> Result<bool> {
+    let unstarted: i64 = sqlx::query_scalar("SELECT count(*) FROM execution_window_inputs wi JOIN reasoning_inbox i ON i.event_id=wi.event_id JOIN execution_windows w ON w.id=wi.window_id WHERE wi.window_id=? AND wi.event_id=? AND i.state='queued' AND w.input_event_id!=wi.event_id AND NOT EXISTS(SELECT 1 FROM production_runs r WHERE r.event_id=wi.event_id)")
+        .bind(window.to_string()).bind(event).fetch_one(&mut *tx).await.map_err(db)?;
+    if unstarted != 1 {
+        return Ok(false);
+    }
+    sqlx::query("DELETE FROM execution_window_inputs WHERE window_id=? AND event_id=?")
+        .bind(window.to_string())
+        .bind(event)
+        .execute(&mut *tx)
+        .await
+        .map_err(db)?;
+    sqlx::query("UPDATE execution_window_queue SET state='queued',window_id=NULL WHERE event_id=? AND window_id=? AND state='dispatched'")
+        .bind(event).bind(window.to_string()).execute(&mut *tx).await.map_err(db)?;
+    Ok(true)
+}
+
 pub(super) async fn source_in(
     tx: &mut SqliteConnection,
     owner: &OwnerId,
