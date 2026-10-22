@@ -124,6 +124,25 @@ export function classifyWhatsAppInboundRequest(text = "") {
   return { malicious: false, reason: "" };
 }
 
+// The only request class a non-owner group member is hard-refused for:
+// changing who is in a chat or what they may do. Everything else a member asks
+// is judged by the thread's model, with the advisory classification attached.
+export function classifyWhatsAppMembershipChangeRequest(text = "") {
+  const normalized = String(text || "").toLowerCase().replace(/\s+/g, " ").trim();
+  if (!normalized) return { change: false, reason: "" };
+  const target = "(?:this |the |our |that |a |my )?(?:whatsapp |orkestr )?(?:group|chat|thread|workspace|orkestr)";
+  const rules = [
+    ["membership_change", new RegExp(`\\b(add|invite|remove|kick|ban)\\b.{0,60}\\b(to|into|from|out of)\\b ${target}\\b`)],
+    ["membership_change", /\b(add|invite)\b.{0,20}(\+?\d[\d ()-]{7,}\d|\b\d{6,}@(?:c\.us|lid)\b)/],
+    ["permission_change", /\b(make|promote|demote)\b.{0,40}\b(admin|administrator|moderator|co-?owner)s?\b/],
+    ["permission_change", new RegExp(`\\b(grant|give|revoke|change|update|remove|elevate|share)\\b.{0,40}\\b(access|permissions?|rights|role|privileges?)\\b.{0,40}\\b(to|for|on|in|of)\\b.{0,40}${target}\\b`)],
+  ];
+  for (const [reason, pattern] of rules) {
+    if (pattern.test(normalized)) return { change: true, reason };
+  }
+  return { change: false, reason: "" };
+}
+
 export function evaluateWhatsAppInboundSecurity({
   binding = {},
   input = {},
