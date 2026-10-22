@@ -55,6 +55,31 @@ Use `scripts/bootstrap-vps.sh` for the opinionated fresh-server path. Use
 want the lower-level installer directly. Use `scripts/deploy-git-release.sh`
 and `scripts/update-watch.sh` for versioned release/update work.
 
+## V2 (Rust) Workspace
+
+The Rust rewrite lives in `v2/` and builds with the toolchain pinned in
+`v2/rust-toolchain.toml`. GitHub Actions is the default place for full suites:
+
+- `v2-rust.yml` (rust-v2) runs on every push to `v2/rust-rewrite` and on PRs
+  into `v2/**`: format, clippy, the locked workspace build, the HTTP
+  scenarios and `cargo test --locked --workspace`.
+- `v2-browser.yml` runs the headless-rendering checks.
+- Both restore a dependency build cache (`Swatinem/rust-cache`) saved from
+  `v2/rust-rewrite`, so PR runs recompile only workspace crates.
+
+Locally, check only the crates you touched:
+
+```bash
+cd v2
+cargo fmt -p <crate> -- --check
+cargo clippy --offline --locked -p <crate> --all-targets -- -D warnings
+cargo test --offline --locked -p <crate>
+```
+
+Then push and let CI run the full workspace. On a shared development host, use
+the host's build wrapper if it has one (shared compile cache, bounded jobs, low
+priority), and delete `target/` from worktrees you no longer need.
+
 ## Install Path Expectations
 
 There are two supported install shapes:

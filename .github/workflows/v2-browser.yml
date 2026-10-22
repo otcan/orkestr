@@ -32,13 +32,23 @@ jobs:
         run: |
           rustup toolchain install 1.99.1 --profile minimal
           rustup target add --toolchain 1.99.1 wasm32-unknown-unknown
-          echo "CARGO_TARGET_DIR=$RUNNER_TEMP/v2-target" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_DIR=$(dirname "$GITHUB_WORKSPACE")/v2-target" >> "$GITHUB_ENV"
           echo "UI_BUNDLE_DIR=$RUNNER_TEMP/v2-bundle" >> "$GITHUB_ENV"
-          echo "V2_SERVER=$RUNNER_TEMP/v2-target/debug/orkestr-v2-server" >> "$GITHUB_ENV"
+          echo "V2_SERVER=$(dirname "$GITHUB_WORKSPACE")/v2-target/debug/orkestr-v2-server" >> "$GITHUB_ENV"
           echo "V2_CARGO=$RUNNER_TEMP/v2-cargo" >> "$GITHUB_ENV"
           printf '#!/bin/sh\nexec cargo +1.99.1 "$@"\n' > "$RUNNER_TEMP/v2-cargo"
           chmod +x "$RUNNER_TEMP/v2-cargo"
-          cargo +1.99.1 install wasm-bindgen-cli --version 0.2.129 --locked --root "$RUNNER_TEMP/bindgen"
+      - name: Restore Rust dependency cache
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: v2 -> ../../v2-target
+          cache-directories: ${{ runner.temp }}/bindgen
+          save-if: ${{ github.ref == 'refs/heads/v2/rust-rewrite' }}
+      - name: Install wasm-bindgen CLI
+        run: |
+          if ! "$RUNNER_TEMP/bindgen/bin/wasm-bindgen" --version 2>/dev/null | grep -qx 'wasm-bindgen 0.2.129'; then
+            cargo +1.99.1 install wasm-bindgen-cli --version 0.2.129 --locked --root "$RUNNER_TEMP/bindgen"
+          fi
           echo "$RUNNER_TEMP/bindgen/bin" >> "$GITHUB_PATH"
       - name: Install locked browser dependencies without lifecycle scripts
         run: |

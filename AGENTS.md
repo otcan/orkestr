@@ -112,3 +112,25 @@ of relying on static thread or workspace text in this file.
 - Do not launch unmanaged Chrome, create ad hoc browser profiles, or bypass the
   desktop lease APIs for web work. If a connector needs browser state, use the
   managed Orkestr browser or desktop surface assigned to that connector.
+
+## V2 (Rust) Builds and Tests
+
+Full V2 suites run in GitHub Actions, not on shared development hosts. Several
+agents usually share one host, and each local workspace build costs minutes of
+CPU and tens of GiB of disk.
+
+- Locally, build and test only the crate you changed:
+  `cargo test --offline --locked -p <crate>` (plus `cargo fmt` and
+  `cargo clippy -p <crate> --all-targets -- -D warnings`). On a shared host,
+  run these through the host's build wrapper rather than plain `cargo` if it
+  provides one; it applies the shared compile cache, job limits and
+  low CPU/IO priority.
+- Do not run `cargo test --workspace`, `cargo build --workspace` or the
+  headless-rendering suite locally by default. Push the branch or open a PR:
+  `.github/workflows/v2-rust.yml` (rust-v2) runs the full workspace build,
+  clippy and tests, and `.github/workflows/v2-browser.yml` runs headless
+  rendering. Read the result with `gh pr checks` or `gh run view --log-failed`.
+- Run a full local suite only when CI cannot reproduce the problem, and say why
+  in the PR.
+- Remove a worktree's `target/` directory when the work is done. Shared hosts
+  may prune target directories that have not been touched for a few hours.
