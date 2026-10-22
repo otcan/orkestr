@@ -660,6 +660,9 @@ class Ledger:
                                  "timerNamespace": timer.get("namespace"), "timerSourceId": timer.get("source_timer_id"),
                                  "state": "delivered", "deliveryState": "delivered", "observedVia": "rust-pilot-ledger",
                                  "createdAt": data.get("created_at")})
+                    if (data.get("post") or {}).get("author"):
+                        # V1 labels a post by its author (coordinator/operator/question), not as a timer.
+                        rows[-1]["postAuthor"] = data["post"]["author"]
                     for seq, message in db.execute("SELECT seq,message FROM exports WHERE input_id=? AND (outcome IS NULL OR outcome='uncertain') "
                                                    "ORDER BY seq", (data["remote_id"],)).fetchall():
                         rows.append(dict(json.loads(message), exportSequence=seq))
