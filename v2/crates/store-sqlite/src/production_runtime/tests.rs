@@ -426,11 +426,19 @@ async fn exact_expired_predecessor_cas_fences_without_recreating_native_identity
     std::fs::remove_dir_all(f.root).unwrap();
 }
 
-/// Undo 0066 (conversation posts), 0065 (attachment encryption), 0064 (restricted threads), 0063 (calendar timers: policies, pauses, outcomes, digests, trigger events), 0062 (quoted-reply context), 0061 (auto-acceptance audit), 0060 (review-before-accepting setting), 0059 (read-path indexes), 0058 (WhatsApp chat provisions) and 0057
+/// Undo 0067 (conversation trackers), 0066 (conversation posts), 0065 (attachment encryption), 0064 (restricted threads), 0063 (calendar timers: policies, pauses, outcomes, digests, trigger events), 0062 (quoted-reply context), 0061 (auto-acceptance audit), 0060 (review-before-accepting setting), 0059 (read-path indexes), 0058 (WhatsApp chat provisions) and 0057
 /// (sidebar read marks and lineage); tests never write them. Then undo 0056 exactly: rebuild `execution_windows` under the fixed-deadline
 /// definition that migrations up to 0055 produce, keeping every row.
 pub(super) async fn downgrade_window_deadlines(store: &Store) {
     for statement in [
+        "DROP TABLE tracker_messages",
+        "DROP TABLE tracker_batches",
+        "DROP TABLE tracker_ledger",
+        "DROP TABLE tracker_events",
+        "DROP TABLE tracker_row_links",
+        "DROP TABLE tracker_rows",
+        "DROP TABLE trackers",
+        "DELETE FROM _sqlx_migrations WHERE version=67",
         "DROP TABLE conversation_posts",
         "DELETE FROM _sqlx_migrations WHERE version=66",
         "DROP TABLE attachment_sealed_objects",

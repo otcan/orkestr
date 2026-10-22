@@ -52,6 +52,7 @@ mod timer_detail_view;
 mod timer_editor_view;
 mod timer_pause_view;
 mod timer_screen;
+mod tracker_view;
 mod transport;
 mod v1_manage_view;
 mod v1_thread_view;

@@ -1,0 +1,22 @@
+Authentication-Results: mx.google.com; dkim=pass
+ header.i=@acme-robotics.example; spf=pass
+ smtp.mailfrom=acme-robotics.example; dmarc=pass
+ header.from=acme-robotics.example
+From: Acme Robotics GmbH <careers@acme-robotics.example>
+To: Alex Example <alex.jobseeker@example.com>
+Subject: Offer =?utf-8?b?4oCT?= Backend Engineer (Rust)
+Date: Wed, 21 Oct 2026 15:00:00 +0000
+Message-ID: <jt15fixture.12bb60ae1e49d8b5@acme-robotics.example>
+In-Reply-To: <jt15fixture.sent-acme@example.com>
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: quoted-printable
+MIME-Version: 1.0
+
+Dear Alex,
+
+We are delighted to offer you the position of Backend Engineer (Rust) at Acme=
+ Robotics GmbH. Please find the offer letter attached and let us know by Frid=
+ay.
+
+Best regards,
+Acme Robotics HR

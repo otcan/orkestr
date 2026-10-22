@@ -1,0 +1,16 @@
+Authentication-Results: mx.google.com; dkim=pass
+ header.i=@smartrecruiters.com; spf=pass smtp.mailfrom=smartrecruiters.com;
+ dmarc=pass header.from=smartrecruiters.com
+From: Adventure Works <noreply@smartrecruiters.com>
+To: Alex Example <alex.jobseeker@example.com>
+Subject: Application status update
+Date: Thu, 22 Oct 2026 02:00:00 +0000
+Message-ID: <jt15fixture.f09d9d07e61d0625@smartrecruiters.com>
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: quoted-printable
+MIME-Version: 1.0
+
+Hi Alex,
+
+Your application for Cloud Architect at Adventure Works is under review. We w=
+ill get back to you soon.

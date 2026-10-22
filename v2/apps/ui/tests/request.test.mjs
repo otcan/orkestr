@@ -172,3 +172,18 @@ test('GET polls revalidate with the last ETag and a 304 returns the kept body',a
         return new Response('{}');
     });
 });
+
+test('tracker and recipe routes are allowed; other tracker paths are not',async()=>{
+    const id = '11111111-2222-4333-8444-555555555555';
+    const ok = [`/api/v2/conversations/${id}/tracker`,`/api/v2/conversations/${id}/tracker/events`,`/api/v2/conversations/${id}/tracker/mail-scan`,
+        `/api/v2/conversations/${id}/tracker/merge`,`/api/v2/conversations/${id}/tracker/rows/${id}`,`/api/v2/conversations/${id}/tracker/rows/${id}/events`,
+        '/api/v2/recipes','/api/v2/recipes/job-tracker/install'];
+    for(const path of ok) {
+        let called = false;
+        await execute({recv:async()=>({...base,method:'GET',path,body:null,csrf:'c'})},async()=>{called = true; return new Response('{}');});
+        assert.equal(called,true,path);
+    }
+    for(const path of [`/api/v2/conversations/${id}/tracker/grant`,`/api/v2/conversations/${id}/tracker/rows/x`,'/api/v2/recipes/../install','/api/v2/recipes/Job/install']) {
+        await assert.rejects(execute({recv:async()=>({...base,path})},()=>assert.fail('fetch must not run')),/Invalid API path/,path);
+    }
+});

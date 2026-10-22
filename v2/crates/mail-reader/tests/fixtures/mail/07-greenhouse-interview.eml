@@ -1,0 +1,22 @@
+Authentication-Results: mx.google.com; dkim=pass
+ header.i=@us.greenhouse-mail.io; spf=pass
+ smtp.mailfrom=us.greenhouse-mail.io; dmarc=pass
+ header.from=us.greenhouse-mail.io
+From: Northwind Labs <no-reply@us.greenhouse-mail.io>
+To: Alex Example <alex.jobseeker@example.com>
+Subject: Interview invitation =?utf-8?b?4oCT?= Platform Engineer at Northwind
+ Labs
+Date: Wed, 21 Oct 2026 09:00:00 +0000
+Message-ID: <jt15fixture.5c3ad7a22281d178@us.greenhouse-mail.io>
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: quoted-printable
+MIME-Version: 1.0
+
+Hi Alex,
+
+Thanks again for your interest in the Platform Engineer role. We'd like to in=
+vite you to a first interview with our engineering manager. Please pick a slo=
+t that works for you: https://calendly.com/northwind-recruiting/30min
+
+Kind regards,
+Sam

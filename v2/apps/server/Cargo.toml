@@ -10,6 +10,8 @@ orkestr-v2-contracts = { path = "../../crates/contracts" }
 orkestr-v2-application = { path = "../../crates/application" }
 orkestr-v2-store-sqlite = { path = "../../crates/store-sqlite" }
 orkestr-v2-restricted = { path = "../../crates/restricted" }
+# Read-only local mail store reader for the job-tracking recipe.
+orkestr-v2-mail-reader = { path = "../../crates/mail-reader" }
 axum = "=0.8.6"
 tokio.workspace = true
 serde.workspace = true

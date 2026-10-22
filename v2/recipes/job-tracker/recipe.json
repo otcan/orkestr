@@ -1,0 +1,27 @@
+{
+  "schema": "orkestr.recipe.v1",
+  "id": "job-tracker",
+  "version": "1.0.0",
+  "title": "Job tracking",
+  "summary": "Tracks your job applications from your mail (LinkedIn and applicant-tracking emails) in a table. Checks hourly on weekdays and only speaks up when something changed. Nothing is sent on your behalf.",
+  "conversation": {"name": "Job tracker"},
+  "tracker": {
+    "notify_on": ["interview_invite", "interview_scheduled", "assessment", "offer"],
+    "rules": "rules.json"
+  },
+  "mail": {
+    "kind": "thunderbird",
+    "folders": [],
+    "since_days": 60,
+    "max_messages_per_scan": 500
+  },
+  "timers": [
+    {
+      "id": "intake",
+      "label": "Job tracker: check job mail",
+      "schedule": {"weekdays": [1, 2, 3, 4, 5], "start_minute": 540, "end_minute": 1200, "every_hours": 1, "minutes": [0]},
+      "silent_mode": "unless_changed",
+      "instructions": "instructions.md"
+    }
+  ]
+}

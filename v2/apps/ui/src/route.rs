@@ -13,6 +13,7 @@ pub enum Tab {
     History,
     Projects,
     Timers,
+    Tracker,
     Memory,
     LiveMap,
     Host,
@@ -20,12 +21,13 @@ pub enum Tab {
 }
 
 impl Tab {
-    pub const ALL: [Tab; 9] = [
+    pub const ALL: [Tab; 10] = [
         Tab::Chat,
         Tab::Work,
         Tab::History,
         Tab::Projects,
         Tab::Timers,
+        Tab::Tracker,
         Tab::Memory,
         Tab::LiveMap,
         Tab::Host,
@@ -38,6 +40,7 @@ impl Tab {
             Tab::History => "History",
             Tab::Projects => "Projects",
             Tab::Timers => "Timers",
+            Tab::Tracker => "Tracker",
             Tab::Memory => "Memory",
             Tab::LiveMap => "Live map",
             Tab::Host => "Host resources",
@@ -51,6 +54,7 @@ impl Tab {
             Tab::History => "history",
             Tab::Projects => "projects",
             Tab::Timers => "timers",
+            Tab::Tracker => "tracker",
             Tab::Memory => "memory",
             Tab::LiveMap => "live-map",
             Tab::Host => "host",

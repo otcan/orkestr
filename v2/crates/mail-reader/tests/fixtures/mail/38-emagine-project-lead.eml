@@ -1,0 +1,17 @@
+Authentication-Results: mx.google.com; dkim=pass header.i=@emagine.org;
+ spf=pass smtp.mailfrom=emagine.org; dmarc=pass header.from=emagine.org
+From: emagine Recruiting <jobs@emagine.org>
+To: Alex Example <alex.jobseeker@example.com>
+Subject: Projektanfrage: Data Engineer (Remote, 6 Monate)
+Date: Thu, 22 Oct 2026 13:00:00 +0000
+Message-ID: <jt15fixture.emagine-lead@emagine.org>
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: quoted-printable
+MIME-Version: 1.0
+
+Hallo Alex,
+
+f=C3=BCr ein Projekt bei unserem Kunden suchen wir einen Data Engineer. Hast =
+du Interesse?
+
+Viele Gr=C3=BC=C3=9Fe

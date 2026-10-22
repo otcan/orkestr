@@ -24,6 +24,8 @@ mod restricted;
 pub use restricted::{
     RestrictedApprovalStatus, RestrictedContextRow, RestrictedRunnerThread, SESSION_GRANT_TTL_MS,
 };
+pub mod tracker;
+pub use tracker::{ScanRecord, ScannedMessage, TrackerCaller, TrackerConfig};
 mod sidebar;
 pub use sidebar::{EventTime, SidebarConversation, SidebarConversations};
 mod whatsapp_chats;

@@ -1,0 +1,19 @@
+Authentication-Results: mx.google.com; dkim=pass header.i=@linkedin.com;
+ spf=pass smtp.mailfrom=linkedin.com; dmarc=pass header.from=linkedin.com
+From: LinkedIn <jobs-noreply@linkedin.com>
+To: Alex Example <alex.jobseeker@example.com>
+Subject: Your application was viewed by Contoso Analytics
+Date: Tue, 20 Oct 2026 09:30:00 +0000
+Message-ID: <jt15fixture.9ea1214cea294a28@linkedin.com>
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 8bit
+MIME-Version: 1.0
+
+Contoso Analytics viewed your application
+
+Data Engineer
+Contoso Analytics · Munich, Germany
+
+https://www.linkedin.com/jobs/view/4011111111/
+
+This doesn't guarantee a response.

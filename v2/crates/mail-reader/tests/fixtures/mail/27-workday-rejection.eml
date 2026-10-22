@@ -1,0 +1,17 @@
+Authentication-Results: mx.google.com; dkim=pass header.i=@myworkday.com;
+ spf=pass smtp.mailfrom=myworkday.com; dmarc=pass header.from=myworkday.com
+From: Fabrikam Careers <fabrikam@myworkday.com>
+To: Alex Example <alex.jobseeker@example.com>
+Subject: Update on your application
+Date: Thu, 22 Oct 2026 03:00:00 +0000
+Message-ID: <jt15fixture.99368d83b6300225@myworkday.com>
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: quoted-printable
+MIME-Version: 1.0
+
+Dear Alex,
+
+We regret to inform you that we have decided to pursue other candidates for t=
+he Senior Frontend Developer (R-10442) position at Fabrikam AG.
+
+Fabrikam Talent Acquisition

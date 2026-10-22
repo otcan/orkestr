@@ -269,6 +269,17 @@ pub fn Workspace(
                             }
                         } else if tab() == Tab::Timers {
                             crate::timer_screen::Timers { key: "{current()}-{session_scope.read().generation()}", conversation: current(), csrf, session_scope, onexpired }
+                        } else if tab() == Tab::Tracker {
+                            crate::tracker_view::TrackerScreen { key: "{current()}-{session_scope.read().generation()}", conversation: current(), csrf, session_scope, onexpired,
+                                onopen: move |(id, name): (String, String)| {
+                                    linked.set(None);
+                                    execution.write().select(&id, "");
+                                    current.set(id);
+                                    title.set(name);
+                                    tab.set(Tab::Tracker);
+                                    reload += 1;
+                                }
+                            }
                         } else if tab() == Tab::Memory {
                             crate::memory_view::MemoryView { key: "{session_scope.read().generation()}", csrf, project: None, session_scope, onexpired }
                         } else if tab() == Tab::LiveMap {

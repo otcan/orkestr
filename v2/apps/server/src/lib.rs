@@ -57,7 +57,11 @@ mod provider_payload;
 mod resource_health;
 mod response_shaping;
 pub mod restricted_http;
+mod recipes;
+mod recipes_http;
 mod routes;
+mod tracker_http;
+mod tracker_mail;
 mod sidebar_http;
 mod sidebar_v1;
 mod steering_http;
@@ -501,6 +505,9 @@ pub fn router_with_google_catalog(
         .merge(attachment_keys_http::router())
         .merge(message_times_http::router())
         .merge(conversation_posts_http::router())
+        .merge(tracker_http::router())
+        .merge(tracker_mail::router())
+        .merge(recipes_http::router())
         .merge(thread_icons::router())
         .merge(v1_links::router())
         .merge(v1_manage_http::router())

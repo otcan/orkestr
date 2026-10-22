@@ -1,8 +1,8 @@
 // Audited platform bridge: only fixed same-origin API paths from Rust.
 const input = await dioxus.recv();
-const route = /^\/api\/v2\/(?:setup|browser\/session|projects|conversations\/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}(?:\/messages|\/message-attachments)?)(?:\?after=[0-9]+&limit=100)?$/;
-// Owner management of one conversation: settings, timers, desktops, posts.
-const manage = /^\/api\/v2\/conversations\/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\/(?:settings|timers|desktops|desktop-binding|message-times\?after=[0-9]{1,18}&limit=200|posts\?limit=50)$/;
+const route = /^\/api\/v2\/(?:setup|browser\/session|projects|recipes(?:\/[a-z0-9-]{1,80}\/install)?|conversations\/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}(?:\/messages|\/message-attachments)?)(?:\?after=[0-9]+&limit=100)?$/;
+// Owner management of one conversation: settings, timers, desktops, posts, tracker.
+const manage = /^\/api\/v2\/conversations\/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\/(?:settings|timers|desktops|desktop-binding|message-times\?after=[0-9]{1,18}&limit=200|posts\?limit=50|tracker(?:\/(?:events|merge|mail-scan|mail-source|rows\/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}(?:\/events)?))?)$/;
 // Sidebar observation, read marks, linked V1 history and input, old V1 deep links.
 const sidebar = /^\/api\/v2\/(?:sidebar(?:\/read)?|v1-threads\/[A-Za-z0-9._:-]{1,200}\/(?:messages(?:\?before=[0-9]{1,18})?|uploads)|v1-links\/thr_[A-Za-z0-9_-]{22}\?instance=ins_[A-Za-z0-9_-]{22}|whatsapp-chats|v1-threads\/[A-Za-z0-9._:-]{1,200}\/(?:settings|whatsapp|desktops|timers(?:\/[A-Za-z0-9._:-]{1,200}(?:\/(?:pause|resume))?)?))$/;
 if (!route.test(input.path) && !manage.test(input.path) && !(sidebar.test(input.path) && !input.path.includes(".."))) throw new Error("Invalid API path");

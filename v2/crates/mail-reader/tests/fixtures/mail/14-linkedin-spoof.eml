@@ -1,0 +1,15 @@
+Authentication-Results: mx.google.com; dkim=fail
+ header.i=@linkedin-security-check.example; spf=fail
+ smtp.mailfrom=linkedin-security-check.example; dmarc=fail
+ header.from=linkedin-security-check.example
+From: LinkedIn <jobs-noreply@linkedin.com>
+To: Alex Example <alex.jobseeker@example.com>
+Subject: Your application was viewed by Globex Corp
+Date: Wed, 21 Oct 2026 16:00:00 +0000
+Message-ID: <jt15fixture.9a0fe1c353883574@linkedin-security-check.example>
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: quoted-printable
+MIME-Version: 1.0
+
+Globex Corp viewed your application. Verify your account to see details: http=
+://linkedin-security-check.example/login

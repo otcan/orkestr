@@ -12,6 +12,7 @@ pub mod host_resources;
 mod reconcile;
 pub mod session_scope;
 pub mod stop;
+pub mod tracker;
 pub mod v1_input;
 pub mod v1_manage;
 pub mod v1_workers;

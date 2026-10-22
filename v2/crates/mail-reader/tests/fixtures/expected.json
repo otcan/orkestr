@@ -1,0 +1,248 @@
+{
+ "00-linkedin-applied.eml": {
+  "kind": "applied",
+  "company": "Acme Robotics GmbH",
+  "role": "Backend Engineer (Rust)",
+  "source": "linkedin",
+  "link": "https://linkedin.com/jobs/view/4012345678"
+ },
+ "01-linkedin-viewed.eml": {
+  "kind": "viewed",
+  "company": "Contoso Analytics",
+  "role": "Data Engineer",
+  "source": "linkedin"
+ },
+ "02-greenhouse-received.eml": {
+  "kind": "application_received",
+  "company": "Northwind Labs",
+  "role": "Platform Engineer",
+  "source": "ats:greenhouse",
+  "link": "https://job-boards.greenhouse.io/northwindlabs/jobs/7712345"
+ },
+ "03-workday-received.eml": {
+  "kind": "application_received",
+  "company": "Fabrikam AG",
+  "role": "Senior Frontend Developer (R-10442)",
+  "source": "ats:workday"
+ },
+ "04-linkedin-alert.eml": {
+  "kind": "job_alert",
+  "items": [
+   [
+    "Tailspin Toys",
+    "Rust Developer",
+    "https://linkedin.com/jobs/view/4019999991"
+   ],
+   [
+    "Wingtip Solutions",
+    "Systems Engineer",
+    "https://linkedin.com/jobs/view/4019999992"
+   ]
+  ]
+ },
+ "05-linkedin-social.eml": {
+  "drop": "drop:social"
+ },
+ "06-newsletter.eml": {
+  "drop": "drop:newsletter"
+ },
+ "07-greenhouse-interview.eml": {
+  "kind": "interview_invite",
+  "company": "Northwind Labs",
+  "role": "Platform Engineer",
+  "source": "ats:greenhouse"
+ },
+ "08-personio-rejection-de.eml": {
+  "kind": "rejection",
+  "company": "Bluebird Logistik GmbH",
+  "role": "DevOps Engineer (m/w/d)",
+  "source": "ats:personio"
+ },
+ "09-ashby-assessment.eml": {
+  "kind": "assessment",
+  "company": "Litware",
+  "role": "Software Engineer",
+  "source": "ats:ashby"
+ },
+ "10-lever-rejection.eml": {
+  "kind": "rejection",
+  "company": "Proseware",
+  "role": "Site Reliability Engineer",
+  "source": "ats:lever",
+  "link": "https://jobs.lever.co/proseware/5f2c"
+ },
+ "11-linkedin-rejection.eml": {
+  "kind": "rejection",
+  "company": "Contoso Analytics",
+  "role": "Data Engineer",
+  "source": "linkedin"
+ },
+ "12-linkedin-inmail.eml": {
+  "kind": "job_alert",
+  "company": "Adatum Corp",
+  "role": "Staff Backend Engineer",
+  "source": "linkedin"
+ },
+ "13-direct-offer.eml": {
+  "kind": "offer",
+  "company": "Acme Robotics GmbH",
+  "role": "Backend Engineer (Rust)",
+  "source": "direct",
+  "requires_thread": true
+ },
+ "14-linkedin-spoof.eml": {
+  "drop": "sender_not_authenticated"
+ },
+ "15-greenhouse-own-domain-html.eml": {
+  "kind": "application_received",
+  "company": "Tailspin Toys",
+  "role": "QA Engineer",
+  "source": "ats:greenhouse",
+  "link": "https://boards.greenhouse.io/tailspintoys/jobs/4455"
+ },
+ "16-workday-received-de-qp.eml": {
+  "kind": "application_received",
+  "company": "Contoso GmbH",
+  "role": "Projektmanager (m/w/d)",
+  "source": "ats:workday"
+ },
+ "17-codility-assessment.eml": {
+  "kind": "assessment",
+  "company": "Wingtip Solutions",
+  "role": "Systems Engineer",
+  "source": "assessment:codility"
+ },
+ "18-recruiter-direct.eml": {
+  "kind": "job_alert",
+  "company": "Fourth Coffee",
+  "role": "Senior Rust Engineer",
+  "source": "direct",
+  "max_confidence": 65
+ },
+ "19-linkedin-alert-dot.eml": {
+  "kind": "job_alert",
+  "items": [
+   [
+    "Fabrikam AG",
+    "Data Scientist",
+    "https://linkedin.com/jobs/view/4018888881"
+   ]
+  ]
+ },
+ "20-greenhouse-spoofed-rejection.eml": {
+  "drop": "not_in_thread"
+ },
+ "21-interview-de-direct.eml": {
+  "drop": "not_in_thread"
+ },
+ "22-teamtailor-received.eml": {
+  "kind": "application_received",
+  "company": "Margie's Travel",
+  "role": "Travel Consultant",
+  "source": "ats:teamtailor"
+ },
+ "23-personal.eml": {
+  "drop": "not_job_related"
+ },
+ "24-interview-tips-newsletter.eml": {
+  "drop": "drop:newsletter"
+ },
+ "25-ashby-received-multipart.eml": {
+  "kind": "application_received",
+  "company": "Litware",
+  "role": "Software Engineer",
+  "source": "ats:ashby"
+ },
+ "26-smartrecruiters-review.eml": {
+  "kind": "in_review",
+  "company": "Adventure Works",
+  "role": "Cloud Architect",
+  "source": "ats:smartrecruiters"
+ },
+ "27-workday-rejection.eml": {
+  "kind": "rejection",
+  "company": "Fabrikam AG",
+  "role": "Senior Frontend Developer (R-10442)",
+  "source": "ats:workday"
+ },
+ "28-lever-received-tracking.eml": {
+  "kind": "application_received",
+  "company": "Proseware",
+  "role": "Site Reliability Engineer",
+  "source": "ats:lever",
+  "link": "https://jobs.lever.co/proseware/5f2c?lever-origin=applied"
+ },
+ "29-encoded-subject-linkedin.eml": {
+  "kind": "applied",
+  "company": "Bäckerei Müller GmbH",
+  "role": "Verkäufer (m/w/d)",
+  "source": "linkedin"
+ },
+ "30-sent-acme-application.eml": {
+  "kind": "applied",
+  "company": "Acme Robotics GmbH",
+  "role": "Backend Engineer (Rust)",
+  "source": "direct",
+  "outgoing": true
+ },
+ "31-sent-hays-application.eml": {
+  "kind": "applied",
+  "company": "Hays",
+  "role": "Senior Java Entwickler (Projekt 4711)",
+  "source": "agency:hays",
+  "outgoing": true
+ },
+ "32-hays-rejection-in-thread.eml": {
+  "kind": "rejection",
+  "company": "Hays",
+  "role": "Senior Java Entwickler (Projekt 4711)",
+  "source": "agency:hays",
+  "requires_thread": true
+ },
+ "33-sent-sthree-application.eml": {
+  "kind": "applied",
+  "company": "SThree",
+  "role": "DevOps Engineer (Remote)",
+  "source": "agency:sthree",
+  "outgoing": true
+ },
+ "34-sthree-onboarding-in-thread.eml": {
+  "kind": "offer",
+  "company": "SThree",
+  "role": "DevOps Engineer (Remote)",
+  "source": "agency:sthree",
+  "requires_thread": true
+ },
+ "35-marketing-offer-bulk.eml": {
+  "drop": "drop:marketing"
+ },
+ "36-calendly-sales-pitch.eml": {
+  "drop": "not_in_thread"
+ },
+ "37-hackathon-newsletter.eml": {
+  "drop": "drop:marketing"
+ },
+ "38-emagine-project-lead.eml": {
+  "kind": "job_alert",
+  "company": "emagine",
+  "role": "Data Engineer (Remote, 6 Monate)",
+  "source": "agency:emagine"
+ },
+ "39-sent-reply-to-emagine-lead.eml": {
+  "kind": "applied",
+  "company": "emagine",
+  "role": "Data Engineer (Remote, 6 Monate)",
+  "source": "agency:emagine",
+  "outgoing": true
+ },
+ "40-platform-digest-bulk.eml": {
+  "drop": "drop:marketing"
+ },
+ "41-sent-private.eml": {
+  "drop": "private_recipient",
+  "outgoing": true
+ },
+ "42-linkedin-sales-inmail.eml": {
+  "drop": "lead_without_role"
+ }
+}

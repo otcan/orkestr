@@ -330,6 +330,8 @@ async function api(state, req, res, url) {
     if (state.v1LoseFirst) { state.v1LoseFirst = false; return json(res, 504, { code: 'v1_receipt_unknown', message: 'V1 did not confirm.' }); }
     return json(res, duplicate ? 200 : 202, { thread_id: v1[1], message_id: `v1-input-${index}`, duplicate, state: 'queued' });
   }
+  if (path === '/api/v2/recipes' && req.method === 'GET') return json(res, 200, { recipes: [{ id: 'job-tracker', version: '1.0.0', title: 'Job tracking',
+    summary: 'Synthetic recipe.', conversation_name: 'Job tracker', timers: [{ label: 'Check job mail', schedule: 'hourly at :00, Mon-Fri, 09:00-20:00', silent_unless_changed: true }], mail: 'thunderbird' }] });
   if (path === '/api/v2/projects' && req.method === 'GET') return json(res, 200, { next_cursor: null, projects: [
     { project_id: uuid(601), conversation_id: C, name: 'Errand project', resources: { local_git: 'not_configured', local_oxrm: 'not_configured' } }] });
   if (path === '/api/v2/conversations' && req.method === 'GET') return json(res, 200, {
@@ -372,6 +374,8 @@ async function api(state, req, res, url) {
   }
   // Conversation posts: none in the synthetic workspace.
   if (rest === '/posts' && req.method === 'GET') return json(res, 200, { conversation_id: id, posts: [] });
+  // Tracker: not set up in the synthetic workspace (the tab offers recipes).
+  if (rest === '/tracker' && req.method === 'GET') return json(res, 409, { code: 'tracker_not_enabled', message: 'Precondition refused', request_id: 'synthetic', retryable: false });
   // V1 workers of the linked V1 thread (Research notes only): one working
   // worker, one nested idle worker and one retired worker.
   if (rest === '/v1-workers' && req.method === 'GET') {
