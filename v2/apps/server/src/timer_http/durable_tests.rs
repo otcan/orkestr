@@ -310,3 +310,66 @@ async fn due_occurrence_that_cannot_be_admitted_backs_off_without_rescanning() {
     store.close().await;
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[tokio::test]
+async fn deploy_drain_defers_a_due_fire_until_resume() {
+    let (store, bound, owner, _, conversation, dir) = fixture().await;
+    let namespace = Uuid::new_v4();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64;
+    store
+        .import_dormant_timer(
+            BROWSER,
+            &owner,
+            &TimerImportRequest {
+                namespace,
+                source_namespace: "synthetic-source".into(),
+                source_timer_id: "synthetic-drained-once".into(),
+                source_enabled: false,
+                schedule: TimerSchedule::Once { due_ms: now + 500 },
+            },
+        )
+        .await
+        .unwrap();
+    store
+        .enable_durable_timer(
+            BROWSER,
+            &owner,
+            &DurableTimerEnable {
+                timer: TimerEnableRequest {
+                    namespace,
+                    expected_revision: 1,
+                    request_key: "drained-once".into(),
+                    conversation_id: conversation,
+                },
+                instruction: "Fresh synthetic drained instruction".into(),
+            },
+        )
+        .await
+        .unwrap();
+    let paused = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let flag = paused.clone();
+    let mut controller =
+        DurableTimerController::new(bound.clone()).with_pause(Arc::new(move || {
+            flag.load(std::sync::atomic::Ordering::Acquire)
+        }));
+    tokio::time::sleep(Duration::from_millis(800)).await;
+    // Due, but drained: nothing fires and the occurrence stays due.
+    for _ in 0..3 {
+        assert_eq!(controller.tick().await.unwrap(), DurableTick::default());
+    }
+    paused.store(false, std::sync::atomic::Ordering::Release);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    let mut admitted = 0;
+    while admitted == 0 && tokio::time::Instant::now() < deadline {
+        admitted += controller.tick().await.unwrap().admitted;
+        if admitted == 0 {
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    }
+    assert_eq!(admitted, 1, "the deferred occurrence fires after resume");
+    store.close().await;
+    std::fs::remove_dir_all(dir).unwrap();
+}

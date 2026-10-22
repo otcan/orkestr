@@ -48,6 +48,10 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     orkestr_v2_server::attachment_keys_http::startup(&store, &home).await;
     let origin = config.origin;
     let mut state = AppState::new(store.clone(), token, origin)?;
+    // Operator deploy drain: `<home>/deploy-drain.request` pauses admission.
+    let deploy_drain = state.deploy_drain();
+    deploy_drain.bind(&home);
+    deploy_drain.start();
     let beta = std::env::var_os("ORKESTR_V2_BETA_CONFIG");
     if let Some(path) = &beta {
         // Timers may run beside beta windows: occurrences queue their Deep turn

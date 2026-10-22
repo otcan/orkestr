@@ -41,6 +41,7 @@ pub(crate) struct Controller {
     conversations: Mutex<HashMap<ConversationId, Arc<ConversationController>>>,
     pub(super) opening: tokio::sync::Mutex<()>,
     pub(super) queue: QueueState,
+    pub(super) drain: Arc<crate::deploy_drain::DeployDrain>,
 }
 
 impl Controller {
@@ -71,7 +72,17 @@ impl Controller {
             conversations: Mutex::new(conversations),
             opening: tokio::sync::Mutex::new(()),
             queue: QueueState::default(),
+            drain: Arc::default(),
         }
+    }
+
+    /// Trusted startup only: share the process's operator deploy drain.
+    pub(crate) fn with_deploy_drain(
+        mut self,
+        drain: Arc<crate::deploy_drain::DeployDrain>,
+    ) -> Self {
+        self.drain = drain;
+        self
     }
 
     pub(crate) fn configured_scope(&self) -> (&OwnerId, &ConversationId) {
@@ -210,6 +221,11 @@ impl Controller {
             return Ok(WindowOutcome::Admitted(replay));
         }
         self.queue.remember(browser);
+        if self.drain.is_draining() {
+            // Deploy drain: neither open nor join; the next process (or this
+            // one after resume) admits it from Core's durable queue in order.
+            return self.enqueue(browser, conversation, input).await;
+        }
         let entry = self.entry(conversation)?;
         if input.window_id.is_some() && !self.waiting(browser, conversation).await? {
             if self.joinable(browser, conversation, input).await? {
