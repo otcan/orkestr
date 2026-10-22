@@ -11,8 +11,17 @@ pub fn Auth(onlogin: EventHandler<transport::BrowserSession>) -> Element {
     let mut password = use_signal(String::new);
     let mut bootstrap = use_signal(String::new);
     let mut setup = use_signal(|| false);
+    // Desktop first run: the app handed over the setup token (no terminal).
+    let mut local = use_signal(|| false);
     let mut busy = use_signal(|| false);
     let mut status = use_signal(String::new);
+    use_future(move || async move {
+        if let Some(token) = crate::local_setup::take().await {
+            bootstrap.set(token);
+            setup.set(true);
+            local.set(true);
+        }
+    });
     rsx! {
         form { onsubmit: move |event| {
             event.prevent_default();
@@ -22,10 +31,15 @@ pub fn Auth(onlogin: EventHandler<transport::BrowserSession>) -> Element {
                 let credentials = Credentials { username: username(), password: password() };
                 password.set(String::new());
                 let secret = bootstrap();
-                bootstrap.set(String::new());
+                // A handed-over token stays for a retry; a typed one is cleared.
+                if !local() { bootstrap.set(String::new()); }
                 let body = serde_json::to_value(credentials).unwrap_or(Value::Null);
                 let result = if setup() {
-                    transport::request::<Value>("POST", "/api/v2/setup", body.clone(), "", &secret).await.map(|_| ())
+                    match transport::request::<Value>("POST", "/api/v2/setup", body.clone(), "", &secret).await {
+                        // This computer already has its owner: sign in instead.
+                        Err(error) if local() && error.status == 409 => { setup.set(false); Ok(()) }
+                        result => result.map(|_| ()),
+                    }
                 } else { Ok(()) };
                 match result {
                     Err(error) => status.set(error.message),
@@ -37,13 +51,17 @@ pub fn Auth(onlogin: EventHandler<transport::BrowserSession>) -> Element {
                 busy.set(false);
             });
         },
-            h2 { if setup() { "Create owner account" } else { "Sign in" } }
-            p { "Sign in to your local assistant." }
+            h2 { if setup() && local() { "Create your account" } else if setup() { "Create owner account" } else { "Sign in" } }
+            if setup() && local() {
+                p { "This account stays on this computer. Choose a username and a password of at least 12 characters." }
+            } else {
+                p { "Sign in to your local assistant." }
+            }
             label { r#for: "username", "Username" }
             input { id: "username", autocomplete: "username", required: true, value: "{username}", oninput: move |e| username.set(e.value()) }
             label { r#for: "password", "Password" }
             input { id: "password", r#type: "password", autocomplete: if setup() { "new-password" } else { "current-password" }, required: true, value: "{password}", oninput: move |e| password.set(e.value()) }
-            if setup() {
+            if setup() && !local() {
                 label { r#for: "bootstrap", "Local operator bootstrap token" }
                 input { id: "bootstrap", r#type: "password", autocomplete: "off", required: true, value: "{bootstrap}", oninput: move |e| bootstrap.set(e.value()) }
                 p { "Use the setup token provided by your operator. Keep it private. Setup creates the first owner account once." }
