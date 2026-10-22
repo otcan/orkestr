@@ -240,3 +240,25 @@ for (const [name, before, after] of [
 ]) test(`dedicated iOS workflow rejects ${name}`, () => {
   assert.throws(() => validateWorkflow(iosFixture.replace(before, after), "v2-ios.yml"), /workflow_/);
 });
+
+const desktopFixture = iosFixture.replace("runs-on: macos-15", "runs-on: windows-2025");
+test("desktop app runners are allowed only in the dedicated v2 desktop workflow", () => {
+  for (const runner of ["macos-15", "macos-15-intel", "windows-2025", "ubuntu-latest"])
+    assert.deepEqual(validateWorkflow(desktopFixture.replace("windows-2025", runner), "v2-desktop.yml"), { jobs: 1, actions: 1 });
+  for (const filename of ["", "ci.yml", "v2-rust.yml", "v2-ios.yml", "v2-desktop.yaml"])
+    assert.throws(() => validateWorkflow(desktopFixture, filename), /workflow_runner/, filename);
+  assert.throws(() => validateWorkflow(desktopFixture.replace("windows-2025", "macos-15-intel"), "v2-ios.yml"), /workflow_runner/);
+});
+for (const runner of ["windows-latest", "windows-2022", "macos-latest", "macos-14", "self-hosted", "${{ matrix.runner }}"])
+  test(`dedicated desktop workflow rejects runner ${runner}`, () => {
+    assert.throws(() => validateWorkflow(desktopFixture.replace("windows-2025", runner), "v2-desktop.yml"), /workflow_runner/);
+  });
+for (const [name, before, after] of [
+  ["main branch", "v2/**", "main"],
+  ["tag trigger", "push: {branches: ['v2/**']}", "push: {branches: ['v2/**'], tags: ['v*']}"],
+  ["manual trigger", "pull_request:", "workflow_dispatch:"],
+  ["job write token", "runs-on: windows-2025", "runs-on: windows-2025\n    permissions: {contents: write}"],
+  ["secret", "echo fixture", "echo '${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}'"],
+]) test(`dedicated desktop workflow rejects ${name}`, () => {
+  assert.throws(() => validateWorkflow(desktopFixture.replace(before, after), "v2-desktop.yml"), /workflow_/);
+});

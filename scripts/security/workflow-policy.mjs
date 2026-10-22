@@ -50,6 +50,13 @@ const publishCommands = new Set(["docker", "echo", "set", "test", "[["]);
 const publishDockerCommands = new Set(["load", "login", "logout", "tag", "push"]);
 // GitHub-hosted runners only; the arm64 runner builds the Apple Silicon image.
 const githubHostedRunners = new Set(["ubuntu-latest", "ubuntu-24.04-arm"]);
+// Unsigned native app builds that need Apple or Windows hosts. Each runner is
+// allowed only in its fixed v2 workflow file, which may only run for v2
+// branch pushes and pull requests and never sees a secret or a write token.
+const nativeRunners = Object.freeze({
+  "v2-ios.yml": new Set(["macos-15"]),
+  "v2-desktop.yml": new Set(["macos-15", "macos-15-intel", "windows-2025"]),
+});
 const ownImageRef = /^"\$IMAGE:[A-Za-z0-9._{}:$-]+"$/;
 function imagetoolsArgsAllowed(args) {
   let sources = 0;
@@ -109,8 +116,8 @@ export function validateWorkflow(source, filename = "") {
   const events = typeof workflow.on === "string" ? [workflow.on] : Array.isArray(workflow.on) ? workflow.on : record(workflow.on) ? Object.keys(workflow.on) : [];
   requirePolicy(events.length > 0 && events.every(event => triggers.has(event)), "workflow_trigger");
   requirePolicy(record(workflow.jobs) && Object.keys(workflow.jobs).length > 0, "workflow_jobs");
-  const iosSimulator = filename === "v2-ios.yml";
-  if (iosSimulator) {
+  const native = Object.hasOwn(nativeRunners, filename) ? nativeRunners[filename] : null;
+  if (native) {
     requirePolicy(record(workflow.on) && events.every(event => ["pull_request", "push"].includes(event)), "workflow_ios_trigger");
     for (const event of events) {
       requirePolicy(!["tags", "tags-ignore", "branches-ignore"].some(key => key in (workflow.on[event] || {})), "workflow_ios_branch");
@@ -120,9 +127,9 @@ export function validateWorkflow(source, filename = "") {
   }
   let actions = 0;
   for (const job of Object.values(workflow.jobs)) {
-    requirePolicy(record(job) && (githubHostedRunners.has(job["runs-on"]) || (iosSimulator && job["runs-on"] === "macos-15")), "workflow_runner");
+    requirePolicy(record(job) && (githubHostedRunners.has(job["runs-on"]) || (native !== null && native.has(job["runs-on"]))), "workflow_runner");
     requirePolicy(!["uses", "secrets", "container", "services", "environment"].some(key => key in job), "workflow_privileged_job");
-    if ("permissions" in job && (iosSimulator || (!attestationJob(job) && !publishJob(job)))) permissions(job.permissions);
+    if ("permissions" in job && (native !== null || (!attestationJob(job) && !publishJob(job)))) permissions(job.permissions);
     requirePolicy(!job["continue-on-error"], "workflow_ignored_failure");
     requirePolicy(Array.isArray(job.steps) && job.steps.length > 0, "workflow_steps");
     for (const step of job.steps) {

@@ -1,0 +1,214 @@
+name: V2 desktop app
+
+# Unsigned desktop builds of Orkestr V2 (Tauri). Signing and notarization are
+# not part of this workflow: it never sees a secret (see
+# v2/apps/desktop/README.md for what a signed release needs).
+on:
+  push:
+    branches: ['v2/rust-rewrite']
+    paths: ['v2/**', '.github/workflows/v2-desktop.yml']
+  pull_request:
+    branches: ['v2/**']
+    paths: ['v2/**', '.github/workflows/v2-desktop.yml']
+
+permissions:
+  contents: read
+
+# Only superseded PR checks cancel; integration push runs stay independent.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # The WebAssembly UI is platform independent: build it once.
+  ui-bundle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Pinned Rust, wasm target and wasm-bindgen
+        run: |
+          rustup toolchain install 1.99.1 --profile minimal
+          rustup target add --toolchain 1.99.1 wasm32-unknown-unknown
+          cargo +1.99.1 install wasm-bindgen-cli --version 0.2.129 --locked --root "$RUNNER_TEMP/bindgen"
+          echo "$RUNNER_TEMP/bindgen/bin" >> "$GITHUB_PATH"
+          printf '#!/bin/sh\nexec cargo +1.99.1 "$@"\n' > "$RUNNER_TEMP/v2-cargo"
+          chmod +x "$RUNNER_TEMP/v2-cargo"
+      - name: First-run handoff regression
+        run: node --test v2/apps/ui/tests/local_setup.test.mjs
+      - name: Build the UI bundle
+        working-directory: v2
+        env:
+          V2_CARGO: ${{ runner.temp }}/v2-cargo
+          CARGO_TARGET_DIR: ${{ runner.temp }}/target
+          UI_BUNDLE_DIR: ${{ runner.temp }}/ui
+        run: |
+          cargo +1.99.1 fetch --locked
+          bash apps/ui/scripts/bundle.sh
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: v2-ui-bundle
+          path: ${{ runner.temp }}/ui
+          if-no-files-found: error
+          retention-days: 3
+
+  linux-x64:
+    needs: ui-bundle
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: v2-ui-bundle
+          path: ${{ runner.temp }}/ui
+      - name: System libraries for the webview, tray and headless smoke test
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev patchelf file xvfb dbus x11-apps
+      - name: Pinned Rust and Tauri CLI
+        run: |
+          rustup toolchain install 1.99.1 --profile minimal --component rustfmt --component clippy
+          npm install --prefix "$RUNNER_TEMP/tauri-cli" --ignore-scripts --no-audit --no-fund @tauri-apps/cli@2.12.4
+          echo "CARGO_TARGET_DIR=$RUNNER_TEMP/target" >> "$GITHUB_ENV"
+      - name: Packaging regressions
+        run: python3 -B -m unittest discover -s v2/packaging/desktop/tests -v
+      - name: Build the server and stage the desktop bundle (with the verified Codex CLI)
+        env:
+          V2_CARGO: cargo
+        run: |
+          python3 -B v2/packaging/desktop/build_bundle.py --out "$RUNNER_TEMP/bundle" \
+            --target x86_64-unknown-linux-gnu --ui-dist "$RUNNER_TEMP/ui" --desktop
+      - name: Desktop shell format, lint and tests
+        working-directory: v2/apps/desktop
+        run: |
+          cargo fmt --check
+          cargo clippy --locked --all-targets -- -D warnings
+          cargo test --locked
+      - name: Build the deb and AppImage
+        working-directory: v2/apps/desktop
+        run: '"$RUNNER_TEMP/tauri-cli/node_modules/.bin/tauri" build --bundles deb,appimage --ci'
+      - name: Headless smoke test of the installed package
+        run: |
+          python3 -B v2/apps/desktop/tests/smoke_linux.py \
+            --deb "$(ls "$CARGO_TARGET_DIR"/release/bundle/deb/*.deb)" \
+            --report "$RUNNER_TEMP/smoke-deb.json"
+          python3 -B v2/apps/desktop/tests/smoke_linux.py \
+            --appimage "$(ls "$CARGO_TARGET_DIR"/release/bundle/appimage/*.AppImage)" \
+            --report "$RUNNER_TEMP/smoke-appimage.json"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: ${{ always() }}
+        with:
+          name: orkestr-desktop-linux-x64-unsigned
+          path: |
+            ${{ runner.temp }}/target/release/bundle/deb/*.deb
+            ${{ runner.temp }}/target/release/bundle/appimage/*.AppImage
+            ${{ runner.temp }}/bundle/*.tar.gz
+            ${{ runner.temp }}/smoke-*.json
+          if-no-files-found: ignore
+          retention-days: 7
+
+  macos-arm64:
+    needs: ui-bundle
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: v2-ui-bundle
+          path: ${{ runner.temp }}/ui
+      - name: Pinned Rust and Tauri CLI
+        run: |
+          rustup toolchain install 1.99.1 --profile minimal --component clippy
+          npm install --prefix "$RUNNER_TEMP/tauri-cli" --ignore-scripts --no-audit --no-fund @tauri-apps/cli@2.12.4
+          echo "CARGO_TARGET_DIR=$RUNNER_TEMP/target" >> "$GITHUB_ENV"
+      - name: Build the server and stage the desktop bundle
+        env:
+          V2_CARGO: cargo
+        run: |
+          python3 -B v2/packaging/desktop/build_bundle.py --out "$RUNNER_TEMP/bundle" \
+            --target aarch64-apple-darwin --ui-dist "$RUNNER_TEMP/ui" --desktop
+      - name: Desktop shell tests
+        working-directory: v2/apps/desktop
+        run: cargo test --locked
+      - name: Build the unsigned app and dmg
+        working-directory: v2/apps/desktop
+        run: '"$RUNNER_TEMP/tauri-cli/node_modules/.bin/tauri" build --bundles app,dmg --ci'
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: orkestr-desktop-macos-arm64-unsigned
+          path: ${{ runner.temp }}/target/release/bundle/dmg/*.dmg
+          if-no-files-found: error
+          retention-days: 7
+
+  macos-x64:
+    needs: ui-bundle
+    runs-on: macos-15-intel
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: v2-ui-bundle
+          path: ${{ runner.temp }}/ui
+      - name: Pinned Rust and Tauri CLI
+        run: |
+          rustup toolchain install 1.99.1 --profile minimal --component clippy
+          npm install --prefix "$RUNNER_TEMP/tauri-cli" --ignore-scripts --no-audit --no-fund @tauri-apps/cli@2.12.4
+          echo "CARGO_TARGET_DIR=$RUNNER_TEMP/target" >> "$GITHUB_ENV"
+      - name: Build the server and stage the desktop bundle
+        env:
+          V2_CARGO: cargo
+        run: |
+          python3 -B v2/packaging/desktop/build_bundle.py --out "$RUNNER_TEMP/bundle" \
+            --target x86_64-apple-darwin --ui-dist "$RUNNER_TEMP/ui" --desktop
+      - name: Build the unsigned app and dmg
+        working-directory: v2/apps/desktop
+        run: '"$RUNNER_TEMP/tauri-cli/node_modules/.bin/tauri" build --bundles app,dmg --ci'
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: orkestr-desktop-macos-x64-unsigned
+          path: ${{ runner.temp }}/target/release/bundle/dmg/*.dmg
+          if-no-files-found: error
+          retention-days: 7
+
+  # The V2 server does not build for Windows yet (it uses Unix process and
+  # sandbox APIs). Until it does, this job keeps the Windows shell compiling
+  # and its tests passing, and verifies the pinned Windows Codex download.
+  windows-x64-shell:
+    runs-on: windows-2025
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Pinned Rust
+        run: rustup toolchain install 1.99.1 --profile minimal --component clippy
+      - name: Fetch and verify the Windows Codex CLI
+        run: python -B v2/packaging/desktop/fetch_codex.py --target x86_64-pc-windows-msvc --out v2/apps/desktop/binaries
+      - name: Shell compile check and tests (placeholder server sidecar and UI)
+        working-directory: v2/apps/desktop
+        run: |
+          printf 'placeholder' > binaries/orkestr-v2-server-x86_64-pc-windows-msvc.exe
+          mkdir -p resources/ui
+          printf '<!doctype html>' > resources/ui/index.html
+          printf '{}' > resources/bundle-manifest.json
+          cargo clippy --locked --all-targets -- -D warnings
+          cargo test --locked
