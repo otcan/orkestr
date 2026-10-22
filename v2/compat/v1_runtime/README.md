@@ -47,7 +47,19 @@ private deployment state, never in this repository.
 
 One owner session is shared by all bindings. A 401 revokes it for every
 binding (operator review, restart required); a conversation that does not
-match its binding refuses only that binding.
+match its binding refuses only that binding. Every mutation (POST) first
+re-checks the server build identity and the session; a read reuses a check
+younger than 30 s, and any transport failure forces a new check.
+
+## Pacing
+
+A binding with an input in flight steps it every second. An idle binding
+sleeps until its next Rust poll is due (timer occurrences and posts every 5 s,
+digests every 30 s, at most 5 s per pass); a new inbound input wakes its
+worker at once. The burst debounce still applies: a fresh input is sent when
+its chat has been quiet for 3 s (each new message of the burst restarts the
+wait), and the worker wakes exactly then rather than up to a pass later. With dozens of bindings this keeps idle polling to roughly
+about `0.43 x bindings` requests per second.
 
 ## Quoted replies
 
@@ -329,7 +341,7 @@ things, all through the same loopback client and all optional on the server side
   (`NO_REPLY`, or `NO_NEWS` / held `LOW_SIGNAL` for a timer that is silent unless
   changed) is exported as `NO_REPLY` and acknowledged `no_reply`, so V1 sends
   nothing. A server without the route (404) keeps the ordinary reply rules.
-- **Digests.** Every 15 s it reads `GET /timer-digests`, records each digest as a
+- **Digests.** Every 30 s it reads `GET /timer-digests`, records each digest as a
   pseudo timer input (`origin: "timer"`, deterministic ids, idempotent by digest
   id) answered by the digest text, acknowledges it to Rust once the ledger holds
   it, and exports it like any reply (reply prefix and footer apply).
@@ -369,8 +381,8 @@ this leading paragraph from the owner's bubble; the model still receives it.
 
 A conversation post is an assistant-side message written into a V2
 conversation from outside any run (an external coordinator session, operator
-alert tooling); see `docs/v2/conversation-posts.md`. Every 3 s (posts are
-interactive; digests use 15 s) the adapter reads
+alert tooling); see `docs/v2/conversation-posts.md`. Every 5 s (posts are
+interactive; digests use 30 s) the adapter reads
 `GET /posts?pending=true&limit=20`. For each post it writes, in one ledger
 transaction, a pseudo timer input and its final reply, then acknowledges it
 with `POST /posts/<id>/delivered`:

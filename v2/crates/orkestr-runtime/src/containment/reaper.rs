@@ -58,7 +58,16 @@ pub(super) fn start_reaper_retained(
             let mut pending = Vec::new();
             let mut disconnected = false;
             loop {
-                match receiver.recv_timeout(Duration::from_millis(5)) {
+                // Nothing to reap: sleep until work arrives or every sender is
+                // gone instead of waking 200 times a second while idle.
+                let work = if pending.is_empty() && !disconnected {
+                    receiver
+                        .recv()
+                        .map_err(|_| mpsc::RecvTimeoutError::Disconnected)
+                } else {
+                    receiver.recv_timeout(Duration::from_millis(5))
+                };
+                match work {
                     Ok(Work::Spawn(mut command, reply)) => {
                         let result = command.spawn().map_err(|_| Error::Io);
                         if result.is_ok() {

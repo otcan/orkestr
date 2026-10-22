@@ -187,5 +187,33 @@ class Windows(unittest.TestCase):
             self.assertEqual((receipt["state"], receipt["reason"]), ("reconciliation", "server_lost"))
 
 
+class TickPaceTests(unittest.TestCase):
+    """Custody housekeeping is paced; a waiting control request never is."""
+
+    def manager(self, accepts):
+        manager = Manager.__new__(Manager)
+        manager.ticks = 0
+        manager.tick = lambda: setattr(manager, "ticks", manager.ticks + 1)
+        def accept():
+            accepts.append(1)
+            raise module.socket.timeout()
+        manager.control = SimpleNamespace(socket=SimpleNamespace(accept=accept))
+        return manager
+
+    def test_housekeeping_runs_at_most_once_per_tick_interval(self):
+        accepts = []
+        manager = self.manager(accepts)
+        clock = [100.0]
+        with patch.object(module.time, "monotonic", lambda: clock[0]):
+            for _ in range(5):
+                manager.once()
+            self.assertEqual((manager.ticks, len(accepts)), (1, 5))
+            clock[0] += module.TICK_S
+            manager.once()
+            self.assertEqual(manager.ticks, 2)
+            clock[0] -= 10  # A clock step backwards never stalls housekeeping.
+            manager.once()
+            self.assertEqual(manager.ticks, 3)
+
 if __name__ == "__main__":
     unittest.main()

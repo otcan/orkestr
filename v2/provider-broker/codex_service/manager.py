@@ -18,8 +18,16 @@ from .egress import Endpoint, Window
 from .ledger import Ledger
 from .package import Package
 
+# Idle pace of the control loop. A waiting control request is accepted at once;
+# custody housekeeping (server exit, descendant tree walk over /proc, window
+# deadlines) runs at most once per TICK_S instead of on every 50 ms accept
+# timeout, which kept the manager at a quarter of a core while idle.
+TICK_S = 0.25
+
 
 class Manager:
+    ticked = None  # Monotonic time of the last custody housekeeping pass.
+
     def __init__(self, root, expected):
         require(os.geteuid() == 0, "root_manager_required")
         self.package = Package(root, expected)
@@ -31,7 +39,7 @@ class Manager:
         try:
             self.lock = StateLock(self.package.ledger_directory)
             self.ledger = Ledger(self.lock.path, self.package.owner, self.package.conversation)
-            self.control = OwnedSocket(self.package.control, self.package.gid, self.ledger, "control")
+            self.control = OwnedSocket(self.package.control, self.package.gid, self.ledger, "control", TICK_S)
         except BaseException:
             self.close()
             raise
@@ -232,8 +240,17 @@ class Manager:
                     self._uncertain(window.window, window.generation, "cleanup_unknown")
             self._terminate_all()
 
+    def due(self, now=None):
+        """Whether custody housekeeping is due; requests never wait for it."""
+        now = time.monotonic() if now is None else now
+        if self.ticked is not None and 0 <= now - self.ticked < TICK_S:
+            return False
+        self.ticked = now
+        return True
+
     def once(self):
-        self.tick()
+        if self.due():
+            self.tick()
         try:
             connection, _ = self.control.socket.accept()
         except socket.timeout:

@@ -50,7 +50,7 @@ class StateLock:
 
 
 class OwnedSocket:
-    def __init__(self, path, gid, ledger, name):
+    def __init__(self, path, gid, ledger, name, timeout=0.05):
         self.path, self.ledger, self.name = Path(path), ledger, name
         protected(self.path.parent, True)
         require(len(bytes(self.path)) < 100, "socket_path_bound")
@@ -73,7 +73,9 @@ class OwnedSocket:
             self.identity = (info.st_dev, info.st_ino)
             ledger.set_endpoint(name, self.identity)
             self.socket.listen(12)
-            self.socket.settimeout(0.05)
+            # accept() returns at once for a waiting peer; the timeout only
+            # paces the owner's idle loop.
+            self.socket.settimeout(timeout)
         except BaseException:
             self.close()
             raise

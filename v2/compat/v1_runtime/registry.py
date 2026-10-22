@@ -12,7 +12,7 @@ import threading
 
 from . import config as config_module
 from .ledger import Ledger
-from .worker import DEFAULT_BURST_QUIET_S, Worker, attachment_export_settings
+from .worker import DEFAULT_BURST_QUIET_S, Signal, Worker, attachment_export_settings
 
 UNIQUE_KEYS = ("remote_thread_id", "conversation_id", "public_thread_id", "chat_id")
 MUTABLE_KEYS = ("enabled", "revoked", "progress_updates", "attachments", "max_outstanding_inputs", "max_input_age_seconds",
@@ -23,7 +23,8 @@ class Binding:
     def __init__(self, source, value, ledger):
         self.source, self.config, self.ledger = source, value, ledger
         self.error = None
-        self.stop = threading.Event()
+        # Stops the worker; `stop.wake()` makes it step a new input at once.
+        self.stop = Signal()
         self.thread = self.worker = None
 
     @property

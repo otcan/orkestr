@@ -90,12 +90,12 @@ class PostTests(Base):
         self.assertEqual(self.peer.posts_acked, [])
         self.assertEqual(self.ledger.messages(), [])
 
-    def test_posts_are_polled_every_three_seconds_and_not_while_paused(self):
+    def test_posts_are_polled_every_five_seconds_and_not_while_paused(self):
         self.worker.run_once(_Stop())
         self.worker.run_once(_Stop())
         polls = lambda: len([r for r in self.peer.reads if r[1].startswith("/posts?")])
         self.assertEqual(polls(), 1)
-        self.worker._posts_checked -= 4
+        self.worker._posts_checked -= 6
         self.worker.run_once(_Stop())
         self.assertEqual(polls(), 2)
         self.peer.posts = [post()]

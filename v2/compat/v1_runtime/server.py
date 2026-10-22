@@ -173,6 +173,9 @@ class Handler(BaseHTTPRequestHandler):
             data, duplicate = binding.ledger.enqueue(dict(body, attachments=attachments), author)
         except Conflict as error:
             return self.answer(409 if str(error) != "attachment_reference_invalid" else 422, {"ok": False, "error": str(error)})
+        if not duplicate:
+            # The idle worker sleeps up to IDLE_PASS_S; a new input is stepped now.
+            binding.stop.wake()
         return self.answer(200 if duplicate else 202, {"ok": True, "duplicate": duplicate,
             "message": {"id": data["remote_id"], "role": "user", "state": "delivered", "deliveryState": "delivered",
                         "observedVia": "rust-pilot-ledger"}})

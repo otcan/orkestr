@@ -20,6 +20,10 @@ LIMITS = dict(duration_ms=900000, attempts=32, bytes=67108864,
 SESSION = "/api/v2/browser/session"
 # Matches the server JSON limit for raw-octet attachment bundles.
 ATTACHMENT_MAX_JSON = 68 * 1024 * 1024
+# Reads reuse a server identity + session check this recent. Every mutation
+# (POST) and any read after a transport failure re-verifies first. Idle
+# polling of many bindings otherwise costs two extra requests per read.
+READ_RECHECK_S = 30
 
 
 class ClientError(RuntimeError):
@@ -127,6 +131,7 @@ class RustSession:
         self._cookie = self._csrf = None
         self._revoked = False
         self.generation = 0
+        self._verified_at = None
         self._lock = threading.RLock()
 
     def _wire(self, method, path, body=None, allowed=(200,), events=False,
@@ -192,6 +197,8 @@ class RustSession:
         except ClientError:
             raise
         except (OSError, http.client.HTTPException, ValueError, TypeError):
+            # A lost or restarted server is checked again before the next read.
+            self._verified_at = None
             raise ClientError("transport_outcome_unknown" if method == "POST" else "transport_failed") from None
         finally:
             connection.close()
@@ -212,14 +219,22 @@ class RustSession:
         require(isinstance(value, dict) and value.get("owner_id") == self.owner and
                 value.get("csrf_token") == self._csrf, "session_scope_mismatch")
 
-    def login(self):
-        """Returns the session generation; a new generation needs scope re-verification."""
+    def login(self, mutation=True):
+        """Returns the session generation; a new generation needs scope re-verification.
+
+        A read may reuse a verification younger than READ_RECHECK_S; a mutation
+        always verifies the server identity and session first."""
         with self._lock:
             require(not self._revoked, "session_revoked")
+            if (not mutation and self._cookie and self._verified_at is not None and
+                    time.monotonic() - self._verified_at < READ_RECHECK_S):
+                return self.generation
+            self._verified_at = None
             self._health()
             if self._cookie:
                 _, value, _ = self._wire("GET", SESSION)
                 self._session(value)
+                self._verified_at = time.monotonic()
                 return self.generation
             _, value, headers = self._wire("POST", SESSION, credentials(self.credentials_path))
             cookies = [v for k, v in headers if k.lower() == "set-cookie"]
@@ -244,6 +259,7 @@ class RustSession:
                 raise
             self._cookie = f"orkestr_v2_session={cookie.value}"
             self.generation += 1
+            self._verified_at = time.monotonic()
             return self.generation
 
 
@@ -277,10 +293,10 @@ class RustClient:
     def _wire(self, *args, **kwargs):
         return self.session._wire(*args, **kwargs)
 
-    def ensure_login(self):
+    def ensure_login(self, mutation=True):
         with self._lock:
             require(not self._scope_refused, "conversation_scope_mismatch")
-            generation = self.session.login()
+            generation = self.session.login(mutation)
             if self._verified == generation:
                 return
             try:
@@ -336,7 +352,7 @@ class RustClient:
             require((method == "GET" and body is None) or (method == "POST" and isinstance(body, dict)),
                     "request_shape_refused")
             require(urlsplit(suffix).path != "/events", "use_read_events")
-            self.ensure_login()
+            self.ensure_login(mutation=method != "GET")
             status, value, _ = self._wire(method, path, body, allowed)
             if isinstance(value, dict):
                 require(value.get("conversation_id", self.conversation) == self.conversation and
@@ -364,7 +380,7 @@ class RustClient:
     def read_events(self, after, maximum=100):
         require(integer(after) and type(maximum) is int and 1 <= maximum <= 100, "cursor_refused")
         with self._lock:
-            self.ensure_login()
+            self.ensure_login(mutation=False)
             _, raw, _ = self._wire("GET", f"{self.prefix}/events?after={after}&limit={maximum}", events=True)
         events, cursor = [], after
         for frame in raw.replace(b"\r\n", b"\n").split(b"\n\n")[:-1]:

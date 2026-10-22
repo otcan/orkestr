@@ -135,3 +135,27 @@ fn abandoned_spawn_reply_kills_and_waits_same_child_before_release() {
     assert_eq!(active.load(Ordering::Acquire), 0);
     assert!(!std::path::Path::new(&format!("/proc/{pid}")).exists());
 }
+
+#[test]
+fn idle_reaper_blocks_yet_reaps_returned_child_and_releases_on_disconnect() {
+    let (released, observed) = mpsc::channel();
+    let active = Arc::new(AtomicUsize::new(0));
+    let reaper = start_reaper_retained(active.clone(), Box::new(Resource(released))).unwrap();
+    let mut command = Command::new("/bin/true");
+    command.stdout(Stdio::null()).process_group(0);
+    let child = reaper.spawn(command).unwrap();
+    let pid = child.id();
+    // The idle reaper is parked in a blocking receive; returned work wakes it.
+    std::thread::sleep(Duration::from_millis(50));
+    assert_eq!(active.load(Ordering::Acquire), 1);
+    assert!(reaper.send(child).is_ok());
+    let until = Instant::now() + Duration::from_secs(3);
+    while active.load(Ordering::Acquire) != 0 {
+        assert!(Instant::now() < until);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(!std::path::Path::new(&format!("/proc/{pid}")).exists());
+    assert!(observed.recv_timeout(Duration::from_millis(30)).is_err());
+    drop(reaper);
+    observed.recv_timeout(Duration::from_secs(3)).unwrap();
+}

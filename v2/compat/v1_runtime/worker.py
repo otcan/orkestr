@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import re
 import sys
+import threading
 import time
 import uuid
 
@@ -16,9 +17,18 @@ from .rust_client import ClientError
 PROGRESS_INTERVAL_S = 60
 PROGRESS_MAX_CHARS = 3500
 TIMER_PAGE = 50
-DIGEST_POLL_S = 15
+# Pass cadence. While an input is in flight a binding steps it every second;
+# an idle binding sleeps until its next Rust poll is due (at most IDLE_PASS_S)
+# and a new inbound input wakes it at once (see Signal). One host serves
+# dozens of bindings, so idle polling dominates the adapter and server CPU.
+PASS_S = 1
+IDLE_PASS_S = 5
+# Scheduled timer occurrences: a few seconds of pickup delay is invisible.
+TIMER_POLL_S = 5
+# Digests are due a few times a day.
+DIGEST_POLL_S = 30
 # Conversation posts are interactive (a coordinator or an operator alert).
-POST_POLL_S = 3
+POST_POLL_S = 5
 POST_PAGE = 20
 POST_AUTHORS = ("coordinator", "operator")
 # Web-UI owner messages (snapshot `origin: "web"`) are mirrored to the group and
@@ -161,6 +171,38 @@ def export_attachment(directory, gid, conversation, item, content):
     return str(target)
 
 
+class Signal:
+    """A binding's stop flag that a worker sleeps on.
+
+    `wait` has `threading.Event` semantics (returns True once stopped);
+    `wake` ends the current or next sleep early without stopping, so a new
+    input is stepped at once instead of after the idle pause."""
+
+    def __init__(self):
+        self._condition = threading.Condition()
+        self._stopped = self._woken = False
+
+    def set(self):
+        with self._condition:
+            self._stopped = True
+            self._condition.notify_all()
+
+    def is_set(self):
+        return self._stopped
+
+    def wake(self):
+        with self._condition:
+            self._woken = True
+            self._condition.notify_all()
+
+    def wait(self, timeout=None):
+        with self._condition:
+            if not (self._stopped or self._woken):
+                self._condition.wait(timeout)
+            self._woken = False
+            return self._stopped
+
+
 class Worker:
     def __init__(self, client, ledger, progress_updates=False, max_input_age_s=DEFAULT_MAX_INPUT_AGE_S,
                  attachment_dir=None, attachment_gid=None, burst_quiet_s=0.0):
@@ -176,6 +218,8 @@ class Worker:
         # Binding flags: mirror web-UI owner messages; name their files (else count only).
         self.web_mirror = True
         self.attachments = False
+        self._timers_checked = None
+        self._burst_due = None  # Wall time a waiting burst head may be sent.
         # Optional per-binding chat rules file (see instructions.py); not pinned.
         self.instructions_path = None
         self.instructions_error = None
@@ -351,6 +395,8 @@ class Worker:
             return
         data["trigger_sent"] = True
         self.ledger.save(data)
+        # An event-triggered timer may now be admitted: look at the next pass.
+        self._timers_checked = None
 
     def discover_digests(self):
         """Adopt digests Rust created for this conversation and acknowledge them
@@ -615,6 +661,8 @@ class Worker:
         if self.burst_quiet_s and isinstance(first, (int, float)):
             newest = max([first] + [r["queued_at"] for r in rows if isinstance(r.get("queued_at"), (int, float))])
             if now - newest < self.burst_quiet_s and now - first < max(BURST_MAX_WAIT_S, self.burst_quiet_s):
+                # The next pass comes when the burst is due, not a whole pass later.
+                self._burst_due = min(newest + self.burst_quiet_s, first + max(BURST_MAX_WAIT_S, self.burst_quiet_s))
                 return False
         if data.get("attachments") and "attachment_receipt" not in data:
             self.import_attachments(data)
@@ -1113,12 +1161,41 @@ class Worker:
         return value["text"]
 
     def run(self, stop, active=lambda: True):
-        while not stop.wait(1):
+        pause = PASS_S
+        while not stop.wait(pause):
             # Expiry only touches the ledger, so it also runs while the binding
             # is paused: a re-enabled binding never runs stale input.
             self.expire_stale()
-            if active():
-                self.run_once(stop)
+            if not active():
+                pause = IDLE_PASS_S
+            elif self.run_once(stop):
+                pause = self.busy_pause()
+            else:
+                pause = self.idle_pause()
+
+    def busy_pause(self, now=None):
+        """PASS_S, or less when a waiting burst head becomes due sooner. A new
+        message of the burst wakes the worker anyway and restarts the wait."""
+        due, self._burst_due = self._burst_due, None
+        if due is None:
+            return PASS_S
+        now = time.time() if now is None else now
+        return min(PASS_S, max(0.05, due - now))
+
+    def idle_pause(self, now=None):
+        """Seconds until the next Rust poll is due, between PASS_S and IDLE_PASS_S."""
+        now = time.monotonic() if now is None else now
+        due = [checked + interval - now for checked, interval in
+               ((self._timers_checked, TIMER_POLL_S), (self._posts_checked, POST_POLL_S),
+                (self._digest_checked, DIGEST_POLL_S)) if checked is not None]
+        if self.web_mirror and self._web_checked is not None:
+            due.append(self._web_checked + WEB_POLL_S - now)
+        return max(PASS_S, min([IDLE_PASS_S] + due))
+
+    @staticmethod
+    def _due(checked, interval):
+        # A pause ends at the due time; a few ms of early wakeup still counts.
+        return checked is None or time.monotonic() - checked >= interval - 0.05
 
     def expire_stale(self):
         try:
@@ -1128,22 +1205,25 @@ class Worker:
             pass
 
     def run_once(self, stop):
-        try:
-            self.discover_timers()
-        except Exception:
-            # Discovery is retried every pass; it never blocks existing inputs.
-            pass
-        # Digests are due a few times a day: look every 15 s, not every pass.
-        if self._digest_checked is None or time.monotonic() - self._digest_checked >= DIGEST_POLL_S:
+        """One pass. Returns True while an input is pending (step again soon)."""
+        if self._due(self._timers_checked, TIMER_POLL_S):
+            self._timers_checked = time.monotonic()
+            try:
+                self.discover_timers()
+            except Exception:
+                # Discovery is retried at the next check; it never blocks existing inputs.
+                pass
+        # Digests are due a few times a day: look every DIGEST_POLL_S, not every pass.
+        if self._due(self._digest_checked, DIGEST_POLL_S):
             self._digest_checked = time.monotonic()
             try:
                 self.discover_digests()
             except Exception:
                 # A missing route (older server) or a failure is retried at the next check.
                 pass
-        # Posts are interactive: look every 3 s. A paused binding (run() skips
-        # run_once) leaves them pending in Rust until it is enabled again.
-        if self._posts_checked is None or time.monotonic() - self._posts_checked >= POST_POLL_S:
+        # Posts are interactive: look every POST_POLL_S. A paused binding (run()
+        # skips run_once) leaves them pending in Rust until it is enabled again.
+        if self._due(self._posts_checked, POST_POLL_S):
             self._posts_checked = time.monotonic()
             try:
                 self.discover_posts()
@@ -1151,7 +1231,7 @@ class Worker:
                 # A missing route (older server) or a failure is retried at the next check.
                 pass
         # Web-UI owner messages: interactive, never queued behind WhatsApp input.
-        if self.web_mirror and (self._web_checked is None or time.monotonic() - self._web_checked >= WEB_POLL_S):
+        if self.web_mirror and self._due(self._web_checked, WEB_POLL_S):
             self._web_checked = time.monotonic()
             try:
                 self.discover_web()
@@ -1172,12 +1252,12 @@ class Worker:
             pass
         data = self.ledger.next_input()
         if not data:
-            return
+            return False
         if data.get("blocked"):
             # Written by an earlier adapter version: close it visibly so the
             # inputs behind it proceed.
             self.ledger.refuse(data, data["blocked"])
-            return
+            return True
         try:
             self.step(data)
         except Refused as error:
@@ -1198,3 +1278,4 @@ class Worker:
             if not transient(error):
                 self.ledger.refuse(data, refusal_reason(error), alert=data.get("origin") == "timer")
             stop.wait(4)
+        return True
