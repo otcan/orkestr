@@ -160,6 +160,29 @@ and only admits input from the binding's account, group, V1 thread and
 verified owner aliases or listed members. Forwarded `originOwner`, command and control flags
 confer no additional permission. Edits receive explicit refusals.
 
+### Bursts
+
+Messages sent in quick succession, such as a text followed by photos sent one
+by one, go to Rust as one input, so one turn answers all of them with one reply.
+Before an input is sent, the worker waits until the chat has been quiet for 3 s
+(`DEFAULT_BURST_QUIET_S`). A continuous stream holds the first input for at
+most `BURST_MAX_WAIT_S` (10 s).
+
+The input is then sent together with the queued inputs directly behind it, up
+to 8 inputs and 16 KiB of text. This includes inputs that queued while an
+earlier turn was running. An input joins only if it:
+
+- comes from the same chat, account and author;
+- has not been sent to Rust yet;
+- is not a timer, digest or post;
+- has not been re-sent.
+
+Every input in the batch has its attachments imported. The combined text starts
+with a note that asks for a single reply. The absorbed inputs leave the queue at
+once and settle together with the first input's reply or refusal notice.
+Each merge logs one `burst_merged` line with the conversation, the first
+input's ID, the number of absorbed inputs and the burst span (no message text).
+
 ### V1-local input
 
 Everything else V1 queues for a delegated thread (thread-to-thread and agent

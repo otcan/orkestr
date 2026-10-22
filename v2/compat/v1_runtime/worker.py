@@ -37,6 +37,16 @@ FAST_GRACE_S = 60
 STALL_NOTICE_AFTER_S = 20 * 60
 STALL_NOTICE = ("Still working on this message after more than 20 minutes. It may be stuck; "
                 "Orkestr keeps retrying and the operator has been alerted.")
+# Burst handling: WhatsApp messages sent in quick succession (text, then photos
+# one by one) go to Rust as one input, so one turn answers all of them. A fresh
+# input waits until the chat was quiet this long; a continuous stream holds the
+# first input at most BURST_MAX_WAIT_S. The registry enables the wait.
+DEFAULT_BURST_QUIET_S = 3.0
+BURST_MAX_WAIT_S = 10.0
+BURST_MAX_INPUTS = 8
+BURST_TEXT_MAX_BYTES = 16 * 1024
+BURST_NOTE = ("[%d messages arrived together and are delivered as one turn. Read all of them, then answer "
+              "in a single reply that covers everything; do not reply to each message separately.]")
 # Frozen per-attempt state dropped when an input is sent again as a new turn.
 RESET_KEYS = ("intake", "cursor", "window", "window_request", "previous_window", "matched_runs", "accepted",
               "fast_accept_request", "deep_accept_request", "fast_payload", "deep_payload", "admitted_at",
@@ -140,8 +150,10 @@ def export_attachment(directory, gid, conversation, item, content):
 
 class Worker:
     def __init__(self, client, ledger, progress_updates=False, max_input_age_s=DEFAULT_MAX_INPUT_AGE_S,
-                 attachment_dir=None, attachment_gid=None):
+                 attachment_dir=None, attachment_gid=None, burst_quiet_s=0.0):
         self.client, self.ledger = client, ledger
+        # 0 sends a fresh input at once; queued inputs are still merged.
+        self.burst_quiet_s = burst_quiet_s
         self.attachment_dir, self.attachment_gid = attachment_dir, attachment_gid
         self.progress_updates = progress_updates
         self.max_input_age_s = max_input_age_s
@@ -410,11 +422,56 @@ class Worker:
         # Withdrawn or never queued: open the window through the ordinary path.
         return True
 
+    def gather_burst(self, data, now=None):
+        """Decide, once, which queued inputs ride along with `data`.
+
+        Returns False while the burst may still grow (wait for the next pass).
+        Otherwise freezes the batch: every absorbed input's attachments are
+        imported, the combined text is stored as `data`'s intake text, and the
+        absorbed rows leave the queue in one ledger transaction."""
+        if "intake" in data or "burst" in data or data.get("origin") or data.get("requeued") or data.get("continued"):
+            return True
+        rows = self.ledger.burst_candidates(data, BURST_MAX_INPUTS - 1)
+        now = time.time() if now is None else now
+        first = data.get("queued_at")
+        if self.burst_quiet_s and isinstance(first, (int, float)):
+            newest = max([first] + [r["queued_at"] for r in rows if isinstance(r.get("queued_at"), (int, float))])
+            if now - newest < self.burst_quiet_s and now - first < max(BURST_MAX_WAIT_S, self.burst_quiet_s):
+                return False
+        if data.get("attachments") and "attachment_receipt" not in data:
+            self.import_attachments(data)
+        texts, batch = [data.get("intake_text") or compose(data)], []
+        for row in rows:
+            try:
+                if row.get("attachments") and "attachment_receipt" not in row:
+                    self.import_attachments(row)
+            except Exception:
+                # This input runs on its own later; never fail the head for it.
+                break
+            text = row.get("intake_text") or compose(row)
+            if len("\n\n".join(texts + [text]).encode()) > BURST_TEXT_MAX_BYTES:
+                break
+            texts.append(text)
+            batch.append(row)
+        if batch:
+            data["intake_text"] = "\n\n".join([BURST_NOTE % len(texts)] + texts)
+        self.ledger.absorb(data, batch)
+        if batch:
+            # Identifiers only, never message text.
+            print("orkestr-v2-wa-adapter burst_merged conversation=%s input=%s absorbed=%d span_s=%.1f"
+                  % (getattr(self.client, "conversation", "?"), data["remote_id"], len(batch),
+                     max([0.0] + [r["queued_at"] - first for r in batch
+                                  if isinstance(r.get("queued_at"), (int, float)) and isinstance(first, (int, float))])),
+                  file=sys.stderr, flush=True)
+        return True
+
     def step(self, data):
         if data.get("blocked"):
             return
         if data.get("digest"):
             return self.finish_digest(data)
+        if not self.gather_burst(data):
+            return
         if data.get("attachments") and "attachment_receipt" not in data:
             self.import_attachments(data)
         if "intake" not in data:
