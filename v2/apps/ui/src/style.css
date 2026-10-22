@@ -402,3 +402,12 @@ details[open] > summary { margin-bottom: .4rem; }
 .rich-text th { background: var(--surface-2); font-weight: 650; }
 .rich-text .rt-right { text-align: right; }
 .rich-text .rt-center { text-align: center; }
+/* Drag and drop: files dropped on the conversation attach like Attach. */
+.drop-hint { display: none; }
+@media (hover: hover) and (pointer: fine) { .drop-hint { display: inline; font-size: .72rem; color: var(--faint); } }
+.conversation-pane.drop-active::after, .message-composer.drop-active::after {
+ content: "Drop files to attach"; position: absolute; inset: .5rem; z-index: 30; pointer-events: none;
+ display: flex; align-items: center; justify-content: center; font-weight: 650; font-size: 1rem; color: var(--accent-text);
+ border: 2px dashed var(--accent); border-radius: var(--radius); background: color-mix(in srgb, var(--accent-soft) 82%, transparent);
+}
+.message-composer.drop-active { position: relative; }

@@ -3,6 +3,7 @@ use orkestr_v2_contracts::MessageAttachmentReceipt;
 use orkestr_v2_ui::composer_attachments::{self, Attached};
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::{cell::Cell, rc::Rc};
 
 /// Enter sends, Shift+Enter inserts a newline, never while an IME composes
 /// (see `composer_keys.mjs`). Installs once on the textarea with `id`.
@@ -105,8 +106,58 @@ pub fn AttachTools(
     };
     let pick_upload = upload.clone();
     let paste_upload = upload.clone();
+    // Files dropped onto the conversation or images pasted into the composer
+    // upload like Attach. The listener lives as long as this component.
+    let tools_id = format!(
+        "attach-tools-{}",
+        target
+            .path()
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+            .collect::<String>()
+    );
+    let gate = use_hook(|| Rc::new(Cell::new(false)));
+    gate.set(disabled);
+    let mut drops = use_signal(|| None::<document::Eval>);
+    use_drop(move || {
+        if let Some(eval) = drops.peek().as_ref() {
+            let _ = eval.send(json!({"stop": true}));
+        }
+    });
+    {
+        let id = tools_id.clone();
+        let gate = gate.clone();
+        let upload = upload.clone();
+        use_future(move || {
+            let (id, gate, upload) = (id.clone(), gate.clone(), upload.clone());
+            async move {
+                let mut eval = document::eval(&helper(
+                    "return await watchDrops(document, await dioxus.recv(), dioxus);",
+                ));
+                if eval.send(json!(id)).is_err() {
+                    return;
+                }
+                drops.set(Some(eval));
+                while let Ok(picked) = eval.recv::<Picked>().await {
+                    if !mounted() {
+                        return;
+                    }
+                    match picked {
+                        Picked {
+                            error: Some(error), ..
+                        } => status.set(format!("Not attached: {error}")),
+                        Picked { files, .. } if files.is_empty() => {}
+                        _ if gate.get() || busy() => status.set(
+                            "Not attached: wait for the current send or upload to finish.".into(),
+                        ),
+                        Picked { files, .. } => upload(files),
+                    }
+                }
+            }
+        });
+    }
     rsx! {
-        div { class: "composer-tools",
+        div { class: "composer-tools", id: "{tools_id}",
             button { r#type: "button", class: "tool-button", disabled: disabled || busy(), "aria-label": "Attach a file or image",
                 onclick: move |_| {
                     let upload = pick_upload.clone();
@@ -135,6 +186,7 @@ pub fn AttachTools(
                         onclick: move |_| { let id = item.summary.attachment_id.clone(); attached.write().retain(|a| a.summary.attachment_id != id); }, "×" }
                 }
             }
+            span { class: "drop-hint", "aria-hidden": "true", "or drop files here" }
             if !status().is_empty() { span { class: "tool-status", role: "status", "{status}" } }
         }
         if pasting() {

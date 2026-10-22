@@ -3,7 +3,8 @@ use orkestr_v2_contracts::BetaDiscovery;
 use orkestr_v2_ui::{execution::Execution, session_scope::SessionScope, workers::Workers};
 
 /// Per-conversation work: configured controls, the Deep run with Stop/Steer and
-/// worker tasks, window/queue state and independent workers. Reading never starts work.
+/// worker tasks, window/queue state, independent workers and the linked V1
+/// thread's V1 workers. Reading never starts work.
 #[component]
 pub fn WorkView(
     id: String,
@@ -36,7 +37,8 @@ pub fn WorkView(
             }
             crate::execution_poll::ExecutionPoll { key: "work-{id}-{owner}", id: id.clone(), csrf: csrf.clone(), session_scope, execution, onexpired }
             crate::beta_window_view::WindowView { key: "work-window-{id}-{owner}", id: id.clone(), session_scope, onexpired }
-            crate::workers_view::WorkersView { key: "workers-{id}-{owner}", id, csrf, session_scope, workers, execution: worker_execution, onexpired }
+            crate::workers_view::WorkersView { key: "workers-{id}-{owner}", id: id.clone(), csrf, session_scope, workers, execution: worker_execution, onexpired }
+            crate::v1_workers_view::V1WorkersView { key: "v1-workers-{id}-{owner}", id, session_scope, onexpired }
         }
     }
 }

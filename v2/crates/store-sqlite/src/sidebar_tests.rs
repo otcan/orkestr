@@ -269,3 +269,37 @@ async fn message_times_list_inputs_and_replies_with_their_event_times() {
     );
     case.finish().await;
 }
+
+#[tokio::test]
+async fn v1_links_name_each_conversations_linked_thread() {
+    let case = Case::new().await;
+    let linked = case.conversation("synthetic-linked").await;
+    let plain = case.conversation("synthetic-plain").await;
+    case.store
+        .import_archived_history(
+            &case.token,
+            &case.owner,
+            &linked,
+            &archived(
+                "synthetic-group",
+                &[("user", "Synthetic start", "2026-01-01T00:00:00.000Z")],
+            ),
+        )
+        .await
+        .unwrap();
+    let links = case
+        .store
+        .conversation_v1_links(&case.token, &case.owner)
+        .await
+        .unwrap();
+    let link = |id: &ConversationId| links.iter().find(|(c, _)| c == id).unwrap().1.clone();
+    assert_eq!(link(&linked).as_deref(), Some("synthetic-group"));
+    assert_eq!(link(&plain), None);
+    assert_eq!(
+        case.store
+            .conversation_v1_links("wrong-credential", &case.owner)
+            .await,
+        Err(ResourceError::Unauthorized)
+    );
+    case.finish().await;
+}
