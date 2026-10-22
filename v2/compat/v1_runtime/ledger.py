@@ -43,6 +43,20 @@ LOCAL_CONNECTOR = "orkestr-v1"
 LOCAL_ROLES = ("v1_owner", "v1_agent", "v1_external")
 
 
+def burst_compatible(head, row):
+    """Whether `row` may join `head`'s turn: a plain chat input from the same
+    chat, account and author that has not been sent to Rust or batched yet.
+    Timer, digest and post rows, refused or re-sent inputs never join."""
+    def author(value):
+        value = value.get("author") or {}
+        return value.get("role"), value.get("id")
+    return (row.get("phase") == "queued" and "intake" not in row and "burst" not in row and
+            not row.get("origin") and not row.get("digest") and not row.get("blocked") and
+            not row.get("requeued") and not row.get("continued") and
+            all(row.get(k) == head.get(k) for k in ("chat_id", "account_id", "public_thread_id")) and
+            author(row) == author(head))
+
+
 def refusal_notice(reason):
     return ("Not accepted: %s. Orkestr V2 did not produce a reply to this message; "
             "send it again if it is still needed." % reason)
@@ -406,6 +420,37 @@ class Ledger:
         if changed != 1:
             raise ValueError("missing_input")
 
+    def burst_candidates(self, head, limit):
+        """Inputs queued directly behind `head` that may join its turn, oldest first.
+
+        The run stops at the first row that may not, so queue order is kept."""
+        with self.connect() as db:
+            rows = db.execute("SELECT data FROM inputs WHERE rowid > (SELECT rowid FROM inputs WHERE remote_id=?) AND "
+                              "json_extract(data,'$.phase') != 'completed' ORDER BY rowid LIMIT ?",
+                              (head["remote_id"], max(0, int(limit)))).fetchall()
+        batch = []
+        for (raw,) in rows:
+            row = json.loads(raw)
+            if not burst_compatible(head, row):
+                break
+            batch.append(row)
+        return batch
+
+    def absorb(self, head, rows):
+        """Fold `rows` into `head` in one transaction: `head` carries their text
+        to Rust and its one reply answers all of them. The absorbed rows leave
+        the run queue now and settle together with `head`."""
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            for row in rows:
+                current = db.execute("SELECT data FROM inputs WHERE remote_id=?", (row["remote_id"],)).fetchone()
+                if not current or not burst_compatible(head, json.loads(current[0])):
+                    raise Conflict("burst_changed")
+                row.update(phase="completed", absorbed_into=head["remote_id"])
+                self.save(row, db)
+            head["burst"] = [row["remote_id"] for row in rows]
+            self.save(head, db)
+
     def next_input(self):
         with self.connect() as db:
             row = db.execute("SELECT data FROM inputs WHERE json_extract(data,'$.phase') != 'completed' ORDER BY rowid LIMIT 1").fetchone()
@@ -580,6 +625,11 @@ class Ledger:
         self.save(data, db)
         ids = [a["upload_id"] for a in data.get("attachments", [])]
         db.executemany("UPDATE uploads SET bytes=NULL WHERE upload_id=?", [(i,) for i in ids])
+        # Inputs folded into this one were answered by its reply (or notice).
+        for remote_id in data.get("burst") or ():
+            row = db.execute("SELECT data FROM inputs WHERE remote_id=?", (remote_id,)).fetchone()
+            if row and not json.loads(row[0]).get("settled"):
+                self._settle(db, json.loads(row[0]), outcome)
 
     def health(self):
         with self.connect() as db:
