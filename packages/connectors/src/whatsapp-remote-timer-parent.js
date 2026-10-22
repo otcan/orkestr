@@ -19,6 +19,7 @@ export const remoteTimerParentSource = "orkestr-v2-timer";
 export const remoteTimerParentEvent = "whatsapp_remote_timer_parent_materialized";
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const maxTimerTextLength = 500;
+const postAuthors = new Set(["coordinator", "operator", "assistant_question"]);
 
 function clean(value) {
   return typeof value === "string" ? value.trim() : "";
@@ -64,6 +65,9 @@ export async function materializeRemoteTimerParent({ thread, remote, remoteMessa
     state: "completed",
     text: clean(remoteMessage.text),
     timerId: clean(remoteMessage.timerSourceId),
+    // Conversation posts (timerId "post") name their author so the relay
+    // labels them as coordinator or system messages, not timers.
+    ...(postAuthors.has(clean(remoteMessage.postAuthor)) ? { postAuthor: clean(remoteMessage.postAuthor) } : {}),
     createdAt: clean(remoteMessage.createdAt),
     remoteBackend: remote.backendId,
     remoteThreadId: remote.remoteThreadId,

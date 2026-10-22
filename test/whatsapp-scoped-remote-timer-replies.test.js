@@ -53,12 +53,28 @@ function fixture(t) {
   return {notifier, state, options, proofs, fence, advance: ms => clock += ms};
 }
 
+test('V2 conversation posts are labelled by author, never as timers', async t => {
+  for (const [parent, header] of [
+    [{text: 'Coordinator', timerId: 'post', postAuthor: 'coordinator'}, '🤖 Coordinator:'],
+    [{text: 'Operator', timerId: 'post', postAuthor: 'operator'}, '⚙️ System:'],
+    [{text: 'Question', timerId: 'post', postAuthor: 'assistant_question'}, '❓ Question:'],
+    [{text: 'Operator', timerId: 'post'}, '⚙️ System:'],
+    [{text: 'Coordinator', timerId: 'post'}, '🤖 Coordinator:'],
+  ]) {
+    const {notifier, state} = fixture(t);
+    Object.assign(state.messages[0], parent);
+    assert.equal((await notifier.tick()).sent, 1);
+    assert.equal(state.sent[0].text, `${header}\nGood morning.`);
+    assert.doesNotMatch(state.sent[0].text, /Timer/);
+  }
+});
+
 test('a V2 timer reply on a delegated relay thread is delivered once and reported delivered', async t => {
   const {notifier, state, options} = fixture(t);
   assert.equal((await notifier.tick()).sent, 1);
   assert.equal(state.sent.length, 1);
   assert.equal(state.sent[0].to, chatId);
-  assert.match(state.sent[0].text, /^\[Timer: Morning brief\]\nGood morning\./);
+  assert.match(state.sent[0].text, /^⏰ Morning brief\nGood morning\./);
   assert.equal(state.reports.length, 1);
   assert.match(state.reports[0].url, /\/api\/threads\/thread-1\/messages\/answer1\/scoped-relay-delivery$/);
   assert.equal(state.reports[0].body.requestIds.length, 1);
@@ -144,7 +160,7 @@ test('a V1 timer paused because its thread is delegated notifies the owner once'
   state.messages = [{id: 'notice1', role: 'assistant', state: 'completed', phase: 'signal', source: 'timer_delegation_fence', signalMode: 'notify_passively',
     ownerUserId: 'admin', chatId, createdAt: iso(9000), text: 'Timer "Daily check" did not run: this chat is now handled by Orkestr V2, so V1 paused it.'}];
   assert.equal((await notifier.tick()).sent, 1);
-  assert.match(state.sent[0].text, /^\[Timer: Daily check\]\nTimer "Daily check" did not run/);
+  assert.match(state.sent[0].text, /^⏰ Daily check\nTimer "Daily check" did not run/);
   await notifier.tick();
   assert.equal(state.sent.length, 1);
   assert.equal(state.reports.length, 0);
@@ -171,11 +187,11 @@ test('a long V2 timer reply is one message plus the full text as a Markdown docu
   const notifier = createScopedTimerNotifications({...options, env});
   t.after(() => notifier.close());
   assert.equal((await notifier.tick()).sent, 2);
-  assert.match(state.sent[0].text, /^\[Timer: Morning brief\]\nMorning paragraph\.[\s\S]*\n\n… \(full reply attached\)/);
+  assert.match(state.sent[0].text, /^⏰ Morning brief\nMorning paragraph\.[\s\S]*\n\n… \(full reply attached\)/);
   assert.ok(state.sent[0].text.length < 5000 + 4000);
   const {media} = state.sent[1].text;
   assert.equal(media.mimetype, 'text/markdown');
-  assert.equal(Buffer.from(media.data, 'base64').toString('utf8'), `[Timer: Morning brief]\n${state.messages[1].text.trim()}`);
+  assert.equal(Buffer.from(media.data, 'base64').toString('utf8'), `⏰ Morning brief\n${state.messages[1].text.trim()}`);
   assert.equal(state.reports.length, 1);
   assert.equal(state.reports[0].body.requestIds.length, 2);
   assert.deepEqual(state.reports[0].body.connectorMessageIds, ['sent-1', 'sent-2']);
