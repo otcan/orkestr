@@ -69,6 +69,7 @@ pub fn submit(
             n.get()
         })
     );
+    let key_target = target.clone();
     let item = match Item::new(local.clone(), target, text, quote, attachment_ids) {
         Ok(item) => item,
         Err(message) => {
@@ -93,7 +94,9 @@ pub fn submit(
     spawn(async move {
         let key = match legacy.filter(|_| files.is_empty()) {
             Some(key) => Ok(key),
-            None => crate::transport::message_key().await,
+            None => crate::transport::key()
+                .await
+                .map(|uuid| key_target.message_key(&uuid)),
         };
         let now = now_ms().await;
         let activated = key.is_ok_and(|key| outbox.write().activate(&local, key, now));
@@ -117,7 +120,12 @@ pub fn submit(
 
 fn retry(mut outbox: Signal<Outbox>, key: String) {
     spawn(async move {
-        let fresh = crate::transport::message_key().await.ok();
+        let target = outbox.peek().get(&key).map(|item| item.target.clone());
+        let fresh = crate::transport::key()
+            .await
+            .ok()
+            .zip(target)
+            .map(|(uuid, target)| target.message_key(&uuid));
         let now = now_ms().await;
         outbox.write().retry(&key, fresh, now);
         kick();

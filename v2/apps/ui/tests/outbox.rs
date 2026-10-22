@@ -237,3 +237,10 @@ fn a_full_outbox_drops_sent_items_first_and_never_unsent_ones() {
     assert!(outbox.enqueue(extra));
     assert!(outbox.get(&key(1)).is_none());
 }
+
+#[test]
+fn native_sends_carry_the_web_key_prefix_and_v1_keeps_a_bare_uuid() {
+    let uuid = "00000000-0000-4000-8000-000000000001";
+    assert_eq!(native("c").message_key(uuid), format!("web:{uuid}"));
+    assert_eq!(Target::V1("t".into()).message_key(uuid), uuid);
+}

@@ -46,6 +46,15 @@ impl Target {
             Self::V1(thread) => crate::v1_input::draft_key(thread),
         }
     }
+    /// The idempotency key for a new send: `web:<uuid>` for a native
+    /// conversation (so the WhatsApp adapter can mirror web input), the bare
+    /// UUID for V1, whose input contract requires exactly a UUID.
+    pub fn message_key(&self, uuid: &str) -> String {
+        match self {
+            Self::Native(_) => format!("{}{uuid}", orkestr_v2_contracts::WEB_MESSAGE_KEY_PREFIX),
+            Self::V1(_) => uuid.to_string(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
