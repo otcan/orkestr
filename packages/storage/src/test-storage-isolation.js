@@ -5,10 +5,17 @@ function clean(value = "") {
   return String(value || "").trim();
 }
 
+// Snapshots this module produced. They are frozen plain objects whose values
+// are already normalized, so snapshotting one again would copy it unchanged.
+const snapshots = new WeakSet();
+
 export function snapshotEnvironment(env = process.env) {
-  return Object.freeze(Object.fromEntries(
+  if (env && snapshots.has(env)) return env;
+  const snapshot = Object.freeze(Object.fromEntries(
     Object.entries(env || {}).map(([key, value]) => [key, value ?? ""]),
   ));
+  snapshots.add(snapshot);
+  return snapshot;
 }
 
 export function nodeTestStorageIsolationActive(env = process.env) {

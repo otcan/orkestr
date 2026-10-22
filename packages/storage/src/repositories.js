@@ -27,6 +27,11 @@ function safeThreadId(threadId) {
   return String(threadId || "").replace(/[^a-zA-Z0-9_.-]/g, "_") || "default";
 }
 
+// The per-thread JSON message file, which also names the thread's message mutation lock.
+export function threadMessageFilePath(threadId, env = process.env) {
+  return path.join(dataPaths(env).threadMessages, `${safeThreadId(threadId)}.json`);
+}
+
 export function createThreadRepository(env = process.env) {
   const repositoryEnv = snapshotEnvironment(env);
   return {
@@ -62,8 +67,7 @@ export function createThreadMessageRepository(env = process.env) {
       return threadMessageStoreEnabled(repositoryEnv);
     },
     async pathForThread(threadId) {
-      const paths = dataPaths(repositoryEnv);
-      return path.join(paths.threadMessages, `${safeThreadId(threadId)}.json`);
+      return threadMessageFilePath(threadId, repositoryEnv);
     },
     async list(threadId) {
       const stored = await listThreadMessageRows(threadId, repositoryEnv);

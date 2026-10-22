@@ -1,10 +1,10 @@
 import fs from "node:fs/promises";
 import { createHash } from "node:crypto";
-import { ensureDataDirs } from "./paths.js";
+import { dataPaths, ensureDataDirs } from "./paths.js";
 import { appendEvent, readJson, writeJson } from "./store.js";
 import { assertPublicRefInvariant, assertUniquePublicRefs } from "./public-references.js";
 import { withStorageFileLock } from "./storage-lock.js";
-import { assertTestStoragePath } from "./test-storage-isolation.js";
+import { assertTestStorageHome, assertTestStoragePath } from "./test-storage-isolation.js";
 
 const dbCache = new Map();
 const dbPaths = new WeakMap();
@@ -317,6 +317,14 @@ async function openThreadDatabase(env) {
   const sqlite = await loadSqlite(mode);
   if (!sqlite) return null;
 
+  // Once the handle is cached the data directories already exist; skip the
+  // mkdir calls on this per-lookup path but keep the test storage guards.
+  const cachedPaths = dataPaths(env);
+  if (dbCache.has(cachedPaths.threadsDb)) {
+    assertTestStorageHome(cachedPaths.home, env);
+    assertTestStoragePath(cachedPaths.threadsDb, env, "thread_registry_sqlite");
+    return dbCache.get(cachedPaths.threadsDb);
+  }
   const paths = await ensureDataDirs(env);
   assertTestStoragePath(paths.threadsDb, env, "thread_registry_sqlite");
   if (dbCache.has(paths.threadsDb)) return dbCache.get(paths.threadsDb);

@@ -84,8 +84,10 @@ export async function acknowledgeRemoteMirrorDeliveries({
   postAck,
   readState = async () => null,
   env = process.env,
+  // Optional current message list of the thread (read-only); read when absent.
+  messages: currentMessages = null,
 } = {}) {
-  const messages = await listThreadMessages(thread.id, env);
+  const messages = Array.isArray(currentMessages) ? currentMessages : await listThreadMessages(thread.id, env);
   const byId = new Map(messages.map((message) => [message.id, message]));
   let state;
   const counts = { acknowledged: 0, rejected: 0, failed: 0 };

@@ -85,6 +85,7 @@ import { completeRuntimeLiveness, recordRuntimeLiveness } from "./runtime-livene
 import { currentCodexGenerationMatches, generationScopedRuntimePatch, rolloutGenerationMode } from "./codex-generation.js";
 import { reconcileCodexFinalProjection } from "./codex-final-projection.js";
 import { createThreadMessageSnapshot } from "./thread-message-snapshot.js";
+import { createCodexHydrationIndex } from "./codex-hydration-index.js";
 import { injectRuntimeFault, runtimeNowMs, runtimeStopPhaseFor } from "./runtime-fault-injection.js";
 import { recordRuntimeControlMetric } from "./observability.js";
 import { recordCodexInputDelivery, recordCodexUserInputRequest } from "./codex-input-observability.js";
@@ -2652,15 +2653,17 @@ function duplicateHistoryMatch(existing = {}, input = {}) {
     compactHistoryText(existing.text) === compactHistoryText(input.text);
 }
 
-function matchingHydratedMessage(messages = [], input = {}, historyItems = []) {
+// `index` (optional) narrows each scan to the messages its predicate can match;
+// see codex-hydration-index.js. Results are identical with or without it.
+function matchingHydratedMessage(messages = [], input = {}, historyItems = [], index = null) {
   if (input.role === "user") {
-    const match = matchCanonicalInput(messages, input, historyItems);
+    const match = matchCanonicalInput(index ? index.identityScopeOf(input) : messages, input, historyItems);
     identityMetric(match.outcome);
     return match.message;
   }
   const eventId = clean(input.eventId);
   if (eventId) {
-    const existing = messages.find((message) => clean(message.eventId) === eventId);
+    const existing = (index ? index.eventId(eventId) : messages).find((message) => clean(message.eventId) === eventId);
     if (existing) return existing;
   }
   const role = clean(input.role);
@@ -2668,8 +2671,9 @@ function matchingHydratedMessage(messages = [], input = {}, historyItems = []) {
   const turnId = clean(input.codexTurnId);
   const itemId = clean(input.codexItemId);
   if (!role || !codexId || !turnId) return null;
+  const turnMessages = index ? index.codexTurn(codexId, turnId) : messages;
   if (itemId) {
-    const existing = messages.find((message) =>
+    const existing = turnMessages.find((message) =>
       clean(message.role) === role &&
       clean(message.codexThreadId) === codexId &&
       clean(message.codexTurnId) === turnId &&
@@ -2679,7 +2683,7 @@ function matchingHydratedMessage(messages = [], input = {}, historyItems = []) {
   }
   const text = compactHistoryText(input.text);
   if (!text) return null;
-  return messages.find((message) =>
+  return turnMessages.find((message) =>
     clean(message.role) === role &&
     (role === "user" || codexAppServerHistorySource(message.source)) &&
     clean(message.codexThreadId) === codexId &&
@@ -2699,14 +2703,16 @@ function hydrationPatchChanged(existing, patch) {
   return false;
 }
 
-async function upsertHydratedCodexMessage(thread, input, snapshot, env = process.env, historyItems = []) {
-  return snapshot.run((messages) =>
-    upsertHydratedCodexMessageLocked(thread, input, messages, env, historyItems));
+async function upsertHydratedCodexMessage(thread, input, snapshot, env = process.env, historyItems = [], index = null) {
+  return snapshot.run((messages) => {
+    index?.sync(snapshot.loads);
+    return upsertHydratedCodexMessageLocked(thread, input, messages, env, historyItems, index);
+  });
 }
 
-async function upsertHydratedCodexMessageLocked(thread, input, messages, env, historyItems) {
+async function upsertHydratedCodexMessageLocked(thread, input, messages, env, historyItems, index = null) {
   if (input.role === "user") {
-    const match = matchCanonicalInput(messages, input, historyItems);
+    const match = matchCanonicalInput(index ? index.identityScopeOf(input) : messages, input, historyItems);
     if (!match.message && (match.outcome === "conflict" || (match.outcome === "ambiguous" && match.hasLocalCandidates))) {
       identityMetric(match.outcome);
       // Ambiguity is not a new runtime input. Leave existing evidence intact
@@ -2715,10 +2721,11 @@ async function upsertHydratedCodexMessageLocked(thread, input, messages, env, hi
       return { message: null, created: false, updated: false, changed: false, reason: match.outcome };
     }
   }
-  const existing = matchingHydratedMessage(messages, input, historyItems);
+  const existing = matchingHydratedMessage(messages, input, historyItems, index);
   if (!existing) {
     const message = await appendThreadMessage(thread.id, input, env);
     messages.push(message);
+    index?.appended(message);
     return { message, created: true, updated: false, changed: true };
   }
   const { timestamp, createdAt, ...patchInput } = input;
@@ -2749,8 +2756,9 @@ async function upsertHydratedCodexMessageLocked(thread, input, messages, env, hi
     return { message: existing, created: false, updated: false, changed: false };
   }
   const message = await updateThreadMessage(thread.id, existing.id, patch, env);
-  const index = messages.findIndex((item) => item.id === existing.id);
-  if (index >= 0) messages[index] = message;
+  const position = messages.findIndex((item) => item.id === existing.id);
+  if (position >= 0) messages[position] = message;
+  index?.invalidate();
   return { message, created: false, updated: true, changed: true };
 }
 
@@ -2785,6 +2793,8 @@ export async function hydrateCodexAppServerThreadMessages(thread, codexThread, e
   const snapshot = createThreadMessageSnapshot(thread.id, env);
   await snapshot.run(() => {});
   const messages = snapshot.messages;
+  // Per-pass lookups; every item used to rescan the whole thread several times.
+  const index = createCodexHydrationIndex(messages);
   let count = 0;
   let created = 0;
   let updated = 0;
@@ -2810,7 +2820,7 @@ export async function hydrateCodexAppServerThreadMessages(thread, codexThread, e
           codexItemId: item.id || null,
           ...(timestamp ? { timestamp, createdAt: timestamp } : {}),
           ...codexAppServerMessageFields(codexThread.id, { turnId, itemId: item.id }),
-        }, snapshot, env, items).catch(() => null);
+        }, snapshot, env, items, index).catch(() => null);
         if (result) {
           if (result.created) created += 1;
           if (result.updated) updated += 1;
@@ -2819,9 +2829,11 @@ export async function hydrateCodexAppServerThreadMessages(thread, codexThread, e
       } else if (["agentMessage", "plan", "exitedReviewMode", "contextCompaction"].includes(type)) {
         const text = type === "contextCompaction" ? "Codex compacted the conversation context." : itemText(item);
         if (!text) continue;
-        const priorAssistant = messages.find(message => message.role === "assistant" && message.codexThreadId === codexThread.id && message.codexTurnId === turnId && message.codexItemId === item.id);
-        const turnParent = canonicalTurnParent(messages, clean(codexThread.id), turnId, priorAssistant?.parentMessageId);
-        const hasTurnInputs = messages.some(message => message.role === "user" && message.codexThreadId === codexThread.id && message.codexTurnId === turnId);
+        index.sync(snapshot.loads);
+        const turnMessages = index.codexTurn(codexThread.id, turnId);
+        const priorAssistant = turnMessages.find(message => message.role === "assistant" && message.codexThreadId === codexThread.id && message.codexTurnId === turnId && message.codexItemId === item.id);
+        const turnParent = canonicalTurnParent(index.identityTurn(clean(codexThread.id), turnId), clean(codexThread.id), turnId, priorAssistant?.parentMessageId);
+        const hasTurnInputs = turnMessages.some(message => message.role === "user" && message.codexThreadId === codexThread.id && message.codexTurnId === turnId);
         if (!turnParent) identityMetric("parent_unresolved");
         const whatsappParent = turnParent
           ? whatsappOrigin(turnParent) ? turnParent : replyDeliveryProjectionParent(turnParent)
@@ -2841,7 +2853,7 @@ export async function hydrateCodexAppServerThreadMessages(thread, codexThread, e
           ...codexAppServerMessageFields(codexThread.id, { turnId, itemId: item.id }),
           ...whatsappProjectionFields(whatsappParent, thread),
           ...(turnParent ? { parentMessageId: turnParent.id } : {}),
-        }, snapshot, env).catch(() => null);
+        }, snapshot, env, [], index).catch(() => null);
         if (result) {
           if (result.created) created += 1;
           if (result.updated) updated += 1;

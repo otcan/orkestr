@@ -1,5 +1,6 @@
 import path from "node:path";
 import { appendEvent } from "../../storage/src/store.js";
+import { threadMessageStoreFingerprint } from "../../storage/src/thread-message-registry.js";
 import { recordRouterTraceEvent } from "../../core/src/router-traces.js";
 import { appendThreadMessage, listThreadMessages, listThreads, updateThreadMessage } from "../../core/src/threads.js";
 import { remoteWhatsAppRuntimeBinding } from "../../core/src/thread-remote-runtime-binding.js";
@@ -366,6 +367,9 @@ export async function syncRemoteWhatsAppThreadMessages(env = process.env, fetchI
     await routeHeldLocalInputs(thread, env, { fetchImpl, forward: forwardLocalInputToRemote }).catch(() => null);
     try {
       const { backend, payload, messages: remoteMessages } = await fetchRemoteThreadMessages(remote, env, fetchImpl);
+      // Every store write bumps this revision, so an unchanged fingerprint after the
+      // import loops proves localMessages is still what a fresh read would return.
+      const listedFingerprint = await threadMessageStoreFingerprint(thread.id, env).catch(() => null);
       const localMessages = await listThreadMessages(thread.id, env);
       const localByRemoteId = new Map(
         localMessages
@@ -417,6 +421,11 @@ export async function syncRemoteWhatsAppThreadMessages(env = process.env, fetchI
             thread,
             remote,
             env,
+            // Skip a second full parse of long threads when nothing was written since the read.
+            messages: listedFingerprint &&
+              listedFingerprint === await threadMessageStoreFingerprint(thread.id, env).catch(() => null)
+              ? localMessages
+              : null,
             readState: options.readState,
             postAck: (body) => remoteJson(backend, `threads/${encodeURIComponent(remote.remoteThreadId)}/mirror-acks`, fetchImpl, {
               method: "POST",

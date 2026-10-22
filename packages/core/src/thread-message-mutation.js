@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { withStorageFileLock } from "../../storage/src/storage-lock.js";
-import { createThreadMessageRepository } from "../../storage/src/repositories.js";
+import { threadMessageFilePath } from "../../storage/src/repositories.js";
 
 const context = new AsyncLocalStorage();
 const queues = new Map();
@@ -17,6 +17,7 @@ export function enqueueMessageMutation(file, operation) {
 }
 
 export async function withThreadMessageMutation(threadId, env, operation) {
-  const file = await createThreadMessageRepository(env).pathForThread(threadId);
+  // Same path as the repository's pathForThread, without snapshotting the environment per write.
+  const file = threadMessageFilePath(threadId, env);
   return enqueueMessageMutation(file, operation);
 }

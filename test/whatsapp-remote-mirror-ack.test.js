@@ -11,6 +11,8 @@ import { shouldMirrorWhatsAppProgress, shouldMirrorWhatsAppReply } from "../pack
 import { createThread, listThreadMessages } from "../packages/core/src/threads.js";
 import { whatsappDebugFooter } from "../packages/connectors/src/whatsapp-formatting.js";
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
+import { syncRemoteWhatsAppThreadMessages } from "../packages/connectors/src/whatsapp-remote-runtime.js";
+import { DatabaseSync } from "node:sqlite";
 
 // A synthetic acknowledging runtime: replies stay listed until a terminal report.
 async function fixture(t, { binding = {}, backend = {}, mirrorAck = true } = {}) {
@@ -233,4 +235,45 @@ test("a mirrored reply keeps the remote provider and model for the debug footer"
   const footer = whatsappDebugFooter({ message: reply, thread: {}, messages: [], deliveryType: "final", env: {} });
   assert.equal(reply.remoteBackend, "example");
   assert.match(footer, /^dbg: example\/codex\/example-model-1 · rt:example · msg:\*final\*/);
+});
+
+// Counts full reads of one thread's message list (listThreadMessageRows).
+function countFullMessageReads(t) {
+  const prepare = DatabaseSync.prototype.prepare;
+  let reads = 0;
+  t.mock.method(DatabaseSync.prototype, "prepare", function (sql) {
+    const statement = prepare.call(this, sql);
+    if (!/select position, data from orkestr_thread_messages\s+where thread_id = \? order by position asc\s*$/i.test(sql.trim())) return statement;
+    return new Proxy(statement, {
+      get(target, key) {
+        if (key === "all") return (...args) => { reads += 1; return target.all(...args); };
+        const value = Reflect.get(target, key, target);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+  });
+  return () => reads;
+}
+
+test("a sync cycle reads the thread once when nothing changed, and freshly after it imported", async t => {
+  const f = await fixture(t);
+  const routed = await f.route();
+  f.exportRow({ id: "example-final", phase: "final_answer", text: "The accepted synthetic answer." });
+  await deliver(f);
+  await deliver(f);
+  assert.equal(f.runtime.acks.length, 1);
+  const reads = countFullMessageReads(t);
+  // An idle runtime lists nothing new, so the cycle writes nothing.
+  const user = f.runtime.user;
+  f.runtime.user = null;
+  const idle = await syncRemoteWhatsAppThreadMessages(f.env, f.fetchImpl);
+  assert.deepEqual(idle.results.map((row) => [row.imported, row.updated, row.acks?.acknowledged]), [[0, 0, 0]]);
+  assert.equal(reads(), 1, "the acknowledgement step reuses the unchanged list");
+  f.runtime.user = user;
+  f.exportRow({ id: "example-second", phase: "final_answer", text: "A second synthetic answer." });
+  const imported = await syncRemoteWhatsAppThreadMessages(f.env, f.fetchImpl);
+  assert.equal(imported.results[0].imported, 1);
+  assert.equal(reads(), 3, "an import in the cycle makes the acknowledgement step read again");
+  const second = (await listThreadMessages("example-thread", f.env)).find((row) => row.remoteMessageId === "example-second");
+  assert.equal(second.parentMessageId, routed.message.id);
 });
