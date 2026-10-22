@@ -1,13 +1,12 @@
 use dioxus::prelude::*;
-use orkestr_v2_contracts::{
-    SidebarAuthor, SidebarEntry, V1HistoryMessage, V1HistoryPage, V1ThreadInputReceipt,
-};
+use orkestr_v2_contracts::{SidebarAuthor, SidebarEntry, V1HistoryMessage, V1HistoryPage};
 use orkestr_v2_ui::{
+    chat_timeline::{split_reply_line, QuoteAuthor},
+    outbox::{Outbox, Target},
     session_scope::SessionScope,
-    v1_input::{self, Failed},
-    Draft,
+    v1_input, Draft,
 };
-use serde_json::{json, Value};
+use serde_json::Value;
 use std::collections::BTreeMap;
 
 /// Recent history of a linked V1 chat and an owner composer. The chat runs on
@@ -131,10 +130,20 @@ pub fn V1ThreadView(
                 ol { class: "chat-messages",
                     for message in messages.read().iter() {
                         li { key: "{message.cursor}", class: match message.author { SidebarAuthor::Owner => "user-message", _ => "assistant-message" },
-                            "data-phase": message.phase.clone().unwrap_or_default(),
+                            "data-phase": message.phase.clone().unwrap_or_default(), "data-replyable": "true",
                             article {
                                 strong { match message.author { SidebarAuthor::Owner => "You", SidebarAuthor::Participant => "Group member", SidebarAuthor::Assistant if message.coordinator => "Coordinator", SidebarAuthor::Assistant => "Assistant" } }
-                                crate::rich_text_view::RichText { text: message.text.clone() }
+                                if let Some((label, snippet, rest)) = split_reply_line(&message.text) {
+                                    crate::outbox_view::Quote { label, text: snippet }
+                                    crate::rich_text_view::RichText { text: rest }
+                                } else {
+                                    crate::rich_text_view::RichText { text: message.text.clone() }
+                                }
+                                if writable() {
+                                    crate::outbox_view::ReplyButton { draft_key: v1_input::draft_key(&thread), composer: "v1-composer", message_id: message.message_id.clone(),
+                                        author: match message.author { SidebarAuthor::Owner => QuoteAuthor::Owner, SidebarAuthor::Assistant => QuoteAuthor::Assistant, SidebarAuthor::Participant => QuoteAuthor::Other },
+                                        text: split_reply_line(&message.text).map(|(_, _, rest)| rest).unwrap_or_else(|| message.text.clone()) }
+                                }
                             }
                             if let Some(at) = message.created_at_ms {
                                 crate::message_time_view::MessageTime { at_ms: at, now_ms: now(), receipts: message.receipts.clone() }
@@ -142,6 +151,7 @@ pub fn V1ThreadView(
                         }
                     }
                 }
+                crate::outbox_view::OutboxBubbles { target: Target::V1(thread.clone()), shown: messages.read().iter().map(|m| m.message_id.clone()).collect::<Vec<_>>() }
                 if loaded() && working() { p { class: "v1-typing", role: "status", "typing…" } }
                 if loaded() && messages.read().is_empty() { p { class: "empty-conversation", "No messages yet." } }
                 if !loaded() && notice().is_empty() { p { class: "empty-conversation", "Loading V1 history…" } }
@@ -175,78 +185,37 @@ fn V1Composer(
     onexpired: EventHandler<()>,
     onsent: EventHandler<()>,
 ) -> Element {
+    let _ = onexpired;
     let owner = session_scope.read().generation();
     let key = v1_input::draft_key(&thread);
-    let mut sending = use_signal(|| false);
-    let mut status = use_signal(String::new);
-    let mut mounted = use_signal(|| true);
-    let mut attached = use_signal(Vec::<orkestr_v2_ui::composer_attachments::Attached>::new);
-    // Upload ids frozen with the pending input, so a retry resends them.
-    let mut frozen = use_signal(Vec::<String>::new);
-    use_drop(move || mounted.set(false));
-    let draft = drafts.read().get(&key).cloned().unwrap_or_default();
+    let outbox = use_context::<Signal<Outbox>>();
+    let status = use_signal(String::new);
+    let attached = use_signal(Vec::<orkestr_v2_ui::composer_attachments::Attached>::new);
+    let text = drafts
+        .read()
+        .get(&key)
+        .map(|d| d.text.clone())
+        .unwrap_or_default();
     let input_key = key.clone();
+    let preview_key = key.clone();
     let attach_thread = thread.clone();
-    let attach_csrf = csrf.clone();
     rsx! {
+        crate::outbox_view::ReplyPreview { draft_key: preview_key }
         form { class: "message-composer v1-composer", onsubmit: move |event| {
             event.prevent_default();
-            if sending() || !session_scope.read().is_current(owner) { return; }
-            if drafts.peek().get(&key).is_none_or(|d| d.pending.is_none()) {
-                let files = attached.peek().clone();
-                if !files.is_empty() {
-                    let mut all = drafts.write();
-                    let draft = all.entry(key.clone()).or_default();
-                    let text = orkestr_v2_ui::composer_attachments::v1_text(&draft.text, &files);
-                    if text != draft.text { draft.edit(text); }
-                }
-                frozen.set(orkestr_v2_ui::composer_attachments::ids(&files));
+            if !session_scope.read().is_current(owner) { return; }
+            if crate::outbox_view::submit(Target::V1(thread.clone()), drafts, attached, outbox, status) {
+                onsent.call(());
             }
-            sending.set(true);
-            status.set("Sending to V1…".into());
-            let (thread, key, csrf) = (thread.clone(), key.clone(), csrf.clone());
-            spawn(async move {
-                let current = || mounted() && session_scope.read().is_current(owner);
-                let result = async {
-                    let id = crate::transport::key().await?;
-                    let mut input = v1_input::prepare(drafts.write().entry(key.clone()).or_default(), id)
-                        .map_err(|m| crate::transport::Failure::from(m.to_string()))?;
-                    input.attachment_ids = frozen.peek().clone();
-                    crate::transport::request::<V1ThreadInputReceipt>(
-                        "POST", &format!("/api/v2/v1-threads/{thread}/messages"), json!(input), &csrf, "",
-                    ).await
-                }.await;
-                if !current() { return; }
-                match result {
-                    Ok(receipt) if receipt.is_valid() && receipt.thread_id == thread => {
-                        drafts.write().entry(key).or_default().accepted();
-                        attached.set(Vec::new());
-                        frozen.set(Vec::new());
-                        onsent.call(());
-                        status.set(if receipt.duplicate { "Already delivered to V1.".into() } else { "Sent to V1.".into() });
-                    }
-                    Ok(_) => status.set("V1 receipt could not be verified. Retry sends the same message once.".into()),
-                    Err(error) => match v1_input::failed(error.status) {
-                        Failed::Expired => { onexpired.call(()); return; }
-                        Failed::Refused => {
-                            drafts.write().entry(key).or_default().pending = None;
-                            frozen.set(Vec::new());
-                            status.set(error.message);
-                        }
-                        Failed::Retry => status.set(format!("{} Retry sends the same message once.", error.message)),
-                    },
-                }
-                sending.set(false);
-            });
         },
             label { r#for: "v1-composer", "Message to V1" }
-            textarea { id: "v1-composer", rows: 3, value: "{draft.text}", "aria-describedby": "v1-composer-help",
+            textarea { id: "v1-composer", rows: 3, value: "{text}", "aria-describedby": "v1-composer-help",
                 oninput: move |event| { if session_scope.read().is_current(owner) { drafts.write().entry(input_key.clone()).or_default().edit(event.value()); } }
             }
-            crate::composer_tools::AttachTools { target: crate::composer_tools::AttachTarget::V1(attach_thread.clone()), csrf: attach_csrf.clone(), attached, disabled: sending() || draft.pending.is_some() }
+            crate::composer_tools::AttachTools { target: crate::composer_tools::AttachTarget::V1(attach_thread.clone()), csrf: csrf.clone(), attached, disabled: false }
             crate::composer_tools::EnterSend { id: "v1-composer" }
-            p { id: "v1-composer-help", if draft.pending.is_some() { "Retry sends the original message once. Your newer edits stay in the composer." } else { "Enter sends · Shift+Enter adds a new line. Sent as owner input to this V1 thread; the reply appears here, not in WhatsApp." } }
-            button { r#type: "submit", disabled: sending(), if draft.pending.is_some() { "Retry send" } else { "Send" } }
+            p { id: "v1-composer-help", "Enter sends · Shift+Enter adds a new line. Sent as owner input to this V1 thread; the reply appears here, not in WhatsApp." }
+            button { r#type: "submit", "Send" }
             if !status().is_empty() { p { class: "composer-notice", role: "status", "{status}" } }
         }
     }

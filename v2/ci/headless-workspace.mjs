@@ -50,6 +50,35 @@ const noHorizontalScroll = async () => {
   assert.ok(scroll <= width, `Horizontal page scroll at ${width}px (${scroll}px content)`);
 };
 
+// Wait for the synthetic server state (not the page) to satisfy `check`.
+const until = async (check, what, timeout = 20000) => {
+  const end = Date.now() + timeout;
+  while (!check()) {
+    if (Date.now() > end) throw new Error(`Timed out waiting for ${what}`);
+    await new Promise(r => setTimeout(r, 50));
+  }
+};
+const composerValue = id => page.$eval(id, n => n.value);
+// Start a reply: hover + Reply on desktop, a long press on the phone.
+const replyTo = async (label, rowSelector, snippet) => {
+  const handle = await page.evaluateHandle((rowSelector, snippet) => [...document.querySelectorAll(rowSelector)]
+    .find(li => li.textContent.includes(snippet) && li.dataset.replyable === 'true'), rowSelector, snippet);
+  const row = handle.asElement();
+  assert.ok(row, `Replyable row with ${snippet}`);
+  await row.evaluate(li => li.scrollIntoView({ block: 'center' }));
+  if (label === 'phone') {
+    const text = await row.$('article .rich-text') ?? await row.$('article p');
+    const box = await text.boundingBox();
+    await page.touchscreen.touchStart(box.x + 5, box.y + box.height / 2);
+    await new Promise(r => setTimeout(r, 750));
+    await page.touchscreen.touchEnd();
+  } else {
+    await row.hover();
+    assert.ok(await row.$eval('.reply-action', b => getComputedStyle(b).opacity !== '0'), 'Reply shows on hover');
+    await row.$eval('.reply-action', b => b.click());
+  }
+};
+
 const transcript = () => page.$eval('.conversation-pane > .conversation-scroll', el =>
   ({ gap: el.scrollHeight - el.scrollTop - el.clientHeight, pinned: el.dataset.pinned, scrollable: el.scrollHeight > el.clientHeight + 100 }));
 
@@ -85,7 +114,7 @@ export const scenarios = [
     await screenshot(label, 'composer-attachments');
     await page.focus('#composer');
     await page.keyboard.press('Enter');
-    await waitText('Sent. Waiting for a reply.');
+    await until(() => state.windowPosts.some(w => w.input_request_key === Object.keys(state.intake).at(-1)), 'work request of the sent message');
     assert.equal(posts(), before + 1, 'Enter sends once');
     const sent = state.messages[A].at(-1).text;
     assert.match(sent, /^Synthetic first line\nsecond line\n\n\[Files attached in the Orkestr app/);
@@ -129,6 +158,63 @@ export const scenarios = [
     await waitText('Not attached: Attachments are limited to 16 MiB per message.');
     assert.equal(state.uploads.length, uploads + 2);
     while (await page.$('.message-composer .chip-remove')) await page.click('.message-composer .chip-remove');
+  }],
+  ['parallel-sends', async label => {
+    // Several messages in a row: the composer is never disabled, each message
+    // has its own key and state, order holds, and later ones join the running turn.
+    await page.waitForSelector('#composer');
+    const intakeBefore = state.intakePosts.length, windowBefore = state.windowPosts.length;
+    state.windowDelayMs = 600;
+    state.intakeLoseNext = true; // the first answer is lost; its retry must not duplicate
+    for (const n of [1, 2, 3]) {
+      await page.focus('#composer');
+      await page.keyboard.type(`Parallel ${n}`);
+      assert.equal(await page.$eval('#composer', el => el.disabled), false, 'composer stays enabled');
+      assert.equal(await page.$eval('.message-composer button[type=submit]', el => el.disabled), false, 'Send stays enabled');
+      await page.keyboard.press('Enter');
+      assert.equal(await composerValue('#composer'), '', 'text leaves the composer at once');
+    }
+    await page.waitForFunction(() => document.querySelectorAll('[data-delivery]').length >= 1);
+    await screenshot(label, 'outbox-sending');
+    await until(() => state.windowPosts.length >= windowBefore + 3, 'three work requests');
+    state.windowDelayMs = 0;
+    const mine = state.messages[A].filter(m => /^Parallel \d$/.test(m.text));
+    assert.deepEqual(mine.map(m => m.text), ['Parallel 1', 'Parallel 2', 'Parallel 3'], 'one message each, in order');
+    const keys = state.intakePosts.slice(intakeBefore).map(p => p.client_message_id);
+    assert.equal(new Set(keys).size, 3, 'three distinct idempotency keys');
+    assert.equal(keys.length, 4, 'the lost answer was retried once with the same key');
+    assert.equal(keys[0], keys[1]);
+    const windows = state.windowPosts.slice(windowBefore);
+    assert.deepEqual(windows.map(w => w.input_request_key), [...new Set(keys)], 'work starts in send order');
+    assert.ok(windows.slice(1).every(w => w.window_id !== null), 'later messages join the running turn');
+    // Without a live event stream (synthetic API) sent messages stay as "Sent" bubbles.
+    await page.waitForFunction(() => document.querySelectorAll('.outbox-message [data-delivery="sent"]').length >= 3 && !document.querySelector('[data-delivery="sending"], [data-delivery="failed"]'));
+  }],
+  ['replies', async label => {
+    // Reply to an earlier message: it is quoted in the composer, sent with
+    // reply-to context and the visible line the model reads, and shown quoted.
+    await replyTo(label, '.chat-messages > li', 'Native synthetic message');
+    await page.waitForFunction(() => document.querySelector('.composer-quote')?.textContent.includes('Native synthetic message'));
+    assert.match(await text('.composer-quote cite'), /Replying to you/);
+    await screenshot(label, 'reply-composer');
+    await page.click('.composer-quote-cancel');
+    await page.waitForFunction(() => !document.querySelector('.composer-quote'));
+    await replyTo(label, '.chat-messages > li', 'Native synthetic message');
+    await page.waitForSelector('.composer-quote');
+    await page.focus('#composer');
+    await page.keyboard.type('Synthetic reply');
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(() => !document.querySelector('.composer-quote'));
+    await until(() => state.messages[A].at(-1).text.endsWith('Synthetic reply'), 'reply admitted');
+    const sent = state.messages[A].at(-1);
+    assert.equal(sent.text, '[Replying to your message: "Native synthetic message"]\n\nSynthetic reply');
+    assert.deepEqual(sent.reply_to, { message_id: '00000000-0000-4000-8000-000000000101', author: 'owner', sent_at: null,
+      text: 'Native synthetic message', is_own_reply: false, unavailable: false });
+    await page.waitForFunction(() => [...document.querySelectorAll('.outbox-message')].some(li =>
+      li.querySelector('.reply-quote')?.textContent.includes('Native synthetic message') && li.querySelector('.rich-text')?.textContent.trim() === 'Synthetic reply'));
+    await screenshot(label, 'reply-sent');
+    // Replying scrolled the quoted message into view; return to the newest.
+    await page.$eval('.conversation-pane > .conversation-scroll', el => { el.scrollTop = el.scrollHeight; el.dispatchEvent(new Event('scroll')); });
   }],
   ['message-times', async label => {
     // Native message: short Berlin time for an older day, full date on hover/tap.
@@ -174,33 +260,43 @@ export const scenarios = [
     await page.waitForFunction(() => document.querySelectorAll('.archived-messages > li').length === 60);
     assert.match(await text('.archived-history > summary'), /60 messages/);
   }],
-  ['reload-recovery', async () => {
-    const draft = () => page.$eval('#composer', node => node.value);
+  ['reload-recovery', async label => {
+    const draft = () => composerValue('#composer');
     const typeDraft = async value => { await page.focus('#composer'); await page.keyboard.type(value); };
     // An unsent draft survives a full reload.
     await typeDraft('Draft survives reload');
     await page.reload({ waitUntil: 'domcontentloaded' });
     await page.waitForFunction(() => document.querySelector('#composer')?.value === 'Draft survives reload');
-    // Intake succeeds, admission is uncertain, and the composer stays editable while busy.
-    state.windowMode = 'uncertain'; state.windowDelayMs = 1500;
+    // Intake succeeds, work admission stays uncertain: the message shows as
+    // failed and retries by itself; a second message waits behind it.
+    state.windowMode = 'uncertain';
+    const windowBefore = state.windowPosts.length;
     await clickText('Send');
-    await page.waitForFunction(() => document.querySelector('.message-composer button[type=submit]')?.disabled);
-    await typeDraft(' + edit while busy');
-    assert.equal(await draft(), 'Draft survives reload + edit while busy');
-    await waitText('Send not confirmed');
+    assert.equal(await draft(), '', 'the composer is free at once');
+    await typeDraft('Second while the first retries');
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(() => document.querySelector('[data-delivery="failed"]'), { timeout: 20000 });
+    await screenshot(label, 'outbox-failed');
+    await until(() => state.windowPosts.length >= windowBefore + 2, 'automatic retries');
     const first = state.windowPosts.at(-1);
+    assert.ok(state.windowPosts.slice(windowBefore).every(w => w.request_key === first.request_key), 'retries resend the same work request');
     const intakes = Object.keys(state.intake).length;
-    // Reload recovers the saved receipt and the exact uncertain work request.
+    // A reload keeps both unsent messages (localStorage) and their order.
+    await typeDraft('Edit after sending');
     await page.reload({ waitUntil: 'domcontentloaded' });
-    await waitText('Message saved; work has not started yet');
-    assert.equal(await draft(), 'Draft survives reload + edit while busy');
-    state.windowMode = 'accept'; state.windowDelayMs = 0;
-    await clickText('Retry send');
-    await waitText('Sent. Waiting for a reply.');
-    const retry = state.windowPosts.at(-1);
-    assert.deepEqual(retry, first, 'Retry after reload must resend the exact original work request');
-    assert.equal(Object.keys(state.intake).length, intakes, 'Retry after reload must not create another message');
-    assert.equal(await draft(), 'Draft survives reload + edit while busy', 'Edits made after Send are kept');
+    await page.waitForSelector('[data-delivery]', { timeout: 20000 });
+    assert.equal(await draft(), 'Edit after sending', 'newer edits are kept');
+    state.windowMode = 'accept';
+    await page.evaluate(() => [...document.querySelectorAll('.delivery-retry')][0]?.click());
+    const second = () => state.messages[A].find(m => m.text === 'Second while the first retries');
+    await until(() => second() && state.windowPosts.some(w => w.input_message_id === second().message_id), 'second message admitted');
+    const posts = state.windowPosts.slice(windowBefore);
+    assert.ok(posts.filter(w => w.input_message_id === first.input_message_id).every(w => w.request_key === first.request_key), 'the first keeps its request across the reload');
+    assert.equal(posts.filter(w => w.input_message_id === second().message_id).length, 1, 'the second is admitted once');
+    assert.ok(posts.findIndex(w => w.input_message_id === second().message_id) > posts.findLastIndex(w => w.input_message_id === first.input_message_id), 'order holds');
+    assert.equal(Object.keys(state.intake).length, intakes + 1, 'no duplicate messages');
+    await page.waitForFunction(() => !document.querySelector('[data-delivery="failed"]') && !document.querySelector('[data-delivery="sending"]'), { timeout: 20000 });
+    await page.$eval('#composer', n => { n.value = ''; n.dispatchEvent(new Event('input', { bubbles: true })); });
   }],
   ['conversation-list', async label => {
     await openDrawer(label);
@@ -317,16 +413,15 @@ export const scenarios = [
     await page.waitForSelector('#v1-composer');
     await page.type('#v1-composer', 'Synthetic owner note to V1');
     await clickText('Send');
-    await waitText('Retry sends the same message once.');
+    assert.equal(await composerValue('#v1-composer'), '', 'Text leaves the composer at once');
+    // The unknown first outcome retries by itself with the same key.
+    await until(() => state.v1Posts.length >= 2, 'automatic V1 retry');
     await screenshot(label, 'v1-chat-retry');
-    await clickText('Retry send');
-    await waitText('Already delivered to V1.');
     assert.equal(state.v1Inputs.length, 1, 'Exactly one V1 input');
     assert.equal(state.v1Posts.length, 2);
     assert.equal(state.v1Posts[0].client_message_id, state.v1Posts[1].client_message_id, 'Retry reuses the key');
     assert.deepEqual({ ...state.v1Posts[0], client_message_id: 'k' },
       { thread: 'synthetic-group', client_message_id: 'k', text: 'Synthetic owner note to V1' });
-    assert.equal(await page.$eval('#v1-composer', n => n.value), '', 'Accepted text leaves the composer');
     // V1 works on it (typing…), then the coordinator's reply appears live.
     await page.waitForSelector('.v1-typing');
     await screenshot(label, 'v1-chat-typing');
@@ -345,6 +440,19 @@ export const scenarios = [
     assert.equal(v1post.text, 'Attached: orkestr-v2-synthetic-pixel.png');
     assert.equal(v1post.attachment_ids.length, 1);
     assert.equal(state.uploads.at(-1).target, 'v1:synthetic-group');
+    // Reply in the V1 chat: V1 gets the quote as the relay's reply line.
+    await replyTo(label, '.v1-thread .chat-messages > li', 'Synthetic coordinator answer');
+    await page.waitForFunction(() => document.querySelector('.v1-thread .composer-quote')?.textContent.includes('Replying to Orkestr'));
+    await page.focus('#v1-composer');
+    await page.keyboard.type('Synthetic V1 reply');
+    await page.keyboard.press('Enter');
+    await until(() => state.v1Inputs.some(x => x.text.endsWith('Synthetic V1 reply')), 'V1 reply admitted');
+    const v1quoted = state.v1Posts.at(-1);
+    assert.equal(v1quoted.text, '[Replying to Orkestr message: "Synthetic coordinator answer"]\n\nSynthetic V1 reply');
+    assert.equal(v1quoted.reply_to, undefined, 'V1 receives the line only');
+    await page.waitForFunction(() => [...document.querySelectorAll('.v1-thread .chat-messages > li')].some(li =>
+      li.querySelector('.reply-quote')?.textContent.includes('Synthetic coordinator answer') && li.querySelector('.rich-text')?.textContent.trim() === 'Synthetic V1 reply'), { timeout: 20000 });
+    await screenshot(label, 'v1-reply');
     await noHorizontalScroll();
     // Back to a native conversation.
     await openDrawer(label);

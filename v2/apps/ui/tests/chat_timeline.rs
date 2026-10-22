@@ -155,3 +155,76 @@ fn the_adapter_chat_rules_line_is_hidden_from_the_owner_bubble() {
         "hello\n\n[Chat rules v1: x]"
     );
 }
+
+mod web_replies {
+    use orkestr_v2_ui::chat_timeline::{
+        clip, quote, quote_label, reply_line, split_reply_line, with_reply_line,
+        without_reply_line, QuoteAuthor,
+    };
+
+    #[test]
+    fn a_web_reply_reads_like_a_whatsapp_reply_and_is_a_valid_quote() {
+        let own = quote(
+            "run-1",
+            QuoteAuthor::Assistant,
+            "Should I look into\n\nthe report next?",
+        );
+        assert!(own.valid() && own.is_own_reply);
+        assert_eq!(own.text, "Should I look into the report next?");
+        assert_eq!(
+            reply_line(&own),
+            "[Replying to Orkestr message: \"Should I look into the report next?\"]"
+        );
+        assert_eq!(quote_label(&own), "Replying to Orkestr");
+        let mine = quote("m-1", QuoteAuthor::Owner, "my note");
+        assert_eq!(reply_line(&mine), "[Replying to your message: \"my note\"]");
+        assert_eq!(quote_label(&mine), "Replying to you");
+        let other = quote("m-2", QuoteAuthor::Other, "member note");
+        assert_eq!(quote_label(&other), "Replying to an earlier message");
+        let text = with_reply_line("no need", &own);
+        assert_eq!(
+            text,
+            "[Replying to Orkestr message: \"Should I look into the report next?\"]\n\nno need"
+        );
+        assert_eq!(without_reply_line(&text), "no need");
+    }
+
+    #[test]
+    fn long_quotes_are_bounded_by_characters_not_bytes() {
+        let long = "ü".repeat(900);
+        let q = quote(&"x".repeat(400), QuoteAuthor::Owner, &long);
+        assert!(q.valid(), "within the stored quote bounds");
+        assert_eq!(q.text.chars().count(), 500);
+        assert!(q.text.ends_with('\u{2026}'));
+        assert_eq!(q.message_id.as_ref().unwrap().len(), 300);
+        assert_eq!(clip(&long, 80).chars().count(), 80);
+        assert_eq!(clip("  a \n b  ", 80), "a b");
+    }
+
+    #[test]
+    fn a_reply_line_in_v1_history_becomes_a_quote() {
+        let (label, snippet, rest) = split_reply_line(
+            "[Replying to Orkestr message from 21:50: \"x y\"]\n\nno need\n\nmore",
+        )
+        .unwrap();
+        assert_eq!(
+            (label.as_str(), snippet.as_str(), rest.as_str()),
+            ("Replying to Orkestr", "x y", "no need\n\nmore")
+        );
+        let (label, snippet, _) =
+            split_reply_line("[Replying to an unavailable message]\n\nok").unwrap();
+        assert_eq!(
+            (label.as_str(), snippet.as_str()),
+            ("Replying to an unavailable message", "")
+        );
+        assert_eq!(
+            split_reply_line("[Replying to your message: \"a\"]\n\nb")
+                .unwrap()
+                .0,
+            "Replying to you"
+        );
+        assert!(split_reply_line("plain text").is_none());
+        assert!(split_reply_line("[Replying to x: \"y\"] without blank line").is_none());
+        assert!(split_reply_line("[Note]\n\ntext").is_none());
+    }
+}

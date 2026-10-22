@@ -50,3 +50,8 @@ test('queue read uses its fixed route, GET only, and 202 queued receipts keep th
  const queued=await betaRequest({route:'window',method:'POST',conversation,csrf:'c',body:'{"request_key":"q"}'},async()=>new Response('{"state":"queued"}',{status:202}));
  assert.deepEqual(queued,{status:202,text:'{"state":"queued"}'});
 });
+test('a window refusal of a restricted thread surfaces only its fixed code',async()=>{
+ const conversation='00000000-0000-4000-8000-000000000001',post={route:'window',method:'POST',conversation,csrf:'c',body:'{"request_key":"q"}'};
+ assert.deepEqual(await betaRequest(post,async()=>new Response('{"code":"restricted_conversation","message":"<unsafe>"}',{status:409})),{status:409,text:'',code:'restricted_conversation'});
+ assert.deepEqual(await betaRequest(post,async()=>new Response('{"code":"window_conflict","message":"<unsafe>"}',{status:409})),{status:409,text:''});
+});

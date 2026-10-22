@@ -36,13 +36,14 @@ mod memory_transport;
 mod memory_view;
 mod message_time_view;
 mod new_whatsapp_chat;
+mod outbox_driver;
+mod outbox_view;
 mod page_memory_bridge;
 mod progress_view;
 mod projects_view;
 mod restricted_view;
 mod rich_text_view;
 mod scroll_pin;
-mod send_admission;
 mod steering_view;
 mod stop_button;
 mod timer_bridge;
@@ -87,11 +88,15 @@ fn App() -> Element {
     let mut v1_link = use_signal(|| None::<V1Link>);
     use_context_provider(move || v1_link);
     let mut drafts = use_signal(BTreeMap::<String, Draft>::new);
+    use_context_provider(move || drafts);
     let mut session_scope = use_signal(SessionScope::default);
     let mut saved_inputs = use_signal(orkestr_v2_ui::beta_inputs::SavedInputs::default);
     use_context_provider(move || saved_inputs);
     let mut window_intent = use_signal(orkestr_v2_ui::beta_window::WindowIntents::default);
     use_context_provider(move || window_intent);
+    // Unsent messages of this owner; sent in the background by `OutboxDriver`.
+    let mut outbox = use_signal(orkestr_v2_ui::outbox::Outbox::default);
+    use_context_provider(move || outbox);
     let mut task_drafts = use_signal(|| {
         orkestr_v2_ui::task_draft_lifetime::TaskDrafts::new(dioxus::dioxus_core::current_scope_id())
     });
@@ -161,6 +166,7 @@ fn App() -> Element {
                 execution.write().authorization_lost();
                 saved_inputs.write().clear_owner();
                 window_intent.write().clear_scope();
+                outbox.write().clear_owner();
                 host_resources.write().clear_owner();
                 held_inputs.write().clear_owner();
                 task_drafts.write().clear_owner();
@@ -188,6 +194,7 @@ fn App() -> Element {
         execution.write().authorization_lost();
         saved_inputs.write().clear_owner();
         window_intent.write().clear_scope();
+        outbox.write().clear_owner();
         host_resources.write().clear_owner();
         held_inputs.write().clear_owner();
         task_drafts.write().clear_owner();
@@ -224,6 +231,7 @@ fn App() -> Element {
                     execution.write().authorization_lost();
                     saved_inputs.write().clear_owner();
                     window_intent.write().clear_scope();
+        outbox.write().clear_owner();
                     host_resources.write().clear_owner();
                     held_inputs.write().clear_owner();
                     task_drafts.write().clear_owner();
@@ -250,6 +258,10 @@ fn App() -> Element {
             } else {
                 workspace::Workspace { key: "{session_scope.read().generation()}-{refresh}", current, csrf: csrf(), session_scope, execution, drafts, held_inputs, onexpired: expired }
             }
+            if !csrf().is_empty() { outbox_view::ReplyGestures {} }
+            if !csrf().is_empty() && !current().is_empty() && !global().is_empty() {
+                outbox_driver::OutboxDriver { key: "outbox-{session_scope.read().generation()}-{global}", global: global(), csrf: csrf(), session_scope, onexpired: expired }
+            }
             if !csrf().is_empty() {
                     attachment_keys_view::AttachmentKeyEnrollment { key: "keys-{session_scope.read().generation()}", csrf: csrf() }
                     button { class: "sign-out", disabled: logging_out(), onclick: move |_| {
@@ -265,6 +277,7 @@ fn App() -> Element {
                                     execution.write().authorization_lost();
                                     saved_inputs.write().clear_owner();
                                     window_intent.write().clear_scope();
+        outbox.write().clear_owner();
                                     host_resources.write().clear_owner();
                                     held_inputs.write().clear_owner();
                                     task_drafts.write().clear_owner();

@@ -44,7 +44,7 @@ export function createState() {
   const queued = { [C]: [{ conversation_id: C, request_key: 'synthetic-queued', input_message_id: uuid(301), input_event_id: uuid(302),
     input_request_key: 'synthetic-input', state: 'queued', position: 2, queued_at_ms: 2000, window_id: null, withdrawal: null }] };
   // windowMode: 'accept' admits; 'uncertain' answers 503 after the request is seen.
-  return { archived, messages, window, queued, requests: [], intake: {}, windowPosts: [], windowMode: 'accept', windowDelayMs: 0, marks: [],
+  return { archived, messages, window, queued, requests: [], intake: {}, intakePosts: [], intakeLoseNext: false, windowPosts: [], windowMode: 'accept', windowDelayMs: 0, marks: [],
     // v1Posts: every POST seen; v1Inputs: admitted once per key. The first post's answer is lost (504).
     v1Posts: [], v1Inputs: [], v1LoseFirst: true, v1Polls: 0, uploads: [],
     // "New WhatsApp chat": the first attempt stops at the adapter binding.
@@ -119,8 +119,11 @@ async function intake(state, req, res, id) {
     const sequence = state.messages[id].length + 1, n = 400 + Object.keys(state.intake).length * 2;
     receipt = { conversation: id, request: input.client_message_id, message_id: uuid(n), event_id: uuid(n + 1), sequence, status: 'accepted' };
     state.intake[input.client_message_id] = receipt;
-    state.messages[id].push({ message_id: receipt.message_id, sequence, actor_kind: 'owner', text: input.text });
+    state.messages[id].push({ message_id: receipt.message_id, sequence, actor_kind: 'owner', text: input.text, ...(input.reply_to ? { reply_to: input.reply_to } : {}) });
   }
+  state.intakePosts.push({ conversation: id, ...input });
+  // Admitted, but the answer is lost: the client must retry with the same key.
+  if (state.intakeLoseNext) { state.intakeLoseNext = false; return json(res, 504, { code: 'unavailable', message: 'Synthetic lost answer' }); }
   const { conversation, request, ...wire } = receipt;
   return json(res, 202, wire);
 }
