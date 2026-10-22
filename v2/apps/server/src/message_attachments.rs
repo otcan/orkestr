@@ -364,6 +364,11 @@ pub(crate) async fn native_upload(
                 E::Unauthorized => unauthorized(),
                 E::NotFound => Error(StatusCode::NOT_FOUND, "not_found", "Conversation not found"),
                 E::Invalid => invalid(),
+                E::EncryptionKeyRequired => Error(
+                    StatusCode::CONFLICT,
+                    "attachment_encryption_key_required",
+                    "Attachments are stored encrypted for your browser keys, and none is enrolled. Open the app in your browser to enroll it, then retry",
+                ),
                 E::Conflict | E::Removed => Error(
                     StatusCode::CONFLICT,
                     "attachment_conflict",

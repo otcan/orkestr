@@ -1,6 +1,7 @@
 const config=await dioxus.recv();
 let live=true,busy=false;const urls=new Set();
-const client=createAttachmentClient({...config,current:()=>live});
+// Sealed files are decrypted here with this browser's identity (attachments/age.mjs).
+const client=createAttachmentClient({...config,current:()=>live,open:async ciphertext=>ageDecodePayload(await ageOpenSealed(ciphertext))});
 const report=async value=>{if(live)await dioxus.send(value);};
 const save=(bytes,name,type)=>{
  if(!live)throw new Error('File selection changed');

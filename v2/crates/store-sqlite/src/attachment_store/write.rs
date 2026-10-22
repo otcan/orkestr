@@ -96,6 +96,18 @@ impl Store {
                 return Err(AttachmentError::Conflict);
             }
         }
+        // Recipient snapshot for this import, read inside the write transaction.
+        let recipients = super::keys::active_recipients(&mut tx, owner).await?;
+        let carries_bytes = request.mapping.iter().any(|m| {
+            request
+                .source
+                .contents
+                .iter()
+                .any(|c| c.reference_id == m.source_reference_id)
+        });
+        if recipients.is_empty() && carries_bytes && super::keys::required(&mut tx, owner).await? {
+            return Err(AttachmentError::EncryptionKeyRequired);
+        }
         sqlx::query("INSERT INTO attachment_manifests(id,owner_id,conversation_id,manifest_json) VALUES(?,?,?,?)")
             .bind(request.target_manifest.manifest_id.to_string()).bind(owner.to_string()).bind(conversation.to_string()).bind(serde_json::to_string(&request.target_manifest).map_err(db)?)
             .execute(&mut *tx).await.map_err(db)?;
@@ -112,9 +124,22 @@ impl Store {
                 .iter()
                 .find(|c| c.reference_id == m.source_reference_id)
                 .map(|c| c.bytes.as_slice());
+            // With an active recipient only ciphertext is stored (bytes stay NULL).
+            let plaintext = if recipients.is_empty() { bytes } else { None };
             sqlx::query("INSERT INTO attachment_objects(reference_id,manifest_id,bytes,removed) VALUES(?,?,?,?)")
-                .bind(m.target_reference_id.to_string()).bind(request.target_manifest.manifest_id.to_string()).bind(bytes).bind(i64::from(target.state==AttachmentState::Removed))
+                .bind(m.target_reference_id.to_string()).bind(request.target_manifest.manifest_id.to_string()).bind(plaintext).bind(i64::from(target.state==AttachmentState::Removed))
                 .execute(&mut *tx).await.map_err(db)?;
+            if let (false, Some(bytes)) = (recipients.is_empty(), bytes) {
+                super::keys::insert_sealed(
+                    &mut tx,
+                    &m.target_reference_id.to_string(),
+                    &recipients,
+                    &target.filename,
+                    &target.media_type,
+                    bytes,
+                )
+                .await?;
+            }
         }
         let receipt = AttachmentImportReceipt {
             import_id: Uuid::new_v4(),
@@ -170,6 +195,8 @@ impl Store {
         if r.state == AttachmentState::Inert {
             return Err(AttachmentError::Inert);
         }
+        sqlx::query("DELETE FROM attachment_sealed_objects WHERE reference_id=? AND reference_id IN (SELECT reference_id FROM attachment_objects WHERE manifest_id=?)")
+            .bind(reference.to_string()).bind(manifest.to_string()).execute(&mut *tx).await.map_err(db)?;
         sqlx::query("UPDATE attachment_objects SET bytes=NULL,removed=1 WHERE reference_id=? AND manifest_id=?")
             .bind(reference.to_string()).bind(manifest.to_string()).execute(&mut *tx).await.map_err(db)?;
         let receipt = AttachmentRemovalReceipt {

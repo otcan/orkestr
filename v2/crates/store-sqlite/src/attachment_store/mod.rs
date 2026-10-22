@@ -1,6 +1,17 @@
 //! Authenticated inert byte storage. Never creates native conversation input.
+//!
+//! Object bytes are stored as age ciphertext for the owner's active browser
+//! recipients (see `keys`). Plaintext is stored only while the owner has no
+//! active recipient and no fail-closed policy (fresh installs and tests).
+pub mod keys;
 mod list;
 mod read;
+pub use read::StoredObject;
+#[cfg(test)]
+mod encryption_tests;
+pub mod seal;
+#[cfg(test)]
+mod seal_fixture;
 #[cfg(test)]
 mod tests;
 mod write;
@@ -17,6 +28,8 @@ pub enum AttachmentError {
     Inert,
     Conflict,
     Unavailable,
+    /// Encryption is required and the owner has no active recipient.
+    EncryptionKeyRequired,
 }
 pub type Result<T> = std::result::Result<T, AttachmentError>;
 fn db<T>(_: T) -> AttachmentError {

@@ -33,7 +33,8 @@ pub fn ThreadFiles(
         let active = active.clone();
         async move {
             let source = format!(
-                "{}\n{}\n{}",
+                "{}\n{}\n{}\n{}",
+                include_str!("attachments/age.mjs").replace("export ", ""),
                 include_str!("attachments/integrity.mjs").replace("export ", ""),
                 include_str!("attachments/client.mjs")
                     .replace(
@@ -103,7 +104,7 @@ pub fn ThreadFiles(
     rsx! {
         section { "aria-label":"Thread files",
             h3 { "Thread files" }
-            p { "Save a private copy for this conversation. Files are not attached to messages or sent to the assistant." }
+            p { "Save a private copy for this conversation. Files are not attached to messages or sent to the assistant. Stored files are encrypted for your enrolled browsers and decrypted here." }
             p {role:"status", "{notice}"}
             button {disabled:busy(),onclick:move |_|send(json!({"kind":"list"})),"Refresh files"}
             if pending() {
