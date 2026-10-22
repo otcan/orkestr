@@ -5,6 +5,7 @@ import {createScopedPairingPermit} from './whatsapp-scoped-pairing.js';
 import {scopedRouteMembership} from './whatsapp-scoped-route-membership.js';
 import {createScopedDirectSender,validateScopedDirectChats} from './whatsapp-scoped-direct-chats.js';
 import {SCOPED_SEND_MAX_TEXT_LENGTH, validReplyDocument} from './whatsapp-scoped-group-formatting.js';
+import {validReplyFileShape} from './whatsapp-scoped-reply-files.js';
 import {validateOperatorNotifications, operatorNoticeBodyValid} from './whatsapp-scoped-operator-notices.js';
 import {createScopedGroupCreator, scopedGroupCreateRequest, validateScopedGroupCreate} from './whatsapp-scoped-group-create.js';
 const loaded=new Map();
@@ -87,6 +88,12 @@ export function createScopedNativeWorkerPolicy(config,{createTransport=createSco
    if(method==='POST' && url.pathname==='/send-document' && body.accountId===config.workerAccountId && groupAllowed(body.to)
       && validReplyDocument({filename:body.filename,mimetype:body.mimetype,text:body.text}) && typeof body.requestId==='string' && typeof body.parentId==='string'
       && Object.keys(body).every(k=>['accountId','to','filename','mimetype','text','requestId','parentId','notificationId'].includes(k)))return;
+   // A file attached to a group reply; the transport re-reads and re-hashes it
+   // from the group's own thread snapshot (`replyMediaRoot`).
+   if(method==='POST' && url.pathname==='/send-file' && Boolean(config.replyMediaRoot) && body.accountId===config.workerAccountId && groupAllowed(body.to)
+      && validReplyFileShape({path:body.path,filename:body.filename,mimetype:body.mimetype,sha256:body.sha256})
+      && typeof body.requestId==='string' && typeof body.parentId==='string'
+      && Object.keys(body).every(k=>['accountId','to','path','filename','mimetype','sha256','requestId','parentId'].includes(k)))return;
    fail();
   },
   observe(accountId,client,message){
@@ -118,6 +125,7 @@ export function createScopedNativeWorkerPolicy(config,{createTransport=createSco
    return groupCreator.create(client,request,config.workerAccountId);
   },
   sendDocument(accountId,client,chatId,document,request,createMedia){return get(accountId).sendDocument(client,chatId,document,'main',request,createMedia);},
+  sendFile(accountId,client,chatId,file,request,createMedia){return get(accountId).sendFile(client,chatId,file,'main',request,createMedia);},
   close(){transport?.close();directSender?.close();groupCreator?.close();},
  };
 }

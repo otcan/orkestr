@@ -9,11 +9,11 @@ import {wrapperRejection} from '../packages/connectors/src/whatsapp-scoped-wrapp
 // large for one argument (Linux allows 128 KiB), goes as JSON on stdin.
 const ARGV_TEXT_MAX_BYTES = 100_000;
 const execute = payload => new Promise((resolve, reject) => {
-  const viaArgv = payload.document === undefined && Buffer.byteLength(payload.text || '') <= ARGV_TEXT_MAX_BYTES;
+  const viaArgv = payload.document === undefined && payload.file === undefined && Buffer.byteLength(payload.text || '') <= ARGV_TEXT_MAX_BYTES;
   const args = viaArgv
     ? [config.wrapperPath, payload.kind === 'notify' ? 'group-notify' : 'group-reply', payload.to, payload.requestId, payload.parentId, payload.text]
     : [config.wrapperPath, 'group-send'];
-  const child = execFile('/usr/bin/node', args, {timeout: 45000, maxBuffer: 1024 * 1024}, (error, stdout, stderr) => {
+  const child = execFile('/usr/bin/node', args, {timeout: payload.file ? 130000 : 45000, maxBuffer: 1024 * 1024}, (error, stdout, stderr) => {
     if (error) reject(Object.assign(error, {stdout, stderr}));
     else resolve({stdout, stderr});
   });
@@ -28,8 +28,8 @@ const relay = createScopedGroupRelay({
   config,
   formatter,
   api: (url, options = {}) => requestJson(url, {timeoutMs: 15000, ...options}),
-  send: async ({chatId, requestId, parentId, text, document}) => {
-    const {stdout} = await execute({kind: 'reply', to: chatId, requestId, parentId, text, document});
+  send: async ({chatId, requestId, parentId, text, document, file}) => {
+    const {stdout} = await execute({kind: 'reply', to: chatId, requestId, parentId, text, document, file});
     return JSON.parse(stdout);
   },
   log,

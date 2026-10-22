@@ -75,6 +75,36 @@ export class ThreadMessagesController {
     }
   }
 
+  // The scoped group relay sends the files of an assistant reply from their
+  // plaintext outbound snapshots. Only snapshots V1 staged itself qualify:
+  // the path, display name, type and the digest the worker must re-verify.
+  @Get(":threadId/messages/:messageId/scoped-relay-files")
+  async scopedRelayFiles(
+    @Req() request: any,
+    @Param("threadId") threadId: string,
+    @Param("messageId") messageId: string,
+  ) {
+    const thread = await getThreadForPrincipal(threadId, requestPrincipal(request));
+    if (!thread) throw httpError("thread_not_found", 404);
+    const message: any = await getThreadMessage(thread.id, messageId);
+    if (!message) throw httpError("message_not_found", 404);
+    if (String(message.role || "").trim().toLowerCase() !== "assistant") return { ok: true, files: [] };
+    const files = (Array.isArray(message.attachments) ? message.attachments : []).flatMap((attachment: any) => {
+      const source = attachment?.encrypted === true ? attachment.deliverySource : attachment;
+      const sha256 = String(source?.outboundSnapshot?.sha256 || "");
+      const filePath = String(source?.path || "");
+      if (!attachment?.id || !/^[0-9a-f]{64}$/.test(sha256) || !path.isAbsolute(filePath)) return [];
+      return [{
+        id: String(attachment.id),
+        path: filePath,
+        filename: path.basename(String(source.filename || source.name || "")) || "attachment",
+        mimetype: String(source.mimetype || ""),
+        sha256,
+      }];
+    });
+    return { ok: true, files };
+  }
+
   @Patch(":threadId/messages/:messageId/whatsapp-inbound-revision")
   async reviseWhatsAppInbound(
     @Req() request: any,

@@ -6,6 +6,7 @@ import {createDeliveryRouteFence} from './whatsapp-delivery-route-fence.js';
 import {scopedRouteMembership} from './whatsapp-scoped-route-membership.js';
 import {DatabaseSync} from 'node:sqlite';
 import {isReplyDocument, scopedGroupReplyChunks} from './whatsapp-scoped-group-formatting.js';
+import {createRelayReplyFiles} from './whatsapp-scoped-relay-reply-files.js';
 import {createDynamicGroupRegistry, createDynamicGroupView, eligibleGroups, validateDynamicGroups} from './whatsapp-scoped-dynamic-groups.js';
 
 const key = value => crypto.createHash('sha256').update(value).digest('hex');
@@ -113,7 +114,8 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
     CREATE TABLE IF NOT EXISTS input_media_upload_attempts(id TEXT PRIMARY KEY,attempts INTEGER NOT NULL DEFAULT 0,state TEXT NOT NULL DEFAULT 'retrying');
     CREATE TABLE IF NOT EXISTS reply_receipts(id TEXT PRIMARY KEY,provider_ids TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS reply_sent_text(provider_id TEXT PRIMARY KEY,request_id TEXT NOT NULL,text TEXT NOT NULL,sent_at TEXT NOT NULL);
-    CREATE TABLE IF NOT EXISTS remote_delivery_reports(id TEXT PRIMARY KEY,reported_at TEXT NOT NULL);`);
+    CREATE TABLE IF NOT EXISTS remote_delivery_reports(id TEXT PRIMARY KEY,reported_at TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS reply_file_attempts(id TEXT PRIMARY KEY,attempts INTEGER NOT NULL DEFAULT 0);`);
   const routeFence = config.routeControl ? createDeliveryRouteFence({dbPath:config.routeControl.dbPath}) : null;
   const staticGroups = new Map(config.groups.map(g => [g.chatId, g]));
   // With dynamicGroups, groups registered in the transport journal join live.
@@ -121,6 +123,7 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
   const groups = dynamic ? createDynamicGroupView(inbox, {static: staticGroups, now}) : staticGroups;
   const fencedGroup = group => Boolean(group) && (fencedThreads?.has(group.threadId) || (Boolean(routeFence) && group.dynamic === true));
   const errors = new Map();
+  const replyFiles = createRelayReplyFiles({config, db, api, send, log, key});
 
   // Registrar: keep each journal's registered groups equal to V1's eligible
   // delegated owner group threads (created after `since`). Registration and
@@ -274,6 +277,7 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
         db.prepare('INSERT OR IGNORE INTO reply_sent_text VALUES(?,?,?,?)').run(providerId, requestId, sentText, new Date().toISOString());
       log({event: 'reply_delivered', threadId: group.threadId, messageId: answer.id});
     }
+    await replyFiles.deliver(input, group, answer, () => inputThread(input, group));
     // A mirrored remote-runtime reply: report the confirmed send so V1 can
     // acknowledge it to the runtime. A failed report retries on the next
     // poll without resending (every chunk above is already 'sent').
