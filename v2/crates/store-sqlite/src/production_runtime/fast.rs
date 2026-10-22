@@ -81,17 +81,6 @@ impl Store {
         if held != 0 {
             return Err(RuntimeStoreError::Fenced);
         }
-        // Timer occurrences execute in Deep only. A Fast presentation would run
-        // the same scheduled instructions (and their side effects) twice.
-        let timer: i64 =
-            sqlx::query_scalar("SELECT count(*) FROM dormant_timer_inputs WHERE event_id=?")
-                .bind(input.source_event_id.to_string())
-                .fetch_one(&mut *tx)
-                .await
-                .map_err(db)?;
-        if timer != 0 {
-            return Err(RuntimeStoreError::Fenced);
-        }
         c.validate(&mut tx).await?;
         self.execution_window_input_in(
             &mut tx,

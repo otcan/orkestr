@@ -248,6 +248,23 @@ impl Store {
             .await
             .map_err(db)?,
         };
+        // A timer occurrence executes in Deep only. Its Fast presentation keeps
+        // the window's Fast lifecycle but never receives the scheduled
+        // instructions, so they cannot run (or cause side effects) twice.
+        let text = if claim.provider.run.role == orkestr_v2_contracts::runtime::Role::Fast
+            && sqlx::query_scalar::<_, i64>(
+                "SELECT count(*) FROM dormant_timer_inputs WHERE message_id=?",
+            )
+            .bind(&message_id)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(db)?
+                != 0
+        {
+            FAST_TIMER_TEXT.to_owned()
+        } else {
+            text
+        };
         let parent_run = match row.get::<Option<String>, _>("worker_delegation_id") {
             Some(delegation) => {
                 let parent: String = sqlx::query_scalar(
@@ -303,3 +320,8 @@ impl Store {
         })
     }
 }
+
+/// Fast presentation of a timer occurrence: no scheduled instructions.
+pub const FAST_TIMER_TEXT: &str =
+    "[Scheduled timer occurrence. The Deep turn executes it; this Fast turn \
+must not run any command or tool and must not act on it. Reply with exactly NO_REPLY.]";

@@ -360,9 +360,7 @@ async fn mapping_is_immutable_and_enable_must_target_it() {
 }
 
 #[tokio::test]
-async fn timer_occurrence_is_deep_only_and_never_presented_to_fast() {
-    use orkestr_v2_application::IntakeStore;
-    use orkestr_v2_contracts::MessageInput;
+async fn fast_presentation_of_a_timer_never_carries_its_instructions() {
     let f = setup().await;
     let roles = f
         .handle
@@ -380,68 +378,70 @@ async fn timer_occurrence_is_deep_only_and_never_presented_to_fast() {
         })
         .await
         .unwrap();
-    let namespace = enabled(
-        &f,
-        TimerSchedule::Interval {
-            every_ms: 3_600_000,
-        },
-        "deep-only",
-    )
-    .await;
-    overdue(&f, namespace, 5_000).await;
-    let issuer = f.handle.authorize_timer_scheduler(namespace).await.unwrap();
-    let receipt = f
-        .handle
-        .admit_authorized_timer_turn(&issuer, namespace, false)
-        .await
-        .unwrap();
-    // The timer occurrence is never a Fast source.
-    assert!(f
-        .handle
-        .next_fast_source(&f.token, &f.conversation, 0)
-        .await
-        .unwrap()
-        .is_none());
-    // A forged Fast admission of the timer input is refused without effect.
-    let before = count(&f, "SELECT count(*) FROM production_runs").await;
-    assert!(matches!(
-        f.handle
-            .admit_fast(
-                &f.token,
-                &FastAdmissionInput {
-                    source_message_id: receipt.input.message_id.clone(),
-                    source_event_id: receipt.input.event_id.clone(),
-                    fast_binding_id: fast.session_id.clone(),
-                    expected_binding_generation: fast.generation,
-                    request_key: format!("fast-http:{}", receipt.input.event_id.0),
-                },
-            )
-            .await,
-        Err(RuntimeStoreError::Fenced)
-    ));
-    assert_eq!(
-        count(&f, "SELECT count(*) FROM production_runs").await,
-        before
-    );
-    // A later ordinary owner message is still presented to Fast.
+    use orkestr_v2_application::IntakeStore;
     f.store
         .admit(
             &f.owner,
             &f.conversation,
-            &MessageInput {
-                client_message_id: "owner-after-timer".into(),
-                text: "ordinary owner input".into(),
+            &orkestr_v2_contracts::MessageInput {
+                client_message_id: "timer:synthetic-claim".into(),
+                text: "Synthetic scheduled task with side effects".into(),
             },
         )
         .await
         .unwrap();
-    let source = f
+    let row = sqlx::query(
+        "SELECT id,message_id,sequence FROM events WHERE conversation_id=? AND kind='message_accepted'",
+    )
+    .bind(f.conversation.to_string())
+    .fetch_one(&f.store.pool)
+    .await
+    .unwrap();
+    let (event, message): (String, String) = (row.get("id"), row.get("message_id"));
+    // Mark it as a timer occurrence (provenance rows elided for this unit).
+    let mut connection = f.store.pool.acquire().await.unwrap();
+    sqlx::query("PRAGMA foreign_keys=OFF")
+        .execute(&mut *connection)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO dormant_timer_inputs(claim_id,owner_id,namespace,generation,input_digest,message_id,event_id,scope_sequence) VALUES(?,?,?,1,?,?,?,?)")
+        .bind(Uuid::new_v4().to_string()).bind(f.owner.to_string()).bind(Uuid::new_v4().to_string())
+        .bind("0".repeat(64)).bind(&message).bind(&event).bind(row.get::<i64, _>("sequence"))
+        .execute(&mut *connection).await.unwrap();
+    sqlx::query("PRAGMA foreign_keys=ON")
+        .execute(&mut *connection)
+        .await
+        .unwrap();
+    drop(connection);
+    let admitted = f
         .handle
-        .next_fast_source(&f.token, &f.conversation, 0)
+        .admit_fast(
+            &f.token,
+            &FastAdmissionInput {
+                source_message_id: orkestr_v2_contracts::MessageId(message.parse().unwrap()),
+                source_event_id: orkestr_v2_contracts::EventId(event.parse().unwrap()),
+                fast_binding_id: fast.session_id,
+                expected_binding_generation: fast.generation,
+                request_key: "fast-timer-text".into(),
+            },
+        )
+        .await
+        .unwrap();
+    let DispatchClaimResult::Reserved(reserved) = f
+        .handle
+        .claim_provider_dispatch(&admitted, "fast-timer-text")
         .await
         .unwrap()
-        .unwrap();
-    assert_ne!(source.event_id, receipt.input.event_id);
+    else {
+        panic!("fast dispatch not reserved")
+    };
+    let ExecutionConsumption::Dispatch(capability) =
+        f.handle.consume_execution(&reserved).await.unwrap()
+    else {
+        panic!("fast dispatch not consumed")
+    };
+    assert_eq!(capability.text(), super::dispatch::FAST_TIMER_TEXT);
+    assert!(!capability.text().contains("side effects"));
     f.store.close().await;
     std::fs::remove_dir_all(f.root).unwrap();
 }
