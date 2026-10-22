@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { enterSends, installEnterSend } from '../src/composer_keys.mjs';
-import { describe, pastedText, safeName, toBase64 } from '../src/attach_files.mjs';
+import { carriesFiles, describe, installDropZone, pastedFiles, pastedText, safeName, toBase64 } from '../src/attach_files.mjs';
 
 const key = (extra = {}) => ({ key: 'Enter', shiftKey: false, altKey: false, ctrlKey: false, metaKey: false, isComposing: false, keyCode: 13, ...extra });
 
@@ -42,4 +42,54 @@ test('files and pasted text become bounded base64 uploads', async () => {
   assert.equal(Buffer.from(pasted.content_base64, 'base64').toString(), 'ü'.repeat(5000));
   assert.equal(safeName('\u0000../x'), 'x');
   assert.equal(toBase64(new Uint8Array([255, 0, 1])), '/wAB');
+});
+
+test('only file drags and text-free pastes attach', () => {
+  assert.equal(carriesFiles({ types: ['Files'] }), true);
+  assert.equal(carriesFiles({ types: ['text/plain'] }), false);
+  assert.equal(carriesFiles(null), false);
+  const image = { name: 'shot.png' };
+  assert.deepEqual(pastedFiles({ types: ['Files'], files: [image] }), [image]);
+  assert.deepEqual(pastedFiles({ types: ['text/plain', 'Files'], files: [image] }), [], 'text paste stays text');
+  assert.deepEqual(pastedFiles({ types: ['text/plain'], files: [] }), []);
+});
+
+test('drop zone highlights, describes dropped files and uninstalls', async () => {
+  const listeners = target => { const map = {}; return Object.assign(target, {
+    addEventListener: (type, cb) => { map[type] = cb; }, removeEventListener: (type, cb) => { if (map[type] === cb) delete map[type]; }, map }); };
+  const classes = new Set();
+  const doc = listeners({});
+  const zone = listeners({ ownerDocument: doc, contains: node => node === 'inside',
+    classList: { toggle: (name, on) => (on ? classes.add(name) : classes.delete(name)) } });
+  const textarea = listeners({});
+  const sent = [];
+  const off = installDropZone(zone, textarea, batch => sent.push(batch));
+  const file = (name, text) => ({ name, type: 'text/plain', size: text.length, arrayBuffer: async () => new TextEncoder().encode(text).buffer });
+  let prevented = 0;
+  const event = (types, files = []) => ({ dataTransfer: { types, files, dropEffect: '' }, preventDefault: () => prevented++, target: 'inside' });
+  zone.map.dragenter(event(['Files'])); zone.map.dragenter(event(['Files']));
+  assert.ok(classes.has('drop-active'));
+  zone.map.dragleave(event(['Files']));
+  assert.ok(classes.has('drop-active'), 'leaving a child keeps the highlight');
+  await zone.map.drop(event(['Files'], [file('a.txt', 'a'), file('b.txt', 'bb')]));
+  assert.ok(!classes.has('drop-active'));
+  assert.deepEqual(sent[0].files.map(f => f.filename), ['a.txt', 'b.txt']);
+  await zone.map.drop(event(['Files'], Array(9).fill(file('x', 'x'))));
+  assert.match(sent[1].error, /at most 8/);
+  const before = prevented;
+  zone.map.dragover(event(['text/plain']));
+  assert.equal(prevented, before, 'text drags are left to the browser');
+  const outside = { ...event(['Files']), target: 'sidebar' };
+  doc.map.drop(outside);
+  assert.equal(prevented, before + 1, 'a file dropped elsewhere does not navigate away');
+  await textarea.map.paste({ clipboardData: { types: ['Files'], files: [file('shot.png', 'png')] }, preventDefault: () => prevented++ });
+  assert.equal(sent[2].files[0].filename, 'shot.png');
+  off();
+  assert.deepEqual([Object.keys(zone.map), Object.keys(textarea.map), Object.keys(doc.map)], [[], [], []]);
+});
+
+test('unreadable entries (folders) are refused with a clear error', async () => {
+  const folder = { name: 'photos', type: '', size: 4096, arrayBuffer: async () => { throw new Error('NotReadable'); } };
+  assert.match((await describe([folder])).error, /photos could not be read \(folders cannot be attached\)/);
+  assert.match((await describe([{ ...folder, size: 0 }])).error, /photos is empty or a folder/);
 });

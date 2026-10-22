@@ -92,6 +92,44 @@ export const scenarios = [
     assert.match(sent, /orkestr-v2-synthetic-pixel\.png \(image\/png, \d+ bytes.*local file \/synthetic\/attachments\//);
     assert.equal(await page.$$eval('.attachment-chip', n => n.length), 0, 'Sent attachments leave the composer');
   }],
+  ['drop-attachments', async label => {
+    // Files dragged onto the conversation highlight it and attach on drop;
+    // a pasted image attaches too. Both use the Attach upload.
+    await page.waitForSelector('.message-composer .composer-tools[id]');
+    const uploads = state.uploads.length;
+    await page.evaluate(() => {
+      const dt = new DataTransfer();
+      dt.items.add(new File(['first synthetic drop'], 'drop-one.txt', { type: 'text/plain' }));
+      dt.items.add(new File(['second synthetic drop'], 'drop-two.md', { type: 'text/markdown' }));
+      window.__drop = dt;
+      document.querySelector('.conversation-pane').dispatchEvent(new DragEvent('dragenter', { dataTransfer: dt, bubbles: true, cancelable: true }));
+      document.querySelector('.chat-transcript').dispatchEvent(new DragEvent('dragover', { dataTransfer: dt, bubbles: true, cancelable: true }));
+    });
+    assert.ok(await page.$('.conversation-pane.drop-active'), 'drop zone is highlighted');
+    await screenshot(label, 'drop-highlight');
+    await page.evaluate(() => document.querySelector('.chat-transcript').dispatchEvent(new DragEvent('drop', { dataTransfer: window.__drop, bubbles: true, cancelable: true })));
+    await page.waitForFunction(() => document.querySelectorAll('.message-composer .attachment-chip').length === 2);
+    assert.equal(await page.$('.conversation-pane.drop-active'), null);
+    assert.deepEqual(state.uploads.at(-1).files.map(f => [f.filename, f.media_type]), [['drop-one.txt', 'text/plain'], ['drop-two.md', 'text/markdown']]);
+    assert.equal(state.uploads.length, uploads + 1, 'one upload for one drop');
+    await page.evaluate(() => {
+      const dt = new DataTransfer();
+      dt.items.add(new File([new Uint8Array([137, 80, 78, 71])], 'image.png', { type: 'image/png' }));
+      document.querySelector('#composer').dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+    });
+    await page.waitForFunction(() => document.querySelectorAll('.message-composer .attachment-chip').length === 3);
+    assert.equal(state.uploads.at(-1).files[0].media_type, 'image/png');
+    await screenshot(label, 'drop-attached');
+    // Over the limit: a clear error and nothing uploaded.
+    await page.evaluate(() => {
+      const dt = new DataTransfer();
+      dt.items.add(new File([new Uint8Array(17 * 1024 * 1024)], 'too-big.bin'));
+      document.querySelector('.conversation-pane').dispatchEvent(new DragEvent('drop', { dataTransfer: dt, bubbles: true, cancelable: true }));
+    });
+    await waitText('Not attached: Attachments are limited to 16 MiB per message.');
+    assert.equal(state.uploads.length, uploads + 2);
+    while (await page.$('.message-composer .chip-remove')) await page.click('.message-composer .chip-remove');
+  }],
   ['message-times', async label => {
     // Native message: short Berlin time for an older day, full date on hover/tap.
     await page.waitForFunction(() => [...document.querySelectorAll('.chat-messages .user-message')].some(li => li.textContent.includes('Native synthetic message') && li.querySelector('.message-time')), { timeout: 20000 });
