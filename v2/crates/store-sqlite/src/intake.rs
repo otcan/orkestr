@@ -148,7 +148,7 @@ impl IntakeStore for Store {
             return Err(StoreError::Invalid);
         }
         let limit = limit.clamp(1, 100);
-        let mut rows = sqlx::query("SELECT m.id,m.sequence,m.actor_kind,m.text,r.reply_to FROM messages m LEFT JOIN message_reply_to r ON r.message_id=m.id WHERE m.conversation_id=? AND m.owner_id=? AND m.sequence>? AND m.sequence<=? ORDER BY m.sequence LIMIT ?")
+        let mut rows = sqlx::query("SELECT m.id,m.sequence,m.actor_kind,m.text,m.request_key,r.reply_to FROM messages m LEFT JOIN message_reply_to r ON r.message_id=m.id WHERE m.conversation_id=? AND m.owner_id=? AND m.sequence>? AND m.sequence<=? ORDER BY m.sequence LIMIT ?")
             .bind(conversation.to_string()).bind(owner.to_string()).bind(after).bind(last_sequence).bind(limit+1).fetch_all(&self.pool).await.map_err(db)?;
         let more = rows.len() > limit as usize;
         rows.truncate(limit as usize);
@@ -163,6 +163,7 @@ impl IntakeStore for Store {
                     reply_to: r
                         .get::<Option<String>, _>("reply_to")
                         .and_then(|json| serde_json::from_str(&json).ok()),
+                    origin: orkestr_v2_contracts::message_origin(r.get("request_key")),
                 })
             })
             .collect::<Result<Vec<_>>>()?;

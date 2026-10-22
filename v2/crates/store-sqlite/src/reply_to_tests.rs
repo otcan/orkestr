@@ -106,3 +106,27 @@ async fn an_oversized_or_empty_quote_is_refused_and_admits_nothing() {
         .is_empty());
     let _ = std::fs::remove_dir_all(root);
 }
+
+#[tokio::test]
+async fn only_web_composer_messages_carry_the_web_origin_in_the_snapshot() {
+    let (root, store, owner, conversation) = fixture().await;
+    for key in [
+        "web:00000000-0000-4000-8000-000000000001",
+        "wa-intake-1",
+        "timer:claim",
+    ] {
+        store
+            .admit(&owner, &conversation, &input(key))
+            .await
+            .unwrap();
+    }
+    let snapshot = store.snapshot(&owner, &conversation, 0, 10).await.unwrap();
+    let origins: Vec<_> = snapshot.messages.iter().map(|m| m.origin.clone()).collect();
+    assert_eq!(origins, vec![Some("web".to_string()), None, None]);
+    let json = serde_json::to_value(&snapshot.messages[1]).unwrap();
+    assert!(
+        json.get("origin").is_none(),
+        "absent origin stays off the wire"
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}

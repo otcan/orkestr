@@ -14,6 +14,7 @@ pub(crate) mod handles;
 pub(crate) mod initial;
 mod integers;
 pub(crate) mod manager_client;
+pub(crate) mod pressure;
 pub(crate) use controller::{Controller, ReconcileError, WindowOutcome};
 
 #[cfg(test)]

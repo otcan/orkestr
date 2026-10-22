@@ -202,10 +202,10 @@ pub fn queued_notice(queued: &orkestr_v2_contracts::ExecutionWindowQueued) -> St
     use orkestr_v2_contracts::QueuedWindowState;
     match (queued.state, queued.position) {
         (QueuedWindowState::Queued, Some(position)) => format!(
-            "Queued: other conversations are using every work slot. This message starts automatically (position {position})."
+            "Waiting: the host is busy or earlier work is still running. This message starts automatically (position {position})."
         ),
         (QueuedWindowState::Queued, None) => {
-            "Queued: this message starts automatically when a work slot frees.".into()
+            "Waiting: this message starts automatically when the host has room.".into()
         }
         (QueuedWindowState::Dispatched, _) => "Sent. Waiting for a reply.".into(),
         (QueuedWindowState::Withdrawn, _) => {
@@ -226,4 +226,123 @@ pub fn valid_status(value: &orkestr_v2_contracts::ExecutionWindowStatus, id: &st
             .checked_sub(value.opened_at_ms)
             .is_some_and(|work| (870_000..=14_370_000).contains(&work))
         && value.expires_at_ms.checked_sub(value.work_deadline_ms) == Some(30_000)
+}
+
+/// Plain-language work status for the window toolbar: what is happening, until
+/// when, and why new work waits. Presentation only; it never admits work.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WindowSummary {
+    pub headline: String,
+    pub host: Option<String>,
+}
+
+const CLEANUP_MS: i64 = 30_000;
+
+fn duration_label(ms: i64) -> String {
+    let minutes = (ms + 59_999) / 60_000;
+    if minutes >= 60 && minutes % 60 == 0 {
+        format!("{} h", minutes / 60)
+    } else if minutes >= 60 {
+        format!("{} h {} min", minutes / 60, minutes % 60)
+    } else {
+        format!("{minutes} min")
+    }
+}
+
+fn wait_reason(
+    reason: orkestr_v2_contracts::HostBusyReason,
+    host: &orkestr_v2_contracts::WindowHostAdmission,
+) -> String {
+    use orkestr_v2_contracts::HostBusyReason;
+    match reason {
+        HostBusyReason::CpuPressure => {
+            format!("host busy, CPU pressure {}%", host.cpu_pressure_pct)
+        }
+        HostBusyReason::MemoryPressure => {
+            format!("host busy, memory pressure {}%", host.memory_pressure_pct)
+        }
+        HostBusyReason::MemoryLow => format!(
+            "host low on memory, {:.1} GiB free",
+            host.memory_available_mib as f64 / 1024.0
+        ),
+    }
+}
+
+pub fn window_summary(
+    status: Option<&orkestr_v2_contracts::ExecutionWindowStatus>,
+    queue: Option<&orkestr_v2_contracts::ExecutionWindowQueue>,
+    now_ms: i64,
+) -> WindowSummary {
+    use orkestr_v2_contracts::{ExecutionWindowState, QueuedWindowState};
+    let host = queue.and_then(|q| q.host.as_ref()).filter(|h| h.is_valid());
+    let headline = match status {
+        Some(s) if s.state == ExecutionWindowState::Active => {
+            let mut text = format!(
+                "Working · until {}",
+                crate::message_time::short(s.work_deadline_ms, now_ms)
+            );
+            text.push_str(" · extends automatically while work continues");
+            if let Some(host) = host {
+                let latest = s.opened_at_ms + host.max_window_ms - CLEANUP_MS;
+                text.push_str(&format!(
+                    ", up to {} ({} at the latest)",
+                    duration_label(host.max_window_ms),
+                    crate::message_time::short(latest, now_ms)
+                ));
+            }
+            text
+        }
+        Some(s) if s.state == ExecutionWindowState::Opening => "Starting".into(),
+        Some(s) if s.state == ExecutionWindowState::Retiring => "Finishing up".into(),
+        Some(s) if s.state == ExecutionWindowState::ReconciliationRequired => {
+            "Needs operator attention".into()
+        }
+        _ => "Idle · send a message to start work".into(),
+    };
+    let waiting: Vec<_> = queue
+        .map(|q| {
+            q.entries
+                .iter()
+                .filter(|e| e.state == QueuedWindowState::Queued)
+                .collect()
+        })
+        .unwrap_or_default();
+    let host_line = match host {
+        Some(host) if !waiting.is_empty() => {
+            // A queued timer waits on the background threshold, owner input
+            // on the interactive one.
+            let background = waiting
+                .iter()
+                .all(|e| e.input_request_key.starts_with("timer:"));
+            let reason = if background {
+                host.background_wait
+            } else {
+                host.interactive_wait
+            };
+            Some(match reason {
+                Some(reason) => format!("Waiting: {}", wait_reason(reason, host)),
+                None => format!(
+                    "Waiting: {} message(s) here start when earlier work finishes",
+                    waiting.len()
+                ),
+            })
+        }
+        Some(host) => Some(match host.interactive_wait {
+            Some(reason) => format!("New work waits: {}", wait_reason(reason, host)),
+            None => format!(
+                "Host OK · CPU pressure {}% · {:.0} GiB free",
+                host.cpu_pressure_pct,
+                host.memory_available_mib as f64 / 1024.0
+            ),
+        }),
+        None if !waiting.is_empty() => Some(format!(
+            "Waiting: {} message(s) here start automatically",
+            waiting.len()
+        )),
+        None => None,
+    };
+    WindowSummary {
+        headline,
+        host: host_line,
+    }
 }

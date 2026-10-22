@@ -374,3 +374,80 @@ fn queued_intent_is_rebuilt_against_current_window_state() {
         Plan::Withdraw(QueuedWindowWithdrawal::ReconciliationRequired)
     ));
 }
+
+fn pressure_fixture(
+    root: &std::path::Path,
+    cpu_avg60: f64,
+) -> crate::window_runtime::pressure::Source {
+    let dir = root.join("proc");
+    std::fs::create_dir_all(dir.join("pressure")).unwrap();
+    std::fs::write(
+        dir.join("pressure/cpu"),
+        format!("some avg10={cpu_avg60:.2} avg60={cpu_avg60:.2} avg300=0.00 total=1\n"),
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("pressure/memory"),
+        "some avg10=0.00 avg60=0.00 avg300=0.00 total=0\n",
+    )
+    .unwrap();
+    std::fs::write(dir.join("meminfo"), "MemAvailable:   41627040 kB\n").unwrap();
+    crate::window_runtime::pressure::Source::at(&dir)
+}
+
+#[tokio::test]
+async fn host_pressure_queues_new_windows_and_owner_input_goes_before_timers() {
+    let f = fixture().await;
+    let (busy, owner_chat, timer_chat) = (
+        f.conversation("busy").await,
+        f.conversation("owner-chat").await,
+        f.conversation("timer-chat").await,
+    );
+    f.occupy(&busy, "busy").await;
+    let mut controller = f.controller(64);
+    controller.queue.swept.store(true, Ordering::Release);
+    // Saturated CPU: even owner input waits although the backstop has room.
+    controller.pressure = pressure_fixture(&f.root, 90.0);
+    let owner = f.request(&owner_chat, "owner-input").await;
+    let WindowOutcome::Queued(queued) = controller
+        .process(BROWSER, &f.owner, &owner_chat, &owner)
+        .await
+        .unwrap()
+    else {
+        panic!("a busy host must queue a new window")
+    };
+    assert_eq!(queued.state, QueuedWindowState::Queued);
+    let host = controller
+        .queue_status(BROWSER, &owner_chat)
+        .await
+        .unwrap()
+        .host
+        .unwrap();
+    assert_eq!(
+        (host.cpu_pressure_pct, host.interactive_wait),
+        (90, Some(orkestr_v2_contracts::HostBusyReason::CpuPressure))
+    );
+    controller.dispatch_once().await;
+    assert_eq!(f.windows(&owner_chat).await, 0);
+    // Moderate pressure: owner input opens, a timer occurrence keeps waiting.
+    controller.pressure = pressure_fixture(&f.root, 55.0);
+    let mut timer = f.request(&timer_chat, "timer:synthetic-claim").await;
+    timer.request_key = "timer-window:synthetic".into();
+    let WindowOutcome::Queued(_) = controller
+        .process(BROWSER, &f.owner, &timer_chat, &timer)
+        .await
+        .unwrap()
+    else {
+        panic!("background work waits on a moderately busy host")
+    };
+    controller.queue.wake();
+    controller.dispatch_once().await;
+    assert_eq!(f.windows(&owner_chat).await, 1);
+    assert_eq!(f.windows(&timer_chat).await, 0);
+    // Calm host: the timer opens too.
+    controller.pressure = pressure_fixture(&f.root, 5.0);
+    controller.queue.wake();
+    controller.dispatch_once().await;
+    assert_eq!(f.windows(&timer_chat).await, 1);
+    controller.queue.close().await;
+}

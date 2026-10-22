@@ -6,6 +6,7 @@
 //! queued intents can start without another request. Core rejects it once the
 //! session expires or logs out; queued rows then wait for the next sign-in.
 use super::controller::Controller;
+use super::pressure::Priority;
 use orkestr_v2_application::runtime::RuntimeStoreError;
 use orkestr_v2_contracts::{
     ExecutionWindowQueued, ExecutionWindowRequest, ExecutionWindowState, ExecutionWindowStatus,
@@ -309,8 +310,9 @@ impl Controller {
     /// earliest row of each conversation is eligible, preserving its order.
     /// Caller holds `opening`, so no other fresh window can race the count.
     pub(super) async fn drain_locked(&self, browser: &str) {
+        let mut opened = false;
         for _ in 0..MAX_ROUNDS {
-            match self.drain_round(browser).await {
+            match self.drain_round(browser, &mut opened).await {
                 Ok(true) => continue,
                 Ok(false) => return,
                 Err(RuntimeStoreError::Unauthorized) => {
@@ -325,7 +327,11 @@ impl Controller {
         }
     }
 
-    async fn drain_round(&self, browser: &str) -> Result<bool, RuntimeStoreError> {
+    async fn drain_round(
+        &self,
+        browser: &str,
+        opened: &mut bool,
+    ) -> Result<bool, RuntimeStoreError> {
         let rows = self
             .store
             .execution_window_queue_authenticated(browser, None)
@@ -339,6 +345,17 @@ impl Controller {
             .live_execution_windows_authenticated(browser)
             .await?;
         let queued: HashSet<_> = rows.iter().map(|row| row.conversation_id.clone()).collect();
+        // Owner input first, then timers; each keeps its FIFO order. A
+        // conversation's own rows keep their order: only its earliest row is
+        // eligible, whatever its priority.
+        let mut earliest = HashSet::new();
+        let mut rows: Vec<_> = rows
+            .into_iter()
+            .filter(|row| earliest.insert(row.conversation_id.clone()))
+            .collect();
+        rows.sort_by_key(|row| {
+            Priority::of(&row.request_key, &row.input_request_key) == Priority::Background
+        });
         let mut seen = HashSet::new();
         let mut progressed = false;
         for row in rows {
@@ -361,6 +378,14 @@ impl Controller {
                 Plan::Admit(request) => request,
             };
             let fresh = request.window_id.is_none();
+            let priority = Priority::of(&row.request_key, &row.input_request_key);
+            // Pressure lags a window's start-up: timers (which arrive in
+            // bursts) open at most one fresh window per pass while anything is
+            // live, so the next pass measures the host again.
+            let throttled = priority == Priority::Background && *opened && live > 0;
+            if fresh && (throttled || !self.host_room(live, priority)) {
+                continue;
+            }
             if fresh && live >= self.capacity {
                 if !self.reclaim_idle(browser, &queued).await {
                     continue;
@@ -398,6 +423,7 @@ impl Controller {
                 Ok(_) => {
                     self.queue.settled(&row.request_key);
                     live += u32::from(fresh);
+                    *opened |= fresh && priority == Priority::Background;
                     progressed = true;
                 }
                 Err(_) if self.queue.failed(&row.request_key) >= MAX_FAILURES => {

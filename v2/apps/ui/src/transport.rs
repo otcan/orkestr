@@ -93,6 +93,14 @@ pub async fn key() -> Result<String, Failure> {
         .map_err(|_| Failure::from("Secure request ID generation unavailable".to_string()))
 }
 
+/// Request key of a message typed in the composer: `web:<uuid>`, so the
+/// WhatsApp adapter can tell web input apart from its own intake.
+pub async fn message_key() -> Result<String, Failure> {
+    key()
+        .await
+        .map(|key| format!("{}{key}", orkestr_v2_contracts::WEB_MESSAGE_KEY_PREFIX))
+}
+
 pub async fn sleep(ms: u32) {
     let _ = document::eval(&format!(
         "await new Promise(resolve => setTimeout(resolve, {ms})); return null;"

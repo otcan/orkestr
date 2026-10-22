@@ -1,13 +1,19 @@
-//! Concurrent conversation windows under one owner-wide live capacity.
+//! Concurrent conversation windows admitted by live host pressure.
 //!
 //! Each conversation owns its own retained controller, private authority,
 //! local handles and manager scope; one conversation never shuts down, steers
-//! or stops another. Fresh windows open one at a time under `opening`, after
-//! Core's live-window count leaves room. Other fresh-window intents queue
-//! durably in Core and the dispatcher admits them in FIFO order.
+//! or stops another. Fresh windows open one at a time under `opening` while
+//! the host has room (Linux PSI and available memory, see `pressure`) and
+//! Core's live-window count stays below the configured safety backstop.
+//! Other fresh-window intents queue durably in Core; the dispatcher admits
+//! owner input before timers, each in FIFO order.
 use super::{
-    conversation::ConversationController, dispatch::QueueState, handles::Handles,
-    initial::InitialAuthority, manager_client::ManagerClient,
+    conversation::ConversationController,
+    dispatch::QueueState,
+    handles::Handles,
+    initial::InitialAuthority,
+    manager_client::ManagerClient,
+    pressure::{self, Priority},
 };
 use crate::{beta_config::BetaConfig, execution_registry::ExecutionScope};
 use orkestr_v2_application::runtime::RuntimeStoreError;
@@ -38,6 +44,7 @@ pub(crate) struct Controller {
     pub(super) store: Store,
     manager: ManagerClient,
     pub(super) capacity: u32,
+    pub(super) pressure: pressure::Source,
     conversations: Mutex<HashMap<ConversationId, Arc<ConversationController>>>,
     pub(super) opening: tokio::sync::Mutex<()>,
     pub(super) queue: QueueState,
@@ -65,6 +72,7 @@ impl Controller {
         conversations.insert(config.conversation_id.clone(), configured);
         Self {
             capacity: config.active_windows(),
+            pressure: pressure::Source::default(),
             config,
             home,
             store,
@@ -254,7 +262,13 @@ impl Controller {
         let entry = self.entry(conversation)?;
         // Earlier durable intents (any conversation) take free slots first.
         self.drain_locked(browser).await;
-        let mut room = input.window_id.is_some() || self.live(browser).await? < self.capacity;
+        let live = self.live(browser).await?;
+        let priority = Priority::of(&input.request_key, &input.input_request_key);
+        if input.window_id.is_none() && !self.host_room(live, priority) {
+            // The host is busy: wait durably; the dispatcher retries each second.
+            return self.enqueue(browser, conversation, input).await;
+        }
+        let mut room = input.window_id.is_some() || live < self.capacity;
         if !room && !self.waiting(browser, conversation).await? {
             // Retire another conversation's idle window rather than queue.
             let keep = std::iter::once(conversation.clone()).collect();
@@ -411,7 +425,18 @@ impl Controller {
             active,
             queued_total: u32::try_from(total).map_err(|_| RuntimeStoreError::Unavailable)?,
             entries,
+            host: Some(
+                self.pressure
+                    .read()
+                    .view(self.config.window_max_lifetime_ms_for(conversation)),
+            ),
         })
+    }
+
+    /// Whether the host has room for one more fresh window of this priority.
+    /// With nothing live, a window always opens: waiting would free nothing.
+    pub(super) fn host_room(&self, live: u32, priority: Priority) -> bool {
+        live == 0 || self.pressure.read().busy(priority).is_none()
     }
 
     /// Stop dispatching, then stop every conversation concurrently so all

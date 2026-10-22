@@ -26,7 +26,7 @@ pub struct RowStatus {
     pub tone: Tone,
 }
 
-/// Owner-wide slot usage reported by any conversation's queue read.
+/// Owner-wide work counts reported by any conversation's queue read.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Slots {
     pub capacity: u32,
@@ -35,13 +35,9 @@ pub struct Slots {
 }
 impl Slots {
     pub fn label(&self) -> String {
-        let mut text = format!(
-            "{} of {} work slots in use",
-            self.active.min(self.capacity),
-            self.capacity
-        );
+        let mut text = format!("{} working", self.active.min(self.capacity));
         if self.queued > 0 {
-            text.push_str(&format!(" · {} queued", self.queued));
+            text.push_str(&format!(" · {} waiting", self.queued));
         }
         text
     }

@@ -93,7 +93,7 @@ pub fn submit(
     spawn(async move {
         let key = match legacy.filter(|_| files.is_empty()) {
             Some(key) => Ok(key),
-            None => crate::transport::key().await,
+            None => crate::transport::message_key().await,
         };
         let now = now_ms().await;
         let activated = key.is_ok_and(|key| outbox.write().activate(&local, key, now));
@@ -117,7 +117,7 @@ pub fn submit(
 
 fn retry(mut outbox: Signal<Outbox>, key: String) {
     spawn(async move {
-        let fresh = crate::transport::key().await.ok();
+        let fresh = crate::transport::message_key().await.ok();
         let now = now_ms().await;
         outbox.write().retry(&key, fresh, now);
         kick();

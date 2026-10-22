@@ -101,7 +101,7 @@ fn slot_summary_never_overstates_use() {
             queued: 0
         }
         .label(),
-        "2 of 2 work slots in use"
+        "2 working"
     );
     assert_eq!(
         Slots {
@@ -110,6 +110,6 @@ fn slot_summary_never_overstates_use() {
             queued: 3
         }
         .label(),
-        "1 of 8 work slots in use · 3 queued"
+        "1 working · 3 waiting"
     );
 }

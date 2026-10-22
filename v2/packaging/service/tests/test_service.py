@@ -267,9 +267,9 @@ class ServiceTests(unittest.TestCase):
               'launcher_sha256':'a'*64,'workspace':'/srv/native-readonly',
               'namespace':'synthetic','supervisor_key':'synthetic.deep'}
         self.assertNotIn('max_active_windows',validate(json.dumps(base).encode()))
-        for value in (1,8,12):
+        for value in (1,8,12,64):
             self.assertEqual(validate(json.dumps(dict(base,max_active_windows=value)).encode())['max_active_windows'],value)
-        for value in (0,13,-1,True,'8',None,2.0):
+        for value in (0,65,-1,True,'8',None,2.0):
             with self.subTest(value=value),self.assertRaisesRegex(RuntimeError,'window capacity'):
                 validate(json.dumps(dict(base,max_active_windows=value)).encode())
 

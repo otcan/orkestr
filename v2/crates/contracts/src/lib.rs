@@ -197,6 +197,19 @@ pub struct Message {
     pub text: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reply_to: Option<ReplyTo>,
+    /// `"web"` for a message typed in the web UI composer (its request key
+    /// starts with [`WEB_MESSAGE_KEY_PREFIX`]); absent otherwise. Lets the
+    /// WhatsApp adapter mirror web input without echoing its own intake.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<String>,
+}
+/// Request-key prefix of messages sent from the web UI composer.
+pub const WEB_MESSAGE_KEY_PREFIX: &str = "web:";
+/// The snapshot origin of a message admitted under this request key.
+pub fn message_origin(request_key: &str) -> Option<String> {
+    request_key
+        .starts_with(WEB_MESSAGE_KEY_PREFIX)
+        .then(|| "web".to_string())
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConversationSnapshot {

@@ -144,7 +144,7 @@ def validate(raw):
         require(len(launchers)==5 and value['launcher'] not in launchers,'distinct beta role launchers required')
     if 'max_active_windows' in value:
         capacity = value['max_active_windows']
-        require(type(capacity) is int and 1 <= capacity <= 12, 'bounded beta window capacity required')
+        require(type(capacity) is int and 1 <= capacity <= 64, 'bounded beta window capacity required')
     window_lifetimes(value)
     conversation_workspaces(value)
     if 'host_full_access' in value:
