@@ -11,10 +11,7 @@ use orkestr_v2_store_sqlite::{
     },
     Store,
 };
-use std::{
-    path::PathBuf,
-    time::{Duration, SystemTime, UNIX_EPOCH},
-};
+use std::{path::PathBuf, time::Duration};
 
 struct Fixture {
     root: PathBuf,
@@ -30,10 +27,7 @@ impl Fixture {
             format!(
                 "fixture-composition-{}-{}",
                 std::process::id(),
-                SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap()
-                    .as_nanos()
+                uuid::Uuid::new_v4()
             ),
         );
         std::fs::create_dir_all(&root).unwrap();
