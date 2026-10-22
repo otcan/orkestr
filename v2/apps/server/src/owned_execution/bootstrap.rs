@@ -109,7 +109,7 @@ impl ConfiguredExecution {
                         control: Some(self.control.clone()),
                         tasks: self.config.worker.as_ref().map(|_| self.tasks.clone()),
                     },
-                    self.companion.as_ref().map(|companion| companion.scope()),
+                    self.companion_scope(),
                 )
                 .await?;
             if let Some(companion) = &self.companion {

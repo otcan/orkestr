@@ -319,6 +319,7 @@ pub(super) async fn commit(
         }
     }
     super::release_inputs(tx, &id, p.window_id, &plan.release, true).await?;
+    retry_timer_inputs(tx, p.window_id, &plan.release).await?;
     // Revoke the lost private window credential: a surviving holder is fenced.
     if let Some(hash) = &plan.credential_hash {
         sqlx::query("DELETE FROM auth_sessions WHERE token_hash=?")
@@ -355,6 +356,29 @@ pub(super) async fn commit(
         {
             return Err(RuntimeStoreError::Fenced);
         }
+    }
+    Ok(())
+}
+
+/// A timer occurrence has no sender who could send it again. When its window
+/// failed to open, nothing of it ran: Core proves no run of any role exists
+/// for its event, so its Deep turn has never executed and Fast (which only
+/// ever sees a fixed note for a timer, #246) never presented it either. Its
+/// dispatched queue intent goes back in line exactly once, and the dispatcher
+/// opens the next window for it. A second failed opening of the same input
+/// leaves it released: the adapter then refuses it with an operator alert.
+async fn retry_timer_inputs(
+    tx: &mut SqliteConnection,
+    window: Uuid,
+    release: &[String],
+) -> Result<()> {
+    for event in release {
+        sqlx::query("UPDATE execution_window_queue SET state='queued',window_id=NULL WHERE event_id=?1 AND window_id=?2 AND state='dispatched' AND request_key='timer-window:'||?1 AND EXISTS(SELECT 1 FROM dormant_timer_inputs t WHERE t.event_id=?1) AND NOT EXISTS(SELECT 1 FROM production_runs r WHERE r.event_id=?1) AND NOT EXISTS(SELECT 1 FROM ordinary_input_holds h WHERE h.event_id=?1) AND (SELECT count(*) FROM execution_window_open_failure_inputs f WHERE f.event_id=?1)=1")
+            .bind(event)
+            .bind(window.to_string())
+            .execute(&mut *tx)
+            .await
+            .map_err(db)?;
     }
     Ok(())
 }

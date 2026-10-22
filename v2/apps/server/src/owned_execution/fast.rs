@@ -7,6 +7,9 @@ use orkestr_v2_contracts::RunId;
 use orkestr_v2_store_sqlite::{FastAdmissionInput, FastSource};
 use std::time::Instant;
 
+/// Deep's setup wait gave up on this companion; it never presents here.
+pub(super) const ABANDONED: &str = "Fast companion abandoned: Deep continued without it";
+
 pub(super) enum FastExit {
     Shutdown,
     Stopped { run: RunId, proof: ReapedBroker },
@@ -70,13 +73,20 @@ impl ConfiguredExecution {
                 return Ok(());
             };
             if let Some(companion) = &self.companion {
-                companion.ready();
+                if !companion.claim_ready() {
+                    return Err(ABANDONED);
+                }
             }
             self.wait_window_active(&mut shutdown, &mut heartbeat)
                 .await?;
             let Some(input) = self.fast_input(&mut shutdown, &mut heartbeat).await? else {
                 return Ok(());
             };
+            if let Some(companion) = &self.companion {
+                if !companion.claim_start() {
+                    return Err(ABANDONED);
+                }
+            }
             let live = started(
                 ready
                     .dispatch(&self.token, &input)

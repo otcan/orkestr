@@ -224,5 +224,42 @@ class GenuineStallTests(Base):
         self.assertIn("input_failed", log)
 
 
+class RetriedOpenTests(Base):
+    """Core queues an occurrence again once when its window failed to open."""
+
+    def wait_for_retry(self):
+        self.peer.timer_rows = [occurrence(2)]
+        self.drive()
+        self.expire_grace(2)
+        # The failed window is closed, but Core put the occurrence back in line.
+        self.peer.timer_rows = [occurrence(2, window="queued")]
+        log = self.drive()
+        data = self.row(2)
+        self.assertNotIn("refused", data)
+        self.assertEqual(data["phase"], "waiting_for_timer_retry")
+        self.assertNotIn("ALERT", log)
+        self.peer.timer_rows = [occurrence(2)]
+
+    def test_requeued_occurrence_waits_and_delivers_its_retry_answer(self):
+        self.wait_for_retry()
+        self.peer.outcome = lambda body: {"outcome": "delivered", "deliver": True, "summary": "x", "replay": False}
+        self.peer.ran(2, text="Two new job signals")
+        self.drive()
+        self.assertEqual(self.row(2)["phase"], "completed")
+        (reply,) = self.replies()
+        self.assertEqual(reply["text"], "Two new job signals")
+
+    def test_failed_retry_is_refused_with_one_operator_alert(self):
+        self.wait_for_retry()
+        self.drive()
+        self.assertNotIn("refused", self.row(2), "the retry gets its own grace period")
+        self.expire_grace(2)
+        log = self.drive()
+        data = self.row(2)
+        self.assertEqual(data["refused"]["reason"], "timer_window_ended_without_run")
+        self.assertIn("ALERT orkestr-v2-wa-adapter input_failed", log)
+        self.assertEqual(log.count("ALERT"), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

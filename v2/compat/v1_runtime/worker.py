@@ -852,7 +852,21 @@ class Worker:
         current = self.call("GET", "/window", allowed=(200, 204))
         if isinstance(current, dict) and current.get("state") != "closed":
             return True
+        if self.timer_requeued(data):
+            # Core queued the occurrence again after its window failed to open
+            # (nothing of it ran): wait for the retry window's Deep run.
+            data["deep_missing_since"] = now
+            if data.get("phase") != "waiting_for_timer_retry":
+                data["phase"] = "waiting_for_timer_retry"
+            self.ledger.save(data)
+            return True
         raise Refused("timer_window_ended_without_run")
+
+    def timer_requeued(self, data):
+        """Whether Core put this timer occurrence back in its window queue."""
+        sequence = data["intake"]["sequence"]
+        rows = [row for row in self.timer_inputs(sequence - 1, 1) if row["message_id"] == data["intake"]["message_id"]]
+        return len(rows) == 1 and rows[0]["event_id"] == data["intake"]["event_id"] and rows[0].get("window") == "queued"
 
     def role_status(self, data, role, ids):
         if data.get("origin") == "timer":
