@@ -15,14 +15,15 @@ function fixture(t,{send,delegate={},messages={}}={}) {
       dailyNewRecipientCap:2,dailyFollowUpCap:1,minGapSeconds:60,...delegate}]};
   const p=createScopedGroupTransport({config,token:'transport-token',base:{},dbPath:':memory:',now:()=>now,sendLookupDelayMs:1});
   t.after(()=>p.close());
-  const calls={sent:[],seen:0};
+  const calls={sent:[],seen:0,lookups:[]};
   const chats={};
   const chatFor=id=>chats[id] ||= {id:{_serialized:id},name:`chat ${id}`,isGroup:false,timestamp:now/1000,unreadCount:1,
-    sendSeen:async()=>{calls.seen++;},fetchMessages:async({limit})=>(messages[id]||[]).slice(-limit)};
+    lastMessage:messages[id]?.at(-1),sendSeen:async()=>{calls.seen++;},fetchMessages:async({limit})=>(messages[id]||[]).slice(-limit)};
   let counter=0;
   const client={info:{wid:{_serialized:own}},
     getChats:async()=>[chatFor(alice),chatFor(bob),chatFor(stranger),chatFor(group)],
     getChatById:async id=>chatFor(id),
+    getMessageById:async id=>{calls.lookups.push(id);return Object.values(messages).flat().find(m=>m.id._serialized===id);},
     sendMessage:send || (async(to,text,options)=>{calls.sent.push({to,text,options});return {id:{_serialized:`out-${++counter}`}};})};
   return {p,client,calls,advance:ms=>{now+=ms;}};
 }
@@ -68,11 +69,101 @@ test('delegate configuration is validated and needs dedicated credentials', t =>
   const make=delegates=>createScopedGroupTransport({config:{...base,delegates},token:'transport-token',base:{},dbPath:':memory:'});
   make([good]).close();
   for(const bad of [{...good,tokenSha256:'abc'},{...good,name:'Bad Name'},{...good,chatIds:[group]},{...good,chatIds:[alice,alice]},
-      {...good,chatIds:[]},{...good,dailyNewRecipientCap:0},{...good,extra:1},{...good,tokenSha256:sha('transport-token')},{...good,minGapSeconds:-1}])
+      {...good,chatIds:[]},{...good,dailyNewRecipientCap:0},{...good,extra:1},{...good,tokenSha256:sha('transport-token')},{...good,minGapSeconds:-1},{...good,allowReactions:'true'}])
     assert.throws(()=>make([bad]),/configuration_invalid/);
   assert.throws(()=>make([good,{...good,name:'other'}]),/configuration_invalid/);
   assert.throws(()=>createScopedGroupTransport({config:{...base,delegates:[good],coordinator:{tokenSha256:good.tokenSha256,authorizedAt:base.activatedAt}},
     token:'transport-token',base:{},dbPath:':memory:'}),/configuration_invalid/);
+});
+
+test('delegate history and last-message list expose reactions only inside the approved page', async t => {
+  let calls=0;
+  const message={id:{_serialized:'m1'},fromMe:false,from:alice,timestamp:1000,type:'chat',body:'hello',hasReaction:true,
+    getReactions:async()=>{calls++;return [{hasReactionByMe:true,senders:[
+      {id:{_serialized:'r1',fromMe:true},msgId:'m1',reaction:'❤️',timestamp:1001},
+      {id:{_serialized:'r2',fromMe:false},msgId:'m1',reaction:'❤️',timestamp:1002}]}];}};
+  const foreign={...message,getReactions:async()=>{assert.fail('must not inspect unapproved reactions');}};
+  const {p,client,calls:transport}=fixture(t,{messages:{[alice]:[message],[stranger]:[foreign]}});
+  const read=await call(p,client,{path:`/delegate/chats/${encodeURIComponent(alice)}/messages`});
+  assert.deepEqual(read.body.messages[0].reactions.map(r=>[r.messageId,r.emoji,r.origin]),[['m1','❤️','us'],['m1','❤️','them']]);
+  const list=await call(p,client,{path:'/delegate/chats',query:{limit:'1'}});
+  assert.equal(list.body.chats.length,1);
+  assert.equal(list.body.chats[0].lastMessage.id,'m1');
+  assert.equal(list.body.chats[0].lastMessage.reactions.length,2);
+  assert.equal(Object.hasOwn(list.body.chats[0].lastMessage,'body'),false);
+  assert.equal((await call(p,client,{path:`/delegate/chats/${encodeURIComponent(stranger)}/messages`})).status,403);
+  assert.equal(calls,2);assert.equal(transport.seen,0);assert.equal(transport.sent.length,0);
+});
+
+const reactionTarget=(chat,options={})=>({id:{_serialized:`false_${chat}_ABCDEF`,remote:chat,fromMe:false},hasReaction:false,
+  react:async()=>{},...options});
+
+test('reaction writes require explicit opt-in, one emoji and approved matching message/chat before lookup', async t => {
+  const f=fixture(t);
+  const body={to:alice,messageId:`false_${alice}_ABCDEF`,emoji:'👍',requestId:'r1'};
+  assert.equal((await call(f.p,f.client,{method:'POST',path:'/delegate/react',body})).body.error,'delegate_reactions_not_enabled');
+  const enabled=fixture(t,{delegate:{allowReactions:true}});
+  for(const patch of [{to:stranger,messageId:`false_${stranger}_A`},{messageId:`false_${stranger}_A`},
+    {to:group,messageId:`false_${group}_A`},{messageId:'false_12345678@lid_A'},{emoji:'hello'},{emoji:'👍👍'},{emoji:''}]) {
+    const response=await call(enabled.p,enabled.client,{method:'POST',path:'/delegate/react',body:{...body,...patch}});
+    assert.notEqual(response.status,200);
+  }
+  assert.equal(enabled.calls.lookups.length,0);assert.equal(enabled.calls.sent.length,0);
+  enabled.client.info.wid._serialized=stranger;
+  assert.equal((await call(enabled.p,enabled.client,{method:'POST',path:'/delegate/react',body})).body.error,'delegate_account_mismatch');
+  assert.equal(enabled.calls.lookups.length,0);
+});
+
+test('acked readback confirms once, journal dedupes, and reactions do not consume or establish text contact', async t => {
+  let reactions=0;
+  const message=reactionTarget(alice);
+  message.react=async emoji=>{reactions++;message.hasReaction=true;message.getReactions=async()=>[{senders:[{
+    id:{_serialized:'true_reaction_1',fromMe:true},msgId:message.id,emoji,reaction:emoji,timestamp:Date.now()/1000,ack:1}]}];};
+  const {p,client,calls}=fixture(t,{delegate:{allowReactions:true,dailyNewRecipientCap:1},messages:{[alice]:[message]}});
+  const body={to:alice,messageId:message.id._serialized,emoji:'👍',requestId:'r1'};
+  const result=await call(p,client,{method:'POST',path:'/delegate/react',body});
+  assert.equal(result.body.state,'confirmed');assert.equal(result.body.acceptance,'provider_ack');assert.equal(result.body.delivered,null);
+  const duplicate=await call(p,client,{method:'POST',path:'/delegate/react',body});
+  assert.equal(duplicate.body.duplicate,true);assert.equal(reactions,1);
+  const conflict=await call(p,client,{method:'POST',path:'/delegate/react',body:{...body,emoji:'❤️'}});
+  assert.equal(conflict.body.error,'delegate_request_conflict');
+  const cap=await call(p,client,{path:'/delegate/cap'});
+  assert.equal(cap.body.usage.newRecipients,0);assert.equal(cap.body.usage.followUps,0);
+  // Same existing emoji: no new provider call and no false send receipt.
+  const unchanged=await call(p,client,{method:'POST',path:'/delegate/react',body:{...body,requestId:'r2'}});
+  assert.equal(unchanged.body.state,'unchanged');assert.equal(unchanged.body.providerId,null);assert.equal(reactions,1);
+  const text=await call(p,client,{method:'POST',path:'/delegate/send',body:{to:alice,text:'hello',requestId:'text1'}});
+  assert.equal(text.status,200);
+  const journal=await call(p,client,{path:'/delegate/sends'});
+  assert.equal(journal.body.sends[0].firstContact,1);assert.equal(calls.seen,0);
+});
+
+test('resolved react promise without accepted readback stays uncertain; retries cannot send again', async t => {
+  let reactions=0;
+  const message=reactionTarget(alice,{react:async()=>{reactions++;}});
+  const {p,client}=fixture(t,{delegate:{allowReactions:true},messages:{[alice]:[message]}});
+  const body={to:alice,messageId:message.id._serialized,emoji:'👍',requestId:'r1'};
+  assert.equal((await call(p,client,{method:'POST',path:'/delegate/react',body})).body.error,'delegate_reaction_uncertain');
+  for(const requestId of ['r1','r2']) assert.equal((await call(p,client,{method:'POST',path:'/delegate/react',body:{...body,requestId}})).body.error,'delegate_reaction_uncertain');
+  assert.equal(reactions,1);
+  const listed=await call(p,client,{path:'/delegate/reactions',query:{state:'uncertain'}});
+  assert.equal(listed.body.reactions.length,1);
+  const resolve={method:'POST',path:'/coordinator/delegate-reaction-resolve',body:{delegate:'swing',requestId:'r1',outcome:'not_sent'}};
+  assert.equal((await call(p,client,resolve)).status,403);
+  assert.equal((await call(p,client,{...resolve,delegate:false,coordinator:true})).status,200);
+  assert.equal((await call(p,client,{method:'POST',path:'/delegate/react',body})).body.error,'delegate_request_resolved_not_sent');
+});
+
+test('provider-returned target mismatch or missing reaction baseline cannot cause a write', async t => {
+  let reactions=0;
+  const message=reactionTarget(alice,{react:async()=>{reactions++;}});
+  const {p,client}=fixture(t,{delegate:{allowReactions:true},messages:{[alice]:[message]}});
+  const body={to:alice,messageId:message.id._serialized,emoji:'👍',requestId:'r1'};
+  message.id.remote=stranger;
+  assert.equal((await call(p,client,{method:'POST',path:'/delegate/react',body})).body.error,'delegate_reaction_target_unverified');
+  message.id.remote=alice;message.hasReaction=true;
+  assert.equal((await call(p,client,{method:'POST',path:'/delegate/react',body})).body.error,'delegate_reaction_snapshot_unavailable');
+  assert.equal(reactions,0);
 });
 
 test('send is limited to scoped chats, idempotent, and counts first contacts per rolling 24 h', async t => {

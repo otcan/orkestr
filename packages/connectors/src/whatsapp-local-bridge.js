@@ -1,5 +1,6 @@
 import { scopedNativeWorker, createPreservingNativeAuth } from './whatsapp-scoped-native-worker.js';
 import { historyPage, listAllChats } from './whatsapp-scoped-direct-chats.js';
+import { serializeMessagesWithReactions } from './whatsapp-reaction-read.js';
 import { authenticationFailureEvidence } from './whatsapp-auth-failure-evidence.js';
 import { autoConnectHomeChat } from "./whatsapp-auto-home-chat.js";
 import { chromeLockFromOtherHost, chromeLockHost, retireLoggedOutSession } from "./whatsapp-session-recovery.js";
@@ -6854,7 +6855,8 @@ export async function pageLocalWhatsAppChatHistory({ accountId = "", chatId = ""
   if (!client) return { accountId: normalized, chatId, ready: false, messages: [], hasMore: false, nextCursor: null };
   const chat = await client.getChatById(String(chatId || "").trim());
   const page = await historyPage(chat, { before, limit });
-  return { accountId: normalized, chatId, ready: true, messages: page.messages.map(publicHistoryMessage), hasMore: page.hasMore, nextCursor: page.nextCursor };
+  return { accountId: normalized, chatId, ready: true,
+    messages: await serializeMessagesWithReactions(page.messages, publicHistoryMessage, {ownChatId: client.info?.wid?._serialized}), hasMore: page.hasMore, nextCursor: page.nextCursor };
 }
 
 export async function listLocalWhatsAppChatMessages({ accountId = "", chatId = "", limit = 30, env = process.env } = {}) {
@@ -6886,17 +6888,7 @@ export async function listLocalWhatsAppChatMessages({ accountId = "", chatId = "
         ready: true,
         fallback: "browser_store",
         ...(augmented.load ? { historyLoad: augmented.load } : {}),
-        messages: augmented.messages.map((message) => ({
-          id: serializedMessageId(message),
-          body: String(message?.body || ""),
-          type: String(message?.type || ""),
-          fromMe: Boolean(message?.fromMe),
-          from: serializedId(message?.from),
-          to: serializedId(message?.to),
-          author: serializedId(message?.author),
-          timestamp: message?.timestamp ? new Date(Number(message.timestamp) * 1000).toISOString() : null,
-          hasMedia: Boolean(message?.hasMedia),
-        })),
+        messages: await serializeMessagesWithReactions(augmented.messages, publicHistoryMessage, {ownChatId: runtime.client.info?.wid?._serialized}),
       };
     }
     if (recoverableLocalWhatsAppChatReadRuntimeError(error)) {
@@ -6920,17 +6912,7 @@ export async function listLocalWhatsAppChatMessages({ accountId = "", chatId = "
     ready: true,
     ...(augmented.replaced ? { fallback: "earlier_messages_loaded" } : {}),
     ...(augmented.load ? { historyLoad: augmented.load } : {}),
-    messages: augmented.messages.map((message) => ({
-      id: serializedMessageId(message),
-      body: String(message?.body || ""),
-      type: String(message?.type || ""),
-      fromMe: Boolean(message?.fromMe),
-      from: serializedId(message?.from),
-      to: serializedId(message?.to),
-      author: serializedId(message?.author),
-      timestamp: message?.timestamp ? new Date(Number(message.timestamp) * 1000).toISOString() : null,
-      hasMedia: Boolean(message?.hasMedia),
-    })),
+    messages: await serializeMessagesWithReactions(augmented.messages, publicHistoryMessage, {ownChatId: runtime.client.info?.wid?._serialized}),
   };
 }
 
