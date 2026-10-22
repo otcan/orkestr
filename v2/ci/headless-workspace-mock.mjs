@@ -12,12 +12,27 @@ const names = { [A]: 'Assistant', [B]: 'Research notes', [C]: 'Queued errands' }
 const types = { '.html': 'text/html', '.js': 'text/javascript', '.wasm': 'application/wasm', '.css': 'text/css' };
 const uuid = n => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 
+// Synthetic formatted messages: agent Markdown, WhatsApp-style emphasis, the
+// relay's reply context and a JSON-escaped relay text.
+const LONG_URL = 'https://example.invalid/synthetic/' + 'very-long-path-segment-'.repeat(8) + 'end?query=' + 'x'.repeat(40);
+export const FORMATTED = {
+  markdown: ['## Synthetic status', '', 'The **build** passed and the *deploy* is `pending`. See [the runbook](https://example.invalid/runbook).', '',
+    '- First item with a long link ' + LONG_URL, '  - Nested item', '1. Ordered one', '2. Ordered two', '',
+    '| Check | Result | Notes |', '|---|:---:|---|', '| rust-v2 | **green** | all 512 synthetic tests passed in the hosted runner |',
+    '| browser | ~~red~~ green | a long note that makes this table wider than a phone screen on purpose |', '',
+    '```sh', 'cargo test --offline --locked -p orkestr-v2-ui -- --nocapture --test-threads=1 # a very long synthetic command line', '```'].join('\n'),
+  whatsapp: ['*Synthetic WhatsApp summary*', '', '\u2022\u2060  \u2060*Bold item* with _italic_ and ~strike~', '\u2022\u2060  \u2060Second item, snake_case_name stays', '',
+    '```synthetic code with *stars* kept```'].join('\n'),
+  reply: '[WhatsApp: synthetic-group]\n\n[Replying to Orkestr message from 15:23: "Synthetic quoted answer…"]\n\nWhich check was this? <b>not html</b>',
+  escaped: '{"status":{"completed":"Synthetic notification.\\n\\n| Gene | rsID |\\n|---|---|\\n| SYN1 | rs0001 |\\n\\n**Done**"}}',
+};
+
 export function createState() {
   const archived = Array.from({ length: 60 }, (_, i) => ({
     archive_sequence: i + 1, source_instance: 'synthetic-v1', source_thread_id: 'thread-a', snapshot_id: 'snapshot-1',
     message: { source_message_id: `m${i + 1}`, source_position: i + 1, source_cursor: i + 1, role: i % 2 ? 'assistant' : 'user',
       phase: null, state: 'done', source_kind: null, created_at: '2026-01-01T00:00:00Z', updated_at: null,
-      text: `Imported synthetic message ${i + 1}`, attachments: [] },
+      text: i === 49 ? FORMATTED.escaped : `Imported synthetic message ${i + 1}`, attachments: [] },
   }));
   const messages = { [A]: [{ message_id: uuid(101), sequence: 1, actor_kind: 'owner', text: 'Native synthetic message' }], [B]: [], [C]: [] };
   const window = {
@@ -180,6 +195,10 @@ function v1History(state, thread) {
     { message_id: 'v1-m11', author: 'participant', text: 'Synthetic member note', created_at_ms: Date.now() - 3.5 * 3600000, phase: null, cursor: 11 },
     { message_id: 'v1-m12', author: 'assistant', text: 'Synthetic coordinator reply', created_at_ms: Date.parse('2025-07-01T14:42:05Z'), phase: 'final_answer', cursor: 12,
       receipts: [{ kind: 'sent_to_whatsapp', at_ms: Date.parse('2025-07-01T14:42:09Z') }] },
+  ] : thread === V1_WORKER ? [
+    { message_id: 'v1-w1', author: 'owner', text: FORMATTED.reply, created_at_ms: Date.now() - 3 * 3600000, phase: null, cursor: 1 },
+    { message_id: 'v1-w2', author: 'participant', text: FORMATTED.whatsapp, created_at_ms: Date.now() - 2 * 3600000, phase: null, cursor: 2 },
+    { message_id: 'v1-w3', author: 'assistant', text: FORMATTED.markdown, created_at_ms: Date.now() - 3600000, phase: 'final_answer', cursor: 3 },
   ] : [];
   // After owner input from the app: V1 works for two polls, then the
   // coordinator's reply appears.

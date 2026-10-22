@@ -55,6 +55,9 @@ export function acceptedResultRendered({origin, result, text}) {
   const row = rows[0];
   if (row.dataset.runId !== result.run_id || row.dataset.completionEventId !== result.completion_event_id ||
       row.dataset.payloadId !== result.payload_id) return false;
-  const outputs = [...row.querySelectorAll('pre[data-accepted-output="true"]')];
-  return outputs.length === 1 && outputs[0].textContent === text;
+  // Replies render formatted (paragraphs, line breaks); compare the plain
+  // synthetic text without layout whitespace.
+  const flat = value => String(value).replace(/\s+/g, '');
+  const outputs = [...row.querySelectorAll('[data-accepted-output="true"]')];
+  return outputs.length === 1 && flat(outputs[0].textContent) === flat(text);
 }

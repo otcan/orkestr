@@ -52,7 +52,7 @@ test('rendered reload proof requires the exact accepted-history article and text
     });
   const article = (patch = {}, text = payload.text) => ({dataset: {...dataset, ...patch},
     querySelectorAll: selector => {
-      assert.equal(selector, 'pre[data-accepted-output="true"]'); return [{textContent: text}];
+      assert.equal(selector, '[data-accepted-output="true"]'); return [{textContent: text}];
     }});
   assert.equal(evaluate([article()]), true);
   for (const key of Object.keys(dataset)) assert.equal(evaluate([article({[key]: id(99)})]), false);

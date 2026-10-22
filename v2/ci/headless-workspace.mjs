@@ -2,7 +2,7 @@
 // Exercises the real WASM bundle at desktop and phone widths; no provider runs.
 import assert from 'node:assert/strict';
 import puppeteer from 'puppeteer';
-import { A, C, V1_INSTANCE_REF, V1_LINKS, createState, startMock } from './headless-workspace-mock.mjs';
+import { A, C, V1_INSTANCE_REF, V1_LINKS, V1_WORKER, createState, startMock } from './headless-workspace-mock.mjs';
 import { mkdir } from 'node:fs/promises';
 
 assert.equal(process.env.CI, 'true', 'Run only in isolated CI');
@@ -498,6 +498,31 @@ export const scenarios = [
     await open(V1_LINKS.unknown);
     await waitText('This V1 link does not open here');
     await screenshot(label, 'v1-link-unknown');
+    await noHorizontalScroll();
+  }],
+  ['message-formatting', async label => {
+    // Agent Markdown, WhatsApp emphasis and the reply context render as
+    // elements; markup in message text stays text.
+    await page.goto(`${origin}/#v1/${V1_WORKER}`, { waitUntil: 'domcontentloaded' });
+    await page.waitForFunction(() => document.querySelectorAll('.v1-thread .chat-messages > li').length === 3, { timeout: 20000 });
+    const view = await page.evaluate(() => {
+      const scope = document.querySelector('.v1-thread .chat-messages');
+      const texts = sel => [...scope.querySelectorAll(sel)].map(n => n.textContent);
+      return { strong: texts('.rich-text strong'), em: texts('.rich-text em'), strike: texts('.rich-text s'), heading: texts('.rich-text h4'),
+        code: texts('.rich-text pre.rt-code'), bullets: scope.querySelectorAll('.rt-list li').length, cells: texts('.rt-table td'),
+        reply: texts('.rt-reply'), links: [...scope.querySelectorAll('.rich-text a')].map(a => [a.getAttribute('href'), a.rel]),
+        html: scope.querySelectorAll('b').length, raw: /\*\*|~~|```|\|---/.test(scope.textContent) };
+    });
+    assert.deepEqual(view.heading, ['Synthetic status']);
+    for (const word of ['Synthetic WhatsApp summary', 'Bold item', 'build', 'green']) assert.ok(view.strong.includes(word), word);
+    assert.deepEqual(view.em, ['italic']); assert.deepEqual(view.strike, ['strike', 'red']);
+    assert.match(view.code[0], /^cargo test --offline/);
+    assert.equal(view.bullets, 6); assert.ok(view.cells.includes('rust-v2'));
+    assert.match(view.reply[0], /^Replying to Orkestr message from 15:23/);
+    assert.deepEqual(view.links[0], ['https://example.invalid/runbook', 'noopener noreferrer nofollow']);
+    assert.equal(view.html, 0, 'message markup is never parsed as HTML');
+    assert.equal(view.raw, false, 'no literal Markdown markers remain');
+    await screenshot(label, 'message-formatting');
     await noHorizontalScroll();
   }],
 ];

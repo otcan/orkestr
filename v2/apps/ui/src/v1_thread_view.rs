@@ -134,7 +134,7 @@ pub fn V1ThreadView(
                             "data-phase": message.phase.clone().unwrap_or_default(),
                             article {
                                 strong { match message.author { SidebarAuthor::Owner => "You", SidebarAuthor::Participant => "Group member", SidebarAuthor::Assistant if message.coordinator => "Coordinator", SidebarAuthor::Assistant => "Assistant" } }
-                                p { "{message.text}" }
+                                crate::rich_text_view::RichText { text: message.text.clone() }
                             }
                             if let Some(at) = message.created_at_ms {
                                 crate::message_time_view::MessageTime { at_ms: at, now_ms: now(), receipts: message.receipts.clone() }
