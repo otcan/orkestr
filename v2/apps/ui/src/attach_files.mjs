@@ -22,8 +22,10 @@ export async function describe(files) {
   if (total > BYTES_MAX) return { error: 'Attachments are limited to 16 MiB per message.' };
   const out = [];
   for (const file of list) {
-    if (!file.size) return { error: `${safeName(file.name)} is empty.` };
-    const bytes = new Uint8Array(await file.arrayBuffer());
+    if (!file.size) return { error: `${safeName(file.name)} is empty or a folder.` };
+    let bytes;
+    try { bytes = new Uint8Array(await file.arrayBuffer()); }
+    catch { return { error: `${safeName(file.name)} could not be read (folders cannot be attached).` }; }
     out.push({ filename: safeName(file.name), media_type: /^[\w!#$&^.+-]+\/[\w!#$&^.+-]+$/.test(file.type) ? file.type : 'application/octet-stream',
       content_base64: toBase64(bytes) });
   }
@@ -46,4 +48,65 @@ export function pick(document) {
     document.body.append(input);
     input.click();
   });
+}
+
+// Dropped files (onto the conversation) and pasted images (into the
+// composer) take the same path as the Attach button: describe, then the
+// Rust side uploads. `send` receives each described batch.
+export function carriesFiles(transfer) {
+  return [...(transfer?.types ?? [])].includes('Files');
+}
+
+// A paste attaches files only when it carries no text, so pasting text from
+// apps that also put a picture on the clipboard still pastes the text.
+export function pastedFiles(clipboard) {
+  const types = [...(clipboard?.types ?? [])];
+  if (types.includes('text/plain')) return [];
+  return [...(clipboard?.files ?? [])];
+}
+
+export function installDropZone(zone, textarea, send) {
+  let depth = 0;
+  const highlight = on => zone.classList.toggle('drop-active', on);
+  const enter = event => { if (!carriesFiles(event.dataTransfer)) return; event.preventDefault(); depth += 1; highlight(true); };
+  const over = event => { if (!carriesFiles(event.dataTransfer)) return; event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; };
+  const leave = event => { if (!carriesFiles(event.dataTransfer)) return; depth = Math.max(0, depth - 1); if (!depth) highlight(false); };
+  const drop = async event => {
+    if (!carriesFiles(event.dataTransfer)) return;
+    event.preventDefault(); depth = 0; highlight(false);
+    send(await describe(event.dataTransfer.files));
+  };
+  const paste = async event => {
+    const files = pastedFiles(event.clipboardData);
+    if (!files.length) return;
+    event.preventDefault();
+    send(await describe(files));
+  };
+  // Files dropped elsewhere on the page must not replace the app with the file.
+  const guard = event => { if (carriesFiles(event.dataTransfer) && !zone.contains(event.target)) { event.preventDefault(); if (event.type === 'dragover') event.dataTransfer.dropEffect = 'none'; } };
+  const doc = zone.ownerDocument;
+  zone.addEventListener('dragenter', enter); zone.addEventListener('dragover', over);
+  zone.addEventListener('dragleave', leave); zone.addEventListener('drop', drop);
+  textarea?.addEventListener('paste', paste);
+  doc.addEventListener('dragover', guard); doc.addEventListener('drop', guard);
+  return () => {
+    zone.removeEventListener('dragenter', enter); zone.removeEventListener('dragover', over);
+    zone.removeEventListener('dragleave', leave); zone.removeEventListener('drop', drop);
+    textarea?.removeEventListener('paste', paste);
+    doc.removeEventListener('dragover', guard); doc.removeEventListener('drop', guard);
+    highlight(false);
+  };
+}
+
+// Finds the conversation pane around the composer tools with `id`.
+export async function watchDrops(document, id, dioxus) {
+  let tools = null;
+  for (let i = 0; i < 200 && !(tools = document.getElementById(id)); i++) await new Promise(r => setTimeout(r, 25));
+  if (!tools) return null;
+  const form = tools.closest('form');
+  const zone = tools.closest('.conversation-pane') ?? form;
+  const off = installDropZone(zone, form?.querySelector('textarea'), batch => dioxus.send(batch));
+  await dioxus.recv();
+  off();
+  return null;
 }
