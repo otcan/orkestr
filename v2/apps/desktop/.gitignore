@@ -1,0 +1,5 @@
+# Staged by v2/packaging/desktop/build_bundle.py --desktop; never committed.
+/binaries/
+/resources/
+/gen/
+/target/

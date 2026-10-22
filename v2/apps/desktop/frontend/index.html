@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Orkestr</title>
+<style>
+  :root { color-scheme: light dark; --bg: #f8fafc; --fg: #101820; --accent: #0f9488; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #101820; --fg: #f8fafc; --accent: #2dd4bf; } }
+  html, body { height: 100%; margin: 0; }
+  body { display: grid; place-items: center; background: var(--bg); color: var(--fg);
+         font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { text-align: center; padding: 16px; }
+  .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%;
+         background: var(--accent); animation: pulse 1.2s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: .25; } }
+</style>
+</head>
+<body>
+<main>
+  <h1>Orkestr</h1>
+  <p><span class="dot"></span> Starting your assistant on this computer…</p>
+</main>
+</body>
+</html>
