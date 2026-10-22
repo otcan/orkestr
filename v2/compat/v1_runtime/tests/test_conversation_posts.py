@@ -30,6 +30,8 @@ class PostTests(Base):
         self.assertEqual(user["publicMessageId"], "v2timer-" + user["id"])
         self.assertEqual((user["publicThreadId"], user["chatId"], user["accountId"]), ("v1-thread", "chat@g.us", "account"))
         self.assertEqual((user["text"], user["timerSourceId"]), ("Coordinator", "post"))
+        # V1 labels the post by its author, not as a timer.
+        self.assertEqual(user["postAuthor"], "coordinator")
         # The reply is the post text unchanged (no Rust prefix/footer), with the post's footer fields.
         self.assertEqual(reply["text"], "Deploy finished.\n\nAll checks green.")
         self.assertEqual((reply["role"], reply["phase"], reply["state"]), ("assistant", "final_answer", "completed"))

@@ -79,6 +79,7 @@ class TimerRelayTests(Base):
         self.assertEqual((rows[0]["publicThreadId"], rows[0]["chatId"], rows[0]["accountId"]),
                          ("v1-thread", "chat@g.us", "account"))
         self.assertEqual(rows[0]["timerSourceId"], "305d54e89718")
+        self.assertNotIn("postAuthor", rows[0])
         self.assertEqual(rows[0]["text"], "Scheduled timer: Morning brief")
 
     def test_changed_occurrence_identity_conflicts(self):
