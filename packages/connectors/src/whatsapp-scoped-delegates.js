@@ -23,6 +23,8 @@
 import crypto from 'node:crypto';
 import {listAllChats, historyPage} from './whatsapp-scoped-direct-chats.js';
 import {serializeMessage} from './whatsapp-scoped-coordinator.js';
+import {serializeMessagesWithReactions} from './whatsapp-reaction-read.js';
+import {createDelegateReactions} from './whatsapp-delegate-reactions.js';
 
 const NAME = /^[a-z0-9-]{1,40}$/;
 const DIRECT_CHAT = /^\d{6,20}@c\.us$/;
@@ -32,7 +34,7 @@ const MAX_CHATS = 1000;
 const MAX_TEXT = 3000;
 const SEND_TIMEOUT_MS = 30_000;
 const DAY_MS = 24 * 3600 * 1000;
-const KEYS = ['name', 'threadId', 'tokenSha256', 'authorizedAt', 'chatIds', 'dailyNewRecipientCap', 'dailyFollowUpCap', 'minGapSeconds'];
+const KEYS = ['name', 'threadId', 'tokenSha256', 'authorizedAt', 'chatIds', 'dailyNewRecipientCap', 'dailyFollowUpCap', 'minGapSeconds', 'allowReactions'];
 
 const deny = (code, statusCode = 403, extra = {}) => { throw Object.assign(new Error(`delegate_${code}`), {statusCode, ...extra}); };
 const hash = value => crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -53,6 +55,7 @@ export function validateDelegatesConfig(config = {}) {
         || !Array.isArray(item.chatIds) || !item.chatIds.length || item.chatIds.length > MAX_CHATS
         || new Set(item.chatIds).size !== item.chatIds.length || item.chatIds.some(id => typeof id !== 'string' || !DIRECT_CHAT.test(id))
         || !Number.isInteger(item.dailyNewRecipientCap) || item.dailyNewRecipientCap < 1 || item.dailyNewRecipientCap > 100
+        || (item.allowReactions !== undefined && typeof item.allowReactions !== 'boolean')
         || (item.dailyFollowUpCap !== undefined && (!Number.isInteger(item.dailyFollowUpCap) || item.dailyFollowUpCap < 0 || item.dailyFollowUpCap > 100))
         || (item.minGapSeconds !== undefined && (!Number.isInteger(item.minGapSeconds) || item.minGapSeconds < 0 || item.minGapSeconds > 3600)))
       deny('configuration_invalid');
@@ -60,6 +63,7 @@ export function validateDelegatesConfig(config = {}) {
     byName.set(item.name, {
       name: item.name, threadId: item.threadId, tokenSha256: item.tokenSha256, authorizedAt: item.authorizedAt,
       chats: new Set(item.chatIds), dailyNewRecipientCap: item.dailyNewRecipientCap,
+      allowReactions: item.allowReactions === true,
       dailyFollowUpCap: item.dailyFollowUpCap ?? 20, minGapSeconds: item.minGapSeconds ?? 120,
     });
   }
@@ -78,6 +82,7 @@ export function delegateForBearer(delegates, bearer) {
 }
 
 export function createDelegateAccess({config, delegates, db, serial, now = Date.now, timeoutMs = SEND_TIMEOUT_MS, lookupDelayMs = 1000}) {
+  const reactions = createDelegateReactions({config, delegates, db, serial, now, timeoutMs, lookupDelayMs});
   db.exec(`CREATE TABLE IF NOT EXISTS delegate_send(id TEXT PRIMARY KEY,delegate TEXT NOT NULL,request_id TEXT NOT NULL,hash TEXT NOT NULL,
     chat_id TEXT NOT NULL,state TEXT NOT NULL,provider_id TEXT,created_at TEXT NOT NULL,resolved_at TEXT,first_contact INTEGER NOT NULL DEFAULT 0)`);
   // A send interrupted by a crash may or may not have reached WhatsApp.
@@ -208,21 +213,26 @@ export function createDelegateAccess({config, delegates, db, serial, now = Date.
       const identityMatches = client?.info?.wid?._serialized === config.ownChatId;
       const uncertain = db.prepare("SELECT COUNT(*) AS n FROM delegate_send WHERE delegate=? AND state='uncertain'").get(delegate.name).n;
       return {ok: true, ready: Boolean(client) && identityMatches, identityMatches, delegate: delegate.name, threadId: delegate.threadId,
-        scopedChats: delegate.chats.size, uncertainSends: uncertain, authorizedAt: delegate.authorizedAt, usage: usage(delegate), markSeen: false};
+        scopedChats: delegate.chats.size, uncertainSends: uncertain, authorizedAt: delegate.authorizedAt, usage: usage(delegate), markSeen: false,
+        reactionRead: true, reactionSend: delegate.allowReactions};
     }
     if (req.method === 'GET' && parts.length === 1 && parts[0] === 'cap') return {ok: true, usage: usage(delegate)};
     if (req.method === 'GET' && parts.length === 1 && parts[0] === 'chats') {
       assertClient(client);
-      return {ok: true, ...await listAllChats(scopedClient(client, delegate), {cursor: query.cursor, limit: query.limit, unreadOnly: query.unread_only === '1'})};
+      return {ok: true, ...await listAllChats(scopedClient(client, delegate), {cursor: query.cursor, limit: query.limit, unreadOnly: query.unread_only === '1',
+        lastMessageSnapshots: messages => serializeMessagesWithReactions(messages, message => ({id: message?.id?._serialized || null}), {ownChatId: config.ownChatId})})};
     }
     if (req.method === 'GET' && parts.length === 3 && parts[0] === 'chats' && parts[2] === 'messages') {
       if (!delegate.chats.has(parts[1])) deny('scope_denied');
       assertClient(client);
       const chat = await client.getChatById(parts[1]);
       const page = await historyPage(chat, {before: query.before, limit: query.limit});
-      return {ok: true, chatId: parts[1], name: chat?.name || null, messages: page.messages.map(serializeMessage), hasMore: page.hasMore, nextCursor: page.nextCursor};
+      return {ok: true, chatId: parts[1], name: chat?.name || null,
+        messages: await serializeMessagesWithReactions(page.messages, serializeMessage, {ownChatId: config.ownChatId}), hasMore: page.hasMore, nextCursor: page.nextCursor};
     }
     if (req.method === 'GET' && parts.length === 1 && parts[0] === 'sends') return {ok: true, sends: sendsFor(delegate.name, query.state === undefined ? null : String(query.state))};
+    if (req.method === 'GET' && parts.length === 1 && parts[0] === 'reactions') return {ok: true, reactions: reactions.list(delegate.name, query.state === undefined ? null : String(query.state))};
+    if (req.method === 'POST' && parts.length === 1 && parts[0] === 'react') return reactions.react(client, delegate, req.body || {});
     if (req.method === 'POST' && parts.length === 1 && parts[0] === 'send') return send(client, delegate, req.body || {});
     if (req.method === 'POST' && parts.length === 1 && parts[0] === 'send-dry-run') return send(client, delegate, req.body || {}, {dryRun: true});
     return deny('route_unknown', 404);
@@ -237,6 +247,7 @@ export function createDelegateAccess({config, delegates, db, serial, now = Date.
       return {ok: true, sends: sendsFor(name, query.state === undefined ? null : String(query.state))};
     }
     if (req.method === 'POST' && parts.length === 1 && parts[0] === 'delegate-resolve') return resolve(req.body || {});
+    if (req.method === 'POST' && parts.length === 1 && parts[0] === 'delegate-reaction-resolve') return reactions.resolve(req.body || {});
     return null;
   }
 
@@ -258,7 +269,7 @@ export function createDelegateAccess({config, delegates, db, serial, now = Date.
             if (!delegate) return res.status(403).json({ok: false, error: 'delegate_unauthorized'});
             return res.json(await dispatchDelegate(req, getClient(), delegate));
           }
-          if (req.path === '/coordinator/delegate-sends' || req.path === '/coordinator/delegate-resolve') {
+          if (['/coordinator/delegate-sends', '/coordinator/delegate-resolve', '/coordinator/delegate-reaction-resolve'].includes(req.path)) {
             if (req.orkestrCoordinator !== true) return res.status(403).json({ok: false, error: 'coordinator_unauthorized'});
             const result = await dispatchOperator(req);
             if (result) return res.json(result);

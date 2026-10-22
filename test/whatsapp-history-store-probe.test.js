@@ -6,6 +6,7 @@ import test from "node:test";
 import {
   getLocalWhatsAppBridgeStatus,
   listLocalWhatsAppChatMessages,
+  pageLocalWhatsAppChatHistory,
   probeLocalWhatsAppStore,
   recoverLocalWhatsAppChatMessages,
   resetLocalWhatsAppBridgeForTest,
@@ -232,6 +233,26 @@ test("chat history keeps the existing path when enough messages are visible", as
   } finally {
     await resetLocalWhatsAppBridgeForTest(env);
   }
+});
+
+test("ordinary and paged history expose supported reaction snapshots without marking seen", async () => {
+  const env = await setupEnv("orkestr-wa-history-reactions-");
+  let reads = 0, seen = 0;
+  const message = {...model(1), fromMe: false, timestamp: 1000, hasReaction: true,
+    getReactions: async () => {reads++; return [{senders: [{id: {_serialized: 'fixture-reaction', fromMe: true},
+      msgId: model(1).id, reaction: '👍', timestamp: 1001, ack: 1}]}];}};
+  const client = {info: {wid: {_serialized: SELF}}, getChatById: async () => ({id: {_serialized: CHAT_ID},
+    fetchMessages: async () => [message], sendSeen: async () => {seen++;}})};
+  try {
+    setLocalWhatsAppRuntimeForTest("sender", {client}, {ready: true}, env);
+    const legacy = await listLocalWhatsAppChatMessages({accountId: "sender", chatId: CHAT_ID, limit: 1, env});
+    const paged = await pageLocalWhatsAppChatHistory({accountId: "sender", chatId: CHAT_ID, limit: 1, env});
+    for (const result of [legacy, paged]) {
+      assert.equal(result.messages[0].reactionsStatus, 'available');
+      assert.deepEqual(result.messages[0].reactions.map(r => [r.messageId, r.emoji, r.origin]), [[message.id._serialized, '👍', 'us']]);
+    }
+    assert.equal(reads, 2);assert.equal(seen, 0);
+  } finally {await resetLocalWhatsAppBridgeForTest(env);}
 });
 
 test("own-message-only history with a failing loader is flagged history_read_degraded as a warning", async () => {
