@@ -1,0 +1,62 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Orkestr",
+  "mainBinaryName": "orkestr",
+  "identifier": "de.orkestr.desktop",
+  "build": {
+    "frontendDist": "frontend"
+  },
+  "app": {
+    "windows": [],
+    "withGlobalTauri": false,
+    "security": {
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["deb", "appimage", "app", "dmg", "nsis"],
+    "publisher": "Orkestr contributors",
+    "license": "MIT",
+    "category": "Productivity",
+    "shortDescription": "Your local AI assistant",
+    "longDescription": "Orkestr runs a private assistant on this computer. It keeps your data on this computer and uses your own ChatGPT or Claude subscription.",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "externalBin": ["binaries/orkestr-v2-server", "binaries/codex"],
+    "resources": {
+      "resources/ui/": "ui/",
+      "resources/bundle-manifest.json": "bundle-manifest.json"
+    },
+    "createUpdaterArtifacts": false,
+    "linux": {
+      "deb": {
+        "depends": ["libwebkit2gtk-4.1-0", "libgtk-3-0", "libayatana-appindicator3-1"]
+      }
+    },
+    "macOS": {
+      "minimumSystemVersion": "11.0"
+    },
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser"
+      }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDg4OTE5NkI0REJCRTc4MjkKUldRcGVMN2J0SmFSaUdpbEc2VFd6NHFlUXRidmhKYVRmTEIwbitmUlJ6RVhGeG82Q21QOXVBaHoK",
+      "endpoints": [
+        "https://github.com/otcan/orkestr/releases/download/desktop-stable/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  }
+}
