@@ -55,6 +55,26 @@ interactive input (explicit `/now` and "Send now" still interrupt). The
 per-binding opt-outs and `ORKESTR_WHATSAPP_INBOUND_STEER_DEFAULT=0` apply to
 Claude Code threads the same way they apply to Codex.
 
+### Claude Code input bursts
+
+Several plain inputs from the same source and reply route (for example a
+WhatsApp group message followed by photos sent one by one) become one turn and
+one answer:
+
+- A fresh WhatsApp or WebUI input waits for a quiet period of
+  `ORKESTR_THREAD_INPUT_DEBOUNCE_MS` (default 3000, `0` disables) before its turn
+  starts. A continuous stream holds the first input for at most
+  `ORKESTR_THREAD_INPUT_DEBOUNCE_MAX_MS` (default 10000).
+- When the turn starts, every pending input queued directly behind the first one
+  with the same source and reply authority joins it, including inputs that
+  arrived while the previous turn was running. The prompt tells the executor how
+  many messages arrived together and asks for a single reply.
+- Commands, `/now`, MCP (thread bridge) requests, mailbox-origin inputs, and
+  machine inputs such as timers or watch reports are never merged into a chat
+  burst and never wait.
+
+`ORKESTR_CLAUDE_CODE_COALESCE_QUEUED_INPUTS=0` restores one turn per queued input.
+
 ### Claude Code turn limits and visibility
 
 Each Claude Code turn is supervised with these limits:

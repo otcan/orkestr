@@ -38,6 +38,7 @@ import {
 import { claudeCodeDetachedTransport } from "./claude-code-detached-turn.js";
 import { reattachDetachedClaudeCodeTurn } from "./claude-code-turn-reattach.js";
 import {
+  claudeCodeInputDebounceDelayMs,
   claudeCodeInputRequestsInterrupt,
   claudeCodeResumePrompt,
   claudeCodeInputDeferredByAuthority,
@@ -310,6 +311,14 @@ export async function deliverClaudeCodePendingInputs(thread, env = process.env) 
       const handled = await processQueuedExecutorCommands(thread, env);
       delivered.push(...handled);
       if (handled.length) continue;
+      break;
+    }
+    // Hold a fresh input briefly so a quick burst starts one turn, not one
+    // turn per message; the scheduler re-runs this pass when the window ends.
+    const debounceMs = claudeCodeInputDebounceDelayMs(candidates, next, env);
+    if (debounceMs > 0) {
+      scheduleClaudeCodeDelivery(thread.id, env, debounceMs);
+      await appendEvent({ type: "claude_code_input_debounced", threadId: thread.id, messageId: next.id, delayMs: debounceMs }, env).catch(() => {});
       break;
     }
     const current = await getThread(thread.id, env) || thread;

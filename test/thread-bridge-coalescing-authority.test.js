@@ -7,7 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { createLlmAccountProfile, updateLlmAccountProfileState } from "../packages/core/src/llm-account-profiles.js";
-import { CLAUDE_CODE_INTERRUPT_RESUME_NOTE, replyAuthorityKey } from "../packages/core/src/claude-code-interrupt-resume.js";
+import { CLAUDE_CODE_INTERRUPT_RESUME_NOTE, claudeCodeBurstNote, replyAuthorityKey } from "../packages/core/src/claude-code-interrupt-resume.js";
 import { deliverClaudeCodePendingInputs, hasActiveClaudeCodeSupervisor, resetClaudeCodeRuntimeForTest, startClaudeCodeThread } from "../packages/core/src/runtime-claude-code-adapter.js";
 import { createThread, enqueueThreadInput, getThread, listThreadMessages, updateThread, updateThreadMessage } from "../packages/core/src/threads.js";
 import { createUiReplyDeliveryIntent, createWorkerReplyDeliveryIntent } from "../packages/core/src/reply-delivery-intent.js";
@@ -187,7 +187,7 @@ test("steer inputs with distinct reply authority are not coalesced; matching aut
     const two = await enqueueThreadInput(thread.id, { text: "steer beta", source: "whatsapp_inbound", connector: "whatsapp", chatId: "synthetic-chat-a", accountId: "synthetic-account-a", ...steer }, env);
     return [{ messageId: one.id }, { messageId: two.id }];
   });
-  assert.ok(same.prompts.includes([CLAUDE_CODE_INTERRUPT_RESUME_NOTE, "steer alpha", "steer beta"].join("\n\n")), "same authority still coalesces");
+  assert.ok(same.prompts.includes([CLAUDE_CODE_INTERRUPT_RESUME_NOTE, claudeCodeBurstNote(2), "steer alpha", "steer beta"].join("\n\n")), "same authority still coalesces");
 });
 
 test("replyAuthorityKey distinguishes opt-out, agent, chat and reply route", () => {
