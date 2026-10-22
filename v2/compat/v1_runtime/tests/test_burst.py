@@ -1,5 +1,7 @@
 """A WhatsApp burst (text, then photos one by one) becomes one Rust input and one reply."""
+import contextlib
 import hashlib
+import io
 from pathlib import Path
 import tempfile
 import time
@@ -37,8 +39,13 @@ class BurstTests(unittest.TestCase):
         for public_id, text in (("a", "merhaba, bi eksik fark ettim"), ("b", "en önemlisi bu"), ("c", "eski versiyonunda böyle")):
             self.ledger.enqueue(body(public_id, text))
         worker = Worker(self.peer, self.ledger)
-        worker.step(self.ledger.next_input())
+        log = io.StringIO()
+        with contextlib.redirect_stderr(log):
+            worker.step(self.ledger.next_input())
 
+        self.assertIn("burst_merged", log.getvalue())
+        self.assertIn("absorbed=2", log.getvalue())
+        self.assertNotIn("merhaba", log.getvalue(), "the log carries identifiers only")
         self.assertEqual(self.intakes(), ["\n\n".join([BURST_NOTE % 3, "merhaba, bi eksik fark ettim", "en önemlisi bu",
                                                        "eski versiyonunda böyle"])])
         finals = self.finals()

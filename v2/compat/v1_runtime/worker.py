@@ -456,6 +456,13 @@ class Worker:
         if batch:
             data["intake_text"] = "\n\n".join([BURST_NOTE % len(texts)] + texts)
         self.ledger.absorb(data, batch)
+        if batch:
+            # Identifiers only, never message text.
+            print("orkestr-v2-wa-adapter burst_merged conversation=%s input=%s absorbed=%d span_s=%.1f"
+                  % (getattr(self.client, "conversation", "?"), data["remote_id"], len(batch),
+                     max([0.0] + [r["queued_at"] - first for r in batch
+                                  if isinstance(r.get("queued_at"), (int, float)) and isinstance(first, (int, float))])),
+                  file=sys.stderr, flush=True)
         return True
 
     def step(self, data):

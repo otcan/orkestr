@@ -180,6 +180,8 @@ earlier turn was running. An input joins only if it:
 Every input in the batch has its attachments imported. The combined text starts
 with a note that asks for a single reply. The absorbed inputs leave the queue at
 once and settle together with the first input's reply or refusal notice.
+Each merge logs one `burst_merged` line with the conversation, the first
+input's ID, the number of absorbed inputs and the burst span (no message text).
 
 ### V1-local input
 
