@@ -253,3 +253,47 @@ async fn historical_admission_replay_never_selects_or_closes_another_conversatio
     drop(store);
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn conversation_workspace_replaces_only_that_conversations_deep_and_fast_directory() {
+    let mut value = serde_json::json!({
+        "schema_version":1,"owner_id":Uuid::new_v4(),"conversation_id":Uuid::new_v4(),
+        "manager_socket":"/run/synthetic/control.sock","launcher":"/opt/synthetic/launcher",
+        "launcher_sha256":"a".repeat(64),"workspace":"/srv/synthetic/workspace",
+        "namespace":"synthetic-native","supervisor_key":"synthetic-supervisor",
+        "host_full_access":{"environment":{"HOME":"/home/example","PATH":"/usr/bin"}}
+    });
+    let role = |n: usize| {
+        serde_json::json!({"launcher":format!("/opt/synthetic/launcher-{n}"),
+            "launcher_sha256":"b".repeat(64),"workspace":"/srv/synthetic/workspace"})
+    };
+    value["roles"] =
+        serde_json::json!({"fast":role(0),"workers":[role(1),role(2),role(3),role(4)]});
+    let mapped = ConversationId(Uuid::new_v4());
+    let other = ConversationId(Uuid::new_v4());
+    value["conversation_workspaces"] =
+        serde_json::json!({ mapped.to_string(): "/srv/v1/workspaces/thread" });
+    let base: BetaConfig = serde_json::from_value(value).unwrap();
+    base.validate().unwrap();
+    let selected = selected_config(&base, &mapped).unwrap();
+    assert_eq!(
+        selected.workspace,
+        std::path::PathBuf::from("/srv/v1/workspaces/thread")
+    );
+    let roles = selected.roles.as_ref().unwrap();
+    assert_eq!(
+        roles.fast.workspace,
+        std::path::PathBuf::from("/srv/v1/workspaces/thread")
+    );
+    // Workers keep the configured instance workspace.
+    assert!(roles
+        .workers
+        .iter()
+        .all(|w| w.workspace == std::path::Path::new("/srv/synthetic/workspace")));
+    let unmapped = selected_config(&base, &other).unwrap();
+    assert_eq!(unmapped.workspace, base.workspace);
+    assert_eq!(
+        unmapped.roles.as_ref().unwrap().fast.workspace,
+        std::path::PathBuf::from("/srv/synthetic/workspace")
+    );
+}

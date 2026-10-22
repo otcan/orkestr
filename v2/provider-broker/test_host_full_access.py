@@ -34,6 +34,53 @@ def reply(channel, sandbox):
 
 
 class HostFullAccessTests(unittest.TestCase):
+    def test_pinned_conversation_workspace_is_the_only_alternative_cwd(self):
+        v1 = "/synthetic/v1/workspaces/thread"
+
+        def pinned():
+            channel = Channel(Path("/synthetic/workspace"), host_full_access=True,
+                              conversation_workspaces=(v1,))
+            channel.client({"id": 1, "method": "OpenOwnedSession",
+                            "params": {"protocol": PROTOCOL, "identity": dict(IDENTITY)}})
+            request(channel, {"id": 1, "method": "initialize", "params": {
+                "clientInfo": {"name": "synthetic", "title": "Synthetic", "version": "1"},
+                "capabilities": {"experimentalApi": False}}})
+            channel.provider({"id": 1, "result": {"userAgent": "synthetic", "platformFamily": "unix",
+                                                  "platformOs": "linux", "codexHome": "/synthetic"}})
+            request(channel, {"method": "initialized"}, outer=3)
+            request(channel, {"id": 2, "method": "account/read", "params": {"refreshToken": False}}, outer=4)
+            channel.provider({"id": 2, "result": {"requiresOpenaiAuth": True, "account": {"type": "chatgpt"}}})
+            return channel
+
+        def begin(channel, cwd):
+            return request(channel, {"id": 3, "method": "thread/start", "params": {"cwd": cwd,
+                "approvalPolicy": "never", "sandbox": "danger-full-access", "ephemeral": False,
+                "modelProvider": "openai"}}, outer=5)
+
+        channel = pinned()
+        begin(channel, v1)
+        self.assertEqual(channel.workspace, v1)
+        result = reply(channel, {"type": "dangerFullAccess"})
+        self.assertEqual(result["result"]["frame"]["result"]["cwd"], v1)
+        # The instance workspace stays valid; any other directory is refused.
+        channel = pinned()
+        begin(channel, "/synthetic/workspace")
+        reply(channel, {"type": "dangerFullAccess"})
+        channel = pinned()
+        with self.assertRaises(Refused):
+            begin(channel, "/synthetic/elsewhere")
+        # A provider reply naming another directory is refused.
+        channel = pinned()
+        begin(channel, v1)
+        with self.assertRaises(Refused):
+            channel.provider({"id": 3, "result": {"thread": {"id": "synthetic-native",
+                "cwd": "/synthetic/workspace", "ephemeral": False, "modelProvider": "openai"},
+                "modelProvider": "openai", "cwd": "/synthetic/workspace", "approvalPolicy": "never",
+                "sandbox": {"type": "dangerFullAccess"}}})
+        # Never without host full access.
+        with self.assertRaises(Refused):
+            Channel(Path("/synthetic/workspace"), conversation_workspaces=(v1,))
+
     def test_full_access_requires_and_reports_danger_full_access_only(self):
         channel = setup(True)
         with self.assertRaises(Refused):
