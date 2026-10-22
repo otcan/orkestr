@@ -57,8 +57,11 @@ class Peer:
             self.saved_window = dict(body, status=dict(conversation_id=self.conversation, state="active", generation=1,
                                                        window_id="window", predecessor_window_id=None))
             return 201, self.saved_window
-        if route in ("/execution", "/fast/execution"):
+        path, _, query = route.partition("?run_id=")
+        if path in ("/execution", "/fast/execution"):
             role = "fast" if route.startswith("/fast") else "deep"
+            if query and query != role + "-run":
+                return 404, {"code": "not_found"}
             return 200, dict(run_id=role + "-run", revision=len(self.accepted) + 10,
                 phase="completed" if role in self.accepted else "awaiting_acceptance",
                 acceptance_candidate=dict(run_id=role + "-run", completion_event_id=role + "-completion"),

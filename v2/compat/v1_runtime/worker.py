@@ -514,8 +514,16 @@ class Worker:
         data["cursor"] = max([data["cursor"]] + [event["sequence"] for event in events])
         self.ledger.save(data)
         self.capture_questions(data, events, ids)
-        statuses = {role: self.call("GET", route, allowed=(200, 204)) for role, route in
-                    (("fast", "/fast/execution"), ("deep", "/execution"))}
+        if data.get("origin") == "timer":
+            # Timer occurrences queue behind each other, so this input's runs
+            # are often no longer the conversation's current ones: read them
+            # by run ID, never through the current view.
+            statuses = self.own_statuses(ids)
+            if self.timer_without_deep(data, statuses, caught_up=len(events) < 100):
+                return
+        else:
+            statuses = {role: self.call("GET", route, allowed=(200, 204)) for role, route in
+                        (("fast", "/fast/execution"), ("deep", "/execution"))}
         self.capture_progress(data, statuses["deep"], ids)
         accepted = data.setdefault("accepted", {})
         if self.continue_after_deadline(data, statuses, ids) or self.requeue_orphaned(data, ids):
@@ -568,6 +576,50 @@ class Worker:
             reply.update(text="NO_REPLY", noReply=True)
         self.ledger.complete(data, reply)
 
+    def own_statuses(self, ids):
+        """Status of this input's own Fast and Deep runs, looked up by run ID
+        (a run of the other role answers 404). Missing roles are None."""
+        found = {"fast": None, "deep": None}
+        for run in sorted(ids):
+            for role, route in (("deep", "/execution"), ("fast", "/fast/execution")):
+                if found[role] is not None:
+                    continue
+                status, value = self.client.request("GET", "%s?run_id=%s" % (route, run), allowed=(200, 404))
+                if status == 200 and isinstance(value, dict) and value.get("run_id") == run:
+                    found[role] = value
+                    break
+        return found
+
+    def timer_without_deep(self, data, statuses, caught_up):
+        """Whether a timer input with no Deep run of its own must keep waiting.
+
+        A timer occurrence is never re-sent, so an input whose window ended
+        before its Deep turn ran would otherwise stay open forever and hold
+        every later input of the binding behind it. While the conversation
+        still has an unclosed window the run may yet start (a window past its
+        deadline is a genuine stall and is alerted by the stall check); once
+        every window is closed it is refused with an operator alert.
+        Returns True to wait, False when a Deep run exists.
+        """
+        if isinstance(statuses.get("deep"), dict):
+            data.pop("deep_missing_since", None)
+            return False
+        now = time.time()
+        since = data.setdefault("deep_missing_since", now)
+        if since == now:
+            self.ledger.save(data)
+        if not caught_up or now - since < ORPHAN_GRACE_S:
+            return True
+        current = self.call("GET", "/window", allowed=(200, 204))
+        if isinstance(current, dict) and current.get("state") != "closed":
+            return True
+        raise Refused("timer_window_ended_without_run")
+
+    def role_status(self, data, role, ids):
+        if data.get("origin") == "timer":
+            return self.own_statuses(ids)[role]
+        return self.call("GET", "/fast/execution" if role == "fast" else "/execution")
+
     @staticmethod
     def fast_unusable(value, ids):
         return (not value or value.get("run_id") not in ids or
@@ -599,8 +651,7 @@ class Worker:
         accepted = data.setdefault("accepted", {})
         frozen_key = role + "_accept_request"
         if frozen_key not in data:
-            route = "/fast/execution" if role == "fast" else "/execution"
-            value = self.call("GET", route)
+            value = self.role_status(data, role, ids) or {}
             if self.accepted_elsewhere(value, ids):
                 self.adopt_acceptance(data, role, value["run_id"], ids)
                 return
@@ -848,8 +899,9 @@ class Worker:
                 pass
         try:
             for data in self.ledger.mark_stalled(STALL_NOTICE_AFTER_S, STALL_NOTICE):
-                print("ALERT orkestr-v2-wa-adapter input_stalled conversation=%s input=%s phase=%s"
-                      % (getattr(self.client, "conversation", "?"), data["remote_id"], data.get("phase")),
+                print("ALERT orkestr-v2-wa-adapter input_stalled conversation=%s input=%s phase=%s age_min=%d"
+                      % (getattr(self.client, "conversation", "?"), data["remote_id"], data.get("phase"),
+                         (data["stalled"]["at"] - data["stalled"]["since"]) // 60),
                       file=sys.stderr, flush=True)
         except Exception:
             # Retried every pass; never blocks the binding.
@@ -867,11 +919,18 @@ class Worker:
         except Refused as error:
             # A definite refusal is terminal for this input only: the owner gets
             # a notice and later inputs proceed. Health keeps it for review.
-            self.ledger.refuse(data, str(error))
+            # A timer occurrence has no sender who could resend it, so its
+            # refusal (a failed, lost or never started run) also alerts the operator.
+            timer = data.get("origin") == "timer"
+            if self.ledger.refuse(data, str(error), alert=timer) and timer:
+                print("ALERT orkestr-v2-wa-adapter input_failed conversation=%s input=%s phase=%s reason=%s"
+                      % (getattr(self.client, "conversation", "?"), data["remote_id"],
+                         data["refused"].get("phase"), data["refused"]["reason"]),
+                      file=sys.stderr, flush=True)
         except Exception as error:
             # Transient failures retry the same frozen request (bounded by the
             # input age limit until a window is open). Definite upstream
             # refusals are terminal like any other refusal.
             if not transient(error):
-                self.ledger.refuse(data, refusal_reason(error))
+                self.ledger.refuse(data, refusal_reason(error), alert=data.get("origin") == "timer")
             stop.wait(4)
