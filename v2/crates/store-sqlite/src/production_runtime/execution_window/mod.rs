@@ -119,6 +119,9 @@ async fn window_in(
 mod terminal_tests;
 
 #[cfg(test)]
+mod join_release_tests;
+
+#[cfg(test)]
 mod bootstrap_tests;
 
 mod retired_context;

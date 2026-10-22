@@ -270,22 +270,48 @@ impl ConversationController {
         }
         let mut state = self.state.lock().await;
         if input.window_id.is_some() {
-            if !matches!(*state, State::Running(_)) {
-                return Err("window transport is unavailable");
-            }
-            let result = self
-                .manager
-                .admit(
-                    &self.request(input, admission),
-                    Instant::now() + Duration::from_secs(5),
+            // Core already holds this follow-up in the live window. A manager
+            // answer about the follow-up never ends that window: replacing the
+            // running task here would abort a healthy Deep (no cleanup, egress
+            // left owned) and strand the input until the hard deadline.
+            let ack = if matches!(*state, State::Running(_)) {
+                join_ack(
+                    self.manager
+                        .admit(
+                            &self.request(input, admission),
+                            Instant::now() + Duration::from_secs(5),
+                        )
+                        .await
+                        .map(|_| ()),
                 )
-                .await
-                .map_err(|_| "additional window admission uncertain");
-            if result.is_err() {
-                *state = State::Uncertain;
-                self.handles.poison();
-            }
-            return result.map(|_| ());
+            } else {
+                JoinAck::Withdraw
+            };
+            drop(state);
+            return match ack {
+                JoinAck::Joined => Ok(()),
+                // The manager may have recorded it; Core's join is durable and
+                // the live Deep claims it like any other window input.
+                JoinAck::KeepJoined => {
+                    eprintln!("window follow-up kept without manager acknowledgement");
+                    Ok(())
+                }
+                // Nothing here can run it: hand it back to ordinary admission
+                // (the caller retries and reaches this window's successor).
+                JoinAck::Withdraw => match self
+                    .store
+                    .withdraw_unstarted_window_join_authenticated(
+                        browser,
+                        &self.config.conversation_id,
+                        input,
+                    )
+                    .await
+                {
+                    Ok(true) => Err("window follow-up refused; input awaits the next window"),
+                    Ok(false) => Ok(()),
+                    Err(_) => Err("window follow-up refused; withdrawal unavailable"),
+                },
+            };
         }
         if !matches!(*state, State::Idle) {
             return Err("window replacement requires exact retirement");
@@ -518,5 +544,47 @@ impl ConversationController {
                 .flat_map(|roles| roles.launches())
                 .map(|role| role.workspace.clone()),
         )
+    }
+}
+
+/// What a follow-up's manager admission means for its Core join.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum JoinAck {
+    Joined,
+    /// The manager answered but its record is unknown: keep the durable join.
+    KeepJoined,
+    /// The manager certainly recorded nothing (refused, or never sent).
+    Withdraw,
+}
+fn join_ack(result: Result<(), super::manager_client::ManagerError>) -> JoinAck {
+    use super::manager_client::ManagerError;
+    match result {
+        Ok(()) => JoinAck::Joined,
+        Err(ManagerError::Refused | ManagerError::InvalidRequest) => JoinAck::Withdraw,
+        Err(_) => JoinAck::KeepJoined,
+    }
+}
+
+#[cfg(test)]
+mod join_ack_tests {
+    use super::super::manager_client::ManagerError;
+    use super::*;
+
+    #[test]
+    fn a_refused_follow_up_is_withdrawn_and_an_unknown_answer_keeps_the_join() {
+        assert_eq!(join_ack(Ok(())), JoinAck::Joined);
+        assert_eq!(join_ack(Err(ManagerError::Refused)), JoinAck::Withdraw);
+        assert_eq!(
+            join_ack(Err(ManagerError::InvalidRequest)),
+            JoinAck::Withdraw
+        );
+        for unknown in [
+            ManagerError::Deadline,
+            ManagerError::Unavailable,
+            ManagerError::Protocol,
+            ManagerError::Peer,
+        ] {
+            assert_eq!(join_ack(Err(unknown)), JoinAck::KeepJoined);
+        }
     }
 }

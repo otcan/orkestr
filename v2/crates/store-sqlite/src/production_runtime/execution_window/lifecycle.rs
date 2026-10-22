@@ -174,6 +174,19 @@ impl Store {
         if !matches!(outcome.as_str(), "accepted" | "stopped") {
             return Err(RuntimeStoreError::Fenced);
         }
+        // Follow-ups that joined this window after its last Deep turn and were
+        // never taken return to ordinary admission, so its successor runs them
+        // instead of their staying bound to a closed window.
+        let unstarted: Vec<String> = sqlx::query_scalar(
+            "SELECT event_id FROM execution_window_inputs WHERE window_id=? ORDER BY rowid",
+        )
+        .bind(window.to_string())
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(db)?;
+        for event in &unstarted {
+            super::admission::release_unstarted(&mut tx, window, event).await?;
+        }
         sqlx::query("UPDATE execution_windows SET state='closed',terminal_run_id=? WHERE id=?")
             .bind(prior_run.to_string())
             .bind(window.to_string())
