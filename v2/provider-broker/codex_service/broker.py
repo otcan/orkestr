@@ -53,7 +53,9 @@ def main(root, role="deep"):
                         workspace_exec=sys.argv[1:] == workspace,
                         workspace_trusted=sys.argv[1:] == workspace and type(
                             package.beta["workspace_exec"].get("trusted")) is dict,
-                        host_full_access=getattr(config, "host_full_access", False) is True),
+                        host_full_access=getattr(config, "host_full_access", False) is True,
+                        conversation_workspaces=tuple(getattr(package, "beta", {}).get("conversation_workspaces", {}).values())
+                        if not worker and getattr(config, "host_full_access", False) is True else ()),
                 handoff=handoff,
                 diagnostics=True)
             pump.run()

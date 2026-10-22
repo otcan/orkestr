@@ -99,9 +99,16 @@ def encode(value):
 
 class Channel:
     def __init__(self, workspace, *, expected_native=None, offline_python=False, workspace_exec=False,
-                 workspace_trusted=False, host_full_access=False):
+                 workspace_trusted=False, host_full_access=False, conversation_workspaces=()):
         # Operator instance opt-in only: Codex danger-full-access on the host.
         require(type(host_full_access) is bool)
+        # Operator-pinned per-conversation working directories (host full
+        # access only). Runtime selects one for a Deep/Fast thread; no other
+        # directory is ever accepted.
+        conversation_workspaces = tuple(str(path) for path in conversation_workspaces)
+        require(not conversation_workspaces or host_full_access)
+        require(all(path.startswith("/") and "\0" not in path for path in conversation_workspaces))
+        self.conversation_workspaces = frozenset(conversation_workspaces)
         self.sandbox = ("danger-full-access", "dangerFullAccess") if host_full_access else (
             "read-only", "readOnly")
         require(type(offline_python) is bool and type(workspace_exec) is bool
@@ -275,6 +282,9 @@ class Channel:
                 require(isinstance(params, dict) and params.get("dynamicTools") == [tool])
                 params = dict(params)
                 del params["dynamicTools"]
+            cwd = params.get("cwd") if isinstance(params, dict) else None
+            if cwd != self.workspace and cwd in self.conversation_workspaces:
+                self.workspace = cwd
             require(params == {"cwd": self.workspace, "approvalPolicy": "never",
                                "sandbox": self.sandbox[0], "ephemeral": False, "modelProvider": "openai"}
                     and params["ephemeral"] is False)

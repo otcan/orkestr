@@ -111,7 +111,7 @@ def validate(raw):
     require(type(raw) is bytes and len(raw) <= MAX_BETA_CONFIG_BYTES, 'bounded beta config required')
     value = json.loads(raw.decode('utf-8'), object_pairs_hook=unique,
                        parse_constant=lambda _: (_ for _ in ()).throw(RuntimeError('invalid beta number')))
-    require(type(value) is dict and set(value) - {'roles', 'workspace_exec', 'additional_workspace_exec', 'max_active_windows', 'host_full_access', 'claude', 'window_max_minutes', 'conversation_window_max_minutes'} == FIELDS, 'closed beta config fields required')
+    require(type(value) is dict and set(value) - {'roles', 'workspace_exec', 'additional_workspace_exec', 'max_active_windows', 'host_full_access', 'claude', 'window_max_minutes', 'conversation_window_max_minutes', 'conversation_workspaces'} == FIELDS, 'closed beta config fields required')
     require(type(value['schema_version']) is int and value['schema_version'] == 1, 'beta schema version')
     for name in ('owner_id', 'conversation_id'):
         text = value[name]
@@ -146,6 +146,7 @@ def validate(raw):
         capacity = value['max_active_windows']
         require(type(capacity) is int and 1 <= capacity <= 12, 'bounded beta window capacity required')
     window_lifetimes(value)
+    conversation_workspaces(value)
     if 'host_full_access' in value:
         host_full_access(value['host_full_access'])
     if 'claude' in value:
@@ -182,6 +183,27 @@ def window_lifetimes(value):
                 raise RuntimeError('window lifetime conversation') from None
             require(str(identifier) == conversation and identifier.int != 0
                     and type(minutes) is int and 15 <= minutes <= 240, 'window lifetime ceilings')
+    return value
+
+
+def conversation_workspaces(value):
+    """Optional per-conversation Codex Deep/Fast working directories (for a
+    migrated V1 thread's workspace). Host full access only."""
+    if 'conversation_workspaces' not in value:
+        return value
+    table = value['conversation_workspaces']
+    require(type(table) is dict and 0 < len(table) <= 128 and 'host_full_access' in value,
+            'conversation workspaces require host_full_access')
+    for conversation, path in table.items():
+        try:
+            identifier = uuid.UUID(conversation)
+        except (ValueError, TypeError, AttributeError):
+            raise RuntimeError('conversation workspace conversation') from None
+        require(str(identifier) == conversation and identifier.int != 0
+                and type(path) is str and path.startswith('/') and path != '/' and '\x00' not in path
+                and not path.endswith('/') and len(path) <= 4096
+                and all(part not in ('', '.', '..') for part in path.split('/')[1:]),
+                'conversation workspace path')
     return value
 
 

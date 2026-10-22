@@ -143,7 +143,7 @@ class Package:
         beta = self.beta
         require(set(beta) - {"roles", "workspace_exec", "additional_workspace_exec", "max_active_windows",
                              "window_max_minutes", "conversation_window_max_minutes",
-                             "host_full_access", "claude"} == {"schema_version", "owner_id", "conversation_id", "manager_socket",
+                             "host_full_access", "claude", "conversation_workspaces"} == {"schema_version", "owner_id", "conversation_id", "manager_socket",
                 "launcher", "launcher_sha256", "workspace", "namespace", "supervisor_key"}
                 and type(beta["schema_version"]) is int and beta["schema_version"] == 1,
                 "beta_format")
@@ -169,6 +169,16 @@ class Package:
                     and {"HOME", "PATH"} <= set(access["environment"])
                     and all(type(k) is str and type(v) is str and "\0" not in k + v
                             for k, v in access["environment"].items()), "host_full_access")
+        if "conversation_workspaces" in beta:
+            # Per-conversation Deep/Fast working directories, host full access only.
+            table = beta["conversation_workspaces"]
+            require(type(table) is dict and 0 < len(table) <= 128 and "host_full_access" in beta
+                    and all(type(k) is str and re.fullmatch(
+                        r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", k)
+                        and type(v) is str and v.startswith("/") and v != "/" and "\0" not in v
+                        and not v.endswith("/") and len(v) <= 4096
+                        and all(part not in ("", ".", "..") for part in v.split("/")[1:])
+                        for k, v in table.items()), "conversation_workspaces")
         additional = beta.get("additional_workspace_exec", [])
         # Further conversations' projects: same closed shape and the same
         # command profile kind (one tool schema for every Worker broker).
