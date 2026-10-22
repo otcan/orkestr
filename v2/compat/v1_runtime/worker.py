@@ -7,7 +7,8 @@ import sys
 import time
 import uuid
 
-from .ledger import DEFAULT_MAX_INPUT_AGE_S, DIGEST_NAMESPACE as DIGEST_REPLY_NAMESPACE, PROGRESS_LIMIT, no_reply
+from .ledger import (DEFAULT_MAX_INPUT_AGE_S, DIGEST_NAMESPACE as DIGEST_REPLY_NAMESPACE, PROGRESS_LIMIT, WEB_TEXT_LIMIT,
+                     no_reply)
 from . import instructions
 from .participants import compose
 from .rust_client import ClientError
@@ -20,6 +21,18 @@ DIGEST_POLL_S = 15
 POST_POLL_S = 3
 POST_PAGE = 20
 POST_AUTHORS = ("coordinator", "operator")
+# Web-UI owner messages (snapshot `origin: "web"`) are mirrored to the group and
+# their accepted Deep answer follows. Interactive, so looked for every 3 s.
+WEB_POLL_S = 3
+WEB_PAGE = 50
+WEB_PAGES = 4
+WEB_WATCHES_PER_PASS = 8
+# An answer is awaited at most this long (above the 4 h window ceiling).
+WEB_ANSWER_MAX_S = 5 * 3600
+# A web message with no Deep run of its own once no window is open is dropped.
+WEB_NO_RUN_GRACE_S = 120
+DEEP_TERMINAL_PHASES = ("failed", "lost", "cancelled", "blocked", "stopped", "interrupted")
+APP_FILES = re.compile(r"\n*\[Files attached in the Orkestr app[^\n]*:\n((?:- [^\n]*\n?)*)\]?", re.S)
 # Runtime marker of an asynchronous question (Codex `request_user_input_async`)
 # in a progress payload; must equal the runtime's ASYNC_QUESTION_PREFIX. Such a
 # question is sent at once as its own message, never as the input's final.
@@ -159,6 +172,10 @@ class Worker:
         self.max_input_age_s = max_input_age_s
         self._digest_checked = None
         self._posts_checked = None
+        self._web_checked = None
+        # Binding flags: mirror web-UI owner messages; name their files (else count only).
+        self.web_mirror = True
+        self.attachments = False
         # Optional per-binding chat rules file (see instructions.py); not pinned.
         self.instructions_path = None
         self.instructions_error = None
@@ -387,6 +404,167 @@ class Worker:
             self.ledger.enqueue_post(row, identity)
             self.client.request("POST", "/posts/%s/delivered" % row["id"], body={}, allowed=(200,))
 
+    def web_text(self, text):
+        """The owner's web message for WhatsApp: app attachment notes become one
+        line (file names with `attachments`, else only the count); bounded."""
+        files = []
+        def strip(match):
+            files.extend(line[2:].split(" (", 1)[0] for line in match.group(1).splitlines() if line.startswith("- "))
+            return ""
+        body = APP_FILES.sub(strip, text).strip()
+        if files:
+            note = ("\U0001f4ce " + ", ".join(files)) if self.attachments else "\U0001f4ce %d file(s) attached in the app" % len(files)
+            body = (body + "\n\n" + note) if body else note
+        if len(body) > WEB_TEXT_LIMIT:
+            body = body[:WEB_TEXT_LIMIT].rstrip() + " \u2026"
+        return body
+
+    def discover_web(self):
+        """Mirror owner messages typed in the V2 web UI to the group.
+
+        Only snapshot rows the server marks `origin: "web"` qualify, and never a
+        message this adapter admitted itself (no echo of WhatsApp input). The
+        first scan of a ledger only records the current position."""
+        cursor = self.ledger.web_cursor()
+        if cursor is None:
+            value = self.call("GET", "")
+            if not isinstance(value, dict) or type(value.get("last_sequence")) is not int:
+                raise Refused("snapshot_shape")
+            self.ledger.set_web_cursor(value["last_sequence"])
+            return
+        own, identity = None, None
+        for _ in range(WEB_PAGES):
+            value = self.call("GET", "?after=%d&limit=%d" % (cursor, WEB_PAGE))
+            rows = value.get("messages") if isinstance(value, dict) else None
+            if not isinstance(rows, list) or len(rows) > WEB_PAGE:
+                raise Refused("snapshot_shape")
+            for row in rows:
+                if (not isinstance(row, dict) or type(row.get("sequence")) is not int or row["sequence"] <= cursor or
+                        not isinstance(row.get("message_id"), str) or not isinstance(row.get("text"), str)):
+                    raise Refused("snapshot_shape")
+                if row.get("origin") == "web" and row.get("actor_kind") == "owner" and row["text"].strip():
+                    if own is None:
+                        own = self.ledger.own_message_ids()
+                    if row["message_id"] not in own:
+                        uuid.UUID(row["message_id"])
+                        if identity is None:
+                            identity = self.provider_identity()
+                        text = self.web_text(row["text"])
+                        if text and self.ledger.enqueue_web(row, text, identity):
+                            print("orkestr-v2-wa-adapter web_mirrored conversation=%s message=%s"
+                                  % (getattr(self.client, "conversation", "?"), row["message_id"]),
+                                  file=sys.stderr, flush=True)
+                cursor = row["sequence"]
+                self.ledger.set_web_cursor(cursor)
+            if value.get("next_cursor") is None:
+                break
+
+    def web_dropped(self, watch, reason):
+        self.ledger.drop_web_watch(watch["message_id"])
+        print("orkestr-v2-wa-adapter web_answer_dropped conversation=%s message=%s reason=%s"
+              % (getattr(self.client, "conversation", "?"), watch["message_id"], reason), file=sys.stderr, flush=True)
+
+    def drive_web(self):
+        """Deliver the accepted Deep answer of each mirrored web message.
+
+        Never blocks the serial WhatsApp queue and never opens a window or
+        accepts a run: the web UI (or owner auto-accept) does that. Runs are
+        matched by the message's own source tuple and read by run ID."""
+        for watch in self.ledger.web_watches(WEB_WATCHES_PER_PASS):
+            try:
+                self.drive_web_one(watch)
+            except Refused as error:
+                self.web_dropped(watch, str(error))
+            except Exception:
+                # Transient: retried at the next pass, bounded by WEB_ANSWER_MAX_S.
+                if time.time() - watch.get("since", 0) > WEB_ANSWER_MAX_S:
+                    self.web_dropped(watch, "answer_timeout")
+
+    def drive_web_one(self, watch):
+        now = time.time()
+        if now - watch.get("since", now) > WEB_ANSWER_MAX_S:
+            return self.web_dropped(watch, "answer_timeout")
+        if "event_id" not in watch:
+            first = self.client.read_events(after=watch["sequence"] - 1, maximum=1)
+            event = first[0] if first else None
+            if (not event or event.get("sequence") != watch["sequence"] or
+                    (event.get("payload_ref_or_safe_payload") or {}).get("message_id") != watch["message_id"]):
+                raise Refused("web_event_mismatch")
+            watch.update(event_id=event["event_id"], cursor=watch["sequence"])
+            self.ledger.save_web_watch(watch)
+        intake = {"message_id": watch["message_id"], "event_id": watch["event_id"]}
+        events = self.client.read_events(after=watch["cursor"], maximum=100)
+        ids = set(watch.get("runs", [])) | set(self.client.matching_run_ids(events, intake))
+        if len(ids) > 128:
+            raise Refused("too_many_runs")
+        watch["runs"] = sorted(ids)
+        watch["cursor"] = max([watch["cursor"]] + [e["sequence"] for e in events])
+        self.ledger.save_web_watch(watch)
+        deep = []
+        for run in watch["runs"]:
+            status, value = self.client.request("GET", "/execution?run_id=" + run, allowed=(200, 404))
+            if status == 200 and isinstance(value, dict) and value.get("run_id") == run:
+                deep.append(value)
+        done = [d for d in deep if d.get("phase") == "completed"]
+        if done:
+            return self.web_answer(watch, done[-1]["run_id"])
+        live = [d for d in deep if d.get("phase") not in DEEP_TERMINAL_PHASES]
+        for status in live:
+            self.web_progress(watch, status)
+        if live:
+            return
+        if deep:
+            return self.web_dropped(watch, "deep_" + str(deep[-1].get("phase")))
+        if len(events) == 100 or now - watch["since"] < WEB_NO_RUN_GRACE_S:
+            return
+        current = self.call("GET", "/window", allowed=(200, 204))
+        if isinstance(current, dict) and current.get("state") != "closed":
+            return
+        self.web_dropped(watch, "no_run")
+
+    def web_progress(self, watch, status):
+        if not self.progress_updates or status.get("phase") != "running":
+            return
+        payload_id = (status.get("progress") or {}).get("payload_id")
+        seen = watch.setdefault("progress", [])
+        now = time.time()
+        if (not payload_id or payload_id in seen or len(seen) >= PROGRESS_LIMIT or
+                now - watch.get("progress_at", watch["since"]) < PROGRESS_INTERVAL_S):
+            return
+        payload = self.call("GET", "/payloads/" + payload_id)
+        if payload.get("run_id") != status["run_id"] or payload.get("payload_id") != payload_id:
+            raise Refused("progress_payload_mismatch")
+        watch["progress_at"] = now
+        text = payload.get("text")
+        if not isinstance(text, str) or not text.strip() or no_reply(text) or text.startswith(QUESTION_PREFIX):
+            seen.append(payload_id)
+            return self.ledger.save_web_watch(watch)
+        if len(text) > PROGRESS_MAX_CHARS:
+            text = text[:PROGRESS_MAX_CHARS].rstrip() + " \u2026"
+        self.ledger.web_progress(watch, payload_id, text)
+
+    def web_answer(self, watch, run_id):
+        after, rows = watch["sequence"], []
+        for _ in range(10):
+            history = self.call("GET", "/accepted-results?limit=50&after_sequence=" + str(after))
+            rows.extend(r for r in history.get("results", []) if r.get("run_id") == run_id)
+            cursor = history.get("next_after_sequence")
+            if cursor is None or rows:
+                break
+            if type(cursor) is not int or cursor <= after:
+                raise Refused("history_cursor")
+            after = cursor
+        if len(rows) != 1 or rows[0].get("payload_removed") is not False or not rows[0].get("payload_id"):
+            # Completed without one canonical acceptance (for example rejected).
+            raise Refused("not_accepted")
+        payload = self.call("GET", "/payloads/" + rows[0]["payload_id"])
+        if payload.get("run_id") != run_id or not isinstance(payload.get("text"), str):
+            raise Refused("payload_mismatch")
+        text = self.render_final(payload["text"])
+        if text is None:
+            return self.web_dropped(watch, "no_reply")
+        self.ledger.complete_web(watch, text, self.provider_identity())
+
     def finish_digest(self, data):
         digest = data["digest"]
         text = self.render_final(digest["text"])
@@ -485,6 +663,10 @@ class Worker:
             if intake.get("status") != "accepted" or not all(intake.get(k) for k in ("message_id", "event_id", "sequence")):
                 raise Refused("intake_receipt")
             data.update(intake=intake, cursor=intake["sequence"] - 1, phase="admitted", admitted_at=time.time())
+            # Every Core message this adapter admitted is never mirrored back as web input.
+            own = data.setdefault("own_messages", [])
+            if intake["message_id"] not in own:
+                own.append(intake["message_id"])
             self.ledger.save(data)
         self.fire_trigger(data)
         if data.get("origin") == "timer" and "window" not in data and "window_request" not in data:
@@ -953,6 +1135,17 @@ class Worker:
                 self.discover_posts()
             except Exception:
                 # A missing route (older server) or a failure is retried at the next check.
+                pass
+        # Web-UI owner messages: interactive, never queued behind WhatsApp input.
+        if self.web_mirror and (self._web_checked is None or time.monotonic() - self._web_checked >= WEB_POLL_S):
+            self._web_checked = time.monotonic()
+            try:
+                self.discover_web()
+            except Exception:
+                pass
+            try:
+                self.drive_web()
+            except Exception:
                 pass
         try:
             for data in self.ledger.mark_stalled(STALL_NOTICE_AFTER_S, STALL_NOTICE):

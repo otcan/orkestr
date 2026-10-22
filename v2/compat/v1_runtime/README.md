@@ -389,6 +389,46 @@ reaches Rust as input and never wakes a provider. While a binding is paused
 (`enabled: false`) the adapter does not poll: posts stay pending in Rust and
 are delivered after it is enabled again (the same as digests).
 
+## Web-UI owner messages
+
+The owner may also type in the V2 web UI of a bound conversation. Those
+messages and their answers are mirrored to the group, so WhatsApp shows the
+whole conversation. Every 3 s (while the binding is enabled) the worker reads
+the conversation snapshot (`GET /api/v2/conversations/<id>?after=<cursor>`)
+and adopts each row with `origin: "web"` and `actor_kind: "owner"` that this
+adapter did not admit itself:
+
+- **Only web input.** The server marks a row `origin: "web"` only for a
+  message the web composer sent (its `client_message_id` starts with `web:`).
+  Timer occurrences, steering, conversation posts and every message this
+  adapter admitted (WhatsApp and V1-local input; their Core message IDs are
+  kept in the ledger) are never mirrored, so nothing echoes back. A server
+  without the field mirrors nothing.
+- **The message at once.** One pseudo timer input labelled `🖥️ (web)` (the
+  same parent shape as conversation posts) whose final reply is the owner's
+  text, so V1 sends `[Timer: 🖥️ (web)]` and the text. App attachment notes
+  become one line: the file names with `attachments`, otherwise only the
+  count. No file bytes are exported. Text is bounded to 3500 characters.
+- **The answer when accepted.** The message's own Deep runs are matched by
+  its source tuple and read by run ID. The adapter never sends, opens a window
+  for or accepts a web message: the web UI (or owner auto-accept) does. Once
+  a Deep run of it is accepted, the canonical accepted payload (after Rust's
+  reply settings; `NO_REPLY` sends nothing) is exported under a second pseudo
+  input labelled `🖥️ (web) ↩ <first 60 characters of the message>`. Several
+  web messages in one window each get their own answer.
+- **Progress** (`progress_updates` only): at most three notes per message,
+  60 s apart, each as its own `🖥️ (web) progress: …` message.
+- **Never blocking.** Awaited answers live in their own ledger table, not in
+  the serial WhatsApp input queue. One is dropped with a log line
+  (`web_answer_dropped ... reason=`) when its Deep run fails or is stopped,
+  when it has no run once no window is open, or after 5 hours.
+  `GET /threads/<id>/health` reports `webAnswersAwaited`.
+
+Ids are deterministic (uuid5 of the Core message ID) and adoption writes the
+mirror and the awaited answer in one transaction, so a restart or a lost
+cursor write adopts nothing twice. The first scan of a ledger only records the
+current position.
+
 ## Progress, NO_REPLY and attachments
 
 With `progress_updates`, intermediate payloads of the exact matched Deep run
