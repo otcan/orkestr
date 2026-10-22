@@ -11,6 +11,7 @@ Implemented routes:
 |---|---|
 | GET `/api/v2/health` | Public liveness only; runtime disabled, fixture mode false |
 | POST `/api/v2/setup` | `{username,password}` plus `x-orkestr-bootstrap`; 201 with global conversation ID, 409 on rebootstrap |
+| GET `/api/v2/setup` | `x-orkestr-bootstrap` only; `{"setup_required": bool}` (no-store). 401 without the token, so nothing is disclosed to other clients |
 | POST `/api/v2/session` | `{username,password}`; bearer token, type, expiry seconds, global conversation ID |
 | GET `/api/v2/projects` | `{projects,next_cursor}` |
 | POST `/api/v2/projects` | `{client_request_id,name}`; Project, 201 new / 200 duplicate / 409 conflict |
