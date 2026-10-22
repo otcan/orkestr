@@ -187,6 +187,13 @@ export const scenarios = [
     await waitText('Codex');
     await page.waitForFunction(() => [...document.querySelectorAll('button')].some(b => /^(Stop|Stop unavailable)$/.test(b.textContent.trim())));
     await waitText('Steer running work');
+    // The linked V1 thread's workers: retired ones only on request.
+    await waitText('Synthetic V1 worker progress');
+    assert.ok(!(await page.evaluate(() => document.body.textContent)).includes('Synthetic V1 worker 3'), 'Retired V1 workers start hidden');
+    assert.equal(await page.$eval('.v1-workers a', a => a.getAttribute('href')), '#v1/worker-synthetic-group-0001');
+    await clickText('Show retired (1)');
+    await waitText('Synthetic V1 worker 3 · retired');
+    await clickText('Hide retired (1)');
     await clickText('Projects');
     await waitText('Git: not_configured');
     await clickText('Errand project');

@@ -143,3 +143,18 @@ test('Fast status uses its own cookie route, including exact-run lookup and abse
         stop(); await run; assert.equal(messages[0].status,204);
     }
 });
+
+test('V1 workers read only the exact conversation route',async()=>{
+    const target=path.replace('/execution','/v1-workers');let first=true,cancel;const messages=[];
+    const run=execute({recv:()=>first?(first=false,Promise.resolve({path:target})):new Promise(resolve=>{cancel=resolve;}),send:m=>messages.push(m)},async(url,options)=>{
+        assert.equal(url,target);assert.equal(options.credentials,'same-origin');
+        assert.equal(options.headers,undefined);assert.equal(options.method,'GET');
+        return new Response('{"workers":[]}');
+    });
+    while(!messages.length) await new Promise(resolve=>setImmediate(resolve));
+    cancel();await run;assert.deepEqual(messages[0].body.workers,[]);
+    for(const query of ['?limit=25','/x','?show_retired=1']) {
+        await assert.rejects(execute({recv:async()=>({path:target+query})},()=>assert.fail('no fetch')),/Invalid status path/);
+    }
+    await assert.rejects(execute({recv:async()=>({path:'/api/v2/conversations/x/v1-workers'})},()=>assert.fail('no fetch')),/Invalid status path/);
+});

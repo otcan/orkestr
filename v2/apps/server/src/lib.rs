@@ -67,6 +67,7 @@ pub mod timer_http;
 mod timer_lifecycle;
 mod v1_links;
 mod v1_manage_http;
+mod v1_workers_http;
 pub mod whatsapp_chats;
 mod whatsapp_chats_http;
 mod window_http;
@@ -499,6 +500,7 @@ pub fn router_with_google_catalog(
         .merge(thread_icons::router())
         .merge(v1_links::router())
         .merge(v1_manage_http::router())
+        .merge(v1_workers_http::router())
         .merge(whatsapp_chats_http::router())
         .merge(restricted_http::router())
         .merge(google_registry_metadata::router(catalog))

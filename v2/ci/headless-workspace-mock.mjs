@@ -348,6 +348,19 @@ async function api(state, req, res, url) {
       at_ms: m.sequence === 1 ? Date.parse('2025-07-01T14:42:05Z') : Date.now(), receipts: [] }));
     return json(res, 200, { conversation_id: id, times, next_after: null });
   }
+  // V1 workers of the linked V1 thread (Research notes only): one working
+  // worker, one nested idle worker and one retired worker.
+  if (rest === '/v1-workers' && req.method === 'GET') {
+    const now = Date.now();
+    const worker = (n, parent, depth, state, extra = {}) => ({ thread_id: `worker-${V1_GROUP}-000${n}`, name: `Synthetic V1 worker ${n}`,
+      parent_thread_id: parent, depth, state, last_activity_ms: now - n * 60000, preview: null, openable: state !== 'retired', conversation_id: null, ...extra });
+    return json(res, 200, { schema_version: 1, observed_at_ms: now, conversation_id: id, v1_thread_id: id === B ? V1_GROUP : null,
+      v1_status: 'ready', retired: id === B ? 1 : 0, truncated: false, workers: id !== B ? [] : [
+        worker(1, V1_GROUP, 1, 'working', { preview: { author: 'assistant', text: 'Synthetic V1 worker progress' } }),
+        worker(2, `worker-${V1_GROUP}-0001`, 2, 'idle'),
+        worker(3, V1_GROUP, 1, 'retired'),
+      ] });
+  }
   if (rest === '/execution' && req.method === 'GET') {
     if (id !== B) { res.writeHead(204, { 'cache-control': 'no-store' }); return res.end(); }
     return json(res, 200, { schema_version: 1, conversation_id: B, run_id: uuid(204), revision: 3, observed_at_ms: Date.now(), phase: 'running',

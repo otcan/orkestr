@@ -367,6 +367,45 @@ impl Store {
     }
 }
 
+/// The V1 thread each directory conversation is linked to, in the sidebar's
+/// precedence (lineage, first archived source, provisioned WhatsApp thread).
+const V1_LINKS: &str = "SELECT d.conversation_id,coalesce(l.source_thread_id,
+  (SELECT s.source_thread_id FROM archived_history_sources s WHERE s.conversation_id=d.conversation_id AND s.owner_id=d.owner_id
+   ORDER BY s.row_sequence LIMIT 1),
+  (SELECT p.v1_thread_id FROM whatsapp_chat_provisions p WHERE p.owner_id=d.owner_id AND p.conversation_id=d.conversation_id)) AS thread
+ FROM conversation_directory d
+ LEFT JOIN conversation_lineage l ON l.owner_id=d.owner_id AND l.conversation_id=d.conversation_id
+ WHERE d.owner_id=? ORDER BY d.row_sequence LIMIT ?";
+
+impl Store {
+    /// Every directory conversation of the owner (the sidebar's bound) with
+    /// the V1 thread it is linked to, if any. No previews or activity: a
+    /// cheap read for views that only need the V1 link.
+    pub async fn conversation_v1_links(
+        &self,
+        credential: &str,
+        owner: &OwnerId,
+    ) -> Result<Vec<(ConversationId, Option<String>)>> {
+        let mut tx = self.sidebar_scope(credential, owner, false).await?;
+        let rows = sqlx::query(V1_LINKS)
+            .bind(owner.to_string())
+            .bind(SIDEBAR_MAX_ENTRIES as i64)
+            .fetch_all(&mut *tx)
+            .await
+            .map_err(unavailable)?;
+        tx.commit().await.map_err(unavailable)?;
+        rows.iter()
+            .map(|row| {
+                let id: String = row.get("conversation_id");
+                Ok((
+                    ConversationId(id.parse().map_err(unavailable)?),
+                    row.get("thread"),
+                ))
+            })
+            .collect()
+    }
+}
+
 #[cfg(test)]
 #[path = "sidebar_tests.rs"]
 mod tests;
