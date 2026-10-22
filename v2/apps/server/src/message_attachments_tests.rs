@@ -173,6 +173,23 @@ async fn linked_v1_chat_uploads_to_v1_and_the_input_carries_the_files() {
         "/synthetic-v1/uploads/group-coordinated/photo.png"
     );
     assert_eq!(sent["attachments"][0]["mimetype"], "image/png");
+    // V1 requires encrypted uploads: the file went through an inbound session.
+    assert_eq!(
+        sent["attachments"][0]["source"],
+        "browser_encrypted_inbound"
+    );
+    assert_eq!(sent["attachments"][0]["size"], PNG.len());
+    // A retry with the same key resumes the same V1 session.
+    let (status, again) = send(
+        &case.state,
+        "POST",
+        "/api/v2/v1-threads/group-coordinated/uploads",
+        &[&auth],
+        &upload(key, &[("photo.png", "image/png", PNG)]),
+    )
+    .await;
+    assert_eq!(status, 200, "{again}");
+    assert_eq!(again["attachments"][0]["attachment_id"], id.as_str());
     // Uploads belong to their thread; unknown ids are refused before V1.
     let other = json!({"client_message_id": "1a2b3c4d-0000-4000-8000-000000000002", "text": "Synthetic",
         "attachment_ids": ["1a2b3c4d-0000-4000-8000-0000000000ff"]});
