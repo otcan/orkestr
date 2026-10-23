@@ -12,6 +12,9 @@ import {createDynamicGroupRegistry, createDynamicGroupView, eligibleGroups, vali
 const key = value => crypto.createHash('sha256').update(value).digest('hex');
 const progressPhases = new Set(['commentary', 'awaiting_approval']);
 const progressSources = new Set(['codex-rollout', 'codex-app-server', 'codex-app-server-import', 'claude-code']);
+const adapterProgress = message => message.source === 'rust-v2-adapter' && message.remoteKind === 'progress'
+  && typeof message.remoteMessageId === 'string' && Boolean(message.remoteMessageId.trim())
+  && !message.remoteMirrorAck?.outcome;
 // Replies posted after the turn ended (a bound api-session) and parented by V1
 // to the latest relay-routed input. Delivered once, within a bounded window.
 const lateSources = new Set(['api-session']);
@@ -101,7 +104,7 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
   // Commentary honours the thread's own update suppression; approval requests
   // still reach the owner because the turn waits on them.
   const eligibleProgress = (message, suppressUpdates = false) => config.forwardProgressUpdates === true
-    && progressPhases.has(message.phase) && progressSources.has(message.source)
+    && progressPhases.has(message.phase) && (progressSources.has(message.source) || adapterProgress(message))
     && !(suppressUpdates && message.phase === 'commentary')
     && Number.isFinite(Date.parse(message.createdAt)) && Date.parse(message.createdAt) >= progressSince;
   const inbox = inboxDb || new DatabaseSync(config.journalPath, {readOnly: true});

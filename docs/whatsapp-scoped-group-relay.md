@@ -56,6 +56,14 @@ Changing that contract requires a deliberate journal migration; do not reset a
 journal to bypass an uncertain delivery. Keep the config, journals and account
 credentials private. `ORKESTR_ENV_FILE` selects the local CLI API credentials.
 
+Progress from the built-in V2 adapter (`rust-v2-adapter`) follows the same opt-in,
+activation cutoff, parent matching, per-thread update suppression and durable
+receipt rules as local executor progress. Enable adapter progress export and
+clear the thread's update-suppression flag when progress delivery is wanted.
+The legacy mirror stays disabled while the scoped relay owns delivery.
+Adapter updates already acknowledged by a transport are never replayed after
+progress is enabled or the relay restarts.
+
 ## Dynamic group registration
 
 A group created for a Rust (V2) chat should not need a contract migration and a
