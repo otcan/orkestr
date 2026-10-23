@@ -97,9 +97,11 @@ impl Store {
                 return Err(RuntimeStoreError::Conflict);
             }
         } else {
-            sqlx::query("UPDATE production_requested_native SET observed_run_id=?,observed_event_key=? WHERE session_id=? AND binding_generation=? AND observed_run_id IS NULL")
+            sqlx::query("UPDATE production_requested_native SET observed_run_id=?,observed_event_key=? WHERE session_id=? AND binding_generation=? AND context_id=? AND incarnation_id=? AND observed_run_id IS NULL")
                 .bind(provider.run.run_id.to_string()).bind(source_event_key).bind(provider.run.session_id.to_string())
-                .bind(i64::try_from(provider.binding.generation).map_err(db)?).execute(&mut *tx).await.map_err(db)?;
+                .bind(i64::try_from(provider.binding.generation).map_err(db)?)
+                .bind(&self.context()?.id).bind(&self.context()?.incarnation)
+                .execute(&mut *tx).await.map_err(db)?;
         }
         tx.commit().await.map_err(db)?;
         Ok(())
@@ -109,10 +111,14 @@ impl Store {
         tx: &mut SqliteConnection,
         p: &ProviderAdmission,
     ) -> Result<()> {
-        let pending:i64 = sqlx::query_scalar("SELECT count(*) FROM production_requested_native WHERE session_id=? AND binding_generation=? AND (observed_run_id IS NULL OR observed_run_id!=?)")
+        let c = self.context()?;
+        let (initialized, observed): (i64, i64) = sqlx::query_as("SELECT count(*),coalesce(sum(CASE WHEN requested_native_id=? AND observed_run_id=? AND observed_event_key IS NOT NULL THEN 1 ELSE 0 END),0) FROM production_requested_native WHERE session_id=? AND binding_generation=? AND context_id=? AND incarnation_id=?")
+            .bind(p.run.native_session_id.as_deref()).bind(p.run.run_id.to_string())
             .bind(p.run.session_id.to_string()).bind(i64::try_from(p.binding.generation).map_err(db)?)
-            .bind(p.run.run_id.to_string()).fetch_one(tx).await.map_err(db)?;
-        if pending != 0 {
+            .bind(&c.id).bind(&c.incarnation).fetch_one(tx).await.map_err(db)?;
+        if initialized != observed
+            || (p.binding.provider_kind == ProviderKind::Claude && observed != 1)
+        {
             return Err(RuntimeStoreError::Fenced);
         }
         Ok(())

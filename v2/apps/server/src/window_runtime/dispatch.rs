@@ -17,13 +17,14 @@ use std::{
         atomic::{AtomicBool, Ordering},
         Arc, Mutex, Weak,
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tokio::sync::{watch, Notify};
 
 const POLL: Duration = Duration::from_secs(1);
-/// Local admission failures before a still-queued intent is withdrawn.
-const MAX_FAILURES: u32 = 3;
+/// Admission errors never consume intent; retry without a busy loop.
+const RETRY_BASE: Duration = Duration::from_secs(5);
+const RETRY_MAX: Duration = Duration::from_secs(60);
 /// Bounded work per dispatch pass; later rows wait for the next pass.
 const MAX_ROUNDS: usize = 32;
 /// A follow-up needs this much remaining work time, else it waits for close.
@@ -47,7 +48,7 @@ pub(super) fn joinable(status: &ExecutionWindowStatus, now_ms: i64, max_lifetime
 
 pub(crate) struct QueueState {
     credential: Mutex<Option<String>>,
-    failures: Mutex<HashMap<String, u32>>,
+    failures: Mutex<HashMap<String, (u32, Instant)>>,
     wake: Notify,
     pending: AtomicBool,
     swept: AtomicBool,
@@ -96,13 +97,26 @@ impl QueueState {
     pub(super) fn is_closed(&self) -> bool {
         self.closed.load(Ordering::Acquire)
     }
+    fn retry_due(&self, key: &str) -> bool {
+        self.failures.lock().is_ok_and(|failures| {
+            failures
+                .get(key)
+                .is_none_or(|(_, next)| Instant::now() >= *next)
+        })
+    }
     fn failed(&self, key: &str) -> u32 {
         let Ok(mut failures) = self.failures.lock() else {
-            return MAX_FAILURES;
+            return 0;
         };
-        let count = failures.entry(key.to_owned()).or_default();
-        *count = count.saturating_add(1);
-        *count
+        let retry = failures
+            .entry(key.to_owned())
+            .or_insert((0, Instant::now()));
+        retry.0 = retry.0.saturating_add(1);
+        retry.1 = Instant::now()
+            + RETRY_BASE
+                .saturating_mul(1 << retry.0.saturating_sub(1).min(4))
+                .min(RETRY_MAX);
+        retry.0
     }
     fn settled(&self, key: &str) {
         if let Ok(mut failures) = self.failures.lock() {
@@ -388,6 +402,11 @@ impl Controller {
             let Ok(entry) = self.entry(conversation) else {
                 continue;
             };
+            // Event identity is owner-wide; request keys may repeat across conversations.
+            let retry_key = row.input_event_id.to_string();
+            if !self.queue.retry_due(&retry_key) {
+                continue;
+            }
             let owner = self.config.owner_id.clone();
             let result = entry.process(browser, &owner, conversation, &request).await;
             if let Err(reason) = &result {
@@ -396,15 +415,14 @@ impl Controller {
             }
             match result {
                 Ok(_) => {
-                    self.queue.settled(&row.request_key);
+                    self.queue.settled(&retry_key);
                     live += u32::from(fresh);
                     progressed = true;
                 }
-                Err(_) if self.queue.failed(&row.request_key) >= MAX_FAILURES => {
-                    // A dispatched row is unchanged; only a still-queued one withdraws.
-                    self.withdraw(browser, &row, QueuedWindowWithdrawal::AdmissionRefused)
-                        .await?;
-                    progressed = true;
+                Err(_) if self.queue.failed(&retry_key) == 3 => {
+                    // The occurrence already advanced its timer. Withdrawing it
+                    // here silently loses the only durable execution intent.
+                    eprintln!("ALERT orkestr-v2-server window_queue_deferred conversation={} event={} cause=admission_refused", row.conversation_id, row.input_event_id);
                 }
                 Err(_) => {}
             }
@@ -451,16 +469,25 @@ impl Controller {
         row: &ExecutionWindowQueued,
         reason: QueuedWindowWithdrawal,
     ) -> Result<(), RuntimeStoreError> {
-        self.queue.settled(&row.request_key);
-        self.store
+        self.queue.settled(&row.input_event_id.to_string());
+        let result = self
+            .store
             .withdraw_queued_execution_window_authenticated(
                 browser,
                 &row.conversation_id,
                 &row.request_key,
                 reason,
             )
-            .await
-            .map(|_| ())
+            .await?;
+        if result.state == orkestr_v2_contracts::QueuedWindowState::Withdrawn {
+            let cause = match reason {
+                QueuedWindowWithdrawal::InputUnavailable => "input_unavailable",
+                QueuedWindowWithdrawal::ReconciliationRequired => "reconciliation_required",
+                QueuedWindowWithdrawal::AdmissionRefused => "admission_refused",
+            };
+            eprintln!("ALERT orkestr-v2-server window_queue_withdrawn conversation={} event={} cause={cause}", row.conversation_id, row.input_event_id);
+        }
+        Ok(())
     }
 }
 

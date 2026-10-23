@@ -27,7 +27,25 @@ impl Store {
         c.authenticate(&mut tx).await?;
         c.validate(&mut tx).await?;
         crate::runtime::scope(&mut tx, &c.owner, conversation).await?;
-        let page = projection(&mut tx, &c.owner, conversation, after_sequence, limit).await?;
+        // Match the actual window claim gate. An old unadmitted input must not
+        // spend a one-use native continuation setup for this window.
+        let window = c.window_scope(&mut tx).await?;
+        if window
+            .as_ref()
+            .is_some_and(|w| w.get::<String, _>("conversation_id") != conversation.to_string())
+        {
+            return Err(RuntimeStoreError::Fenced);
+        }
+        let window_id = window.as_ref().map(|w| w.get::<String, _>("id"));
+        let page = projection(
+            &mut tx,
+            &c.owner,
+            conversation,
+            after_sequence,
+            limit,
+            window_id.as_deref(),
+        )
+        .await?;
         tx.commit().await.map_err(db)?;
         Ok(page)
     }
@@ -41,6 +59,7 @@ async fn projection(
     conversation: &ConversationId,
     after_sequence: i64,
     limit: u32,
+    window: Option<&str>,
 ) -> Result<HeldOwnerInputPage> {
     let revision =
         sqlx::query_scalar("SELECT revision FROM execution_revisions WHERE conversation_id=?")
@@ -49,8 +68,8 @@ async fn projection(
             .await
             .map_err(db)?;
     let clock = now(tx).await?;
-    let eligible:i64=sqlx::query_scalar("SELECT count(*) FROM reasoning_inbox i WHERE i.conversation_id=? AND i.state IN ('queued','claimed') AND NOT EXISTS(SELECT 1 FROM ordinary_input_holds h WHERE h.event_id=i.event_id)")
-            .bind(conversation.to_string()).fetch_one(&mut **tx).await.map_err(db)?;
+    let eligible:i64=sqlx::query_scalar("SELECT count(*) FROM reasoning_inbox i WHERE i.conversation_id=? AND i.state IN ('queued','claimed') AND NOT EXISTS(SELECT 1 FROM ordinary_input_holds h WHERE h.event_id=i.event_id) AND (? IS NULL OR EXISTS(SELECT 1 FROM execution_window_inputs wi WHERE wi.window_id=? AND wi.event_id=i.event_id))")
+            .bind(conversation.to_string()).bind(window).bind(window).fetch_one(&mut **tx).await.map_err(db)?;
     let rows=sqlx::query("SELECT h.*,b.run_id,b.through_scope_sequence FROM production_held_inputs h JOIN production_stop_boundaries b ON b.event_id=h.boundary_event_id WHERE h.conversation_id=? AND b.owner_id=? AND h.scope_sequence>? ORDER BY h.scope_sequence LIMIT ?")
             .bind(conversation.to_string()).bind(owner.to_string()).bind(after_sequence).bind(i64::from(limit)+1).fetch_all(&mut **tx).await.map_err(db)?;
     let more = rows.len() > limit as usize;
