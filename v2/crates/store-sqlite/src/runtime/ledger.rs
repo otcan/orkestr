@@ -118,7 +118,7 @@ pub(crate) async fn validate_window_claim(
         return Err(RuntimeStoreError::Expired);
     }
     let earliest: i64 = sqlx::query_scalar(
-        "SELECT min(sequence) FROM reasoning_inbox WHERE conversation_id=? AND state <> 'consumed' AND NOT EXISTS(SELECT 1 FROM ordinary_input_holds h WHERE h.event_id=reasoning_inbox.event_id) AND (? IS NULL OR EXISTS(SELECT 1 FROM execution_window_inputs wi WHERE wi.window_id=? AND wi.event_id=reasoning_inbox.event_id))",
+        "SELECT min(sequence) FROM reasoning_inbox WHERE conversation_id=? AND state IN ('queued','claimed') AND NOT EXISTS(SELECT 1 FROM ordinary_input_holds h WHERE h.event_id=reasoning_inbox.event_id) AND (? IS NULL OR EXISTS(SELECT 1 FROM execution_window_inputs wi WHERE wi.window_id=? AND wi.event_id=reasoning_inbox.event_id))",
     )
     .bind(claim.conversation_id.to_string()).bind(window).bind(window)
     .fetch_one(&mut *conn)

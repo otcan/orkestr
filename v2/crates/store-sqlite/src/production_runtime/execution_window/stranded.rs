@@ -276,7 +276,7 @@ async fn release_inputs(
 
 /// Inputs admitted to this window but never consumed by a Deep run.
 async fn unconsumed_inputs(tx: &mut SqliteConnection, window: Uuid) -> Result<Vec<String>> {
-    sqlx::query_scalar("SELECT wi.event_id FROM execution_window_inputs wi JOIN reasoning_inbox i ON i.event_id=wi.event_id WHERE wi.window_id=? AND i.state!='consumed' AND NOT EXISTS(SELECT 1 FROM production_runs r WHERE r.event_id=wi.event_id AND r.role='deep') ORDER BY i.sequence")
+    sqlx::query_scalar("SELECT wi.event_id FROM execution_window_inputs wi JOIN reasoning_inbox i ON i.event_id=wi.event_id WHERE wi.window_id=? AND i.state IN ('queued','claimed') AND NOT EXISTS(SELECT 1 FROM production_runs r WHERE r.event_id=wi.event_id AND r.role='deep') ORDER BY i.sequence")
         .bind(window.to_string()).fetch_all(&mut *tx).await.map_err(db)
 }
 

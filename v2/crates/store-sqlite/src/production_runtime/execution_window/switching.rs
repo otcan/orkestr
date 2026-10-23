@@ -83,7 +83,7 @@ impl Store {
             .bind(&context).bind(&incarnation).fetch_one(&mut *tx).await.map_err(db)?;
         let unresolved: i64 = sqlx::query_scalar("SELECT count(*) FROM production_runs r WHERE r.context_id=? AND r.incarnation_id=? AND NOT EXISTS(SELECT 1 FROM production_terminal_evidence t WHERE t.run_id=r.id)")
             .bind(&context).bind(&incarnation).fetch_one(&mut *tx).await.map_err(db)?;
-        let queued: i64 = sqlx::query_scalar("SELECT count(*) FROM execution_window_inputs w JOIN reasoning_inbox i ON i.event_id=w.event_id WHERE w.window_id=? AND i.state!='consumed' AND NOT EXISTS(SELECT 1 FROM ordinary_input_holds h WHERE h.event_id=i.event_id)")
+        let queued: i64 = sqlx::query_scalar("SELECT count(*) FROM execution_window_inputs w JOIN reasoning_inbox i ON i.event_id=w.event_id WHERE w.window_id=? AND i.state IN ('queued','claimed') AND NOT EXISTS(SELECT 1 FROM ordinary_input_holds h WHERE h.event_id=i.event_id)")
             .bind(row.get::<String, _>("id")).fetch_one(&mut *tx).await.map_err(db)?;
         let ready = terminal_deep > 0
             && unresolved == 0

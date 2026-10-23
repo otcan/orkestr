@@ -29,7 +29,7 @@ pub(super) async fn next(
         .execution_window_input_in(&mut tx, conversation, None)
         .await?;
     // Do not skip an outstanding earlier admitted claim to take a later follow-up.
-    let row = sqlx::query("SELECT * FROM reasoning_inbox WHERE conversation_id=? AND state <> 'consumed' AND NOT EXISTS(SELECT 1 FROM ordinary_input_holds h WHERE h.event_id=reasoning_inbox.event_id) AND (? IS NULL OR EXISTS(SELECT 1 FROM execution_window_inputs wi WHERE wi.window_id=? AND wi.event_id=reasoning_inbox.event_id)) ORDER BY sequence LIMIT 1")
+    let row = sqlx::query("SELECT * FROM reasoning_inbox WHERE conversation_id=? AND state IN ('queued','claimed') AND NOT EXISTS(SELECT 1 FROM ordinary_input_holds h WHERE h.event_id=reasoning_inbox.event_id) AND (? IS NULL OR EXISTS(SELECT 1 FROM execution_window_inputs wi WHERE wi.window_id=? AND wi.event_id=reasoning_inbox.event_id)) ORDER BY sequence LIMIT 1")
         .bind(conversation.to_string()).bind(&window).bind(&window).fetch_optional(&mut *tx).await.map_err(db)?;
     let Some(row) = row else {
         return Ok(None);

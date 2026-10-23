@@ -195,7 +195,7 @@ impl Store {
             sqlx::query("INSERT INTO production_stop_boundaries(event_id,owner_id,conversation_id,run_id,through_scope_sequence) VALUES(?,?,?,?,?)")
                 .bind(event.to_string()).bind(owner.to_string()).bind(provider.run.conversation_id.to_string())
                 .bind(run.to_string()).bind(sequence-1).execute(&mut *tx).await.map_err(db)?;
-            sqlx::query("INSERT INTO production_held_inputs(event_id,conversation_id,scope_sequence,message_id,boundary_event_id,reason) SELECT i.event_id,i.conversation_id,i.sequence,i.message_id,?,'stop_boundary' FROM reasoning_inbox i WHERE i.conversation_id=? AND i.sequence<=? AND i.state!='consumed' AND NOT EXISTS(SELECT 1 FROM production_held_inputs h WHERE h.event_id=i.event_id)")
+            sqlx::query("INSERT INTO production_held_inputs(event_id,conversation_id,scope_sequence,message_id,boundary_event_id,reason) SELECT i.event_id,i.conversation_id,i.sequence,i.message_id,?,'stop_boundary' FROM reasoning_inbox i WHERE i.conversation_id=? AND i.sequence<=? AND i.state IN ('queued','claimed') AND NOT EXISTS(SELECT 1 FROM production_held_inputs h WHERE h.event_id=i.event_id)")
                 .bind(event.to_string()).bind(provider.run.conversation_id.to_string()).bind(sequence-1)
                 .execute(&mut *tx).await.map_err(db)?;
         }

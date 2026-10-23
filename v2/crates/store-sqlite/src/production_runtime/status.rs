@@ -152,7 +152,7 @@ impl Store {
         let queued: Option<i64> = if exact_run.is_some() || fast_only {
             None
         } else {
-            sqlx::query_scalar("SELECT CAST((julianday(e.occurred_at)-2440587.5)*86400000 AS INTEGER) FROM reasoning_inbox i JOIN events e ON e.id=i.event_id WHERE i.conversation_id=? AND i.state!='consumed' AND NOT EXISTS(SELECT 1 FROM ordinary_input_holds h WHERE h.event_id=i.event_id) ORDER BY i.sequence LIMIT 1")
+            sqlx::query_scalar("SELECT CAST((julianday(e.occurred_at)-2440587.5)*86400000 AS INTEGER) FROM reasoning_inbox i JOIN events e ON e.id=i.event_id WHERE i.conversation_id=? AND i.state IN ('queued','claimed') AND NOT EXISTS(SELECT 1 FROM ordinary_input_holds h WHERE h.event_id=i.event_id) ORDER BY i.sequence LIMIT 1")
                 .bind(conversation.to_string()).fetch_optional(&mut *tx).await.map_err(db)?
         };
         let (run_id, phase) = match run {

@@ -58,6 +58,7 @@ mod provider_payload;
 mod resource_health;
 mod response_shaping;
 pub mod restricted_http;
+mod retired_inputs;
 mod routes;
 mod sidebar_http;
 mod sidebar_v1;
@@ -500,6 +501,7 @@ pub fn router_with_google_catalog(
         .route("/api/v2/conversations/{id}/accept",post(execution_accept::accept))
         .route("/api/v2/conversations/{id}/payloads/{payload}",get(provider_payload::read).delete(provider_payload::remove))
         .route("/api/v2/conversations/{id}/held-inputs",get(held_inputs::read))
+        .route("/api/v2/conversations/{id}/inputs/{input}/retire",post(retired_inputs::retire))
         .route("/api/v2/conversations/{id}/messages",post(routes::message))
         .route("/api/v2/conversations/{id}/events",get(routes::events))
         .merge(timer_http::routes(state.timers.clone()))

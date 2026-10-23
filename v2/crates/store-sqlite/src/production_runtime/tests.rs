@@ -430,6 +430,7 @@ async fn exact_expired_predecessor_cas_fences_without_recreating_native_identity
 /// (sidebar read marks and lineage); tests never write them. Then undo 0056 exactly: rebuild `execution_windows` under the fixed-deadline
 /// definition that migrations up to 0055 produce, keeping every row.
 pub(super) async fn downgrade_window_deadlines(store: &Store) {
+    super::retired_inputs::migration_fixture::downgrade(store).await;
     let v52 = include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/migrations/0052_stranded_window_failures.sql"
