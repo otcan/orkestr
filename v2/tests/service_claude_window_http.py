@@ -220,7 +220,7 @@ if __name__ == "__main__":
     parser.add_argument("--executable")
     parser.add_argument("--account")
     parser.add_argument("--keep-logs")
-    parser.add_argument("--scenario", choices=("turns", "fast-lost"), default="turns")
+    parser.add_argument("--scenario", choices=("turns", "fast-lost", "policy"), default="turns")
     args = parser.parse_args()
     real = args.executable is not None
     record = {"source": args.source, "binary_sha256": hashlib.sha256(args.binary.read_bytes()).hexdigest(),
@@ -230,7 +230,13 @@ if __name__ == "__main__":
     started = time.monotonic()
     try:
         case.setup()
-        record.update(fast_lost(case) if args.scenario == "fast-lost" else run(case, real), passed=True)
+        if args.scenario == "policy":
+            assert not real, "policy fixture is synthetic only"
+            from service_claude_policy_case import run as policy_case
+            result = policy_case(case, admit=admit, expect=expect, select_claude=select_claude)
+        else:
+            result = fast_lost(case) if args.scenario == "fast-lost" else run(case, real)
+        record.update(result, passed=True)
     except BaseException as error:
         record["error"] = type(error).__name__ + ": " + str(error)
         raise

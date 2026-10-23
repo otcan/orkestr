@@ -14,7 +14,7 @@ from service_roles_case import ServiceRolesCase, GID, UID, packager, Package, di
 
 PEER = Path(__file__).with_name("service_claude_native.py")
 CLAUDE_BROKER = ("claude_connector.py", "claude_protocol.py", "claude_control.py",
-                 "claude_telemetry.py", "claude_resume.py", "claude_bootstrap.py")
+                 "claude_telemetry.py", "claude_resume.py", "claude_bootstrap.py", "claude_policy.py")
 
 
 class ClaudeWindowCase(ServiceRolesCase):

@@ -85,6 +85,22 @@ class ProcessTests(unittest.TestCase):
         with self.assertRaisesRegex(Refused, "original_cleanup_proof_missing"):
             self.children.proven_gone()
 
+    def test_observation_failure_still_reaps_known_children_without_creating_proof(self):
+        self.entry.write_text("import os,signal,time\nos.kill(os.getpid(),signal.SIGSTOP)\ntime.sleep(30)\n")
+        child = self.spawn()
+        identity = process(child.pid)
+        self.assertTrue(self.children.bind(child.pid, identity["start"], time.monotonic() + 2))
+        with unittest.mock.patch.object(self.children, "observe", side_effect=Refused("owned_child_metadata")):
+            self.assertFalse(self.children.cleanup(0.3))
+        child.wait(3)
+        self.assertIsNone(process(child.pid))
+        self.assertTrue(self.children.uncertain)
+        self.assertTrue(self.children.forced)
+        self.assertEqual(self.children.uncertainty_reason, "owned_child_metadata")
+        self.assertFalse(self.children.released())
+        with self.assertRaisesRegex(Refused, "original_cleanup_proof_missing"):
+            self.children.proven_gone()
+
     def test_unreaped_zombie_at_cleanup_deadline_recovers_once_reaped(self):
         # A refused broker is the server's child: it stays a zombie until the
         # server reaps it, which happens only after the manager replied.
@@ -243,14 +259,11 @@ class LifecycleTests(LedgerTests):
 # own authoritative suite, and are not counted twice as independent coverage.
 def load_tests(loader, _tests, _pattern):
     suite = loader.loadTestsFromTestCase(ProcessTests)
+    suite.addTests(loader.loadTestsFromTestCase(UnreapedChildDiagnosticTests))
     for name in ("test_unexpected_clean_ui_exit_marks_window_and_manager_failed",
                  "test_normal_expiry_keeps_ui_alive_and_metadata_pending"):
         suite.addTest(LifecycleTests(name))
     return suite
-
-
-if __name__ == "__main__":
-    unittest.main()
 
 
 class UnreapedChildDiagnosticTests(__import__("unittest").TestCase):
@@ -272,3 +285,19 @@ class UnreapedChildDiagnosticTests(__import__("unittest").TestCase):
         with redirect_stderr(err):
             self.assertEqual(Children._log_live(children), [])
         self.assertEqual(err.getvalue(), "")
+
+    def test_window_diagnostic_distinguishes_uncertainty_and_deduplicates(self):
+        import io
+        from contextlib import redirect_stderr
+        window = SimpleNamespace(window="11111111-1111-4111-8111-111111111111", generation=3,
+                                 children=SimpleNamespace(uncertain=True, forced=True,
+                                                          uncertainty_reason="owned_child_bound"))
+        err = io.StringIO()
+        with redirect_stderr(err):
+            Manager._cleanup_notice(window)
+            Manager._cleanup_notice(window)
+        self.assertEqual(err.getvalue(), "manager window cleanup refused: window=11111111-1111-4111-8111-111111111111 generation=3 reason=owned_child_bound forced=1\n")
+
+
+if __name__ == "__main__":
+    unittest.main()

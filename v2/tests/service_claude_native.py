@@ -45,7 +45,24 @@ message = frame["uuid"]
 turns += 1
 state.write_text(str(turns))
 record("turn", number=turns, text=frame["message"]["content"])
-emit({"type": "system", "subtype": "init", "session_id": native, "uuid": str(uuid.uuid4())})
+emit({"type": "system", "subtype": "init", "session_id": native,
+      "model": "synthetic-selected-model", "uuid": str(uuid.uuid4())})
+if Path("policy-refusal").exists():
+    record("policy-refusal")
+    emit({"type": "user", "session_id": native, "uuid": str(uuid.uuid4()),
+          "isSynthetic": True, "refused_message_id": "msg_synthetic_refusal",
+          "parent_tool_use_id": None, "message": {"role": "user", "content": "synthetic retry"}})
+    emit({"type": "system", "subtype": "model_refusal_fallback", "session_id": native,
+          "original_model": "synthetic-selected-model", "fallback_model": "synthetic-fallback-model"})
+    emit({"type": "assistant", "session_id": native, "user_message_uuid": message,
+          "message": {"role": "assistant", "model": "synthetic-fallback-model",
+                      "content": [{"type": "text", "text": "must never be exported"}]}})
+    emit({"type": "result", "subtype": "success", "session_id": native,
+          "is_error": False, "user_message_uuid": message, "result": "must never be accepted"})
+    # Cleanup must stop/reap this original process; the refusal is not a
+    # successful result and does not itself end the native process.
+    assert not sys.stdin.read()
+    raise SystemExit(0)
 if "hold" in frame["message"]["content"]:
     # Long synthetic turn: progress, then wait for the exact interrupt.
     emit({"type": "assistant", "session_id": native, "uuid": str(uuid.uuid4()),
@@ -65,7 +82,7 @@ if "hold" in frame["message"]["content"]:
     raise SystemExit(0)
 emit({"type": "assistant", "session_id": native, "uuid": str(uuid.uuid4()),
       "parent_tool_use_id": None, "user_message_uuid": message,
-      "message": {"id": "msg_synthetic", "role": "assistant",
+      "message": {"id": "msg_synthetic", "role": "assistant", "model": "synthetic-answer-model",
                   "content": [{"type": "text", "text": f"synthetic Claude turn {turns}"}]}})
 # Installed-CLI informational rate telemetry, including a field added after the
 # closed codec was written (overageEnabled); it must drain, never lose the turn.

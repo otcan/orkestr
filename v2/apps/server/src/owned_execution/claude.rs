@@ -156,6 +156,13 @@ impl ConfiguredExecution {
                     }
                 }
                 ExecutionPhase::Failed | ExecutionPhase::Blocked | ExecutionPhase::Cancelled => {
+                    if status.failure.as_ref().is_some_and(|failure| {
+                        failure.class == orkestr_v2_contracts::ExecutionFailureClass::Policy
+                    }) {
+                        // Dropping the owned pump starts real cleanup. This is
+                        // a logical refusal, never a fabricated native result.
+                        return Err("Claude provider policy refusal");
+                    }
                     return Err("Claude execution requires reconciliation");
                 }
                 ExecutionPhase::CancelRequested => {

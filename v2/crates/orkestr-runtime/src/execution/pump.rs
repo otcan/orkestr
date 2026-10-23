@@ -24,6 +24,8 @@ pub(super) struct CodexOutput {
     pub(super) tool_write: Option<super::offline_result::ToolResultWrite>,
     pub(super) workspace_write: Option<super::workspace_result::WorkspaceResultWrite>,
     pub(super) writing: Option<super::provider_write::PendingWrite>,
+    pub(super) native_model: Option<String>,
+    models: super::model_evidence::ModelEvidence,
 }
 impl Provider for CodexOutput {
     fn start(&mut self, _: &RunAdmission) -> Result<(), Blocker> {
@@ -38,6 +40,13 @@ impl Provider for CodexOutput {
         }
         if let Some(error) = &self.failed {
             return Err(error.clone());
+        }
+        if self.models.pending() {
+            return Ok(None);
+        }
+        if let Some(model) = self.stream.take_model_observation() {
+            self.models.observe(model)?;
+            return Ok(None);
         }
         if self.broker.as_ref().is_some_and(|b| b.steering_ack_ready()) {
             return Ok(None);
@@ -129,7 +138,14 @@ impl Provider for CodexOutput {
             self.failed = Some(error.clone());
             return Err(error);
         }
-        Ok(self.stream.next_event())
+        while let Some(model) = self.stream.take_model_observation() {
+            self.models.observe(model)?;
+        }
+        if self.models.pending() {
+            Ok(None)
+        } else {
+            Ok(self.stream.next_event())
+        }
     }
 }
 
@@ -172,6 +188,8 @@ impl CodexPump {
                 tool_write: None,
                 workspace_write: None,
                 steering: None,
+                native_model: None,
+                models: Default::default(),
             },
             #[cfg(all(test, feature = "fixture-test-controls"))]
             test_fence: None,
@@ -185,6 +203,13 @@ impl CodexPump {
     ) -> Self {
         channel.bind_tool_native(self.admission.binding.native_session_id.clone());
         self.source.broker = Some(channel);
+        self
+    }
+    pub(super) fn with_native_model(mut self, model: Option<String>, uses_default: bool) -> Self {
+        self.source
+            .stream
+            .report_model(if uses_default { model.as_deref() } else { None });
+        self.source.native_model = model;
         self
     }
     pub(super) fn with_provider_write(
@@ -214,6 +239,21 @@ impl CodexPump {
         }
     }
     pub async fn step(&mut self, store: &Store) -> Result<bool, supervisor::Error> {
+        match self.source.models.flush(store, &self.admission).await {
+            Ok(true) => return Ok(true),
+            Ok(false) => {}
+            Err(error) => {
+                if !matches!(
+                    error,
+                    orkestr_v2_application::runtime::RuntimeStoreError::Busy
+                        | orkestr_v2_application::runtime::RuntimeStoreError::Unavailable
+                ) {
+                    self.source.failed = Some(Blocker::Protocol);
+                    self.source.child.quarantine();
+                }
+                return Err(supervisor::Error::Store(error));
+            }
+        }
         supervisor::step(store, &mut self.source, &self.admission, &mut self.cursor).await
     }
     #[cfg(test)]

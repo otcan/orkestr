@@ -4,6 +4,7 @@ use crate::Store;
 use sqlx::{Connection, SqliteConnection};
 
 pub(in crate::production_runtime) async fn downgrade(store: &Store) {
+    super::super::model_migration_tests::downgrade(store).await;
     let decisions: i64 = sqlx::query_scalar("SELECT count(*) FROM owner_input_retirements")
         .fetch_one(&store.pool)
         .await
