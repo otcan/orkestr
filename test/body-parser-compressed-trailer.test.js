@@ -11,7 +11,7 @@ import {fileURLToPath} from 'node:url';
 test('a completed compressed JSON frame with trailing bytes cannot crash the parser process', {timeout: 10000}, async t => {
   const child = spawn(process.execPath, [fileURLToPath(new URL('./fixtures/body-parser-process.mjs', import.meta.url)),
     ...(process.env.ORKESTR_TEST_BODY_PARSER_PATH ? [process.env.ORKESTR_TEST_BODY_PARSER_PATH] : [])],
-    {stdio: ['ignore', 'pipe', 'pipe', 'ipc'], env: {PATH: process.env.PATH, NODE_ENV: 'test'}});
+    {stdio: ['ignore', 'pipe', 'pipe', 'ipc'], env: {PATH: process.env.PATH, NODE_ENV: 'test', ORKESTR_BODY_PARSER_FIXTURE: '1'}});
   let stderr = '', exited = false;
   child.stderr.on('data', data => {stderr += data;});
   child.once('exit', () => {exited = true;});
