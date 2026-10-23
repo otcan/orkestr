@@ -64,6 +64,19 @@ async fn confirmed_idle_setup_gets_one_new_reservation_only_in_a_proven_successo
             .await
             .unwrap()
             .is_none());
+        assert!(
+            store
+                .reattach_terminal_supervisor(
+                    browser,
+                    fixtures::config(ProductionTakeover::ExpiredPredecessor {
+                        incarnation_id: recovered.predecessor_incarnation().into(),
+                    }),
+                    &prior_run,
+                )
+                .await
+                .is_err(),
+            "a confirmed setup cannot reopen through a non-window browser credential"
+        );
         let previous = store
             .execution_window_status_authenticated(browser, &conversation)
             .await
