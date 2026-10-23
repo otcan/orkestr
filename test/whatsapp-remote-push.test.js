@@ -162,3 +162,24 @@ test('global uncertain transport barrier blocks the immediate delivery path too'
   assert.equal(result.ok, false); assert.equal(result.error, 'group_delivery_requires_review');
   assert.equal(f.state.sends.length, 0);
 });
+
+test('lost relay response retries the same change cursor without another provider send', async t => {
+  const f = await fixture(t);
+  let attempts = 0;
+  const cursors = [];
+  const api = (url, options) => {
+    if (url.includes('/remote-runtime/changes?')) cursors.push(new URL(url, 'http://v1.test').searchParams.get('cursor'));
+    return f.api(url, options);
+  };
+  const watch = startScopedRemoteWatch({api, deliver: async ids => {
+    assert.equal((await f.relay.deliverThreads(ids)).ok, true);
+    if (++attempts === 1) throw new Error('lost confirmation after durable send');
+  }});
+  t.after(() => watch.close());
+  await until(() => f.state.waiters.length > 0);
+  f.publish();
+  await until(() => attempts === 2);
+  assert.equal(f.state.sends.length, 1);
+  assert.equal(cursors.filter(cursor => cursor === 'epoch:0').length, 2);
+  await watch.close();
+});

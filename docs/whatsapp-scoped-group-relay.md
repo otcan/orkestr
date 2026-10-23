@@ -375,3 +375,44 @@ send class of the scoped transport and native worker:
   uncertain result blocks retries; at most `maxPerHour` per transport.
 - `scripts/scoped-native-group-reply.mjs group-send` accepts `{kind: "operator", to, requestId, text}`.
 - It never reads, marks seen or counts as owner input. No proof rows are written or needed.
+
+### Immediate remote reply delivery
+
+A remote backend can advertise `messageChanges: {"version":1,"path":"changes"}`
+on its authenticated health endpoint. The scoped relay then holds a request to
+V1's admin-only `GET /api/connectors/whatsapp/remote-runtime/changes` gateway.
+An adapter export commit wakes that request; V1 imports only the changed,
+currently bound threads and returns their IDs for immediate relay delivery.
+The 25-second connection heartbeat does not delay exports. A new adapter epoch
+returns a route snapshot, so disconnects and restarts recover pending exports.
+The relay advances its in-memory cursor only after delivery succeeds. Its
+existing request/receipt journals prevent duplicate sends on a retried cursor.
+Backends without this capability keep the ordinary scan path.
+
+Unrelated thread reads may continue while immediate delivery runs. The same
+input is serialized, actual transport sends remain serialized, and any unresolved
+transport send blocks delivery. Binding, parent, participant and route-fence
+checks apply to the immediate path too. Confirmed remote receipts are reported
+to the adapter immediately. None of these events prove recipient reads.
+
+### Optional five-second acknowledgement
+
+An operator may configure a literal acknowledgement and opt in individual groups:
+
+```json
+{
+  "acknowledgement": {"text":"Received — working on it.","since":"2026-01-01T00:00:00Z"},
+  "groups": [{"chatId":"example-group","threadId":"example-thread","name":"Example","deterministicAcknowledgement":true}]
+}
+```
+
+The acknowledgement is eligible at intake plus five seconds, only for new
+interactive owner inputs in those groups. Thread update suppression, route
+holds and binding checks still apply. Timer and participant inputs are excluded.
+A real reply attempt or known `NO_REPLY` suppresses the acknowledgement; the
+sender cannot predict a `NO_REPLY` produced later. An uncertain real send also
+suppresses extra traffic. Frozen text, a stable provider request ID and durable
+receipts preserve at most one acknowledgement across retries and restarts.
+Native Fast/final replies remain deliverable after it. Inputs older than five
+minutes never get a late acknowledgement. The transport journal's directory
+watch schedules deadlines independently of an unrelated background API scan.
