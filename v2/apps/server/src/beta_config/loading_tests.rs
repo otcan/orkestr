@@ -39,7 +39,9 @@ impl Fixture {
             0,
             "explicit root fixture runner required"
         );
-        let root = PathBuf::from(format!("/opt/orkestr-beta-loading-test-{}", Uuid::new_v4()));
+        // Hosted CI makes /opt world-writable. Own this synthetic ancestry
+        // below /, like the manager fixture; never chmod a shared directory.
+        let root = PathBuf::from(format!("/orkestr-beta-loading-test-{}", Uuid::new_v4()));
         directory(&root, 0, GID, 0o750);
         let home = root.join("home");
         directory(&home, UID, GID, 0o700);
@@ -101,8 +103,59 @@ impl Drop for Owned {
 fn exercise(case: &str) {
     let mut f = Fixture::new();
     let mut rewrite = false;
+    if case.starts_with("conversation_") {
+        let workspace = f.root.join("shared-thread");
+        directory(&workspace, 0, GID, 0o755);
+        let mut bytes = 2u32.to_le_bytes().to_vec();
+        let user = if case == "conversation_other_uid" {
+            UID - 1
+        } else {
+            UID
+        };
+        let mask = if case == "conversation_mask" { 5 } else { 7 };
+        for (tag, perm, id) in [
+            (1u16, 7u16, u32::MAX),
+            (2, 7, user),
+            (4, 5, u32::MAX),
+            (16, mask, u32::MAX),
+            (32, 5, u32::MAX),
+        ] {
+            bytes.extend(tag.to_le_bytes());
+            bytes.extend(perm.to_le_bytes());
+            bytes.extend(id.to_le_bytes());
+        }
+        if case != "conversation_no_acl" {
+            rustix::fs::setxattr(
+                &workspace,
+                "system.posix_acl_access",
+                &bytes,
+                rustix::fs::XattrFlags::empty(),
+            )
+            .unwrap();
+        }
+        if case == "conversation_world_write" {
+            mode(&workspace, 0o777);
+        }
+        let path = if case == "conversation_alias" {
+            let alias = f.root.join("shared-alias");
+            symlink(&workspace, &alias).unwrap();
+            alias
+        } else {
+            workspace
+        };
+        let selected = if case == "conversation_no_optin" {
+            json!(path)
+        } else {
+            json!({"path":path, "shared":true})
+        };
+        f.value["host_full_access"] =
+            json!({"environment":{"HOME":"/home/example","PATH":"/usr/bin"}});
+        f.value["conversation_workspaces"] = json!({Uuid::from_u128(2).to_string():selected});
+        f.write();
+    }
     match case {
         "valid" => {}
+        value if value.starts_with("conversation_") => {}
         "world_executable" => {
             chown(f.path("launcher"), Some(0), Some(0)).unwrap();
             mode(&f.path("launcher"), 0o555);
@@ -224,7 +277,7 @@ fn exercise(case: &str) {
             .env("ORKESTR_TEST_BETA_HOME", &f.home)
             .env(
                 "ORKESTR_TEST_BETA_EXPECT",
-                if ["valid", "world_executable"].contains(&case) {
+                if ["valid", "world_executable", "conversation_shared"].contains(&case) {
                     "pass"
                 } else {
                     "refuse"
@@ -336,4 +389,8 @@ privileged! {
     workspace_nested_refused=>"workspace_nested", workspace_symlink_refused=>"workspace_alias", socket_mode_refused=>"socket_mode",
     socket_owner_refused=>"socket_owner", socket_group_refused=>"socket_group", socket_parent_refused=>"socket_parent",
     socket_regular_file_refused=>"socket_file", socket_symlink_refused=>"socket_alias", socket_name_refused=>"socket_name",
+    conversation_shared_acl_allowed=>"conversation_shared", conversation_no_acl_refused=>"conversation_no_acl",
+    conversation_no_optin_refused=>"conversation_no_optin", conversation_wrong_uid_refused=>"conversation_other_uid",
+    conversation_mask_refused=>"conversation_mask", conversation_world_write_refused=>"conversation_world_write",
+    conversation_symlink_refused=>"conversation_alias",
 }

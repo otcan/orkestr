@@ -102,6 +102,12 @@ class FullAccessConfigurationTests(unittest.TestCase):
             session = selected.new_session()
             self.assertEqual(session.workspace, thread)
             self.assertTrue(session.uncontained)
+            shared = dict(beta, conversation_workspaces={INPUT: {"path": str(thread), "shared": True}})
+            self.assertEqual(conversation_workspace(config, shared, thread).workspace, thread)
+            for bad in ({"path": str(thread)}, {"path": str(thread), "shared": False},
+                        {"path": str(thread), "shared": True, "extra": True}):
+                with self.assertRaises(BrokerRefused):
+                    conversation_workspace(config, dict(beta, conversation_workspaces={INPUT: bad}), thread)
             # Any other directory, or a pin without host full access, is refused.
             for cwd, table in ((elsewhere, beta), (thread, {}),
                                (thread, {"conversation_workspaces": {INPUT: str(thread)}})):

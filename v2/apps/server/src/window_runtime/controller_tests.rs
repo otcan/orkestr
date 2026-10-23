@@ -273,6 +273,19 @@ fn conversation_workspace_replaces_only_that_conversations_deep_and_fast_directo
     let other = ConversationId(Uuid::new_v4());
     value["conversation_workspaces"] =
         serde_json::json!({ mapped.to_string(): "/srv/v1/workspaces/thread" });
+    let mut shared_value = value.clone();
+    shared_value["conversation_workspaces"] = serde_json::json!({mapped.to_string():
+        {"path":"/srv/v1/workspaces/thread", "shared":true}});
+    let shared_base: BetaConfig = serde_json::from_value(shared_value).unwrap();
+    let shared_selected = selected_config(&shared_base, &mapped).unwrap();
+    assert_eq!(
+        shared_selected.workspace,
+        std::path::Path::new("/srv/v1/workspaces/thread")
+    );
+    assert_eq!(
+        shared_selected.roles.unwrap().fast.workspace,
+        shared_selected.workspace
+    );
     let base: BetaConfig = serde_json::from_value(value).unwrap();
     base.validate().unwrap();
     let selected = selected_config(&base, &mapped).unwrap();
@@ -311,8 +324,7 @@ fn conversation_workspace_replaces_only_that_conversations_claude_directory() {
     });
     let mapped = ConversationId(Uuid::new_v4());
     let other = ConversationId(Uuid::new_v4());
-    value["conversation_workspaces"] =
-        serde_json::json!({ mapped.to_string(): "/srv/v1/workspaces/claude-thread" });
+    value["conversation_workspaces"] = serde_json::json!({ mapped.to_string(): {"path":"/srv/v1/workspaces/claude-thread", "shared":true} });
     let base: BetaConfig = serde_json::from_value(value).unwrap();
     base.validate().unwrap();
     // Claude Deep and its Fast companion both take the window's Claude

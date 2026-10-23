@@ -462,12 +462,12 @@ pub(super) fn selected_config(
     // their own configured workspaces. The Claude launcher accepts it only as
     // one of the same operator-pinned directories (host full access).
     if let Some(workspace) = base.conversation_workspaces.get(conversation) {
-        config.workspace = workspace.clone();
+        config.workspace = workspace.path().to_path_buf();
         if let Some(roles) = config.roles.as_mut() {
-            roles.fast.workspace = workspace.clone();
+            roles.fast.workspace = workspace.path().to_path_buf();
         }
         if let Some(claude) = config.claude.as_mut() {
-            claude.workspace = workspace.clone();
+            claude.workspace = workspace.path().to_path_buf();
         }
     }
     config.validate()?;
