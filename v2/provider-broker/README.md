@@ -156,3 +156,7 @@ current lineage fence. Parent revoke/Stop requires that Core-issued fence; role
 JSON cannot authorize cancellation, bypass readiness or create a grant. Typed
 Worker orchestration and activation remain separate gates. Claude role admission
 is unchanged pending its separate typed composition.
+
+## Diagnostics on an installed service
+
+Installed service packages have a closed, protected inventory. Use `python3 -I -S -B` and `PYTHONDONTWRITEBYTECODE=1` when importing their modules for diagnostics; store scripts, caches and output outside the package. Root-owned bytecode is still an unexpected file. The running manager rechecks inventory before admission and child binding, refuses immediately on invalid inventory, and emits one value-free `ALERT orkestr-v2-manager package_inventory_invalid` journal record per invalid episode. Route that record to the operator alert sink. It does not delete files, modify the manifest, accept extra files or weaken child ownership checks.

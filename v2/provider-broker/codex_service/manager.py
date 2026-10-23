@@ -132,12 +132,27 @@ class Manager:
         return bind_deadline(request["bind_deadline_ms"], accepted,
                              row["deadline_mono_ns"] / 1e9 - DRAIN_SECONDS)
 
+    def _package_preflight(self):
+        try:
+            self.package.verify_inventory()
+        except Exception:
+            # Diagnostics can accidentally leave root-owned bytecode in a
+            # running release. Refuse before waiting for a child handshake,
+            # with one value-free operator alert per invalid episode.
+            if not getattr(self, "inventory_alerted", False):
+                sys.stderr.write("ALERT orkestr-v2-manager package_inventory_invalid\n")
+                sys.stderr.flush()
+                self.inventory_alerted = True
+            raise Refused("package_inventory") from None
+        self.inventory_alerted = False
+
     def dispatch(self, request, deadline=None):
         self.ledger._scope(request)
         operation = request["operation"]
         if operation == "status":
             return {"ok": True, "receipt": self.ledger.status(request["conversation_id"])}
         if operation == "admit":
+            self._package_preflight()
             receipt, fresh = self.ledger.admit(request)
             if fresh:
                 require(receipt["window_id"] not in self.windows, "previous_custody_owned")
@@ -151,6 +166,7 @@ class Manager:
             require(status["state"] == "active" and window is not None and not window.egress_closed
                     and self.egress is not None, "window_not_accepting_children")
             try:
+                self._package_preflight()
                 if deadline is None:
                     deadline = self._bind_deadline(request, time.monotonic())
                 fresh = window.children.bind(request["broker_pid"], request["broker_start"],

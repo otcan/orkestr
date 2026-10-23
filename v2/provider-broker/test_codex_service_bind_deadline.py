@@ -1,5 +1,6 @@
 """One caller deadline; synthetic metadata and owned Python children only."""
 import json
+import io
 import os
 from pathlib import Path
 import socket
@@ -78,7 +79,8 @@ class BindingTests(unittest.TestCase):
         (self.root / "codex_service").mkdir()
         self.entry = self.root / "codex_service/entry.py"
         self.marker = self.root / "continued"
-        self.package = SimpleNamespace(root=self.root, uid=os.getuid())
+        self.package = SimpleNamespace(root=self.root, uid=os.getuid(),
+                                       verify_inventory=lambda: None)
         self.owner, self.conversation, self.window = uid(), uid(), uid()
         self.ledger = Ledger(self.root / "ledger.sqlite3", self.owner, self.conversation)
         self.addCleanup(self.ledger.close)
@@ -174,6 +176,23 @@ class BindingTests(unittest.TestCase):
         self.assertTrue(manager.children.proven_gone())
         self.assertFalse(manager.children.forced)
         self.assertEqual(self.ledger.status()["attempts"], 0)
+
+    def test_invalid_package_never_waits_for_or_continues_a_broker(self):
+        child, identity = self.spawn(2)
+        manager = self.manager(process(os.getpid()))
+        def invalid():
+            raise Refused("unexpected_package_file")
+        self.package.verify_inventory = invalid
+        with patch.object(manager.children, "bind") as bind, \
+                patch("codex_service.manager.sys.stderr", io.StringIO()) as output:
+            started = time.monotonic()
+            with self.assertRaisesRegex(Refused, "^broker_binding$"):
+                manager.dispatch(self.request(identity))
+            self.assertLess(time.monotonic() - started, 1)
+            bind.assert_not_called()
+            self.assertEqual(output.getvalue(),
+                             "ALERT orkestr-v2-manager package_inventory_invalid\n")
+        self.assertFalse(self.marker.exists())
 
     def test_expired_or_invalid_internal_deadline_never_records_or_continues(self):
         child, identity = self.spawn()

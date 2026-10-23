@@ -85,13 +85,8 @@ class Package:
                     and all(part not in ("", ".", "..") for part in name.split("/"))
                     and "\\" not in name, "ui_path")
         pinned = {**manifest["files"], **{"ui/" + name: value for name, value in ui.items()}}
-        actual = set()
-        for path in self.root.rglob("*"):
-            require(not path.is_symlink(), "package_alias")
-            protected(path, path.is_dir())
-            if path.is_file():
-                actual.add(str(path.relative_to(self.root)))
-        require(actual == set(pinned) | {"manifest.json"}, "unexpected_package_file")
+        self.inventory = frozenset(pinned) | {"manifest.json"}
+        self.verify_inventory()
         for name, value in pinned.items():
             require(type(value) is str and re.fullmatch(r"[0-9a-f]{64}", value)
                     and digest(protected(self.root / name)) == value, "package_hash")
@@ -108,6 +103,16 @@ class Package:
         self.beta = metadata(self.root / "beta.json", MAX_BETA_CONFIG_BYTES)
         self._bind()
         bind_roles(self)
+
+    def verify_inventory(self):
+        """Recheck closed inventory and custody; never import or repair files."""
+        actual = set()
+        for path in self.root.rglob("*"):
+            require(not path.is_symlink(), "package_alias")
+            protected(path, path.is_dir())
+            if path.is_file():
+                actual.add(str(path.relative_to(self.root)))
+        require(actual == self.inventory, "unexpected_package_file")
 
     def _bind(self):
         value = self.runtime
