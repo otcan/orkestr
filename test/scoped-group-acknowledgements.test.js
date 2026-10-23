@@ -62,7 +62,7 @@ test('uncertain attempt freezes the same text/request and cannot cause another s
 });
 
 test('known NO_REPLY, third-party author, opt-out, stale input and revoked binding are silent', async t => {
-  for (const mode of ['no_reply', 'participant', 'optout', 'stale', 'revoked']) {
+  for (const mode of ['no_reply', 'participant', 'optout', 'progress_optout', 'stale', 'revoked']) {
     const f = fixture(t); f.state.at = 5000;
     if (mode === 'no_reply') f.ack.mark(f.input.id, 'no_reply');
     if (mode === 'participant') {
@@ -70,6 +70,7 @@ test('known NO_REPLY, third-party author, opt-out, stale input and revoked bindi
       f.inbox.prepare('INSERT INTO group_input_author VALUES(?,?)').run(f.input.id, '{}');
     }
     if (mode === 'optout') f.group.deterministicAcknowledgement = false;
+    if (mode === 'progress_optout') f.group.forwardProgressUpdates = false;
     if (mode === 'stale') f.state.at = 300001;
     if (mode === 'revoked') f.state.allowed = false;
     await f.ack.check(f.input); assert.equal(f.state.sends.length, 0, mode);
