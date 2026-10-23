@@ -12,7 +12,7 @@ import signal
 import socket
 import sys
 from .contract import require
-from .package import Package
+from .package import Package, conversation_workspace_paths
 
 
 def catalog_warning(size):
@@ -38,7 +38,7 @@ def conversation_workspace(config, beta, cwd):
         return config
     pinned = beta.get("conversation_workspaces", {})
     require(config.host_full_access is not None and "host_full_access" in beta
-            and type(pinned) is dict and cwd in pinned.values(), "claude_conversation_workspace")
+            and type(pinned) is dict and cwd in conversation_workspace_paths(beta), "claude_conversation_workspace")
     selected = dataclasses.replace(config, workspace=Path(cwd))
     selected.validate()  # Absolute, canonical, existing directory.
     return selected

@@ -173,6 +173,23 @@ These checks complement, and do not replace, the complete manager `Package`
 validator. The 30 nonroot and six explicitly privileged manager checks require
 separate CI registration by the workflow owner; prior CI is not their evidence.
 
+### Per-conversation shared workspaces
+
+In a host-full-access plan, `conversation_workspaces` pins each conversation's
+Codex or Claude Deep/Fast working directory. A string path retains the ordinary
+service-UID ownership requirement. A foreign-owned directory needs an explicit
+closed entry such as `{"path":"/srv/shared-project","shared":true}`. Runtime
+requires a named POSIX access ACL entry for the service UID granting `rwx`, an
+ACL mask granting `rwx`, and no world-write bit. Group permissions alone do not
+qualify. The directory must remain canonical, existing, and outside Core home;
+symlinks and path aliases refuse. Custody is checked again after configuration
+loading. The product never changes directory ownership or ACLs.
+
+The packager and both provider launchers recognize the same closed shape. This
+opt-in affects only the pinned conversation directory; Worker directories and
+the private service home, account, executable, and configuration custody rules
+retain their existing checks.
+
 Outer release preparation now requires root and explicit `service_gid`, matching
 inner `service.json.gid`. It creates root:service-group mode0750 outer traversal,
 assigns the copied protected tree to that group without changing its bytes/modes,

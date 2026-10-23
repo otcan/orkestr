@@ -6,7 +6,7 @@ import socket
 import sys
 from codex_bounded.broker import modules, pump_type
 from .contract import require
-from .package import Package
+from .package import Package, conversation_workspace_paths
 from .profile import Configuration
 
 
@@ -54,7 +54,7 @@ def main(root, role="deep"):
                         workspace_trusted=sys.argv[1:] == workspace and type(
                             package.beta["workspace_exec"].get("trusted")) is dict,
                         host_full_access=getattr(config, "host_full_access", False) is True,
-                        conversation_workspaces=tuple(getattr(package, "beta", {}).get("conversation_workspaces", {}).values())
+                        conversation_workspaces=conversation_workspace_paths(getattr(package, "beta", {}))
                         if not worker and getattr(config, "host_full_access", False) is True else ()),
                 handoff=handoff,
                 diagnostics=True)

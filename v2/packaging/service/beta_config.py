@@ -199,6 +199,10 @@ def conversation_workspaces(value):
             identifier = uuid.UUID(conversation)
         except (ValueError, TypeError, AttributeError):
             raise RuntimeError('conversation workspace conversation') from None
+        if type(path) is dict:
+            require(set(path) == {'path', 'shared'} and path['shared'] is True,
+                    'explicit shared conversation workspace required')
+            path = path['path']
         require(str(identifier) == conversation and identifier.int != 0
                 and type(path) is str and path.startswith('/') and path != '/' and '\x00' not in path
                 and not path.endswith('/') and len(path) <= 4096

@@ -34,18 +34,7 @@ pub(crate) fn load(path: &Path, home: &Path) -> Result<BetaConfig, &'static str>
         return Err(REFUSED);
     }
     for workspace in config.conversation_workspaces.values() {
-        // An existing directory of the service identity, by its canonical
-        // name, outside the private Core home.
-        let info = fs::symlink_metadata(workspace).map_err(|_| REFUSED)?;
-        if !info.is_dir()
-            || info.uid() != uid
-            || workspace.canonicalize().ok().as_deref() != Some(workspace.as_path())
-            || workspace.starts_with(home)
-            || home.starts_with(workspace)
-            || (home_info.dev(), home_info.ino()) == (info.dev(), info.ino())
-        {
-            return Err(REFUSED);
-        }
+        workspace.custody(home, uid)?;
     }
     let launcher = protected_bytes(&config.launcher, gid, true, 16 * 1024 * 1024)?;
     if format!("{:x}", Sha256::digest(launcher)) != config.launcher_sha256 {
@@ -120,6 +109,9 @@ pub(crate) fn load(path: &Path, home: &Path) -> Result<BetaConfig, &'static str>
     // Recheck custody after the bounded reads; no stale pre-read path approval.
     private_directory(home, uid, gid)?;
     private_directory(&config.workspace, uid, gid)?;
+    for workspace in config.conversation_workspaces.values() {
+        workspace.custody(home, uid)?;
+    }
     protected_chain(path, None)?;
     protected_chain(&config.launcher, None)?;
     if let Some(roles) = &config.roles {

@@ -18,6 +18,28 @@ MODULES_SERVICE = ("__init__.py", "contract.py", "ledger.py", "budget.py", "cust
 # command profiles.
 MAX_BETA_CONFIG_BYTES = 262144
 MAX_ADDITIONAL_WORKSPACE_EXEC = 128
+
+
+def conversation_workspace_paths(beta):
+    """Normalize only the closed operator-pinned workspace entries.
+
+    Runtime separately checks foreign ownership against the named service UID
+    ACL. Provider selection cannot introduce another working directory.
+    """
+    paths = []
+    for value in beta.get("conversation_workspaces", {}).values():
+        if type(value) is dict:
+            require(set(value) == {"path", "shared"} and value["shared"] is True,
+                    "conversation_workspaces")
+            value = value["path"]
+        require(type(value) is str and value.startswith("/") and value != "/" and "\0" not in value
+                and not value.endswith("/") and len(value) <= 4096
+                and all(part not in ("", ".", "..") for part in value.split("/")[1:]),
+                "conversation_workspaces")
+        paths.append(value)
+    return tuple(paths)
+
+
 FILES = {"server", "native", "manager.py", "launcher.py", "service.json", "profile.json", "beta.json"}
 FILES |= {"broker/" + name for name in BROKER}
 FILES |= {"isolation/" + name for name in ISOLATION}
@@ -182,10 +204,8 @@ class Package:
             require(type(table) is dict and 0 < len(table) <= 128 and "host_full_access" in beta
                     and all(type(k) is str and re.fullmatch(
                         r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", k)
-                        and type(v) is str and v.startswith("/") and v != "/" and "\0" not in v
-                        and not v.endswith("/") and len(v) <= 4096
-                        and all(part not in ("", ".", "..") for part in v.split("/")[1:])
-                        for k, v in table.items()), "conversation_workspaces")
+                        for k in table), "conversation_workspaces")
+            conversation_workspace_paths(beta)
         additional = beta.get("additional_workspace_exec", [])
         # Further conversations' projects: same closed shape and the same
         # command profile kind (one tool schema for every Worker broker).

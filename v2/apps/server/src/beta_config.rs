@@ -1,4 +1,5 @@
 //! Closed operator configuration; never accepted from HTTP.
+mod conversation_workspaces;
 pub(crate) mod host_full_access;
 pub(crate) mod loading;
 pub(crate) mod roles;
@@ -51,7 +52,8 @@ pub(crate) struct BetaConfig {
     /// example a migrated V1 thread's workspace with its AGENTS.md or
     /// CLAUDE.md). Host full access only; Workers keep their own workspaces.
     #[serde(default)]
-    pub conversation_workspaces: std::collections::HashMap<ConversationId, PathBuf>,
+    pub conversation_workspaces:
+        std::collections::HashMap<ConversationId, conversation_workspaces::ConversationWorkspace>,
 }
 
 /// Operator-pinned Claude service launcher. Account and full-access
@@ -150,9 +152,7 @@ impl BetaConfig {
                 || self
                     .conversation_workspaces
                     .iter()
-                    .any(|(conversation, path)| {
-                        conversation.0.is_nil() || !conversation_workspace_path(path)
-                    }))
+                    .any(|(conversation, path)| conversation.0.is_nil() || !path.valid()))
         {
             return Err("invalid conversation workspaces");
         }
@@ -357,6 +357,25 @@ mod tests {
             serde_json::json!({"environment":{"HOME":"/home/example","PATH":"/usr/bin"}});
         let config: BetaConfig = serde_json::from_value(value.clone()).unwrap();
         config.validate().unwrap();
+        let mut shared = value.clone();
+        shared["conversation_workspaces"] =
+            serde_json::json!({ primary: {"path":"/srv/shared-thread", "shared":true} });
+        serde_json::from_value::<BetaConfig>(shared.clone())
+            .unwrap()
+            .validate()
+            .unwrap();
+        shared["conversation_workspaces"][primary]["shared"] = serde_json::json!(false);
+        assert!(serde_json::from_value::<BetaConfig>(shared.clone())
+            .unwrap()
+            .validate()
+            .is_err());
+        for bad in [
+            serde_json::json!({"path":"/srv/x"}),
+            serde_json::json!({"path":"/srv/x", "shared":true, "extra":true}),
+        ] {
+            shared["conversation_workspaces"][primary] = bad;
+            assert!(serde_json::from_value::<BetaConfig>(shared.clone()).is_err());
+        }
         for bad in ["relative", "/", "/srv/../etc", "/srv/./x", "/srv/x/"] {
             let mut value = value.clone();
             value["conversation_workspaces"] = serde_json::json!({ primary: bad });
