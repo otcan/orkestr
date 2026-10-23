@@ -157,6 +157,17 @@ async function gatewayHealth(item) {
   return { response, payload };
 }
 
+test("MCP gateway rejects oversized JSON before invoking a connector", async (t) => {
+  const item = await fixture();
+  t.after(() => item.close());
+  const response = await fetch(`${item.gatewayUrl}/mcp`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { padding: "x".repeat(101 * 1024) } }),
+  });
+  assert.equal(response.status, 413);
+  assert.equal(item.worker.calls.length, 0);
+});
+
 test("connector MCP gateway health returns HTTP 200 for healthy worker diagnostics", async () => {
   const item = await fixture();
   try {
