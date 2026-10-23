@@ -49,7 +49,7 @@ async fn projection(
             .await
             .map_err(db)?;
     let clock = now(tx).await?;
-    let eligible:i64=sqlx::query_scalar("SELECT count(*) FROM reasoning_inbox i WHERE i.conversation_id=? AND i.state!='consumed' AND NOT EXISTS(SELECT 1 FROM ordinary_input_holds h WHERE h.event_id=i.event_id)")
+    let eligible:i64=sqlx::query_scalar("SELECT count(*) FROM reasoning_inbox i WHERE i.conversation_id=? AND i.state IN ('queued','claimed') AND NOT EXISTS(SELECT 1 FROM ordinary_input_holds h WHERE h.event_id=i.event_id)")
             .bind(conversation.to_string()).fetch_one(&mut **tx).await.map_err(db)?;
     let rows=sqlx::query("SELECT h.*,b.run_id,b.through_scope_sequence FROM production_held_inputs h JOIN production_stop_boundaries b ON b.event_id=h.boundary_event_id WHERE h.conversation_id=? AND b.owner_id=? AND h.scope_sequence>? ORDER BY h.scope_sequence LIMIT ?")
             .bind(conversation.to_string()).bind(owner.to_string()).bind(after_sequence).bind(i64::from(limit)+1).fetch_all(&mut **tx).await.map_err(db)?;

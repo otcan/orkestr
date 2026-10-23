@@ -42,6 +42,8 @@ pub use intelligence::*;
 mod cancellation;
 mod held_inputs;
 pub use held_inputs::*;
+mod retired_inputs;
+pub use retired_inputs::*;
 mod execution;
 mod worker_discovery;
 mod worker_tasks;

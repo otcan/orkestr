@@ -53,7 +53,7 @@ impl Store {
             return Err(RuntimeStoreError::Conflict);
         }
         // Never overtake an older unconsumed ordinary message or another steer.
-        let queued:i64=sqlx::query_scalar("SELECT count(*) FROM reasoning_inbox i WHERE conversation_id=? AND state!='consumed' AND NOT EXISTS(SELECT 1 FROM ordinary_input_holds h WHERE h.event_id=i.event_id)").bind(conversation.to_string()).fetch_one(&mut *tx).await.map_err(db)?;
+        let queued:i64=sqlx::query_scalar("SELECT count(*) FROM reasoning_inbox i WHERE conversation_id=? AND state IN ('queued','claimed') AND NOT EXISTS(SELECT 1 FROM ordinary_input_holds h WHERE h.event_id=i.event_id)").bind(conversation.to_string()).fetch_one(&mut *tx).await.map_err(db)?;
         let pending:i64=sqlx::query_scalar("SELECT count(*) FROM production_steering WHERE run_id=? AND state IN ('reserved','delivery_unknown')").bind(input.control.run_id.to_string()).fetch_one(&mut *tx).await.map_err(db)?;
         let turn = if let Some(a) = authority {
             current(self, &mut tx, a).await?;
