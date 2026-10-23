@@ -5,6 +5,7 @@ each manager transition touched, proving one window never closes, spends or
 retires another window's children, relay or budget.
 """
 import threading
+import io
 import unittest
 from unittest.mock import patch
 from types import SimpleNamespace
@@ -71,7 +72,8 @@ class Windows(unittest.TestCase):
                              clock=self.clock, live_windows=2)
         self.addCleanup(self.ledger.close)
         manager = Manager.__new__(Manager)
-        manager.package = SimpleNamespace(endpoint="/synthetic/egress.sock", gid=1)
+        manager.package = SimpleNamespace(endpoint="/synthetic/egress.sock", gid=1,
+                                          verify_inventory=lambda: None)
         manager.ledger, manager.identity, manager.child = self.ledger, {"pid": 1}, None
         manager.windows, manager.egress, manager.guard = {}, None, threading.RLock()
         manager.failed = manager.closed = False
@@ -119,6 +121,25 @@ class Windows(unittest.TestCase):
         # A later window gets a fresh listener epoch and its own custody.
         self.admit(uid(), "later")
         self.assertEqual(len(FakeEndpoint.opened), 2)
+
+    def test_invalid_package_refuses_before_admission_and_alerts_once_until_recovered(self):
+        def invalid():
+            raise Refused("unexpected_package_file")
+        self.manager.package.verify_inventory = invalid
+        with patch.object(module.sys, "stderr", io.StringIO()) as output:
+            for _ in range(2):
+                with self.assertRaisesRegex(Refused, "^package_inventory$"):
+                    self.admit(self.home)
+            self.assertEqual(output.getvalue(),
+                             "ALERT orkestr-v2-manager package_inventory_invalid\n")
+            self.assertEqual(self.manager.windows, {})
+            self.assertEqual(FakeEndpoint.opened, [])
+            self.manager.package.verify_inventory = lambda: None
+            self.admit(self.home)
+            self.manager.package.verify_inventory = invalid
+            with self.assertRaisesRegex(Refused, "^package_inventory$"):
+                self.admit(uid())
+            self.assertEqual(output.getvalue().count("package_inventory_invalid"), 2)
 
     def test_uncertainty_terminates_only_the_reported_window(self):
         a, b = self.admit(self.home), self.admit(uid())

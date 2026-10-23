@@ -71,6 +71,19 @@ class PackageTests(unittest.TestCase):
         self.assertFalse(package.endpoint.exists())
         self.assertEqual(list(self.fixture.account.iterdir()), [])
 
+    def test_running_package_rechecks_root_owned_bytecode_without_relaxing_inventory(self):
+        package = Package(self.root, self.receipt["manifest_sha256"])
+        cache = self.root / "broker/__pycache__"
+        cache.mkdir(mode=0o750)
+        artifact = cache / "synthetic.cpython-312.pyc"
+        artifact.write_bytes(b"synthetic bytecode")
+        artifact.chmod(0o640)
+        with self.assertRaisesRegex(Refused, "unexpected_package_file"):
+            package.verify_inventory()
+        artifact.unlink()
+        cache.rmdir()
+        package.verify_inventory()
+
     def test_fixture_owns_protected_ancestry_without_relaxing_writable_parent_refusal(self):
         self.assertEqual(self.fixture.root.parent, Path("/"))
         self.assertEqual(protected(self.root, True), self.root)
