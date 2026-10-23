@@ -210,7 +210,7 @@ impl Store {
             return Err(RuntimeStoreError::Fenced);
         }
         // Other old setup bindings cannot be used as if their process survived.
-        sqlx::query("UPDATE session_bindings SET state='lost' WHERE id!=? AND id IN (SELECT session_id FROM production_readiness WHERE context_id=?)")
+        sqlx::query("UPDATE session_bindings SET state='lost' WHERE id!=? AND state!='retired' AND id IN (SELECT session_id FROM production_readiness WHERE context_id=?)")
             .bind(&session).bind(&context_id).execute(&mut *tx).await.map_err(db)?;
         let store = Store {
             #[cfg(feature = "fixture-test-controls")]

@@ -15,6 +15,16 @@ from .contract import require
 from .package import Package
 
 
+def catalog_warning(size):
+    """Value-free host diagnostic; provider stderr stays closed as before."""
+    try:
+        import syslog
+        syslog.syslog(syslog.LOG_WARNING,
+                      f"orkestr Claude discarded commands_changed catalog bytes={size}")
+    except (ImportError, OSError):
+        pass  # Optional logging must not turn discarded metadata into lost work.
+
+
 def conversation_workspace(config, beta, cwd):
     """The working directory Runtime launched this turn in.
 
@@ -71,7 +81,8 @@ def main(root):
                 session = config.resumed_session(receive(config))  # One-use FD4.
             else:
                 session = config.new_session()
-            pump = Pump(session, ClaudeChannel(session), handoff=handoff, diagnostics=True)
+            pump = Pump(session, ClaudeChannel(session, catalog_warning=catalog_warning),
+                        handoff=handoff, diagnostics=True)
             pump.run()
             if pump.parent_eof and pump.child is not None and pump.reaped:
                 return REAPED_EXIT

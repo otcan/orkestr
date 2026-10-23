@@ -18,7 +18,6 @@ impl ConfiguredExecution {
         provider: orkestr_v2_application::runtime::ProviderKind,
         setup: WindowSetup,
         context: Arc<Context>,
-        resumed: bool,
     ) -> Result<Self, &'static str> {
         config.validate()?;
         // A Claude conversation runs only its Deep role in this window: no
@@ -73,11 +72,7 @@ impl ConfiguredExecution {
             None if workspace_grant.is_none() => None,
             None => return Err("workspace profile scope changed"),
         };
-        let directory = if resumed {
-            directory::existing_for(home, &config.conversation_id)?
-        } else {
-            directory::create_for(home, &config.conversation_id)?
-        };
+        let directory = directory::window_deep(home, &config.conversation_id)?;
         let owner = config.owner_id.clone();
         let mut factory = Self {
             config: Config {

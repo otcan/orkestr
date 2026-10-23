@@ -125,10 +125,11 @@ async fn failed_first_lineage_in(
     owner: &OwnerId,
     conversation: &ConversationId,
 ) -> Result<bool> {
-    let (windows, failed, unclosed): (i64, i64, i64) = sqlx::query_as("SELECT count(*),count(f.id),coalesce(sum(w.state!='closed'),0) FROM execution_windows w LEFT JOIN execution_window_open_failures f ON f.window_id=w.id AND f.restored_window_id IS NULL WHERE w.owner_id=? AND w.conversation_id=?")
-        .bind(owner.to_string()).bind(conversation.to_string())
+    let floor = native_reset::floor(tx, owner, conversation).await?;
+    let (windows, failed, unclosed): (i64, i64, i64) = sqlx::query_as("SELECT count(*),count(f.id),coalesce(sum(w.state!='closed'),0) FROM execution_windows w LEFT JOIN execution_window_open_failures f ON f.window_id=w.id AND f.restored_window_id IS NULL WHERE w.owner_id=? AND w.conversation_id=? AND w.generation>?")
+        .bind(owner.to_string()).bind(conversation.to_string()).bind(floor)
         .fetch_one(&mut *tx).await.map_err(db)?;
-    Ok(windows > 0 && windows == failed && unclosed == 0)
+    Ok((windows > 0 || floor > 0) && windows == failed && unclosed == 0)
 }
 
 impl Store {
@@ -158,7 +159,7 @@ impl Store {
         conversation: &ConversationId,
         config: ProductionSupervisorConfig,
     ) -> Result<ExecutionWindowBootstrap> {
-        if config.provider != ProviderKind::Codex
+        if !window_provider(config.provider)
             || !matches!(config.takeover, ProductionTakeover::First)
             || !valid(&config.namespace)
             || !valid(&config.supervisor_key)
@@ -168,11 +169,11 @@ impl Store {
         let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
         let owner = browser_owner(self, &mut tx, browser_credential).await?;
         crate::runtime::scope(&mut tx, &owner, conversation).await?;
-        let runs: i64 = sqlx::query_scalar(
-            "SELECT count(*) FROM production_runs WHERE owner_id=? AND conversation_id=?",
-        )
+        let floor = native_reset::floor(&mut tx, &owner, conversation).await?;
+        let runs: i64 = sqlx::query_scalar("SELECT count(*) FROM production_runs r WHERE r.owner_id=? AND r.conversation_id=? AND NOT EXISTS(SELECT 1 FROM execution_windows w WHERE w.context_id=r.context_id AND w.incarnation_id=r.incarnation_id AND w.generation<=?)")
         .bind(owner.to_string())
         .bind(conversation.to_string())
+        .bind(floor)
         .fetch_one(&mut *tx)
         .await
         .map_err(db)?;
@@ -180,8 +181,8 @@ impl Store {
             return Err(RuntimeStoreError::Fenced);
         }
         let clock = now(&mut tx).await?;
-        let existing = sqlx::query("SELECT * FROM production_supervisors WHERE owner_id=? AND provider_kind='codex' AND namespace=? AND supervisor_key=?")
-            .bind(owner.to_string()).bind(&config.namespace).bind(&config.supervisor_key)
+        let existing = sqlx::query("SELECT * FROM production_supervisors WHERE owner_id=? AND provider_kind=? AND namespace=? AND supervisor_key=?")
+            .bind(owner.to_string()).bind(provider_name(config.provider)?).bind(&config.namespace).bind(&config.supervisor_key)
             .fetch_optional(&mut *tx).await.map_err(db)?;
         let current = existing
             .as_ref()
@@ -228,8 +229,8 @@ impl Store {
             }
             None => {
                 let id = Uuid::new_v4().to_string();
-                sqlx::query("INSERT INTO production_supervisors(context_id,owner_id,provider_kind,namespace,supervisor_key,incarnation_id,generation,lease_deadline_ms) VALUES(?,?,'codex',?,?,?,1,?)")
-                    .bind(&id).bind(owner.to_string()).bind(&config.namespace).bind(&config.supervisor_key)
+                sqlx::query("INSERT INTO production_supervisors(context_id,owner_id,provider_kind,namespace,supervisor_key,incarnation_id,generation,lease_deadline_ms) VALUES(?,?,?,?,?,?,1,?)")
+                    .bind(&id).bind(owner.to_string()).bind(provider_name(config.provider)?).bind(&config.namespace).bind(&config.supervisor_key)
                     .bind(&incarnation).bind(clock + 60_000).execute(&mut *tx).await.map_err(db)?;
                 (id, 1)
             }
@@ -257,7 +258,7 @@ impl Store {
         let mut store = self.clone();
         store.authority = Some(Context {
             owner,
-            provider: ProviderKind::Codex,
+            provider: config.provider,
             namespace: config.namespace,
             key: config.supervisor_key,
             id,

@@ -12,6 +12,7 @@ pub const EXECUTION_WINDOW_MAX_LIFETIME_MS: i64 = 14_400_000;
 pub const EXECUTION_WINDOW_CLEANUP_MS: i64 = 30_000;
 mod admission;
 mod bootstrap;
+mod native_reset;
 pub use bootstrap::ExecutionWindowBootstrap;
 mod credential;
 mod fast_metadata;
@@ -87,6 +88,11 @@ pub(super) async fn effective_predecessor(
     let Some(predecessor) = predecessor else {
         return Ok(None);
     };
+    let reset: i64 = sqlx::query_scalar("SELECT count(*) FROM execution_windows w JOIN conversation_native_resets r ON r.owner_id=w.owner_id AND r.conversation_id=w.conversation_id AND r.window_generation>=w.generation WHERE w.id=?")
+        .bind(&predecessor).fetch_one(&mut *tx).await.map_err(db)?;
+    if reset != 0 {
+        return Ok(None);
+    }
     let failed: Option<Option<String>> = sqlx::query_scalar(
         "SELECT restored_window_id FROM execution_window_open_failures WHERE window_id=?",
     )

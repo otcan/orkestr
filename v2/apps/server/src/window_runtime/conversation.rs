@@ -411,7 +411,7 @@ impl ConversationController {
             .take()
             .await
             .map_err(|_| "private window authority unavailable")?;
-        let (bound, credential, metadata, workspace, resumed) = match authority {
+        let (bound, credential, metadata, workspace) = match authority {
             WindowAuthority::Initial(cap) => {
                 let grant = cap
                     .store()
@@ -455,7 +455,7 @@ impl ConversationController {
                     .authorize_session_metadata(cap.binding())
                     .await
                     .map_err(|_| "opening metadata refused")?;
-                (bound, grant, metadata, workspace, false)
+                (bound, grant, metadata, workspace)
             }
             WindowAuthority::Retired(cap) => {
                 let grant = cap
@@ -509,7 +509,7 @@ impl ConversationController {
                             (bound, metadata, None)
                         }
                     };
-                (bound, grant, metadata, workspace, true)
+                (bound, grant, metadata, workspace)
             }
         };
         let context = Arc::new(Context::new(
@@ -530,7 +530,6 @@ impl ConversationController {
                 workspace,
             },
             context,
-            resumed,
         )
         .await?
         .start_window()

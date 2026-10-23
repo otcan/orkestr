@@ -478,3 +478,6 @@ mod decisions;
 
 #[path = "stranded_failure_tests.rs"]
 mod failures;
+
+#[path = "native_reset_tests.rs"]
+mod native_reset_tests;

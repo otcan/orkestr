@@ -102,6 +102,24 @@ pub(super) fn existing_for(
     existing_directory(home, scoped_root(home)?.join(conversation.to_string()))
 }
 
+/// A window's scratch custody can survive failed setup or an explicit native
+/// reset. This validates private directories only; Core still decides whether
+/// the metadata grant selects fresh native setup or a specific native resume.
+pub(super) fn window_deep(
+    home: &Path,
+    conversation: &orkestr_v2_contracts::ConversationId,
+) -> Result<PathBuf, &'static str> {
+    if conversation.0.is_nil() {
+        return Err("execution scope requires a conversation");
+    }
+    let path = scoped_root(home)?.join(conversation.to_string());
+    match std::fs::symlink_metadata(&path) {
+        Ok(_) => existing_directory(home, path),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => create_directory(path),
+        Err(_) => Err("Deep scratch custody unavailable"),
+    }
+}
+
 /// Fast keeps its own writable home and temporary directory, including when
 /// the ordinary Deep factory serves the same canonical conversation.
 pub(super) fn fast(
@@ -141,6 +159,28 @@ pub(super) fn window_fast(
 mod tests {
     use super::*;
     use std::os::unix::fs::{symlink, PermissionsExt};
+
+    #[test]
+    fn fresh_window_authority_can_reuse_only_private_canonical_scratch() {
+        let home =
+            std::env::temp_dir().join(format!("window-reset-scratch-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&home).unwrap();
+        let conversation = orkestr_v2_contracts::ConversationId(uuid::Uuid::new_v4());
+        let directory = window_deep(&home, &conversation).unwrap();
+        std::fs::write(directory.join("home/retained"), b"synthetic scratch").unwrap();
+        assert_eq!(window_deep(&home, &conversation).unwrap(), directory);
+        assert_eq!(
+            std::fs::read(directory.join("home/retained")).unwrap(),
+            b"synthetic scratch"
+        );
+        std::fs::set_permissions(
+            directory.join("tmp"),
+            std::fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+        assert!(window_deep(&home, &conversation).is_err());
+        std::fs::remove_dir_all(home).unwrap();
+    }
 
     #[test]
     fn recovery_preserves_private_scratch_and_refuses_aliases_or_shared_modes() {

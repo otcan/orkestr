@@ -20,8 +20,11 @@ def provider_error(value):
 
 
 class ClaudeChannel:
-    def __init__(self, session):
+    def __init__(self, session, catalog_warning=None):
+        require(catalog_warning is None or callable(catalog_warning))
         self.session = session
+        self.catalog_warning = catalog_warning
+        self.catalog_warned = False
         self.native = str(session.native)
         self.poisoned = False
         self.terminal_uuid = None
@@ -159,10 +162,25 @@ class ClaudeChannel:
                 or frame.get("parent_tool_use_id") is None)
         if kind == "system" and frame.get("subtype") != "init":
             # UI/retry/status notices: bounded discard, never readiness or output.
+            limit = 16384
+            if self.tools and frame.get("subtype") == "commands_changed":
+                # A full-access CLI's installed command descriptions can exceed
+                # 16 KiB before its first turn. This closed notice is metadata
+                # only: retain the native frame bound, discard all descriptions.
+                exact(frame, ("type", "subtype", "session_id", "uuid", "commands"))
+                canonical(frame["uuid"])
+                require(isinstance(frame["commands"], list) and len(frame["commands"]) <= 4096
+                        and all(isinstance(command, dict) for command in frame["commands"]))
+                limit = 4 * 1024 * 1024
+            size = len(json.dumps(frame, allow_nan=False).encode())
             require(identifier(frame.get("subtype")) and len(frame["subtype"]) <= 64
                     and self.system_notices < 256
-                    and len(json.dumps(frame, allow_nan=False).encode()) <= 16384)
+                    and size <= limit)
             self.system_notices += 1
+            if limit > 16384 and size > 16384 and not self.catalog_warned:
+                self.catalog_warned = True
+                if self.catalog_warning is not None:
+                    self.catalog_warning(size)  # Trusted callback receives only the byte count.
             return None
         if kind in ("command_lifecycle", "rate_limit_event"):
             validate_telemetry(frame, self.input_uuid)

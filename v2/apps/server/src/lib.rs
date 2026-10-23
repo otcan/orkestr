@@ -486,6 +486,7 @@ pub fn router_with_google_catalog(
         .route("/api/v2/conversations/{id}/window",get(window_http::status).post(window_http::admit))
         .route("/api/v2/conversations/{id}/window/queue",get(window_http::queue))
         .route("/api/v2/conversations/{id}/window/reconcile",post(window_http::reconcile))
+        .route("/api/v2/conversations/{id}/window/reset-native",post(window_http::reset_native))
         .route("/api/v2/conversations/{id}/execution",get(execution::status))
         .route("/api/v2/conversations/{id}/fast/execution",get(execution::fast_status))
         .route("/api/v2/conversations/{id}/workers",get(worker_discovery::list))

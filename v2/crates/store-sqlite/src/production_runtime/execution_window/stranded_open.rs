@@ -225,12 +225,12 @@ async fn revert_allowed(
     let ready: i64 = sqlx::query_scalar("SELECT count(*) FROM production_runs r JOIN session_bindings b ON b.id=r.session_id WHERE r.id=? AND r.context_id=? AND r.incarnation_id=? AND r.role='deep' AND b.state='ready' AND b.generation=r.binding_generation+1 AND b.native_session_id=r.native_session_id")
         .bind(&lineage.prior_run).bind(context).bind(&lineage.incarnation)
         .fetch_one(&mut *tx).await.map_err(db)?;
-    // Setup only: no session became busy and no per-generation native request
-    // (which a later opening would collide with) was recorded.
+    // Setup only: no session became busy or observed an actual native turn.
+    // Unobserved Claude reservations are archived at commit before reuse.
     let busy: i64 = sqlx::query_scalar("SELECT count(*) FROM production_readiness rd JOIN session_bindings b ON b.id=rd.session_id WHERE rd.context_id=? AND rd.incarnation_id=? AND b.state='busy'")
         .bind(context).bind(incarnation).fetch_one(&mut *tx).await.map_err(db)?;
     let requested: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM production_requested_native WHERE context_id=? AND incarnation_id=?",
+        "SELECT count(*) FROM production_requested_native n WHERE n.context_id=? AND n.incarnation_id=? AND (n.observed_run_id IS NOT NULL OR n.observed_event_key IS NOT NULL OR NOT EXISTS(SELECT 1 FROM session_bindings b WHERE b.id=n.session_id AND b.provider_kind='claude' AND b.generation=n.binding_generation AND b.state='ready' AND b.native_session_id=n.requested_native_id))",
     )
     .bind(context)
     .bind(incarnation)
@@ -275,6 +275,13 @@ pub(super) async fn commit(
         &plan.incarnation,
         plan.supervisor_generation,
     ) {
+        // No run exists under this failed incarnation; only unobserved setup
+        // reservations passed planning. Keep an immutable failure archive.
+        sqlx::query("INSERT INTO execution_window_failed_native_requests(failure_id,session_id,binding_generation,context_id,incarnation_id,requested_native_id,initialization_key) SELECT ?,session_id,binding_generation,context_id,incarnation_id,requested_native_id,initialization_key FROM production_requested_native WHERE context_id=? AND incarnation_id=? AND observed_run_id IS NULL AND observed_event_key IS NULL")
+            .bind(id.to_string()).bind(context).bind(failed)
+            .execute(&mut *tx).await.map_err(db)?;
+        sqlx::query("DELETE FROM production_requested_native WHERE context_id=? AND incarnation_id=? AND observed_run_id IS NULL AND observed_event_key IS NULL")
+            .bind(context).bind(failed).execute(&mut *tx).await.map_err(db)?;
         // Reservations for the predecessor turns are archived, never confirmed.
         sqlx::query("INSERT INTO execution_window_failed_resume_metadata(id,failure_id,prior_run_id,terminal_event_id,context_id,incarnation_id,session_id,binding_generation,state,confirmation_digest) SELECT id,?,prior_run_id,terminal_event_id,context_id,incarnation_id,session_id,binding_generation,state,confirmation_digest FROM production_resume_metadata WHERE context_id=? AND incarnation_id=?")
             .bind(id.to_string()).bind(context).bind(failed)

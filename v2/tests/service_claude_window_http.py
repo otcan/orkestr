@@ -171,10 +171,23 @@ def run(case, real):
         assert {(row["model"], row["effort"]) for row in spawns} == {("synthetic-claude-model", "low")}
         assert {(row["model"], row["effort"]) for row in fast_spawns} == {(None, "low")}
         assert len([row for row in trace if row["kind"] == "interrupt"]) == 2
+    if not real:
+        # Accepted proposals do not authorize replacing a still-owned native.
+        expect(case, path(case.conversation) + '/window/reset-native', 409, 'POST',
+               dict(request_key='synthetic-owner-native-reset', window_id=successor['window_id'],
+                    generation=successor['generation'], acknowledge_native_history_loss=True))
     case.stop()
     final = case.rows("SELECT state FROM execution_windows")
     assert [row["state"] for row in final] == ["closed", "closed"], final
-    return {"runs": runs, "windows": final, "texts": [text1[:40], text2[:40], text4[:40]]}
+    reset = None
+    if not real:
+        from service_claude_reset_case import restart_manager, run as reset_roundtrip
+        restart_manager(case)
+        reset = reset_roundtrip(case, successor, fourth, turn=turn, expect=expect)
+        final = case.rows("SELECT state FROM execution_windows")
+        assert [row['state'] for row in final] == ['closed'] * 4, final
+    return {"runs": runs, "windows": final, "texts": [text1[:40], text2[:40], text4[:40]],
+            "native_reset": reset}
 
 
 def fast_lost(case):
