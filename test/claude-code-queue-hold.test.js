@@ -69,6 +69,10 @@ async function waitFor(condition) {
 test("Claude hold fences stale direct callers and pending dispatch without claiming inputs", async t => {
   const f = await fixture(t);
   const row = await enqueueThreadInput(f.thread.id, { text: "next task", source: "cli" }, f.env);
+  // A skipped input must not run turn-completion cleanup, even for an invalid
+  // deferred request. No turn has completed and the held state must survive.
+  const deferred = { target: "unconfigured-example", when: "after_turn" };
+  await updateThread(f.thread.id, { pendingExecutorSwitch: deferred }, f.env);
   const held = await setThreadQueueHold(f.thread.id, { paused: true, reason: "migration" }, f.env);
   assert.equal(held.paused, true);
   assert.equal(held.pendingCount, 1);
@@ -80,6 +84,8 @@ test("Claude hold fences stale direct callers and pending dispatch without claim
   assert.equal(unchanged.state, "queued");
   assert.equal(unchanged.deliveryAttempt, undefined);
   assert.equal(unchanged.executorTurnId, undefined);
+  assert.deepEqual((await getThread(f.thread.id, f.env)).pendingExecutorSwitch, deferred);
+  await updateThread(f.thread.id, {}, f.env, { unset: ["pendingExecutorSwitch"] });
   await setThreadQueueHold(f.thread.id, { paused: false, reason: "complete" }, f.env);
   assert.deepEqual(await deliverClaudeCodePendingInputs(f.thread, f.env), [row.id]);
   assert.equal((await f.readCalls()).filter(c => c.turn).length, 1);

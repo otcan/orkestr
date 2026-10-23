@@ -100,7 +100,7 @@ export async function startClaudeCodeThread(thread, env = process.env) {
   return { thread: updated, started: true };
 }
 
-async function sendClaudeCodeInputReserved(thread, message, env = process.env, options = {}) {
+async function sendClaudeCodeInputReserved(thread, message, env = process.env, options = {}, admissionState = {}) {
   // Serialize only admission with operator holds. The durable active turn
   // identity is committed before releasing the boundary; inference runs outside.
   const admission = await withThreadQueueBoundary(thread.id, async () => {
@@ -178,6 +178,7 @@ async function sendClaudeCodeInputReserved(thread, message, env = process.env, o
     return { thread, profile, freshMessage, coalesced, prompt, attemptId, rootTurnId, deliveryAttempt, sessionId, priorTurnFailed, runningMessage };
   }, env);
   if (admission.skipped) return admission;
+  admissionState.admitted = true;
   const { profile, freshMessage, coalesced, prompt, rootTurnId, deliveryAttempt, runningMessage } = admission;
   let { attemptId, sessionId, priorTurnFailed } = admission;
   thread = admission.thread;
@@ -284,11 +285,12 @@ export async function sendClaudeCodeInput(thread, message, env = process.env, op
     throw error;
   }
   turnReservations.add(thread.id);
+  const admissionState = { admitted: false };
   try {
-    return await sendClaudeCodeInputReserved(thread, message, env, options);
+    return await sendClaudeCodeInputReserved(thread, message, env, options, admissionState);
   } finally {
     turnReservations.delete(thread.id);
-    await applyPendingExecutorSwitchAfterTurn(thread.id, env);
+    if (admissionState.admitted) await applyPendingExecutorSwitchAfterTurn(thread.id, env);
   }
 }
 
