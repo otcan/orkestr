@@ -7,14 +7,10 @@ import {scopedRouteMembership} from './whatsapp-scoped-route-membership.js';
 import {DatabaseSync} from 'node:sqlite';
 import {isReplyDocument, scopedGroupReplyChunks} from './whatsapp-scoped-group-formatting.js';
 import {createRelayReplyFiles} from './whatsapp-scoped-relay-reply-files.js';
+import {createProgressBudget, progressPhases, progressPolicy} from './scoped-group-progress.js';
 import {createDynamicGroupRegistry, createDynamicGroupView, eligibleGroups, validateDynamicGroups} from './whatsapp-scoped-dynamic-groups.js';
 
 const key = value => crypto.createHash('sha256').update(value).digest('hex');
-const progressPhases = new Set(['commentary', 'awaiting_approval']);
-const progressSources = new Set(['codex-rollout', 'codex-app-server', 'codex-app-server-import', 'claude-code']);
-const adapterProgress = message => message.source === 'rust-v2-adapter' && message.remoteKind === 'progress'
-  && typeof message.remoteMessageId === 'string' && Boolean(message.remoteMessageId.trim())
-  && !message.remoteMirrorAck?.outcome;
 // Replies posted after the turn ended (a bound api-session) and parented by V1
 // to the latest relay-routed input. Delivered once, within a bounded window.
 const lateSources = new Set(['api-session']);
@@ -98,15 +94,9 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
   const fencedThreads = scopedRouteMembership(config);
   if (config.appendDebugFooter === true && !['shouldAppendWhatsAppDebugFooter', 'stripWhatsAppDebugFooter', 'whatsappDebugFooter'].every(k => typeof formatter?.[k] === 'function'))
     throw new Error('group_footer_formatter_required');
-  const progressSince = Date.parse(config.forwardProgressSince || '');
-  if (config.forwardProgressUpdates === true && !Number.isFinite(progressSince))
-    throw new Error('group_progress_cutoff_required');
   // Commentary honours the thread's own update suppression; approval requests
   // still reach the owner because the turn waits on them.
-  const eligibleProgress = (message, suppressUpdates = false) => config.forwardProgressUpdates === true
-    && progressPhases.has(message.phase) && (progressSources.has(message.source) || adapterProgress(message))
-    && !(suppressUpdates && message.phase === 'commentary')
-    && Number.isFinite(Date.parse(message.createdAt)) && Date.parse(message.createdAt) >= progressSince;
+  const eligibleProgress = progressPolicy(config, now());
   const inbox = inboxDb || new DatabaseSync(config.journalPath, {readOnly: true});
   const db = relayDb || new DatabaseSync(config.relayJournalPath);
   db.exec(`PRAGMA journal_mode=WAL;
@@ -210,6 +200,7 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
     return {thread, metadata};
   }
 
+  const progressBudget = createProgressBudget(db, now);
   async function answersFor(group, route, suppressUpdates = false) {
     // Walk older pages until the parent is found, so a long-running turn cannot
     // lose its final answer merely because another turn produced many messages.
@@ -222,7 +213,7 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
       for (const message of messages) {
         context.set(message.id, message);
         if (message.role === 'assistant' && message.state === 'completed'
-            && (['final_answer', 'final', 'need_input', 'awaiting_input', 'question', 'request_user_input'].includes(message.phase) || eligibleProgress(message, suppressUpdates))
+            && (['final_answer', 'final', 'need_input', 'awaiting_input', 'question', 'request_user_input'].includes(message.phase) || eligibleProgress(message, group, suppressUpdates))
             && message.parentMessageId === route.message_id) answers.set(message.id, message);
       }
       if (messages.some(m => m.id === route.message_id) || !page.hasMoreBefore || !messages.length) {
@@ -230,7 +221,7 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
         const finals = ordered.filter(m => ['final_answer', 'final'].includes(m.phase));
         // A final supersedes stale progress and unanswered questions. Live progress
         // keeps the route open; durable reply IDs prevent replays on later polls.
-        const updates = ordered.filter(message => eligibleProgress(message, suppressUpdates));
+        const updates = ordered.filter(message => eligibleProgress(message, group, suppressUpdates));
         const question = ordered.filter(m => !progressPhases.has(m.phase)).slice(-1);
         const pending = [...updates, ...question].sort((a, b) => Number(a.cursor || 0) - Number(b.cursor || 0));
         return {answers: finals.length ? finals : pending, messages: [...context.values()]};
@@ -411,8 +402,12 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
     }
     const suppressUpdates = threadSuppressesUpdates(routeThread);
     const {answers, messages} = await answersFor(group, route, suppressUpdates);
+    const localCommentary = answers.filter(m => m.phase === 'commentary' && m.source !== 'rust-v2-adapter');
+    const progress = progressBudget.select(input.id, localCommentary);
     for (const answer of answers) {
+      if (localCommentary.includes(answer) && answer !== progress) continue;
       await deliverAnswer(input, group, answer, messages);
+      if (answer === progress) progressBudget.delivered(input.id, answer, localCommentary);
       if (['final_answer', 'final'].includes(answer.phase)) db.prepare('UPDATE routed SET completed=1 WHERE id=?').run(input.id);
     }
   }
