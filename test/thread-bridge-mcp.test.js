@@ -77,6 +77,15 @@ async function connect(base) {
   return { registration, tokens: await tokenResponse.json(), verifier };
 }
 
+test("thread MCP rejects oversized JSON before authentication or tool execution", async (t) => {
+  const { base } = await startBridgeServer(t);
+  const response = await fetch(`${base}/mcp`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { padding: "x".repeat(101 * 1024) } }),
+  });
+  assert.equal(response.status, 413);
+});
+
 test("ChatGPT-style OAuth connection reads all threads and comments through MCP", async (t) => {
   const { base } = await startBridgeServer(t);
   await createUser({ id: "admin" }, process.env).catch(() => null);
