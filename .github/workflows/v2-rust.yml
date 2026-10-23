@@ -131,6 +131,7 @@ jobs:
         run: |
           sudo /usr/bin/python3 -B tests/service_claude_window_http.py "$CARGO_TARGET_DIR/debug/orkestr-v2-server" --source "$(git rev-parse HEAD)" --report "$RUNNER_TEMP/v2-claude-window.json"
           sudo /usr/bin/python3 -B tests/service_claude_window_http.py "$CARGO_TARGET_DIR/debug/orkestr-v2-server" --source "$(git rev-parse HEAD)" --report "$RUNNER_TEMP/v2-claude-window-fast-lost.json" --scenario fast-lost
+          sudo /usr/bin/python3 -B tests/service_claude_window_http.py "$CARGO_TARGET_DIR/debug/orkestr-v2-server" --source "$(git rev-parse HEAD)" --report "$RUNNER_TEMP/v2-claude-window-policy.json" --scenario policy
       - name: V1 thread history move and rollback over real HTTP
         env:
           PYTHONDONTWRITEBYTECODE: '1'

@@ -315,8 +315,8 @@ class Ledger:
         post's label; the reply text is exactly the post text. Input and export
         are written in one transaction, so the post never waits behind a running
         input and a replay after a lost acknowledgement adopts nothing new.
-        `identity` (provider/model) only fills the reply when the post has none
-        and is not part of the post's identity. Returns (reply, existed).
+        Native `identity` supplies the footer independently of the post's
+        declared model and is not part of its identity. Returns (reply, existed).
         """
         post_id = record["id"]
         digest = hashlib.sha256(json.dumps({k: record.get(k) for k in ("id", "author", "label", "text", "provider", "model")},
@@ -334,8 +334,8 @@ class Ledger:
             reply = {"id": str(uuid.uuid5(POST_NAMESPACE, "reply:" + post_id)), "role": "assistant", "state": "completed",
                      "phase": "final_answer", "source": "rust-v2-pilot", "parentMessageId": remote_id, "text": record["text"]}
             footer = {k: record[k] for k in ("provider", "model") if record.get(k)}
-            if "provider" not in footer:
-                footer = dict(identity or {}, **footer)
+            if identity:
+                footer.update({k: identity[k] for k in ("provider", "model") if identity.get(k)})
             reply.update({k: footer[k] for k in ("provider", "model") if footer.get(k)})
             data = {"remote_id": remote_id, "public_id": public_id, "origin": "timer", "text": label,
                     "public_thread_id": self.scope.get("public_thread_id"), "chat_id": self.scope.get("chat_id"),
@@ -427,13 +427,14 @@ class Ledger:
         with self.connect() as db:
             db.execute("DELETE FROM web_watch WHERE message_id=?", (message_id,))
 
-    def web_progress(self, watch, payload_id, text):
+    def web_progress(self, watch, payload_id, text, identity=None):
         """One intermediate note of a web message's Deep run, as its own message."""
         message_id = watch["message_id"]
         remote_id = str(uuid.uuid5(WEB_NAMESPACE, "progress:%s:%s" % (message_id, payload_id)))
         reply = {"id": str(uuid.uuid5(WEB_NAMESPACE, "progress-reply:%s:%s" % (message_id, payload_id))),
                  "role": "assistant", "state": "completed", "phase": "final_answer", "source": "rust-v2-web-mirror",
                  "parentMessageId": remote_id, "text": text}
+        reply.update({k: v for k, v in (identity or {}).items() if k in ("provider", "model") and v})
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
             self._pseudo_timer(db, remote_id, "%s progress: %s" % (WEB_LABEL, watch["excerpt"]), int(time.time() * 1000),
@@ -462,7 +463,7 @@ class Ledger:
             data["phase"] = "completed"
             self._settle(db, data, outcome)
 
-    def refuse(self, data, reason, alert=False):
+    def refuse(self, data, reason, alert=False, notice=None):
         """Close an input that will not get a reply, with a visible owner notice.
 
         The notice is exported as the input's final reply, so V1 delivers it
@@ -480,6 +481,8 @@ class Ledger:
             message = {"id": str(uuid.uuid5(NOTICE_NAMESPACE, data["remote_id"])), "role": "assistant", "state": "completed",
                        "phase": "final_answer", "kind": "notice", "source": "rust-v2-adapter",
                        "parentMessageId": data["remote_id"], "refusal": reason, "text": refusal_notice(reason)}
+            if notice is not None:
+                message.update({k: v for k, v in notice.items() if k in ("text", "provider", "model")})
             data.pop("blocked", None)
             if alert:
                 now = time.time()
@@ -625,7 +628,7 @@ class Ledger:
             self._export(db, data, "progress", "continued:" + data["remote_id"], message)
             return message
 
-    def add_progress(self, data, payload_id, text):
+    def add_progress(self, data, payload_id, text, identity=None):
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
             self.save(data, db)
@@ -634,6 +637,7 @@ class Ledger:
                 return None
             message = {"id": str(uuid.uuid4()), "role": "assistant", "state": "completed", "phase": "commentary",
                        "kind": "progress", "source": "rust-v2-adapter", "parentMessageId": data["remote_id"], "text": text}
+            message.update({k: v for k, v in (identity or {}).items() if k in ("provider", "model") and v})
             self._export(db, data, "progress", "progress:%s:%s" % (data["remote_id"], payload_id), message)
             return message
 

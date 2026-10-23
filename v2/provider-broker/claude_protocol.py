@@ -5,6 +5,7 @@ import uuid
 from protocol import PROTOCOL, exact, identifier, require
 from claude_telemetry import validate_telemetry
 from claude_control import ClaudeControl, canonical, text_blocks
+from claude_policy import refusal, reported_model
 
 
 # Full-access tool traffic that never becomes Orkestr progress.
@@ -39,6 +40,9 @@ class ClaudeChannel:
         self.terminal = False
         self.telemetry_uuids = set()
         self.control = None
+        self.resolved_model = None
+        self.current_model = None
+        self.policy_refused = False
         # Set once the active input's first assistant frame carries its exact
         # user_message_uuid. The installed CLI omits the key on later blocks
         # and on API messages after a tool result within the same turn.
@@ -148,6 +152,11 @@ class ClaudeChannel:
             self.keepalives += 1
             return None
         require(frame.get("session_id", self.native if kind in TOOL_NOTICES else None) == self.native)
+        if self.policy_refused:
+            return None
+        refused = refusal(self, frame)
+        if refused is not None:
+            return refused
         if self.tools and self.control is None and (kind in TOOL_NOTICES or (
                 kind == "assistant" and frame.get("parent_tool_use_id") is not None)):
             # Tool results, tool progress and subagent turns of THIS joined
@@ -218,6 +227,10 @@ class ClaudeChannel:
             require(frame.get("subtype") == "init" and self.initialized and not self.system_seen)
             self.system_seen = True
             clean = {"type": "system", "subtype": "init", "session_id": self.native}
+            self.resolved_model = reported_model(frame.get("model"))
+            self.current_model = self.resolved_model
+            if self.resolved_model is not None:
+                clean["model"] = self.resolved_model
         elif kind == "assistant":
             require(self.initialized and self.active is not None and not self.terminal)
             message = frame.get("message")
@@ -231,6 +244,10 @@ class ClaudeChannel:
                 return None
             clean = {"type": kind, "session_id": self.native,
                      "message": {"role": kind, "content": blocks}}
+            model = reported_model(message.get("model"))
+            if model is not None:
+                self.current_model = model
+                clean["message"]["model"] = model
             if "error" in frame:
                 # Closed native failure class (auth, quota, billing...); Runtime
                 # records Failed and never retries on another account/provider.

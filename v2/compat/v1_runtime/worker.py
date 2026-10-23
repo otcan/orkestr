@@ -13,6 +13,8 @@ from .ledger import (DEFAULT_MAX_INPUT_AGE_S, DIGEST_NAMESPACE as DIGEST_REPLY_N
 from . import instructions
 from .participants import compose
 from .rust_client import ClientError
+from .model_identity import observed_identity
+from .policy_refusal import notice as policy_notice
 
 PROGRESS_INTERVAL_S = 60
 PROGRESS_MAX_CHARS = 3500
@@ -285,7 +287,7 @@ class Worker:
             return
         if len(text) > PROGRESS_MAX_CHARS:
             text = text[:PROGRESS_MAX_CHARS].rstrip() + " …"
-        self.ledger.add_progress(data, payload_id, text)
+        self.ledger.add_progress(data, payload_id, text, self.provider_identity(run_id=status["run_id"], status=status))
 
     def capture_questions(self, data, events, ids):
         """Send each asynchronous question of this input's runs at once.
@@ -318,7 +320,7 @@ class Worker:
                 uuid.UUID(payload_id)
                 self.ledger.enqueue_post({"id": payload_id, "author": "assistant_question", "label": QUESTION_LABEL,
                                           "text": text, "provider": None, "model": None,
-                                          "created_ms": int(time.time() * 1000)}, self.provider_identity())
+                                          "created_ms": int(time.time() * 1000)}, self.provider_identity(run_id=payload["run_id"]))
             self.ledger.save(data)
 
     def call(self, method, route, body=None, allowed=(200,)):
@@ -443,7 +445,7 @@ class Worker:
                         for k in ("provider", "model"))):
                 raise Refused("posts_shape")
             uuid.UUID(row["id"])
-            if not row.get("provider") and identity is None:
+            if identity is None:
                 identity = self.provider_identity()
             self.ledger.enqueue_post(row, identity)
             self.client.request("POST", "/posts/%s/delivered" % row["id"], body={}, allowed=(200,))
@@ -558,6 +560,9 @@ class Worker:
         if live:
             return
         if deep:
+            notice = policy_notice(deep[-1], ids)
+            if notice:
+                return self.ledger.complete_web(watch, notice["text"], notice)
             return self.web_dropped(watch, "deep_" + str(deep[-1].get("phase")))
         if len(events) == 100 or now - watch["since"] < WEB_NO_RUN_GRACE_S:
             return
@@ -585,7 +590,7 @@ class Worker:
             return self.ledger.save_web_watch(watch)
         if len(text) > PROGRESS_MAX_CHARS:
             text = text[:PROGRESS_MAX_CHARS].rstrip() + " \u2026"
-        self.ledger.web_progress(watch, payload_id, text)
+        self.ledger.web_progress(watch, payload_id, text, self.provider_identity(run_id=status["run_id"], status=status))
 
     def web_answer(self, watch, run_id):
         after, rows = watch["sequence"], []
@@ -607,7 +612,7 @@ class Worker:
         text = self.render_final(payload["text"])
         if text is None:
             return self.web_dropped(watch, "no_reply")
-        self.ledger.complete_web(watch, text, self.provider_identity())
+        self.ledger.complete_web(watch, text, self.provider_identity(run_id=run_id))
 
     def finish_digest(self, data):
         digest = data["digest"]
@@ -809,6 +814,11 @@ class Worker:
         else:
             statuses = {role: self.call("GET", route, allowed=(200, 204)) for role, route in
                         (("fast", "/fast/execution"), ("deep", "/execution"))}
+        notice = policy_notice(statuses["deep"], ids)
+        if notice:
+            self.settle_own_fast(data, statuses.get("fast"), ids)
+            self.ledger.refuse(data, "provider_policy_refusal", alert=data.get("origin") == "timer", notice=notice)
+            return
         self.capture_progress(data, statuses["deep"], ids)
         accepted = data.setdefault("accepted", {})
         if self.continue_after_deadline(data, statuses, ids):
@@ -856,7 +866,7 @@ class Worker:
         text = self.timer_final(data, data["deep_payload"]["text"])
         reply = {"id": deep["acceptance_event_id"], "role": "assistant", "state": "completed",
                  "phase": "final_answer", "source": "rust-v2-pilot", "parentMessageId": data["remote_id"], "text": text}
-        reply.update(self.provider_identity())
+        reply.update(self.provider_identity(run_id=deep["run_id"]))
         if text is None:
             # V1 never transports an exact NO_REPLY; it acknowledges it as no_reply.
             reply.update(text="NO_REPLY", noReply=True)
@@ -1113,21 +1123,9 @@ class Worker:
         self.ledger.continue_notice(data, CONTINUE_NOTICE)
         return True
 
-    def provider_identity(self):
-        """Provider and model of the conversation, for the V1 debug footer.
-        Best effort: a missing route or odd shape only omits the fields."""
-        try:
-            value = self.call("GET", "/settings")
-        except Exception:
-            return {}
-        if not isinstance(value, dict):
-            return {}
-        identity = {}
-        for key in ("provider", "model"):
-            item = value.get(key)
-            if isinstance(item, str) and re.fullmatch("[A-Za-z0-9._:-]{1,64}", item):
-                identity[key] = item
-        return identity if "provider" in identity else {}
+    def provider_identity(self, run_id=None, status=None, fast=False):
+        """Exact-run evidence for footers; unknown models remain unreported."""
+        return observed_identity(self.call, run_id=run_id, status=status, fast=fast)
 
     def render_final(self, text):
         """Apply the conversation's reply settings (NO_REPLY, prefix, footer)

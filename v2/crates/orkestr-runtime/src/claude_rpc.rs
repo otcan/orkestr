@@ -22,6 +22,8 @@ pub enum ClaudeObservation {
     CompletedProposal,
     /// Explicit provider error; only `terminal_result_seen` proves a result frame.
     Failed,
+    /// Explicit native policy refusal; this is never a terminal-result proof.
+    PolicyRefusal,
 }
 
 /// One parser per owned invocation, with a distinct native session per role.
@@ -37,6 +39,8 @@ pub struct ClaudeRpc {
     failure_seen: bool,
     failure_class: Option<orkestr_v2_contracts::ExecutionFailureClass>,
     telemetry_ids: HashSet<String>,
+    models: orkestr_v2_contracts::ExecutionModels,
+    model_observation: Option<orkestr_v2_contracts::ExecutionModelObservation>,
 }
 
 impl ClaudeRpc {
@@ -59,6 +63,8 @@ impl ClaudeRpc {
             failure_seen: false,
             failure_class: None,
             telemetry_ids: HashSet::new(),
+            models: Default::default(),
+            model_observation: None,
         })
     }
 
@@ -87,6 +93,39 @@ impl ClaudeRpc {
     /// Never derived from provider text.
     pub fn failure_class(&self) -> Option<orkestr_v2_contracts::ExecutionFailureClass> {
         self.failure_class
+    }
+
+    pub fn take_model_observation(
+        &mut self,
+    ) -> Option<orkestr_v2_contracts::ExecutionModelObservation> {
+        self.model_observation.take()
+    }
+
+    fn observe_model(
+        &mut self,
+        source: orkestr_v2_contracts::ExecutionModelSource,
+        value: Option<&Value>,
+    ) -> Result<(), Blocker> {
+        let Some(value) = value else {
+            return Ok(());
+        };
+        let model = value
+            .as_str()
+            .filter(|s| orkestr_v2_contracts::valid_observed_model(s))
+            .ok_or(Blocker::Protocol)?;
+        let last = match source {
+            orkestr_v2_contracts::ExecutionModelSource::Resolved => &mut self.models.resolved_model,
+            orkestr_v2_contracts::ExecutionModelSource::Answer => &mut self.models.actual_model,
+            orkestr_v2_contracts::ExecutionModelSource::Refused => &mut self.models.refused_model,
+        };
+        if last.as_deref() != Some(model) {
+            *last = Some(model.to_owned());
+            self.model_observation = Some(orkestr_v2_contracts::ExecutionModelObservation {
+                source,
+                model: model.to_owned(),
+            });
+        }
+        Ok(())
     }
 
     /// Clean EOF is valid only after a terminal result with no protocol error.
@@ -161,6 +200,22 @@ impl ClaudeRpc {
         };
         match text(&value, "type")? {
             "system" => {
+                if text(&value, "subtype")? == "provider_policy_refusal" {
+                    if !self.initialized
+                        || self.failure_seen
+                        || nested
+                        || !uuid(text(&value, "user_message_uuid")?)
+                    {
+                        return Err(Blocker::Protocol);
+                    }
+                    self.observe_model(
+                        orkestr_v2_contracts::ExecutionModelSource::Refused,
+                        value.get("model"),
+                    )?;
+                    self.failure_seen = true;
+                    self.failure_class = Some(orkestr_v2_contracts::ExecutionFailureClass::Policy);
+                    return Ok(Some(ClaudeObservation::PolicyRefusal));
+                }
                 if text(&value, "subtype")? != "init" {
                     return Err(Blocker::Unsupported);
                 }
@@ -168,6 +223,10 @@ impl ClaudeRpc {
                     return Err(Blocker::Protocol);
                 }
                 self.initialized = true;
+                self.observe_model(
+                    orkestr_v2_contracts::ExecutionModelSource::Resolved,
+                    value.get("model"),
+                )?;
                 Ok(Some(ClaudeObservation::Initialized))
             }
             // Housekeeping is not evidence of semantic progress or dispatch.
@@ -225,6 +284,16 @@ impl ClaudeRpc {
         }
         if self.failure_seen || content.is_empty() || (kind == "user" && !tool_result) {
             return Ok(None);
+        }
+        if kind == "assistant"
+            && content
+                .iter()
+                .any(|block| block.get("type").and_then(Value::as_str) == Some("text"))
+        {
+            self.observe_model(
+                orkestr_v2_contracts::ExecutionModelSource::Answer,
+                message.get("model"),
+            )?;
         }
         // Content, including tool arguments and nested agent text, stays opaque.
         Ok(Some(ClaudeObservation::Progress))
@@ -362,6 +431,8 @@ fn bounded(value: &Value, depth: usize, nodes: &mut usize) -> Result<(), Blocker
 #[path = "claude_rpc/tests.rs"]
 mod tests;
 
+#[cfg(test)]
+mod model_policy_tests;
 mod telemetry;
 
 /// Map the broker's closed Claude error class to the presentation class.

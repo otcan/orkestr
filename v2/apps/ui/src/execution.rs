@@ -59,30 +59,9 @@ pub struct Execution {
     failure: Option<&'static str>,
 }
 
-/// Short truthful cause for a failed run; never provider text.
-pub fn failure_label(class: orkestr_v2_contracts::ExecutionFailureClass) -> &'static str {
-    use orkestr_v2_contracts::ExecutionFailureClass as Class;
-    match class {
-        Class::Authentication => "provider login required",
-        Class::Quota => "provider usage limit reached",
-        Class::Billing => "provider billing problem",
-        Class::Provider => "provider rejected the request",
-        Class::Unknown => "provider reported an error",
-    }
-}
-/// Owner-visible notice for a run that ended failed: never a silent pending
-/// state. Carries only the closed failure class, never provider text.
-pub fn failure_notice(status: &orkestr_v2_contracts::ExecutionStatus) -> Option<String> {
-    (status.phase == orkestr_v2_contracts::ExecutionPhase::Failed).then(|| {
-        let cause = status
-            .failure
-            .as_ref()
-            .map_or("the run ended with an error", |f| failure_label(f.class));
-        format!(
-            "This reply failed: {cause}. Nothing was accepted. Send your message again to retry."
-        )
-    })
-}
+mod presentation;
+pub use presentation::{failure_label, failure_notice, model_label};
+
 impl Execution {
     pub const STALE_MS: u64 = 15_000;
     pub fn selection_generation(&self) -> u64 {

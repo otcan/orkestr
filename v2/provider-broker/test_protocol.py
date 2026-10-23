@@ -45,6 +45,20 @@ def turn(native="synthetic-native"):
 
 
 class ProtocolTests(unittest.TestCase):
+    def test_native_model_reroute_is_scoped_and_strips_private_details(self):
+        channel, _ = opened()
+        ready(channel)
+        request(channel, turn(), "CommitExecution", 6)
+        channel.provider({"id": 4, "result": {"turn": {"id": "synthetic-turn", "status": "inProgress"}}})
+        result = channel.provider({"method": "model/rerouted", "params": {
+            "threadId": "synthetic-native", "turnId": "synthetic-turn", "toModel": "native-answer-model",
+            "fromModel": "native-original-model", "reason": "private provider detail"}})
+        self.assertEqual(result["params"]["frame"]["params"], {
+            "threadId": "synthetic-native", "turnId": "synthetic-turn", "toModel": "native-answer-model"})
+        with self.assertRaises(Refused):
+            channel.provider({"method": "model/rerouted", "params": {
+                "threadId": "synthetic-native", "turnId": "foreign", "toModel": "foreign-model"}})
+
     def test_fresh_metadata_and_single_commit(self):
         channel, _ = opened()
         ready(channel)

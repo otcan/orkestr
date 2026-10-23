@@ -29,13 +29,15 @@ impl ClaudeInputCorrelation {
         let Some(input) = &self.0 else {
             return Ok(());
         };
-        if matches!(
+        if (matches!(
             frame.get("type").and_then(Value::as_str),
             Some("assistant" | "result")
-        ) && (frame.get("user_message_uuid").and_then(Value::as_str) != Some(input)
-            || frame
-                .get("user_message_uuids")
-                .is_some_and(|ids| ids != &json!([input])))
+        ) || (frame.get("type").and_then(Value::as_str) == Some("system")
+            && frame.get("subtype").and_then(Value::as_str) == Some("provider_policy_refusal")))
+            && (frame.get("user_message_uuid").and_then(Value::as_str) != Some(input)
+                || frame
+                    .get("user_message_uuids")
+                    .is_some_and(|ids| ids != &json!([input])))
         {
             return Err(Blocker::StaleLease);
         }
@@ -88,5 +90,18 @@ mod tests {
         assert!(ClaudeInputCorrelation(None)
             .verify(&json!({"type":"assistant"}))
             .is_ok());
+    }
+
+    #[test]
+    fn policy_refusal_is_scoped_to_the_issued_input_uuid() {
+        let correlation = ClaudeInputCorrelation(Some(INPUT.into()));
+        for value in [None, Some(PRIOR)] {
+            let mut frame = json!({"type":"system","subtype":"provider_policy_refusal"});
+            if let Some(value) = value {
+                frame["user_message_uuid"] = json!(value);
+            }
+            assert_eq!(correlation.verify(&frame), Err(Blocker::StaleLease));
+        }
+        assert!(correlation.verify(&json!({"type":"system","subtype":"provider_policy_refusal","user_message_uuid":INPUT})).is_ok());
     }
 }
