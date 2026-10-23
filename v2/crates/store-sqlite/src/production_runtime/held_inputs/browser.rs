@@ -29,7 +29,7 @@ impl Store {
         .ok_or(RuntimeStoreError::Unauthorized)?;
         let owner = OwnerId(owner.parse().map_err(db)?);
         crate::runtime::scope(&mut tx, &owner, conversation).await?;
-        let page = projection(&mut tx, &owner, conversation, after_sequence, limit).await?;
+        let page = projection(&mut tx, &owner, conversation, after_sequence, limit, None).await?;
         if !page.is_valid() {
             return Err(RuntimeStoreError::Unavailable);
         }

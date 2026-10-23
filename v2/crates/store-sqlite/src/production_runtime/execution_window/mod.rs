@@ -25,6 +25,10 @@ mod switching;
 pub use credential::{ExecutionWindowCredential, ExecutionWindowRetirement};
 use provider_choice::window_provider;
 #[cfg(test)]
+mod confirmed_resume_tests;
+#[cfg(test)]
+mod eligibility_tests;
+#[cfg(test)]
 mod queue_tests;
 #[cfg(test)]
 mod tests;

@@ -21,6 +21,75 @@ use uuid::Uuid;
 
 const BROWSER: &str = "synthetic-browser";
 
+#[tokio::test]
+async fn repeated_admission_refusals_keep_the_same_intent_across_restart() {
+    let f = fixture().await;
+    let waiting = f.conversation("refused").await;
+    // An existing live pre-window supervisor makes a new bootstrap refuse.
+    f.store
+        .bootstrap_execution_window_authenticated(
+            BROWSER,
+            &waiting,
+            ProductionSupervisorConfig {
+                provider: ProviderKind::Codex,
+                namespace: "existing-context".into(),
+                supervisor_key: "existing-key".into(),
+                takeover: ProductionTakeover::First,
+            },
+        )
+        .await
+        .unwrap();
+    let request = f.request(&waiting, "retry-same-event").await;
+    let original = f
+        .store
+        .enqueue_execution_window_authenticated(BROWSER, &waiting, &request)
+        .await
+        .unwrap();
+    let controller = f.controller(8);
+    let key = request.input_event_id.to_string();
+    for attempt in 1..=5 {
+        if let Some(retry) = controller.queue.failures.lock().unwrap().get_mut(&key) {
+            retry.1 = Instant::now();
+        }
+        controller.drain_locked(BROWSER).await;
+        let rows = f
+            .store
+            .execution_window_queue_authenticated(BROWSER, Some(&waiting))
+            .await
+            .unwrap();
+        assert_eq!(
+            rows,
+            vec![original.clone()],
+            "attempt {attempt} must retain exact durable intent"
+        );
+        assert!(!controller.queue.retry_due(&key), "a refusal must back off");
+        assert_eq!(f.windows(&waiting).await, 0);
+    }
+    controller.queue.close().await;
+    let reopened = Store::open(&f.root.join("core.sqlite3")).await.unwrap();
+    assert_eq!(
+        reopened
+            .execution_window_queue_authenticated(BROWSER, Some(&waiting))
+            .await
+            .unwrap(),
+        vec![original]
+    );
+}
+
+#[test]
+fn retry_is_bounded_and_another_event_does_not_inherit_backoff() {
+    let queue = QueueState::default();
+    for count in 1..=20 {
+        assert_eq!(queue.failed("event-one"), count);
+        let retry = queue.failures.lock().unwrap()["event-one"];
+        assert!(retry.1.saturating_duration_since(Instant::now()) <= RETRY_MAX);
+    }
+    assert!(!queue.retry_due("event-one"));
+    assert!(queue.retry_due("event-two"));
+    queue.settled("event-one");
+    assert!(queue.retry_due("event-one"));
+}
+
 struct Fixture {
     root: std::path::PathBuf,
     store: Store,

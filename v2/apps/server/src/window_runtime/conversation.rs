@@ -108,7 +108,20 @@ impl ConversationController {
             .initial
             .admit(&self.store, browser, owner, conversation, input)
             .await
-            .map_err(|_| "window admission refused")?;
+            .map_err(|error| {
+                // Closed local enum only; no provider body, credential or SQL text.
+                let cause = match error {
+                    orkestr_v2_application::runtime::RuntimeStoreError::Busy => "capacity",
+                    orkestr_v2_application::runtime::RuntimeStoreError::Fenced => "fenced",
+                    orkestr_v2_application::runtime::RuntimeStoreError::Unauthorized => {
+                        "unauthorized"
+                    }
+                    orkestr_v2_application::runtime::RuntimeStoreError::Conflict => "conflict",
+                    _ => "unavailable",
+                };
+                eprintln!("window admission refused: conversation={conversation} cause={cause}");
+                "window admission refused"
+            })?;
         super::integers::generation(admission.status.generation)?;
         super::integers::timestamp(admission.status.opened_at_ms)?;
         super::integers::timestamp(admission.status.expires_at_ms)?;

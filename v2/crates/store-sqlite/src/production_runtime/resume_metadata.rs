@@ -53,14 +53,43 @@ impl Store {
         };
         let link = grant.resume.as_ref().ok_or(RuntimeStoreError::Fenced)?;
         let existing: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM production_resume_metadata WHERE prior_run_id=? AND incarnation_id=?",
+        )
+        .bind(prior_run.to_string())
+        .bind(&c.incarnation)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(db)?;
+        if existing != 0 {
+            return Err(RuntimeStoreError::Conflict);
+        }
+        // Another incarnation's setup is never reused or overwritten. Only a
+        // separately admitted successor window after proven retirement may
+        // reserve again, and only when every earlier setup is confirmed.
+        let previous: i64 = sqlx::query_scalar(
             "SELECT count(*) FROM production_resume_metadata WHERE prior_run_id=?",
         )
         .bind(prior_run.to_string())
         .fetch_one(&mut *tx)
         .await
         .map_err(db)?;
-        if existing != 0 {
-            return Err(RuntimeStoreError::Conflict);
+        if previous != 0 {
+            let window = c
+                .window_scope(&mut tx)
+                .await?
+                .ok_or(RuntimeStoreError::Fenced)?;
+            let valid: i64 = sqlx::query_scalar("SELECT count(*) FROM production_resume_metadata WHERE prior_run_id=? AND state='confirmed' AND context_id=? AND session_id=? AND binding_generation=? AND terminal_event_id=?")
+                .bind(prior_run.to_string()).bind(&c.id).bind(binding.session_id.to_string())
+                .bind(i64::try_from(binding.generation).map_err(db)?).bind(&terminal)
+                .fetch_one(&mut *tx).await.map_err(db)?;
+            if valid != previous
+                || window.get::<&str, _>("state") != "opening"
+                || window
+                    .get::<Option<String>, _>("predecessor_window_id")
+                    .is_none()
+            {
+                return Err(RuntimeStoreError::Fenced);
+            }
         }
         sqlx::query("INSERT INTO production_resume_metadata(id,prior_run_id,terminal_event_id,context_id,incarnation_id,session_id,binding_generation,state) VALUES(?,?,?,?,?,?,?,'issued')")
             .bind(&link.id).bind(prior_run.to_string()).bind(link.terminal_event.to_string()).bind(&c.id).bind(&c.incarnation)
