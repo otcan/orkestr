@@ -37,13 +37,13 @@ Config fields:
 | `ownChatId` | Exact paired account identifier; checked against the live client |
 | `ownerUserId` | Orkestr principal who owns every allowed thread |
 | `activatedAt` | ISO timestamp; older input is never imported |
-| `groups` | Array of `{chatId, threadId, name}` |
+| `groups` | Array of `{chatId, threadId, name, forwardProgressUpdates?}`; each group's optional boolean overrides the global progress flag |
 | `heldInputIds` | Optional array of exact transport input IDs excluded before any API call or send; malformed values fail startup |
 | `replyPrefix` | Deployment's configured reply identity |
 | `appendDebugFooter` | Enable the shared WhatsApp model/quota/queue footer; per-thread suppression and tenant isolation still apply |
 | `maxReplyChars` | Optional single-message budget for new replies, 1000 to 60000 characters (default 20000, or `ORKESTR_WHATSAPP_MAX_REPLY_CHARS`) |
-| `forwardProgressUpdates` | Opt in to completed assistant commentary and approval updates on this transport; independent of the disabled legacy mirror |
-| `forwardProgressSince` | Required ISO activation cutoff when updates are enabled; older updates are not replayed |
+| `forwardProgressUpdates` | Boolean for completed assistant commentary and approval updates; defaults on for the validated owner groups, independently of the legacy mirror |
+| `forwardProgressSince` | ISO activation cutoff; required for explicit global `forwardProgressUpdates: true`. When omitted with default-on or group-only activation, process startup is the cutoff |
 | `formattingModulePath` | Optional existing immutable Orkestr formatter module for a minimal transport install; defaults to the product module in the same repository |
 | `journalPath` | Transport SQLite journal |
 | `relayJournalPath` | Orkestr routing and completed reply journal |
@@ -56,7 +56,7 @@ Changing that contract requires a deliberate journal migration; do not reset a
 journal to bypass an uncertain delivery. Keep the config, journals and account
 credentials private. `ORKESTR_ENV_FILE` selects the local CLI API credentials.
 
-Progress from the built-in V2 adapter (`rust-v2-adapter`) follows the same opt-in,
+Progress from the built-in V2 adapter (`rust-v2-adapter`) follows the same group policy,
 activation cutoff, parent matching, per-thread update suppression and durable
 receipt rules as local executor progress. Enable adapter progress export and
 clear the thread's update-suppression flag when progress delivery is wanted.
@@ -217,6 +217,15 @@ fragments, analysis, tools and context-compaction events are excluded. Updates
 keep the turn open, use the same durable payload/receipt journal and label their
 footer `msg:*update*`. A final supersedes any unsent progress already in history.
 Enabling updates does not reopen completed turns or change legacy group bindings.
+
+Local V1 commentary, including Claude Code's started-working acknowledgement,
+is eligible on the first relay poll (the runner polls every three seconds).
+After the first confirmed send, each input gets at most one commentary update
+per minute. The newest pending update replaces older pending notes. This budget
+and any unfinished send survive a relay restart; a retry keeps its frozen payload
+and provider request ID. Questions, approvals and final answers remain immediate.
+Remote V2 exports retain their adapter pacing and acknowledgement contract.
+Thread binding update suppression still applies to commentary in either runtime.
 
 ## Owner-authorized coordinator access
 
