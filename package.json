@@ -59,7 +59,7 @@
   },
   "license": "MIT",
   "dependencies": {
-    "@modelcontextprotocol/sdk": "1.31.0",
+    "@modelcontextprotocol/sdk": "1.32.0",
     "@nestjs/common": "^11.2.3",
     "@nestjs/core": "^11.2.3",
     "@nestjs/platform-express": "^11.2.3",
@@ -107,10 +107,11 @@
       "puppeteer": "25.9.0"
     },
     "@angular/build": {
-      "piscina": "5.3.2"
+      "piscina": "5.3.2",
+      "vite": "7.3.7"
     },
     "@angular/cli": {
-      "@modelcontextprotocol/sdk": "1.31.0"
+      "@modelcontextprotocol/sdk": "1.32.0"
     }
   }
 }

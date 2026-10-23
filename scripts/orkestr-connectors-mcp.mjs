@@ -4,6 +4,7 @@ import multer from "multer";
 import { multipartUploadLimits } from "../packages/shared/src/multipart-limits.js";
 import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { MCP_MAX_REQUEST_BODY_BYTES } from "../packages/shared/src/mcp-limits.js";
 import { authorizeConnectorMcpRequest, authorizeConnectorMcpToken } from "../packages/connectors/src/connectors-mcp-auth.js";
 import { createConnectorsMcpServer } from "../packages/connectors/src/connectors-mcp-server.js";
 import { listConnectorInboxEvents } from "../packages/connectors/src/connector-inbox.js";
@@ -140,7 +141,7 @@ export function createConnectorsMcpGateway({ env = process.env, fetchImpl = fetc
       return jsonError(res, Number(error?.statusCode || 401), clean(error?.message) || "connector_mcp_unauthorized");
     }
     const server = createConnectorsMcpServer({ auth, request: req, env });
-    const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+    const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, maxRequestBodySize: MCP_MAX_REQUEST_BODY_BYTES });
     try {
       await server.connect(transport);
       await transport.handleRequest(req, res, req.body);

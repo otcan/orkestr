@@ -3,7 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseDocument, visit } from "yaml";
 
-// Verified against the official actions/* tag refs. Updating this inventory
+// Verified against the official upstream tag refs. Updating this inventory
 // requires review together with the workflow and immutable upstream commit.
 export const actionPins = Object.freeze({
   "actions/checkout": "d23441a48e516b6c34aea4fa41551a30e30af803", // v6.1.0
@@ -11,6 +11,7 @@ export const actionPins = Object.freeze({
   "actions/upload-artifact": "ea165f8d65b6e75b540449e92b4886f43607fa02", // v4.6.2
   "actions/download-artifact": "d3f86a106a0bac45b974a628896c90dbdf5c8093", // v4.3.0
   "actions/attest-build-provenance": "4d101475d8b20a2381f78447822ac1eab6504dd8", // v4.2.2
+  "Swatinem/rust-cache": "d1527c8f67ef9af357290475d4af4b0fab8f12e0", // v2.9.3
 });
 const attestAction = "actions/attest-build-provenance";
 // Only these actions may run in a job that holds OIDC/attestation write

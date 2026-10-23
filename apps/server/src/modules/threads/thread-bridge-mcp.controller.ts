@@ -1,5 +1,6 @@
 import { Body, Controller, Delete, Get, Headers, HttpCode, Post, Query, Req, Res } from "@nestjs/common";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { MCP_MAX_REQUEST_BODY_BYTES } from "../../../../../packages/shared/src/mcp-limits.js";
 import {
   authorizationServerMetadata,
   createConsent,
@@ -164,7 +165,7 @@ export class ThreadBridgeMcpController {
         return sendMcpJson(response, record, result.status, result.body);
       }
       const server = createThreadBridgeMcpServer({ principal });
-      const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+      const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, maxRequestBodySize: MCP_MAX_REQUEST_BODY_BYTES });
       const legacyOutcome = captureResponseOutcome(response);
       response.once("close", () => {
         const { outcome, ...details }: any = legacyOutcome();
