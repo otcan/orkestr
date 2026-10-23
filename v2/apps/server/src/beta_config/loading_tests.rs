@@ -39,7 +39,9 @@ impl Fixture {
             0,
             "explicit root fixture runner required"
         );
-        let root = PathBuf::from(format!("/opt/orkestr-beta-loading-test-{}", Uuid::new_v4()));
+        // Hosted CI makes /opt world-writable. Own this synthetic ancestry
+        // below /, like the manager fixture; never chmod a shared directory.
+        let root = PathBuf::from(format!("/orkestr-beta-loading-test-{}", Uuid::new_v4()));
         directory(&root, 0, GID, 0o750);
         let home = root.join("home");
         directory(&home, UID, GID, 0o700);

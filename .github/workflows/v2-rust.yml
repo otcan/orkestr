@@ -108,6 +108,19 @@ jobs:
         run: cargo +1.99.1 clippy --locked --workspace --all-targets -- -D warnings
       - name: Locked build
         run: cargo +1.99.1 build --locked --workspace
+      - name: Protected beta configuration custody regressions
+        run: |
+          cargo +1.99.1 test --locked -p orkestr-v2-server --lib --no-run --message-format=json > "$RUNNER_TEMP/beta-custody-artifacts.jsonl"
+          sudo /usr/bin/python3 -I -S -B - "$RUNNER_TEMP/beta-custody-artifacts.jsonl" <<'PY'
+          import json, subprocess, sys
+          artifacts = [json.loads(line) for line in open(sys.argv[1])]
+          binaries = {a['executable'] for a in artifacts if a.get('reason') == 'compiler-artifact'
+                      and a.get('profile', {}).get('test') and a.get('executable')
+                      and a.get('target', {}).get('kind') == ['lib']
+                      and a.get('target', {}).get('name') == 'orkestr_v2_server'}
+          assert len(binaries) == 1, 'one exact server test executable required'
+          subprocess.run([binaries.pop(), 'beta_config::loading::tests::', '--include-ignored'], check=True, timeout=300)
+          PY
       - name: Shared Fast, Deep and Worker windows over real HTTP
         run: |
           sudo /usr/bin/python3 -B tests/service_roles_http.py "$CARGO_TARGET_DIR/debug/orkestr-v2-server" --source "$(git rev-parse HEAD)" --report "$RUNNER_TEMP/v2-service-roles.json"
@@ -127,19 +140,6 @@ jobs:
           sudo /usr/bin/python3 -B tests/stranded_window_http.py "$CARGO_TARGET_DIR/debug/orkestr-v2-server" --source "$(git rev-parse HEAD)" --report "$RUNNER_TEMP/v2-stranded-window.json"
       - name: Unit and HTTP process-failure tests (requires Python 3)
         run: cargo +1.99.1 test --locked --workspace
-      - name: Protected beta configuration custody regressions
-        run: |
-          cargo +1.99.1 test --locked -p orkestr-v2-server --lib --no-run --message-format=json > "$RUNNER_TEMP/beta-custody-artifacts.jsonl"
-          sudo /usr/bin/python3 -I -S -B - "$RUNNER_TEMP/beta-custody-artifacts.jsonl" <<'PY'
-          import json, subprocess, sys
-          artifacts = [json.loads(line) for line in open(sys.argv[1])]
-          binaries = {a['executable'] for a in artifacts if a.get('reason') == 'compiler-artifact'
-                      and a.get('profile', {}).get('test') and a.get('executable')
-                      and a.get('target', {}).get('kind') == ['lib']
-                      and a.get('target', {}).get('name') == 'orkestr_v2_server'}
-          assert len(binaries) == 1, 'one exact server test executable required'
-          subprocess.run([binaries.pop(), 'beta_config::loading::tests::', '--include-ignored'], check=True, timeout=300)
-          PY
       - name: Offline domain demo smoke check
         run: cargo +1.99.1 run --locked -p orkestr-v2-demo
       - name: Make shared-window synthetic evidence readable
