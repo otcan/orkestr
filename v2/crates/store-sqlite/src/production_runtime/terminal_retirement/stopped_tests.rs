@@ -22,31 +22,62 @@ fn copy_config(c: &ProductionSupervisorConfig) -> ProductionSupervisorConfig {
     }
 }
 async fn consumed(f: &Case, role: Role) -> ProviderAdmission {
+    let provider = f.handle.context().unwrap().provider;
+    let roles = f
+        .handle
+        .ensure_role_bindings(&f.owner, &f.conversation)
+        .await
+        .unwrap();
+    let starting = if role == Role::Deep {
+        roles.deep
+    } else {
+        roles.fast
+    };
+    let link = if provider == ProviderKind::Claude {
+        let metadata = f
+            .handle
+            .authorize_session_metadata(&starting)
+            .await
+            .unwrap();
+        Some(
+            f.handle
+                .initialize_claude_session(
+                    metadata,
+                    crate::production_runtime::claude_identity::ClaudeProcessInitialization {
+                        requested_native_session_id: Uuid::new_v4().to_string(),
+                        protocol_version: "claude-control-v1".into(),
+                        source_event_key: "stopped-retirement-init".into(),
+                    },
+                )
+                .await
+                .unwrap(),
+        )
+    } else {
+        None
+    };
+    let b = if let Some(link) = &link {
+        link.binding().clone()
+    } else if role == Role::Deep {
+        ready(f).await
+    } else {
+        f.handle
+            .confirm_native_session(NativeSessionConfirmation {
+                session_id: starting.session_id,
+                expected_generation: starting.generation,
+                native_session_id: "synthetic-native-retired-fast".into(),
+                protocol_version: "synthetic-1".into(),
+                source_event_key: "fast-retired-ready".into(),
+            })
+            .await
+            .unwrap()
+    };
     let a = if role == Role::Deep {
-        let b = ready(f).await;
         let input = claim(f, &b).await;
         f.handle
             .admit_run(&input, &b.session_id, b.generation, "stopped-retire")
             .await
             .unwrap()
     } else {
-        let b = f
-            .handle
-            .ensure_role_bindings(&f.owner, &f.conversation)
-            .await
-            .unwrap()
-            .fast;
-        let b = f
-            .handle
-            .confirm_native_session(NativeSessionConfirmation {
-                session_id: b.session_id,
-                expected_generation: b.generation,
-                native_session_id: "synthetic-native-retired-fast".into(),
-                protocol_version: "synthetic-1".into(),
-                source_event_key: "fast-retired-ready".into(),
-            })
-            .await
-            .unwrap();
         let input = f
             .store
             .admit(
@@ -73,7 +104,7 @@ async fn consumed(f: &Case, role: Role) -> ProviderAdmission {
             .await
             .unwrap()
     };
-    let DispatchClaimResult::Reserved(r) = f
+    let DispatchClaimResult::Reserved(reservation) = f
         .handle
         .claim_provider_dispatch(&a, "retire-reserve")
         .await
@@ -81,10 +112,26 @@ async fn consumed(f: &Case, role: Role) -> ProviderAdmission {
     else {
         panic!()
     };
-    assert!(matches!(
-        f.handle.consume_execution(&r).await.unwrap(),
-        ExecutionConsumption::Dispatch(_)
-    ));
+    let ExecutionConsumption::Dispatch(dispatch) =
+        f.handle.consume_execution(&reservation).await.unwrap()
+    else {
+        panic!()
+    };
+    let dispatch = if let Some(link) = link {
+        link.attach_execution(*dispatch).unwrap()
+    } else {
+        *dispatch
+    };
+    if provider == ProviderKind::Claude {
+        f.handle
+            .observe_claude_session(
+                dispatch.provider(),
+                b.native_session_id.as_deref().unwrap(),
+                "stopped-retirement-native-init",
+            )
+            .await
+            .unwrap();
+    }
     f.handle
         .append_provider_event(
             &f.owner,
