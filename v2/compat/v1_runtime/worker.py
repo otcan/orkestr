@@ -76,8 +76,6 @@ RESET_KEYS = ("intake", "cursor", "window", "window_request", "previous_window",
               "progress_at", "fast_unusable_since", "intake_rules", "questions_scanned")
 # An admitted input whose window ended without starting any run of it.
 ORPHAN_GRACE_S = 60
-# How often an input whose window ended before any run of it started is sent again.
-MAX_ORPHAN_REQUEUES = 3
 # Deep phases a window work deadline leaves behind.
 DEADLINE_STOP_PHASES = ("cancelled", "stopped", "interrupted")
 CONTINUE_NOTICE = ("Continuing in a new turn: the previous turn reached its time limit "
@@ -813,8 +811,9 @@ class Worker:
                         (("fast", "/fast/execution"), ("deep", "/execution"))}
         self.capture_progress(data, statuses["deep"], ids)
         accepted = data.setdefault("accepted", {})
-        if self.continue_after_deadline(data, statuses, ids) or self.requeue_orphaned(data, ids):
+        if self.continue_after_deadline(data, statuses, ids):
             return
+        self.refuse_orphaned(data, ids)
         for role, value in statuses.items():
             if role in accepted or role + "_accept_request" in data:
                 continue
@@ -1063,13 +1062,14 @@ class Worker:
         return (current.get("state") == "active" and type(deadline) is int and
                 deadline <= time.time() * 1000)
 
-    def requeue_orphaned(self, data, ids):
-        """Send an input again when its window ended before any run of it started
-        (for example a follow-up that joined a window held by another input's
-        unaccepted proposals, or a window whose setup failed). Nothing of it ran,
-        so no notice. At most MAX_ORPHAN_REQUEUES times per input; after that it
-        is refused with the owner notice so it settles and later inputs proceed.
-        Ledgers written before the counter count an existing `requeued` as one."""
+    def refuse_orphaned(self, data, ids):
+        """Settle an unstarted input after its window ends; never clone intake.
+
+        Re-admitting with new message keys hides setup failure behind duplicate
+        owner messages. Preserve the original evidence and use the normal
+        failure notice/settlement path so later inputs can proceed. Timers keep
+        their separate Core-owned retry of the same occurrence.
+        """
         if ids or data.get("origin") == "timer" or "window" not in data:
             return False
         now = time.time()
@@ -1078,19 +1078,7 @@ class Worker:
             self.ledger.save(data)
         if now - since < ORPHAN_GRACE_S or not self.window_ended(data):
             return False
-        count = data.get("requeue_count", 1 if data.get("requeued") else 0)
-        if count >= MAX_ORPHAN_REQUEUES:
-            raise Refused("window_setup_failed")
-        text = data.get("intake_text") or compose(data)
-        previous = data["intake"]["message_id"]
-        for key in RESET_KEYS + ("unstarted_since",):
-            data.pop(key, None)
-        for key in ("message", "window", "fast", "deep"):
-            data["keys"][key] = str(uuid.uuid4())
-        data.update(intake_text=text, phase="queued", queued_at=now, requeue_count=count + 1,
-                    requeued={"previous_message_id": previous, "at": now})
-        self.ledger.save(data)
-        return True
+        raise Refused("window_setup_failed")
 
     def continue_after_deadline(self, data, statuses, ids):
         """Re-queue an input once when a window deadline stopped its Deep turn.

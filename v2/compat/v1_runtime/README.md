@@ -368,8 +368,13 @@ header, member label and note, reply line):
 ```
 
 The line is computed when the input is first sent and frozen with it, so a
-retry resends exactly the same text; a re-queued turn (deadline continuation,
-orphan requeue) reads the file again. It is never part of the ledger's identity
+retry resends exactly the same text; a deadline continuation reads the file
+again. An input whose window ends before any matching run starts is refused
+after the grace period as `window_setup_failed`; it is never re-admitted with
+a new message ID. The original intake and failed-window evidence remain, the
+normal failure notice settles the input, and later inputs can proceed. Timer
+occurrences retain their separate Core-owned retry without duplicate intake.
+The rules file is never part of the ledger's identity
 digest, so a V1 retry after the file changed is still the same input. If the
 file is missing or unreadable at send time the input is sent without the line
 and `GET /threads/<id>/health` reports `instructionsError`
