@@ -12,9 +12,13 @@ use orkestr_v2_store_sqlite::{
     Store,
 };
 use std::{
+    io::ErrorKind,
     path::PathBuf,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    sync::atomic::{AtomicU64, Ordering},
+    time::Duration,
 };
+
+static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(0);
 
 struct Fixture {
     root: PathBuf,
@@ -26,17 +30,20 @@ struct Fixture {
 }
 impl Fixture {
     async fn new() -> Self {
-        let root = PathBuf::from(std::env::var_os("ORKESTR_V2_HOME").expect("isolated home")).join(
-            format!(
+        let home = PathBuf::from(std::env::var_os("ORKESTR_V2_HOME").expect("isolated home"));
+        std::fs::create_dir_all(&home).unwrap();
+        let root = loop {
+            let root = home.join(format!(
                 "fixture-composition-{}-{}",
                 std::process::id(),
-                SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap()
-                    .as_nanos()
-            ),
-        );
-        std::fs::create_dir_all(&root).unwrap();
+                NEXT_FIXTURE.fetch_add(1, Ordering::Relaxed)
+            ));
+            match std::fs::create_dir(&root) {
+                Ok(()) => break root,
+                Err(error) if error.kind() == ErrorKind::AlreadyExists => continue,
+                Err(error) => panic!("fixture directory: {error}"),
+            }
+        };
         let store = Store::open(&root.join("fixture.sqlite3")).await.unwrap();
         let conversation = store
             .setup("synthetic-owner", "synthetic-hash")

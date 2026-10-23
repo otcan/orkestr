@@ -85,7 +85,7 @@ is `404`.
 
 ## Delivery through the adapter
 
-Every 3 s, for each enabled binding, the adapter reads
+Every 5 s, for each enabled binding, the adapter reads
 `GET …/posts?pending=true&limit=20`. For each post it writes, in one ledger
 transaction:
 

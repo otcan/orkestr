@@ -158,6 +158,54 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(len(self.posts(client_module.SESSION)), 1)
         self.assertEqual(self.posts(PREFIX + "/messages"), [])
 
+    def checks(self):
+        return len([row for row in self.server.observed if row[1] == "/api/v2/health"])
+
+    def test_reads_reuse_a_recent_check_and_mutations_always_recheck(self):
+        self.client.ensure_login()
+        self.assertEqual(self.checks(), 1)
+        for _ in range(3):
+            self.assertEqual(self.client.request("GET", "/window", allowed=(200, 204)), (204, None))
+        self.assertEqual(self.checks(), 1, "idle reads reuse the recent server identity and session check")
+        self.client.request("POST", "/messages", {"client_message_id": "k", "text": "t"}, (202,))
+        self.assertEqual(self.checks(), 2, "a mutation always rechecks first")
+        self.client.session._verified_at -= client_module.READ_RECHECK_S
+        self.client.request("GET", "/window", allowed=(200, 204))
+        self.assertEqual(self.checks(), 3, "an old check is renewed before a read")
+        self.assertEqual(len(self.posts(client_module.SESSION)), 1)
+
+    def test_a_transport_failure_rechecks_before_the_next_read(self):
+        self.client.ensure_login()
+        original = self.respond
+        self.server.respond = lambda method, path: ((302, b"", {"Location": "/"}) if path == PREFIX + "/window"
+                                                    else original(method, path))
+        with self.assertRaises(ClientError):
+            self.client.request("GET", "/window", allowed=(200, 204))
+        self.assertIsNotNone(self.client.session._verified_at, "a definite status keeps the check")
+        self.server.respond = original
+        self.client.session.port = 1  # Nothing listens: the transport fails.
+        with self.assertRaisesRegex(ClientError, "transport_failed"):
+            self.client.request("GET", "/window", allowed=(200, 204))
+        self.assertIsNone(self.client.session._verified_at)
+        self.client.session.port = self.server.server_port
+        before = self.checks()
+        self.client.request("GET", "/window", allowed=(200, 204))
+        self.assertEqual(self.checks(), before + 1)
+
+    def test_source_drift_is_seen_by_reads_within_the_recheck_interval(self):
+        self.client.ensure_login()
+        original = self.respond
+        def mismatch(method, path):
+            status, value, headers = original(method, path)
+            if path == "/api/v2/health":
+                value["build"]["source_commit"] = "c" * 40
+            return status, value, headers
+        self.server.respond = mismatch
+        self.client.session._verified_at -= client_module.READ_RECHECK_S
+        with self.assertRaisesRegex(ClientError, "source_mismatch"):
+            self.client.request("GET", "/window", allowed=(200, 204))
+        self.assertFalse(any(row[1] == PREFIX + "/window" for row in self.server.observed))
+
     def test_wrong_owner_and_csrf_projection_refuse(self):
         for field, value in (("owner_id", RUN), ("csrf_token", "c" * 64)):
             with self.subTest(field=field):

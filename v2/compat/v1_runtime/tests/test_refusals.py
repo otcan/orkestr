@@ -18,10 +18,8 @@ class Stop:
         self.passes = passes
 
     def wait(self, duration):
-        if duration == 1:
-            self.passes -= 1
-            return self.passes < 0
-        return False
+        self.passes -= 1
+        return self.passes < 0
 
 
 def body(public_id, text="request"):
