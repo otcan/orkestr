@@ -12,7 +12,8 @@ export function createScopedAcknowledgements({config, inbox, db, groups, now, ke
   const mark = (id, reason) => db.prepare('INSERT OR IGNORE INTO scoped_real_reply_activity VALUES(?,?)').run(id, reason);
   function eligible(input) {
     const group = groups.get(input.chat_id), at = Date.parse(input.created_at);
-    if (!policy || group?.deterministicAcknowledgement !== true || !Number.isFinite(at) || at < Date.parse(policy.since) ||
+    const updates = typeof group?.forwardProgressUpdates === 'boolean' ? group.forwardProgressUpdates : config.forwardProgressUpdates !== false;
+    if (!updates || !policy || group?.deterministicAcknowledgement !== true || !Number.isFinite(at) || at < Date.parse(policy.since) ||
         now() - at > 300000 || covered(input.id) || db.prepare("SELECT 1 FROM scoped_acknowledgements WHERE input_id=? AND state='sent'").get(input.id)) return false;
     // The transport journal proves these are interactive owner inputs. Timers
     // have no group_input row. Participant-author rows never receive this ack.
