@@ -5,6 +5,14 @@ use orkestr_v2_contracts::ExecutionAcceptanceRequest;
 use std::time::Duration;
 
 pub(super) async fn seed_closed(root: std::path::PathBuf, active_only: bool) {
+    seed_closed_provider(root, active_only, ProviderKind::Codex).await;
+}
+
+pub(super) async fn seed_closed_provider(
+    root: std::path::PathBuf,
+    active_only: bool,
+    provider: ProviderKind,
+) {
     std::fs::create_dir_all(&root).unwrap();
     let store = Store::open(&root.join("core.sqlite3")).await.unwrap();
     let conversation = store
@@ -21,12 +29,10 @@ pub(super) async fn seed_closed(root: std::path::PathBuf, active_only: bool) {
     // Browser login is the only saved session. All machine authority comes from
     // the deployed private bootstrap/issue/bind ports, not a test machine token.
     store.save_session(&browser, &owner).await.unwrap();
+    let mut config = fixtures::config(ProductionTakeover::First);
+    config.provider = provider;
     let initial = store
-        .bootstrap_execution_window_authenticated(
-            &browser,
-            &conversation,
-            fixtures::config(ProductionTakeover::First),
-        )
+        .bootstrap_execution_window_authenticated(&browser, &conversation, config)
         .await
         .unwrap();
     let binding = initial.binding().clone();
@@ -62,19 +68,38 @@ pub(super) async fn seed_closed(root: std::path::PathBuf, active_only: bool) {
         .await
         .unwrap();
     let metadata = bound.authorize_session_metadata(&binding).await.unwrap();
-    let transition = bound
-        .confirm_metadata_session(
-            metadata,
-            NativeSessionConfirmation {
-                session_id: binding.session_id.clone(),
-                expected_generation: binding.generation,
-                native_session_id: "synthetic-cold-native".into(),
-                protocol_version: "codex-rpc-1".into(),
-                source_event_key: "synthetic-cold-ready".into(),
-            },
-        )
-        .await
-        .unwrap();
+    let native = if provider == ProviderKind::Claude {
+        Uuid::new_v4().to_string()
+    } else {
+        "synthetic-cold-native".into()
+    };
+    let transition = if provider == ProviderKind::Claude {
+        bound
+            .initialize_claude_session(
+                metadata,
+                super::super::claude_identity::ClaudeProcessInitialization {
+                    requested_native_session_id: native.clone(),
+                    protocol_version: "claude-control-v1".into(),
+                    source_event_key: "synthetic-cold-ready".into(),
+                },
+            )
+            .await
+            .unwrap()
+    } else {
+        bound
+            .confirm_metadata_session(
+                metadata,
+                NativeSessionConfirmation {
+                    session_id: binding.session_id.clone(),
+                    expected_generation: binding.generation,
+                    native_session_id: native.clone(),
+                    protocol_version: "codex-rpc-1".into(),
+                    source_event_key: "synthetic-cold-ready".into(),
+                },
+            )
+            .await
+            .unwrap()
+    };
     let binding = transition.binding();
     bound
         .activate_execution_window(cap.credential(), a.status.window_id, 1, "first-boot")
@@ -115,7 +140,18 @@ pub(super) async fn seed_closed(root: std::path::PathBuf, active_only: bool) {
     else {
         panic!()
     };
+    let dispatch = if provider == ProviderKind::Claude {
+        transition.attach_execution(*dispatch).unwrap()
+    } else {
+        *dispatch
+    };
     let p = dispatch.provider();
+    if provider == ProviderKind::Claude {
+        bound
+            .observe_claude_session(p, &native, "synthetic-cold-native-init")
+            .await
+            .unwrap();
+    }
     bound
         .append_provider_event(&f.owner, p, &observation(p, 1, ProviderEvent::Started))
         .await

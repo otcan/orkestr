@@ -29,6 +29,12 @@ pub(in crate::production_runtime) async fn downgrade(store: &Store) {
             .fetch_one(&mut reference)
             .await
             .unwrap();
+    let requested_table: String = sqlx::query_scalar(
+        "SELECT sql FROM sqlite_schema WHERE name='production_requested_native'",
+    )
+    .fetch_one(&mut reference)
+    .await
+    .unwrap();
     let rest: Vec<String> = sqlx::query_scalar("SELECT sql FROM sqlite_schema WHERE name IN ('inbox_lease','execution_inbox_insert','execution_inbox_update','ordinary_input_holds') ORDER BY type,name")
         .fetch_all(&mut reference).await.unwrap();
     reference.close().await.unwrap();
@@ -47,6 +53,11 @@ pub(in crate::production_runtime) async fn downgrade(store: &Store) {
         &metadata_table,
         "INSERT INTO production_resume_metadata SELECT * FROM metadata_copy",
         "DROP TABLE metadata_copy",
+        "CREATE TEMP TABLE requested_copy AS SELECT * FROM production_requested_native",
+        "DROP TABLE production_requested_native",
+        &requested_table,
+        "INSERT INTO production_requested_native SELECT * FROM requested_copy",
+        "DROP TABLE requested_copy",
         "DELETE FROM _sqlx_migrations WHERE version>=70",
     ] {
         sqlx::query(statement).execute(&mut *tx).await.unwrap();

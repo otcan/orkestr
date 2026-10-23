@@ -25,3 +25,8 @@ proven retirement and predecessor CAS, and matching prior context, terminal
 event, binding and generation. Existing records are preserved. Issued or
 mismatched setup remains fenced; the old incarnation cannot spend the new
 reservation, and the generic non-window restart discovery remains unchanged.
+
+Claude initialization records also retain their incarnation. A resumed process
+needs its own matching native observation for the newly consumed run. Observing
+that run updates only the current incarnation; an older unobserved initialization
+remains unobserved. Missing current initialization evidence fails closed.
