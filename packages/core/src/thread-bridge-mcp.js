@@ -3,6 +3,7 @@
 // (mcp-oauth.js); this module only adapts arguments and results.
 import { randomUUID } from "node:crypto";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { MCP_MAX_TOOL_INPUT_ELEMENTS } from "../../shared/src/mcp-limits.js";
 import * as z from "zod/v4";
 import { listBridgeThreads, readBridgeChanges, readBridgeHistory, replyToBridgeThread } from "./thread-bridge.js";
 import { getThread } from "./threads.js";
@@ -158,7 +159,8 @@ export async function callThreadBridgeTool(name, args, principal, env = process.
 }
 
 export function createThreadBridgeMcpServer({ principal, env = process.env }) {
-  const server = new McpServer({ name: "orkestr-threads", version: "1.0.0", websiteUrl: "https://orkestr.de" });
+  const server = new McpServer({ name: "orkestr-threads", version: "1.0.0", websiteUrl: "https://orkestr.de" },
+    { maxToolInputElements: MCP_MAX_TOOL_INPUT_ELEMENTS });
   for (const [name, tool] of Object.entries(tools)) {
     server.registerTool(name, {
       title: tool.title,

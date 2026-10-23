@@ -16,6 +16,13 @@ jobs:
       - run: echo fixture
 `;
 test("ordinary read-only immutable workflow passes", () => assert.deepEqual(validateWorkflow(fixture), { jobs: 1, actions: 1 }));
+test("existing Rust cache workflows require the reviewed immutable upstream pin", () => {
+  const cache = fixture.replace(`actions/checkout@${actionPins["actions/checkout"]}`, `Swatinem/rust-cache@${actionPins["Swatinem/rust-cache"]}`);
+  assert.deepEqual(validateWorkflow(cache), { jobs: 1, actions: 1 });
+  for (const pin of ["v2.9.3", "a".repeat(40)]) {
+    assert.throws(() => validateWorkflow(cache.replace(actionPins["Swatinem/rust-cache"], pin)), /workflow_action_pin/);
+  }
+});
 for (const [name, before, after] of [
   ["mutable action", actionPins["actions/checkout"], "v6"],
   ["unreviewed immutable action", actionPins["actions/checkout"], "a".repeat(40)],
@@ -53,6 +60,10 @@ jobs:
         with: {subject-checksums: subjects.sha256}
 `;
 test("trusted-event attestation job may hold OIDC and attestation write permissions", () => assert.deepEqual(validateWorkflow(attestFixture), { jobs: 1, actions: 2 }));
+test("Rust cache remains forbidden in privileged attestation jobs", () => {
+  const cache = attestFixture.replace("    steps:\n", `    steps:\n      - uses: Swatinem/rust-cache@${actionPins["Swatinem/rust-cache"]}\n`);
+  assert.throws(() => validateWorkflow(cache), /workflow_attestation_actions/);
+});
 for (const [name, before, after] of [
   ["attestation on pull requests", "github.event_name == 'push' || ", "github.event_name == 'pull_request' || "],
   ["attestation without event gate", "    if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}\n", ""],
