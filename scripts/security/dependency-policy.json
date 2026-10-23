@@ -46,6 +46,13 @@
       "integrity": "sha512-2JqQszD2pyDTpIvBH1ZCXdrHgENVNdJIeOM6asbwHRgWknFiaLd1gNB91w/B/0hQHNpafkpxa90lPpBaJM87Hw==",
       "scriptSha256": "0ed1348f56a51eb0cbf097c1a598812c35526ac8166643c53749ebc51f66e115",
       "rationale": "Browser download provisioner; CI forbids launching browsers and needs no downloaded Chrome. Runtime browsers are separately managed. Script stays disabled."
+    },
+    {
+      "package": "puppeteer",
+      "version": "25.13.0",
+      "integrity": "sha512-vB4KLXTT5QqlikcOQ/xV0RY18bBVtNyLUTfqJ9mW+penHyoM+5DmANYuDCI4jgBtiL0eD9I5ZFSafW6/a6Trpg==",
+      "scriptSha256": "0ed1348f56a51eb0cbf097c1a598812c35526ac8166643c53749ebc51f66e115",
+      "rationale": "Upstream Puppeteer 25.13.0 migrates BiDi to Zod 4. The browser download provisioner remains node install.mjs; lifecycle execution stays disabled and runtime browsers remain separately managed."
     }
   ],
   "exceptions": []
