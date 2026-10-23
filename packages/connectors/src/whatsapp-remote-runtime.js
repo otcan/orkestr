@@ -243,13 +243,13 @@ export async function updateRemoteWhatsAppThreadInput({ thread, message, revisio
   };
 }
 
-async function fetchRemoteThreadMessages(remote, env = process.env, fetchImpl = fetch) {
+async function fetchRemoteThreadMessages(remote, env = process.env, fetchImpl = fetch, signal = null) {
   const backend = backendForBinding(remote.binding, env);
   const payload = await remoteJson(
     backend,
     `threads/${encodeURIComponent(remote.remoteThreadId)}/messages?limit=${backend.fetchLimit}`,
     fetchImpl,
-    { method: "GET" },
+    { method: "GET", signal },
   );
   const messages = Array.isArray(payload?.messages)
     ? payload.messages
@@ -371,7 +371,7 @@ export async function syncRemoteWhatsAppThreadMessages(env = process.env, fetchI
     // Retry V1-local input whose forward did not complete (restart, outage).
     await routeHeldLocalInputs(thread, env, { fetchImpl, forward: forwardLocalInputToRemote }).catch(() => null);
     try {
-      const { backend, payload, messages: remoteMessages } = await fetchRemoteThreadMessages(remote, env, fetchImpl);
+      const { backend, payload, messages: remoteMessages } = await fetchRemoteThreadMessages(remote, env, fetchImpl, options.signal);
       const currentRemote = remoteWhatsAppRuntimeBinding(await getThread(thread.id, env), env);
       if (!currentRemote || currentRemote.backendId !== remote.backendId || currentRemote.remoteThreadId !== remote.remoteThreadId || currentRemote.binding.remoteMirrorEnabled === false)
         throw new Error('remote_binding_changed_during_import');

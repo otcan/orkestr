@@ -92,6 +92,7 @@ test('remote change gateway requires admin and validates its configured backend'
   const request = {orkestrPrincipal: {kind: 'user', userId: 'guest', role: 'user'}};
   await assert.rejects(controller.watches(request), error => error.getStatus() === 403);
   await assert.rejects(controller.changes(request, {backend: 'example'}), error => error.getStatus() === 403);
+  await assert.rejects(controller.sync(request, {backend: 'example', thread: 'example'}), error => error.getStatus() === 403);
   await assert.rejects(controller.changes({}, {backend: ['example']}), error => error.getStatus() === 400);
   await assert.rejects(controller.changes({}, {backend: 'unconfigured-backend'}), error => error.getStatus() === 404);
 });

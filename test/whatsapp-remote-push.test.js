@@ -6,7 +6,7 @@ import path from 'node:path';
 import {DatabaseSync} from 'node:sqlite';
 import {performance} from 'node:perf_hooks';
 import {createThread, appendThreadMessage, getThread, listThreadMessages} from '../packages/core/src/threads.js';
-import {discoverRemoteMessageWatches, importRemoteMessageChanges} from '../packages/connectors/src/whatsapp-remote-changes.js';
+import {discoverRemoteMessageWatches, importRemoteMessageChanges, importRemoteMessageThread} from '../packages/connectors/src/whatsapp-remote-changes.js';
 import {syncRemoteWhatsAppThreadMessages} from '../packages/connectors/src/whatsapp-remote-runtime.js';
 import {recordScopedRelayRemoteDelivery} from '../packages/connectors/src/whatsapp-scoped-relay-remote.js';
 import {createScopedGroupRelay} from '../packages/connectors/src/whatsapp-scoped-group-relay.js';
@@ -35,7 +35,7 @@ async function fixture(t, {slow = false, acknowledgement = false} = {}) {
     assert.equal(options.headers.authorization, 'Bearer synthetic-token');
     if (u.pathname === '/health') return Response.json({messageChanges: {version: 1, path: 'changes'}});
     if (u.pathname === '/changes') {
-      if (u.searchParams.get('cursor') !== `epoch:${state.version}`) return Response.json(change());
+      if (u.searchParams.get('cursor') !== `epoch:${state.version}`) return Response.json({...change(), reset: !u.searchParams.get('cursor')});
       return new Promise((resolve, reject) => {
         const finish = () => {options.signal?.removeEventListener('abort', stop); resolve(Response.json(change()));};
         const stop = () => {state.waiters = state.waiters.filter(fn => fn !== finish); reject(new Error('aborted'));};
@@ -58,7 +58,11 @@ async function fixture(t, {slow = false, acknowledgement = false} = {}) {
     if (url.endsWith('/watches')) return discoverRemoteMessageWatches(env, fetchImpl);
     if (url.includes('/remote-runtime/changes?')) {
       const query = new URL(url, 'http://v1.test').searchParams;
-      return importRemoteMessageChanges({backendId: query.get('backend'), cursor: query.get('cursor'), signal: options.signal}, env, fetchImpl);
+      return importRemoteMessageChanges({backendId: query.get('backend'), cursor: query.get('cursor'), signal: options.signal, signalOnly: query.get('signalOnly') === '1'}, env, fetchImpl);
+    }
+    if (url.includes('/remote-runtime/sync?')) {
+      const query = new URL(url, 'http://v1.test').searchParams;
+      return importRemoteMessageThread({backendId: query.get('backend'), threadId: query.get('thread'), signal: options.signal}, env, fetchImpl);
     }
     if (url.includes('/slow-thread')) {state.slowReads++; beginSlow(); await slowGate; return {thread: {ownerUserId: 'admin', binding: {enabled: true, chatId: 'slow-group'}}};}
     if (url.endsWith('/scoped-relay-delivery')) {
@@ -163,7 +167,7 @@ test('global uncertain transport barrier blocks the immediate delivery path too'
   assert.equal(f.state.sends.length, 0);
 });
 
-test('lost relay response retries the same change cursor without another provider send', async t => {
+test('lost relay response retries the queued thread independently without another provider send', async t => {
   const f = await fixture(t);
   let attempts = 0;
   const cursors = [];
@@ -180,6 +184,26 @@ test('lost relay response retries the same change cursor without another provide
   f.publish();
   await until(() => attempts === 2);
   assert.equal(f.state.sends.length, 1);
-  assert.equal(cursors.filter(cursor => cursor === 'epoch:0').length, 2);
+  assert.equal(cursors.filter(cursor => cursor === 'epoch:0').length, 1, 'notifications keep flowing while the thread retries');
   await watch.close();
+});
+
+test('restart recovers queued work from the adapter snapshot after its signal cursor advanced', async t => {
+  const f = await fixture(t); f.publish();
+  let blocked = false;
+  const firstApi = (url, options) => {
+    if (url.includes('/remote-runtime/sync?')) {
+      blocked = true;
+      return new Promise((_resolve, reject) => options.signal.addEventListener('abort', () => reject(new Error('stopped before import')), {once: true}));
+    }
+    return f.api(url, options);
+  };
+  const first = startScopedRemoteWatch({api: firstApi, deliver: ids => f.relay.deliverThreads(ids)});
+  await until(() => blocked); await first.close();
+  assert.equal(f.state.sends.length, 0);
+  const resumed = startScopedRemoteWatch({api: f.api, deliver: async ids => assert.equal((await f.relay.deliverThreads(ids)).ok, true)});
+  try {
+    await until(() => f.state.acks.length === 1);
+    assert.equal(f.state.sends.length, 1);
+  } finally {await resumed.close();}
 });

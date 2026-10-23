@@ -13,11 +13,11 @@ export async function discoverRemoteMessageWatches(env = process.env, fetchImpl 
       return health.messageChanges?.version === 1 && health.messageChanges?.path === 'changes' ? backend.id : null;
     } catch { return null; }
   }));
-  return {ok: true, backends: backends.filter(Boolean)};
+  return {ok: true, version: 2, backends: backends.filter(Boolean)};
 }
 
-/** @param {{backendId?: string, cursor?: string, signal?: AbortSignal}} options */
-export async function importRemoteMessageChanges({backendId, cursor = '', signal} = {}, env = process.env, fetchImpl = fetch) {
+/** @param {{backendId?: string, cursor?: string, signal?: AbortSignal, signalOnly?: boolean}} options */
+export async function importRemoteMessageChanges({backendId, cursor = '', signal, signalOnly = false} = {}, env = process.env, fetchImpl = fetch) {
   const backend = configuredRemoteThreadBackends(env)[backendId];
   if (!backend) throw Object.assign(new Error('remote_backend_not_configured'), {statusCode: 404});
   if (typeof cursor !== 'string' || cursor.length > 128)
@@ -35,6 +35,7 @@ export async function importRemoteMessageChanges({backendId, cursor = '', signal
     const remote = remoteWhatsAppRuntimeBinding(thread, env);
     return remote?.backendId === backend.id && remote.binding.remoteMirrorEnabled !== false && routes.has(remote.remoteThreadId);
   });
+  if (signalOnly) return {ok: true, cursor: change.cursor, threadIds: threads.map(thread => thread.id), reset: change.reset === true};
   const results = [];
   let retry = false;
   // One slow unrelated binding cannot hold the whole change batch serially.
@@ -48,4 +49,15 @@ export async function importRemoteMessageChanges({backendId, cursor = '', signal
     }
   }));
   return {ok: true, cursor: change.cursor, threadIds: results, retry};
+}
+
+/** @param {{backendId: string, threadId: string, signal?: AbortSignal}} options */
+export async function importRemoteMessageThread({backendId, threadId, signal}, env = process.env, fetchImpl = fetch) {
+  const thread = (await listThreads(env)).find(thread => thread.id === threadId);
+  const remote = remoteWhatsAppRuntimeBinding(thread, env);
+  // A migration/removal after notification is not permission to read the old route.
+  if (!remote || remote.backendId !== backendId || remote.binding.remoteMirrorEnabled === false)
+    return {ok: true, threadId, skipped: true};
+  const result = await syncRemoteWhatsAppThreadMessages(env, fetchImpl, {threadIds: [threadId], push: true, signal});
+  return {ok: true, threadId, retry: result.results.some(row => row.error || row.unmapped)};
 }

@@ -381,12 +381,18 @@ send class of the scoped transport and native worker:
 A remote backend can advertise `messageChanges: {"version":1,"path":"changes"}`
 on its authenticated health endpoint. The scoped relay then holds a request to
 V1's admin-only `GET /api/connectors/whatsapp/remote-runtime/changes` gateway.
-An adapter export commit wakes that request; V1 imports only the changed,
-currently bound threads and returns their IDs for immediate relay delivery.
+An adapter export commit wakes that request. The current gateway returns only
+changed, currently bound thread IDs; the relay immediately queues independent
+per-thread imports and delivery through its admin-only sync endpoint.
 The 25-second connection heartbeat does not delay exports. A new adapter epoch
 returns a route snapshot, so disconnects and restarts recover pending exports.
-The relay advances its in-memory cursor only after delivery succeeds. Its
-existing request/receipt journals prevent duplicate sends on a retried cursor.
+The notification cursor advances when work is queued in memory. Each affected
+thread remains queued until import and delivery succeed, independently of other
+threads. A process restart starts from an adapter snapshot again; unacknowledged
+exports plus the existing request/receipt journals recover work without duplicate
+sends. Snapshot recovery has two workers; fresh export events have four separate
+slots, so a slow reconnect scan cannot consume all delivery capacity. Older V1
+gateways retain the original cursor-after-delivery protocol during rollout.
 Backends without this capability keep the ordinary scan path.
 
 Unrelated thread reads may continue while immediate delivery runs. The same
