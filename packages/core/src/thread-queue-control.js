@@ -1,3 +1,4 @@
+import { threadUsesClaudeCode } from "./claude-code-runtime-policy.js";
 // Operator queue maintenance is serialized with native dispatch, never with a
 // running turn. Original records and a write-ahead ledger remain recoverable.
 import path from "node:path";
@@ -29,8 +30,8 @@ export async function setThreadQueueHold(threadId, input, env = process.env) {
     const thread = await getThread(threadId, env);
     if (!thread) fail("thread_not_found");
     if (typeof input.paused !== "boolean" || !String(input.reason || "").trim()) fail("queue_hold_reason_required");
-    // Restrict maintenance to the runtime which implements this boundary.
-    if (!["codex-app-server", "app-server"].includes(thread.runtimeKind)) fail("queue_maintenance_runtime_unsupported");
+    // Restrict maintenance to runtimes which serialize native admission with this boundary.
+    if (!["codex-app-server", "app-server"].includes(thread.runtimeKind) && !threadUsesClaudeCode(thread)) fail("queue_maintenance_runtime_unsupported");
     await updateThread(threadId, { queueDispatchHold: { paused: input.paused, reason: input.reason,
       changedAt: new Date().toISOString(), changedBy: input.actor || "operator" } }, env);
     await appendEvent({ type: "thread_queue_hold_changed", threadId, paused: input.paused, reason: input.reason }, env);
