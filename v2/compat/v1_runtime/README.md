@@ -559,3 +559,17 @@ existing dedupe ledgers. Never reset global WhatsApp routing, replay an
 uncertain send, retire the production chat, or release the selected queue
 hold while a delegated input could still execute locally. Verify the original
 route with a fresh message.
+
+### Export change feed
+
+Authenticated `GET /health` advertises `messageChanges` version1. Clients may
+hold `GET /changes?cursor=<opaque cursor>&waitMs=25000`; an export wakes it only
+after its SQLite transaction commits. The response contains `cursor`, `threads`
+(remote binding IDs) and `reset`. It carries no message text and never sends or
+re-admits input. Re-read each changed binding through the existing messages API.
+Initial, unknown-epoch and future cursors return a route snapshot. A reconnect
+with a valid cursor includes every route changed while disconnected. The route
+revision map coalesces repeated wakeups without changing export/ACK durability.
+Duplicate export inserts and rolled-back transactions do not wake clients.
+At most16 long-poll requests may wait concurrently; authentication precedes
+admission, and invalid query fields, repeated fields and excessive waits fail.
