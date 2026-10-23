@@ -84,6 +84,18 @@ CLAUDE_FORBIDDEN_ENV = {'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_COD
                         'CLAUDE_CONFIG_DIR'}
 
 
+def claude_inventory(manager):
+    # Keep a closed, reviewed inventory. Counting files alone missed the new
+    # policy codec at preparation time even though the manager required it.
+    expected = {'launcher-claude.py', 'claude-private.json'} | {
+        'broker/' + name for name in ('claude_connector.py', 'claude_protocol.py', 'claude_control.py',
+                                     'claude_telemetry.py', 'claude_resume.py', 'claude_bootstrap.py',
+                                     'claude_policy.py')}
+    files = set(getattr(manager, 'CLAUDE_FILES', set()))
+    require(files == expected, 'manager Claude inventory required')
+    return files
+
+
 def claude(plan):
     """Optional Claude Deep/Fast window runtime; requires host full access."""
     value = plan['claude']
@@ -211,8 +223,7 @@ def prepare(plan):
         host_files = set(getattr(manager,'HOST_FILES',set())) if 'code_mode_host' in plan else set()
         require(not host_files or host_files == {'codex-code-mode-host'},'manager host inventory required')
         claude_plan = plan.get('claude')
-        claude_files = set(getattr(manager,'CLAUDE_FILES',set())) if claude_plan else set()
-        require(not claude_plan or len(claude_files)==8,'manager Claude inventory required')
+        claude_files = claude_inventory(manager) if claude_plan else set()
         if claude_plan:
             # Paths only: the account directory is never opened, listed or hashed.
             require(Path(claude_plan['executable']).resolve(strict=True)==Path(claude_plan['executable'])
