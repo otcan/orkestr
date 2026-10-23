@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { syncRemoteWhatsAppThreadMessages } from "../../../../../packages/connectors/src/whatsapp-remote-runtime.js";
 import { createReadStream } from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -68,6 +69,8 @@ export class ThreadMessagesController {
     if (!thread) throw httpError("thread_not_found", 404);
     try {
       const result = await recordScopedRelayRemoteDelivery({ thread, messageId, body });
+      const synced = await syncRemoteWhatsAppThreadMessages(process.env, fetch, {threadIds: [thread.id], push: true});
+      if (synced.results.some((row: any) => row.error || row.acks?.rejected)) throw httpError('remote_delivery_ack_pending', 502);
       return { ok: true, threadId: thread.id, duplicate: result.duplicate, messageId: result.message.id,
         deliveryState: result.message.deliveryState };
     } catch (error: any) {

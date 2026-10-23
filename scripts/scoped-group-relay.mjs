@@ -1,4 +1,7 @@
 import fs from 'node:fs';
+import path from 'node:path';
+import {startScopedRemoteWatch} from '../packages/connectors/src/whatsapp-scoped-remote-watch.js';
+import {createKeyedSerial} from '../packages/connectors/src/scoped-relay-serial.js';
 import {execFile} from 'node:child_process';
 import {requestJson} from '../apps/cli/src/api-client.js';
 import {createScopedTimerNotifications} from '../packages/connectors/src/whatsapp-scoped-timer-notifications.js';
@@ -8,7 +11,8 @@ import {wrapperRejection} from '../packages/connectors/src/whatsapp-scoped-wrapp
 // A text keeps the wrapper's argv contract. A reply document, or a text too
 // large for one argument (Linux allows 128 KiB), goes as JSON on stdin.
 const ARGV_TEXT_MAX_BYTES = 100_000;
-const execute = payload => new Promise((resolve, reject) => {
+const serializeTransport = createKeyedSerial();
+const execute = payload => serializeTransport('transport', () => new Promise((resolve, reject) => {
   const viaArgv = payload.document === undefined && payload.file === undefined && Buffer.byteLength(payload.text || '') <= ARGV_TEXT_MAX_BYTES;
   const args = viaArgv
     ? [config.wrapperPath, payload.kind === 'notify' ? 'group-notify' : 'group-reply', payload.to, payload.requestId, payload.parentId, payload.text]
@@ -19,7 +23,7 @@ const execute = payload => new Promise((resolve, reject) => {
   });
   child.stdin.on('error', () => {});
   child.stdin.end(viaArgv ? '' : JSON.stringify(payload));
-});
+}));
 const config = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
 const formatter = config.appendDebugFooter === true
   ? await import(config.formattingModulePath || '../packages/connectors/src/whatsapp-formatting.js') : null;
@@ -45,6 +49,20 @@ const notifications = createScopedTimerNotifications({config,formatter,minInterv
     }
   },
 });
+const remoteWatch = startScopedRemoteWatch({
+  api: (url, options = {}) => requestJson(url, options), log,
+  deliver: async threadIds => {
+    const result = await relay.deliverThreads(threadIds);
+    if (!result.ok) throw new Error('remote_relay_delivery_blocked');
+    const notificationsResult = await notifications.tick({threadIds});
+    if (notificationsResult.errors && Object.keys(notificationsResult.errors).length) throw new Error('remote_notification_delivery_failed');
+  },
+});
+// SQLite WAL writes wake deadline scheduling even during an unrelated API scan.
+const journalWatch = config.journalPath ? fs.watch(path.dirname(config.journalPath), (_event, filename) => {
+  if (!filename || String(filename).startsWith(path.basename(config.journalPath))) relay.scheduleAcknowledgements();
+}) : null;
+relay.scheduleAcknowledgements();
 let stopped = false;
 for (const signal of ['SIGTERM', 'SIGINT']) process.once(signal, () => { stopped = true; });
 log({event: 'group_relay_started', groups: config.groups.length});
@@ -62,5 +80,7 @@ while (!stopped) {
   }
   await new Promise(resolve => setTimeout(resolve, 3000));
 }
+journalWatch?.close();
+await remoteWatch.close();
 relay.close();
 notifications.close();

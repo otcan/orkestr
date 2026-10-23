@@ -1,8 +1,10 @@
 import path from "node:path";
+import { remoteBackendHasPushWatch } from "./whatsapp-remote-push-state.js";
+import { withRemoteThreadSync } from "./whatsapp-remote-sync-lock.js";
 import { appendEvent } from "../../storage/src/store.js";
 import { threadMessageStoreFingerprint } from "../../storage/src/thread-message-registry.js";
 import { recordRouterTraceEvent } from "../../core/src/router-traces.js";
-import { appendThreadMessage, listThreadMessages, listThreads, updateThreadMessage } from "../../core/src/threads.js";
+import { appendThreadMessage, getThread, listThreadMessages, listThreads, updateThreadMessage } from "../../core/src/threads.js";
 import { remoteWhatsAppRuntimeBinding } from "../../core/src/thread-remote-runtime-binding.js";
 import { routeHeldLocalInputs } from "../../core/src/remote-runtime-held-inputs.js";
 import { forwardLocalInputToRemote } from "./whatsapp-remote-local-input.js";
@@ -119,7 +121,7 @@ export async function remoteJson(backend, endpointPath, fetchImpl, options = {})
   const response = await fetchImpl(remoteEndpointUrl(backend, endpointPath), {
     ...options,
     headers: remoteHeaders(backend, options.headers || {}),
-    signal: AbortSignal.timeout(backend.timeoutMs),
+    signal: options.signal ? AbortSignal.any([options.signal, AbortSignal.timeout(backend.timeoutMs)]) : AbortSignal.timeout(backend.timeoutMs),
   });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok || payload?.ok === false) {
@@ -361,12 +363,18 @@ async function appendRemoteAssistantMessage({ thread, remote, remoteMessage, par
 export async function syncRemoteWhatsAppThreadMessages(env = process.env, fetchImpl = fetch, options = {}) {
   const results = [];
   for (const thread of await listThreads(env)) {
+    if (options.threadIds && !options.threadIds.includes(thread.id)) continue;
     const remote = remoteWhatsAppRuntimeBinding(thread, env);
     if (!remote || remote.binding.remoteMirrorEnabled === false) continue;
+    if (!options.push && remote.binding.mirrorToWhatsApp === false && remoteBackendHasPushWatch(remote.backendId, env)) continue;
+    await withRemoteThreadSync(thread.id, env, async () => {
     // Retry V1-local input whose forward did not complete (restart, outage).
     await routeHeldLocalInputs(thread, env, { fetchImpl, forward: forwardLocalInputToRemote }).catch(() => null);
     try {
       const { backend, payload, messages: remoteMessages } = await fetchRemoteThreadMessages(remote, env, fetchImpl);
+      const currentRemote = remoteWhatsAppRuntimeBinding(await getThread(thread.id, env), env);
+      if (!currentRemote || currentRemote.backendId !== remote.backendId || currentRemote.remoteThreadId !== remote.remoteThreadId || currentRemote.binding.remoteMirrorEnabled === false)
+        throw new Error('remote_binding_changed_during_import');
       // Every store write bumps this revision, so an unchanged fingerprint after the
       // import loops proves localMessages is still what a fresh read would return.
       const listedFingerprint = await threadMessageStoreFingerprint(thread.id, env).catch(() => null);
@@ -379,6 +387,7 @@ export async function syncRemoteWhatsAppThreadMessages(env = process.env, fetchI
       );
       let imported = 0;
       let updated = 0;
+      let unmapped = 0;
       // Recover user acknowledgements first, even when replies precede them in
       // the fetched page. An assistant still needs an ordinary mapped parent.
       for (const remoteMessage of remoteMessages) {
@@ -409,7 +418,7 @@ export async function syncRemoteWhatsAppThreadMessages(env = process.env, fetchI
         const local = localByRemoteId.get(remoteMessageId);
         if (local || !completedAssistantMessage(remoteMessage)) continue;
         const parentMessageId = publicParentIdForRemoteMessage(remoteMessage, localByRemoteId);
-        if (!parentMessageId && remote.binding.remoteMirrorOrphanReplies !== true) continue;
+        if (!parentMessageId && remote.binding.remoteMirrorOrphanReplies !== true) { unmapped += 1; continue; }
         const parent = parentMessageId ? localMessages.find((message) => message.id === parentMessageId) || null : null;
         const appended = await appendRemoteAssistantMessage({ thread, remote, remoteMessage, parentMessageId, parent, env });
         localByRemoteId.set(remoteMessageId, appended);
@@ -445,7 +454,7 @@ export async function syncRemoteWhatsAppThreadMessages(env = process.env, fetchI
         }, env);
       }
       results.push({
-        threadId: thread.id, remoteBackend: remote.backendId, remoteThreadId: remote.remoteThreadId, imported, updated,
+        threadId: thread.id, remoteBackend: remote.backendId, remoteThreadId: remote.remoteThreadId, imported, updated, unmapped,
         ...(acks ? { acks } : {}),
       });
     } catch (error) {
@@ -458,6 +467,7 @@ export async function syncRemoteWhatsAppThreadMessages(env = process.env, fetchI
       }, env).catch(() => {});
       results.push({ threadId: thread.id, remoteBackend: remote.backendId, remoteThreadId: remote.remoteThreadId, error: error.message || String(error) });
     }
+    });
   }
   return { ok: true, results };
 }

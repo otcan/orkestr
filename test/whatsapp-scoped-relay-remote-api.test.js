@@ -35,11 +35,20 @@ test("compiled thread input forwards delegated relay input and records the relay
   await createThread({ id: "example-delegated", ownerUserId: "admin", binding }, env);
   await createThread({ id: "example-mirrored", ownerUserId: "admin", binding: { ...binding, chatId: "other@g.us", mirrorToWhatsApp: true, remoteThreadId: "other" } }, env);
   const inputs = [];
+  const acknowledgements = [];
+  let remoteReply = null;
   globalThis.fetch = async (url, options = {}) => {
     const parsed = new URL(String(url));
     if (parsed.host === "runtime.example.test" && parsed.pathname === "/threads/example-remote/input") {
       inputs.push(JSON.parse(options.body));
       return Response.json({ ok: true, message: { id: "example-remote-user", state: "delivered", deliveryState: "delivered" } }, { status: 202 });
+    }
+    if (parsed.pathname === '/threads/example-remote/messages') return Response.json({messages: [
+      {id: 'example-remote-user', role: 'user', state: 'delivered'},
+      ...(remoteReply && !acknowledgements.length ? [remoteReply] : [])], mirrorAck: {version: 1, ackedThrough: acknowledgements.length}});
+    if (parsed.pathname === '/threads/example-remote/mirror-acks') {
+      acknowledgements.push(JSON.parse(options.body));
+      return Response.json({ok: true, sequence: 1, ackedThrough: 1});
     }
     throw new Error(`unexpected synthetic request ${parsed.href}`);
   };
@@ -65,10 +74,24 @@ test("compiled thread input forwards delegated relay input and records the relay
     role: "assistant", phase: "final_answer", state: "completed", source: "remote-runtime", text: "answer",
     parentMessageId: first.message.id, remoteBackend: "example", remoteThreadId: "example-remote", remoteMessageId: "example-remote-reply",
   }, env);
+  remoteReply = {id: 'example-remote-reply', role: 'assistant', state: 'completed', phase: 'final_answer', text: 'answer',
+    parentMessageId: 'example-remote-user', exportSequence: 1};
   const messages = new ThreadMessagesController({});
   const recorded = await messages.scopedRelayDelivery({}, "example-delegated", reply.id,
     { requestIds: ["reply:example"], connectorMessageIds: ["provider-1"] });
   assert.equal(recorded.deliveryState, "delivered");
+  assert.equal(acknowledgements.length, 1, 'confirmed provider receipt is acknowledged immediately');
+  assert.equal(acknowledgements[0].outcome, 'delivered');
   await assert.rejects(messages.scopedRelayDelivery({}, "example-delegated", first.message.id, { requestIds: ["reply:example"] }),
     (error) => error.getStatus() === 409);
+});
+
+test('remote change gateway requires admin and validates its configured backend', async () => {
+  const {WhatsAppRemoteChangesController} = await import('../dist/server/apps/server/src/modules/connectors/whatsapp-remote-changes.controller.js');
+  const controller = new WhatsAppRemoteChangesController();
+  const request = {orkestrPrincipal: {kind: 'user', userId: 'guest', role: 'user'}};
+  await assert.rejects(controller.watches(request), error => error.getStatus() === 403);
+  await assert.rejects(controller.changes(request, {backend: 'example'}), error => error.getStatus() === 403);
+  await assert.rejects(controller.changes({}, {backend: ['example']}), error => error.getStatus() === 400);
+  await assert.rejects(controller.changes({}, {backend: 'unconfigured-backend'}), error => error.getStatus() === 404);
 });

@@ -1,3 +1,6 @@
+import {buildReplyTo} from './scoped-group-reply-quote.js';
+import {createScopedAcknowledgements} from './scoped-group-acknowledgements.js';
+import {createKeyedSerial} from './scoped-relay-serial.js';
 import crypto from 'node:crypto';
 import {createGroupParticipantPolicy, participantInputMetadata} from './whatsapp-group-participant-author.js';
 import fs from 'node:fs/promises';
@@ -52,35 +55,7 @@ function readGroupInputs(inbox) {
     FROM group_input i ${join} ${quoteJoin} ORDER BY i.created_at`).all();
 }
 
-const REPLY_TEXT_MAX = 500;
-const REPLY_SNIPPET_MAX = 80;
-const collapse = value => String(value || '').replace(/\s+/g, ' ').trim();
-const clip = (value, max) => { const text = collapse(value); return text.length > max ? `${text.slice(0, max - 1).trimEnd()}\u2026` : text; };
-
-// The structured reply-to for an input that quoted another message, or null.
-// An unresolvable quote is marked `unavailable` instead of guessed. `own` is the
-// text Orkestr itself sent (from the relay's journal) when the quote is one of
-// its replies. The visible line is what the model reads.
-export function buildReplyTo(input, {own = null, ownChatId = '', timeZone = 'Europe/Berlin'} = {}) {
-  if (!input.quote_row) return null;
-  const quotedId = input.quote_id || null;
-  const body = own?.text || input.quote_body || '';
-  if (!Number(input.quote_resolved) && !own) {
-    return {replyTo: {messageId: quotedId, author: input.quote_author || null, sentAt: input.quote_sent_at || null, text: '', isOwnReply: false, unavailable: true},
-      line: '[Replying to an unavailable message]'};
-  }
-  const sentAt = input.quote_sent_at || own?.sentAt || null;
-  const authorDigits = String(input.quote_author || '').split('@')[0];
-  const ownerAuthored = !own && Boolean(authorDigits) && authorDigits === String(ownChatId).split('@')[0];
-  const replyTo = {messageId: quotedId, author: own ? 'orkestr' : (input.quote_author || null), sentAt, text: clip(body, REPLY_TEXT_MAX), isOwnReply: Boolean(own)};
-  let time = '';
-  if (sentAt) {
-    try { time = new Intl.DateTimeFormat('en-GB', {hour: '2-digit', minute: '2-digit', hour12: false, timeZone}).format(new Date(sentAt)); } catch { time = ''; }
-  }
-  const who = own ? 'Orkestr message' : (ownerAuthored ? 'your message' : 'earlier message');
-  const line = `[Replying to ${who}${time ? ` from ${time}` : ''}: "${clip(body, REPLY_SNIPPET_MAX)}"]`;
-  return {replyTo, line};
-}
+export {buildReplyTo} from './scoped-group-reply-quote.js';
 
 export function createScopedGroupRelay({config, api, send, log = () => {}, inboxDb, relayDb, formatter, env = process.env, readMediaFile = fs.readFile, now = Date.now,
     openRegistry = path => createDynamicGroupRegistry(path, {now, staticGroups: config.groups})}) {
@@ -116,6 +91,27 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
   const groups = dynamic ? createDynamicGroupView(inbox, {static: staticGroups, now}) : staticGroups;
   const fencedGroup = group => Boolean(group) && (fencedThreads?.has(group.threadId) || (Boolean(routeFence) && group.dynamic === true));
   const errors = new Map();
+  const inputSerial = createKeyedSerial(), outboundSerial = createKeyedSerial();
+  const deliveryBlocked = () => Boolean(inbox.prepare("SELECT 1 FROM group_send WHERE state IN ('sending','uncertain') LIMIT 1").get());
+  const acknowledgements = createScopedAcknowledgements({config, inbox, db, groups, now, key, serial: outboundSerial,
+    blocked: deliveryBlocked, send, log,
+    inspect: async (input, group) => {
+      if (heldInputIds.has(input.id)) return false;
+      const route = db.prepare('SELECT * FROM routed WHERE id=?').get(input.id);
+      if (route?.completed) return false;
+      if (routeFence && fencedGroup(group)) {
+        const active = routeFence.current();
+        if (active?.route !== config.routeControl.routeId || Date.parse(input.created_at) < Date.parse(active.since)) return false;
+      }
+      const {thread} = await inputThread(input, group);
+      if (threadSuppressesUpdates(thread)) return false;
+      if (!route) return true;
+      const {messages} = await answersFor(group, route, false);
+      if (messages.some(m => m.parentMessageId === route.message_id && String(m.text || '').trim() === 'NO_REPLY')) {
+        acknowledgements.mark(input.id, 'no_reply'); return false;
+      }
+      return true;
+    }});
   const replyFiles = createRelayReplyFiles({config, db, api, send, log, key});
 
   // Registrar: keep each journal's registered groups equal to V1's eligible
@@ -232,8 +228,13 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
     throw new Error('group_reply_history_incomplete');
   }
 
-  async function deliverAnswer(input, group, answer, messages) {
+  const deliverAnswer = (input, group, answer, messages) => outboundSerial('send', async () => {
+    if (deliveryBlocked()) throw new Error('group_delivery_requires_review');
+    return deliverAnswerOnce(input, group, answer, messages);
+  });
+  async function deliverAnswerOnce(input, group, answer, messages) {
     const text = String(answer.text || '').trim();
+    if (text === 'NO_REPLY') acknowledgements.mark(input.id, 'no_reply');
     if (!text || text === 'NO_REPLY') return;
     const payloadId = key(`${input.id}:${answer.id}`);
     let saved = db.prepare('SELECT chunks FROM reply_payloads WHERE id=?').get(payloadId);
@@ -259,6 +260,8 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
       await inputThread(input, group);
       // An entry is a text or, for a reply over the budget, its full-text document.
       const entry = chunks[index];
+      if (deliveryBlocked()) throw new Error('group_delivery_requires_review');
+      acknowledgements.mark(input.id, 'real_send_attempt');
       const result = await send({chatId: input.chat_id, requestId, parentId: input.id,
         ...(isReplyDocument(entry) ? {document: entry.document} : {text: entry})});
       if (result.ok !== true || !result.ids?.length) throw new Error('group_reply_unconfirmed');
@@ -300,7 +303,11 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
     return receipts.some(row => JSON.parse(row.provider_ids || '[]').some(p => p === id || (suffix && String(p).endsWith(suffix)))) ? {text: ''} : null;
   }
 
-  async function routeInput(input, group) {
+  const routeInput = (input, group) => inputSerial(input.id, async () => {
+    if (deliveryBlocked()) throw new Error('group_delivery_requires_review');
+    return routeInputOnce(input, group);
+  });
+  async function routeInputOnce(input, group) {
     if (routeFence && fencedGroup(group)) {
       const active = routeFence.current();
       if (active?.route !== config.routeControl.routeId || !Number.isFinite(Date.parse(input.created_at)) || Date.parse(input.created_at) < Date.parse(active.since)) return;
@@ -417,7 +424,7 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
   // durable payload/receipt journal. Only each group's newest completed input
   // inside the window is watched, polled at most every LATE_REPLY_POLL_MS.
   const lastLatePoll = new Map();
-  async function deliverLateReplies(inputs) {
+  async function deliverLateReplies(inputs, immediate = false) {
     const latest = new Map();
     for (const input of inputs) if (!heldInputIds.has(input.id) && groups.has(input.chat_id)) latest.set(input.chat_id, input);
     for (const [chatId, input] of latest) {
@@ -425,13 +432,15 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
       const at = Date.parse(input.created_at);
       if (!Number.isFinite(at) || now() - at > LATE_REPLY_WINDOW_MS) continue;
       const route = db.prepare('SELECT * FROM routed WHERE id=? AND completed=1').get(input.id);
-      if (!route || now() - (lastLatePoll.get(chatId) || 0) < LATE_REPLY_POLL_MS) continue;
+      if (!route || (!immediate && now() - (lastLatePoll.get(chatId) || 0) < LATE_REPLY_POLL_MS)) continue;
       if (routeFence && fencedGroup(group)) {
         const active = routeFence.current();
         if (active?.route !== config.routeControl.routeId || at < Date.parse(active.since)) continue;
       }
       lastLatePoll.set(chatId, now());
       try {
+        await inputSerial(input.id, async () => {
+        if (deliveryBlocked()) throw new Error('group_delivery_requires_review');
         const page = await api(`/api/threads/${encodeURIComponent(group.threadId)}/messages?limit=50`);
         const messages = page.messages || [];
         const late = messages.filter(m => m.role === 'assistant' && m.state === 'completed' && finalPhases.has(m.phase)
@@ -439,6 +448,7 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
             && Date.parse(m.createdAt) >= at && Date.parse(m.createdAt) - at <= LATE_REPLY_WINDOW_MS)
           .sort((a, b) => Number(a.cursor || 0) - Number(b.cursor || 0));
         for (const answer of late) await deliverAnswer(input, group, answer, messages);
+        });
         errors.delete(`late:${input.id}`);
       } catch (error) {
         const code = errorCode(error);
@@ -449,12 +459,30 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
   }
 
   return {
-    close() { routeFence?.close(); for (const registry of registries.values()) registry.close?.(); if (!relayDb) db.close(); if (!inboxDb) inbox.close(); },
+    scheduleAcknowledgements() {
+      const inputs = readGroupInputs(inbox).filter(input => !heldInputIds.has(input.id) && groups.has(input.chat_id));
+      acknowledgements.schedule(inputs);
+    },
+    close() { acknowledgements.close(); routeFence?.close(); for (const registry of registries.values()) registry.close?.(); if (!relayDb) db.close(); if (!inboxDb) inbox.close(); },
+    async deliverThreads(threadIds) {
+      if (deliveryBlocked()) return {ok: false, error: 'group_delivery_requires_review'};
+      const wanted = new Set(threadIds);
+      const inputs = readGroupInputs(inbox).filter(input => !heldInputIds.has(input.id) && wanted.has(groups.get(input.chat_id)?.threadId));
+      for (const input of inputs) {
+        const group = groups.get(input.chat_id);
+        try { await routeInput(input, group); errors.delete(input.id); }
+        catch (error) { errors.set(input.id, errorCode(error)); }
+      }
+      await deliverLateReplies(inputs, true);
+      const failures = inputs.flatMap(input => [errors.get(input.id), errors.get(`late:${input.id}`)]).filter(Boolean);
+      return {ok: failures.length === 0, errors: [...new Set(failures)]};
+    },
     async tick() {
       await reconcileRegistrations();
       if (inbox.prepare("SELECT 1 FROM group_send WHERE state IN ('sending','uncertain') LIMIT 1").get())
         return {ok: false, error: 'group_delivery_requires_review'};
       const inputs = readGroupInputs(inbox);
+      acknowledgements.schedule(inputs.filter(input => !heldInputIds.has(input.id) && groups.has(input.chat_id)));
       let held = 0, excluded = 0;
       for (const input of inputs) {
         if (heldInputIds.has(input.id)) { held++; continue; }
