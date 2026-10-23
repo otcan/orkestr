@@ -279,7 +279,7 @@ impl Controller {
         // first, so a parent proposal waiting on them stays acceptable. This
         // process holds no custody (the caller checked); the manager must also
         // report no live budget for the window. A refusal changes nothing.
-        if self.manager_released(window).await {
+        if self.manager_released(window, false).await {
             let _ = self
                 .store
                 .settle_lapsed_runs_authenticated(
@@ -389,7 +389,7 @@ impl Controller {
     }
 
     /// The manager holds no live budget (or custody) for this exact window.
-    async fn manager_released(&self, window: &ExecutionWindowStatus) -> bool {
+    async fn manager_released(&self, window: &ExecutionWindowStatus, retired_only: bool) -> bool {
         let Ok(manager) = self
             .manager
             .for_conversation(window.conversation_id.clone())
@@ -406,6 +406,8 @@ impl Controller {
             Ok(super::super::manager_client::ManagerReceipt::Window(receipt)) => {
                 receipt.window_id == window.window_id
                     && receipt.generation == window.generation
+                    && (!retired_only
+                        || receipt.state == super::super::manager_client::WindowState::Retired)
                     && !matches!(
                         receipt.state,
                         super::super::manager_client::WindowState::Active
@@ -414,6 +416,42 @@ impl Controller {
             }
             _ => false,
         }
+    }
+
+    /// An explicit owner reset is allowed only after ordinary reconciliation
+    /// has closed Core and the exact manager window has retired/reaped.
+    pub(crate) async fn reset_claude_native(
+        &self,
+        browser: &str,
+        conversation: &ConversationId,
+        request: &orkestr_v2_contracts::ClaudeNativeResetRequest,
+    ) -> Result<orkestr_v2_contracts::ClaudeNativeResetReceipt, ReconcileError> {
+        let _opening = self.opening.lock().await;
+        if self.live_owner(conversation).await {
+            return Err(ReconcileError::LiveOwner);
+        }
+        let window = self
+            .store
+            .execution_window_status_authenticated(browser, conversation)
+            .await
+            .map_err(|_| ReconcileError::Refused)?
+            .ok_or(ReconcileError::NotFound)?;
+        if window.window_id != request.window_id || window.generation != request.generation {
+            return Err(ReconcileError::NotFound);
+        }
+        if window.state != ExecutionWindowState::Closed
+            || !self.manager_released(&window, true).await
+        {
+            return Err(ReconcileError::Refused);
+        }
+        let receipt = self
+            .store
+            .reset_claude_native_authenticated(browser, conversation, request)
+            .await
+            .map_err(|_| ReconcileError::Refused)?;
+        self.forget(conversation)
+            .map_err(|_| ReconcileError::Refused)?;
+        Ok(receipt)
     }
 
     /// This conversation's local controller may be poisoned/released from

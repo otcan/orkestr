@@ -75,7 +75,9 @@ survive a call. Payload persistence, if needed, is a separate authorized boundar
 Any malformed, unknown, mismatched, oversized, replayed-terminal, or contradictory
 frame permanently quarantines the parser. Duplicate object keys, including
 escaped spellings of the same key, are rejected. Errors contain only a `Blocker` enum,
-never raw provider content or native identifiers. There is no reset or retry API.
+never raw provider content or native identifiers. This protocol has no retry API.
+An explicit owner window-level [native reset](claude-native-reset.md) can replace
+continuity after full retirement; it never retries uncertain input.
 The closed broker-sanitized `command_lifecycle` and UUID-bearing
 `rate_limit_event` shape contains exactly `type`, matching `session_id`, and a
 valid `uuid`. These housekeeping frames may precede init or follow a terminal

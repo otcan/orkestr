@@ -24,6 +24,126 @@ async fn fresh() -> (Store, OwnerId, ConversationId, String) {
     store.save_session(&browser, &owner).await.unwrap();
     (store, owner, conversation, browser)
 }
+
+#[tokio::test]
+async fn failed_first_claude_open_uses_claude_rebootstrap_without_provider_fallback() {
+    use orkestr_v2_contracts::{
+        ExecutionWindowReconciliationActor as Actor,
+        ExecutionWindowReconciliationDecision as Decision,
+    };
+    let (store, owner, conversation, browser) = fresh().await;
+    let mut config = fixtures::config(ProductionTakeover::First);
+    config.provider = ProviderKind::Claude;
+    let initial = store
+        .bootstrap_execution_window_authenticated(&browser, &conversation, config)
+        .await
+        .unwrap();
+    let input = store
+        .admit(
+            &owner,
+            &conversation,
+            &MessageInput {
+                client_message_id: "first-claude-failed-setup".into(),
+                text: "synthetic input".into(),
+            },
+        )
+        .await
+        .unwrap()
+        .receipt;
+    let mut req = ExecutionWindowRequest {
+        request_key: "window:first-claude-failed-setup".into(),
+        input_message_id: input.message_id,
+        input_event_id: input.event_id,
+        input_request_key: "first-claude-failed-setup".into(),
+        expected_generation: 0,
+        window_id: None,
+        predecessor_window_id: None,
+    };
+    let a = store
+        .admit_execution_window_authenticated(&browser, &conversation, &req)
+        .await
+        .unwrap();
+    let grant = initial
+        .store()
+        .issue_execution_window_credential(
+            initial.credential(),
+            a.status.window_id,
+            1,
+            "failed-claude-setup-boot",
+            a.status.expires_at_ms,
+            &"b".repeat(64),
+        )
+        .await
+        .unwrap();
+    initial
+        .store()
+        .bind_execution_window(initial.credential(), &grant)
+        .await
+        .unwrap();
+    store
+        .reconcile_execution_window_authenticated(&browser, &conversation, a.status.window_id, 1)
+        .await
+        .unwrap();
+    let StrandedExecutionWindow::Pending(plan) = store
+        .plan_stranded_execution_window_authenticated(
+            &browser,
+            &conversation,
+            a.status.window_id,
+            1,
+            Decision::AbandonUnaccepted,
+            Actor::Owner,
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("expected failed-open plan")
+    };
+    store
+        .reconcile_stranded_execution_window_authenticated(
+            &browser,
+            &plan,
+            Decision::AbandonUnaccepted,
+            Actor::Owner,
+        )
+        .await
+        .unwrap();
+    let mut config = fixtures::config(ProductionTakeover::First);
+    config.provider = ProviderKind::Claude;
+    let reset = store
+        .rebootstrap_execution_window_authenticated(&browser, &conversation, config)
+        .await
+        .unwrap();
+    req.expected_generation = 1;
+    req.predecessor_window_id = Some(a.status.window_id);
+    req.request_key = "window:retry-claude-setup".into();
+    let a = store
+        .admit_execution_window_authenticated(&browser, &conversation, &req)
+        .await
+        .unwrap();
+    let grant = reset
+        .store()
+        .issue_execution_window_credential(
+            reset.credential(),
+            a.status.window_id,
+            2,
+            "new-claude-setup-boot",
+            a.status.expires_at_ms,
+            &"c".repeat(64),
+        )
+        .await
+        .unwrap();
+    reset
+        .store()
+        .bind_execution_window(reset.credential(), &grant)
+        .await
+        .unwrap();
+    let providers: Vec<String> =
+        sqlx::query_scalar("SELECT provider_kind FROM production_supervisors")
+            .fetch_all(&store.pool)
+            .await
+            .unwrap();
+    assert_eq!(providers, vec!["claude"]);
+}
 #[tokio::test]
 async fn first_login_private_bootstrap_then_window_without_machine_file_or_readiness() {
     let (store, owner, conversation, browser) = fresh().await;

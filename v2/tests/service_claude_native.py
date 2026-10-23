@@ -35,6 +35,10 @@ setup = json.loads(sys.stdin.readline())
 assert setup["request"] == {"subtype": "initialize", "hooks": None}
 emit({"type": "control_response", "response": {"subtype": "success",
       "request_id": setup["request_id"], "response": {}}})
+emit({"type": "system", "subtype": "commands_changed", "session_id": native,
+      "uuid": str(uuid.uuid4()), "commands": [{"name": "synthetic-command",
+      "description": "synthetic installed command description " * 12,
+      "argumentHint": "", "aliases": []} for _ in range(80)]})
 frame = json.loads(sys.stdin.readline())
 assert frame["type"] == "user" and frame["session_id"] == native
 message = frame["uuid"]

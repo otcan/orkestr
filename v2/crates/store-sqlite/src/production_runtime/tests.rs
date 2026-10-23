@@ -439,6 +439,9 @@ pub(super) async fn downgrade_window_deadlines(store: &Store) {
         .unwrap();
     let end = start + v52[start..].find(");").unwrap() + 2;
     for statement in [
+        "DROP TABLE execution_window_failed_native_requests",
+        "DROP TABLE conversation_native_resets",
+        "DELETE FROM _sqlx_migrations WHERE version=69",
         "CREATE TABLE open_failure_inputs_copy AS SELECT * FROM execution_window_open_failure_inputs",
         "DROP TABLE execution_window_open_failure_inputs",
         &v52[start..end],

@@ -68,7 +68,10 @@ pub(crate) async fn admit(
             controller
                 .process(&credential, &owner, &conversation, &input)
                 .await
-                .map_err(|_| {
+                .map_err(|reason| {
+                    // Controller errors are closed static diagnostics, never
+                    // raw provider output or a user-supplied path/message.
+                    eprintln!("window admission refused: {reason}");
                     Error(
                         StatusCode::SERVICE_UNAVAILABLE,
                         "window_unavailable",
@@ -197,6 +200,56 @@ pub(crate) async fn reconcile(
         Json(receipt),
     )
         .into_response())
+}
+
+/// No input is admitted by reset. The next separately admitted input selects
+/// fresh setup from Core's audited owner decision, never from a resume refusal.
+pub(crate) async fn reset_native(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    body: Result<Json<orkestr_v2_contracts::ClaudeNativeResetRequest>, JsonRejection>,
+) -> Result<Response, Error> {
+    browser::owner(&state, &headers).await?;
+    browser::guard(
+        &state,
+        &axum::http::Method::POST,
+        "execution_window",
+        &headers,
+    )
+    .await?;
+    let credential = browser::credential(&headers)?;
+    let conversation = conversation(&id)?;
+    let Json(request) = body.map_err(|_| invalid())?;
+    if !request.is_valid() {
+        return Err(invalid());
+    }
+    let controller = state.window_controller.clone().ok_or(Error(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "window_unavailable",
+        "Window runtime is not configured",
+    ))?;
+    let receipt = tokio::spawn(async move {
+        controller
+            .reset_claude_native(&credential, &conversation, &request)
+            .await
+    })
+    .await
+    .map_err(|_| {
+        Error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "window_unavailable",
+            "Native reset outcome is uncertain",
+        )
+    })?
+    .map_err(|_| {
+        Error(
+            StatusCode::CONFLICT,
+            "native_reset_conflict",
+            "Reconcile and retire the exact window before resetting Claude native continuity",
+        )
+    })?;
+    Ok(Json(receipt).into_response())
 }
 
 fn conversation(id: &str) -> Result<ConversationId, Error> {

@@ -4,7 +4,7 @@
   "files": {
     "claude_server.py": "e66ed5ce8f13d9b4e589783c2bc3144973c6c2c8db634a8bb3a7d63130cf37f0",
     "claude_connector.py": "3e37839a08e5a12625f5aa85a882d7115ebf9fad1c90eb3a25088d22063855b8",
-    "claude_protocol.py": "6efc86767bc8b5dd11005920b171e0b43fe4d8725222370fc79696516196798f",
+    "claude_protocol.py": "124e60df409f03d1fefb8f84f1b6df53e575c1bd2e56e44809ea7e58eab7593d",
     "protocol.py": "0349e55001718c542da37033cd1653b780654fad79508608980b56c8ca817518",
     "transport.py": "5ebf87ce14b1d7038829893838a98550302fcb4335cb8be7bb159933bc854a85",
     "claude_resume.py": "ecc014ec6578791adc2086b3d83dc161c61fbdffa043c957b0cc919c9a2d2850",
