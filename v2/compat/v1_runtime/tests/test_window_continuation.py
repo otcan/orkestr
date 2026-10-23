@@ -211,36 +211,35 @@ class StallNoticeTests(Case):
 
 
 class OrphanedFollowUpTests(Case):
-    def test_follow_up_whose_window_ended_unstarted_is_sent_again_once(self):
+    def orphan(self):
         self.peer.foreign = True  # No run of this input ever starts.
         self.worker.step(self.data)
         data = self.ledger.next_input()
         self.assertEqual(data["phase"], "running")
-        self.assertIn("unstarted_since", data)
-        # Still inside the grace period, or the window still open: wait.
-        self.peer.current = dict(window_id="window", state="closed", conversation_id="conversation")
-        self.worker.step(data)
-        data = self.ledger.next_input()
-        self.assertEqual(data["phase"], "running")
+        return data
+
+    def end_window(self, data):
         data["unstarted_since"] -= 61
         self.ledger.save(data)
-        self.worker.step(self.ledger.next_input())
+        self.peer.current = dict(window_id="window", state="closed", conversation_id="conversation")
+
+    def test_unstarted_follow_up_refuses_without_creating_another_message(self):
+        data = self.orphan()
+        original = copy.deepcopy(data)
+        self.peer.current = dict(window_id="window", state="closed", conversation_id="conversation")
+        self.worker.step(data)  # Still inside the grace period.
+        self.end_window(data)
+        for _ in range(2):
+            with self.assertRaisesRegex(Refused, "window_setup_failed"):
+                self.worker.step(self.ledger.next_input())
         data = self.ledger.next_input()
-        self.assertEqual(data["phase"], "queued")
-        self.assertIn("requeued", data)
-        self.assertFalse(data["intake_text"].startswith("[The previous turn"))
-        self.assertEqual(self.notices(), [])
-        # The new turn runs normally.
-        self.peer.foreign, self.peer.current = False, None
-        self.worker.step(data)
-        self.assertEqual(self.ledger.messages()[-1]["text"], "deep result")
-        messages = [body for route, body in self.peer.mutations if route == "/messages"]
-        self.assertEqual(len(messages), 2)
+        self.assertEqual(data["keys"], original["keys"])
+        self.assertEqual(data["intake"], original["intake"])
+        self.assertNotIn("requeued", data)
+        self.assertEqual(len([r for r, _ in self.peer.mutations if r == "/messages"]), 1)
 
     def test_open_window_keeps_waiting(self):
-        self.peer.foreign = True
-        self.worker.step(self.data)
-        data = self.ledger.next_input()
+        data = self.orphan()
         data["unstarted_since"] -= 61
         self.ledger.save(data)
         self.peer.current = dict(window_id="window", state="active", conversation_id="conversation",
@@ -248,83 +247,38 @@ class OrphanedFollowUpTests(Case):
         self.worker.step(self.ledger.next_input())
         self.assertEqual(self.ledger.next_input()["phase"], "running")
 
-
-class RepeatedOrphanTests(Case):
-    """Windows that end before any run starts (for example bind_child refused under load)."""
-
-    def orphan_once(self):
-        """Run the head input into a window that ends with no run of it."""
-        self.peer.foreign = True
-        self.peer.current = None
-        data = self.ledger.next_input()
-        self.worker.step(data)
-        data = self.ledger.next_input()
-        data["unstarted_since"] -= 61
-        self.ledger.save(data)
-        self.peer.current = dict(window_id="window", state="closed", conversation_id="conversation")
-        self.worker.step(self.ledger.next_input())
-
-    def test_a_second_orphan_requeues_again(self):
-        self.orphan_once()
-        self.orphan_once()
-        data = self.ledger.next_input()
-        self.assertEqual((data["phase"], data["requeue_count"]), ("queued", 2))
-        self.assertEqual(self.notices(), [])
-
-    def test_limit_reached_refuses_with_a_notice_and_settles(self):
-        for _ in range(3):
-            self.orphan_once()
-        self.assertEqual(self.ledger.next_input()["requeue_count"], 3)
-        with self.assertRaisesRegex(Refused, "window_setup_failed"):
-            self.orphan_once()
-
-    def test_limit_refusal_through_run_once_lets_the_next_input_proceed(self):
-        for _ in range(3):
-            self.orphan_once()
-        # Arrives after the first input went to Rust, so it runs on its own.
+    def test_failure_notice_settles_once_and_later_input_proceeds(self):
+        data = self.orphan()
         later, _ = self.ledger.enqueue(dict(publicMessageId="later", publicThreadId="thread", chatId="chat",
                                             accountId="account", text="next"))
-        data = self.ledger.next_input()
-        self.worker.step(data)
-        data = self.ledger.next_input()
-        data["unstarted_since"] -= 61
-        self.ledger.save(data)
+        self.end_window(data)
         self.worker.run_once(_Stop())
-        notice = [m for m in self.ledger.messages() if m.get("kind") == "notice"]
-        self.assertEqual([m["refusal"] for m in notice], ["window_setup_failed"])
-        acked = self.ledger.acknowledge(notice[0]["id"], {"outcome": "delivered", "outboxJobId": "job",
-                                                          "parentPublicMessageId": "public"})
+        self.worker.run_once(_Stop())
+        notices = [m for m in self.ledger.messages() if m.get("kind") == "notice"]
+        self.assertEqual([m["refusal"] for m in notices], ["window_setup_failed"])
+        acked = self.ledger.acknowledge(notices[0]["id"], {"outcome": "delivered", "outboxJobId": "job",
+                                                       "parentPublicMessageId": "public"})
         self.assertTrue(acked["settled"])
         self.assertEqual(self.ledger.next_input()["public_id"], later["public_id"])
+        messages = [body for route, body in self.peer.mutations if route == "/messages"]
+        self.assertEqual(sum(body["client_message_id"] == self.data["keys"]["message"] for body in messages), 1)
+        self.assertEqual(len(messages), 2)
 
-    def test_legacy_stuck_row_recovers_after_restart(self):
-        # An older adapter requeued once (no counter), then the successor window
-        # also ended with no run: the row sat in `running` forever.
-        self.orphan_once()
-        data = self.ledger.next_input()
-        data.pop("requeue_count")
-        self.ledger.save(data)
-        self.peer.foreign, self.peer.current = True, None
-        self.worker.step(self.ledger.next_input())
-        data = self.ledger.next_input()
-        self.assertEqual(data["phase"], "running")
-        data["unstarted_since"] -= 3600
-        self.ledger.save(data)
-        self.peer.current = dict(window_id="window", state="closed", conversation_id="conversation")
+    def test_legacy_requeued_input_is_not_cloned_again_after_restart(self):
+        data = self.orphan()
+        data["requeued"] = {"previous_message_id": "legacy", "at": 1}
+        self.end_window(data)
         restarted = Worker(self.peer, Ledger(Path(self.temp.name) / "ledger.sqlite3", {"test_scope": "one"}))
-        restarted.step(self.ledger.next_input())
-        data = self.ledger.next_input()
-        self.assertEqual((data["phase"], data["requeue_count"]), ("queued", 2))
+        with self.assertRaisesRegex(Refused, "window_setup_failed"):
+            restarted.step(restarted.ledger.next_input())
+        self.assertEqual(len([r for r, _ in self.peer.mutations if r == "/messages"]), 1)
 
-    def test_no_current_window_counts_as_ended(self):
-        self.peer.foreign = True
-        self.worker.step(self.data)
-        data = self.ledger.next_input()
-        data["unstarted_since"] -= 61
-        self.ledger.save(data)
+    def test_missing_window_refuses_after_grace(self):
+        data = self.orphan()
+        self.end_window(data)
         self.peer.current = None
-        self.worker.step(self.ledger.next_input())
-        self.assertEqual(self.ledger.next_input()["phase"], "queued")
+        with self.assertRaisesRegex(Refused, "window_setup_failed"):
+            self.worker.step(self.ledger.next_input())
 
 
 class _Stop:
