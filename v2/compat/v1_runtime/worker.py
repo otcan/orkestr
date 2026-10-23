@@ -15,6 +15,7 @@ from .participants import compose
 from .rust_client import ClientError
 from .model_identity import observed_identity
 from .policy_refusal import notice as policy_notice
+from .first_response import capture as capture_first_response
 
 PROGRESS_INTERVAL_S = 60
 PROGRESS_MAX_CHARS = 3500
@@ -819,6 +820,7 @@ class Worker:
             self.settle_own_fast(data, statuses.get("fast"), ids)
             self.ledger.refuse(data, "provider_policy_refusal", alert=data.get("origin") == "timer", notice=notice)
             return
+        capture_first_response(self, data, statuses, ids)
         self.capture_progress(data, statuses["deep"], ids)
         accepted = data.setdefault("accepted", {})
         if self.continue_after_deadline(data, statuses, ids):
