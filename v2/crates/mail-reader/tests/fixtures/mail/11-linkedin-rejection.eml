@@ -1,0 +1,20 @@
+Authentication-Results: mx.google.com; dkim=pass header.i=@linkedin.com;
+ spf=pass smtp.mailfrom=linkedin.com; dmarc=pass header.from=linkedin.com
+From: LinkedIn <jobs-noreply@linkedin.com>
+To: Alex Example <alex.jobseeker@example.com>
+Subject: Your application to Data Engineer at Contoso Analytics
+Date: Wed, 21 Oct 2026 13:00:00 +0000
+Message-ID: <jt15fixture.85ae5c93ee59e943@linkedin.com>
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: quoted-printable
+MIME-Version: 1.0
+
+Your update from Contoso Analytics
+
+Data Engineer
+Contoso Analytics =C2=B7 Munich, Germany
+
+Unfortunately, Contoso Analytics has decided not to move forward with your ap=
+plication.
+
+https://www.linkedin.com/jobs/view/4011111111/

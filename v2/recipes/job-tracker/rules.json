@@ -1,0 +1,922 @@
+{
+  "schema": "orkestr.jobmail-rules.v1",
+  "version": "jobmail-rules@2",
+  "trusted_authserv": [
+    "mx.google.com"
+  ],
+  "unauthenticated_confidence_cap": 60,
+  "sources": [
+    {
+      "id": "linkedin",
+      "sender_domains": [
+        "linkedin.com"
+      ],
+      "require_dkim": true,
+      "trusted": true
+    },
+    {
+      "id": "ats:greenhouse",
+      "sender_domains": [
+        "greenhouse-mail.io",
+        "greenhouse.io"
+      ],
+      "link_domains": [
+        "boards.greenhouse.io",
+        "job-boards.greenhouse.io"
+      ],
+      "posting_links": true,
+      "trusted": true
+    },
+    {
+      "id": "ats:lever",
+      "sender_domains": [
+        "lever.co"
+      ],
+      "link_domains": [
+        "jobs.lever.co"
+      ],
+      "posting_links": true,
+      "trusted": true
+    },
+    {
+      "id": "ats:workday",
+      "sender_domains": [
+        "myworkday.com"
+      ],
+      "link_domains": [
+        "myworkdayjobs.com"
+      ],
+      "posting_links": true,
+      "trusted": true
+    },
+    {
+      "id": "ats:ashby",
+      "sender_domains": [
+        "ashbyhq.com"
+      ],
+      "link_domains": [
+        "jobs.ashbyhq.com"
+      ],
+      "posting_links": true,
+      "trusted": true
+    },
+    {
+      "id": "ats:workable",
+      "sender_domains": [
+        "workablemail.com",
+        "workable.com"
+      ],
+      "link_domains": [
+        "apply.workable.com"
+      ],
+      "posting_links": true,
+      "trusted": true
+    },
+    {
+      "id": "ats:personio",
+      "sender_domains": [
+        "personio.com",
+        "personio.de",
+        "m-personio.com"
+      ],
+      "link_domains": [
+        "jobs.personio.de",
+        "jobs.personio.com"
+      ],
+      "posting_links": true,
+      "trusted": true
+    },
+    {
+      "id": "ats:smartrecruiters",
+      "sender_domains": [
+        "smartrecruiters.com"
+      ],
+      "link_domains": [
+        "jobs.smartrecruiters.com"
+      ],
+      "posting_links": true,
+      "trusted": true
+    },
+    {
+      "id": "ats:teamtailor",
+      "sender_domains": [
+        "teamtailor.com",
+        "teamtailor-mail.com"
+      ],
+      "link_domains": [
+        "teamtailor.com"
+      ],
+      "posting_links": true,
+      "trusted": true
+    },
+    {
+      "id": "ats:recruitee",
+      "sender_domains": [
+        "recruitee.com"
+      ],
+      "link_domains": [
+        "recruitee.com"
+      ],
+      "posting_links": true,
+      "trusted": true
+    },
+    {
+      "id": "ats:join",
+      "sender_domains": [
+        "join.com"
+      ],
+      "link_domains": [
+        "join.com"
+      ],
+      "posting_links": true,
+      "trusted": true
+    },
+    {
+      "id": "ats:icims",
+      "sender_domains": [
+        "icims.com"
+      ],
+      "link_domains": [
+        "icims.com"
+      ],
+      "posting_links": true,
+      "trusted": true
+    },
+    {
+      "id": "ats:successfactors",
+      "sender_domains": [
+        "successfactors.com",
+        "successfactors.eu",
+        "sapsf.com",
+        "sapsf.eu"
+      ],
+      "link_domains": [
+        "successfactors.com",
+        "successfactors.eu"
+      ],
+      "posting_links": true,
+      "trusted": true
+    },
+    {
+      "id": "assessment:hackerrank",
+      "sender_domains": [
+        "hackerrank.com",
+        "hackerrankforwork.com"
+      ],
+      "link_domains": [
+        "hackerrank.com"
+      ],
+      "trusted": true
+    },
+    {
+      "id": "assessment:codility",
+      "sender_domains": [
+        "codility.com"
+      ],
+      "link_domains": [
+        "app.codility.com"
+      ],
+      "trusted": true
+    },
+    {
+      "id": "assessment:testgorilla",
+      "sender_domains": [
+        "testgorilla.com"
+      ],
+      "link_domains": [
+        "app.testgorilla.com"
+      ],
+      "trusted": true
+    },
+    {
+      "id": "assessment:codesignal",
+      "sender_domains": [
+        "codesignal.com"
+      ],
+      "link_domains": [
+        "app.codesignal.com"
+      ],
+      "trusted": true
+    },
+    {
+      "id": "agency:hays",
+      "name": "Hays",
+      "sender_domains": [
+        "hays.de",
+        "hays.com",
+        "hays.at",
+        "hays.ch"
+      ]
+    },
+    {
+      "id": "agency:sthree",
+      "name": "SThree",
+      "sender_domains": [
+        "sthree.com",
+        "computerfutures.com",
+        "progressiverecruitment.com",
+        "realstaffing.com"
+      ]
+    },
+    {
+      "id": "agency:randstad",
+      "name": "Randstad",
+      "sender_domains": [
+        "randstad.de",
+        "randstad.com",
+        "randstaddigital.de"
+      ]
+    },
+    {
+      "id": "agency:gulp",
+      "name": "GULP",
+      "sender_domains": [
+        "gulp.de"
+      ]
+    },
+    {
+      "id": "agency:etengo",
+      "name": "Etengo",
+      "sender_domains": [
+        "etengo.de"
+      ]
+    },
+    {
+      "id": "agency:emagine",
+      "name": "emagine",
+      "sender_domains": [
+        "emagine.org",
+        "emagine.de"
+      ]
+    },
+    {
+      "id": "agency:akkodis",
+      "name": "Akkodis",
+      "sender_domains": [
+        "akkodis.com",
+        "akkodis.de"
+      ]
+    },
+    {
+      "id": "agency:redglobal",
+      "name": "RED Global",
+      "sender_domains": [
+        "redglobal.com"
+      ]
+    },
+    {
+      "id": "agency:westhouse",
+      "name": "Westhouse",
+      "sender_domains": [
+        "westhouse-group.com",
+        "westhouse-consulting.com"
+      ]
+    },
+    {
+      "id": "agency:solcom",
+      "name": "SOLCOM",
+      "sender_domains": [
+        "solcom.de"
+      ]
+    },
+    {
+      "id": "agency:michael-page",
+      "name": "Michael Page",
+      "sender_domains": [
+        "michaelpage.de",
+        "michaelpage.com"
+      ]
+    },
+    {
+      "id": "platform:freelance-de",
+      "name": "freelance.de",
+      "sender_domains": [
+        "freelance.de"
+      ]
+    },
+    {
+      "id": "platform:freelancermap",
+      "name": "freelancermap",
+      "sender_domains": [
+        "freelancermap.de"
+      ]
+    },
+    {
+      "id": "platform:malt",
+      "name": "Malt",
+      "sender_domains": [
+        "malt.de",
+        "malt.com"
+      ]
+    }
+  ],
+  "vendor_names": [
+    "linkedin",
+    "greenhouse",
+    "lever",
+    "workday",
+    "personio",
+    "ashby",
+    "workable",
+    "smartrecruiters",
+    "teamtailor",
+    "recruitee",
+    "icims",
+    "successfactors",
+    "join",
+    "hackerrank",
+    "codility",
+    "testgorilla",
+    "codesignal",
+    "calendly"
+  ],
+  "drop": [
+    {
+      "id": "social",
+      "when": {
+        "any": [
+          "reacted to your post",
+          "commented on your post",
+          "new connection",
+          "endorsed you",
+          "wants to connect",
+          "invitation to connect",
+          "people viewed your profile",
+          "appeared in",
+          "is celebrating",
+          "congratulate",
+          "liked your",
+          "mentioned you"
+        ]
+      }
+    },
+    {
+      "id": "marketing",
+      "when": {
+        "bulk": true,
+        "not_sources": [
+          "linkedin",
+          "ats:*"
+        ]
+      }
+    },
+    {
+      "id": "newsletter",
+      "when": {
+        "sources": [
+          "direct"
+        ],
+        "any": [
+          "unsubscribe",
+          "newsletter",
+          "weekly digest",
+          "abmelden"
+        ],
+        "none": [
+          "your application",
+          "ihre bewerbung",
+          "deine bewerbung",
+          "vorstellungsgespräch",
+          "thank you for applying"
+        ]
+      }
+    }
+  ],
+  "rules": [
+    {
+      "id": "linkedin.alert",
+      "event": "job_alert",
+      "confidence": 95,
+      "gate": "none",
+      "when": {
+        "sources": [
+          "linkedin"
+        ],
+        "from_prefix": [
+          "jobalerts-noreply",
+          "jobs-listings"
+        ]
+      }
+    },
+    {
+      "id": "linkedin.inmail",
+      "event": "job_alert",
+      "confidence": 75,
+      "gate": "none",
+      "when": {
+        "sources": [
+          "linkedin"
+        ],
+        "from_prefix": [
+          "inmail-hit-reply",
+          "hit-reply"
+        ],
+        "any": [
+          "role",
+          "position",
+          "opportunity",
+          "stelle",
+          "projekt",
+          "project"
+        ]
+      }
+    },
+    {
+      "id": "offer",
+      "event": "offer",
+      "confidence": 85,
+      "when": {
+        "any": [
+          "pleased to offer you",
+          "delighted to offer you",
+          "happy to offer you",
+          "excited to offer you",
+          "extend an offer",
+          "offer letter",
+          "confirmed you for",
+          "vertragsangebot",
+          "zusage",
+          "onboarding",
+          "welcome aboard"
+        ],
+        "none": [
+          "keine zusage",
+          "leider nicht",
+          "unfortunately not",
+          "regret to inform",
+          "not to move forward",
+          "not move forward"
+        ],
+        "not_sources": [
+          "linkedin"
+        ]
+      }
+    },
+    {
+      "id": "linkedin.rejection",
+      "event": "rejection",
+      "confidence": 95,
+      "when": {
+        "sources": [
+          "linkedin"
+        ],
+        "from_prefix": [
+          "jobs-noreply"
+        ],
+        "all": [
+          [
+            "unfortunately"
+          ],
+          [
+            "not to move forward",
+            "not move forward",
+            "not moving forward",
+            "decided not to"
+          ]
+        ]
+      }
+    },
+    {
+      "id": "rejection.en",
+      "event": "rejection",
+      "confidence": 90,
+      "when": {
+        "all": [
+          [
+            "unfortunately",
+            "regret to inform",
+            "we regret"
+          ],
+          [
+            "not to move forward",
+            "not move forward",
+            "not moving forward",
+            "other candidates",
+            "not be proceeding",
+            "not proceed",
+            "decided to pursue",
+            "position has been filled",
+            "not been selected",
+            "decided not to"
+          ]
+        ],
+        "none": [
+          "move forward with you",
+          "moving forward with you",
+          "great news",
+          "congratulations",
+          "confirmed you",
+          "onboarding",
+          "welcome aboard",
+          "freuen uns",
+          "gute nachricht",
+          "zusage",
+          "willkommen"
+        ],
+        "not_sources": [
+          "linkedin"
+        ]
+      }
+    },
+    {
+      "id": "rejection.en.direct",
+      "event": "rejection",
+      "confidence": 85,
+      "when": {
+        "any": [
+          "position has been filled",
+          "we will not be moving forward",
+          "move forward with other candidates"
+        ],
+        "none": [
+          "move forward with you",
+          "moving forward with you",
+          "great news",
+          "congratulations",
+          "confirmed you",
+          "onboarding",
+          "welcome aboard",
+          "freuen uns",
+          "gute nachricht",
+          "zusage",
+          "willkommen"
+        ],
+        "not_sources": [
+          "linkedin"
+        ]
+      }
+    },
+    {
+      "id": "rejection.de",
+      "event": "rejection",
+      "confidence": 90,
+      "when": {
+        "all": [
+          [
+            "leider"
+          ],
+          [
+            "absage",
+            "andere kandidat*",
+            "anderen kandidat*",
+            "nicht berücksichtig*",
+            "nicht weiter",
+            "anderweitig",
+            "nicht in die engere",
+            "nicht entsprech*",
+            "entschieden"
+          ]
+        ],
+        "none": [
+          "move forward with you",
+          "moving forward with you",
+          "great news",
+          "congratulations",
+          "confirmed you",
+          "onboarding",
+          "welcome aboard",
+          "freuen uns",
+          "gute nachricht",
+          "zusage",
+          "willkommen"
+        ],
+        "not_sources": [
+          "linkedin"
+        ]
+      }
+    },
+    {
+      "id": "assessment",
+      "event": "assessment",
+      "confidence": 90,
+      "when": {
+        "any": [
+          "hackerrank.com",
+          "codility.com",
+          "testgorilla.com",
+          "codesignal.com",
+          "coding assessment",
+          "coding challenge",
+          "take-home",
+          "take home assignment",
+          "online assessment",
+          "technical assessment",
+          "programmieraufgabe",
+          "fallstudie"
+        ],
+        "not_sources": [
+          "linkedin"
+        ]
+      }
+    },
+    {
+      "id": "interview",
+      "event": "interview_invite",
+      "confidence": 85,
+      "when": {
+        "any": [
+          "interview invitation",
+          "invite you to an interview",
+          "invite you to a first interview",
+          "invite you to interview",
+          "invite you for an interview",
+          "schedule an interview",
+          "schedule a call",
+          "pick a slot",
+          "book a time",
+          "calendly.com",
+          "goodtime.io",
+          "vorstellungsgespräch",
+          "einladung zum gespräch",
+          "einladung zum interview",
+          "terminvorschlag",
+          "kennenlerngespräch"
+        ],
+        "not_sources": [
+          "linkedin"
+        ]
+      }
+    },
+    {
+      "id": "linkedin.applied",
+      "event": "applied",
+      "confidence": 98,
+      "when": {
+        "sources": [
+          "linkedin"
+        ],
+        "from_prefix": [
+          "jobs-noreply"
+        ],
+        "any": [
+          "your application was sent to"
+        ]
+      }
+    },
+    {
+      "id": "linkedin.viewed",
+      "event": "viewed",
+      "confidence": 98,
+      "when": {
+        "sources": [
+          "linkedin"
+        ],
+        "any": [
+          "your application was viewed",
+          "viewed your application",
+          "downloaded your resume"
+        ]
+      }
+    },
+    {
+      "id": "received.en",
+      "event": "application_received",
+      "confidence": 90,
+      "when": {
+        "any": [
+          "thank you for applying",
+          "thanks for applying",
+          "we have received your application",
+          "we received your application",
+          "application received",
+          "your application has been received",
+          "application confirmation"
+        ],
+        "not_sources": [
+          "linkedin"
+        ]
+      }
+    },
+    {
+      "id": "received.de",
+      "event": "application_received",
+      "confidence": 90,
+      "when": {
+        "any": [
+          "vielen dank für ihre bewerbung",
+          "danke für deine bewerbung",
+          "vielen dank für deine bewerbung",
+          "eingangsbestätigung",
+          "wir haben ihre bewerbung erhalten",
+          "ihre bewerbung ist bei uns eingegangen"
+        ],
+        "not_sources": [
+          "linkedin"
+        ]
+      }
+    },
+    {
+      "id": "in_review",
+      "event": "in_review",
+      "confidence": 80,
+      "when": {
+        "all": [
+          [
+            "application",
+            "bewerbung*"
+          ],
+          [
+            "under review",
+            "is being reviewed",
+            "werden geprüft",
+            "in prüfung"
+          ]
+        ],
+        "not_sources": [
+          "linkedin"
+        ]
+      }
+    },
+    {
+      "id": "agency.project",
+      "event": "job_alert",
+      "confidence": 80,
+      "gate": "none",
+      "when": {
+        "sources": [
+          "agency:*",
+          "platform:*"
+        ],
+        "in_reply": false,
+        "any": [
+          "projektanfrage",
+          "projekt",
+          "project",
+          "position",
+          "rolle",
+          "role",
+          "vakanz",
+          "opportunity",
+          "einsatz"
+        ]
+      }
+    },
+    {
+      "id": "recruiter.direct",
+      "event": "job_alert",
+      "confidence": 65,
+      "gate": "none",
+      "when": {
+        "all": [
+          [
+            "recruiter",
+            "talent acquisition",
+            "talent partner",
+            "headhunter",
+            "personalberater*"
+          ],
+          [
+            "role",
+            "position",
+            "opportunity",
+            "stelle",
+            "vakanz"
+          ]
+        ],
+        "none": [
+          "unsubscribe"
+        ]
+      }
+    },
+    {
+      "id": "reply.in_thread",
+      "event": "recruiter_contact",
+      "confidence": 75,
+      "gate": "thread",
+      "when": {
+        "in_reply": true
+      }
+    },
+    {
+      "id": "outgoing.application",
+      "event": "applied",
+      "confidence": 90,
+      "direction": "outgoing",
+      "gate": "none",
+      "when": {
+        "any": [
+          "bewerbung*",
+          "application",
+          "applying",
+          "apply for",
+          "lebenslauf",
+          "my cv",
+          "mein cv",
+          "cv attached",
+          "resume",
+          "profil anbei",
+          "anbei mein",
+          "anbei finden sie mein",
+          "stundensatz",
+          "tagessatz",
+          "hourly rate",
+          "daily rate",
+          "verfügbar ab",
+          "available from",
+          "verfügbarkeit"
+        ]
+      }
+    },
+    {
+      "id": "outgoing.reply",
+      "event": "applied",
+      "confidence": 70,
+      "direction": "outgoing",
+      "gate": "thread",
+      "when": {
+        "in_reply": true
+      }
+    }
+  ],
+  "extract": {
+    "subject": [
+      "your application was sent to {company}",
+      "your application was viewed by {company}",
+      "{company} viewed your application",
+      "your application to {role} at {company}",
+      "thank you for applying to {company}",
+      "thanks for applying to {company}",
+      "application received: {role}",
+      "interview invitation – {role} at {company}",
+      "interview invitation - {role} at {company}",
+      "assessment for {role} at {company}",
+      "ihre bewerbung als {role} bei {company}",
+      "ihre bewerbung bei {company}",
+      "deine bewerbung bei {company}",
+      "offer – {role}",
+      "offer - {role}",
+      "opportunity: {role} at {company}",
+      "coding challenge from {company}",
+      "bewerbung als {role} bei {company}",
+      "bewerbung als {role}",
+      "bewerbung: {role}",
+      "bewerbung für {role}",
+      "bewerbung auf {role}",
+      "application: {role}",
+      "application for {role}",
+      "application – {role}",
+      "application - {role}",
+      "projektanfrage: {role}",
+      "projektanfrage – {role}",
+      "projektanfrage - {role}",
+      "projekt: {role}",
+      "project: {role}",
+      "your application to {company}"
+    ],
+    "body": [
+      "{role}\n{company} · {location}",
+      "application for {role} at {company} is",
+      "the {role} position at {company}.",
+      "the {role} position at {company},",
+      "the {role} role at {company}.",
+      "the {role} role at {company},",
+      "our {role} role at {company}.",
+      "our {role} position at {company}.",
+      "application for {role} at {company}.",
+      "position of {role} at {company}.",
+      "bewerbung als {role} bei {company}.",
+      "bewerbung als {role}.",
+      "bewerbung auf die stelle {role} bei {company}."
+    ],
+    "display_name_noise": [
+      "careers",
+      "career",
+      "recruiting",
+      "recruitment",
+      "talent",
+      "acquisition",
+      "jobs",
+      "team",
+      "hr",
+      "hiring",
+      "the"
+    ]
+  },
+  "alerts": {
+    "items": [
+      "{role} - {company} - {location}",
+      "{role} · {company} · {location}",
+      "{role} at {company}"
+    ],
+    "max_items": 25
+  },
+  "freemail_domains": [
+    "gmail.com",
+    "googlemail.com",
+    "gmx.de",
+    "gmx.net",
+    "web.de",
+    "t-online.de",
+    "outlook.com",
+    "hotmail.com",
+    "live.com",
+    "yahoo.com",
+    "icloud.com",
+    "me.com",
+    "posteo.de",
+    "mailbox.org",
+    "proton.me",
+    "protonmail.com"
+  ],
+  "deny_senders": []
+}

@@ -1,0 +1,17 @@
+Authentication-Results: mx.google.com; dkim=pass header.i=@linkedin.com;
+ spf=pass smtp.mailfrom=linkedin.com; dmarc=pass header.from=linkedin.com
+From: Riley Recruiter via LinkedIn <inmail-hit-reply@linkedin.com>
+To: Alex Example <alex.jobseeker@example.com>
+Subject: Riley sent you a new message
+Date: Wed, 21 Oct 2026 14:00:00 +0000
+Message-ID: <jt15fixture.b27dace6a383247f@linkedin.com>
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: quoted-printable
+MIME-Version: 1.0
+
+Riley Recruiter, Talent Partner at Adatum Corp
+
+Hi Alex, I came across your profile and think you'd be a great fit for our St=
+aff Backend Engineer role at Adatum Corp. Are you open to a quick call?
+
+Reply on LinkedIn

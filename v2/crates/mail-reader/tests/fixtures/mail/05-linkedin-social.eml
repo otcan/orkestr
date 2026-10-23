@@ -1,0 +1,12 @@
+Authentication-Results: mx.google.com; dkim=pass header.i=@linkedin.com;
+ spf=pass smtp.mailfrom=linkedin.com; dmarc=pass header.from=linkedin.com
+From: LinkedIn <notifications-noreply@linkedin.com>
+To: Alex Example <alex.jobseeker@example.com>
+Subject: Jamie Doe reacted to your post
+Date: Tue, 20 Oct 2026 11:30:00 +0000
+Message-ID: <jt15fixture.02fb0e22a9e1c55b@linkedin.com>
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+MIME-Version: 1.0
+
+Jamie Doe and 3 others reacted to your post. See all reactions.

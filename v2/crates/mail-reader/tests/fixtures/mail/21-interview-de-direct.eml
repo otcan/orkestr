@@ -1,0 +1,17 @@
+Authentication-Results: mx.google.com; dkim=pass
+ header.i=@bluebird-logistik.example; spf=pass
+ smtp.mailfrom=bluebird-logistik.example; dmarc=pass
+ header.from=bluebird-logistik.example
+From: Bluebird Logistik GmbH <jobs@bluebird-logistik.example>
+To: Alex Example <alex.jobseeker@example.com>
+Subject: Einladung zum =?utf-8?q?Vorstellungsgespr=C3=A4ch?=
+Date: Wed, 21 Oct 2026 22:00:00 +0000
+Message-ID: <jt15fixture.9c2cb4adc9a3d53d@bluebird-logistik.example>
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: quoted-printable
+MIME-Version: 1.0
+
+Hallo Alex,
+
+wir m=C3=B6chten Sie gerne zu einem Vorstellungsgespr=C3=A4ch einladen. Bitte=
+ nennen Sie uns Ihre Verf=C3=BCgbarkeit.

@@ -1,0 +1,13 @@
+Authentication-Results: mx.google.com; dkim=pass header.i=@news.example.org;
+ spf=pass smtp.mailfrom=news.example.org; dmarc=pass
+ header.from=news.example.org
+From: Example Weekly <newsletter@news.example.org>
+To: Alex Example <alex.jobseeker@example.com>
+Subject: This week in tech: 10 tools you should know
+Date: Tue, 20 Oct 2026 12:00:00 +0000
+Message-ID: <jt15fixture.755df51129cb976c@news.example.org>
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+MIME-Version: 1.0
+
+Our weekly digest. Unsubscribe at any time.

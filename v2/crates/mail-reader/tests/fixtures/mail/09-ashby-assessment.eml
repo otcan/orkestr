@@ -1,0 +1,18 @@
+Authentication-Results: mx.google.com; dkim=pass header.i=@ashbyhq.com;
+ spf=pass smtp.mailfrom=ashbyhq.com; dmarc=pass header.from=ashbyhq.com
+From: Ashby <no-reply@ashbyhq.com>
+To: Alex Example <alex.jobseeker@example.com>
+Subject: Next step: coding assessment for Software Engineer at Litware
+Date: Wed, 21 Oct 2026 11:00:00 +0000
+Message-ID: <jt15fixture.1f9aef9d0def2bc3@ashbyhq.com>
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: quoted-printable
+MIME-Version: 1.0
+
+Hi Alex,
+
+As a next step for the Software Engineer role at Litware, please complete the=
+ HackerRank coding assessment within 5 days: https://www.hackerrank.com/test/=
+abc123/login
+
+The Litware team

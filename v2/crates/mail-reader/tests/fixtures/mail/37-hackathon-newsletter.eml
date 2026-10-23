@@ -1,0 +1,14 @@
+Authentication-Results: mx.google.com; dkim=pass header.i=@hackathons.example;
+ spf=pass smtp.mailfrom=hackathons.example; dmarc=pass
+ header.from=hackathons.example
+From: Hackathon Weekly <team@hackathons.example>
+To: Alex Example <alex.jobseeker@example.com>
+Subject: New coding challenge: build an AI agent
+Date: Thu, 22 Oct 2026 12:00:00 +0000
+Message-ID: <jt15fixture.38a9b1d207dc07ef@hackathons.example>
+List-Id: <weekly.hackathons.example>
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+MIME-Version: 1.0
+
+Join this week's coding challenge and win prizes.

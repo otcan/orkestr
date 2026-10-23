@@ -1,0 +1,19 @@
+Authentication-Results: mx.google.com; dkim=pass header.i=@linkedin.com;
+ spf=pass smtp.mailfrom=linkedin.com; dmarc=pass header.from=linkedin.com
+From: LinkedIn Job Alerts <jobalerts-noreply@linkedin.com>
+To: Alex Example <alex.jobseeker@example.com>
+Subject: 15 new jobs for 'rust developer'
+Date: Tue, 20 Oct 2026 11:00:00 +0000
+Message-ID: <jt15fixture.56c04e4214cacf34@linkedin.com>
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+MIME-Version: 1.0
+
+Your job alert for rust developer in Germany
+
+Rust Developer - Tailspin Toys - Hamburg
+https://www.linkedin.com/comm/jobs/view/4019999991/
+Systems Engineer - Wingtip Solutions - Remote
+https://www.linkedin.com/comm/jobs/view/4019999992/
+
+See all jobs

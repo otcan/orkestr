@@ -1,0 +1,16 @@
+Authentication-Results: mx.google.com; dkim=pass header.i=@hire.lever.co;
+ spf=pass smtp.mailfrom=hire.lever.co; dmarc=pass header.from=hire.lever.co
+From: Proseware <no-reply@hire.lever.co>
+To: Alex Example <alex.jobseeker@example.com>
+Subject: Thank you for applying to Proseware
+Date: Thu, 22 Oct 2026 04:00:00 +0000
+Message-ID: <jt15fixture.da610392581c9b88@hire.lever.co>
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: quoted-printable
+MIME-Version: 1.0
+
+Hi Alex,
+
+Thank you for applying to the Site Reliability Engineer position at Proseware.
+Posting: https://jobs.lever.co/proseware/5f2c/?utm_source=3Dlinkedin&lever-or=
+igin=3Dapplied

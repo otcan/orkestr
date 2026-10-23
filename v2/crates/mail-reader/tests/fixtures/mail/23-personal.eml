@@ -1,0 +1,12 @@
+Authentication-Results: mx.google.com; dkim=pass header.i=@example.net;
+ spf=pass smtp.mailfrom=example.net; dmarc=pass header.from=example.net
+From: Sam Friend <sam@example.net>
+To: Alex Example <alex.jobseeker@example.com>
+Subject: Dinner on Friday?
+Date: Thu, 22 Oct 2026 00:00:00 +0000
+Message-ID: <jt15fixture.db69db5fb56cc44b@example.net>
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+MIME-Version: 1.0
+
+Hey Alex, are you free for dinner on Friday? Sam

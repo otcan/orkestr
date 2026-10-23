@@ -1,0 +1,19 @@
+Authentication-Results: mx.google.com; dkim=pass header.i=@myworkday.com;
+ spf=pass smtp.mailfrom=myworkday.com; dmarc=pass header.from=myworkday.com
+From: Fabrikam Careers <fabrikam@myworkday.com>
+To: Alex Example <alex.jobseeker@example.com>
+Subject: Application received: Senior Frontend Developer (R-10442)
+Date: Tue, 20 Oct 2026 10:30:00 +0000
+Message-ID: <jt15fixture.6578c5bec46b8161@myworkday.com>
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: quoted-printable
+MIME-Version: 1.0
+
+Dear Alex,
+
+We have received your application for Senior Frontend Developer (R-10442) at =
+Fabrikam AG.
+You can track your application status here: https://fabrikam.wd3.myworkdayjob=
+s.com/en-US/careers/userHome
+
+Fabrikam Talent Acquisition

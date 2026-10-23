@@ -1,0 +1,16 @@
+Authentication-Results: mx.google.com; dkim=fail header.i=@evil-relay.example;
+ spf=fail smtp.mailfrom=evil-relay.example; dmarc=fail
+ header.from=evil-relay.example
+From: Greenhouse <no-reply@us.greenhouse-mail.io>
+To: Alex Example <alex.jobseeker@example.com>
+Subject: Your application to Litware
+Date: Wed, 21 Oct 2026 21:00:00 +0000
+Message-ID: <jt15fixture.ea89a0c52c5f96e8@evil-relay.example>
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: quoted-printable
+MIME-Version: 1.0
+
+Hi Alex,
+
+Unfortunately we have decided not to move forward for the Software Engineer r=
+ole at Litware.

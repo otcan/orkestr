@@ -1,0 +1,14 @@
+Authentication-Results: mx.google.com; dkim=pass header.i=@freelance.de;
+ spf=pass smtp.mailfrom=freelance.de; dmarc=pass header.from=freelance.de
+From: freelance.de <noreply@freelance.de>
+To: Alex Example <alex.jobseeker@example.com>
+Subject: 12 neue Projekte =?utf-8?q?f=C3=BCr?= Sie
+Date: Thu, 22 Oct 2026 15:00:00 +0000
+Message-ID: <jt15fixture.63874fe6745c4758@freelance.de>
+List-Unsubscribe: <https://www.freelance.de/unsub>
+Precedence: bulk
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+MIME-Version: 1.0
+
+Neue Projekte: Java Entwickler, DevOps Engineer, Data Engineer ...

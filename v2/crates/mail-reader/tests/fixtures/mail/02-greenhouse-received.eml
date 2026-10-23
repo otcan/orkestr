@@ -1,0 +1,22 @@
+Authentication-Results: mx.google.com; dkim=pass
+ header.i=@us.greenhouse-mail.io; spf=pass
+ smtp.mailfrom=us.greenhouse-mail.io; dmarc=pass
+ header.from=us.greenhouse-mail.io
+From: Greenhouse <no-reply@us.greenhouse-mail.io>
+To: Alex Example <alex.jobseeker@example.com>
+Subject: Thank you for applying to Northwind Labs
+Date: Tue, 20 Oct 2026 10:00:00 +0000
+Message-ID: <jt15fixture.1218d5fe054a62ad@us.greenhouse-mail.io>
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: quoted-printable
+MIME-Version: 1.0
+
+Hi Alex,
+
+Thank you for applying to the Platform Engineer position at Northwind Labs. W=
+e have received your application and our team will review it shortly.
+
+https://job-boards.greenhouse.io/northwindlabs/jobs/7712345
+
+Best,
+Northwind Labs Recruiting

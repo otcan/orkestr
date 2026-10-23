@@ -1,0 +1,15 @@
+Authentication-Results: mx.google.com; dkim=pass header.i=@linkedin.com;
+ spf=pass smtp.mailfrom=linkedin.com; dmarc=pass header.from=linkedin.com
+From: LinkedIn Job Alerts <jobalerts-noreply@linkedin.com>
+To: Alex Example <alex.jobseeker@example.com>
+Subject: Data Scientist: Fabrikam AG
+Date: Wed, 21 Oct 2026 20:00:00 +0000
+Message-ID: <jt15fixture.5dba18f0b906adbf@linkedin.com>
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 8bit
+MIME-Version: 1.0
+
+Your job alert for data scientist
+
+Data Scientist · Fabrikam AG · Munich
+https://www.linkedin.com/comm/jobs/view/4018888881/?trk=eml

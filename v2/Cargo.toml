@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/orkestr-domain", "crates/orkestr-demo", "crates/contracts", "crates/application", "crates/store-sqlite", "apps/server", "crates/orkestr-runtime", "apps/ui", "crates/restricted"]
+members = ["crates/orkestr-domain", "crates/orkestr-demo", "crates/contracts", "crates/application", "crates/store-sqlite", "apps/server", "crates/orkestr-runtime", "apps/ui", "crates/restricted", "crates/mail-reader"]
 
 [workspace.package]
 edition = "2021"

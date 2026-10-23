@@ -4120,6 +4120,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "orkestr-v2-mail-reader"
+version = "2.0.0-beta.3"
+dependencies = [
+ "orkestr-v2-contracts",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+]
+
+[[package]]
 name = "orkestr-v2-restricted"
 version = "2.0.0-beta.3"
 dependencies = [

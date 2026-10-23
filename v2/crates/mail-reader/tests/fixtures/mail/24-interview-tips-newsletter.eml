@@ -1,0 +1,15 @@
+Authentication-Results: mx.google.com; dkim=pass
+ header.i=@careers-blog.example; spf=pass smtp.mailfrom=careers-blog.example;
+ dmarc=pass header.from=careers-blog.example
+From: Career Blog <hello@careers-blog.example>
+To: Alex Example <alex.jobseeker@example.com>
+Subject: 10 tips for your next interview
+Date: Thu, 22 Oct 2026 01:00:00 +0000
+Message-ID: <jt15fixture.508febdc1edb5c94@careers-blog.example>
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+MIME-Version: 1.0
+
+Prepare well, research the company and practise your answers.
+
+Manage preferences or unsubscribe here.
