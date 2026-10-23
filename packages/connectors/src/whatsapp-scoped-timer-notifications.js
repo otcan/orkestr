@@ -1,3 +1,4 @@
+import {createKeyedSerial} from './scoped-relay-serial.js';
 import {notificationScope,notificationKey,createTimerNotificationProofStore} from './whatsapp-timer-notification-proof.js';
 import {createDeliveryRouteFence} from './whatsapp-delivery-route-fence.js';
 import {encodeReplyEntry, replyEntrySendFields, scopedGroupReplyChunks, scopedReplyHeader} from './whatsapp-scoped-group-formatting.js';
@@ -34,6 +35,7 @@ export function createScopedTimerNotifications({config,api,send,formatter,env=pr
   const fence=suppliedFence || createDeliveryRouteFence({dbPath:config.routeControl.dbPath,now});
   const legacySingle=scope.threads.size===1;
   let lastTick=-Infinity,lastStatus=null;
+  const threadSerial=createKeyedSerial();
   const allowedTimer=(timer,event,threadId)=>event.type==='thread_signal_appended'
     ? timer?.ownerUserId===config.ownerUserId && timer.target===threadId && timer.targetType==='thread' && visible(timer)
       && (delegationNoticeAllowed(timer,event) || (event.source!=='timer_delegation_fence' && timer.enabled===true && timer.lastAuthNoticeMessageId===event.messageId && timer.blockedReason==='blocked_auth'))
@@ -134,8 +136,8 @@ export function createScopedTimerNotifications({config,api,send,formatter,env=pr
   }
   return {
     close(){if(!suppliedProof)proofs.close();if(!suppliedFence)fence.close();},
-    async tick() {
-      if(lastStatus && now()-lastTick<minIntervalMs)return lastStatus;
+    async tick({threadIds} = {}) {
+      if(!threadIds && lastStatus && now()-lastTick<minIntervalMs)return lastStatus;
       lastTick=now();
       if(fence.current()?.route!==config.routeControl.routeId)return lastStatus={enabled:true,active:false,sent:0};
       const route=fence.assertActive(config.routeControl.routeId);
@@ -169,7 +171,8 @@ export function createScopedTimerNotifications({config,api,send,formatter,env=pr
       for(const e of pending){const id=e.target||e.threadId;if(!scope.threads.has(id))continue;if(!byThread.has(id))byThread.set(id,[]);byThread.get(id).push(e);}
       let sent=0;const errors={};
       for(const [threadId,runs] of byThread) {
-        try {sent+=await deliverThread(threadId,runs,since,eligible);}
+        if(threadIds && !threadIds.includes(threadId))continue;
+        try {sent+=await threadSerial(threadId,()=>deliverThread(threadId,runs,since,eligible));}
         catch(e) {
           // A single-thread scope keeps its original fail-closed behaviour; an
           // unresolved provider delivery always stops every thread.
