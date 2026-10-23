@@ -12,6 +12,8 @@ import sqlite3
 import time
 import uuid
 
+from .export_changes import ExportConnection
+
 SCHEMA = "2"
 # Terminal outcomes settle an export. "uncertain" is recorded but keeps it listed.
 TERMINAL = ("delivered", "suppressed", "no_reply", "failed")
@@ -85,7 +87,7 @@ def no_reply(text):
 
 
 class Ledger:
-    def __init__(self, path, scope, max_outstanding=32):
+    def __init__(self, path, scope, max_outstanding=32, on_export=None):
         path = Path(path)
         if path.is_symlink() or not path.parent.is_dir():
             raise ValueError("ledger_path")
@@ -97,6 +99,7 @@ class Ledger:
         if not isinstance(scope, dict) or not scope:
             raise ValueError("ledger_scope_required")
         self.path = str(path)
+        self.on_export = on_export
         self.scope = dict(scope)
         self.max_outstanding = max_outstanding
         identity = json.dumps({"schema": 1, "scope": scope}, sort_keys=True, separators=(",", ":"))
@@ -136,7 +139,8 @@ class Ledger:
                 raise ValueError("ledger_schema_unsupported")
 
     def connect(self):
-        db = sqlite3.connect(self.path, timeout=5)
+        db = sqlite3.connect(self.path, timeout=5, factory=ExportConnection)
+        db.on_export = self.on_export
         db.execute("PRAGMA synchronous=FULL")
         return db
 
@@ -577,8 +581,10 @@ class Ledger:
 
     # Exports -----------------------------------------------------------
     def _export(self, db, data, kind, source_key, message):
-        db.execute("INSERT OR IGNORE INTO exports(export_id,input_id,kind,source_key,message) VALUES (?,?,?,?,?)",
-                   (message["id"], data["remote_id"], kind, source_key, json.dumps(message)))
+        inserted = db.execute("INSERT OR IGNORE INTO exports(export_id,input_id,kind,source_key,message) VALUES (?,?,?,?,?)",
+                              (message["id"], data["remote_id"], kind, source_key, json.dumps(message)))
+        if inserted.rowcount:
+            db.exported = True
 
     def complete(self, data, reply):
         """Atomically record the accepted final reply and make it visible to V1."""
