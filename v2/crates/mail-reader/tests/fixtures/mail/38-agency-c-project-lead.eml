@@ -1,10 +1,11 @@
-Authentication-Results: mx.google.com; dkim=pass header.i=@emagine.org;
- spf=pass smtp.mailfrom=emagine.org; dmarc=pass header.from=emagine.org
-From: emagine Recruiting <jobs@emagine.org>
+Authentication-Results: mx.google.com; dkim=pass header.i=@agency-c.example;
+ spf=pass smtp.mailfrom=agency-c.example; dmarc=pass
+ header.from=agency-c.example
+From: Agency C Recruiting <jobs@agency-c.example>
 To: Alex Example <alex.jobseeker@example.com>
 Subject: Projektanfrage: Data Engineer (Remote, 6 Monate)
 Date: Thu, 22 Oct 2026 13:00:00 +0000
-Message-ID: <jt15fixture.emagine-lead@emagine.org>
+Message-ID: <jt15fixture.agency-c-lead@agency-c.example>
 Content-Type: text/plain; charset="utf-8"
 Content-Transfer-Encoding: quoted-printable
 MIME-Version: 1.0

@@ -1,16 +1,9 @@
 //! Incremental Maildir traversal with a bounded cursor.
 use super::*;
-use std::fs::File;
-use std::io::Read;
 use std::path::Path;
 
-fn read_bounded(path: &Path, max: u64) -> io::Result<Vec<u8>> {
-    let mut bytes = Vec::new();
-    File::open(path)?.take(max).read_to_end(&mut bytes)?;
-    Ok(bytes)
-}
-
 pub(super) fn scan_maildir(
+    scope: &Scope,
     root: &Path,
     previous: Option<&FolderCursor>,
     limits: &ScanLimits,
@@ -29,23 +22,27 @@ pub(super) fn scan_maildir(
     let mut candidates = Vec::new();
     let mut any = false;
     for sub in ["cur", "new"] {
+        if expired(limits, out) {
+            return Ok(previous.cloned());
+        }
         let dir = root.join(sub);
-        let entries = match fs::read_dir(&dir) {
+        let entries = match scope.entries(&dir) {
             Ok(entries) => entries,
             Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
             Err(e) => return Err(e),
         };
         any = true;
         for entry in entries {
-            let entry = entry?;
-            let meta = entry.metadata()?;
-            if !meta.is_file() {
-                continue;
+            if expired(limits, out) {
+                return Ok(previous.cloned());
             }
-            let name = entry.file_name().to_string_lossy().into_owned();
+            let path = dir.join(entry?);
+            let name = path.file_name().unwrap().to_string_lossy().into_owned();
             if name.starts_with('.') || crate::profile::is_secret_file(&name) {
                 continue;
             }
+            let file = scope.file(&path)?;
+            let meta = file.metadata()?;
             out.stats.files_seen += 1;
             // Flags after ":2," (or "!2," on Windows) change when mail is read.
             let unique = name.split([':', '!']).next().unwrap_or(&name).to_owned();
@@ -57,7 +54,7 @@ pub(super) fn scan_maildir(
                 out.stats.skipped_unsettled += 1;
                 continue;
             }
-            candidates.push((unique, entry.path(), meta.len()));
+            candidates.push((unique, path, meta.len()));
         }
     }
     if !any {
@@ -70,15 +67,27 @@ pub(super) fn scan_maildir(
         candidates.partition_point(|(name, _, _)| after.as_ref().is_some_and(|last| name <= last));
     candidates.rotate_left(split);
     for (unique, path, len) in candidates {
-        if out.stats.examined() >= limits.max_messages {
+        if expired(limits, out) || out.stats.examined() >= limits.max_messages {
             out.stats.truncated = true;
             break;
         }
         if len > limits.max_message_bytes {
             out.stats.skipped_large += 1;
         } else {
-            match read_bounded(&path, limits.max_message_bytes) {
-                Ok(bytes) => keep(envelope::parse(&bytes), limits, out),
+            let read = scope.file(&path).and_then(|mut file| {
+                read_bounded(
+                    &mut file,
+                    limits.max_message_bytes.saturating_add(1),
+                    limits,
+                    out,
+                )
+            });
+            match read {
+                Ok(Some(bytes)) if bytes.len() as u64 > limits.max_message_bytes => {
+                    out.stats.skipped_large += 1;
+                }
+                Ok(Some(bytes)) => keep(envelope::parse(&bytes), limits, out),
+                Ok(None) => break,
                 // Removed between listing and reading: nothing to record.
                 Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
                 Err(e) => return Err(e),

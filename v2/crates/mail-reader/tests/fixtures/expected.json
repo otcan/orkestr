@@ -174,7 +174,7 @@
  },
  "29-encoded-subject-linkedin.eml": {
   "kind": "applied",
-  "company": "Bäckerei Müller GmbH",
+  "company": "Beispielbäckerei GmbH",
   "role": "Verkäufer (m/w/d)",
   "source": "linkedin"
  },
@@ -185,32 +185,32 @@
   "source": "direct",
   "outgoing": true
  },
- "31-sent-hays-application.eml": {
+ "31-sent-agency-a-application.eml": {
   "kind": "applied",
-  "company": "Hays",
-  "role": "Senior Java Entwickler (Projekt 4711)",
-  "source": "agency:hays",
+  "company": "Agency A",
+  "role": "Senior Java Entwickler (Projekt TEST-A)",
+  "source": "agency:agency-a",
   "outgoing": true
  },
- "32-hays-rejection-in-thread.eml": {
+ "32-agency-a-rejection-in-thread.eml": {
   "kind": "rejection",
-  "company": "Hays",
-  "role": "Senior Java Entwickler (Projekt 4711)",
-  "source": "agency:hays",
+  "company": "Agency A",
+  "role": "Senior Java Entwickler (Projekt TEST-A)",
+  "source": "agency:agency-a",
   "requires_thread": true
  },
- "33-sent-sthree-application.eml": {
+ "33-sent-agency-b-application.eml": {
   "kind": "applied",
-  "company": "SThree",
+  "company": "Agency B",
   "role": "DevOps Engineer (Remote)",
-  "source": "agency:sthree",
+  "source": "agency:agency-b",
   "outgoing": true
  },
- "34-sthree-onboarding-in-thread.eml": {
+ "34-agency-b-onboarding-in-thread.eml": {
   "kind": "offer",
-  "company": "SThree",
+  "company": "Agency B",
   "role": "DevOps Engineer (Remote)",
-  "source": "agency:sthree",
+  "source": "agency:agency-b",
   "requires_thread": true
  },
  "35-marketing-offer-bulk.eml": {
@@ -222,17 +222,17 @@
  "37-hackathon-newsletter.eml": {
   "drop": "drop:marketing"
  },
- "38-emagine-project-lead.eml": {
+ "38-agency-c-project-lead.eml": {
   "kind": "job_alert",
-  "company": "emagine",
+  "company": "Agency C",
   "role": "Data Engineer (Remote, 6 Monate)",
-  "source": "agency:emagine"
+  "source": "agency:agency-c"
  },
- "39-sent-reply-to-emagine-lead.eml": {
+ "39-sent-reply-to-agency-c-lead.eml": {
   "kind": "applied",
-  "company": "emagine",
+  "company": "Agency C",
   "role": "Data Engineer (Remote, 6 Monate)",
-  "source": "agency:emagine",
+  "source": "agency:agency-c",
   "outgoing": true
  },
  "40-platform-digest-bulk.eml": {

@@ -21,7 +21,22 @@ fn root() -> PathBuf {
 
 fn pack() -> RulePack {
     let text = fs::read_to_string(root().join("../../recipes/job-tracker/rules.json")).unwrap();
-    RulePack::from_json(&text).unwrap()
+    let mut pack = RulePack::from_json(&text).unwrap();
+    // Exercise agency rules with reserved synthetic mail identities. Production
+    // configuration keeps its real service-domain vocabulary, never fixture people.
+    for (original, alias, name) in [
+        ("agency:hays", "agency-a", "Agency A"),
+        ("agency:sthree", "agency-b", "Agency B"),
+        ("agency:emagine", "agency-c", "Agency C"),
+    ] {
+        let source = pack.sources.iter_mut().find(|s| s.id == original).unwrap();
+        source.id = format!("agency:{alias}");
+        source.name = Some(name.into());
+        source.sender_domains = vec![format!("{alias}.example")];
+        source.link_domains.clear();
+    }
+    pack.freemail_domains.push("personal-mail.example".into());
+    pack
 }
 
 fn fixtures() -> Vec<(String, Vec<u8>, Value)> {
@@ -134,23 +149,26 @@ fn fixtures_hold_only_fictional_or_vendor_addresses() {
         "teamtailor.com",
         "smartrecruiters.com",
         "codility.com",
-        "hays.de",
-        "computerfutures.com",
-        "emagine.org",
         "freelance.de",
     ];
     for (file, bytes, _) in fixtures() {
         let env = envelope::parse(&bytes);
-        let d = env.sender_domain.as_str();
-        let fictional =
-            d.ends_with(".example") || d.starts_with("example.") || d.ends_with(".example.org");
-        assert!(
-            fictional
-                || vendors
-                    .iter()
-                    .any(|v| d == *v || d.ends_with(&format!(".{v}"))),
-            "{file}: unexpected sender domain {d}"
+        let domains = std::iter::once(env.sender_domain.as_str()).chain(
+            env.to
+                .iter()
+                .map(|(_, address)| address.rsplit('@').next().unwrap_or("")),
         );
+        for d in domains {
+            let fictional =
+                d.ends_with(".example") || d.starts_with("example.") || d.ends_with(".example.org");
+            assert!(
+                fictional
+                    || vendors
+                        .iter()
+                        .any(|v| d == *v || d.ends_with(&format!(".{v}"))),
+                "{file}: unexpected mail domain {d}"
+            );
+        }
         let text = String::from_utf8_lossy(&bytes);
         assert!(!text.contains("gmail.com"), "{file}");
     }
@@ -186,7 +204,16 @@ fn a_thunderbird_profile_is_found_scanned_and_classified_incrementally() {
     assert_eq!(folders.len(), 1);
     let later = SystemTime::now() + Duration::from_secs(60);
     let pack = pack();
-    let run = |cursor: &Cursor| scan(&folders, cursor, &ScanLimits::default(), later).unwrap();
+    let run = |cursor: &Cursor| {
+        scan(
+            &profiles[0].path,
+            &folders,
+            cursor,
+            &ScanLimits::default(),
+            later,
+        )
+        .unwrap()
+    };
     let one = run(&Cursor::default());
     assert_eq!(one.envelopes.len(), 20);
     let dates: Vec<i64> = one.envelopes.iter().map(|e| e.date_ms.unwrap()).collect();
@@ -275,7 +302,7 @@ fn keyword_mail_from_untrusted_senders_never_moves_a_row_without_a_thread() {
             "{name}"
         );
     }
-    let Outcome::Events { events, .. } = outcome("sthree-onboarding-in-thread") else {
+    let Outcome::Events { events, .. } = outcome("agency-b-onboarding-in-thread") else {
         panic!()
     };
     assert_eq!(
@@ -286,7 +313,7 @@ fn keyword_mail_from_untrusted_senders_never_moves_a_row_without_a_thread() {
     assert_eq!(
         events[0].thread_refs,
         vec![envelope::message_ref(
-            "<jt15fixture.sent-sthree@example.com>"
+            "<jt15fixture.sent-agency-b@example.com>"
         )]
     );
 }
