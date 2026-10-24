@@ -30,6 +30,8 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          # Service packaging validates the candidate against its pinned manager ancestor.
+          fetch-depth: 0
           persist-credentials: false
       - name: Isolate candidate data and build output
         run: |
