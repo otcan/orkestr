@@ -286,6 +286,8 @@ impl Store {
                 .map_err(|_| RuntimeStoreError::Unavailable)?,
             ),
         };
+        let text = super::execution_window::handoff_context::attach(&mut tx, &claim.provider, text)
+            .await?;
         let capability = ConsumedProviderDispatch {
             launch,
             parent_run,

@@ -481,3 +481,5 @@ mod failures;
 
 #[path = "native_reset_tests.rs"]
 mod native_reset_tests;
+#[path = "provider_handoff_tests.rs"]
+mod provider_handoff_tests;

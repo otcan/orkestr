@@ -4,7 +4,7 @@ use crate::Store;
 use orkestr_v2_contracts::*;
 use sqlx::{Row, Sqlite, Transaction};
 
-async fn current(
+pub(crate) async fn current(
     tx: &mut Transaction<'_, Sqlite>,
     conversation: &ConversationId,
 ) -> Result<ConversationSettings> {
@@ -53,7 +53,15 @@ pub(crate) async fn turn_launch(
     if present == 0 {
         return Ok(ConversationSettings::defaults(conversation.clone()).launch());
     }
-    Ok(current(tx, conversation).await?.launch())
+    let settings = current(tx, conversation).await?;
+    if settings
+        .model
+        .as_deref()
+        .is_some_and(orkestr_v2_contracts::model_denied)
+    {
+        return Err(ResourceError::Invalid);
+    }
+    Ok(settings.launch())
 }
 
 impl Store {
@@ -88,6 +96,14 @@ impl Store {
             .owner_scope(credential, owner, conversation, true)
             .await?;
         let before = current(&mut tx, conversation).await?;
+        if before.provider != update.provider {
+            let history: i64 = sqlx::query_scalar("SELECT (SELECT count(*) FROM execution_windows WHERE conversation_id=?) + (SELECT count(*) FROM session_bindings WHERE conversation_id=? AND native_session_id IS NOT NULL)")
+                .bind(conversation.to_string()).bind(conversation.to_string())
+                .fetch_one(&mut *tx).await.map_err(unavailable)?;
+            if history != 0 {
+                return Err(ResourceError::Conflict("provider_handoff_required"));
+            }
+        }
         let same = |s: &ConversationSettings| {
             s.provider == update.provider
                 && s.model == update.model

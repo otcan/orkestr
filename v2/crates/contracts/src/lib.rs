@@ -13,6 +13,8 @@ mod claude_native_reset;
 pub use claude_native_reset::*;
 mod provider_handoff;
 pub use provider_handoff::*;
+mod model_policy;
+pub use model_policy::*;
 mod calendar_rule;
 pub use calendar_rule::*;
 mod timer_results;

@@ -1,8 +1,6 @@
 //! Generic owner reset: preserve old evidence and require a separately admitted input.
 use super::*;
-use orkestr_v2_contracts::{
-    ClaudeNativeResetRequest, ConversationProvider, ConversationSettingsUpdate,
-};
+use orkestr_v2_contracts::ClaudeNativeResetRequest;
 
 fn request(w: &Window) -> ClaudeNativeResetRequest {
     ClaudeNativeResetRequest {
@@ -15,7 +13,7 @@ fn request(w: &Window) -> ClaudeNativeResetRequest {
 
 /// Use the existing fully retired role fixture, then select the native kind.
 /// No provider output or success is fabricated by the production reset path.
-async fn select_claude(store: &Store, w: &Window) {
+pub(super) async fn select_claude(store: &Store, w: &Window) {
     let sessions: Vec<String> =
         sqlx::query_scalar("SELECT id FROM session_bindings WHERE native_session_id IS NOT NULL")
             .fetch_all(&store.pool)
@@ -48,24 +46,11 @@ async fn select_claude(store: &Store, w: &Window) {
         .execute(&store.pool)
         .await
         .unwrap();
-    store
-        .update_conversation_settings(
-            &w.browser_credential,
-            &w.f.owner,
-            &w.f.conversation,
-            &ConversationSettingsUpdate {
-                expected_revision: 0,
-                provider: ConversationProvider::Claude,
-                model: Some("opus".into()),
-                reasoning_effort: Some("high".into()),
-                honor_no_reply: true,
-                reply_prefix: None,
-                reply_footer: None,
-                review_before_accepting: false,
-            },
-        )
-        .await
-        .unwrap();
+    // Seed pre-existing Claude fixture history, rather than invoke the now
+    // forbidden plain provider-flip API after native history exists.
+    sqlx::query("INSERT INTO conversation_settings(conversation_id,owner_id,revision,provider,model,reasoning_effort,honor_no_reply,reply_prefix,reply_footer,provider_generation,updated_at_ms,review_before_accepting) VALUES(?,?,1,'claude','opus','high',1,NULL,NULL,1,1,0)")
+        .bind(w.f.conversation.to_string()).bind(w.f.owner.to_string())
+        .execute(&store.pool).await.unwrap();
 }
 
 #[tokio::test]
