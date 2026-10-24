@@ -224,7 +224,7 @@ impl Controller {
             .map_err(|_| ReconcileError::Refused)
     }
 
-    async fn live_owner(&self, conversation: &ConversationId) -> bool {
+    pub(super) async fn live_owner(&self, conversation: &ConversationId) -> bool {
         match self.existing(conversation) {
             Some(entry) => {
                 // Observe a task that already ended (for example after its
@@ -389,7 +389,11 @@ impl Controller {
     }
 
     /// The manager holds no live budget (or custody) for this exact window.
-    async fn manager_released(&self, window: &ExecutionWindowStatus, retired_only: bool) -> bool {
+    pub(super) async fn manager_released(
+        &self,
+        window: &ExecutionWindowStatus,
+        retired_only: bool,
+    ) -> bool {
         let Ok(manager) = self
             .manager
             .for_conversation(window.conversation_id.clone())

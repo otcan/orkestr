@@ -82,6 +82,7 @@ fn model_valid(value: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b"._:-".contains(&b))
         && !value.bytes().all(|b| b.is_ascii_digit())
         && !["openai", "azure", "openrouter"].contains(&value.to_ascii_lowercase().as_str())
+        && !crate::model_denied(value)
 }
 fn decoration_valid(value: &str, max: usize, newlines: bool) -> bool {
     !value.trim().is_empty()

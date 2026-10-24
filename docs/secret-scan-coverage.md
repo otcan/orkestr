@@ -20,6 +20,12 @@ every detector's correctness or exact per-file coverage. The pinned scanner,
 history scope, separate merge diffs, secret redaction and existing evidence
 publication checks remain required.
 
+History statistics stream through a bounded numeric-column counter. The helper
+retains at most 64 characters of row metadata and discards filenames instead of
+buffering all Git numstat output. Histories whose metadata exceeds one MiB keep
+their full immutable scope. Git errors, deadlines, malformed rows and integer
+overflow still refuse coverage; no history is truncated to fit a buffer.
+
 Actual scanner regressions cover a fresh nonempty repository, a known
 credential-shaped fixture hidden behind candidate grafts/replacement refs, and
 the exact reviewed inventory exception. Injected zero-summary and subprocess

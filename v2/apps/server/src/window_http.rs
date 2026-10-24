@@ -252,6 +252,92 @@ pub(crate) async fn reset_native(
     Ok(Json(receipt).into_response())
 }
 
+pub(crate) async fn handoff_provider(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    body: Result<Json<orkestr_v2_contracts::ProviderHandoffRequest>, JsonRejection>,
+) -> Result<Response, Error> {
+    browser::owner(&state, &headers).await?;
+    browser::guard(
+        &state,
+        &axum::http::Method::POST,
+        "execution_window",
+        &headers,
+    )
+    .await?;
+    let credential = browser::credential(&headers)?;
+    let conversation = conversation(&id)?;
+    let Json(request) = body.map_err(|_| invalid())?;
+    if !request.is_valid() {
+        return Err(invalid());
+    }
+    if state
+        .store
+        .is_restricted_conversation(&conversation)
+        .await
+        .unwrap_or(true)
+    {
+        return Err(Error(
+            StatusCode::CONFLICT,
+            "restricted_conversation",
+            "Restricted conversations cannot change native window providers",
+        ));
+    }
+    let controller = state.window_controller.clone().ok_or(Error(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "window_unavailable",
+        "Window runtime is not configured",
+    ))?;
+    let receipt = tokio::spawn(async move {
+        controller
+            .handoff_provider(&credential, &conversation, &request)
+            .await
+    })
+    .await
+    .map_err(|_| {
+        Error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "provider_handoff_uncertain",
+            "Read the handoff receipt before retrying this decision",
+        )
+    })?
+    .map_err(|error| match error {
+        crate::window_runtime::HandoffError::Uncertain => Error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "provider_handoff_uncertain",
+            "Read the handoff receipt before retrying this decision",
+        ),
+        crate::window_runtime::HandoffError::Refused => Error(
+            StatusCode::CONFLICT,
+            "provider_handoff_conflict",
+            "Retire the exact window and verify its current settings before a provider handoff",
+        ),
+    })?;
+    Ok(Json(receipt).into_response())
+}
+
+pub(crate) async fn handoff_receipt(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((id, key)): Path<(String, String)>,
+) -> Result<Response, Error> {
+    browser::owner(&state, &headers).await?;
+    let credential = browser::credential(&headers)?;
+    let conversation = conversation(&id)?;
+    let receipt = state
+        .store
+        .provider_handoff_receipt_authenticated(&credential, &conversation, &key)
+        .await
+        .map_err(store_error)?
+        .ok_or(Error(
+            StatusCode::NOT_FOUND,
+            "provider_handoff_not_found",
+            "No handoff decision has that request key",
+        ))?;
+    Ok(Json(receipt).into_response())
+}
+
 fn conversation(id: &str) -> Result<ConversationId, Error> {
     Uuid::parse_str(id)
         .ok()

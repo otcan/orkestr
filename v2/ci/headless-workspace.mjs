@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import puppeteer from 'puppeteer';
 import { A, C, V1_INSTANCE_REF, V1_LINKS, V1_WORKER, createState, startMock } from './headless-workspace-mock.mjs';
 import { mkdir } from 'node:fs/promises';
+import { providerHandoff } from './headless-provider-handoff.mjs';
 
 assert.equal(process.env.CI, 'true', 'Run only in isolated CI');
 assert.ok(process.env.UI_BUNDLE_DIR, 'UI_BUNDLE_DIR is required');
@@ -561,11 +562,13 @@ export const scenarios = [
     assert.ok(!('next_due_ms' in created) && !('generation' in created), 'no clock or claim from the page');
     await clickText('Chat');
   }],
+  ['provider-handoff', label => providerHandoff({ page, state, label, openDrawer, choose, clickText, waitText, screenshot, noHorizontalScroll })],
   ['v1-manage', async label => {
     await openDrawer(label);
     await choose('Synthetic group');
     await page.waitForSelector('.v1-tabs');
-    await clickText('Settings');
+    await page.waitForSelector('#v1-composer');
+    await clickWithin('.v1-tabs', 'Settings');
     await page.waitForSelector('#v1-model');
     await page.select('#v1-effort', 'high');
     await clickText('Save model and effort');
@@ -780,7 +783,11 @@ try {
   assert.deepEqual(errors, [], 'Browser rendering errors');
   console.log(`PASS: configured workspace rendering (${scenarios.map(s => s[0]).join(', ')}) at desktop and phone widths; synthetic API only, no provider qualification`);
 } catch (error) {
-  console.error(JSON.stringify({ stage, error: error.message, requests: state.requests.slice(-25), pageErrors: errors }));
+  const view = await page?.evaluate(() => ({ hash: location.hash, heading: document.querySelector('.heading-title')?.textContent,
+    tabs: [...document.querySelectorAll('.v1-tabs button')].map(n => ({ text: n.textContent, current: n.getAttribute('aria-current') })),
+    body: document.body.innerText.slice(-4500) })).catch(() => null);
+  await screenshot('failure', stage.replace(/[^a-z0-9-]/gi, '-')).catch(() => {});
+  console.error(JSON.stringify({ stage, error: error.message, requests: state.requests.slice(-25), pageErrors: errors, view }));
   throw error;
 } finally {
   await browser?.close();

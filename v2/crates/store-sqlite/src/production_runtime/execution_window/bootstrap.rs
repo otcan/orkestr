@@ -170,6 +170,8 @@ impl Store {
         let owner = browser_owner(self, &mut tx, browser_credential).await?;
         crate::runtime::scope(&mut tx, &owner, conversation).await?;
         let floor = native_reset::floor(&mut tx, &owner, conversation).await?;
+        let handoff =
+            handoff_context::target(&mut tx, &owner, conversation, config.provider).await?;
         let runs: i64 = sqlx::query_scalar("SELECT count(*) FROM production_runs r WHERE r.owner_id=? AND r.conversation_id=? AND NOT EXISTS(SELECT 1 FROM execution_windows w WHERE w.context_id=r.context_id AND w.incarnation_id=r.incarnation_id AND w.generation<=?)")
         .bind(owner.to_string())
         .bind(conversation.to_string())
@@ -202,8 +204,21 @@ impl Store {
         .fetch_one(&mut *tx)
         .await
         .map_err(db)?;
-        if others != 0 {
+        if others != 0 && !handoff {
             return Err(RuntimeStoreError::Fenced);
+        }
+        if handoff {
+            // Only an explicit matching handoff may cross providers, and every
+            // old scope must still carry genuine retirement provenance now.
+            retired_context::all_prior_retired(
+                &mut tx,
+                &owner,
+                conversation,
+                &config.namespace,
+                &config.supervisor_key,
+                None,
+            )
+            .await?;
         }
         let incarnation = Uuid::new_v4().to_string();
         let (id, generation) = match existing {
@@ -249,6 +264,7 @@ impl Store {
             let row = sqlx::query("INSERT INTO session_bindings(id,owner_id,conversation_id,role) VALUES(?,?,?,?) RETURNING *")
                 .bind(Uuid::new_v4().to_string()).bind(owner.to_string()).bind(conversation.to_string()).bind(role)
                 .fetch_one(&mut *tx).await.map_err(db)?;
+            handoff_context::bind(&mut tx, &owner, conversation, row.get("id")).await?;
             if role == "deep" {
                 deep = Some(crate::runtime::binding(&row)?);
             }
