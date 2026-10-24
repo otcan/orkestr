@@ -32,14 +32,15 @@ def load_pins(path):
     return pins
 
 
-def pin_for(pins, target):
+def pin_for(pins, target, *, allow_file_for_tests=False):
     entry = pins["targets"].get(target)
     if entry is None:
         raise FetchError(f"no pinned Codex build for {target}")
     digest = entry.get("sha256", "")
     if len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest):
         raise FetchError("pinned digest must be 64 lowercase hex characters")
-    if not str(entry.get("url", "")).startswith(("https://", "file://")):
+    url = str(entry.get("url", ""))
+    if not url.startswith("https://") and not (allow_file_for_tests and url.startswith("file://")):
         raise FetchError("pinned URL must use https")
     return entry
 
@@ -91,9 +92,10 @@ def extract_single(archive, destination):
     temporary.replace(destination)
 
 
-def fetch(target, out_dir, pins_path=HERE / "codex-pins.json", cache_dir=None):
+def fetch(target, out_dir, pins_path=HERE / "codex-pins.json", cache_dir=None, *, allow_file_for_tests=False):
+    """Release callers require HTTPS; local test fixtures explicitly opt in."""
     pins = load_pins(pins_path)
-    entry = pin_for(pins, target)
+    entry = pin_for(pins, target, allow_file_for_tests=allow_file_for_tests)
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     cache = Path(cache_dir) if cache_dir else Path(tempfile.gettempdir()) / "orkestr-codex-cache"
