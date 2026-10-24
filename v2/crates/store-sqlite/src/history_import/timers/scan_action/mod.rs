@@ -10,6 +10,7 @@ mod check;
 mod check_tests;
 mod claim;
 mod commit;
+mod discovery;
 mod enable;
 #[cfg(test)]
 mod enable_tests;
@@ -18,6 +19,8 @@ mod local_sources;
 mod local_sources_tests;
 #[cfg(test)]
 pub(crate) mod migration_fixture;
+#[cfg(test)]
+mod owner_limit_tests;
 mod remove;
 #[cfg(test)]
 mod result_tests;

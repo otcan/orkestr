@@ -2,6 +2,7 @@
 use super::*;
 
 pub(super) struct Current {
+    pub read_policy_id: String,
     pub timer: TimerReceipt,
     pub conversation: ConversationId,
     pub authority_id: Uuid,
@@ -54,6 +55,7 @@ pub(super) async fn current(
         return Err(HistoryError::Conflict);
     }
     Ok(Current {
+        read_policy_id: authority.get("read_policy_id"),
         timer,
         conversation,
         authority_id: Uuid::parse_str(authority.get("authority_id")).map_err(unavailable)?,

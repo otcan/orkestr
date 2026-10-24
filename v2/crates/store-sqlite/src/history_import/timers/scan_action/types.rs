@@ -31,6 +31,7 @@ pub struct TrackerLocalSource {
 /// Private Core read/commit capability. It has no wire decoder, Clone, provider
 /// admission or native identity. The bounded reader slot must precede its issue.
 pub struct TrackerScanClaim {
+    pub(super) read_policy_id: String,
     pub(super) id: Uuid,
     pub(super) owner: OwnerId,
     pub(super) namespace: Uuid,
@@ -49,6 +50,9 @@ pub struct TrackerScanClaim {
     pub(super) issuer_key: String,
 }
 impl TrackerScanClaim {
+    pub fn read_policy_id(&self) -> &str {
+        &self.read_policy_id
+    }
     pub fn conversation(&self) -> &ConversationId {
         &self.conversation
     }

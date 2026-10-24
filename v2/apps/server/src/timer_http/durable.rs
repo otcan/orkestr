@@ -1,6 +1,5 @@
 //! Restart-safe controller with authenticated supervisor lifecycle.
 //! No browser credentials, instruction cache, caller clock or HTTP dispatch port.
-use orkestr_v2_application::runtime::RuntimeStoreError;
 use orkestr_v2_store_sqlite::history_import::timers::scan_action::TimerWorkKind;
 use orkestr_v2_store_sqlite::{history_import::HistoryError, Store};
 use std::{collections::HashMap, sync::Arc, time::Duration};
@@ -46,6 +45,7 @@ pub struct DurableTimerController {
     /// Digests are due at most a few times a day; check twice a minute.
     digest_checked: Option<Instant>,
     tracker_mail: Option<Arc<crate::tracker_mail_runtime::TrackerMailRuntime>>,
+    scan_in_progress: Option<Uuid>,
 }
 const DIGEST_CHECK: Duration = Duration::from_secs(30);
 impl DurableTimerController {
@@ -60,6 +60,7 @@ impl DurableTimerController {
             paused: None,
             digest_checked: None,
             tracker_mail: None,
+            scan_in_progress: None,
         }
     }
     pub(crate) fn with_tracker_mail(
@@ -91,9 +92,21 @@ impl DurableTimerController {
         if self.paused.as_ref().is_some_and(|paused| paused()) {
             return Ok(DurableTick::default());
         }
-        tokio::time::timeout(Duration::from_secs(5), self.pass())
-            .await
-            .map_err(|_| HistoryError::Unavailable)?
+        match tokio::time::timeout(Duration::from_secs(5), self.pass()).await {
+            Ok(result) => result,
+            Err(_) => match self.scan_in_progress.take() {
+                Some(namespace) => {
+                    self.hold(namespace, Instant::now());
+                    self.alert(namespace, "tracker_scan_pass_timed_out");
+                    self.after = Some(namespace);
+                    Ok(DurableTick {
+                        deferred: 1,
+                        ..Default::default()
+                    })
+                }
+                None => Err(HistoryError::Unavailable),
+            },
+        }
     }
     async fn pass(&mut self) -> Result<DurableTick, HistoryError> {
         // Only occurrences that are due by the Store clock are scanned.
@@ -114,17 +127,21 @@ impl DurableTimerController {
                 continue;
             }
             // Fresh issuer every time: discovery/UUID alone never grants admission.
-            let issuer = self
-                .supervisor
-                .authorize_timer_scheduler(namespace)
-                .await
-                .map_err(|error| match error {
-                    RuntimeStoreError::Unavailable => HistoryError::Unavailable,
-                    _ => HistoryError::Unauthorized,
-                })?;
+            let issuer = match self.supervisor.authorize_timer_scheduler(namespace).await {
+                Ok(issuer) => issuer,
+                Err(_) => {
+                    self.hold(namespace, now);
+                    self.alert(namespace, "timer_issuer_refused");
+                    result.deferred += 1;
+                    continue;
+                }
+            };
             result.scanned += 1;
             let kind = self.supervisor.timer_work_kind(&issuer, namespace).await;
             let scan = matches!(kind, Ok(TimerWorkKind::TrackerScan));
+            if scan {
+                self.scan_in_progress = Some(namespace);
+            }
             let admission = match kind {
                 Ok(TimerWorkKind::Instruction) => self
                     .supervisor
@@ -141,9 +158,11 @@ impl DurableTimerController {
                         Err(HistoryError::Conflict)
                     }
                 },
-                Err(error) => {
+                Err(_) => {
                     self.alert(namespace, "timer_work_kind_refused");
-                    Err(error)
+                    self.hold(namespace, now);
+                    result.deferred += 1;
+                    continue;
                 }
             };
             match admission {
@@ -157,12 +176,15 @@ impl DurableTimerController {
                 }
                 // Concurrently disabled/stopped, Stop boundary changed or the
                 // window queue is full: hold with backoff, recreate nothing.
+                Err(_) if scan => {
+                    self.hold(namespace, now);
+                    self.alert(namespace, "tracker_scan_failed_occurrence_held");
+                    result.deferred += 1;
+                }
                 Err(
                     HistoryError::Conflict | HistoryError::NotFound | HistoryError::Unavailable,
                 ) => {
-                    let failures = self.backoff.get(&namespace).map_or(0, |(n, _)| *n) + 1;
-                    self.backoff
-                        .insert(namespace, (failures, now + retry_delay(failures)));
+                    self.hold(namespace, now);
                     result.deferred += 1;
                 }
                 Err(error) => return Err(error),
@@ -170,6 +192,7 @@ impl DurableTimerController {
             // At most one bounded I/O wait per five-second pass. Rotate after
             // this namespace even if the read is held, so other work stays fair.
             if scan {
+                self.scan_in_progress = None;
                 next = Some(namespace);
                 break;
             }
@@ -190,6 +213,14 @@ impl DurableTimerController {
             }
         }
         Ok(result)
+    }
+    fn hold(&mut self, namespace: Uuid, now: Instant) {
+        let failures = self
+            .backoff
+            .get(&namespace)
+            .map_or(1, |(n, _)| n.saturating_add(1));
+        self.backoff
+            .insert(namespace, (failures, now + retry_delay(failures)));
     }
     fn alert(&self, namespace: Uuid, reason: &'static str) {
         if let Some(runtime) = &self.tracker_mail {
@@ -220,18 +251,18 @@ impl DurableTimerController {
             {
                 continue;
             }
-            let issuer = self
-                .supervisor
-                .authorize_timer_scheduler(namespace)
-                .await
-                .map_err(|error| match error {
-                    RuntimeStoreError::Unavailable => HistoryError::Unavailable,
-                    _ => HistoryError::Unauthorized,
-                })?;
+            let issuer = match self.supervisor.authorize_timer_scheduler(namespace).await {
+                Ok(issuer) => issuer,
+                Err(_) => {
+                    self.hold(namespace, now);
+                    self.alert(namespace, "trigger_issuer_refused");
+                    result.deferred += 1;
+                    continue;
+                }
+            };
             match self.supervisor.timer_work_kind(&issuer, namespace).await {
                 Ok(TimerWorkKind::Instruction) => {}
-                Ok(TimerWorkKind::TrackerScan)
-                | Err(HistoryError::Conflict | HistoryError::NotFound) => {
+                Ok(TimerWorkKind::TrackerScan) | Err(_) => {
                     self.alert(namespace, "trigger_action_kind_refused");
                     let failures = self.backoff.get(&namespace).map_or(0, |(n, _)| *n) + 1;
                     self.backoff
@@ -239,7 +270,6 @@ impl DurableTimerController {
                     result.deferred += 1;
                     continue;
                 }
-                Err(error) => return Err(error),
             }
             match self
                 .supervisor

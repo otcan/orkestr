@@ -69,6 +69,10 @@ async fn read_claim_is_exclusive_and_leaves_occurrence_due_until_atomic_silent_c
         _ => panic!("one read claim must win"),
     };
     assert_eq!(
+        claim.read_policy_id(),
+        orkestr_v2_contracts::tracker_actions::TRACKER_READ_POLICY_V1
+    );
+    assert_eq!(
         case.count("SELECT count(*) FROM dormant_timer_claims")
             .await,
         0

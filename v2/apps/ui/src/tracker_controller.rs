@@ -202,11 +202,21 @@ impl TrackerUi {
         self.sources.set(Vec::new());
         self.discovered.set(false);
         spawn(async move {
+            let key = match transport::key().await {
+                Ok(key) => key,
+                Err(error) => {
+                    self.finish(epoch, Err(error.message), "");
+                    return;
+                }
+            };
+            if !self.current(epoch) {
+                return;
+            }
             let result = tracker_bridge::call(
                 "POST",
                 &format!("{}/mail-sources", self.base()),
                 &(self.csrf)(),
-                json!({}),
+                json!({"request_key":key}),
             )
             .await;
             if !self.current(epoch) {

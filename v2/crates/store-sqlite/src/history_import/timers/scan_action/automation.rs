@@ -2,15 +2,36 @@
 use super::*;
 use orkestr_v2_contracts::tracker_automation::*;
 
+async fn checked_source(
+    tx: &mut Transaction<'_, Sqlite>,
+    owner: &OwnerId,
+    conversation: &ConversationId,
+    source_revision: i64,
+) -> Result<bool> {
+    sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM tracker_manual_checks c JOIN tracker_scan_receipts r ON r.owner_id=c.owner_id AND r.conversation_id=c.conversation_id AND r.namespace=c.namespace JOIN tracker_scan_authorities a ON a.authority_id=c.authority_id AND a.owner_id=c.owner_id AND a.namespace=r.namespace AND a.generation=r.generation WHERE c.owner_id=? AND c.conversation_id=? AND a.source_revision=?)")
+        .bind(owner.to_string()).bind(conversation.to_string()).bind(source_revision)
+        .fetch_one(&mut **tx).await.map_err(unavailable)
+}
+
 pub(super) async fn state(
     tx: &mut Transaction<'_, Sqlite>,
     owner: &OwnerId,
     conversation: &ConversationId,
 ) -> Result<TrackerAutomationStatus> {
+    let source_revision: i64 = sqlx::query_scalar(
+        "SELECT source_revision FROM trackers WHERE owner_id=? AND conversation_id=?",
+    )
+    .bind(owner.to_string())
+    .bind(conversation.to_string())
+    .fetch_one(&mut **tx)
+    .await
+    .map_err(unavailable)?;
+    let first_check_complete = checked_source(tx, owner, conversation, source_revision).await?;
     let old = sqlx::query("SELECT revision,authority_json,calendar_json FROM tracker_automation_settings WHERE owner_id=? AND conversation_id=?")
         .bind(owner.to_string()).bind(conversation.to_string()).fetch_optional(&mut **tx).await.map_err(unavailable)?;
     let Some(old) = old else {
         return Ok(TrackerAutomationStatus {
+            first_check_complete,
             revision: 0,
             enabled: false,
             source_current: false,
@@ -30,6 +51,7 @@ pub(super) async fn state(
         .transpose()
         .map_err(unavailable)?;
     let mut result = TrackerAutomationStatus {
+        first_check_complete,
         revision: old.get("revision"),
         enabled: false,
         source_current: false,
@@ -186,6 +208,16 @@ impl Store {
         let before = state(&mut tx, owner, conversation).await?;
         if before.revision != request.expected_revision
             || before.timer_revision != request.expected_timer_revision
+        {
+            return Err(HistoryError::Conflict);
+        }
+        if !checked_source(
+            &mut tx,
+            owner,
+            conversation,
+            request.expected_source_revision,
+        )
+        .await?
         {
             return Err(HistoryError::Conflict);
         }

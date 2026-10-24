@@ -29,6 +29,7 @@ CREATE TABLE tracker_scan_authorities (
  classifier_id TEXT NOT NULL CHECK(length(classifier_id) BETWEEN 1 AND 80),
  recipe_id TEXT NOT NULL CHECK(length(recipe_id) BETWEEN 1 AND 80),
  classifier_digest TEXT NOT NULL CHECK(length(classifier_digest)=64),
+ read_policy_id TEXT NOT NULL DEFAULT 'local-mail-v1' CHECK(read_policy_id='local-mail-v1'),
  stop_sequence INTEGER NOT NULL CHECK(stop_sequence>=0), created_ms INTEGER NOT NULL,
  PRIMARY KEY(owner_id,namespace,generation),
  UNIQUE(owner_id,namespace,request_key),
@@ -176,3 +177,13 @@ CREATE TRIGGER tracker_automation_decision_no_update BEFORE UPDATE ON tracker_au
 BEGIN SELECT RAISE(ABORT,'immutable_tracker_automation_decision'); END;
 CREATE TRIGGER tracker_automation_decision_no_delete BEFORE DELETE ON tracker_automation_decisions
 BEGIN SELECT RAISE(ABORT,'immutable_tracker_automation_decision'); END;
+
+-- Expiring metadata replay only; no source selection or execution authority.
+CREATE TABLE tracker_discovery_receipts (
+ owner_id TEXT NOT NULL, conversation_id TEXT NOT NULL,
+ request_key TEXT NOT NULL CHECK(length(request_key) BETWEEN 1 AND 128),
+ receipt_json TEXT NOT NULL CHECK(length(receipt_json)<=64000 AND json_valid(receipt_json)),
+ expires_ms INTEGER NOT NULL,
+ PRIMARY KEY(owner_id,conversation_id,request_key),
+ FOREIGN KEY(owner_id,conversation_id) REFERENCES conversations(owner_id,id)
+);

@@ -68,6 +68,7 @@ impl Store {
         }
         let current = view::current(&mut tx, &owner, claim.namespace, now).await?;
         if current.authority_id != claim.authority_id
+            || current.read_policy_id != claim.read_policy_id
             || current.conversation != claim.conversation
             || current.timer.generation != claim.generation
             || current.timer.next_due_ms != Some(claim.due_ms)

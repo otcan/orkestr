@@ -54,6 +54,7 @@ pub struct AutomationForm {
     pub weekdays: Vec<u8>,
     pub acknowledged: bool,
     pub frequent: bool,
+    pub hourly: bool,
 }
 impl Default for AutomationForm {
     fn default() -> Self {
@@ -63,6 +64,7 @@ impl Default for AutomationForm {
             weekdays: vec![1, 2, 3, 4, 5],
             acknowledged: false,
             frequent: false,
+            hourly: true,
         }
     }
 }
@@ -85,20 +87,28 @@ impl AutomationForm {
                 && rule.end_minute == 1439
                 && rule.every_hours == 1
                 && rule.minutes == [0, 15, 30, 45],
+            hourly: rule.start_minute == 540
+                && rule.end_minute == 1200
+                && rule.every_hours == 1
+                && rule.minutes == [0],
         }
     }
     pub fn calendar(&self) -> Result<CalendarRule, &'static str> {
         if self.weekdays.is_empty() {
             return Err("Choose at least one day.");
         }
-        if self.frequent {
+        if self.frequent || self.hourly {
             return CalendarRule {
                 timezone: self.timezone.trim().into(),
                 weekdays: self.weekdays.clone(),
-                start_minute: 0,
-                end_minute: 1439,
+                start_minute: if self.hourly { 540 } else { 0 },
+                end_minute: if self.hourly { 1200 } else { 1439 },
                 every_hours: 1,
-                minutes: vec![0, 15, 30, 45],
+                minutes: if self.hourly {
+                    vec![0]
+                } else {
+                    vec![0, 15, 30, 45]
+                },
             }
             .normalized();
         }

@@ -3,6 +3,7 @@ use super::*;
 
 fn receipt(row: &SqliteRow, duplicate: bool) -> Result<TrackerScanAuthority> {
     Ok(TrackerScanAuthority {
+        read_policy_id: row.get("read_policy_id"),
         authority_id: Uuid::parse_str(row.get("authority_id")).map_err(unavailable)?,
         namespace: Uuid::parse_str(row.get("namespace")).map_err(unavailable)?,
         generation: row.get("generation"),
@@ -82,6 +83,7 @@ pub(super) async fn enable_in_transaction(
         .bind(source.get::<String,_>("source_digest")).bind(&request.expected_recipe).bind(&request.classifier_id).bind(&request.classifier_digest).bind(stop).bind(now)
         .execute(&mut **tx).await.map_err(unavailable)?;
     Ok(TrackerScanAuthority {
+        read_policy_id: orkestr_v2_contracts::tracker_actions::TRACKER_READ_POLICY_V1.into(),
         authority_id: authority,
         namespace: request.timer.namespace,
         generation: enabled.receipt.generation,

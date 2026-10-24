@@ -2,7 +2,7 @@
 const id = n => `10000000-0000-4000-8000-${String(n).padStart(12,'0')}`;
 export function trackerState(conversation) {
   return {conversation,enabled:false,source:null,revision:0,sourceDecisions:{},checks:{},reports:[],rows:[],posts:[],loseCheck:true,
-    automation:{revision:0,enabled:false,source_current:false,timer_revision:null,authority:null,calendar:null},automationDecisions:{}};
+    automation:{revision:0,enabled:false,source_current:false,first_check_complete:false,timer_revision:null,authority:null,calendar:null},automationDecisions:{}};
 }
 const authority = (t,n) => ({authority_id:id(n),namespace:id(n+1),generation:1,conversation_id:t.conversation,source_revision:t.revision,recipe_id:'job-tracker',classifier_digest:'ab'.repeat(32),duplicate:false});
 export function completeTrackerCheck(t,key) {
@@ -11,6 +11,7 @@ export function completeTrackerCheck(t,key) {
     source_revision:1,recipe_id:'job-tracker',classifier_digest:'ab'.repeat(32),news:true,digest_id:id(31),labelled:1,dropped:0,duplicates:0,more_mail:true,
     changes:[{kind:'created',row_id:id(40),company:'Example Works',role:'Backend Engineer',event:'applied',from:null,to:'applied',notify:true}],recorded_ms:Date.now(),duplicate:false};
   check.result=result;t.reports=[result];
+  t.automation.first_check_complete=true;
   t.rows=[{id:id(40),company:'Example Works',company_key:'example works',role:'Backend Engineer',role_key:'backend engineer',source:'direct',status:'applied',
     status_changed_ms:Date.now(),applied_ms:Date.now(),last_contact_ms:Date.now(),next_step:'Follow up if no reply',link:'https://example.invalid/job',location:null,
     notes:'',confidence:90,needs_review:false,archived:false,events_count:1,revision:1}];
@@ -55,7 +56,8 @@ export async function trackerApi(state,req,res,url,{json,body}) {
     if(t.automationDecisions[input.request_key])return reply(200,{...t.automationDecisions[input.request_key],duplicate:true});
     if(input.expected_revision!==t.automation.revision)return reply(409,{message:'Schedule changed'});
     const enabled=req.method==='POST';
-    t.automation={revision:t.automation.revision+1,enabled,source_current:true,timer_revision:enabled?2:3,authority:enabled?authority(t,20):t.automation.authority,calendar:input.calendar??t.automation.calendar};
+    if(enabled && !t.automation.first_check_complete)return reply(409,{message:'Complete a first manual check'});
+    t.automation={...t.automation,revision:t.automation.revision+1,enabled,source_current:true,timer_revision:enabled?2:3,authority:enabled?authority(t,20):t.automation.authority,calendar:input.calendar??t.automation.calendar};
     const result={request_key:input.request_key,revision:t.automation.revision,enabled,authority:t.automation.authority,duplicate:false};t.automationDecisions[input.request_key]=result;return reply(200,result);
   }
   if(suffix.startsWith('/automation/decisions/'))return reply(t.automationDecisions[suffix.split('/').at(-1)]?200:404,t.automationDecisions[suffix.split('/').at(-1)]??{});

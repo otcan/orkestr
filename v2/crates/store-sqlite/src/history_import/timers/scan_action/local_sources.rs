@@ -49,36 +49,8 @@ impl Store {
         owner: &OwnerId,
         sources: &[TrackerLocalSource],
     ) -> Result<i64> {
-        if sources.len() > 16
-            || sources.iter().any(|s| {
-                s.source_id.is_nil()
-                    || s.backing_json.len() > 64_000
-                    || serde_json::from_str::<serde_json::Value>(&s.backing_json).is_err()
-            })
-        {
-            return Err(HistoryError::Invalid);
-        }
         let mut tx = self.history_transaction(credential, owner, true).await?;
-        let now = store_clock(&mut tx).await?;
-        let expires = now
-            .checked_add(10 * 60_000)
-            .ok_or(HistoryError::Unavailable)?;
-        sqlx::query("DELETE FROM tracker_local_sources WHERE owner_id=? AND expires_ms<=? AND source_id NOT IN(SELECT json_extract(source_json,'$.source_id') FROM trackers WHERE owner_id=? AND source_json IS NOT NULL AND json_extract(source_json,'$.source_id') IS NOT NULL)")
-            .bind(owner.to_string()).bind(now).bind(owner.to_string()).execute(&mut *tx).await.map_err(unavailable)?;
-        let count: i64 =
-            sqlx::query_scalar("SELECT count(*) FROM tracker_local_sources WHERE owner_id=?")
-                .bind(owner.to_string())
-                .fetch_one(&mut *tx)
-                .await
-                .map_err(unavailable)?;
-        if count + sources.len() as i64 > 256 {
-            return Err(HistoryError::Conflict);
-        }
-        for source in sources {
-            sqlx::query("INSERT INTO tracker_local_sources(owner_id,source_id,backing_json,expires_ms) VALUES(?,?,?,?)")
-                .bind(owner.to_string()).bind(source.source_id.to_string()).bind(&source.backing_json).bind(expires)
-                .execute(&mut *tx).await.map_err(unavailable)?;
-        }
+        let expires = register(&mut tx, owner, sources).await?;
         tx.commit().await.map_err(unavailable)?;
         Ok(expires)
     }
@@ -155,4 +127,41 @@ impl Store {
         tx.commit().await.map_err(unavailable)?;
         Ok((backing, cursor))
     }
+}
+
+pub(super) async fn register(
+    tx: &mut Transaction<'_, Sqlite>,
+    owner: &OwnerId,
+    sources: &[TrackerLocalSource],
+) -> Result<i64> {
+    if sources.len() > 16
+        || sources.iter().any(|s| {
+            s.source_id.is_nil()
+                || s.backing_json.len() > 64_000
+                || serde_json::from_str::<serde_json::Value>(&s.backing_json).is_err()
+        })
+    {
+        return Err(HistoryError::Invalid);
+    }
+    let now = store_clock(tx).await?;
+    let expires = now
+        .checked_add(10 * 60_000)
+        .ok_or(HistoryError::Unavailable)?;
+    sqlx::query("DELETE FROM tracker_local_sources WHERE owner_id=? AND expires_ms<=? AND source_id NOT IN(SELECT json_extract(source_json,'$.source_id') FROM trackers WHERE owner_id=? AND source_json IS NOT NULL AND json_extract(source_json,'$.source_id') IS NOT NULL)")
+            .bind(owner.to_string()).bind(now).bind(owner.to_string()).execute(&mut **tx).await.map_err(unavailable)?;
+    let count: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM tracker_local_sources WHERE owner_id=?")
+            .bind(owner.to_string())
+            .fetch_one(&mut **tx)
+            .await
+            .map_err(unavailable)?;
+    if count + sources.len() as i64 > 256 {
+        return Err(HistoryError::Conflict);
+    }
+    for source in sources {
+        sqlx::query("INSERT INTO tracker_local_sources(owner_id,source_id,backing_json,expires_ms) VALUES(?,?,?,?)")
+                .bind(owner.to_string()).bind(source.source_id.to_string()).bind(&source.backing_json).bind(expires)
+                .execute(&mut **tx).await.map_err(unavailable)?;
+    }
+    Ok(expires)
 }

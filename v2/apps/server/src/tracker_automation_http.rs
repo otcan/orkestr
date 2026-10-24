@@ -63,12 +63,12 @@ async fn enable(
                 .map_err(history)?;
             let slot = state
                 .tracker_mail
-                .pool
+                .metadata_pool
                 .reserve(&owner, &conversation)
                 .map_err(|_| unavailable())?;
             let ticket = state
                 .tracker_mail
-                .pool
+                .metadata_pool
                 .enqueue(slot, move || {
                     crate::tracker_mail_sources::resolve(&backing, &selected).map(|_| ())
                 })

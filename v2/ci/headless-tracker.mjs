@@ -25,6 +25,8 @@ export async function trackerScenario({page,state,conversation,label,screenshot}
   await click('Use these folders');
   await page.waitForSelector('section[aria-label="Mail checks"]');
   assert.equal(t.automation.enabled,false,'source selection does not enable automation');
+  assert.equal(await page.$eval('section[aria-label="Recurring mail checks"] select',n=>n.value),'hourly');
+  assert.equal(await page.$eval('section[aria-label="Recurring mail checks"] .tracker-consent input',n=>n.disabled),true,'first manual result required');
   await page.waitForFunction(()=>[...document.querySelectorAll('button')].find(b=>b.textContent.trim()==='Enable recurring checks')?.disabled===true);
   const selection=t.posts.find(p=>p.suffix==='/mail-source').body;
   assert.deepEqual(Object.keys(selection.source).sort(),['inbox','sent','source_id']);

@@ -26,6 +26,7 @@ fn source_form_requires_both_roles_and_resets_consent_after_any_folder_change() 
 fn automation_is_off_by_default_and_keeps_the_reviewed_zone_and_revision_tuple() {
     let mut form = AutomationForm::default();
     let before = TrackerAutomationStatus {
+        first_check_complete: false,
         revision: 3,
         enabled: false,
         source_current: false,
@@ -37,6 +38,10 @@ fn automation_is_off_by_default_and_keeps_the_reviewed_zone_and_revision_tuple()
         .enable(SOURCE, &before, 4, ("rules", &"ab".repeat(32)))
         .is_err());
     form.timezone = "Europe/Berlin".into();
+    assert!(form.hourly);
+    let hourly = form.calendar().unwrap();
+    assert_eq!((hourly.start_minute, hourly.end_minute), (540, 1200));
+    form.hourly = false;
     form.time = "09:30".into();
     form.acknowledged = true;
     let request = form

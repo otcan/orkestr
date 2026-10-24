@@ -4,6 +4,8 @@ use crate::timer_http::durable::DurableTimerController;
 use orkestr_v2_mail_reader::profile::{DiscoveryEnv, Os};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
+#[path = "tracker_review_http_tests.rs"]
+mod review;
 
 async fn enabled() -> Case {
     let mut case = case().await;
@@ -80,7 +82,7 @@ async fn choose(case: &Case) -> Value {
         "POST",
         &case.path("/tracker/mail-sources"),
         &[&auth],
-        "{}",
+        "{\"request_key\":\"find-mail\"}",
     )
     .await;
     assert_eq!(code, 200, "{discovery}");
@@ -361,6 +363,30 @@ async fn automation_requires_ready_selected_mail_and_recovers_its_old_decision_a
     assert_eq!(code, 409);
     request["request_key"] = json!("fresh-opt-in");
     request["expected_revision"] = json!(1);
+    let (code, _) = send(&case.state, "POST", &path, &[&auth], &request.to_string()).await;
+    assert_eq!(
+        code, 409,
+        "source selection alone cannot enable recurring reads"
+    );
+    let (code, check) = send(
+        &case.state,
+        "POST",
+        &case.path("/tracker/check"),
+        &[&auth],
+        &check_body(&case, "first-manual-check"),
+    )
+    .await;
+    assert_eq!(code, 200, "{check}");
+    let bound = case
+        .state
+        .store
+        .authorize_timer_supervisor(&case.bearer)
+        .await
+        .unwrap();
+    let mut controller =
+        DurableTimerController::new(bound).with_tracker_mail(case.state.tracker_mail.clone());
+    tokio::time::sleep(Duration::from_millis(2)).await;
+    assert_eq!(controller.tick().await.unwrap().tracker_actions, 1);
     let (code, enabled) = send(&case.state, "POST", &path, &[&auth], &request.to_string()).await;
     assert_eq!(code, 200, "{enabled}");
     assert_eq!(enabled["enabled"], true);

@@ -32,6 +32,8 @@ pub struct TrackerAutomationReceipt {
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TrackerAutomationStatus {
+    #[serde(default)]
+    pub first_check_complete: bool,
     pub revision: i64,
     pub enabled: bool,
     pub source_current: bool,

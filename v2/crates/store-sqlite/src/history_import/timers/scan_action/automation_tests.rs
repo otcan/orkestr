@@ -62,6 +62,13 @@ async fn disable(case: &Case, key: &str) -> TrackerAutomationReceipt {
 #[tokio::test]
 async fn recurring_scan_requires_separate_opt_in_and_exact_enable_never_rearms_after_stop() {
     let (case, _) = enable_tests::fixture().await;
+    assert_eq!(
+        enable(&case, &request("before-first-check")).await,
+        Err(HistoryError::Conflict)
+    );
+    assert!(!status(&case).await.first_check_complete);
+    check_tests::complete_first_check(&case).await;
+    assert!(status(&case).await.first_check_complete);
     let mut unchecked = request("unchecked");
     unchecked.acknowledge_automation = false;
     assert_eq!(enable(&case, &unchecked).await, Err(HistoryError::Invalid));
@@ -107,6 +114,7 @@ async fn recurring_scan_requires_separate_opt_in_and_exact_enable_never_rearms_a
 #[tokio::test]
 async fn initial_disable_blocks_a_delayed_enable_and_stale_timer_revision_cannot_replace_stop() {
     let (case, _) = enable_tests::fixture().await;
+    check_tests::complete_first_check(&case).await;
     let stopped = disable(&case, "initial-stop").await;
     assert_eq!(stopped.revision, 1);
     assert!(stopped.authority.is_none());
@@ -139,7 +147,7 @@ async fn initial_disable_blocks_a_delayed_enable_and_stale_timer_revision_cannot
     assert_eq!(
         case.count("SELECT count(*) FROM tracker_scan_authorities")
             .await,
-        1
+        2
     );
     case.finish().await;
 }
@@ -147,6 +155,7 @@ async fn initial_disable_blocks_a_delayed_enable_and_stale_timer_revision_cannot
 #[tokio::test]
 async fn automation_factory_failure_rolls_back_old_stop_new_schedule_and_receipt() {
     let (case, _) = enable_tests::fixture().await;
+    check_tests::complete_first_check(&case).await;
     enable(&case, &request("first")).await.unwrap();
     let before = status(&case).await;
     let timers = case.count("SELECT count(*) FROM dormant_timers").await;
@@ -164,7 +173,7 @@ async fn automation_factory_failure_rolls_back_old_stop_new_schedule_and_receipt
     assert_eq!(
         case.count("SELECT count(*) FROM tracker_scan_authorities")
             .await,
-        1
+        2
     );
     assert_eq!(
         case.count("SELECT count(*) FROM tracker_automation_decisions")
@@ -177,6 +186,7 @@ async fn automation_factory_failure_rolls_back_old_stop_new_schedule_and_receipt
 #[tokio::test]
 async fn source_removal_disables_old_actions_without_erasing_automation_audit() {
     let (case, _) = enable_tests::fixture().await;
+    check_tests::complete_first_check(&case).await;
     enable(&case, &request("first")).await.unwrap();
     case.store
         .remove_tracker_scan_source(
@@ -192,6 +202,10 @@ async fn source_removal_disables_old_actions_without_erasing_automation_audit() 
         .unwrap();
     let current = status(&case).await;
     assert!(!current.enabled && !current.source_current);
+    assert!(
+        !current.first_check_complete,
+        "old-source success cannot unlock new-source automation"
+    );
     assert_eq!(current.timer_revision, Some(3));
     let recovered = case
         .store

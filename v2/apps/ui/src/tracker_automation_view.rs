@@ -78,6 +78,7 @@ pub fn MailChecks() -> Element {
                 "selected_mail_source_unavailable"=>"The selected mail folders are unavailable. Check Thunderbird’s offline settings or choose folders again.",
                 "installed_recipe_or_rules_changed"=>"The mail rules changed. Review and confirm your recurring schedule again, or request a new check.",
                 "source_or_timer_authority_changed"=>"The saved mail check settings changed. Refresh and review your selection.",
+                "tracker_scan_commit_refused" | "tracker_scan_claim_refused" | "tracker_scan_material_refused" | "tracker_scan_failed_occurrence_held" | "tracker_scan_pass_timed_out"=>"The mail check could not finish. It remains queued and will retry.",
                 "reader_wait_ended_custody_retained_until_exit" | "previous_reader_still_in_custody"=>"A previous read must finish before this check can continue. This check is still waiting.",
                 _=>"The mail reader is busy or unavailable. This check remains queued and will retry.",
             }).collect::<std::collections::BTreeSet<_>>() {p {class:"tracker-hint",role:"status","{message}"}}
@@ -94,17 +95,19 @@ pub fn MailChecks() -> Element {
         }
         section {class:"tracker-setup", "aria-label":"Recurring mail checks",
             h3 {"3. Choose recurring checks (optional)"}
+            if !data.automation.first_check_complete {p {"Complete a successful Check mail once with these folders before enabling recurring checks."}}
             if data.automation.enabled {
                 p {class:"tracker-connected","Recurring checks are scheduled."}
                 if let Some(calendar)=&data.automation.calendar {p {{calendar.describe()}}}
                 button {onclick:move |_|ui.stop_automation(),"Stop recurring checks"}
             } else {p {"Recurring checks are off. Checking once does not turn them on."}}
             label {"Frequency"
-                select {value:if current.frequent {"frequent"} else {"daily"},onchange:move |e|{let mut f=form.write();f.frequent=e.value()=="frequent";f.acknowledged=false;},
-                    option {value:"daily","Once a day"} option {value:"frequent","Every 15 minutes"}
+                select {value:if current.hourly {"hourly"} else if current.frequent {"frequent"} else {"daily"},onchange:move |e|{let mut f=form.write();f.frequent=e.value()=="frequent";f.hourly=e.value()=="hourly";f.acknowledged=false;},
+                    option {value:"hourly","Every hour"} option {value:"daily","Once a day"} option {value:"frequent","Every 15 minutes"}
                 }
             }
-            if !current.frequent {label {"Time" input {r#type:"time",value:current.time,oninput:move |e|{let mut f=form.write();f.time=e.value();f.acknowledged=false;}}}}
+            if !current.frequent && !current.hourly {label {"Time" input {r#type:"time",value:current.time,oninput:move |e|{let mut f=form.write();f.time=e.value();f.acknowledged=false;}}}}
+            else if current.hourly {p {"Checks run every hour from 09:00 through 20:00 on the selected days."}}
             else {p {"Checks run every 15 minutes throughout the selected days."}}
             label {"Timezone" input {value:current.timezone,placeholder:"Europe/Berlin",oninput:move |e|{let mut f=form.write();f.timezone=e.value();f.acknowledged=false;}}}
             fieldset {class:"tracker-days",legend {"Days"}
@@ -115,7 +118,7 @@ pub fn MailChecks() -> Element {
                 }
             }
             p {class:"tracker-schedule-preview","{preview}"}
-            label {class:"tracker-consent",input {r#type:"checkbox",checked:current.acknowledged,onchange:move |e|{
+            label {class:"tracker-consent",input {r#type:"checkbox",checked:current.acknowledged,disabled:!data.automation.first_check_complete,onchange:move |e|{
                 if !e.checked(){form.write().acknowledged=false;reviewed.set(None);return;}
                 let mut chosen=form();chosen.acknowledged=true;
                 match chosen.enable("pending",&review_before,review_source,(&review_classifier.0,&review_classifier.1)){
@@ -123,7 +126,7 @@ pub fn MailChecks() -> Element {
                     Err(message)=>ui.notice.set(message.into()),
                 }
             }},"Enable read-only mail checks with this schedule."}
-            button {disabled:(ui.busy)() || !current.acknowledged || !data.mail.scheduler_ready,onclick:move |_|{
+            button {disabled:(ui.busy)() || !current.acknowledged || !data.mail.scheduler_ready || !data.automation.first_check_complete,onclick:move |_|{
                 if !form.peek().acknowledged{return;}
                 let request=reviewed.peek().clone();
                 match request {

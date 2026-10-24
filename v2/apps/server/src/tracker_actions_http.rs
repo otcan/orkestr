@@ -109,9 +109,20 @@ async fn discover(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(id): Path<String>,
+    request: Result<Json<TrackerDiscoveryRequest>, JsonRejection>,
 ) -> Result<Response, Error> {
     let (owner, credential) = owner_credential(&state, &headers).await?;
     let conversation = conversation(&id)?;
+    let request = body(request)?;
+    match state
+        .store
+        .tracker_source_discovery(&credential, &owner, &conversation, &request.request_key)
+        .await
+    {
+        Ok(receipt) => return Ok(Json(receipt).into_response()),
+        Err(HistoryError::NotFound) => {}
+        Err(error) => return Err(history(error)),
+    }
     state
         .store
         .tracker_config(
@@ -125,13 +136,13 @@ async fn discover(
         .map_err(failure)?;
     let slot = state
         .tracker_mail
-        .pool
+        .metadata_pool
         .reserve(&owner, &conversation)
         .map_err(|_| unavailable())?;
     let env = state.tracker_mail.discovery_env.clone();
     let ticket = state
         .tracker_mail
-        .pool
+        .metadata_pool
         .enqueue(slot, move || crate::tracker_mail_sources::discover(env))
         .map_err(|_| unavailable())?;
     let completed = ticket
@@ -139,15 +150,19 @@ async fn discover(
         .await
         .map_err(|_| unavailable())?;
     let discovery = completed.result().map_err(|_| unavailable())?;
-    let expires_ms = state
+    let receipt = state
         .store
-        .register_tracker_local_sources(&credential, &owner, &discovery.backing)
+        .record_tracker_source_discovery(
+            &credential,
+            &owner,
+            &conversation,
+            &request.request_key,
+            &discovery.sources,
+            &discovery.backing,
+        )
         .await
         .map_err(history)?;
-    Ok(Json(
-        serde_json::json!({"sources":discovery.sources,"expires_ms":expires_ms,"read_only":true}),
-    )
-    .into_response())
+    Ok(Json(receipt).into_response())
 }
 
 async fn select(
@@ -186,13 +201,13 @@ async fn select(
         .map_err(history)?;
     let slot = state
         .tracker_mail
-        .pool
+        .metadata_pool
         .reserve(&owner, &conversation)
         .map_err(|_| unavailable())?;
     let selected = request.source.clone();
     let ticket = state
         .tracker_mail
-        .pool
+        .metadata_pool
         .enqueue(slot, move || {
             crate::tracker_mail_sources::resolve(&backing, &selected).map(|_| ())
         })

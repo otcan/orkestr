@@ -80,6 +80,9 @@ async fn load(mut ui: TrackerUi, epoch: u64) -> Result<Option<Dashboard>, String
                         json!({"request_key":decision.key()}),
                     )
                     .await?;
+                    if !ui.current(epoch) {
+                        return Err(String::new());
+                    }
                     ui.pending.write().retain(|p| p.key() != decision.key());
                 }
             }

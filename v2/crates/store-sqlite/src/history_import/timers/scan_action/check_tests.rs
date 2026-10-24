@@ -28,6 +28,26 @@ async fn cancel(case: &Case, key: &str) -> TrackerCheckReceipt {
         .unwrap()
 }
 
+pub(super) async fn complete_first_check(case: &Case) {
+    let created = create(case, &request("verified-first-manual-check"))
+        .await
+        .unwrap();
+    let namespace = created.authority.unwrap().namespace;
+    sqlx::query("UPDATE dormant_timers SET next_due_ms=CAST((julianday('now')-2440587.5)*86400000 AS INTEGER)-1 WHERE owner_id=? AND namespace=?")
+        .bind(case.owner.to_string()).bind(namespace.to_string()).execute(&case.store.pool).await.unwrap();
+    let handle = case
+        .store
+        .authorize_timer_supervisor(&case.token)
+        .await
+        .unwrap();
+    let issuer = handle.authorize_timer_scheduler(namespace).await.unwrap();
+    let claim = handle.claim_tracker_scan(&issuer, namespace).await.unwrap();
+    handle
+        .commit_tracker_scan(&issuer, &claim, &[], "{}", "{}")
+        .await
+        .unwrap();
+}
+
 #[tokio::test]
 async fn check_once_is_atomic_typed_bounded_and_exactly_recoverable_after_cancel() {
     let (case, _) = enable_tests::fixture().await;

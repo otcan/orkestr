@@ -167,8 +167,8 @@ impl Store {
         }
         // Bound live decisions, independently from the runtime's actual I/O slots.
         // A source change revokes old actions; their immutable history stays intact.
-        let counts = sqlx::query("SELECT count(*) AS total,COALESCE(sum(c.conversation_id=?),0) AS scoped FROM tracker_manual_checks c JOIN dormant_timers d ON d.owner_id=c.owner_id AND d.namespace=c.namespace JOIN tracker_scan_authorities a ON a.owner_id=d.owner_id AND a.namespace=d.namespace AND a.generation=d.generation JOIN trackers t ON t.owner_id=a.owner_id AND t.conversation_id=a.conversation_id AND t.source_revision=a.source_revision AND t.recipe=a.recipe_id WHERE d.state='enabled' AND NOT EXISTS(SELECT 1 FROM production_stop_boundaries b JOIN events e ON e.id=b.event_id WHERE b.owner_id=a.owner_id AND b.conversation_id=a.conversation_id AND e.sequence>a.stop_sequence)")
-            .bind(conversation.to_string()).fetch_one(&mut *tx).await.map_err(unavailable)?;
+        let counts = sqlx::query("SELECT count(*) AS total,COALESCE(sum(c.conversation_id=?),0) AS scoped FROM tracker_manual_checks c JOIN dormant_timers d ON d.owner_id=c.owner_id AND d.namespace=c.namespace JOIN tracker_scan_authorities a ON a.owner_id=d.owner_id AND a.namespace=d.namespace AND a.generation=d.generation JOIN trackers t ON t.owner_id=a.owner_id AND t.conversation_id=a.conversation_id AND t.source_revision=a.source_revision AND t.recipe=a.recipe_id WHERE c.owner_id=? AND d.state='enabled' AND NOT EXISTS(SELECT 1 FROM production_stop_boundaries b JOIN events e ON e.id=b.event_id WHERE b.owner_id=a.owner_id AND b.conversation_id=a.conversation_id AND e.sequence>a.stop_sequence)")
+            .bind(conversation.to_string()).bind(owner.to_string()).fetch_one(&mut *tx).await.map_err(unavailable)?;
         if counts.get::<i64, _>("total") >= 16 || counts.get::<i64, _>("scoped") != 0 {
             return Err(HistoryError::Conflict);
         }

@@ -393,6 +393,7 @@ async fn populated_payload_prefix_upgrade_preserves_all_rows_and_foreign_links()
         "tracker_scan_authorities",
         "tracker_scan_attempts",
         "tracker_scan_receipts",
+        "tracker_discovery_receipts",
         "tracker_automation_decisions",
         "tracker_automation_settings",
         "tracker_local_sources",

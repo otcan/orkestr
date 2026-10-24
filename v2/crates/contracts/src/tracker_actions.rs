@@ -2,6 +2,25 @@
 use crate::ConversationId;
 use uuid::Uuid;
 
+pub const TRACKER_READ_POLICY_V1: &str = "local-mail-v1";
+fn default_read_policy() -> String {
+    TRACKER_READ_POLICY_V1.into()
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TrackerDiscoveryRequest {
+    pub request_key: String,
+}
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct TrackerSourceDiscovery {
+    pub request_key: String,
+    pub sources: Vec<TrackerMailSource>,
+    pub expires_ms: i64,
+    pub read_only: bool,
+    pub duplicate: bool,
+}
+
 /// Opaque entries in the trusted local source registry. Browser input never
 /// supplies filesystem paths; the runtime must re-resolve these before reading.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -89,6 +108,8 @@ pub struct TrackerSourceReceipt {
 /// An owner decision receipt, not an executable read capability.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct TrackerScanAuthority {
+    #[serde(default = "default_read_policy")]
+    pub read_policy_id: String,
     pub authority_id: Uuid,
     pub namespace: Uuid,
     pub generation: i64,

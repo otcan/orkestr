@@ -69,21 +69,29 @@ fn classify_batch(
 
 pub(crate) struct TrackerMailRuntime {
     pub pool: Arc<ScanPool>,
+    pub metadata_pool: Arc<ScanPool>,
     pub rules: Arc<RulePack>,
     pub digest: String,
     pub discovery_env: orkestr_v2_mail_reader::profile::DiscoveryEnv,
     alerts: Mutex<BTreeMap<Uuid, &'static str>>,
+    #[cfg(test)]
+    pub reject_classified_event: std::sync::atomic::AtomicBool,
 }
 impl TrackerMailRuntime {
     pub fn new() -> std::result::Result<Self, &'static str> {
         Ok(Self {
             pool: Arc::new(ScanPool::new(2, 4).map_err(|_| "mail reader pool unavailable")?),
+            metadata_pool: Arc::new(
+                ScanPool::new(1, 2).map_err(|_| "mail metadata pool unavailable")?,
+            ),
             rules: Arc::new(
                 RulePack::from_json(RULES).map_err(|_| "installed mail rules invalid")?,
             ),
             digest: format!("{:x}", Sha256::digest(RULES.as_bytes())),
             discovery_env: orkestr_v2_mail_reader::profile::DiscoveryEnv::from_process(),
             alerts: Mutex::new(BTreeMap::new()),
+            #[cfg(test)]
+            reject_classified_event: std::sync::atomic::AtomicBool::new(false),
         })
     }
     pub fn alert(&self, namespace: Uuid, reason: &'static str) {
@@ -91,6 +99,9 @@ impl TrackerMailRuntime {
             .alerts
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if reason == "tracker_scan_failed_occurrence_held" && alerts.contains_key(&namespace) {
+            return;
+        }
         if alerts.get(&namespace) == Some(&reason) {
             return;
         }
@@ -144,12 +155,17 @@ impl TrackerMailRuntime {
                 self.capacity_alert(namespace, e);
                 HistoryError::Conflict
             })?;
-        let claim = store.claim_tracker_scan(issuer, namespace).await?;
+        let claim = store
+            .claim_tracker_scan(issuer, namespace)
+            .await
+            .inspect_err(|_| self.alert(namespace, "tracker_scan_claim_refused"))?;
         if claim.recipe_id() != "job-tracker"
+            || claim.read_policy_id()
+                != orkestr_v2_contracts::tracker_actions::TRACKER_READ_POLICY_V1
             || claim.classifier_id() != self.rules.version
             || claim.classifier_digest() != self.digest
         {
-            store.abandon_tracker_scan(issuer, &claim).await?;
+            self.abandon(store, issuer, &claim, namespace).await;
             self.alert(namespace, "installed_recipe_or_rules_changed");
             return Err(HistoryError::Conflict);
         }
@@ -157,53 +173,76 @@ impl TrackerMailRuntime {
         let (backing, cursor) = match material {
             Ok(value) => value,
             Err(error) => {
-                store.abandon_tracker_scan(issuer, &claim).await?;
+                self.alert(namespace, "tracker_scan_material_refused");
+                self.abandon(store, issuer, &claim, namespace).await;
                 return Err(error);
             }
         };
         let selected = claim.source().clone();
         let rules = self.rules.clone();
-        let ticket = self
-            .pool
-            .enqueue(slot, move || {
-                let resolved = tracker_mail_sources::resolve(&backing, &selected)?;
-                // Corrupt stored cursors refuse; they never silently restart history.
-                let cursor: Cursor = cursor
-                    .as_deref()
-                    .map(serde_json::from_str)
-                    .transpose()
-                    .map_err(|_| crate::tracker_scan_pool::ReadFailure::Unavailable)?
-                    .unwrap_or_default();
-                let limits = ScanLimits {
-                    max_messages: 64,
-                    max_message_bytes: 4 * 1024 * 1024,
-                    max_mbox_bytes: 8 * 1024 * 1024,
-                    max_seen: 2_048,
-                    deadline: std::time::Instant::now() + Duration::from_millis(1500),
-                    ..ScanLimits::default()
-                };
-                let output = scan_folders_with_identity(
-                    &resolved.profile,
-                    Some(resolved.identity),
-                    &resolved.folders,
-                    &cursor,
-                    &limits,
-                    SystemTime::now(),
-                )
-                .map_err(|_| crate::tracker_scan_pool::ReadFailure::Unavailable)?;
-                classify_batch(output, &rules)
-            })
-            .map_err(|e| {
+        #[cfg(test)]
+        let reject = self
+            .reject_classified_event
+            .load(std::sync::atomic::Ordering::Relaxed);
+        let ticket = match self.pool.enqueue(slot, move || {
+            let resolved = tracker_mail_sources::resolve(&backing, &selected)?;
+            // Corrupt stored cursors refuse; they never silently restart history.
+            let cursor: Cursor = cursor
+                .as_deref()
+                .map(serde_json::from_str)
+                .transpose()
+                .map_err(|_| crate::tracker_scan_pool::ReadFailure::Unavailable)?
+                .unwrap_or_default();
+            let limits = ScanLimits {
+                max_messages: 64,
+                max_message_bytes: 4 * 1024 * 1024,
+                max_mbox_bytes: 8 * 1024 * 1024,
+                max_seen: 2_048,
+                deadline: std::time::Instant::now() + Duration::from_millis(1500),
+                ..ScanLimits::default()
+            };
+            let output = scan_folders_with_identity(
+                &resolved.profile,
+                Some(resolved.identity),
+                &resolved.folders,
+                &cursor,
+                &limits,
+                SystemTime::now(),
+            )
+            .map_err(|_| crate::tracker_scan_pool::ReadFailure::Unavailable)?;
+            let batch = classify_batch(output, &rules)?;
+            #[cfg(test)]
+            let batch = if reject {
+                let mut batch = batch;
+                if let Some(event) = batch
+                    .messages
+                    .iter_mut()
+                    .filter_map(|m| m.outcome.as_mut().ok())
+                    .flatten()
+                    .next()
+                {
+                    event.company.clear();
+                }
+                batch
+            } else {
+                batch
+            };
+            Ok(batch)
+        }) {
+            Ok(ticket) => ticket,
+            Err(e) => {
                 self.capacity_alert(namespace, e);
-                HistoryError::Conflict
-            })?;
+                self.abandon(store, issuer, &claim, namespace).await;
+                return Err(HistoryError::Conflict);
+            }
+        };
         let completed = match ticket
             .wait(tokio::time::Instant::now() + Duration::from_secs(2))
             .await
         {
             Ok(value) => value,
             Err(_) => {
-                store.abandon_tracker_scan(issuer, &claim).await?;
+                self.abandon(store, issuer, &claim, namespace).await;
                 self.alert(namespace, "reader_wait_ended_custody_retained_until_exit");
                 return Err(HistoryError::Unavailable);
             }
@@ -211,7 +250,7 @@ impl TrackerMailRuntime {
         let output = match completed.result() {
             Ok(output) => output,
             _ => {
-                store.abandon_tracker_scan(issuer, &claim).await?;
+                self.abandon(store, issuer, &claim, namespace).await;
                 self.alert(namespace, "selected_mail_source_unavailable");
                 return Err(HistoryError::Conflict);
             }
@@ -236,16 +275,36 @@ impl TrackerMailRuntime {
                 Ok(())
             }
             Err(error) => {
-                store.abandon_tracker_scan(issuer, &claim).await?;
+                self.alert(namespace, "tracker_scan_commit_refused");
+                self.abandon(store, issuer, &claim, namespace).await;
                 Err(error)
             }
         }
     }
+    async fn abandon(
+        &self,
+        store: &Store,
+        issuer: &TimerSchedulerIssuer,
+        claim: &orkestr_v2_store_sqlite::history_import::timers::scan_action::TrackerScanClaim,
+        namespace: Uuid,
+    ) {
+        if let Err(error) = store.abandon_tracker_scan(issuer, claim).await {
+            // Cleanup failure is separate evidence, never the scan's result or
+            // a reason to terminate the shared timer controller.
+            eprintln!(
+                "{}",
+                serde_json::json!({"event":"tracker_scan_cleanup_refused","namespace":namespace,"error":format!("{error:?}"),"occurrence_held":true})
+            );
+        }
+    }
     pub async fn shutdown(&self) -> std::result::Result<(), &'static str> {
         self.pool.begin_shutdown();
+        self.metadata_pool.begin_shutdown();
         let until = tokio::time::Instant::now() + Duration::from_secs(6);
         loop {
-            if self.pool.try_join() {
+            let reads_joined = self.pool.try_join();
+            let metadata_joined = self.metadata_pool.try_join();
+            if reads_joined && metadata_joined {
                 return Ok(());
             }
             if tokio::time::Instant::now() >= until {

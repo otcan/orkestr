@@ -38,6 +38,7 @@ impl Store {
             .execute(&mut *tx).await.map_err(unavailable)?;
         tx.commit().await.map_err(unavailable)?;
         Ok(TrackerScanClaim {
+            read_policy_id: current.read_policy_id,
             id,
             owner,
             namespace,
