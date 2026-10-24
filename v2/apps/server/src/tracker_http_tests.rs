@@ -59,7 +59,7 @@ async fn tracker_routes_enable_record_edit_export_and_grant() {
     assert_eq!(value["recipe"], "job-tracker");
     let batch = json!({"request_key":"scan-1","events":[
         applied("Acme Robotics GmbH", "Backend Engineer (Rust)", 1_792_486_800_000, "0123456789abcdef01234567"),
-        {"kind":"interview_invite","company":"Acme Robotics","role":null,"source":"direct","occurred_ms":1_792_573_200_000,
+        {"kind":"interview_invite","company":"Acme Robotics","role":null,"source":"direct","occurred_ms":1_792_573_200_000i64,
          "classifier":"assistant","confidence":90}
     ]});
     let (status, set) = send(

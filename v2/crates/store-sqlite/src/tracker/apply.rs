@@ -1,6 +1,6 @@
-//! Recording events: dedupe ledger, match-and-merge (job link, then company
-//! + role, then company alone for role-less mail such as ATS rejections),
-//! monotonic status, and the resulting changeset.
+//! Record events using the dedupe ledger, job links, company and role keys,
+//! monotonic status and a resulting changeset. Role-less mail can match a
+//! known company after its thread and link references have been considered.
 use super::{config, row_of, Result, TrackerCaller, ROW_COLUMNS};
 use crate::conversation_resources::{now_ms, unavailable, ResourceError};
 use crate::Store;
