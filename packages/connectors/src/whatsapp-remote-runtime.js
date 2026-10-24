@@ -12,6 +12,7 @@ import { remoteParentExpectedFields, remoteParentRecoveryCandidate } from "./wha
 import { acknowledgeRemoteMirrorDeliveries, remoteMirrorAckSupported } from "./whatsapp-remote-mirror-ack.js";
 import { uploadRemoteInputAttachments } from "./whatsapp-remote-attachment-upload.js";
 import { materializeRemoteTimerParent, remoteTimerParentSource } from "./whatsapp-remote-timer-parent.js";
+import { createTimerAccountLookup } from "./whatsapp-remote-timer-accounts.js";
 
 export { remoteWhatsAppRuntimeBinding };
 
@@ -362,6 +363,7 @@ async function appendRemoteAssistantMessage({ thread, remote, remoteMessage, par
 
 export async function syncRemoteWhatsAppThreadMessages(env = process.env, fetchImpl = fetch, options = {}) {
   const results = [];
+  const lookupTimerAccounts = createTimerAccountLookup(env, fetchImpl);
   for (const thread of await listThreads(env)) {
     if (options.threadIds && !options.threadIds.includes(thread.id)) continue;
     const remote = remoteWhatsAppRuntimeBinding(thread, env);
@@ -398,7 +400,7 @@ export async function syncRemoteWhatsAppThreadMessages(env = process.env, fetchI
         // V2 timer turns have no V1 input; give their reply a local parent once.
         if (known?.source === remoteTimerParentSource) continue;
         if (!known && remoteMessage.source === remoteTimerParentSource) {
-          const timerParent = await materializeRemoteTimerParent({ thread, remote, remoteMessage, remoteMessages, localMessages, env, fetchImpl });
+          const timerParent = await materializeRemoteTimerParent({ thread, remote, remoteMessage, remoteMessages, localMessages, env, fetchImpl, lookupAccounts: lookupTimerAccounts });
           if (timerParent) {
             localByRemoteId.set(remoteMessageId, timerParent.message);
             if (timerParent.created) imported += 1;

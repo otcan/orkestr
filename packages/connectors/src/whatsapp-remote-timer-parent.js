@@ -13,9 +13,8 @@
 import { appendThreadMessage } from "../../core/src/threads.js";
 import { appendEvent } from "../../storage/src/store.js";
 import { resourceOwnerUserId } from "../../core/src/policy.js";
-import { readWhatsAppConnectorAccounts } from "./whatsapp-account-registry.js";
 import { whatsappAccountLookupKeys } from "./whatsapp-account-identity.js";
-import { verifiedTimerAccounts } from "./whatsapp-remote-timer-accounts.js";
+import { createTimerAccountLookup } from "./whatsapp-remote-timer-accounts.js";
 
 export const remoteTimerParentSource = "orkestr-v2-timer";
 // Server receipt for a materialized parent; the scoped relay's timer
@@ -46,7 +45,7 @@ function sameTimerAccount(thread, expected, received, accounts, env) {
 
 // Returns the local id to materialize, or "" when the row is not an exact,
 // unambiguous V2 timer row for this thread and binding.
-export function remoteTimerParentId(thread, remote, remoteMessage, remoteMessages = [], { accounts = [], env = process.env } = {}) {
+function timerParentShape(thread, remote, remoteMessage, remoteMessages) {
   const id = remoteMessage?.id;
   if (typeof id !== "string" || !uuidPattern.test(id)) return "";
   const publicId = `v2timer-${id}`;
@@ -58,11 +57,17 @@ export function remoteTimerParentId(thread, remote, remoteMessage, remoteMessage
   const binding = remote?.binding || {};
   const accountId = binding.responderAccountId || binding.outboundAccountId || binding.accountId;
   const chatId = binding.chatId;
-  if (!chatId || remoteMessage.chatId !== chatId ||
-      !sameTimerAccount(thread, accountId, remoteMessage.accountId, accounts, env)) return "";
+  if (!chatId || remoteMessage.chatId !== chatId || !clean(accountId) || !clean(remoteMessage.accountId)) return "";
   if (remoteMessages.filter((row) => row?.publicMessageId === publicId).length !== 1 ||
       remoteMessages.filter((row) => (row?.id || row?.messageId) === id).length !== 1) return "";
   return publicId;
+}
+
+export function remoteTimerParentId(thread, remote, remoteMessage, remoteMessages = [], { accounts = [], env = process.env } = {}) {
+  const publicId = timerParentShape(thread, remote, remoteMessage, remoteMessages);
+  const binding = remote?.binding || {};
+  const accountId = binding.responderAccountId || binding.outboundAccountId || binding.accountId;
+  return publicId && sameTimerAccount(thread, accountId, remoteMessage.accountId, accounts, env) ? publicId : "";
 }
 
 function compatibleTimerParent(local, remote, remoteMessageId) {
@@ -73,18 +78,18 @@ function compatibleTimerParent(local, remote, remoteMessageId) {
 
 // Maps (or creates once) the local parent for a V2 timer row. Returns the local
 // message and whether it was created, or null when the row does not qualify.
-export async function materializeRemoteTimerParent({ thread, remote, remoteMessage, remoteMessages, localMessages, env, fetchImpl = fetch }) {
+export async function materializeRemoteTimerParent({ thread, remote, remoteMessage, remoteMessages, localMessages, env, fetchImpl = fetch, lookupAccounts = null }) {
+  if (!timerParentShape(thread, remote, remoteMessage, remoteMessages)) return null;
   const binding = remote?.binding || {};
   const accountId = binding.responderAccountId || binding.outboundAccountId || binding.accountId;
-  const accounts = accountId === remoteMessage.accountId ? [] : await readWhatsAppConnectorAccounts(env);
+  const lookup = lookupAccounts || createTimerAccountLookup(env, fetchImpl);
+  const accounts = accountId === remoteMessage.accountId ? [] : await lookup();
   let publicId = remoteTimerParentId(thread, remote, remoteMessage, remoteMessages, { accounts, env });
   if (!publicId && accountId !== remoteMessage.accountId && accounts.length) {
     // A legacy registry may store only the runtime alias. Resolve its current
     // physical identity through the existing read-only bridge status path.
-    const { getWhatsAppStatus } = await import("./whatsapp.js");
-    const status = await getWhatsAppStatus(env, fetchImpl, { readOnly: true });
     publicId = remoteTimerParentId(thread, remote, remoteMessage, remoteMessages,
-      { accounts: verifiedTimerAccounts(accounts, status, env), env });
+      { accounts: await lookup(true), env });
   }
   if (!publicId) return null;
   const existing = localMessages.find((message) => message.id === publicId);

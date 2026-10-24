@@ -54,7 +54,7 @@ async function fixture(t, rows, binding = {}, health = {}) {
       ...binding,
     },
   }, env);
-  const runtime = { inputs: [], acks: [], other: [] };
+  const runtime = { inputs: [], acks: [], other: [], healthReads: 0 };
   const sends = [];
   const reply = {
     id: "example-timer-final", role: "assistant", state: "completed", phase: "final_answer",
@@ -80,11 +80,37 @@ async function fixture(t, rows, binding = {}, health = {}) {
       sends.push(body);
       return Response.json({ ok: true, ids: [`example-sent-${sends.length}`] });
     }
-    if (parsed.host === "bridge.example.test" && parsed.pathname === "/health") return Response.json({ ok: true, ready: true, accounts: [], ...health });
+    if (parsed.host === "bridge.example.test" && parsed.pathname === "/health") {
+      runtime.healthReads += 1;
+      return Response.json({ ok: true, ready: true, accounts: [], ...health });
+    }
     throw new Error(`unexpected synthetic request ${parsed.href}`);
   };
   return { env, runtime, sends, deliver: () => deliverWhatsAppReplies(env, fetchImpl) };
 }
+
+test("unresolvable timer identities share one bridge lookup per poll and refresh on the next", async t => {
+  const otherId = "0b6c1f5e-8f3a-4c2d-9e7b-1a2b3c4d5e70";
+  const f = await fixture(t, [timerRow({ accountId: "sender" }),
+    timerRow({ id: otherId, publicMessageId: `v2timer-${otherId}`, accountId: "sender" })],
+    { responderAccountId: "15550001001" });
+  await upsertWhatsAppConnectorAccount({ accountId: "sender", runtimeAccountId: "sender" }, f.env);
+  await f.deliver();
+  assert.equal(f.runtime.healthReads, 1);
+  await f.deliver();
+  assert.equal(f.runtime.healthReads, 2);
+  assert.deepEqual(await listThreadMessages("example-thread", f.env), []);
+  assert.equal(f.sends.length, 0);
+});
+
+test("foreign timer shape is refused before bridge account lookup", async t => {
+  const f = await fixture(t, [timerRow({ accountId: "sender", publicThreadId: "other-thread" })],
+    { responderAccountId: "15550001001" }, { accounts: [{ accountId: "sender", phoneNumber: "15550001001", ready: true }] });
+  await upsertWhatsAppConnectorAccount({ accountId: "sender", runtimeAccountId: "sender" }, f.env);
+  await f.deliver();
+  assert.equal(f.runtime.healthReads, 0);
+  assert.equal(f.sends.length, 0);
+});
 
 for (const [bound, received] of [["15550001001", "sender"], ["sender", "15550001001"]]) {
   test(`legacy alias-only registry resolves verified bridge identity ${bound} → ${received}`, async t => {
