@@ -166,9 +166,10 @@ function approvalCodexStatus(status) {
 }
 
 export class CodexAppServerClient {
-  constructor({ env = process.env, home = os.homedir() } = {}) {
+  constructor({ env = process.env, home = os.homedir(), cwd } = {}) {
     this.env = { ...env };
     this.home = home;
+    this.cwd = cwd;
     this.command = codexCommand(env);
     this.codexHome = defaultCodexHome(env, home);
     this.transport = codexAppServerTransport(env);
@@ -223,6 +224,7 @@ export class CodexAppServerClient {
   async startProcess() {
     this.proc = spawn(this.command, codexAppServerClientArgs(this.env), {
       env: commandEnv(this.env, this.home),
+      cwd: this.cwd,
       stdio: ["pipe", "pipe", "pipe"],
     });
     this.proc.on("error", (error) => this.rejectAll(error));
