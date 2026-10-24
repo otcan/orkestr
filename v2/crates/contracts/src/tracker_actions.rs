@@ -36,6 +36,30 @@ pub struct TrackerSourceSelect {
     pub acknowledge_read_only_access: bool,
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TrackerSourceRemove {
+    pub request_key: String,
+    pub expected_revision: i64,
+}
+
+/// One owner-authorized check; no implicit recurring automation.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TrackerCheckRequest {
+    pub request_key: String,
+    pub expected_source_revision: i64,
+    pub expected_recipe: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct TrackerCheckReceipt {
+    pub request_key: String,
+    pub authority: Option<TrackerScanAuthority>,
+    pub cancelled: bool,
+    pub duplicate: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct TrackerSourceReceipt {
     pub request_key: String,

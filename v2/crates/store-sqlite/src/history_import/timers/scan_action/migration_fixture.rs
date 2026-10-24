@@ -4,6 +4,8 @@ use crate::Store;
 pub(crate) async fn downgrade_empty(store: &Store) {
     let mut tx = store.pool.begin().await.unwrap();
     let tables = [
+        "tracker_check_cancellations",
+        "tracker_manual_checks",
         "tracker_action_digests",
         "tracker_scan_receipts",
         "tracker_scan_attempts",

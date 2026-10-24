@@ -393,6 +393,8 @@ async fn populated_payload_prefix_upgrade_preserves_all_rows_and_foreign_links()
         "tracker_scan_authorities",
         "tracker_scan_attempts",
         "tracker_scan_receipts",
+        "tracker_check_cancellations",
+        "tracker_manual_checks",
         "tracker_action_digests",
     ] {
         expected.insert(table.into(), Vec::new());

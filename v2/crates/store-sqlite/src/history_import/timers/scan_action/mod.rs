@@ -2,6 +2,9 @@
 //! separate from model instructions. No path, credential or provider admission.
 #[cfg(test)]
 mod action_tests;
+mod check;
+#[cfg(test)]
+mod check_tests;
 mod claim;
 mod commit;
 mod enable;
@@ -9,6 +12,7 @@ mod enable;
 mod enable_tests;
 #[cfg(test)]
 pub(crate) mod migration_fixture;
+mod remove;
 #[cfg(test)]
 mod result_tests;
 mod source;

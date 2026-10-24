@@ -133,6 +133,8 @@ async fn populated_prefixes_copy_first_edges_to_50_preserve_rows_and_rollback_so
             "tracker_scan_authorities",
             "tracker_scan_attempts",
             "tracker_scan_receipts",
+            "tracker_check_cancellations",
+            "tracker_manual_checks",
             "tracker_action_digests",
         ] {
             let count: i64 = sqlx::query_scalar(&format!("SELECT count(*) FROM {table}"))

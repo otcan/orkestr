@@ -1,7 +1,7 @@
 use super::*;
 pub use orkestr_v2_contracts::tracker_actions::{
-    SelectedMailSource, TrackerScanAuthority, TrackerScanReceipt, TrackerSourceReceipt,
-    TrackerSourceSelect,
+    SelectedMailSource, TrackerCheckReceipt, TrackerCheckRequest, TrackerScanAuthority,
+    TrackerScanReceipt, TrackerSourceReceipt, TrackerSourceRemove, TrackerSourceSelect,
 };
 
 #[derive(Debug, Clone)]

@@ -6,8 +6,9 @@ CREATE TABLE tracker_source_selections (
  request_key TEXT NOT NULL CHECK(length(request_key) BETWEEN 1 AND 128),
  expected_revision INTEGER NOT NULL CHECK(expected_revision>=0),
  source_digest TEXT NOT NULL CHECK(length(source_digest)=64),
- selection_json TEXT NOT NULL CHECK(json_valid(selection_json) AND length(selection_json)<=16000),
- acknowledged INTEGER NOT NULL CHECK(acknowledged=1), created_ms INTEGER NOT NULL,
+ selection_json TEXT CHECK(selection_json IS NULL OR (json_valid(selection_json) AND length(selection_json)<=16000)),
+ acknowledged INTEGER NOT NULL CHECK(acknowledged IN(0,1)), created_ms INTEGER NOT NULL,
+ CHECK((selection_json IS NULL AND acknowledged=0) OR (selection_json IS NOT NULL AND acknowledged=1)),
  PRIMARY KEY(owner_id,conversation_id,source_revision),
  UNIQUE(owner_id,conversation_id,request_key),
  FOREIGN KEY(owner_id,conversation_id) REFERENCES trackers(owner_id,conversation_id)
@@ -105,3 +106,27 @@ CREATE TRIGGER tracker_action_digest_no_update BEFORE UPDATE ON tracker_action_d
 BEGIN SELECT RAISE(ABORT,'immutable_tracker_action_digest'); END;
 CREATE TRIGGER tracker_action_digest_no_delete BEFORE DELETE ON tracker_action_digests
 BEGIN SELECT RAISE(ABORT,'immutable_tracker_action_digest'); END;
+
+-- A request and its cancellation are separate immutable decisions. A negative
+-- cancellation may arrive before creation and permanently blocks that key.
+CREATE TABLE tracker_manual_checks (
+ owner_id TEXT NOT NULL, conversation_id TEXT NOT NULL, request_key TEXT NOT NULL,
+ semantic_digest TEXT NOT NULL CHECK(length(semantic_digest)=64),
+ namespace TEXT NOT NULL UNIQUE, authority_json TEXT NOT NULL CHECK(json_valid(authority_json)),
+ created_ms INTEGER NOT NULL, PRIMARY KEY(owner_id,conversation_id,request_key),
+ FOREIGN KEY(owner_id,conversation_id) REFERENCES trackers(owner_id,conversation_id),
+ FOREIGN KEY(owner_id,namespace) REFERENCES dormant_timers(owner_id,namespace)
+);
+CREATE TABLE tracker_check_cancellations (
+ owner_id TEXT NOT NULL, conversation_id TEXT NOT NULL, request_key TEXT NOT NULL,
+ created_ms INTEGER NOT NULL, PRIMARY KEY(owner_id,conversation_id,request_key),
+ FOREIGN KEY(owner_id,conversation_id) REFERENCES trackers(owner_id,conversation_id)
+);
+CREATE TRIGGER tracker_manual_check_no_update BEFORE UPDATE ON tracker_manual_checks
+BEGIN SELECT RAISE(ABORT,'immutable_tracker_manual_check'); END;
+CREATE TRIGGER tracker_manual_check_no_delete BEFORE DELETE ON tracker_manual_checks
+BEGIN SELECT RAISE(ABORT,'immutable_tracker_manual_check'); END;
+CREATE TRIGGER tracker_check_cancel_no_update BEFORE UPDATE ON tracker_check_cancellations
+BEGIN SELECT RAISE(ABORT,'immutable_tracker_check_cancel'); END;
+CREATE TRIGGER tracker_check_cancel_no_delete BEFORE DELETE ON tracker_check_cancellations
+BEGIN SELECT RAISE(ABORT,'immutable_tracker_check_cancel'); END;

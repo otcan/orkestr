@@ -61,11 +61,7 @@ impl Store {
             .bind(owner.to_string()).bind(conversation.to_string()).bind(revision)
             .bind(&request.request_key).bind(request.expected_revision).bind(&digest).bind(&source).bind(now)
             .execute(&mut *tx).await.map_err(unavailable)?;
-        // Source changes preserve prior evidence and revoke its pending intake.
-        sqlx::query("UPDATE tracker_unresolved_events SET state='quarantined' WHERE owner_id=? AND conversation_id=? AND state='pending'")
-            .bind(owner.to_string()).bind(conversation.to_string()).execute(&mut *tx).await.map_err(unavailable)?;
-        sqlx::query("UPDATE tracker_ledger SET outcome='quarantined_source' WHERE owner_id=? AND conversation_id=? AND outcome='unresolved'")
-            .bind(owner.to_string()).bind(conversation.to_string()).execute(&mut *tx).await.map_err(unavailable)?;
+        quarantine(&mut tx, owner, conversation).await?;
         sqlx::query("UPDATE trackers SET source_json=?,source_revision=?,cursor_json=NULL,updated_ms=? WHERE owner_id=? AND conversation_id=?")
             .bind(source).bind(revision).bind(now).bind(owner.to_string()).bind(conversation.to_string())
             .execute(&mut *tx).await.map_err(unavailable)?;
@@ -101,4 +97,17 @@ impl Store {
         tx.commit().await.map_err(unavailable)?;
         Ok(receipt)
     }
+}
+
+pub(super) async fn quarantine(
+    tx: &mut Transaction<'_, Sqlite>,
+    owner: &OwnerId,
+    conversation: &ConversationId,
+) -> Result<()> {
+    // Source changes preserve prior evidence and revoke its pending intake.
+    sqlx::query("UPDATE tracker_unresolved_events SET state='quarantined' WHERE owner_id=? AND conversation_id=? AND state='pending'")
+        .bind(owner.to_string()).bind(conversation.to_string()).execute(&mut **tx).await.map_err(unavailable)?;
+    sqlx::query("UPDATE tracker_ledger SET outcome='quarantined_source' WHERE owner_id=? AND conversation_id=? AND outcome='unresolved'")
+        .bind(owner.to_string()).bind(conversation.to_string()).execute(&mut **tx).await.map_err(unavailable)?;
+    Ok(())
 }
