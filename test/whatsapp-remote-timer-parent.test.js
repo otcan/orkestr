@@ -9,6 +9,7 @@ import { deliverWhatsAppReplies } from "../packages/connectors/src/whatsapp.js";
 import { appendThreadMessage, createThread, listThreadMessages } from "../packages/core/src/threads.js";
 import { writeConnectorConfig } from "../packages/storage/src/config.js";
 import { listEvents } from "../packages/storage/src/store.js";
+import { upsertWhatsAppConnectorAccount } from "../packages/connectors/src/whatsapp-account-registry.js";
 
 const timerRowId = "0b6c1f5e-8f3a-4c2d-9e7b-1a2b3c4d5e6f";
 
@@ -25,7 +26,7 @@ function timerRow(overrides = {}) {
   };
 }
 
-async function fixture(t, rows) {
+async function fixture(t, rows, binding = {}) {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "remote-timer-parent-"));
   t.after(() => fs.rm(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 }));
   const env = {
@@ -50,6 +51,7 @@ async function fixture(t, rows) {
     binding: {
       connector: "whatsapp", chatId: "example-chat", responderAccountId: "example-account",
       remoteBackend: "example", remoteThreadId: "example-remote-thread",
+      ...binding,
     },
   }, env);
   const runtime = { inputs: [], acks: [], other: [] };
@@ -140,6 +142,42 @@ test("a V2 conversation post row keeps its known author on the local parent", as
     assert.equal(parent.postAuthor, expected);
   }
 });
+
+for (const [boundAccount, remoteAccount] of [["example-account", "example-runtime"], ["example-runtime", "example-account"]]) {
+test(`registered timer account identities ${boundAccount} → ${remoteAccount} deliver exactly once`, async t => {
+  const f = await fixture(t, [timerRow({ accountId: remoteAccount })], { responderAccountId: boundAccount });
+  await upsertWhatsAppConnectorAccount({ accountId: "example-account", runtimeAccountId: "example-runtime" }, f.env);
+  await f.deliver();
+  await f.deliver();
+  const messages = await listThreadMessages("example-thread", f.env);
+  assert.equal(messages.filter(row => row.role === "user").length, 1);
+  assert.equal(messages.filter(row => row.role === "assistant").length, 1);
+  assert.equal(f.sends.length, 1);
+  assert.equal(f.runtime.acks.length, 1);
+  assert.equal(f.runtime.acks[0].parentPublicMessageId, `v2timer-${timerRowId}`);
+  assert.deepEqual(f.runtime.inputs, []);
+});
+}
+
+for (const reason of ["unregistered", "ambiguous", "foreign owner", "disabled", "revoked", "foreign chat", "foreign thread"]) {
+  test(`a timer account alias is refused when ${reason}`, async t => {
+    const f = await fixture(t, [timerRow({ accountId: "example-runtime",
+      ...(reason === "foreign chat" ? { chatId: "other-chat" } : {}),
+      ...(reason === "foreign thread" ? { publicThreadId: "other-thread" } : {}),
+    })]);
+    if (reason !== "unregistered") await upsertWhatsAppConnectorAccount({
+      accountId: "example-account", runtimeAccountId: "example-runtime",
+      ...(reason === "foreign owner" ? { ownerUserId: "another-owner" } : {}),
+      ...(["disabled", "revoked"].includes(reason) ? { status: reason } : {}),
+    }, f.env);
+    if (reason === "ambiguous") await upsertWhatsAppConnectorAccount({ accountId: "other-account", runtimeAccountId: "example-runtime" }, f.env);
+    await f.deliver();
+    assert.deepEqual(await listThreadMessages("example-thread", f.env), []);
+    assert.equal(f.sends.length, 0);
+    assert.deepEqual(f.runtime.acks, []);
+    assert.deepEqual(f.runtime.inputs, []);
+  });
+}
 
 test("materializing a V2 timer parent records one server event for the relay's notification proof", async t => {
   const f = await fixture(t, [timerRow()]);

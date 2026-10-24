@@ -12,6 +12,9 @@
 // remote runtime, or mirrored to WhatsApp.
 import { appendThreadMessage } from "../../core/src/threads.js";
 import { appendEvent } from "../../storage/src/store.js";
+import { resourceOwnerUserId } from "../../core/src/policy.js";
+import { readWhatsAppConnectorAccounts } from "./whatsapp-account-registry.js";
+import { whatsappAccountLookupKeys } from "./whatsapp-account-identity.js";
 
 export const remoteTimerParentSource = "orkestr-v2-timer";
 // Server receipt for a materialized parent; the scoped relay's timer
@@ -25,9 +28,24 @@ function clean(value) {
   return typeof value === "string" ? value.trim() : "";
 }
 
+function sameTimerAccount(thread, expected, received, accounts, env) {
+  expected = clean(expected);
+  received = clean(received);
+  if (!expected || !received) return false;
+  if (expected === received) return true;
+  // Both selectors must identify the same unique, active registry record.
+  // Never infer an alias from a role name or select the first matching account.
+  const matches = selector => accounts.filter(account => !account.deletedAt &&
+    !["disabled", "revoked"].includes(account.status) &&
+    whatsappAccountLookupKeys(account, env).some(key => key.toLowerCase() === selector.toLowerCase()));
+  const left = matches(expected), right = matches(received);
+  return left.length === 1 && right.length === 1 && left[0] === right[0] &&
+    resourceOwnerUserId(left[0], env) === resourceOwnerUserId(thread, env);
+}
+
 // Returns the local id to materialize, or "" when the row is not an exact,
 // unambiguous V2 timer row for this thread and binding.
-export function remoteTimerParentId(thread, remote, remoteMessage, remoteMessages = []) {
+export function remoteTimerParentId(thread, remote, remoteMessage, remoteMessages = [], { accounts = [], env = process.env } = {}) {
   const id = remoteMessage?.id;
   if (typeof id !== "string" || !uuidPattern.test(id)) return "";
   const publicId = `v2timer-${id}`;
@@ -39,7 +57,8 @@ export function remoteTimerParentId(thread, remote, remoteMessage, remoteMessage
   const binding = remote?.binding || {};
   const accountId = binding.responderAccountId || binding.outboundAccountId || binding.accountId;
   const chatId = binding.chatId;
-  if (!chatId || !accountId || remoteMessage.chatId !== chatId || remoteMessage.accountId !== accountId) return "";
+  if (!chatId || remoteMessage.chatId !== chatId ||
+      !sameTimerAccount(thread, accountId, remoteMessage.accountId, accounts, env)) return "";
   if (remoteMessages.filter((row) => row?.publicMessageId === publicId).length !== 1 ||
       remoteMessages.filter((row) => (row?.id || row?.messageId) === id).length !== 1) return "";
   return publicId;
@@ -54,7 +73,10 @@ function compatibleTimerParent(local, remote, remoteMessageId) {
 // Maps (or creates once) the local parent for a V2 timer row. Returns the local
 // message and whether it was created, or null when the row does not qualify.
 export async function materializeRemoteTimerParent({ thread, remote, remoteMessage, remoteMessages, localMessages, env }) {
-  const publicId = remoteTimerParentId(thread, remote, remoteMessage, remoteMessages);
+  const binding = remote?.binding || {};
+  const accountId = binding.responderAccountId || binding.outboundAccountId || binding.accountId;
+  const accounts = accountId === remoteMessage.accountId ? [] : await readWhatsAppConnectorAccounts(env);
+  const publicId = remoteTimerParentId(thread, remote, remoteMessage, remoteMessages, { accounts, env });
   if (!publicId) return null;
   const existing = localMessages.find((message) => message.id === publicId);
   if (existing) return compatibleTimerParent(existing, remote, remoteMessage.id) ? { message: existing, created: false } : null;
