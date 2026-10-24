@@ -425,7 +425,18 @@ async fn provider_handoff_context_reaches_each_fresh_role_once_and_never_replays
         .await,
         2
     );
-    let mut tx = fresh.pool.begin().await.unwrap();
+    // The exact first envelopes and once markers survive a Store restart.
+    let reopened = Store::open(&old.f.root.join("core.sqlite3")).await.unwrap();
+    let envelopes: Vec<String> = sqlx::query_scalar(
+        "SELECT turn_text FROM conversation_handoff_context_delivery ORDER BY session_id",
+    )
+    .fetch_all(&reopened.pool)
+    .await
+    .unwrap();
+    assert_eq!(envelopes.len(), 2);
+    assert!(envelopes.iter().any(|text| text == deep.text()));
+    assert!(envelopes.iter().any(|text| text == fast.text()));
+    let mut tx = reopened.pool.begin().await.unwrap();
     let later = crate::production_runtime::execution_window::handoff_context::attach(
         &mut tx,
         deep.provider(),

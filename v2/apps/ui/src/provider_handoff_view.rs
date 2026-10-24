@@ -77,6 +77,12 @@ pub fn ProviderHandoff(
             button { r#type: "button", onclick: move |_| opened.set(!opened()), "Change provider with context" }
             if opened() {
                 p { "Start a new session with another provider and carry a reviewed history summary. Previous messages stay in history. Send a new message afterward to start work." }
+                if let Some(base) = settings() {
+                    p { "Current provider: {base.provider.as_str()}, model: {base.model.as_deref().unwrap_or(\"default\")} (settings revision {base.revision})." }
+                }
+                if let Some(previous) = window() {
+                    p { "Previous work window: " code { "{previous.window_id}" } " (generation {previous.generation}, {orkestr_v2_ui::live_map::window_label(previous.state)})." }
+                }
                 if let Some(current) = form() {
                     form { onsubmit: move |event| {
                         event.prevent_default();
