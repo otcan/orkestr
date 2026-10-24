@@ -1,6 +1,32 @@
 use super::*;
 
 #[tokio::test]
+async fn provider_handoff_missing_current_schema_never_uses_legacy_fixture_compatibility() {
+    let p = pending().await;
+    let mut tx = p.w.f.store.pool.begin().await.unwrap();
+    for table in [
+        "conversation_handoff_context_delivery",
+        "conversation_handoff_sessions",
+        "conversation_provider_handoffs",
+    ] {
+        sqlx::query(&format!("DROP TABLE {table}"))
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+    }
+    assert!(matches!(
+        crate::production_runtime::execution_window::handoff_context::attach(
+            &mut tx,
+            &p.deep,
+            "synthetic new input".into()
+        )
+        .await,
+        Err(RuntimeStoreError::Unavailable)
+    ));
+    tx.rollback().await.unwrap();
+}
+
+#[tokio::test]
 async fn legacy_denied_model_cannot_launch_but_can_handoff_without_changing_reply_policy() {
     let p = pending().await;
     let w = &p.w;

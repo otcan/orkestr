@@ -37,6 +37,13 @@ pub(in crate::production_runtime) async fn attach(
     admission: &ProviderAdmission,
     text: String,
 ) -> Result<String> {
+    // Historical unit fixtures deliberately dispatch while producing a pre-73
+    // database, before their real Store upgrade. Production never skips this
+    // read: missing continuity tables must still fail closed there.
+    #[cfg(test)]
+    if super::provider_handoff_migration_fixture::legacy_dispatch_fixture(tx).await? {
+        return Ok(text);
+    }
     let row = sqlx::query("SELECT h.id,h.history_summary,h.history_sha256,h.to_provider FROM conversation_handoff_sessions b JOIN conversation_provider_handoffs h ON h.id=b.handoff_id AND h.owner_id=b.owner_id AND h.conversation_id=b.conversation_id WHERE b.session_id=? AND b.owner_id=? AND b.conversation_id=?")
         .bind(admission.run.session_id.to_string()).bind(admission.run.owner_id.to_string())
         .bind(admission.run.conversation_id.to_string()).fetch_optional(&mut *tx).await.map_err(db)?;
