@@ -8,6 +8,8 @@ use sqlx::{
 };
 use std::{path::Path, time::Duration};
 use uuid::Uuid;
+pub mod tracker;
+pub use tracker::{ScanRecord, ScannedMessage, TrackerCaller, TrackerConfig};
 pub mod archived_history;
 pub use archived_history::{
     archived_checksum_next, archived_message_canonical, archived_message_digest,
