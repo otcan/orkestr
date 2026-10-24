@@ -267,7 +267,7 @@ impl TrackerEnable {
     }
 }
 
-/// Fold `absorb` into `keep` (events, links); `absorb` is removed.
+/// Fold `absorb` into `keep` in the active table, retaining original history.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TrackerMerge {

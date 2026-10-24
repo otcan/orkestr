@@ -48,7 +48,9 @@ impl Store {
         conversation: &ConversationId,
         source_json: Option<&str>,
     ) -> Result<TrackerConfig> {
-        if source_json.is_some_and(|s| s.len() > SOURCE_MAX || serde_json::from_str::<serde_json::Value>(s).is_err()) {
+        if source_json.is_some_and(|s| {
+            s.len() > SOURCE_MAX || serde_json::from_str::<serde_json::Value>(s).is_err()
+        }) {
             return Err(ResourceError::Invalid);
         }
         let mut tx = self
@@ -56,8 +58,17 @@ impl Store {
             .await?;
         let before = config(&mut tx, owner, conversation).await?;
         if before.source_json.as_deref() != source_json {
-            sqlx::query("UPDATE trackers SET source_json=?,cursor_json=NULL,updated_ms=? WHERE owner_id=? AND conversation_id=?")
+            let revision = before
+                .source_revision
+                .checked_add(1)
+                .ok_or(ResourceError::Unavailable)?;
+            sqlx::query("UPDATE tracker_unresolved_events SET state='quarantined' WHERE owner_id=? AND conversation_id=? AND state='pending'")
+                .bind(owner.to_string()).bind(conversation.to_string()).execute(&mut *tx).await.map_err(unavailable)?;
+            sqlx::query("UPDATE tracker_ledger SET outcome='quarantined_source' WHERE owner_id=? AND conversation_id=? AND outcome='unresolved'")
+                .bind(owner.to_string()).bind(conversation.to_string()).execute(&mut *tx).await.map_err(unavailable)?;
+            sqlx::query("UPDATE trackers SET source_json=?,source_revision=?,cursor_json=NULL,updated_ms=? WHERE owner_id=? AND conversation_id=?")
                 .bind(source_json)
+                .bind(revision)
                 .bind(now_ms())
                 .bind(owner.to_string())
                 .bind(conversation.to_string())
@@ -77,21 +88,36 @@ impl Store {
         &self,
         caller: TrackerCaller<'_>,
         conversation: &ConversationId,
+        expected_source_revision: i64,
         messages: &[ScannedMessage],
         cursor_json: &str,
         summary_json: &str,
     ) -> Result<ScanRecord> {
         if cursor_json.len() > CURSOR_MAX
             || summary_json.len() > SOURCE_MAX
+            || serde_json::from_str::<serde_json::Value>(cursor_json).is_err()
+            || serde_json::from_str::<serde_json::Value>(summary_json).is_err()
+            || messages.len() > 500
             || messages.iter().any(|m| {
                 m.message_ref.len() != 24
-                    || m.outcome.as_ref().is_ok_and(|events| events.iter().any(|e| !e.is_valid()))
+                    || !m.message_ref.bytes().all(|b| b.is_ascii_hexdigit())
+                    || m.outcome.as_ref().is_ok_and(|events| {
+                        events.is_empty()
+                            || events.len() > TRACKER_EVENTS_PER_REQUEST
+                            || events.iter().any(|e| {
+                                !e.is_valid()
+                                    || e.message_ref.as_deref() != Some(m.message_ref.as_str())
+                            })
+                    })
             })
         {
             return Err(ResourceError::Invalid);
         }
         let (mut tx, owner) = self.tracker_scope(caller, conversation, true).await?;
         let config = config(&mut tx, &owner, conversation).await?;
+        if config.source_revision != expected_source_revision {
+            return Err(ResourceError::Conflict("tracker_source_revision_mismatch"));
+        }
         let mut record = ScanRecord::default();
         for message in messages {
             if ledger_has(&mut tx, &owner, conversation, &message.message_ref).await? {
@@ -102,17 +128,24 @@ impl Store {
                 Ok(events) => {
                     record.labelled += 1;
                     for event in events {
-                        let change = apply_one(&mut tx, &owner, conversation, &config.notify_on, event).await?;
+                        let change =
+                            apply_one(&mut tx, &owner, conversation, &config.notify_on, event)
+                                .await?;
                         record.changes.push(change);
                     }
-                    ledger_record(&mut tx, &owner, conversation, &message.message_ref, "event").await?;
+                    ledger_record(&mut tx, &owner, conversation, &message.message_ref, "event")
+                        .await?;
                 }
                 Err(reason) => {
                     record.dropped += 1;
-                    ledger_record(&mut tx, &owner, conversation, &message.message_ref, reason).await?;
+                    ledger_record(&mut tx, &owner, conversation, &message.message_ref, reason)
+                        .await?;
                 }
             }
         }
+        record.changes.extend(
+            super::unresolved::reconsider(&mut tx, &owner, conversation, &config.notify_on).await?,
+        );
         let now = now_ms();
         sqlx::query("UPDATE trackers SET cursor_json=?,last_scan_ms=?,last_scan_json=?,updated_ms=? WHERE owner_id=? AND conversation_id=?")
             .bind(cursor_json)

@@ -1,16 +1,20 @@
-//! Per-conversation tracker (migration 0067): application rows with an
+//! Per-conversation tracker (migration 0074): application rows with an
 //! append-only event timeline, URL and company+role dedupe, a processed
 //! message ledger and an optional conversation-scoped grant so the
 //! conversation's assistant can read the table and record events without
 //! owner authority. Nothing here admits input, wakes a provider or sends.
 mod apply;
 mod edit;
+mod merge;
+#[cfg(test)]
+pub(crate) mod migration_fixture;
 mod scan;
-pub use apply::UNKNOWN_COMPANY;
-pub use scan::{ScanRecord, ScannedMessage};
+mod unresolved;
 use crate::conversation_resources::{now_ms, owned, unavailable, ResourceError};
 use crate::Store;
+pub use apply::UNKNOWN_COMPANY;
 use orkestr_v2_contracts::*;
+pub use scan::{ScanRecord, ScannedMessage};
 use sqlx::{sqlite::SqliteRow, Row, Sqlite, Transaction};
 use uuid::Uuid;
 
@@ -83,6 +87,7 @@ pub struct TrackerConfig {
     pub notify_on: Vec<TrackerEventKind>,
     pub grant_issued: bool,
     pub source_json: Option<String>,
+    pub source_revision: i64,
     pub cursor_json: Option<String>,
     pub last_scan_ms: Option<i64>,
     pub last_scan_json: Option<String>,
@@ -94,7 +99,7 @@ pub(crate) async fn config(
     conversation: &ConversationId,
 ) -> Result<TrackerConfig> {
     let row = sqlx::query(
-        "SELECT recipe,notify_on_json,grant_hash,source_json,cursor_json,last_scan_ms,last_scan_json FROM trackers WHERE owner_id=? AND conversation_id=?",
+        "SELECT recipe,notify_on_json,grant_hash,source_json,source_revision,cursor_json,last_scan_ms,last_scan_json FROM trackers WHERE owner_id=? AND conversation_id=?",
     )
     .bind(owner.to_string())
     .bind(conversation.to_string())
@@ -106,9 +111,13 @@ pub(crate) async fn config(
         serde_json::from_str(&row.get::<String, _>("notify_on_json")).map_err(unavailable)?;
     Ok(TrackerConfig {
         recipe: row.get("recipe"),
-        notify_on: notify.iter().filter_map(|k| TrackerEventKind::parse(k)).collect(),
+        notify_on: notify
+            .iter()
+            .filter_map(|k| TrackerEventKind::parse(k))
+            .collect(),
         grant_issued: row.get::<Option<String>, _>("grant_hash").is_some(),
         source_json: row.get("source_json"),
+        source_revision: row.get("source_revision"),
         cursor_json: row.get("cursor_json"),
         last_scan_ms: row.get("last_scan_ms"),
         last_scan_json: row.get("last_scan_json"),
@@ -203,7 +212,7 @@ impl Store {
         let (mut tx, owner) = self.tracker_scope(caller, conversation, false).await?;
         let config = config(&mut tx, &owner, conversation).await?;
         let rows = sqlx::query(&format!(
-            "SELECT {ROW_COLUMNS} FROM tracker_rows WHERE owner_id=? AND conversation_id=? ORDER BY last_contact_ms DESC,id LIMIT ?"
+            "SELECT {ROW_COLUMNS} FROM tracker_rows WHERE owner_id=? AND conversation_id=? AND NOT EXISTS(SELECT 1 FROM tracker_row_merges m WHERE m.owner_id=tracker_rows.owner_id AND m.conversation_id=tracker_rows.conversation_id AND m.absorb_id=tracker_rows.id) ORDER BY last_contact_ms DESC,id LIMIT ?"
         ))
         .bind(owner.to_string())
         .bind(conversation.to_string())
@@ -230,12 +239,14 @@ impl Store {
     ) -> Result<Vec<TrackerEvent>> {
         let (mut tx, owner) = self.tracker_scope(caller, conversation, false).await?;
         let events = sqlx::query(
-            "SELECT id,row_id,kind,occurred_ms,source,message_ref,sender_domain,evidence,classifier,confidence FROM tracker_events
-             WHERE owner_id=? AND conversation_id=? AND row_id=? ORDER BY occurred_ms,recorded_ms,id LIMIT 500",
+            "WITH RECURSIVE history(row_id) AS (SELECT ? UNION SELECT m.absorb_id FROM tracker_row_merges m JOIN history h ON h.row_id=m.keep_id WHERE m.owner_id=? AND m.conversation_id=?) SELECT id,row_id,kind,occurred_ms,source,message_ref,sender_domain,evidence,classifier,confidence FROM tracker_events
+             WHERE owner_id=? AND conversation_id=? AND row_id IN (SELECT row_id FROM history) ORDER BY occurred_ms,recorded_ms,id LIMIT 500",
         )
+        .bind(row.to_string())
         .bind(owner.to_string())
         .bind(conversation.to_string())
-        .bind(row.to_string())
+        .bind(owner.to_string())
+        .bind(conversation.to_string())
         .fetch_all(&mut *tx)
         .await
         .map_err(unavailable)?;

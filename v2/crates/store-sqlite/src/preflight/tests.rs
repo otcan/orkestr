@@ -374,6 +374,19 @@ async fn populated_payload_prefix_upgrade_preserves_all_rows_and_foreign_links()
             "2|'production-conversation'|'owner'|'Synthetic'|NULL|NULL".into(),
         ],
     );
+    for table in [
+        "trackers",
+        "tracker_rows",
+        "tracker_row_links",
+        "tracker_events",
+        "tracker_ledger",
+        "tracker_batches",
+        "tracker_messages",
+        "tracker_row_merges",
+        "tracker_unresolved_events",
+    ] {
+        expected.insert(table.into(), Vec::new());
+    }
     conn.close().await.unwrap();
     let store = Store::open(&dir.db()).await.unwrap();
     let mut conn = raw(&dir.db()).await;
@@ -470,7 +483,7 @@ async fn populated_payload_prefix_upgrade_preserves_all_rows_and_foreign_links()
             .fetch_one(&mut conn)
             .await
             .unwrap(),
-        72
+        74
     );
     for table in [
         "history_imports",

@@ -23,7 +23,11 @@ fn valid_key(key: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b"-_.:".contains(&b))
 }
 
-async fn load(tx: &mut Transaction<'_, Sqlite>, sql: &str, binds: &[&str]) -> Result<Vec<TrackerRow>> {
+async fn load(
+    tx: &mut Transaction<'_, Sqlite>,
+    sql: &str,
+    binds: &[&str],
+) -> Result<Vec<TrackerRow>> {
     let mut query = sqlx::query(sql);
     for value in binds {
         query = query.bind(*value);
@@ -70,7 +74,11 @@ async fn find(
     if company.is_empty() || event.company == UNKNOWN_COMPANY {
         return Ok(None);
     }
-    let role = event.role.as_deref().map(tracker_role_key).unwrap_or_default();
+    let role = event
+        .role
+        .as_deref()
+        .map(tracker_role_key)
+        .unwrap_or_default();
     if !role.is_empty() {
         let exact = load(
             tx,
@@ -96,10 +104,16 @@ async fn find(
     .await?;
     if !role.is_empty() {
         // A role for a row that had none yet ("your application to Acme").
-        let open: Vec<TrackerRow> = candidates.into_iter().filter(|r| r.role_key.is_empty()).collect();
+        let open: Vec<TrackerRow> = candidates
+            .into_iter()
+            .filter(|r| r.role_key.is_empty())
+            .collect();
         return Ok((open.len() == 1).then(|| (open.into_iter().next().unwrap(), false)));
     }
-    let open: Vec<&TrackerRow> = candidates.iter().filter(|r| !r.status.is_terminal()).collect();
+    let open: Vec<&TrackerRow> = candidates
+        .iter()
+        .filter(|r| !r.status.is_terminal())
+        .collect();
     Ok(match open.len() {
         1 => Some((open[0].clone(), false)),
         0 => candidates.into_iter().next().map(|r| (r, false)),
@@ -108,7 +122,10 @@ async fn find(
 }
 
 fn applied_kind(kind: TrackerEventKind) -> bool {
-    matches!(kind, TrackerEventKind::Applied | TrackerEventKind::ApplicationReceived)
+    matches!(
+        kind,
+        TrackerEventKind::Applied | TrackerEventKind::ApplicationReceived
+    )
 }
 
 /// Apply one validated event inside the caller's transaction.
@@ -126,6 +143,7 @@ pub(crate) async fn apply_one(
     let matched = find(tx, (&owner_s, &conv_s), event, link.as_deref()).await?;
     let notify = notify_on.contains(&event.kind);
     if matched.is_none() && event.requires_thread {
+        super::unresolved::save(tx, owner, conversation, event).await?;
         return Ok(TrackerChange {
             kind: TrackerChangeKind::Unmatched,
             row_id: None,
@@ -139,8 +157,14 @@ pub(crate) async fn apply_one(
     }
     let (row, change) = match matched {
         None => {
+            let active: i64 = sqlx::query_scalar("SELECT count(*) FROM tracker_rows r WHERE r.owner_id=? AND r.conversation_id=? AND NOT EXISTS(SELECT 1 FROM tracker_row_merges m WHERE m.owner_id=r.owner_id AND m.conversation_id=r.conversation_id AND m.absorb_id=r.id)")
+                .bind(&owner_s).bind(&conv_s).fetch_one(&mut **tx).await.map_err(unavailable)?;
+            if active >= TRACKER_ROWS_MAX as i64 {
+                return Err(ResourceError::Conflict("tracker_full"));
+            }
             let status = event.kind.status().unwrap_or(TrackerStatus::Saved);
-            let unknown = event.company == UNKNOWN_COMPANY || tracker_company_key(&event.company).is_empty();
+            let unknown =
+                event.company == UNKNOWN_COMPANY || tracker_company_key(&event.company).is_empty();
             let role = event.role.clone().unwrap_or_default();
             let row = TrackerRow {
                 id: Uuid::new_v4(),
@@ -153,7 +177,10 @@ pub(crate) async fn apply_one(
                 status_changed_ms: event.occurred_ms,
                 applied_ms: applied_kind(event.kind).then_some(event.occurred_ms),
                 last_contact_ms: event.occurred_ms,
-                next_step: event.next_step.clone().or(status.default_next_step().map(str::to_owned)),
+                next_step: event
+                    .next_step
+                    .clone()
+                    .or(status.default_next_step().map(str::to_owned)),
                 link: link.clone(),
                 location: event.location.clone(),
                 notes: String::new(),
@@ -192,7 +219,11 @@ pub(crate) async fn apply_one(
                 _ => tracker_transition(row.status, event.kind),
             };
             // Older mail never closes a row that moved on since.
-            if status != row.status && status.is_terminal() && event.occurred_ms < row.status_changed_ms && !manual {
+            if status != row.status
+                && status.is_terminal()
+                && event.occurred_ms < row.status_changed_ms
+                && !manual
+            {
                 status = row.status;
                 review = true;
             }
@@ -200,7 +231,10 @@ pub(crate) async fn apply_one(
             if changed {
                 row.status = status;
                 row.status_changed_ms = event.occurred_ms.max(row.status_changed_ms);
-                row.next_step = event.next_step.clone().or(status.default_next_step().map(str::to_owned));
+                row.next_step = event
+                    .next_step
+                    .clone()
+                    .or(status.default_next_step().map(str::to_owned));
             } else if event.next_step.is_some() {
                 row.next_step = event.next_step.clone();
             }
@@ -293,6 +327,14 @@ pub(crate) async fn ledger_record(
     message_ref: &str,
     outcome: &str,
 ) -> Result<()> {
+    let pending: i64 = sqlx::query_scalar("SELECT count(*) FROM tracker_unresolved_events WHERE owner_id=? AND conversation_id=? AND message_ref=? AND state='pending'")
+        .bind(owner.to_string()).bind(conversation.to_string()).bind(message_ref)
+        .fetch_one(&mut **tx).await.map_err(unavailable)?;
+    let outcome = if outcome == "event" && pending != 0 {
+        "unresolved"
+    } else {
+        outcome
+    };
     sqlx::query("INSERT OR IGNORE INTO tracker_ledger(owner_id,conversation_id,message_ref,outcome,recorded_ms) VALUES(?,?,?,?,?)")
         .bind(owner.to_string())
         .bind(conversation.to_string())
@@ -322,7 +364,11 @@ pub(crate) async fn apply_events(
     }
     let mut changes = Vec::with_capacity(events.len());
     for event in events {
-        if event.message_ref.as_ref().is_some_and(|r| known.contains(r)) {
+        if event
+            .message_ref
+            .as_ref()
+            .is_some_and(|r| known.contains(r))
+        {
             changes.push(TrackerChange {
                 kind: TrackerChangeKind::Duplicate,
                 row_id: None,
@@ -382,16 +428,17 @@ impl Store {
             }
             return serde_json::from_str(&changes).map_err(unavailable);
         }
-        let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM tracker_rows WHERE owner_id=? AND conversation_id=?")
-            .bind(owner.to_string())
-            .bind(conversation.to_string())
-            .fetch_one(&mut *tx)
-            .await
-            .map_err(unavailable)?;
-        if rows as usize + request.events.len() > TRACKER_ROWS_MAX {
-            return Err(ResourceError::Conflict("tracker_full"));
-        }
-        let changes = apply_events(&mut tx, &owner, conversation, &config.notify_on, &request.events).await?;
+        let mut changes = apply_events(
+            &mut tx,
+            &owner,
+            conversation,
+            &config.notify_on,
+            &request.events,
+        )
+        .await?;
+        changes.extend(
+            super::unresolved::reconsider(&mut tx, &owner, conversation, &config.notify_on).await?,
+        );
         let set = TrackerChangeset { changes };
         sqlx::query("INSERT INTO tracker_batches(owner_id,conversation_id,request_key,digest,changes_json,created_ms) VALUES(?,?,?,?,?,?)")
             .bind(owner.to_string())

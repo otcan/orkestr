@@ -22,7 +22,7 @@ fn manual_kind(status: TrackerStatus) -> TrackerEventKind {
     }
 }
 
-async fn one(
+pub(super) async fn one(
     tx: &mut Transaction<'_, Sqlite>,
     owner: &OwnerId,
     conversation: &ConversationId,
@@ -57,6 +57,7 @@ impl Store {
             .owner_scope(credential, owner, conversation, true)
             .await?;
         super::config(&mut tx, owner, conversation).await?;
+        super::merge::ensure_active(&mut tx, owner, conversation, id).await?;
         let mut row = one(&mut tx, owner, conversation, id).await?;
         if row.revision != edit.expected_revision {
             return Err(ResourceError::Conflict("tracker_row_revision_mismatch"));
@@ -115,81 +116,5 @@ impl Store {
         }
         tx.commit().await.map_err(unavailable)?;
         Ok(row)
-    }
-
-    /// Fold `absorb` into `keep`: events and links move, counts add up, the
-    /// later contact wins, and `absorb` is deleted. Status stays `keep`'s
-    /// unless `absorb` is further along (or terminal).
-    pub async fn merge_tracker_rows(
-        &self,
-        credential: &str,
-        owner: &OwnerId,
-        conversation: &ConversationId,
-        merge: &TrackerMerge,
-    ) -> Result<TrackerRow> {
-        if merge.keep == merge.absorb {
-            return Err(ResourceError::Invalid);
-        }
-        let mut tx = self
-            .owner_scope(credential, owner, conversation, true)
-            .await?;
-        let mut keep = one(&mut tx, owner, conversation, merge.keep).await?;
-        let absorb = one(&mut tx, owner, conversation, merge.absorb).await?;
-        let status = match (keep.status.rank(), absorb.status.rank()) {
-            _ if absorb.status.is_terminal() => absorb.status,
-            (Some(a), Some(b)) if b > a => absorb.status,
-            _ => keep.status,
-        };
-        if status != keep.status {
-            keep.status = status;
-            keep.status_changed_ms = keep.status_changed_ms.max(absorb.status_changed_ms);
-        }
-        keep.applied_ms = match (keep.applied_ms, absorb.applied_ms) {
-            (Some(a), Some(b)) => Some(a.min(b)),
-            (a, b) => a.or(b),
-        };
-        keep.last_contact_ms = keep.last_contact_ms.max(absorb.last_contact_ms);
-        if keep.role.is_empty() {
-            keep.role = absorb.role.clone();
-            keep.role_key = absorb.role_key.clone();
-        }
-        keep.link = keep.link.or(absorb.link.clone());
-        keep.location = keep.location.or(absorb.location.clone());
-        if !absorb.notes.is_empty() {
-            keep.notes = if keep.notes.is_empty() {
-                absorb.notes.clone()
-            } else {
-                format!("{}\n{}", keep.notes, absorb.notes)
-            }
-            .chars()
-            .take(TRACKER_NOTES_MAX)
-            .collect();
-        }
-        keep.events_count += absorb.events_count;
-        keep.revision += 1;
-        let (o, c) = (owner.to_string(), conversation.to_string());
-        for sql in [
-            "UPDATE tracker_events SET row_id=? WHERE row_id=? AND owner_id=? AND conversation_id=?",
-            "UPDATE OR IGNORE tracker_row_links SET row_id=? WHERE row_id=? AND owner_id=? AND conversation_id=?",
-            "UPDATE tracker_messages SET row_id=? WHERE row_id=? AND owner_id=? AND conversation_id=?",
-        ] {
-            sqlx::query(sql)
-                .bind(keep.id.to_string()).bind(absorb.id.to_string()).bind(&o).bind(&c)
-                .execute(&mut *tx).await.map_err(unavailable)?;
-        }
-        sqlx::query("DELETE FROM tracker_row_links WHERE row_id=?")
-            .bind(absorb.id.to_string())
-            .execute(&mut *tx).await.map_err(unavailable)?;
-        sqlx::query("DELETE FROM tracker_rows WHERE id=?")
-            .bind(absorb.id.to_string())
-            .execute(&mut *tx).await.map_err(unavailable)?;
-        sqlx::query("UPDATE tracker_rows SET role=?,role_key=?,status=?,status_changed_ms=?,applied_ms=?,last_contact_ms=?,link=?,location=?,notes=?,events_count=?,revision=?,updated_ms=? WHERE id=?")
-            .bind(&keep.role).bind(&keep.role_key).bind(keep.status.as_str()).bind(keep.status_changed_ms)
-            .bind(keep.applied_ms).bind(keep.last_contact_ms).bind(&keep.link).bind(&keep.location)
-            .bind(&keep.notes).bind(i64::from(keep.events_count)).bind(keep.revision).bind(now_ms())
-            .bind(keep.id.to_string())
-            .execute(&mut *tx).await.map_err(unavailable)?;
-        tx.commit().await.map_err(unavailable)?;
-        Ok(keep)
     }
 }

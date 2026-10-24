@@ -104,7 +104,13 @@ async fn enable(
         .map_err(failure)?;
     let value = state
         .store
-        .tracker_page(TrackerCaller::Owner { credential: &credential, owner: &owner }, &conversation)
+        .tracker_page(
+            TrackerCaller::Owner {
+                credential: &credential,
+                owner: &owner,
+            },
+            &conversation,
+        )
         .await
         .map_err(failure)?;
     Ok(Json(value).into_response())
@@ -150,7 +156,13 @@ async fn edit(
     let request = body(request)?;
     let value = state
         .store
-        .edit_tracker_row(&credential, &owner, &conversation(&id)?, row_id(&row)?, &request)
+        .edit_tracker_row(
+            &credential,
+            &owner,
+            &conversation(&id)?,
+            row_id(&row)?,
+            &request,
+        )
         .await
         .map_err(failure)?;
     Ok(Json(value).into_response())

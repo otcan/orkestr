@@ -2,6 +2,7 @@
 use super::*;
 
 pub(super) async fn downgrade(store: &Store) {
+    crate::tracker::migration_fixture::downgrade_empty(store).await;
     let mut tx = store.pool.begin().await.unwrap();
     let count: i64 = sqlx::query_scalar("SELECT count(*) FROM production_run_models")
         .fetch_one(&mut *tx)
