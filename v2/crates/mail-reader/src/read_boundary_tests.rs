@@ -76,14 +76,23 @@ fn linked_account_directories_and_maildir_entries_are_refused() {
     let maildir = profile.join("maildir");
     fs::create_dir_all(maildir.join("cur")).unwrap();
     symlink(outside.join("INBOX"), maildir.join("cur/looks-like-mail")).unwrap();
-    assert!(scan(
+    fs::hard_link(outside.join("INBOX"), maildir.join("cur/hardlink-alias")).unwrap();
+    fs::write(
+        maildir.join("cur/safe"),
+        b"Message-ID: <safe@example.test>\nFrom: person@example.test\nSubject: Safe mail\n\nbody\n",
+    )
+    .unwrap();
+    let out = scan(
         &profile,
         &[MailFolder::Maildir(maildir)],
         &Cursor::default(),
         &ScanLimits::default(),
-        later()
+        later(),
     )
-    .is_err());
+    .unwrap();
+    assert_eq!(out.stats.skipped_unsafe, 2);
+    assert_eq!(out.envelopes.len(), 1);
+    assert_eq!(out.envelopes[0].subject, "Safe mail");
 }
 
 #[cfg(unix)]

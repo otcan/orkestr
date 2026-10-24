@@ -41,8 +41,6 @@ pub(super) fn scan_maildir(
             if name.starts_with('.') || crate::profile::is_secret_file(&name) {
                 continue;
             }
-            let file = scope.file(&path)?;
-            let meta = file.metadata()?;
             out.stats.files_seen += 1;
             // Flags after ":2," (or "!2," on Windows) change when mail is read.
             let unique = name.split([':', '!']).next().unwrap_or(&name).to_owned();
@@ -50,11 +48,7 @@ pub(super) fn scan_maildir(
             if seen.contains(&unique) {
                 continue;
             }
-            if !settled(&meta, limits, now) {
-                out.stats.skipped_unsettled += 1;
-                continue;
-            }
-            candidates.push((unique, path, meta.len()));
+            candidates.push((unique, path));
         }
     }
     if !any {
@@ -64,24 +58,31 @@ pub(super) fn scan_maildir(
     candidates.sort();
     candidates.dedup_by(|a, b| a.0 == b.0);
     let split =
-        candidates.partition_point(|(name, _, _)| after.as_ref().is_some_and(|last| name <= last));
+        candidates.partition_point(|(name, _)| after.as_ref().is_some_and(|last| name <= last));
     candidates.rotate_left(split);
-    for (unique, path, len) in candidates {
+    for (unique, path) in candidates {
         if expired(limits, out) || out.stats.examined() >= limits.max_messages {
             out.stats.truncated = true;
             break;
         }
-        if len > limits.max_message_bytes {
+        let Some(mut file) = open_entry(scope, &path, &mut out.stats)? else {
+            after = Some(unique);
+            continue;
+        };
+        let meta = file.metadata()?;
+        if !settled(&meta, limits, now) {
+            out.stats.skipped_unsettled += 1;
+            continue;
+        }
+        if meta.len() > limits.max_message_bytes {
             out.stats.skipped_large += 1;
         } else {
-            let read = scope.file(&path).and_then(|mut file| {
-                read_bounded(
-                    &mut file,
-                    limits.max_message_bytes.saturating_add(1),
-                    limits,
-                    out,
-                )
-            });
+            let read = read_bounded(
+                &mut file,
+                limits.max_message_bytes.saturating_add(1),
+                limits,
+                out,
+            );
             match read {
                 Ok(Some(bytes)) if bytes.len() as u64 > limits.max_message_bytes => {
                     out.stats.skipped_large += 1;
@@ -105,4 +106,24 @@ pub(super) fn scan_maildir(
         }
     }
     Ok(Some(FolderCursor::Maildir { seen, after }))
+}
+
+/// A live sync rename/delete and a refused unsafe entry cannot stall the folder.
+pub(super) fn open_entry(
+    scope: &Scope,
+    path: &Path,
+    stats: &mut ScanStats,
+) -> io::Result<Option<fs::File>> {
+    match scope.file(path) {
+        Ok(file) => Ok(Some(file)),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            stats.skipped_missing += 1;
+            Ok(None)
+        }
+        Err(error) if crate::scoped_fs::is_refused(&error) => {
+            stats.skipped_unsafe += 1;
+            Ok(None)
+        }
+        Err(error) => Err(error),
+    }
 }
