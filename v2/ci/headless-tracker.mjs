@@ -1,0 +1,77 @@
+import assert from 'node:assert/strict';
+import {completeTrackerCheck,trackerState} from './headless-tracker-mock.mjs';
+
+export async function trackerScenario({page,state,conversation,label,screenshot}) {
+  const before={intake:state.intakePosts.length,windows:state.windowPosts.length,whatsapp:state.chatPosts.length,instructionTimers:state.timerCalls.length};
+  state.trackers[conversation]=trackerState(conversation);
+  const t=state.trackers[conversation];
+  const click=async text=>{
+    await page.waitForFunction(text=>[...document.querySelectorAll('button')].some(b=>b.textContent.trim()===text&&!b.disabled),{},text);
+    await page.evaluate(text=>[...document.querySelectorAll('button')].find(b=>b.textContent.trim()===text&&!b.disabled).click(),text);
+  };
+  const waitText=text=>page.waitForFunction(text=>document.body.textContent.includes(text),{},text);
+  await page.goto(`${new URL(page.url()).origin}/#conversation/${conversation}/tracker`,{waitUntil:'domcontentloaded'});
+  await page.reload({waitUntil:'domcontentloaded'});
+  await click('Set up job tracker');
+  await click('Find mail folders');
+  await page.waitForSelector('.tracker-source input[type=radio]');
+  await page.click('.tracker-source input[type=radio]');
+  await page.waitForSelector('.tracker-folder-columns input[type=checkbox]');
+  await page.$$eval('.tracker-folder-columns input[type=checkbox]',nodes=>nodes.forEach(n=>n.click()));
+  await click('Use these folders');
+  await waitText('Confirm local synchronization and read-only access.');
+  assert.equal(t.posts.filter(p=>p.suffix==='/mail-source').length,0,'consent required before source selection');
+  await page.click('section[aria-label="Mail folder setup"] .tracker-consent input');
+  await click('Use these folders');
+  await page.waitForSelector('section[aria-label="Mail checks"]');
+  assert.equal(t.automation.enabled,false,'source selection does not enable automation');
+  await page.waitForFunction(()=>[...document.querySelectorAll('button')].find(b=>b.textContent.trim()==='Enable recurring checks')?.disabled===true);
+  const selection=t.posts.find(p=>p.suffix==='/mail-source').body;
+  assert.deepEqual(Object.keys(selection.source).sort(),['inbox','sent','source_id']);
+  assert.equal(selection.acknowledge_read_only_access,true);
+  await click('Check mail once');
+  await waitText('Response interrupted. Check the saved change.');
+  const first=t.posts.find(p=>p.suffix==='/check');
+  assert.ok(first?.body.request_key);
+  const key=first.body.request_key;
+  await page.reload({waitUntil:'domcontentloaded'});
+  await page.waitForSelector('.tracker-recovery-row');
+  assert.equal(t.posts.filter(p=>p.suffix==='/check').length,1,'reload must not create or resend a scan');
+  assert.equal(t.automation.enabled,false,'checking once leaves automation off');
+  completeTrackerCheck(t,key);
+  await waitText('Example Works');
+  await waitText('More mail remains.');
+  await page.waitForFunction(()=>document.querySelectorAll('.tracker-recovery-row').length===0);
+  assert.equal(t.posts.filter(p=>p.suffix==='/check').length,1,'known result does not create a replacement scan');
+  assert.equal(await page.evaluate(()=>Object.keys(localStorage).filter(k=>k.startsWith('orkestr.tracker.pending.v1:')).length),0);
+  const recurring='section[aria-label="Recurring mail checks"]';
+  await page.waitForFunction(selector=>document.querySelector(`${selector} input[placeholder="Europe/Berlin"]`)?.value,{},recurring);
+  await page.$eval(`${recurring} .tracker-consent input`,n=>n.click());
+  await page.waitForFunction(selector=>document.querySelector(`${selector} .tracker-consent input`)?.checked===true,{},recurring);
+  // Another browser changes the settings after this page's approval. Refresh
+  // must revoke that approval rather than silently rebasing it onto new state.
+  t.automation.revision+=1;
+  await click('Refresh');
+  await page.waitForFunction(selector=>document.querySelector(`${selector} .tracker-consent input`)?.checked===false,{},recurring);
+  assert.equal(t.posts.filter(p=>p.suffix==='/automation'&&p.method==='POST').length,0);
+  await page.$eval(`${recurring} .tracker-consent input`,n=>n.click());
+  await click('Enable recurring checks');
+  await waitText('Recurring checks are scheduled.');
+  assert.equal(t.automation.enabled,true);
+  const enable=t.posts.find(p=>p.suffix==='/automation'&&p.method==='POST').body;
+  assert.equal(enable.expected_revision,1,'enable retains the newly reviewed settings revision');
+  assert.equal(enable.acknowledge_automation,true);
+  assert.equal(enable.expected_source_revision,1);
+  assert.equal(typeof enable.calendar.timezone,'string');
+  await click('Stop recurring checks');
+  await waitText('Recurring checks are off.');
+  assert.equal(t.automation.enabled,false);
+  assert.equal(t.posts.filter(p=>p.suffix==='/automation'&&p.method==='DELETE').length,1);
+  await screenshot(label,'tracker-guided');
+  const width=await page.evaluate(()=>({page:document.documentElement.scrollWidth,viewport:innerWidth}));
+  assert.ok(width.page<=width.viewport,'tracker must not overflow the phone viewport');
+  assert.deepEqual({intake:state.intakePosts.length,windows:state.windowPosts.length,whatsapp:state.chatPosts.length,instructionTimers:state.timerCalls.length},before,'tracker must not admit model/window/WhatsApp/instruction-timer operations');
+  await page.goto(`${new URL(page.url()).origin}/#conversation/${conversation}`,{waitUntil:'domcontentloaded'});
+  await page.reload({waitUntil:'domcontentloaded'});
+  await page.waitForSelector('#composer');
+}

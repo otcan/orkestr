@@ -114,6 +114,7 @@ impl Store {
         )
         .await?;
         let news = record.changes.iter().any(|c| c.is_news());
+        let summary: serde_json::Value = serde_json::from_str(summary_json).map_err(unavailable)?;
         let result = TrackerScanReceipt {
             id: Uuid::new_v4(),
             request_key: claim.request_key(),
@@ -128,6 +129,10 @@ impl Store {
             labelled: record.labelled,
             dropped: record.dropped,
             duplicates: record.duplicates,
+            more_mail: summary
+                .get("truncated")
+                .and_then(serde_json::Value::as_bool),
+            read_warnings: serde_json::from_value(summary).ok(),
             changes: record.changes,
             recorded_ms: now,
             duplicate: false,

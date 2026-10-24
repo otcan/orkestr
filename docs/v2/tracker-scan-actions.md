@@ -1,9 +1,10 @@
 # Tracker scan actions (Stage 3 development)
 
 This development source connects the Core transaction boundary, local source
-registry, bounded reader pool, typed scheduler and owner HTTP actions. The guided
-setup and table UI are still being completed. It does not activate mail access
-or automation in an installed instance.
+registry, bounded reader pool, typed scheduler, owner HTTP actions and the Job
+tracker tab. Its guided setup separates selecting folders, checking once and
+explicit recurring opt-in. This source does not activate mail access or
+automation in an installed instance.
 
 An owner first selects opaque local registry entries for Inbox and Sent and
 explicitly acknowledges read-only access. Source decisions have stable keys,
@@ -15,6 +16,11 @@ survive restart. Reads pin the profile identity on its opened directory handle.
 Actual traversal currently requires Unix descriptors; other platforms refuse
 mail access until an equivalent handle implementation is qualified. Folder
 availability does not prove that Thunderbird has finished synchronizing mail.
+The owner confirms local synchronization as well as read-only access. Browser
+recovery records are scoped by authenticated owner and conversation and contain
+opaque decisions, never paths or credentials. The exact reviewed source,
+settings, timer and rule tuple survives interrupted responses; a concurrent
+change revokes the UI approval instead of silently rebasing it.
 
 Check once creates a one-shot typed action atomically on the ordinary scheduler.
 It does not enable recurring automation. Cancellation by the client decision key
@@ -43,6 +49,9 @@ slot through the Store commit. Discovery and deterministic classification also
 run on this pool. Each action bounds messages, bytes, events and cursor history;
 folder rotation prevents Inbox traffic from starving Sent. Capacity refusals are
 operator-visible and keep the occurrence due. Shutdown joins only real exits.
+Messages are capped at 4 MiB, MIME attachments are excluded from classification
+text and extracted text is capped at 50,000 characters. Reports expose remaining
+mail and skipped-entry counters; a bounded scan never implies full catch-up.
 
 One result transaction repeats source, recipe, Stop, generation, session and
 lease checks, records structured evidence and cursor, claims the canonical
@@ -63,6 +72,9 @@ Focused development checks are the Store `history_import::timers`,
 `tracker_actions_http`, `tracker_scan_pool` and durable scheduler tests. The
 synthetic HTTP case discovers Inbox/Sent, commits one informative scan, reopens
 the server composition and commits a quiet scan with unchanged mail bytes and
-zero ordinary timer inputs. Full integration and
-rendering checks run in CI on the final source. WhatsApp action reports remain
+zero ordinary timer inputs. It covers a CV attachment above 512 KiB and mail
+spanning two bounded scans. Browser scenarios exercise consent, response loss
+and reload recovery, explicit recurring enable/stop, concurrent settings changes
+and desktop/phone layout. Full integration and rendering checks run in CI on
+the final source. WhatsApp action reports remain
 a separate later contract.

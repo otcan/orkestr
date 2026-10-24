@@ -245,7 +245,7 @@ impl ScanPool {
             .deadline
             .min(Instant::now() + Duration::from_secs(5));
         request.limits.max_messages = request.limits.max_messages.min(64);
-        request.limits.max_message_bytes = request.limits.max_message_bytes.min(512 * 1024);
+        request.limits.max_message_bytes = request.limits.max_message_bytes.min(4 * 1024 * 1024);
         request.limits.max_mbox_bytes = request.limits.max_mbox_bytes.min(8 * 1024 * 1024);
         request.limits.max_seen = request.limits.max_seen.min(100_000);
         self.enqueue(reservation, move || {

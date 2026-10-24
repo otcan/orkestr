@@ -49,14 +49,29 @@ fn mail_fixture(case: &Case) -> (std::path::PathBuf, Vec<u8>) {
     std::fs::write(account.join("Inbox"), "").unwrap();
     let sent = account.join("Sent");
     let message = b"From - Sat Oct 24 12:00:00 2026\nFrom: Applicant <person@applicant.example>\nTo: Hiring Team <jobs@company.example>\nMessage-ID: <application-one@applicant.example>\nSubject: Your application to Backend Engineer at Example Works\n\nI would like to apply for the Backend Engineer position at Example Works. My CV is attached.\n";
-    std::fs::write(&sent, message).unwrap();
+    // A normal application can carry a CV larger than 512 KiB. Attachments
+    // are not classification text; the bounded reader must still see the mail.
+    let mut messages = message.to_vec();
+    let headers_end = messages.windows(2).position(|w| w == b"\n\n").unwrap();
+    messages.truncate(headers_end + 1);
+    messages.extend_from_slice(b"MIME-Version: 1.0\nContent-Type: multipart/mixed; boundary=synthetic-cv\n\n--synthetic-cv\nContent-Type: text/plain\n\nI would like to apply for the Backend Engineer position at Example Works. My CV is attached.\n--synthetic-cv\nContent-Type: application/pdf\nContent-Disposition: attachment; filename=synthetic-cv.pdf\nContent-Transfer-Encoding: base64\n\n");
+    for _ in 0..10_000 {
+        messages.extend_from_slice(
+            b"QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFB\n",
+        );
+    }
+    messages.extend_from_slice(b"--synthetic-cv--\n");
+    for index in 0..70 {
+        messages.extend_from_slice(format!("From - Sat Oct 24 12:00:00 2026\nFrom: Applicant <person@applicant.example>\nTo: Friend <friend@personal.example>\nMessage-ID: <greeting-{index}@applicant.example>\nSubject: Hello\n\nSee you soon.\n").as_bytes());
+    }
+    std::fs::write(&sent, &messages).unwrap();
     let file = std::fs::File::open(&sent).unwrap();
     file.set_times(
         std::fs::FileTimes::new()
             .set_modified(std::time::SystemTime::now() - Duration::from_secs(60)),
     )
     .unwrap();
-    (sent, message.to_vec())
+    (sent, messages)
 }
 async fn choose(case: &Case) -> Value {
     let auth = case.auth();
@@ -158,6 +173,8 @@ async fn synthetic_guided_source_check_and_restarted_reader_commit_news_then_sil
     assert_eq!(code, 200);
     assert_eq!(reports.as_array().unwrap().len(), 1);
     assert_eq!(reports[0]["news"], true, "{reports}");
+    assert_eq!(reports[0]["more_mail"], true);
+    assert_eq!(reports[0]["read_warnings"]["skipped_large"], 0);
     assert!(reports[0]["digest_id"].is_string());
     let (code, table) = send(&case.state, "GET", &case.path("/tracker"), &[&auth], "").await;
     assert_eq!(code, 200);
@@ -200,6 +217,7 @@ async fn synthetic_guided_source_check_and_restarted_reader_commit_news_then_sil
     .await;
     assert_eq!(reports.as_array().unwrap().len(), 2);
     assert_eq!(reports[0]["news"], false);
+    assert_eq!(reports[0]["more_mail"], false);
     assert!(reports[0]["digest_id"].is_null());
     assert!(restarted
         .store

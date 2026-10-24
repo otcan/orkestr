@@ -60,6 +60,8 @@ jobs:
           cargo +1.99.1 fetch --locked
           cargo +1.99.1 build --offline --locked -p orkestr-v2-server
           bash apps/ui/scripts/bundle.sh
+      - name: Browser tracker recovery and request boundary unit tests
+        run: node --test v2/apps/ui/tests/tracker_client.test.mjs
       - name: CI headless rendering with synthetic data
         run: node v2/ci/headless-rendering.mjs
       - name: CI configured workspace rendering against a synthetic API

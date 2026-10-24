@@ -114,7 +114,29 @@ pub struct TrackerScanReceipt {
     pub labelled: usize,
     pub dropped: usize,
     pub duplicates: usize,
+    /// Unknown for older receipts. A truncated read never means full catch-up.
+    #[serde(default)]
+    pub more_mail: Option<bool>,
+    #[serde(default)]
+    pub read_warnings: Option<TrackerReadWarnings>,
     pub changes: Vec<crate::TrackerChange>,
     pub recorded_ms: i64,
     pub duplicate: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct TrackerReadWarnings {
+    pub skipped_large: u64,
+    pub skipped_unsafe: u64,
+    pub skipped_missing: u64,
+    pub skipped_unsettled: u64,
+}
+impl TrackerReadWarnings {
+    pub fn total(&self) -> u64 {
+        self.skipped_large
+            .saturating_add(self.skipped_unsafe)
+            .saturating_add(self.skipped_missing)
+            .saturating_add(self.skipped_unsettled)
+    }
 }

@@ -5,6 +5,7 @@ import puppeteer from 'puppeteer';
 import { A, C, V1_INSTANCE_REF, V1_LINKS, V1_WORKER, createState, startMock } from './headless-workspace-mock.mjs';
 import { mkdir } from 'node:fs/promises';
 import { providerHandoff } from './headless-provider-handoff.mjs';
+import { trackerScenario } from './headless-tracker.mjs';
 
 assert.equal(process.env.CI, 'true', 'Run only in isolated CI');
 assert.ok(process.env.UI_BUNDLE_DIR, 'UI_BUNDLE_DIR is required');
@@ -84,6 +85,7 @@ const transcript = () => page.$eval('.conversation-pane > .conversation-scroll',
   ({ gap: el.scrollHeight - el.scrollTop - el.clientHeight, pinned: el.dataset.pinned, scrollable: el.scrollHeight > el.clientHeight + 100 }));
 
 export const scenarios = [
+  ['tracker-guided', async label => trackerScenario({page,state,conversation:A,label,screenshot})],
   ['composer-tools', async label => {
     await page.waitForSelector('#composer');
     // Enter sends; Shift+Enter inserts a newline; IME composition never sends.

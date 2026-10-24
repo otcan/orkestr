@@ -176,7 +176,7 @@ impl TrackerMailRuntime {
                     .unwrap_or_default();
                 let limits = ScanLimits {
                     max_messages: 64,
-                    max_message_bytes: 512 * 1024,
+                    max_message_bytes: 4 * 1024 * 1024,
                     max_mbox_bytes: 8 * 1024 * 1024,
                     max_seen: 2_048,
                     deadline: std::time::Instant::now() + Duration::from_millis(1500),
