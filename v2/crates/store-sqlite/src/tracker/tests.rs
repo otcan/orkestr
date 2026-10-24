@@ -443,6 +443,8 @@ mod reconsider;
 #[path = "scan_tests.rs"]
 mod scans;
 
+#[path = "review_annotation_tests.rs"]
+mod review_annotations;
 #[path = "review_authority_tests.rs"]
 mod review_authority;
 #[path = "review_history_tests.rs"]

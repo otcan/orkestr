@@ -8,7 +8,9 @@ includes it. No operational migration is part of this change.
 The authenticated owner can enable a tracker, edit rows with an exact revision,
 merge rows, read the timeline and export CSV. An explicitly issued and revocable
 tracker grant can read and add `assistant` notes to existing rows in its bound
-conversation. Grants cannot change status, create rows, claim mail provenance
+conversation. Grant notes append immutable events with annotation digests, clamp future
+timestamps to now and leave all row fields/revisions untouched; timeline counts
+are derived from immutable history. Grants cannot change status, create rows, claim mail provenance
 (`message_ref`, `thread_refs`, `requires_thread`, sender or evidence), or call scan
 intake. Classified mail intake requires owner authority in this stage; a separate
 trusted scan-action capability is deferred to the scan-action stage. Grant
@@ -57,7 +59,9 @@ owner row-edit API can override status. Every changed company, role, link, notes
 archive/review flag or next step creates an immutable `edited` event (field names
 and before/after hashes); status changes have their own event, including
 `no_response`. Merge keeps the status with the latest status-event time, with
-ties retaining the requested keep row. Every lookup excludes absorbed rows.
+ties retaining the requested keep row. Every lookup excludes absorbed rows as destinations while resolving their retained
+company/role keys through immutable merge links to the surviving row, including
+multi-hop merges.
 
 Mail evidence snippets are transient: event evidence and pending JSON retain
 only SHA-256 evidence hashes and extracted structured fields. Owner notes stay

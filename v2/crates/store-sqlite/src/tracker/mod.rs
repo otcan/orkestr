@@ -6,6 +6,7 @@
 mod apply;
 mod authority;
 mod edit;
+mod lookup;
 mod merge;
 #[cfg(test)]
 pub(crate) mod migration_fixture;
@@ -33,7 +34,12 @@ pub enum TrackerCaller<'a> {
     Grant(&'a str),
 }
 
-pub(crate) const ROW_COLUMNS: &str = "id,company,company_key,role,role_key,source,status,status_changed_ms,applied_ms,last_contact_ms,next_step,link,location,notes,confidence,needs_review,archived,events_count,revision";
+pub(crate) const ROW_STORAGE_COLUMNS: &str = "id,company,company_key,role,role_key,source,status,status_changed_ms,applied_ms,last_contact_ms,next_step,link,location,notes,confidence,needs_review,archived,events_count,revision";
+
+// Event counts are derived; grant annotations never update a row, even its cache/revision.
+pub(crate) const ROW_COLUMNS: &str = "id,company,company_key,role,role_key,source,status,status_changed_ms,applied_ms,last_contact_ms,next_step,link,location,notes,confidence,needs_review,archived,
+ (WITH RECURSIVE history(id) AS (SELECT tracker_rows.id UNION SELECT m.absorb_id FROM tracker_row_merges m JOIN history h ON m.keep_id=h.id WHERE m.owner_id=tracker_rows.owner_id AND m.conversation_id=tracker_rows.conversation_id)
+ SELECT count(*) FROM tracker_events e WHERE e.owner_id=tracker_rows.owner_id AND e.conversation_id=tracker_rows.conversation_id AND e.row_id IN(SELECT id FROM history)) AS events_count,revision";
 
 fn grant_hash(grant: &str) -> String {
     crate::digest(&format!("orkestr-v2-tracker-grant:{grant}"))

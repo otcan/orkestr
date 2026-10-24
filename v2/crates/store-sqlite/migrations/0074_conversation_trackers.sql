@@ -175,3 +175,5 @@ CREATE TRIGGER tracker_intake_audit_no_delete BEFORE DELETE ON tracker_intake_au
 BEGIN SELECT RAISE(ABORT,'immutable_tracker_intake_audit'); END;
 CREATE INDEX tracker_unresolved_pending ON tracker_unresolved_events(owner_id,conversation_id,state,recorded_ms);
 CREATE INDEX tracker_intake_audit_reason ON tracker_intake_audit(owner_id,conversation_id,reason);
+
+CREATE INDEX tracker_merges_keep ON tracker_row_merges(owner_id,conversation_id,keep_id);

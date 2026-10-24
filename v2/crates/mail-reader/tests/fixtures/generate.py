@@ -226,7 +226,7 @@ CASES = [
      {"drop": "private_recipient", "outgoing": True, "to": "Synthetic Friend <synthetic-friend@personal-mail.example>"}),
     ("linkedin-sales-inmail", 3360, "Pat Growth via LinkedIn <inmail-hit-reply@linkedin.com>", "linkedin.com", True,
      "Pat sent you a new message",
-     "Hi Alex, a great opportunity to grow your consulting business. Let's book a time: https://calendly.com/patgrowth/30min", None,
+     "Hi Alex, a great opportunity to grow your consulting business. Let's book a time: https://calendly.com/synthetic-example/30min", None,
      {"drop": "lead_without_role"}),
 ]
 

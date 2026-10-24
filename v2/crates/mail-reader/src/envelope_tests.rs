@@ -87,18 +87,24 @@ fn thunderbird_expunged_flag_is_detected() {
 
 #[test]
 fn recipients_reply_references_and_bulk_markers() {
-    let e = parse(b"From: Alex <alex@example.com>\r\nTo: \"Hays, Recruiting\" <Projekte@hays.de>, b@example.org\r\n\
-In-Reply-To: <r2@hays.de>\r\nReferences: <r1@hays.de> <r2@hays.de>\r\n\r\n");
+    let e = parse(b"From: Alex <alex@example.com>\r\nTo: \"Example Agency, Recruiting\" <Projekte@agency-a.example>, b@example.org\r\n\
+In-Reply-To: <r2@agency-a.example>\r\nReferences: <r1@agency-a.example> <r2@agency-a.example>\r\n\r\n");
     assert_eq!(
         e.to,
         vec![
-            ("Hays, Recruiting".into(), "projekte@hays.de".into()),
+            (
+                "Example Agency, Recruiting".into(),
+                "projekte@agency-a.example".into()
+            ),
             (String::new(), "b@example.org".into())
         ]
     );
     assert_eq!(
         e.reply_refs,
-        vec![message_ref("<r2@hays.de>"), message_ref("<r1@hays.de>")]
+        vec![
+            message_ref("<r2@agency-a.example>"),
+            message_ref("<r1@agency-a.example>")
+        ]
     );
     assert!(!e.bulk);
     assert!(parse(b"Precedence: bulk\r\n\r\n").bulk);

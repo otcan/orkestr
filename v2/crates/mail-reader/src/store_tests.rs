@@ -330,3 +330,6 @@ fn missing_folders_keep_their_cursor() {
     assert_eq!(out.stats.missing_folders, 2);
     assert!(out.envelopes.is_empty());
 }
+
+#[path = "maildir_review_tests.rs"]
+mod maildir_review;
