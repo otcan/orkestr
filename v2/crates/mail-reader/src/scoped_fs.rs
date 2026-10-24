@@ -4,14 +4,25 @@ use std::fs::File;
 use std::io;
 use std::path::Path;
 
+#[derive(Debug)]
+struct UnsafePath;
+impl std::fmt::Display for UnsafePath {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("unsafe mail source path")
+    }
+}
+impl std::error::Error for UnsafePath {}
 fn refused() -> io::Error {
-    io::Error::new(io::ErrorKind::PermissionDenied, "unsafe mail source path")
+    io::Error::new(io::ErrorKind::PermissionDenied, UnsafePath)
+}
+pub(crate) fn is_refused(error: &io::Error) -> bool {
+    error.get_ref().is_some_and(|e| e.is::<UnsafePath>())
 }
 
 #[cfg(unix)]
 mod platform {
     use super::*;
-    use rustix::fs::{fstat, openat, statat, AtFlags, Dir, Mode, OFlags};
+    use rustix::fs::{fstat, openat, statat, AtFlags, Dir, FileType, Mode, OFlags};
     use std::ffi::OsString;
     use std::os::unix::{ffi::OsStringExt, fs::MetadataExt};
     use std::path::{Component, PathBuf};
@@ -43,11 +54,25 @@ mod platform {
             return Err(refused());
         }
         let before = statat(parent, name, AtFlags::SYMLINK_NOFOLLOW)?;
+        let kind = FileType::from_raw_mode(before.st_mode);
+        if !matches!(
+            (directory, kind),
+            (true, FileType::Directory) | (false, FileType::RegularFile)
+        ) || (!directory && before.st_nlink != 1)
+        {
+            return Err(refused());
+        }
         let mut flags = OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW | OFlags::NONBLOCK;
         if directory {
             flags |= OFlags::DIRECTORY;
         }
-        let file = File::from(openat(parent, name, flags, Mode::empty())?);
+        let file = File::from(openat(parent, name, flags, Mode::empty()).map_err(|error| {
+            if error == rustix::io::Errno::LOOP {
+                refused()
+            } else {
+                io::Error::from(error)
+            }
+        })?);
         let after = file.metadata()?;
         let identity = fstat(&file)?;
         if identity.st_dev != before.st_dev

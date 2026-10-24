@@ -106,6 +106,12 @@ pub struct ScanStats {
     pub files_seen: usize,
     pub new_messages: usize,
     pub skipped_large: usize,
+    /// Unsafe directory entries were refused without being read.
+    #[serde(default)]
+    pub skipped_unsafe: usize,
+    /// Maildir entries removed or renamed before their open.
+    #[serde(default)]
+    pub skipped_missing: usize,
     pub skipped_unsettled: usize,
     pub skipped_old: usize,
     pub skipped_expunged: usize,
@@ -116,7 +122,12 @@ pub struct ScanStats {
 
 impl ScanStats {
     fn examined(&self) -> usize {
-        self.new_messages + self.skipped_large + self.skipped_old + self.skipped_expunged
+        self.new_messages
+            + self.skipped_large
+            + self.skipped_old
+            + self.skipped_expunged
+            + self.skipped_unsafe
+            + self.skipped_missing
     }
 }
 
