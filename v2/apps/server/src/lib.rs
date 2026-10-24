@@ -72,6 +72,7 @@ pub mod timer_bootstrap;
 pub mod timer_http;
 mod timer_lifecycle;
 mod tracker_http;
+pub mod tracker_scan_pool;
 mod v1_links;
 mod v1_manage_http;
 mod v1_workers_http;
