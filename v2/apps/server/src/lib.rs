@@ -54,6 +54,8 @@ pub mod observability;
 pub mod offline_python;
 pub mod owned_children;
 pub mod owned_execution;
+#[cfg(test)]
+mod provider_handoff_http_tests;
 mod provider_payload;
 mod resource_health;
 mod response_shaping;
@@ -489,6 +491,8 @@ pub fn router_with_google_catalog(
         .route("/api/v2/conversations/{id}/window/queue",get(window_http::queue))
         .route("/api/v2/conversations/{id}/window/reconcile",post(window_http::reconcile))
         .route("/api/v2/conversations/{id}/window/reset-native",post(window_http::reset_native))
+        .route("/api/v2/conversations/{id}/provider-handoffs",post(window_http::handoff_provider))
+        .route("/api/v2/conversations/{id}/provider-handoffs/{key}",get(window_http::handoff_receipt))
         .route("/api/v2/conversations/{id}/execution",get(execution::status))
         .route("/api/v2/conversations/{id}/fast/execution",get(execution::fast_status))
         .route("/api/v2/conversations/{id}/workers",get(worker_discovery::list))

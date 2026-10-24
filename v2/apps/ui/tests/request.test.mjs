@@ -6,6 +6,19 @@ const AsyncFunction = Object.getPrototypeOf(async function() {}).constructor;
 const execute = new AsyncFunction('dioxus', 'fetch', code);
 const base = {method:'POST',path:'/api/v2/browser/session',body:{username:'synthetic-user',password:'synthetic-password'},csrf:'',bootstrap:''};
 
+test('provider handoff and receipt keep scoped cookie paths and mutation CSRF', async () => {
+    const root='/api/v2/conversations/00000000-0000-4000-8000-000000000001/provider-handoffs';
+    for(const [method,path] of [['POST',root],['GET',root+'/synthetic:handoff']]) {
+        await execute({recv:async()=>({...base,method,path,csrf:'synthetic-csrf',body:method==='POST'?{request_key:'synthetic:handoff'}:null})},async(actual,options)=>{
+            assert.equal(actual,path);assert.equal(options.credentials,'same-origin');
+            assert.equal(options.headers['x-orkestr-csrf'],method==='POST'?'synthetic-csrf':undefined);
+            assert.equal(options.headers.Authorization,undefined);return Response.json({ok:true});
+        });
+    }
+    for(const path of [root+'/..',root+'/%2e%2e',root+'/synthetic?foreign=1'])
+        await assert.rejects(execute({recv:async()=>({...base,path})},()=>assert.fail('fetch must not run')),/Invalid API path/);
+});
+
 test('login credentials use JSON and same-origin cookies without caching', async () => {
     const input = {...base,bootstrap:'synthetic-bootstrap'};
     const result = await execute({recv:async()=>input},async(path, options)=>{

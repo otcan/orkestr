@@ -41,6 +41,7 @@ mod outbox_view;
 mod page_memory_bridge;
 mod progress_view;
 mod projects_view;
+mod provider_handoff_view;
 mod restricted_view;
 mod rich_text_view;
 mod scroll_pin;

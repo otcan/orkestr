@@ -8,7 +8,8 @@ pub(super) async fn floor(
     owner: &OwnerId,
     conversation: &ConversationId,
 ) -> Result<i64> {
-    sqlx::query_scalar("SELECT coalesce(max(window_generation),0) FROM conversation_native_resets WHERE owner_id=? AND conversation_id=?")
+    sqlx::query_scalar("SELECT max(generation) FROM (SELECT coalesce(max(window_generation),0) AS generation FROM conversation_native_resets WHERE owner_id=? AND conversation_id=? UNION ALL SELECT coalesce(max(window_generation),0) FROM conversation_provider_handoffs WHERE owner_id=? AND conversation_id=?)")
+        .bind(owner.to_string()).bind(conversation.to_string())
         .bind(owner.to_string()).bind(conversation.to_string())
         .fetch_one(tx).await.map_err(db)
 }

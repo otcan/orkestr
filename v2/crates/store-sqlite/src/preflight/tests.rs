@@ -374,7 +374,11 @@ async fn populated_payload_prefix_upgrade_preserves_all_rows_and_foreign_links()
             "2|'production-conversation'|'owner'|'Synthetic'|NULL|NULL".into(),
         ],
     );
+    // New tracker and continuity tables remain empty after this historic upgrade.
     for table in [
+        "conversation_provider_handoffs",
+        "conversation_handoff_sessions",
+        "conversation_handoff_context_delivery",
         "trackers",
         "tracker_rows",
         "tracker_row_links",

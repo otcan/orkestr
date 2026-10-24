@@ -1,5 +1,8 @@
 # Orkestr 2.0 Rust intake increment
 
+Owner-authorized provider changes and carried context are documented in
+[Provider handoff](docs/provider-handoff.md).
+
 The first core increment provides a real Axum server with authenticated local
 projects, one global/project conversation, transactional SQLite admission,
 paginated history and cursor SSE. It does not run models or workers. Project

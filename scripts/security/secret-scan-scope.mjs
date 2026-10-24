@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { historyAdditions } from "./secret-scan-statistics.mjs";
 
 export const scanEnvironment = Object.freeze({ PATH: "/usr/local/bin:/usr/bin:/bin", LC_ALL: "C",
   GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_NO_REPLACE_OBJECTS: "1", GIT_GRAFT_FILE: "/dev/null",
@@ -51,14 +52,7 @@ export function resolveScope({ repository, targetRef, expectedCommit, baseCommit
   // The same immutable range and separate merge diffs must contain additions
   // before a zero-byte scanner result is considered missing coverage. Empty or
   // deletion-only histories legitimately contain nothing for Gitleaks to scan.
-  const stats = git(["log", "--format=", "--numstat", ...logOptions.split(" "), "--"]);
-  let scannableAddedLines = 0;
-  for (const line of stats.split("\n").filter(Boolean)) {
-    const match = line.match(/^(\d+|-)\t(\d+|-)\t/);
-    if (!match) throw new Error("scan_revision_count_invalid");
-    if (match[1] !== "-") scannableAddedLines += Number(match[1]);
-    if (!Number.isSafeInteger(scannableAddedLines)) throw new Error("scan_revision_count_invalid");
-  }
+  const scannableAddedLines = historyAdditions(repository, logOptions, scanEnvironment);
   return { scope: baseCommit ? "commit_range" : approvedRefs.length ? "approved_reachable_refs" : "target_history",
     targetRef, targetCommit: expectedCommit, baseCommit: baseCommit || null, refs, refCount: refs.length,
     revisionCount: Number(count), scannableAddedLines, logOptions };

@@ -206,6 +206,13 @@ impl BetaConfig {
     ) -> Result<orkestr_v2_application::runtime::ProviderKind, &'static str> {
         use orkestr_v2_application::runtime::ProviderKind;
         use orkestr_v2_contracts::ConversationProvider;
+        if launch
+            .model
+            .as_deref()
+            .is_some_and(orkestr_v2_contracts::model_denied)
+        {
+            return Err("model is denied by server policy");
+        }
         let claude_default = self.claude.as_ref().is_some_and(|c| c.default);
         let selected = match launch.provider {
             ConversationProvider::Codex if launch.settings_revision == 0 && claude_default => {
@@ -325,6 +332,20 @@ mod tests {
             claude.window_provider(&launch, Some(ProviderKind::Claude)),
             Ok(ProviderKind::Claude)
         );
+    }
+    #[test]
+    fn denied_models_never_select_a_window_provider() {
+        let config: BetaConfig = serde_json::from_value(input()).unwrap();
+        let mut launch =
+            orkestr_v2_contracts::ConversationSettings::defaults(config.conversation_id.clone())
+                .launch();
+        for model in ["fable", "FABLE", "claude-fable-v2"] {
+            launch.model = Some(model.into());
+            assert_eq!(
+                config.window_provider(&launch, None),
+                Err("model is denied by server policy")
+            );
+        }
     }
     #[test]
     fn window_lifetime_ceiling_defaults_overrides_and_bounds() {
