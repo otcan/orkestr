@@ -2,8 +2,9 @@
 import json
 import secrets
 import uuid
-from protocol import PROTOCOL, exact, identifier, require
+from protocol import PROTOCOL, Refused, exact, identifier, require
 from claude_telemetry import validate_telemetry
+from claude_quota import project
 from claude_control import ClaudeControl, canonical, text_blocks
 from claude_policy import refusal, reported_model
 
@@ -21,9 +22,11 @@ def provider_error(value):
 
 
 class ClaudeChannel:
-    def __init__(self, session, catalog_warning=None):
+    def __init__(self, session, catalog_warning=None, quota_observer=None):
         require(catalog_warning is None or callable(catalog_warning))
         self.session = session
+        self.quota_observer = quota_observer
+        self.owner_id = None
         self.catalog_warning = catalog_warning
         self.catalog_warned = False
         self.native = str(session.native)
@@ -68,6 +71,7 @@ class ClaudeChannel:
             exact(identity, ("provider", "role", "owner_id", "session_id", "namespace", "incarnation"))
             require(all(identifier(v) for v in identity.values()))
             require(identity["provider"] == "claude" and identity["role"] in ("fast", "deep"))
+            self.owner_id = identity['owner_id']
             self.handle = secrets.token_hex(24)
             return None, {"id": outer, "result": {"protocol": PROTOCOL, "identity": identity,
                 "metadata_only": True, "owned_handle": self.handle, "native_session": self.native}}
@@ -200,6 +204,15 @@ class ClaudeChannel:
                     and (self.control is None or value not in self.control.notice_ids)
                     and value not in self.telemetry_uuids and len(self.telemetry_uuids) < 128)
             self.telemetry_uuids.add(value)
+            if kind == 'rate_limit_event' and self.quota_observer is not None:
+                try:
+                    windows = project(frame['rate_limit_info'])
+                    if windows:
+                        self.quota_observer(self.owner_id, windows)
+                except Refused:
+                    raise  # Preserve stop/control signals delivered during metadata I/O.
+                except Exception:
+                    pass  # Quota metadata cannot fail, renew or complete a turn.
             # Even post-terminal telemetry cannot advance readiness or execution state.
             return None
         if self.control is not None and kind in ("user", "assistant", "stream_event", *TOOL_NOTICES):

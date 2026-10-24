@@ -197,6 +197,8 @@ class Selected(unittest.TestCase):
                 'workspace':str(r/'claude-workspace'),'home':str(r/'claude-home'),
                 'temporary':str(r/'claude-tmp'),'fast':True}
         self.plan['claude']=dict(claude)
+        quota=r/'quota';quota.mkdir(mode=0o750);os.chown(quota,995,986)
+        self.plan['claude_quota_projection']={'directory':str(quota),'account_ref':'33333333-3333-4333-8333-333333333333'}
         self.plan['host_full_access']={'providers':True,'environment':{**environment,'ANTHROPIC_API_KEY':'x'}}
         with self.assertRaisesRegex(RuntimeError,'Claude account'):selected.prepare(self.plan)
         self.plan['host_full_access']={'providers':True,'environment':environment}
@@ -209,6 +211,8 @@ class Selected(unittest.TestCase):
             package=manager.Package(r/'release/package',sha(r/'release/package/manifest.json'))
             self.assertEqual(package.claude['workspace'],claude['workspace'])
             self.assertTrue(package.claude['fast'] and not package.claude['default'])
+            self.assertEqual(package.runtime['claude_quota_projection'],self.plan['claude_quota_projection'])
+            self.assertIn('broker/claude_quota.py',package.manifest['files'])
         self.assertIn('broker-claude',(r/'release/package/launcher-claude.py').read_text())
         private=json.loads((r/'release/package/claude-private.json').read_bytes())
         self.assertEqual(private['host_full_access'],{'environment':environment})

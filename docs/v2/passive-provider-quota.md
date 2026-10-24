@@ -1,0 +1,84 @@
+# Passive Claude quota projection
+
+The service broker can project quota from already-running Claude sessions into
+the existing V1 `/api/quota/providers` snapshot and WhatsApp footer. It creates
+no provider request, canary, thread, run, message or execution authority.
+The existing canary and ordinary Claude work use the same broker path.
+
+The codec validates native session identity, initialized/active state and the
+unique telemetry UUID before projecting known five-hour and whole-account
+seven-day numeric usage, reset, status and observation time. It never forwards
+the raw native event or selected-account object. Model-specific weekly windows
+are ignored. Percentages are never inferred from token counts or an allowed or
+rejected status. The stripped broker/Rust protocol remains unchanged; projected
+metadata cannot initialize, renew, finish or cancel a turn. Sink errors are
+isolated while native stop/control refusals still propagate.
+
+The protected selected-service plan optionally includes:
+
+```json
+{
+  "claude_quota_projection": {
+    "directory": "/srv/orkestr-quota/example-owner",
+    "account_ref": "22222222-2222-4222-8222-222222222222"
+  }
+}
+```
+
+The operator enrolls the opaque account reference for that package's verified
+Claude account directory; change the reference on an account change. The broker
+checks the Core owner from its validated channel against the protected package
+owner. Neither a browser, model nor native event selects the sink or account.
+
+Create the directory before activation, owned by the service UID with no group
+write or world permissions (0700, or 0750 with scoped reader ACLs). It must be
+outside the sealed package, Core state, manager endpoints/ledger, provider home,
+Claude account/home/temporary directories and selected workspace. Sharing this
+metadata must never relax their existing private permission checks. The sink
+uses a directory descriptor, no-follow regular single-link files, a nonblocking
+lock and atomic replacement of `claude.json` (0640; directory access remains
+scoped). It retains at most two minimized window records, with no credentials,
+raw events, prompts, native-session IDs or email addresses. The cache is
+informational, not durable execution evidence. Its opaque owner/account refs
+never appear in the quota API or footer.
+
+V1 reads the file through an operator-owned, non-writable, non-public JSON
+configuration named by `ORKESTR_PROVIDER_QUOTA_PROJECTION_CONFIG`:
+
+```json
+{
+  "format": "orkestr-provider-quota-sources-v1",
+  "sources": [{
+    "ownerUserId": "example-owner",
+    "coreOwnerId": "11111111-1111-4111-8111-111111111111",
+    "accountRef": "22222222-2222-4222-8222-222222222222",
+    "producerUid": 1000,
+    "path": "/srv/orkestr-quota/example-owner/claude.json"
+  }]
+}
+```
+
+This is a local file pull: no HTTP credential, endpoint or extra polling process
+is needed. Reads use the existing 30-second snapshot cache and normal quota
+requests. The loader requires the authenticated V1 owner, enrolled Core owner,
+opaque account ref, producer UID, private file custody and closed bounded data
+shape. Missing, malformed or unreadable projection leaves existing telemetry
+unknown/stale and cannot fail the request.
+
+Each period keeps its own observation time, including through later caller
+thread enrichment. An unrelated window or changed file mtime never refreshes an
+old percentage. The existing public schema stays unchanged: the aggregate
+`observedAt` is the oldest selected window observation and `stale` uses the
+existing six-hour threshold. Thus one fresh period cannot conceal an older
+period. Absent windows stay null; expired reset windows are unknown. Existing
+reset-window ordering and rate-limited profile state are preserved.
+
+Deployment is one coordinated reviewed train updating the V2 broker package
+and V1 snapshot reader, with private directory/config/ACL enrollment. It needs
+both components updated, rather than a separate quota-only restart. If V1 runs
+under a different UID, grant read/traverse only on this projection directory and
+its files, using an appropriate default reader ACL for atomic replacements.
+After activation, accept only an actual event from the next existing canary or
+ordinary Claude session and verify its timestamp/reset values through V1 GET.
+No manual provider probe is part of acceptance; until such data exists there is
+no fresh quota claim. Real bindings and configuration remain in operator state.

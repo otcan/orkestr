@@ -3,11 +3,14 @@
 // any of the owner's threads is the best estimate for every thread. Values are
 // only ever derived from observed telemetry; unknown windows stay null.
 import { resourceOwnerUserId } from "./policy.js";
+import { loadProviderQuotaProjections } from "./provider-quota-projection.js";
 
 export const providerQuotaProviders = Object.freeze(["codex", "claude"]);
 const defaultStaleMs = 6 * 60 * 60 * 1000;
 const defaultCacheMs = 30 * 1000;
 const snapshotCache = new Map();
+// Internal per-period stamps; keep the established JSON/API schema unchanged.
+const quotaWindowDetails = new WeakMap();
 
 function objectValue(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : null;
@@ -202,6 +205,14 @@ export function mergeThreadIntoProviderQuota(snapshot = null, thread = null, { n
     const own = providerQuotaFromThread(thread, provider, { now, staleMs });
     if (!own) continue;
     const current = base[provider];
+    if (provider === "claude" && current && quotaWindowDetails.has(current)) {
+      result[provider] = mergeProjectedClaudeQuota(current, ["fiveHour", "weekly"].map(period => ({
+        period, observedAt: own.observedAt, source: own.source,
+        record: { used_percent: own[`${period}RemainingPct`] == null ? null : 100 - own[`${period}RemainingPct`],
+          resets_at: own[`${period}ResetsAt`], status: own[`${period}Status`] },
+      })), { now, staleMs });
+      continue;
+    }
     // Ties go to the calling thread: it may have been written after the cache fill.
     const pick = current?.source ? newer(own, current) : own;
     if (pick === own) result[provider] = { ...own, limited: Boolean(current?.limited) };
@@ -219,7 +230,48 @@ async function defaultLoadClaudeProfiles(ownerUserId, env) {
   return listLlmAccountProfiles(ownerUserId, { provider: "claude-code" }, env);
 }
 
-export async function providerQuotaSnapshot({ ownerUserId = "", now = Date.now(), loadThreads = defaultLoadThreads, loadClaudeProfiles = defaultLoadClaudeProfiles, useCache = true } = {}, env = process.env) {
+// Pick each period independently. A fresh five-hour observation must not stamp
+// an older weekly percentage fresh. The public aggregate age is conservative.
+export function mergeProjectedClaudeQuota(base, observations, { now = Date.now(), staleMs = defaultStaleMs } = {}) {
+  const periods = ["fiveHour", "weekly"];
+  const selected = { ...(quotaWindowDetails.get(base) || {}) };
+  for (const period of periods) {
+    const current = { remainingPct: base[`${period}RemainingPct`], resetsAt: base[`${period}ResetsAt`],
+      status: base[`${period}Status`], observedAt: base.observedAt, source: base.source };
+    if (!selected[period] && (current.remainingPct != null || current.resetsAt || current.status)) selected[period] = current;
+  }
+  let changed = false;
+  for (const entry of observations) {
+    if (!periods.includes(entry.period)) continue;
+    const summary = quotaWindowSummary(entry.record, now);
+    if (summary.remainingPct === null && !summary.resetsAt && !summary.status) continue;
+    const candidate = { ...summary, observedAt: entry.observedAt, source: entry.source === undefined ? "telemetry" : entry.source };
+    const current = selected[entry.period];
+    const resetA = quotaEpochMs(current?.resetsAt), resetB = quotaEpochMs(candidate.resetsAt);
+    const fresh = value => value?.source === "telemetry" && observedMs(value) > 0 && now - observedMs(value) <= staleMs;
+    const replace = !current || (resetA && resetB && Math.abs(resetA - resetB) > windowSkewMs
+      ? resetB > resetA : fresh(current) !== fresh(candidate) ? fresh(candidate) : observedMs(candidate) >= observedMs(current));
+    if (replace) { selected[entry.period] = candidate; changed = true; }
+  }
+  if (!changed) return base;
+  const result = { ...base };
+  for (const period of periods) {
+    const chosen = selected[period];
+    result[`${period}RemainingPct`] = chosen?.remainingPct ?? null;
+    result[`${period}ResetsAt`] = chosen?.resetsAt ?? null;
+    result[`${period}Status`] = chosen?.status ?? null;
+  }
+  const values = Object.values(selected), ages = values.map(observedMs);
+  const age = ages.length && ages.every(ms => ms > 0) ? Math.min(...ages) : null;
+  result.observedAt = isoOrNull(age);
+  result.stale = Boolean(age) && now - age > staleMs;
+  result.source = values.every(value => value.source === "telemetry") ? "telemetry" : base.source;
+  result.limited = Boolean(base.limited) || values.some(value => value.status === "rejected");
+  quotaWindowDetails.set(result, selected);
+  return result;
+}
+
+export async function providerQuotaSnapshot({ ownerUserId = "", now = Date.now(), loadThreads = defaultLoadThreads, loadClaudeProfiles = defaultLoadClaudeProfiles, loadProjections = loadProviderQuotaProjections, useCache = true } = {}, env = process.env) {
   const owner = resourceOwnerUserId({ ownerUserId }, env);
   const staleMs = providerQuotaStaleMs(env);
   const cacheKey = `${clean(env.ORKESTR_HOME)}\u0000${owner}`;
@@ -229,6 +281,8 @@ export async function providerQuotaSnapshot({ ownerUserId = "", now = Date.now()
     .filter((thread) => resourceOwnerUserId(thread, env) === owner);
   const claudeProfiles = await loadClaudeProfiles(owner, env).catch(() => []);
   const value = providerQuotaFromThreads(threads, { now, staleMs, claudeProfiles });
+  const projections = await loadProjections(owner, env, now).catch(() => []);
+  value.claude = mergeProjectedClaudeQuota(value.claude, projections, { now, staleMs });
   if (useCache) snapshotCache.set(cacheKey, { at: now, value });
   return value;
 }

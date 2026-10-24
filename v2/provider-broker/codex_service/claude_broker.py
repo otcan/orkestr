@@ -55,6 +55,7 @@ def main(root):
         from reaping import REAPED_EXIT
         from claude_connector import ClaudeConfiguration
         from claude_protocol import ClaudeChannel
+        from claude_quota import QuotaSink
         from startup_diagnostics import StderrCapture, report_failure
         fresh = ["open-owned-session", "--protocol", PROTOCOL]
         resumed = ["resume-owned-session", "--protocol", PROTOCOL]
@@ -82,7 +83,8 @@ def main(root):
                 session = config.resumed_session(receive(config))  # One-use FD4.
             else:
                 session = config.new_session()
-            pump = Pump(session, ClaudeChannel(session, catalog_warning=catalog_warning),
+            pump = Pump(session, ClaudeChannel(session, catalog_warning=catalog_warning,
+                        quota_observer=QuotaSink.optional(package, config)),
                         handoff=handoff, diagnostics=True, stderr_capture=StderrCapture())
             pump.run()
             if pump.parent_eof and pump.child is not None and pump.reaped:

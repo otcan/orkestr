@@ -6,6 +6,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
@@ -67,7 +68,8 @@ class ServiceTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):prepare.settings(self.root/'home','https://example.invalid',19822,0,self.out)
 
     def test_nonisolated_python_capture_refused(self):
-        with self.assertRaisesRegex(RuntimeError,'-I -S -B'):closure.python_files()
+        with patch.object(closure.sys,'flags',SimpleNamespace(isolated=0,no_site=0,dont_write_bytecode=1)):
+            with self.assertRaisesRegex(RuntimeError,'-I -S -B'):closure.python_files()
 
     def test_dependency_change_refused(self):
         pin=closure.pin(self.binary);self.binary.write_bytes(b'changed')
@@ -125,7 +127,8 @@ class ServiceTests(unittest.TestCase):
                 validate(json.dumps(dict(value,**{key:bad})).encode())
         with self.assertRaises(RuntimeError):validate(json.dumps(dict(value,token='forbidden')).encode())
         with self.assertRaisesRegex(RuntimeError,'duplicate'):validate(b'{"schema_version":1,"schema_version":1}')
-        with self.assertRaisesRegex(RuntimeError,'bounded'):validate(b' '*16385)
+        from beta_config import MAX_BETA_CONFIG_BYTES
+        with self.assertRaisesRegex(RuntimeError,'bounded'):validate(b' '*(MAX_BETA_CONFIG_BYTES+1))
 
     def test_selected_plan_accepts_only_closed_host_full_access(self):
         from selected import OPTIONAL, optional

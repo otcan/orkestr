@@ -19,11 +19,13 @@ class ClaudeInventoryTests(unittest.TestCase):
             self.assertEqual(selected.claude_inventory(manager), manager.CLAUDE_FILES)
             self.assertIn('broker/claude_policy.py', manager.CLAUDE_FILES)
             self.assertIn('broker/startup_diagnostics.py', manager.CLAUDE_FILES)
+            self.assertIn('broker/claude_quota.py', manager.CLAUDE_FILES)
 
     def test_missing_extra_or_substituted_codec_is_refused(self):
         with authority(ROOT, SOURCE) as (_, manager, _):
             current = manager.CLAUDE_FILES.copy()
         for files in (current - {'broker/claude_policy.py'},
+                      current - {'broker/claude_quota.py'},
                       current - {'broker/startup_diagnostics.py'}, current | {'broker/unreviewed.py'},
                       (current - {'broker/claude_policy.py'}) | {'broker/substitute.py'}):
             with self.assertRaisesRegex(RuntimeError, 'manager Claude inventory required'):

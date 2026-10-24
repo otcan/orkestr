@@ -52,7 +52,7 @@ CODE_MODE_HOST = "codex-code-mode-host"
 HOST_FILES = {CODE_MODE_HOST}
 # Optional per-conversation Claude Deep runtime (operator host full access).
 CLAUDE_BROKER = ("claude_connector.py", "claude_protocol.py", "claude_control.py",
-                 "claude_policy.py", "claude_telemetry.py", "claude_resume.py", "claude_bootstrap.py",
+                 "claude_policy.py", "claude_telemetry.py", "claude_quota.py", "claude_resume.py", "claude_bootstrap.py",
                  "startup_diagnostics.py")
 CLAUDE_FILES = {"launcher-claude.py", "claude-private.json"} | {"broker/" + name for name in CLAUDE_BROKER}
 DEPENDENCIES = ("/usr/bin/python3", "/usr/bin/bwrap", "/usr/bin/prlimit",
@@ -139,7 +139,7 @@ class Package:
 
     def _bind(self):
         value = self.runtime
-        require(set(value) - {"live_map", "desktop_broker", "timer_config", "v1_chat_icons_dir", "whatsapp_chats"} == {"format", "uid", "gid", "owner_id", "conversation_id", "home",
+        require(set(value) - {"live_map", "desktop_broker", "timer_config", "v1_chat_icons_dir", "whatsapp_chats", "claude_quota_projection"} == {"format", "uid", "gid", "owner_id", "conversation_id", "home",
                 "bootstrap_file", "ledger_directory", "endpoint_directory", "port", "trusted_origin"}
                 and value["format"] == "orkestr-v2-codex-service-v1", "service_format")
         self.live_map = live_map_path(value["live_map"]) if "live_map" in value else None
