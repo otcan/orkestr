@@ -60,6 +60,7 @@ export async function providerHandoff({ page, state, label, openDrawer, choose, 
     assert.deepEqual(failures, []);
     await screenshot(label, 'provider-handoff-complete');
     await clickText('Chat');
+    await page.waitForSelector('#composer');
   } finally {
     page.off('request', intercept); await page.setRequestInterception(false);
     state.settings = prior.settings; state.window[A] = prior.window;

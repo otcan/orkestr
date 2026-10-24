@@ -567,6 +567,7 @@ export const scenarios = [
     await openDrawer(label);
     await choose('Synthetic group');
     await page.waitForSelector('.v1-tabs');
+    await page.waitForSelector('#v1-composer');
     await clickWithin('.v1-tabs', 'Settings');
     await page.waitForSelector('#v1-model');
     await page.select('#v1-effort', 'high');
@@ -782,7 +783,11 @@ try {
   assert.deepEqual(errors, [], 'Browser rendering errors');
   console.log(`PASS: configured workspace rendering (${scenarios.map(s => s[0]).join(', ')}) at desktop and phone widths; synthetic API only, no provider qualification`);
 } catch (error) {
-  console.error(JSON.stringify({ stage, error: error.message, requests: state.requests.slice(-25), pageErrors: errors }));
+  const view = await page?.evaluate(() => ({ hash: location.hash, heading: document.querySelector('.heading-title')?.textContent,
+    tabs: [...document.querySelectorAll('.v1-tabs button')].map(n => ({ text: n.textContent, current: n.getAttribute('aria-current') })),
+    body: document.body.innerText.slice(-4500) })).catch(() => null);
+  await screenshot('failure', stage.replace(/[^a-z0-9-]/gi, '-')).catch(() => {});
+  console.error(JSON.stringify({ stage, error: error.message, requests: state.requests.slice(-25), pageErrors: errors, view }));
   throw error;
 } finally {
   await browser?.close();
