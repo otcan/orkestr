@@ -55,6 +55,7 @@ def main(root):
         from reaping import REAPED_EXIT
         from claude_connector import ClaudeConfiguration
         from claude_protocol import ClaudeChannel
+        from startup_diagnostics import StderrCapture, report_failure
         fresh = ["open-owned-session", "--protocol", PROTOCOL]
         resumed = ["resume-owned-session", "--protocol", PROTOCOL]
         require(sys.argv[1:] in (fresh, resumed), "claude_broker_operation")
@@ -82,12 +83,17 @@ def main(root):
             else:
                 session = config.new_session()
             pump = Pump(session, ClaudeChannel(session, catalog_warning=catalog_warning),
-                        handoff=handoff, diagnostics=True)
+                        handoff=handoff, diagnostics=True, stderr_capture=StderrCapture())
             pump.run()
             if pump.parent_eof and pump.child is not None and pump.reaped:
                 return REAPED_EXIT
         return 0
     except Exception:
         sys.stderr.write("selected Claude service broker refused; reconcile uncertain delivery\n")
+        if pump is not None:
+            def emit(message):
+                import syslog
+                syslog.syslog(syslog.LOG_ERR, message)
+            report_failure(pump, sys.argv[1:] == resumed, emit)
         code = pump.failure_exit if pump is not None else 2
         return code if type(code) is int and 80 <= code <= 217 else 2

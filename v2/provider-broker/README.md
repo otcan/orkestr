@@ -160,3 +160,16 @@ is unchanged pending its separate typed composition.
 ## Diagnostics on an installed service
 
 Installed service packages have a closed, protected inventory. Use `python3 -I -S -B` and `PYTHONDONTWRITEBYTECODE=1` when importing their modules for diagnostics; store scripts, caches and output outside the package. Root-owned bytecode is still an unexpected file. The running manager rechecks inventory before admission and child binding, refuses immediately on invalid inventory, and emits one value-free `ALERT orkestr-v2-manager package_inventory_invalid` journal record per invalid episode. Route that record to the operator alert sink. It does not delete files, modify the manifest, accept extra files or weaken child ownership checks.
+
+The selected Claude service broker drains native stderr independently of the
+provider protocol. It retains at most 8 KiB in memory and emits one
+`claude_broker_failure` syslog record on failure. The record contains fixed
+category labels, byte counts, startup phase, fresh/resumed status, and the
+existing closed failure/child-state exit code. Raw stderr, paths, account names,
+tokens, and provider error messages are never emitted or persisted. Categories
+are hints derived from the retained tail; an empty or unclassified result does
+not establish a cause. Other brokers retain their default stderr behavior.
+
+These records are diagnostic only. Stderr EOF, child exit, zero production runs,
+and an empty process snapshot cannot authorize retirement or clear uncertain
+process custody. Reconciliation still requires the original cleanup proof.
