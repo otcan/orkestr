@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import puppeteer from 'puppeteer';
 import { A, C, V1_INSTANCE_REF, V1_LINKS, V1_WORKER, createState, startMock } from './headless-workspace-mock.mjs';
 import { mkdir } from 'node:fs/promises';
+import { providerHandoff } from './headless-provider-handoff.mjs';
 
 assert.equal(process.env.CI, 'true', 'Run only in isolated CI');
 assert.ok(process.env.UI_BUNDLE_DIR, 'UI_BUNDLE_DIR is required');
@@ -561,6 +562,7 @@ export const scenarios = [
     assert.ok(!('next_due_ms' in created) && !('generation' in created), 'no clock or claim from the page');
     await clickText('Chat');
   }],
+  ['provider-handoff', label => providerHandoff({ page, state, label, openDrawer, choose, clickText, waitText, screenshot, noHorizontalScroll })],
   ['v1-manage', async label => {
     await openDrawer(label);
     await choose('Synthetic group');
