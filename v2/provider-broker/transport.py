@@ -95,7 +95,8 @@ def failure_exit(error, child, fallback=None):
 
 
 class Pump:
-    def __init__(self, config, channel, incoming=0, outgoing=1, handoff=None, diagnostics=False):
+    def __init__(self, config, channel, incoming=0, outgoing=1, handoff=None, diagnostics=False,
+                 stderr_capture=None):
         require(type(diagnostics) is bool)
         self.config, self.channel = config, channel
         self.incoming, self.outgoing = incoming, outgoing
@@ -111,6 +112,8 @@ class Pump:
         self.diagnostics = diagnostics
         self.failure_exit = 2
         self.failure_fallback = None
+        self.stderr_capture = stderr_capture
+        self.last_provider_frame_bytes = 0
         # Only the provider source may opt into a larger bound; parent input
         # and every broker output keep MAX_FRAME.
         self.provider_limit = getattr(config, "max_provider_frame", MAX_FRAME)
@@ -132,12 +135,16 @@ class Pump:
             command = contained_command(command)
         self.child = subprocess.Popen(command, env=self.config.environment(),
                                       cwd=self.config.workspace, stdin=subprocess.PIPE,
-                                      stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                      stdout=subprocess.PIPE,
+                                      stderr=subprocess.PIPE if self.stderr_capture is not None else subprocess.DEVNULL,
                                       close_fds=True, process_group=0)
         if hasattr(self.config, "owned_spawned"):
             self.config.owned_spawned(self.child)
         for pipe in (self.child.stdin, self.child.stdout):
             os.set_blocking(pipe.fileno(), False)
+        if self.stderr_capture is not None:
+            os.set_blocking(self.child.stderr.fileno(), False)
+            self.watch(self.child.stderr.fileno(), selectors.EVENT_READ)
         if self.handoff is None:
             self.queues[self.child.stdin.fileno()] = deque()
         else:
@@ -162,6 +169,8 @@ class Pump:
             self.selector.register(fd, events)
 
     def line(self, fd, raw):
+        if fd != self.incoming:
+            self.last_provider_frame_bytes = len(raw)
         try:
             value = decode(raw, self.limit(fd))
         except Refused as error:
@@ -203,12 +212,20 @@ class Pump:
         buffer = self.buffers.get(fd, b"")
         while b"\n" in buffer and self.capacity():
             raw, buffer = buffer.split(b"\n", 1)
+            if fd != self.incoming:
+                self.last_provider_frame_bytes = len(raw)
             require(bool(raw) and len(raw) <= self.limit(fd), Failure.FRAME_BOUND)
             self.line(fd, raw)
+        if fd != self.incoming and buffer:
+            self.last_provider_frame_bytes = len(buffer)
         require(len(buffer) <= self.limit(fd), Failure.FRAME_BOUND)
         self.buffers[fd] = buffer
 
     def read(self, fd):
+        if (self.stderr_capture is not None and self.child is not None
+                and self.child.stderr is not None and fd == self.child.stderr.fileno()):
+            self.read_stderr(fd)
+            return True  # Stderr EOF is never a provider EOF or readiness.
         self.drain_buffer(fd)
         if not self.capacity() or b"\n" in self.buffers[fd]:
             return True
@@ -229,6 +246,26 @@ class Pump:
         self.buffers[fd] += chunk
         self.drain_buffer(fd)
         return True
+
+    def read_stderr(self, fd):
+        try:
+            chunk = os.read(fd, 4096)
+        except BlockingIOError:
+            return False
+        except OSError:
+            chunk = b''  # Optional diagnostics cannot poison protocol state.
+        if chunk:
+            try:
+                self.stderr_capture.feed(chunk)
+            except Exception:
+                pass
+            return True
+        try:
+            if fd in (self.selector.get_map() or {}):
+                self.selector.unregister(fd)
+        except (OSError, ValueError):
+            pass
+        return False
 
     def write(self, fd):
         queue = self.queues[fd]
@@ -273,16 +310,33 @@ class Pump:
                 self.failure_exit = failure_exit(error, self.child, self.failure_fallback)
             raise
         finally:
-            self.selector.close()
-            if self.child is not None:
-                # A pipe close failure must not skip owned-child termination.
-                for pipe in (self.child.stdin, self.child.stdout):
-                    try:
-                        if pipe is not None:
-                            pipe.close()
-                    except OSError:
-                        pass
-                if getattr(self.config, "uncontained", False) is True:
-                    self.reaped = reap_uncontained(self.child)
-                else:
-                    self.reaped = reap_owned(self.child)
+            try:
+                if self.child is not None:
+                    # A pipe close failure must not skip owned-child termination.
+                    for pipe in (self.child.stdin, self.child.stdout):
+                        try:
+                            if pipe is not None:
+                                pipe.close()
+                        except OSError:
+                            pass
+                    if getattr(self.config, "uncontained", False) is True:
+                        self.reaped = reap_uncontained(self.child)
+                    else:
+                        self.reaped = reap_owned(self.child)
+            finally:
+                try:
+                    if self.stderr_capture is not None and self.child is not None and self.child.stderr is not None:
+                        # A bounded, nonblocking drain cannot delay owned cleanup.
+                        try:
+                            fd = self.child.stderr.fileno()
+                            # launch() may have failed before configuring pipes.
+                            os.set_blocking(fd, False)
+                            for _ in range(16):
+                                if not self.read_stderr(fd):
+                                    break
+                        except (OSError, ValueError):
+                            pass
+                        finally:
+                            self.child.stderr.close()
+                finally:
+                    self.selector.close()

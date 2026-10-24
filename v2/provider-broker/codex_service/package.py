@@ -52,7 +52,8 @@ CODE_MODE_HOST = "codex-code-mode-host"
 HOST_FILES = {CODE_MODE_HOST}
 # Optional per-conversation Claude Deep runtime (operator host full access).
 CLAUDE_BROKER = ("claude_connector.py", "claude_protocol.py", "claude_control.py",
-                 "claude_policy.py", "claude_telemetry.py", "claude_resume.py", "claude_bootstrap.py")
+                 "claude_policy.py", "claude_telemetry.py", "claude_resume.py", "claude_bootstrap.py",
+                 "startup_diagnostics.py")
 CLAUDE_FILES = {"launcher-claude.py", "claude-private.json"} | {"broker/" + name for name in CLAUDE_BROKER}
 DEPENDENCIES = ("/usr/bin/python3", "/usr/bin/bwrap", "/usr/bin/prlimit",
                 "/etc/ssl/certs/ca-certificates.crt")

@@ -67,6 +67,7 @@ jobs:
           python3 -I -S -B -m unittest discover -s provider-broker -p test_codex_service_bind_deadline.py -v
           python3 -I -S -B -m unittest discover -s provider-broker -p test_codex_service_native_state.py -v
           python3 -I -S -B -m unittest discover -s provider-broker -p test_codex_service_exit_diagnostics.py -v
+          python3 -I -S -B -m unittest discover -s provider-broker -p test_startup_diagnostics.py -v
           python3 -I -S -B -m unittest discover -s provider-broker -p test_codex_output_items.py -v
       - name: Claude broker codec, full-access and owned-cleanup regressions
         run: |

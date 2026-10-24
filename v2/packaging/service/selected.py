@@ -90,7 +90,7 @@ def claude_inventory(manager):
     expected = {'launcher-claude.py', 'claude-private.json'} | {
         'broker/' + name for name in ('claude_connector.py', 'claude_protocol.py', 'claude_control.py',
                                      'claude_telemetry.py', 'claude_resume.py', 'claude_bootstrap.py',
-                                     'claude_policy.py')}
+                                     'claude_policy.py', 'startup_diagnostics.py')}
     files = set(getattr(manager, 'CLAUDE_FILES', set()))
     require(files == expected, 'manager Claude inventory required')
     return files
