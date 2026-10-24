@@ -45,6 +45,11 @@ class Refused(Exception):
 CODEX_EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra")
 
 
+def reported_model(value):
+    return (isinstance(value, str) and 0 < len(value) <= 120 and
+            all(c.isascii() and (c.isalnum() or c in "-_.:/") for c in value))
+
+
 def require(condition, failure=Failure.PROTOCOL):
     if not condition:
         raise Refused("broker protocol refused", failure)
@@ -337,7 +342,7 @@ class Channel:
                 if params["item"].get("type") != "agentMessage":
                     return None  # Tool items remain metadata, never an execution grant.
             if not item_event and frame["method"] not in (
-                    "turn/started", "turn/completed", "item/agentMessage/delta"):
+                    "turn/started", "turn/completed", "item/agentMessage/delta", "model/rerouted"):
                 return None
             foreign = frame["params"].get("threadId") if isinstance(frame["params"], dict) else None
             if (self.sandbox[1] == "dangerFullAccess" and self.native is not None
@@ -365,6 +370,10 @@ class Channel:
                 if "itemId" in params:
                     require(identifier(params["itemId"]), Failure.TURN_SCHEMA)
                     clean["itemId"] = params["itemId"]
+            elif frame["method"] == "model/rerouted":
+                require(identifier(params.get("turnId")) and reported_model(params.get("toModel")), Failure.TURN_SCHEMA)
+                turn_id = params["turnId"]
+                clean = {k: params[k] for k in ("threadId", "turnId", "toModel")}
             elif item_event:
                 item = params["item"]
                 require(identifier(params.get("turnId")), Failure.TURN_SCHEMA)
@@ -441,6 +450,8 @@ class Channel:
                      "cwd": self.workspace, "approvalPolicy": "never", "modelProvider": "openai",
                      "sandbox": {"type": "readOnly", "networkAccess": False}
                      if self.sandbox[1] == "readOnly" else {"type": "dangerFullAccess"}}}
+            if reported_model(result.get("model")):
+                frame["result"]["model"] = result["model"]
         elif kind == "turn/start":
             require(isinstance(result.get("turn"), dict))
             require(identifier(result["turn"].get("id")))

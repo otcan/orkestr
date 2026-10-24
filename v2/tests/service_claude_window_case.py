@@ -11,10 +11,9 @@ import shutil
 
 import owned_execution_http as ordinary
 from service_roles_case import ServiceRolesCase, GID, UID, packager, Package, digest
+from codex_service.package import CLAUDE_BROKER
 
 PEER = Path(__file__).with_name("service_claude_native.py")
-CLAUDE_BROKER = ("claude_connector.py", "claude_protocol.py", "claude_control.py",
-                 "claude_telemetry.py", "claude_resume.py", "claude_bootstrap.py")
 
 
 class ClaudeWindowCase(ServiceRolesCase):

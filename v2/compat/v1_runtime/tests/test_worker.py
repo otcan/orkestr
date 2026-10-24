@@ -405,11 +405,11 @@ class ExtensionTests(unittest.TestCase):
             Worker(self.peer, self.ledger).step(data)
         self.assertFalse(any(route == "/messages" for route, _ in self.peer.mutations))
 
-    def test_final_reply_carries_the_conversation_provider_and_model(self):
+    def test_final_reply_does_not_infer_the_actual_model_from_settings(self):
         self.peer.settings = dict(provider="codex", model="gpt-6-astra", revision=3)
         Worker(self.peer, self.ledger).step(self.enqueue())
         final = self.ledger.messages()[-1]
-        self.assertEqual((final["provider"], final["model"]), ("codex", "gpt-6-astra"))
+        self.assertEqual((final["provider"], final["model"]), ("codex", "unreported"))
 
     def test_final_reply_without_settings_route_omits_provider(self):
         Worker(self.peer, self.ledger).step(self.enqueue())

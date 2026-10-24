@@ -2,6 +2,9 @@
 use crate::{ports::Blocker, ports::ProviderEvent};
 use serde_json::Value;
 use std::collections::VecDeque;
+#[cfg(test)]
+mod model_tests;
+mod models;
 mod text;
 pub use text::ASYNC_QUESTION_PREFIX;
 
@@ -18,6 +21,7 @@ pub struct TurnStream {
     poisoned: bool,
     interrupt_claimed: bool,
     text: text::TurnText,
+    models: models::Models,
 }
 impl TurnStream {
     /// Protocol correlation only. The process layer separately consumes Core's
@@ -37,6 +41,7 @@ impl TurnStream {
             poisoned: false,
             interrupt_claimed: false,
             text: text::TurnText::default(),
+            models: Default::default(),
         })
     }
     pub fn next_event(&mut self) -> Option<ProviderEvent> {
@@ -45,6 +50,14 @@ impl TurnStream {
         } else {
             None
         }
+    }
+    pub(crate) fn report_model(&mut self, model: Option<&str>) {
+        self.models.initialize(model);
+    }
+    pub(crate) fn take_model_observation(
+        &mut self,
+    ) -> Option<orkestr_v2_contracts::ExecutionModelObservation> {
+        self.models.take()
     }
     pub(crate) fn renewal_quiescent(&self) -> bool {
         !self.poisoned
@@ -177,12 +190,20 @@ impl TurnStream {
                 | "item/agentMessage/delta"
                 | "item/started"
                 | "item/completed"
+                | "model/rerouted"
         ) {
             return Ok(());
         }
         let params = value.get("params").ok_or(Blocker::Protocol)?;
         if text(params, "threadId")? != self.thread {
             return Err(Blocker::StaleLease);
+        }
+        if method == "model/rerouted" {
+            self.turn_id(text(params, "turnId")?)?;
+            if self.terminal.is_some() {
+                return Err(Blocker::Protocol);
+            }
+            return self.models.reroute(text(params, "toModel")?);
         }
         if matches!(
             method,
@@ -193,6 +214,7 @@ impl TurnStream {
                 return Err(Blocker::Protocol);
             }
             if let Some(snapshot) = self.text.receive(method, params)? {
+                self.models.answered();
                 self.queue(ProviderEvent::Progress(snapshot))?;
             }
             return Ok(());
@@ -225,6 +247,7 @@ impl TurnStream {
         }
         if matches!(event, ProviderEvent::CompletedProposal { .. }) {
             if let Some(snapshot) = self.text.finish(turn)? {
+                self.models.answered();
                 self.queue(ProviderEvent::Progress(snapshot))?;
             }
         }

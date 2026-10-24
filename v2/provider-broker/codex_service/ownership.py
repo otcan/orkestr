@@ -1,5 +1,6 @@
 """Original pidfds only. Empty process snapshots never create retirement proof."""
 import math
+import errno
 import os
 from functools import wraps
 from pathlib import Path
@@ -81,6 +82,7 @@ class Children:
         self.records = {}
         self.brokers = set()
         self.forced = self.uncertain = False
+        self.uncertainty_reason = None
         self.lock = threading.RLock()
 
     @serialized
@@ -182,9 +184,24 @@ class Children:
                     require(self.host or child["uid"] == self.package.uid, "owned_child_identity")
                     self.remember(child)
                     pending.append(child)
-        except BaseException:
-            self.uncertain = True
+        except BaseException as error:
+            self._observation_failed(error)
             raise
+
+    def _observation_failed(self, error):
+        """Persist a closed diagnostic; never expose raw exception text/paths."""
+        self.uncertain = True
+        if self.uncertainty_reason is not None:
+            return
+        reason = error.args[0] if error.args else None
+        allowed = {"owned_child_bound", "owned_child_identity", "owned_child_metadata",
+                   "owned_process_missing", "owned_process_changed"}
+        if isinstance(reason, str) and reason in allowed:
+            self.uncertainty_reason = reason
+        elif isinstance(error, OSError) and error.errno in (errno.ENOENT, errno.ESRCH):
+            self.uncertainty_reason = "owned_child_disappeared"
+        else:
+            self.uncertainty_reason = "owned_child_observation"
 
     @serialized
     def proven_gone(self):
@@ -198,7 +215,8 @@ class Children:
     def released(self):
         """Every original identity reaped and cleanup certain. Not graceful proof."""
         self.observe()
-        return not self.uncertain and not self._log_live()
+        live = self._log_live()
+        return not self.uncertain and not live
 
     def _log_live(self):
         """Owned identities still alive. Operator diagnostic on stderr: pid and
@@ -228,7 +246,12 @@ class Children:
         for this very reply. `released()` re-observes later, so reconciliation
         succeeds once every original identity is reaped. Only a descendant tree
         that could not be followed (`observe`) stays permanently uncertain."""
-        self.observe()
+        try:
+            self.observe()
+        except Exception as error:
+            # A failed walk loses retirement proof, but must not prevent cleanup
+            # of identities already pinned by their original pidfds.
+            self._observation_failed(error)
         live = [record for record in self.records.values() if not record.exited()]
         if live:
             self.forced = True

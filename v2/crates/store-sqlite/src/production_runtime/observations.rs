@@ -191,6 +191,7 @@ pub(super) fn failure_class_name(
 ) -> &'static str {
     use orkestr_v2_contracts::ExecutionFailureClass as Class;
     match class {
+        Class::Policy => "policy",
         Class::Authentication => "authentication",
         Class::Quota => "quota",
         Class::Billing => "billing",
@@ -202,6 +203,7 @@ pub(super) fn failure_class_name(
 pub(super) fn failure_class(value: &str) -> Option<orkestr_v2_contracts::ExecutionFailureClass> {
     use orkestr_v2_contracts::ExecutionFailureClass as Class;
     Some(match value {
+        "policy" => Class::Policy,
         "authentication" => Class::Authentication,
         "quota" => Class::Quota,
         "billing" => Class::Billing,

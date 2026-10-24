@@ -42,6 +42,8 @@ pub struct ExecutionResources {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ExecutionFailureClass {
+    /// The provider declined this input under its content policy.
+    Policy,
     /// The provider account is not logged in or its login was rejected.
     Authentication,
     /// A usage or rate limit was reached.
@@ -88,9 +90,13 @@ pub struct ExecutionStatus {
     pub progress: Option<ExecutionProgress>,
     pub resources: Option<ExecutionResources>,
     pub capabilities: ExecutionCapabilities,
-    /// Present only for a `failed` run whose provider stated a closed class.
+    /// Closed provider failure. A policy refusal remains visible after audited
+    /// cleanup settles the underlying run as cancelled; no native stop is implied.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failure: Option<ExecutionFailure>,
+    /// Exact-run native model evidence; absent when the provider did not report it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub models: Option<crate::ExecutionModels>,
 }
 impl ExecutionStatus {
     /// Compare equal-revision durable meaning, excluding only read-time clock
@@ -107,6 +113,7 @@ impl ExecutionStatus {
             && self.resources == other.resources
             && self.capabilities == other.capabilities
             && self.failure == other.failure
+            && self.models == other.models
     }
 
     pub fn is_valid(&self) -> bool {
@@ -132,7 +139,16 @@ impl ExecutionStatus {
                     && s.observed_at_ms > 0
                     && s.observed_at_ms <= self.observed_at_ms
             })
-            && (self.failure.is_none() || self.phase == ExecutionPhase::Failed)
+            && self.failure.as_ref().is_none_or(|failure| {
+                self.phase == ExecutionPhase::Failed
+                    || (self.phase == ExecutionPhase::Cancelled
+                        && failure.class == ExecutionFailureClass::Policy)
+            })
+            && self
+                .models
+                .as_ref()
+                .is_none_or(crate::ExecutionModels::is_valid)
+            && (self.models.is_none() || self.run_id.is_some())
     }
 }
 
@@ -142,6 +158,7 @@ mod tests {
     #[test]
     fn equal_revision_excludes_only_clock_and_queue_age_samples() {
         let first = ExecutionStatus {
+            models: None,
             failure: None,
             schema_version: 1,
             conversation_id: ConversationId(uuid::Uuid::from_u128(1)),

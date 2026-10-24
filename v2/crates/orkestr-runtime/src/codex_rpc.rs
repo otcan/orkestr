@@ -22,6 +22,7 @@ pub struct CodexRpc {
     readiness: Readiness,
     native_session: Option<String>,
     turn_submitted: bool,
+    reported_model: Option<String>,
 }
 enum Request {
     Initialize,
@@ -39,6 +40,7 @@ impl Default for CodexRpc {
             readiness: Readiness::Uninitialized,
             native_session: None,
             turn_submitted: false,
+            reported_model: None,
         }
     }
 }
@@ -161,6 +163,10 @@ impl CodexRpc {
         self.native_session.as_deref()
     }
 
+    pub(crate) fn reported_model(&self) -> Option<&str> {
+        self.reported_model.as_deref()
+    }
+
     fn request(&mut self, kind: Request, method: &str, params: Value) -> Result<Value, Blocker> {
         if self.pending.is_some() {
             return Err(Blocker::Busy);
@@ -231,6 +237,11 @@ impl CodexRpc {
                     return Err(Blocker::Protocol);
                 }
                 self.native_session = Some(native.to_owned());
+                self.reported_model = result
+                    .get("model")
+                    .and_then(Value::as_str)
+                    .filter(|v| orkestr_v2_contracts::valid_observed_model(v))
+                    .map(str::to_owned);
                 None
             }
             Request::Account => {

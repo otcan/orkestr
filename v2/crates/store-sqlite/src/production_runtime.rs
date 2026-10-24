@@ -54,6 +54,11 @@ pub use workspace::{
     WorkspaceLaunch, WorkspaceLaunchConsumption, WorkspaceLaunchReservation,
     WorkspaceLaunchReservationResult, WorkspaceOperatorAllowlist,
 };
+mod model_evidence;
+#[cfg(test)]
+mod model_evidence_tests;
+#[cfg(test)]
+mod model_migration_tests;
 #[cfg(test)]
 mod observation_tests;
 mod observations;

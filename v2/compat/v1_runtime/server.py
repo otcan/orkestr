@@ -32,6 +32,7 @@ class Server(ThreadingHTTPServer):
     def __init__(self, config, registry):
         super().__init__(("127.0.0.1", config["listen_port"]), Handler)
         self.config, self.registry = config, registry
+        self.change_waiters = threading.BoundedSemaphore(16)
 
 
 def valid_filename(name):
@@ -94,7 +95,10 @@ class Handler(BaseHTTPRequestHandler):
             return
         target = urlsplit(self.path)
         if target.path == "/health" and not target.query:
-            return self.answer(200, dict(ok=True, inputKinds=INPUT_KINDS, **self.server.registry.status()))
+            return self.answer(200, dict(ok=True, inputKinds=INPUT_KINDS, messageChanges={"version": 1, "path": "changes"},
+                                         **self.server.registry.status()))
+        if target.path == "/changes":
+            return self.changes(target.query)
         binding, action = self.route(target.path)
         if binding is None or action not in ("messages", "health"):
             return self.answer(404, {"ok": False, "error": "route_not_found"})
@@ -117,6 +121,24 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError:
             return self.answer(400, {"ok": False, "error": "invalid_limit"})
         return self.answer(200, dict(ok=True, **binding.ledger.listing(limit)))
+
+    def changes(self, raw_query):
+        try:
+            query = parse_qs(raw_query, strict_parsing=True, keep_blank_values=True)
+            if set(query) - {"cursor", "waitMs"} or any(len(v) != 1 for v in query.values()):
+                raise ValueError()
+            cursor = query.get("cursor", [""])[0]
+            wait_ms = int(query.get("waitMs", ["25000"])[0])
+            if len(cursor) > 128 or not 0 <= wait_ms <= 25000:
+                raise ValueError()
+        except ValueError:
+            return self.answer(400, {"ok": False, "error": "invalid_change_query"})
+        if not self.server.change_waiters.acquire(blocking=False):
+            return self.answer(429, {"ok": False, "error": "change_waiter_capacity"})
+        try:
+            return self.answer(200, dict(ok=True, **self.server.registry.changes.read(cursor, wait_ms)))
+        finally:
+            self.server.change_waiters.release()
 
     def do_POST(self):
         if not self.authorized():
@@ -261,6 +283,7 @@ def main():
     reloader = threading.Thread(target=registry.run, args=(stop, wake), daemon=True)
     reloader.start()
     def shutdown(*_):
+        registry.changes.close()
         stop.set()
         wake.set()
         threading.Thread(target=server.shutdown, daemon=True).start()

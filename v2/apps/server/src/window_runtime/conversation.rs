@@ -35,17 +35,8 @@ pub(super) struct ConversationController {
 }
 /// Spacing of immediate reconciliation attempts for one released window.
 const RELEASED_RETRY: Duration = Duration::from_secs(10);
-enum State {
-    Idle,
-    Starting,
-    Running(WindowTask),
-    Uncertain,
-    /// The durable window is unresolved, but this process holds no custody:
-    /// it never ran a task for it, or its task stopped and every original
-    /// child was reaped. Only audited reconciliation may close it; shutdown
-    /// is clean because nothing local remains to prove.
-    Released,
-}
+mod state;
+use state::State;
 impl ConversationController {
     pub(super) fn handles(&self) -> &Handles {
         &self.handles
@@ -146,7 +137,11 @@ impl ConversationController {
             if status.state != orkestr_v2_contracts::ExecutionWindowState::Closed
                 && matches!(
                     *self.state.lock().await,
-                    State::Idle | State::Uncertain | State::Starting | State::Released
+                    State::Idle
+                        | State::Uncertain
+                        | State::Starting
+                        | State::Released
+                        | State::Reaping(_)
                 )
             {
                 let status = self
@@ -159,10 +154,11 @@ impl ConversationController {
                     )
                     .await?;
                 let mut state = self.state.lock().await;
-                *state = match *state {
-                    State::Idle | State::Released => State::Released,
-                    _ => State::Uncertain,
-                };
+                if matches!(*state, State::Idle | State::Released) {
+                    *state = State::Released;
+                } else if !matches!(*state, State::Reaping(_)) {
+                    *state = State::Uncertain;
+                }
                 self.handles.poison();
                 return Ok(Some(status));
             }
@@ -213,7 +209,7 @@ impl ConversationController {
             *state = State::Released;
             return Ok(false);
         }
-        *state = State::Uncertain;
+        *state = State::Reaping(task.cleanup_accounting());
         Err("window shutdown is not proven retirement")
     }
     pub(crate) async fn shutdown(&self) -> Result<(), &'static str> {
@@ -261,13 +257,17 @@ impl ConversationController {
                     *state = if released {
                         State::Released
                     } else {
-                        State::Uncertain
+                        State::Reaping(task.cleanup_accounting())
                     };
                     self.handles.poison();
                 }
             }
         }
-        if matches!(*state, State::Uncertain | State::Released) {
+        state.refresh_reaping().await;
+        if matches!(
+            *state,
+            State::Uncertain | State::Released | State::Reaping(_)
+        ) {
             return Err("window requires reconciliation");
         }
         Ok(())

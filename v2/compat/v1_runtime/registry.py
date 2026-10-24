@@ -11,6 +11,7 @@ from pathlib import Path
 import threading
 
 from . import config as config_module
+from .export_changes import ExportChanges
 from .ledger import Ledger
 from .worker import DEFAULT_BURST_QUIET_S, Signal, Worker, attachment_export_settings
 
@@ -47,6 +48,7 @@ class Registry:
     def __init__(self, service, client_factory, static=(), workers=True):
         self.service, self.client_factory, self.workers = service, client_factory, workers
         self.static = list(static)
+        self.changes = ExportChanges()
         self.bindings = {}
         self.file_errors = {}
         self._lock = threading.RLock()
@@ -119,11 +121,13 @@ class Registry:
         current = self.bindings.get(remote)
         if current is None:
             try:
-                ledger = Ledger(self._ledger_path(value), value["scope"], value["max_outstanding_inputs"])
+                ledger = Ledger(self._ledger_path(value), value["scope"], value["max_outstanding_inputs"],
+                                on_export=lambda: self.changes.publish(remote))
             except (ValueError, OSError) as error:
                 self.file_errors[source] = str(error)
                 return
             current = self.bindings[remote] = Binding(source, value, ledger)
+            self.changes.publish(remote)
             current.error = None
         elif current.identity() != json.dumps(value["scope"], sort_keys=True) or current.source != source:
             self._refuse(current, "binding_scope_changed")
@@ -169,6 +173,7 @@ class Registry:
             binding.thread.join(timeout=10)
 
     def shutdown(self):
+        self.changes.close()
         with self._lock:
             for binding in self.bindings.values():
                 self._stop(binding, wait=True)

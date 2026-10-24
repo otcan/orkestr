@@ -559,3 +559,40 @@ existing dedupe ledgers. Never reset global WhatsApp routing, replay an
 uncertain send, retire the production chat, or release the selected queue
 hold while a delegated input could still execute locally. Verify the original
 route with a fresh message.
+
+### Export change feed
+
+Authenticated `GET /health` advertises `messageChanges` version1. Clients may
+hold `GET /changes?cursor=<opaque cursor>&waitMs=25000`; an export wakes it only
+after its SQLite transaction commits. The response contains `cursor`, `threads`
+(remote binding IDs) and `reset`. It carries no message text and never sends or
+re-admits input. Re-read each changed binding through the existing messages API.
+Initial, unknown-epoch and future cursors return a route snapshot. A reconnect
+with a valid cursor includes every route changed while disconnected. The route
+revision map coalesces repeated wakeups without changing export/ACK durability.
+Duplicate export inserts and rolled-back transactions do not wake clients.
+At most16 long-poll requests may wait concurrently; authentication precedes
+admission, and invalid query fields, repeated fields and excessive waits fail.
+
+### Audited export suppression
+
+The local admin command `export_disposition.py` can suppress one completed final
+that the operator has independently verified was never imported or transported.
+It never sends, replays, acknowledges delivery, changes Core or starts a native
+session. Use the immutable installed release's command with `python3 -I -S -B`.
+The ledger and its directory must belong to the caller and be private.
+
+First run `inspect --ledger <existing-ledger> --export-id <export-id>`; it prints
+only identity, state and SHA256 metadata. For `suppress`, supply the exact
+`--input-id`, `--scope-sha256`, `--message-sha256`, an explicit `--request-key`,
+`--reason` and `--confirm-never-transported`. This last flag records an operator
+attestation, not transport proof: check the importing system and provider
+receipts before using it. Recorded or uncertain ACKs, active/batched inputs,
+changed scope/content and other pending exports of the input refuse unchanged.
+
+Suppression and its immutable full-text audit commit atomically. The export
+outcome becomes `suppressed`, its ACK stays NULL, and complete text remains in
+both live and audit records. An identical request is idempotent; a changed
+decision with the same key refuses. Later independent inputs and exports retain
+their ordinary import/delivery path. No service restart is needed to apply a
+disposition using a command already shipped in the installed release.

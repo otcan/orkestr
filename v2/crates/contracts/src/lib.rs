@@ -49,6 +49,8 @@ pub use held_inputs::*;
 mod retired_inputs;
 pub use retired_inputs::*;
 mod execution;
+mod execution_models;
+pub use execution_models::*;
 mod worker_discovery;
 mod worker_tasks;
 pub use execution::*;

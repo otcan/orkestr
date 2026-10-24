@@ -205,7 +205,15 @@ class Manager:
                     self._uncertain(window.window, window.generation, "runtime_refused")
                     self._terminate(window)
                 require(window.egress_closed, "window_egress_owned")
-                require(window.children.released(), "owned_child_not_reaped")
+                try:
+                    released = window.children.released()
+                except Exception:
+                    self._cleanup_notice(window)
+                    raise
+                if not released:
+                    self._cleanup_notice(window)
+                    require(not window.children.uncertain, "owned_cleanup_uncertain")
+                    require(False, "owned_child_not_reaped")
             receipt = self.ledger.reconcile(request)
             if window is not None:
                 with self.guard:
@@ -225,6 +233,19 @@ class Manager:
                 self.windows.pop(window.window, None)
             window.children.close()
         return {"ok": True, "receipt": receipt}
+
+    @staticmethod
+    def _cleanup_notice(window):
+        children = window.children
+        reason = (getattr(children, "uncertainty_reason", None) or "owned_child_observation") \
+            if getattr(children, "uncertain", False) else "owned_child_not_reaped"
+        # Once per changed condition, with scope IDs and a closed reason only.
+        signature = (reason, bool(children.forced))
+        if getattr(window, "cleanup_notice", None) != signature:
+            window.cleanup_notice = signature
+            sys.stderr.write("manager window cleanup refused: window=%s generation=%d reason=%s forced=%d\n" %
+                             (window.window, window.generation, reason, bool(children.forced)))
+            sys.stderr.flush()
 
     def tick(self):
         require(self.child is not None, "server_not_started")

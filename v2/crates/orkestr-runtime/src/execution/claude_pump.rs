@@ -30,9 +30,14 @@ struct ClaudeOutput {
     events: VecDeque<ProviderEvent>,
     correlation: super::claude_lifecycle::ClaudeInputCorrelation,
     completed: bool,
+    models: super::model_evidence::ModelEvidence,
+    policy_refused: bool,
 }
 impl ClaudeOutput {
     fn poll_inner(&mut self) -> Result<Option<ProviderEvent>, Blocker> {
+        if self.models.pending() || (self.policy_refused && self.events.is_empty()) {
+            return Ok(None);
+        }
         if self.pending_native {
             return Ok(None);
         }
@@ -81,6 +86,9 @@ impl ClaudeOutput {
         };
         self.correlation.verify(&frame)?;
         let observation = self.rpc.receive("turn:3", &frame.to_string())?;
+        if let Some(model) = self.rpc.take_model_observation() {
+            self.models.observe(model)?;
+        }
         if observation == Some(ClaudeObservation::Initialized) {
             if self.started || self.pending_native {
                 return Err(Blocker::Protocol);
@@ -92,6 +100,12 @@ impl ClaudeOutput {
             return Err(Blocker::Protocol);
         }
         match observation {
+            Some(ClaudeObservation::PolicyRefusal) => {
+                self.policy_refused = true;
+                self.events.push_back(ProviderEvent::FailedWith(
+                    orkestr_v2_contracts::ExecutionFailureClass::Policy,
+                ));
+            }
             Some(ClaudeObservation::Progress) => {
                 // Only text from a fully validated bounded parser frame is persisted.
                 if let Some(content) = frame
@@ -126,7 +140,11 @@ impl ClaudeOutput {
             None => {} // Validated non-authoritative telemetry produces no event.
             _ => return Err(Blocker::Protocol),
         }
-        Ok(self.events.pop_front())
+        if self.models.pending() {
+            Ok(None)
+        } else {
+            Ok(self.events.pop_front())
+        }
     }
 }
 impl Provider for ClaudeOutput {
@@ -187,6 +205,8 @@ impl ClaudePump {
                 events: VecDeque::new(),
                 correlation,
                 completed: false,
+                models: Default::default(),
+                policy_refused: false,
             },
             cursor: PendingObservation::default(),
             admission,
@@ -235,6 +255,21 @@ impl ClaudePump {
             self.source.pending_native = false;
             self.source.started = true;
             self.source.events.push_back(ProviderEvent::Started);
+        }
+        match self.source.models.flush(store, &self.admission).await {
+            Ok(true) => return Ok(true),
+            Ok(false) => {}
+            Err(error) => {
+                if !matches!(
+                    error,
+                    orkestr_v2_application::runtime::RuntimeStoreError::Busy
+                        | orkestr_v2_application::runtime::RuntimeStoreError::Unavailable
+                ) {
+                    self.source.failed = true;
+                    self.source.child.quarantine();
+                }
+                return Err(supervisor::Error::Store(error));
+            }
         }
         supervisor::step(store, &mut self.source, &self.admission, &mut self.cursor).await
     }

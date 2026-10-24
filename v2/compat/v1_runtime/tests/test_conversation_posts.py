@@ -18,6 +18,13 @@ def post(text="Deploy finished.\n\nAll checks green.", provider="claude", model=
 
 
 class PostTests(Base):
+    def test_replayed_post_keeps_its_first_footer_when_model_metadata_changes(self):
+        first, existed = self.ledger.enqueue_post(post(), {"provider": "claude", "model": "unreported"})
+        self.assertFalse(existed)
+        again, existed = self.ledger.enqueue_post(post(), {"provider": "claude", "model": "later-model"})
+        self.assertTrue(existed)
+        self.assertEqual(first, again)
+        self.assertEqual(again["model"], "unreported")
     def test_post_is_adopted_exported_verbatim_and_acknowledged(self):
         self.peer.reply_settings = dict(prefix="[Orkestr]", footer="dbg", honor_no_reply=True)
         self.peer.posts = [post()]
@@ -36,7 +43,7 @@ class PostTests(Base):
         self.assertEqual(reply["text"], "Deploy finished.\n\nAll checks green.")
         self.assertEqual((reply["role"], reply["phase"], reply["state"]), ("assistant", "final_answer", "completed"))
         self.assertEqual(reply["parentMessageId"], user["id"])
-        self.assertEqual((reply["provider"], reply["model"]), ("claude", "synthetic-model"))
+        self.assertEqual((reply["provider"], reply["model"]), ("claude", "unreported"))
         self.assertNotIn(("POST", "/settings/render"), self.peer.reads)
         self.assertIsNone(self.ledger.next_input(), "nothing is queued for Rust")
         done = self.ledger.acknowledge(reply["id"], {"outcome": "delivered", "outboxJobId": "job",
@@ -72,7 +79,7 @@ class PostTests(Base):
         self.peer.posts = [post(provider=None, model=None, author="operator", label="Ops alert")]
         self.worker.run_once(_Stop())
         user, reply = self.ledger.messages()
-        self.assertEqual((reply["provider"], reply["model"]), ("codex", "gpt-synthetic"))
+        self.assertEqual((reply["provider"], reply["model"]), ("codex", "unreported"))
         self.assertEqual(user["text"], "Ops alert")
 
     def test_post_waits_for_nothing_behind_a_running_input(self):

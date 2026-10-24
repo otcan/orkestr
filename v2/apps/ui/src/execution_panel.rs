@@ -26,7 +26,7 @@ pub fn ExecutionPanel(
                 (AwaitingAcceptance, _) if auto_accept => {
                     "Reply ready; accepting automatically".into()
                 }
-                (Failed, Some(f)) => format!(
+                (Failed | Cancelled, Some(f)) => format!(
                     "Work failed: {}",
                     orkestr_v2_ui::execution::failure_label(f.class)
                 ),
@@ -50,9 +50,15 @@ pub fn ExecutionPanel(
         model.summary(now_ms)
     };
     rsx! {
+        if let Some(notice) = model.control_status().and_then(|s| orkestr_v2_ui::execution::failure_notice(&s)) {
+            p { class: "execution-failure", "{notice}" }
+        }
         section { class: if compact { "execution-toolbar" } else { "execution-panel" }, "aria-label": "Execution and resources",
             if !compact { h3 { "Execution" } }
             p { class: "execution-summary", role: "status", "{summary}" }
+            if let Some(status) = model.control_status() {
+                p { class: "execution-model", "{orkestr_v2_ui::execution::model_label(&status)}" }
+            }
             if !compact { details { summary { "CPU and RAM" } p { "{model.resources(now_ms)}" } } }
             crate::stop_button::StopButton { execution, csrf: csrf.clone(), session_scope, onexpired }
             if let Some(status) = model.control_status().filter(|s| !compact && s.progress.is_some()) {

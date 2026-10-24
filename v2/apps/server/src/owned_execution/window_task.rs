@@ -70,6 +70,9 @@ impl WindowTask {
             .as_ref()
             .is_some_and(|context| context.is_closed())
     }
+    pub(crate) fn cleanup_accounting(&self) -> crate::owned_children::ChildSet {
+        self.children.clone()
+    }
     /// Request the existing issued-control shutdown path, never a new terminal.
     pub(crate) fn request_stop(&self) {
         let _ = self.shutdown.send(true);

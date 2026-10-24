@@ -265,30 +265,40 @@ fn exercise(case: &str) {
         "{}::fixture_child",
         module_path!().split_once("::").unwrap().1
     );
-    let mut child = Owned(
-        Command::new(&f.executable)
-            .args(["--exact", &name, "--nocapture"])
-            .uid(UID)
-            .gid(GID)
-            .env_clear()
-            .env("PATH", "/usr/bin:/bin")
-            .env("LANG", "C.UTF-8")
-            .env("ORKESTR_TEST_BETA_PATH", &f.config)
-            .env("ORKESTR_TEST_BETA_HOME", &f.home)
-            .env(
-                "ORKESTR_TEST_BETA_EXPECT",
-                if ["valid", "world_executable", "conversation_shared"].contains(&case) {
-                    "pass"
-                } else {
-                    "refuse"
-                },
-            )
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .unwrap(),
-    );
+    let mut command = Command::new(&f.executable);
+    command
+        .args(["--exact", &name, "--nocapture"])
+        .uid(UID)
+        .gid(GID)
+        .env_clear()
+        .env("PATH", "/usr/bin:/bin")
+        .env("LANG", "C.UTF-8")
+        .env("ORKESTR_TEST_BETA_PATH", &f.config)
+        .env("ORKESTR_TEST_BETA_HOME", &f.home)
+        .env(
+            "ORKESTR_TEST_BETA_EXPECT",
+            if ["valid", "world_executable", "conversation_shared"].contains(&case) {
+                "pass"
+            } else {
+                "refuse"
+            },
+        )
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    // Parallel fixture forks can inherit another fixture's copy writer until
+    // exec closes its CLOEXEC fd. Only this transient Linux ETXTBSY is retried;
+    // no beta validation or actual launcher refusal is retried or weakened.
+    let spawn_deadline = Instant::now() + Duration::from_secs(3);
+    let mut child = loop {
+        match command.spawn() {
+            Ok(child) => break Owned(child),
+            Err(error) if error.raw_os_error() == Some(26) && Instant::now() < spawn_deadline => {
+                std::thread::sleep(Duration::from_millis(2));
+            }
+            Err(error) => panic!("synthetic custody fixture spawn failed: {error}"),
+        }
+    };
     let deadline = Instant::now() + Duration::from_secs(3);
     let status = loop {
         if let Some(status) = child.0.try_wait().unwrap() {

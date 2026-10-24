@@ -201,10 +201,11 @@ impl Store {
             None
         };
         let failure = match (&run_id, phase) {
-            (Some(run), ExecutionPhase::Failed) => sqlx::query_scalar::<_, String>(
-                "SELECT f.class FROM production_failure_classes f JOIN production_observations o ON o.event_id=f.event_id WHERE f.run_id=? AND o.kind='failed' ORDER BY o.run_sequence DESC LIMIT 1",
+            (Some(run), ExecutionPhase::Failed | ExecutionPhase::Cancelled) => sqlx::query_scalar::<_, String>(
+                "SELECT f.class FROM production_failure_classes f JOIN production_observations o ON o.event_id=f.event_id WHERE f.run_id=? AND o.kind='failed' AND (? OR f.class='policy') ORDER BY o.run_sequence DESC LIMIT 1",
             )
             .bind(run.to_string())
+            .bind(phase == ExecutionPhase::Failed)
             .fetch_optional(&mut *tx)
             .await
             .map_err(db)?
@@ -225,7 +226,40 @@ impl Store {
         } else {
             None
         };
+        let models = if let Some(run) = &run_id {
+            let rows = sqlx::query(
+                "SELECT source,model FROM production_run_models WHERE run_id=? ORDER BY sequence",
+            )
+            .bind(run.to_string())
+            .fetch_all(&mut *tx)
+            .await
+            .map_err(db)?;
+            let mut models = orkestr_v2_contracts::ExecutionModels::default();
+            let provider: String =
+                sqlx::query_scalar("SELECT provider_kind FROM production_runs WHERE id=?")
+                    .bind(run.to_string())
+                    .fetch_one(&mut *tx)
+                    .await
+                    .map_err(db)?;
+            models.provider = Some(match provider.as_str() {
+                "codex" => orkestr_v2_contracts::ConversationProvider::Codex,
+                "claude" => orkestr_v2_contracts::ConversationProvider::Claude,
+                _ => return Err(RuntimeStoreError::Unavailable),
+            });
+            for row in rows {
+                match row.get::<&str, _>("source") {
+                    "resolved" => models.resolved_model = Some(row.get("model")),
+                    "answer" => models.actual_model = Some(row.get("model")),
+                    "refused" => models.refused_model = Some(row.get("model")),
+                    _ => return Err(RuntimeStoreError::Unavailable),
+                }
+            }
+            Some(models)
+        } else {
+            None
+        };
         let status = ExecutionStatus {
+            models,
             failure,
             schema_version: 1,
             conversation_id: conversation.clone(),

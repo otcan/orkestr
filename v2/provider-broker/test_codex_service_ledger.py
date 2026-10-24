@@ -337,6 +337,7 @@ class LedgerTests(unittest.TestCase):
                                  close_egress=lambda: setattr(window, "egress_closed", True),
                                  children=SimpleNamespace(released=lambda: False,
                                                           forced=True,
+                                                          uncertain=False,
                                                           cleanup=lambda seconds=2: cleaned.append(seconds) or True,
                                                           close=lambda: closed.append(1)))
         manager.windows, manager.egress = {request["window_id"]: window}, None
@@ -351,6 +352,11 @@ class LedgerTests(unittest.TestCase):
         with self.assertRaisesRegex(contract.Refused, "owned_child_not_reaped"):
             manager.dispatch(decision)
         self.assertEqual(self.ledger.status()["state"], "reconciliation")
+        window.children.uncertain = True
+        with self.assertRaisesRegex(contract.Refused, "owned_cleanup_uncertain"):
+            manager.dispatch(decision)
+        self.assertEqual(self.ledger.status()["state"], "reconciliation")
+        window.children.uncertain = False
         window.children.released = lambda: True
         self.assertEqual(manager.dispatch(decision)["receipt"]["state"], "retired")
         self.assertEqual((manager.windows, closed), ({}, [1]))
