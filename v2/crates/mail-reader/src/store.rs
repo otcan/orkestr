@@ -37,6 +37,10 @@ impl MailFolder {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Cursor {
     pub folders: BTreeMap<String, FolderCursor>,
+    /// Rotate between selected folders so sustained Inbox traffic cannot starve
+    /// Sent. Legacy cursors start with the first selected folder.
+    #[serde(default)]
+    pub next_folder: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -173,6 +177,19 @@ pub fn scan_folders(
     limits: &ScanLimits,
     now: SystemTime,
 ) -> io::Result<ScanOutput> {
+    scan_folders_with_identity(profile, None, folders, cursor, limits, now)
+}
+
+/// Pin the selected profile identity on the opened root handle, before any
+/// mailbox read. Path-based metadata checks alone leave a replacement race.
+pub fn scan_folders_with_identity(
+    profile: &Path,
+    identity: Option<(u64, u64)>,
+    folders: &[ScanFolder],
+    cursor: &Cursor,
+    limits: &ScanLimits,
+    now: SystemTime,
+) -> io::Result<ScanOutput> {
     let mut out = ScanOutput {
         envelopes: Vec::new(),
         cursor: cursor.clone(),
@@ -182,7 +199,22 @@ pub fn scan_folders(
         return Ok(out);
     }
     let scope = Scope::new(profile)?;
-    for ScanFolder { folder, outgoing } in folders {
+    if let Some(expected) = identity {
+        if scope.identity()? != expected {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "selected mail profile was replaced",
+            ));
+        }
+    }
+    let start = cursor
+        .next_folder
+        .as_ref()
+        .and_then(|key| folders.iter().position(|f| f.folder.key() == *key))
+        .unwrap_or(0);
+    for visited in 0..folders.len() {
+        let index = (start + visited) % folders.len();
+        let ScanFolder { folder, outgoing } = &folders[index];
         if expired(limits, &mut out) || out.stats.examined() >= limits.max_messages {
             out.stats.truncated = true;
             break;
@@ -202,6 +234,7 @@ pub fn scan_folders(
         if let Some(next) = next {
             out.cursor.folders.insert(folder.key(), next);
         }
+        out.cursor.next_folder = Some(folders[(index + 1) % folders.len()].folder.key());
     }
     out.envelopes.sort_by(|a, b| {
         a.date_ms

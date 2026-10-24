@@ -22,8 +22,10 @@ fn logout_and_owner_change_fence_old_receipts_without_cross_owner_drafts() {
         .unwrap();
     session.invalidate();
     assert!(!session.is_current(first));
+    assert!(session.retention_namespace().is_none());
     let resumed = session.activate("owner-a-global", &mut drafts);
     assert!(session.is_current(resumed));
+    assert_eq!(session.retention_namespace(), Some("owner-a-global"));
     assert!(!session.is_current(first));
     assert_eq!(drafts["project-conversation"].text, "private draft A");
     assert!(drafts["project-conversation"].pending.is_some());

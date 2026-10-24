@@ -71,7 +71,12 @@ pub mod thread_icons;
 pub mod timer_bootstrap;
 pub mod timer_http;
 mod timer_lifecycle;
+mod tracker_actions_http;
+mod tracker_automation_http;
 mod tracker_http;
+mod tracker_mail_runtime;
+mod tracker_mail_sources;
+pub mod tracker_scan_pool;
 mod v1_links;
 mod v1_manage_http;
 mod v1_workers_http;
@@ -87,6 +92,7 @@ mod workspace_exec;
 #[derive(Clone)]
 pub struct AppState {
     pub store: Store,
+    tracker_mail: Arc<tracker_mail_runtime::TrackerMailRuntime>,
     executions: execution_registry::ExecutionRegistry,
     fast_executions: execution_registry::ExecutionRegistry,
     window_handles: Option<window_runtime::handles::Handles>,
@@ -119,6 +125,9 @@ impl AppState {
     /// The process-wide deploy drain (inert until bound to a home directory).
     pub fn deploy_drain(&self) -> Arc<deploy_drain::DeployDrain> {
         self.deploy_drain.clone()
+    }
+    pub async fn shutdown_tracker_reads(&self) -> Result<(), &'static str> {
+        self.tracker_mail.shutdown().await
     }
     pub async fn shutdown_beta_window(&self) -> Result<(), &'static str> {
         match &self.window_controller {
@@ -240,7 +249,8 @@ impl AppState {
         let drain = self.deploy_drain.clone();
         // A deploy drain defers fires: due occurrences stay due in Core.
         let mut controller = timer_http::durable::DurableTimerController::new(supervisor)
-            .with_pause(Arc::new(move || drain.is_draining()));
+            .with_pause(Arc::new(move || drain.is_draining()))
+            .with_tracker_mail(self.tracker_mail.clone());
         if let Some(window) = &self.window_controller {
             let window = Arc::downgrade(window);
             controller = controller.with_window_dispatch(Arc::new(move || {
@@ -276,6 +286,7 @@ impl AppState {
         }
         Ok(Self {
             timers: timer_http::DurableOwnerController::new(store.clone()),
+            tracker_mail: Arc::new(tracker_mail_runtime::TrackerMailRuntime::new()?),
             store,
             executions: execution_registry::ExecutionRegistry::default(),
             fast_executions: execution_registry::ExecutionRegistry::default(),
@@ -529,6 +540,8 @@ pub fn router_with_google_catalog(
         .merge(message_times_http::router())
         .merge(conversation_posts_http::router())
         .merge(tracker_http::router())
+        .merge(tracker_actions_http::router())
+        .merge(tracker_automation_http::router())
         .merge(thread_icons::router())
         .merge(v1_links::router())
         .merge(v1_manage_http::router())

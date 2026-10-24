@@ -3,6 +3,7 @@
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { extname, join, normalize } from 'node:path';
+import { trackerApi } from './headless-tracker-mock.mjs';
 
 export const A = '00000000-0000-4000-8000-00000000000a';
 export const B = '00000000-0000-4000-8000-00000000000b';
@@ -44,7 +45,7 @@ export function createState() {
   const queued = { [C]: [{ conversation_id: C, request_key: 'synthetic-queued', input_message_id: uuid(301), input_event_id: uuid(302),
     input_request_key: 'synthetic-input', state: 'queued', position: 2, queued_at_ms: 2000, window_id: null, withdrawal: null }] };
   // windowMode: 'accept' admits; 'uncertain' answers 503 after the request is seen.
-  return { archived, messages, window, queued, requests: [], intake: {}, intakePosts: [], intakeLoseNext: false, windowPosts: [], windowMode: 'accept', windowDelayMs: 0, marks: [],
+  return { archived, messages, window, queued, trackers: {}, requests: [], intake: {}, intakePosts: [], intakeLoseNext: false, windowPosts: [], windowMode: 'accept', windowDelayMs: 0, marks: [],
     // v1Posts: every POST seen; v1Inputs: admitted once per key. The first post's answer is lost (504).
     v1Posts: [], v1Inputs: [], v1LoseFirst: true, v1Polls: 0, uploads: [],
     // "New WhatsApp chat": the first attempt stops at the adapter binding.
@@ -222,6 +223,7 @@ function v1History(state, thread) {
 async function api(state, req, res, url) {
   const path = url.pathname, q = url.searchParams;
   state.requests.push(`${req.method} ${path.replace(/[0-9a-f-]{36}/g, ':id')}`);
+  if (await trackerApi(state, req, res, url, { json, body })) return;
   if (path === '/api/v2/browser/session' && req.method === 'GET') return json(res, 200, { csrf_token: 'synthetic-csrf', global_conversation_id: A });
   if (path === '/api/v2/beta') {
     const id = q.get('conversation_id') ?? A;

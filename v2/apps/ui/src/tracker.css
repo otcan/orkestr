@@ -1,0 +1,28 @@
+.tracker-screen{max-width:1200px;margin:0 auto;padding:1rem;display:grid;gap:1rem}
+.tracker-heading{display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap}
+.tracker-heading h2,.tracker-heading h3{margin:0}.tracker-heading p{margin:.35rem 0}
+.tracker-setup,.tracker-ledger,.tracker-recovery{border:1px solid var(--border,#69738655);border-radius:12px;padding:1.1rem;background:var(--panel-bg,transparent)}
+.tracker-setup h3,.tracker-recovery h3{margin-top:0}.tracker-notice{padding:.8rem;border-left:3px solid #5595d8;white-space:pre-wrap}
+.tracker-connected{color:var(--success,#26946d)}.tracker-hint{font-size:.9rem;opacity:.8;line-height:1.5}
+.tracker-buttons,.tracker-recovery-row,.tracker-filters{display:flex;gap:.6rem;align-items:center;flex-wrap:wrap;margin:.7rem 0}
+.tracker-recovery-row span{flex:1}.tracker-recovery{border-color:#b88a3e}
+.tracker-setup>label,.tracker-row-editor>label,.tracker-merge>label{display:grid;gap:.35rem;margin:.8rem 0;max-width:32rem}
+.tracker-setup input:not([type=checkbox]):not([type=radio]),.tracker-setup select,.tracker-row-editor input:not([type=checkbox]),.tracker-row-editor textarea,.tracker-row-editor select,.tracker-merge select{font:inherit;padding:.6rem;max-width:100%;border:1px solid var(--border,#69738677);border-radius:6px;color:inherit;background:var(--input-bg,transparent)}
+.tracker-screen .tracker-consent{display:flex;align-items:flex-start;gap:.65rem;max-width:48rem;line-height:1.5}
+.tracker-consent input{margin-top:.3rem;flex-shrink:0}.tracker-source{margin:.8rem 0;border:1px solid var(--border,#69738655);border-radius:8px;padding:.8rem}
+.tracker-source-name{font-weight:600;display:flex;gap:.6rem;align-items:center}.tracker-folder-columns{display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-top:.8rem}
+.tracker-folder-columns fieldset,.tracker-days{border:1px solid var(--border,#69738655);border-radius:6px;padding:.7rem}
+.tracker-folder-columns label{display:flex;gap:.5rem;margin:.5rem 0;overflow-wrap:anywhere}.tracker-days{display:flex;flex-wrap:wrap;gap:.7rem;max-width:40rem}
+.tracker-days label{display:flex;gap:.3rem;align-items:center}.tracker-schedule-preview{font-weight:600;padding:.65rem;background:var(--hover-bg,#77889915);border-radius:6px}
+.tracker-filters button.selected{outline:2px solid #5595d8;outline-offset:1px}.tracker-search{display:grid;gap:.4rem;max-width:30rem;margin:1rem 0}
+.tracker-search input{font:inherit;padding:.65rem;border:1px solid var(--border,#69738677);border-radius:6px;background:var(--input-bg,transparent);color:inherit}
+.tracker-table-scroll{overflow:auto}.tracker-table{width:100%;border-collapse:collapse;font-size:.9rem}.tracker-table td,.tracker-table th{text-align:left;border-bottom:1px solid var(--border,#69738644);padding:.7rem;vertical-align:top}
+.tracker-table th button{font:inherit;font-weight:600;white-space:nowrap}.tracker-table td:nth-child(1),.tracker-table td:nth-child(2){min-width:140px}.tracker-table td:last-child{min-width:130px}
+.tracker-table td a{display:block;margin-top:.4rem}.tracker-review{display:block;font-size:.8rem;color:var(--warning,#b58a35)}.tracker-empty{padding:1rem 0;opacity:.8}
+.tracker-merge{margin-top:1rem;padding-top:1rem;border-top:1px solid var(--border,#69738644)}.tracker-merge summary{cursor:pointer;font-weight:600}
+.tracker-dialog-backdrop{position:fixed;inset:0;background:#0009;z-index:2000;display:flex;align-items:flex-start;justify-content:center;padding:3vh 1rem;overflow:auto}
+.tracker-row-editor{width:min(38rem,100%);background:var(--bg,#171c25);color:var(--text,#eef2f6);border:1px solid var(--border,#69738677);border-radius:12px;padding:1.2rem;box-shadow:0 10px 40px #0005}
+.tracker-row-editor>label{max-width:none}.tracker-row-editor textarea{min-height:6rem}.tracker-row-editor .tracker-buttons{position:sticky;bottom:0;padding:.7rem 0;background:inherit}
+@media(max-width:640px){.tracker-screen{padding:.6rem}.tracker-folder-columns{grid-template-columns:1fr}.tracker-setup,.tracker-ledger,.tracker-recovery{padding:.8rem}.tracker-table{font-size:.82rem}.tracker-table td{padding:.5rem}}
+
+.tracker-screen{min-width:0;width:100%;box-sizing:border-box}.tracker-screen>*{min-width:0}.tracker-row-editor,.tracker-dialog-backdrop{box-sizing:border-box}.tracker-row-editor{min-width:0}

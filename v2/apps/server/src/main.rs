@@ -186,6 +186,7 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         Some(timers) => timers.shutdown().await,
         None => Ok(()),
     };
+    let tracker_cleanup = timer_state.shutdown_tracker_reads().await;
     let cleanup = match execution {
         Some(execution) => execution.shutdown().await,
         None => Ok(()),
@@ -203,6 +204,7 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     }
     beta_cleanup?;
     timer_cleanup?;
+    tracker_cleanup?;
     cleanup?;
     Ok(())
 }

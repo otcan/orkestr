@@ -1,5 +1,89 @@
 //! Immutable edits and logical merge regression coverage.
 use super::*;
+
+#[tokio::test]
+async fn merged_legacy_keys_treat_sql_pattern_characters_literally() {
+    for key in ["legacy%", "legacy_"] {
+        let c = Case::new().await;
+        enabled(&c).await;
+        let seeded = c
+            .store
+            .apply_tracker_events(
+                owner(&c),
+                &c.conversation,
+                &batch(
+                    "legacy-seed",
+                    vec![
+                        event(
+                            TrackerEventKind::Applied,
+                            "Legacy Company",
+                            Some("Engineer A"),
+                            1000,
+                        ),
+                        event(
+                            TrackerEventKind::Applied,
+                            "Surviving Company",
+                            Some("Engineer B"),
+                            2000,
+                        ),
+                    ],
+                ),
+            )
+            .await
+            .unwrap();
+        let absorb = seeded.changes[0].row_id.unwrap();
+        let keep = seeded.changes[1].row_id.unwrap();
+        c.store
+            .merge_tracker_rows(
+                &c.token,
+                &c.owner,
+                &c.conversation,
+                &TrackerMerge { keep, absorb },
+            )
+            .await
+            .unwrap();
+        // A historical key is synthetic fixture data; no production guard is disabled.
+        sqlx::query(
+            "UPDATE tracker_rows SET company_key=? WHERE id=? AND owner_id=? AND conversation_id=?",
+        )
+        .bind(key)
+        .bind(absorb.to_string())
+        .bind(c.owner.to_string())
+        .bind(c.conversation.to_string())
+        .execute(&c.store.pool)
+        .await
+        .unwrap();
+        let next = c
+            .store
+            .apply_tracker_events(
+                owner(&c),
+                &c.conversation,
+                &batch(
+                    "unrelated-prefix",
+                    vec![event(
+                        TrackerEventKind::Applied,
+                        "LegacyX Robotics",
+                        None,
+                        3000,
+                    )],
+                ),
+            )
+            .await
+            .unwrap();
+        assert_eq!(next.changes[0].kind, TrackerChangeKind::Created);
+        assert_ne!(next.changes[0].row_id, Some(keep));
+        assert_eq!(
+            c.store
+                .tracker_page(owner(&c), &c.conversation)
+                .await
+                .unwrap()
+                .rows
+                .len(),
+            2
+        );
+        c.finish().await;
+    }
+}
 #[tokio::test]
 async fn absorbed_keys_attach_to_the_surviving_row_without_recreating_a_duplicate() {
     let c = Case::new().await;

@@ -8,7 +8,7 @@ use crate::Store;
 use orkestr_v2_contracts::*;
 
 /// One message of a scan, already classified by the recipe's rule pack.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct ScannedMessage {
     pub message_ref: String,
     /// Events to record, or the reason the message was dropped.
@@ -96,71 +96,101 @@ impl Store {
         if matches!(caller, TrackerCaller::Grant(_)) {
             return Err(ResourceError::Unauthorized);
         }
-        if cursor_json.len() > CURSOR_MAX
-            || summary_json.len() > SOURCE_MAX
-            || serde_json::from_str::<serde_json::Value>(cursor_json).is_err()
-            || serde_json::from_str::<serde_json::Value>(summary_json).is_err()
-            || messages.len() > 500
-            || messages.iter().any(|m| {
-                m.message_ref.len() != 24
-                    || !m.message_ref.bytes().all(|b| b.is_ascii_hexdigit())
-                    || m.outcome.as_ref().is_ok_and(|events| {
-                        events.is_empty()
-                            || events.len() > TRACKER_EVENTS_PER_REQUEST
-                            || events.iter().any(|e| {
-                                !super::authority::valid_intake(e)
-                                    || e.message_ref.as_deref() != Some(m.message_ref.as_str())
-                            })
-                    })
-            })
-        {
-            return Err(ResourceError::Invalid);
-        }
+        validate(messages, cursor_json, summary_json)?;
         let (mut tx, owner) = self.tracker_scope(caller, conversation, true).await?;
-        let config = config(&mut tx, &owner, conversation).await?;
-        if config.source_revision != expected_source_revision {
-            return Err(ResourceError::Conflict("tracker_source_revision_mismatch"));
+        let record = record_in_transaction(
+            &mut tx,
+            &owner,
+            conversation,
+            expected_source_revision,
+            messages,
+            cursor_json,
+            summary_json,
+        )
+        .await?;
+        tx.commit().await.map_err(unavailable)?;
+        Ok(record)
+    }
+}
+
+pub(crate) fn validate(
+    messages: &[ScannedMessage],
+    cursor_json: &str,
+    summary_json: &str,
+) -> Result<()> {
+    if cursor_json.len() > CURSOR_MAX
+        || summary_json.len() > SOURCE_MAX
+        || serde_json::from_str::<serde_json::Value>(cursor_json).is_err()
+        || serde_json::from_str::<serde_json::Value>(summary_json).is_err()
+        || messages.len() > 500
+        || messages.iter().any(|m| {
+            m.message_ref.len() != 24
+                || !m.message_ref.bytes().all(|b| b.is_ascii_hexdigit())
+                || m.outcome.as_ref().is_ok_and(|events| {
+                    events.is_empty()
+                        || events.len() > TRACKER_EVENTS_PER_REQUEST
+                        || events.iter().any(|e| {
+                            !super::authority::valid_intake(e)
+                                || e.message_ref.as_deref() != Some(m.message_ref.as_str())
+                        })
+                })
+        })
+    {
+        return Err(ResourceError::Invalid);
+    }
+    Ok(())
+}
+
+/// Shared atomic writer. The caller supplies its independently authenticated
+/// transaction and repeats its action/source/Stop/lease fences before commit.
+pub(crate) async fn record_in_transaction(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    owner: &OwnerId,
+    conversation: &ConversationId,
+    expected_source_revision: i64,
+    messages: &[ScannedMessage],
+    cursor_json: &str,
+    summary_json: &str,
+) -> Result<ScanRecord> {
+    let config = config(tx, owner, conversation).await?;
+    if config.source_revision != expected_source_revision {
+        return Err(ResourceError::Conflict("tracker_source_revision_mismatch"));
+    }
+    let mut record = ScanRecord::default();
+    for message in messages {
+        if ledger_has(tx, owner, conversation, &message.message_ref).await? {
+            record.duplicates += 1;
+            continue;
         }
-        let mut record = ScanRecord::default();
-        for message in messages {
-            if ledger_has(&mut tx, &owner, conversation, &message.message_ref).await? {
-                record.duplicates += 1;
-                continue;
+        match &message.outcome {
+            Ok(events) => {
+                record.labelled += 1;
+                for event in events {
+                    let change =
+                        apply_one(tx, owner, conversation, &config.notify_on, event).await?;
+                    record.changes.push(change);
+                }
+                ledger_record(tx, owner, conversation, &message.message_ref, "event").await?;
             }
-            match &message.outcome {
-                Ok(events) => {
-                    record.labelled += 1;
-                    for event in events {
-                        let change =
-                            apply_one(&mut tx, &owner, conversation, &config.notify_on, event)
-                                .await?;
-                        record.changes.push(change);
-                    }
-                    ledger_record(&mut tx, &owner, conversation, &message.message_ref, "event")
-                        .await?;
-                }
-                Err(reason) => {
-                    record.dropped += 1;
-                    ledger_record(&mut tx, &owner, conversation, &message.message_ref, reason)
-                        .await?;
-                }
+            Err(reason) => {
+                record.dropped += 1;
+                ledger_record(tx, owner, conversation, &message.message_ref, reason).await?;
             }
         }
-        record.changes.extend(
-            super::unresolved::reconsider(&mut tx, &owner, conversation, &config.notify_on).await?,
-        );
-        let now = now_ms();
-        sqlx::query("UPDATE trackers SET cursor_json=?,last_scan_ms=?,last_scan_json=?,updated_ms=? WHERE owner_id=? AND conversation_id=?")
+    }
+    record
+        .changes
+        .extend(super::unresolved::reconsider(tx, owner, conversation, &config.notify_on).await?);
+    let now = now_ms();
+    sqlx::query("UPDATE trackers SET cursor_json=?,last_scan_ms=?,last_scan_json=?,updated_ms=? WHERE owner_id=? AND conversation_id=?")
             .bind(cursor_json)
             .bind(now)
             .bind(summary_json)
             .bind(now)
             .bind(owner.to_string())
             .bind(conversation.to_string())
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await
             .map_err(unavailable)?;
-        tx.commit().await.map_err(unavailable)?;
-        Ok(record)
-    }
+    Ok(record)
 }

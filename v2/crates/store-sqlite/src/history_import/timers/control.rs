@@ -115,6 +115,44 @@ pub(super) async fn enable_in_transaction(
     let result = receipt(&row(tx, owner, request.namespace).await?)?;
     Ok(result)
 }
+pub(super) async fn control_in_transaction(
+    tx: &mut Transaction<'_, Sqlite>,
+    owner: &OwnerId,
+    request: &TimerControlRequest,
+) -> Result<TimerReceipt> {
+    check(
+        request.namespace,
+        request.expected_revision,
+        &request.request_key,
+    )?;
+    let current = row(tx, owner, request.namespace).await?;
+    let (action, state) = request.action.values();
+    let digest = semantic(action, request.expected_revision, None);
+    if let Some(old) = prior(tx, owner, request.namespace, &request.request_key).await? {
+        let result = replay(&current, &old, &digest, TimerState::parse(state)?)?;
+        return Ok(result);
+    }
+    let result = receipt(&current)?;
+    if result.revision != request.expected_revision
+        || matches!(result.state, TimerState::Stopped | TimerState::RolledBack)
+    {
+        return Err(HistoryError::Conflict);
+    }
+    let rev = revision(result.revision)?;
+    let generation = revision(result.generation)?;
+    sqlx::query("UPDATE dormant_timer_claims SET cancelled=1 WHERE owner_id=? AND namespace=?")
+        .bind(owner.to_string())
+        .bind(request.namespace.to_string())
+        .execute(&mut **tx)
+        .await
+        .map_err(unavailable)?;
+    sqlx::query("UPDATE dormant_timers SET state=?,revision=?,generation=?,next_due_ms=NULL WHERE owner_id=? AND namespace=?")
+        .bind(state).bind(rev).bind(generation).bind(owner.to_string()).bind(request.namespace.to_string()).execute(&mut **tx).await.map_err(unavailable)?;
+    sqlx::query("INSERT INTO dormant_timer_controls(owner_id,namespace,request_key,semantic_digest,action,receipt_revision,generation) VALUES(?,?,?,?,?,?,?)")
+        .bind(owner.to_string()).bind(request.namespace.to_string()).bind(&request.request_key).bind(digest).bind(action).bind(rev).bind(generation).execute(&mut **tx).await.map_err(unavailable)?;
+    let result = receipt(&row(tx, owner, request.namespace).await?)?;
+    Ok(result)
+}
 impl Store {
     /// Enables schedule provenance only; use enable_timer_input for ordinary input.
     pub async fn enable_dormant_timer(
@@ -143,33 +181,7 @@ impl Store {
             &request.request_key,
         )?;
         let mut tx = self.history_transaction(credential, owner, true).await?;
-        let current = row(&mut tx, owner, request.namespace).await?;
-        let (action, state) = request.action.values();
-        let digest = semantic(action, request.expected_revision, None);
-        if let Some(old) = prior(&mut tx, owner, request.namespace, &request.request_key).await? {
-            let result = replay(&current, &old, &digest, TimerState::parse(state)?)?;
-            tx.commit().await.map_err(unavailable)?;
-            return Ok(result);
-        }
-        let result = receipt(&current)?;
-        if result.revision != request.expected_revision
-            || matches!(result.state, TimerState::Stopped | TimerState::RolledBack)
-        {
-            return Err(HistoryError::Conflict);
-        }
-        let rev = revision(result.revision)?;
-        let generation = revision(result.generation)?;
-        sqlx::query("UPDATE dormant_timer_claims SET cancelled=1 WHERE owner_id=? AND namespace=?")
-            .bind(owner.to_string())
-            .bind(request.namespace.to_string())
-            .execute(&mut *tx)
-            .await
-            .map_err(unavailable)?;
-        sqlx::query("UPDATE dormant_timers SET state=?,revision=?,generation=?,next_due_ms=NULL WHERE owner_id=? AND namespace=?")
-            .bind(state).bind(rev).bind(generation).bind(owner.to_string()).bind(request.namespace.to_string()).execute(&mut *tx).await.map_err(unavailable)?;
-        sqlx::query("INSERT INTO dormant_timer_controls(owner_id,namespace,request_key,semantic_digest,action,receipt_revision,generation) VALUES(?,?,?,?,?,?,?)")
-            .bind(owner.to_string()).bind(request.namespace.to_string()).bind(&request.request_key).bind(digest).bind(action).bind(rev).bind(generation).execute(&mut *tx).await.map_err(unavailable)?;
-        let result = receipt(&row(&mut tx, owner, request.namespace).await?)?;
+        let result = control_in_transaction(&mut tx, owner, request).await?;
         tx.commit().await.map_err(unavailable)?;
         Ok(result)
     }

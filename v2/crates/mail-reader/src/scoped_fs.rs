@@ -86,6 +86,10 @@ mod platform {
     }
 
     impl Scope {
+        pub(crate) fn identity(&self) -> io::Result<(u64, u64)> {
+            let meta = self.directory.metadata()?;
+            Ok((meta.dev(), meta.ino()))
+        }
         pub(crate) fn new(path: &Path) -> io::Result<Self> {
             if !path.is_absolute() {
                 return Err(refused());
@@ -142,6 +146,9 @@ pub(crate) use platform::Scope;
 pub(crate) struct Scope;
 #[cfg(not(unix))]
 impl Scope {
+    pub(crate) fn identity(&self) -> io::Result<(u64, u64)> {
+        Err(refused())
+    }
     pub(crate) fn new(_: &Path) -> io::Result<Self> {
         Err(io::Error::new(
             io::ErrorKind::Unsupported,

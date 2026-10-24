@@ -101,7 +101,8 @@ async fn aliases(
     let predicate = if role.is_some() {
         "company_key=?3 AND role_key=?4"
     } else {
-        "(company_key=?3 OR company_key LIKE ?3 || '-%' OR ?3 LIKE company_key || '-%')"
+        // Compare literal word prefixes; legacy keys cannot inject LIKE patterns.
+        "(company_key=?3 OR substr(company_key,1,length(?3)+1)=?3 || '-' OR substr(?3,1,length(company_key)+1)=company_key || '-')"
     };
     let active = if role.is_some() { "" } else { "AND archived=0" };
     let sql = format!("WITH RECURSIVE resolved(id) AS (

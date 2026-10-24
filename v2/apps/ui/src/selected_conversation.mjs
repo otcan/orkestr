@@ -1,4 +1,4 @@
-const pattern = /^#conversation\/([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})(?:\/(?:chat|work|history|projects|timers|memory|live-map|settings))?$/i;
+const pattern = /^#conversation\/([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})(?:\/(?:chat|work|history|projects|timers|tracker|memory|live-map|settings))?$/i;
 const nil = '00000000-0000-0000-0000-000000000000';
 // This is a presentation pointer. Owner-authenticated discovery still gates mounting.
 export function selectedConversation(hash) {

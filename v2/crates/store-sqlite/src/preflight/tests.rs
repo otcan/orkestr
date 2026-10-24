@@ -389,6 +389,17 @@ async fn populated_payload_prefix_upgrade_preserves_all_rows_and_foreign_links()
         "tracker_row_merges",
         "tracker_unresolved_events",
         "tracker_intake_audit",
+        "tracker_source_selections",
+        "tracker_scan_authorities",
+        "tracker_scan_attempts",
+        "tracker_scan_receipts",
+        "tracker_discovery_receipts",
+        "tracker_automation_decisions",
+        "tracker_automation_settings",
+        "tracker_local_sources",
+        "tracker_check_cancellations",
+        "tracker_manual_checks",
+        "tracker_action_digests",
     ] {
         expected.insert(table.into(), Vec::new());
     }
@@ -488,7 +499,7 @@ async fn populated_payload_prefix_upgrade_preserves_all_rows_and_foreign_links()
             .fetch_one(&mut conn)
             .await
             .unwrap(),
-        74
+        75
     );
     for table in [
         "history_imports",

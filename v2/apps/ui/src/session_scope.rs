@@ -33,6 +33,15 @@ impl SessionScope {
     pub fn generation(&self) -> u64 {
         self.generation
     }
+    /// Stable owner retention namespace, available only during authentication.
+    /// This global conversation ID grants no API authority.
+    pub fn retention_namespace(&self) -> Option<&str> {
+        if self.active {
+            self.binding.as_deref()
+        } else {
+            None
+        }
+    }
     pub fn is_current(&self, generation: u64) -> bool {
         self.active && generation == self.generation
     }

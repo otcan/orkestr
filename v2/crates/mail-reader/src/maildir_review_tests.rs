@@ -57,6 +57,7 @@ fn seen_entries_are_filtered_without_opening_even_if_they_became_aliases() {
     let folder = MailFolder::Maildir(root);
     let cursor = Cursor {
         folders: BTreeMap::from([(folder.key(), FolderCursor::Maildir { seen, after: None })]),
+        ..Cursor::default()
     };
     let out = scan(
         dir.path(),
