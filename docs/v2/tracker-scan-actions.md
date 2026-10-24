@@ -20,6 +20,8 @@ replay, not a durable execution decision: after expiry the owner must discover
 again. At most 64 live discovery responses and 256 registry sources are retained
 per owner. Discovery and selection checks use a separate bounded metadata pool,
 so they cannot consume the scheduled readers' workers or slots.
+Each fresh discovery also sweeps up to 64 expired responses across all owners,
+using an expiry index; inactive owners need no separate cleanup scheduler.
 Actual traversal currently requires Unix descriptors; other platforms refuse
 mail access until an equivalent handle implementation is qualified. Folder
 availability does not prove that Thunderbird has finished synchronizing mail.
@@ -72,8 +74,11 @@ These use `tracker_action_digests`, separate from the adapter's chat-delivery
 `timer_digests` queue. There is no fabricated reasoning input, provider run,
 window, WhatsApp parent or delivery claim. Failure rolls everything back and
 leaves the same occurrence eligible, subject to actual reader custody.
-Every action failure, including Invalid/Unauthorized and a pass timeout during
-the action, holds that occurrence with bounded backoff and an alert. It cannot
+Every action failure, including Invalid/Unauthorized, holds that occurrence with
+bounded backoff and an alert. Every five-second controller pass timeout, including
+after a committed scan while processing triggers/digests, alerts and backs off the
+next pass for five seconds. It preserves already committed receipts and does not
+withdraw an uncommitted occurrence or replay a completed one. It cannot
 terminate the shared timer controller. Failed cleanup is logged separately and
 never replaces the original result; failure to abandon is not cleanup proof.
 
@@ -84,6 +89,11 @@ classified events, 100 events per message and 50,000 extracted characters.
 The cooperative read deadline is 1.5 seconds, reader wait two seconds and Core
 lease ten seconds. Cancellation/expiry never releases actual reader custody.
 Changing these semantics requires a new policy ID; unsupported IDs refuse.
+The five-second pass budget cancels the waiting action future; it does not
+abandon or expire a Core claim by itself. If cancellation prevents best-effort
+abandonment, the `reading` attempt remains fenced until its ten-second lease
+expires. A replacement still requires both actual pool custody to end and Core
+to admit the next attempt. Late commit repeats the Store-clock lease check.
 
 The immutable `tracker_scan_receipts` row is the typed action outcome, joined to
 the canonical occurrence claim in the same transaction. `news=false` is a quiet

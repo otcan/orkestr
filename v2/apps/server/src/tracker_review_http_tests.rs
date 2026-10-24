@@ -4,6 +4,91 @@ use orkestr_v2_store_sqlite::history_import::timers::{
 };
 
 #[tokio::test]
+async fn timeout_after_committed_slow_scan_and_slow_triggers_retries_without_controller_exit() {
+    let case = enabled().await;
+    let (sent, _) = mail_fixture(&case);
+    std::fs::write(sent, "").unwrap();
+    choose(&case).await;
+    case.state
+        .timers
+        .ready
+        .store(true, std::sync::atomic::Ordering::Release);
+    let auth = case.auth();
+    let (code, check) = send(
+        &case.state,
+        "POST",
+        &case.path("/tracker/check"),
+        &[&auth],
+        &check_body(&case, "slow-check"),
+    )
+    .await;
+    assert_eq!(code, 200, "{check}");
+    let bound = case
+        .state
+        .store
+        .authorize_timer_supervisor(&case.bearer)
+        .await
+        .unwrap();
+    let mut controller =
+        DurableTimerController::new(bound).with_tracker_mail(case.state.tracker_mail.clone());
+    let trigger_started = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    controller.test_scan_delay = Some(Duration::from_secs(2));
+    controller.test_trigger_delay = Some((Duration::from_secs(4), trigger_started.clone()));
+    tokio::time::sleep(Duration::from_millis(2)).await;
+    let result = controller
+        .tick()
+        .await
+        .expect("post-scan pass timeout must not stop the controller");
+    assert!(
+        trigger_started.load(std::sync::atomic::Ordering::Relaxed),
+        "timeout must occur after scan finished and trigger processing began"
+    );
+    assert_eq!(result.deferred, 1);
+    let (_, reports) = send(
+        &case.state,
+        "GET",
+        &case.path("/tracker/scan-reports"),
+        &[&auth],
+        "",
+    )
+    .await;
+    assert_eq!(
+        reports.as_array().unwrap().len(),
+        1,
+        "committed scan outcome survives the later timeout"
+    );
+    let next_pass = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    controller.test_trigger_delay = Some((Duration::ZERO, next_pass.clone()));
+    assert_eq!(
+        controller.tick().await.unwrap().deferred,
+        1,
+        "global timeout backoff is observed"
+    );
+    assert!(!next_pass.load(std::sync::atomic::Ordering::Relaxed));
+    tokio::time::sleep(Duration::from_millis(5100)).await;
+    controller
+        .tick()
+        .await
+        .expect("next pass still runs after timeout/backoff");
+    assert!(next_pass.load(std::sync::atomic::Ordering::Relaxed));
+    let (_, reports) = send(
+        &case.state,
+        "GET",
+        &case.path("/tracker/scan-reports"),
+        &[&auth],
+        "",
+    )
+    .await;
+    assert_eq!(
+        reports.as_array().unwrap().len(),
+        1,
+        "timeout does not replay the completed scan"
+    );
+    case.state.shutdown_tracker_reads().await.unwrap();
+    case.finish().await;
+}
+
+#[tokio::test]
 async fn invalid_classified_event_holds_its_occurrence_and_other_timers_continue() {
     let case = enabled().await;
     mail_fixture(&case);

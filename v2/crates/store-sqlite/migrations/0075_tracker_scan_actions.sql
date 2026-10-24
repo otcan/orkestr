@@ -187,3 +187,4 @@ CREATE TABLE tracker_discovery_receipts (
  PRIMARY KEY(owner_id,conversation_id,request_key),
  FOREIGN KEY(owner_id,conversation_id) REFERENCES conversations(owner_id,id)
 );
+CREATE INDEX tracker_discovery_expiry ON tracker_discovery_receipts(expires_ms);

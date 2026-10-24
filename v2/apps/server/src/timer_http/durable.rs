@@ -46,6 +46,11 @@ pub struct DurableTimerController {
     digest_checked: Option<Instant>,
     tracker_mail: Option<Arc<crate::tracker_mail_runtime::TrackerMailRuntime>>,
     scan_in_progress: Option<Uuid>,
+    timeout_retry: Option<Instant>,
+    #[cfg(test)]
+    pub(crate) test_scan_delay: Option<Duration>,
+    #[cfg(test)]
+    pub(crate) test_trigger_delay: Option<(Duration, Arc<std::sync::atomic::AtomicBool>)>,
 }
 const DIGEST_CHECK: Duration = Duration::from_secs(30);
 impl DurableTimerController {
@@ -61,6 +66,11 @@ impl DurableTimerController {
             digest_checked: None,
             tracker_mail: None,
             scan_in_progress: None,
+            timeout_retry: None,
+            #[cfg(test)]
+            test_scan_delay: None,
+            #[cfg(test)]
+            test_trigger_delay: None,
         }
     }
     pub(crate) fn with_tracker_mail(
@@ -92,20 +102,33 @@ impl DurableTimerController {
         if self.paused.as_ref().is_some_and(|paused| paused()) {
             return Ok(DurableTick::default());
         }
+        if self.timeout_retry.is_some_and(|at| at > Instant::now()) {
+            return Ok(DurableTick {
+                deferred: 1,
+                ..Default::default()
+            });
+        }
         match tokio::time::timeout(Duration::from_secs(5), self.pass()).await {
             Ok(result) => result,
-            Err(_) => match self.scan_in_progress.take() {
-                Some(namespace) => {
+            Err(_) => {
+                self.timeout_retry = Some(Instant::now() + RETRY_BASE);
+                if let Some(namespace) = self.scan_in_progress.take() {
                     self.hold(namespace, Instant::now());
                     self.alert(namespace, "tracker_scan_pass_timed_out");
                     self.after = Some(namespace);
-                    Ok(DurableTick {
-                        deferred: 1,
-                        ..Default::default()
-                    })
+                } else {
+                    // A scan may already have committed before triggers/digests
+                    // exhausted this pass. Report no withdrawal or delivery.
+                    eprintln!(
+                        "{}",
+                        serde_json::json!({"event":"timer_controller_pass_timeout","retry_after_ms":5000,"receipts_remain_authoritative":true})
+                    );
                 }
-                None => Err(HistoryError::Unavailable),
-            },
+                Ok(DurableTick {
+                    deferred: 1,
+                    ..Default::default()
+                })
+            }
         }
     }
     async fn pass(&mut self) -> Result<DurableTick, HistoryError> {
@@ -149,10 +172,17 @@ impl DurableTimerController {
                     .await
                     .map(|r| !r.duplicate),
                 Ok(TimerWorkKind::TrackerScan) => match &self.tracker_mail {
-                    Some(runtime) => runtime
-                        .run(&self.supervisor, &issuer, namespace)
-                        .await
-                        .map(|_| true),
+                    Some(runtime) => {
+                        let result = runtime
+                            .run(&self.supervisor, &issuer, namespace)
+                            .await
+                            .map(|_| true);
+                        #[cfg(test)]
+                        if let Some(delay) = self.test_scan_delay.take() {
+                            tokio::time::sleep(delay).await;
+                        }
+                        result
+                    }
                     None => {
                         self.alert(namespace, "tracker_reader_not_configured");
                         Err(HistoryError::Conflict)
@@ -239,6 +269,11 @@ impl DurableTimerController {
         result: &mut DurableTick,
         now: Instant,
     ) -> Result<(), HistoryError> {
+        #[cfg(test)]
+        if let Some((delay, started)) = self.test_trigger_delay.take() {
+            started.store(true, std::sync::atomic::Ordering::Relaxed);
+            tokio::time::sleep(delay).await;
+        }
         for namespace in self
             .supervisor
             .pending_timer_trigger_namespaces(PAGE)

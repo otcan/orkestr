@@ -64,6 +64,10 @@ impl Store {
             return Err(HistoryError::Invalid);
         }
         let now = store_clock(&mut tx).await?;
+        // Bound global cleanup so an inactive owner's expired metadata can be
+        // collected by later discovery without an independent scheduler.
+        sqlx::query("DELETE FROM tracker_discovery_receipts WHERE rowid IN(SELECT rowid FROM tracker_discovery_receipts WHERE expires_ms<=? ORDER BY expires_ms LIMIT 64)")
+            .bind(now).execute(&mut *tx).await.map_err(unavailable)?;
         sqlx::query("DELETE FROM tracker_discovery_receipts WHERE owner_id=? AND expires_ms<=?")
             .bind(owner.to_string())
             .bind(now)
