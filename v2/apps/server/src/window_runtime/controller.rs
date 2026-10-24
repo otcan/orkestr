@@ -474,6 +474,9 @@ pub(super) fn selected_config(
     Ok(config)
 }
 
+#[path = "provider_handoff.rs"]
+mod provider_handoff;
+pub(crate) use provider_handoff::HandoffError;
 #[path = "stranded.rs"]
 mod stranded;
 pub(crate) use stranded::ReconcileError;

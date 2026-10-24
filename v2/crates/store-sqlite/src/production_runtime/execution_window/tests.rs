@@ -29,7 +29,7 @@ pub(super) async fn input(f: &Case, key: &str) -> ExecutionWindowRequest {
     }
 }
 pub(super) async fn browser(f: &Case) -> String {
-    let token = "synthetic-browser-window".to_string();
+    let token = "browser:synthetic-browser-window".to_string();
     f.store.save_session(&token, &f.owner).await.unwrap();
     token
 }

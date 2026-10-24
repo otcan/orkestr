@@ -9,6 +9,7 @@ use std::collections::BTreeMap;
 pub mod chat_settings;
 pub mod execution;
 pub mod host_resources;
+pub mod provider_handoff;
 mod reconcile;
 pub mod session_scope;
 pub mod stop;
