@@ -11,6 +11,8 @@ mod conversation_settings;
 pub use conversation_settings::*;
 mod claude_native_reset;
 pub use claude_native_reset::*;
+mod provider_handoff;
+pub use provider_handoff::*;
 mod calendar_rule;
 pub use calendar_rule::*;
 mod timer_results;
