@@ -69,3 +69,20 @@ decision receipt. Once later work has been accepted or delivered, do not roll
 back that durable state over the new history. Provider reversal requires a new
 supported decision after another closed window, rather than an ordinary settings
 flip or direct database edit.
+
+## Deadline continuations
+
+The adapter refuses an automatic continuation when the cancelled run's exact
+provider differs from the conversation's current provider, or when its lineage
+cannot be proved. It freezes the current provider generation with the continuation.
+Legacy requeued inputs without this proof require review rather than replay.
+
+The next `POST /messages` includes `expected_provider_generation` and the exact
+`continuation_source_run_id`. Core also checks the source run's scoped Deep
+binding is not retired and still matches the selected provider. A handoff away
+and back cannot revive that retired binding, even with a current generation.
+Core checks it under the same write transaction as fresh input admission.
+If the provider changed, HTTP409 `provider_generation_changed` commits no
+message, event, inbox, outbox or sequence change. Exact-key receipt retries do
+not create another input. Once guarded admission commits, the ordinary queued
+input fence prevents a concurrent handoff from crossing that continuation.

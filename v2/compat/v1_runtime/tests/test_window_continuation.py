@@ -17,8 +17,13 @@ class QueuePeer(Peer):
         self.queue_state = None
         self.deep_phase = None
         self.current = None
+        self.provider = "codex"
+        self.provider_generation = 0
+        self.run_provider = "codex"
 
     def request(self, method, route, body=None, allowed=(200,)):
+        if route == "/settings" and method == "GET":
+            return 200, dict(provider=self.provider, provider_generation=self.provider_generation)
         if route == "/window" and method == "GET":
             return (200, self.current) if self.current else (204, None)
         if route == "/window" and method == "POST" and self.queue_state:
@@ -28,7 +33,8 @@ class QueuePeer(Peer):
                          window_id="window" if self.queue_state == "dispatched" else None, withdrawal=None)
             return 202, reply
         if route == "/execution" and self.deep_phase:
-            return 200, dict(run_id="deep-run", revision=10, phase=self.deep_phase)
+            return 200, dict(run_id="deep-run", revision=10, phase=self.deep_phase,
+                             models=dict(provider=self.run_provider))
         return super().request(method, route, body=body, allowed=allowed)
 
 

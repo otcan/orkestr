@@ -106,10 +106,20 @@ pub async fn message(
     body: Result<Json<MessageRequest>, JsonRejection>,
 ) -> Result<impl IntoResponse, Error> {
     let owner = owner(&s, &headers).await?;
-    let (input, reply_to) = json(body)?.into_parts();
+    let request = json(body)?;
+    let expected_provider_generation = request.expected_provider_generation;
+    let continuation_source_run_id = request.continuation_source_run_id.clone();
+    let (input, reply_to) = request.into_parts();
     let admitted = s
         .store
-        .admit_with_reply_to(&owner, &conversation(id)?, &input, reply_to.as_ref())
+        .admit_with_provider_generation(
+            &owner,
+            &conversation(id)?,
+            &input,
+            reply_to.as_ref(),
+            expected_provider_generation,
+            continuation_source_run_id.as_ref(),
+        )
         .await?;
     Ok((
         if admitted.duplicate {
