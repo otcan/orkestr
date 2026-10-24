@@ -152,6 +152,13 @@ pub struct MessageRequest {
     pub text: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reply_to: Option<ReplyTo>,
+    /// Optional fence for an automatic continuation. Checked atomically with
+    /// fresh admission; an exact-key receipt retry creates no new input.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_provider_generation: Option<i64>,
+    /// Exact prior run whose session must still belong to this provider epoch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub continuation_source_run_id: Option<RunId>,
 }
 impl MessageRequest {
     pub fn into_parts(self) -> (MessageInput, Option<ReplyTo>) {

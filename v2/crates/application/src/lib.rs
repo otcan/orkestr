@@ -6,6 +6,7 @@ use std::future::Future;
 pub enum StoreError {
     Invalid,
     Conflict,
+    ProviderGenerationMismatch,
     NotFound,
     AlreadySetup,
     Unavailable,
