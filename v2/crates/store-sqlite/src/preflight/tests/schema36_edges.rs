@@ -129,6 +129,11 @@ async fn populated_prefixes_copy_first_edges_to_50_preserve_rows_and_rollback_so
             "desktop_leases",
             "legacy_worker_links",
             "legacy_worker_transitions",
+            "tracker_source_selections",
+            "tracker_scan_authorities",
+            "tracker_scan_attempts",
+            "tracker_scan_receipts",
+            "tracker_action_digests",
         ] {
             let count: i64 = sqlx::query_scalar(&format!("SELECT count(*) FROM {table}"))
                 .fetch_one(&mut upgraded)
@@ -141,7 +146,7 @@ async fn populated_prefixes_copy_first_edges_to_50_preserve_rows_and_rollback_so
                 .fetch_one(&mut upgraded)
                 .await
                 .unwrap(),
-            74
+            75
         );
         assert!(sqlx::query("PRAGMA foreign_key_check")
             .fetch_all(&mut upgraded)

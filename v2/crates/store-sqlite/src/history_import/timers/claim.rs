@@ -18,6 +18,26 @@ pub(super) async fn in_transaction(
     request: &TimerClaimRequest,
     now_ms: i64,
 ) -> Result<TimerClaimReceipt> {
+    claim_in_transaction(tx, owner, request, now_ms, false).await
+}
+
+/// Only a fully fenced scan-result transaction may advance an action timer.
+pub(super) async fn scan_in_transaction(
+    tx: &mut Transaction<'_, Sqlite>,
+    owner: &OwnerId,
+    request: &TimerClaimRequest,
+    now_ms: i64,
+) -> Result<TimerClaimReceipt> {
+    claim_in_transaction(tx, owner, request, now_ms, true).await
+}
+
+async fn claim_in_transaction(
+    tx: &mut Transaction<'_, Sqlite>,
+    owner: &OwnerId,
+    request: &TimerClaimRequest,
+    now_ms: i64,
+    scan_action: bool,
+) -> Result<TimerClaimReceipt> {
     if request.namespace.is_nil() || request.generation < 1 || !valid(&request.request_key, 128) {
         return Err(HistoryError::Invalid);
     }
@@ -28,6 +48,12 @@ pub(super) async fn in_transaction(
     if !matches!(result.state, TimerState::Enabled | TimerState::Exhausted)
         || result.generation != request.generation
     {
+        return Err(HistoryError::Conflict);
+    }
+    let scan:i64=sqlx::query_scalar("SELECT count(*) FROM tracker_scan_authorities WHERE owner_id=? AND namespace=? AND generation=?")
+        .bind(owner.to_string()).bind(request.namespace.to_string()).bind(request.generation)
+        .fetch_one(&mut **tx).await.map_err(unavailable)?;
+    if (scan != 0) != scan_action {
         return Err(HistoryError::Conflict);
     }
     let conversation = ConversationId(

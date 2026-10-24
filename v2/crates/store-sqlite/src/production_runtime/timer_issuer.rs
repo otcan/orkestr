@@ -7,6 +7,22 @@ pub struct TimerSchedulerIssuer {
     namespace: Uuid,
 }
 
+impl TimerSchedulerIssuer {
+    /// An in-memory action cannot cross a supervisor/session replacement.
+    /// The key is never serialized or accepted from a browser.
+    pub(crate) fn tracker_scan_key(&self) -> String {
+        crate::digest(&format!(
+            "tracker.scan.issuer.v1:{}:{}:{}:{}:{}:{}",
+            self.context.owner,
+            self.context.id,
+            self.context.incarnation,
+            self.context.generation,
+            self.context.token_hash,
+            self.namespace,
+        ))
+    }
+}
+
 impl Store {
     /// Metadata-only restart discovery. Each namespace still needs a separate
     /// issuer and a fresh guarded admission; discovery grants no timer authority.

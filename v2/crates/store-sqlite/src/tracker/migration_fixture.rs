@@ -2,6 +2,7 @@
 use crate::Store;
 
 pub(crate) async fn downgrade_empty(store: &Store) {
+    crate::history_import::timers::scan_action::migration_fixture::downgrade_empty(store).await;
     let tables = [
         "tracker_intake_audit",
         "tracker_unresolved_events",

@@ -28,7 +28,7 @@ async fn watermark(
     sqlx::query_scalar("SELECT COALESCE(max(e.sequence),0) FROM production_stop_boundaries b JOIN events e ON e.id=b.event_id WHERE b.owner_id=? AND b.conversation_id=?")
         .bind(owner.to_string()).bind(conversation.to_string()).fetch_one(&mut **tx).await.map_err(unavailable)
 }
-async fn guard(
+pub(super) async fn guard(
     tx: &mut Transaction<'_, Sqlite>,
     owner: &OwnerId,
     namespace: Uuid,

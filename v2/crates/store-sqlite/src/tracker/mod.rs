@@ -11,7 +11,7 @@ mod merge;
 #[cfg(test)]
 pub(crate) mod migration_fixture;
 mod retention;
-mod scan;
+pub(crate) mod scan;
 mod unresolved;
 use crate::conversation_resources::{now_ms, owned, unavailable, ResourceError};
 use crate::Store;

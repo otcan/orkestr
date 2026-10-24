@@ -7,6 +7,7 @@ mod claim;
 mod control;
 mod detail;
 pub mod digest;
+pub mod scan_action;
 pub use calendar::local_time_label;
 pub use detail::TimerDetail;
 mod import;
