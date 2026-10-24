@@ -345,7 +345,7 @@ async fn manual_edit_merge_grant_and_validation() {
         )
         .await
         .unwrap();
-    assert_eq!(merged.events_count, 3);
+    assert_eq!(merged.events_count, 4);
     assert_eq!(
         case.store
             .tracker_page(owner(&case), &chat)
@@ -389,7 +389,11 @@ async fn manual_edit_merge_grant_and_validation() {
             &chat,
             &batch(
                 "g",
-                vec![event(TrackerEventKind::Note, "Fabrikam AG", None, 5_000)],
+                vec![TrackerEventInput {
+                    source: "direct".into(),
+                    classifier: "assistant".into(),
+                    ..event(TrackerEventKind::Note, "Fabrikam AG", None, 5_000)
+                }],
             ),
         )
         .await
@@ -438,3 +442,10 @@ mod integrity;
 mod reconsider;
 #[path = "scan_tests.rs"]
 mod scans;
+
+#[path = "review_authority_tests.rs"]
+mod review_authority;
+#[path = "review_history_tests.rs"]
+mod review_history;
+#[path = "review_intake_tests.rs"]
+mod review_intake;

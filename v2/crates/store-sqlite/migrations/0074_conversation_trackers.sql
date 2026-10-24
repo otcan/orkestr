@@ -138,7 +138,8 @@ CREATE TABLE tracker_unresolved_events (
  event_digest TEXT NOT NULL CHECK(length(event_digest)=64),
  event_json TEXT NOT NULL CHECK(length(CAST(event_json AS BLOB)) BETWEEN 1 AND 16384),
  source_revision INTEGER NOT NULL CHECK(source_revision>=0),
- state TEXT NOT NULL CHECK(state IN ('pending','resolved','quarantined')),
+ state TEXT NOT NULL CHECK(state IN ('pending','resolved','quarantined','expired','evicted')),
+ reason TEXT NOT NULL CHECK(reason='missing_known_thread'),
  recorded_ms INTEGER NOT NULL,
  attempt_order INTEGER NOT NULL DEFAULT 0,
  resolved_event_id TEXT,
@@ -151,8 +152,26 @@ CREATE TRIGGER tracker_unresolved_provenance BEFORE UPDATE ON tracker_unresolved
 WHEN NEW.owner_id<>OLD.owner_id OR NEW.conversation_id<>OLD.conversation_id
  OR NEW.message_ref<>OLD.message_ref OR NEW.event_digest<>OLD.event_digest
  OR NEW.event_json<>OLD.event_json OR NEW.source_revision<>OLD.source_revision
- OR NEW.recorded_ms<>OLD.recorded_ms OR OLD.state<>'pending'
- OR NEW.state NOT IN ('pending','resolved','quarantined')
+ OR NEW.reason<>OLD.reason OR NEW.recorded_ms<>OLD.recorded_ms OR OLD.state<>'pending'
+ OR NEW.state NOT IN ('pending','resolved','quarantined','expired','evicted')
 BEGIN SELECT RAISE(ABORT,'immutable_unresolved_provenance'); END;
 CREATE TRIGGER tracker_unresolved_no_delete BEFORE DELETE ON tracker_unresolved_events
 BEGIN SELECT RAISE(ABORT,'immutable_unresolved_provenance'); END;
+
+-- Durable minimized evidence for bounded pending retention and row overflow.
+CREATE TABLE tracker_intake_audit (
+ id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, conversation_id TEXT NOT NULL,
+ message_ref TEXT CHECK(message_ref IS NULL OR length(message_ref)=24),
+ event_digest TEXT NOT NULL CHECK(length(event_digest)=64),
+ event_json TEXT CHECK(event_json IS NULL OR length(CAST(event_json AS BLOB)) BETWEEN 1 AND 16384),
+ reason TEXT NOT NULL CHECK(reason IN ('row_limit','unresolved_capacity','unresolved_expired')),
+ recorded_ms INTEGER NOT NULL,
+ UNIQUE(owner_id,conversation_id,event_digest,reason),
+ FOREIGN KEY(owner_id,conversation_id) REFERENCES trackers(owner_id,conversation_id)
+);
+CREATE TRIGGER tracker_intake_audit_no_update BEFORE UPDATE ON tracker_intake_audit
+BEGIN SELECT RAISE(ABORT,'immutable_tracker_intake_audit'); END;
+CREATE TRIGGER tracker_intake_audit_no_delete BEFORE DELETE ON tracker_intake_audit
+BEGIN SELECT RAISE(ABORT,'immutable_tracker_intake_audit'); END;
+CREATE INDEX tracker_unresolved_pending ON tracker_unresolved_events(owner_id,conversation_id,state,recorded_ms);
+CREATE INDEX tracker_intake_audit_reason ON tracker_intake_audit(owner_id,conversation_id,reason);

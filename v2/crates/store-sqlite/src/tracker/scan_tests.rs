@@ -135,11 +135,11 @@ async fn replies_attach_by_thread_and_untrusted_mail_needs_a_thread() {
     // The user's own application (Sent folder) to an agency.
     let mut sent = event(
         TrackerEventKind::Applied,
-        "Hays",
-        Some("Senior Java Entwickler (Projekt 4711)"),
+        "Example Agency A",
+        Some("Example Java Developer (TEST-A)"),
         1_000,
     );
-    sent.source = "agency:hays".into();
+    sent.source = "agency:example-a".into();
     sent.message_ref = Some("111111111111111111111111".into());
     case.store
         .apply_tracker_events(owner(&case), &chat, &batch("s", vec![sent]))
@@ -169,7 +169,7 @@ async fn replies_attach_by_thread_and_untrusted_mail_needs_a_thread() {
         .await
         .unwrap();
     assert_eq!(set.changes[0].kind, TrackerChangeKind::StatusChanged);
-    assert_eq!(set.changes[0].company, "Hays");
+    assert_eq!(set.changes[0].company, "Example Agency A");
     assert_eq!(set.changes[1].kind, TrackerChangeKind::Unmatched);
     assert!(!TrackerChangeset {
         changes: vec![set.changes[1].clone()]

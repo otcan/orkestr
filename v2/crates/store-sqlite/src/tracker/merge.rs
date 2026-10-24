@@ -51,14 +51,12 @@ impl Store {
         ensure_active(&mut tx, owner, conversation, merge.absorb).await?;
         let mut keep = one(&mut tx, owner, conversation, merge.keep).await?;
         let absorb = one(&mut tx, owner, conversation, merge.absorb).await?;
-        let status = match (keep.status.rank(), absorb.status.rank()) {
-            _ if absorb.status.is_terminal() => absorb.status,
-            (Some(a), Some(b)) if b > a => absorb.status,
-            _ => keep.status,
-        };
-        if status != keep.status {
-            keep.status = status;
-            keep.status_changed_ms = keep.status_changed_ms.max(absorb.status_changed_ms);
+        // Status event time, including explicit owner edits, decides the winner.
+        // Equal times retain the requested keep row deterministically.
+        if absorb.status_changed_ms > keep.status_changed_ms {
+            keep.status = absorb.status;
+            keep.status_changed_ms = absorb.status_changed_ms;
+            keep.next_step = absorb.next_step.clone();
         }
         keep.applied_ms = match (keep.applied_ms, absorb.applied_ms) {
             (Some(a), Some(b)) => Some(a.min(b)),
@@ -102,9 +100,9 @@ impl Store {
             .execute(&mut *tx)
             .await
             .map_err(unavailable)?;
-        sqlx::query("UPDATE tracker_rows SET role=?,role_key=?,status=?,status_changed_ms=?,applied_ms=?,last_contact_ms=?,link=?,location=?,notes=?,events_count=?,revision=?,updated_ms=? WHERE id=?")
+        sqlx::query("UPDATE tracker_rows SET role=?,role_key=?,status=?,status_changed_ms=?,applied_ms=?,last_contact_ms=?,next_step=?,link=?,location=?,notes=?,events_count=?,revision=?,updated_ms=? WHERE id=?")
             .bind(&keep.role).bind(&keep.role_key).bind(keep.status.as_str()).bind(keep.status_changed_ms)
-            .bind(keep.applied_ms).bind(keep.last_contact_ms).bind(&keep.link).bind(&keep.location)
+            .bind(keep.applied_ms).bind(keep.last_contact_ms).bind(&keep.next_step).bind(&keep.link).bind(&keep.location)
             .bind(&keep.notes).bind(i64::from(keep.events_count)).bind(keep.revision).bind(now_ms())
             .bind(keep.id.to_string())
             .execute(&mut *tx).await.map_err(unavailable)?;

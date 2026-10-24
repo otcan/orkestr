@@ -207,3 +207,71 @@ async fn tracker_routes_enable_record_edit_export_and_grant() {
     assert_eq!(status, 401);
     case.finish().await;
 }
+
+#[tokio::test]
+async fn every_tracker_browser_mutation_requires_origin_and_csrf() {
+    use sha2::{Digest, Sha256};
+    let case = case().await;
+    let cookie = format!("Cookie: orkestr_v2_session={}", case.cookie);
+    let csrf = format!(
+        "x-orkestr-csrf: {:x}",
+        Sha256::digest(format!("orkestr-v2-browser-csrf-v1:{}", case.cookie).as_bytes())
+    );
+    let origin = "Origin: http://127.0.0.1:19882";
+    let row = Uuid::new_v4();
+    let edit_path = format!("/tracker/rows/{row}");
+    for (method, suffix, body) in [
+        ("PUT", "/tracker", json!({"recipe":"job-tracker"})),
+        (
+            "POST",
+            "/tracker/events",
+            json!({"request_key":"browser","events":[applied("Example","Engineer",1000,"0123456789abcdef01234567")]}),
+        ),
+        (
+            "POST",
+            edit_path.as_str(),
+            json!({"expected_revision":1,"notes":"Example"}),
+        ),
+        (
+            "POST",
+            "/tracker/merge",
+            json!({"keep":row,"absorb":Uuid::new_v4()}),
+        ),
+        ("POST", "/tracker/grant", json!(null)),
+        ("DELETE", "/tracker/grant", json!(null)),
+    ] {
+        for headers in [
+            vec![cookie.as_str()],
+            vec![cookie.as_str(), origin],
+            vec![cookie.as_str(), csrf.as_str()],
+            vec![
+                cookie.as_str(),
+                csrf.as_str(),
+                "Origin: http://foreign.example",
+            ],
+        ] {
+            let (status, value) = send(
+                &case.state,
+                method,
+                &case.path(suffix),
+                &headers,
+                &body.to_string(),
+            )
+            .await;
+            assert_eq!(status, 403, "{method} {suffix}: {value}");
+        }
+    }
+    // Positive control proves that this cookie/CSRF pair is valid for this origin.
+    let (status, value) = send(
+        &case.state,
+        "PUT",
+        &case.path("/tracker"),
+        &[&cookie, origin, &csrf],
+        &json!({"recipe":"job-tracker"}).to_string(),
+    )
+    .await;
+    assert_eq!(status, 200, "{value}");
+    assert_eq!(value["grant_issued"], false);
+    assert!(value["rows"].as_array().unwrap().is_empty());
+    case.finish().await;
+}

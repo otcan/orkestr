@@ -93,6 +93,9 @@ impl Store {
         cursor_json: &str,
         summary_json: &str,
     ) -> Result<ScanRecord> {
+        if matches!(caller, TrackerCaller::Grant(_)) {
+            return Err(ResourceError::Unauthorized);
+        }
         if cursor_json.len() > CURSOR_MAX
             || summary_json.len() > SOURCE_MAX
             || serde_json::from_str::<serde_json::Value>(cursor_json).is_err()
@@ -105,7 +108,7 @@ impl Store {
                         events.is_empty()
                             || events.len() > TRACKER_EVENTS_PER_REQUEST
                             || events.iter().any(|e| {
-                                !e.is_valid()
+                                !super::authority::valid_intake(e)
                                     || e.message_ref.as_deref() != Some(m.message_ref.as_str())
                             })
                     })

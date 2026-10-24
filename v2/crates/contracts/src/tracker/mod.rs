@@ -43,7 +43,7 @@ pub struct TrackerEventInput {
     pub message_ref: Option<String>,
     #[serde(default)]
     pub sender_domain: Option<String>,
-    /// At most 200 characters that justified the label.
+    /// Transient classification evidence; persistence keeps only its SHA-256 hash.
     #[serde(default)]
     pub evidence: Option<String>,
     /// `rule:<id>`, `llm:<model>`, `assistant` or `manual`.
@@ -160,6 +160,8 @@ pub enum TrackerChangeKind {
     Duplicate,
     /// Needed a known thread and had none: nothing recorded.
     Unmatched,
+    /// Intake advanced with durable overflow evidence; owner attention needed.
+    BacklogFull,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -181,7 +183,9 @@ impl TrackerChange {
         match self.kind {
             // A lead from a job alert is recorded quietly.
             TrackerChangeKind::Created => self.to != Some(TrackerStatus::Saved),
-            TrackerChangeKind::StatusChanged | TrackerChangeKind::NeedsReview => true,
+            TrackerChangeKind::StatusChanged
+            | TrackerChangeKind::NeedsReview
+            | TrackerChangeKind::BacklogFull => true,
             TrackerChangeKind::Event
             | TrackerChangeKind::Duplicate
             | TrackerChangeKind::Unmatched => false,
@@ -205,6 +209,9 @@ impl TrackerChange {
                 from.label(),
                 to.label()
             ),
+            (TrackerChangeKind::BacklogFull, _, _) => {
+                "Tracker backlog full; review intake audit".into()
+            }
             (TrackerChangeKind::NeedsReview, _, _) => format!(
                 "Check: {} - {} ({} needs review)",
                 self.company,
@@ -228,6 +235,15 @@ impl TrackerChangeset {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TrackerBacklog {
+    pub pending: u32,
+    pub expired: u64,
+    pub evicted: u64,
+    pub overflow: u64,
+    pub full: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TrackerPage {
     pub conversation_id: ConversationId,
     /// The recipe that set the tracker up (`job-tracker`) or `manual`.
@@ -236,6 +252,7 @@ pub struct TrackerPage {
     /// When the mail source was last scanned, if it has one.
     pub last_scan_ms: Option<i64>,
     pub rows: Vec<TrackerRow>,
+    pub backlog: TrackerBacklog,
 }
 
 /// Turn a conversation's tracker on (idempotent).

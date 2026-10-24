@@ -9,9 +9,9 @@
 //! - `POST .../tracker/merge {keep, absorb}`: merge two rows (owner).
 //! - `GET .../tracker/export.csv?delimiter=comma|semicolon`: CSV download.
 //! - `POST|DELETE .../tracker/grant`: issue (shown once) or revoke the
-//!   conversation tracker grant for the assistant (owner).
+//!   conversation tracker annotation grant for the assistant (owner).
 //!
-//! Reads, events and the export accept the owner or the grant (header
+//! Reads and the export accept the owner or the grant; grant events are annotations (header
 //! `x-orkestr-tracker-grant`, machine requests only). Nothing here admits
 //! input, wakes or steers a provider, or sends anything.
 use super::*;

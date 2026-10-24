@@ -21,10 +21,14 @@ pub enum TrackerEventKind {
     JobAlert,
     /// A free-text note or a manual edit; never changes the status by itself.
     Note,
+    /// Explicit owner status edit; distinct from a free-text note.
+    NoResponse,
+    /// Owner changed structured row fields.
+    Edited,
 }
 
 impl TrackerEventKind {
-    pub const ALL: [TrackerEventKind; 14] = [
+    pub const ALL: [TrackerEventKind; 16] = [
         Self::Saved,
         Self::Applied,
         Self::ApplicationReceived,
@@ -39,6 +43,8 @@ impl TrackerEventKind {
         Self::Withdrawn,
         Self::JobAlert,
         Self::Note,
+        Self::NoResponse,
+        Self::Edited,
     ];
     pub fn as_str(self) -> &'static str {
         match self {
@@ -56,6 +62,8 @@ impl TrackerEventKind {
             Self::Withdrawn => "withdrawn",
             Self::JobAlert => "job_alert",
             Self::Note => "note",
+            Self::NoResponse => "no_response",
+            Self::Edited => "edited",
         }
     }
     pub fn parse(value: &str) -> Option<Self> {
@@ -72,7 +80,8 @@ impl TrackerEventKind {
             Self::Offer => TrackerStatus::Offer,
             Self::Rejection => TrackerStatus::Rejected,
             Self::Withdrawn => TrackerStatus::Withdrawn,
-            Self::Note => return None,
+            Self::NoResponse => TrackerStatus::NoResponse,
+            Self::Note | Self::Edited => return None,
         })
     }
 }

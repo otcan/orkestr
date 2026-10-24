@@ -4,10 +4,12 @@
 //! conversation's assistant can read the table and record events without
 //! owner authority. Nothing here admits input, wakes a provider or sends.
 mod apply;
+mod authority;
 mod edit;
 mod merge;
 #[cfg(test)]
 pub(crate) mod migration_fixture;
+mod retention;
 mod scan;
 mod unresolved;
 use crate::conversation_resources::{now_ms, owned, unavailable, ResourceError};
@@ -21,7 +23,7 @@ use uuid::Uuid;
 pub(crate) type Result<T> = std::result::Result<T, ResourceError>;
 
 /// The owner (cookie or bearer), or the conversation's tracker grant
-/// (read rows and events, record events, run the mail scan).
+/// (read rows/events and annotate existing rows; no mail provenance or scan authority).
 #[derive(Clone, Copy)]
 pub enum TrackerCaller<'a> {
     Owner {
@@ -220,6 +222,7 @@ impl Store {
         .fetch_all(&mut *tx)
         .await
         .map_err(unavailable)?;
+        let backlog = retention::backlog(&mut tx, &owner, conversation).await?;
         tx.commit().await.map_err(unavailable)?;
         Ok(TrackerPage {
             conversation_id: conversation.clone(),
@@ -227,6 +230,7 @@ impl Store {
             grant_issued: config.grant_issued,
             last_scan_ms: config.last_scan_ms,
             rows: rows.iter().map(row_of).collect::<Result<_>>()?,
+            backlog,
         })
     }
 

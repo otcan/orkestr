@@ -3,6 +3,7 @@ use crate::Store;
 
 pub(crate) async fn downgrade_empty(store: &Store) {
     let tables = [
+        "tracker_intake_audit",
         "tracker_unresolved_events",
         "tracker_row_merges",
         "tracker_messages",

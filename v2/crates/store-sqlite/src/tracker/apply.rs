@@ -37,7 +37,7 @@ async fn load(
 }
 
 /// Find the row this event belongs to; `true` when the match is ambiguous.
-async fn find(
+pub(super) async fn find(
     tx: &mut Transaction<'_, Sqlite>,
     scope: (&str, &str),
     event: &TrackerEventInput,
@@ -48,7 +48,7 @@ async fn find(
     for reference in &event.thread_refs {
         let found = load(
             tx,
-            &format!("SELECT {ROW_COLUMNS} FROM tracker_rows WHERE id=(SELECT row_id FROM tracker_messages WHERE owner_id=? AND conversation_id=? AND message_ref=?)"),
+            &format!("SELECT {ROW_COLUMNS} FROM tracker_rows WHERE NOT EXISTS(SELECT 1 FROM tracker_row_merges m WHERE m.owner_id=tracker_rows.owner_id AND m.conversation_id=tracker_rows.conversation_id AND m.absorb_id=tracker_rows.id) AND id=(SELECT row_id FROM tracker_messages WHERE owner_id=? AND conversation_id=? AND message_ref=?)"),
             &[owner, conversation, reference],
         )
         .await?;
@@ -62,7 +62,7 @@ async fn find(
     if let Some(link) = link {
         let found = load(
             tx,
-            &format!("SELECT {ROW_COLUMNS} FROM tracker_rows WHERE id=(SELECT row_id FROM tracker_row_links WHERE owner_id=? AND conversation_id=? AND link=?)"),
+            &format!("SELECT {ROW_COLUMNS} FROM tracker_rows WHERE NOT EXISTS(SELECT 1 FROM tracker_row_merges m WHERE m.owner_id=tracker_rows.owner_id AND m.conversation_id=tracker_rows.conversation_id AND m.absorb_id=tracker_rows.id) AND id=(SELECT row_id FROM tracker_row_links WHERE owner_id=? AND conversation_id=? AND link=?)"),
             &[owner, conversation, link],
         )
         .await?;
@@ -82,7 +82,7 @@ async fn find(
     if !role.is_empty() {
         let exact = load(
             tx,
-            &format!("SELECT {ROW_COLUMNS} FROM tracker_rows WHERE owner_id=? AND conversation_id=? AND company_key=? AND role_key=? ORDER BY last_contact_ms DESC LIMIT 1"),
+            &format!("SELECT {ROW_COLUMNS} FROM tracker_rows WHERE NOT EXISTS(SELECT 1 FROM tracker_row_merges m WHERE m.owner_id=tracker_rows.owner_id AND m.conversation_id=tracker_rows.conversation_id AND m.absorb_id=tracker_rows.id) AND owner_id=? AND conversation_id=? AND company_key=? AND role_key=? ORDER BY last_contact_ms DESC LIMIT 1"),
             &[owner, conversation, &company, &role],
         )
         .await?;
@@ -96,7 +96,7 @@ async fn find(
     // Same company (one key may extend the other: "acme" / "acme-robotics").
     let candidates = load(
         tx,
-        &format!("SELECT {ROW_COLUMNS} FROM tracker_rows WHERE owner_id=? AND conversation_id=? AND archived=0
+        &format!("SELECT {ROW_COLUMNS} FROM tracker_rows WHERE NOT EXISTS(SELECT 1 FROM tracker_row_merges m WHERE m.owner_id=tracker_rows.owner_id AND m.conversation_id=tracker_rows.conversation_id AND m.absorb_id=tracker_rows.id) AND owner_id=? AND conversation_id=? AND archived=0
                   AND (company_key=?1 OR company_key LIKE ?1 || '-%' OR ?1 LIKE company_key || '-%') ORDER BY last_contact_ms DESC")
             .replace("?1", "?3"),
         &[owner, conversation, &company],
@@ -138,14 +138,17 @@ pub(crate) async fn apply_one(
 ) -> Result<TrackerChange> {
     let (owner_s, conv_s) = (owner.to_string(), conversation.to_string());
     let link = event.link.as_deref().and_then(tracker_canonical_url);
-    let manual = event.classifier == "manual";
     let now = now_ms();
     let matched = find(tx, (&owner_s, &conv_s), event, link.as_deref()).await?;
     let notify = notify_on.contains(&event.kind);
     if matched.is_none() && event.requires_thread {
-        super::unresolved::save(tx, owner, conversation, event).await?;
+        let full = super::unresolved::save(tx, owner, conversation, event).await?;
         return Ok(TrackerChange {
-            kind: TrackerChangeKind::Unmatched,
+            kind: if full {
+                TrackerChangeKind::BacklogFull
+            } else {
+                TrackerChangeKind::Unmatched
+            },
             row_id: None,
             company: event.company.clone(),
             role: event.role.clone().unwrap_or_default(),
@@ -160,7 +163,17 @@ pub(crate) async fn apply_one(
             let active: i64 = sqlx::query_scalar("SELECT count(*) FROM tracker_rows r WHERE r.owner_id=? AND r.conversation_id=? AND NOT EXISTS(SELECT 1 FROM tracker_row_merges m WHERE m.owner_id=r.owner_id AND m.conversation_id=r.conversation_id AND m.absorb_id=r.id)")
                 .bind(&owner_s).bind(&conv_s).fetch_one(&mut **tx).await.map_err(unavailable)?;
             if active >= TRACKER_ROWS_MAX as i64 {
-                return Err(ResourceError::Conflict("tracker_full"));
+                super::retention::audit(tx, owner, conversation, event, "row_limit").await?;
+                return Ok(TrackerChange {
+                    kind: TrackerChangeKind::BacklogFull,
+                    row_id: None,
+                    company: event.company.clone(),
+                    role: event.role.clone().unwrap_or_default(),
+                    event: event.kind,
+                    from: None,
+                    to: None,
+                    notify: false,
+                });
             }
             let status = event.kind.status().unwrap_or(TrackerStatus::Saved);
             let unknown =
@@ -214,15 +227,11 @@ pub(crate) async fn apply_one(
         }
         Some((mut row, ambiguous)) => {
             let before = row.clone();
-            let (mut status, mut review) = match (manual, event.kind.status()) {
-                (true, Some(status)) => (status, false),
-                _ => tracker_transition(row.status, event.kind),
-            };
+            let (mut status, mut review) = tracker_transition(row.status, event.kind);
             // Older mail never closes a row that moved on since.
             if status != row.status
                 && status.is_terminal()
                 && event.occurred_ms < row.status_changed_ms
-                && !manual
             {
                 status = row.status;
                 review = true;
@@ -297,7 +306,7 @@ pub(crate) async fn apply_one(
     sqlx::query("INSERT INTO tracker_events(id,owner_id,conversation_id,row_id,kind,occurred_ms,source,message_ref,sender_domain,evidence,classifier,confidence,recorded_ms) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)")
         .bind(Uuid::new_v4().to_string()).bind(&owner_s).bind(&conv_s).bind(row.id.to_string())
         .bind(event.kind.as_str()).bind(event.occurred_ms).bind(&event.source).bind(&event.message_ref)
-        .bind(&event.sender_domain).bind(&event.evidence).bind(&event.classifier).bind(i64::from(event.confidence))
+        .bind(&event.sender_domain).bind(super::retention::evidence_hash(event.evidence.as_deref())).bind(&event.classifier).bind(i64::from(event.confidence))
         .bind(now)
         .execute(&mut **tx).await.map_err(unavailable)?;
     Ok(change)
@@ -330,7 +339,12 @@ pub(crate) async fn ledger_record(
     let pending: i64 = sqlx::query_scalar("SELECT count(*) FROM tracker_unresolved_events WHERE owner_id=? AND conversation_id=? AND message_ref=? AND state='pending'")
         .bind(owner.to_string()).bind(conversation.to_string()).bind(message_ref)
         .fetch_one(&mut **tx).await.map_err(unavailable)?;
-    let outcome = if outcome == "event" && pending != 0 {
+    let overflow: i64 = sqlx::query_scalar("SELECT count(*) FROM tracker_intake_audit WHERE owner_id=? AND conversation_id=? AND message_ref=? AND reason='row_limit'")
+        .bind(owner.to_string()).bind(conversation.to_string()).bind(message_ref)
+        .fetch_one(&mut **tx).await.map_err(unavailable)?;
+    let outcome = if outcome == "event" && overflow != 0 {
+        "overflow_row_limit"
+    } else if outcome == "event" && pending != 0 {
         "unresolved"
     } else {
         outcome
@@ -402,7 +416,7 @@ impl Store {
         if !valid_key(&request.request_key)
             || request.events.is_empty()
             || request.events.len() > TRACKER_EVENTS_PER_REQUEST
-            || !request.events.iter().all(TrackerEventInput::is_valid)
+            || !request.events.iter().all(super::authority::valid_intake)
         {
             return Err(ResourceError::Invalid);
         }
@@ -427,6 +441,9 @@ impl Store {
                 return Err(ResourceError::Conflict("tracker_batch_conflict"));
             }
             return serde_json::from_str(&changes).map_err(unavailable);
+        }
+        if matches!(caller, TrackerCaller::Grant(_)) {
+            super::authority::grant_events(&mut tx, &owner, conversation, &request.events).await?;
         }
         let mut changes = apply_events(
             &mut tx,
