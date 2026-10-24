@@ -1,0 +1,20 @@
+Authentication-Results: mx.google.com; dkim=pass header.i=@linkedin.com;
+ spf=pass smtp.mailfrom=linkedin.com; dmarc=pass header.from=linkedin.com
+From: LinkedIn <jobs-noreply@linkedin.com>
+To: Alex Example <alex.jobseeker@example.com>
+Subject: Alex, your application was sent to Acme Robotics GmbH
+Date: Tue, 20 Oct 2026 09:00:00 +0000
+Message-ID: <jt15fixture.5e7cf0d8c2a2bb5d@linkedin.com>
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: quoted-printable
+MIME-Version: 1.0
+
+Your application was sent to Acme Robotics GmbH
+
+Backend Engineer (Rust)
+Acme Robotics GmbH =C2=B7 Berlin, Germany (Hybrid)
+
+View job: https://www.linkedin.com/comm/jobs/view/4012345678/?trackingId=3Dab=
+c&refId=3Dxyz
+
+Applied on October 20, 2026

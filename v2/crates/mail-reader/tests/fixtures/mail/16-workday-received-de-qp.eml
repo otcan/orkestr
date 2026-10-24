@@ -1,0 +1,18 @@
+Authentication-Results: mx.google.com; dkim=pass header.i=@myworkday.com;
+ spf=pass smtp.mailfrom=myworkday.com; dmarc=pass header.from=myworkday.com
+From: Contoso Karriere <contoso@myworkday.com>
+To: Alex Example <alex.jobseeker@example.com>
+Subject: =?utf-8?q?Eingangsbest=C3=A4tigung?= Ihrer Bewerbung
+Date: Wed, 21 Oct 2026 17:00:00 +0000
+Message-ID: <jt15fixture.e54f8bce2891bc9d@myworkday.com>
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: quoted-printable
+MIME-Version: 1.0
+
+Hallo Alex,
+
+vielen Dank f=C3=BCr Ihre Bewerbung als Projektmanager (m/w/d) bei Contoso Gm=
+bH.
+Wir melden uns in K=C3=BCrze.
+
+Ihr Recruiting-Team

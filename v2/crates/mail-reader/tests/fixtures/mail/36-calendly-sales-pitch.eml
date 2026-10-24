@@ -1,0 +1,18 @@
+Authentication-Results: mx.google.com; dkim=pass
+ header.i=@growthtools.example; spf=pass smtp.mailfrom=growthtools.example;
+ dmarc=pass header.from=growthtools.example
+From: Sam Sales <sam@growthtools.example>
+To: Alex Example <alex.jobseeker@example.com>
+Subject: Quick call this week?
+Date: Thu, 22 Oct 2026 11:00:00 +0000
+Message-ID: <jt15fixture.af870407552b29ac@growthtools.example>
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: quoted-printable
+MIME-Version: 1.0
+
+Hi Alex,
+
+I help consultants win more clients. Pick a slot: https://calendly.com/growth=
+tools/15min
+
+Sam

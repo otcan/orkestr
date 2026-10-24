@@ -1,0 +1,16 @@
+Authentication-Results: mx.google.com; dkim=pass header.i=@codility.com;
+ spf=pass smtp.mailfrom=codility.com; dmarc=pass header.from=codility.com
+From: Codility <no-reply@codility.com>
+To: Alex Example <alex.jobseeker@example.com>
+Subject: Coding challenge from Wingtip Solutions
+Date: Wed, 21 Oct 2026 18:00:00 +0000
+Message-ID: <jt15fixture.d3afb32d50f35696@codility.com>
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: quoted-printable
+MIME-Version: 1.0
+
+Hello Alex,
+
+Wingtip Solutions has invited you to complete a coding challenge for the Syst=
+ems Engineer role at Wingtip Solutions.
+Start here: https://app.codility.com/c/run/ABC-123

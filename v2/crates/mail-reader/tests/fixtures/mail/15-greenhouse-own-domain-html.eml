@@ -1,0 +1,18 @@
+Authentication-Results: mx.google.com; dkim=pass
+ header.i=@tailspin-toys.example; spf=pass
+ smtp.mailfrom=tailspin-toys.example; dmarc=pass
+ header.from=tailspin-toys.example
+From: Tailspin Toys Careers <careers@tailspin-toys.example>
+To: Alex Example <alex.jobseeker@example.com>
+Subject: Thank you for your application
+Date: Wed, 21 Oct 2026 16:40:00 +0000
+Message-ID: <jt15fixture.90c3df33ea0430b1@tailspin-toys.example>
+Content-Type: text/html; charset="utf-8"
+Content-Transfer-Encoding: base64
+MIME-Version: 1.0
+
+PGh0bWw+PGJvZHk+PHA+SGkgQWxleCw8L3A+PHA+VGhhbmsgeW91IGZvciBhcHBseWluZyB0byB0
+aGUgUUEgRW5naW5lZXIgcG9zaXRpb24gYXQgVGFpbHNwaW4gVG95cy4gV2Ugd2lsbCBiZSBpbiB0
+b3VjaC48L3A+PHA+PGEgaHJlZj0iaHR0cHM6Ly9ib2FyZHMuZ3JlZW5ob3VzZS5pby90YWlsc3Bp
+bnRveXMvam9icy80NDU1P2doX3NyYz1tYWlsJmFtcDt1dG1fbWVkaXVtPWVtYWlsIj5WaWV3IHRo
+ZSBwb3N0aW5nPC9hPjwvcD48L2JvZHk+PC9odG1sPgo=

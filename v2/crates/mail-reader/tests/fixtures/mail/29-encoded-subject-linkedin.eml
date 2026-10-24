@@ -1,0 +1,18 @@
+Authentication-Results: mx.google.com; dkim=pass header.i=@linkedin.com;
+ spf=pass smtp.mailfrom=linkedin.com; dmarc=pass header.from=linkedin.com
+From: LinkedIn <jobs-noreply@linkedin.com>
+To: Alex Example <alex.jobseeker@example.com>
+Subject: Alex, your application was sent to =?utf-8?q?B=C3=A4ckerei_M=C3=BCl?=
+ =?utf-8?q?ler?= GmbH
+Date: Thu, 22 Oct 2026 05:00:00 +0000
+Message-ID: <jt15fixture.140da00c3b7346a6@linkedin.com>
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 8bit
+MIME-Version: 1.0
+
+Your application was sent to Bäckerei Müller GmbH
+
+Verkäufer (m/w/d)
+Bäckerei Müller GmbH · Köln
+
+https://www.linkedin.com/comm/jobs/view/4017777771/

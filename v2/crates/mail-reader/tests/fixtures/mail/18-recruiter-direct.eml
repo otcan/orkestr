@@ -1,0 +1,20 @@
+Authentication-Results: mx.google.com; dkim=pass
+ header.i=@talentbridge.example; spf=pass smtp.mailfrom=talentbridge.example;
+ dmarc=pass header.from=talentbridge.example
+From: Jane Smith <jane@talentbridge.example>
+To: Alex Example <alex.jobseeker@example.com>
+Subject: Opportunity: Senior Rust Engineer at Fourth Coffee
+Date: Wed, 21 Oct 2026 19:00:00 +0000
+Message-ID: <jt15fixture.0d750b37c9c56071@talentbridge.example>
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: quoted-printable
+MIME-Version: 1.0
+
+Hi Alex,
+
+I'm a recruiter at TalentBridge. Our client Fourth Coffee is hiring for a Sen=
+ior Rust Engineer position in Berlin. Would you be open to a short call this =
+week?
+
+Best,
+Jane

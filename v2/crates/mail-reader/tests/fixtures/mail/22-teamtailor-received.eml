@@ -1,0 +1,17 @@
+Authentication-Results: mx.google.com; dkim=pass
+ header.i=@message.teamtailor.com; spf=pass
+ smtp.mailfrom=message.teamtailor.com; dmarc=pass
+ header.from=message.teamtailor.com
+From: Margie's Travel <no-reply@message.teamtailor.com>
+To: Alex Example <alex.jobseeker@example.com>
+Subject: Thanks for applying to Margie's Travel
+Date: Wed, 21 Oct 2026 23:00:00 +0000
+Message-ID: <jt15fixture.0c03aa5bfd40fae5@message.teamtailor.com>
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: quoted-printable
+MIME-Version: 1.0
+
+Hi Alex,
+
+Thanks for your application for the Travel Consultant role at Margie's Travel=
+. We will review it soon.

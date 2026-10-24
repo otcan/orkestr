@@ -1,0 +1,15 @@
+[package]
+name = "orkestr-v2-mail-reader"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+# Read-only, bounded, incremental reader of a desktop mail client's local
+# store (Thunderbird Maildir or mbox) and the recipe-driven job-mail
+# classifier. No network, no credentials, no writes to the mail store.
+[dependencies]
+orkestr-v2-contracts = { path = "../contracts" }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true

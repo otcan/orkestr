@@ -1,0 +1,19 @@
+Authentication-Results: mx.google.com; dkim=pass header.i=@m.personio.com;
+ spf=pass smtp.mailfrom=m.personio.com; dmarc=pass header.from=m.personio.com
+From: Personio <bluebird-jobs@m.personio.com>
+To: Alex Example <alex.jobseeker@example.com>
+Subject: Ihre Bewerbung bei Bluebird Logistik GmbH
+Date: Wed, 21 Oct 2026 10:00:00 +0000
+Message-ID: <jt15fixture.c30d38eceab823b2@m.personio.com>
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: quoted-printable
+MIME-Version: 1.0
+
+Hallo Alex,
+
+vielen Dank f=C3=BCr Ihre Bewerbung als DevOps Engineer (m/w/d). Leider m=C3=
+=BCssen wir Ihnen mitteilen, dass wir uns f=C3=BCr andere Kandidat:innen ents=
+chieden haben. Wir w=C3=BCnschen Ihnen viel Erfolg.
+
+Mit freundlichen Gr=C3=BC=C3=9Fen
+Bluebird Logistik GmbH
