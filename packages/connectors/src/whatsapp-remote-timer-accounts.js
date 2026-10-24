@@ -14,6 +14,6 @@ export function verifiedTimerAccounts(registryAccounts, status = {}, env = proce
     if (!canonical) return account;
     return { ...account, id: canonical, accountId: canonical,
       runtimeAccountId: account.runtimeAccountId || account.accountId || account.id,
-      legacyRoleAliases: [...(account.legacyRoleAliases || []), account.accountId, account.id].filter(Boolean) };
+      legacyRoleAliases: [...(Array.isArray(account.legacyRoleAliases) ? account.legacyRoleAliases : []), account.accountId, account.id].filter(Boolean) };
   });
 }
