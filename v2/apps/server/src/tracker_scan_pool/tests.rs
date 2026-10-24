@@ -1,4 +1,23 @@
 use super::*;
+
+#[tokio::test]
+async fn retrying_an_old_action_cancel_does_not_cancel_newer_reader_custody() {
+    let pool = ScanPool::new(1, 1).unwrap();
+    let (owner, conversation) = ids();
+    let action = uuid::Uuid::new_v4();
+    let reservation = pool.reserve_action(&owner, &conversation, action).unwrap();
+    pool.cancel_action(&owner, &conversation, uuid::Uuid::new_v4());
+    assert_eq!(pool.status().cancelled, 0);
+    pool.cancel_action(&owner, &conversation, action);
+    assert_eq!(pool.status().cancelled, 1);
+    assert!(matches!(
+        pool.reserve(&owner, &conversation),
+        Err(Refused::Busy)
+    ));
+    drop(reservation);
+    assert_eq!(pool.status().cancelled, 0);
+    stop(&pool).await;
+}
 use uuid::Uuid;
 fn ids() -> (OwnerId, ConversationId) {
     (OwnerId(Uuid::new_v4()), ConversationId(Uuid::new_v4()))
@@ -142,9 +161,10 @@ async fn panic_is_a_failed_result_with_real_completion_and_worker_survives() {
     let pool = ScanPool::new(1, 1).unwrap();
     let (owner, conversation) = ids();
     let ticket = pool
-        .enqueue(pool.reserve(&owner, &conversation).unwrap(), || {
-            panic!("synthetic reader panic")
-        })
+        .enqueue(
+            pool.reserve(&owner, &conversation).unwrap(),
+            || -> Result<ScanOutput, ReadFailure> { panic!("synthetic reader panic") },
+        )
         .unwrap();
     let completed = ticket.wait(deadline()).await.unwrap();
     assert!(matches!(completed.result(), Err(ReadFailure::Panicked)));

@@ -21,6 +21,13 @@ pub enum TimerWorkKind {
     TrackerScan,
 }
 
+/// Trusted server registry data. Intentionally no wire decoder or Debug.
+/// Backing paths stay in local storage and never enter the selection receipt.
+pub struct TrackerLocalSource {
+    pub source_id: Uuid,
+    pub backing_json: String,
+}
+
 /// Private Core read/commit capability. It has no wire decoder, Clone, provider
 /// admission or native identity. The bounded reader slot must precede its issue.
 pub struct TrackerScanClaim {

@@ -31,6 +31,12 @@ impl Store {
     ) -> Result<TrackerScanReceipt> {
         scan::validate(messages, cursor_json, summary_json).map_err(resource)?;
         if messages.len() > 64
+            || messages
+                .iter()
+                .filter_map(|m| m.outcome.as_ref().ok())
+                .map(Vec::len)
+                .sum::<usize>()
+                > 256
             || messages.iter().any(|m| {
                 m.outcome
                     .as_ref()
@@ -158,6 +164,22 @@ impl Store {
             .bind(owner.to_string()).bind(conversation.to_string()).bind(key)
             .fetch_optional(&mut *tx).await.map_err(unavailable)?.ok_or(HistoryError::NotFound)?;
         let result = decode(&row)?;
+        tx.commit().await.map_err(unavailable)?;
+        Ok(result)
+    }
+
+    /// Native UI audit/report history only. No chat publication or delivery ack.
+    pub async fn tracker_scan_reports(
+        &self,
+        credential: &str,
+        owner: &OwnerId,
+        conversation: &ConversationId,
+    ) -> Result<Vec<TrackerScanReceipt>> {
+        let mut tx = self.history_transaction(credential, owner, false).await?;
+        target(&mut tx, owner, conversation).await?;
+        let rows = sqlx::query("SELECT receipt_json FROM tracker_scan_receipts WHERE owner_id=? AND conversation_id=? ORDER BY recorded_ms DESC,id DESC LIMIT 20")
+            .bind(owner.to_string()).bind(conversation.to_string()).fetch_all(&mut *tx).await.map_err(unavailable)?;
+        let result = rows.iter().map(decode).collect::<Result<_>>()?;
         tx.commit().await.map_err(unavailable)?;
         Ok(result)
     }

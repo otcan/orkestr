@@ -8,6 +8,71 @@ fn later() -> SystemTime {
     SystemTime::now() + Duration::from_secs(60)
 }
 
+#[test]
+fn bounded_scans_rotate_inbox_and_sent_and_keep_rotation_after_serializing_cursor() {
+    let dir = crate::testdir::tempdir().unwrap();
+    let mut folders = Vec::new();
+    for (name, outgoing) in [("INBOX", false), ("Sent", true)] {
+        let path = dir.path().join(name);
+        let messages: String = (0..4)
+            .map(|n| message(&format!("{name}-{n}"), "synthetic mail"))
+            .collect();
+        fs::write(&path, messages).unwrap();
+        folders.push(ScanFolder {
+            folder: MailFolder::Mbox(path),
+            outgoing,
+        });
+    }
+    let mut cursor = Cursor::default();
+    for outgoing in [false, true, false, true] {
+        let limits = ScanLimits {
+            max_messages: 1,
+            ..ScanLimits::default()
+        };
+        let out = scan_folders(dir.path(), &folders, &cursor, &limits, later()).unwrap();
+        assert_eq!(out.envelopes.len(), 1);
+        assert_eq!(out.envelopes[0].outgoing, outgoing);
+        cursor = serde_json::from_str(&serde_json::to_string(&out.cursor).unwrap()).unwrap();
+    }
+    let legacy: Cursor = serde_json::from_str(r#"{"folders":{}}"#).unwrap();
+    assert!(legacy.next_folder.is_none());
+}
+
+#[cfg(unix)]
+#[test]
+fn selected_profile_identity_is_checked_on_the_open_directory_before_read() {
+    use std::os::unix::fs::MetadataExt;
+    let dir = crate::testdir::tempdir().unwrap();
+    let profile = dir.path().join("profile");
+    fs::create_dir(&profile).unwrap();
+    let inbox = profile.join("INBOX");
+    fs::write(&inbox, message("pin", "synthetic mail")).unwrap();
+    let meta = fs::metadata(&profile).unwrap();
+    let folders = [ScanFolder {
+        folder: MailFolder::Mbox(inbox),
+        outgoing: false,
+    }];
+    assert!(scan_folders_with_identity(
+        &profile,
+        Some((meta.dev(), meta.ino().wrapping_add(1))),
+        &folders,
+        &Cursor::default(),
+        &ScanLimits::default(),
+        later()
+    )
+    .is_err());
+    let output = scan_folders_with_identity(
+        &profile,
+        Some((meta.dev(), meta.ino())),
+        &folders,
+        &Cursor::default(),
+        &ScanLimits::default(),
+        later(),
+    )
+    .unwrap();
+    assert_eq!(output.envelopes.len(), 1);
+}
+
 #[cfg(unix)]
 #[test]
 fn a_mailbox_alias_cannot_read_profile_credentials_or_an_outside_file() {

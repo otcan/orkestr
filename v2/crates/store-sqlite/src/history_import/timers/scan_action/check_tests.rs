@@ -6,6 +6,8 @@ fn request(key: &str) -> TrackerCheckRequest {
         request_key: key.into(),
         expected_source_revision: 1,
         expected_recipe: "job-tracker".into(),
+        expected_classifier_id: "synthetic-rules".into(),
+        expected_classifier_digest: "ab".repeat(32),
     }
 }
 async fn create(case: &Case, request: &TrackerCheckRequest) -> Result<TrackerCheckReceipt> {
@@ -59,6 +61,20 @@ async fn check_once_is_atomic_typed_bounded_and_exactly_recoverable_after_cancel
     );
     assert!(
         create(&case, &request("check-one"))
+            .await
+            .unwrap()
+            .duplicate
+    );
+    // Recover the original package decision after an installed-rule upgrade.
+    assert!(
+        case.store
+            .create_tracker_check(
+                &case.token,
+                &case.owner,
+                &case.conversation,
+                &request("check-one"),
+                ("upgraded-rules", &"cd".repeat(32))
+            )
             .await
             .unwrap()
             .duplicate

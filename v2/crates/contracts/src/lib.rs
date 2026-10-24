@@ -37,6 +37,7 @@ mod tracker;
 pub use tracker::*;
 mod recipes;
 pub mod tracker_actions;
+pub mod tracker_automation;
 pub use recipes::*;
 mod whatsapp_chats;
 pub use whatsapp_chats::*;

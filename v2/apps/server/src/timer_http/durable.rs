@@ -1,6 +1,7 @@
 //! Restart-safe controller with authenticated supervisor lifecycle.
 //! No browser credentials, instruction cache, caller clock or HTTP dispatch port.
 use orkestr_v2_application::runtime::RuntimeStoreError;
+use orkestr_v2_store_sqlite::history_import::timers::scan_action::TimerWorkKind;
 use orkestr_v2_store_sqlite::{history_import::HistoryError, Store};
 use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::time::Instant;
@@ -27,6 +28,8 @@ pub struct DurableTick {
     pub triggered: u32,
     /// Digests created with content.
     pub digests: u32,
+    /// Typed mailbox actions; these admit no model or window work.
+    pub tracker_actions: u32,
 }
 /// Own exactly one per authenticated supervisor lifecycle. Not a cloned task pool.
 pub struct DurableTimerController {
@@ -42,6 +45,7 @@ pub struct DurableTimerController {
     paused: Option<Arc<dyn Fn() -> bool + Send + Sync>>,
     /// Digests are due at most a few times a day; check twice a minute.
     digest_checked: Option<Instant>,
+    tracker_mail: Option<Arc<crate::tracker_mail_runtime::TrackerMailRuntime>>,
 }
 const DIGEST_CHECK: Duration = Duration::from_secs(30);
 impl DurableTimerController {
@@ -55,7 +59,15 @@ impl DurableTimerController {
             wake: None,
             paused: None,
             digest_checked: None,
+            tracker_mail: None,
         }
+    }
+    pub(crate) fn with_tracker_mail(
+        mut self,
+        runtime: Arc<crate::tracker_mail_runtime::TrackerMailRuntime>,
+    ) -> Self {
+        self.tracker_mail = Some(runtime);
+        self
     }
     /// Defer every fire while `paused` answers true (deploy drain).
     pub fn with_pause(mut self, paused: Arc<dyn Fn() -> bool + Send + Sync>) -> Self {
@@ -89,7 +101,7 @@ impl DurableTimerController {
             .supervisor
             .due_timer_scheduler_candidates(self.after, PAGE)
             .await?;
-        let next = next_cursor(&candidates);
+        let mut next = next_cursor(&candidates);
         let mut result = DurableTick::default();
         let now = Instant::now();
         for namespace in candidates {
@@ -111,14 +123,35 @@ impl DurableTimerController {
                     _ => HistoryError::Unauthorized,
                 })?;
             result.scanned += 1;
-            match self
-                .supervisor
-                .admit_authorized_timer_turn(&issuer, namespace, self.queue_window)
-                .await
-            {
-                Ok(receipt) => {
+            let kind = self.supervisor.timer_work_kind(&issuer, namespace).await;
+            let scan = matches!(kind, Ok(TimerWorkKind::TrackerScan));
+            let admission = match kind {
+                Ok(TimerWorkKind::Instruction) => self
+                    .supervisor
+                    .admit_authorized_timer_turn(&issuer, namespace, self.queue_window)
+                    .await
+                    .map(|r| !r.duplicate),
+                Ok(TimerWorkKind::TrackerScan) => match &self.tracker_mail {
+                    Some(runtime) => runtime
+                        .run(&self.supervisor, &issuer, namespace)
+                        .await
+                        .map(|_| true),
+                    None => {
+                        self.alert(namespace, "tracker_reader_not_configured");
+                        Err(HistoryError::Conflict)
+                    }
+                },
+                Err(error) => {
+                    self.alert(namespace, "timer_work_kind_refused");
+                    Err(error)
+                }
+            };
+            match admission {
+                Ok(fresh) => {
                     self.backoff.remove(&namespace);
-                    if !receipt.duplicate {
+                    if scan {
+                        result.tracker_actions += 1;
+                    } else if fresh {
                         result.admitted += 1;
                     }
                 }
@@ -133,6 +166,12 @@ impl DurableTimerController {
                     result.deferred += 1;
                 }
                 Err(error) => return Err(error),
+            }
+            // At most one bounded I/O wait per five-second pass. Rotate after
+            // this namespace even if the read is held, so other work stays fair.
+            if scan {
+                next = Some(namespace);
+                break;
             }
             // Issuer drops here; no instruction or credential is retained locally.
         }
@@ -151,6 +190,16 @@ impl DurableTimerController {
             }
         }
         Ok(result)
+    }
+    fn alert(&self, namespace: Uuid, reason: &'static str) {
+        if let Some(runtime) = &self.tracker_mail {
+            runtime.alert(namespace, reason);
+        } else {
+            eprintln!(
+                "{}",
+                serde_json::json!({"event":"timer_work_refused","namespace":namespace,"reason":reason,"occurrence_held":true})
+            );
+        }
     }
     /// Runs for recorded inbound events (new message or email). Same fresh
     /// issuer, backoff and window queue as clock occurrences.
@@ -179,6 +228,19 @@ impl DurableTimerController {
                     RuntimeStoreError::Unavailable => HistoryError::Unavailable,
                     _ => HistoryError::Unauthorized,
                 })?;
+            match self.supervisor.timer_work_kind(&issuer, namespace).await {
+                Ok(TimerWorkKind::Instruction) => {}
+                Ok(TimerWorkKind::TrackerScan)
+                | Err(HistoryError::Conflict | HistoryError::NotFound) => {
+                    self.alert(namespace, "trigger_action_kind_refused");
+                    let failures = self.backoff.get(&namespace).map_or(0, |(n, _)| *n) + 1;
+                    self.backoff
+                        .insert(namespace, (failures, now + retry_delay(failures)));
+                    result.deferred += 1;
+                    continue;
+                }
+                Err(error) => return Err(error),
+            }
             match self
                 .supervisor
                 .admit_authorized_trigger_turn(&issuer, namespace, self.queue_window)

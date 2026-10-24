@@ -46,7 +46,7 @@ impl Store {
             .await
             .map_err(|_| HistoryError::Unauthorized)?;
         let namespaces: Vec<String> = sqlx::query_scalar(
-            "SELECT a.namespace FROM durable_timer_authorities a JOIN dormant_timers t ON t.owner_id=a.owner_id AND t.namespace=a.namespace AND t.generation=a.generation WHERE a.owner_id=? AND t.state='enabled' AND a.namespace>? ORDER BY a.namespace LIMIT ?",
+            "SELECT t.namespace FROM dormant_timers t WHERE t.owner_id=? AND (EXISTS(SELECT 1 FROM durable_timer_authorities a WHERE a.owner_id=t.owner_id AND a.namespace=t.namespace AND a.generation=t.generation) OR EXISTS(SELECT 1 FROM tracker_scan_authorities a WHERE a.owner_id=t.owner_id AND a.namespace=t.namespace AND a.generation=t.generation)) AND t.state='enabled' AND t.namespace>? ORDER BY t.namespace LIMIT ?",
         )
         .bind(context.owner.to_string())
         .bind(after.map(|id| id.to_string()).unwrap_or_default())

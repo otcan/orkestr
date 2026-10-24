@@ -25,14 +25,14 @@ async fn prior(
         .fetch_optional(&mut **tx).await.map_err(unavailable)
 }
 
-fn decision_digest(request: &TrackerCheckRequest, rules: (&str, &str)) -> String {
+fn decision_digest(request: &TrackerCheckRequest) -> String {
     hash(
         &serde_json::json!([
             "orkestr.tracker.manual-check.v1",
             request.expected_source_revision,
             request.expected_recipe,
-            rules.0,
-            rules.1
+            request.expected_classifier_id,
+            request.expected_classifier_digest
         ])
         .to_string(),
     )
@@ -45,18 +45,84 @@ async fn recover(
     key: &str,
     old: Option<&SqliteRow>,
 ) -> Result<TrackerCheckReceipt> {
+    let authority: Option<TrackerScanAuthority> = old
+        .map(|row| serde_json::from_str(row.get("authority_json")))
+        .transpose()
+        .map_err(unavailable)?;
+    let mut result: Option<TrackerScanReceipt> = None;
+    let mut stopped = cancelled(tx, owner, conversation, key).await?;
+    if let Some(ref authority) = authority {
+        let json: Option<String> = sqlx::query_scalar("SELECT receipt_json FROM tracker_scan_receipts WHERE owner_id=? AND conversation_id=? AND namespace=? AND generation=? ORDER BY recorded_ms DESC LIMIT 1")
+            .bind(owner.to_string()).bind(conversation.to_string()).bind(authority.namespace.to_string()).bind(authority.generation)
+            .fetch_optional(&mut **tx).await.map_err(unavailable)?;
+        result = json
+            .map(|s| serde_json::from_str(&s))
+            .transpose()
+            .map_err(unavailable)?;
+        if let Some(ref mut result) = result {
+            result.duplicate = true;
+        }
+        if result.is_none() {
+            let timer = receipt(&row(tx, owner, authority.namespace).await?)?;
+            let source: Option<i64> = sqlx::query_scalar("SELECT source_revision FROM trackers WHERE owner_id=? AND conversation_id=? AND recipe=?")
+                .bind(owner.to_string()).bind(conversation.to_string()).bind(&authority.recipe_id).fetch_optional(&mut **tx).await.map_err(unavailable)?;
+            stopped |= timer.state != TimerState::Enabled
+                || timer.generation != authority.generation
+                || source != Some(authority.source_revision);
+            match input::guard(
+                tx,
+                owner,
+                authority.namespace,
+                authority.generation,
+                conversation,
+            )
+            .await
+            {
+                Ok(()) => {}
+                Err(HistoryError::Conflict) => stopped = true,
+                Err(error) => return Err(error),
+            }
+        }
+    }
     Ok(TrackerCheckReceipt {
         request_key: key.to_owned(),
-        authority: old
-            .map(|row| serde_json::from_str(row.get("authority_json")))
-            .transpose()
-            .map_err(unavailable)?,
-        cancelled: cancelled(tx, owner, conversation, key).await?,
+        authority,
+        cancelled: stopped,
         duplicate: true,
+        result,
     })
 }
 
 impl Store {
+    /// Recover active checks from a fresh browser without inventing another
+    /// decision key. The returned values remain non-executable owner receipts.
+    pub async fn tracker_pending_checks(
+        &self,
+        credential: &str,
+        owner: &OwnerId,
+        conversation: &ConversationId,
+    ) -> Result<Vec<TrackerCheckReceipt>> {
+        let mut tx = self.history_transaction(credential, owner, false).await?;
+        target(&mut tx, owner, conversation).await?;
+        let rows = sqlx::query("SELECT c.request_key,c.semantic_digest,c.authority_json,c.namespace FROM tracker_manual_checks c JOIN dormant_timers t ON t.owner_id=c.owner_id AND t.namespace=c.namespace AND t.generation=c.generation WHERE c.owner_id=? AND c.conversation_id=? AND t.state='enabled' ORDER BY c.created_ms DESC,c.request_key LIMIT 16")
+            .bind(owner.to_string()).bind(conversation.to_string()).fetch_all(&mut *tx).await.map_err(unavailable)?;
+        let mut result = Vec::new();
+        for old in rows {
+            let receipt = recover(
+                &mut tx,
+                owner,
+                conversation,
+                old.get("request_key"),
+                Some(&old),
+            )
+            .await?;
+            if !receipt.cancelled {
+                result.push(receipt);
+            }
+        }
+        tx.commit().await.map_err(unavailable)?;
+        Ok(result)
+    }
     /// The trusted runtime supplies the installed deterministic rule identity.
     /// Creating a check does not opt the owner into recurring automation.
     pub async fn create_tracker_check(
@@ -72,7 +138,7 @@ impl Store {
         if !valid(&request.request_key, 128) {
             return Err(HistoryError::Invalid);
         }
-        let digest = decision_digest(request, rules);
+        let digest = decision_digest(request);
         let old = prior(&mut tx, owner, conversation, &request.request_key).await?;
         if let Some(ref old) = old {
             if old.get::<String, _>("semantic_digest") != digest {
@@ -93,6 +159,11 @@ impl Store {
             let receipt = recover(&mut tx, owner, conversation, &request.request_key, None).await?;
             tx.commit().await.map_err(unavailable)?;
             return Ok(receipt);
+        }
+        if request.expected_classifier_id != rules.0
+            || request.expected_classifier_digest != rules.1
+        {
+            return Err(HistoryError::Conflict);
         }
         // Bound live decisions, independently from the runtime's actual I/O slots.
         // A source change revokes old actions; their immutable history stays intact.
@@ -144,6 +215,7 @@ impl Store {
             authority: Some(authority),
             cancelled: false,
             duplicate: false,
+            result: None,
         })
     }
 

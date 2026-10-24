@@ -113,9 +113,14 @@ CREATE TABLE tracker_manual_checks (
  owner_id TEXT NOT NULL, conversation_id TEXT NOT NULL, request_key TEXT NOT NULL,
  semantic_digest TEXT NOT NULL CHECK(length(semantic_digest)=64),
  namespace TEXT NOT NULL UNIQUE, authority_json TEXT NOT NULL CHECK(json_valid(authority_json)),
- created_ms INTEGER NOT NULL, PRIMARY KEY(owner_id,conversation_id,request_key),
+ authority_id TEXT GENERATED ALWAYS AS (json_extract(authority_json,'$.authority_id')) STORED NOT NULL,
+ generation INTEGER GENERATED ALWAYS AS (json_extract(authority_json,'$.generation')) STORED NOT NULL,
+ created_ms INTEGER NOT NULL,
+ CHECK(json_extract(authority_json,'$.namespace') IS namespace AND json_extract(authority_json,'$.conversation_id') IS conversation_id),
+ PRIMARY KEY(owner_id,conversation_id,request_key),
  FOREIGN KEY(owner_id,conversation_id) REFERENCES trackers(owner_id,conversation_id),
- FOREIGN KEY(owner_id,namespace) REFERENCES dormant_timers(owner_id,namespace)
+ FOREIGN KEY(owner_id,namespace) REFERENCES dormant_timers(owner_id,namespace),
+ FOREIGN KEY(authority_id,owner_id,namespace,generation,conversation_id) REFERENCES tracker_scan_authorities(authority_id,owner_id,namespace,generation,conversation_id)
 );
 CREATE TABLE tracker_check_cancellations (
  owner_id TEXT NOT NULL, conversation_id TEXT NOT NULL, request_key TEXT NOT NULL,
@@ -130,3 +135,44 @@ CREATE TRIGGER tracker_check_cancel_no_update BEFORE UPDATE ON tracker_check_can
 BEGIN SELECT RAISE(ABORT,'immutable_tracker_check_cancel'); END;
 CREATE TRIGGER tracker_check_cancel_no_delete BEFORE DELETE ON tracker_check_cancellations
 BEGIN SELECT RAISE(ABORT,'immutable_tracker_check_cancel'); END;
+
+-- Private, trusted local resolver backing. HTTP returns only opaque IDs and
+-- labels. Expiring unselected discoveries can be pruned; selected ones persist
+-- across restart and their filesystem identities are checked on each read.
+CREATE TABLE tracker_local_sources (
+ owner_id TEXT NOT NULL, source_id TEXT NOT NULL,
+ backing_json TEXT NOT NULL CHECK(json_valid(backing_json) AND length(backing_json)<=64000),
+ expires_ms INTEGER NOT NULL, PRIMARY KEY(owner_id,source_id),
+ FOREIGN KEY(owner_id) REFERENCES owners(id)
+);
+
+CREATE TABLE tracker_automation_settings (
+ owner_id TEXT NOT NULL, conversation_id TEXT NOT NULL, revision INTEGER NOT NULL CHECK(revision>0),
+ authority_json TEXT CHECK(authority_json IS NULL OR (json_valid(authority_json) AND length(authority_json)<=16000)),
+ calendar_json TEXT CHECK(calendar_json IS NULL OR (json_valid(calendar_json) AND length(calendar_json)<=16000)),
+ namespace TEXT GENERATED ALWAYS AS (json_extract(authority_json,'$.namespace')) STORED,
+ authority_id TEXT GENERATED ALWAYS AS (json_extract(authority_json,'$.authority_id')) STORED,
+ generation INTEGER GENERATED ALWAYS AS (json_extract(authority_json,'$.generation')) STORED,
+ CHECK(authority_json IS NULL OR (authority_id IS NOT NULL AND namespace IS NOT NULL AND generation IS NOT NULL AND json_extract(authority_json,'$.conversation_id') IS conversation_id)),
+ PRIMARY KEY(owner_id,conversation_id),
+ FOREIGN KEY(owner_id,conversation_id) REFERENCES trackers(owner_id,conversation_id),
+ FOREIGN KEY(authority_id,owner_id,namespace,generation,conversation_id) REFERENCES tracker_scan_authorities(authority_id,owner_id,namespace,generation,conversation_id)
+);
+CREATE TABLE tracker_automation_decisions (
+ owner_id TEXT NOT NULL, conversation_id TEXT NOT NULL,
+ request_key TEXT NOT NULL CHECK(length(request_key) BETWEEN 1 AND 128),
+ semantic_digest TEXT NOT NULL CHECK(length(semantic_digest)=64),
+ receipt_json TEXT NOT NULL CHECK(json_valid(receipt_json) AND length(receipt_json)<=16000),
+ created_ms INTEGER NOT NULL,
+ namespace TEXT GENERATED ALWAYS AS (json_extract(receipt_json,'$.authority.namespace')) STORED,
+ authority_id TEXT GENERATED ALWAYS AS (json_extract(receipt_json,'$.authority.authority_id')) STORED,
+ generation INTEGER GENERATED ALWAYS AS (json_extract(receipt_json,'$.authority.generation')) STORED,
+ CHECK(json_type(receipt_json,'$.authority') IS 'null' OR (authority_id IS NOT NULL AND namespace IS NOT NULL AND generation IS NOT NULL AND json_extract(receipt_json,'$.authority.conversation_id') IS conversation_id)),
+ PRIMARY KEY(owner_id,conversation_id,request_key),
+ FOREIGN KEY(owner_id,conversation_id) REFERENCES trackers(owner_id,conversation_id),
+ FOREIGN KEY(authority_id,owner_id,namespace,generation,conversation_id) REFERENCES tracker_scan_authorities(authority_id,owner_id,namespace,generation,conversation_id)
+);
+CREATE TRIGGER tracker_automation_decision_no_update BEFORE UPDATE ON tracker_automation_decisions
+BEGIN SELECT RAISE(ABORT,'immutable_tracker_automation_decision'); END;
+CREATE TRIGGER tracker_automation_decision_no_delete BEFORE DELETE ON tracker_automation_decisions
+BEGIN SELECT RAISE(ABORT,'immutable_tracker_automation_decision'); END;

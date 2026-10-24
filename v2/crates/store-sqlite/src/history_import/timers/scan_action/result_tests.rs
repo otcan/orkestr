@@ -28,6 +28,44 @@ fn classified() -> Vec<ScannedMessage> {
 }
 
 #[tokio::test]
+async fn oversized_classified_batch_does_not_advance_cursor_or_occurrence() {
+    let (case, request, handle, issuer) = enabled().await;
+    let claim = handle
+        .claim_tracker_scan(&issuer, request.timer.namespace)
+        .await
+        .unwrap();
+    let mut messages = Vec::new();
+    for index in 0..3 {
+        let reference = format!("{index:024x}");
+        let mut event = classified().remove(0).outcome.unwrap().remove(0);
+        event.message_ref = Some(reference.clone());
+        messages.push(ScannedMessage {
+            message_ref: reference,
+            outcome: Ok(vec![event; 100]),
+        });
+    }
+    assert_eq!(
+        handle
+            .commit_tracker_scan(&issuer, &claim, &messages, "{}", "{}")
+            .await,
+        Err(HistoryError::Invalid)
+    );
+    assert!(cursor(&case).await.is_none());
+    for table in [
+        "tracker_rows",
+        "tracker_scan_receipts",
+        "dormant_timer_claims",
+        "tracker_action_digests",
+    ] {
+        assert_eq!(
+            case.count(&format!("SELECT count(*) FROM {table}")).await,
+            0
+        );
+    }
+    case.finish().await;
+}
+
+#[tokio::test]
 async fn structured_news_commits_one_ui_digest_with_evidence_and_recovers_after_stop() {
     let (case, request, handle, issuer) = enabled().await;
     let claim = handle

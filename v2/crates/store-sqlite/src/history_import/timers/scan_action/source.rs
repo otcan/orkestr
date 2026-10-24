@@ -11,6 +11,31 @@ impl Store {
         conversation: &ConversationId,
         request: &TrackerSourceSelect,
     ) -> Result<TrackerSourceReceipt> {
+        self.select_tracker_source(credential, owner, conversation, request, false)
+            .await
+    }
+
+    /// HTTP selection path: fresh registry reference is fenced in the same
+    /// transaction as the source decision, after exact replay recovery.
+    pub async fn select_registered_tracker_scan_source(
+        &self,
+        credential: &str,
+        owner: &OwnerId,
+        conversation: &ConversationId,
+        request: &TrackerSourceSelect,
+    ) -> Result<TrackerSourceReceipt> {
+        self.select_tracker_source(credential, owner, conversation, request, true)
+            .await
+    }
+
+    async fn select_tracker_source(
+        &self,
+        credential: &str,
+        owner: &OwnerId,
+        conversation: &ConversationId,
+        request: &TrackerSourceSelect,
+        require_registry: bool,
+    ) -> Result<TrackerSourceReceipt> {
         let mut tx = self.history_transaction(credential, owner, true).await?;
         target(&mut tx, owner, conversation).await?;
         let digest = source_digest(&request.source)?;
@@ -40,6 +65,9 @@ impl Store {
         {
             return Err(HistoryError::Invalid);
         }
+        if require_registry {
+            registry_fresh(&mut tx, owner, request.source.source_id).await?;
+        }
         let before: Option<i64> = sqlx::query_scalar(
             "SELECT source_revision FROM trackers WHERE owner_id=? AND conversation_id=?",
         )
@@ -65,6 +93,9 @@ impl Store {
         sqlx::query("UPDATE trackers SET source_json=?,source_revision=?,cursor_json=NULL,updated_ms=? WHERE owner_id=? AND conversation_id=?")
             .bind(source).bind(revision).bind(now).bind(owner.to_string()).bind(conversation.to_string())
             .execute(&mut *tx).await.map_err(unavailable)?;
+        if require_registry {
+            registry_fresh(&mut tx, owner, request.source.source_id).await?;
+        }
         tx.commit().await.map_err(unavailable)?;
         Ok(TrackerSourceReceipt {
             request_key: request.request_key.clone(),
@@ -104,10 +135,47 @@ pub(super) async fn quarantine(
     owner: &OwnerId,
     conversation: &ConversationId,
 ) -> Result<()> {
+    // A changed/removed source revokes its old schedules with the canonical
+    // control operation. Keep their history, without leaving permanently due
+    // actions retrying a source the owner no longer authorizes.
+    let timers = sqlx::query("SELECT d.namespace,d.revision FROM dormant_timers d JOIN tracker_scan_authorities a ON a.owner_id=d.owner_id AND a.namespace=d.namespace AND a.generation=d.generation WHERE d.owner_id=? AND a.conversation_id=? AND d.state='enabled' LIMIT 257")
+        .bind(owner.to_string()).bind(conversation.to_string()).fetch_all(&mut **tx).await.map_err(unavailable)?;
+    if timers.len() > 256 {
+        return Err(HistoryError::Conflict);
+    }
+    for timer in timers {
+        let namespace = Uuid::parse_str(timer.get("namespace")).map_err(unavailable)?;
+        let expected_revision: i64 = timer.get("revision");
+        control::control_in_transaction(
+            tx,
+            owner,
+            &TimerControlRequest {
+                namespace,
+                expected_revision,
+                request_key: format!("source-change:{namespace}:{expected_revision}"),
+                action: TimerControl::Disable,
+            },
+        )
+        .await?;
+    }
     // Source changes preserve prior evidence and revoke its pending intake.
     sqlx::query("UPDATE tracker_unresolved_events SET state='quarantined' WHERE owner_id=? AND conversation_id=? AND state='pending'")
         .bind(owner.to_string()).bind(conversation.to_string()).execute(&mut **tx).await.map_err(unavailable)?;
     sqlx::query("UPDATE tracker_ledger SET outcome='quarantined_source' WHERE owner_id=? AND conversation_id=? AND outcome='unresolved'")
         .bind(owner.to_string()).bind(conversation.to_string()).execute(&mut **tx).await.map_err(unavailable)?;
+    Ok(())
+}
+
+async fn registry_fresh(
+    tx: &mut Transaction<'_, Sqlite>,
+    owner: &OwnerId,
+    source: Uuid,
+) -> Result<()> {
+    let now = store_clock(tx).await?;
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM tracker_local_sources WHERE owner_id=? AND source_id=? AND expires_ms>?")
+        .bind(owner.to_string()).bind(source.to_string()).bind(now).fetch_one(&mut **tx).await.map_err(unavailable)?;
+    if count != 1 {
+        return Err(HistoryError::Conflict);
+    }
     Ok(())
 }

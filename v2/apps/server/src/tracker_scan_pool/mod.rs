@@ -32,7 +32,7 @@ pub enum ReadFailure {
     Unavailable,
     Panicked,
 }
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub struct PoolStatus {
     pub occupied: usize,
     pub active: usize,
@@ -40,9 +40,15 @@ pub struct PoolStatus {
     pub capacity: usize,
     pub stopping: bool,
     pub refusals: u64,
+    /// Cancellation requested while actual worker/result custody still exists.
+    pub cancelled: usize,
+}
+struct Custody {
+    cancel: Arc<AtomicBool>,
+    action: Option<uuid::Uuid>,
 }
 struct State {
-    occupied: HashMap<Key, Arc<AtomicBool>>,
+    occupied: HashMap<Key, Custody>,
     active: usize,
     queued: usize,
     capacity: usize,
@@ -86,34 +92,35 @@ pub struct ReadRequest {
 }
 /// Hold this through the final Store transaction. Its existence proves the
 /// synchronous read returned; it does not prove that the Store accepted a result.
-pub struct CompletedScan {
-    result: Result<ScanOutput, ReadFailure>,
+pub struct Completed<T> {
+    result: Result<T, ReadFailure>,
     _custody: ScanReservation,
 }
-impl CompletedScan {
-    pub fn result(&self) -> Result<&ScanOutput, ReadFailure> {
+pub type CompletedScan = Completed<ScanOutput>;
+impl<T> Completed<T> {
+    pub fn result(&self) -> Result<&T, ReadFailure> {
         self.result.as_ref().map_err(|e| *e)
     }
 }
 /// The receiver owns cancellation, never reader custody.
-pub struct ScanTicket {
-    receive: Option<oneshot::Receiver<CompletedScan>>,
+pub struct ScanTicket<T = ScanOutput> {
+    receive: Option<oneshot::Receiver<Completed<T>>>,
     cancel: Arc<AtomicBool>,
     cancel_on_drop: bool,
 }
-impl Drop for ScanTicket {
+impl<T> Drop for ScanTicket<T> {
     fn drop(&mut self) {
         if self.cancel_on_drop {
             self.cancel.store(true, Ordering::Release);
         }
     }
 }
-impl ScanTicket {
+impl<T> ScanTicket<T> {
     /// An expired/dropped waiter leaves the reservation with the actual worker.
     pub async fn wait(
         mut self,
         deadline: tokio::time::Instant,
-    ) -> Result<CompletedScan, ReadFailure> {
+    ) -> Result<Completed<T>, ReadFailure> {
         let receive = self.receive.take().ok_or(ReadFailure::Unavailable)?;
         let completion = tokio::time::timeout_at(deadline, receive)
             .await
@@ -175,6 +182,22 @@ impl ScanPool {
         owner: &OwnerId,
         conversation: &ConversationId,
     ) -> Result<ScanReservation, Refused> {
+        self.reserve_inner(owner, conversation, None)
+    }
+    pub(crate) fn reserve_action(
+        &self,
+        owner: &OwnerId,
+        conversation: &ConversationId,
+        action: uuid::Uuid,
+    ) -> Result<ScanReservation, Refused> {
+        self.reserve_inner(owner, conversation, Some(action))
+    }
+    fn reserve_inner(
+        &self,
+        owner: &OwnerId,
+        conversation: &ConversationId,
+        action: Option<uuid::Uuid>,
+    ) -> Result<ScanReservation, Refused> {
         if owner.0.is_nil() || conversation.0.is_nil() {
             return Err(Refused::Invalid);
         }
@@ -194,7 +217,13 @@ impl ScanPool {
             return Err(reason);
         }
         let cancel = Arc::new(AtomicBool::new(false));
-        state.occupied.insert(key.clone(), cancel.clone());
+        state.occupied.insert(
+            key.clone(),
+            Custody {
+                cancel: cancel.clone(),
+                action,
+            },
+        );
         Ok(ScanReservation {
             shared: self.shared.clone(),
             key,
@@ -231,9 +260,15 @@ impl ScanPool {
         })
     }
 
-    fn enqueue<F>(&self, reservation: ScanReservation, read: F) -> Result<ScanTicket, Refused>
+    /// Trusted metadata/read work only; the same bounds and custody apply.
+    pub(crate) fn enqueue<F, T>(
+        &self,
+        reservation: ScanReservation,
+        read: F,
+    ) -> Result<ScanTicket<T>, Refused>
     where
-        F: FnOnce() -> Result<ScanOutput, ReadFailure> + Send + 'static,
+        F: FnOnce() -> Result<T, ReadFailure> + Send + 'static,
+        T: Send + 'static,
     {
         if !Arc::ptr_eq(&self.shared, &reservation.shared) {
             return Err(Refused::Invalid);
@@ -274,7 +309,7 @@ impl ScanPool {
                 result
             };
             shared.lock().active -= 1;
-            let completion = CompletedScan {
+            let completion = Completed {
                 result,
                 _custody: reservation,
             };
@@ -289,6 +324,35 @@ impl ScanPool {
         Ok(ticket)
     }
 
+    /// Cooperative cancellation keeps custody with the actual worker/result.
+    pub fn cancel_scope(&self, owner: &OwnerId, conversation: &ConversationId) {
+        if let Some(custody) = self
+            .shared
+            .lock()
+            .occupied
+            .get(&(owner.clone(), conversation.clone()))
+        {
+            custody.cancel.store(true, Ordering::Release);
+        }
+    }
+    pub(crate) fn cancel_action(
+        &self,
+        owner: &OwnerId,
+        conversation: &ConversationId,
+        action: uuid::Uuid,
+    ) {
+        if let Some(custody) = self
+            .shared
+            .lock()
+            .occupied
+            .get(&(owner.clone(), conversation.clone()))
+        {
+            if custody.action == Some(action) {
+                custody.cancel.store(true, Ordering::Release);
+            }
+        }
+    }
+
     pub fn status(&self) -> PoolStatus {
         let state = self.shared.lock();
         PoolStatus {
@@ -298,6 +362,11 @@ impl ScanPool {
             capacity: state.capacity,
             stopping: state.stopping,
             refusals: state.refusals,
+            cancelled: state
+                .occupied
+                .values()
+                .filter(|c| c.cancel.load(Ordering::Acquire))
+                .count(),
         }
     }
 
@@ -309,8 +378,8 @@ impl ScanPool {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut state = self.shared.lock();
         state.stopping = true;
-        for cancel in state.occupied.values() {
-            cancel.store(true, Ordering::Release);
+        for custody in state.occupied.values() {
+            custody.cancel.store(true, Ordering::Release);
         }
         sender.take();
     }

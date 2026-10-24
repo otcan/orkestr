@@ -160,6 +160,7 @@ pub fn discover(env: &DiscoveryEnv) -> Vec<Profile> {
         .iter()
         .flat_map(|root| read_profiles_ini(root))
         .filter(|p| Scope::new(&p.path).is_ok())
+        .take(16)
         .collect();
     all.sort_by_key(|p| !p.default);
     all
@@ -182,6 +183,7 @@ pub fn inbox_folders(profile: &Path, extra: &[String]) -> Vec<MailFolder> {
             continue;
         };
         let mut accounts: Vec<PathBuf> = accounts
+            .take(256)
             .flatten()
             .map(|name| base.join(name))
             .filter(|p| scope.directory(p).is_ok())
@@ -242,6 +244,7 @@ pub fn sent_folders(profile: &Path) -> Vec<MailFolder> {
             continue;
         };
         let mut accounts: Vec<PathBuf> = accounts
+            .take(256)
             .flatten()
             .map(|name| base.join(name))
             .filter(|p| scope.directory(p).is_ok())

@@ -43,6 +43,21 @@ pub struct TrackerSourceRemove {
     pub expected_revision: i64,
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct TrackerMailFolder {
+    pub id: Uuid,
+    pub label: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct TrackerMailSource {
+    pub id: Uuid,
+    pub label: String,
+    pub inbox: Vec<TrackerMailFolder>,
+    pub sent: Vec<TrackerMailFolder>,
+    pub ready: bool,
+}
+
 /// One owner-authorized check; no implicit recurring automation.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -50,6 +65,8 @@ pub struct TrackerCheckRequest {
     pub request_key: String,
     pub expected_source_revision: i64,
     pub expected_recipe: String,
+    pub expected_classifier_id: String,
+    pub expected_classifier_digest: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -58,6 +75,7 @@ pub struct TrackerCheckReceipt {
     pub authority: Option<TrackerScanAuthority>,
     pub cancelled: bool,
     pub duplicate: bool,
+    pub result: Option<TrackerScanReceipt>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
