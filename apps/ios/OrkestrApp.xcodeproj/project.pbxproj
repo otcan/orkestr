@@ -1,0 +1,79 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		A10000000000000000000001 /* OrkestrApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000001 /* OrkestrApp.swift */; };
+		A10000000000000000000002 /* AppRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000002 /* AppRootView.swift */; };
+		A10000000000000000000003 /* OrkestrTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000003 /* OrkestrTheme.swift */; };
+		A10000000000000000000004 /* AssistantView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000004 /* AssistantView.swift */; };
+		A10000000000000000000005 /* ProjectsListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000005 /* ProjectsListView.swift */; };
+		A10000000000000000000006 /* ApprovalsAttentionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000006 /* ApprovalsAttentionView.swift */; };
+		A10000000000000000000007 /* HistoryMemorySettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000007 /* HistoryMemorySettingsView.swift */; };
+		A10000000000000000000008 /* ServerReadinessView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000008 /* ServerReadinessView.swift */; };
+		A10000000000000000000009 /* OrkestrMobileCore in Frameworks */ = {isa = PBXBuildFile; productRef = AC0000000000000000000002 /* OrkestrMobileCore */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		A20000000000000000000001 /* OrkestrApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrkestrApp.swift; sourceTree = "<group>"; };
+		A20000000000000000000002 /* AppRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppRootView.swift; sourceTree = "<group>"; };
+		A20000000000000000000003 /* OrkestrTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrkestrTheme.swift; sourceTree = "<group>"; };
+		A20000000000000000000004 /* AssistantView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantView.swift; sourceTree = "<group>"; };
+		A20000000000000000000005 /* ProjectsListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectsListView.swift; sourceTree = "<group>"; };
+		A20000000000000000000006 /* ApprovalsAttentionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ApprovalsAttentionView.swift; sourceTree = "<group>"; };
+		A20000000000000000000007 /* HistoryMemorySettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistoryMemorySettingsView.swift; sourceTree = "<group>"; };
+		A20000000000000000000008 /* ServerReadinessView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServerReadinessView.swift; sourceTree = "<group>"; };
+		A30000000000000000000001 /* OrkestrApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = OrkestrApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		A40000000000000000000001 /* Frameworks */ = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (A10000000000000000000009 /* OrkestrMobileCore in Frameworks */, ); runOnlyForDeploymentPostprocessing = 0; };
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		A50000000000000000000001 = {isa = PBXGroup; children = (A50000000000000000000002 /* OrkestrApp */, A50000000000000000000003 /* Products */, ); sourceTree = "<group>"; };
+		A50000000000000000000002 /* OrkestrApp */ = {isa = PBXGroup; path = OrkestrApp; sourceTree = "<group>"; children = (A20000000000000000000001, A20000000000000000000002, A20000000000000000000003, A20000000000000000000004, A20000000000000000000005, A20000000000000000000006, A20000000000000000000007, A20000000000000000000008, ); };
+		A50000000000000000000003 /* Products */ = {isa = PBXGroup; name = Products; sourceTree = "<group>"; children = (A30000000000000000000001 /* OrkestrApp.app */, ); };
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+			A60000000000000000000001 /* OrkestrApp */ = {isa = PBXNativeTarget; buildConfigurationList = A90000000000000000000001; buildPhases = (A70000000000000000000001 /* Sources */, A40000000000000000000001 /* Frameworks */, A80000000000000000000001 /* Resources */, ); buildRules = (); dependencies = (); name = OrkestrApp; packageProductDependencies = (AC0000000000000000000002 /* OrkestrMobileCore */, ); productName = OrkestrApp; productReference = A30000000000000000000001 /* OrkestrApp.app */; productType = "com.apple.product-type.application"; };
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+			A60000000000000000000002 /* Project object */ = {isa = PBXProject; attributes = {BuildIndependentTargetsInParallel = 1; LastUpgradeCheck = 1600; TargetAttributes = {A60000000000000000000001 = {CreatedOnToolsVersion = 16.0; }; }; }; buildConfigurationList = A90000000000000000000002; compatibilityVersion = "Xcode 14.0"; developmentRegion = en; hasScannedForEncodings = 0; knownRegions = (en, Base, ); mainGroup = A50000000000000000000001; packageReferences = (AC0000000000000000000001 /* XCLocalSwiftPackageReference "OrkestrMobileCore" */, ); productRefGroup = A50000000000000000000003 /* Products */; projectDirPath = ""; projectRoot = ""; targets = (A60000000000000000000001 /* OrkestrApp */, ); };
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+			A80000000000000000000001 /* Resources */ = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+			A70000000000000000000001 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (A10000000000000000000001, A10000000000000000000002, A10000000000000000000003, A10000000000000000000004, A10000000000000000000005, A10000000000000000000006, A10000000000000000000007, A10000000000000000000008, ); runOnlyForDeploymentPostprocessing = 0; };
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+			AB0000000000000000000001 /* Debug project */ = {isa = XCBuildConfiguration; buildSettings = {IPHONEOS_DEPLOYMENT_TARGET = 17.0; SDKROOT = iphoneos; SWIFT_VERSION = 5.0; }; name = Debug; };
+			AB0000000000000000000002 /* Release project */ = {isa = XCBuildConfiguration; buildSettings = {IPHONEOS_DEPLOYMENT_TARGET = 17.0; SDKROOT = iphoneos; SWIFT_VERSION = 5.0; }; name = Release; };
+			AB0000000000000000000003 /* Debug app */ = {isa = XCBuildConfiguration; buildSettings = {GENERATE_INFOPLIST_FILE = YES; INFOPLIST_KEY_CFBundleDisplayName = Orkestr; IPHONEOS_DEPLOYMENT_TARGET = 17.0; PRODUCT_BUNDLE_IDENTIFIER = de.orkestr.personalagent; PRODUCT_NAME = "$(TARGET_NAME)"; SDKROOT = iphoneos; SWIFT_EMIT_LOC_STRINGS = YES; SWIFT_VERSION = 5.0; TARGETED_DEVICE_FAMILY = "1,2"; }; name = Debug; };
+			AB0000000000000000000004 /* Release app */ = {isa = XCBuildConfiguration; buildSettings = {GENERATE_INFOPLIST_FILE = YES; INFOPLIST_KEY_CFBundleDisplayName = Orkestr; IPHONEOS_DEPLOYMENT_TARGET = 17.0; PRODUCT_BUNDLE_IDENTIFIER = de.orkestr.personalagent; PRODUCT_NAME = "$(TARGET_NAME)"; SDKROOT = iphoneos; SWIFT_EMIT_LOC_STRINGS = YES; SWIFT_VERSION = 5.0; TARGETED_DEVICE_FAMILY = "1,2"; }; name = Release; };
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+			A90000000000000000000001 /* Target config */ = {isa = XCConfigurationList; buildConfigurations = (AB0000000000000000000003, AB0000000000000000000004, ); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+			A90000000000000000000002 /* Project config */ = {isa = XCConfigurationList; buildConfigurations = (AB0000000000000000000001, AB0000000000000000000002, ); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+/* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+			AC0000000000000000000001 /* XCLocalSwiftPackageReference "OrkestrMobileCore" */ = {isa = XCLocalSwiftPackageReference; relativePath = OrkestrMobileCore; };
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+			AC0000000000000000000002 /* OrkestrMobileCore */ = {isa = XCSwiftPackageProductDependency; package = AC0000000000000000000001 /* XCLocalSwiftPackageReference "OrkestrMobileCore" */; productName = OrkestrMobileCore; };
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = A60000000000000000000002 /* Project object */;
+}

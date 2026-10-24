@@ -5,7 +5,9 @@ comments. Checkout explicitly disables credential persistence. The workflow
 and jobs inherit only `contents: read`: no write or OIDC permission is needed.
 The inventory in `scripts/security/workflow-policy.mjs` is deliberately narrow:
 official checkout v6.1.0, setup-node v6.5.0, upload-artifact v4.6.2 and
-download-artifact v4.3.0. Tag refs were resolved through the official GitHub
+download-artifact v4.3.0. Static GitHub-hosted runners are `ubuntu-latest`,
+`ubuntu-24.04-arm`, and `macos-14`; the macOS runner is for unsigned native Apple
+builds only. No self-hosted or dynamic runner labels are accepted. Tag refs were resolved through the official GitHub
 `actions/*` repository API, not a third-party mirror.
 
 `npm run security:workflows` parses every workflow with pinned YAML 2.9.1 and

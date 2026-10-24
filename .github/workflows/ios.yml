@@ -1,0 +1,21 @@
+name: iOS native build
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ios:
+    runs-on: macos-14
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - name: Build unsigned iOS simulator app
+        run: xcodebuild -project apps/ios/OrkestrApp.xcodeproj -scheme OrkestrApp -sdk iphonesimulator -configuration Debug CODE_SIGNING_ALLOWED=NO build
+      - name: Run typed API client tests
+        run: swift test --package-path apps/ios/OrkestrMobileCore
