@@ -15,6 +15,8 @@ mod bootstrap;
 pub(super) mod handoff_context;
 mod native_reset;
 pub(super) mod provider_handoff;
+#[cfg(test)]
+pub(super) mod provider_handoff_migration_fixture;
 pub use bootstrap::ExecutionWindowBootstrap;
 mod credential;
 mod fast_metadata;

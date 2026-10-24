@@ -374,6 +374,14 @@ async fn populated_payload_prefix_upgrade_preserves_all_rows_and_foreign_links()
             "2|'production-conversation'|'owner'|'Synthetic'|NULL|NULL".into(),
         ],
     );
+    // New continuity tables must be empty after an ordinary historic upgrade.
+    for table in [
+        "conversation_provider_handoffs",
+        "conversation_handoff_sessions",
+        "conversation_handoff_context_delivery",
+    ] {
+        expected.insert(table.into(), Vec::new());
+    }
     conn.close().await.unwrap();
     let store = Store::open(&dir.db()).await.unwrap();
     let mut conn = raw(&dir.db()).await;
@@ -470,7 +478,7 @@ async fn populated_payload_prefix_upgrade_preserves_all_rows_and_foreign_links()
             .fetch_one(&mut conn)
             .await
             .unwrap(),
-        72
+        73
     );
     for table in [
         "history_imports",

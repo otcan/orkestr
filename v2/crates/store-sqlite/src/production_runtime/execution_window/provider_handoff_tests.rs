@@ -1,6 +1,8 @@
 //! Isolated native-lineage fixtures; no provider process or external transport.
 use super::*;
 use orkestr_v2_contracts::{ConversationProvider, ProviderHandoffRequest};
+#[path = "provider_handoff_policy_tests.rs"]
+mod policy_tests;
 
 fn request(w: &Window) -> ProviderHandoffRequest {
     ProviderHandoffRequest {
@@ -252,6 +254,15 @@ async fn provider_handoff_refuses_active_stale_foreign_and_queued_input() {
         .handoff_provider_authenticated("foreign-browser", &w.f.conversation, &req)
         .await
         .is_err());
+    assert!(
+        matches!(
+            fresh
+                .handoff_provider_authenticated(&w.f.token, &w.f.conversation, &req)
+                .await,
+            Err(RuntimeStoreError::Unauthorized)
+        ),
+        "a machine credential of the same owner is not a browser decision"
+    );
     let _queued = input(&w.f, "synthetic-new-queued-input").await;
     assert!(fresh
         .handoff_provider_authenticated(&w.browser_credential, &w.f.conversation, &req)

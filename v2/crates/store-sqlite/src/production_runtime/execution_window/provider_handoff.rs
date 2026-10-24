@@ -2,6 +2,19 @@
 use super::*;
 use orkestr_v2_contracts::{ProviderHandoffReceipt, ProviderHandoffRequest};
 
+async fn authenticated_owner(
+    store: &Store,
+    tx: &mut SqliteConnection,
+    browser: &str,
+) -> Result<OwnerId> {
+    // The HTTP browser boundary issues this namespaced session. A machine
+    // session of the same owner is still not an owner browser decision.
+    if !browser.starts_with("browser:") {
+        return Err(RuntimeStoreError::Unauthorized);
+    }
+    browser_owner(store, tx, browser).await
+}
+
 async fn existing(
     tx: &mut SqliteConnection,
     owner: &OwnerId,
@@ -38,7 +51,7 @@ impl Store {
             return Err(RuntimeStoreError::InvalidInput);
         }
         let mut tx = self.pool.begin().await.map_err(db)?;
-        let owner = browser_owner(self, &mut tx, browser).await?;
+        let owner = authenticated_owner(self, &mut tx, browser).await?;
         crate::runtime::scope(&mut tx, &owner, conversation).await?;
         let receipt = existing(&mut tx, &owner, conversation, request).await?;
         tx.commit().await.map_err(db)?;
@@ -55,7 +68,7 @@ impl Store {
             return Err(RuntimeStoreError::InvalidInput);
         }
         let mut tx = self.pool.begin().await.map_err(db)?;
-        let owner = browser_owner(self, &mut tx, browser).await?;
+        let owner = authenticated_owner(self, &mut tx, browser).await?;
         crate::runtime::scope(&mut tx, &owner, conversation).await?;
         let raw: Option<String> = sqlx::query_scalar("SELECT receipt_json FROM conversation_provider_handoffs WHERE owner_id=? AND conversation_id=? AND request_key=?")
             .bind(owner.to_string()).bind(conversation.to_string()).bind(request_key)
@@ -79,7 +92,7 @@ impl Store {
             return Err(RuntimeStoreError::InvalidInput);
         }
         let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
-        let owner = browser_owner(self, &mut tx, browser).await?;
+        let owner = authenticated_owner(self, &mut tx, browser).await?;
         crate::runtime::scope(&mut tx, &owner, conversation).await?;
         if let Some(receipt) = existing(&mut tx, &owner, conversation, request).await? {
             tx.commit().await.map_err(db)?;

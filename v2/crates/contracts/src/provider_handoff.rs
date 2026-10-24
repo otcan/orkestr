@@ -96,6 +96,12 @@ mod tests {
         r.history_summary = "x".repeat(HANDOFF_HISTORY_SUMMARY_MAX + 1);
         assert!(!r.is_valid());
         r = request();
+        r.history_summary = "é".repeat(HANDOFF_HISTORY_SUMMARY_MAX / 2 + 1);
+        assert!(!r.is_valid(), "the summary bound counts UTF-8 bytes");
+        r = request();
+        r.model = Some("fable".into());
+        assert!(!r.is_valid());
+        r = request();
         r.history_summary = "private\0text".into();
         assert!(!r.is_valid());
         r = request();

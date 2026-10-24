@@ -90,8 +90,10 @@ pub fn ProviderHandoff(
                                 };
                                 let key = match transport::key().await { Ok(k) => k, Err(e) => { busy.set(false); status.set(e.message); return; } };
                                 let request = match current.request(key, &base, &closed) { Ok(r) => r, Err(e) => { busy.set(false); status.set(e.into()); return; } };
+                                if !session_scope.read().is_current(owner) { return; }
                                 pending.set(Some(request.clone())); request
                             };
+                            if !session_scope.read().is_current(owner) { return; }
                             let result = transport::request::<ProviderHandoffReceipt>("POST", &format!("/api/v2/conversations/{id}/provider-handoffs"), json!(request), &token, "").await;
                             if !session_scope.read().is_current(owner) { return; }
                             busy.set(false);
