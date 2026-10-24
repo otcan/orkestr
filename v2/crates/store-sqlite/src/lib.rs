@@ -133,6 +133,14 @@ impl Store {
     pub async fn close(&self) {
         self.pool.close().await;
     }
+    /// Whether the single local owner exists (first-run setup is complete).
+    pub async fn owner_configured(&self) -> Result<bool> {
+        let owners: i64 = sqlx::query_scalar("SELECT count(*) FROM owners")
+            .fetch_one(&self.pool)
+            .await
+            .map_err(db)?;
+        Ok(owners != 0)
+    }
     pub async fn setup(&self, username: &str, password_hash: &str) -> Result<ConversationId> {
         let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
         let exists: i64 = sqlx::query_scalar("SELECT count(*) FROM owners")
