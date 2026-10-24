@@ -20,14 +20,17 @@ test("framework and upload dependencies stay above the reviewed security floors"
   }
   assert.equal(versionAt("node_modules/@angular/build"), "21.2.24");
   assert.equal(versionAt("node_modules/@nestjs/platform-express"), "11.2.3");
-  assert.equal(versionAt("node_modules/multer"), "2.4.0");
+  assert.equal(versionAt("node_modules/multer"), "2.5.0");
   // GHSA-27r3-jxmh-p828: trailing compressed-body bytes must not crash the server.
   for (const [packagePath, entry] of Object.entries(lock.packages)) {
     if (packagePath.endsWith('node_modules/body-parser')) assert.equal(entry.version, '2.4.0', packagePath);
   }
   assert.equal(versionAt("node_modules/qs"), "6.16.1");
   for (const [packagePath, entry] of Object.entries(lock.packages)) {
-    if (packagePath.endsWith("/node_modules/multer")) assert.equal(entry.version, "2.4.0", packagePath);
+    if (packagePath.endsWith("/node_modules/multer")) assert.equal(entry.version, "2.5.0", packagePath);
+    if (packagePath.endsWith("node_modules/undici")) {
+      assert.ok(['6.29.1', '7.30.1'].includes(entry.version), packagePath);
+    }
     if (packagePath.endsWith("/node_modules/qs")) assert.equal(entry.version, "6.16.1", packagePath);
   }
   // GHSA-6qxp-vccf-f47h, GHSA-22jm-h49p-29qw, GHSA-46jr-4wx8-v453: 1.32.1,
