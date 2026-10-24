@@ -192,7 +192,7 @@ export function pageByCursor(items, {cursor, limit}) {
   return {page, hasMore, nextCursor: hasMore && last ? encodeCursor({t: last.t, id: last.id}) : null, total: sorted.length};
 }
 
-export async function listAllChats(client, {source = 'chats', cursor, limit, unreadOnly = false} = {}) {
+export async function listAllChats(client, {source = 'chats', cursor, limit, unreadOnly = false, lastMessageSnapshots} = {}) {
   const size = pageLimit(limit, READ_ALL_PAGE_MAX);
   if (source === 'contacts') {
     const contacts = await client.getContacts();
@@ -212,7 +212,9 @@ export async function listAllChats(client, {source = 'chats', cursor, limit, unr
       lastFromThem: last ? last.fromMe !== true : null};
   });
   const {page, hasMore, nextCursor, total} = pageByCursor(items, {cursor, limit: size});
-  return {source, chats: page.map(({t, id, ...rest}) => ({chatId: id, ...rest})), hasMore, nextCursor, total};
+  const snapshots = lastMessageSnapshots ? await lastMessageSnapshots(page.map(item => chats.find(chat => chat.id._serialized === item.id)?.lastMessage)) : null;
+  return {source, chats: page.map(({t, id, ...rest}, index) => ({chatId: id, ...rest,
+    ...(snapshots ? {lastMessage: snapshots[index]} : {})})), hasMore, nextCursor, total};
 }
 
 // History page strictly older than `before` (a message id), newest first.
