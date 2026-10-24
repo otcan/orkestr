@@ -11,6 +11,7 @@ import uuid
 from .ledger import (DEFAULT_MAX_INPUT_AGE_S, DIGEST_NAMESPACE as DIGEST_REPLY_NAMESPACE, PROGRESS_LIMIT, WEB_TEXT_LIMIT,
                      no_reply)
 from . import instructions
+from . import continuation_guard
 from .participants import compose
 from .rust_client import ClientError
 from .model_identity import observed_identity
@@ -711,7 +712,17 @@ class Worker:
             request = {"client_message_id": data["keys"]["message"], "text": text}
             if data.get("reply_to"):
                 request["reply_to"] = data["reply_to"]
-            intake = self.call("POST", "/messages", request, (200, 202))
+            if data.get("continued"):
+                try:
+                    request["expected_provider_generation"] = continuation_guard.generation(data)
+                    request["continuation_source_run_id"] = data["continuation_guard"]["source_run_id"]
+                except ValueError as error:
+                    raise Refused(str(error)) from None
+                status, intake = self.client.request("POST", "/messages", body=request, allowed=(200, 202, 409))
+                if status == 409:
+                    raise Refused("continuation_admission_requires_review")
+            else:
+                intake = self.call("POST", "/messages", request, (200, 202))
             if intake.get("status") != "accepted" or not all(intake.get(k) for k in ("message_id", "event_id", "sequence")):
                 raise Refused("intake_receipt")
             data.update(intake=intake, cursor=intake["sequence"] - 1, phase="admitted", admitted_at=time.time())
@@ -1106,6 +1117,10 @@ class Worker:
                 data.get("origin") == "timer" or not isinstance(deep, dict) or deep.get("run_id") not in ids or
                 deep.get("phase") not in DEADLINE_STOP_PHASES or not self.deadline_stopped(data)):
             return False
+        try:
+            guard = continuation_guard.freeze(self.call, deep)
+        except ValueError as error:
+            raise Refused(str(error)) from None
         fast = statuses.get("fast")
         if (isinstance(fast, dict) and fast.get("run_id") in ids and fast.get("phase") == "awaiting_acceptance" and
                 "fast" not in data.get("accepted", {})):
@@ -1121,7 +1136,7 @@ class Worker:
         for key in ("message", "window", "fast", "deep"):
             data["keys"][key] = str(uuid.uuid4())
         data.update(intake_text=CONTINUE_PREFIX + text, phase="queued", queued_at=time.time(),
-                    continued={"previous_message_id": previous, "at": time.time()})
+                    continued={"previous_message_id": previous, "at": time.time()}, continuation_guard=guard)
         self.ledger.continue_notice(data, CONTINUE_NOTICE)
         return True
 

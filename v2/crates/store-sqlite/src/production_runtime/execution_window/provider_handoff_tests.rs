@@ -1,6 +1,8 @@
 //! Isolated native-lineage fixtures; no provider process or external transport.
 use super::*;
 use orkestr_v2_contracts::{ConversationProvider, ProviderHandoffRequest};
+#[path = "provider_handoff_intake_tests.rs"]
+mod intake_tests;
 #[path = "provider_handoff_policy_tests.rs"]
 mod policy_tests;
 

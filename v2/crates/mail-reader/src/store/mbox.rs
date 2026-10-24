@@ -5,21 +5,47 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 
-/// Digest of the file's first `len` bytes.
-fn head_digest(file: &mut File, len: u64) -> io::Result<String> {
+/// Digest a bounded byte range for an append/compaction checkpoint.
+fn digest(file: &mut File, start: u64, len: u64) -> io::Result<String> {
     let mut head = Vec::new();
-    file.seek(SeekFrom::Start(0))?;
+    file.seek(SeekFrom::Start(start))?;
     file.take(len).read_to_end(&mut head)?;
     if (head.len() as u64) < len {
         return Ok(String::new());
     }
-    Ok(Sha256::digest(&head)[..12]
+    Ok(Sha256::digest(&head)
         .iter()
         .map(|b| format!("{b:02x}"))
         .collect())
 }
 
+fn checkpoint(
+    file: &mut File,
+    offset: u64,
+    last_separator: Option<(u64, u64, String)>,
+) -> io::Result<MboxCheckpoint> {
+    let len = offset.min(4096);
+    Ok(MboxCheckpoint {
+        tail: digest(file, offset - len, len)?,
+        last_separator,
+    })
+}
+
+fn unchanged(file: &mut File, offset: u64, point: &MboxCheckpoint) -> io::Result<bool> {
+    let len = offset.min(4096);
+    if digest(file, offset - len, len)? != point.tail {
+        return Ok(false);
+    }
+    if let Some((start, len, hash)) = &point.last_separator {
+        if *len > 1024 || *start > offset || digest(file, *start, *len)? != *hash {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
 pub(super) fn scan_mbox(
+    scope: &Scope,
     path: &Path,
     previous: Option<&FolderCursor>,
     limits: &ScanLimits,
@@ -32,7 +58,7 @@ pub(super) fn scan_mbox(
             "mbox chunk limit must be at least 16 bytes",
         ));
     }
-    let mut file = match File::open(path) {
+    let mut file = match scope.file(path) {
         Ok(file) => file,
         Err(e) if e.kind() == io::ErrorKind::NotFound => {
             out.stats.missing_folders += 1;
@@ -48,21 +74,29 @@ pub(super) fn scan_mbox(
     }
     // Same head as last time (over the length hashed then) and not shorter:
     // an append. Anything else is a rewrite (compaction): start over.
-    let mut offset = match previous {
+    let (mut offset, mut last_separator) = match previous {
         Some(FolderCursor::Mbox {
             offset,
             head,
             head_len,
-        }) if *offset <= meta.len() && head_digest(&mut file, *head_len)? == *head => *offset,
-        _ => 0,
+            checkpoint: Some(point),
+        }) if *head_len <= 4096
+            && *offset <= meta.len()
+            && digest(&mut file, 0, *head_len)? == *head
+            && unchanged(&mut file, *offset, point)? =>
+        {
+            (*offset, point.last_separator.clone())
+        }
+        _ => (0, None),
     };
     let head_len = meta.len().min(4096);
-    let head = head_digest(&mut file, head_len)?;
+    let head = digest(&mut file, 0, head_len)?;
     if offset == meta.len() {
         return Ok(Some(FolderCursor::Mbox {
             offset,
             head,
             head_len,
+            checkpoint: Some(checkpoint(&mut file, offset, last_separator)?),
         }));
     }
     if !settled(&meta, limits, now) {
@@ -78,24 +112,45 @@ pub(super) fn scan_mbox(
         previous_byte[0] == b'\n'
     };
     file.seek(SeekFrom::Start(offset))?;
-    let mut chunk = Vec::new();
-    (&mut file)
-        .take(limits.max_mbox_bytes)
-        .read_to_end(&mut chunk)?;
+    let Some(chunk) = read_bounded(&mut file, limits.max_mbox_bytes, limits, out)? else {
+        return Ok(previous.cloned());
+    };
     let base = offset;
     let complete = base + chunk.len() as u64 == meta.len();
     let starts = message_starts(&chunk, at_line_start);
     for (index, &start) in starts.iter().enumerate() {
+        if expired(limits, out) {
+            break;
+        }
+        let separator_len = chunk[start..]
+            .iter()
+            .position(|&b| b == b'\n')
+            .unwrap_or(chunk.len() - start)
+            .min(1024);
+        let separator = (
+            base + start as u64,
+            separator_len as u64,
+            Sha256::digest(&chunk[start..start + separator_len])
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect(),
+        );
         let end = match starts.get(index + 1) {
             Some(&next) => next,
             None if complete => chunk.len(),
             // The last message may continue past this chunk: next scan.
             None => {
-                if index == 0 && chunk.len() as u64 >= limits.max_mbox_bytes {
+                if index == 0 && start == 0 && chunk.len() as u64 >= limits.max_mbox_bytes {
                     // One message larger than a whole scan chunk: skip past it.
                     out.stats.skipped_large += 1;
                     // Retain enough overlap to find a separator split across chunks.
                     offset = base + chunk.len().saturating_sub(5) as u64;
+                    last_separator = Some(separator);
+                } else {
+                    // A separator found after the tail of an oversized message
+                    // starts a new message. Retry from that boundary, not beyond
+                    // its partial body at this chunk's end.
+                    offset = base + start as u64;
                 }
                 out.stats.truncated = true;
                 break;
@@ -117,8 +172,9 @@ pub(super) fn scan_mbox(
             keep(envelope::parse(&message[body_start..]), limits, out);
         }
         offset = base + end as u64;
+        last_separator = Some(separator);
     }
-    if starts.is_empty() {
+    if starts.is_empty() && !out.stats.deadline_reached {
         if complete {
             offset = meta.len();
         } else {
@@ -132,6 +188,7 @@ pub(super) fn scan_mbox(
         offset,
         head,
         head_len,
+        checkpoint: Some(checkpoint(&mut file, offset, last_separator)?),
     }))
 }
 

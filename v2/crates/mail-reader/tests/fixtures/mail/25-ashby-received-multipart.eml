@@ -7,9 +7,9 @@ Date: Wed, 21 Oct 2026 10:00:00 +0000
 Message-ID: <jt15fixture.da9b80be0412e2dd@ashbyhq.com>
 MIME-Version: 1.0
 Content-Type: multipart/alternative;
- boundary="===============6084331427645102362=="
+ boundary="synthetic-boundary-ad6643e6fdbd2590"
 
---===============6084331427645102362==
+--synthetic-boundary-ad6643e6fdbd2590
 Content-Type: text/plain; charset="utf-8"
 Content-Transfer-Encoding: quoted-printable
 
@@ -18,7 +18,7 @@ Hi Alex,
 Thanks for applying to the Software Engineer role at Litware. We have receive=
 d your application.
 
---===============6084331427645102362==
+--synthetic-boundary-ad6643e6fdbd2590
 Content-Type: text/html; charset="utf-8"
 Content-Transfer-Encoding: quoted-printable
 MIME-Version: 1.0
@@ -26,4 +26,4 @@ MIME-Version: 1.0
 <p>Hi Alex,</p><p>Thanks for applying to the Software Engineer role at Litwar=
 e.</p>
 
---===============6084331427645102362==--
+--synthetic-boundary-ad6643e6fdbd2590--

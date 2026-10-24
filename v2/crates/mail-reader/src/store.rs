@@ -3,12 +3,13 @@
 //! nothing is renamed, flagged, locked or deleted. Messages that may still be
 //! being written (modified within `settle_ms`) wait for the next scan.
 use crate::envelope::{self, Envelope};
+use crate::scoped_fs::Scope;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io;
-use std::path::PathBuf;
-use std::time::SystemTime;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant, SystemTime};
 
 mod maildir;
 mod mbox;
@@ -55,11 +56,23 @@ pub enum FolderCursor {
         offset: u64,
         head: String,
         head_len: u64,
+        /// Missing legacy proof forces an idempotent rescan.
+        #[serde(default)]
+        checkpoint: Option<MboxCheckpoint>,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MboxCheckpoint {
+    tail: String,
+    last_separator: Option<(u64, u64, String)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ScanLimits {
+    /// Absolute wall-clock deadline for this invocation, checked during reads.
+    /// Create fresh limits per scan; an expired deadline preserves the cursor.
+    pub deadline: Instant,
     /// Messages examined per scan, including old, expunged and oversized mail.
     pub max_messages: usize,
     pub max_message_bytes: u64,
@@ -75,6 +88,7 @@ pub struct ScanLimits {
 impl Default for ScanLimits {
     fn default() -> Self {
         Self {
+            deadline: Instant::now() + Duration::from_secs(5),
             max_messages: 500,
             max_message_bytes: 4 * 1024 * 1024,
             max_mbox_bytes: 64 * 1024 * 1024,
@@ -87,6 +101,7 @@ impl Default for ScanLimits {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ScanStats {
+    pub deadline_reached: bool,
     pub folders: usize,
     pub files_seen: usize,
     pub new_messages: usize,
@@ -122,6 +137,7 @@ pub struct ScanFolder {
 
 /// Scan incoming folders only (see [`scan_folders`]).
 pub fn scan(
+    profile: &Path,
     folders: &[MailFolder],
     cursor: &Cursor,
     limits: &ScanLimits,
@@ -134,12 +150,13 @@ pub fn scan(
             outgoing: false,
         })
         .collect();
-    scan_folders(&folders, cursor, limits, now)
+    scan_folders(profile, &folders, cursor, limits, now)
 }
 
 /// Scan every folder once; envelopes from sent folders are `outgoing`. A
 /// folder that does not exist is counted, not an error.
 pub fn scan_folders(
+    profile: &Path,
     folders: &[ScanFolder],
     cursor: &Cursor,
     limits: &ScanLimits,
@@ -147,16 +164,26 @@ pub fn scan_folders(
 ) -> io::Result<ScanOutput> {
     let mut out = ScanOutput {
         envelopes: Vec::new(),
-        cursor: Cursor::default(),
+        cursor: cursor.clone(),
         stats: ScanStats::default(),
     };
+    if expired(limits, &mut out) {
+        return Ok(out);
+    }
+    let scope = Scope::new(profile)?;
     for ScanFolder { folder, outgoing } in folders {
+        if expired(limits, &mut out) || out.stats.examined() >= limits.max_messages {
+            out.stats.truncated = true;
+            break;
+        }
         out.stats.folders += 1;
         let previous = cursor.folders.get(&folder.key());
         let first = out.envelopes.len();
         let next = match folder {
-            MailFolder::Maildir(path) => scan_maildir(path, previous, limits, now, &mut out)?,
-            MailFolder::Mbox(path) => scan_mbox(path, previous, limits, now, &mut out)?,
+            MailFolder::Maildir(path) => {
+                scan_maildir(&scope, path, previous, limits, now, &mut out)?
+            }
+            MailFolder::Mbox(path) => scan_mbox(&scope, path, previous, limits, now, &mut out)?,
         };
         out.envelopes[first..]
             .iter_mut()
@@ -172,6 +199,37 @@ pub fn scan_folders(
             .then(a.message_ref.cmp(&b.message_ref))
     });
     Ok(out)
+}
+
+fn expired(limits: &ScanLimits, out: &mut ScanOutput) -> bool {
+    if Instant::now() < limits.deadline {
+        return false;
+    }
+    out.stats.deadline_reached = true;
+    out.stats.truncated = true;
+    true
+}
+
+fn read_bounded(
+    file: &mut impl std::io::Read,
+    max: u64,
+    limits: &ScanLimits,
+    out: &mut ScanOutput,
+) -> io::Result<Option<Vec<u8>>> {
+    let mut bytes = Vec::new();
+    let mut block = [0; 65536];
+    while (bytes.len() as u64) < max {
+        if expired(limits, out) {
+            return Ok(None);
+        }
+        let count = ((max - bytes.len() as u64).min(block.len() as u64)) as usize;
+        let read = file.read(&mut block[..count])?;
+        if read == 0 {
+            break;
+        }
+        bytes.extend_from_slice(&block[..read]);
+    }
+    Ok(Some(bytes))
 }
 
 fn settled(meta: &fs::Metadata, limits: &ScanLimits, now: SystemTime) -> bool {
@@ -194,6 +252,9 @@ fn keep(envelope: Envelope, limits: &ScanLimits, out: &mut ScanOutput) {
     }
 }
 
+#[cfg(test)]
+#[path = "read_boundary_tests.rs"]
+mod boundary_tests;
 #[cfg(test)]
 #[path = "store_tests.rs"]
 mod tests;

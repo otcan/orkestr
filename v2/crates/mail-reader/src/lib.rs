@@ -16,6 +16,7 @@ pub mod envelope;
 pub mod mime;
 pub mod profile;
 pub mod rules;
+mod scoped_fs;
 pub mod store;
 pub mod template;
 #[cfg(test)]

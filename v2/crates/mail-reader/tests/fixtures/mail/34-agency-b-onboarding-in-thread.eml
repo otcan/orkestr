@@ -1,12 +1,12 @@
-Authentication-Results: mx.google.com; dkim=pass
- header.i=@computerfutures.com; spf=pass smtp.mailfrom=computerfutures.com;
- dmarc=pass header.from=computerfutures.com
-From: Computer Futures <jobs@computerfutures.com>
+Authentication-Results: mx.google.com; dkim=pass header.i=@agency-b.example;
+ spf=pass smtp.mailfrom=agency-b.example; dmarc=pass
+ header.from=agency-b.example
+From: Agency B <jobs@agency-b.example>
 To: Alex Example <alex.jobseeker@example.com>
 Subject: RE: Application: DevOps Engineer (Remote)
 Date: Thu, 22 Oct 2026 09:00:00 +0000
-Message-ID: <jt15fixture.38be91ea7486a46d@computerfutures.com>
-In-Reply-To: <jt15fixture.sent-sthree@example.com>
+Message-ID: <jt15fixture.3ca6fa2c8883d306@agency-b.example>
+In-Reply-To: <jt15fixture.sent-agency-b@example.com>
 Content-Type: text/plain; charset="utf-8"
 Content-Transfer-Encoding: quoted-printable
 MIME-Version: 1.0

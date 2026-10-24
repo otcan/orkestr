@@ -321,6 +321,11 @@ impl IntoResponse for Error {
 impl From<StoreError> for Error {
     fn from(e: StoreError) -> Self {
         match e {
+            StoreError::ProviderGenerationMismatch => Self(
+                StatusCode::CONFLICT,
+                "provider_generation_changed",
+                "Conversation provider changed before input admission",
+            ),
             StoreError::Invalid => Self(
                 StatusCode::BAD_REQUEST,
                 "invalid_input",

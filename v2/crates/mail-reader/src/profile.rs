@@ -1,8 +1,9 @@
 //! Thunderbird profile discovery per OS and inbox folder detection. Only
 //! locations are computed here; the reader never opens the profile's
 //! credential, key or cookie stores (see [`is_secret_file`]).
+use crate::scoped_fs::Scope;
 use crate::store::MailFolder;
-use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -96,9 +97,16 @@ pub struct Profile {
 
 /// Profiles listed in `<root>/profiles.ini`, the default first.
 pub fn read_profiles_ini(root: &Path) -> Vec<Profile> {
-    let Ok(text) = fs::read_to_string(root.join("profiles.ini")) else {
+    let Ok(scope) = Scope::new(root) else {
         return Vec::new();
     };
+    let Ok(file) = scope.file(&root.join("profiles.ini")) else {
+        return Vec::new();
+    };
+    let mut text = String::new();
+    if file.take(512 * 1024).read_to_string(&mut text).is_err() {
+        return Vec::new();
+    }
     let mut sections: Vec<(String, Vec<(String, String)>)> = Vec::new();
     for line in text.lines().take(2000) {
         let line = line.trim();
@@ -151,7 +159,7 @@ pub fn discover(env: &DiscoveryEnv) -> Vec<Profile> {
     let mut all: Vec<Profile> = profile_roots(env)
         .iter()
         .flat_map(|root| read_profiles_ini(root))
-        .filter(|p| p.path.is_dir())
+        .filter(|p| Scope::new(&p.path).is_ok())
         .collect();
     all.sort_by_key(|p| !p.default);
     all
@@ -162,35 +170,40 @@ pub fn discover(env: &DiscoveryEnv) -> Vec<Profile> {
 /// `extra` folder names (for example a Gmail label "Jobs").
 pub fn inbox_folders(profile: &Path, extra: &[String]) -> Vec<MailFolder> {
     let mut folders = Vec::new();
+    let Ok(scope) = Scope::new(profile) else {
+        return folders;
+    };
     for (kind, names) in [
         ("ImapMail", ["INBOX", "Inbox"]),
         ("Mail", ["Inbox", "INBOX"]),
     ] {
-        let Ok(accounts) = fs::read_dir(profile.join(kind)) else {
+        let base = profile.join(kind);
+        let Ok(accounts) = scope.entries(&base) else {
             continue;
         };
         let mut accounts: Vec<PathBuf> = accounts
             .flatten()
-            .map(|e| e.path())
-            .filter(|p| p.is_dir())
+            .map(|name| base.join(name))
+            .filter(|p| scope.directory(p).is_ok())
             .collect();
         accounts.sort();
         for account in accounts {
             // The inbox is `INBOX` (IMAP) or `Inbox` (local); take the first
             // that exists so case-insensitive filesystems never list it twice.
-            let inbox = names.iter().map(|n| account.join(n)).find(|p| p.exists());
+            let inbox = names
+                .iter()
+                .map(|n| account.join(n))
+                .find(|p| folder(&scope, p).is_some());
             let extras = extra
                 .iter()
                 .filter(|n| {
                     !n.is_empty() && !n.contains(['/', '\\']) && *n != ".." && !is_secret_file(n)
                 })
                 .map(|n| account.join(n))
-                .filter(|p| p.exists());
+                .filter(|p| folder(&scope, p).is_some());
             for path in inbox.into_iter().chain(extras) {
-                let folder = if path.is_dir() {
-                    MailFolder::Maildir(path)
-                } else {
-                    MailFolder::Mbox(path)
+                let Some(folder) = folder(&scope, &path) else {
+                    continue;
                 };
                 if !folders.contains(&folder) {
                     folders.push(folder);
@@ -220,26 +233,25 @@ const SENT: [&str; 7] = [
 /// The user's sent folders of a profile (the primary source of applications).
 pub fn sent_folders(profile: &Path) -> Vec<MailFolder> {
     let mut folders = Vec::new();
+    let Ok(scope) = Scope::new(profile) else {
+        return folders;
+    };
     for kind in ["ImapMail", "Mail"] {
-        let Ok(accounts) = fs::read_dir(profile.join(kind)) else {
+        let base = profile.join(kind);
+        let Ok(accounts) = scope.entries(&base) else {
             continue;
         };
         let mut accounts: Vec<PathBuf> = accounts
             .flatten()
-            .map(|e| e.path())
-            .filter(|p| p.is_dir())
+            .map(|name| base.join(name))
+            .filter(|p| scope.directory(p).is_ok())
             .collect();
         accounts.sort();
         for account in accounts {
             for name in SENT {
                 let path = account.join(name);
-                if !path.exists() {
+                let Some(folder) = folder(&scope, &path) else {
                     continue;
-                }
-                let folder = if path.is_dir() {
-                    MailFolder::Maildir(path)
-                } else {
-                    MailFolder::Mbox(path)
                 };
                 if !folders.contains(&folder) {
                     folders.push(folder);
@@ -249,4 +261,14 @@ pub fn sent_folders(profile: &Path) -> Vec<MailFolder> {
         }
     }
     folders
+}
+
+fn folder(scope: &Scope, path: &Path) -> Option<MailFolder> {
+    if scope.directory(path).is_ok() {
+        Some(MailFolder::Maildir(path.to_owned()))
+    } else if scope.file(path).is_ok() {
+        Some(MailFolder::Mbox(path.to_owned()))
+    } else {
+        None
+    }
 }

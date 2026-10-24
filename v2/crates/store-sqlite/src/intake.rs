@@ -43,11 +43,61 @@ impl Store {
         input: &MessageInput,
         reply_to: Option<&ReplyTo>,
     ) -> Result<Admission> {
+        self.admit_with_provider_generation(owner, conversation, input, reply_to, None, None)
+            .await
+    }
+
+    /// An automatic continuation cannot cross a provider decision between its
+    /// adapter-side check and this transaction. Handoff also takes this write
+    /// lock and refuses queued input, so whichever commits first fences the other.
+    pub async fn admit_with_provider_generation(
+        &self,
+        owner: &OwnerId,
+        conversation: &ConversationId,
+        input: &MessageInput,
+        reply_to: Option<&ReplyTo>,
+        expected_provider_generation: Option<i64>,
+        continuation_source_run_id: Option<&orkestr_v2_contracts::RunId>,
+    ) -> Result<Admission> {
+        if expected_provider_generation.is_some_and(|generation| generation < 0) {
+            return Err(StoreError::Invalid);
+        }
+        if continuation_source_run_id.is_some() && expected_provider_generation.is_none() {
+            return Err(StoreError::Invalid);
+        }
         if reply_to.is_some_and(|r| !r.valid()) {
             return Err(StoreError::Invalid);
         }
         let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
         let admission = admit_in_transaction(&mut tx, owner, conversation, input).await?;
+        if !admission.duplicate {
+            if let Some(expected) = expected_provider_generation {
+                let current: Option<i64> = sqlx::query_scalar(
+                    "SELECT provider_generation FROM conversation_settings WHERE conversation_id=? AND owner_id=?",
+                )
+                .bind(conversation.to_string())
+                .bind(owner.to_string())
+                .fetch_optional(&mut *tx)
+                .await
+                .map_err(db)?;
+                if current.unwrap_or(0) != expected {
+                    // Dropping this transaction rolls back message, event,
+                    // inbox, outbox and conversation watermark together.
+                    return Err(StoreError::ProviderGenerationMismatch);
+                }
+            }
+            if let Some(run) = continuation_source_run_id {
+                // Every provider handoff retires prior Fast/Deep bindings. This
+                // also fences an away-and-back handoff before the adapter froze
+                // the current generation: provider names alone cannot prove it.
+                let valid: i64 = sqlx::query_scalar("SELECT count(*) FROM production_runs r JOIN session_bindings b ON b.id=r.session_id AND b.owner_id=r.owner_id AND b.conversation_id=r.conversation_id LEFT JOIN conversation_settings s ON s.owner_id=r.owner_id AND s.conversation_id=r.conversation_id WHERE r.id=? AND r.owner_id=? AND r.conversation_id=? AND b.role='deep' AND b.state!='retired' AND r.provider_kind=COALESCE(s.provider,'codex')")
+                    .bind(run.to_string()).bind(owner.to_string()).bind(conversation.to_string())
+                    .fetch_one(&mut *tx).await.map_err(db)?;
+                if valid != 1 {
+                    return Err(StoreError::ProviderGenerationMismatch);
+                }
+            }
+        }
         if let Some(reply_to) = reply_to {
             // First writer wins; a retry of the same input never rewrites it.
             sqlx::query("INSERT OR IGNORE INTO message_reply_to(message_id,reply_to) VALUES (?,?)")
