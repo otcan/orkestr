@@ -398,7 +398,7 @@ export async function syncRemoteWhatsAppThreadMessages(env = process.env, fetchI
         // V2 timer turns have no V1 input; give their reply a local parent once.
         if (known?.source === remoteTimerParentSource) continue;
         if (!known && remoteMessage.source === remoteTimerParentSource) {
-          const timerParent = await materializeRemoteTimerParent({ thread, remote, remoteMessage, remoteMessages, localMessages, env });
+          const timerParent = await materializeRemoteTimerParent({ thread, remote, remoteMessage, remoteMessages, localMessages, env, fetchImpl });
           if (timerParent) {
             localByRemoteId.set(remoteMessageId, timerParent.message);
             if (timerParent.created) imported += 1;

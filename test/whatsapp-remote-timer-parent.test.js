@@ -26,7 +26,7 @@ function timerRow(overrides = {}) {
   };
 }
 
-async function fixture(t, rows, binding = {}) {
+async function fixture(t, rows, binding = {}, health = {}) {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "remote-timer-parent-"));
   t.after(() => fs.rm(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 }));
   const env = {
@@ -80,9 +80,39 @@ async function fixture(t, rows, binding = {}) {
       sends.push(body);
       return Response.json({ ok: true, ids: [`example-sent-${sends.length}`] });
     }
+    if (parsed.host === "bridge.example.test" && parsed.pathname === "/health") return Response.json({ ok: true, ready: true, accounts: [], ...health });
     throw new Error(`unexpected synthetic request ${parsed.href}`);
   };
   return { env, runtime, sends, deliver: () => deliverWhatsAppReplies(env, fetchImpl) };
+}
+
+for (const [bound, received] of [["15550001001", "sender"], ["sender", "15550001001"]]) {
+  test(`legacy alias-only registry resolves verified bridge identity ${bound} → ${received}`, async t => {
+    const f = await fixture(t, [timerRow({ accountId: received })], { responderAccountId: bound },
+      { accounts: [{ accountId: "sender", phoneNumber: "15550001001", ready: true }] });
+    await upsertWhatsAppConnectorAccount({ accountId: "sender", runtimeAccountId: "sender" }, f.env);
+    await f.deliver();
+    await f.deliver();
+    assert.equal(f.sends.length, 1);
+    assert.equal(f.runtime.acks.length, 1);
+    assert.deepEqual(f.runtime.inputs, []);
+    assert.equal((await listThreadMessages("example-thread", f.env)).length, 2);
+  });
+}
+
+for (const reason of ["not ready", "wrong physical account", "ambiguous bridge", "unregistered", "foreign owner", "ambiguous registry"]) {
+  test(`legacy timer alias bridge proof refuses ${reason}`, async t => {
+    const observed = { accountId: "sender", phoneNumber: reason === "wrong physical account" ? "15550001002" : "15550001001", ready: reason !== "not ready" };
+    const f = await fixture(t, [timerRow({ accountId: "sender" })], { responderAccountId: "15550001001" },
+      { accounts: reason === "ambiguous bridge" ? [observed, observed] : [observed] });
+    if (reason !== "unregistered") await upsertWhatsAppConnectorAccount({ accountId: "sender", runtimeAccountId: "sender",
+      ...(reason === "foreign owner" ? { ownerUserId: "another-owner" } : {}) }, f.env);
+    if (reason === "ambiguous registry") await upsertWhatsAppConnectorAccount({ accountId: "other-account", runtimeAccountId: "sender" }, f.env);
+    await f.deliver();
+    assert.deepEqual(await listThreadMessages("example-thread", f.env), []);
+    assert.equal(f.sends.length, 0);
+    assert.deepEqual(f.runtime.acks, []);
+  });
 }
 
 test("a V2 timer row gives its reply one local parent that is mirrored and acknowledged", async t => {

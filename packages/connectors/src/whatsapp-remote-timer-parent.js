@@ -15,6 +15,7 @@ import { appendEvent } from "../../storage/src/store.js";
 import { resourceOwnerUserId } from "../../core/src/policy.js";
 import { readWhatsAppConnectorAccounts } from "./whatsapp-account-registry.js";
 import { whatsappAccountLookupKeys } from "./whatsapp-account-identity.js";
+import { verifiedTimerAccounts } from "./whatsapp-remote-timer-accounts.js";
 
 export const remoteTimerParentSource = "orkestr-v2-timer";
 // Server receipt for a materialized parent; the scoped relay's timer
@@ -72,11 +73,19 @@ function compatibleTimerParent(local, remote, remoteMessageId) {
 
 // Maps (or creates once) the local parent for a V2 timer row. Returns the local
 // message and whether it was created, or null when the row does not qualify.
-export async function materializeRemoteTimerParent({ thread, remote, remoteMessage, remoteMessages, localMessages, env }) {
+export async function materializeRemoteTimerParent({ thread, remote, remoteMessage, remoteMessages, localMessages, env, fetchImpl = fetch }) {
   const binding = remote?.binding || {};
   const accountId = binding.responderAccountId || binding.outboundAccountId || binding.accountId;
   const accounts = accountId === remoteMessage.accountId ? [] : await readWhatsAppConnectorAccounts(env);
-  const publicId = remoteTimerParentId(thread, remote, remoteMessage, remoteMessages, { accounts, env });
+  let publicId = remoteTimerParentId(thread, remote, remoteMessage, remoteMessages, { accounts, env });
+  if (!publicId && accountId !== remoteMessage.accountId && accounts.length) {
+    // A legacy registry may store only the runtime alias. Resolve its current
+    // physical identity through the existing read-only bridge status path.
+    const { getWhatsAppStatus } = await import("./whatsapp.js");
+    const status = await getWhatsAppStatus(env, fetchImpl, { readOnly: true });
+    publicId = remoteTimerParentId(thread, remote, remoteMessage, remoteMessages,
+      { accounts: verifiedTimerAccounts(accounts, status, env), env });
+  }
   if (!publicId) return null;
   const existing = localMessages.find((message) => message.id === publicId);
   if (existing) return compatibleTimerParent(existing, remote, remoteMessage.id) ? { message: existing, created: false } : null;
