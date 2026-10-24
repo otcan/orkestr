@@ -1,7 +1,7 @@
 //! Immutable edits and logical merge regression coverage.
 use super::*;
 #[tokio::test]
-async fn exact_key_lookup_never_attaches_new_events_to_absorbed_rows() {
+async fn absorbed_keys_attach_to_the_surviving_row_without_recreating_a_duplicate() {
     let c = Case::new().await;
     enabled(&c).await;
     let first = c
@@ -57,7 +57,17 @@ async fn exact_key_lookup_never_attaches_new_events_to_absorbed_rows() {
         )
         .await
         .unwrap();
-    assert_eq!(next.changes[0].kind, TrackerChangeKind::Created);
+    assert_eq!(next.changes[0].kind, TrackerChangeKind::StatusChanged);
+    assert_eq!(next.changes[0].row_id, Some(keep));
+    assert_eq!(
+        c.store
+            .tracker_page(owner(&c), &c.conversation)
+            .await
+            .unwrap()
+            .rows
+            .len(),
+        1
+    );
     assert_ne!(next.changes[0].row_id, Some(absorb));
     assert_eq!(
         c.count(&format!(
@@ -244,4 +254,77 @@ async fn merge_selects_latest_status_event_time_including_lower_progress() {
         );
         c.finish().await;
     }
+}
+
+#[tokio::test]
+async fn exact_and_roleless_aliases_follow_multiple_merges_to_one_survivor() {
+    let c = Case::new().await;
+    enabled(&c).await;
+    let set = c
+        .store
+        .apply_tracker_events(
+            owner(&c),
+            &c.conversation,
+            &batch(
+                "seed",
+                vec![
+                    event(TrackerEventKind::Applied, "Example A", Some("Role A"), 1000),
+                    event(TrackerEventKind::Applied, "Example B", Some("Role B"), 1000),
+                    event(TrackerEventKind::Applied, "Example C", Some("Role C"), 1000),
+                ],
+            ),
+        )
+        .await
+        .unwrap();
+    let ids: Vec<_> = set.changes.iter().map(|c| c.row_id.unwrap()).collect();
+    for (keep, absorb) in [(ids[1], ids[0]), (ids[2], ids[1])] {
+        c.store
+            .merge_tracker_rows(
+                &c.token,
+                &c.owner,
+                &c.conversation,
+                &TrackerMerge { keep, absorb },
+            )
+            .await
+            .unwrap();
+    }
+    let set = c
+        .store
+        .apply_tracker_events(
+            owner(&c),
+            &c.conversation,
+            &batch(
+                "aliases",
+                vec![
+                    event(
+                        TrackerEventKind::RecruiterContact,
+                        "Example A",
+                        Some("Role A"),
+                        2000,
+                    ),
+                    event(TrackerEventKind::Viewed, "Example A", None, 2001),
+                    event(
+                        TrackerEventKind::InReview,
+                        "Example B",
+                        Some("Role B"),
+                        2002,
+                    ),
+                ],
+            ),
+        )
+        .await
+        .unwrap();
+    assert!(set
+        .changes
+        .iter()
+        .all(|c| c.row_id == Some(ids[2]) && c.kind != TrackerChangeKind::Created));
+    let page = c
+        .store
+        .tracker_page(owner(&c), &c.conversation)
+        .await
+        .unwrap();
+    assert_eq!(page.rows.len(), 1);
+    assert_eq!(page.rows[0].events_count, 6);
+    assert_eq!(c.count("SELECT count(*) FROM tracker_rows").await, 3);
+    c.finish().await;
 }

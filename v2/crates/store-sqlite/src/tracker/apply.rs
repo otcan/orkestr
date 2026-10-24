@@ -1,7 +1,8 @@
 //! Record events using the dedupe ledger, job links, company and role keys,
 //! monotonic status and a resulting changeset. Role-less mail can match a
 //! known company after its thread and link references have been considered.
-use super::{config, row_of, Result, TrackerCaller, ROW_COLUMNS};
+use super::lookup::find;
+use super::{config, Result, TrackerCaller, ROW_STORAGE_COLUMNS};
 use crate::conversation_resources::{now_ms, unavailable, ResourceError};
 use crate::Store;
 use orkestr_v2_contracts::*;
@@ -21,104 +22,6 @@ fn valid_key(key: &str) -> bool {
         && key
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b"-_.:".contains(&b))
-}
-
-async fn load(
-    tx: &mut Transaction<'_, Sqlite>,
-    sql: &str,
-    binds: &[&str],
-) -> Result<Vec<TrackerRow>> {
-    let mut query = sqlx::query(sql);
-    for value in binds {
-        query = query.bind(*value);
-    }
-    let rows = query.fetch_all(&mut **tx).await.map_err(unavailable)?;
-    rows.iter().map(row_of).collect()
-}
-
-/// Find the row this event belongs to; `true` when the match is ambiguous.
-pub(super) async fn find(
-    tx: &mut Transaction<'_, Sqlite>,
-    scope: (&str, &str),
-    event: &TrackerEventInput,
-    link: Option<&str>,
-) -> Result<Option<(TrackerRow, bool)>> {
-    let (owner, conversation) = scope;
-    // A reply in a known thread belongs to that row, whatever it says.
-    for reference in &event.thread_refs {
-        let found = load(
-            tx,
-            &format!("SELECT {ROW_COLUMNS} FROM tracker_rows WHERE NOT EXISTS(SELECT 1 FROM tracker_row_merges m WHERE m.owner_id=tracker_rows.owner_id AND m.conversation_id=tracker_rows.conversation_id AND m.absorb_id=tracker_rows.id) AND id=(SELECT row_id FROM tracker_messages WHERE owner_id=? AND conversation_id=? AND message_ref=?)"),
-            &[owner, conversation, reference],
-        )
-        .await?;
-        if let Some(row) = found.into_iter().next() {
-            return Ok(Some((row, false)));
-        }
-    }
-    if event.requires_thread {
-        return Ok(None);
-    }
-    if let Some(link) = link {
-        let found = load(
-            tx,
-            &format!("SELECT {ROW_COLUMNS} FROM tracker_rows WHERE NOT EXISTS(SELECT 1 FROM tracker_row_merges m WHERE m.owner_id=tracker_rows.owner_id AND m.conversation_id=tracker_rows.conversation_id AND m.absorb_id=tracker_rows.id) AND id=(SELECT row_id FROM tracker_row_links WHERE owner_id=? AND conversation_id=? AND link=?)"),
-            &[owner, conversation, link],
-        )
-        .await?;
-        if let Some(row) = found.into_iter().next() {
-            return Ok(Some((row, false)));
-        }
-    }
-    let company = tracker_company_key(&event.company);
-    if company.is_empty() || event.company == UNKNOWN_COMPANY {
-        return Ok(None);
-    }
-    let role = event
-        .role
-        .as_deref()
-        .map(tracker_role_key)
-        .unwrap_or_default();
-    if !role.is_empty() {
-        let exact = load(
-            tx,
-            &format!("SELECT {ROW_COLUMNS} FROM tracker_rows WHERE NOT EXISTS(SELECT 1 FROM tracker_row_merges m WHERE m.owner_id=tracker_rows.owner_id AND m.conversation_id=tracker_rows.conversation_id AND m.absorb_id=tracker_rows.id) AND owner_id=? AND conversation_id=? AND company_key=? AND role_key=? ORDER BY last_contact_ms DESC LIMIT 1"),
-            &[owner, conversation, &company, &role],
-        )
-        .await?;
-        if let Some(row) = exact.into_iter().next() {
-            return Ok(Some((row, false)));
-        }
-        if event.kind == TrackerEventKind::JobAlert {
-            return Ok(None);
-        }
-    }
-    // Same company (one key may extend the other: "acme" / "acme-robotics").
-    let candidates = load(
-        tx,
-        &format!("SELECT {ROW_COLUMNS} FROM tracker_rows WHERE NOT EXISTS(SELECT 1 FROM tracker_row_merges m WHERE m.owner_id=tracker_rows.owner_id AND m.conversation_id=tracker_rows.conversation_id AND m.absorb_id=tracker_rows.id) AND owner_id=? AND conversation_id=? AND archived=0
-                  AND (company_key=?1 OR company_key LIKE ?1 || '-%' OR ?1 LIKE company_key || '-%') ORDER BY last_contact_ms DESC")
-            .replace("?1", "?3"),
-        &[owner, conversation, &company],
-    )
-    .await?;
-    if !role.is_empty() {
-        // A role for a row that had none yet ("your application to Acme").
-        let open: Vec<TrackerRow> = candidates
-            .into_iter()
-            .filter(|r| r.role_key.is_empty())
-            .collect();
-        return Ok((open.len() == 1).then(|| (open.into_iter().next().unwrap(), false)));
-    }
-    let open: Vec<&TrackerRow> = candidates
-        .iter()
-        .filter(|r| !r.status.is_terminal())
-        .collect();
-    Ok(match open.len() {
-        1 => Some((open[0].clone(), false)),
-        0 => candidates.into_iter().next().map(|r| (r, false)),
-        _ => Some((open[0].clone(), true)),
-    })
 }
 
 fn applied_kind(kind: TrackerEventKind) -> bool {
@@ -204,7 +107,7 @@ pub(crate) async fn apply_one(
                 revision: 1,
             };
             sqlx::query(&format!(
-                "INSERT INTO tracker_rows(owner_id,conversation_id,{ROW_COLUMNS},created_ms,updated_ms) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+                "INSERT INTO tracker_rows(owner_id,conversation_id,{ROW_STORAGE_COLUMNS},created_ms,updated_ms) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
             ))
             .bind(&owner_s).bind(&conv_s)
             .bind(row.id.to_string()).bind(&row.company).bind(&row.company_key).bind(&row.role).bind(&row.role_key)
@@ -267,11 +170,11 @@ pub(crate) async fn apply_one(
             row.needs_review |= review || ambiguous || event.confidence < REVIEW_BELOW;
             row.events_count += 1;
             row.revision += 1;
-            sqlx::query("UPDATE tracker_rows SET role=?,role_key=?,status=?,status_changed_ms=?,applied_ms=?,last_contact_ms=?,next_step=?,link=?,location=?,confidence=?,needs_review=?,events_count=?,revision=?,updated_ms=? WHERE id=?")
+            sqlx::query("UPDATE tracker_rows SET role=?,role_key=?,status=?,status_changed_ms=?,applied_ms=?,last_contact_ms=?,next_step=?,link=?,location=?,confidence=?,needs_review=?,events_count=?,revision=?,updated_ms=? WHERE id=? AND owner_id=? AND conversation_id=?")
                 .bind(&row.role).bind(&row.role_key).bind(row.status.as_str()).bind(row.status_changed_ms)
                 .bind(row.applied_ms).bind(row.last_contact_ms).bind(&row.next_step).bind(&row.link).bind(&row.location)
                 .bind(i64::from(row.confidence)).bind(i64::from(row.needs_review)).bind(i64::from(row.events_count))
-                .bind(row.revision).bind(now).bind(row.id.to_string())
+                .bind(row.revision).bind(now).bind(row.id.to_string()).bind(&owner_s).bind(&conv_s)
                 .execute(&mut **tx).await.map_err(unavailable)?;
             let kind = if changed {
                 TrackerChangeKind::StatusChanged
@@ -442,20 +345,24 @@ impl Store {
             }
             return serde_json::from_str(&changes).map_err(unavailable);
         }
-        if matches!(caller, TrackerCaller::Grant(_)) {
-            super::authority::grant_events(&mut tx, &owner, conversation, &request.events).await?;
+        let mut changes = if matches!(caller, TrackerCaller::Grant(_)) {
+            super::authority::grant_events(&mut tx, &owner, conversation, &request.events).await?
+        } else {
+            apply_events(
+                &mut tx,
+                &owner,
+                conversation,
+                &config.notify_on,
+                &request.events,
+            )
+            .await?
+        };
+        if matches!(caller, TrackerCaller::Owner { .. }) {
+            changes.extend(
+                super::unresolved::reconsider(&mut tx, &owner, conversation, &config.notify_on)
+                    .await?,
+            );
         }
-        let mut changes = apply_events(
-            &mut tx,
-            &owner,
-            conversation,
-            &config.notify_on,
-            &request.events,
-        )
-        .await?;
-        changes.extend(
-            super::unresolved::reconsider(&mut tx, &owner, conversation, &config.notify_on).await?,
-        );
         let set = TrackerChangeset { changes };
         sqlx::query("INSERT INTO tracker_batches(owner_id,conversation_id,request_key,digest,changes_json,created_ms) VALUES(?,?,?,?,?,?)")
             .bind(owner.to_string())

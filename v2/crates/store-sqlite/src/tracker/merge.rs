@@ -90,21 +90,25 @@ impl Store {
                 .bind(keep.id.to_string()).bind(absorb.id.to_string()).bind(&o).bind(&c)
                 .execute(&mut *tx).await.map_err(unavailable)?;
         }
-        sqlx::query("DELETE FROM tracker_row_links WHERE row_id=?")
-            .bind(absorb.id.to_string())
+        sqlx::query(
+            "DELETE FROM tracker_row_links WHERE row_id=? AND owner_id=? AND conversation_id=?",
+        )
+        .bind(absorb.id.to_string())
+        .bind(&o)
+        .bind(&c)
+        .execute(&mut *tx)
+        .await
+        .map_err(unavailable)?;
+        sqlx::query("UPDATE tracker_rows SET archived=1,revision=revision+1 WHERE id=? AND owner_id=? AND conversation_id=?")
+            .bind(absorb.id.to_string()).bind(&o).bind(&c)
             .execute(&mut *tx)
             .await
             .map_err(unavailable)?;
-        sqlx::query("UPDATE tracker_rows SET archived=1,revision=revision+1 WHERE id=?")
-            .bind(absorb.id.to_string())
-            .execute(&mut *tx)
-            .await
-            .map_err(unavailable)?;
-        sqlx::query("UPDATE tracker_rows SET role=?,role_key=?,status=?,status_changed_ms=?,applied_ms=?,last_contact_ms=?,next_step=?,link=?,location=?,notes=?,events_count=?,revision=?,updated_ms=? WHERE id=?")
+        sqlx::query("UPDATE tracker_rows SET role=?,role_key=?,status=?,status_changed_ms=?,applied_ms=?,last_contact_ms=?,next_step=?,link=?,location=?,notes=?,events_count=?,revision=?,updated_ms=? WHERE id=? AND owner_id=? AND conversation_id=?")
             .bind(&keep.role).bind(&keep.role_key).bind(keep.status.as_str()).bind(keep.status_changed_ms)
             .bind(keep.applied_ms).bind(keep.last_contact_ms).bind(&keep.next_step).bind(&keep.link).bind(&keep.location)
             .bind(&keep.notes).bind(i64::from(keep.events_count)).bind(keep.revision).bind(now_ms())
-            .bind(keep.id.to_string())
+            .bind(keep.id.to_string()).bind(&o).bind(&c)
             .execute(&mut *tx).await.map_err(unavailable)?;
         sqlx::query("INSERT INTO tracker_row_merges(owner_id,conversation_id,absorb_id,keep_id,recorded_ms,receipt_json) VALUES(?,?,?,?,?,?)")
             .bind(&o).bind(&c).bind(absorb.id.to_string()).bind(keep.id.to_string()).bind(now_ms())

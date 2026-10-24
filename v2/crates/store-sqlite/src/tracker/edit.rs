@@ -112,11 +112,11 @@ impl Store {
             row.events_count += 1;
         }
         row.revision += 1;
-        sqlx::query("UPDATE tracker_rows SET company=?,company_key=?,role=?,role_key=?,status=?,status_changed_ms=?,next_step=?,link=?,notes=?,needs_review=?,archived=?,events_count=?,revision=?,updated_ms=? WHERE id=?")
+        sqlx::query("UPDATE tracker_rows SET company=?,company_key=?,role=?,role_key=?,status=?,status_changed_ms=?,next_step=?,link=?,notes=?,needs_review=?,archived=?,events_count=?,revision=?,updated_ms=? WHERE id=? AND owner_id=? AND conversation_id=?")
             .bind(&row.company).bind(&row.company_key).bind(&row.role).bind(&row.role_key)
             .bind(row.status.as_str()).bind(row.status_changed_ms).bind(&row.next_step).bind(&row.link)
             .bind(&row.notes).bind(i64::from(row.needs_review)).bind(i64::from(row.archived))
-            .bind(i64::from(row.events_count)).bind(row.revision).bind(now).bind(row.id.to_string())
+            .bind(i64::from(row.events_count)).bind(row.revision).bind(now).bind(row.id.to_string()).bind(owner.to_string()).bind(conversation.to_string())
             .execute(&mut *tx).await.map_err(unavailable)?;
         if let Some(link) = &row.link {
             sqlx::query("INSERT OR IGNORE INTO tracker_row_links(owner_id,conversation_id,link,row_id) VALUES(?,?,?,?)")
