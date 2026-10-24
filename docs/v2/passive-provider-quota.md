@@ -64,6 +64,11 @@ requests. The loader requires the authenticated V1 owner, enrolled Core owner,
 opaque account ref, producer UID, private file custody and closed bounded data
 shape. Missing, malformed or unreadable projection leaves existing telemetry
 unknown/stale and cannot fail the request.
+Exactly one Claude account source may be enrolled per V1 owner. Once a valid
+projection is present, its account-scoped windows replace legacy Claude thread
+quota: old thread records lack a verified account reference and cannot backfill
+missing windows or override the projection during footer enrichment. Without a
+valid projection, existing legacy behavior remains available.
 
 Each period keeps its own observation time, including through later caller
 thread enrichment. An unrelated window or changed file mtime never refreshes an

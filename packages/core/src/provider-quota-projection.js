@@ -4,6 +4,7 @@ import { constants } from "node:fs";
 import path from "node:path";
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const identified = value => uuid.test(value) && value !== "00000000-0000-0000-0000-000000000000";
 const statuses = new Set([null, "allowed", "allowed_warning", "rejected"]);
 const exact = (value, keys) => value && typeof value === "object" && !Array.isArray(value)
   && Object.keys(value).sort().join("|") === [...keys].sort().join("|");
@@ -48,10 +49,13 @@ export async function loadProviderQuotaProjections(ownerUserId, env = process.en
     const config = await privateJson(filename, [0, process.getuid?.()].filter(Number.isInteger), 16_384);
     if (!exact(config, ["format", "sources"]) || config.format !== "orkestr-provider-quota-sources-v1"
         || !Array.isArray(config.sources) || config.sources.length > 16) return [];
+    // One enrolled Claude account per owner; never blend different accounts'
+    // periods or silently choose one ambiguous operator entry.
+    if (config.sources.filter(source => source?.ownerUserId === ownerUserId).length !== 1) return [];
     const results = [];
     for (const source of config.sources) {
       if (!exact(source, ["ownerUserId", "coreOwnerId", "accountRef", "producerUid", "path"])
-          || source.ownerUserId !== ownerUserId || !uuid.test(source.coreOwnerId) || !uuid.test(source.accountRef)
+          || source.ownerUserId !== ownerUserId || !identified(source.coreOwnerId) || !identified(source.accountRef)
           || !Number.isInteger(source.producerUid) || source.producerUid < 0) continue;
       try {
         const value = await privateJson(source.path, [source.producerUid], 8192);

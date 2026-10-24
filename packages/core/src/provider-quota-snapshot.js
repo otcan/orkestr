@@ -206,11 +206,8 @@ export function mergeThreadIntoProviderQuota(snapshot = null, thread = null, { n
     if (!own) continue;
     const current = base[provider];
     if (provider === "claude" && current && quotaWindowDetails.has(current)) {
-      result[provider] = mergeProjectedClaudeQuota(current, ["fiveHour", "weekly"].map(period => ({
-        period, observedAt: own.observedAt, source: own.source,
-        record: { used_percent: own[`${period}RemainingPct`] == null ? null : 100 - own[`${period}RemainingPct`],
-          resets_at: own[`${period}ResetsAt`], status: own[`${period}Status`] },
-      })), { now, staleMs });
+      // Legacy thread telemetry has no enrolled account reference. It cannot
+      // backfill unknown periods or override this verified account projection.
       continue;
     }
     // Ties go to the calling thread: it may have been written after the cache fill.
@@ -282,7 +279,10 @@ export async function providerQuotaSnapshot({ ownerUserId = "", now = Date.now()
   const claudeProfiles = await loadClaudeProfiles(owner, env).catch(() => []);
   const value = providerQuotaFromThreads(threads, { now, staleMs, claudeProfiles });
   const projections = await loadProjections(owner, env, now).catch(() => []);
-  value.claude = mergeProjectedClaudeQuota(value.claude, projections, { now, staleMs });
+  if (projections.length) {
+    value.claude = mergeProjectedClaudeQuota({ ...emptyProviderQuota("claude"), limited: value.claude.limited }, projections, { now, staleMs });
+    if (!quotaWindowDetails.has(value.claude)) quotaWindowDetails.set(value.claude, {});
+  }
   if (useCache) snapshotCache.set(cacheKey, { at: now, value });
   return value;
 }

@@ -58,6 +58,21 @@ test("fresh five-hour data cannot restamp old weekly usage or be lost to a calli
   assert.equal(merged.claude.stale, true);
 });
 
+test("enrolled account never blends legacy thread windows or ambiguous account bindings", async t => {
+  const f=await fixture(t);
+  await f.save(projection({five_hour:record(23)}));
+  const legacy={ownerUserId:"owner-a",runtimeKind:"claude-code",claudeRateLimitsObservedAt:new Date(now).toISOString(),
+    claudeRateLimits:{primary:{used_percent:90,window_minutes:300},secondary:{used_percent:1,window_minutes:10080}}};
+  const snapshot=await providerQuotaSnapshot({ownerUserId:"owner-a",now,useCache:false,loadThreads:async()=>[legacy],loadClaudeProfiles:async()=>[]},f.env);
+  assert.equal(snapshot.claude.fiveHourRemainingPct,77);
+  assert.equal(snapshot.claude.weeklyRemainingPct,null);
+  const enriched=mergeThreadIntoProviderQuota(snapshot,legacy,{now});
+  assert.equal(enriched.claude.fiveHourRemainingPct,77);
+  assert.equal(enriched.claude.weeklyRemainingPct,null);
+  await fs.writeFile(f.config,JSON.stringify({format:"orkestr-provider-quota-sources-v1",sources:[f.source,{...f.source,accountRef:owner}]}),{mode:0o600});
+  assert.deepEqual(await loadProviderQuotaProjections("owner-a",f.env,now),[]);
+});
+
 test("absent, expired and status-only windows never invent remaining percentages", () => {
   const values = quotaProjectionWindows(projection({ five_hour: record(null), seven_day: record(40, now, now - hour) }), binding, now);
   const quota = mergeProjectedClaudeQuota(emptyProviderQuota("claude"), values, { now });

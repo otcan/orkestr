@@ -139,7 +139,8 @@ def optional(plan):
                 and type(value['directory']) is str and value['directory'].startswith('/')
                 and len(value['directory'])<=4096 and '\x00' not in value['directory']
                 and '..' not in Path(value['directory']).parts
-                and type(value['account_ref']) is str and str(uuid.UUID(value['account_ref']))==value['account_ref'],
+                and type(value['account_ref']) is str and str(uuid.UUID(value['account_ref']))==value['account_ref']
+                and uuid.UUID(value['account_ref']).int != 0,
                 'closed passive Claude quota projection required')
     privileged = plan.get('workspace_exec', {}).get('trusted', {}).get('host_privileged') is True
     require(not privileged or 'host_full_access' in plan,
