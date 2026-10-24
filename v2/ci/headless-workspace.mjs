@@ -567,7 +567,7 @@ export const scenarios = [
     await openDrawer(label);
     await choose('Synthetic group');
     await page.waitForSelector('.v1-tabs');
-    await clickText('Settings');
+    await clickWithin('.v1-tabs', 'Settings');
     await page.waitForSelector('#v1-model');
     await page.select('#v1-effort', 'high');
     await clickText('Save model and effort');
