@@ -79,6 +79,12 @@ jobs:
         run: |
           sudo /usr/bin/python3 -I -S -B -m unittest discover -s "$PWD/provider-broker" -p test_codex_service_package.py -v
           sudo /usr/bin/python3 -I -S -B -m unittest discover -s "$PWD/provider-broker" -p test_codex_service_roles.py -v
+      - name: Service packager and passive quota inventory
+        run: |
+          python3 -I -S -B -m unittest discover -s packaging/service/tests -v
+          sudo /usr/bin/python3 -I -S -B -m unittest discover -s "$PWD/packaging/service/tests" -p test_selected.py -v
+          sudo /usr/bin/python3 -I -S -B -m unittest discover -s "$PWD/packaging/service/tests" -p test_artifact_boundary.py -v
+          sudo /usr/bin/python3 -I -S -B -m unittest discover -s "$PWD/packaging/service/tests" -p test_release.py -v
       - name: Scoped V1 runtime compatibility regressions
         working-directory: ${{ github.workspace }}
         run: python3 -B -m unittest discover -s v2/compat/v1_runtime/tests -v
