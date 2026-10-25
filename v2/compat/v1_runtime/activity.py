@@ -64,6 +64,9 @@ def observe(worker, data, statuses, now=None):
         questions = set(data.get("question_payloads", []))
         question_ids = [str(uuid.uuid5(POST_NAMESPACE, "post:" + value))
                         for value in questions]
+        fast_id = (data.get("first_response") or {}).get("remote_id")
+        if fast_id:
+            question_ids.append(fast_id)
         placeholders = ",".join("?" for _ in question_ids)
         selection = "e.input_id=?" + (" OR e.input_id IN (" + placeholders + ")" if question_ids else "")
         for row in db.execute("SELECT e.source_key,e.ack,e.input_id,i.data FROM exports e JOIN inputs i ON i.remote_id=e.input_id "
@@ -71,7 +74,8 @@ def observe(worker, data, statuses, now=None):
             source, raw, remote, parent = row
             if source.startswith(NOTICE_PREFIXES):
                 continue
-            if remote != data["remote_id"] and (json.loads(parent).get("post") or {}).get("id") not in questions:
+            if (remote not in (data["remote_id"], fast_id)
+                    and (json.loads(parent).get("post") or {}).get("id") not in questions):
                 continue
             at = delivered_at(raw)
             if at is not None and at <= now:

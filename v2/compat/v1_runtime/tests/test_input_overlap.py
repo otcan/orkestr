@@ -24,6 +24,7 @@ class InputOverlapTests(unittest.TestCase):
         self.peer.runs['owner-message'] = {role: status(role + '-owner', 'completed') for role in ('fast', 'deep')}
         self.peer.auto_accepted.update(['fast-owner', 'deep-owner'])
         self.peer.texts['deep-owner'] = 'The accepted plan'
+        self.peer.texts['fast-owner'] = 'NO_REPLY' # This overlap case exercises only the substantive Deep answer.
         self.peer.ran(2, text='NO_REPLY')
         self.peer.timer_rows = [occurrence(2)]
         self.worker = Worker(self.peer, self.ledger)

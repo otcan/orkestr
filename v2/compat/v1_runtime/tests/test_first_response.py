@@ -27,6 +27,7 @@ class FirstResponseTests(unittest.TestCase):
             return original(method, route, **kwargs)
         self.peer.request = request
         self.worker = Worker(self.peer, self.ledger, progress_updates=True)
+        self.worker.fast_reply_policy = "owner_only"
 
     def step_at(self, seconds):
         with patch("time.time", return_value=100 + seconds):
@@ -35,15 +36,21 @@ class FirstResponseTests(unittest.TestCase):
     def replies(self):
         return [r for r in self.ledger.messages() if r["role"] == "assistant"]
 
-    def test_fast_only_reply_is_exported_at_five_seconds_and_survives_restart_once(self):
+    def ack_fast(self, outcome='delivered'):
+        fast=next(row for row in self.replies() if row.get('firstResponse'))
+        parent=next(row for row in self.ledger.messages() if row['id']==fast['parentMessageId'])
+        self.ledger.acknowledge(fast['id'],dict(outcome=outcome,outboxJobId='fake-fast',parentPublicMessageId=parent['publicMessageId'],
+            connectorMessageIds=['fake-receipt'] if outcome=='delivered' else [],deliveredAt='1970-01-01T00:01:42+00:00'))
+        return fast
+
+    def test_fast_is_exported_immediately_and_survives_restart_once(self):
         self.configure()
         self.step_at(1)
-        self.assertEqual(self.replies(), [])
-        self.step_at(5)
         first = self.replies()
         self.assertEqual([r["text"] for r in first], [self.state["fast"]])
-        self.assertEqual(first[0]["kind"], "progress")
+        self.assertTrue(first[0]["firstResponse"])
         self.worker = Worker(self.peer, self.ledger, progress_updates=True)
+        self.worker.fast_reply_policy="owner_only"
         self.step_at(6)
         self.assertEqual(self.replies(), first)
         self.assertNotIn("deep", self.peer.accepted)
@@ -54,26 +61,31 @@ class FirstResponseTests(unittest.TestCase):
         self.step_at(64)
         self.assertEqual(len(self.replies()), 1)
         self.step_at(65)
-        self.assertEqual([r["text"] for r in self.replies()], [self.state["fast"], "Still checking."])
+        self.assertEqual([r["text"] for r in self.replies()], ["Still checking.", self.state["fast"]])
+        self.ack_fast()
         self.state["deep"] = "ready"
         self.step_at(66)
         self.assertEqual([r["text"] for r in self.replies()],
-                         [self.state["fast"], "Still checking.", self.state["final"]])
+                         ["Still checking.", self.state["final"]])
 
-    def test_final_ready_within_five_seconds_suppresses_the_ack(self):
+    def test_ready_fast_is_preserved_when_deep_is_also_ready(self):
         self.configure()
-        self.step_at(1)
         self.state["deep"] = "ready"
-        self.step_at(4)
-        self.assertEqual([r["text"] for r in self.replies()], [self.state["final"]])
+        self.step_at(1)
+        self.assertEqual([r["text"] for r in self.replies()],[self.state["fast"]])
+        self.assertNotEqual(self.ledger.next_input()['phase'],'completed')
+        self.ack_fast();self.step_at(2)
+        self.assertEqual([r["text"] for r in self.replies()],[self.state["final"]])
 
-    def test_final_no_reply_within_five_seconds_suppresses_a_substantive_fast_ack(self):
+    def test_silent_deep_does_not_drop_a_substantive_ready_fast(self):
         self.configure(final="NO_REPLY")
         self.step_at(1)
         self.state["deep"] = "ready"
         self.step_at(4)
-        self.assertEqual(len(self.replies()), 1)
-        self.assertTrue(self.replies()[0]["noReply"])
+        self.assertEqual([r["text"] for r in self.replies()],[self.state["fast"]])
+        self.ack_fast();self.step_at(5)
+        self.assertEqual(len(self.replies()),1)
+        self.assertTrue(self.replies()[0]['noReply'])
 
     def test_first_available_fast_after_the_coalescing_window_has_no_extra_delay(self):
         self.configure()
@@ -102,11 +114,12 @@ class FirstResponseTests(unittest.TestCase):
         self.assertTrue(self.replies()[0]["noReply"])
         self.assertEqual(self.replies()[0]["text"], "NO_REPLY")
 
-    def test_disabled_preference_and_timers_do_not_emit_interactive_acks(self):
+    def test_fast_is_independent_of_progress_preference_but_timers_keep_silence_policy(self):
         self.configure()
         self.worker.progress_updates = False
         self.step_at(5)
-        self.assertEqual(self.replies(), [])
+        first = self.replies()
+        self.assertEqual(len(first), 1)
         self.worker.progress_updates = True
         current = self.ledger.next_input()
         current["origin"] = "timer"
@@ -114,7 +127,111 @@ class FirstResponseTests(unittest.TestCase):
         # Exercise the helper directly: timer intake has its separate run lookup.
         from v2.compat.v1_runtime.first_response import capture
         capture(self.worker, current, {"fast": {"run_id": "fast-run", "phase": "completed"}}, {"fast-run"})
-        self.assertEqual(self.replies(), [])
+        self.assertEqual(self.replies(), first)
+
+    def test_no_stale_fast_after_final_and_ordering_survives_restart(self):
+        self.configure(deep="ready");self.step_at(1)
+        (fast,)=self.replies()
+        self.worker=Worker(self.peer,self.ledger,progress_updates=False)
+        self.worker.fast_reply_policy="owner_only"
+        self.step_at(2);self.assertEqual(self.replies(),[fast])
+        self.ack_fast();self.step_at(3)
+        (final,)=self.replies();self.assertFalse(final.get('firstResponse'))
+        self.ledger.acknowledge(final['id'],dict(outcome='delivered',outboxJobId='fake-final',parentPublicMessageId='public'))
+        self.assertEqual(self.ledger.messages(),[])
+        self.assertIsNone(self.ledger.next_input())
+
+    def test_uncertain_fast_blocks_final_without_resending_or_reexporting(self):
+        self.configure(deep="ready");self.step_at(1)
+        fast=self.ack_fast('uncertain')
+        self.step_at(2)
+        self.assertEqual([row['id'] for row in self.replies()],[fast['id']])
+        self.assertEqual(self.ledger.next_input()['first_response']['delivery_blocker'],'unverified_uncertain')
+        self.ack_fast();self.step_at(3)
+        self.assertEqual([row['text'] for row in self.replies()],[self.state['final']])
+
+    def test_participant_binding_preserves_existing_preference_coalesce_and_ready_deep_policy(self):
+        self.configure();self.worker.fast_reply_policy="legacy";self.worker.progress_updates=False
+        self.step_at(1);self.step_at(6);self.assertEqual(self.replies(),[])
+        self.worker.progress_updates=True;self.step_at(7)
+        self.assertEqual(len(self.replies()),1)
+        self.assertEqual(self.replies()[0]['kind'],'progress')
+        self.assertFalse(self.replies()[0].get('firstResponse'))
+
+    def test_coordinator_policy_suppresses_fast_with_progress_enabled(self):
+        self.configure(deep="ready");self.worker.fast_reply_policy='disabled'
+        self.step_at(1)
+        self.assertEqual([row['text'] for row in self.replies()],[self.state['final']])
+
+    def test_participant_binding_keeps_ready_final_supersession(self):
+        self.configure(deep="ready");self.worker.fast_reply_policy="legacy"
+        self.step_at(1)
+        self.assertEqual([row['text'] for row in self.replies()],[self.state['final']])
+
+    def test_definite_fast_non_send_releases_the_final_without_a_later_fast(self):
+        self.configure(deep="ready");self.step_at(1)
+        self.ack_fast('suppressed');self.step_at(2)
+        self.assertEqual([row['text'] for row in self.replies()],[self.state['final']])
+
+    def test_hanging_fast_never_holds_final_longer_than_fifteen_seconds_even_after_restart(self):
+        self.configure(deep="ready");self.step_at(1)
+        (fast,)=self.replies()
+        self.worker=Worker(self.peer,self.ledger)
+        self.worker.fast_reply_policy="owner_only"
+        self.step_at(15);self.assertEqual(self.replies(),[fast])
+        self.step_at(16);(final,)=self.replies()
+        self.assertEqual(final['text'],self.state['final'])
+        with self.ledger.connect() as db:
+            outcome,raw=db.execute('SELECT outcome,ack FROM exports WHERE export_id=?',(fast['id'],)).fetchone()
+            self.assertEqual(outcome,'superseded');self.assertIsNone(raw)
+        self.ledger.acknowledge(final['id'],dict(outcome='delivered',outboxJobId='fake-final',parentPublicMessageId='public'))
+        self.assertEqual(self.ledger.messages(),[])
+
+    def test_uncertain_fast_releases_final_at_fifteen_seconds_and_keeps_late_receipt_honest(self):
+        import json
+        self.configure(deep="ready");self.step_at(1)
+        (fast,)=self.replies()
+        parent=next(row for row in self.ledger.messages() if row['id']==fast['parentMessageId'])
+        self.ack_fast('uncertain');self.step_at(16)
+        self.assertEqual([row['text'] for row in self.replies()],[self.state['final']])
+        with self.ledger.connect() as db:
+            data=json.loads(db.execute('SELECT data FROM inputs WHERE remote_id=?',(self.data['remote_id'],)).fetchone()[0])
+            self.assertEqual(data['first_response']['delivery_blocker'],'unverified_uncertain')
+        self.ledger.acknowledge(fast['id'],dict(outcome='delivered',outboxJobId='fake-fast',parentPublicMessageId=parent['publicMessageId'],
+            connectorMessageIds=['late-receipt'],deliveredAt='1970-01-01T00:01:57+00:00'))
+        with self.ledger.connect() as db:
+            outcome,raw=db.execute('SELECT outcome,ack FROM exports WHERE export_id=?',(fast['id'],)).fetchone()
+            self.assertEqual(outcome,'superseded');self.assertEqual(json.loads(raw)['connectorMessageIds'],['late-receipt'])
+
+    def test_fast_does_not_consume_any_of_the_three_ordinary_progress_slots(self):
+        self.configure();self.step_at(1)
+        current=self.ledger.next_input()
+        for index in range(3):
+            self.assertIsNotNone(self.ledger.add_progress(current,'update-'+str(index),'work'))
+        self.assertIsNone(self.ledger.add_progress(current,'fourth','work'))
+
+    def test_v1_local_fast_is_recorded_locally_without_a_pseudo_group_notification(self):
+        self.configure()
+        self.data['author']=dict(role='v1_owner',id='v1:web:owner',label='Owner',source='web')
+        self.ledger.save(self.data)
+        self.step_at(1)
+        self.assertEqual(len(self.replies()),1)
+        self.assertEqual(self.replies()[0]['parentMessageId'],self.data['remote_id'])
+        with self.ledger.connect() as db:
+            self.assertEqual(db.execute('SELECT count(*) FROM inputs').fetchone()[0],1)
+
+    def test_latency_uses_only_the_explicit_fast_parent_and_confirmed_receipt(self):
+        from v2.compat.v1_runtime.latency import measure
+        self.configure();self.step_at(1)
+        fast=self.replies()[0]
+        parent=next(row for row in self.ledger.messages() if row['id']==fast['parentMessageId'])
+        self.ledger.acknowledge(fast['id'],dict(outcome='delivered',outboxJobId='fake-fast',parentPublicMessageId=parent['publicMessageId'],
+            connectorMessageIds=['fake-receipt'],deliveredAt='1970-01-01T00:01:42+00:00'))
+        result=measure(self.ledger.path,100000)
+        self.assertEqual((result['sample_n'],result['p50_ms'],result['samples'][0]['first_kind']),(1,2000,'fast'))
+        with self.ledger.connect() as db:
+            db.execute("UPDATE inputs SET data=json_set(data,'$.first_response_for.input_id','foreign') WHERE remote_id=?",(fast['parentMessageId'],))
+        self.assertEqual(measure(self.ledger.path,100000)['sample_n'],0)
 
 
 if __name__ == "__main__":

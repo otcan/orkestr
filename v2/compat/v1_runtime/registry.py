@@ -17,7 +17,7 @@ from .worker import DEFAULT_BURST_QUIET_S, Signal, Worker, attachment_export_set
 
 UNIQUE_KEYS = ("remote_thread_id", "conversation_id", "public_thread_id", "chat_id")
 MUTABLE_KEYS = ("enabled", "revoked", "progress_updates", "attachments", "max_outstanding_inputs", "max_input_age_seconds",
-                "participants", "owner_label", "instructions_path")
+                "participants", "owner_label", "instructions_path", "fast_reply_policy")
 
 
 class Binding:
@@ -158,6 +158,7 @@ class Registry:
             binding.worker = Worker(client, binding.ledger, attachment_dir=directory, attachment_gid=gid,
                                     burst_quiet_s=DEFAULT_BURST_QUIET_S)
         binding.worker.progress_updates = binding.config["progress_updates"]
+        binding.worker.fast_reply_policy = binding.config["fast_reply_policy"]
         binding.worker.attachments = binding.config["attachments"]
         binding.worker.max_input_age_s = binding.config["max_input_age_seconds"]
         binding.worker.instructions_path = binding.config["instructions_path"]

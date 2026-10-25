@@ -56,8 +56,8 @@ younger than 30 s, and any transport failure forces a new check.
 A binding with an input in flight steps it every second. An idle binding
 sleeps until its next Rust poll is due (timer occurrences and posts every 5 s,
 digests every 30 s, at most 5 s per pass); a new inbound input wakes its
-worker at once. The burst debounce still applies: a fresh input is sent when
-its chat has been quiet for 3 s (each new message of the burst restarts the
+worker at once. A single plain text message is admitted immediately. A queued
+burst or attachment waits until its chat has been quiet for 3 s (each new message of the burst restarts the
 wait), and the worker wakes exactly then rather than up to a pass later. With dozens of bindings this keeps idle polling to roughly
 about `0.43 x bindings` requests per second.
 
@@ -87,6 +87,7 @@ Each binding is `<bindings_dir>/<remote_thread_id>.json`:
 | `enabled` | `false` pauses intake and execution; exports and acknowledgements continue |
 | `revoked` | `true` permanently withdraws the route (intake and export answer 410) |
 | `progress_updates` | Export intermediate Deep progress for this binding |
+| `fast_reply_policy` | Optional: `legacy` (default) preserves the progress-dependent Fast policy. Explicit `owner_only` enables immediate Fast replies for a group the operator verified has only owner-visible recipients; participant grants do not establish that visibility. `disabled` suppresses Fast replies (for example a coordinator chat). |
 | `attachments` | Accept inbound attachments for this binding |
 | `max_outstanding_inputs` | 1–64 unsettled inputs before intake answers 409 |
 | `max_input_age_seconds` | Optional, 60–604800 (default 1800): how long an input may wait without a Rust window before it is refused as `input_expired` |

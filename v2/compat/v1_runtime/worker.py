@@ -70,7 +70,7 @@ BURST_NOTE = ("[%d messages arrived together and are delivered as one turn. Read
 # Frozen per-attempt state dropped when an input is sent again as a new turn.
 RESET_KEYS = ("intake", "cursor", "window", "window_request", "previous_window", "matched_runs", "accepted",
               "fast_accept_request", "deep_accept_request", "fast_payload", "deep_payload", "admitted_at",
-              "progress_at", "fast_unusable_since", "intake_rules", "questions_scanned", "question_payloads", "activity")
+              "progress_at", "fast_unusable_since", "intake_rules", "questions_scanned", "question_payloads", "activity", "deep_final_ready_at")
 # An admitted input whose window ended without starting any run of it.
 ORPHAN_GRACE_S = 60
 # Deep phases a window work deadline leaves behind.
@@ -206,6 +206,7 @@ class Worker:
         self.burst_quiet_s = burst_quiet_s
         self.attachment_dir, self.attachment_gid = attachment_dir, attachment_gid
         self.progress_updates = progress_updates
+        self.fast_reply_policy = "legacy"
         self.max_input_age_s = max_input_age_s
         self._digest_checked = None
         self._posts_checked = None
@@ -299,6 +300,11 @@ class Worker:
         the owner sees it while the turn continues to its single final.
         """
         scanned = data.setdefault("questions_scanned", [])
+        if len(scanned) >= QUESTION_SCAN_LIMIT and not data.get("question_scan_cap_logged"):
+            data["question_scan_cap_logged"] = True
+            self.ledger.save(data)
+            print("ALERT orkestr-v2-wa-adapter question_scan_cap conversation=%s input=%s cap=%d"
+                  % (getattr(self.client,"conversation","?"),data["remote_id"],QUESTION_SCAN_LIMIT),file=sys.stderr,flush=True)
         for event in events:
             payload = event.get("payload_ref_or_safe_payload") or {}
             observation = payload.get("observation") or {}
@@ -658,7 +664,8 @@ class Worker:
         rows = self.ledger.burst_candidates(data, BURST_MAX_INPUTS - 1)
         now = time.time() if now is None else now
         first = data.get("queued_at")
-        if self.burst_quiet_s and isinstance(first, (int, float)):
+        single_text = not rows and not data.get("attachments") and bool((data.get("text") or "").strip())
+        if self.burst_quiet_s and not single_text and isinstance(first, (int, float)):
             newest = max([first] + [r["queued_at"] for r in rows if isinstance(r.get("queued_at"), (int, float))])
             if now - newest < self.burst_quiet_s and now - first < max(BURST_MAX_WAIT_S, self.burst_quiet_s):
                 # The next pass comes when the burst is due, not a whole pass later.
@@ -814,6 +821,10 @@ class Worker:
         # A later timer or browser input can replace the current views before
         # this input is observed. Match every origin to its own proven run IDs.
         statuses = self.own_statuses(ids)
+        deep_status = statuses.get("deep") or {}
+        if deep_status.get("run_id") in ids and deep_status.get("phase") in ("awaiting_acceptance", "completed"):
+            data.setdefault("deep_final_ready_at", time.time())
+            self.ledger.save(data)
         if data.get("origin") == "timer":
             # A bounded SSE read can yield one complete frame even while more
             # are buffered. Only an empty read proves this cursor caught up.

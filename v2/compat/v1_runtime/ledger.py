@@ -590,9 +590,13 @@ class Ledger:
         """Atomically record the accepted final reply and make it visible to V1."""
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
+            from .first_response_store import final_ready
+            if not final_ready(self, db, data):
+                return False
             data.update(reply=reply, phase="completed")
             self.save(data, db)
             self._export(db, data, "final", "final:" + data["remote_id"], reply)
+            return True
 
     def continue_notice(self, data, text):
         """Save a re-queued input and tell the owner, in one transaction.
@@ -622,6 +626,10 @@ class Ledger:
             message.update({k: v for k, v in (identity or {}).items() if k in ("provider", "model") and v})
             self._export(db, data, "progress", "progress:%s:%s" % (data["remote_id"], payload_id), message)
             return message
+
+    def add_first_response(self, data, payload_id, text, identity=None):
+        from .first_response_store import add
+        return add(self, data, payload_id, text, identity)
 
     def _acked_through(self, db):
         pending = db.execute("SELECT min(seq) FROM exports WHERE outcome IS NULL OR outcome='uncertain'").fetchone()[0]
