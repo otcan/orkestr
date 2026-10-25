@@ -67,6 +67,22 @@ username/password, then binds your owner and global conversation through the
 authenticated API. It generates a closed manager/role/timer configuration using
 fixed container paths. No API keys or host paths need to be pasted into JSON.
 
+## Security model
+
+The AI agent has full tool access **inside the container**, subject to Unix file
+permissions. Model processes run as **non-root UID 10001** under the protected
+root manager. The writable persistent surface is the service-owned portions of
+the **state and credentials named volumes**; temporary files use container
+tmpfs. The agent can read its provider logins. Never bind-mount sensitive host
+paths, a host home, the Docker socket, devices or host PID namespaces into this
+instance. It is for one trusted owner, not mutually isolated tenants.
+
+Expose the service only on localhost, or behind an authenticated HTTPS reverse
+proxy with an exactly matching configured origin. The supplied Compose file
+supports localhost and SSH forwarding; its origin is fixed to
+`http://127.0.0.1:19822`. Public reverse-proxy origin configuration needs separate
+qualification. Do not publish its internal port directly to the internet.
+
 The root manager drops model processes to UID 10001. Provider tools can use the
 container's workspaces and CLI credentials: this is a single trusted owner's
 instance. Compose mounts no host files, Docker socket or host namespaces and
