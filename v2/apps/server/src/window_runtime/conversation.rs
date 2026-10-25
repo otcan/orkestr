@@ -1,4 +1,6 @@
 //! Serialized private admission-to-task handoff; receipts alone never launch.
+#[path = "conversation_drain.rs"]
+mod drain;
 use super::{
     context::Context,
     handles::Handles,
@@ -165,28 +167,6 @@ impl ConversationController {
             return Ok(Some(status));
         }
         Ok(None)
-    }
-    /// Capacity pressure only: retire this conversation's live window when every
-    /// role is accepted and Core shows no pending input, run or descendant (the
-    /// former conversation-switch precondition). The operation lock keeps any
-    /// follow-up admission from interleaving between the check and the stop.
-    pub(super) async fn retire_if_idle(&self, browser: &str) -> Result<bool, &'static str> {
-        let _operation = self.operation.lock().await;
-        self.refresh().await?;
-        let mut state = self.state.lock().await;
-        let State::Running(task) = &mut *state else {
-            return Ok(false);
-        };
-        if !task.roles_ready_to_close()
-            || !self
-                .store
-                .execution_window_switch_ready_authenticated(browser, &self.config.conversation_id)
-                .await
-                .unwrap_or(false)
-        {
-            return Ok(false);
-        }
-        Self::stop_task(&self.handles, &mut state).await
     }
     /// Ok(true): retired. Ok(false): not retirable (for example proposals still
     /// await acceptance) but every original child is reaped, so the window is
