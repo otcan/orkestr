@@ -24,6 +24,10 @@ ATTACHMENT_MAX_JSON = 68 * 1024 * 1024
 # (POST) and any read after a transport failure re-verifies first. Idle
 # polling of many bindings otherwise costs two extra requests per read.
 READ_RECHECK_S = 30
+# The server issues sessions with a fixed 12 h lifetime. A 401 is treated as a
+# revocation (no silent re-login), so the session is renewed well before it
+# would expire instead.
+SESSION_RENEW_S = 10 * 60 * 60
 
 
 class ClientError(RuntimeError):
@@ -132,6 +136,7 @@ class RustSession:
         self._revoked = False
         self.generation = 0
         self._verified_at = None
+        self._logged_in_at = 0.0
         self._lock = threading.RLock()
 
     def _wire(self, method, path, body=None, allowed=(200,), events=False,
@@ -226,6 +231,10 @@ class RustSession:
         always verifies the server identity and session first."""
         with self._lock:
             require(not self._revoked, "session_revoked")
+            if self._cookie and time.monotonic() - self._logged_in_at >= SESSION_RENEW_S:
+                # Log in again while the current session is still valid.
+                self._cookie = self._csrf = None
+                self._verified_at = None
             if (not mutation and self._cookie and self._verified_at is not None and
                     time.monotonic() - self._verified_at < READ_RECHECK_S):
                 return self.generation
@@ -259,7 +268,7 @@ class RustSession:
                 raise
             self._cookie = f"orkestr_v2_session={cookie.value}"
             self.generation += 1
-            self._verified_at = time.monotonic()
+            self._verified_at = self._logged_in_at = time.monotonic()
             return self.generation
 
 
