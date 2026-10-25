@@ -416,7 +416,8 @@ class ExtensionTests(unittest.TestCase):
         self.peer.settings = dict(provider="codex", model="gpt-6-astra", revision=3)
         Worker(self.peer, self.ledger).step(self.enqueue())
         final = self.ledger.messages()[-1]
-        self.assertEqual((final["provider"], final["model"]), ("codex", "unreported"))
+        self.assertNotIn("provider", final)
+        self.assertEqual(final["model"], "unreported")
 
     def test_final_reply_without_settings_route_omits_provider(self):
         Worker(self.peer, self.ledger).step(self.enqueue())

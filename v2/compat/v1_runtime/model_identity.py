@@ -21,6 +21,8 @@ def observed_identity(call, run_id=None, status=None, fast=False):
                 status = None
         if not valid_run or not isinstance(status, dict) or status.get("run_id") != run_id:
             status = None
+    if run_id is None:
+        status = None
     models = status.get("models") if isinstance(status, dict) else None
     models = models if isinstance(models, dict) else {}
     provider = token(models.get("provider"))
@@ -28,15 +30,15 @@ def observed_identity(call, run_id=None, status=None, fast=False):
     failure = status.get("failure") if isinstance(status, dict) else None
     if isinstance(failure, dict) and failure.get("class") == "policy":
         model = token(models.get("refused_model")) or token(models.get("resolved_model"))
-    if provider is None:
-        try:
-            settings = call("GET", "/settings")
-            provider = token(settings.get("provider")) if isinstance(settings, dict) else None
-        except Exception:
-            provider = None
     # Legacy status or operational posts may have no run evidence. Their
     # configured/declarative model is deliberately not reported as an answer.
     result = {"model": model or "unreported"}
+    if isinstance(status, dict) and run_id is not None and status.get("run_id") == run_id:
+        result.update(identitySource="run", runId=run_id, layer="fast" if fast else "deep")
+        # Current Core may omit actual effort. Never fill it from preferences.
+        effort = models.get("actual_reasoning_effort")
+        if effort in ("low", "medium", "high", "xhigh", "max", "ultra"):
+            result["observedReasoningEffort"] = effort
     if provider:
         result["provider"] = provider
     return result

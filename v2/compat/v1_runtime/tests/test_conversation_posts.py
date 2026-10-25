@@ -24,7 +24,7 @@ class PostTests(Base):
         again, existed = self.ledger.enqueue_post(post(), {"provider": "claude", "model": "later-model"})
         self.assertTrue(existed)
         self.assertEqual(first, again)
-        self.assertEqual(again["model"], "unreported")
+        self.assertEqual(again["model"], "synthetic-model")
     def test_post_is_adopted_exported_verbatim_and_acknowledged(self):
         self.peer.reply_settings = dict(prefix="[Orkestr]", footer="dbg", honor_no_reply=True)
         self.peer.posts = [post()]
@@ -43,7 +43,7 @@ class PostTests(Base):
         self.assertEqual(reply["text"], "Deploy finished.\n\nAll checks green.")
         self.assertEqual((reply["role"], reply["phase"], reply["state"]), ("assistant", "final_answer", "completed"))
         self.assertEqual(reply["parentMessageId"], user["id"])
-        self.assertEqual((reply["provider"], reply["model"]), ("claude", "unreported"))
+        self.assertEqual((reply["provider"], reply["model"]), ("claude", "synthetic-model"))
         self.assertNotIn(("POST", "/settings/render"), self.peer.reads)
         self.assertIsNone(self.ledger.next_input(), "nothing is queued for Rust")
         done = self.ledger.acknowledge(reply["id"], {"outcome": "delivered", "outboxJobId": "job",
@@ -74,12 +74,13 @@ class PostTests(Base):
         with self.assertRaises(Conflict):
             self.ledger.enqueue_post(post(text="Something else"))
 
-    def test_conversation_provider_fills_a_post_without_one(self):
+    def test_missing_post_identity_never_borrows_the_conversation_provider(self):
         self.peer.settings = {"provider": "codex", "model": "gpt-synthetic"}
         self.peer.posts = [post(provider=None, model=None, author="operator", label="Ops alert")]
         self.worker.run_once(_Stop())
         user, reply = self.ledger.messages()
-        self.assertEqual((reply["provider"], reply["model"]), ("codex", "unreported"))
+        self.assertNotIn("provider", reply)
+        self.assertNotIn("model", reply)
         self.assertEqual(user["text"], "Ops alert")
 
     def test_post_waits_for_nothing_behind_a_running_input(self):

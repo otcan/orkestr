@@ -441,7 +441,6 @@ class Worker:
         rows = value.get("posts") if isinstance(value, dict) else None
         if not isinstance(rows, list) or len(rows) > POST_PAGE:
             raise Refused("posts_shape")
-        identity = None
         for row in rows:
             if not (isinstance(row, dict) and all(isinstance(row.get(k), str) and row[k].strip() for k in ("id", "label", "text"))
                     and row.get("author") in POST_AUTHORS and row.get("conversation_id") == self.client.conversation and
@@ -449,9 +448,7 @@ class Worker:
                         for k in ("provider", "model"))):
                 raise Refused("posts_shape")
             uuid.UUID(row["id"])
-            if identity is None:
-                identity = self.provider_identity()
-            self.ledger.enqueue_post(row, identity)
+            self.ledger.enqueue_post(row)
             self.client.request("POST", "/posts/%s/delivered" % row["id"], body={}, allowed=(200,))
 
     def web_text(self, text):

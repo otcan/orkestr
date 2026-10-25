@@ -3,6 +3,7 @@ import json
 import time
 import uuid
 from .ledger import LOCAL_ROLES
+from .layer_identity import IDENTITY_FIELDS
 
 FIRST_RESPONSE_NAMESPACE = uuid.UUID("e1cc360c-9c08-4cc5-8798-817864e93f23")
 FINAL_ORDERING_LIMIT_S = 15
@@ -14,8 +15,8 @@ def add(ledger, data, payload_id, text, identity=None):
     remote = str(uuid.uuid5(FIRST_RESPONSE_NAMESPACE, "input:" + source))
     message = dict(id=str(uuid.uuid5(FIRST_RESPONSE_NAMESPACE, "reply:" + source)), role="assistant",
                    state="completed", phase="final_answer", source="rust-v2-adapter",
-                   parentMessageId=remote, text=text, firstResponse=True)
-    message.update({k:v for k,v in (identity or {}).items() if k in ("provider", "model") and v})
+                   parentMessageId=remote, text=text, firstResponse=True, layer="fast", sourceInputId=data["remote_id"])
+    message.update({k:v for k,v in (identity or {}).items() if k in IDENTITY_FIELDS and v})
     with ledger.connect() as db:
         db.execute("BEGIN IMMEDIATE")
         data["first_response"].update(remote_id=remote, export_id=message["id"])

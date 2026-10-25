@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+from .layer_identity import IDENTITY_FIELDS, attach_scope, post_identity
 import sqlite3
 import time
 import uuid
@@ -319,8 +320,8 @@ class Ledger:
         post's label; the reply text is exactly the post text. Input and export
         are written in one transaction, so the post never waits behind a running
         input and a replay after a lost acknowledgement adopts nothing new.
-        Native `identity` supplies the footer independently of the post's
-        declared model and is not part of its identity. Returns (reply, existed).
+        External posts preserve their own provider/model. Native questions may
+        supply exact-run `identity`; neither path borrows conversation settings. Returns (reply, existed).
         """
         post_id = record["id"]
         digest = hashlib.sha256(json.dumps({k: record.get(k) for k in ("id", "author", "label", "text", "provider", "model")},
@@ -337,10 +338,7 @@ class Ledger:
             label = (record.get("label") or "Coordinator")[:TIMER_TEXT_LIMIT]
             reply = {"id": str(uuid.uuid5(POST_NAMESPACE, "reply:" + post_id)), "role": "assistant", "state": "completed",
                      "phase": "final_answer", "source": "rust-v2-pilot", "parentMessageId": remote_id, "text": record["text"]}
-            footer = {k: record[k] for k in ("provider", "model") if record.get(k)}
-            if identity:
-                footer.update({k: identity[k] for k in ("provider", "model") if identity.get(k)})
-            reply.update({k: footer[k] for k in ("provider", "model") if footer.get(k)})
+            reply.update(post_identity(db, record, identity))
             data = {"remote_id": remote_id, "public_id": public_id, "origin": "timer", "text": label,
                     "public_thread_id": self.scope.get("public_thread_id"), "chat_id": self.scope.get("chat_id"),
                     "account_id": self.scope.get("account_id"),
@@ -405,7 +403,7 @@ class Ledger:
         reply = {"id": str(uuid.uuid5(WEB_NAMESPACE, "mirror-reply:" + message_id)), "role": "assistant",
                  "state": "completed", "phase": "final_answer", "source": "rust-v2-web-mirror",
                  "parentMessageId": remote_id, "text": text}
-        reply.update({k: v for k, v in (identity or {}).items() if k in ("provider", "model") and v})
+        reply.update({k: v for k, v in (identity or {}).items() if k in IDENTITY_FIELDS and v})
         excerpt = " ".join(text.split())
         excerpt = excerpt if len(excerpt) <= WEB_EXCERPT_CHARS else excerpt[:WEB_EXCERPT_CHARS].rstrip() + "\u2026"
         watch = {"message_id": message_id, "sequence": message["sequence"], "excerpt": excerpt,
@@ -438,7 +436,7 @@ class Ledger:
         reply = {"id": str(uuid.uuid5(WEB_NAMESPACE, "progress-reply:%s:%s" % (message_id, payload_id))),
                  "role": "assistant", "state": "completed", "phase": "final_answer", "source": "rust-v2-web-mirror",
                  "parentMessageId": remote_id, "text": text}
-        reply.update({k: v for k, v in (identity or {}).items() if k in ("provider", "model") and v})
+        reply.update({k: v for k, v in (identity or {}).items() if k in IDENTITY_FIELDS and v})
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
             self._pseudo_timer(db, remote_id, "%s progress: %s" % (WEB_LABEL, watch["excerpt"]), int(time.time() * 1000),
@@ -453,7 +451,7 @@ class Ledger:
         reply = {"id": str(uuid.uuid5(WEB_NAMESPACE, "answer-reply:" + message_id)), "role": "assistant",
                  "state": "completed", "phase": "final_answer", "source": "rust-v2-pilot",
                  "parentMessageId": remote_id, "text": text}
-        reply.update({k: v for k, v in (identity or {}).items() if k in ("provider", "model") and v})
+        reply.update({k: v for k, v in (identity or {}).items() if k in IDENTITY_FIELDS and v})
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
             self._pseudo_timer(db, remote_id, "%s \u21a9 %s" % (WEB_LABEL, watch["excerpt"]), int(time.time() * 1000),
@@ -581,6 +579,7 @@ class Ledger:
 
     # Exports -----------------------------------------------------------
     def _export(self, db, data, kind, source_key, message):
+        attach_scope(message, data)
         inserted = db.execute("INSERT OR IGNORE INTO exports(export_id,input_id,kind,source_key,message) VALUES (?,?,?,?,?)",
                               (message["id"], data["remote_id"], kind, source_key, json.dumps(message)))
         if inserted.rowcount:
@@ -623,7 +622,7 @@ class Ledger:
                 return None
             message = {"id": str(uuid.uuid4()), "role": "assistant", "state": "completed", "phase": "commentary",
                        "kind": "progress", "source": "rust-v2-adapter", "parentMessageId": data["remote_id"], "text": text}
-            message.update({k: v for k, v in (identity or {}).items() if k in ("provider", "model") and v})
+            message.update({k: v for k, v in (identity or {}).items() if k in IDENTITY_FIELDS and v})
             self._export(db, data, "progress", "progress:%s:%s" % (data["remote_id"], payload_id), message)
             return message
 
