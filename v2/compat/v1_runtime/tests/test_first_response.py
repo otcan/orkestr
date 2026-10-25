@@ -145,6 +145,19 @@ class FirstResponseTests(unittest.TestCase):
         with self.ledger.connect() as db:
             self.assertEqual(db.execute('SELECT count(*) FROM inputs').fetchone()[0],1)
 
+    def test_latency_uses_only_the_explicit_fast_parent_and_confirmed_receipt(self):
+        from v2.compat.v1_runtime.latency import measure
+        self.configure();self.step_at(1)
+        fast=self.replies()[0]
+        parent=next(row for row in self.ledger.messages() if row['id']==fast['parentMessageId'])
+        self.ledger.acknowledge(fast['id'],dict(outcome='delivered',outboxJobId='fake-fast',parentPublicMessageId=parent['publicMessageId'],
+            connectorMessageIds=['fake-receipt'],deliveredAt='1970-01-01T00:01:42+00:00'))
+        result=measure(self.ledger.path,100000)
+        self.assertEqual((result['sample_n'],result['p50_ms'],result['samples'][0]['first_kind']),(1,2000,'fast'))
+        with self.ledger.connect() as db:
+            db.execute("UPDATE inputs SET data=json_set(data,'$.first_response_for.input_id','foreign') WHERE remote_id=?",(fast['parentMessageId'],))
+        self.assertEqual(measure(self.ledger.path,100000)['sample_n'],0)
+
 
 if __name__ == "__main__":
     unittest.main()

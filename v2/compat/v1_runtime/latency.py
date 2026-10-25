@@ -25,24 +25,29 @@ def measure(path, after_ms):
     samples, silent, pending, invalid = [], 0, 0, 0
     with closing(sqlite3.connect(Path(path).resolve(strict=True).as_uri() + "?mode=ro", uri=True)) as db:
         db.execute("BEGIN")
-        inputs = db.execute("SELECT remote_id,json_extract(data,'$.queued_at'),json_extract(data,'$.settled.outcome') "
+        inputs = db.execute("SELECT remote_id,json_extract(data,'$.queued_at'),json_extract(data,'$.settled.outcome'), "
+                            "json_extract(data,'$.first_response.remote_id') "
                             "FROM inputs WHERE json_extract(data,'$.origin') IS NULL "
                             "AND json_extract(data,'$.absorbed_into') IS NULL "
                             "AND json_extract(data,'$.queued_at')>=? ORDER BY rowid", (after_ms / 1000,)).fetchall()
-        for remote, queued, outcome in inputs:
+        for remote, queued, outcome, fast in inputs:
             receipts = []
+            if fast:
+                origin = db.execute("SELECT json_extract(data,'$.first_response_for.input_id') FROM inputs WHERE remote_id=?", (fast,)).fetchone()
+                if not origin or origin[0] != remote:
+                    fast = None
             # Progress may be superseded before its late, genuine send ACK
             # arrives. Count that receipt too; supersession cannot unsend it.
-            for seq, kind, raw in db.execute("SELECT seq,kind,ack FROM exports WHERE input_id=? AND "
+            for seq, kind, raw, parent in db.execute("SELECT seq,kind,ack,input_id FROM exports WHERE input_id IN (?,?) AND "
                                              "source_key NOT LIKE 'stalled:%' AND source_key NOT LIKE 'heartbeat:%' "
                                              "AND source_key NOT LIKE 'continued:%' AND "
-                                             "(outcome='delivered' OR (outcome='superseded' AND json_extract(ack,'$.outcome')='delivered'))", (remote,)):
+                                             "(outcome='delivered' OR (outcome='superseded' AND json_extract(ack,'$.outcome')='delivered'))", (remote,fast)):
                 ack = json.loads(raw) if raw else None
                 sent = send_time(ack)
                 if sent is None or not isinstance(queued, (int, float)) or not math.isfinite(queued) or sent < queued:
                     invalid += 1
                     continue
-                receipts.append((sent, seq, kind))
+                receipts.append((sent, seq, "fast" if parent == fast else kind))
             if receipts:
                 sent, seq, kind = min(receipts)
                 samples.append({"input_id": remote, "first_export_sequence": seq, "first_kind": kind,

@@ -299,6 +299,11 @@ class Worker:
         the owner sees it while the turn continues to its single final.
         """
         scanned = data.setdefault("questions_scanned", [])
+        if len(scanned) >= QUESTION_SCAN_LIMIT and not data.get("question_scan_cap_logged"):
+            data["question_scan_cap_logged"] = True
+            self.ledger.save(data)
+            print("ALERT orkestr-v2-wa-adapter question_scan_cap conversation=%s input=%s cap=%d"
+                  % (getattr(self.client,"conversation","?"),data["remote_id"],QUESTION_SCAN_LIMIT),file=sys.stderr,flush=True)
         for event in events:
             payload = event.get("payload_ref_or_safe_payload") or {}
             observation = payload.get("observation") or {}
