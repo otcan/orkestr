@@ -10,7 +10,8 @@ import urllib.request
 
 
 def docker(*args):
-    return subprocess.check_output(['docker', *args], text=True).strip()
+    return subprocess.check_output(['docker', *args], text=True,
+            **({'stderr': subprocess.STDOUT} if args[0] == 'logs' else {})).strip()
 
 
 def main():
