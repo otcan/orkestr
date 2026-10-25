@@ -206,8 +206,7 @@ class Worker:
         self.burst_quiet_s = burst_quiet_s
         self.attachment_dir, self.attachment_gid = attachment_dir, attachment_gid
         self.progress_updates = progress_updates
-        self.fast_reply_policy = "owner_only"
-        self.has_participants = False
+        self.fast_reply_policy = "legacy"
         self.max_input_age_s = max_input_age_s
         self._digest_checked = None
         self._posts_checked = None

@@ -27,6 +27,7 @@ class FirstResponseTests(unittest.TestCase):
             return original(method, route, **kwargs)
         self.peer.request = request
         self.worker = Worker(self.peer, self.ledger, progress_updates=True)
+        self.worker.fast_reply_policy = "owner_only"
 
     def step_at(self, seconds):
         with patch("time.time", return_value=100 + seconds):
@@ -49,6 +50,7 @@ class FirstResponseTests(unittest.TestCase):
         self.assertEqual([r["text"] for r in first], [self.state["fast"]])
         self.assertTrue(first[0]["firstResponse"])
         self.worker = Worker(self.peer, self.ledger, progress_updates=True)
+        self.worker.fast_reply_policy="owner_only"
         self.step_at(6)
         self.assertEqual(self.replies(), first)
         self.assertNotIn("deep", self.peer.accepted)
@@ -131,6 +133,7 @@ class FirstResponseTests(unittest.TestCase):
         self.configure(deep="ready");self.step_at(1)
         (fast,)=self.replies()
         self.worker=Worker(self.peer,self.ledger,progress_updates=False)
+        self.worker.fast_reply_policy="owner_only"
         self.step_at(2);self.assertEqual(self.replies(),[fast])
         self.ack_fast();self.step_at(3)
         (final,)=self.replies();self.assertFalse(final.get('firstResponse'))
@@ -148,7 +151,7 @@ class FirstResponseTests(unittest.TestCase):
         self.assertEqual([row['text'] for row in self.replies()],[self.state['final']])
 
     def test_participant_binding_preserves_existing_preference_coalesce_and_ready_deep_policy(self):
-        self.configure();self.worker.has_participants=True;self.worker.progress_updates=False
+        self.configure();self.worker.fast_reply_policy="legacy";self.worker.progress_updates=False
         self.step_at(1);self.step_at(6);self.assertEqual(self.replies(),[])
         self.worker.progress_updates=True;self.step_at(7)
         self.assertEqual(len(self.replies()),1)
@@ -161,7 +164,7 @@ class FirstResponseTests(unittest.TestCase):
         self.assertEqual([row['text'] for row in self.replies()],[self.state['final']])
 
     def test_participant_binding_keeps_ready_final_supersession(self):
-        self.configure(deep="ready");self.worker.has_participants=True
+        self.configure(deep="ready");self.worker.fast_reply_policy="legacy"
         self.step_at(1)
         self.assertEqual([row['text'] for row in self.replies()],[self.state['final']])
 
@@ -174,6 +177,7 @@ class FirstResponseTests(unittest.TestCase):
         self.configure(deep="ready");self.step_at(1)
         (fast,)=self.replies()
         self.worker=Worker(self.peer,self.ledger)
+        self.worker.fast_reply_policy="owner_only"
         self.step_at(15);self.assertEqual(self.replies(),[fast])
         self.step_at(16);(final,)=self.replies()
         self.assertEqual(final['text'],self.state['final'])

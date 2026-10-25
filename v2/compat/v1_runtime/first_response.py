@@ -12,7 +12,7 @@ def capture(worker, data, statuses, own_runs):
     policy = worker.fast_reply_policy
     if policy == "disabled":
         return
-    if policy == "legacy" or worker.has_participants:
+    if policy == "legacy":
         return capture_legacy(worker, data, statuses, own_runs)
     # Operational timers keep their separate digest/reply rules. Interactive
     # Fast is a reply of its own, independent of the ordinary progress setting.

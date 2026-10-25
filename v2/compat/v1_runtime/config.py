@@ -16,7 +16,7 @@ SCOPE_FIELDS = {"conversation_id", "public_thread_id", "chat_id", "account_id", 
 BINDING_FIELDS = SCOPE_FIELDS | {"enabled", "revoked", "progress_updates", "attachments", "max_outstanding_inputs"}
 # Optional binding fields and their defaults.
 OPTIONAL_BINDING_FIELDS = {"max_input_age_seconds": 30 * 60, "participants": [], "owner_label": "Owner",
-                           "instructions_path": None, "fast_reply_policy": "owner_only"}
+                           "instructions_path": None, "fast_reply_policy": "legacy"}
 # Group participants other than the owner. The owner is only ever the verified
 # `allowed_principals`; a participant can never hold the owner role.
 PARTICIPANT_ROLES = ("member", "none")

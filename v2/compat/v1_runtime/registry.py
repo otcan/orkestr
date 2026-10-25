@@ -159,7 +159,6 @@ class Registry:
                                     burst_quiet_s=DEFAULT_BURST_QUIET_S)
         binding.worker.progress_updates = binding.config["progress_updates"]
         binding.worker.fast_reply_policy = binding.config["fast_reply_policy"]
-        binding.worker.has_participants = bool(binding.config["participants"])
         binding.worker.attachments = binding.config["attachments"]
         binding.worker.max_input_age_s = binding.config["max_input_age_seconds"]
         binding.worker.instructions_path = binding.config["instructions_path"]
