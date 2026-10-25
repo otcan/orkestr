@@ -85,7 +85,7 @@ class BurstTests(unittest.TestCase):
 
     def test_a_single_input_is_sent_unchanged(self):
         self.ledger.enqueue(body("a", "only one"))
-        Worker(self.peer, self.ledger).step(self.ledger.next_input())
+        Worker(self.peer, self.ledger, burst_quiet_s=3).step(self.ledger.next_input())
         self.assertEqual(self.intakes(), ["only one"])
 
     def test_inputs_from_another_chat_or_author_or_already_sent_never_join(self):

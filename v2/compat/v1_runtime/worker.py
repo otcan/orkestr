@@ -658,7 +658,8 @@ class Worker:
         rows = self.ledger.burst_candidates(data, BURST_MAX_INPUTS - 1)
         now = time.time() if now is None else now
         first = data.get("queued_at")
-        if self.burst_quiet_s and isinstance(first, (int, float)):
+        single_text = not rows and not data.get("attachments") and bool((data.get("text") or "").strip())
+        if self.burst_quiet_s and not single_text and isinstance(first, (int, float)):
             newest = max([first] + [r["queued_at"] for r in rows if isinstance(r.get("queued_at"), (int, float))])
             if now - newest < self.burst_quiet_s and now - first < max(BURST_MAX_WAIT_S, self.burst_quiet_s):
                 # The next pass comes when the burst is due, not a whole pass later.

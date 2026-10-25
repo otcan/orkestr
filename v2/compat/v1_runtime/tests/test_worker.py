@@ -71,7 +71,7 @@ class Peer:
                 progress=dict(payload_id=role + "-payload"))
         if route.startswith("/payloads/"):
             role = "fast" if "fast" in route else "deep"
-            return 200, dict(run_id=role + "-run", payload_id=role + "-payload", text=role + " result")
+            return 200, dict(run_id=role + "-run", payload_id=role + "-payload", text="NO_REPLY" if role == "fast" else role + " result")
         if route == "/accept":
             role = body["run_id"].split("-")[0]
             receipt = self.accepted.setdefault(role, dict(body, requested_revision=body["expected_revision"],

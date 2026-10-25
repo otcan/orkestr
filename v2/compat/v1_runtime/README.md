@@ -56,8 +56,8 @@ younger than 30 s, and any transport failure forces a new check.
 A binding with an input in flight steps it every second. An idle binding
 sleeps until its next Rust poll is due (timer occurrences and posts every 5 s,
 digests every 30 s, at most 5 s per pass); a new inbound input wakes its
-worker at once. The burst debounce still applies: a fresh input is sent when
-its chat has been quiet for 3 s (each new message of the burst restarts the
+worker at once. A single plain text message is admitted immediately. A queued
+burst or attachment waits until its chat has been quiet for 3 s (each new message of the burst restarts the
 wait), and the worker wakes exactly then rather than up to a pass later. With dozens of bindings this keeps idle polling to roughly
 about `0.43 x bindings` requests per second.
 

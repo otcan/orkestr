@@ -138,10 +138,11 @@ class BurstWakeTests(unittest.TestCase):
         peer.request = request
         thread = threading.Thread(target=worker.run, args=(signal,), daemon=True)
         with contextlib.redirect_stderr(io.StringIO()):
-            thread.start()
             message("a", "first")
-            time.sleep(0.3)
             message("b", "second")
+            thread.start()
+            time.sleep(0.3)
+            message("c", "third")
             last = time.monotonic()
             deadline = last + 5
             while not intakes() and time.monotonic() < deadline:
@@ -149,7 +150,7 @@ class BurstWakeTests(unittest.TestCase):
             signal.set()
             thread.join(5)
         (at, text), = intakes()
-        self.assertEqual(text, "\n\n".join([BURST_NOTE % 2, "first", "second"]))
+        self.assertEqual(text, "\n\n".join([BURST_NOTE % 3, "first", "second", "third"]))
         self.assertGreaterEqual(at - last, 0.55, "the quiet period is kept")
         self.assertLess(at - last, 0.6 + 0.5, "sent when quiet, not a whole pass later")
 
