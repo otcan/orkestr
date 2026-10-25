@@ -22,7 +22,7 @@ def main():
     name = 'orkestr-fresh-' + secrets.token_hex(6)
     volumes = [name + '-state', name + '-credentials']
     created = []
-    report = {'source': a.source, 'image': a.image, 'real_accounts': 0,
+    report = {'source': a.source, 'image': a.image, 'passed': False, 'real_accounts': 0,
               'provider_logins': 0, 'provider_inference': 0, 'checks': []}
     def passed(name):
         report['checks'].append(name)
@@ -71,6 +71,9 @@ def main():
                 health = request('/api/v2/health')
                 break
             except (OSError, ValueError):
+                if docker('inspect', '--format', '{{.State.Running}}', name) != 'true':
+                    report['startup_log_tail'] = docker('logs', '--tail', '12', name)[-4096:]
+                    raise RuntimeError('fresh container exited before health')
                 assert time.monotonic() < deadline, 'fresh container did not become healthy'
                 time.sleep(1)
         assert health['status'] == 'ok' and health['build']['source_commit'] == a.source

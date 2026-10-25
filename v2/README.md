@@ -20,8 +20,7 @@ select the approved tag instead:
 git clone --branch feat/v2-beta1-install https://github.com/otcan/orkestr.git
 cd orkestr
 export ORKESTR_SOURCE_COMMIT=$(git rev-parse HEAD)
-docker compose -f v2/packaging/oss/compose.yaml build
-docker compose -f v2/packaging/oss/compose.yaml up -d
+docker compose -f v2/packaging/oss/compose.yaml up -d --build
 docker compose -f v2/packaging/oss/compose.yaml ps
 ```
 
