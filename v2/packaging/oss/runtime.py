@@ -10,6 +10,9 @@ import sys
 import time
 import urllib.request
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from capabilities import drop_child_capabilities
+
 ROOT = Path('/opt/orkestr')
 SOURCE = ROOT / 'source'
 STATE = Path('/state')
@@ -84,6 +87,7 @@ def dropped_environment():
 
 def login(provider):
     initialize()
+    drop_child_capabilities()
     env = dropped_environment()
     if provider == 'codex':
         argv = [str(ROOT / 'providers/codex'), 'login', '--device-auth']
@@ -118,6 +122,7 @@ def configure():
     import getpass
     import uuid
     initialize()
+    drop_child_capabilities()
     require(not (STATE / 'owner.json').exists(), 'already configured; automatic reconfiguration refused')
     require(logged_in('codex') and logged_in('claude'), 'provider_login_required: run login codex and login claude')
     credentials = {'username': input('Orkestr owner username: '), 'password': getpass.getpass('Orkestr owner password: ')}
@@ -186,7 +191,8 @@ def serve():
         require(stat.S_ISREG(info.st_mode) and info.st_uid == 0 and info.st_nlink == 1
                 and stat.S_IMODE(info.st_mode) == 0o600, 'owner scope custody refused')
         release = prepare(json.loads(owner_file.read_text()))
-        argv, kwargs = [str(release / 'start-service')], {}
+        argv, kwargs = ['/usr/bin/python3', '-I', '-S', '-B',
+                        str(SOURCE / 'v2/packaging/oss/capabilities.py'), str(release)], {}
     else:
         print('provider_login_required: create the Orkestr owner, then login codex, login claude, configure', flush=True)
         argv = [str(ROOT / 'server')]
@@ -203,7 +209,12 @@ def serve():
     signal.signal(signal.SIGTERM, finish)
     signal.signal(signal.SIGINT, finish)
     try:
+        if kwargs:
+            drop_child_capabilities()
         child = subprocess.Popen(argv, cwd='/', **kwargs)
+        if not kwargs:
+            # The dedicated root manager got its own copy before PID1 drops Bnd.
+            drop_child_capabilities()
         proxy = subprocess.Popen(['/usr/sbin/nginx', '-c', str(SOURCE / 'v2/packaging/oss/nginx.conf')],
                                  user=UID, group=GID, extra_groups=[])
         while not ending:

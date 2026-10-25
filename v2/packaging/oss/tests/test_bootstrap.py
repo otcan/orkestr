@@ -62,7 +62,8 @@ class BootstrapTests(unittest.TestCase):
     def test_no_owner_authentication_before_both_provider_logins(self):
         runtime = load('runtime')
         with tempfile.TemporaryDirectory() as scratch, patch.object(runtime, 'STATE', Path(scratch)), \
-                patch.object(runtime, 'initialize'), patch.object(runtime, 'logged_in', return_value=False), \
+                patch.object(runtime, 'initialize'), patch.object(runtime, 'drop_child_capabilities'), \
+                patch.object(runtime, 'logged_in', return_value=False), \
                 patch.object(runtime, 'request') as request:
             with self.assertRaisesRegex(RuntimeError, 'provider_login_required'):
                 runtime.configure()

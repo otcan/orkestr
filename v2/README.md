@@ -83,10 +83,18 @@ supports localhost and SSH forwarding; its origin is fixed to
 `http://127.0.0.1:19822`. Public reverse-proxy origin configuration needs separate
 qualification. Do not publish its internal port directly to the internet.
 
-The root manager drops model processes to UID 10001. Provider tools can use the
-container's workspaces and CLI credentials: this is a single trusted owner's
-instance. Compose mounts no host files, Docker socket or host namespaces and
-requests no privileged container access.
+Compose adds **SYS_PTRACE to the root manager** so its existing peer checks can
+verify `/proc/<owned-service-pid>/exe` after dropping the server to UID 10001.
+Default Docker capabilities deny that cross-UID observation. The AI process
+has **empty effective, permitted, inheritable, ambient and bounding capability
+sets**, verified in CI on the actual non-root Core process and an exec child.
+The container root manager clears its bounding/inheritable/ambient sets before
+running the fully verified protected entry in the same process; it retains only
+its already-held root execution privileges. Descendant execs cannot inherit
+SYS_PTRACE. CI also proves the executable check fails without the added cap.
+This capability is
+confined to the container's own PID namespace; Compose mounts no host files,
+Docker socket or host namespaces and does not use privileged mode.
 
 This uses the existing full-access provider profile **inside the Docker
 boundary**. It does not use nested Bubblewrap namespaces, which Docker's default

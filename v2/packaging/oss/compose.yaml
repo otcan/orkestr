@@ -17,6 +17,10 @@ services:
       - /tmp:rw,nosuid,nodev,size=256m
     security_opt:
       - no-new-privileges:true
+    # Root manager verifies the exact dropped server via /proc/<pid>/exe.
+    # Provider UID 10001 has no effective capabilities; no host PID namespace.
+    cap_add:
+      - SYS_PTRACE
     pids_limit: 256
     stop_grace_period: 45s
     restart: "no"

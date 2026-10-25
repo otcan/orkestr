@@ -39,6 +39,20 @@ def main():
                "assert not Path('/root/.codex/auth.json').exists(); "
                "assert not Path('/root/.claude/.credentials.json').exists()")
         passed('image has empty state/credential roots and no provider secret environment')
+        necessity = '''
+import errno,os,subprocess
+p=subprocess.Popen(['/bin/sleep','10'],user=10001,group=10001,extra_groups=[])
+try:
+    try: os.readlink('/proc/'+str(p.pid)+'/exe')
+    except PermissionError as error: assert error.errno==errno.EACCES
+    else: raise AssertionError('default capabilities unexpectedly allow cross-UID executable inspection')
+finally:
+    p.terminate();p.wait(timeout=5)
+print('root_observation_requires_added_capability')
+'''
+        assert 'root_observation_requires_added_capability' in docker('run', '--rm', '--network', 'none',
+               '--entrypoint', '/usr/bin/python3', a.image, '-I', '-S', '-B', '-c', necessity)
+        passed('negative control: default root capabilities cannot inspect a dropped owned executable')
         for volume in volumes:
             docker('volume', 'create', volume)
             created.append(volume)
@@ -50,7 +64,8 @@ def main():
                "assert not list(Path('/credentials').iterdir())")
         passed('new named volumes are empty before initialization')
         docker('run', '--detach', '--name', name, '--memory', '2g', '--cpus', '2', '--pids-limit', '256',
-               '--security-opt', 'no-new-privileges:true', '--tmpfs', '/tmp:rw,nosuid,nodev,size=256m',
+               '--security-opt', 'no-new-privileges:true', '--cap-add', 'SYS_PTRACE',
+               '--tmpfs', '/tmp:rw,nosuid,nodev,size=256m',
                '--publish', '127.0.0.1::19823', '--mount', f'type=volume,src={volumes[0]},dst=/state',
                '--mount', f'type=volume,src={volumes[1]},dst=/credentials', a.image)
         inspected = json.loads(docker('inspect', '--format', '{{json .Mounts}}', name))
@@ -59,13 +74,14 @@ def main():
         port = json.loads(docker('inspect', '--format', '{{json .NetworkSettings.Ports}}', name))['19823/tcp'][0]
         assert port['HostIp'] == '127.0.0.1'
         base = 'http://127.0.0.1:' + port['HostPort']
-        def request(path, body=None, headers=None, raw=False):
+        def request(path, body=None, headers=None, raw=False, response_headers=False):
             data = None if body is None else json.dumps(body).encode()
             req = urllib.request.Request(base + path, data=data,
                     headers={'Content-Type': 'application/json', 'Host': '127.0.0.1:19822', **(headers or {})})
             with urllib.request.urlopen(req, timeout=10) as response:
                 result = response.read()
-                return result if raw else json.loads(result)
+                value = result if raw else json.loads(result)
+                return (value, {k.lower(): v for k, v in response.headers.items()}) if response_headers else value
         deadline = time.monotonic() + 120
         while True:
             try:
@@ -94,14 +110,16 @@ def main():
         passed('setup rejects unauthenticated callers; synthetic owner created')
         session = request('/api/v2/machine/session', credentials)
         assert session['global_conversation_id'] == setup['global_conversation_id']
-        headers = {'Authorization': 'Bearer ' + session['token']}
+        browser, browser_headers = request('/api/v2/browser/session', credentials,
+                    {'Origin': 'http://127.0.0.1:19822'}, response_headers=True)
+        assert browser['global_conversation_id'] == setup['global_conversation_id']
+        passed('browser cookie/CSRF login with the exact configured origin')
+        headers = {'Cookie': browser_headers['set-cookie'].split(';', 1)[0],
+                   'Origin': 'http://127.0.0.1:19822', 'x-orkestr-csrf': browser['csrf_token']}
         conversation = request('/api/v2/conversations', {'client_request_id': 'fresh-install-thread',
                                 'name': 'Synthetic fresh thread'}, headers)['conversation_id']
         assert conversation != setup['global_conversation_id']
         passed('owner login and new conversation via supported API')
-        browser = request('/api/v2/browser/session', credentials, {'Origin': 'http://127.0.0.1:19822'})
-        assert browser['global_conversation_id'] == setup['global_conversation_id']
-        passed('browser cookie/CSRF login with the exact configured origin')
         assert 'provider_login_required' in docker('logs', name)
         native = docker('exec', name, '/opt/orkestr/providers/codex', '--version')
         assert '0.163.0' in native
@@ -119,6 +137,41 @@ def main():
                       "print(next(s.split()[1] for s in open('/proc/self/status') if s.startswith('CapEff:')))")
         assert int(caps, 16) == 0
         passed('provider UID has zero effective capabilities; nested namespace outcome recorded')
+        peer_probe = '''
+from pathlib import Path
+import subprocess,sys
+sys.path.insert(0,'/opt/orkestr/source/v2/packaging/oss')
+from capabilities import drop_child_capabilities,masks
+drop_child_capabilities()
+assert masks()['CapBnd']==masks()['CapInh']==masks()['CapAmb']==0
+assert masks()['CapEff'] & (1<<19)
+p=subprocess.Popen(['/bin/sleep','10'],user=10001,group=10001,extra_groups=[])
+try:
+    expected=Path('/bin/sleep').resolve()
+    actual=Path('/proc')/str(p.pid)/'exe'
+    assert actual.resolve()==expected
+    assert (actual.stat().st_dev,actual.stat().st_ino)==(expected.stat().st_dev,expected.stat().st_ino)
+    status=dict(line.split(':',1) for line in (Path('/proc')/str(p.pid)/'status').read_text().splitlines())
+    assert all(int(status[key].strip(),16)==0 for key in ('CapInh','CapPrm','CapEff','CapBnd','CapAmb'))
+    expected_server=Path('/opt/orkestr/server').stat()
+    servers=[]
+    for candidate in Path('/proc').iterdir():
+        if not candidate.name.isdigit():continue
+        try:
+            exe=(candidate/'exe').stat()
+            if (exe.st_dev,exe.st_ino)==(expected_server.st_dev,expected_server.st_ino):
+                servers.append(dict(line.split(':',1) for line in (candidate/'status').read_text().splitlines()))
+        except OSError: pass
+    assert len(servers)==1
+    assert set(servers[0]['Uid'].split())=={'10001'}
+    assert all(int(servers[0][key].strip(),16)==0 for key in ('CapInh','CapPrm','CapEff','CapBnd','CapAmb'))
+    assert servers[0]['NoNewPrivs'].strip()=='1'
+finally:
+    p.terminate();p.wait(timeout=5)
+print('root_peer_proof_passed')
+'''
+        assert 'root_peer_proof_passed' in docker('exec', name, '/usr/bin/python3', '-I', '-S', '-B', '-c', peer_probe)
+        passed('root peer proof works while actual Core and exec child have all five capability sets empty')
         refused = subprocess.run(['docker', 'exec', name, '/usr/bin/python3', '-I', '-S', '-B',
                     '/opt/orkestr/source/v2/packaging/oss/runtime.py', 'configure'],
                     capture_output=True, text=True, timeout=65)
@@ -127,7 +180,7 @@ def main():
         # Validate the real generated package using a synthetic auth *placeholder*.
         # Never activate it or write owner.json: provider launch remains disabled.
         composition = '''
-import importlib.util,json,sys
+import importlib.util,json,os,sys
 from pathlib import Path
 spec=importlib.util.spec_from_file_location('oss_runtime','/opt/orkestr/source/v2/packaging/oss/runtime.py')
 r=importlib.util.module_from_spec(spec);spec.loader.exec_module(r)
@@ -140,10 +193,13 @@ try:
     assert not Path('/state/owner.json').exists()
     sys.path[:0]=[str(package/'package'),str(package/'package/broker')]
     from codex_service.package import Package
-    from codex_service.profile import Configuration
+    from codex_service.profile import host_command
+    from codex_service.ownership import host_full_access
     selected=Package(package/'package')
-    command,descriptors=Configuration(selected).isolated_command()
-    assert command[0]=='/usr/bin/env' and '/usr/bin/bwrap' not in command and not descriptors
+    os.setgroups([]);os.setgid(10001);os.setuid(10001)
+    assert host_full_access(selected) is True
+    command=host_command(Path(selected.profile['native']),selected.beta['host_full_access']['environment'])
+    assert command[0]=='/usr/bin/env' and '/usr/bin/bwrap' not in command
     from claude_connector import ClaudeConfiguration
     claude=ClaudeConfiguration.load(package/'package/claude-private.json')
     assert claude.new_session().uncontained is True
@@ -159,6 +215,9 @@ finally:
             'generated manager package validation failed: ' + result.stderr[-2000:]
         passed('real closed manager package validates with a synthetic auth placeholder; never activated')
         docker('restart', '--time', '45', name)
+        rebound = json.loads(docker('inspect', '--format', '{{json .NetworkSettings.Ports}}', name))['19823/tcp'][0]
+        assert rebound['HostIp'] == '127.0.0.1'
+        base = 'http://127.0.0.1:' + rebound['HostPort']
         deadline = time.monotonic() + 60
         while True:
             try:
