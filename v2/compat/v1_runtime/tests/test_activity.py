@@ -86,9 +86,16 @@ class ActivityTests(unittest.TestCase):
         self.assertEqual(notice['phase'],'final_answer')
         self.assertNotEqual(notice['parentMessageId'],self.data['remote_id'])
 
-    def test_delivered_heartbeat_does_not_reset_the_work_activity_clock(self):
+    def test_healthy_notice_is_once_then_a_second_only_at_an_hour_and_never_a_third(self):
         self.advance(1600);self.ack(self.notices()[0],1600)
-        for now in range(1610,2201,10):self.poll(now)
-        self.assertEqual(len(self.notices()),1) # old delivered notice is no longer listed
+        self.advance(4590);self.assertEqual(self.notices(),[])
+        self.poll(4600);self.assertEqual(len(self.notices()),1)
+        self.ack(self.notices()[0],4600);self.advance(8200);self.assertEqual(self.notices(),[])
         with self.ledger.connect() as db:
             self.assertEqual(db.execute("SELECT count(*) FROM inputs WHERE json_extract(data,'$.activity_notice') IS NOT NULL").fetchone()[0],2)
+
+    def test_missing_run_alert_is_immediate_at_detection_and_notice_at_most_every_thirty_minutes(self):
+        self.status=dict(deep=None)
+        self.advance(1600);self.assertEqual(self.ledger.next_input()['activity']['problem'],'no_running_task')
+        self.ack(self.notices()[0],1600);self.advance(3390);self.assertEqual(self.notices(),[])
+        self.poll(3400);self.assertEqual(len(self.notices()),1)
