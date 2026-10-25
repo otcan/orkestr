@@ -222,6 +222,7 @@ class Worker:
         self.attachments = False
         self._timers_checked = None
         self._burst_due = None  # Wall time a waiting burst head may be sent.
+        self._revoked_alerted = False
         # Optional per-binding chat rules file (see instructions.py); not pinned.
         self.instructions_path = None
         self.instructions_error = None
@@ -1280,5 +1281,12 @@ class Worker:
             # refusals are terminal like any other refusal.
             if not transient(error):
                 self.ledger.refuse(data, refusal_reason(error), alert=data.get("origin") == "timer")
+            elif getattr(error, "code", None) == "session_revoked" and not self._revoked_alerted:
+                # Retried, but never silently: nothing reaches Rust until an
+                # operator restores the owner session.
+                self._revoked_alerted = True
+                print("ALERT orkestr-v2-wa-adapter session_revoked conversation=%s input=%s"
+                      % (getattr(self.client, "conversation", "?"), data["remote_id"]),
+                      file=sys.stderr, flush=True)
             stop.wait(4)
         return True

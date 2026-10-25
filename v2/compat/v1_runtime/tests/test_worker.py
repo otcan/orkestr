@@ -1,4 +1,6 @@
+import contextlib
 import copy
+import io
 from pathlib import Path
 import tempfile
 import unittest
@@ -212,7 +214,9 @@ class WorkerTests(unittest.TestCase):
                         return 200, dict(run_id="deep-run", phase=failure)
                     return original(method, route, **kwargs)
                 peer.request = request
-                Worker(peer, ledger).run(Stop())
+                stderr = io.StringIO()
+                with contextlib.redirect_stderr(stderr):
+                    Worker(peer, ledger).run(Stop())
                 # Only this input's own Fast may be settled; a refused Deep never is.
                 self.assertFalse(any(route == "/accept" and body["run_id"] == "deep-run"
                                      for route, body in peer.mutations))
@@ -222,6 +226,8 @@ class WorkerTests(unittest.TestCase):
                     pending = ledger.next_input()
                     self.assertEqual(pending["phase"], "running")
                     self.assertNotIn("refused", pending)
+                    # ...but never silently: the operator is alerted once.
+                    self.assertEqual(stderr.getvalue().count("ALERT orkestr-v2-wa-adapter session_revoked"), 1)
                     continue
                 self.assertIsNone(ledger.next_input())
                 notice = [m for m in ledger.messages() if m["role"] == "assistant"]

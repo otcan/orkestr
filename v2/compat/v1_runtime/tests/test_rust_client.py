@@ -158,6 +158,24 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(len(self.posts(client_module.SESSION)), 1)
         self.assertEqual(self.posts(PREFIX + "/messages"), [])
 
+    def test_an_aging_session_is_renewed_before_the_server_expires_it(self):
+        self.client.request("POST", "/messages", {"client_message_id": "k", "text": "t"}, (202,))
+        generation = self.client.session.generation
+        self.client.session._logged_in_at -= client_module.SESSION_RENEW_S - 60
+        self.client.request("POST", "/messages", {"client_message_id": "k", "text": "t"}, (202,))
+        self.assertEqual(len(self.posts(client_module.SESSION)), 1, "a young session is reused")
+        self.client.session._logged_in_at -= 60
+        self.client.request("POST", "/messages", {"client_message_id": "k", "text": "t"}, (202,))
+        self.assertEqual(len(self.posts(client_module.SESSION)), 2, "an old session logs in again")
+        self.assertEqual(self.client.session.generation, generation + 1)
+        self.assertFalse(self.client._revoked)
+
+    def test_an_aging_session_is_renewed_by_an_idle_read(self):
+        self.client.ensure_login()
+        self.client.session._logged_in_at -= client_module.SESSION_RENEW_S
+        self.assertEqual(self.client.request("GET", "/window", allowed=(200, 204)), (204, None))
+        self.assertEqual(len(self.posts(client_module.SESSION)), 2)
+
     def checks(self):
         return len([row for row in self.server.observed if row[1] == "/api/v2/health"])
 
