@@ -401,20 +401,28 @@ transport send blocks delivery. Binding, parent, participant and route-fence
 checks apply to the immediate path too. Confirmed remote receipts are reported
 to the adapter immediately. None of these events prove recipient reads.
 
-### Optional five-second acknowledgement
+### Optional twenty-second fallback acknowledgement
 
 An operator may configure a literal acknowledgement and opt in individual groups:
 
 ```json
 {
-  "acknowledgement": {"text":"Received — working on it.","since":"2026-01-01T00:00:00Z"},
+  "acknowledgement": {"text":"Received — working on it.","queuedText":"Received, queued behind the current task in this chat; I'll answer when it finishes.","since":"2026-01-01T00:00:00Z"},
   "groups": [{"chatId":"example-group","threadId":"example-thread","name":"Example","deterministicAcknowledgement":true}]
 }
 ```
 
-The acknowledgement is eligible at intake plus five seconds, only for new
+The acknowledgement is eligible at intake plus twenty seconds, only for new
 interactive owner inputs in those groups. Thread update suppression, route
 holds and binding checks still apply. Timer and participant inputs are excluded.
+Fresh exact-input running evidence (no older than five seconds) is required for
+the working acknowledgement. An adapter input whose current phase is `queued`
+gets the truthful `queuedText` instead, without claiming execution started.
+`queuedText` defaults to the English sentence above; set it in the same language
+as `text`. Both share one durable per-input notice slot, so admission does not
+produce a second acknowledgement. Unknown, stale or unsupported runtime activity
+stays silent. Ready native Fast or final output cancels both notices even before
+V1 imports it; state is checked again inside the send queue.
 A real reply attempt or known `NO_REPLY` suppresses the acknowledgement; the
 sender cannot predict a `NO_REPLY` produced later. An uncertain real send also
 suppresses extra traffic. Frozen text, a stable provider request ID and durable

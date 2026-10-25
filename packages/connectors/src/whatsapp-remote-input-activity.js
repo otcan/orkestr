@@ -16,6 +16,6 @@ export async function remoteInputActivity({threadId,publicMessageId},env=process
     throw new Error('remote_activity_scope_mismatch');
   const fresh=Number.isSafeInteger(value.observedAtMs) && now()-value.observedAtMs>=0 && now()-value.observedAtMs<=5000;
   return {ok:true,supported:true,publicThreadId:thread.id,publicMessageId,
-    active:fresh && value.active===true && value.phase==='running',fastReady:value.fastReady===true,finalReady:value.finalReady===true,
+    phase:value.phase,active:fresh && value.active===true && value.phase==='running',fastReady:value.fastReady===true,finalReady:value.finalReady===true,
     observedAtMs:value.observedAtMs};
 }

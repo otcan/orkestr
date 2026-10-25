@@ -15,7 +15,7 @@ function fixture(t) {
     serial: createKeyedSerial(), blocked: () => state.blocked, inspect: async () => {
       state.inspections=(state.inspections||0)+1;
       if(state.onInspect)await state.onInspect(state.inspections);
-      return {active:state.allowed && state.active, covered:state.ready, reason:'native_output_ready'};
+      return {active:state.allowed && state.active, queued:state.allowed && state.queued, covered:state.ready, reason:'native_output_ready'};
     }, log() {},
     send: async payload => {
       state.sends.push(payload);
@@ -105,4 +105,34 @@ test('the scheduled twenty-second fallback is cancelled immediately by real outp
   f.state.at=20000;t.mock.timers.tick(1);
   await new Promise(resolve=>setImmediate(resolve));
   assert.equal(f.state.sends.length,0);
+});
+
+
+test('queued input gets one truthful notice at twenty seconds, preserved through admission and restart',async t=>{
+  const f=fixture(t);f.state.active=false;f.state.queued=true;f.state.at=19999;
+  await f.ack.check(f.input);assert.equal(f.state.sends.length,0);
+  f.state.at=20000;
+  await Promise.all(Array.from({length:10},()=>f.ack.check(f.input)));
+  assert.equal(f.state.sends.length,1);
+  assert.equal(f.state.sends[0].text,"Received, queued behind the current task in this chat; I'll answer when it finishes.");
+  f.restart();f.state.active=true;f.state.queued=false;f.state.at=60000;
+  await f.ack.check(f.input);assert.equal(f.state.sends.length,1,'admission must not produce a second notice');
+  assert.equal(f.db.prepare('SELECT count(*) n FROM reply_receipts').get().n,1);
+});
+
+test('queued notice uses the explicitly configured acknowledgement language',async t=>{
+  const f=fixture(t);f.state.active=false;f.state.queued=true;f.state.at=20000;
+  f.config.acknowledgement.queuedText='Empfangen, die Nachricht wartet hinter der aktuellen Aufgabe in diesem Chat. Ich antworte, sobald diese abgeschlossen ist.';
+  f.restart();await f.ack.check(f.input);
+  assert.equal(f.state.sends[0].text,f.config.acknowledgement.queuedText);
+});
+
+test('queued fallback is canceled by delivered output or Fast ready, including while waiting for send',async t=>{
+  for(const mode of ['delivered','fast','during_send']){
+    const f=fixture(t);f.state.active=false;f.state.queued=true;f.state.at=20000;
+    if(mode==='delivered')f.ack.mark(f.input.id,'real_send_attempt');
+    if(mode==='fast')f.state.ready=true;
+    if(mode==='during_send')f.state.onInspect=async count=>{if(count===2)f.state.ready=true;};
+    await f.ack.check(f.input);assert.equal(f.state.sends.length,0,mode);
+  }
 });

@@ -12,6 +12,9 @@ export async function acknowledgementActivity({api,group,thread,route,messages,n
     if(value.ok!==true || value.publicThreadId!==group.threadId || value.publicMessageId!==route.message_id)
       return {active:false};
     if(value.fastReady || value.finalReady) return {active:false,covered:true,reason:'native_output_ready'};
+    // A fresh HTTP read proves the exact input remains queued; a queued input
+    // has no native execution timestamp and must never claim work has started.
+    if(value.supported===true && value.phase==='queued') return {active:false,queued:true};
     const age=now()-value.observedAtMs;
     return {active:value.active===true && Number.isSafeInteger(value.observedAtMs) && age>=0 && age<=5000};
   }

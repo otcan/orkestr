@@ -7,6 +7,9 @@ export function createScopedAcknowledgements({config, inbox, db, groups, now, ke
   const policy = config.acknowledgement;
   if (policy !== undefined && (!policy || typeof policy.text !== 'string' || !policy.text.trim() || policy.text.length > 500 || !Number.isFinite(Date.parse(policy.since))))
     throw new Error('group_acknowledgement_configuration_invalid');
+  if (policy?.queuedText !== undefined && (typeof policy.queuedText !== 'string' || !policy.queuedText.trim() || policy.queuedText.length > 500))
+    throw new Error('group_queued_acknowledgement_configuration_invalid');
+  const queuedText=policy?.queuedText ?? "Received, queued behind the current task in this chat; I'll answer when it finishes.";
   const timers = new Map();
   const lastChecked = new Map();
   let closed = false;
@@ -15,11 +18,11 @@ export function createScopedAcknowledgements({config, inbox, db, groups, now, ke
     db.prepare('INSERT OR IGNORE INTO scoped_real_reply_activity VALUES(?,?)').run(id, reason);
     clearTimeout(timers.get(id));timers.delete(id);lastChecked.delete(id);
   };
-  async function active(input,group) {
+  async function inspectState(input,group) {
     lastChecked.set(input.id,now());
     const value=await inspect(input,group);
-    if(value?.covered===true) {mark(input.id,value.reason||'native_output_ready');return false;}
-    return value?.active===true;
+    if(value?.covered===true) {mark(input.id,value.reason||'native_output_ready');return null;}
+    return value?.queued===true ? 'queued' : value?.active===true ? 'active' : null;
   }
   function eligible(input) {
     const group = groups.get(input.chat_id), at = Date.parse(input.created_at);
@@ -36,13 +39,14 @@ export function createScopedAcknowledgements({config, inbox, db, groups, now, ke
     const group = groups.get(input.chat_id);
     // Fresh binding/history guards run without holding the transport queue.
     // A real send that wins this race records activity before any provider call.
-    if (!await active(input, group)) return;
+    if (!await inspectState(input, group)) return;
     await serial('send', async () => {
       if (closed || !eligible(input) || blocked()) return;
       // Native output or run state can change while this send waits its turn.
-      if (!await active(input,group) || closed || !eligible(input) || blocked()) return;
+      const state=await inspectState(input,group);
+      if (!state || closed || !eligible(input) || blocked()) return;
       db.prepare("INSERT OR IGNORE INTO scoped_acknowledgements VALUES(?,?,?,'prepared',NULL)")
-        .run(input.id, `reply:${key(`${input.id}:acknowledgement:v1`)}`, policy.text);
+        .run(input.id, `reply:${key(`${input.id}:acknowledgement:v1`)}`, state==='queued' ? queuedText : policy.text);
       const row = db.prepare('SELECT * FROM scoped_acknowledgements WHERE input_id=?').get(input.id);
       const result = await send({chatId: input.chat_id, requestId: row.request_id, parentId: input.id, text: row.text});
       if (result?.ok !== true || !result.ids?.length) throw new Error('group_acknowledgement_unconfirmed');

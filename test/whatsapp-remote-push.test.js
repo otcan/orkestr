@@ -27,7 +27,7 @@ async function fixture(t, {slow = false, acknowledgement = false} = {}) {
   if (slow) inbox.prepare('INSERT INTO group_input VALUES(?,?,?,?)').run('slow-wa', 'slow-group', 'older request', new Date(at - 1).toISOString());
   inbox.prepare('INSERT INTO group_input VALUES(?,?,?,?)').run('wa', 'group', 'request', new Date(at).toISOString());
   const state = {version: 0, exports: [], sends: [], acks: [], reads: [], waiters: [], sentAt: null, slowReads: 0, clock: at,
-    nativeActive:true,nativeFastReady:false,activityReads:0};
+    nativeActive:true,nativePhase:'running',nativeFastReady:false,activityReads:0};
   let unblock, beginSlow;
   const slowStarted = new Promise(resolve => {beginSlow = resolve;});
   const slowGate = new Promise(resolve => {unblock = resolve;});
@@ -38,8 +38,8 @@ async function fixture(t, {slow = false, acknowledgement = false} = {}) {
     if (u.pathname === '/health') return Response.json({messageChanges: {version: 1, path: 'changes'}});
     if(u.pathname==='/threads/route/activity') {
       state.activityReads++;
-      return Response.json({ok:true,version:1,publicThreadId:thread.id,publicMessageId:parent.id,phase:'running',
-        observedAtMs:state.clock,active:state.nativeActive,fastReady:state.nativeFastReady,finalReady:false});
+      return Response.json({ok:true,version:1,publicThreadId:thread.id,publicMessageId:parent.id,phase:state.nativePhase,
+        observedAtMs:state.nativePhase==='queued' ? null : state.clock,active:state.nativeActive,fastReady:state.nativeFastReady,finalReady:false});
     }
     if (u.pathname === '/changes') {
       if (u.searchParams.get('cursor') !== `epoch:${state.version}`) return Response.json({...change(), reset: !u.searchParams.get('cursor')});
@@ -99,7 +99,7 @@ async function fixture(t, {slow = false, acknowledgement = false} = {}) {
     for (const fn of state.waiters.splice(0)) fn();
   };
   t.after(() => {relay.close(); inbox.close(); db.close();});
-  return {state, relay, api, env, fetchImpl, publish, parent, thread, slowStarted, unblock, inbox};
+  return {state, relay, api, env, fetchImpl, publish, parent, thread, slowStarted, unblock, inbox, db};
 }
 const until = async predicate => {
   const deadline = performance.now() + 2000;
@@ -229,4 +229,34 @@ test('restart recovers queued work from the adapter snapshot after its signal cu
     await until(() => f.state.acks.length === 1);
     assert.equal(f.state.sends.length, 1);
   } finally {await resumed.close();}
+});
+
+
+test('queued backend input gets one queued notice through the real proxy and relay journals',async t=>{
+  t.mock.timers.enable({apis:['setTimeout']});
+  const f=await fixture(t,{acknowledgement:true});f.state.nativePhase='queued';f.state.nativeActive=false;
+  f.relay.scheduleAcknowledgements();f.state.clock+=19999;t.mock.timers.tick(19999);
+  assert.equal(f.state.sends.length,0);
+  f.state.clock++;t.mock.timers.tick(1);
+  await until(()=>f.db.prepare('SELECT count(*) n FROM reply_receipts').get().n===1);
+  assert.equal(f.state.sends.length,1);assert.match(f.state.sends[0].text,/queued behind the current task/);
+  f.state.nativePhase='running';f.state.nativeActive=true;
+  f.relay.scheduleAcknowledgements();f.state.clock+=60000;t.mock.timers.tick(60000);
+  await new Promise(resolve=>setImmediate(resolve));assert.equal(f.state.sends.length,1);
+  f.publish({phase:'final_answer',kind:'final',text:'The final answer'});
+  const batch=await importRemoteMessageChanges({backendId:'example'},f.env,f.fetchImpl);
+  await f.relay.deliverThreads(batch.threadIds);
+  assert.equal(f.state.sends.length,2);assert.match(f.state.sends[1].text,/The final answer/);
+  assert.equal(f.state.acks.length,1);assert.equal(f.state.acks[0].outcome,'delivered');
+});
+
+test('output arriving before the queued deadline cancels the queued notice',async t=>{
+  t.mock.timers.enable({apis:['setTimeout']});
+  const f=await fixture(t,{acknowledgement:true});f.state.nativePhase='queued';f.state.nativeActive=false;
+  f.relay.scheduleAcknowledgements();
+  f.publish();const batch=await importRemoteMessageChanges({backendId:'example'},f.env,f.fetchImpl);
+  await f.relay.deliverThreads(batch.threadIds);
+  f.state.clock+=20000;t.mock.timers.tick(20000);await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(f.state.sends.length,1);assert.match(f.state.sends[0].text,/Real Fast reply/);
+  assert.equal(f.db.prepare('SELECT count(*) n FROM scoped_acknowledgements').get().n,0);
 });

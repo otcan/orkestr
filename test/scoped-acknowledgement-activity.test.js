@@ -43,3 +43,21 @@ test('V1 activity proxy is scoped, fresh, read-only and denies a mismatched back
   const unsupported=async()=>({status:404});
   assert.equal((await remoteInputActivity({threadId:'thread',publicMessageId:'input'},env,unsupported,deps)).active,false);
 });
+
+
+test('a scoped queued input is distinct from active work and does not need a native timestamp',async()=>{
+  const args=options({active:false,phase:'queued',observedAtMs:null});
+  assert.deepEqual(await acknowledgementActivity(args),{active:false,queued:true});
+  for(const change of [{publicMessageId:'foreign'},{publicThreadId:'foreign'},{supported:false},{phase:'paused'},{phase:'absorbed'}]){
+    const value=await acknowledgementActivity(options({active:false,phase:'queued',observedAtMs:null,...change}));
+    assert.notEqual(value.queued,true);
+  }
+  assert.equal((await acknowledgementActivity(options({active:false,phase:'queued',finalReady:true}))).covered,true);
+});
+
+test('V1 proxy preserves the exact queued phase without inventing active execution',async()=>{
+  const env={ORKESTR_REMOTE_THREAD_BACKENDS_JSON:JSON.stringify({example:{baseUrl:'http://example.test',token:'synthetic-token'}})};
+  const backend=async()=>({ok:true,status:200,json:async()=>({...hint,version:1,phase:'queued',active:false,observedAtMs:null})});
+  const value=await remoteInputActivity({threadId:'thread',publicMessageId:'input'},env,backend,{readThread:async()=>thread,now:()=>20000});
+  assert.equal(value.phase,'queued');assert.equal(value.active,false);assert.equal(value.observedAtMs,null);
+});
