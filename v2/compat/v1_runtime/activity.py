@@ -1,12 +1,15 @@
 """Truthful, admission-scoped activity notices; no notice is a work result."""
 from datetime import datetime
 import json
+import sys
 import time
 import uuid
 
 from .ledger import LOCAL_ROLES, NOTICE_NAMESPACE, POST_NAMESPACE
 
 INTERVAL_S = 10 * 60
+MISSING_RUN_INTERVAL_S = 30 * 60
+SECOND_HEALTHY_AFTER_S = 60 * 60
 POLL_GAP_S = 60
 NOTICE_PREFIXES = ("stalled:", "heartbeat:", "continued:")
 
@@ -52,6 +55,8 @@ def observe(worker, data, statuses, now=None):
     if payload and payload != activity.get("payload_id"):
         activity.update(payload_id=payload, progress_at=now)
     activity.update(observed_at=now, phase=phase, run_id=deep.get("run_id"))
+    if phase == "running":
+        activity.pop("problem", None)
     ledger = worker.ledger
     with ledger.connect() as db:
         db.execute("BEGIN IMMEDIATE")
@@ -78,8 +83,23 @@ def observe(worker, data, statuses, now=None):
         ledger.save(data, db)
         if now - max(times) < INTERVAL_S:
             return
+        running = phase == "running"
+        if running:
+            activity.pop("problem", None)
+            count = activity.get("healthy_notices", 0)
+            if count >= 2 or (count and now - since - activity.get("paused_s", 0) < SECOND_HEALTHY_AFTER_S):
+                ledger.save(data, db)
+                return
+        else:
+            if activity.get("problem") != "no_running_task":
+                activity["problem"] = "no_running_task"
+                print("ALERT orkestr-v2-wa-adapter no_running_task conversation=%s input=%s"
+                      % (getattr(worker.client, "conversation", "?"), data["remote_id"]), file=sys.stderr, flush=True)
+            ledger.save(data, db)
+            if now - activity.get("missing_notice_at", -MISSING_RUN_INTERVAL_S) < MISSING_RUN_INTERVAL_S:
+                return
         prior = db.execute("SELECT value FROM ledger_meta WHERE key='activity_notice'").fetchone()
-        if prior and now - json.loads(prior[0])["at"] < INTERVAL_S:
+        if prior and now - json.loads(prior[0])["at"] < (INTERVAL_S if running else MISSING_RUN_INTERVAL_S):
             return
         pending = db.execute("SELECT 1 FROM exports e JOIN inputs i ON i.remote_id=e.input_id "
                              "WHERE (e.source_key LIKE 'heartbeat:%' OR e.source_key LIKE 'stalled:%' "
@@ -88,7 +108,6 @@ def observe(worker, data, statuses, now=None):
         if pending:
             return  # One unresolved status message for this whole binding.
         minutes = max(0, int((now - since - activity.get("paused_s", 0)) // 60))
-        running = phase == "running"
         text = ("Still running, %d minutes since admission. No new progress in the last 10 minutes." % minutes
                 if running else "No running task is confirmed (%s), %d minutes since admission. The result is still pending."
                 % (phase or "no run observed", minutes))
@@ -104,5 +123,10 @@ def observe(worker, data, statuses, now=None):
         # works for every origin without completing the original input.
         ledger._pseudo_timer(db, remote, "Status", sequence,
             {"activity_notice": dict(input_id=data["remote_id"], running=running)}, message, source_id="status")
+        if running:
+            activity["healthy_notices"] = activity.get("healthy_notices", 0) + 1
+        else:
+            activity["missing_notice_at"] = now
+        ledger.save(data, db)
         db.execute("INSERT INTO ledger_meta VALUES('activity_notice',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                    (json.dumps(dict(at=now, input_id=data["remote_id"], running=running)),))
