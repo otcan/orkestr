@@ -70,7 +70,7 @@ BURST_NOTE = ("[%d messages arrived together and are delivered as one turn. Read
 # Frozen per-attempt state dropped when an input is sent again as a new turn.
 RESET_KEYS = ("intake", "cursor", "window", "window_request", "previous_window", "matched_runs", "accepted",
               "fast_accept_request", "deep_accept_request", "fast_payload", "deep_payload", "admitted_at",
-              "progress_at", "fast_unusable_since", "intake_rules", "questions_scanned", "question_payloads", "activity")
+              "progress_at", "fast_unusable_since", "intake_rules", "questions_scanned", "question_payloads", "activity", "deep_final_ready_at")
 # An admitted input whose window ended without starting any run of it.
 ORPHAN_GRACE_S = 60
 # Deep phases a window work deadline leaves behind.
@@ -206,6 +206,8 @@ class Worker:
         self.burst_quiet_s = burst_quiet_s
         self.attachment_dir, self.attachment_gid = attachment_dir, attachment_gid
         self.progress_updates = progress_updates
+        self.fast_reply_policy = "owner_only"
+        self.has_participants = False
         self.max_input_age_s = max_input_age_s
         self._digest_checked = None
         self._posts_checked = None
@@ -820,6 +822,10 @@ class Worker:
         # A later timer or browser input can replace the current views before
         # this input is observed. Match every origin to its own proven run IDs.
         statuses = self.own_statuses(ids)
+        deep_status = statuses.get("deep") or {}
+        if deep_status.get("run_id") in ids and deep_status.get("phase") in ("awaiting_acceptance", "completed"):
+            data.setdefault("deep_final_ready_at", time.time())
+            self.ledger.save(data)
         if data.get("origin") == "timer":
             # A bounded SSE read can yield one complete frame even while more
             # are buffered. Only an empty read proves this cursor caught up.

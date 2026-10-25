@@ -42,7 +42,6 @@ WEB_TEXT_LIMIT = 3500
 WEB_EXCERPT_CHARS = 60
 # Deterministic IDs for the owner notice that closes a refused input.
 NOTICE_NAMESPACE = uuid.UUID("5d0c3f7e-8a41-4c2b-9e6d-1b7f2a9c4e83")
-FIRST_RESPONSE_NAMESPACE = uuid.UUID("e1cc360c-9c08-4cc5-8798-817864e93f23")
 # Phases in which no Rust execution window was opened for the input yet.
 NOT_STARTED = ("queued", "admitted", "waiting_for_window")
 DEFAULT_MAX_INPUT_AGE_S = 30 * 60
@@ -591,9 +590,13 @@ class Ledger:
         """Atomically record the accepted final reply and make it visible to V1."""
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
+            from .first_response_store import final_ready
+            if not final_ready(self, db, data):
+                return False
             data.update(reply=reply, phase="completed")
             self.save(data, db)
             self._export(db, data, "final", "final:" + data["remote_id"], reply)
+            return True
 
     def continue_notice(self, data, text):
         """Save a re-queued input and tell the owner, in one transaction.
@@ -625,31 +628,8 @@ class Ledger:
             return message
 
     def add_first_response(self, data, payload_id, text, identity=None):
-        """Atomically persist one Fast reply and its explicit originating input.
-
-        Its own notification parent prevents a ready Deep final from dropping
-        it through V1's ordinary progress supersession. The original input still
-        awaits its one Deep final. V1-local inputs retain their local reply path.
-        """
-        source = data["remote_id"] + ":" + payload_id
-        remote = str(uuid.uuid5(FIRST_RESPONSE_NAMESPACE, "input:" + source))
-        message = dict(id=str(uuid.uuid5(FIRST_RESPONSE_NAMESPACE, "reply:" + source)), role="assistant",
-                       state="completed", phase="final_answer", source="rust-v2-adapter",
-                       parentMessageId=remote, text=text, firstResponse=True)
-        message.update({k:v for k,v in (identity or {}).items() if k in ("provider", "model") and v})
-        with self.connect() as db:
-            db.execute("BEGIN IMMEDIATE")
-            data["first_response"].update(remote_id=remote, export_id=message["id"])
-            self.save(data, db)
-            if (data.get("author") or {}).get("role") in LOCAL_ROLES:
-                # No group notification for a local-only request.
-                message.update(parentMessageId=data["remote_id"], phase="commentary", kind="progress")
-                self._export(db, data, "progress", "first-response:" + source, message)
-            else:
-                self._pseudo_timer(db, remote, "Quick reply", int(data["first_response"]["at"] * 1000),
-                    {"first_response_for": dict(input_id=data["remote_id"], run_id=data["first_response"]["run_id"],
-                                                payload_id=payload_id)}, message, source_id="fast")
-        return message
+        from .first_response_store import add
+        return add(self, data, payload_id, text, identity)
 
     def _acked_through(self, db):
         pending = db.execute("SELECT min(seq) FROM exports WHERE outcome IS NULL OR outcome='uncertain'").fetchone()[0]

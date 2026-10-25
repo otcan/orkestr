@@ -2,17 +2,23 @@
 import time
 
 from .ledger import no_reply
+from .legacy_first_response import capture_legacy
 
 MAX_CHARS = 3500
 QUESTION_PREFIX = "\u2753 Question while I keep working:\n\n"
 
 
 def capture(worker, data, statuses, own_runs):
+    policy = worker.fast_reply_policy
+    if policy == "disabled":
+        return
+    if policy == "legacy" or worker.has_participants:
+        return capture_legacy(worker, data, statuses, own_runs)
     # Operational timers keep their separate digest/reply rules. Interactive
     # Fast is a reply of its own, independent of the ordinary progress setting.
     if data.get("origin") == "timer" or data.get("first_response"):
         return
-    fast, deep = statuses.get("fast"), statuses.get("deep")
+    fast = statuses.get("fast")
     if (not isinstance(fast, dict) or fast.get("run_id") not in own_runs or
             fast.get("phase") not in ("awaiting_acceptance", "completed")):
         return

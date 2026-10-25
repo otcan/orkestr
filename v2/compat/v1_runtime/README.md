@@ -87,6 +87,7 @@ Each binding is `<bindings_dir>/<remote_thread_id>.json`:
 | `enabled` | `false` pauses intake and execution; exports and acknowledgements continue |
 | `revoked` | `true` permanently withdraws the route (intake and export answer 410) |
 | `progress_updates` | Export intermediate Deep progress for this binding |
+| `fast_reply_policy` | Optional: `owner_only` (default) sends Fast immediately on bindings without participants; bindings with participants keep the prior progress-dependent policy. `legacy` preserves that policy everywhere; `disabled` suppresses Fast replies (for example a coordinator chat). |
 | `attachments` | Accept inbound attachments for this binding |
 | `max_outstanding_inputs` | 1–64 unsettled inputs before intake answers 409 |
 | `max_input_age_seconds` | Optional, 60–604800 (default 1800): how long an input may wait without a Rust window before it is refused as `input_expired` |
