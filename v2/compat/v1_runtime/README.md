@@ -597,3 +597,14 @@ both live and audit records. An identical request is idempotent; a changed
 decision with the same key refuses. Later independent inputs and exports retain
 their ordinary import/delivery path. No service restart is needed to apply a
 disposition using a command already shipped in the installed release.
+
+### Input activity for transport fallbacks
+
+Authenticated `GET /threads/<remote_id>/activity?publicMessageId=<public_id>`
+returns version 1 hints for that exact input only: `active`, `observedAtMs`,
+`fastReady`, `finalReady`, and `phase`. Missing inputs return 404. A queued,
+paused, absorbed, finished, or unobserved input is not active. Native execution
+observations older than five seconds cannot authorize a working acknowledgement.
+The response contains no message text, credentials, provider session or run IDs.
+This read never starts, steers, acknowledges or sends anything; readiness is not
+proof that a reply reached its recipient.

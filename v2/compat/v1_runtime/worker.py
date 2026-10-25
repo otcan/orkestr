@@ -19,6 +19,7 @@ from .policy_refusal import notice as policy_notice
 from .first_response import capture as capture_first_response
 from .questions import QUESTION_PREFIX, QUESTION_LABEL, QUESTION_SCAN_LIMIT, export_question
 from .activity import observe as observe_activity
+from .input_activity import record as record_transport_activity
 
 PROGRESS_INTERVAL_S = 60
 PROGRESS_MAX_CHARS = 3500
@@ -70,7 +71,7 @@ BURST_NOTE = ("[%d messages arrived together and are delivered as one turn. Read
 # Frozen per-attempt state dropped when an input is sent again as a new turn.
 RESET_KEYS = ("intake", "cursor", "window", "window_request", "previous_window", "matched_runs", "accepted",
               "fast_accept_request", "deep_accept_request", "fast_payload", "deep_payload", "admitted_at",
-              "progress_at", "fast_unusable_since", "intake_rules", "questions_scanned", "question_payloads", "activity", "deep_final_ready_at")
+              "progress_at", "fast_unusable_since", "intake_rules", "questions_scanned", "question_payloads", "activity", "deep_final_ready_at", "transport_activity")
 # An admitted input whose window ended without starting any run of it.
 ORPHAN_GRACE_S = 60
 # Deep phases a window work deadline leaves behind.
@@ -821,6 +822,8 @@ class Worker:
         # A later timer or browser input can replace the current views before
         # this input is observed. Match every origin to its own proven run IDs.
         statuses = self.own_statuses(ids)
+        record_transport_activity(data, statuses, ids)
+        self.ledger.save(data)
         deep_status = statuses.get("deep") or {}
         if deep_status.get("run_id") in ids and deep_status.get("phase") in ("awaiting_acceptance", "completed"):
             data.setdefault("deep_final_ready_at", time.time())

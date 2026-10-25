@@ -100,7 +100,7 @@ class Handler(BaseHTTPRequestHandler):
         if target.path == "/changes":
             return self.changes(target.query)
         binding, action = self.route(target.path)
-        if binding is None or action not in ("messages", "health"):
+        if binding is None or action not in ("messages", "health", "activity"):
             return self.answer(404, {"ok": False, "error": "route_not_found"})
         if action == "health" and not target.query:
             members = sum(entry["role"] == participants.MEMBER for entry in binding.config["participants"])
@@ -111,6 +111,19 @@ class Handler(BaseHTTPRequestHandler):
         if binding.state in ("revoked", "refused"):
             return self.answer(410 if binding.state == "revoked" else 503,
                                {"ok": False, "error": binding.error or "binding_revoked"})
+        if action == "activity":
+            from .input_activity import read
+            try:
+                query=parse_qs(target.query,strict_parsing=True,keep_blank_values=True)
+                if set(query)!={"publicMessageId"} or len(query["publicMessageId"])!=1:
+                    raise ValueError()
+                public_id=query["publicMessageId"][0]
+                if not 1<=len(public_id)<=256:raise ValueError()
+            except ValueError:
+                return self.answer(400,{"ok":False,"error":"invalid_activity_query"})
+            value=read(binding.ledger,public_id,enabled=binding.state=="enabled")
+            if value is None:return self.answer(404,{"ok":False,"error":"input_not_found"})
+            return self.answer(200,dict(ok=True,version=1,publicThreadId=binding.config["public_thread_id"],**value))
         try:
             query = parse_qs(target.query, strict_parsing=True) if target.query else {}
             if set(query) - {"limit"} or len(query.get("limit", ["100"])) != 1:
