@@ -30,7 +30,7 @@ class PolicyWorkerTests(unittest.TestCase):
     def test_policy_failure_exports_one_frozen_notice_without_accepting_or_replaying(self):
         original = self.peer.request
         def request(method, route, **kwargs):
-            if method == "GET" and route == "/execution":
+            if method == "GET" and route.split("?", 1)[0] == "/execution":
                 return 200, failed()
             return original(method, route, **kwargs)
         self.peer.request = request

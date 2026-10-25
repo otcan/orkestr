@@ -33,7 +33,8 @@ class Peer:
                     input_request_key=input_key, expected_generation=0, window_id=None, predecessor_window_id=None)
 
     def read_events(self, after, maximum):
-        return [{"sequence": 2, "run_id": "fast-run"}, {"sequence": 3, "run_id": "deep-run"}]
+        return [event for event in [{"sequence": 2, "run_id": "fast-run"},
+                                    {"sequence": 3, "run_id": "deep-run"}] if event["sequence"] > after][:maximum]
 
     def matching_run_ids(self, events, intake):
         return [] if self.foreign else ["fast-run", "deep-run"]
@@ -208,7 +209,7 @@ class WorkerTests(unittest.TestCase):
                 peer = Peer()
                 original = peer.request
                 def request(method, route, **kwargs):
-                    if route == "/execution":
+                    if route.split("?", 1)[0] == "/execution":
                         if failure == "session_revoked":
                             raise ClientError("session_revoked", 401)
                         return 200, dict(run_id="deep-run", phase=failure)
@@ -309,7 +310,7 @@ class ExtensionTests(unittest.TestCase):
                 peer, phase = Peer(), ["running:p1"]
                 original = peer.request
                 def request(method, route, **kwargs):
-                    if route == "/execution" and phase[0].startswith("running"):
+                    if route.split("?", 1)[0] == "/execution" and phase[0].startswith("running"):
                         return 200, dict(run_id="deep-run", revision=1, phase="running",
                                          progress=dict(payload_id=phase[0].split(":")[1]))
                     if route in ("/payloads/p1", "/payloads/p2", "/payloads/p3"):

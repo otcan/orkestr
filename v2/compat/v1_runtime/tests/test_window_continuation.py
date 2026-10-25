@@ -32,7 +32,7 @@ class QueuePeer(Peer):
             reply.update(conversation_id=self.conversation, state=self.queue_state, position=1, queued_at_ms=1,
                          window_id="window" if self.queue_state == "dispatched" else None, withdrawal=None)
             return 202, reply
-        if route == "/execution" and self.deep_phase:
+        if route.split("?", 1)[0] == "/execution" and self.deep_phase:
             return 200, dict(run_id="deep-run", revision=10, phase=self.deep_phase,
                              models=dict(provider=self.run_provider))
         return super().request(method, route, body=body, allowed=allowed)
@@ -147,7 +147,7 @@ class StrandedFastPeer(QueuePeer):
         self.fast = None  # None: Fast status 204 (no live Fast handle)
 
     def request(self, method, route, body=None, allowed=(200,)):
-        if route == "/fast/execution" and method == "GET":
+        if route.split("?", 1)[0] == "/fast/execution" and method == "GET":
             return (200, self.fast) if self.fast else (204, None)
         return super().request(method, route, body=body, allowed=allowed)
 
@@ -314,7 +314,7 @@ class ServerAcceptedPeer(Peer):
                                             acceptance_event_id=role + "-auto-accepted"))
 
     def request(self, method, route, body=None, allowed=(200,)):
-        if route in ("/execution", "/fast/execution") and self.before_freeze:
+        if route.split("?", 1)[0] in ("/execution", "/fast/execution") and self.before_freeze:
             role = "fast" if route.startswith("/fast") else "deep"
             if role in self.server_roles:
                 self.server_accept(role)
@@ -364,7 +364,7 @@ class ServerAcceptanceTests(unittest.TestCase):
         peer = ServerAcceptedPeer(set())
         original = peer.request
         def request(method, route, body=None, allowed=(200,)):
-            if route == "/execution":
+            if route.split("?", 1)[0] == "/execution":
                 return 200, dict(run_id="deep-run", revision=10, phase="completed")
             return original(method, route, body=body, allowed=allowed)
         peer.request = request

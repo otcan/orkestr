@@ -15,7 +15,7 @@ class FirstResponseTests(unittest.TestCase):
         self.ledger.save(self.data)
         original = self.peer.request
         def request(method, route, **kwargs):
-            if route == "/execution" and self.state["deep"] == "running":
+            if route.split("?", 1)[0] == "/execution" and self.state["deep"] == "running":
                 return 200, {"run_id": "deep-run", "phase": "running", "revision": 1,
                              "progress": {"payload_id": self.state["payload"]}}
             if route == "/payloads/fast-payload":
@@ -85,7 +85,7 @@ class FirstResponseTests(unittest.TestCase):
         original = self.peer.request
         def request(method, route, **kwargs):
             status, value = original(method, route, **kwargs)
-            if route == "/fast/execution":
+            if route.split("?", 1)[0] == "/fast/execution":
                 value = {**value, "run_id": "foreign-fast-run"}
             return status, value
         self.peer.request = request
