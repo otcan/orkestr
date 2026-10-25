@@ -86,7 +86,6 @@ test("release deploy script exposes versioned install, status, and rollback", as
   assert.match(script, /backup_keep="\$\{ORKESTR_DEPLOY_BACKUP_KEEP:-3\}"/);
   assert.match(script, /release_keep="\$\{ORKESTR_DEPLOY_RELEASE_KEEP:-3\}"/);
   assert.match(script, /prune_state_backups "\$backup_keep"/);
-  assert.match(script, /prune_state_backups "\$\(\(backup_keep > 1 \? backup_keep - 1 : 1\)\)"/);
   assert.match(script, /Pruned \$removed old state backup\(s\), keeping max \$keep/);
   assert.match(script, /resolve_backup_compressor/);
   assert.match(script, /command -v pigz/);
@@ -94,11 +93,13 @@ test("release deploy script exposes versioned install, status, and rollback", as
   assert.match(script, /compressor_cmd=\(gzip "-\$gzip_level" -c\)/);
   assert.match(script, /State backup started: \$backup_name using \$compressor/);
   assert.match(script, /State backup completed in \$\{elapsed\}s/);
-  assert.match(script, /--exclude="\$data_base\/\$exclude"/);
+  // The literal home prefix is escaped separately; user exclusion globs remain globs.
+  // Real archive semantics (including wildcard-bearing home names) have integration coverage.
+  assert.match(script, /--exclude="\$pattern_base\/\$exclude"/);
+  assert.match(script, /tar_args\+=\(--anchored --no-wildcards\)/);
   assert.match(script, /--ignore-failed-read/);
   assert.match(script, /--warning=no-file-changed/);
   assert.match(script, /--warning=no-file-removed/);
-  assert.match(script, /find "\$backup_dir" -maxdepth 1 -type f \\\( -name '\*\.tar\.gz' -o -name '\*\.tar\.zst' -o -name '\*\.tar' \\\)/);
   assert.match(script, /State backup completed with non-fatal live-file changes/);
   assert.match(script, /ORKESTR_RELEASE_WHATSAPP_ACCOUNT_PROBE_TIMEOUT_SECONDS/);
   assert.match(script, /probe_timeout="\$\(positive_integer_env "\$\{ORKESTR_RELEASE_WHATSAPP_ACCOUNT_PROBE_TIMEOUT_SECONDS:-\}" 8 1\)"/);

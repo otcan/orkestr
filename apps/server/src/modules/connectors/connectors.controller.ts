@@ -1180,7 +1180,7 @@ export class ConnectorsController {
             .send(routed);
         }
         const thread = await getThread(String(routed.threadId || ""));
-        if (threadUsesApiAgent(thread || {})) {
+        if (threadUsesApiAgent(thread || {}) && !(routed as any).remoteRuntime) {
           const payload = await runWithRoutedWhatsAppTyping({ thread, input: body }, async () => {
             await deliverWhatsAppReplies().catch(() => null);
             await processApiAgentThreadInput(thread.id).catch(() => null);

@@ -40,7 +40,7 @@ export const connectorsMcpInputSchemas = {
   }).strict(),
   orkestr_conversation: z.object({
     ...contextShape,
-    action: z.enum(["list", "history", "participants", "recover", "create", "promote_admins", "demote_admins", "set_picture"]),
+    action: z.enum(["list", "list_all", "history", "participants", "recover", "create", "promote_admins", "demote_admins", "set_picture"]),
     conversation_id: cleanString.nullish(),
     name: cleanString.nullish(),
     participant_ids: z.array(cleanString.min(1)).max(100).nullish(),
@@ -50,6 +50,9 @@ export const connectorsMcpInputSchemas = {
     limit: z.number().int().min(1).max(200).nullish(),
     unread_only: z.boolean().nullish(),
     mark_seen: z.boolean().nullish(),
+    cursor: z.string().max(400).nullish().describe("list_all: the nextCursor of the previous page."),
+    before: z.string().max(200).nullish().describe("history (read-all): message id; returns the page of older messages."),
+    source: z.enum(["chats", "contacts"]).nullish().describe("list_all: chats (default) or contacts."),
     event_ids: z.array(cleanString.min(1).max(240)).max(20).nullish().describe("Exact connector event ids to recover within the scoped conversation."),
   }).strict(),
   orkestr_routing: z.object({

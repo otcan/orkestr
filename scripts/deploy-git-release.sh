@@ -36,7 +36,7 @@ Environment:
   ORKESTR_DEPLOY_BACKUP_EXCLUDES Space-separated paths under ORKESTR_HOME to omit from backups. Defaults to live runtime/session dirs.
   ORKESTR_DEPLOY_BACKUP_COMPRESSOR Backup compressor: auto, pigz, gzip, zstd, or none. Defaults to auto.
   ORKESTR_DEPLOY_BACKUP_GZIP_LEVEL gzip/pigz compression level. Defaults to 1 for faster deploys.
-  ORKESTR_DEPLOY_BACKUP_KEEP    Completed state backups to keep per device. Defaults to 3 and is capped at 3.
+  ORKESTR_DEPLOY_BACKUP_KEEP    Completed state backups to keep per device. Defaults to 3, minimum 2, maximum 3.
   ORKESTR_DEPLOY_RELEASE_KEEP   Completed release directories to keep per device. Defaults to 3 and is capped at 3.
   ORKESTR_DEPLOY_SYNC_WORKERS   Fast-forward and push safe stale worker branches after deploy. Defaults to 1.
   ORKESTR_RELEASE_TRAIN_FANOUT  Deploy eligible broker-listed instances after local deploy. Defaults to 1.
@@ -453,9 +453,9 @@ resolve_backup_compressor() {
   esac
 }
 
-backup_state() {
+backup_state() (
   local stamp target backup_name pending_backup data_dir data_base data_parent exclude tar_args tar_status compressor_status
-  local compressor gzip_level extension start_ts end_ts elapsed size
+  local compressor gzip_level extension start_ts end_ts elapsed size snapshot_stage overlay_name pattern_base
   local -a compressor_cmd statuses
   if [ "$run_backup" != "1" ]; then
     require_recent_state_backup || return $?
@@ -470,7 +470,8 @@ backup_state() {
   fi
   mkdir -p "$backup_dir"
   # Never delete the last completed recovery point before its replacement exists.
-  prune_state_backups "$((backup_keep > 1 ? backup_keep - 1 : 1))"
+  # Preserve every completed recovery point until its replacement is verified
+  # and published. Capacity admission must refuse rather than delete recovery.
   stamp="$(date -u +%Y%m%dT%H%M%S%NZ)"
   target="$(sanitize_id "$release_id")"
   compressor="$(resolve_backup_compressor)"
@@ -497,23 +498,47 @@ backup_state() {
       ;;
   esac
   backup_name="$backup_dir/${stamp}-${target}-state.$extension"
+  # Scope traps to this backup, including calls made through command substitution.
+  # A stopped pipeline must not leave an unverified archive consuming the disk.
+  pending_backup=""
+  snapshot_stage=""
+  trap 'if [ -n "$pending_backup" ]; then rm -f -- "$pending_backup"; fi; if [ -n "$snapshot_stage" ]; then rm -rf -- "$snapshot_stage"; fi' EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  trap 'exit 129' HUP
   pending_backup="$(mktemp "$backup_dir/.state-backup.XXXXXXXX.part")"
+  snapshot_stage="$(mktemp -d "$backup_dir/.sqlite-snapshots.XXXXXXXX")"
+  python3 "$script_dir/backup-sqlite-snapshots.py" "$data_dir" "$snapshot_stage" || return $?
+  IFS= read -r -d '' data_dir < "$snapshot_stage/source-home.nul"
   data_parent="$(dirname "$data_dir")"
   data_base="$(basename "$data_dir")"
+  overlay_name="$(cat "$snapshot_stage/overlay-name")"
+  pattern_base="$(cat "$snapshot_stage/exclude-root-prefix")"
   tar_args=(-C "$data_parent" -cf - --ignore-failed-read --warning=no-file-changed --warning=no-file-removed --warning=no-failed-read)
   for exclude in $backup_excludes; do
     [ -n "$exclude" ] || continue
     case "$exclude" in
       /*) tar_args+=(--exclude="$exclude") ;;
-      *) tar_args+=(--exclude="$data_base/$exclude") ;;
+      *) tar_args+=(--exclude="$pattern_base/$exclude") ;;
     esac
   done
+  # User patterns above retain GNU tar's existing wildcard/unanchored semantics.
+  # Canonical DBs/companions/old metadata below are exact root member names.
+  tar_args+=(--anchored --no-wildcards)
+  while IFS= read -r -d '' exclude; do
+    tar_args+=(--exclude="$exclude")
+  done < "$snapshot_stage/excludes.nul"
+  # Transform only the private overlay; exclusions match its untransformed name.
+  # Escape regex/replacement metacharacters in the original restore root.
+  local escaped_base
+  escaped_base="$(printf '%s' "$data_base" | sed 's/[\\&|]/\\&/g')"
+  tar_args+=(--transform="flags=r;s|^$overlay_name\\(/\\|$\\)|$escaped_base\\1|")
   echo "State backup started: $backup_name using $compressor." >&2
   start_ts="$(date +%s)"
   tar_status=0
   compressor_status=0
   set +e
-  tar "${tar_args[@]}" "$data_base" | "${compressor_cmd[@]}" > "$pending_backup"
+  tar "${tar_args[@]}" "$data_base" -C "$snapshot_stage" "$overlay_name" | "${compressor_cmd[@]}" > "$pending_backup"
   statuses=("${PIPESTATUS[@]}")
   set -e
   tar_status="${statuses[0]:-1}"
@@ -536,13 +561,14 @@ backup_state() {
     return 1
   fi
   mv -- "$pending_backup" "$backup_name"
+  pending_backup=""
   end_ts="$(date +%s)"
   elapsed="$((end_ts - start_ts))"
   size="$(du -h "$backup_name" 2>/dev/null | awk '{print $1}' || true)"
   echo "State backup completed in ${elapsed}s: $backup_name${size:+ ($size)}." >&2
   prune_state_backups "$backup_keep"
   echo "$backup_name"
-}
+)
 
 prune_state_backups() {
   local keep count removed file
@@ -559,7 +585,7 @@ prune_state_backups() {
     if rm -f -- "$file"; then
       removed=$((removed + 1))
     fi
-  done < <(find "$backup_dir" -maxdepth 1 -type f \( -name '*.tar.gz' -o -name '*.tar.zst' -o -name '*.tar' \) -printf '%T@\t%p\n' | sort -rn | cut -f2-)
+  done < <(find "$backup_dir" -maxdepth 1 -type f -size +0c \( -name '*-state.tar.gz' -o -name '*-state.tar.zst' -o -name '*-state.tar' \) -printf '%T@\t%p\n' | sort -rn | cut -f2-)
   if [ "$removed" -gt 0 ]; then
     echo "Pruned $removed old state backup(s), keeping max $keep in $backup_dir." >&2
   fi
@@ -829,11 +855,12 @@ active_thread_unsafe_count() {
 }
 
 active_report_unavailable() {
-  node -e 'const report = JSON.parse(process.argv[1] || "{}"); process.stdout.write(report.unavailable ? "1" : "0");' "$1"
+  # Only a successful, typed report may reach the active-thread counters.
+  node -e 'let report; try { report = JSON.parse(process.argv[1]); } catch {} const available = report?.ok === true && report?.unavailable === false && Array.isArray(report?.active); process.stdout.write(available ? "0" : "1");' "$1"
 }
 
 active_report_error() {
-  node -e 'const report = JSON.parse(process.argv[1] || "{}"); process.stdout.write(String(report.error || ""));' "$1"
+  node -e 'let report; try { report = JSON.parse(process.argv[1]); } catch {} process.stdout.write(typeof report?.error === "string" ? report.error : "invalid_active_work_report");' "$1"
 }
 
 service_is_active() {
@@ -1886,6 +1913,18 @@ install_command() {
       write_history_event "failed" "$release_id" "$deploy_ref" "$target_ref" "$previous_release" "$release_dir" "$backup_path" "whatsapp_required_accounts_not_ready" "$provenance_file"
       exit 1
     fi
+    # Full WhatsApp end-to-end probe once the UI restart has lifted the deploy
+    # drain, so a thread can answer. The connector step runs only an intake
+    # probe. A failure means the deploy is never reported as successful.
+    if [ -n "${ORKESTR_WA_POST_DEPLOY_PROBE_COMMAND:-}" ]; then
+      echo "Running post-deploy WhatsApp end-to-end probe."
+      if ! timeout "${ORKESTR_WA_POST_DEPLOY_PROBE_TIMEOUT:-900}" bash -c "$ORKESTR_WA_POST_DEPLOY_PROBE_COMMAND"; then
+        echo "Post-deploy WhatsApp end-to-end probe failed; deploy is not reported as successful." >&2
+        write_history_event "failed" "$release_id" "$deploy_ref" "$target_ref" "$previous_release" "$release_dir" "$backup_path" "whatsapp_probe_failed" "$provenance_file"
+        exit 1
+      fi
+      echo "Post-deploy WhatsApp end-to-end probe passed."
+    fi
     fanout_status=0
     release_train_instance_fanout "$release_dir" "$target_ref" || fanout_status=$?
     send_release_whatsapp_notifications "$release_dir" "$target_ref" "$deployed_at"
@@ -2032,6 +2071,9 @@ if [ "$backup_keep" -lt 1 ]; then
 fi
 if [ "$backup_keep" -gt 3 ]; then
   backup_keep=3
+fi
+if [ "$backup_keep" -lt 2 ]; then
+  backup_keep=2
 fi
 case "$release_keep" in
   ''|*[!0-9]*) echo "ORKESTR_DEPLOY_RELEASE_KEEP must be an integer from 1 to 3." >&2; exit 2 ;;

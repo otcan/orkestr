@@ -39,6 +39,34 @@ test("WhatsApp formatting strips plan envelopes and preserves code fences", () =
   ].join("\n"));
 });
 
+test("WhatsApp debug footer covers replies mirrored from a remote runtime", () => {
+  const env = { ORKESTR_WHATSAPP_DEBUG_FOOTER: "1", ORKESTR_DEFAULT_CODEX_MODEL: "local-model" };
+  const thread = { runtimeKind: "codex-app-server", codexModeLive: "plan", codexServiceTier: "priority" };
+  const base = { role: "assistant", source: "rust-v2-pilot", phase: "final_answer", remoteBackend: "rust-v2", remoteMessageId: "remote-1" };
+
+  const plain = appendWhatsAppDebugFooter("Done", { env, thread, message: base });
+  assert.match(plain, /^Done\n\ndbg: rust · rt:rust-v2 · msg:\*final\*\n/);
+  assert.match(plain, /\nq:0 · load:\d+% · api:\d+% · help:\/help$/);
+  assert.doesNotMatch(plain, /local-model|mode:plan|fast:on|rt:api/);
+  assert.equal(stripWhatsAppDebugFooter(plain), "Done");
+
+  const withModel = appendWhatsAppDebugFooter("Done", {
+    env, thread, message: { ...base, remoteProvider: "codex", remoteModel: "example-model" },
+  });
+  assert.match(withModel, /\ndbg: rust\/codex\/example-model · rt:rust-v2 · msg:\*final\*\n/);
+
+  // A configured backend source without remote ids still gets the footer.
+  const bySource = appendWhatsAppDebugFooter("Done", {
+    env: { ...env, ORKESTR_REMOTE_RUNTIME_BACKENDS_JSON: JSON.stringify({ "rust-v2": { baseUrl: "http://127.0.0.1:1" } }) },
+    message: { role: "assistant", source: "rust-v2-pilot", phase: "final_answer" },
+  });
+  assert.match(bySource, /\ndbg: rust · rt:rust-v2 · msg:\*final\*\n/);
+
+  assert.equal(appendWhatsAppDebugFooter("Done", { env, message: { role: "assistant", source: "rust-v2-pilot" } }), "Done");
+  assert.equal(appendWhatsAppDebugFooter("Hi", { env, message: { ...base, role: "user" } }), "Hi");
+  assert.equal(appendWhatsAppDebugFooter("Done", { env: { ...env, ORKESTR_WHATSAPP_DEBUG_FOOTER: "0" }, message: base }), "Done");
+});
+
 test("WhatsApp debug footer is gated and marks progress as update", () => {
   const defaultDisabled = appendWhatsAppDebugFooter("Done", {
     message: { source: "codex-app-server", phase: "final_answer" },

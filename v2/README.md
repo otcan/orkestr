@@ -17,7 +17,7 @@ Before publication, use the reviewed candidate branch below. After publication,
 select the approved tag instead:
 
 ```sh
-git clone --branch feat/v2-beta1-install https://github.com/otcan/orkestr.git
+git clone --branch release/v2.0.0-beta.4 https://github.com/otcan/orkestr.git
 cd orkestr
 export ORKESTR_SOURCE_COMMIT=$(git rev-parse HEAD)
 docker compose -f v2/packaging/oss/compose.yaml up -d --build

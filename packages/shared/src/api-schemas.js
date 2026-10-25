@@ -157,6 +157,7 @@ export const threadInputSchema = {
       chatId: stringValue,
       from: stringValue,
       accountId: stringValue,
+      replyTo: objectValue,
       attachments: {
         type: "array",
         items: objectValue,

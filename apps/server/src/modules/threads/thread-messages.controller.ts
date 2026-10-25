@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { syncRemoteWhatsAppThreadMessages } from "../../../../../packages/connectors/src/whatsapp-remote-runtime.js";
 import { createReadStream } from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -18,6 +19,7 @@ import { hydrateEncryptedPublishedAttachmentPaths, validateEncryptedPublishedAtt
 import { reissueEncryptedThreadAttachment } from "../../../../../packages/core/src/encrypted-attachment-reissue.js";
 import { publicEncryptedAttachment } from "../../../../../packages/core/src/encrypted-attachment-projection.js";
 import { storedThreadMessagePage } from "./thread-message-store-page.js";
+import { recordScopedRelayRemoteDelivery } from "../../../../../packages/connectors/src/whatsapp-scoped-relay-remote.js";
 import { ThreadActionSanitizerService } from "./thread-application.services.js";
 import { scheduleNativeCodexHistorySync, syncNativeCodexHistory, threadHistoryPayload, threadMessagePage } from "./thread-message-page.js";
 
@@ -51,6 +53,59 @@ export class ThreadMessagesController {
     scheduleNativeCodexHistorySync(thread);
     return await storedThreadMessagePage(thread, query, null) ||
       threadMessagePage(thread, await listThreadMessages(thread.id), query, null);
+  }
+
+  // The scoped group relay reports a confirmed provider send of a mirrored
+  // remote-runtime reply; the mirror acknowledgement then settles the input.
+  @Post(":threadId/messages/:messageId/scoped-relay-delivery")
+  @HttpCode(200)
+  async scopedRelayDelivery(
+    @Req() request: any,
+    @Param("threadId") threadId: string,
+    @Param("messageId") messageId: string,
+    @Body() body: Record<string, unknown> = {},
+  ) {
+    const thread = await getThreadForPrincipal(threadId, requestPrincipal(request));
+    if (!thread) throw httpError("thread_not_found", 404);
+    try {
+      const result = await recordScopedRelayRemoteDelivery({ thread, messageId, body });
+      const synced = await syncRemoteWhatsAppThreadMessages(process.env, fetch, {threadIds: [thread.id], push: true});
+      if (synced.results.some((row: any) => row.error || row.acks?.rejected)) throw httpError('remote_delivery_ack_pending', 502);
+      return { ok: true, threadId: thread.id, duplicate: result.duplicate, messageId: result.message.id,
+        deliveryState: result.message.deliveryState };
+    } catch (error: any) {
+      throw httpError(error.message, error.statusCode || 500);
+    }
+  }
+
+  // The scoped group relay sends the files of an assistant reply from their
+  // plaintext outbound snapshots. Only snapshots V1 staged itself qualify:
+  // the path, display name, type and the digest the worker must re-verify.
+  @Get(":threadId/messages/:messageId/scoped-relay-files")
+  async scopedRelayFiles(
+    @Req() request: any,
+    @Param("threadId") threadId: string,
+    @Param("messageId") messageId: string,
+  ) {
+    const thread = await getThreadForPrincipal(threadId, requestPrincipal(request));
+    if (!thread) throw httpError("thread_not_found", 404);
+    const message: any = await getThreadMessage(thread.id, messageId);
+    if (!message) throw httpError("message_not_found", 404);
+    if (String(message.role || "").trim().toLowerCase() !== "assistant") return { ok: true, files: [] };
+    const files = (Array.isArray(message.attachments) ? message.attachments : []).flatMap((attachment: any) => {
+      const source = attachment?.encrypted === true ? attachment.deliverySource : attachment;
+      const sha256 = String(source?.outboundSnapshot?.sha256 || "");
+      const filePath = String(source?.path || "");
+      if (!attachment?.id || !/^[0-9a-f]{64}$/.test(sha256) || !path.isAbsolute(filePath)) return [];
+      return [{
+        id: String(attachment.id),
+        path: filePath,
+        filename: path.basename(String(source.filename || source.name || "")) || "attachment",
+        mimetype: String(source.mimetype || ""),
+        sha256,
+      }];
+    });
+    return { ok: true, files };
   }
 
   @Patch(":threadId/messages/:messageId/whatsapp-inbound-revision")

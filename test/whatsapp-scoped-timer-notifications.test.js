@@ -32,7 +32,7 @@ function fixture(t) {
   state.echoes.push(transport.observe(client,{fromMe:true,to,body:text,timestamp:now()/1000,id:{_serialized:id}}));
   return {id:{_serialized:id}};
  }};
- const options={config,api,formatter,env:{},now,proofStore:proofs,routeFence:fence,send:p=>transport.sendText(client,p.chatId,p.text,'main',p)};
+ const options={config,api,formatter,env:{},now,proofStore:proofs,routeFence:fence,send:p=>p.document ? transport.sendDocument(client,p.chatId,p.document,'main',p,media=>({media})) : transport.sendText(client,p.chatId,p.text,'main',p)};
  const notifier=createScopedTimerNotifications(options);
  t.after(()=>{notifier.close();transport.close();proofs.close();fence.close();});
  return {notifier,transport,client,state,config,proofs,fence,options,advance:ms=>clock+=ms};
@@ -40,7 +40,7 @@ function fixture(t) {
 test('only scheduler-verified thread notification is labeled, delivered once and not echoed',async t=>{
  const {notifier,state,options}=fixture(t);
  assert.equal((await notifier.tick()).sent,1);
- assert.equal(state.sent.length,1);assert.match(state.sent[0].text,/\[Timer: Example check\]/);assert.match(state.sent[0].text,/msg:\*update\*/);
+ assert.equal(state.sent.length,1);assert.match(state.sent[0].text,/⏰ Example check/);assert.match(state.sent[0].text,/msg:\*update\*/);
  assert.deepEqual(await Promise.all(state.echoes),[false]);
  await notifier.tick();const resumed=createScopedTimerNotifications(options);await resumed.tick();resumed.close();
  assert.equal(state.sent.length,1);assert.ok(state.apiCalls.every(x=>!x.includes('thread-2')));
@@ -143,4 +143,138 @@ test('scheduler-recorded passive auth notices notify, while record-only and paus
   state.messages=[{id:'notice1',role:'assistant',state:'completed',phase:'signal',source:'timer_connector_health',signalMode:mode==='record_only'?'record_only':'notify_passively',ownerUserId:'admin',chatId:'120000000001@g.us',createdAt:iso(9000),text:'Reconnect your mail account.'}];
   await notifier.tick();assert.equal(state.sent.length,mode==='visible'?1:0,mode);
  }
+});
+
+test('notification scope accepts a multi-thread route fence that includes its thread', async () => {
+  const {notificationScope} = await import('../packages/connectors/src/whatsapp-timer-notification-proof.js');
+  const groups = [{chatId: '120000000001@g.us', threadId: 'thread-a'}, {chatId: '120000000002@g.us', threadId: 'thread-b'}];
+  const base = {groups, timerNotifications: {enabled: true, threadId: 'thread-a', proofDbPath: '/tmp/unused.sqlite', since: '2026-01-01T00:00:00Z'}};
+  const route = extra => ({routeId: 'route-1', dbPath: '/tmp/unused-route.sqlite', ...extra});
+  assert.equal(notificationScope({...base, routeControl: route({threadIds: ['thread-a', 'thread-b']})}).chatId, '120000000001@g.us');
+  assert.equal(notificationScope({...base, groups: [groups[0]], routeControl: route({threadId: 'thread-a'})}).chatId, '120000000001@g.us');
+  for (const control of [{threadIds: ['thread-b']}, {threadId: 'thread-a', threadIds: ['thread-a', 'thread-b']}, {threadIds: ['thread-a']}])
+    assert.throws(() => notificationScope({...base, routeControl: route(control)}), /timer_notification_configuration_invalid/);
+});
+
+function multiFixture(t) {
+ let clock=epoch+10000;const now=()=>clock;
+ const groups=[{chatId:'120000000001@g.us',threadId:'thread-1'},{chatId:'120000000002@g.us',threadId:'thread-2'},{chatId:'120000000003@g.us',threadId:'thread-3'}];
+ const config={ownChatId:'15550000001@c.us',ownerUserId:'admin',activatedAt:iso(0),groups,
+  timerNotifications:{enabled:true,allGroups:true,since:iso(0),proofDbPath:':memory:'},routeControl:{threadIds:groups.map(g=>g.threadId),routeId:'temporary',dbPath:':memory:'}};
+ const fence=createDeliveryRouteFence({dbPath:':memory:',now});
+ fence.activate({to:'temporary',evidence:{routeId:'temporary',checkedAt:iso(10000),preserveExistingSince:iso(0),restrictionCleared:true,authenticated:true,ready:true,identityVerified:true,oldRouteStopped:true,legacyRouterDisabled:true,transportJournalsClear:true}});
+ const proofs=createTimerNotificationProofStore({path:':memory:',now});
+ const run=(n,extra={})=>({type:'timer_due',timerId:`timer${n}`,messageId:`parent${n}`,target:`thread-${n}`,targetType:'thread',ownerUserId:'admin',ts:iso(5000),...extra});
+ const timer=n=>({id:`timer${n}`,label:`Check ${n}`,ownerUserId:'admin',target:`thread-${n}`,targetType:'thread',enabled:true,cadence:'daily'});
+ // Prompt-file timer messages are not listed; only the answers are.
+ const answer=(n,extra={})=>({id:`answer${n}`,role:'assistant',state:'completed',phase:'final_answer',source:'claude-code',parentMessageId:`parent${n}`,chatId:groups[n-1].chatId,createdAt:iso(9000),text:`Report ${n}`,cursor:2,...extra});
+ const state={events:[run(1),run(2),run(3)],timers:[timer(1),timer(2),timer(3)],messages:{'thread-1':[answer(1)],'thread-2':[answer(2)],'thread-3':[answer(3)]},sent:[],bindings:{},apiCalls:[]};
+ const api=async url=>{state.apiCalls.push(url);
+  if(url==='/api/timers')return {timers:state.timers};
+  if(url.startsWith('/api/events'))return {events:state.events};
+  const id=decodeURIComponent(url.split('/')[3]);
+  if(url.includes('/messages'))return {messages:state.messages[id]||[]};
+  if(url.includes('/quota/'))return {quota:{}};
+  const g=groups.find(x=>x.threadId===id);
+  return {thread:{ownerUserId:'admin',binding:{chatId:g.chatId,enabled:true,mirrorToWhatsApp:false,...(state.bindings[id]||{})}}};
+ };
+ const transport=createScopedGroupTransport({config,token:'test-only',base:{},dbPath:':memory:',now,routeFence:fence,proofStore:proofs});
+ const client={info:{wid:{_serialized:config.ownChatId}},sendMessage:async(to,text)=>{state.sent.push({to,text});return {id:{_serialized:'sent-'+state.sent.length}};}};
+ const options={config,api,formatter,env:{},now,proofStore:proofs,routeFence:fence,send:p=>transport.sendText(client,p.chatId,p.text,'main',p)};
+ const notifier=createScopedTimerNotifications(options);
+ t.after(()=>{notifier.close();transport.close();proofs.close();fence.close();});
+ return {notifier,transport,client,state,config,proofs,options,groups,advance:ms=>clock+=ms};
+}
+test('every configured group thread delivers its own timer answer to its own chat only, exactly once',async t=>{
+ const {notifier,state,groups,options}=multiFixture(t);
+ const r=await notifier.tick();assert.equal(r.sent,3);
+ assert.deepEqual(state.sent.map(s=>s.to).sort(),groups.map(g=>g.chatId).sort());
+ for(const s of state.sent){const n=groups.findIndex(g=>g.chatId===s.to)+1;assert.match(s.text,new RegExp(`⏰ Check ${n}`));assert.match(s.text,new RegExp(`Report ${n}`));}
+ await notifier.tick();const resumed=createScopedTimerNotifications(options);await resumed.tick();resumed.close();
+ assert.equal(state.sent.length,3);
+ const callsAfter=state.apiCalls.length;await notifier.tick();
+ assert.ok(state.apiCalls.slice(callsAfter).every(u=>!u.includes('/messages')),'finished runs are not re-read');
+});
+test('NO_REPLY, disabled reply mirroring, foreign answers and inactive bindings never send; one bad thread does not block others',async t=>{
+ const {notifier,state,groups}=multiFixture(t);
+ state.messages['thread-1']=[{...state.messages['thread-1'][0],text:'NO_REPLY'}];
+ state.bindings['thread-2']={mirrorReplies:false};
+ state.bindings['thread-3']={enabled:false};
+ let r=await notifier.tick();assert.equal(r.sent,0);assert.equal(r.errors['thread-3'],'timer_notification_binding_inactive');
+ assert.equal(state.sent.length,0);
+ const second=multiFixture(t);
+ second.state.messages['thread-1']=[{...second.state.messages['thread-1'][0],chatId:second.groups[1].chatId}];
+ second.state.messages['thread-2']=[{...second.state.messages['thread-2'][0],parentMessageId:'parent1'}];
+ second.state.events[2]={...second.state.events[2],target:'thread-1'};
+ r=await second.notifier.tick();
+ // Answer bound to another chat, answer for another run, and a run retargeted
+ // to a thread its timer does not belong to: nothing is delivered anywhere.
+ assert.equal(second.state.sent.length,0);
+});
+test('a thread outside the fence or a mixed scope is rejected',async()=>{
+ const {notificationScope}=await import('../packages/connectors/src/whatsapp-timer-notification-proof.js');
+ const groups=[{chatId:'120000000001@g.us',threadId:'a'},{chatId:'120000000002@g.us',threadId:'b'}];
+ const base={groups,routeControl:{routeId:'r',dbPath:'/tmp/x',threadIds:['a','b']}};
+ const tn=extra=>({enabled:true,proofDbPath:'/tmp/p',since:'2026-01-01T00:00:00Z',...extra});
+ assert.equal(notificationScope({...base,timerNotifications:tn({allGroups:true})}).threads.size,2);
+ assert.equal(notificationScope({...base,timerNotifications:tn({threadIds:['b']})}).allowsChat('120000000001@g.us'),false);
+ for(const extra of [{threadIds:['c']},{threadId:'a',threadIds:['a']},{allGroups:false},{threadIds:[]},{threadIds:['a','a']}])
+  assert.throws(()=>notificationScope({...base,timerNotifications:tn(extra)}),/configuration_invalid/,JSON.stringify(extra));
+});
+test('multi-thread scope reports an event gap and still delivers provable runs',async t=>{
+ const {notifier,state}=multiFixture(t);
+ state.events=[...Array.from({length:497},(_,i)=>({type:'other',ts:iso(6000+i)})),...state.events.map(e=>({...e,ts:iso(6000)}))];
+ const r=await notifier.tick();assert.ok(r.eventGap);assert.equal(r.sent,3);
+});
+test('V2-owned timer replies (no V1 timer_due run) are never delivered by the scoped notifier',async t=>{
+ const {notifier,state}=multiFixture(t);
+ state.events=[];
+ state.messages['thread-1']=[{id:'v2timer-1',role:'user',source:'orkestr-v2-timer',timerId:'timer1',ownerUserId:'admin',createdAt:iso(5000)},
+  {...state.messages['thread-1'][0],parentMessageId:'v2timer-1'}];
+ const r=await notifier.tick();assert.equal(r.sent,0);assert.equal(state.sent.length,0);
+});
+test('a definitive pre-dispatch rejection closes the run without blocking other deliveries',async t=>{
+ const {state,options,proofs,groups}=multiFixture(t);
+ let calls=0;
+ const notifier=createScopedTimerNotifications({...options,send:async p=>{calls++;if(p.chatId===groups[0].chatId)throw Object.assign(new Error('scoped_reply_invalid'),{definitive:true});return options.send(p);}});
+ t.after(()=>notifier.close());
+ const r=await notifier.tick();
+ assert.equal(r.errors['thread-1'],'timer_notification_send_rejected');
+ assert.equal(r.sent,2);
+ assert.equal(state.sent.length,2);
+ assert.equal(proofs.finished('parent1'),'rejected');
+ await notifier.tick();assert.equal(calls,3,'rejected run is not retried');
+});
+test('a long timer reply goes out as one message with its footer through the group transport',async t=>{
+ const {notifier,state}=fixture(t);
+ state.messages[1].text=Array.from({length:500},(_,i)=>`item${i}`).join(' ').slice(0,3500);
+ assert.equal((await notifier.tick()).sent,1);
+ assert.equal(state.sent.length,1);
+ assert.ok(state.sent[0].text.length>3000 && state.sent[0].text.length<=4000);
+ assert.match(state.sent[0].text,/^⏰ Example check\nitem0 [\s\S]*\n\ndbg:/);
+});
+test('a timer reply over the budget is one message plus a journaled Markdown document',async t=>{
+ const {state,options}=fixture(t);
+ const text=Array.from({length:500},(_,i)=>`item${i}`).join(' ');
+ state.messages[1].text=text;
+ const env={ORKESTR_WHATSAPP_MAX_REPLY_CHARS:'1000'};
+ const notifier=createScopedTimerNotifications({...options,env});
+ t.after(()=>notifier.close());
+ assert.equal((await notifier.tick()).sent,2);
+ assert.equal(state.sent.length,2);
+ assert.match(state.sent[0].text,/^⏰ Example check\nitem0 [\s\S]*\n\n… \(full reply attached\)\n\ndbg:/);
+ const {media}=state.sent[1].text;
+ assert.equal(media.mimetype,'text/markdown');
+ assert.match(media.filename,/^reply-[0-9a-f]{10}\.md$/);
+ assert.equal(Buffer.from(media.data,'base64').toString('utf8'),`⏰ Example check\n${text}`);
+ await notifier.tick();
+ const resumed=createScopedTimerNotifications({...options,env});await resumed.tick();resumed.close();
+ assert.equal(state.sent.length,2,'neither the message nor the document repeats');
+});
+test('a timer answer with trailing whitespace and no footer still matches its proof',async t=>{
+ const {state,config,notifier}=fixture(t);
+ config.appendDebugFooter=false;
+ state.messages[1].text='All clear.  \n';
+ assert.equal((await notifier.tick()).sent,1);
+ assert.equal(state.sent[0].text,'⏰ Example check\nAll clear.');
 });

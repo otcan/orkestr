@@ -746,7 +746,8 @@ async function timersCommand(argv, ctx) {
   if (subcommand === "list") return listTimersCommand(rest, ctx);
   if (subcommand === "doctor") return doctorTimersCommand(rest, ctx);
   if (subcommand === "run") return runTimerCommand(rest, ctx);
-  throw new Error("Usage: orkestr timers [list|doctor|run <timer-id>] [--json]");
+  if (subcommand === "handoff" || subcommand === "handback") return timerOwnershipCommand(subcommand, rest, ctx);
+  throw new Error("Usage: orkestr timers [list|doctor|run <timer-id>|handoff <timer-id> --handoff-id <key>|handback <timer-id> --handoff-id <key> [--enable|--keep-disabled]] [--json]");
 }
 
 async function jobsCommand(argv, ctx) {
@@ -1460,6 +1461,32 @@ async function runTimerCommand(argv, ctx) {
   });
   if (json) ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
   else ctx.stdout.write(`Ran timer ${timerId}\n`);
+  return 0;
+}
+
+async function timerOwnershipCommand(subcommand, argv, ctx) {
+  const json = argv.includes("--json");
+  const timerId = positional(argv)[0];
+  const handoffId = String(flagValue(argv, "--handoff-id") || "").trim();
+  const usage = subcommand === "handoff"
+    ? "Usage: orkestr timers handoff <timer-id> --handoff-id <key> [--json]"
+    : "Usage: orkestr timers handback <timer-id> --handoff-id <key> [--enable|--keep-disabled] [--json]";
+  if (!timerId || !handoffId) throw new Error(usage);
+  const body = { ownedBy: subcommand === "handoff" ? "v2" : "v1", handoffId };
+  if (subcommand === "handback") {
+    if (argv.includes("--enable") && argv.includes("--keep-disabled")) throw new Error(usage);
+    if (argv.includes("--enable")) body.enable = true;
+    if (argv.includes("--keep-disabled")) body.enable = false;
+  }
+  const payload = await requestJson(`/api/timers/${encodeURIComponent(timerId)}/ownership`, { ...ctx, method: "POST", body });
+  if (json) {
+    ctx.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+    return 0;
+  }
+  const timer = payload?.timer || {};
+  const state = timer.enabled === false ? "disabled" : `enabled, next ${timer.nextRunAt || "-"}`;
+  const owner = subcommand === "handoff" ? "v2" : "v1";
+  ctx.stdout.write(`Timer ${timerId} owned by ${owner} (handoff ${handoffId}, ${state})${payload?.changed === false ? " - already applied" : ""}\n`);
   return 0;
 }
 
@@ -2318,7 +2345,7 @@ Advanced:
   orkestr whatsapp bindings [list|create|status|resolve|update|delete] [--json]
   orkestr whatsapp codex [status|connect] --thread <thread> [--account id] [--json]
   orkestr whatsapp bind-thread <thread> --name <group name> [--wa-participant jid]... [--json]
-  orkestr timers [list|doctor|run <timer-id>] [--json]
+  orkestr timers [list|doctor|run <timer-id>|handoff <timer-id> --handoff-id <key>|handback <timer-id> --handoff-id <key> [--enable|--keep-disabled]] [--json]
   orkestr setup [list|status|install|configure|pause|resume|export|uninstall] [setup-id] [--provider codex|claude-code] [--timezone Area/City] [--opt-in|--enable|--disable check-in] [--json]  (preview)
   orkestr jobs run [--owner-user-id user] [--target-thread thread] [--max-results N] [--signal-mode record_only|notify_passively] [--json]
   orkestr mailboxes [list|status|create|verify|delete|rotate|ingest|messages|retry|relay-audits|dead-letters|replay] [--json]
@@ -2472,6 +2499,7 @@ function positional(argv) {
   const flagsWithValues = new Set([
     "--report-kind", "--report-key",
     "--idempotency-key",
+    "--handoff-id",
     "--branch",
     "--branch-name",
     "--account",

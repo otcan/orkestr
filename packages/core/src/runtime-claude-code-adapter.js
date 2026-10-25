@@ -1,3 +1,5 @@
+import { withThreadQueueBoundary } from "./thread-queue-control.js";
+import { remoteWhatsAppRuntimeBinding } from "./thread-remote-runtime-binding.js";
 import crypto from "node:crypto";
 import {
   claudeCodeEnabled,
@@ -38,6 +40,7 @@ import {
 import { claudeCodeDetachedTransport } from "./claude-code-detached-turn.js";
 import { reattachDetachedClaudeCodeTurn } from "./claude-code-turn-reattach.js";
 import {
+  claudeCodeInputDebounceDelayMs,
   claudeCodeInputRequestsInterrupt,
   claudeCodeResumePrompt,
   claudeCodeInputDeferredByAuthority,
@@ -97,74 +100,88 @@ export async function startClaudeCodeThread(thread, env = process.env) {
   return { thread: updated, started: true };
 }
 
-async function sendClaudeCodeInputReserved(thread, message, env = process.env, options = {}) {
-  if (activeTurns.has(thread.id)) {
-    const error = new Error("claude_code_turn_active");
-    error.statusCode = 409;
-    throw error;
-  }
-  const profile = await profileForThread(thread, env, true);
-  let freshMessage = await getThreadMessage(thread.id, message.id, env);
-  if (!freshMessage || !pendingStates.has(clean(freshMessage.state))) return { skipped: true, message: freshMessage || message };
-  freshMessage = await claimExecutorHandoffForMessage(thread, freshMessage, "claude-code", env);
-  const coalesced = options.coalesce ? await collectClaudeCodeResumeBatch(thread, freshMessage, env) : [];
-  const resumeAfterInterrupt = claudeCodeInputRequestsInterrupt(freshMessage, env) && consumeClaudeCodeInterruptResume(thread);
-  const prompt = claudeCodeResumePrompt(freshMessage, coalesced, { interrupted: resumeAfterInterrupt });
-  // Reassigned across an automatic background-task retry (below) so every
-  // downstream success/failure code path reports the attempt that actually
-  // produced the outcome.
-  let attemptId = `claude_turn_${crypto.randomBytes(12).toString("base64url")}`;
-  const rootTurnId = attemptId;
+async function sendClaudeCodeInputReserved(thread, message, env = process.env, options = {}, admissionState = {}) {
+  // Serialize only admission with operator holds. The durable active turn
+  // identity is committed before releasing the boundary; inference runs outside.
+  const admission = await withThreadQueueBoundary(thread.id, async () => {
+    thread = await getThread(thread.id, env) || thread;
+    if (!threadUsesClaudeCode(thread) || thread.queueDispatchHold?.paused || remoteWhatsAppRuntimeBinding(thread, env)) {
+      return { skipped: true, message: await getThreadMessage(thread.id, message.id, env) || message };
+    }
+    if (activeTurns.has(thread.id)) {
+      const error = new Error("claude_code_turn_active");
+      error.statusCode = 409;
+      throw error;
+    }
+    const profile = await profileForThread(thread, env, true);
+    let freshMessage = await getThreadMessage(thread.id, message.id, env);
+    if (!freshMessage || !pendingStates.has(clean(freshMessage.state))) return { skipped: true, message: freshMessage || message };
+    freshMessage = await claimExecutorHandoffForMessage(thread, freshMessage, "claude-code", env);
+    const coalesced = options.coalesce ? await collectClaudeCodeResumeBatch(thread, freshMessage, env) : [];
+    const resumeAfterInterrupt = claudeCodeInputRequestsInterrupt(freshMessage, env) && consumeClaudeCodeInterruptResume(thread);
+    const prompt = claudeCodeResumePrompt(freshMessage, coalesced, { interrupted: resumeAfterInterrupt });
+    // Reassigned across an automatic background-task retry (below) so every
+    // downstream success/failure code path reports the attempt that actually
+    // produced the outcome.
+    const attemptId = `claude_turn_${crypto.randomBytes(12).toString("base64url")}`;
+    const rootTurnId = attemptId;
 
-  // Terminate any orphaned process group left by a previous crashed attempt
-  // before writing the new attempt identity file.
-  const identityFilePath = supervisionIdentityPath(thread.id, env);
-  const orphan = await recoverOrphanedAttempt(identityFilePath).catch(() => ({ recovered: false }));
-  if (orphan.blocked) {
-    const error = new Error("claude_code_orphan_identity_unverified");
-    error.code = "claude_code_orphan_identity_unverified";
-    throw error;
-  }
-  if (orphan.recovered) {
-    await appendEvent({
-      type: "claude_code_orphan_recovered",
+    // Terminate any orphaned process group left by a previous crashed attempt
+    // before writing the new attempt identity file.
+    const identityFilePath = supervisionIdentityPath(thread.id, env);
+    const orphan = await recoverOrphanedAttempt(identityFilePath).catch(() => ({ recovered: false }));
+    if (orphan.blocked) {
+      const error = new Error("claude_code_orphan_identity_unverified");
+      error.code = "claude_code_orphan_identity_unverified";
+      throw error;
+    }
+    if (orphan.recovered) {
+      await appendEvent({
+        type: "claude_code_orphan_recovered",
+        threadId: thread.id,
+        orphanPgid: orphan.pgid,
+        orphanAttemptId: orphan.attemptId,
+      }, env).catch(() => {});
+    }
+
+    const deliveryAttempt = Math.max(0, Number(freshMessage.deliveryAttempt || 0) || 0) + 1;
+    const sessionId = await getClaudeCodeSession(thread, env);
+    const priorTurnFailed = clean(thread.runtime?.lastTurnStatus) === "failed";
+    const runningMessage = await updateThreadMessage(thread.id, message.id, {
+      state: "running",
+      deliveryState: "delivering",
+      deliveryAttempt,
+      observedVia: "claude_code_stream_json",
+      executorKind: "claude-code",
+      executorTurnId: attemptId,
+    }, env);
+    await settleClaudeCodeCoalescedInputs(thread, freshMessage, coalesced, "running", attemptId, env);
+    await recordClaudeCodeRouterTrace(runningMessage || freshMessage, "delivery_started", {
       threadId: thread.id,
-      orphanPgid: orphan.pgid,
-      orphanAttemptId: orphan.attemptId,
-    }, env).catch(() => {});
-  }
-
-  const deliveryAttempt = Math.max(0, Number(freshMessage.deliveryAttempt || 0) || 0) + 1;
-  let sessionId = await getClaudeCodeSession(thread, env);
-  let priorTurnFailed = clean(thread.runtime?.lastTurnStatus) === "failed";
-  const runningMessage = await updateThreadMessage(thread.id, message.id, {
-    state: "running",
-    deliveryState: "delivering",
-    deliveryAttempt,
-    observedVia: "claude_code_stream_json",
-    executorKind: "claude-code",
-    executorTurnId: attemptId,
-  }, env);
-  await settleClaudeCodeCoalescedInputs(thread, freshMessage, coalesced, "running", attemptId, env);
-  await recordClaudeCodeRouterTrace(runningMessage || freshMessage, "delivery_started", {
-    threadId: thread.id,
-    attempt: deliveryAttempt,
-    ownerProcess: attemptId,
-  }, env);
-  thread = await updateThreadRuntime(thread.id, {
-    state: "working",
-    lastError: null,
-    runtime: {
-      runtimeKind: "claude-code",
+      attempt: deliveryAttempt,
+      ownerProcess: attemptId,
+    }, env);
+    thread = await updateThreadRuntime(thread.id, {
       state: "working",
-      activeTurnId: attemptId,
-      // Read by the deploy active-work guard: only a "detached" turn (in its
-      // own systemd scope) survives a UI service restart.
-      claudeTransport: claudeCodeDetachedTransport(env),
-    },
+      lastError: null,
+      runtime: {
+        runtimeKind: "claude-code",
+        state: "working",
+        activeTurnId: attemptId,
+        // Read by the deploy active-work guard: only a "detached" turn (in its
+        // own systemd scope) survives a UI service restart.
+        claudeTransport: claudeCodeDetachedTransport(env),
+      },
+    }, env);
+    await appendTurnLifecycleEvent("started", { threadId: thread.id, runtimeKind: "claude-code", turnId: attemptId, state: "working", source: "claude-code" }, env).catch(() => {});
+    await appendEvent({ type: "claude_code_turn_started", threadId: thread.id, profileId: profile.id, turnId: attemptId }, env);
+    return { thread, profile, freshMessage, coalesced, prompt, attemptId, rootTurnId, deliveryAttempt, sessionId, priorTurnFailed, runningMessage };
   }, env);
-  await appendTurnLifecycleEvent("started", { threadId: thread.id, runtimeKind: "claude-code", turnId: attemptId, state: "working", source: "claude-code" }, env).catch(() => {});
-  await appendEvent({ type: "claude_code_turn_started", threadId: thread.id, profileId: profile.id, turnId: attemptId }, env);
+  if (admission.skipped) return admission;
+  admissionState.admitted = true;
+  const { profile, freshMessage, coalesced, prompt, rootTurnId, deliveryAttempt, runningMessage } = admission;
+  let { attemptId, sessionId, priorTurnFailed } = admission;
+  thread = admission.thread;
   const progress = createClaudeCodeProgressReporter({
     thread,
     parentMessage: freshMessage,
@@ -268,17 +285,20 @@ export async function sendClaudeCodeInput(thread, message, env = process.env, op
     throw error;
   }
   turnReservations.add(thread.id);
+  const admissionState = { admitted: false };
   try {
-    return await sendClaudeCodeInputReserved(thread, message, env, options);
+    return await sendClaudeCodeInputReserved(thread, message, env, options, admissionState);
   } finally {
     turnReservations.delete(thread.id);
-    await applyPendingExecutorSwitchAfterTurn(thread.id, env);
+    if (admissionState.admitted) await applyPendingExecutorSwitchAfterTurn(thread.id, env);
   }
 }
 
 export async function deliverClaudeCodePendingInputs(thread, env = process.env) {
   const delivered = [];
   for (;;) {
+    thread = await getThread(thread.id, env) || thread;
+    if (thread.queueDispatchHold?.paused || remoteWhatsAppRuntimeBinding(thread, env)) break;
     const candidates = await normalizeClaudeCodeNowInputs(thread, (await listThreadMessageCandidates(thread.id, { states: [...pendingStates] }, env))
       .filter((message) => message.role === "user"), env);
     const control = candidates.find((message) => {
@@ -300,7 +320,7 @@ export async function deliverClaudeCodePendingInputs(thread, env = process.env) 
       continue;
     }
     if (turnReservations.has(thread.id) || activeTurns.has(thread.id)) {
-      if (candidates.some((message) => claudeCodeInputRequestsInterrupt(message, env))) await steerActiveClaudeCodeTurn(thread, env);
+      if (candidates.some((message) => claudeCodeInputRequestsInterrupt(message, env))) await interruptClaudeCodeThreadForInput(thread, env);
       break;
     }
     const next = candidates[0];
@@ -310,6 +330,14 @@ export async function deliverClaudeCodePendingInputs(thread, env = process.env) 
       const handled = await processQueuedExecutorCommands(thread, env);
       delivered.push(...handled);
       if (handled.length) continue;
+      break;
+    }
+    // Hold a fresh input briefly so a quick burst starts one turn, not one
+    // turn per message; the scheduler re-runs this pass when the window ends.
+    const debounceMs = claudeCodeInputDebounceDelayMs(candidates, next, env);
+    if (debounceMs > 0) {
+      scheduleClaudeCodeDelivery(thread.id, env, debounceMs);
+      await appendEvent({ type: "claude_code_input_debounced", threadId: thread.id, messageId: next.id, delayMs: debounceMs }, env).catch(() => {});
       break;
     }
     const current = await getThread(thread.id, env) || thread;
@@ -380,7 +408,12 @@ async function steerActiveClaudeCodeTurn(thread, env = process.env) {
 // to the supervisor's SIGTERM/SIGKILL path; the resumed turn is started by the
 // delivery pass that owned the interrupted turn or by the delivery scheduler.
 export async function interruptClaudeCodeThreadForInput(thread, env = process.env) {
-  return steerActiveClaudeCodeTurn(thread, env);
+  return withThreadQueueBoundary(thread.id, async () => {
+    const current = await getThread(thread.id, env) || thread;
+    if (current.queueDispatchHold?.paused) return { interrupted: false, reason: "queue_held" };
+    if (remoteWhatsAppRuntimeBinding(current, env)) return { interrupted: false, reason: "remote_runtime" };
+    return steerActiveClaudeCodeTurn(current, env);
+  }, env);
 }
 
 export async function claudeCodeThreadStatus(thread, env = process.env, counts = {}) {

@@ -1,4 +1,5 @@
 import { scopedNativeWorker, createPreservingNativeAuth } from './whatsapp-scoped-native-worker.js';
+import { historyPage, listAllChats } from './whatsapp-scoped-direct-chats.js';
 import { authenticationFailureEvidence } from './whatsapp-auth-failure-evidence.js';
 import { autoConnectHomeChat } from "./whatsapp-auto-home-chat.js";
 import { chromeLockFromOtherHost, chromeLockHost, retireLoggedOutSession } from "./whatsapp-session-recovery.js";
@@ -6818,6 +6819,44 @@ export async function listLocalWhatsAppChats(accountId = "", env = process.env) 
   };
 }
 
+function publicHistoryMessage(message) {
+  return {
+    id: serializedMessageId(message),
+    body: String(message?.body || ""),
+    type: String(message?.type || ""),
+    fromMe: Boolean(message?.fromMe),
+    from: serializedId(message?.from),
+    to: serializedId(message?.to),
+    author: serializedId(message?.author),
+    timestamp: message?.timestamp ? new Date(Number(message.timestamp) * 1000).toISOString() : null,
+    hasMedia: Boolean(message?.hasMedia),
+  };
+}
+
+function readyRuntimeOrNull(accountId, env) {
+  const normalized = normalizeAccountId(accountId, env);
+  const runtime = runtimes.get(normalized);
+  const state = accountStates.get(normalized) || defaultAccountState(normalized);
+  const ready = runtime?.client && state.ready && state.chatOpsReady !== false && state.runtimeUsable !== false;
+  return { normalized, client: ready ? runtime.client : null };
+}
+
+// Owner-authorized read-all: paged metadata of every chat or contact (no content).
+export async function pageLocalWhatsAppChats({ accountId = "", source = "chats", cursor = "", limit, unreadOnly = false, env = process.env } = {}) {
+  const { normalized, client } = readyRuntimeOrNull(accountId, env);
+  if (!client) return { accountId: normalized, ready: false, hasMore: false, nextCursor: null };
+  return { accountId: normalized, ready: true, ...(await listAllChats(client, { source, cursor, limit, unreadOnly })) };
+}
+
+// Owner-authorized read-all: one history page older than `before`; never marks seen.
+export async function pageLocalWhatsAppChatHistory({ accountId = "", chatId = "", before = "", limit, env = process.env } = {}) {
+  const { normalized, client } = readyRuntimeOrNull(accountId, env);
+  if (!client) return { accountId: normalized, chatId, ready: false, messages: [], hasMore: false, nextCursor: null };
+  const chat = await client.getChatById(String(chatId || "").trim());
+  const page = await historyPage(chat, { before, limit });
+  return { accountId: normalized, chatId, ready: true, messages: page.messages.map(publicHistoryMessage), hasMore: page.hasMore, nextCursor: page.nextCursor };
+}
+
 export async function listLocalWhatsAppChatMessages({ accountId = "", chatId = "", limit = 30, env = process.env } = {}) {
   const normalized = normalizeAccountId(accountId, env);
   const id = String(chatId || "").trim();
@@ -7836,6 +7875,58 @@ function localWhatsAppOutboundAttachmentMaxBytes(env = process.env) {
       25 * 1024 * 1024,
   );
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 25 * 1024 * 1024;
+}
+
+// Scoped native workers only: create an owner-only group through the worker's
+// journaled, owner-authorized group creation (`groupCreate` config block).
+export async function createLocalWhatsAppScopedGroup({ request = {}, env = process.env } = {}) {
+  const scoped = scopedNativeWorker(env);
+  if (!scoped) throw Object.assign(new Error("scoped_worker_required"), { statusCode: 403 });
+  const selectedAccountId = await normalizeManagedAccountId(request.senderAccountId || request.accountId || scoped.accountId, env);
+  const runtime = selectedAccountId ? runtimes.get(selectedAccountId) : null;
+  const state = selectedAccountId ? accountStates.get(selectedAccountId) : null;
+  if (!runtime?.client || !state?.ready || state?.runtimeUsable === false) {
+    const error = new Error("whatsapp_local_bridge_not_ready");
+    error.statusCode = 400;
+    throw error;
+  }
+  return scoped.createGroup(selectedAccountId, runtime.client, request);
+}
+
+// Scoped native workers only: send the full text of a long group reply as one
+// Markdown document through the scoped transport's journaled send.
+export async function sendLocalWhatsAppScopedDocument({ chatId = "", accountId = "", document = {}, env = process.env, scopedRequest = {} } = {}) {
+  const scoped = scopedNativeWorker(env);
+  if (!scoped) throw Object.assign(new Error("scoped_worker_required"), { statusCode: 403 });
+  const selectedAccountId = await normalizeManagedAccountId(accountId, env);
+  const runtime = selectedAccountId ? runtimes.get(selectedAccountId) : null;
+  const state = selectedAccountId ? accountStates.get(selectedAccountId) : null;
+  if (!runtime?.client || !state?.ready || state?.runtimeUsable === false) {
+    const error = new Error("whatsapp_local_bridge_not_ready");
+    error.statusCode = 400;
+    throw error;
+  }
+  const MessageMedia = runtime.MessageMedia || (await loadBridgeDependencies()).whatsapp.MessageMedia;
+  return scoped.sendDocument(selectedAccountId, runtime.client, chatId, document, scopedRequest,
+    ({ mimetype, data, filename }) => new MessageMedia(mimetype, data, filename));
+}
+
+// Scoped native workers only: send a file the assistant attached to a group
+// reply, read by the scoped transport from the thread's outbound snapshot.
+export async function sendLocalWhatsAppScopedFile({ chatId = "", accountId = "", file = {}, env = process.env, scopedRequest = {} } = {}) {
+  const scoped = scopedNativeWorker(env);
+  if (!scoped) throw Object.assign(new Error("scoped_worker_required"), { statusCode: 403 });
+  const selectedAccountId = await normalizeManagedAccountId(accountId, env);
+  const runtime = selectedAccountId ? runtimes.get(selectedAccountId) : null;
+  const state = selectedAccountId ? accountStates.get(selectedAccountId) : null;
+  if (!runtime?.client || !state?.ready || state?.runtimeUsable === false) {
+    const error = new Error("whatsapp_local_bridge_not_ready");
+    error.statusCode = 400;
+    throw error;
+  }
+  const MessageMedia = runtime.MessageMedia || (await loadBridgeDependencies()).whatsapp.MessageMedia;
+  return scoped.sendFile(selectedAccountId, runtime.client, chatId, file, scopedRequest,
+    ({ mimetype, data, filename }) => new MessageMedia(mimetype, data, filename));
 }
 
 /**
