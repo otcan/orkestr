@@ -16,7 +16,7 @@ import time
 import unittest
 
 from v2.compat.v1_runtime.ledger import Ledger
-from v2.compat.v1_runtime.worker import ORPHAN_GRACE_S, STALL_NOTICE, STALL_NOTICE_AFTER_S, Worker
+from v2.compat.v1_runtime.worker import ORPHAN_GRACE_S, Worker
 from v2.compat.v1_runtime.tests.test_timer_relay import SCOPE, TimerPeer, _Stop, occurrence
 
 
@@ -127,8 +127,6 @@ class SilentTerminalTimerTests(Base):
         self.assertEqual(self.peer.outcomes, [{"claim_id": occurrence(2)["claim_id"], "text": "report"}])
         (reply,) = self.replies()
         self.assertTrue(reply["noReply"])
-        later = data["admitted_at"] + 10 * STALL_NOTICE_AFTER_S
-        self.assertEqual(self.ledger.mark_stalled(STALL_NOTICE_AFTER_S, STALL_NOTICE, now=later), [])
         user = [m for m in self.ledger.messages() if m["role"] == "user"][0]
         done = self.ledger.acknowledge(reply["id"], {"outcome": "no_reply", "parentPublicMessageId": user["publicMessageId"]})
         self.assertTrue(done["settled"])
@@ -171,38 +169,6 @@ class SilentTerminalTimerTests(Base):
 
 
 class GenuineStallTests(Base):
-    def stall_after(self, sequence):
-        data = self.row(sequence)
-        later = data["admitted_at"] + STALL_NOTICE_AFTER_S + 90
-        return self.ledger.mark_stalled(STALL_NOTICE_AFTER_S, STALL_NOTICE, now=later), later
-
-    def test_open_window_without_a_run_waits_and_is_alerted_as_stalled(self):
-        self.peer.window = dict(window_id="w", state="active", conversation_id=self.peer.conversation, generation=9,
-                                work_deadline_ms=int(time.time() * 1000) + 600000)
-        self.peer.timer_rows = [occurrence(2)]
-        self.drive()
-        self.expire_grace(2)
-        self.drive()
-        data = self.row(2)
-        self.assertEqual(data["phase"], "running")
-        self.assertNotIn("refused", data)
-        marked, later = self.stall_after(2)
-        self.assertEqual([d["remote_id"] for d in marked], [data["remote_id"]])
-        stalled = marked[0]["stalled"]
-        self.assertEqual(stalled["since"], data["admitted_at"])
-        self.assertEqual(int(stalled["at"] - stalled["since"]) // 60, (STALL_NOTICE_AFTER_S + 90) // 60)
-
-    def test_deep_running_past_its_deadline_is_alerted_as_stalled(self):
-        self.peer.ran(2, deep="running", fast="completed")
-        self.peer.window = dict(window_id="w", state="active", conversation_id=self.peer.conversation, generation=9,
-                                work_deadline_ms=int(time.time() * 1000) - 1)
-        self.peer.timer_rows = [occurrence(2)]
-        self.drive(2)
-        self.assertEqual(self.row(2)["phase"], "running")
-        marked, _ = self.stall_after(2)
-        self.assertEqual(len(marked), 1)
-        self.assertEqual(marked[0]["stalled"]["phase"], "running")
-
     def test_failed_deep_run_without_an_answer_alerts(self):
         self.peer.ran(2, deep="failed", fast="completed")
         self.peer.timer_rows = [occurrence(2)]

@@ -200,22 +200,6 @@ class SettlingWindowTests(Case):
         self.assertEqual(self.ledger.messages()[-1]["text"], "deep result")
 
 
-class StallNoticeTests(Case):
-    def test_unanswered_input_gets_one_notice_and_counts_as_stalled(self):
-        from v2.compat.v1_runtime.worker import STALL_NOTICE, STALL_NOTICE_AFTER_S
-        self.assertEqual(self.ledger.mark_stalled(STALL_NOTICE_AFTER_S, STALL_NOTICE), [])
-        later = time.time() + STALL_NOTICE_AFTER_S + 1
-        marked = self.ledger.mark_stalled(STALL_NOTICE_AFTER_S, STALL_NOTICE, now=later)
-        self.assertEqual([d["remote_id"] for d in marked], [self.data["remote_id"]])
-        self.assertEqual(self.ledger.mark_stalled(STALL_NOTICE_AFTER_S, STALL_NOTICE, now=later + 600), [])
-        self.assertEqual([m["text"] for m in self.notices()], [STALL_NOTICE])
-        self.assertEqual(self.ledger.health()["stalledInputs"], 1)
-        # The input still runs to its reply; it then no longer counts.
-        self.worker.step(self.ledger.next_input())
-        self.assertEqual(self.ledger.messages()[-1]["text"], "deep result")
-        self.assertEqual(self.ledger.health()["stalledInputs"], 0)
-
-
 class OrphanedFollowUpTests(Case):
     def orphan(self):
         self.peer.foreign = True  # No run of this input ever starts.

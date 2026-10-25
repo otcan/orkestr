@@ -34,6 +34,8 @@ def measure(path, after_ms):
             # Progress may be superseded before its late, genuine send ACK
             # arrives. Count that receipt too; supersession cannot unsend it.
             for seq, kind, raw in db.execute("SELECT seq,kind,ack FROM exports WHERE input_id=? AND "
+                                             "source_key NOT LIKE 'stalled:%' AND source_key NOT LIKE 'heartbeat:%' "
+                                             "AND source_key NOT LIKE 'continued:%' AND "
                                              "(outcome='delivered' OR (outcome='superseded' AND json_extract(ack,'$.outcome')='delivered'))", (remote,)):
                 ack = json.loads(raw) if raw else None
                 sent = send_time(ack)
