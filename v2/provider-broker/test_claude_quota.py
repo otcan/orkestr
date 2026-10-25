@@ -82,7 +82,7 @@ class QuotaProjectionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             root=Path(root);directory=root/'quota';directory.mkdir(mode=0o750)
             package=SimpleNamespace(owner=OWNER,uid=os.getuid(),home=root/'home',root=root/'release',
-                ledger_directory=root/'ledger',endpoint_directory=root/'endpoints',runtime={})
+                ledger_directory=root/'ledger',endpoint=root/'endpoints'/'egress.sock',runtime={})
             self.assertIsNone(QuotaSink.optional(package))
             package.runtime={'claude_quota_projection':{'directory':str(directory),'account_ref':ACCOUNT}}
             self.assertIsInstance(QuotaSink.optional(package),QuotaSink)

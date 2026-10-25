@@ -85,7 +85,7 @@ class QuotaSink:
             if not directory.is_absolute() or directory.resolve(strict=True) != directory:
                 return None
             # Sharing quota metadata must never relax Core/package custody.
-            private_paths=[package.home, package.root, package.ledger_directory, package.endpoint_directory]
+            private_paths=[package.home, package.root, package.ledger_directory, package.endpoint.parent]
             if getattr(package,'provider_home',None) is not None:
                 private_paths.append(package.provider_home)
             if native_config is not None:

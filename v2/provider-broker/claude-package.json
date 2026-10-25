@@ -13,7 +13,7 @@
     "claude_telemetry.py": "f3bcfaec041bd45cdb7456c2b71188b20ad5decc951fdea40f14b8c0340538a7",
     "claude_control.py": "a7c2404b2683b77ca73dc7c4c16266bcb6d5df02cd5417f4b98d0d24f9760f22",
     "claude_policy.py": "929683817855f5032c16f08902986b0ffb20735081c65960799c485f60a654fd",
-    "claude_quota.py": "6728c9e87cfbb93946358dc4ef3dfdca0c095fd26449d9889aa2b860f3fd95be"
+    "claude_quota.py": "3a60404d7c62dd36861cd111c7be9b0bc2714523d2c571165aa3e7cc09a36f67"
   },
   "activation": "held-installed-cli-and-runtime-composition-review"
 }

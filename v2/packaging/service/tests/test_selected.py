@@ -213,6 +213,19 @@ class Selected(unittest.TestCase):
             self.assertTrue(package.claude['fast'] and not package.claude['default'])
             self.assertEqual(package.runtime['claude_quota_projection'],self.plan['claude_quota_projection'])
             self.assertIn('broker/claude_quota.py',package.manifest['files'])
+            # Exercise the actual protected Package contract, not a lookalike
+            # that can accidentally invent attributes absent in production.
+            from claude_connector import ClaudeConfiguration
+            from claude_quota import QuotaSink
+            with patch.object(Path,'open',guarded):
+                config=ClaudeConfiguration.load(r/'release/package/claude-private.json')
+                sink=QuotaSink.optional(package,config)
+            self.assertIsInstance(sink,QuotaSink)
+            self.assertEqual(sink.directory,quota)
+            self.assertEqual(sink.uid,995)
+            self.assertEqual(sink.owner,self.plan['owner_id'])
+            package.runtime['claude_quota_projection']['directory']=str(package.endpoint.parent)
+            self.assertIsNone(QuotaSink.optional(package,config))
         self.assertIn('broker-claude',(r/'release/package/launcher-claude.py').read_text())
         private=json.loads((r/'release/package/claude-private.json').read_bytes())
         self.assertEqual(private['host_full_access'],{'environment':environment})
