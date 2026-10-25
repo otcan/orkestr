@@ -377,13 +377,13 @@ class Ledger:
                         own.update(v for k, v in item.items() if k in ("message_id", "previous_message_id") and isinstance(v, str))
         return own
 
-    def _pseudo_timer(self, db, remote_id, label, created_ms, extra, reply):
+    def _pseudo_timer(self, db, remote_id, label, created_ms, extra, reply, source_id=WEB_SOURCE_ID):
         """One completed pseudo timer input (V1's only parent shape for a reply
         without a WhatsApp input) and its final export, in the caller's transaction."""
         data = {"remote_id": remote_id, "public_id": TIMER_PREFIX + remote_id, "origin": "timer", "text": label[:TIMER_TEXT_LIMIT],
                 "public_thread_id": self.scope.get("public_thread_id"), "chat_id": self.scope.get("chat_id"),
                 "account_id": self.scope.get("account_id"),
-                "timer": {"namespace": None, "claim_id": None, "source_timer_id": WEB_SOURCE_ID,
+                "timer": {"namespace": None, "claim_id": None, "source_timer_id": source_id,
                           "label": label[:TIMER_TEXT_LIMIT], "due_ms": created_ms},
                 "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                 "phase": "completed", "admitted_at": time.time(), "keys": {}, "reply": reply}
@@ -594,32 +594,6 @@ class Ledger:
             self.save(data, db)
             self._export(db, data, "final", "final:" + data["remote_id"], reply)
 
-    def mark_stalled(self, after_s, text, now=None):
-        """Give each unanswered input older than after_s one visible notice.
-
-        Returns the inputs newly marked, for the operator alert.
-        """
-        now = time.time() if now is None else now
-        marked = []
-        with self.connect() as db:
-            db.execute("BEGIN IMMEDIATE")
-            rows = db.execute("SELECT data FROM inputs WHERE json_extract(data,'$.phase') != 'completed' AND "
-                              "json_extract(data,'$.settled') IS NULL AND json_extract(data,'$.stalled') IS NULL "
-                              "ORDER BY rowid").fetchall()
-            for (raw,) in rows:
-                data = json.loads(raw)
-                since = arrived(data)
-                if not isinstance(since, (int, float)) or now - since < after_s:
-                    continue
-                data["stalled"] = {"at": now, "phase": data.get("phase"), "since": since}
-                self.save(data, db)
-                message = {"id": str(uuid.uuid5(NOTICE_NAMESPACE, "stalled:" + data["remote_id"])),
-                           "role": "assistant", "state": "completed", "phase": "commentary", "kind": "progress",
-                           "source": "rust-v2-adapter", "parentMessageId": data["remote_id"], "text": text}
-                self._export(db, data, "progress", "stalled:" + data["remote_id"], message)
-                marked.append(data)
-        return marked
-
     def continue_notice(self, data, text):
         """Save a re-queued input and tell the owner, in one transaction.
 
@@ -638,7 +612,9 @@ class Ledger:
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
             self.save(data, db)
-            count = db.execute("SELECT count(*) FROM exports WHERE input_id=? AND kind='progress'", (data["remote_id"],)).fetchone()[0]
+            count = db.execute("SELECT count(*) FROM exports WHERE input_id=? AND kind='progress' "
+                               "AND source_key NOT LIKE 'stalled:%' AND source_key NOT LIKE 'heartbeat:%' "
+                               "AND source_key NOT LIKE 'continued:%'", (data["remote_id"],)).fetchone()[0]
             if count >= PROGRESS_LIMIT:
                 return None
             message = {"id": str(uuid.uuid4()), "role": "assistant", "state": "completed", "phase": "commentary",

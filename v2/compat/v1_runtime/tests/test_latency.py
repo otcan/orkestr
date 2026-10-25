@@ -15,16 +15,18 @@ class LatencyTests(unittest.TestCase):
             path = Path(root) / "synthetic.sqlite3"
             with sqlite3.connect(path) as db:
                 db.execute("CREATE TABLE inputs(remote_id TEXT,data TEXT)")
-                db.execute("CREATE TABLE exports(seq INTEGER,input_id TEXT,kind TEXT,outcome TEXT,ack TEXT)")
+                db.execute("CREATE TABLE exports(seq INTEGER,input_id TEXT,kind TEXT,outcome TEXT,ack TEXT,source_key TEXT)")
                 def input(key, **extra):
                     db.execute("INSERT INTO inputs VALUES(?,?)", (key, json.dumps({"queued_at": 100, **extra})))
-                def receipt(seq, key, seconds, kind="final", outcome="delivered"):
+                def receipt(seq, key, seconds, kind="final", outcome="delivered", source="progress:synthetic"):
                     ack = {"deliveredAt": datetime.fromtimestamp(seconds, timezone.utc).isoformat(),
                            "outcome": "delivered" if outcome == "superseded" else outcome,
                            "connectorMessageIds": ["synthetic-receipt"]}
-                    db.execute("INSERT INTO exports VALUES(?,?,?,?,?)", (seq, key, kind, outcome, json.dumps(ack)))
+                    db.execute("INSERT INTO exports VALUES(?,?,?,?,?,?)", (seq, key, kind, outcome, json.dumps(ack), source))
                 input("one"); receipt(1, "one", 105, "progress"); receipt(2, "one", 130)
                 input("two"); receipt(3, "two", 109)
+                receipt(9, "two", 101, "progress", source="stalled:two")
+                receipt(10, "two", 102, "progress", source="heartbeat:two")
                 input("late-ack"); receipt(7, "late-ack", 103, "progress", outcome="superseded"); receipt(8, "late-ack", 112)
                 input("silent", settled={"outcome": "no_reply"})
                 input("unknown"); receipt(4, "unknown", 104, outcome="uncertain")

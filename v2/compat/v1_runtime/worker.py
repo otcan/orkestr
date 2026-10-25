@@ -18,6 +18,7 @@ from .model_identity import observed_identity
 from .policy_refusal import notice as policy_notice
 from .first_response import capture as capture_first_response
 from .questions import QUESTION_PREFIX, QUESTION_LABEL, QUESTION_SCAN_LIMIT, export_question
+from .activity import observe as observe_activity
 
 PROGRESS_INTERVAL_S = 60
 PROGRESS_MAX_CHARS = 3500
@@ -56,11 +57,6 @@ UNSETTLED_WINDOW_STATES = ("opening", "retiring", "reconciliation_required")
 # A Fast in these phases (or missing) can never become this input's proposal.
 FAST_UNUSABLE_PHASES = ("failed", "lost", "cancelled", "blocked", "stopped", "interrupted", "completed")
 FAST_GRACE_S = 60
-# An input still not answered after this long gets one visible notice and an
-# operator alert, so a silent hang cannot happen.
-STALL_NOTICE_AFTER_S = 20 * 60
-STALL_NOTICE = ("Still working on this message after more than 20 minutes. It may be stuck; "
-                "Orkestr keeps retrying and the operator has been alerted.")
 # Burst handling: WhatsApp messages sent in quick succession (text, then photos
 # one by one) go to Rust as one input, so one turn answers all of them. A fresh
 # input waits until the chat was quiet this long; a continuous stream holds the
@@ -74,7 +70,7 @@ BURST_NOTE = ("[%d messages arrived together and are delivered as one turn. Read
 # Frozen per-attempt state dropped when an input is sent again as a new turn.
 RESET_KEYS = ("intake", "cursor", "window", "window_request", "previous_window", "matched_runs", "accepted",
               "fast_accept_request", "deep_accept_request", "fast_payload", "deep_payload", "admitted_at",
-              "progress_at", "fast_unusable_since", "intake_rules", "questions_scanned", "question_payloads")
+              "progress_at", "fast_unusable_since", "intake_rules", "questions_scanned", "question_payloads", "activity")
 # An admitted input whose window ended without starting any run of it.
 ORPHAN_GRACE_S = 60
 # Deep phases a window work deadline leaves behind.
@@ -830,6 +826,7 @@ class Worker:
             return
         capture_first_response(self, data, statuses, ids)
         self.capture_progress(data, statuses["deep"], ids)
+        observe_activity(self, data, statuses)
         accepted = data.setdefault("accepted", {})
         if self.continue_after_deadline(data, statuses, ids):
             return
@@ -1239,15 +1236,6 @@ class Worker:
                 self.drive_web()
             except Exception:
                 pass
-        try:
-            for data in self.ledger.mark_stalled(STALL_NOTICE_AFTER_S, STALL_NOTICE):
-                print("ALERT orkestr-v2-wa-adapter input_stalled conversation=%s input=%s phase=%s age_min=%d"
-                      % (getattr(self.client, "conversation", "?"), data["remote_id"], data.get("phase"),
-                         (data["stalled"]["at"] - data["stalled"]["since"]) // 60),
-                      file=sys.stderr, flush=True)
-        except Exception:
-            # Retried every pass; never blocks the binding.
-            pass
         data = self.ledger.next_input()
         if not data:
             return False
