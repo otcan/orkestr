@@ -17,6 +17,7 @@ from .rust_client import ClientError
 from .model_identity import observed_identity
 from .policy_refusal import notice as policy_notice
 from .first_response import capture as capture_first_response
+from .questions import QUESTION_PREFIX, QUESTION_LABEL, QUESTION_SCAN_LIMIT, export_question
 
 PROGRESS_INTERVAL_S = 60
 PROGRESS_MAX_CHARS = 3500
@@ -50,10 +51,6 @@ APP_FILES = re.compile(r"\n*\[Files attached in the Orkestr app[^\n]*:\n((?:- [^
 # Runtime marker of an asynchronous question (Codex `request_user_input_async`)
 # in a progress payload; must equal the runtime's ASYNC_QUESTION_PREFIX. Such a
 # question is sent at once as its own message, never as the input's final.
-QUESTION_PREFIX = "\u2753 Question while I keep working:\n\n"
-QUESTION_LABEL = "Question"
-# Progress payloads inspected per input for questions (bounded state).
-QUESTION_SCAN_LIMIT = 1024
 # Window states that are neither open for a follow-up nor closed for a successor.
 UNSETTLED_WINDOW_STATES = ("opening", "retiring", "reconciliation_required")
 # A Fast in these phases (or missing) can never become this input's proposal.
@@ -77,7 +74,7 @@ BURST_NOTE = ("[%d messages arrived together and are delivered as one turn. Read
 # Frozen per-attempt state dropped when an input is sent again as a new turn.
 RESET_KEYS = ("intake", "cursor", "window", "window_request", "previous_window", "matched_runs", "accepted",
               "fast_accept_request", "deep_accept_request", "fast_payload", "deep_payload", "admitted_at",
-              "progress_at", "fast_unusable_since", "intake_rules", "questions_scanned")
+              "progress_at", "fast_unusable_since", "intake_rules", "questions_scanned", "question_payloads")
 # An admitted input whose window ended without starting any run of it.
 ORPHAN_GRACE_S = 60
 # Deep phases a window work deadline leaves behind.
@@ -276,15 +273,20 @@ class Worker:
         seen = data.setdefault("progress_seen", [])
         if status.get("run_id") not in ids or not payload_id or payload_id in seen or len(seen) >= PROGRESS_LIMIT:
             return
+        if payload_id in data.get("question_payloads", []):
+            return  # Its own durable post is the only transport path.
         now = time.time()
         if now - data.get("progress_at", data.get("admitted_at", now)) < PROGRESS_INTERVAL_S:
             return
         payload = self.call("GET", "/payloads/" + payload_id)
         if payload.get("run_id") != status["run_id"] or payload.get("payload_id") != payload_id:
             raise Refused("progress_payload_mismatch")
+        text = payload.get("text")
+        if export_question(self, data, payload_id, text, status["run_id"]):
+            self.ledger.save(data)
+            return
         seen.append(payload_id)
         data["progress_at"] = now
-        text = payload.get("text")
         if not isinstance(text, str) or not text.strip() or no_reply(text):
             self.ledger.save(data)
             return
@@ -319,11 +321,7 @@ class Worker:
             text = value.get("text") if value.get("payload_id") == payload_id else None
             if value and value.get("run_id") != payload["run_id"]:
                 raise Refused("progress_payload_mismatch")
-            if isinstance(text, str) and text.startswith(QUESTION_PREFIX) and text[len(QUESTION_PREFIX):].strip():
-                uuid.UUID(payload_id)
-                self.ledger.enqueue_post({"id": payload_id, "author": "assistant_question", "label": QUESTION_LABEL,
-                                          "text": text, "provider": None, "model": None,
-                                          "created_ms": int(time.time() * 1000)}, self.provider_identity(run_id=payload["run_id"]))
+            export_question(self, data, payload_id, text, payload["run_id"])
             self.ledger.save(data)
 
     def call(self, method, route, body=None, allowed=(200,)):
