@@ -1,6 +1,7 @@
 import {readGroupInputs} from './scoped-group-inbox.js';
 import {buildReplyTo} from './scoped-group-reply-quote.js';
 import {createScopedAcknowledgements} from './scoped-group-acknowledgements.js';
+import {acknowledgementActivity} from './scoped-acknowledgement-activity.js';
 import {createKeyedSerial} from './scoped-relay-serial.js';
 import crypto from 'node:crypto';
 import {createGroupParticipantPolicy, participantInputMetadata} from './whatsapp-group-participant-author.js';
@@ -88,12 +89,12 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
       }
       const {thread} = await inputThread(input, group);
       if (threadSuppressesUpdates(thread)) return false;
-      if (!route) return true;
+      if (!route) return {active:false};
       const {messages} = await answersFor(group, route, false);
       if (messages.some(m => m.parentMessageId === route.message_id && String(m.text || '').trim() === 'NO_REPLY')) {
         acknowledgements.mark(input.id, 'no_reply'); return false;
       }
-      return true;
+      return acknowledgementActivity({api,group,thread,route,messages,now});
     }});
   const replyFiles = createRelayReplyFiles({config, db, api, send, log, key});
 

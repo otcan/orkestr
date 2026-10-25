@@ -67,6 +67,7 @@ const files = ['packages/connectors/src/whatsapp-scoped-group-transport.js',
   'packages/connectors/src/scoped-group-inbox.js',
   'packages/connectors/src/scoped-group-reply-quote.js',
   'packages/connectors/src/scoped-group-acknowledgements.js',
+  'packages/connectors/src/scoped-acknowledgement-activity.js',
   'packages/connectors/src/scoped-relay-serial.js',
   'packages/connectors/src/whatsapp-scoped-remote-watch.js',
   'packages/connectors/src/whatsapp-scoped-group-relay.js', 'scripts/scoped-group-relay.mjs', 'apps/cli/src/api-client.js'];

@@ -3,9 +3,18 @@ import {isAdminPrincipal} from '../../../../../packages/core/src/policy.js';
 import {requestPrincipal} from '../../../../../packages/core/src/principal.js';
 import {discoverRemoteMessageWatches, importRemoteMessageChanges, importRemoteMessageThread} from '../../../../../packages/connectors/src/whatsapp-remote-changes.js';
 import {httpError} from '../../common/http.js';
+import {remoteInputActivity} from '../../../../../packages/connectors/src/whatsapp-remote-input-activity.js';
 
 @Controller('api/connectors/whatsapp/remote-runtime')
 export class WhatsAppRemoteChangesController {
+  @Get('input-activity')
+  async activity(@Req() request: any, @Query() query: Record<string, unknown>) {
+    if (!isAdminPrincipal(requestPrincipal(request))) throw httpError('admin_required', 403);
+    if (typeof query.thread !== 'string' || !query.thread || query.thread.length > 256 ||
+        typeof query.message !== 'string' || !query.message || query.message.length > 256 ||
+        Object.keys(query).some(key => !['thread','message'].includes(key))) throw httpError('invalid_activity_query',400);
+    return remoteInputActivity({threadId:query.thread,publicMessageId:query.message});
+  }
   @Get('watches')
   async watches(@Req() request: any) {
     if (!isAdminPrincipal(requestPrincipal(request))) throw httpError('admin_required', 403);

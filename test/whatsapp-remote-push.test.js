@@ -11,6 +11,7 @@ import {syncRemoteWhatsAppThreadMessages} from '../packages/connectors/src/whats
 import {recordScopedRelayRemoteDelivery} from '../packages/connectors/src/whatsapp-scoped-relay-remote.js';
 import {createScopedGroupRelay} from '../packages/connectors/src/whatsapp-scoped-group-relay.js';
 import {startScopedRemoteWatch} from '../packages/connectors/src/whatsapp-scoped-remote-watch.js';
+import {remoteInputActivity} from '../packages/connectors/src/whatsapp-remote-input-activity.js';
 
 async function fixture(t, {slow = false, acknowledgement = false} = {}) {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), 'remote-push-'));
@@ -25,7 +26,8 @@ async function fixture(t, {slow = false, acknowledgement = false} = {}) {
   const at = Date.now();
   if (slow) inbox.prepare('INSERT INTO group_input VALUES(?,?,?,?)').run('slow-wa', 'slow-group', 'older request', new Date(at - 1).toISOString());
   inbox.prepare('INSERT INTO group_input VALUES(?,?,?,?)').run('wa', 'group', 'request', new Date(at).toISOString());
-  const state = {version: 0, exports: [], sends: [], acks: [], reads: [], waiters: [], sentAt: null, slowReads: 0, clock: at};
+  const state = {version: 0, exports: [], sends: [], acks: [], reads: [], waiters: [], sentAt: null, slowReads: 0, clock: at,
+    nativeActive:true,nativeFastReady:false,activityReads:0};
   let unblock, beginSlow;
   const slowStarted = new Promise(resolve => {beginSlow = resolve;});
   const slowGate = new Promise(resolve => {unblock = resolve;});
@@ -34,6 +36,11 @@ async function fixture(t, {slow = false, acknowledgement = false} = {}) {
     const u = new URL(url);
     assert.equal(options.headers.authorization, 'Bearer synthetic-token');
     if (u.pathname === '/health') return Response.json({messageChanges: {version: 1, path: 'changes'}});
+    if(u.pathname==='/threads/route/activity') {
+      state.activityReads++;
+      return Response.json({ok:true,version:1,publicThreadId:thread.id,publicMessageId:parent.id,phase:'running',
+        observedAtMs:state.clock,active:state.nativeActive,fastReady:state.nativeFastReady,finalReady:false});
+    }
     if (u.pathname === '/changes') {
       if (u.searchParams.get('cursor') !== `epoch:${state.version}`) return Response.json({...change(), reset: !u.searchParams.get('cursor')});
       return new Promise((resolve, reject) => {
@@ -64,6 +71,10 @@ async function fixture(t, {slow = false, acknowledgement = false} = {}) {
       const query = new URL(url, 'http://v1.test').searchParams;
       return importRemoteMessageThread({backendId: query.get('backend'), threadId: query.get('thread'), signal: options.signal}, env, fetchImpl);
     }
+    if(url.includes('/remote-runtime/input-activity?')) {
+      const query=new URL(url,'http://v1.test').searchParams;
+      return remoteInputActivity({threadId:query.get('thread'),publicMessageId:query.get('message')},env,fetchImpl,{now:()=>state.clock});
+    }
     if (url.includes('/slow-thread')) {state.slowReads++; beginSlow(); await slowGate; return {thread: {ownerUserId: 'admin', binding: {enabled: true, chatId: 'slow-group'}}};}
     if (url.endsWith('/scoped-relay-delivery')) {
       const messageId = url.split('/')[5];
@@ -83,6 +94,7 @@ async function fixture(t, {slow = false, acknowledgement = false} = {}) {
   db.prepare('INSERT INTO routed VALUES(?,?,?,0)').run('wa', thread.id, parent.id);
   if (slow) db.prepare('INSERT INTO routed VALUES(?,?,?,0)').run('slow-wa', 'slow-thread', 'slow-input');
   const publish = (extra = {}) => {
+    state.nativeFastReady=true;
     state.exports.push({id: `remote-${state.version + 1}`, role: 'assistant', state: 'completed', source: 'rust-v2-adapter', phase: 'commentary', kind: 'progress', text: 'Real Fast reply', parentMessageId: 'remote-user', createdAt: new Date(at).toISOString(), exportSequence: ++state.version, ...extra});
     for (const fn of state.waiters.splice(0)) fn();
   };
@@ -131,10 +143,12 @@ test('parallel background/event imports cannot duplicate a reply', async t => {
   assert.equal((await listThreadMessages(f.thread.id, f.env)).filter(row => row.role === 'assistant').length, 1);
 });
 
-test('five-second ack and later Fast are both sent once through the real relay journals', async t => {
+test('twenty-second active-work fallback and later Fast are both sent once through the real relay journals', async t => {
   t.mock.timers.enable({apis: ['setTimeout']});
   const f = await fixture(t, {acknowledgement: true});
-  f.relay.scheduleAcknowledgements(); f.state.clock += 5000; t.mock.timers.tick(5000);
+  f.relay.scheduleAcknowledgements(); f.state.clock += 19999; t.mock.timers.tick(19999);
+  assert.equal(f.state.sends.length,0);
+  f.state.clock++;t.mock.timers.tick(1);
   await until(() => f.state.sends.length === 1);
   assert.equal(f.state.sends[0].text, 'Empfangen ✓, ich arbeite daran');
   f.publish();
@@ -145,17 +159,26 @@ test('five-second ack and later Fast are both sent once through the real relay j
   assert.equal(f.state.sends.length, 2); assert.match(f.state.sends[1].text, /Real Fast reply/);
 });
 
-test('Fast sent before five seconds and known NO_REPLY each suppress the scheduled ack', async t => {
+test('Fast sent before twenty seconds and known NO_REPLY each suppress the scheduled ack', async t => {
   t.mock.timers.enable({apis: ['setTimeout']});
   for (const text of ['Fast before the deadline', 'NO_REPLY']) {
     const f = await fixture(t, {acknowledgement: true});
     f.publish({text, phase: text === 'NO_REPLY' ? 'final_answer' : 'commentary'});
     const batch = await importRemoteMessageChanges({backendId: 'example'}, f.env, f.fetchImpl);
     await f.relay.deliverThreads(batch.threadIds);
-    f.relay.scheduleAcknowledgements(); f.state.clock += 5000; t.mock.timers.tick(5000);
+    f.relay.scheduleAcknowledgements(); f.state.clock += 20000; t.mock.timers.tick(20000);
     await new Promise(resolve => setImmediate(resolve));
     assert.equal(f.state.sends.length, text === 'NO_REPLY' ? 0 : 1);
   }
+});
+
+test('a native Fast ready before import cancels the fallback without a provider attempt',async t=>{
+  t.mock.timers.enable({apis:['setTimeout']});
+  const f=await fixture(t,{acknowledgement:true});f.state.nativeFastReady=true;
+  f.relay.scheduleAcknowledgements();f.state.clock+=20000;t.mock.timers.tick(20000);
+  await until(()=>f.state.activityReads>0);await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(f.state.sends.length,0);
+  assert.equal((await listThreadMessages(f.thread.id,f.env)).filter(m=>m.role==='assistant').length,0);
 });
 
 test('global uncertain transport barrier blocks the immediate delivery path too', async t => {
