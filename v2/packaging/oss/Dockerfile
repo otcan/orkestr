@@ -31,7 +31,8 @@ COPY --from=build /artifacts/ui /opt/orkestr/ui
 COPY --from=build /artifacts/paired-artifacts.json /opt/orkestr/paired-artifacts.json
 COPY --from=build /artifacts/providers /opt/orkestr/providers
 RUN ln -s /opt/orkestr/providers/codex /usr/local/bin/codex \
-    && ln -s /opt/orkestr/providers/claude /usr/local/bin/claude
+    && ln -s /opt/orkestr/providers/claude /usr/local/bin/claude \
+    && install -m 0555 /opt/orkestr/source/v2/packaging/oss/orkestr-beta /usr/local/bin/orkestr-beta
 EXPOSE 19823
 STOPSIGNAL SIGTERM
 ENTRYPOINT ["/usr/bin/python3", "-I", "-S", "-B", "/opt/orkestr/source/v2/packaging/oss/runtime.py"]
