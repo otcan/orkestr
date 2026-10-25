@@ -3,6 +3,7 @@ import { dualProviderQuotaLines } from "./whatsapp-quota-footer.js";
 import { threadQuotaProvider } from "../../core/src/provider-quota-snapshot.js";
 import { threadRequiresTenantIsolation } from "../../core/src/tenant-policy.js";
 import { codexAssistantSource, threadSuppressesWhatsAppDebugFooter } from "./whatsapp-mirror-policy.js";
+import { remoteLayerFooter } from "./whatsapp-remote-footer.js";
 
 const proposedPlanOpenTagPattern = /^\s*<\s*proposed[\s_-]*plan\s*>\s*/i;
 const proposedPlanCloseTagPattern = /\s*<\s*\/\s*proposed[\s_-]*plan\s*>\s*$/i;
@@ -101,7 +102,7 @@ function footerEnabled(env = process.env) {
 
 // Matches the multi-line footer ("dbg: ..." then provider quota lines and the
 // queue/load line) and the older single-line "dbg: m:..." footer.
-const WHATSAPP_DEBUG_FOOTER_PATTERN = /\s*\ndbg:[^\n]*(?:\n(?:codex|claude)\b[^\n]*){0,2}(?:\n(?:q|queue):[^\n]*)?\s*$/i;
+const WHATSAPP_DEBUG_FOOTER_PATTERN = /\s*\n(?:dbg:|⚡ Quick:)[^\n]*(?:\n(?:codex|claude)\b[^\n]*){0,2}(?:\n(?:q|queue):[^\n]*)?\s*$/i;
 
 export function stripWhatsAppDebugFooter(text) {
   return String(text || "").replace(WHATSAPP_DEBUG_FOOTER_PATTERN, "").trim();
@@ -317,30 +318,6 @@ function remoteRuntimeReply(message = {}, env = process.env) {
   return false;
 }
 
-function remoteRuntimeBackendLabel(message = {}, env = process.env) {
-  const explicit = pickString(message.remoteBackend);
-  if (explicit) return explicit;
-  const source = pickString(message.source).toLowerCase();
-  for (const id of configuredRemoteBackendIds(env)) {
-    if (source === id.toLowerCase() || source.startsWith(`${id.toLowerCase()}-`)) return id;
-  }
-  return "remote";
-}
-
-const debugToken = value => pickString(value).replace(/[\s·*~`]+/g, "-").slice(0, 64);
-
-// Identity for a remote reply: the remote provider/model when the mirrored
-// message carries them, otherwise only the remote runtime id. The local
-// thread's provider, model, mode and fast settings do not describe it.
-function remoteRuntimeIdentity(message = {}, env = process.env) {
-  const backend = debugToken(remoteRuntimeBackendLabel(message, env));
-  const family = backend.split(/[-_]/)[0] || "remote";
-  const provider = debugToken(pickString(message.remoteProvider, message.provider));
-  const model = debugToken(pickString(message.remoteModel, message.model));
-  const agent = [family, provider, model].filter(Boolean).join("/");
-  return [`dbg: ${agent}`, `rt:${backend}`];
-}
-
 export function shouldAppendWhatsAppDebugFooter(message = {}, env = process.env, deliveryType = "", thread = null) {
   if (!footerEnabled(env)) return false;
   if (thread && threadRequiresTenantIsolation(thread, env)) return false;
@@ -366,8 +343,7 @@ export function whatsappDebugFooter({ message = {}, thread = {}, messages = [], 
   const runtimeSurface = runtimeSurfaceDebugValue(thread);
   const queueNotice = String(deliveryType || "").trim() === "queue_notice";
   const identity = remoteRuntimeReply(message, env) ? [
-    ...remoteRuntimeIdentity(message, env),
-    `msg:*${footerMessageType(deliveryType)}*`,
+    remoteLayerFooter(message, messages),
   ] : [
     `dbg: ${agent}/${modelDebugLabel(message, thread, env)}`,
     ...(runtimeSurface ? [`rt:${runtimeSurface}`] : []),

@@ -158,7 +158,7 @@ export function scopedGroupReplyChunks({text, message, thread, messages, config,
   const marker = `\n\n${SCOPED_ATTACHED_MARKER}`;
   // A footer already embedded at the end of the reply text (a final "dbg:"
   // block of up to five lines) stays on the message too, not only in the file.
-  const embedded = suffix ? null : body.match(/\n\n(dbg: [^\n]*(?:\n[^\n]+){0,4})$/);
+  const embedded = suffix ? null : body.match(/\n\n((?:dbg: |⚡ Quick:)[^\n]*(?:\n[^\n]+){0,4})$/);
   if (embedded && embedded[1].length <= SCOPED_FOOTER_MAX_CHARS) suffix = `\n\n${embedded[1]}`;
   const lead = embedded && suffix ? body.slice(0, embedded.index).trimEnd() : body;
   const preview = scopedReplyPreview(lead, limit - marker.length);

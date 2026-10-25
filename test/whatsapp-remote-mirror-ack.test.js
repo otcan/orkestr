@@ -227,14 +227,29 @@ test("only explicitly remote progress changes mirror policy", () => {
 test("a mirrored reply keeps the remote provider and model for the debug footer", async t => {
   const f = await fixture(t);
   await f.route();
-  f.exportRow({ id: "example-model-final", phase: "final_answer", text: "Answer.", provider: "codex", model: "example-model-1" });
+  f.exportRow({ id: "example-model-final", phase: "final_answer", text: "Answer.", provider: "codex", model: "example-model-1", layer: "deep", identitySource: "run", observedReasoningEffort: "low", sourceInputId: "example-remote-user", runId: "example-run" });
   await deliver(f);
   const reply = (await listThreadMessages("example-thread", f.env)).find((row) => row.role === "assistant");
   assert.equal(reply.remoteProvider, "codex");
   assert.equal(reply.remoteModel, "example-model-1");
+  assert.equal(reply.remoteLayer, "deep");
+  assert.equal(reply.remoteIdentitySource, "run");
+  assert.equal(reply.remoteObservedReasoningEffort, "low");
+  assert.equal(reply.remoteOriginalInputId, "example-remote-user");
+  assert.equal(reply.remoteRunId, "example-run");
   const footer = whatsappDebugFooter({ message: reply, thread: {}, messages: [], deliveryType: "final", env: {} });
   assert.equal(reply.remoteBackend, "example");
-  assert.match(footer, /^dbg: example\/codex\/example-model-1 · rt:example · msg:\*final\*/);
+  assert.match(footer, /^⚡ Quick: unknown unknown\/unknown · 🧠 Deep: codex example-model-1\/low · ▶ Deep/);
+});
+
+test("a mirrored Fast export preserves the explicit first-response role", async t => {
+  const f = await fixture(t);
+  await f.route();
+  f.exportRow({ id: "example-fast", text: "Quick answer.", firstResponse: true, provider: "codex", model: "example-mini" });
+  await deliver(f);
+  const reply = (await listThreadMessages("example-thread", f.env)).find((row) => row.role === "assistant");
+  assert.equal(reply.remoteLayer, "fast");
+  assert.match(whatsappDebugFooter({ message: reply }), /^⚡ Quick: codex example-mini\/unknown .*▶ Quick\n/);
 });
 
 // Counts full reads of one thread's message list (listThreadMessageRows).

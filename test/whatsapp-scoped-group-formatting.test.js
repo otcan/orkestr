@@ -115,7 +115,7 @@ test('a reply mirrored from a remote runtime carries the remote debug footer', (
     message: {id: 'm2', chatId: 'group-1', role: 'assistant', source: 'rust-v2-pilot', phase: 'final_answer', remoteBackend: 'rust-v2', remoteMessageId: 'r1'},
     thread: {codexModel: 'example-model', binding: {remoteBackend: 'rust-v2'}}, messages: [], config: {appendDebugFooter: true}, formatter, env: {}});
   assert.equal(entries.length, 1);
-  assert.match(entries[0], /^Done\n\ndbg: rust · rt:rust-v2 · msg:\*final\*\n/);
+  assert.match(entries[0], /^Done\n\n⚡ Quick: unknown unknown\/unknown · 🧠 Deep: unknown unknown\/unknown · ▶ unknown\n/);
 });
 
 test('a footer embedded at the end of a long reply stays on the message', () => {
@@ -126,4 +126,10 @@ test('a footer embedded at the end of a long reply stays on the message', () => 
   assert.equal(entries[1].document.text, text);
   const short = chunk(`hello\n\n${footer}`);
   assert.deepEqual(short, [`hello\n\n${footer}`]);
+});
+
+test('a two-layer footer stays on the preview of a long remote reply', () => {
+  const footer = '⚡ Quick: codex example/low · 🧠 Deep: unknown unknown/unknown · ▶ Quick\nq:0 · load:1%';
+  const entries = chunk(`${words(5000)}\n\n${footer}`);
+  assert.ok(entries[0].endsWith(`${SCOPED_ATTACHED_MARKER}\n\n${footer}`));
 });
