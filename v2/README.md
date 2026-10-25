@@ -10,7 +10,8 @@ for remaining acceptance gates; an image build does not prove a provider answer.
 
 Requires Linux x86_64, Docker Engine with Compose v2, public registry access,
 and your own Codex and Claude logins. Allow at least 8 GiB RAM and 25 GiB free
-disk for the source build. ARM, Windows, macOS and desktop packages are deferred.
+disk for the source build; allow roughly 10–30 minutes depending on the machine
+and registry speed. ARM, Windows, macOS and desktop packages are deferred.
 
 Before publication, use the reviewed candidate branch below. After publication,
 select the approved tag instead:
@@ -71,6 +72,14 @@ The root manager drops model processes to UID 10001. Provider tools can use the
 container's workspaces and CLI credentials: this is a single trusted owner's
 instance. Compose mounts no host files, Docker socket or host namespaces and
 requests no privileged container access.
+
+This uses the existing full-access provider profile **inside the Docker
+boundary**. It does not use nested Bubblewrap namespaces, which Docker's default
+seccomp policy may refuse. CI records that probe and verifies the provider UID
+has zero effective capabilities; no `SYS_ADMIN`, privileged mode, host PID
+namespace or relaxed seccomp policy is requested. The protected manager retains
+its process ownership and cleanup checks. The restricted nested-sandbox profile
+is outside this Compose beta's supported scope.
 
 ### First conversation, review and Stop
 

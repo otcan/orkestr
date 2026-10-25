@@ -27,9 +27,27 @@ def main():
     def passed(name):
         report['checks'].append(name)
     try:
+        image_environment = json.loads(docker('image', 'inspect', '--format', '{{json .Config.Env}}', a.image))
+        forbidden = {'OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN',
+                     'CLAUDE_CODE_OAUTH_TOKEN', 'ORKESTR_V2_BOOTSTRAP_TOKEN'}
+        assert not forbidden & {item.split('=', 1)[0] for item in image_environment}
+        docker('run', '--rm', '--network', 'none', '--entrypoint', '/usr/bin/python3', a.image,
+               '-I', '-S', '-B', '-c',
+               "from pathlib import Path; assert not list(Path('/state').iterdir()); "
+               "assert not list(Path('/credentials').iterdir()); "
+               "assert not Path('/root/.codex/auth.json').exists(); "
+               "assert not Path('/root/.claude/.credentials.json').exists()")
+        passed('image has empty state/credential roots and no provider secret environment')
         for volume in volumes:
             docker('volume', 'create', volume)
             created.append(volume)
+        docker('run', '--rm', '--network', 'none', '--entrypoint', '/usr/bin/python3',
+               '--mount', f'type=volume,src={volumes[0]},dst=/state',
+               '--mount', f'type=volume,src={volumes[1]},dst=/credentials', a.image,
+               '-I', '-S', '-B', '-c',
+               "from pathlib import Path; assert not list(Path('/state').iterdir()); "
+               "assert not list(Path('/credentials').iterdir())")
+        passed('new named volumes are empty before initialization')
         docker('run', '--detach', '--name', name, '--memory', '2g', '--cpus', '2', '--pids-limit', '256',
                '--security-opt', 'no-new-privileges:true', '--tmpfs', '/tmp:rw,nosuid,nodev,size=256m',
                '--publish', '127.0.0.1::19823', '--mount', f'type=volume,src={volumes[0]},dst=/state',
@@ -86,6 +104,17 @@ def main():
         native = docker('exec', name, '/opt/orkestr/providers/claude', '--version')
         assert '2.1.295' in native
         passed('pinned official CLI executables present; no login or inference')
+        namespace = subprocess.run(['docker', 'exec', '--user', '10001:10001', name,
+                    '/usr/bin/bwrap', '--unshare-user', '--unshare-pid', '--die-with-parent',
+                    '--bind', '/', '/', '--proc', '/proc', '--', '/bin/true'],
+                    capture_output=True, text=True, timeout=10)
+        report['unprivileged_bubblewrap'] = {'available': namespace.returncode == 0,
+            'exit_code': namespace.returncode,
+            'profile': 'container-full-access; provider commands use the existing direct profile, not nested namespaces'}
+        caps = docker('exec', '--user', '10001:10001', name, '/usr/bin/python3', '-I', '-S', '-B', '-c',
+                      "print(next(s.split()[1] for s in open('/proc/self/status') if s.startswith('CapEff:')))")
+        assert int(caps, 16) == 0
+        passed('provider UID has zero effective capabilities; nested namespace outcome recorded')
         refused = subprocess.run(['docker', 'exec', name, '/usr/bin/python3', '-I', '-S', '-B',
                     '/opt/orkestr/source/v2/packaging/oss/runtime.py', 'configure'],
                     capture_output=True, text=True, timeout=65)
@@ -105,6 +134,15 @@ try:
     package=r.prepare(json.load(sys.stdin))
     assert (package/'release.json').is_file()
     assert not Path('/state/owner.json').exists()
+    sys.path[:0]=[str(package/'package'),str(package/'package/broker')]
+    from codex_service.package import Package
+    from codex_service.profile import Configuration
+    selected=Package(package/'package')
+    command,descriptors=Configuration(selected).isolated_command()
+    assert command[0]=='/usr/bin/env' and '/usr/bin/bwrap' not in command and not descriptors
+    from claude_connector import ClaudeConfiguration
+    claude=ClaudeConfiguration.load(package/'package/claude-private.json')
+    assert claude.new_session().uncontained is True
     print('generated_package_validation_passed_without_activation')
 finally:
     auth.unlink()

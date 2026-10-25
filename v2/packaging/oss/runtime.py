@@ -236,7 +236,11 @@ def main():
 if __name__ == '__main__':
     try:
         sys.exit(main())
-    except (RuntimeError, OSError, subprocess.SubprocessError):
+    except RuntimeError as error:
+        # require() messages are fixed local strings, never native/API payloads.
+        print(str(error), file=sys.stderr)
+        sys.exit(1)
+    except (OSError, subprocess.SubprocessError):
         # Never echo native login stdout/errors, request bodies or credentials.
         print('Orkestr startup/action refused. Check the documented prerequisites and container service state.', file=sys.stderr)
         sys.exit(1)
