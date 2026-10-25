@@ -227,7 +227,7 @@ test("only explicitly remote progress changes mirror policy", () => {
 test("a mirrored reply keeps the remote provider and model for the debug footer", async t => {
   const f = await fixture(t);
   await f.route();
-  f.exportRow({ id: "example-model-final", phase: "final_answer", text: "Answer.", provider: "codex", model: "example-model-1", layer: "deep", identitySource: "run", observedReasoningEffort: "low", sourceInputId: "example-remote-user", runId: "example-run" });
+  f.exportRow({ id: "example-model-final", phase: "final_answer", text: "Answer.", provider: "codex", model: "example-model-1", identitySource: "run", observedReasoningEffort: "low", sourceInputId: "example-remote-user", runId: "example-run" });
   await deliver(f);
   const reply = (await listThreadMessages("example-thread", f.env)).find((row) => row.role === "assistant");
   assert.equal(reply.remoteProvider, "codex");

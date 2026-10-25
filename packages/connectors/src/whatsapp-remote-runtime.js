@@ -423,7 +423,8 @@ export async function syncRemoteWhatsAppThreadMessages(env = process.env, fetchI
         if (local || !completedAssistantMessage(remoteMessage)) continue;
         const parentMessageId = publicParentIdForRemoteMessage(remoteMessage, localByRemoteId);
         if (!parentMessageId && remote.binding.remoteMirrorOrphanReplies !== true) { unmapped += 1; continue; }
-        const parent = parentMessageId ? localMessages.find((message) => message.id === parentMessageId) || null : null;
+        const parent = parentMessageId ? localMessages.find((message) => message.id === parentMessageId) ||
+          localByRemoteId.get(pickString(remoteMessage.parentMessageId, remoteMessage.parentId)) || null : null;
         const appended = await appendRemoteAssistantMessage({ thread, remote, remoteMessage, parentMessageId, parent, env });
         localByRemoteId.set(remoteMessageId, appended);
         imported += 1;

@@ -6,9 +6,13 @@ const token = (value) => typeof value === "string" && /^[A-Za-z0-9._:-]{1,128}$/
 const known = (value) => token(value) && !["unknown", "unreported"].includes(value.toLowerCase()) ? value : "unknown";
 
 export function remoteLayerMetadata(remote = {}, parent = {}) {
-  const layer = layers.has(remote.layer) ? remote.layer
-    : remote.firstResponse === true ? "fast"
-      : parent.postAuthor === "coordinator" ? "coordinator" : "";
+  parent = parent || {};
+  const post = parent.timerId === "post" || Boolean(parent.postAuthor);
+  const layer = parent.postAuthor === "coordinator" ? "coordinator"
+    : post ? ""
+      : remote.firstResponse === true ? "fast"
+        : layers.has(remote.layer) ? remote.layer
+          : remote.phase === "final_answer" ? "deep" : "";
   return {
     ...(layer ? { remoteLayer: layer } : {}),
     ...(efforts.has(remote.observedReasoningEffort) ? { remoteObservedReasoningEffort: remote.observedReasoningEffort } : {}),
@@ -45,5 +49,6 @@ export function remoteLayerFooter(message = {}, messages = []) {
   const isCoordinator = layer === "coordinator" || coordinator.remoteLayer === "coordinator";
   const main = isCoordinator ? coordinator : layer === "deep" ? message : counterpart(message, messages, "deep");
   const writer = { fast: "Quick", deep: "Deep", coordinator: "Coordinator", unknown: "unknown" }[layer];
-  return `⚡ Quick: ${identity(quick)} · 🧠 ${isCoordinator ? "Coordinator" : "Deep"}: ${identity(main)} · ▶ ${writer}`;
+  const mainIdentity = layer === "fast" && !main.remoteLayer ? "pending" : identity(main);
+  return `⚡ Quick: ${identity(quick)} · 🧠 ${isCoordinator ? "Coordinator" : "Deep"}: ${mainIdentity} · ▶ ${writer}`;
 }

@@ -196,6 +196,13 @@ test("a V2 conversation post row keeps its known author on the local parent", as
     const parent = (await listThreadMessages("example-thread", f.env)).find((row) => row.role === "user");
     assert.equal(parent.timerId, "post");
     assert.equal(parent.postAuthor, expected);
+    const reply = (await listThreadMessages("example-thread", f.env)).find((row) => row.role === "assistant");
+    assert.equal(reply.remoteLayer, expected === "coordinator" ? "coordinator" : undefined,
+      "the first import uses its just-materialized post parent and never labels a post Deep");
+    if (expected === "coordinator") {
+      assert.equal(reply.remoteProvider, undefined);
+      assert.equal(reply.remoteModel, undefined);
+    }
   }
 });
 

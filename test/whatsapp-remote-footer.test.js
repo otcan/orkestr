@@ -11,7 +11,7 @@ const coordinator = { ...scope, id: "post", remoteLayer: "coordinator", remotePr
 
 test("a Fast message shows its own identity and only a correlated observed Deep", () => {
   assert.equal(remoteLayerFooter(fast, [fast, deep]), "⚡ Quick: codex gpt-example-mini/low · 🧠 Deep: codex gpt-example/high · ▶ Quick");
-  assert.equal(remoteLayerFooter(fast), "⚡ Quick: codex gpt-example-mini/low · 🧠 Deep: unknown unknown/unknown · ▶ Quick");
+  assert.equal(remoteLayerFooter(fast), "⚡ Quick: codex gpt-example-mini/low · 🧠 Deep: pending · ▶ Quick");
 });
 
 test("a Deep final shows the original input's Fast and its own writer", () => {
@@ -23,6 +23,8 @@ test("a coordinator post keeps its declared post identity and never the native D
   const old = { ...coordinator, remoteIdentitySource: undefined, remoteProvider: "codex", remoteModel: "unreported" };
   assert.match(remoteLayerFooter(old, [fast, deep]), /Coordinator: unknown unknown\/unknown · ▶ Coordinator$/);
   assert.deepEqual(remoteLayerMetadata({ provider: "codex", model: "unreported" }, { postAuthor: "coordinator" }), { remoteLayer: "coordinator", remoteProvider: null, remoteModel: null });
+  assert.deepEqual(remoteLayerMetadata({ phase: "final_answer", provider: "codex", model: "native-deep" }, { timerId: "post", postAuthor: "coordinator" }), { remoteLayer: "coordinator", remoteProvider: null, remoteModel: null });
+  assert.deepEqual(remoteLayerMetadata({ phase: "final_answer" }, { timerId: "post" }), {}, "a post with no author must not become Deep");
 });
 
 test("unknown model and effort stay unknown despite local configured defaults", () => {
@@ -56,6 +58,7 @@ test("new remote footers strip idempotently and preserve the existing quota/load
 });
 
 test("only explicitly observed remote effort and original identities are imported", () => {
+  assert.deepEqual(remoteLayerMetadata({ phase: "final_answer" }), { remoteLayer: "deep" });
   assert.deepEqual(remoteLayerMetadata({ firstResponse: true, reasoningEffort: "xhigh", model: "configured" }), { remoteLayer: "fast" });
   assert.deepEqual(remoteLayerMetadata({ layer: "deep", sourceInputId: "input-one", runId: "run-one", observedReasoningEffort: "low", identitySource: "run" }), {
     remoteLayer: "deep", remoteOriginalInputId: "input-one", remoteRunId: "run-one", remoteObservedReasoningEffort: "low", remoteIdentitySource: "run",
