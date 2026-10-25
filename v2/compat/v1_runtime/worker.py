@@ -817,16 +817,14 @@ class Worker:
         data["cursor"] = max([data["cursor"]] + [event["sequence"] for event in events])
         self.ledger.save(data)
         self.capture_questions(data, events, ids)
+        # A later timer or browser input can replace the current views before
+        # this input is observed. Match every origin to its own proven run IDs.
+        statuses = self.own_statuses(ids)
         if data.get("origin") == "timer":
-            # Timer occurrences queue behind each other, so this input's runs
-            # are often no longer the conversation's current ones: read them
-            # by run ID, never through the current view.
-            statuses = self.own_statuses(ids)
-            if self.timer_without_deep(data, statuses, caught_up=len(events) < 100):
+            # A bounded SSE read can yield one complete frame even while more
+            # are buffered. Only an empty read proves this cursor caught up.
+            if self.timer_without_deep(data, statuses, caught_up=not events):
                 return
-        else:
-            statuses = {role: self.call("GET", route, allowed=(200, 204)) for role, route in
-                        (("fast", "/fast/execution"), ("deep", "/execution"))}
         notice = policy_notice(statuses["deep"], ids)
         if notice:
             self.settle_own_fast(data, statuses.get("fast"), ids)
@@ -940,9 +938,7 @@ class Worker:
         return len(rows) == 1 and rows[0]["event_id"] == data["intake"]["event_id"] and rows[0].get("window") == "queued"
 
     def role_status(self, data, role, ids):
-        if data.get("origin") == "timer":
-            return self.own_statuses(ids)[role]
-        return self.call("GET", "/fast/execution" if role == "fast" else "/execution")
+        return self.own_statuses(ids)[role]
 
     @staticmethod
     def fast_unusable(value, ids):
