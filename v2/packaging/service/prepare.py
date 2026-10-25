@@ -32,9 +32,10 @@ def settings(home, origin, port, uid, package, gid=None):
     require(home.resolve()==home and package.resolve()==package,'canonical home/package required')
     require(not home.is_relative_to(package) and not package.is_relative_to(home),'home/package overlap')
     parsed=urlsplit(origin)
-    require(parsed.scheme=='https' and parsed.hostname and parsed.hostname not in ('0.0.0.0','::','*') and
+    local_origin = origin == f'http://127.0.0.1:{port}'
+    require(local_origin or (parsed.scheme=='https' and parsed.hostname and parsed.hostname not in ('0.0.0.0','::','*') and
             not parsed.username and not parsed.password and not parsed.query and not parsed.fragment and
-            not parsed.path and parsed.netloc==parsed.hostname,'exact HTTPS origin without path/port required')
+            not parsed.path and parsed.netloc==parsed.hostname),'exact HTTPS origin or matching loopback origin required')
     require(type(port) is int and 1024<=port<=65535,'unprivileged loopback port required')
     require(type(uid) is int and uid>0,'explicit dropped service uid required')
     gid=uid if gid is None else gid

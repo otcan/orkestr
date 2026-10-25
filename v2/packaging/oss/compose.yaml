@@ -1,0 +1,30 @@
+name: orkestr-v2-beta
+services:
+  orkestr:
+    image: orkestr-v2-beta:local
+    platform: linux/amd64
+    build:
+      context: ../../..
+      dockerfile: v2/packaging/oss/Dockerfile
+      args:
+        SOURCE_COMMIT: ${ORKESTR_SOURCE_COMMIT:?Set the exact public commit from git rev-parse HEAD}
+    ports:
+      - "127.0.0.1:19822:19823"
+    volumes:
+      - state:/state
+      - credentials:/credentials
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,size=256m
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    stop_grace_period: 45s
+    restart: "no"
+    healthcheck:
+      test: [CMD, /usr/bin/python3, -I, -S, -B, /opt/orkestr/source/v2/packaging/oss/runtime.py, health]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+volumes:
+  state:
+  credentials:
