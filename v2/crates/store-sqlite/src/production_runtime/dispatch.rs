@@ -276,7 +276,14 @@ impl Store {
             None => None,
         };
         let launch = match claim.provider.run.role {
-            orkestr_v2_contracts::runtime::Role::Fast => None,
+            orkestr_v2_contracts::runtime::Role::Fast => {
+                crate::conversation_resources::fast_settings::turn_launch(
+                    &mut tx,
+                    &claim.provider.run.conversation_id,
+                )
+                .await
+                .map_err(|_| RuntimeStoreError::Unavailable)?
+            }
             _ => Some(
                 crate::conversation_resources::settings::turn_launch(
                     &mut tx,

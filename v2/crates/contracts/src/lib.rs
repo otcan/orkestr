@@ -7,6 +7,8 @@ mod conversations;
 mod live_map;
 pub use conversations::*;
 pub use live_map::*;
+mod fast_role_settings;
+pub use fast_role_settings::*;
 mod conversation_settings;
 pub use conversation_settings::*;
 mod claude_native_reset;

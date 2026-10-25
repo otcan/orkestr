@@ -124,6 +124,7 @@ async fn populated_prefixes_copy_first_edges_to_50_preserve_rows_and_rollback_so
             "production_run_abandonments",
             "execution_window_released_inputs",
             "production_abandoned_retirements",
+            "conversation_fast_settings",
             "conversation_settings",
             "desktop_bindings",
             "desktop_leases",

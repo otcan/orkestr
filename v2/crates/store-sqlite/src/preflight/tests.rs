@@ -374,7 +374,7 @@ async fn populated_payload_prefix_upgrade_preserves_all_rows_and_foreign_links()
             "2|'production-conversation'|'owner'|'Synthetic'|NULL|NULL".into(),
         ],
     );
-    // New tracker and continuity tables remain empty after this historic upgrade.
+    // New optional preferences, tracker and continuity tables remain empty.
     for table in [
         "conversation_provider_handoffs",
         "conversation_handoff_sessions",
@@ -382,6 +382,7 @@ async fn populated_payload_prefix_upgrade_preserves_all_rows_and_foreign_links()
         "trackers",
         "tracker_rows",
         "tracker_row_links",
+        "conversation_fast_settings",
         "tracker_events",
         "tracker_ledger",
         "tracker_batches",
@@ -421,6 +422,7 @@ async fn populated_payload_prefix_upgrade_preserves_all_rows_and_foreign_links()
         "production_abandonment_causes",
         "production_run_lost_failures",
         "dormant_timer_targets",
+        "conversation_fast_settings",
         "conversation_settings",
         "desktop_bindings",
         "desktop_leases",

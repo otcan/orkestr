@@ -42,6 +42,7 @@ mod execution;
 mod execution_accept;
 mod execution_registry;
 pub mod fast_execution;
+mod fast_role_settings_http;
 pub mod google_registry_metadata;
 mod held_inputs;
 pub mod host_metrics;
@@ -531,6 +532,7 @@ pub fn router_with_google_catalog(
         .merge(memory_service::router(state.clone()))
         .merge(archived_history_http::router())
         .merge(conversation_resources_http::router())
+        .merge(fast_role_settings_http::router())
         .merge(conversation_status_http::router())
         .merge(host_metrics::router())
         .merge(desktop_http::router())

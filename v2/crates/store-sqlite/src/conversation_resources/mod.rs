@@ -2,10 +2,13 @@
 //! and V1 worker links. None of these rows admit input, start execution or
 //! create effects; they are preferences, fences and lineage.
 mod desktops;
+pub(crate) mod fast_settings;
 mod legacy_workers;
 pub(crate) mod settings;
 #[cfg(test)]
 mod tests_desktops;
+#[cfg(test)]
+mod tests_fast_settings;
 #[cfg(test)]
 pub(crate) mod tests_settings;
 #[cfg(test)]

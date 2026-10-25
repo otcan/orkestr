@@ -65,6 +65,7 @@ async fn proposal_migration_preserves_old_blocked_children_and_every_prior_row()
         "legacy_worker_links",
         "desktop_leases",
         "desktop_bindings",
+        "conversation_fast_settings",
         "conversation_settings",
         "execution_window_queue",
         "production_failure_classes",
