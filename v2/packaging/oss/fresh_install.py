@@ -43,7 +43,7 @@ def main():
         def request(path, body=None, headers=None, raw=False):
             data = None if body is None else json.dumps(body).encode()
             req = urllib.request.Request(base + path, data=data,
-                    headers={'Content-Type': 'application/json', **(headers or {})})
+                    headers={'Content-Type': 'application/json', 'Host': '127.0.0.1:19822', **(headers or {})})
             with urllib.request.urlopen(req, timeout=10) as response:
                 result = response.read()
                 return result if raw else json.loads(result)
@@ -77,6 +77,9 @@ def main():
                                 'name': 'Synthetic fresh thread'}, headers)['conversation_id']
         assert conversation != setup['global_conversation_id']
         passed('owner login and new conversation via supported API')
+        browser = request('/api/v2/browser/session', credentials, {'Origin': 'http://127.0.0.1:19822'})
+        assert browser['global_conversation_id'] == setup['global_conversation_id']
+        passed('browser cookie/CSRF login with the exact configured origin')
         assert 'provider_login_required' in docker('logs', name)
         native = docker('exec', name, '/opt/orkestr/providers/codex', '--version')
         assert '0.163.0' in native
@@ -88,6 +91,31 @@ def main():
                     capture_output=True, text=True, timeout=65)
         assert refused.returncode != 0
         passed('provider configuration refuses missing CLI login')
+        # Validate the real generated package using a synthetic auth *placeholder*.
+        # Never activate it or write owner.json: provider launch remains disabled.
+        composition = '''
+import importlib.util,json,sys
+from pathlib import Path
+spec=importlib.util.spec_from_file_location('oss_runtime','/opt/orkestr/source/v2/packaging/oss/runtime.py')
+r=importlib.util.module_from_spec(spec);spec.loader.exec_module(r)
+auth=Path('/credentials/codex/auth.json')
+assert not auth.exists()
+r.write_private(auth,'{"fixture":"synthetic-login-placeholder"}')
+try:
+    package=r.prepare(json.load(sys.stdin))
+    assert (package/'release.json').is_file()
+    assert not Path('/state/owner.json').exists()
+    print('generated_package_validation_passed_without_activation')
+finally:
+    auth.unlink()
+'''
+        result = subprocess.run(['docker', 'exec', '-i', name, '/usr/bin/python3', '-I', '-S', '-B', '-c', composition],
+                    input=json.dumps({'owner_id': browser['owner_id'],
+                                      'conversation_id': setup['global_conversation_id']}),
+                    capture_output=True, text=True, timeout=120)
+        assert result.returncode == 0 and 'generated_package_validation_passed_without_activation' in result.stdout, \
+            'generated manager package validation failed: ' + result.stderr[-2000:]
+        passed('real closed manager package validates with a synthetic auth placeholder; never activated')
         docker('restart', '--time', '45', name)
         deadline = time.monotonic() + 60
         while True:
