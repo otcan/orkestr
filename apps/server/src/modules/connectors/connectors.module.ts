@@ -1,3 +1,4 @@
+import { WhatsAppRemoteChangesController } from "./whatsapp-remote-changes.controller.js";
 import { Module } from "@nestjs/common";
 import { ConnectorCallbacksController, ConnectorsController, GoogleMarketingCallbacksController, GoogleWorkspaceConnectController } from "./connectors.controller.js";
 import { GoogleWorkspaceReviewController } from "./google-workspace-review.controller.js";
@@ -8,6 +9,6 @@ import { WhatsAppParticipantIdentityController } from "./whatsapp-participant-id
 import { WhatsAppOutboxMaintenanceController } from "./whatsapp-outbox-maintenance.controller.js";
 
 @Module({
-  controllers: [ConnectorsController, ConnectorCallbacksController, GoogleWorkspaceConnectController, GoogleWorkspaceReviewController, GoogleMarketingCallbacksController, WhatsAppDiagnosticsController, WhatsAppOnboardingController, WhatsAppParticipantIdentityController, WhatsAppOutboxMaintenanceController, TwilioVoiceController],
+  controllers: [WhatsAppRemoteChangesController, ConnectorsController, ConnectorCallbacksController, GoogleWorkspaceConnectController, GoogleWorkspaceReviewController, GoogleMarketingCallbacksController, WhatsAppDiagnosticsController, WhatsAppOnboardingController, WhatsAppParticipantIdentityController, WhatsAppOutboxMaintenanceController, TwilioVoiceController],
 })
 export class ConnectorsModule {}

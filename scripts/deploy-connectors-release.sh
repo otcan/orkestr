@@ -17,6 +17,17 @@ Environment:
   ORKESTR_RELEASE_CONNECTORS_AUTH_REQUIRED_ACCOUNTS Explicit account IDs verified
       as needing QR pairing before this deploy. Only the same pairing state is
       tolerated during code activation; operational health still reports it.
+  ORKESTR_WA_SCOPED_GROUP_CONFIGS        Extra scoped WhatsApp group configs (space separated)
+      validated against the new release before any service stops. Configs named by
+      the worker's and dependent relays' units are discovered automatically.
+  ORKESTR_WA_SCOPED_RELAY_SERVICES       Relay units paired with the worker (space separated).
+      Units that Require the worker are discovered automatically. They are
+      restarted with the new release and must stay active, or the deploy rolls back.
+  ORKESTR_WA_DEPLOY_PROBE_COMMAND        Optional WhatsApp intake probe run after health; a
+      non-zero exit rolls the release back. ORKESTR_WA_DEPLOY_PROBE_TIMEOUT (seconds,
+      default 900) bounds it. Inside a full deploy the UI drain can hold thread
+      replies, so use an intake-only probe here (whatsapp-group-probe.mjs
+      --intake-only) and the full probe via ORKESTR_WA_POST_DEPLOY_PROBE_COMMAND.
 EOF
 }
 
@@ -44,6 +55,9 @@ doctor_timer="${ORKESTR_CONNECTORS_DOCTOR_TIMER_NAME:-${doctor_service}}"
 health_attempts="${ORKESTR_CONNECTORS_HEALTH_ATTEMPTS:-90}"
 health_retry_delay="${ORKESTR_CONNECTORS_HEALTH_RETRY_DELAY:-1}"
 health_stable_successes="${ORKESTR_CONNECTORS_HEALTH_STABLE_SUCCESSES:-3}"
+probe_command="${ORKESTR_WA_DEPLOY_PROBE_COMMAND:-}"
+probe_timeout="${ORKESTR_WA_DEPLOY_PROBE_TIMEOUT:-900}"
+relay_stable_seconds="${ORKESTR_WA_SCOPED_RELAY_STABLE_SECONDS:-15}"
 lock_file="${ORKESTR_CONNECTORS_DEPLOY_LOCK_FILE:-/run/lock/orkestr-connectors-release.lock}"
 node_bin="$(command -v node || echo /usr/bin/node)"
 revision="$(git -C "$source_dir" rev-parse --verify HEAD)"
@@ -70,6 +84,30 @@ switch_current_release() {
 
 active_connector_revision() {
   head -n 1 "$current_link/REVISION" 2>/dev/null | tr -d '[:space:]' || true
+}
+
+# Relays that consume the worker's scoped journal must move with it: a worker
+# stop also stops units that Require it, and nothing restarted them before.
+scoped_relay_services() {
+  {
+    for unit in ${ORKESTR_WA_SCOPED_RELAY_SERVICES:-}; do printf '%s\n' "$unit"; done
+    systemctl show "${worker_service}.service" --property=RequiredBy --value 2>/dev/null | tr ' ' '\n'
+  } | sed '/^$/d' | sed 's/\.service$//' | sort -u
+}
+
+unit_scoped_configs() {
+  local unit="$1"
+  systemctl show "${unit}.service" --property=ExecStart --property=Environment --value 2>/dev/null \
+    | tr ' ;' '\n\n' \
+    | sed -n -e 's/^ORKESTR_WA_SCOPED_GROUP_CONFIG=//p' -e '/^\/.*\.json$/p'
+}
+
+scoped_group_configs() {
+  {
+    for file in ${ORKESTR_WA_SCOPED_GROUP_CONFIGS:-}; do printf '%s\n' "$file"; done
+    unit_scoped_configs "$worker_service"
+    for relay in $(scoped_relay_services); do unit_scoped_configs "$relay"; done
+  } | sed '/^$/d' | sort -u
 }
 
 worker_thread_store() {
@@ -122,12 +160,23 @@ node --check scripts/orkestr-wa-worker.mjs
 node --test --test-concurrency=1 test/connectors-mcp.test.js test/connectors-pairing-health.test.js test/orkestr-wa-service.test.js test/whatsapp-media-id-compat.test.js test/whatsapp-history-id-compat.test.js
 printf '%s\n' "$revision" > "$release_dir/REVISION"
 
+mapfile -t scoped_configs < <(scoped_group_configs)
+if [ "${#scoped_configs[@]}" -gt 0 ]; then
+  # Never activate a release that rejects a live scoped WhatsApp contract: the
+  # worker would drop all group input and the paired relay would crash.
+  if ! "$node_bin" "$release_dir/scripts/scoped-group-preflight.mjs" "${scoped_configs[@]}"; then
+    echo "Scoped WhatsApp configuration is incompatible with this release; not activating." >&2
+    exit 1
+  fi
+fi
+
 if [ "$activate" -ne 1 ]; then
   echo "Connector release staged: $release_dir"
   exit 0
 fi
 
 previous_release="$(readlink -f "$current_link" 2>/dev/null || true)"
+mapfile -t relay_services < <(scoped_relay_services)
 doctor_timer_was_active=0
 if systemctl is-active --quiet "${doctor_timer}.timer"; then
   doctor_timer_was_active=1
@@ -185,16 +234,38 @@ for _ in $(seq 1 "$health_attempts"); do
   fi
   sleep "$health_retry_delay"
 done
-if [ "$health_ready" -ne 1 ]; then
-  "$node_bin" "$release_dir/scripts/connector-runtime-release.mjs" \
-    "$release_dir" "${gateway_service}.service" "${worker_service}.service" || true
-  echo "Connector health verification failed; restoring the previous release." >&2
+restore_previous_release() {
+  echo "$1; restoring the previous release." >&2
   systemctl stop "${gateway_service}.service" "${worker_service}.service" || true
   if [ -n "$previous_release" ] && [ -d "$previous_release" ]; then
     switch_current_release "$previous_release"
     systemctl start "${worker_service}.service" "${gateway_service}.service" || true
   fi
+  for relay in "${relay_services[@]}"; do systemctl restart "${relay}.service" || true; done
   exit 1
+}
+
+if [ "$health_ready" -ne 1 ]; then
+  "$node_bin" "$release_dir/scripts/connector-runtime-release.mjs" \
+    "$release_dir" "${gateway_service}.service" "${worker_service}.service" || true
+  restore_previous_release "Connector health verification failed"
+fi
+
+for relay in "${relay_services[@]}"; do
+  systemctl restart "${relay}.service" || restore_previous_release "Scoped relay ${relay} failed to start with this release"
+done
+if [ "${#relay_services[@]}" -gt 0 ]; then
+  sleep "$relay_stable_seconds"
+  for relay in "${relay_services[@]}"; do
+    systemctl is-active --quiet "${relay}.service" \
+      || restore_previous_release "Scoped relay ${relay} did not stay active (partial WhatsApp rollout)"
+  done
+fi
+
+if [ -n "$probe_command" ]; then
+  if ! timeout "$probe_timeout" bash -c "$probe_command"; then
+    restore_previous_release "WhatsApp end-to-end probe failed after activation"
+  fi
 fi
 
 restore_doctor_timer

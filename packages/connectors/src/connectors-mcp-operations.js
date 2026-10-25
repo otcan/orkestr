@@ -18,6 +18,7 @@ import {
   whatsappWorkerAuth,
   whatsappWorkerConversation,
   whatsappWorkerConversations,
+  whatsappWorkerChatPage,
   whatsappWorkerCreateConversation,
   whatsappWorkerHealth,
   whatsappWorkerSend,
@@ -231,6 +232,8 @@ async function runMessaging(input, auth, env) {
       conversationId: input.conversation_id,
       text: input.text,
       attachmentPaths: attachments.map((item) => item.path),
+      requestId: ensured.job.id,
+      threadId: clean(auth.tokenThreadId),
     }, env);
     const job = await markConnectorOutboxJob(ensured.job.id, {
       state: "delivered",
@@ -249,7 +252,7 @@ async function runMessaging(input, auth, env) {
   } catch (error) {
     const partialDelivery = error?.partialDelivery || error?.payload?.partialDelivery || null;
     const partial = hasWhatsAppPartialDelivery(error);
-    const uncertain = /not_confirmed|timeout/i.test(clean(error?.message));
+    const uncertain = /not_confirmed|timeout|delivery_uncertain/i.test(clean(error?.message));
     const state = partial ? "partial_delivery" : uncertain ? "delivery_uncertain" : "failed_retryable";
     await markConnectorOutboxJob(ensured.job.id, {
       state,
@@ -273,6 +276,20 @@ async function runConversation(input, auth, env) {
   const accountId = auth.accountId || clean(input.account_id) || "sender";
   let payload;
   if (input.action === "list") payload = filterConversations(await whatsappWorkerConversations(accountId, env), auth);
+  else if (input.action === "list_all") {
+    // Owner-authorized read-all: paged chat/contact metadata for this thread's account.
+    if (auth.operator || !clean(auth.tokenThreadId)) throw Object.assign(new Error("connector_read_all_thread_required"), { statusCode: 403 });
+    const page = await whatsappWorkerChatPage(accountId, auth.tokenThreadId, { source: input.source || "chats", cursor: input.cursor || "", limit: input.limit ?? undefined, unreadOnly: input.unread_only === true }, env);
+    const items = page?.chats || page?.contacts || [];
+    payload = {
+      ready: page?.ready !== false,
+      source: page?.source || input.source || "chats",
+      [page?.contacts ? "contacts" : "chats"]: items,
+      hasMore: page?.hasMore === true,
+      nextCursor: page?.nextCursor || null,
+      total: Number(page?.total || 0),
+    };
+  }
   else if (input.action === "create") {
     payload = await whatsappWorkerCreateConversation({
       accountId,
@@ -284,13 +301,17 @@ async function runConversation(input, auth, env) {
     }, env);
   } else {
     if (!clean(input.conversation_id)) throw Object.assign(new Error("connector_conversation_id_required"), { statusCode: 400 });
+    const readAll = !auth.operator && clean(auth.tokenThreadId) && (auth.scopes || []).includes(`${input.service}:read-all`);
     payload = await whatsappWorkerConversation(accountId, input.conversation_id, input.action, {
+      paged: readAll && input.action === "history",
+      before: input.before,
       limit: input.limit,
       unreadOnly: input.unread_only,
       markSeen: input.mark_seen,
       eventIds: input.event_ids,
       participantIds: input.participant_ids,
       title: input.name,
+      threadId: clean(auth.tokenThreadId),
     }, env);
   }
   return connectorMcpStructuredResult({

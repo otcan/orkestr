@@ -38,6 +38,8 @@ orkestr security sessions
 orkestr security revoke <session-id|all>
 orkestr timers list
 orkestr timers run <timer-id>
+orkestr timers handoff <timer-id> --handoff-id <key>
+orkestr timers handback <timer-id> --handoff-id <key> [--enable|--keep-disabled]
 orkestr update --track-main --no-smoke
 orkestr update --release --ref v0.1.0-alpha.10 --channel production
 orkestr update status
@@ -138,6 +140,19 @@ and remote-access security posture. `orkestr doctor
 timers` checks the timer store, enabled schedules, thread targets, prompt files,
 stale due timers, and recorded delivery errors. `orkestr timers` lists timers,
 and `orkestr timers run <id>` queues one immediately.
+
+`orkestr timers handoff <id> --handoff-id <key>` hands a timer to Orkestr V2
+(`POST /api/timers/:timerId/ownership` with `{"ownedBy":"v2","handoffId":...}`).
+While V2 owns it, V1 keeps it disabled and refuses run, update, pause/resume and
+delete with `409 timer_owned_by_v2`; `orkestr doctor timers` reports it as
+`owned_by_v2`. Replaying the same key is a no-op and a different key is
+`409 timer_ownership_conflict`. `orkestr timers handback <id> --handoff-id <key>`
+returns it with the same key, restoring its previous enablement (or the one
+chosen with `--enable`/`--keep-disabled`) and restarting the schedule from now,
+without catching up runs missed during the handoff. Agent Job schedule rows
+cannot be handed off (`409 agent_job_schedule_read_only`). A V1 timer whose
+thread is delegated to a remote runtime is paused with a notice when it falls
+due. See [scoped group relay](whatsapp-scoped-group-relay.md#delegated-remote-runtime-threads).
 
 Both doctor commands support `--json` for scripts. They exit non-zero only when
 the reported status is `broken`; warnings stay visible but do not block local

@@ -1,7 +1,7 @@
 import { appendEvent } from "../../storage/src/store.js";
 import { findThreadMessage, listThreadMessageCandidates, updateThreadMessage } from "./threads.js";
 import { delegatedAssistantInput, parseThreadInputCommand } from "./thread-commands.js";
-import { codexInputText } from "./codex-app-server-common.js";
+import { codexInputText, mailboxTurnRestricted } from "./codex-app-server-common.js";
 import { getClaudeCodeSession, setClaudeCodeSession } from "./claude-code-sessions.js";
 
 // Claude Code runs one `claude -p` process per turn with stdin closed after the
@@ -15,6 +15,12 @@ export const CLAUDE_CODE_INTERRUPT_RESUME_NOTE =
   "[The previous turn was interrupted by a new message from the user. Continue from the current state.]";
 
 export const CLAUDE_CODE_INTERRUPT_PENDING_STATE = "interrupt_resume_pending";
+
+// Prefixed to a turn that carries more than one input, so the executor answers
+// the burst once instead of replying to every message separately.
+export function claudeCodeBurstNote(count) {
+  return `[${count} messages arrived together and are delivered in this one turn. Read all of them, then answer in a single reply that covers everything; do not reply to each message separately.]`;
+}
 
 const pendingStates = ["queued", "pending_delivery"];
 const disabledValues = new Set(["0", "false", "off", "no", "disabled", "disable"]);
@@ -144,11 +150,109 @@ export function replyAuthorityKey(message = {}) {
   ]);
 }
 
-// Pending interrupt inputs that directly follow `primary` in queue order and
-// can share its resume turn. Control commands, passive inputs and inputs with
-// a different reply authority end the run so queue order is preserved.
+export function claudeCodeQueuedInputCoalescingEnabled(env = process.env) {
+  return !disabledValues.has(clean(env.ORKESTR_CLAUDE_CODE_COALESCE_QUEUED_INPUTS).toLowerCase());
+}
+
+// A plain queued input may share a turn with the plain inputs queued directly
+// behind it: one answer then covers the whole burst. MCP (thread bridge)
+// requests each need their own answer, and mailbox-origin inputs run under a
+// restricted turn policy, so neither is ever merged.
+export function claudeCodeInputCoalescible(message = {}) {
+  if (clean(message.role).toLowerCase() !== "user") return false;
+  if (delegatedAssistantInput(message)) return false;
+  if (mailboxTurnRestricted(message)) return false;
+  if (clean(message.codexDeliveryMode).toLowerCase() === "passive") return false;
+  if (parseThreadInputCommand(message).command) return false;
+  return true;
+}
+
+// Only inputs from the same source share a turn: a chat burst never absorbs a
+// timer, a watch report or another agent's message.
+function sameBurst(primary, message) {
+  return clean(message.source) === clean(primary.source) && replyAuthorityKey(message) === replyAuthorityKey(primary);
+}
+
+// Human chat surfaces where people send several short messages in a row.
+function chatBurstSource(message = {}) {
+  const source = clean(message.source).toLowerCase();
+  return source === "ui" || source.startsWith("whatsapp");
+}
+
+// Plain (non-interrupt) inputs queued directly behind `primary` that share its
+// source and reply authority. They arrived while a turn was running or during the
+// debounce window, so the user expects one answer to all of them.
+async function collectClaudeCodeQueuedBatch(thread, primary, env = process.env) {
+  if (!claudeCodeQueuedInputCoalescingEnabled(env) || !claudeCodeInputCoalescible(primary)) return [];
+  const candidates = (await listThreadMessageCandidates(thread.id, { states: pendingStates }, env))
+    .filter((message) => clean(message.role).toLowerCase() === "user");
+  const index = candidates.findIndex((message) => message.id === primary.id);
+  if (index < 0) return [];
+  const batch = [];
+  for (const message of candidates.slice(index + 1, index + 1 + maxCoalescedInputs)) {
+    if (!pendingStates.includes(clean(message.state))) break;
+    // An explicit `/now` keeps its own interrupt semantics.
+    if (message.forceDeliveryAfterInterrupt === true) break;
+    if (!claudeCodeInputCoalescible(message) || !sameBurst(primary, message)) break;
+    batch.push(message);
+  }
+  return batch;
+}
+
+function boundedMs(raw, fallback, max) {
+  const text = clean(raw);
+  const value = text ? Number(text) : fallback;
+  return Number.isFinite(value) && value >= 0 ? Math.min(value, max) : fallback;
+}
+
+// Quiet period a fresh input waits for more inputs before its turn starts, so
+// a quick burst (several WhatsApp messages, photos sent one by one) becomes
+// one turn. ORKESTR_THREAD_INPUT_DEBOUNCE_MS=0 starts turns immediately.
+export function threadInputDebounceMs(env = process.env) {
+  return boundedMs(env.ORKESTR_THREAD_INPUT_DEBOUNCE_MS, 3_000, 30_000);
+}
+
+// Upper bound on how long a continuous stream of inputs can hold back the
+// first one.
+export function threadInputDebounceMaxMs(env = process.env) {
+  return Math.max(threadInputDebounceMs(env), boundedMs(env.ORKESTR_THREAD_INPUT_DEBOUNCE_MAX_MS, 10_000, 120_000));
+}
+
+function createdAtMs(message = {}) {
+  const value = Date.parse(clean(message.createdAt));
+  return Number.isFinite(value) ? value : NaN;
+}
+
+// Milliseconds to hold `next` (the oldest pending input) before starting its
+// turn, or 0 to start now. Only plain inputs that could be merged wait;
+// interrupts, commands, MCP, mailbox and machine inputs never do.
+export function claudeCodeInputDebounceDelayMs(candidates = [], next = null, env = process.env, now = Date.now()) {
+  const quietMs = threadInputDebounceMs(env);
+  if (!quietMs || !next || !claudeCodeQueuedInputCoalescingEnabled(env)) return 0;
+  if (!chatBurstSource(next) || claudeCodeInputRequestsInterrupt(next, env) || !claudeCodeInputCoalescible(next)) return 0;
+  const oldest = createdAtMs(next);
+  if (!Number.isFinite(oldest)) return 0;
+  let newest = oldest;
+  const index = candidates.findIndex((message) => message.id === next.id);
+  for (const message of index >= 0 ? candidates.slice(index + 1, index + 1 + maxCoalescedInputs) : []) {
+    if (message.forceDeliveryAfterInterrupt === true || !claudeCodeInputCoalescible(message)) break;
+    if (!sameBurst(next, message)) break;
+    const created = createdAtMs(message);
+    if (Number.isFinite(created)) newest = Math.max(newest, created);
+  }
+  const quietLeft = quietMs - (now - newest);
+  const maxLeft = threadInputDebounceMaxMs(env) - (now - oldest);
+  const wait = Math.min(quietLeft, maxLeft);
+  return wait > 0 ? Math.ceil(wait) : 0;
+}
+
+// Inputs that directly follow `primary` in queue order and can share its turn.
+// Interrupt inputs batch with the steer inputs behind them (resume turn);
+// plain queued inputs batch with the plain inputs behind them. Control
+// commands, passive inputs and inputs with a different reply authority end
+// the run so queue order is preserved.
 export async function collectClaudeCodeResumeBatch(thread, primary, env = process.env) {
-  if (!claudeCodeInputRequestsInterrupt(primary, env)) return [];
+  if (!claudeCodeInputRequestsInterrupt(primary, env)) return collectClaudeCodeQueuedBatch(thread, primary, env);
   const candidates = (await listThreadMessageCandidates(thread.id, { states: pendingStates }, env))
     .filter((message) => clean(message.role).toLowerCase() === "user");
   const index = candidates.findIndex((message) => message.id === primary.id);
@@ -176,7 +280,8 @@ export async function collectClaudeCodeResumeBatch(thread, primary, env = proces
 export function claudeCodeResumePrompt(primary, coalesced = [], { interrupted = false } = {}) {
   if (!interrupted && !coalesced.length) return codexInputText(primary);
   const parts = [primary, ...coalesced].map((message) => clean(codexInputText(message))).filter(Boolean);
-  return [interrupted ? CLAUDE_CODE_INTERRUPT_RESUME_NOTE : "", ...parts].filter(Boolean).join("\n\n");
+  const burst = parts.length > 1 ? claudeCodeBurstNote(parts.length) : "";
+  return [interrupted ? CLAUDE_CODE_INTERRUPT_RESUME_NOTE : "", burst, ...parts].filter(Boolean).join("\n\n");
 }
 
 const outcomePatches = {

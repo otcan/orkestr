@@ -73,6 +73,7 @@ const messageStringFields = [
   "runtimeGeneration",
   "failedTurnId",
   "timerId",
+  "postAuthor",
   "replayedFromMessageId",
   "previousCodexThreadId",
   "previousRecoveryNoticeId",
@@ -83,6 +84,7 @@ const messageStringFields = [
   "ownerSelfChatHomeThreadId",
   "originTransport",
   "senderParticipantId",
+  "senderLabel",
   "senderTrustLevel",
   "senderEffectiveRole",
   "senderPolicyMode",
@@ -105,6 +107,10 @@ const messageStringFields = [
   "remoteThreadId",
   "remoteMessageId",
   "remoteParentMessageId",
+  "remoteKind",
+  "remoteExportSequence",
+  "remoteProvider",
+  "remoteModel",
   "remoteRoutedAt",
   "remoteSyncedAt",
   "publicThreadId",
@@ -842,13 +848,25 @@ export async function appendThreadMessage(threadId, input, env = process.env) {
           );
       if (duplicate) return { ...duplicate, duplicate: true, duplicateReason: "external_id" };
     }
+    // A caller may pin the local id (e.g. a parent materialized from a remote
+    // runtime row); replaying the same id returns the stored message.
+    const requestedMessageId = String(input.requestedMessageId || "").trim();
+    if (requestedMessageId) {
+      if (!/^[A-Za-z0-9._:-]{1,160}$/.test(requestedMessageId)) {
+        throw Object.assign(new Error("invalid_message_id"), { statusCode: 400 });
+      }
+      const existing = sqlite
+        ? await messageRepository.get(thread.id, requestedMessageId)
+        : messages.find((item) => item.id === requestedMessageId);
+      if (existing) return { ...existing, duplicate: true, duplicateReason: "message_id" };
+    }
     const cursor =
       Number(input.cursor || 0) ||
       (sqlite
         ? await messageRepository.nextCursor(thread.id)
         : Math.max(0, ...messages.map((item) => Number(item.cursor || 0)).filter(Number.isFinite)) + 1);
     let nextMessage = {
-      id: randomUUID(),
+      id: requestedMessageId || randomUUID(),
       ownerUserId: normalizeUserId(input.ownerUserId || thread.ownerUserId || env.ORKESTR_ADMIN_USER_ID || adminUserId),
       role,
       source,
@@ -865,6 +883,8 @@ export async function appendThreadMessage(threadId, input, env = process.env) {
       const value = String(input[key] || "").trim();
       if (value) nextMessage[key] = value;
     }
+    const replyTo = normalizeReplyTo(input.replyTo);
+    if (replyTo) nextMessage.replyTo = replyTo;
     if (input.ownerSelfChatDedicatedTransport === true) nextMessage.ownerSelfChatDedicatedTransport = true;
     if (input.bridgeWhatsAppReply === true || input.bridgeWhatsAppReply === false) {
       nextMessage.bridgeWhatsAppReply = input.bridgeWhatsAppReply;
@@ -957,6 +977,24 @@ export async function appendThreadMessage(threadId, input, env = process.env) {
   await updateThread(thread.id, { state: activeInputStates.has(message.state) ? message.state : thread.state }, env);
   await appendEvent({ type: `thread_message_${message.state}`, threadId: thread.id, messageId: message.id, source: message.source, role: message.role, ownerUserId: message.ownerUserId }, env);
   return message;
+}
+
+// The message an inbound chat reply quoted ({messageId, author, sentAt, text,
+// isOwnReply}); `unavailable` marks a quote that could not be resolved.
+const replyToTextMax = 500;
+export function normalizeReplyTo(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const str = (item, max) => String(item ?? "").trim().slice(0, max);
+  const sentAt = str(value.sentAt, 40);
+  const replyTo = {
+    messageId: str(value.messageId, 300) || null,
+    author: str(value.author, 200) || null,
+    sentAt: Number.isFinite(Date.parse(sentAt)) ? sentAt : null,
+    text: str(value.text, replyToTextMax),
+    isOwnReply: value.isOwnReply === true,
+  };
+  if (value.unavailable === true) replyTo.unavailable = true;
+  return replyTo.messageId || replyTo.text || replyTo.unavailable ? replyTo : null;
 }
 
 function compactInputText(value) {
@@ -1160,6 +1198,11 @@ export async function updateThreadMessage(threadId, messageId, patch, env = proc
       if (message.id !== messageId) {
         next.push(message);
         continue;
+      }
+      if (Object.entries(options.expectedFields || {}).some(([key, value]) => message[key] !== value)) {
+        const error = new Error("message_fields_conflict");
+        error.statusCode = 409;
+        throw error;
       }
       const expectedStates = Array.isArray(options.expectedStates)
         ? options.expectedStates.map((value) => String(value || "").trim().toLowerCase()).filter(Boolean)

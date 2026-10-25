@@ -9,6 +9,7 @@ import {
   addLocalWhatsAppGroupParticipants,
   completeLocalWhatsAppGroupSetup,
   createLocalWhatsAppChat,
+  createLocalWhatsAppScopedGroup,
   demoteLocalWhatsAppGroupParticipants,
   generateLocalWhatsAppChatPicture,
   getLocalWhatsAppGroupInvite,
@@ -16,6 +17,8 @@ import {
   getLocalWhatsAppBridgeStatus,
   getLocalWhatsAppQrSvg,
   listLocalWhatsAppChatMessages,
+  pageLocalWhatsAppChats,
+  pageLocalWhatsAppChatHistory,
   listLocalWhatsAppChats,
   listLocalWhatsAppChatParticipants,
   logoutLocalWhatsAppAccount,
@@ -25,6 +28,8 @@ import {
   recoverLocalWhatsAppChatMessages,
   recoverUnreadLocalWhatsAppMessages,
   sendLocalWhatsAppMessage,
+  sendLocalWhatsAppScopedDocument,
+  sendLocalWhatsAppScopedFile,
   startConfiguredLocalWhatsAppAccounts,
   startLocalWhatsAppAccount,
   startLocalWhatsAppTyping,
@@ -326,6 +331,7 @@ const defaultBridge = {
   addLocalWhatsAppGroupParticipants,
   completeLocalWhatsAppGroupSetup,
   createLocalWhatsAppChat,
+  createLocalWhatsAppScopedGroup,
   demoteLocalWhatsAppGroupParticipants,
   generateLocalWhatsAppChatPicture,
   getLocalWhatsAppGroupInvite,
@@ -333,6 +339,8 @@ const defaultBridge = {
   getLocalWhatsAppBridgeStatus,
   getLocalWhatsAppQrSvg,
   listLocalWhatsAppChatMessages,
+  pageLocalWhatsAppChats,
+  pageLocalWhatsAppChatHistory,
   listLocalWhatsAppChats,
   listLocalWhatsAppChatParticipants,
   logoutLocalWhatsAppAccount,
@@ -341,6 +349,8 @@ const defaultBridge = {
   recoverLocalWhatsAppChatMessages,
   recoverUnreadLocalWhatsAppMessages,
   sendLocalWhatsAppMessage,
+  sendLocalWhatsAppScopedDocument,
+  sendLocalWhatsAppScopedFile,
   startLocalWhatsAppAccount,
   startLocalWhatsAppTyping,
   stopLocalWhatsAppTyping,
@@ -350,7 +360,7 @@ async function handleRequest(req, res, env = process.env, bridge = defaultBridge
   const method = clean(req.method || "GET").toUpperCase();
   const url = new URL(req.url || "/", "http://orkestr-wa.local");
   const scoped = scopedNativeWorker(env);
-  if (scoped && !(method === "POST" && url.pathname === "/send-text")) scoped.checkRequest(method, url);
+  if (scoped && !(method === "POST" && ["/send-text", "/send-document", "/send-file", "/chats"].includes(url.pathname))) scoped.checkRequest(method, url);
   if (method === "GET" && (url.pathname === "/" || url.pathname === "/health")) {
     requireAuth(req, env);
     const health = publicHealth(await bridge.getLocalWhatsAppBridgeStatus(env, { probeChatOps: false }), env);
@@ -413,7 +423,32 @@ async function handleRequest(req, res, env = process.env, bridge = defaultBridge
     return json(res, 200, await bridge.listLocalWhatsAppChats(params.accountId, env));
   }
 
+  params = routeMatch(url.pathname, "/accounts/:accountId/chats/page");
+  if (method === "GET" && params) {
+    requireAuth(req, env);
+    // Only reachable on a scoped worker for an owner-authorized read-all thread (policy checked above).
+    if (!scoped) return json(res, 403, { ok: false, error: "read_all_not_configured" });
+    return json(res, 200, { ...(await bridge.pageLocalWhatsAppChats({
+      accountId: params.accountId,
+      source: clean(url.searchParams.get("source")) || "chats",
+      cursor: clean(url.searchParams.get("cursor")),
+      limit: url.searchParams.get("limit") ?? undefined,
+      unreadOnly: url.searchParams.get("unread") === "1",
+      env,
+    })), ok: true });
+  }
+
   params = routeMatch(url.pathname, "/accounts/:accountId/chats/:chatId/history");
+  if (method === "GET" && params && scoped && url.searchParams.get("page") === "1") {
+    requireAuth(req, env);
+    return json(res, 200, { ...(await bridge.pageLocalWhatsAppChatHistory({
+      accountId: params.accountId,
+      chatId: params.chatId,
+      before: clean(url.searchParams.get("before")),
+      limit: url.searchParams.get("limit") ?? undefined,
+      env,
+    })), ok: true });
+  }
   if (method === "GET" && params) {
     requireAuth(req, env);
     requireServicePolicy(req, url, env, {}, { accounts: [params.accountId], recipients: [params.chatId], recipientScope: "history" });
@@ -598,7 +633,39 @@ async function handleRequest(req, res, env = process.env, bridge = defaultBridge
       mentions: Array.isArray(body.mentions) ? body.mentions.map(clean).filter(Boolean) : [],
       attachments: paths.map((filePath) => ({ path: filePath })),
       crossAccountEchoSuppression: body.crossAccountEchoSuppression !== false,
-      ...(scoped ? { scopedRequest: { requestId: body.requestId, parentId: body.parentId, ...(body.notificationId ? { notificationId: body.notificationId } : {}) } } : {}),
+      ...(scoped ? { scopedRequest: { requestId: body.requestId, parentId: body.parentId, ...(body.notificationId ? { notificationId: body.notificationId } : {}), ...(body.threadId ? { threadId: body.threadId } : {}), ...(body.operatorNotice === true ? { operatorNotice: true } : {}) } } : {}),
+      env,
+    }));
+  }
+
+  // Scoped workers only: the full text of a long group reply as one document.
+  if (method === "POST" && url.pathname === "/send-document") {
+    requireAuth(req, env);
+    const body = await readJsonBody(req);
+    if (!scoped) return json(res, 404, { ok: false, error: "not_found" });
+    scoped.checkRequest(method, url, body);
+    requireServicePolicy(req, url, env, body, { accounts: [body.accountId], recipients: [body.to], recipientScope: "send" });
+    return json(res, 200, await bridge.sendLocalWhatsAppScopedDocument({
+      accountId: clean(body.accountId),
+      chatId: clean(body.to),
+      document: { filename: body.filename, mimetype: body.mimetype, text: body.text },
+      scopedRequest: { requestId: body.requestId, parentId: body.parentId, ...(body.notificationId ? { notificationId: body.notificationId } : {}) },
+      env,
+    }));
+  }
+
+  // Scoped workers only: a file the assistant attached to a group reply.
+  if (method === "POST" && url.pathname === "/send-file") {
+    requireAuth(req, env);
+    const body = await readJsonBody(req);
+    if (!scoped) return json(res, 404, { ok: false, error: "not_found" });
+    scoped.checkRequest(method, url, body);
+    requireServicePolicy(req, url, env, body, { accounts: [body.accountId], recipients: [body.to], recipientScope: "send" });
+    return json(res, 200, await bridge.sendLocalWhatsAppScopedFile({
+      accountId: clean(body.accountId),
+      chatId: clean(body.to),
+      file: { path: body.path, filename: body.filename, mimetype: body.mimetype, sha256: body.sha256 },
+      scopedRequest: { requestId: body.requestId, parentId: body.parentId },
       env,
     }));
   }
@@ -648,6 +715,11 @@ async function handleRequest(req, res, env = process.env, bridge = defaultBridge
   if (method === "POST" && url.pathname === "/chats") {
     requireAuth(req, env);
     const body = await readJsonBody(req);
+    if (scoped) {
+      // Owner-only groups through the worker's journaled creation; anything else is denied.
+      scoped.checkRequest(method, url, body);
+      return json(res, 201, await bridge.createLocalWhatsAppScopedGroup({ request: body, env }));
+    }
     const participants = Array.isArray(body.participantIds) ? body.participantIds.map(clean).filter(Boolean) : [];
     requireServicePolicy(req, url, env, body, {
       accounts: [body.senderAccountId || body.accountId, body.responderAccountId].filter(Boolean),

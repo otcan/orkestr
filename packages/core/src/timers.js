@@ -6,9 +6,11 @@ import { createTimerRepository } from "../../storage/src/repositories.js";
 import { appendEvent } from "../../storage/src/store.js";
 import { assertSanitizedAction } from "./llm-sanitizer.js";
 import { timerRetryAt, timerWaitingForRetry, withDueTimerPass } from "./timer-run-guard.js";
+import { applyTimerOwnershipFence, assertTimerNotOwnedByV2, isTimerOwnershipField, timerOwnedByV2 } from "./timer-ownership.js";
 import { enqueueAgentMessage } from "./messages.js";
 import { principalForUserId, userPrincipal } from "./principal.js";
 import { appendThreadSignal } from "./thread-signals.js";
+import { delegatedTimerTarget, pauseTimerForDelegatedThread, timerDelegationError } from "./timer-delegation-fence.js";
 import { enqueueThreadInput, getThread, getThreadForPrincipal, listThreadMessages, listThreads, listThreadsForPrincipal } from "./threads.js";
 import { assertResourceAccess, filterResourcesForPrincipal, isAdminPrincipal, policyError } from "./policy.js";
 import { adminUserId, normalizeUserId } from "./users.js";
@@ -435,7 +437,7 @@ export function normalizeStoredTimer(timer, now = new Date(), env = process.env)
   normalized.nextRunAt = enabled
     ? String(timer.nextRunAt || legacyDueAt || nextRunAt(normalized, now)).trim()
     : null;
-  return normalized;
+  return applyTimerOwnershipFence(normalized);
 }
 
 export async function listTimers(env = process.env) {
@@ -514,6 +516,13 @@ export async function doctorTimers(env = process.env, now = new Date(), options 
   const nowMs = now.getTime();
 
   for (const timer of timers) {
+    if (timerOwnedByV2(timer)) {
+      issues.push(timerIssue(timer, "info", "owned_by_v2", "Timer is owned by Orkestr V2; V1 will not run it until it is handed back.", {
+        handoffId: timer.ownership?.handoffId || null,
+        changedAt: timer.ownership?.changedAt || null,
+      }));
+      continue;
+    }
     const enabled = timer.enabled !== false;
     const cadence = String(timer.cadence || "").trim().toLowerCase();
     const nextMs = Date.parse(String(timer.nextRunAt || ""));
@@ -574,6 +583,7 @@ export async function doctorTimers(env = process.env, now = new Date(), options 
     total: timers.length,
     enabled: enabledTimers.length,
     disabled: timers.length - enabledTimers.length,
+    ownedByV2: timers.filter(timerOwnedByV2).length,
     due: dueTimers.length,
     errors: issues.filter((issue) => issue.severity === "error").length,
     warnings: issues.filter((issue) => issue.severity === "warning").length,
@@ -696,12 +706,15 @@ async function enqueueTimerMessage(timer, source, env, principal = null, options
   };
   if (timer.targetType !== "thread") return enqueueAgentMessage(timer.target, input, env);
   const thread = await getThread(timer.target, env).catch(() => null);
+  const delegated = delegatedTimerTarget(timer, thread, env);
+  if (delegated) throw timerDelegationError(delegated.remote);
   return enqueueThreadInput(thread?.id || timer.target, whatsappTimerThreadDefaults(thread, input), env);
 }
 
 export async function deleteTimer(id, env = process.env) {
   const timerRepository = createTimerRepository(env);
   const timers = await listTimers(env);
+  assertTimerNotOwnedByV2(timers.find((timer) => timer.id === id));
   const next = timers.filter((timer) => timer.id !== id);
   await timerRepository.save(next);
   if (timers.length !== next.length) {
@@ -724,7 +737,7 @@ function timerUpdatePatch(existing = {}, patch = {}, now = new Date()) {
   for (const [key, rawValue] of Object.entries(patch || {})) {
     if (rawValue === undefined) continue;
     if (key === "id" || key === "ownerUserId" || key === "userId" || key === "createdAt") continue;
-    if (key === "timerId") continue;
+    if (key === "timerId" || isTimerOwnershipField(key)) continue;
     if (key === "threadId") {
       next.targetType = "thread";
       next.target = String(rawValue || "").trim();
@@ -794,6 +807,7 @@ export async function updateTimer(id, patch = {}, env = process.env, now = new D
       next.push(timer);
       continue;
     }
+    assertTimerNotOwnedByV2(timer);
     updated = timerUpdatePatch(timer, patch, now);
     updated = await materializeWorkspacePromptFile(updated, env, { rewriteExisting: promptChanged });
     next.push(updated);
@@ -854,6 +868,7 @@ export async function runTimerNow(id, env = process.env, now = new Date(), optio
     error.statusCode = 404;
     throw error;
   }
+  assertTimerNotOwnedByV2(timer);
   const duplicate = options.allowDuplicate === true ? null : recentManualRun(timer, now, env);
   if (duplicate) {
     return appendEvent(
@@ -956,8 +971,17 @@ async function markDueTimersPass(env, now, options) {
   const due = [];
   const next = [];
   for (const timer of timers) {
-    if (!timer.enabled || !timer.nextRunAt || Date.parse(timer.nextRunAt) > now.getTime() || timerWaitingForRetry(timer, now)) {
+    if (timerOwnedByV2(timer) || !timer.enabled || !timer.nextRunAt || Date.parse(timer.nextRunAt) > now.getTime() || timerWaitingForRetry(timer, now)) {
       next.push(timer);
+      continue;
+    }
+    const delegated = timer.targetType === "thread"
+      ? delegatedTimerTarget(timer, await getThread(timer.target, env).catch(() => null), env)
+      : null;
+    if (delegated) {
+      // Paused with a visible notice instead of held for a late burst.
+      next.push(await pauseTimerForDelegatedThread(timer, delegated, env, now));
+      changed = true;
       continue;
     }
     try {

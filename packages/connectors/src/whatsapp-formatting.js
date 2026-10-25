@@ -286,11 +286,67 @@ function processCpuDebugPercent() {
   return Math.max(0, Math.min(999, percent));
 }
 
+// Configured remote runtime backend ids (ORKESTR_REMOTE_*_BACKENDS_JSON keys and
+// the single-backend id). Only the ids are read; tokens are never touched.
+function configuredRemoteBackendIds(env = process.env) {
+  const ids = new Set();
+  for (const raw of [env?.ORKESTR_REMOTE_THREAD_BACKENDS_JSON, env?.ORKESTR_REMOTE_RUNTIME_BACKENDS_JSON, env?.ORKESTR_REMOTE_BACKENDS_JSON]) {
+    if (!raw) continue;
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) for (const id of Object.keys(parsed)) if (id.trim()) ids.add(id.trim());
+    } catch { /* an unparseable backend map adds no ids */ }
+    break;
+  }
+  const single = pickString(env?.ORKESTR_REMOTE_THREAD_BACKEND_ID, env?.ORKESTR_REMOTE_RUNTIME_BACKEND_ID, env?.ORKESTR_REMOTE_BACKEND_ID);
+  if (single) ids.add(single);
+  return ids;
+}
+
+// A reply mirrored from a remote runtime (for example the Rust V2 app): it
+// carries the remote message identity, or its source names a configured backend.
+function remoteRuntimeReply(message = {}, env = process.env) {
+  if (!message || String(message.role || "").toLowerCase() === "user") return false;
+  if (pickString(message.remoteMessageId)) return true;
+  const source = pickString(message.source).toLowerCase();
+  if (!source) return false;
+  for (const id of configuredRemoteBackendIds(env)) {
+    const backend = id.toLowerCase();
+    if (source === backend || source.startsWith(`${backend}-`)) return true;
+  }
+  return false;
+}
+
+function remoteRuntimeBackendLabel(message = {}, env = process.env) {
+  const explicit = pickString(message.remoteBackend);
+  if (explicit) return explicit;
+  const source = pickString(message.source).toLowerCase();
+  for (const id of configuredRemoteBackendIds(env)) {
+    if (source === id.toLowerCase() || source.startsWith(`${id.toLowerCase()}-`)) return id;
+  }
+  return "remote";
+}
+
+const debugToken = value => pickString(value).replace(/[\s·*~`]+/g, "-").slice(0, 64);
+
+// Identity for a remote reply: the remote provider/model when the mirrored
+// message carries them, otherwise only the remote runtime id. The local
+// thread's provider, model, mode and fast settings do not describe it.
+function remoteRuntimeIdentity(message = {}, env = process.env) {
+  const backend = debugToken(remoteRuntimeBackendLabel(message, env));
+  const family = backend.split(/[-_]/)[0] || "remote";
+  const provider = debugToken(pickString(message.remoteProvider, message.provider));
+  const model = debugToken(pickString(message.remoteModel, message.model));
+  const agent = [family, provider, model].filter(Boolean).join("/");
+  return [`dbg: ${agent}`, `rt:${backend}`];
+}
+
 export function shouldAppendWhatsAppDebugFooter(message = {}, env = process.env, deliveryType = "", thread = null) {
   if (!footerEnabled(env)) return false;
   if (thread && threadRequiresTenantIsolation(thread, env)) return false;
   if (thread && threadSuppressesWhatsAppDebugFooter(thread, message?.chatId, env)) return false;
   if (codexAssistantSource(message) || message.source === "claude-code" || message.source === "orkestr_runtime") return true;
+  if (remoteRuntimeReply(message, env)) return true;
   return ["delivery_error", "mode_queued", "queue_notice", "router_update"].includes(String(deliveryType || "").trim());
 }
 
@@ -309,7 +365,10 @@ export function whatsappDebugFooter({ message = {}, thread = {}, messages = [], 
   const mode = codexModeDebugValue(message, thread);
   const runtimeSurface = runtimeSurfaceDebugValue(thread);
   const queueNotice = String(deliveryType || "").trim() === "queue_notice";
-  const identity = [
+  const identity = remoteRuntimeReply(message, env) ? [
+    ...remoteRuntimeIdentity(message, env),
+    `msg:*${footerMessageType(deliveryType)}*`,
+  ] : [
     `dbg: ${agent}/${modelDebugLabel(message, thread, env)}`,
     ...(runtimeSurface ? [`rt:${runtimeSurface}`] : []),
     ...(!isClaude && mode ? [`mode:${mode}`] : []),

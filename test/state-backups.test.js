@@ -81,3 +81,53 @@ test("state restore plans reject backups outside the configured backup directory
     /backup_path_forbidden/,
   );
 });
+
+test("failed or unverifiable UI backup preserves every completed recovery point", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-ui-backup-preserve-"));
+  const home = path.join(root, "state"), backupDir = path.join(root, "backups"), bin = path.join(root, "bin");
+  const env = { ORKESTR_HOME: home, ORKESTR_DEPLOY_BACKUP_DIR: backupDir };
+  const originalPath = process.env.PATH;
+  await fs.mkdir(home);
+  await fs.mkdir(bin);
+  await fs.writeFile(path.join(home, "fixture"), "synthetic recovery data");
+  try {
+    const originals = new Map();
+    for (let i = 0; i < 3; i++) {
+      const result = await createStateBackup({ label: "synthetic" }, env);
+      assert.equal((await fs.stat(result.backup.path)).mode & 0o777, 0o600);
+      originals.set(result.backup.name, await fs.readFile(result.backup.path));
+    }
+    process.env.PATH = bin + path.delimiter + originalPath;
+    await fs.writeFile(path.join(bin, "tar"), "#!/bin/sh\nexit 7\n", { mode: 0o755 });
+    await assert.rejects(createStateBackup({}, env));
+    await fs.writeFile(path.join(bin, "tar"), '#!/bin/sh\nif [ "$3" = -czf ]; then printf broken > "$4"; exit 0; fi\nexec /usr/bin/tar "$@"\n', { mode: 0o755 });
+    await assert.rejects(createStateBackup({}, env), /verification_or_publication_failed/);
+    assert.deepEqual((await fs.readdir(backupDir)).sort(), [...originals.keys()].sort());
+    for (const [name, bytes] of originals) assert.deepEqual(await fs.readFile(path.join(backupDir, name)), bytes);
+  } finally {
+    process.env.PATH = originalPath;
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("UI retention has a minimum of two and leaves unrelated or symlink archives alone", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-ui-backup-minimum-"));
+  const home = path.join(root, "state"), backupDir = path.join(root, "backups");
+  const env = { ORKESTR_HOME: home, ORKESTR_DEPLOY_BACKUP_DIR: backupDir, ORKESTR_DEPLOY_BACKUP_KEEP: "1" };
+  await fs.mkdir(home);
+  await fs.mkdir(backupDir);
+  const unrelated = path.join(backupDir, "unrelated.tar.gz");
+  await fs.writeFile(unrelated, "preserved unrelated file");
+  try {
+    for (let i = 0; i < 4; i++) await createStateBackup({}, env);
+    const status = await stateBackupStatus(env);
+    assert.equal(status.retention.keep, 2);
+    assert.equal(status.backupCount, 2);
+    const link = path.join(backupDir, "external-state.tar.gz");
+    await fs.symlink(status.latestBackup.path, link);
+    assert.equal((await stateBackupStatus(env)).backupCount, 2);
+    assert.equal(await fs.readFile(unrelated, "utf8"), "preserved unrelated file");
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});

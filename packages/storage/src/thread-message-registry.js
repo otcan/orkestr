@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { dataPaths, ensureDataDirs } from "./paths.js";
+import { assertTestStorageHome } from "./test-storage-isolation.js";
 import { readJson } from "./store.js";
 import { ensureThreadMessageSchema } from "./thread-message-schema.js";
 import { ensureThreadBridgeSchema, recordThreadBridgeChange, readThreadBridgeChanges, threadBridgeOwner, writeThreadBridgeReply } from "./thread-bridge-journal.js";
@@ -28,6 +29,13 @@ async function openDatabase(env = process.env) {
   if (!sqliteThreadMessageStore(env)) return null;
   const sqlite = await loadSqlite();
   if (!sqlite) return null;
+  // Every message read and fingerprint opens the store; once the handle is
+  // cached the data directories already exist, so skip their ten mkdir calls.
+  const cachedPaths = dataPaths(env);
+  if (dbCache.has(cachedPaths.threadMessagesDb)) {
+    assertTestStorageHome(cachedPaths.home, env);
+    return dbCache.get(cachedPaths.threadMessagesDb);
+  }
   const paths = await ensureDataDirs(env);
   if (dbCache.has(paths.threadMessagesDb)) return dbCache.get(paths.threadMessagesDb);
   const db = new sqlite.DatabaseSync(paths.threadMessagesDb);

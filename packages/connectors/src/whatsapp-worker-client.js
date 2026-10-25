@@ -147,11 +147,25 @@ export function whatsappWorkerConversations(accountId = "", env = process.env) {
   return requestWhatsAppWorker(`/accounts/${encodeURIComponent(clean(accountId || "sender"))}/chats`, {}, env);
 }
 
+// Owner-authorized read-all: one page of chat or contact metadata (no content).
+export function whatsappWorkerChatPage(accountId = "", threadId = "", { source = "chats", cursor = "", limit, unreadOnly = false } = {}, env = process.env) {
+  const account = encodeURIComponent(clean(accountId || "sender"));
+  const query = new URLSearchParams({ thread_id: clean(threadId), source: clean(source) || "chats" });
+  if (clean(cursor)) query.set("cursor", clean(cursor));
+  if (limit !== undefined && limit !== null) query.set("limit", String(limit));
+  if (unreadOnly) query.set("unread", "1");
+  return requestWhatsAppWorker(`/accounts/${account}/chats/page?${query}`, {}, env);
+}
+
 export function whatsappWorkerConversation(accountId = "", conversationId = "", action = "history", options = {}, env = process.env) {
   const account = encodeURIComponent(clean(accountId || "sender"));
   const conversation = encodeURIComponent(clean(conversationId));
   if (action === "history") {
-    return requestWhatsAppWorker(`/accounts/${account}/chats/${conversation}/history?limit=${Math.max(1, Number(options.limit || 30) || 30)}`, {}, env);
+    // thread_id lets a scoped worker check that the chat belongs to the caller's thread.
+    const thread = clean(options.threadId) ? `&thread_id=${encodeURIComponent(clean(options.threadId))}` : "";
+    // Paged mode (read-all threads): newest-first pages older than `before`, never marking seen.
+    const paged = options.paged ? `&page=1&mark_seen=false${clean(options.before) ? `&before=${encodeURIComponent(clean(options.before))}` : ""}` : "";
+    return requestWhatsAppWorker(`/accounts/${account}/chats/${conversation}/history?limit=${Math.max(1, Number(options.limit || 30) || 30)}${thread}${paged}`, {}, env);
   }
   if (action === "participants") return requestWhatsAppWorker(`/accounts/${account}/chats/${conversation}/participants`, {}, env);
   if (action === "add_participants" || action === "add-participants") {
@@ -200,14 +214,18 @@ export function whatsappWorkerGroupPictureAudit(accountId = "", chatIds = [], en
   }, env);
 }
 
-export function whatsappWorkerSend({ accountId = "", conversationId = "", text = "", attachmentPaths = [] } = {}, env = process.env) {
+export function whatsappWorkerSend({ accountId = "", conversationId = "", text = "", attachmentPaths = [], requestId = "", threadId = "" } = {}, env = process.env) {
+  // Text-only sends carry no empty `paths` list, and an idempotency request id
+  // when the caller has one: a scoped recovery worker accepts only that shape.
   return requestWhatsAppWorker(attachmentPaths.length ? "/send-media" : "/send-text", {
     method: "POST",
     body: {
       accountId: clean(accountId || "sender"),
       to: clean(conversationId),
       text: String(text || ""),
-      paths: attachmentPaths,
+      ...(attachmentPaths.length ? { paths: attachmentPaths } : {}),
+      ...(clean(requestId) ? { requestId: clean(requestId) } : {}),
+      ...(clean(threadId) ? { threadId: clean(threadId) } : {}),
     },
   }, env);
 }

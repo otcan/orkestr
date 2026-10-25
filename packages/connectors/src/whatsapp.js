@@ -6301,7 +6301,7 @@ async function deliverWhatsAppRepliesOnce(env = process.env, fetchImpl = fetch) 
   if (!bridgeUrl && bridgeMode(config, env) !== "local") {
     return { delivered: [], skipped: [], failed: [], status: "not_configured" };
   }
-  await syncRemoteWhatsAppThreadMessages(env, fetchImpl).catch((error) =>
+  await syncRemoteWhatsAppThreadMessages(env, fetchImpl, { readState: () => readWhatsAppState(env) }).catch((error) =>
     appendEvent({ type: "whatsapp_remote_runtime_sync_failed", error: error.message || String(error) }, env).catch(() => null)
   );
   const state = await readWhatsAppState(env);

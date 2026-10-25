@@ -28,6 +28,7 @@ export async function requestJson(path, options = {}) {
     headers: extraHeaders = null,
     method = body === undefined ? "GET" : "POST",
     timeoutMs = 0,
+    signal = null,
   } = options;
   const deadlineMs = Number(timeoutMs);
   const controller = Number.isFinite(deadlineMs) && deadlineMs > 0 ? new AbortController() : null;
@@ -44,11 +45,11 @@ export async function requestJson(path, options = {}) {
     response = await fetchImpl(`${String(baseUrl).replace(/\/+$/g, "")}${path}`, {
       method,
       headers: { ...(await requestHeaders({ body, env: options.env })), ...(extraHeaders || {}) },
-      body: body === undefined ? undefined : JSON.stringify(body),
-      ...(controller ? { signal: controller.signal } : {}),
+      body: body === undefined ? undefined : isMultipartBody(body) ? body : JSON.stringify(body),
+      ...((controller || signal) ? { signal: controller && signal ? AbortSignal.any([controller.signal, signal]) : controller?.signal || signal } : {}),
     });
   } catch (error) {
-    if (timedOut || error?.name === "AbortError") {
+    if (timedOut || (error?.name === "AbortError" && !signal?.aborted)) {
       throw new ApiError("api_request_timeout", { status: 0, payload: { error: "api_request_timeout", timeoutMs: Math.floor(deadlineMs) } });
     }
     throw error;
@@ -66,10 +67,14 @@ export async function requestJson(path, options = {}) {
 
 async function requestHeaders({ body, env = process.env } = {}) {
   const headers = {};
-  if (body !== undefined) headers["content-type"] = "application/json";
+  if (body !== undefined && !isMultipartBody(body)) headers["content-type"] = "application/json";
   const token = await cliAuthToken(effectiveCliEnv(env));
   if (token) headers.authorization = `Bearer ${token}`;
   return Object.keys(headers).length ? headers : undefined;
+}
+
+function isMultipartBody(body) {
+  return typeof FormData === "function" && body instanceof FormData;
 }
 
 async function cliAuthToken(env = process.env) {

@@ -1,7 +1,20 @@
 import path from "node:path";
+import { remoteBackendHasPushWatch } from "./whatsapp-remote-push-state.js";
+import { withRemoteThreadSync } from "./whatsapp-remote-sync-lock.js";
 import { appendEvent } from "../../storage/src/store.js";
+import { threadMessageStoreFingerprint } from "../../storage/src/thread-message-registry.js";
 import { recordRouterTraceEvent } from "../../core/src/router-traces.js";
-import { appendThreadMessage, listThreadMessages, listThreads, updateThreadMessage } from "../../core/src/threads.js";
+import { appendThreadMessage, getThread, listThreadMessages, listThreads, updateThreadMessage } from "../../core/src/threads.js";
+import { remoteWhatsAppRuntimeBinding } from "../../core/src/thread-remote-runtime-binding.js";
+import { routeHeldLocalInputs } from "../../core/src/remote-runtime-held-inputs.js";
+import { forwardLocalInputToRemote } from "./whatsapp-remote-local-input.js";
+import { remoteParentExpectedFields, remoteParentRecoveryCandidate } from "./whatsapp-remote-parent.js";
+import { acknowledgeRemoteMirrorDeliveries, remoteMirrorAckSupported } from "./whatsapp-remote-mirror-ack.js";
+import { uploadRemoteInputAttachments } from "./whatsapp-remote-attachment-upload.js";
+import { materializeRemoteTimerParent, remoteTimerParentSource } from "./whatsapp-remote-timer-parent.js";
+import { createTimerAccountLookup } from "./whatsapp-remote-timer-accounts.js";
+
+export { remoteWhatsAppRuntimeBinding };
 
 function pickString(...values) {
   for (const value of values) {
@@ -30,6 +43,8 @@ function normalizeBackendConfig(backendId, config = {}) {
     token: pickString(input.token, input.apiToken, input.bearerToken),
     timeoutMs: Math.max(1000, Number(input.timeoutMs || input.timeout || 10_000) || 10_000),
     fetchLimit: Math.max(1, Math.min(500, Number(input.fetchLimit || input.messageLimit || 100) || 100)),
+    // Opt-in: upload accepted inbound files and reference them by upload ID.
+    attachmentUpload: input.attachmentUpload === true,
   };
 }
 
@@ -90,27 +105,6 @@ export function backendForBinding(binding = {}, env = process.env) {
   return backend;
 }
 
-export function remoteWhatsAppRuntimeBinding(thread = null, env = process.env) {
-  const binding = thread?.binding || {};
-  if (String(binding.connector || "whatsapp").trim().toLowerCase() !== "whatsapp") return null;
-  if (binding.remoteRuntimeEnabled === false || binding.remoteRouterEnabled === false) return null;
-  const remoteThreadId = pickString(binding.remoteThreadId, binding.remoteRuntimeThreadId, binding.delegatedThreadId);
-  if (!remoteThreadId) return null;
-  const backendId = pickString(
-    binding.remoteBackend,
-    binding.remoteRuntimeBackend,
-    binding.runtimeBackend,
-    env.ORKESTR_REMOTE_THREAD_BACKEND_ID,
-    env.ORKESTR_REMOTE_RUNTIME_BACKEND_ID,
-    "default",
-  );
-  return {
-    backendId,
-    remoteThreadId,
-    binding,
-  };
-}
-
 export function remoteEndpointUrl(backend, endpointPath) {
   const endpoint = String(endpointPath || "").trim().replace(/^\/+/, "");
   return new URL(`${backend.baseUrl}/${endpoint}`);
@@ -124,11 +118,11 @@ export function remoteHeaders(backend, extra = {}) {
   };
 }
 
-async function remoteJson(backend, endpointPath, fetchImpl, options = {}) {
+export async function remoteJson(backend, endpointPath, fetchImpl, options = {}) {
   const response = await fetchImpl(remoteEndpointUrl(backend, endpointPath), {
     ...options,
     headers: remoteHeaders(backend, options.headers || {}),
-    signal: AbortSignal.timeout(backend.timeoutMs),
+    signal: options.signal ? AbortSignal.any([options.signal, AbortSignal.timeout(backend.timeoutMs)]) : AbortSignal.timeout(backend.timeoutMs),
   });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok || payload?.ok === false) {
@@ -182,16 +176,27 @@ export async function enqueueRemoteWhatsAppThreadInput({ thread, message, input 
   const remote = remoteWhatsAppRuntimeBinding(thread, env);
   if (!remote) return null;
   const backend = backendForBinding(remote.binding, env);
-  const payload = await remoteJson(backend, `threads/${encodeURIComponent(remote.remoteThreadId)}/input`, fetchImpl, {
+  const threadPath = `threads/${encodeURIComponent(remote.remoteThreadId)}`;
+  const uploaded = backend.attachmentUpload
+    ? await uploadRemoteInputAttachments({
+        thread,
+        message,
+        env,
+        post: (body) => remoteJson(backend, `${threadPath}/attachments`, fetchImpl, { method: "POST", body: JSON.stringify(body) }),
+      })
+    : null;
+  const payload = await remoteJson(backend, `${threadPath}/input`, fetchImpl, {
     method: "POST",
     body: JSON.stringify({
       ...input,
+      ...(uploaded ? { attachments: uploaded } : {}),
       role: "user",
       source: input.source || "whatsapp_inbound",
       connector: "whatsapp",
-      parseCommands: true,
-      controlAllowed: true,
-      originOwner: true,
+      // Only owner input carries owner authority; a participant's never does.
+      parseCommands: input.originOwner !== false,
+      controlAllowed: input.originOwner !== false,
+      originOwner: input.originOwner !== false,
       forwardedBy: "orkestr-public-whatsapp-router",
       publicThreadId: thread?.id || "",
       publicMessageId: message?.id || "",
@@ -239,13 +244,13 @@ export async function updateRemoteWhatsAppThreadInput({ thread, message, revisio
   };
 }
 
-async function fetchRemoteThreadMessages(remote, env = process.env, fetchImpl = fetch) {
+async function fetchRemoteThreadMessages(remote, env = process.env, fetchImpl = fetch, signal = null) {
   const backend = backendForBinding(remote.binding, env);
   const payload = await remoteJson(
     backend,
     `threads/${encodeURIComponent(remote.remoteThreadId)}/messages?limit=${backend.fetchLimit}`,
     fetchImpl,
-    { method: "GET" },
+    { method: "GET", signal },
   );
   const messages = Array.isArray(payload?.messages)
     ? payload.messages
@@ -275,13 +280,14 @@ function publicParentIdForRemoteMessage(remoteMessage = {}, localByRemoteId = ne
   return pickString(parent?.id);
 }
 
-async function updatePublicRemoteParent(thread, localMessage, remoteMessage, remote, env) {
+async function updatePublicRemoteParent(thread, localMessage, remoteMessage, remote, env, recovered = false) {
   if (!localMessage || !remoteMessage) return null;
   const patch = {
     remoteBackend: remote.backendId,
     remoteThreadId: remote.remoteThreadId,
     remoteMessageId: pickString(remoteMessage.id, remoteMessage.messageId, localMessage.remoteMessageId),
     remoteSyncedAt: new Date().toISOString(),
+    ...(remoteMessage.origin === "v1_local" ? { remoteInputKind: "v1_local" } : {}),
   };
   const state = pickString(remoteMessage.state);
   const deliveryState = pickString(remoteMessage.deliveryState);
@@ -291,12 +297,24 @@ async function updatePublicRemoteParent(thread, localMessage, remoteMessage, rem
   if (deliveryState) patch.deliveryState = deliveryState;
   if (observedVia) patch.observedVia = observedVia;
   if (deliveredAt) patch.deliveredAt = deliveredAt;
-  return updateThreadMessage(thread.id, localMessage.id, patch, env).catch(() => null);
+  if (recovered && ["completed", "delivered"].includes(state) && deliveryState === "delivered") patch.error = null;
+  return updateThreadMessage(thread.id, localMessage.id, patch, env, {
+    expectedFields: remoteParentExpectedFields(localMessage),
+  }).catch(() => null);
+}
+
+// On a relay-bound thread (legacy mirror off) a reply to V1-local input
+// (thread, agent, mailbox, CLI, UI) stays in this thread, where its requester
+// reads it, exactly as a V1 reply to such input; it is never sent to the group.
+export function remoteLocalInputParent(thread = null, parent = null) {
+  return thread?.binding?.mirrorToWhatsApp === false &&
+    parent?.role === "user" && pickString(parent.remoteInputKind) === "v1_local";
 }
 
 async function appendRemoteAssistantMessage({ thread, remote, remoteMessage, parentMessageId, parent, env }) {
   const binding = thread?.binding || {};
   const attachments = remoteRuntimeAttachmentsForMessage(remote, remoteMessage);
+  const local = remoteLocalInputParent(thread, parent);
   const appended = await appendThreadMessage(thread.id, {
     role: "assistant",
     source: pickString(remoteMessage.source, "remote-runtime"),
@@ -304,19 +322,31 @@ async function appendRemoteAssistantMessage({ thread, remote, remoteMessage, par
     state: "completed",
     text: pickString(remoteMessage.text),
     parentMessageId,
-    connector: "whatsapp",
+    ...(local ? {
+      // Recorded as not sent: the mirror acknowledgement reports `suppressed`.
+      deliveryState: "suppressed",
+      observedVia: "remote_runtime_local_reply",
+    } : {
+      connector: "whatsapp",
+      chatId: pickString(remoteMessage.chatId, binding.chatId),
+      accountId: pickString(binding.responderAccountId, binding.outboundAccountId, remoteMessage.accountId),
+    }),
     routerTraceId: pickString(remoteMessage.routerTraceId, parent?.routerTraceId),
     turnId: pickString(remoteMessage.turnId, parent?.turnId),
-    chatId: pickString(remoteMessage.chatId, binding.chatId),
-    accountId: pickString(binding.responderAccountId, binding.outboundAccountId, remoteMessage.accountId),
     createdAt: messageTimestamp(remoteMessage),
     remoteBackend: remote.backendId,
     remoteThreadId: remote.remoteThreadId,
     remoteMessageId: pickString(remoteMessage.id, remoteMessage.messageId),
     remoteParentMessageId: pickString(remoteMessage.parentMessageId, remoteMessage.parentId),
+    // Optional remote provider/model, shown in the WhatsApp debug footer.
+    ...(pickString(remoteMessage.provider) ? { remoteProvider: pickString(remoteMessage.provider).slice(0, 64) } : {}),
+    ...(pickString(remoteMessage.model) ? { remoteModel: pickString(remoteMessage.model).slice(0, 64) } : {}),
+    ...(Number.isSafeInteger(remoteMessage.exportSequence) ? { remoteExportSequence: String(remoteMessage.exportSequence) } : {}),
+    ...(pickString(remoteMessage.kind).toLowerCase() === "progress" ? { remoteKind: "progress" } : {}),
     remoteSyncedAt: new Date().toISOString(),
     ...(attachments.length ? { attachments } : {}),
   }, env);
+  if (local) return appended;
   await recordRouterTraceEvent({
     routerTraceId: appended.routerTraceId,
     turnId: appended.turnId,
@@ -331,38 +361,90 @@ async function appendRemoteAssistantMessage({ thread, remote, remoteMessage, par
   return appended;
 }
 
-export async function syncRemoteWhatsAppThreadMessages(env = process.env, fetchImpl = fetch) {
+export async function syncRemoteWhatsAppThreadMessages(env = process.env, fetchImpl = fetch, options = {}) {
   const results = [];
+  const lookupTimerAccounts = createTimerAccountLookup(env, fetchImpl);
   for (const thread of await listThreads(env)) {
+    if (options.threadIds && !options.threadIds.includes(thread.id)) continue;
     const remote = remoteWhatsAppRuntimeBinding(thread, env);
     if (!remote || remote.binding.remoteMirrorEnabled === false) continue;
+    if (!options.push && remote.binding.mirrorToWhatsApp === false && remoteBackendHasPushWatch(remote.backendId, env)) continue;
+    await withRemoteThreadSync(thread.id, env, async () => {
+    // Retry V1-local input whose forward did not complete (restart, outage).
+    await routeHeldLocalInputs(thread, env, { fetchImpl, forward: forwardLocalInputToRemote }).catch(() => null);
     try {
-      const { messages: remoteMessages } = await fetchRemoteThreadMessages(remote, env, fetchImpl);
+      const { backend, payload, messages: remoteMessages } = await fetchRemoteThreadMessages(remote, env, fetchImpl, options.signal);
+      const currentRemote = remoteWhatsAppRuntimeBinding(await getThread(thread.id, env), env);
+      if (!currentRemote || currentRemote.backendId !== remote.backendId || currentRemote.remoteThreadId !== remote.remoteThreadId || currentRemote.binding.remoteMirrorEnabled === false)
+        throw new Error('remote_binding_changed_during_import');
+      // Every store write bumps this revision, so an unchanged fingerprint after the
+      // import loops proves localMessages is still what a fresh read would return.
+      const listedFingerprint = await threadMessageStoreFingerprint(thread.id, env).catch(() => null);
       const localMessages = await listThreadMessages(thread.id, env);
       const localByRemoteId = new Map(
         localMessages
+          .filter(message => message.remoteBackend === remote.backendId && message.remoteThreadId === remote.remoteThreadId)
           .map((message) => [pickString(message.remoteMessageId), message])
           .filter(([id]) => id),
       );
       let imported = 0;
       let updated = 0;
+      let unmapped = 0;
+      // Recover user acknowledgements first, even when replies precede them in
+      // the fetched page. An assistant still needs an ordinary mapped parent.
+      for (const remoteMessage of remoteMessages) {
+        if (messageRole(remoteMessage) !== "user") continue;
+        const remoteMessageId = pickString(remoteMessage.id, remoteMessage.messageId);
+        if (!remoteMessageId) continue;
+        const known = localByRemoteId.get(remoteMessageId);
+        // V2 timer turns have no V1 input; give their reply a local parent once.
+        if (known?.source === remoteTimerParentSource) continue;
+        if (!known && remoteMessage.source === remoteTimerParentSource) {
+          const timerParent = await materializeRemoteTimerParent({ thread, remote, remoteMessage, remoteMessages, localMessages, env, fetchImpl, lookupAccounts: lookupTimerAccounts });
+          if (timerParent) {
+            localByRemoteId.set(remoteMessageId, timerParent.message);
+            if (timerParent.created) imported += 1;
+          }
+          continue;
+        }
+        const local = known || remoteParentRecoveryCandidate(thread, remote, remoteMessage, localMessages, remoteMessages);
+        if (!local || local.role !== "user") continue;
+        const changed = await updatePublicRemoteParent(thread, local, remoteMessage, remote, env, !known);
+        if (!changed) continue;
+        localByRemoteId.set(remoteMessageId, changed);
+        updated += 1;
+      }
       for (const remoteMessage of remoteMessages) {
         const remoteMessageId = pickString(remoteMessage.id, remoteMessage.messageId);
         if (!remoteMessageId) continue;
         const local = localByRemoteId.get(remoteMessageId);
-        if (local && messageRole(remoteMessage) === "user") {
-          if (await updatePublicRemoteParent(thread, local, remoteMessage, remote, env)) updated += 1;
-          continue;
-        }
         if (local || !completedAssistantMessage(remoteMessage)) continue;
         const parentMessageId = publicParentIdForRemoteMessage(remoteMessage, localByRemoteId);
-        if (!parentMessageId && remote.binding.remoteMirrorOrphanReplies !== true) continue;
+        if (!parentMessageId && remote.binding.remoteMirrorOrphanReplies !== true) { unmapped += 1; continue; }
         const parent = parentMessageId ? localMessages.find((message) => message.id === parentMessageId) || null : null;
         const appended = await appendRemoteAssistantMessage({ thread, remote, remoteMessage, parentMessageId, parent, env });
         localByRemoteId.set(remoteMessageId, appended);
         imported += 1;
       }
-      if (imported || updated) {
+      // Report outbox outcomes only to runtimes that hold replies until acknowledged.
+      const acks = remoteMirrorAckSupported(payload)
+        ? await acknowledgeRemoteMirrorDeliveries({
+            thread,
+            remote,
+            env,
+            // Skip a second full parse of long threads when nothing was written since the read.
+            messages: listedFingerprint &&
+              listedFingerprint === await threadMessageStoreFingerprint(thread.id, env).catch(() => null)
+              ? localMessages
+              : null,
+            readState: options.readState,
+            postAck: (body) => remoteJson(backend, `threads/${encodeURIComponent(remote.remoteThreadId)}/mirror-acks`, fetchImpl, {
+              method: "POST",
+              body: JSON.stringify(body),
+            }),
+          })
+        : null;
+      if (imported || updated || acks?.acknowledged || acks?.rejected) {
         await appendEvent({
           type: "whatsapp_remote_runtime_messages_synced",
           threadId: thread.id,
@@ -370,9 +452,13 @@ export async function syncRemoteWhatsAppThreadMessages(env = process.env, fetchI
           remoteThreadId: remote.remoteThreadId,
           imported,
           updated,
+          ...(acks ? { acknowledged: acks.acknowledged, ackRejected: acks.rejected, ackedThrough: payload.mirrorAck.ackedThrough } : {}),
         }, env);
       }
-      results.push({ threadId: thread.id, remoteBackend: remote.backendId, remoteThreadId: remote.remoteThreadId, imported, updated });
+      results.push({
+        threadId: thread.id, remoteBackend: remote.backendId, remoteThreadId: remote.remoteThreadId, imported, updated, unmapped,
+        ...(acks ? { acks } : {}),
+      });
     } catch (error) {
       await appendEvent({
         type: "whatsapp_remote_runtime_sync_failed",
@@ -383,6 +469,7 @@ export async function syncRemoteWhatsAppThreadMessages(env = process.env, fetchI
       }, env).catch(() => {});
       results.push({ threadId: thread.id, remoteBackend: remote.backendId, remoteThreadId: remote.remoteThreadId, error: error.message || String(error) });
     }
+    });
   }
   return { ok: true, results };
 }

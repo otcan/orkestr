@@ -1,6 +1,6 @@
 import { dataPaths } from "../../storage/src/paths.js";
 import { appendEvent, readJson, writeJson } from "../../storage/src/store.js";
-import { appendThreadMessage, getThread, getThreadForPrincipal } from "./threads.js";
+import { appendThreadMessage, getThread, getThreadForPrincipal, listThreadMessages } from "./threads.js";
 
 function clean(value) {
   return String(value || "").trim();
@@ -151,6 +151,28 @@ export async function resolveApiSessionThread(input = {}, env = process.env, pri
   return { apiSessionId, binding: publicBinding(binding), thread };
 }
 
+const scopedRelayInputSource = "whatsapp_group_relay";
+
+export function apiSessionRelayParentMaxAgeMs(env = process.env) {
+  const value = Number(env.ORKESTR_API_SESSION_RELAY_PARENT_MAX_AGE_MS || 6 * 60 * 60 * 1000);
+  return Number.isFinite(value) && value > 0 ? value : 6 * 60 * 60 * 1000;
+}
+
+// A WhatsApp thread whose legacy mirror is off is served by the scoped group
+// relay, which only sends replies parented to an input it routed. An assistant
+// reply from a bound api-session is therefore parented to the newest
+// relay-routed owner input, if it is recent; the relay delivers it once.
+async function scopedRelayParentForApiSessionReply(thread = null, input = {}, env = process.env) {
+  const binding = thread?.binding || {};
+  if (lower(binding.connector || "whatsapp") !== "whatsapp" || binding.mirrorToWhatsApp !== false || !clean(binding.chatId)) return null;
+  if (clean(input.parentMessageId)) return null;
+  const messages = await listThreadMessages(thread.id, env);
+  const latest = [...messages].reverse().find((message) => message.role === "user" && clean(message.source) === scopedRelayInputSource);
+  const at = Date.parse(latest?.createdAt || "");
+  if (!latest || !Number.isFinite(at) || Date.now() - at > apiSessionRelayParentMaxAgeMs(env)) return null;
+  return latest;
+}
+
 function boundWhatsAppAssistantDefaults(thread = null, input = {}) {
   const binding = thread?.binding || {};
   if (lower(binding.connector || "whatsapp") !== "whatsapp") return input;
@@ -207,10 +229,12 @@ export async function appendApiSessionMessage(input = {}, env = process.env, pri
     state: clean(input.state || "completed"),
     apiSessionId,
   };
+  const relayParent = role === "assistant" ? await scopedRelayParentForApiSessionReply(thread, input, env) : null;
   const messageInput = role === "assistant"
     ? boundWhatsAppAssistantDefaults(thread, {
         ...base,
         phase: clean(input.phase || "final_answer"),
+        ...(relayParent ? { parentMessageId: relayParent.id } : {}),
       })
     : base;
   const message = await appendThreadMessage(thread.id, messageInput, env);
@@ -232,5 +256,7 @@ export async function appendApiSessionMessage(input = {}, env = process.env, pri
     thread,
     message,
     deliveryExpected: message.role === "assistant" && lower(message.connector) === "whatsapp" && Boolean(message.chatId),
+    // Delivered by the scoped group relay (not awaited here), replying to this input.
+    relayParentMessageId: relayParent?.id || null,
   };
 }

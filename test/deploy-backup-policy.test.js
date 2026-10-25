@@ -89,3 +89,27 @@ test("a compressor producing invalid bytes cannot publish a completed archive",a
     assert.deepEqual(await fs.readdir(backups),[]);
   });
 });
+
+for (const signal of ["TERM", "INT"]) {
+  test(`interrupted ${signal} backup removes only its partial and preserves completed recovery`,async()=>{
+    await fixture(async({root,env,backups})=>{
+      const {stdout}=await exec("bash",["scripts/deploy-git-release.sh","backup"],{env});
+      const archive=stdout.trim(), prior=await fs.readFile(archive);
+      const unrelated=path.join(backups,".state-backup.unrelated.part");
+      await fs.writeFile(unrelated,"not owned by this run");
+      const bin=path.join(root,"bin");await fs.mkdir(bin);
+      await fs.writeFile(path.join(bin,"gzip"),`#!/bin/sh
+cat >/dev/null
+printf interrupted-stream
+kill -${signal} "$PPID"
+exit 0
+`,{mode:0o755});
+      await assert.rejects(exec("bash",["scripts/deploy-git-release.sh","backup"],{
+        env:{...env,PATH:bin+path.delimiter+env.PATH},timeout:10000
+      }),error=>error.code===(signal==="TERM"?143:130));
+      assert.deepEqual(await fs.readFile(archive),prior);
+      assert.equal(await fs.readFile(unrelated,"utf8"),"not owned by this run");
+      assert.deepEqual((await fs.readdir(backups)).sort(),[path.basename(archive),path.basename(unrelated)].sort());
+    });
+  });
+}

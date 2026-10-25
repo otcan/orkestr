@@ -1,3 +1,4 @@
+import { checkScopedParticipant } from "../../../../../packages/connectors/src/whatsapp-scoped-participant-security.js";
 import { prepareAgentReport } from "../../../../../packages/core/src/thread-report-policy.js";
 import fs from "node:fs/promises";
 import { getExecutorAdapter } from "../../../../../packages/core/src/executors.js";
@@ -7,6 +8,7 @@ import { randomUUID } from "node:crypto";
 import { promisify } from "node:util";
 import { Body, Controller, Delete, Get, HttpCode, HttpException, Param, Post, Query, Req } from "@nestjs/common";
 import { deliverWhatsAppReplies } from "../../../../../packages/connectors/src/whatsapp.js";
+import { forwardScopedRelayInputToRemote, scopedRelayRemoteBinding } from "../../../../../packages/connectors/src/whatsapp-scoped-relay-remote.js";
 import { appendEvent } from "../../../../../packages/storage/src/store.js";
 import {
   completeCodexModeCommand,
@@ -753,6 +755,13 @@ export class ThreadsController {
     return { thread };
   }
 
+  @Post(":threadId/whatsapp-participant-check")
+  @HttpCode(200)
+  async whatsappParticipantCheck(@Req() request: any, @Param("threadId") threadId: string, @Body() body: Record<string, unknown> = {}) {
+    const thread = await getThreadForPrincipal(threadId, requestPrincipal(request));
+    return checkScopedParticipant(thread, body);
+  }
+
   @Post(":threadId/input")
   @HttpCode(202)
   async input(@Req() request: any, @Param("threadId") threadId: string, @Body() body: Record<string, unknown> = {}) {
@@ -763,6 +772,10 @@ export class ThreadsController {
     const principal = requestPrincipal(request);
     const thread = await getThread(threadId);
     if (!thread) throw httpError("thread_not_found", 404);
+    if (body.scopedParticipant) {
+      await getThreadForPrincipal(thread.id, principal);
+      body = {...body, ...await checkScopedParticipant(thread, body)};
+    }
     const report = await prepareAgentReport(thread, body, principal);
     if (report.suppressed) return { ok: true, orkestrThreadId: thread.id, message: report.message, queued: false, deliveryState: report.suppressionReason, reason: report.suppressionReason };
     body = report.body;
@@ -987,7 +1000,29 @@ export class ThreadsController {
       await this.assertThreadSanitized("thread.worker-reply", principal, thread, { workerReplyDelivery: body.workerReplyDelivery });
     }
     body = await prepareWorkerReplyInput(thread, body, principal);
+    let scopedRemote: any = null;
+    try {
+      scopedRemote = scopedRelayRemoteBinding(thread, body);
+    } catch (error: any) {
+      throw httpError(error.message, error.statusCode || 409);
+    }
     const message = await enqueueThreadInputForPrincipal(thread.id, body, principal);
+    if (scopedRemote) {
+      // Delegated thread: the remote runtime is the only executor. The local
+      // dispatch fence keeps this row from running here.
+      let forwarded: any;
+      try {
+        forwarded = await forwardScopedRelayInputToRemote({ thread, message, remote: scopedRemote });
+      } catch (error: any) {
+        throw httpError(error.message, error.statusCode || 502);
+      }
+      return {
+        ...queuedInputResponse(thread, forwarded.message, forwarded.refused ? "remote_runtime_refused" : "remote_runtime_forwarded"),
+        remoteRuntime: true,
+        remoteBackend: scopedRemote.backendId,
+        remoteThreadId: scopedRemote.remoteThreadId,
+      };
+    }
     if (threadUsesApiAgent(thread)) {
       if (body.autoRun === false) {
         return { ...queuedInputResponse(thread, message, "auto_run_disabled"), threadId: thread.id, observedVia: message.observedVia || "auto_run_disabled" };
@@ -1415,7 +1450,8 @@ export class ThreadsController {
     const deletedTimers: string[] = [];
     for (const timer of timers) {
       const target = String(timer.target || timer.threadId || "").trim();
-      if (timer.targetType === "thread" && deleted.has(target)) {
+      // V2-owned timers are left for V2 to retire; V1 must not delete them.
+      if (timer.targetType === "thread" && deleted.has(target) && timer.ownedBy !== "v2") {
         if (await deleteTimerForPrincipal(timer.id, principal)) deletedTimers.push(timer.id);
       }
     }

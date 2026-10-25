@@ -21,6 +21,8 @@ import {
 import { approvePairingChallenge, createPairingChallenge } from "../packages/core/src/security.js";
 import { adminPrincipal } from "../packages/core/src/principal.js";
 import { configureTenantWhatsAppRoute } from "../packages/core/src/tenant-whatsapp-routing.js";
+import { listWhatsAppBindingStatuses } from "../packages/connectors/src/whatsapp-account-bindings.js";
+import { ensureWhatsAppScopedTokens, readWhatsAppScopedTokenRecords } from "../packages/core/src/whatsapp-scoped-tokens.js";
 import { createTenantVm } from "../packages/core/src/tenant-vm-registry.js";
 import { createThread, getThread } from "../packages/core/src/threads.js";
 import { readThreadResourcePolicy, registerThreadResource, setThreadResourceGrants } from "../packages/core/src/thread-resource-grants.js";
@@ -577,6 +579,72 @@ test("connector MCP routing cannot follow target threads, bindings, or operation
       operation_ref: job.job.id,
     }, item.env);
     assert.match(JSON.stringify(crossOperation), /connector_mcp_operation_scope_denied/);
+  } finally {
+    await item.close();
+  }
+});
+
+test("store-issued WhatsApp MCP tokens retain their thread binding scope", async () => {
+  const item = await fixture({ scoped: true });
+  try {
+    const own = await createThread({
+      id: "stored-token-own-thread", name: "Stored token own", ownerUserId: "casey",
+      binding: { connector: "whatsapp", chatId: "casey-own@g.us", accountId: "sender" },
+    }, item.env);
+    const other = await createThread({
+      id: "stored-token-other-thread", name: "Stored token other", ownerUserId: "casey",
+      binding: { connector: "whatsapp", chatId: "casey-jobs@g.us", accountId: "sender" },
+    }, item.env);
+    await ensureWhatsAppScopedTokens([{
+      tokenId: "stored-token-thread-scope",
+      scopes: ["connectors:read", "connectors:manage"],
+      principalKind: "tenant_vm",
+      principalId: "vm-casey",
+      ownerUserId: "casey",
+      instanceId: "vm-casey",
+      accountId: "sender",
+      accountService: "whatsapp",
+      threadId: own.id,
+      allowedChatIds: ["casey-jobs@g.us"],
+    }], item.env);
+    const stored = (await readWhatsAppScopedTokenRecords(item.env)).find((record) => record.tokenId === "stored-token-thread-scope");
+    assert.equal(stored.threadId, own.id);
+    assert.equal(stored.accountService, "whatsapp");
+    item.env.ORKESTR_CONNECTORS_MCP_BEARER_TOKEN = stored.token;
+    const bindings = (await listWhatsAppBindingStatuses({ env: item.env })).bindings;
+    const ownBindingId = bindings.find((binding) => binding.threadId === own.id)?.id;
+    const otherBindingId = bindings.find((binding) => binding.threadId === other.id)?.id;
+    assert.ok(ownBindingId);
+    assert.ok(otherBindingId);
+
+    const ownBinding = await callConnectorsMcpTool("orkestr_routing", {
+      service: "whatsapp", action: "unbind", account_id: "sender", instance_id: "vm-casey", user_id: "casey",
+      thread_id: own.id, binding_id: ownBindingId,
+    }, item.env);
+    assert.doesNotMatch(JSON.stringify(ownBinding), /connector_mcp_binding_scope_denied/);
+
+    const crossBinding = await callConnectorsMcpTool("orkestr_routing", {
+      service: "whatsapp", action: "unbind", account_id: "sender", instance_id: "vm-casey", user_id: "casey",
+      thread_id: own.id, binding_id: otherBindingId,
+    }, item.env);
+    assert.match(JSON.stringify(crossBinding), /connector_mcp_binding_scope_denied/);
+
+    const legacy = await ensureWhatsAppScopedTokens([{
+      tokenId: "stored-token-legacy-unscoped", scopes: ["connectors:read", "connectors:manage"], principalKind: "tenant_vm",
+      ownerUserId: "casey", instanceId: "vm-casey",
+    }], item.env);
+    const publicLegacy = legacy.tokens.find((record) => record.tokenId === "stored-token-legacy-unscoped");
+    assert.equal(publicLegacy.threadId, "");
+    assert.equal(publicLegacy.accountService, "");
+    const legacyRecord = (await readWhatsAppScopedTokenRecords(item.env)).find((record) => record.tokenId === "stored-token-legacy-unscoped");
+    assert.equal(legacyRecord.threadId, "");
+    assert.equal(legacyRecord.accountService, "");
+    item.env.ORKESTR_CONNECTORS_MCP_BEARER_TOKEN = legacyRecord.token;
+    const legacyBinding = await callConnectorsMcpTool("orkestr_routing", {
+      service: "whatsapp", action: "unbind", account_id: "sender", instance_id: "vm-casey", user_id: "casey",
+      binding_id: otherBindingId,
+    }, item.env);
+    assert.doesNotMatch(JSON.stringify(legacyBinding), /connector_mcp_binding_scope_denied/);
   } finally {
     await item.close();
   }
