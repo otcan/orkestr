@@ -99,3 +99,18 @@ class ActivityTests(unittest.TestCase):
         self.advance(1600);self.assertEqual(self.ledger.next_input()['activity']['problem'],'no_running_task')
         self.ack(self.notices()[0],1600);self.advance(3390);self.assertEqual(self.notices(),[])
         self.poll(3400);self.assertEqual(len(self.notices()),1)
+
+    def test_confirmed_running_progress_clears_missing_run_alert_without_waiting_ten_more_minutes(self):
+        self.status=dict(deep=None);self.advance(1600)
+        self.assertEqual(self.data['activity']['problem'],'no_running_task')
+        self.status=dict(deep=dict(run_id='own',phase='running',progress=dict(payload_id='new')))
+        self.poll(1610);self.assertNotIn('problem',self.ledger.next_input()['activity'])
+
+    def test_a_second_admitted_input_cannot_add_a_notice_while_the_thread_has_one_pending(self):
+        self.advance(1600)
+        other=self.ledger.enqueue(dict(publicMessageId='second',publicThreadId='thread',chatId='chat',accountId='account',text='other'))[0]
+        other.update(admitted_at=1000,phase='running',matched_runs=['own'],
+                     activity=dict(observed_at=1590,progress_at=1000,payload_id='payload'))
+        self.ledger.save(other)
+        observe(self.worker,other,self.status,now=1600)
+        self.assertEqual(len(self.notices()),1)

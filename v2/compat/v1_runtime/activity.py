@@ -55,6 +55,8 @@ def observe(worker, data, statuses, now=None):
     if payload and payload != activity.get("payload_id"):
         activity.update(payload_id=payload, progress_at=now)
     activity.update(observed_at=now, phase=phase, run_id=deep.get("run_id"))
+    if phase == "running":
+        activity.pop("problem", None)
     ledger = worker.ledger
     with ledger.connect() as db:
         db.execute("BEGIN IMMEDIATE")
