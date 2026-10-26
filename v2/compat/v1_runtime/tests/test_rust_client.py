@@ -254,6 +254,17 @@ class ClientTests(unittest.TestCase):
                 self.client.request("POST", suffix, body={})
         self.assertEqual(self.server.observed, [])
 
+    def test_steer_routes_are_exact(self):
+        for method, suffix in (("GET", "/steer"), ("POST", "/steering/auto-steer:x"), ("GET", "/steering/a b"),
+                               ("GET", "/steering/" + "k" * 129), ("GET", "/steering/x?limit=1"),
+                               ("POST", "/inputs/not-a-uuid/retire"), ("GET", "/inputs/%s/retire" % RUN),
+                               ("POST", "/inputs/%s" % RUN), ("POST", "/steer?run_id=" + RUN)):
+            with self.subTest(method=method, suffix=suffix), self.assertRaises(ClientError):
+                self.client._path(method, suffix)
+        for method, suffix in (("POST", "/steer"), ("GET", "/steering/auto-steer:" + RUN),
+                               ("POST", "/inputs/%s/retire" % RUN)):
+            self.assertTrue(self.client._path(method, suffix).endswith(suffix))
+
     def test_redirect_scope_type_and_body_bounds_are_refused(self):
         self.client.ensure_login()
         original = self.respond

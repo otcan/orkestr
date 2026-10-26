@@ -72,6 +72,11 @@ def refusal_notice(reason):
             "send it again if it is still needed." % reason)
 
 
+# Appended to a refused turn's notice when owner messages were steered into it.
+STEERED_REFUSAL_NOTE = ("\n\nThis also applies to %d message(s) you sent while it was running; "
+                        "send them again if they are still needed.")
+
+
 class Conflict(ValueError):
     pass
 
@@ -487,6 +492,9 @@ class Ledger:
                        "parentMessageId": data["remote_id"], "refusal": reason, "text": refusal_notice(reason)}
             if notice is not None:
                 message.update({k: v for k, v in notice.items() if k in ("text", "provider", "model")})
+            if data.get("steered"):
+                # Messages steered into this turn settle with this notice; say so.
+                message["text"] += STEERED_REFUSAL_NOTE % len(data["steered"])
             data.pop("blocked", None)
             if alert:
                 now = time.time()
@@ -573,6 +581,24 @@ class Ledger:
                 self.save(row, db)
             head["burst"] = [row["remote_id"] for row in rows]
             self.save(head, db)
+
+    def input(self, remote_id):
+        with self.connect() as db:
+            row = db.execute("SELECT data FROM inputs WHERE remote_id=?", (remote_id,)).fetchone()
+        return json.loads(row[0]) if row else None
+
+    # Auto-steer: steer state transitions live in auto_steer_store.py.
+    def begin_steer(self, row, record):
+        from .auto_steer_store import begin
+        return begin(self, row, record)
+
+    def steered(self, row, head_id, audit):
+        from .auto_steer_store import steered
+        return steered(self, row, head_id, audit)
+
+    def unsteer(self, row, reason, audit=None):
+        from .auto_steer_store import unsteer
+        return unsteer(self, row, reason, audit)
 
     def pending_inputs(self):
         """A bounded FIFO snapshot for independent owner intake/Fast work."""
@@ -749,7 +775,7 @@ class Ledger:
         ids = [a["upload_id"] for a in data.get("attachments", [])]
         db.executemany("UPDATE uploads SET bytes=NULL WHERE upload_id=?", [(i,) for i in ids])
         # Inputs folded into this one were answered by its reply (or notice).
-        for remote_id in data.get("burst") or ():
+        for remote_id in list(data.get("burst") or ()) + list(data.get("steered") or ()):
             row = db.execute("SELECT data FROM inputs WHERE remote_id=?", (remote_id,)).fetchone()
             if row and not json.loads(row[0]).get("settled"):
                 self._settle(db, json.loads(row[0]), outcome)

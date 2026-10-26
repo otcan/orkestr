@@ -25,4 +25,8 @@ def export_question(worker, data, payload_id, text, run_id):
     worker.ledger.enqueue_post(dict(id=payload_id, author='assistant_question', label=QUESTION_LABEL,
         text=text, provider=None, model=None, sourceInputId=data['remote_id'], created_ms=int(time.time()*1000)), worker.provider_identity(run_id=run_id))
     seen.append(payload_id)
+    # Auto-steer treats an owner message after this as a possible answer.
+    asked = data.setdefault('questions_asked', [])
+    if len(asked) < 16:
+        asked.append({'run_id': run_id, 'at': time.time()})
     return True

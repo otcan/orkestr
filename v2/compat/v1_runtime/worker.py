@@ -12,6 +12,7 @@ from .ledger import (DEFAULT_MAX_INPUT_AGE_S, DIGEST_NAMESPACE as DIGEST_REPLY_N
                      no_reply)
 from . import instructions
 from . import continuation_guard
+from . import auto_steer
 from .participants import compose
 from .rust_client import ClientError
 from .model_identity import observed_identity
@@ -210,6 +211,8 @@ class Worker:
         self.attachment_dir, self.attachment_gid = attachment_dir, attachment_gid
         self.progress_updates = progress_updates
         self.fast_reply_policy = "legacy"
+        # Steer owner messages into the running head turn (auto_steer.MODES).
+        self.auto_steer = "off"
         self.max_input_age_s = max_input_age_s
         self._digest_checked = None
         self._posts_checked = None
@@ -703,6 +706,8 @@ class Worker:
             return
         if data.get("digest"):
             return self.finish_digest(data)
+        if auto_steer.holds(data):
+            return  # Only auto_steer.drive settles a frozen steer; never admitted here.
         if not admit_input(self, data, merge_burst=not early_fast_eligible(self, data)):
             return
         if data.get("origin") == "timer" and "window" not in data and "window_request" not in data:
@@ -1094,7 +1099,7 @@ class Worker:
                 self.accept_role(data, "fast", ids)
             except Exception:
                 pass
-        text = data.get("intake_text") or compose(data)
+        text = auto_steer.carry(self.ledger, data, data.get("intake_text") or compose(data))
         previous = data["intake"]["message_id"]
         for key in RESET_KEYS:
             data.pop(key, None)
@@ -1174,7 +1179,9 @@ class Worker:
 
     def run_once(self, stop):
         """One pass. Fast intake is independent; Deep finishes in ledger order."""
-        fast_pending = drive_intake_fast(self)
+        # Decide steering before independent Fast intake could admit the input.
+        steering = auto_steer.drive(self)
+        fast_pending = drive_intake_fast(self) or steering
         if self._due(self._timers_checked, TIMER_POLL_S):
             self._timers_checked = time.monotonic()
             try:
