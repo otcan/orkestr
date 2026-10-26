@@ -52,6 +52,7 @@ import {
   settleClaudeCodeCoalescedInputs,
 } from "./claude-code-interrupt-resume.js";
 import { updateThreadRuntime } from "./runtime-record-update.js";
+import { refuseV1ExecutionIfRetired, v1ExecutionDecision } from "./v1-execution-retired.js";
 
 export { assertClaudeCodeHostOwner, threadUsesClaudeCode } from "./claude-code-runtime-policy.js";
 export { setClaudeCodeDeliveryScheduler } from "./claude-code-active-turns.js";
@@ -105,7 +106,8 @@ async function sendClaudeCodeInputReserved(thread, message, env = process.env, o
   // identity is committed before releasing the boundary; inference runs outside.
   const admission = await withThreadQueueBoundary(thread.id, async () => {
     thread = await getThread(thread.id, env) || thread;
-    if (!threadUsesClaudeCode(thread) || thread.queueDispatchHold?.paused || remoteWhatsAppRuntimeBinding(thread, env)) {
+    if (!threadUsesClaudeCode(thread) || thread.queueDispatchHold?.paused || remoteWhatsAppRuntimeBinding(thread, env) ||
+      !(await v1ExecutionDecision(thread, env)).allowed) {
       return { skipped: true, message: await getThreadMessage(thread.id, message.id, env) || message };
     }
     if (activeTurns.has(thread.id)) {
@@ -299,6 +301,7 @@ export async function deliverClaudeCodePendingInputs(thread, env = process.env) 
   for (;;) {
     thread = await getThread(thread.id, env) || thread;
     if (thread.queueDispatchHold?.paused || remoteWhatsAppRuntimeBinding(thread, env)) break;
+    if (await refuseV1ExecutionIfRetired(thread, env, { entryPoint: "claude_code_delivery" })) break;
     const candidates = await normalizeClaudeCodeNowInputs(thread, (await listThreadMessageCandidates(thread.id, { states: [...pendingStates] }, env))
       .filter((message) => message.role === "user"), env);
     const control = candidates.find((message) => {

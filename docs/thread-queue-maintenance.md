@@ -51,3 +51,6 @@ preserves separate-turn delivery. Manual watches retain their passive default.
 During a live turn, steering inputs can pass queued passive inputs; idle input
 ordering remains FIFO and `/stop` keeps priority. Reports cannot answer a pending
 human question or approval. Operator dispatch holds still prevent delivery.
+
+To stop V1 from running model turns on undelegated threads altogether (rather
+than holding one queue), see [V1 execution retired guard](v1-execution-retired.md).
