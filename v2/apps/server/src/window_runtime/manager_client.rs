@@ -593,8 +593,10 @@ fn reason_accepted(reason: &str) -> bool {
         .is_ok_and(|mut seen| seen.len() < 64 && seen.insert(reason.to_owned()));
     if token && first {
         eprintln!("WARN orkestr-v2-server manager_receipt_unknown_reason reason={reason}");
-    } else if !token {
-        // Never echo a malformed value: it is not a closed token.
+    } else if !token && first {
+        // Never echo a malformed value: it is not a closed token. Once per
+        // value, like the unknown-token warning: a stuck receipt is re-read
+        // on every reconcile pass.
         eprintln!(
             "WARN orkestr-v2-server manager_receipt_refused cause=malformed_reason length={}",
             reason.len()

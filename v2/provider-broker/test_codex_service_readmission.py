@@ -90,13 +90,22 @@ class Readmission(unittest.TestCase):
         ledger.reconcile({**scope, "outcome": "failed", "run_id": uid(), "terminal_event_id": uid()})
         with self.assertRaisesRegex(Refused, "input_reused"):
             ledger.admit(self.request(2, first["window_id"], source=source))
+        # A runless failed window that reserved any budget talked to a
+        # provider: its input is never admitted again.
+        spent = self.request(2, first["window_id"])
+        self.assertTrue(ledger.admit(spent)[1])
+        ledger.reserve(spent["window_id"], 2, uid(), "attempt", 1)
+        self.fail_open(spent)
+        with self.assertRaisesRegex(Refused, "input_reused"):
+            ledger.admit(self.request(3, spent["window_id"],
+                                      source=(spent["input_message_id"], spent["input_event_id"])))
         # Mismatched pairing of a released input or event never passes either.
-        other = self.request(2, first["window_id"])
+        other = self.request(3, spent["window_id"])
         self.assertTrue(ledger.admit(other)[1])
         self.fail_open(other)
         for pair in ((other["input_message_id"], uid()), (uid(), other["input_event_id"])):
             with self.subTest(pair=pair), self.assertRaisesRegex(Refused, "input_reused"):
-                ledger.admit(self.request(3, other["window_id"], source=pair))
+                ledger.admit(self.request(4, other["window_id"], source=pair))
 
     def test_successor_of_generations_core_closed_without_the_manager(self):
         ledger = self.open()
@@ -155,7 +164,10 @@ class Readmission(unittest.TestCase):
         self.assertFalse(ledger.db.execute("PRAGMA foreign_key_check").fetchall())
         self.assertEqual(ledger.admit(rows[1]), (ledger.status(), False))
         source = (rows[1]["input_message_id"], rows[1]["input_event_id"])
-        self.assertTrue(ledger.admit(self.request(3, rows[1]["window_id"], uid(), source))[1])
+        # These failed windows reserved budget (provider traffic): never again.
+        with self.assertRaisesRegex(Refused, "input_reused"):
+            ledger.admit(self.request(3, rows[1]["window_id"], uid(), source))
+        self.assertTrue(ledger.admit(self.request(3, rows[1]["window_id"]))[1])
         ledger.close()
         # Reopening is a no-op: no second rebuild, same rows.
         tables = ledger_tables(self.path)

@@ -281,16 +281,19 @@ class Ledger:
 
     def _require_fresh_input(self, request):
         """An input is admitted once, unless every earlier window holding it
-        retired as a failed open that ran nothing (no run, no terminal event).
+        retired as a failed open that ran nothing (no run, no terminal event)
+        and, by this manager's own budget evidence, spent nothing (no attempt
+        or byte reserved: no provider traffic, so no Fast or Deep turn ran).
         Core then re-queues a timer occurrence under a new request key."""
         earlier = self.db.execute(
-            "SELECT a.conversation,a.input_id,a.event_id,w.state,w.outcome,w.run_id,w.terminal_event_id FROM admissions a JOIN windows w ON w.id=a.window_id WHERE a.input_id=? OR a.event_id=?",
+            "SELECT a.conversation,a.input_id,a.event_id,w.state,w.outcome,w.run_id,w.terminal_event_id,w.attempts,w.reserved_bytes FROM admissions a JOIN windows w ON w.id=a.window_id WHERE a.input_id=? OR a.event_id=?",
             (request["input_message_id"], request["input_event_id"])).fetchall()
         require(all(row["conversation"] == request["conversation_id"] and
                     row["input_id"] == request["input_message_id"] and
                     row["event_id"] == request["input_event_id"] and
                     row["state"] == "retired" and row["outcome"] == "failed" and
-                    row["run_id"] is None and row["terminal_event_id"] is None
+                    row["run_id"] is None and row["terminal_event_id"] is None and
+                    row["attempts"] == 0 and row["reserved_bytes"] == 0
                     for row in earlier), "input_reused")
 
     def _record_admission(self, request, fingerprint):
