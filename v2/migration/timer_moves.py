@@ -229,18 +229,31 @@ def _v1_owner(v1, timer_id):
 
 
 def handoff(client, v1, bundle, thread, conversation, timer_ids=None, include_disabled=False,
-            inline_prompt_file=False, apply=False):
-    """Fence V1, then enable in V2. A definite V2 refusal restores V1 ownership."""
-    report = []
+            inline_prompt_file=False, apply=False, force_enable_disabled=False):
+    """Fence V1, then enable in V2. A definite V2 refusal restores V1 ownership.
+
+    A timer disabled in V1 (`source_enabled` false) is never enabled in V2:
+    neither selecting it with `timer_ids` nor `include_disabled` changes that
+    (`include_disabled` is kept for compatibility and no longer enables
+    anything). Only the separate `force_enable_disabled` hands such a timer
+    off and enables it. Every skipped timer is listed in `skipped` with its
+    reason (`source_disabled` or `dormant_schedule:<reason>`).
+    """
+    report, skipped = [], []
     for timer in _selected(bundle, thread, timer_ids):
         row = {'id': timer['id'], 'namespace': timer['namespace']}
         report.append(row)
         if timer['schedule']['kind'] == 'dormant':
             row['result'] = 'skipped_dormant_schedule:' + timer['schedule']['reason']
+            row['reason'] = 'dormant_schedule:' + timer['schedule']['reason']
+            skipped.append({'id': timer['id'], 'reason': row['reason']})
             continue
-        if not timer['source_enabled'] and not include_disabled and not timer_ids:
-            row['result'] = 'skipped_disabled_in_v1'
-            continue
+        if not timer['source_enabled']:
+            if not force_enable_disabled:
+                row.update(result='skipped_disabled_in_v1', reason='source_disabled')
+                skipped.append({'id': timer['id'], 'reason': 'source_disabled'})
+                continue
+            row['forced_enable_disabled'] = True
         detail = client.get('/api/v2/timers/' + timer['namespace'])
         if detail.get('conversation_id') not in (None, conversation):
             raise MoveError('conversation_mismatch')
@@ -275,7 +288,7 @@ def handoff(client, v1, bundle, thread, conversation, timer_ids=None, include_di
             continue
         row.update(result='handed_off', next_due_ms=enabled.get('next_due_ms'),
                    controller_armed=enabled.get('controller_armed'))
-    return {'conversation_id': conversation, 'applied': apply, 'timers': report}
+    return {'conversation_id': conversation, 'applied': apply, 'timers': report, 'skipped': skipped}
 
 
 def handback(client, v1, bundle, thread, timer_ids=None, keep_disabled=False, apply=False):

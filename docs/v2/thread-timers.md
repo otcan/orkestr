@@ -105,7 +105,10 @@ python3 -I -B $M v1-export --thread THREAD_ID --source-instance orkestr-v1-produ
 python3 -I -B $M v2-import --bundle "$OUT/timers.json" --thread THREAD_ID --conversation UUID $V2
 python3 -I -B $M v2-import --bundle "$OUT/timers.json" --thread THREAD_ID --conversation UUID $V2 --apply
 
-# 3. Hand off (default: timers enabled in V1; --timer ID to pick, --include-disabled).
+# 3. Hand off (only timers enabled in V1; --timer ID to pick). A timer disabled
+#    in V1 is never enabled in V2, even with --timer or --include-disabled; it is
+#    reported under "skipped" (reason source_disabled) and named on stderr.
+#    Only --force-enable-disabled hands such a timer off and enables it.
 python3 -I -B $M handoff --bundle "$OUT/timers.json" --thread THREAD_ID --conversation UUID $V2
 python3 -I -B $M handoff --bundle "$OUT/timers.json" --thread THREAD_ID --conversation UUID $V2 --apply
 python3 -I -B $M status  --bundle "$OUT/timers.json" --thread THREAD_ID --conversation UUID $V2
