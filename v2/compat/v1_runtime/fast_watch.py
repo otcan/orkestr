@@ -44,6 +44,11 @@ def pending(ledger, limit):
     return [json.loads(raw) for _, raw in rows]
 
 
+def active(ledger):
+    with ledger.connect() as db:
+        return bool(db.execute("SELECT 1 FROM fast_watch WHERE closed=0 LIMIT 1").fetchone())
+
+
 class Ledger:
     """Worker-compatible view that cannot replace the originating Deep row."""
     def __init__(self, original):

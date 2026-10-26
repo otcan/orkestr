@@ -106,6 +106,54 @@ class FastWatchTests(fixture.IntakeBase):
         self.once(103, restart=True)
         self.assertEqual(self.fast(), fast)
 
+    def test_no_reply_ack_keeps_busy_cadence_for_running_or_unknown_fast(self):
+        for phase in ("running", "unknown"):
+            with self.subTest(phase=phase):
+                self.setUp()
+                self.enqueue()
+                start = self.peer.start
+                def running(role):
+                    start(role)
+                    value = self.peer.runs.get((0, "fast"))
+                    if role == "fast" and value and value["phase"] == "awaiting_acceptance":
+                        value["phase"] = "running"
+                self.peer.start = running
+                request = self.fault("status" if phase == "unknown" else "running", deep_text="NO_REPLY")
+                self.once(100)
+                self.peer.runs[0, "deep"]["phase"] = "awaiting_acceptance"
+                self.once(101)
+                final = self.finals()[0]
+                self.assertTrue(final["noReply"])
+                self.ledger.acknowledge(final["id"], dict(outcome="no_reply", parentPublicMessageId="first", connectorMessageIds=[]))
+                self.assertIsNone(self.ledger.next_input())
+                self.worker = self.new_worker()
+                with contextlib.redirect_stderr(io.StringIO()):
+                    busy = self.worker.run_once(fixture.Stop())
+                self.assertTrue(busy, "retained Fast must not fall back to the five-second idle pass")
+                self.assertEqual(self.worker.busy_pause(), 1)
+                self.assertFalse(self.watches()[0].get("closed", False))
+                self.peer.runs[0, "fast"]["phase"] = "awaiting_acceptance"
+                self.peer.request = request
+                self.assertFalse(self.worker.run_once(fixture.Stop()), "idle resumes once retained work is resolved")
+                self.assertEqual(len(self.fast()), 1)
+
+    def test_failed_lost_and_blocked_diagnostics_do_not_claim_provider_terminal(self):
+        for phase in ("failed", "lost", "blocked"):
+            with self.subTest(phase=phase):
+                self.setUp()
+                self.enqueue()
+                start = self.peer.start
+                def unavailable(role):
+                    start(role)
+                    if role == "fast":
+                        self.peer.runs[0, "fast"]["phase"] = phase
+                self.peer.start = unavailable
+                self.once(100)
+                self.assertEqual(self.watches()[0]["diagnostic"]["reason"], "observed_fast_unavailable")
+                self.assertEqual(self.peer.runs[0, "deep"]["phase"], "running")
+                self.assertNotIn("fast", self.row("first").get("accepted", {}))
+                self.assertEqual(self.mutations("/accept"), [])
+
     def test_original_watch_source_and_unknown_request_survive_deep_continuation(self):
         self.enqueue()
         self.fault("accept_unknown")

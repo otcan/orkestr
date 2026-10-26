@@ -1174,7 +1174,7 @@ class Worker:
 
     def run_once(self, stop):
         """One pass. Fast intake is independent; Deep finishes in ledger order."""
-        drive_intake_fast(self)
+        fast_pending = drive_intake_fast(self)
         if self._due(self._timers_checked, TIMER_POLL_S):
             self._timers_checked = time.monotonic()
             try:
@@ -1212,7 +1212,7 @@ class Worker:
                 pass
         data = self.ledger.next_input()
         if not data:
-            return False
+            return fast_pending
         if data.get("blocked"):
             # Written by an earlier adapter version: close it visibly so the
             # inputs behind it proceed.

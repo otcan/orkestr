@@ -72,7 +72,7 @@ def observe(worker, data):
         data["diagnostic"] = {"reason": "substantive_deep_final_prepared", "presentation": "skipped"}
         worker.ledger.save(data)
     if isinstance(fast, dict) and fast.get("phase") in ("failed", "lost", "cancelled", "blocked", "stopped", "interrupted"):
-        data.update(closed=True, diagnostic={"reason": "observed_fast_terminal", "phase": fast["phase"], "run_id": fast["run_id"]})
+        data.update(closed=True, diagnostic={"reason": "observed_fast_unavailable", "phase": fast["phase"], "run_id": fast["run_id"]})
         worker.ledger.save(data)
         return
     if (isinstance(fast, dict) and fast.get("run_id") in ids and
@@ -88,7 +88,7 @@ def observe(worker, data):
 
 def drive(worker):
     if worker.fast_reply_policy != "owner_only":
-        return
+        return False
     rows = worker.ledger.pending_inputs()
     admissions = 0
     for data in rows:
@@ -124,7 +124,7 @@ def drive(worker):
         watches = fast_watch.pending(worker.ledger, MAX_FAST_OBSERVATIONS)
     except Exception:
         print("ALERT orkestr-v2-wa-adapter fast_watch_deferred", file=sys.stderr, flush=True)
-        return
+        return True
     fast_worker = copy.copy(worker)
     fast_worker.ledger = fast_watch.Ledger(worker.ledger)
     for data in watches:
@@ -139,3 +139,7 @@ def drive(worker):
             print("ALERT orkestr-v2-wa-adapter fast_observation_deferred conversation=%s input=%s"
                   % (getattr(worker.client, "conversation", "?"), data["remote_id"]),
                   file=sys.stderr, flush=True)
+    try:
+        return fast_watch.active(worker.ledger)
+    except Exception:
+        return True  # Unknown retained work keeps its existing busy retry cadence.
