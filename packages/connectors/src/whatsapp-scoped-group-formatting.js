@@ -54,13 +54,25 @@ export const POST_TIMER_SOURCE_ID = 'post';
 export const FAST_TIMER_SOURCE_ID = 'fast';
 const oneLine = value => String(value || '').replace(/[\r\n]/g, ' ').trim().slice(0, 120);
 
+function postAuthorKind(name, postAuthor) {
+  return String(postAuthor || '').trim().toLowerCase() || ({operator: 'operator', system: 'operator', question: 'assistant_question'})[name.toLowerCase()] || 'coordinator';
+}
+
+// Delivery type for a V2 pseudo-timer reply: Quick answers, coordinator posts,
+// questions and scheduled timers are replies ("timer_reply", footer allowed);
+// an operator/system post is a notice ("router_update", no footer).
+export function scopedReplyDeliveryType({label, timerId, postAuthor} = {}) {
+  const source = String(timerId || '').trim();
+  return source === POST_TIMER_SOURCE_ID && postAuthorKind(oneLine(label), postAuthor) === 'operator' ? 'router_update' : 'timer_reply';
+}
+
 export function scopedReplyHeader({label, timerId, postAuthor} = {}) {
   const name = oneLine(label);
   const source = String(timerId || '').trim();
   // V2 Quick (Fast) replies are pseudo timers with source timer id "fast"; mark them like the footer's Quick layer.
   if (source === FAST_TIMER_SOURCE_ID) return `⚡ ${name || 'Quick reply'}`;
   if (source !== POST_TIMER_SOURCE_ID) return `⏰ ${name || 'Scheduled task'}`;
-  const author = String(postAuthor || '').trim().toLowerCase() || ({operator: 'operator', system: 'operator', question: 'assistant_question'})[name.toLowerCase()] || 'coordinator';
+  const author = postAuthorKind(name, postAuthor);
   if (author === 'operator') return '⚙️ System:';
   if (author === 'assistant_question') return `❓ ${name || 'Question'}:`;
   return `🤖 ${name || 'Coordinator'}:`;
