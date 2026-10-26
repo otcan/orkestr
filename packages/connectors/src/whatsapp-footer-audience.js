@@ -2,9 +2,10 @@
 // aid. It never reaches a chat with a non-owner member, never rides on a reply
 // to a member-authored input, and never decorates a notice.
 
+import { whatsappBindingParticipantSets } from "./whatsapp-inbound-security.js";
+
 const clean = (value) => String(value ?? "").trim();
 const lower = (value) => clean(value).toLowerCase();
-const list = (value) => (Array.isArray(value) ? value : [value]).map(clean).filter(Boolean);
 
 function binding(thread) {
   return thread?.binding && typeof thread.binding === "object" ? thread.binding : {};
@@ -14,18 +15,15 @@ function binding(thread) {
 // non-owner member the binding itself does not name.
 const NON_OWNER_MEMBER_FLAGS = ["whatsappNonOwnerMembers", "hasNonOwnerMembers", "thirdPartyMembers"];
 
-// Any participant the binding admits besides the owner's own identities makes
-// the chat shared. Unknown owner identities fail closed: no footer.
+// A trusted participant (inbound security's own classification: explicit
+// trusted ids, or additionalParticipantIds when enabled) that is not one of the
+// owner identities makes the chat shared. Ids compare normalized, so @c.us vs
+// @s.whatsapp.net or a leading "+" do not create a phantom member.
 export function threadHasNonOwnerMembers(thread = {}) {
   const b = binding(thread);
   if (NON_OWNER_MEMBER_FLAGS.some((key) => b[key] === true)) return true;
-  const owner = new Set([...list(b.ownerContactIds), ...list(b.ownerContactId)]);
-  const admitted = [
-    ...list(b.authorizedContactIds),
-    ...list(b.authorizedContactId),
-    ...(b.additionalParticipantsEnabled === false ? [] : list(b.additionalParticipantIds)),
-  ];
-  return admitted.some((id) => !owner.has(id));
+  const { owners, trusted } = whatsappBindingParticipantSets(b);
+  return [...trusted].some((id) => !owners.has(id));
 }
 
 // Inputs admitted for a participant carry the participant policy markers
@@ -55,11 +53,13 @@ export function replyToMemberInput(message = {}, messages = []) {
   return answeredInputs(message, messages).some(memberAuthoredInput);
 }
 
+const NOTICE_DELIVERY_TYPES = new Set(["delivery_error", "queue_notice", "mode_queued", "router_update"]);
+
 export function noticeMessage(message = {}, deliveryType = "") {
   return lower(message?.remoteLayer) === "notice"
     || lower(message?.remoteKind) === "notice"
     || lower(message?.kind) === "notice"
-    || lower(deliveryType) === "delivery_error";
+    || NOTICE_DELIVERY_TYPES.has(lower(deliveryType));
 }
 
 export function footerAudienceAllowed({ message = {}, thread = null, messages = [], deliveryType = "" } = {}) {

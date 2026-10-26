@@ -144,7 +144,6 @@ function codexModelDebugLabel(message = {}, thread = {}, env = process.env) {
     metadata.codexModel,
     env.ORKESTR_DEFAULT_CODEX_MODEL,
     env.OPENAI_MODEL,
-    "unknown",
   );
   const effort = shortReasoningEffort(
     pickString(
@@ -156,7 +155,8 @@ function codexModelDebugLabel(message = {}, thread = {}, env = process.env) {
       env.OPENAI_REASONING_EFFORT,
     ),
   );
-  return effort ? `${model}/${effort}` : model;
+  // An unknown model or effort is omitted, never shown as "unknown".
+  return [model, effort].filter(Boolean).join("/");
 }
 
 function claudeModelDebugLabel(message = {}, thread = {}) {
@@ -168,7 +168,6 @@ function claudeModelDebugLabel(message = {}, thread = {}) {
     metadata.claudeModel,
     thread.claudeModelResolved,
     metadata.claudeModelResolved,
-    "unknown",
   );
   const effort = shortReasoningEffort(
     pickString(
@@ -178,7 +177,8 @@ function claudeModelDebugLabel(message = {}, thread = {}) {
       metadata.claudeEffort,
     ),
   );
-  return effort ? `${model}/${effort}` : model;
+  // An unknown model or effort is omitted, never shown as "unknown".
+  return [model, effort].filter(Boolean).join("/");
 }
 
 function modelDebugLabel(message = {}, thread = {}, env = process.env) {
@@ -330,11 +330,13 @@ export function shouldAppendWhatsAppDebugFooter(message = {}, env = process.env,
   if (!footerAudienceAllowed({ message, thread, messages, deliveryType })) return false;
   if (codexAssistantSource(message) || message.source === "claude-code" || message.source === "orkestr_runtime") return true;
   if (remoteRuntimeReply(message, env)) return true;
-  return ["delivery_error", "mode_queued", "queue_notice", "router_update"].includes(String(deliveryType || "").trim());
+  // A scheduled timer's answer is a model reply; the other types are notices,
+  // which footerAudienceAllowed has already refused.
+  return ["timer_reply", "delivery_error", "mode_queued", "queue_notice", "router_update"].includes(String(deliveryType || "").trim());
 }
 
 function footerMessageType(deliveryType = "") {
-  return ["progress", "queue_notice", "mode_queued", "delivery_error", "router_update"].includes(String(deliveryType || "").trim())
+  return ["progress", "timer_reply", "queue_notice", "mode_queued", "delivery_error", "router_update"].includes(String(deliveryType || "").trim())
     ? "update"
     : "final";
 }
@@ -351,7 +353,7 @@ export function whatsappDebugFooter({ message = {}, thread = {}, messages = [], 
   const identity = remoteRuntimeReply(message, env) ? [
     remoteLayerFooter(message, messages),
   ] : [
-    `dbg: ${agent}/${modelDebugLabel(message, thread, env)}`,
+    `dbg: ${[agent, modelDebugLabel(message, thread, env)].filter(Boolean).join("/")}`,
     ...(runtimeSurface ? [`rt:${runtimeSurface}`] : []),
     ...(!isClaude && mode ? [`mode:${mode}`] : []),
     ...(!isClaude && codexFastDebugValue(message, thread) ? ["fast:on"] : []),

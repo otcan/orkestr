@@ -105,7 +105,7 @@ export function createScopedTimerNotifications({config,api,send,formatter,env=pr
       } else {
         let current=t;
         try{const {quota}=await api(`/api/quota/providers?ownerUserId=${encodeURIComponent(config.ownerUserId)}`,{timeoutMs:1000});if(quota)current={...current,whatsAppDebugProviderQuota:quota};}catch{}
-        chunks=scopedGroupReplyChunks({text:`${scopedReplyHeader({label:timer.label})}\n${answer.text}`,message:{...answer,chatId},thread:current,messages,config,formatter,env,deliveryType:'router_update'});
+        chunks=scopedGroupReplyChunks({text:`${scopedReplyHeader({label:timer.label})}\n${answer.text}`,message:{...answer,chatId},thread:current,messages,config,formatter,env,deliveryType:'timer_reply'});
         proofs.prepareBatch(chunks.map((entry,i)=>({id:baseId+':'+i,threadId,chatId,timerId:timer.id,parentId:parent.id,answerId:answer.id,text:encodeReplyEntry(entry),createdAt:answer.createdAt,runAt:event.ts,expiresAt:new Date(Date.parse(answer.createdAt)+scope.maxAgeMs).toISOString()})));
       }
       for(let i=0;i<chunks.length;i++) {

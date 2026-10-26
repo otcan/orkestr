@@ -324,7 +324,17 @@ async function writeTestDeliveryClaim(home, { accountId, chatId, textKey, claime
   return { claimKey, filePath };
 }
 
+// Notices (router, mode, queue, delivery failure) never carry the footer.
+function assertNoDebugFooter(text) {
+  assert.doesNotMatch(text, /\n\ndbg:|\nq(?:ueue)?:\d+ · |help:\/help/);
+}
+
 function assertDebugFooter(text, { mode = "", messageType = "final", model = "[^·\\n]+", queueReason = "", runtime = "", fiveHour = "", weekly = "" } = {}) {
+  // Queue, mode and router notices are not model replies: no debug footer.
+  if (queueReason) {
+    assert.doesNotMatch(text, /\n\ndbg:|\nq(?:ueue)?:\d+ · /);
+    return;
+  }
   const escapedModel = model.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const quotaWindow = (label, value) => value ? ` ${label}: ${value}(?: \\([0-9dhm]+\\))?` : "";
   const codexLine = fiveHour || weekly
@@ -334,7 +344,7 @@ function assertDebugFooter(text, { mode = "", messageType = "final", model = "[^
     ? `queue:\\d+ · reason:${queueReason}`
     : "q:\\d+";
   const pattern = new RegExp(
-    `\\n\\ndbg: codex/${model === "[^·\\n]+" ? model : escapedModel}` +
+    `\\n\\ndbg: codex${model === "[^·\\n]+" ? "(?:/[^·\\n]+)?" : `/${escapedModel}`}` +
       (runtime ? ` · rt:${runtime}` : "(?: · rt:[a-z-]+)?") +
       (mode ? ` · mode:${mode}` : "") +
       "(?: · fast:on)?" +
@@ -15116,7 +15126,7 @@ test("whatsapp delivery reports queued mode switches without marking the input d
   assert.equal(delivery.delivered[0].sourceMessageId, message.id);
   assert.equal(calls[0].body.to, "chat-mode-queued");
   assert.match(calls[0].body.text, /switch to code when Codex is ready/);
-  assertDebugFooter(calls[0].body.text, { messageType: "update" });
+  assertNoDebugFooter(calls[0].body.text);
   assert.equal(messages.find((entry) => entry.id === message.id).state, "queued");
 });
 
@@ -15247,7 +15257,7 @@ test("whatsapp delivery reports frozen runtime blocks without marking the input 
   assert.equal(calls[0].body.to, "chat-frozen-notice");
   assert.match(stripDebugFooter(calls[0].body.text), /^Codex pane looks frozen\.\n\nOrkestr paused automatic recovery and did not restart or resend anything\./);
   assert.match(stripDebugFooter(calls[0].body.text), /Your message is blocked until the pane changes or you request a manual recovery: "please continue"\./);
-  assertDebugFooter(calls[0].body.text, { messageType: "update", model: "gpt-5.5/xh" });
+  assertNoDebugFooter(calls[0].body.text);
   assert.equal(messages.find((entry) => entry.id === routed.message.id).state, "awaiting_ack");
   assert.equal(messages.find((entry) => entry.id === routed.message.id).deliveryState, "blocked_frozen_runtime");
 });
@@ -15316,9 +15326,9 @@ test("whatsapp delivery reports recovery action requests", async () => {
   assert.match(stripDebugFooter(calls[0].body.text), /^Restart requested\.\n\nOrkestr reset the current Codex runtime and resumed the thread\./);
   assert.match(stripDebugFooter(calls[1].body.text), /^Interrupting the current Codex turn and queued your message: "fix the pairing number"\./);
   assert.match(stripDebugFooter(calls[2].body.text), /^Safe reset requested\.\n\nOrkestr saved recent Orkestr context and started a fresh Codex session for this thread\./);
-  assertDebugFooter(calls[0].body.text, { messageType: "update" });
+  assertNoDebugFooter(calls[0].body.text);
   assertDebugFooter(calls[1].body.text, { messageType: "update", queueReason: "interrupting" });
-  assertDebugFooter(calls[2].body.text, { messageType: "update" });
+  assertNoDebugFooter(calls[2].body.text);
 });
 
 test("whatsapp delivery reports stale-ack recovery exhaustion as manual action", async () => {
@@ -15371,7 +15381,7 @@ test("whatsapp delivery reports stale-ack recovery exhaustion as manual action",
   assert.equal(calls[1].body.to, "chat-recovery-exhausted");
   assert.match(stripDebugFooter(calls[1].body.text), /^Manual recovery needed\.\n\nOrkestr stopped retrying this message to avoid duplicate input\./);
   assert.match(stripDebugFooter(calls[1].body.text), /Open the thread or request \/restart, then resend if needed: "hi"\./);
-  assertDebugFooter(calls[1].body.text, { messageType: "update" });
+  assertNoDebugFooter(calls[1].body.text);
   assert.equal(delivery.delivered.some((entry) => entry.deliveryType === "delivery_error"), false);
 });
 
@@ -15477,7 +15487,7 @@ test("whatsapp delivery reports mirror-disabled routed inputs once", async () =>
   assert.equal(calls[0].body.to, "chat-mirror-disabled-notice");
   assert.equal(calls[0].body.accountId, "account-1");
   assert.match(stripDebugFooter(calls[0].body.text), /^Message routed to Orkestr\.\n\nWhatsApp mirroring is disabled for this thread/);
-  assertDebugFooter(calls[0].body.text, { messageType: "update" });
+  assertNoDebugFooter(calls[0].body.text);
 });
 
 test("whatsapp /status replies from the router without queuing runtime work", async () => {
@@ -16153,7 +16163,7 @@ test("whatsapp delivery mirrors pane interruption notices", async () => {
   assert.equal(delivery.delivered.length, 1);
   assert.equal(calls[0].body.to, "chat-interruption");
   assert.match(calls[0].body.text, /^Codex pane interrupted/);
-  assertDebugFooter(calls[0].body.text, { messageType: "update" });
+  assertNoDebugFooter(calls[0].body.text);
 });
 
 test("whatsapp delivery does not forward local failed inputs", async () => {

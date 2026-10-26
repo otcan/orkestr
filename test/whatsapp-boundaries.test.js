@@ -126,7 +126,9 @@ test("WhatsApp debug footer is gated and marks progress as update", () => {
     message: { source: "codex-app-server", phase: "final_answer" },
     thread: { runtimeKind: "codex-app-server" },
   });
-  assert.match(apiRuntime, /\ndbg: codex\/[^\n]* · rt:api · msg:\*final\*\n/);
+  // No configured model: the label is omitted, never "unknown".
+  assert.match(apiRuntime, /\ndbg: codex(?:\/[^\n·]+)? · rt:api · msg:\*final\*\n/);
+  assert.doesNotMatch(apiRuntime, /unknown/);
   assert.doesNotMatch(apiRuntime, /mode:plan|fast:on|mode-switch:|rt-switch:/);
   assert.equal(stripWhatsAppDebugFooter(apiRuntime), "Done");
 });
@@ -160,7 +162,8 @@ test("WhatsApp debug footer reports Claude Code model, runtime, and usage withou
     thread,
     messages: [],
   });
-  assert.match(waking, /^Waking this thread\.\n\ndbg: claude\/sonnet\/h · rt:claude · msg:\*update\*\ncodex: no data\nclaude 5h: 80% wk: 65%\nqueue:1 · reason:waking · load:\d+% · api:\d+% · help:\/help$/);
+  // A queue notice is not a model reply: no footer.
+  assert.equal(waking, "Waking this thread.");
   assert.doesNotMatch(waking, /mode-switch:|rt-switch:|switch:\//);
   assert.equal(stripWhatsAppDebugFooter(waking), "Waking this thread.");
 });
