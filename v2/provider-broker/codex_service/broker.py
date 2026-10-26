@@ -9,6 +9,22 @@ from .contract import require
 from .package import Package, conversation_workspace_paths
 from .profile import Configuration
 
+# 218..223: the native ended on its own (EOF) and this broker, as subreaper,
+# then reaped its whole owned tree to ECHILD. +0..5 keeps the diagnostic
+# native state of the PROVIDER_EOF failure class. Runtime accepts it as
+# cleanup proof only for an idle accepted Fast native, never as a delivery.
+NATIVE_ENDED_REAPED = 218
+
+
+def native_ended_exit(pump, code):
+    """The native-ended-and-reaped exit for a PROVIDER_EOF failure class."""
+    from protocol import Failure
+    base = 80 + (int(Failure.PROVIDER_EOF) - 1) * 6
+    if (type(code) is int and base <= code < base + 6 and pump is not None
+            and pump.reaped is True and pump.parent_eof is False and pump.child is not None):
+        return NATIVE_ENDED_REAPED + code - base
+    return code
+
 
 def main(root, role="deep"):
     pump = None
@@ -69,7 +85,6 @@ def main(root, role="deep"):
         if not (type(code) is int and 80 <= code <= 217):
             return 2
         try:
-            from reaping import native_ended_exit
             return native_ended_exit(pump, code)
         except Exception:
             return code  # Diagnostics only; never a weaker proof.
