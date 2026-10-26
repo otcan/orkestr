@@ -377,18 +377,49 @@ pub(super) async fn commit(
 /// dispatched queue intent goes back in line exactly once, and the dispatcher
 /// opens the next window for it. A second failed opening of the same input
 /// leaves it released: the adapter then refuses it with an operator alert.
+///
+/// The retry is a new admission with its own request key (`…:retry1`): the
+/// manager keeps the failed window's admission as evidence under the original
+/// key, and re-admits the input only because that window retired as a failed
+/// open with no run.
 async fn retry_timer_inputs(
     tx: &mut SqliteConnection,
     window: Uuid,
     release: &[String],
 ) -> Result<()> {
+    const FIRST_RETRY: u32 = 1;
     for event in release {
-        sqlx::query("UPDATE execution_window_queue SET state='queued',window_id=NULL WHERE event_id=?1 AND window_id=?2 AND state='dispatched' AND request_key='timer-window:'||?1 AND EXISTS(SELECT 1 FROM dormant_timer_inputs t WHERE t.event_id=?1) AND NOT EXISTS(SELECT 1 FROM production_runs r WHERE r.event_id=?1) AND NOT EXISTS(SELECT 1 FROM ordinary_input_holds h WHERE h.event_id=?1) AND (SELECT count(*) FROM execution_window_open_failure_inputs f WHERE f.event_id=?1)=1")
+        let Some(row) = sqlx::query("SELECT message_id,input_request_key FROM execution_window_queue WHERE event_id=?1 AND window_id=?2 AND state='dispatched' AND request_key='timer-window:'||?1 AND EXISTS(SELECT 1 FROM dormant_timer_inputs t WHERE t.event_id=?1) AND NOT EXISTS(SELECT 1 FROM production_runs r WHERE r.event_id=?1) AND NOT EXISTS(SELECT 1 FROM ordinary_input_holds h WHERE h.event_id=?1) AND (SELECT count(*) FROM execution_window_open_failure_inputs f WHERE f.event_id=?1)=1")
             .bind(event)
             .bind(window.to_string())
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(db)?
+        else {
+            continue;
+        };
+        let retry = super::queue::timer_intent(
+            MessageId(row.get::<String, _>("message_id").parse().map_err(db)?),
+            EventId(event.parse().map_err(db)?),
+            row.get::<&str, _>("input_request_key"),
+            FIRST_RETRY,
+        );
+        if !retry.is_valid() {
+            return Err(RuntimeStoreError::InvalidInput);
+        }
+        let digest = crate::digest(&serde_json::to_string(&retry).map_err(db)?);
+        let moved = sqlx::query("UPDATE execution_window_queue SET state='queued',window_id=NULL,request_key=?3,semantic_digest=?4 WHERE event_id=?1 AND window_id=?2 AND state='dispatched' AND request_key='timer-window:'||?1")
+            .bind(event)
+            .bind(window.to_string())
+            .bind(&retry.request_key)
+            .bind(digest)
             .execute(&mut *tx)
             .await
-            .map_err(db)?;
+            .map_err(db)?
+            .rows_affected();
+        if moved != 1 {
+            return Err(RuntimeStoreError::Fenced);
+        }
     }
     Ok(())
 }

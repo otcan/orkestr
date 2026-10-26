@@ -58,7 +58,8 @@ fn exact_receipt_refusals_and_retired_provenance() {
         ("attempts", json!(33)),
         ("reserved_bytes", json!(67_108_865u64)),
         ("state", json!("completed")),
-        ("reason", json!("unrecognized")),
+        ("reason", json!("Not A Token")),
+        ("reason", json!("")),
         ("run_id", json!(Uuid::from_u128(8))),
         ("boot_id", json!(Uuid::nil())),
         ("expires_at_ms", json!(901001)),
@@ -71,7 +72,11 @@ fn exact_receipt_refusals_and_retired_provenance() {
             "{field}"
         );
     }
+    // An unknown but closed reason token is a diagnostic only: accepted.
     let mut value = receipt();
+    value["reason"] = json!("owned_child_observation");
+    assert!(client.receipt(&value).is_ok());
+    value = receipt();
     value["limits"]["cleanup_ms"] = json!(15000);
     assert!(client.receipt(&value).is_err());
     value = receipt();

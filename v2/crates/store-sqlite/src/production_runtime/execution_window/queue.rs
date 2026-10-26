@@ -242,6 +242,31 @@ pub(super) async fn mark_dispatched(
     Ok(())
 }
 
+/// A timer occurrence's queued window intent. Attempt 0 keeps the original
+/// `timer-window:<event>` key; each retry after a failed open gets its own
+/// key (`…:retry<n>`), so the manager sees a new admission, never a replay of
+/// the failed window's request with a different body.
+pub(super) fn timer_intent(
+    input_message_id: MessageId,
+    input_event_id: EventId,
+    input_request_key: &str,
+    retry: u32,
+) -> ExecutionWindowRequest {
+    let request_key = match retry {
+        0 => format!("timer-window:{}", input_event_id.0),
+        n => format!("timer-window:{}:retry{n}", input_event_id.0),
+    };
+    ExecutionWindowRequest {
+        request_key,
+        input_message_id,
+        input_event_id,
+        input_request_key: input_request_key.to_owned(),
+        expected_generation: 0,
+        window_id: None,
+        predecessor_window_id: None,
+    }
+}
+
 /// Queue the Deep window intent for a timer occurrence inside the trusted timer
 /// scheduler transaction that admitted its ordinary input. The owner's durable
 /// timer grant is the intent; dispatch still re-authenticates and Core admission
@@ -255,15 +280,7 @@ pub(in crate::production_runtime) async fn enqueue_timer_intent(
     input_event_id: EventId,
     input_request_key: &str,
 ) -> Result<()> {
-    let input = ExecutionWindowRequest {
-        request_key: format!("timer-window:{}", input_event_id.0),
-        input_message_id,
-        input_event_id,
-        input_request_key: input_request_key.to_owned(),
-        expected_generation: 0,
-        window_id: None,
-        predecessor_window_id: None,
-    };
+    let input = timer_intent(input_message_id, input_event_id, input_request_key, 0);
     if !input.is_valid() {
         return Err(RuntimeStoreError::InvalidInput);
     }
