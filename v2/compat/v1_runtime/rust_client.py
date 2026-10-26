@@ -147,14 +147,19 @@ class RustSession:
             raise ClientError("request_shape_refused") from None
         require(data is None or len(data) <= max_request, "request_too_large")
         timeout_s = timeout_s or self.timeout_s
+        # The login state is read once under the session lock; the exchange
+        # itself runs without it (see `_lock` on RustClient), so one binding's
+        # event wait never stalls every other binding's requests.
+        with self._lock:
+            cookie, csrf = self._cookie, self._csrf
         headers = {"Host": self.authority, "Accept": "text/event-stream" if events else "application/json",
                    "Connection": "close"}
-        if self._cookie and path != "/api/v2/health":
-            headers["Cookie"] = self._cookie
+        if cookie and path != "/api/v2/health":
+            headers["Cookie"] = cookie
         if method == "POST":
             headers.update({"Origin": self.origin, "Content-Type": "application/json"})
             if path != SESSION:
-                headers["X-Orkestr-CSRF"] = self._csrf
+                headers["X-Orkestr-CSRF"] = csrf
         connection = http.client.HTTPConnection(self.host, self.port, timeout=timeout_s)
         started, timer = time.monotonic(), None
         raw = bytearray()
@@ -172,8 +177,14 @@ class RustSession:
             connection.request(method, path, body=data, headers=headers)
             response = connection.getresponse()
             if response.status == 401:
-                self._cookie = self._csrf = None
-                self._revoked = True
+                with self._lock:
+                    if self._cookie != cookie:
+                        # Sent with a session that another binding has since
+                        # renewed: not a revocation of the current one. Auth
+                        # is checked before any mutation, so a retry is safe.
+                        raise ClientError("transport_failed", 401)
+                    self._cookie = self._csrf = None
+                    self._revoked = True
                 raise ClientError("session_revoked", 401)
             if response.status in (301, 302, 303, 307, 308) or response.status not in allowed:
                 raise ClientError("unexpected_status", response.status)
@@ -273,7 +284,16 @@ class RustSession:
 
 
 class RustClient:
-    """Conversation-pinned view of a shared owner session."""
+    """Conversation-pinned view of a shared owner session.
+
+    Requests of one client (one binding) are serialized by the client's own
+    lock; clients sharing a session run their requests concurrently. The
+    session lock guards only the login state and (rare) login exchanges.
+    Before, every request of every binding ran under the session lock, so
+    one caught-up event read (up to the 5 s client deadline) froze all
+    bindings: the adapter issued requests in ~5 s bursts and an owner
+    message waited for several of them before its intake, Fast export and
+    acceptance (live: 14 s to intake and 23 s from Fast proposal to export)."""
 
     def __init__(self, *, conversation_id, session=None, **session_options):
         self.session = session or RustSession(**session_options)
@@ -281,6 +301,7 @@ class RustClient:
         self.prefix = f"/api/v2/conversations/{self.conversation}"
         self._verified = None
         self._scope_refused = False
+        self._client_lock = threading.RLock()
 
     # Compatibility views used by diagnostics and tests.
     @property
@@ -297,7 +318,7 @@ class RustClient:
 
     @property
     def _lock(self):
-        return self.session._lock
+        return self._client_lock
 
     def _wire(self, *args, **kwargs):
         return self.session._wire(*args, **kwargs)
