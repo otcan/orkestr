@@ -130,6 +130,9 @@ export function providerQuotaFromThread(thread = {}, provider = "codex", { now =
   const { ms: observedMs, source } = providerObservation(thread, provider);
   const fiveHour = quotaWindowSummary(quotaWindowRecord(limits, "fiveHour"), now);
   const weekly = quotaWindowSummary(quotaWindowRecord(limits, "weekly"), now);
+  // A refreshed thread can still carry wholly expired telemetry. Its newer
+  // activity timestamp must not erase another thread's usable quota window.
+  if (![fiveHour, weekly].some((window) => window.remainingPct !== null || window.resetsAt || window.status)) return null;
   return {
     ...emptyProviderQuota(provider),
     fiveHourRemainingPct: fiveHour.remainingPct,
