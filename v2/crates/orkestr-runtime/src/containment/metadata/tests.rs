@@ -7,6 +7,8 @@
 //! clippy --locked --offline -p orkestr-runtime --all-targets -- -D warnings
 #[path = "liveness_tests.rs"]
 mod liveness_tests;
+#[path = "retirement_tests.rs"]
+mod retirement_tests;
 use super::*;
 use orkestr_v2_application::{runtime::*, IntakeStore};
 use orkestr_v2_contracts::MessageInput;
@@ -25,6 +27,9 @@ struct Case {
 }
 impl Case {
     async fn new() -> Self {
+        Self::with_program(Path::new("/bin/cat"), &[]).await
+    }
+    async fn with_program(program: &Path, args: &[OsString]) -> Self {
         let root = std::env::temp_dir().join(format!(
             "metadata-synthetic-{}-{}",
             std::process::id(),
@@ -68,8 +73,8 @@ impl Case {
         let authority = MetadataAuthority::new(bound.clone(), grant).unwrap();
         let executor = authority
             .issue_executor(
-                Path::new("/bin/cat"),
-                &[],
+                program,
+                args,
                 ChildDirectories::new(
                     &root.join("workspace"),
                     &root.join("home"),

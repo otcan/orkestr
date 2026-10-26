@@ -2,6 +2,44 @@
 use super::*;
 
 impl Store {
+    /// Negative setup cleanup after trusted composition proved no child was
+    /// launched, or retained the original metadata-child EOF/wait witness.
+    /// Never settles a run, creates a replacement, or releases an input.
+    pub async fn retire_bounded_fast_setup(&self, credential: &str, setup: &Binding) -> Result<()> {
+        self.worker_credential(credential)?;
+        let c = self.context()?;
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        c.validate(&mut tx).await?;
+        let window = c
+            .window_scope(&mut tx)
+            .await?
+            .ok_or(RuntimeStoreError::Fenced)?;
+        if c.provider != ProviderKind::Codex
+            || setup.role != Role::Fast
+            || setup.owner_id != c.owner
+            || setup.state != SessionState::Starting
+            || setup.native_session_id.is_some()
+            || setup.provider_kind != ProviderKind::Unconfigured
+            || window.get::<String, _>("conversation_id") != setup.conversation_id.to_string()
+            || !matches!(
+                window.get::<&str, _>("state"),
+                "opening" | "active" | "retiring"
+            )
+            || window.get::<i64, _>("expires_at_ms") <= now(&mut tx).await?
+        {
+            return Err(RuntimeStoreError::Fenced);
+        }
+        let changed = sqlx::query("UPDATE session_bindings SET state='retired' WHERE id=? AND owner_id=? AND conversation_id=? AND role='fast' AND parent_session_id IS NULL AND ((state='starting' AND native_session_id IS NULL AND generation=?) OR (state='ready' AND provider_kind='codex' AND generation=?)) AND EXISTS(SELECT 1 FROM production_fast_continuity c WHERE c.session_id=session_bindings.id AND c.context_id=? AND c.incarnation_id=?) AND NOT EXISTS(SELECT 1 FROM production_runs r WHERE r.session_id=session_bindings.id)")
+            .bind(setup.session_id.to_string()).bind(c.owner.to_string()).bind(setup.conversation_id.to_string())
+            .bind(setup.generation as i64).bind(setup.generation.checked_add(1).ok_or(RuntimeStoreError::InvalidInput)? as i64)
+            .bind(&c.id).bind(&c.incarnation).execute(&mut *tx).await.map_err(db)?.rows_affected();
+        if changed != 1 {
+            return Err(RuntimeStoreError::Fenced);
+        }
+        tx.commit().await.map_err(db)?;
+        Ok(())
+    }
+
     /// Trusted window scheduler only, after the original Fast child was reaped
     /// (or the predecessor window completed its full retirement protocol).
     /// This grants fresh metadata setup, never dispatch, acceptance or replay.
@@ -186,13 +224,17 @@ impl Store {
     }
 }
 
-/// Called only by the existing manager-proven setup-only failure commit. Never
-/// reuse an unobserved setup reservation across incarnations or erase its ID.
+/// Negative retirement under the original clean teardown or manager-proven
+/// reconciliation. Never reuse an unused reservation or erase its native ID.
 pub(super) async fn retire_failed_setups(
     tx: &mut SqliteConnection,
     context: &str,
     incarnation: &str,
 ) -> Result<()> {
+    #[cfg(test)]
+    if legacy_fixture(tx).await? {
+        return Ok(());
+    }
     sqlx::query("UPDATE session_bindings SET state='retired' WHERE role='fast' AND state!='retired' AND id IN (SELECT session_id FROM production_fast_continuity WHERE context_id=? AND incarnation_id=?) AND NOT EXISTS(SELECT 1 FROM production_runs r WHERE r.session_id=session_bindings.id)")
         .bind(context).bind(incarnation).execute(tx).await.map_err(db)?;
     Ok(())

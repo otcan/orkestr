@@ -506,6 +506,8 @@ impl ReadyMetadataChild {
 
 mod broker_admission;
 mod liveness;
+mod retirement;
+pub use retirement::{ReapedMetadata, RetiringMetadata};
 #[cfg(test)]
 mod tests;
 

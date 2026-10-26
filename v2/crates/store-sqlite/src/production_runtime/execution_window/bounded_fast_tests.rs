@@ -306,3 +306,172 @@ async fn foreign_role_namespace_revocation_and_uncertain_setup_are_fenced() {
         .is_err());
     assert_eq!(before, fixtures::snapshot(&w.f.store).await);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn stop_holds_a_fast_accepted_source_still_queued_for_deep_and_excludes_its_answer() {
+    async fn join(w: &Window, key: &str, text: &str) -> ExecutionWindowRequest {
+        let receipt =
+            w.f.store
+                .admit(
+                    &w.f.owner,
+                    &w.f.conversation,
+                    &MessageInput {
+                        client_message_id: key.into(),
+                        text: text.into(),
+                    },
+                )
+                .await
+                .unwrap()
+                .receipt;
+        let request = ExecutionWindowRequest {
+            request_key: format!("window:{key}"),
+            input_message_id: receipt.message_id,
+            input_event_id: receipt.event_id,
+            input_request_key: key.into(),
+            expected_generation: 1,
+            window_id: Some(w.status.window_id),
+            predecessor_window_id: None,
+        };
+        w.f.store
+            .admit_execution_window_authenticated(
+                &w.browser_credential,
+                &w.f.conversation,
+                &request,
+            )
+            .await
+            .unwrap();
+        request
+    }
+    let w = Window::open().await;
+    let first = fresh(&w, &w.roles.fast, "hold-first").await;
+    w.activate().await;
+    let cap = present(&w, &first, &w.source).await;
+    let done = propose(&w, cap.provider(), "prior unheld answer").await;
+    accept(&w, cap.provider(), done).await;
+    let claim = w
+        .bound
+        .claim_next(
+            &w.f.owner,
+            &w.f.conversation,
+            &w.roles.deep.session_id,
+            Duration::from_secs(30),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    let deep = w
+        .bound
+        .admit_run(
+            &claim,
+            &w.roles.deep.session_id,
+            w.roles.deep.generation,
+            "hold-parent",
+        )
+        .await
+        .unwrap();
+    let deep = w.consume(&deep).await;
+    w.bound
+        .append_provider_event(
+            &w.f.owner,
+            deep.provider(),
+            &observation(deep.provider(), 1, ProviderEvent::Started),
+        )
+        .await
+        .unwrap();
+    let held = join(&w, "later-held", "HELD_OWNER_SOURCE").await;
+    let second = fresh(&w, &ready(&w).await, "hold-second").await;
+    let cap = present(&w, &second, &held).await;
+    let done = propose(&w, cap.provider(), "HELD_ACCEPTED_ANSWER").await;
+    accept(&w, cap.provider(), done).await;
+    w.bound
+        .request_cancel(
+            &w.f.owner,
+            &deep.provider().run.run_id,
+            "hold-before-next-fast",
+        )
+        .await
+        .unwrap();
+    let holds: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM ordinary_input_holds WHERE event_id=?")
+            .bind(held.input_event_id.to_string())
+            .fetch_one(&w.f.store.pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        holds, 1,
+        "supported Deep Stop holds the queued owner source despite Fast acceptance"
+    );
+    let current = join(&w, "after-hold", "NEW_CURRENT_INPUT").await;
+    let third = fresh(&w, &ready(&w).await, "hold-third").await;
+    let cap = present(&w, &third, &current).await;
+    assert!(!cap.text().contains("HELD_OWNER_SOURCE"));
+    assert!(!cap.text().contains("HELD_ACCEPTED_ANSWER"));
+    assert!(cap.text().contains("prior unheld answer"));
+    assert!(cap.text().ends_with("NEW_CURRENT_INPUT"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn abort_before_dispatch_fences_unused_setup_and_preserves_eligible_source() {
+    for confirmed in [false, true] {
+        let w = Window::open().await;
+        let grant = w
+            .bound
+            .authorize_bounded_fast_metadata(w.credential.credential(), &w.roles.fast)
+            .await
+            .unwrap();
+        let setup = grant.binding().clone();
+        if confirmed {
+            w.bound
+                .confirm_metadata_session(
+                    grant,
+                    NativeSessionConfirmation {
+                        session_id: setup.session_id.clone(),
+                        expected_generation: setup.generation,
+                        native_session_id: "synthetic-aborted-setup".into(),
+                        protocol_version: "synthetic-1".into(),
+                        source_event_key: "aborted-ready".into(),
+                    },
+                )
+                .await
+                .unwrap();
+        }
+        // The trusted composition boundary supplies the actual original-child
+        // witness separately; this transaction cannot construct one or mint I/O.
+        w.bound
+            .retire_bounded_fast_setup(w.credential.credential(), &setup)
+            .await
+            .unwrap();
+        let old: String = sqlx::query_scalar("SELECT state FROM session_bindings WHERE id=?")
+            .bind(setup.session_id.to_string())
+            .fetch_one(&w.f.store.pool)
+            .await
+            .unwrap();
+        assert_eq!(old, "retired");
+        let fresh = w
+            .bound
+            .ensure_role_bindings(&w.f.owner, &w.f.conversation)
+            .await
+            .unwrap()
+            .fast;
+        assert_ne!(fresh.session_id, setup.session_id);
+        assert_eq!(fresh.state, SessionState::Starting);
+        let _new = w
+            .bound
+            .authorize_bounded_fast_metadata(w.credential.credential(), &fresh)
+            .await
+            .unwrap();
+        w.activate().await;
+        let source = w
+            .bound
+            .next_fast_source(w.credential.credential(), &w.f.conversation, 0)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(source.event_id, w.source.input_event_id);
+        let runs: i64 = sqlx::query_scalar("SELECT count(*) FROM production_runs")
+            .fetch_one(&w.f.store.pool)
+            .await
+            .unwrap();
+        assert_eq!(runs, 0);
+    }
+}

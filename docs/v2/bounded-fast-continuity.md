@@ -13,6 +13,14 @@ Stopped predecessor can use the same boundary. A proposal, interrupt ACK,
 unresolved run, unconfirmed native setup or stale binding cannot rotate. The old
 binding and native ID remain reserved history. No caller can supply a native ID.
 
+The previous terminal witness remains held through fresh setup until a new
+consumed dispatch attaches to its original child. Shutdown or window expiry
+before dispatch closes setup by trusted broker EOF, waits the original child and
+requires its normal exit73/ECHILD evidence. This metadata-only proof has no
+synthetic run identity and stays retained through window close. Unused setup is
+fenced without admitting or releasing input. Protocol/setup uncertainty keeps
+the original quarantine and reconciliation fences; it never certifies cleanup.
+
 A successor window also starts Fast fresh, after the ordinary closed-window
 retirement and exact readiness lineage checks. Workspace authority is copied
 only from that proved association. Setup-only failed openings retire their unused

@@ -401,6 +401,9 @@ pub struct ReadyCodex {
     actual_fd: bool,
 }
 
+#[path = "setup_retirement.rs"]
+mod setup_retirement;
+
 impl ReadyCodex {
     /// Check only this retained broker while waiting for input. An exit closes
     /// local authority and schedules owned reaping; it never authorizes recovery.

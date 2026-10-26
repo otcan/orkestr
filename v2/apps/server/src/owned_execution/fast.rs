@@ -23,6 +23,8 @@ impl ConfiguredExecution {
     ) -> Result<(), &'static str> {
         self.current().await?;
         let mut heartbeat = Instant::now();
+        let mut pending =
+            super::fast_continuity::PendingFastRetirement::new(self.companion.clone());
         let mut grant = if let Some(grant) = self.initial_grant.take() {
             if self
                 .fast_source(&mut shutdown, &mut heartbeat)
@@ -71,6 +73,9 @@ impl ConfiguredExecution {
                 .prepare_fast(grant, &mut shutdown, &mut heartbeat)
                 .await?
             else {
+                if let Some((run, proof)) = pending.take() {
+                    self.retire_finished_fast(&run, proof).await?;
+                }
                 return Ok(());
             };
             if let Some(companion) = &self.companion {
@@ -81,6 +86,16 @@ impl ConfiguredExecution {
             self.wait_window_active(&mut shutdown, &mut heartbeat)
                 .await?;
             let Some(input) = self.fast_input(&mut shutdown, &mut heartbeat).await? else {
+                self.reap_fast_setup(
+                    ready
+                        .retire_setup()
+                        .map_err(|_| "Fast ready setup retirement refused")?,
+                    &mut heartbeat,
+                )
+                .await?;
+                if let Some((run, proof)) = pending.take() {
+                    self.retire_finished_fast(&run, proof).await?;
+                }
                 return Ok(());
             };
             if let Some(companion) = &self.companion {
@@ -97,9 +112,11 @@ impl ConfiguredExecution {
             if let Some(companion) = &self.companion {
                 companion.started();
             }
+            pending.dispatched();
             match self.drive_fast(live, &mut shutdown, &mut heartbeat).await? {
                 FastExit::Shutdown => return Ok(()),
                 FastExit::Accepted { run, proof } | FastExit::Stopped { run, proof } => {
+                    pending.keep(run.clone(), proof);
                     // ReapedBroker is retained until the terminal metadata
                     // issuer has checked the same Fast predecessor and binding,
                     // or shutdown records its proven retirement without a new run.
@@ -108,6 +125,7 @@ impl ConfiguredExecution {
                         .await?
                         .is_none()
                     {
+                        let (_, proof) = pending.take().ok_or("Fast terminal witness missing")?;
                         self.retire_finished_fast(&run, proof).await?;
                         return Ok(());
                     }
@@ -144,7 +162,6 @@ impl ConfiguredExecution {
                             .await
                             .map_err(|_| "Fast stopped-session continuation refused")?
                     };
-                    drop(proof);
                 }
             }
         }
