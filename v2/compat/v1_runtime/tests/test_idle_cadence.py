@@ -86,6 +86,16 @@ class CadenceTests(Base):
         self.worker.web_mirror = False
         self.assertEqual(self.worker.idle_pause(now), worker_module.IDLE_PASS_S)
 
+    def test_pending_owner_fast_work_is_passed_at_the_bounded_fast_pace(self):
+        self.assertEqual(self.worker.busy_pause(), worker_module.PASS_S)
+        self.worker._fast_since = time.monotonic()
+        self.assertEqual(self.worker.busy_pause(), worker_module.FAST_PASS_S)
+        now = time.time()
+        self.worker._burst_due = now + 0.1
+        self.assertAlmostEqual(self.worker.busy_pause(now), 0.1, places=3)
+        self.worker._fast_since = time.monotonic() - worker_module.FAST_PACE_S
+        self.assertEqual(self.worker.busy_pause(), worker_module.PASS_S)
+
     def test_a_pending_input_is_stepped_every_pass(self):
         self.peer.busy = True  # The window stays busy: the input remains pending and retried.
         self.ledger.enqueue({"publicThreadId": "v1-thread", "publicMessageId": "wa-1", "chatId": "chat@g.us",
