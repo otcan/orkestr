@@ -456,6 +456,26 @@ class ClientTests(unittest.TestCase):
         self.assertTrue(self.client._revoked)
         self.assertIsNone(session._cookie)
 
+    def test_a_failed_renewal_never_sends_another_bindings_request_unauthenticated(self):
+        self.client.ensure_login()
+        session, original = self.client.session, self.respond
+        session._logged_in_at -= client_module.SESSION_RENEW_S
+        self.server.respond = lambda method, path: ((503, {}, {}) if path == "/api/v2/health"
+                                                    else (401, {}, {}) if path == PREFIX + "/window"
+                                                    else original(method, path))
+        with self.assertRaisesRegex(ClientError, "unexpected_status"):
+            self.client.ensure_login()  # The renewal fails after dropping the aging cookie.
+        self.assertIsNone(session._cookie)
+        sent = len(self.server.observed)
+        # Another binding passed its login check before the failed renewal.
+        with self.assertRaisesRegex(ClientError, "transport_failed"):
+            self.client._wire("GET", PREFIX + "/window", allowed=(200, 204))
+        self.assertEqual(len(self.server.observed), sent, "nothing is sent without the session cookie")
+        self.assertFalse(session._revoked)
+        self.server.respond = original
+        self.assertEqual(self.client.request("GET", "/window", allowed=(200, 204)), (204, None))
+        self.assertEqual(len(self.posts(client_module.SESSION)), 2, "the next request logs in again")
+
     def test_attachment_import_is_conversation_pinned_and_receipt_checked(self):
         reference = dict(reference_id=MESSAGE, message_id=None, filename="a.txt", media_type="text/plain",
                          byte_length=1, sha256=hashlib.sha256(b"a").hexdigest(), state="available")

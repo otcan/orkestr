@@ -151,8 +151,14 @@ class RustSession:
         # itself runs without it (see `_lock` on RustClient), so one binding's
         # event wait never stalls every other binding's requests.
         with self._lock:
-            cookie, csrf = self._cookie, self._csrf
-        headers = {"Host": self.authority, "Accept": "text/event-stream" if events else "application/json",
+            cookie, csrf, revoked = self._cookie, self._csrf, self._revoked
+        if not cookie and path not in ("/api/v2/health", SESSION):
+            # Another binding's renewal failed or its 401 revoked the session
+            # after this binding's login check. Never send it unauthenticated:
+            # the server's 401 would then look like a revocation of the
+            # current (absent) session and refuse every binding.
+            raise ClientError("session_revoked" if revoked else "transport_failed")
+        headers ={"Host": self.authority, "Accept": "text/event-stream" if events else "application/json",
                    "Connection": "close"}
         if cookie and path != "/api/v2/health":
             headers["Cookie"] = cookie
