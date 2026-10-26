@@ -40,6 +40,17 @@ impl ConfiguredExecution {
                 ExecutionPhase::Completed => {
                     control.disable();
                     drop(schedule);
+                    if self.window.is_some() {
+                        // Reap outside the next input's latency path. The caller
+                        // retains the original witness while idle, then either
+                        // closes normally or issues a fresh bounded Fast setup.
+                        let retiring = live
+                            .retire_accepted(&self.token)
+                            .await
+                            .map_err(|_| "Fast accepted-session retirement refused")?;
+                        let proof = self.reaped(retiring, &run, heartbeat).await?;
+                        return Ok(fast::FastExit::Accepted { run, proof });
+                    }
                     let Some(input) = self
                         .fast_input_checked(shutdown, heartbeat, || live.check_broker_liveness())
                         .await?

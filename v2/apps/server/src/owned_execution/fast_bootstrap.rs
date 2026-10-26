@@ -47,7 +47,13 @@ impl ConfiguredExecution {
     ) -> Result<Option<crate::fast_execution::ReadyFast>, &'static str> {
         self.maintain(heartbeat).await?;
         self.config.verify_launcher()?;
-        if *shutdown.borrow() {
+        if *shutdown.borrow() || self.fast_window_due() {
+            if self.window.is_some() {
+                self.store
+                    .retire_bounded_fast_setup(&self.token, grant.binding())
+                    .await
+                    .map_err(|_| "Fast unlaunched setup retirement refused")?;
+            }
             return Ok(None);
         }
         let directories = ChildDirectories::new(
@@ -88,7 +94,14 @@ impl ConfiguredExecution {
         .map_err(|_| "Fast broker setup refused")?;
         let deadline = Instant::now() + Duration::from_secs(15);
         loop {
-            if *shutdown.borrow() {
+            if *shutdown.borrow() || self.fast_window_due() {
+                self.reap_fast_setup(
+                    setup
+                        .retire_setup()
+                        .map_err(|_| "Fast pending setup retirement refused")?,
+                    heartbeat,
+                )
+                .await?;
                 return Ok(None);
             }
             self.maintain(heartbeat).await?;
@@ -103,7 +116,7 @@ impl ConfiguredExecution {
             }
             tokio::select! {
                 _ = tokio::time::sleep(Duration::from_millis(10)) => {},
-                _ = shutdown.changed() => return Ok(None),
+                _ = shutdown.changed() => {},
             }
         }
         setup

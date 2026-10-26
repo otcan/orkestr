@@ -47,14 +47,23 @@ async fn accept(w: &Window, provider: &ProviderAdmission, key: &str) {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn companion_resume_requires_exact_closed_predecessor_and_is_single_use() {
-    resume_case(false).await;
+    resume_case(false, false).await;
 }
 #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn workspace_companion_resume_rebinds_only_exact_closed_predecessor_atomically() {
-    resume_case(true).await;
+    resume_case(true, false).await;
 }
-async fn resume_case(with_workspace: bool) {
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn bounded_fast_successor_is_fresh_only_after_exact_closed_retirement() {
+    resume_case(false, true).await;
+}
+#[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn bounded_fast_successor_preserves_workspace_without_resuming_native_history() {
+    resume_case(true, true).await;
+}
+async fn resume_case(with_workspace: bool, bounded: bool) {
     #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
     let (w, project) = if with_workspace {
         let (window, project) = open_project_window().await;
@@ -240,6 +249,7 @@ async fn resume_case(with_workspace: bool) {
             &current,
             credential.credential(),
             &lost,
+            bounded,
             #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
             current_project.as_ref(),
         )
@@ -259,17 +269,24 @@ async fn resume_case(with_workspace: bool) {
         &current,
         credential.credential(),
         &lost,
+        bounded,
         #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
         current_project.as_ref(),
     )
     .await
     .unwrap();
     assert_eq!(grant.binding().role, Role::Fast);
-    assert_eq!(grant.binding().native_session_id, lost.native_session_id);
+    if bounded {
+        assert_ne!(grant.binding().session_id, lost.session_id);
+        assert_eq!(grant.binding().native_session_id, None);
+    } else {
+        assert_eq!(grant.binding().native_session_id, lost.native_session_id);
+    }
     assert!(metadata(
         &current,
         credential.credential(),
         &lost,
+        bounded,
         #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
         current_project.as_ref(),
     )
@@ -288,18 +305,30 @@ async fn resume_case(with_workspace: bool) {
             NativeSessionConfirmation {
                 session_id: ready.session_id.clone(),
                 expected_generation: ready.generation,
-                native_session_id: ready.native_session_id.clone().unwrap(),
+                native_session_id: ready
+                    .native_session_id
+                    .clone()
+                    .unwrap_or_else(|| "synthetic-bounded-successor".into()),
                 protocol_version: "codex-resume-1".into(),
                 source_event_key: "fast-exact-resumed".into(),
             },
         )
         .await
         .unwrap();
-    assert_eq!(confirmed.binding(), &ready);
-    assert_eq!(
-        confirmed.binding().native_session_id,
-        fast.native_session_id
-    );
+    if bounded {
+        assert_eq!(confirmed.binding().session_id, ready.session_id);
+        assert_eq!(confirmed.binding().generation, ready.generation + 1);
+        assert_ne!(
+            confirmed.binding().native_session_id,
+            fast.native_session_id
+        );
+    } else {
+        assert_eq!(confirmed.binding(), &ready);
+        assert_eq!(
+            confirmed.binding().native_session_id,
+            fast.native_session_id
+        );
+    }
     #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
     if let Some((_, path, _)) = project {
         std::fs::remove_dir_all(path).unwrap();
@@ -310,10 +339,22 @@ async fn metadata(
     store: &Store,
     credential: &str,
     binding: &Binding,
+    bounded: bool,
     #[cfg(all(target_os = "linux", target_pointer_width = "64"))] workspace: Option<
         &WorkspaceGrant,
     >,
 ) -> Result<BoundSessionMetadata> {
+    if bounded {
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        if let Some(workspace) = workspace {
+            return store
+                .authorize_bounded_fast_metadata_with_workspace(credential, binding, workspace)
+                .await;
+        }
+        return store
+            .authorize_bounded_fast_metadata(credential, binding)
+            .await;
+    }
     #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
     if let Some(workspace) = workspace {
         return store

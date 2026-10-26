@@ -295,6 +295,14 @@ impl Store {
         };
         let text = super::execution_window::handoff_context::attach(&mut tx, &claim.provider, text)
             .await?;
+        let text = super::fast_digest::attach(
+            &mut tx,
+            &claim.provider,
+            row.get("event_id"),
+            row.get("scope_sequence"),
+            text,
+        )
+        .await?;
         let capability = ConsumedProviderDispatch {
             launch,
             parent_run,

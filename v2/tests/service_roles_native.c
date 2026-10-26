@@ -168,6 +168,11 @@ int main(int argc, char **argv) {
         } else if (!strncmp(method, "\"turn/start\"", 12)) {
             record("turn-request", 0, 0);
             const char *text = strstr(line, "synthetic ordinary HTTP input");
+            /* Fresh Fast receives quoted past evidence before the exact input. */
+            if (!strcmp(role, "fast") && text) {
+                const char *next = text;
+                while ((next = strstr(next + 1, "synthetic ordinary HTTP input"))) text = next;
+            }
             if (!ready || !text || !strstr(line, native)) return failure(36);
             text += strlen("synthetic ordinary HTTP input");
             int input = *text == ' ' ? atoi(text + 1) : 1;

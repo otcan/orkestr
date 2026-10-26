@@ -37,6 +37,14 @@ impl std::fmt::Display for FastFailure {
     }
 }
 impl PreparingFast {
+    pub(crate) fn retire_setup(
+        self,
+    ) -> Result<
+        orkestr_runtime::containment::metadata::RetiringMetadata,
+        orkestr_runtime::containment::Error,
+    > {
+        self.preparing.retire_setup()
+    }
     /// Same typed Fast grant, with the persistent manager's original-child gate.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn open_window_retained(
@@ -93,6 +101,14 @@ impl PreparingFast {
     }
 }
 impl ReadyFast {
+    pub(crate) fn retire_setup(
+        self,
+    ) -> Result<
+        orkestr_runtime::containment::metadata::RetiringMetadata,
+        orkestr_runtime::containment::Error,
+    > {
+        self.ready.retire_setup()
+    }
     /// Consumes this setup even on replay or uncertainty. Neither outcome can
     /// restart a provider or fall back to a Deep inbox claim.
     pub async fn dispatch(

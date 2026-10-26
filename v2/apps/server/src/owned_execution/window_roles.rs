@@ -21,6 +21,7 @@ pub(super) struct Companion {
     /// never becomes ready or dispatches after Deep went on without it.
     setup: Mutex<()>,
     proof: Mutex<Option<ReapedBroker>>,
+    setup_proofs: Mutex<Vec<orkestr_runtime::containment::metadata::ReapedMetadata>>,
 }
 
 /// How long Deep waits for each Fast setup stage before going on alone.
@@ -38,6 +39,7 @@ impl Companion {
             starting: AtomicBool::new(false),
             setup: Mutex::new(()),
             proof: Mutex::new(None),
+            setup_proofs: Mutex::new(Vec::new()),
         })
     }
     pub(super) fn scope(&self) -> ExecutionScope {
@@ -145,6 +147,18 @@ impl Companion {
             return Err("Fast reap proof already retained");
         }
         *retained = Some(proof);
+        Ok(())
+    }
+    pub(super) fn retain_setup(
+        &self,
+        proof: orkestr_runtime::containment::metadata::ReapedMetadata,
+    ) -> Result<(), &'static str> {
+        // Kept on this companion through Core and manager close, independently
+        // of whether a real Fast turn ever attached to this setup child.
+        self.setup_proofs
+            .lock()
+            .map_err(|_| "Fast setup reap storage poisoned")?
+            .push(proof);
         Ok(())
     }
     fn take(&self) -> Result<Option<ReapedBroker>, &'static str> {

@@ -12,6 +12,7 @@ mod config_tests;
 mod directory;
 mod fast;
 mod fast_bootstrap;
+mod fast_continuity;
 mod fast_session;
 mod group;
 pub use group::{ConfiguredExecutions, ExecutionTasks};

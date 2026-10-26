@@ -48,6 +48,7 @@ impl Store {
         if !descendants_clear(&mut tx, &c.id).await? {
             return Err(RuntimeStoreError::Fenced);
         }
+        super::fast_continuity::retire_failed_setups(&mut tx, &c.id, &c.incarnation).await?;
         // Immutable provenance is issued only after the canonical terminal checks
         // above. Other expiry/revocation paths must never create this evidence.
         let clock = now(&mut tx).await?;

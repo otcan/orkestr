@@ -373,3 +373,6 @@ mod launch;
 
 #[path = "role_fast_acceptance_tests.rs"]
 mod fast_acceptance;
+
+#[path = "bounded_fast_tests.rs"]
+mod bounded_fast;
