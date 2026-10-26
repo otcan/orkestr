@@ -410,6 +410,53 @@ class FastHomeRegressionTests(unittest.TestCase):
         self.assertEqual(sync_fast_auth(source, copy), "copied")
         self.assertFalse(copy.is_symlink())
 
+    def test_auth_sync_never_propagates_a_partial_file_or_clobbers_a_fresh_one(self):
+        from codex_service import profile
+        from codex_service.contract import Refused as ContractRefused
+        root, operator, state = self.layout()
+        source, copy = operator / "auth.json", root / "copy.json"
+        self.assertEqual(profile.sync_fast_auth(source, copy), "copied")
+        # Fast's native caught mid-write (truncate, then write): newer but not
+        # a complete JSON object. The operator file is kept, the copy restored.
+        copy.write_text('{"synthetic": "tok')
+        os.utime(copy, ns=(os.stat(source).st_mtime_ns + 10**9,) * 2)
+        self.assertEqual(profile.sync_fast_auth(source, copy), "refreshed")
+        self.assertEqual(source.read_text(), '{"synthetic": "token-a"}')
+        self.assertEqual(copy.read_text(), '{"synthetic": "token-a"}')
+        # A partial operator file is never copied; the launch is refused.
+        source.write_text("")
+        with self.assertRaises(ContractRefused):
+            profile.sync_fast_auth(source, copy)
+        self.assertEqual(copy.read_text(), '{"synthetic": "token-a"}')
+        # The operator file changes after it was read (Deep refreshed): the
+        # stale copy is not written back over it; the sync re-reads instead.
+        source.write_text('{"synthetic": "token-a"}')
+        os.utime(source, ns=(os.stat(copy).st_mtime_ns,) * 2)
+        copy.write_text('{"synthetic": "token-old"}')
+        os.utime(copy, ns=(os.stat(source).st_mtime_ns + 10**9,) * 2)
+        original, calls = profile._read_private, []
+
+        def deep_refreshes_after_the_first_read(path):
+            result = original(path)
+            if Path(path) == source and not calls:
+                calls.append(path)
+                source.write_text('{"synthetic": "token-deep"}')
+                os.utime(source, ns=(os.stat(copy).st_mtime_ns + 2 * 10**9,) * 2)
+            return result
+        profile._read_private = deep_refreshes_after_the_first_read
+        try:
+            self.assertEqual(profile.sync_fast_auth(source, copy), "refreshed")
+        finally:
+            profile._read_private = original
+        self.assertEqual(source.read_text(), '{"synthetic": "token-deep"}')
+        self.assertEqual(copy.read_text(), '{"synthetic": "token-deep"}')
+        self.assertEqual([p.name for p in operator.iterdir()], ["auth.json"])
+        # A linked operator file is never followed.
+        link = operator / "linked.json"
+        link.symlink_to(source)
+        with self.assertRaises(OSError):
+            profile.sync_fast_auth(link, copy)
+
 
 class FastClaudeTests(unittest.TestCase):
     def session(self):
