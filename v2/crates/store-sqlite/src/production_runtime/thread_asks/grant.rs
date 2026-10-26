@@ -308,4 +308,14 @@ impl Store {
         tx.commit().await.map_err(unavailable)?;
         Ok(ThreadAskGrantDirectory { conversations })
     }
+
+    /// The recorded verified author of one input, if any (diagnostics).
+    pub async fn message_author(&self, owner: &OwnerId, message: &MessageId) -> R<Option<String>> {
+        sqlx::query_scalar("SELECT a.author FROM message_authors a JOIN messages m ON m.id=a.message_id WHERE a.message_id=? AND m.owner_id=?")
+            .bind(message.to_string())
+            .bind(owner.to_string())
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(unavailable)
+    }
 }

@@ -187,7 +187,8 @@ async fn attempt(
 
 async fn native_step(item: &Item, id: &str, csrf: &str) -> Result<Outcome, Expired> {
     let Some(receipt) = item.receipt.clone() else {
-        let mut body = json!({"client_message_id": item.key, "text": item.text});
+        // The owner typed this in the composer: the only owner-authored web input.
+        let mut body = json!({"client_message_id": item.key, "text": item.text, "author": "owner"});
         if let Some(reply_to) = &item.reply_to {
             body["reply_to"] = json!(reply_to);
         }

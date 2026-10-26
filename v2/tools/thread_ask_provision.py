@@ -2,11 +2,12 @@
 """Operator provisioning of V2 thread-ask grants (idempotent).
 
   thread_ask_provision.py --v2-url URL --credentials FILE --grant-dir DIR
-                          [--rotate] [--revoke] [--only ID ...] [--chown USER]
-                          [--dry-run]
+                          (--only ID_OR_NAME ... | --all-owner-conversations)
+                          [--rotate] [--revoke] [--chown USER] [--dry-run]
 
-For every eligible conversation of the owner (not restricted or archived),
-this makes sure a thread-ask grant is issued whose allowlist is exactly the
+The selection is explicit: --only names conversations (UUIDs or exact names),
+--all-owner-conversations selects every one. For each selected eligible
+conversation (not restricted or archived), this makes sure a thread-ask grant is issued whose allowlist is exactly the
 owner's other eligible conversations, and that the grant is installed as
 DIR/<conversation>.grant (mode 0600). That is where `thread_ask.py` looks
 when ORKESTR_V2_THREAD_ASK_GRANT_DIR=DIR is set in the agent's environment.
@@ -16,7 +17,13 @@ when ORKESTR_V2_THREAD_ASK_GRANT_DIR=DIR is set in the agent's environment.
 - A changed allowlist (a conversation was added or archived), a missing file,
   or --rotate issues a new grant; the old one stops working at once.
 - --revoke revokes the selected grants and deletes their files.
-- An ineligible conversation that still holds a grant is revoked.
+- A selected ineligible conversation that still holds a grant is revoked.
+- An allowlist above the server cap (256) is refused for that conversation
+  with `allowlist_too_large`; it is never silently truncated.
+
+Grants are owner-scoped, not thread-isolated: any process that can read the
+grant directory can use any conversation's grant. Keep DIR private to the
+agents' user; per-run broker injection is a follow-up.
 
 CREDENTIALS is a private JSON file {"username": ..., "password": ...} of the
 owner; it is used for one machine login and never printed. Grants are never
@@ -31,6 +38,10 @@ import stat
 import sys
 import tempfile
 from urllib import error, parse, request
+
+
+# Must equal Core's THREAD_ASK_TARGETS_MAX.
+TARGETS_MAX = 256
 
 
 class ProvisionError(RuntimeError):
@@ -118,13 +129,29 @@ def install(path, grant, owner=None):
     os.replace(tmp, path)
 
 
+def select(rows, only):
+    """Conversation IDs named by `only` (UUIDs or exact, case-insensitive names)."""
+    by_id = {r['conversation_id']: r for r in rows}
+    chosen = set()
+    for item in only:
+        if item in by_id:
+            chosen.add(item)
+            continue
+        matches = [r['conversation_id'] for r in rows if r['name'].casefold() == item.casefold()]
+        if len(matches) != 1:
+            raise ProvisionError(0, ('ambiguous_conversation:' if matches else 'unknown_conversation:') + item[:40])
+        chosen.add(matches[0])
+    return chosen
+
+
 def plan(rows, only=None, rotate=False, revoke=False, grant_dir=None):
-    """(conversation, action, targets) for each row; pure, for tests."""
+    """(conversation, action, targets) for each selected row; pure, for tests.
+    `only=None` selects every conversation."""
     eligible = sorted(r['conversation_id'] for r in rows if r['eligible'])
     actions = []
     for row in rows:
         conversation, grant = row['conversation_id'], row['grant']
-        if only and conversation not in only:
+        if only is not None and conversation not in only:
             continue
         if revoke or not row['eligible']:
             if grant['issued']:
@@ -132,6 +159,9 @@ def plan(rows, only=None, rotate=False, revoke=False, grant_dir=None):
             continue
         targets = [c for c in eligible if c != conversation]
         if not targets:
+            continue
+        if len(targets) > TARGETS_MAX:
+            actions.append((conversation, 'too_large', targets))
             continue
         current = sorted(grant.get('targets') or []) if grant['issued'] else None
         present = grant_dir is not None and valid_grant_file(Path(grant_dir) / f'{conversation}.grant')
@@ -149,7 +179,9 @@ def parser():
     root.add_argument('--grant-dir', required=True)
     root.add_argument('--rotate', action='store_true')
     root.add_argument('--revoke', action='store_true')
-    root.add_argument('--only', nargs='+')
+    selection = root.add_mutually_exclusive_group(required=True)
+    selection.add_argument('--only', nargs='+', metavar='ID_OR_NAME')
+    selection.add_argument('--all-owner-conversations', action='store_true')
     root.add_argument('--chown')
     root.add_argument('--dry-run', action='store_true')
     return root
@@ -166,10 +198,13 @@ def main(argv=None, api=None):
         rows = api.directory()
         names = {r['conversation_id']: r['name'] for r in rows}
         failed = False
-        for conversation, action, targets in plan(rows, set(args.only or ()), args.rotate, args.revoke, grant_dir):
+        only = None if args.all_owner_conversations else select(rows, args.only)
+        for conversation, action, targets in plan(rows, only, args.rotate, args.revoke, grant_dir):
             path = grant_dir / f'{conversation}.grant'
             line = {'conversation_id': conversation, 'name': names.get(conversation), 'action': action}
             try:
+                if action == 'too_large':
+                    raise ProvisionError(0, 'allowlist_too_large')
                 if args.dry_run or action == 'unchanged':
                     pass
                 elif action == 'revoke':

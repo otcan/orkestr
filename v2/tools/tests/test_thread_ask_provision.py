@@ -56,7 +56,8 @@ class Provision(unittest.TestCase):
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             code = PROV.main(['--v2-url', 'http://127.0.0.1:1', '--credentials', 'unused',
-                              '--grant-dir', str(self.dir), *extra], api=self.api)
+                              '--grant-dir', str(self.dir), *(extra or ('--all-owner-conversations',))],
+                             api=self.api)
         return code, [json.loads(line) for line in out.getvalue().splitlines()]
 
     def test_issues_installs_and_is_idempotent(self):
@@ -91,19 +92,42 @@ class Provision(unittest.TestCase):
         _, lines = self.run_main()
         self.assertEqual({l['conversation_id']: l['action'] for l in lines}, {A: 'rotate', B: 'unchanged'})
         old = self.api.grants[B][0]
-        _, lines = self.run_main('--rotate', '--only', B)
+        _, lines = self.run_main('--rotate', '--only', 'Tb')
         self.assertEqual([l['action'] for l in lines], ['rotate'])
         self.assertNotEqual(self.api.grants[B][0], old)
-        _, lines = self.run_main('--revoke')
+        _, lines = self.run_main('--revoke', '--all-owner-conversations')
         self.assertEqual({l['action'] for l in lines}, {'revoke'})
         self.assertEqual(self.api.grants, {})
         self.assertEqual(list(self.dir.glob('*.grant')), [])
 
     def test_dry_run_writes_nothing(self):
-        _, lines = self.run_main('--dry-run')
+        _, lines = self.run_main('--dry-run', '--all-owner-conversations')
         self.assertEqual({l['action'] for l in lines}, {'issue'})
         self.assertEqual(self.api.calls, [])
         self.assertFalse(self.dir.exists())
+
+    def test_selection_is_explicit_and_names_resolve(self):
+        with self.assertRaises(SystemExit):
+            with contextlib.redirect_stderr(io.StringIO()):
+                PROV.main(['--v2-url', 'http://x', '--credentials', 'c', '--grant-dir', str(self.dir)], api=self.api)
+        code, lines = self.run_main('--only', 'ta', C)
+        self.assertEqual(code, 0)
+        self.assertEqual({l['conversation_id'] for l in lines}, {A, C})
+        # The allowlist is still every other eligible conversation.
+        self.assertEqual(sorted(self.api.grants[A][1]), [B, C])
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+            code = PROV.main(['--v2-url', 'http://x', '--credentials', 'c', '--grant-dir', str(self.dir),
+                              '--only', 'nobody'], api=self.api)
+        self.assertEqual((code, json.loads(err.getvalue())['code']), (2, 'unknown_conversation:nobody'))
+
+    def test_allowlist_above_the_cap_fails_clearly(self):
+        for n in range(PROV.TARGETS_MAX + 1):
+            self.api.eligible[f'10000000-0000-4000-8000-{n:012x}'] = True
+        code, lines = self.run_main('--only', A)
+        self.assertEqual(code, 1)
+        self.assertEqual((lines[0]['action'], lines[0]['code']), ('failed', 'allowlist_too_large'))
+        self.assertEqual(self.api.calls, [])
 
     def test_credentials_must_be_private(self):
         path = Path(self.temp.name) / 'creds.json'

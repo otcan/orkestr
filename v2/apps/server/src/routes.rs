@@ -109,12 +109,13 @@ pub async fn message(
     let request = json(body)?;
     let expected_provider_generation = request.expected_provider_generation;
     let continuation_source_run_id = request.continuation_source_run_id.clone();
-    // The owner's own browser session is the owner. A machine credential (a
-    // delivery adapter) states the author it verified; without that the input
-    // is unattributed and cannot command a thread ask.
-    let author = request.author.or(headers
-        .contains_key(axum::http::header::COOKIE)
-        .then_some(InputAuthor::Owner));
+    // The caller states the author it verified: the web composer sends
+    // `owner`, a delivery adapter the sender it checked. A session (cookie or
+    // bearer) proves only the owner's credential, never who wrote the text:
+    // the adapter uses the owner's session for member messages too. Without
+    // an explicit author the input is unattributed and never commands a
+    // thread ask.
+    let author = request.author;
     let (input, reply_to) = request.into_parts();
     let admitted = s
         .store

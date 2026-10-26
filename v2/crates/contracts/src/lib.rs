@@ -169,9 +169,10 @@ pub struct MessageRequest {
     /// Exact prior run whose session must still belong to this provider epoch.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub continuation_source_run_id: Option<RunId>,
-    /// Who authored the input, as verified by the trusted connector that
-    /// admits it. A browser session without it is the owner; a machine
-    /// credential without it is unattributed.
+    /// Who authored the input, as stated by the caller that verified it (the
+    /// web composer: `owner`; the delivery adapter: the sender it checked).
+    /// Absent: unattributed. A session never implies an author. Servers that
+    /// accept it advertise `message_author` in `/api/v2/health` `features`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub author: Option<InputAuthor>,
 }

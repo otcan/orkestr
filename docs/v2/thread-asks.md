@@ -12,9 +12,21 @@ Deep run must be serving an input the owner authored: the owner's own message
 owner's), or the returned answer of a request that itself passed this check.
 Group members, timers, V1-local senders, unattributed machine inputs and
 another thread's request are refused with 403 `thread_ask_not_owner_commanded`.
-Core records the verified author of each admitted input in `message_authors`:
-the adapter states it (`author` on `POST /messages`), and a browser session is
-the owner.
+Core records the verified author of each admitted input in `message_authors`,
+exactly as the caller states it (`author` on `POST /messages`): the web
+composer sends `owner`, and the WhatsApp adapter sends the sender it verified.
+A session never implies an author (the adapter uses the owner's session for
+member messages too). An input without an explicit author is unattributed and
+never commands an ask. Servers that accept the field list `message_author` in
+`GET /api/v2/health` `features`, and the adapter sends it only then.
+
+**Isolation limit.** Grants are owner-scoped, not thread-isolated. A grant
+proves "an agent of this owner, acting for this conversation". Any process
+that can read another conversation's grant file (for example in a shared
+grant directory) can ask as that conversation. The running-turn and
+owner-commanded checks still apply to the conversation the grant belongs to.
+Per-run capabilities injected by the broker, which no other agent could read,
+are a follow-up (TASK-52 channel).
 
 - The owner issues a grant for the asking conversation:
   `PUT /api/v2/conversations/{id}/thread-ask-grant` with `{}` (every other
@@ -92,13 +104,17 @@ turn of the asking thread, and an input does that through the ordinary path.
 ## Provisioning
 
 `v2/tools/thread_ask_provision.py` is the operator script. It logs in once
-with the owner credential file, reads `GET /api/v2/thread-ask-grants`, and for
-every eligible conversation makes sure a grant exists whose allowlist is
+with the owner credential file and reads `GET /api/v2/thread-ask-grants`. The
+selection is explicit: `--only <ids or names>` or `--all-owner-conversations`.
+For each selected eligible conversation it makes sure a grant exists whose allowlist is
 exactly the owner's other eligible conversations. It installs each grant as
 `<grant-dir>/<conversation>.grant` (0600, optional `--chown`). Reruns change
 nothing. A changed allowlist or a missing file rotates that grant, `--rotate`
 forces rotation, and `--revoke` revokes and deletes. Restricted or archived
-conversations lose their grant. Agents read the file when
+conversations lose their grant. An allowlist above 256 conversations fails
+for that conversation with `allowlist_too_large`; it is never truncated. Keep
+the grant directory readable only by the agents' user (see the isolation
+limit above). Agents read the file when
 `ORKESTR_V2_THREAD_ASK_GRANT_DIR` points at the directory.
 
 ## Agent instructions

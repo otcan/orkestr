@@ -264,3 +264,68 @@ async fn grant_auth_refusals_and_owner_views() {
     assert_eq!(status, 401);
     case.finish().await;
 }
+
+#[tokio::test]
+async fn message_authors_are_only_what_the_caller_states() {
+    use sha2::{Digest, Sha256};
+    let case = case().await;
+    let owner = case
+        .state
+        .store
+        .credentials("synthetic-owner")
+        .await
+        .unwrap()
+        .unwrap()
+        .0;
+    let cookie = format!("Cookie: orkestr_v2_session={}", case.cookie);
+    let origin = "Origin: http://127.0.0.1:19882";
+    let csrf = format!(
+        "x-orkestr-csrf: {:x}",
+        Sha256::digest(format!("orkestr-v2-browser-csrf-v1:{}", case.cookie).as_bytes())
+    );
+    let path = case.path("/messages");
+    let mut authors = Vec::new();
+    // The adapter logs in with the owner's cookie for member messages too, so
+    // a cookie without an explicit author is unattributed, never the owner.
+    for (key, author) in [
+        ("k-none", None),
+        ("k-member", Some("member")),
+        ("k-owner", Some("owner")),
+    ] {
+        let mut body = serde_json::json!({"client_message_id": key, "text": "hello"});
+        if let Some(author) = author {
+            body["author"] = author.into();
+        }
+        let (status, receipt) = send(
+            &case.state,
+            "POST",
+            &path,
+            &[&cookie, origin, &csrf],
+            &body.to_string(),
+        )
+        .await;
+        assert_eq!(status, 202, "{receipt}");
+        let message = MessageId(Uuid::parse_str(receipt["message_id"].as_str().unwrap()).unwrap());
+        authors.push(
+            case.state
+                .store
+                .message_author(&owner, &message)
+                .await
+                .unwrap(),
+        );
+    }
+    assert_eq!(authors, [None, Some("member".into()), Some("owner".into())]);
+    // An unknown author is a malformed request.
+    let bad = r#"{"client_message_id":"k-bad","text":"x","author":"admin"}"#;
+    let (status, _) = send(&case.state, "POST", &path, &[&case.auth()], bad).await;
+    assert_eq!(status, 400);
+    // Servers advertise the field so adapters send it only where accepted.
+    let (status, health) = send(&case.state, "GET", "/api/v2/health", &[], "").await;
+    assert_eq!(status, 200);
+    assert!(health["features"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|f| f == "message_author"));
+    case.finish().await;
+}
