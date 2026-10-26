@@ -4,9 +4,10 @@
 //! `[Chat rules v<12 hex>: before answering, read <path> (cat it) unless you
 //! already read this version in this session, and follow it.]`
 //!
-//! Every Fast session is fresh, so that line forced at least one tool call (and
-//! a second model round trip) into every owner Fast reply. Fast gets the exact
-//! version-checked file content instead. Deep keeps the line unchanged. Any
+//! A fresh Fast session would spend a tool call (and a second model round trip)
+//! on that line, so the first Fast turn of a session gets the exact
+//! version-checked file content instead; a warm same-window continuation of
+//! the same version gets only a short "already given" note. Deep keeps the line unchanged. Any
 //! mismatch (other version, unreadable, too large, not UTF-8) keeps the line,
 //! so Fast can still read the file itself.
 use sha2::{Digest, Sha256};
@@ -100,9 +101,44 @@ pub(super) fn inline(text: String) -> String {
     )
 }
 
+/// The adapter's exact leading rules line, when `text` starts with one.
+pub(super) fn leading_line(text: &str) -> Option<&str> {
+    parse(text)?;
+    Some(text.split_once('\n').map_or(text, |(line, _)| line))
+}
+
+/// Replace the rules line with a note that this exact version was already
+/// given earlier in the same native session (warm same-window Fast turn).
+pub(super) fn already_given(text: String) -> String {
+    let Some((version, _, rest)) = parse(&text) else {
+        return text;
+    };
+    format!(
+        "[Chat rules v{version} for this chat: unchanged since they were given earlier in this session; follow them, no need to read the file again.]\n{rest}"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_warm_turn_gets_a_short_note_for_the_same_version() {
+        let body = "\n[WhatsApp: synthetic]\n\nhello";
+        let input = format!("{}\n{body}", line("0123456789ab", "/synthetic/chat.md"));
+        assert_eq!(
+            leading_line(&input),
+            Some(line("0123456789ab", "/synthetic/chat.md").as_str())
+        );
+        let noted = already_given(input);
+        assert!(noted.starts_with("[Chat rules v0123456789ab for this chat: unchanged"));
+        assert!(!noted.contains("(cat it)") && !noted.contains("/synthetic/chat.md"));
+        assert!(noted.ends_with(body));
+        // Owner text that merely looks like the line is never rewritten.
+        let typed = format!("{}\n\nhello", line("0123456789ab", "/synthetic/chat.md"));
+        assert_eq!(leading_line(&typed), None);
+        assert_eq!(already_given(typed.clone()), typed);
+    }
 
     fn line(version: &str, path: &str) -> String {
         format!("{PREFIX}{version}{READ}{path}{SUFFIX}")
