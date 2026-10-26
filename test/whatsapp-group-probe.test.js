@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import {DatabaseSync} from 'node:sqlite';
-import {runProbe, recordOutcome, PROBE_LABEL} from '../scripts/whatsapp-group-probe.mjs';
+import {runProbe, recordOutcome, providerRateLimited, PROBE_LABEL, RATE_LIMIT_CODE} from '../scripts/whatsapp-group-probe.mjs';
 
 const own = '15550000001@c.us', second = '15550000002@c.us', chat = '120000000009@g.us';
 function fixture(t, {members = [own, second], deliver = true, record = true, route = true} = {}) {
@@ -89,4 +89,58 @@ test('intake-only mode passes on record + route even while the reply is held (de
   assert.equal(r.ok, true);
   assert.equal(r.intakeOnly, true);
   await assert.rejects(runProbe({...fixture(t, {deliver: false, route: false}), token: 't', intakeOnly: true}), /probe_input_not_routed/);
+});
+
+function codexLog(t, rows) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wa-probe-log-'));
+  t.after(() => fs.rmSync(dir, {recursive: true, force: true}));
+  const file = path.join(dir, 'logs_2.sqlite');
+  const db = new DatabaseSync(file);
+  db.exec('CREATE TABLE logs(id INTEGER PRIMARY KEY AUTOINCREMENT,ts INTEGER NOT NULL,level TEXT,target TEXT NOT NULL,feedback_log_body TEXT)');
+  for (const [ts, target, body] of rows) db.prepare('INSERT INTO logs(ts,level,target,feedback_log_body) VALUES(?,?,?,?)').run(ts, 'WARN', target, body);
+  db.close();
+  return file;
+}
+const retry429 = 'turn_id=x retries=1 max_retries=5 sampling_error=exceeded retry limit, last status: 429 Too Many Requests';
+
+test('provider 429 evidence is read only from the configured window and target', t => {
+  const file = codexLog(t, [[100, 'codex_core::responses_retry', retry429], [500, 'other::target', retry429]]);
+  assert.equal(providerRateLimited([file], 90_000, 110_000), true);
+  assert.equal(providerRateLimited([file], 200_000, 600_000), false);
+  assert.equal(providerRateLimited([path.join(path.dirname(file), 'missing.sqlite')], 0, 1e12), false);
+  assert.equal(providerRateLimited(undefined, 0, 1e12), false);
+});
+
+test('an undelivered reply during provider rate limiting is degraded, not failed', async t => {
+  const f = fixture(t, {deliver: false});
+  f.probe.providerRateLimitLogs = [codexLog(t, [[0, 'codex_core::responses_retry', retry429]])];
+  await assert.rejects(runProbe({...f, token: 't'}), e => e.probeCode === RATE_LIMIT_CODE && e.degraded === true);
+  // Without 429 evidence it is still a real delivery failure.
+  const g = fixture(t, {deliver: false});
+  g.probe.providerRateLimitLogs = [codexLog(t, [[0, 'codex_core::responses_retry', 'ok']])];
+  await assert.rejects(runProbe({...g, token: 't'}), e => /reply_not_delivered/.test(e.message) && !e.degraded);
+  // Unrecorded input is never excused by provider rate limits.
+  const h = fixture(t, {record: false, deliver: false});
+  h.probe.providerRateLimitLogs = f.probe.providerRateLimitLogs;
+  await assert.rejects(runProbe({...h, token: 't'}), /input_not_recorded/);
+});
+
+test('degraded runs do not alert as failures or break the failure streak, and alert once when long', t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wa-probe-state-'));
+  t.after(() => fs.rmSync(dir, {recursive: true, force: true}));
+  const file = path.join(dir, 'state.json'), alerts = [];
+  const alert = s => alerts.push(s.degraded ? `degraded:${s.consecutiveDegraded}` : `failed:${s.consecutiveFailures}`);
+  const degraded = {ok: false, degraded: true, code: RATE_LIMIT_CODE};
+  for (let i = 0; i < 3; i += 1) assert.equal(recordOutcome(file, degraded, {alert, degradedAlertAfter: 3}).consecutiveFailures, 0);
+  assert.deepEqual(alerts, ['degraded:3']);
+  recordOutcome(file, degraded, {alert, degradedAlertAfter: 3});
+  assert.deepEqual(alerts, ['degraded:3']);
+  recordOutcome(file, {ok: false, code: 'probe_input_not_recorded'}, {alert});
+  recordOutcome(file, degraded, {alert, degradedAlertAfter: 3});
+  assert.deepEqual(alerts, ['degraded:3']);
+  recordOutcome(file, {ok: false, code: 'probe_input_not_recorded'}, {alert});
+  assert.deepEqual(alerts, ['degraded:3', 'failed:2']);
+  const ok = recordOutcome(file, {ok: true}, {alert});
+  assert.equal(ok.consecutiveFailures, 0);
+  assert.equal(ok.consecutiveDegraded, undefined);
 });
