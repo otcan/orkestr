@@ -1,4 +1,5 @@
 """The same selected read-only account and bounded isolation, explicit service role."""
+import hashlib
 import os
 from pathlib import Path
 import re
@@ -61,7 +62,14 @@ class Configuration:
         """Host Fast's own CODEX_HOME; the operator's home is never used."""
         require(self.host_full_access and self.role == "fast", "fast_home_role")
         operator = host_codex_home(self.host_environment)
-        return prepare_fast_home(fast_home(self.profile), operator / "auth.json")
+        home = fast_home(self.profile, self.host_environment)
+        state = Path(getattr(self.profile, "state_root"))
+        # Never inside a checked native state root (private_state refuses any
+        # unknown entry there) and never inside the operator's Codex home.
+        for other in (state, operator):
+            require(home != other and other not in home.parents and home not in other.parents,
+                    "fast_home_scope_overlap")
+        return prepare_fast_home(home, operator / "auth.json")
 
     def host_resume(self, native):
         """Host mode reads native threads from the real CODEX_HOME, but a thread
@@ -202,30 +210,99 @@ SYSTEM_CODEX = Path("/etc/codex")
 ALLOW_RULE = re.compile(rb"""decision\s*=\s*["']allow["']""")
 
 
-def fast_home(profile):
-    """The Fast role's private Codex home inside its own native state root."""
+FAST_HOME_ROOT = Path(".local/state/orkestr-v2")
+
+
+def fast_home(profile, environment):
+    """The Fast role's private Codex home: OUTSIDE its native state root, which
+    `isolation.authenticated.private_state` checks against a closed inventory,
+    in the service user's own home (always creatable by this broker), one per
+    Fast state root."""
     state = getattr(profile, "state_root", None)
     require(state is not None, "fast_home_state_root")
-    return Path(state) / "host-codex-home"
+    home = Path(environment["HOME"])
+    require(home.is_absolute() and ".." not in home.parts, "fast_home")
+    key = hashlib.sha256(str(Path(state)).encode()).hexdigest()[:16]
+    return home / FAST_HOME_ROOT / f"fast-codex-home-{key}"
+
+
+def _private_directory(path):
+    try:
+        os.mkdir(path, 0o700)
+    except FileExistsError:
+        pass
+    info = os.lstat(path)
+    require(stat.S_ISDIR(info.st_mode) and info.st_uid == os.geteuid()
+            and stat.S_IMODE(info.st_mode) & 0o077 == 0, "fast_home")
+
+
+def _copy_private(source, target, mtime_ns):
+    """Atomic 0600 copy of a regular file; the copy keeps the source mtime."""
+    temporary = target.parent / f".{target.name}.{os.getpid()}.sync"
+    reader = os.open(source, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    try:
+        require(stat.S_ISREG(os.fstat(reader).st_mode), "fast_auth_source")
+        writer = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+                         | os.O_CLOEXEC, 0o600)
+        try:
+            while chunk := os.read(reader, 1024 * 1024):
+                view = memoryview(chunk)
+                while view:
+                    view = view[os.write(writer, view):]
+            os.fsync(writer)
+        finally:
+            os.close(writer)
+        os.utime(temporary, ns=(mtime_ns, mtime_ns))
+        os.replace(temporary, target)
+    finally:
+        os.close(reader)
+        if os.path.lexists(temporary):
+            os.unlink(temporary)
+
+
+def sync_fast_auth(source, copy):
+    """Keep one credential for Deep and Fast. The Fast home holds a private
+    0600 copy (never a link). Before every launch the newer side wins: a
+    newer operator file (Deep or the owner refreshed it) replaces the copy; a
+    copy Fast's native refreshed since the last sync is written back, so a
+    rotated refresh token is never lost. Equal content is left alone."""
+    source, copy = Path(source), Path(copy)
+    info = os.stat(source)
+    require(stat.S_ISREG(info.st_mode) and info.st_uid == os.geteuid(), "fast_auth_source")
+    if os.path.lexists(copy) and not stat.S_ISREG(os.lstat(copy).st_mode):
+        os.unlink(copy)  # A link or anything else is never followed.
+    if not os.path.lexists(copy):
+        _copy_private(source, copy, info.st_mtime_ns)
+        return "copied"
+    current = os.lstat(copy)
+    if source.read_bytes() == copy.read_bytes():
+        if stat.S_IMODE(current.st_mode) != 0o600:
+            os.chmod(copy, 0o600)
+        return "current"
+    if current.st_mtime_ns > info.st_mtime_ns:
+        _copy_private(copy, source, current.st_mtime_ns)
+        return "written_back"
+    _copy_private(source, copy, info.st_mtime_ns)
+    return "refreshed"
 
 
 def prepare_fast_home(home, auth, system=SYSTEM_CODEX):
-    """Make `home` a Fast-only CODEX_HOME: private, holding only a link to the
-    operator's auth file (Codex writes refreshed tokens in place, so Fast and
-    Deep keep one credential) plus Codex's own state. With no config.toml no
-    project is trusted, so project `.codex` config, rules and hooks stay
-    disabled too. Refuses to launch when an `allow` exec-policy rule or
-    an operator config layer could still reach Fast."""
+    """Make `home` a Fast-only CODEX_HOME: private, holding only a private copy
+    of the operator's auth file (`sync_fast_auth`) plus Codex's own state.
+    With no config.toml no project is trusted, so project `.codex` config,
+    rules and hooks stay disabled too. Refuses to launch when an `allow`
+    exec-policy rule or an operator config layer could still reach Fast."""
     home = Path(home)
     auth = Path(auth)
     require(home.is_absolute() and auth.is_absolute(), "fast_home")
-    try:
-        os.mkdir(home, 0o700)
-    except FileExistsError:
-        pass
-    info = os.lstat(home)
-    require(stat.S_ISDIR(info.st_mode) and info.st_uid == os.geteuid()
-            and stat.S_IMODE(info.st_mode) & 0o077 == 0, "fast_home")
+    for parent in reversed(home.parents):
+        if not parent.exists():
+            _private_directory(parent)
+    # The directory holding the Fast home must be ours and not writable by others.
+    parent = os.lstat(home.parent)
+    require(stat.S_ISDIR(parent.st_mode) and parent.st_uid == os.geteuid()
+            and parent.st_mode & 0o022 == 0, "fast_home_parent")
+    _private_directory(home)
     for name in FAST_HOME_FORBIDDEN:
         path = home / name
         if path.is_dir() and not path.is_symlink():
@@ -233,11 +310,7 @@ def prepare_fast_home(home, auth, system=SYSTEM_CODEX):
             shutil.rmtree(path)
         elif os.path.lexists(path):
             os.unlink(path)
-    link = home / "auth.json"
-    if not (link.is_symlink() and os.readlink(link) == str(auth)):
-        if os.path.lexists(link):
-            os.unlink(link)
-        os.symlink(auth, link)
+    sync_fast_auth(auth, home / "auth.json")
     require(not reachable_allow_rules(home, system), "fast_allow_rules")
     require(not any((system / name).exists() for name in ("config.toml", "managed_config.toml",
                                                           "hooks.json")), "fast_system_config")

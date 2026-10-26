@@ -41,15 +41,18 @@ host full access:
   (`CodexRpc::for_role`). The broker independently refuses any other sandbox for
   a Fast identity (`protocol.FAST_SANDBOX`), and the dedicated Fast broker
   serves only Fast identities.
-- The host Fast native runs with its own `CODEX_HOME` (in the Fast role's native
-  state root). That home holds only a link to the operator's auth file: no
-  `config.toml`, exec-policy rules, hooks or plugins. With no config.toml no
-  project is trusted, so a workspace's `.codex` config, rules and MCP servers
-  stay disabled. The broker refuses to launch Fast if an `allow` rule or an
-  operator layer under `/etc/codex` is still reachable. Apps/connectors,
-  plugins, hooks, browser and desktop control, sub-agents, memories, goals,
-  worktrees and dependency installs are also disabled
-  (`codex_service/profile.py`).
+- The host Fast native runs with its own `CODEX_HOME`, under the service
+  user's home (`~/.local/state/orkestr-v2/fast-codex-home-<id>`, 0700), never
+  inside a native state root (`private_state` refuses unknown entries there)
+  or the operator's Codex home. It holds only a private 0600 copy of the
+  operator's `auth.json`, synced before every launch (the newer side wins, so a
+  token Fast's native refreshed is written back): no `config.toml`,
+  exec-policy rules, hooks or plugins. With no config.toml no project is
+  trusted, so a workspace's `.codex` config, rules and MCP servers stay
+  disabled. The broker refuses to launch Fast if an `allow` rule or an operator
+  layer under `/etc/codex` is still reachable. Apps/connectors, plugins, hooks,
+  browser and desktop control, sub-agents, memories, goals, worktrees and
+  dependency installs are also disabled (`codex_service/profile.py`).
 - A Claude Fast session gets only `Read`, `Grep`, `Glob` and `WebSearch`, no MCP
   server, no settings sources and no hooks (`claude_connector.FAST_TOOLS`).
 - Every Fast turn starts with the reply contract `FAST_TURN_NOTE`

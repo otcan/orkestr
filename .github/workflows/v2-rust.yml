@@ -80,6 +80,7 @@ jobs:
           python3 -I -S -B -m unittest discover -s provider-broker -p 'test_claude_*.py' -v
           python3 -I -S -B -m unittest discover -s provider-broker -p test_reaping.py -v
           python3 -I -S -B -m unittest discover -s provider-broker -p test_host_full_access.py -v
+          python3 -I -S -B -m unittest discover -s provider-broker -p test_fast_read_only.py -v
           python3 -I -S -B -m unittest discover -s provider-broker -p test_conversation_workspaces.py -v
       - name: Protected synthetic manager package regressions
         run: |
