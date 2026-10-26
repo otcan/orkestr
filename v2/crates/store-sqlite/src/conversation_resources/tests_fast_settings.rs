@@ -61,9 +61,10 @@ async fn fast_launch_model_matches_the_dispatch_override() {
         case.store
             .fast_launch_model(&case.token, &case.owner, &case.conversation)
             .await
-            .unwrap(),
-        None,
-        "unconfigured Fast keeps the native default"
+            .unwrap()
+            .as_deref(),
+        Some(super::fast_settings::FAST_DEFAULT_MODEL),
+        "unconfigured Fast starts on the Fast default, never the native's global default"
     );
     let update = FastRoleSettingsUpdate {
         expected_revision: 0,

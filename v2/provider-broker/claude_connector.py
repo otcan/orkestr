@@ -9,6 +9,13 @@ import uuid
 import json
 
 PATHS = ("executable", "account", "workspace", "home", "temporary")
+# Fast runs in parallel with Deep on the same input, so it is read-only: only
+# these read-only built-in tools exist, they are the only pre-approved ones
+# (dontAsk denies everything else), no MCP server is loaded, no user/project
+# settings source is read and no hook runs.
+FAST_TOOLS = "Read,Grep,Glob,WebSearch"
+FAST_DISALLOWED_TOOLS = "Bash,Edit,Write,NotebookEdit,WebFetch,Task,Agent,TodoWrite,Skill,SlashCommand"
+FAST_SETTINGS = '{"disableAllHooks":true}'
 EFFORTS = ("low", "medium", "high", "max")
 
 
@@ -107,8 +114,15 @@ class ClaudeOwnedSession:
         self.workspace = config.workspace
         self._account_environment = account_environment
         self.resumed = resumed
+        self.read_only = False
         self._owned_child = None
         self._retired = False
+
+    def restrict_to_read_only(self):
+        """Fast identity: one-way, and only before the native is launched."""
+        if self._owned_child is not None:
+            raise ValueError("Claude process already launched")
+        self.read_only = True
 
     def owned_spawned(self, child):
         if self._owned_child is not None:
@@ -127,6 +141,15 @@ class ClaudeOwnedSession:
 
     def command(self):
         session = ["--resume" if self.resumed else "--session-id", str(self.native)]
+        if self.uncontained and self.read_only:
+            return [str(self._config.executable), "-p", "--input-format", "stream-json",
+                    "--output-format", "stream-json", "--verbose",
+                    "--permission-mode", "dontAsk", "--tools", FAST_TOOLS,
+                    "--allowedTools", FAST_TOOLS, "--disallowedTools", FAST_DISALLOWED_TOOLS,
+                    "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}',
+                    "--setting-sources", "", "--settings", FAST_SETTINGS,
+                    "--disable-slash-commands", "--no-chrome",
+                    "--prompt-suggestions", "false", *session]
         if self.uncontained:
             return [str(self._config.executable), "-p", "--input-format", "stream-json",
                     "--output-format", "stream-json", "--verbose",

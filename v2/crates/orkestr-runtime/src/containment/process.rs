@@ -398,8 +398,15 @@ pub(super) fn validate_metadata(
                     .and_then(Value::as_str)
                     .is_some_and(|cwd| std::path::Path::new(cwd) == workspace)
                 && params.get("approvalPolicy").and_then(Value::as_str) == Some("never")
-                && params.get("sandbox").and_then(Value::as_str)
-                    == Some(crate::provider_access::current().request())
+                // Read-only is always allowed: it is never wider than the
+                // instance selection (a Fast session always uses it).
+                && params
+                    .get("sandbox")
+                    .and_then(Value::as_str)
+                    .is_some_and(|sandbox| {
+                        sandbox == crate::provider_access::current().request()
+                            || sandbox == crate::provider_access::ProviderAccess::ReadOnly.request()
+                    })
                 && params.get("ephemeral") == Some(&Value::Bool(false))
         }
         _ => false,

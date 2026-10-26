@@ -220,6 +220,7 @@ impl PreparingCodex {
             bind(&child)?;
         }
         let open = child.open_broker_metadata()?;
+        let rpc = CodexRpc::for_role(binding.role);
         Ok(Self {
             authority,
             child: Some(child),
@@ -227,7 +228,7 @@ impl PreparingCodex {
             workspace: workspace.into(),
             open: Some(open),
             channel: None,
-            rpc: CodexRpc::default(),
+            rpc,
             phase: Phase::Open,
             failed: false,
             actual_fd,

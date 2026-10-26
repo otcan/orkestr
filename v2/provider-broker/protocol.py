@@ -45,6 +45,14 @@ class Refused(Exception):
 CODEX_EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra")
 
 
+def launch_model(value):
+    """A model Runtime may request (thread/start or turn/start): the same rule
+    as Core's launch_model_valid; never a provider name, path or number."""
+    return (isinstance(value, str) and 0 < len(value) <= 120 and not value.isdigit()
+            and all(c.isascii() and (c.isalnum() or c in "._:-") for c in value)
+            and value.lower() not in ("openai", "azure", "openrouter"))
+
+
 def reported_model(value):
     return (isinstance(value, str) and 0 < len(value) <= 120 and
             all(c.isascii() and (c.isalnum() or c in "-_.:/") for c in value))
@@ -107,11 +115,20 @@ def encode(value):
     return raw
 
 
+# Fast runs in parallel with Deep on the same input. Any Fast side effect would
+# happen twice (once per layer), so Fast never gets more than read-only.
+FAST_SANDBOX = ("read-only", "readOnly")
+
+
 class Channel:
     def __init__(self, workspace, *, expected_native=None, offline_python=False, workspace_exec=False,
-                 workspace_trusted=False, host_full_access=False, conversation_workspaces=()):
+                 workspace_trusted=False, host_full_access=False, conversation_workspaces=(),
+                 fast_only=False):
         # Operator instance opt-in only: Codex danger-full-access on the host.
         require(type(host_full_access) is bool)
+        # The dedicated Fast broker serves only Fast identities.
+        require(type(fast_only) is bool)
+        self.fast_only = fast_only
         # Operator-pinned per-conversation working directories (host full
         # access only). Runtime selects one for a Deep/Fast thread; no other
         # directory is ever accepted.
@@ -177,7 +194,14 @@ class Channel:
             # parent/task admission; role JSON cannot create that authority.
             require(identity["role"] in ("fast", "deep", "worker"))
             require(not self.tool_enabled or identity["role"] == "worker")
+            require(not self.fast_only or identity["role"] == "fast")
             self.role = identity["role"]
+            if self.role == "fast":
+                # Fast is read-only on every instance, including host full
+                # access: Codex's read-only sandbox denies file writes and
+                # network to every command. Runtime must request it and the
+                # provider must confirm it (see thread/start below).
+                self.sandbox = FAST_SANDBOX
             self.handle = secrets.token_hex(24)
             return None, {"id": outer, "result": {"protocol": PROTOCOL,
                     "identity": identity, "metadata_only": True, "owned_handle": self.handle}}
@@ -299,7 +323,7 @@ class Channel:
             if kind == "thread/start" and isinstance(params, dict) and "model" in params:
                 # Optional explicit model for a fresh thread (bounded Fast). It
                 # is a request only; the native start reply is the evidence.
-                require(reported_model(params["model"]))
+                require(launch_model(params["model"]))
                 params = dict(params)
                 del params["model"]
             cwd = params.get("cwd") if isinstance(params, dict) else None
@@ -319,10 +343,7 @@ class Channel:
         # Optional owner conversation settings, as V1 turnStartParams sends them.
         overrides = tuple(key for key in ("model", "effort") if isinstance(params, dict) and key in params)
         if "model" in overrides:
-            model = params["model"]
-            require(isinstance(model, str) and 0 < len(model) <= 120 and not model.isdigit()
-                    and all(c.isascii() and (c.isalnum() or c in "._:-") for c in model)
-                    and model.lower() not in ("openai", "azure", "openrouter"))
+            require(launch_model(params["model"]))
         if "effort" in overrides:
             require(params["effort"] in CODEX_EFFORTS)
         exact(params, ("threadId", "clientUserMessageId", "input") + overrides)

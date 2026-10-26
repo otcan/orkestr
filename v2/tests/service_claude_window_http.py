@@ -169,7 +169,10 @@ def run(case, real):
         assert [row["resumed"] for row in spawns] == [False, True, True, True]
         assert [row["resumed"] for row in fast_spawns][:4] == [False, True, True, True]
         assert {(row["model"], row["effort"]) for row in spawns} == {("synthetic-claude-model", "low")}
-        assert {(row["model"], row["effort"]) for row in fast_spawns} == {(None, "low")}
+        assert {(row["model"], row["effort"]) for row in fast_spawns} == {("sonnet", "low")}
+        # Fast launches read-only; Deep keeps full access.
+        assert all(row["read_only"] for row in fast_spawns)
+        assert not any(row["read_only"] for row in spawns)
         assert len([row for row in trace if row["kind"] == "interrupt"]) == 2
     if not real:
         # Accepted proposals do not authorize replacing a still-owned native.

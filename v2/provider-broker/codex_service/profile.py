@@ -14,6 +14,7 @@ class Configuration:
     def __init__(self, package, role="deep"):
         self.package = package
         require(role in package.role_profiles, "unconfigured_role")
+        self.role = role
         self.profile = SelectedCodexProfile(package.role_profiles[role])
         self.workspace_descriptor = None
         self.workspace = self.profile.workspace
@@ -35,6 +36,11 @@ class Configuration:
         require(not self.issued, "isolated_command_already_issued")
         self.issued = True
         if self.host_full_access:
+            if self.role == "fast":
+                home = self.prepare_fast_home()
+                return host_command(self.profile.native, self.host_environment,
+                                    self.host_environment_files, fast_host_options(),
+                                    {"CODEX_HOME": str(home)}), ()
             return host_command(self.profile.native, self.host_environment,
                                 self.host_environment_files), ()
         descriptor = policy.filter_fd(allow_inet=True)
@@ -51,6 +57,12 @@ class Configuration:
             raise
 
 
+    def prepare_fast_home(self):
+        """Host Fast's own CODEX_HOME; the operator's home is never used."""
+        require(self.host_full_access and self.role == "fast", "fast_home_role")
+        operator = host_codex_home(self.host_environment)
+        return prepare_fast_home(fast_home(self.profile), operator / "auth.json")
+
     def host_resume(self, native):
         """Host mode reads native threads from the real CODEX_HOME, but a thread
         Core already bound may have been created by the sandboxed provider in
@@ -59,6 +71,12 @@ class Configuration:
         require(self.host_full_access, "host_full_access_required")
         state = getattr(self.profile, "state_root", None)
         require(state is not None, "host_resume_state_root")
+        if self.role == "fast":
+            # Fast threads started before Fast had its own home live in the
+            # operator's home; later ones are already in the Fast home.
+            home = self.prepare_fast_home()
+            result = import_rollout(host_codex_home(self.host_environment), home, native)
+            return result if result != "absent" else import_rollout(Path(state), home, native)
         return import_rollout(Path(state), host_codex_home(self.host_environment), native)
 
 
@@ -139,7 +157,106 @@ def import_rollout(state_root, codex_home, native):
     return "imported"
 
 
-def host_command(native, environment, environment_files=()):
+# Fast is read-only (protocol.FAST_SANDBOX). The sandbox covers commands and
+# file edits only, so the host Fast native also loses every tool family that
+# acts outside it: ChatGPT apps/connectors (e.g. cross-thread messaging),
+# plugins, browser and desktop control, sub-agents, memory and goal writes,
+# dependency installs and worktrees. Names are this pinned native's features;
+# an unknown name makes the native refuse to start (fail closed).
+# Re-verify on every native upgrade (see README "Codex native upgrade"): the
+# test suite fails until this matches packaging/desktop/codex-pins.json.
+FAST_FEATURES_VERIFIED_FOR = "0.163.0"
+FAST_DISABLED_FEATURES = (
+    "apps", "plugins", "remote_plugin", "browser_use", "browser_use_external",
+    "browser_use_full_cdp_access", "computer_use", "in_app_browser",
+    "in_app_local_automation", "multi_agent", "multi_agent_v2", "memories", "goals",
+    "worktrees", "workspace_dependencies", "skill_mcp_dependency_install",
+    "image_generation", "hooks",
+)
+# Thread defaults for Fast. Core sends the owner's Fast model/effort (else these
+# same defaults) on every turn; this keeps a Fast native from ever falling back
+# to the operator's global Codex default (a Deep-class model at high effort).
+FAST_DEFAULT_MODEL = "gpt-6-luna"
+FAST_DEFAULT_EFFORT = "low"
+
+
+def fast_host_options():
+    """App-server options for a host Fast native: Fast thread defaults and every
+    side-effect feature disabled. Config, rules and hooks are excluded by the
+    Fast-only CODEX_HOME (`prepare_fast_home`), not by this list."""
+    options = ["-c", f'model="{FAST_DEFAULT_MODEL}"',
+               "-c", f'model_reasoning_effort="{FAST_DEFAULT_EFFORT}"']
+    for feature in FAST_DISABLED_FEATURES:
+        options += ["--disable", feature]
+    return tuple(options)
+
+
+# A Fast CODEX_HOME never holds operator configuration. Codex reads these from
+# its home: config (MCP servers, project trust, profiles), exec-policy rules
+# (an `allow` rule runs a command outside the sandbox), hooks and instructions.
+# Codex itself may write some of them; they are removed before every launch.
+FAST_HOME_FORBIDDEN = ("config.toml", "managed_config.toml", "rules", "hooks.json",
+                       "hooks", "AGENTS.md", "AGENTS.override.md", "plugins")
+# System and managed layers Codex also reads, outside any CODEX_HOME.
+SYSTEM_CODEX = Path("/etc/codex")
+ALLOW_RULE = re.compile(rb"""decision\s*=\s*["']allow["']""")
+
+
+def fast_home(profile):
+    """The Fast role's private Codex home inside its own native state root."""
+    state = getattr(profile, "state_root", None)
+    require(state is not None, "fast_home_state_root")
+    return Path(state) / "host-codex-home"
+
+
+def prepare_fast_home(home, auth, system=SYSTEM_CODEX):
+    """Make `home` a Fast-only CODEX_HOME: private, holding only a link to the
+    operator's auth file (Codex writes refreshed tokens in place, so Fast and
+    Deep keep one credential) plus Codex's own state. With no config.toml no
+    project is trusted, so project `.codex` config, rules and hooks stay
+    disabled too. Refuses to launch when an `allow` exec-policy rule or
+    an operator config layer could still reach Fast."""
+    home = Path(home)
+    auth = Path(auth)
+    require(home.is_absolute() and auth.is_absolute(), "fast_home")
+    try:
+        os.mkdir(home, 0o700)
+    except FileExistsError:
+        pass
+    info = os.lstat(home)
+    require(stat.S_ISDIR(info.st_mode) and info.st_uid == os.geteuid()
+            and stat.S_IMODE(info.st_mode) & 0o077 == 0, "fast_home")
+    for name in FAST_HOME_FORBIDDEN:
+        path = home / name
+        if path.is_dir() and not path.is_symlink():
+            import shutil
+            shutil.rmtree(path)
+        elif os.path.lexists(path):
+            os.unlink(path)
+    link = home / "auth.json"
+    if not (link.is_symlink() and os.readlink(link) == str(auth)):
+        if os.path.lexists(link):
+            os.unlink(link)
+        os.symlink(auth, link)
+    require(not reachable_allow_rules(home, system), "fast_allow_rules")
+    require(not any((system / name).exists() for name in ("config.toml", "managed_config.toml",
+                                                          "hooks.json")), "fast_system_config")
+    return home
+
+
+def reachable_allow_rules(home, system=SYSTEM_CODEX):
+    """Exec-policy rule files with an `allow` decision Fast's native would load."""
+    found = []
+    for root in (Path(home) / "rules", Path(system) / "rules"):
+        if not root.exists():
+            continue
+        for path in sorted(root.rglob("*")):
+            if path.is_file() and ALLOW_RULE.search(path.read_bytes()):
+                found.append(path)
+    return found
+
+
+def host_command(native, environment, environment_files=(), options=(), pinned=None):
     """No namespace, seccomp, egress proxy or mounts: `env -i` installs exactly
     the operator's real executor environment before the pinned native.
 
@@ -156,7 +273,15 @@ def host_command(native, environment, environment_files=()):
         script = 'set -a; for f in ' + " ".join('"$%d"' % (i + 1) for i in range(len(files))) + \
             '; do . "$f"; done; set +a; shift %d; exec "$@"' % len(files)
         command += ["/bin/sh", "-c", script, "orkestr-host-env", *files]
-    return command + [str(native), "app-server", "--listen", "stdio://"]
+    require(all(type(option) is str and "\0" not in option for option in options), "host_options")
+    # Pinned values are set last, after any environment file, so a sourced
+    # file cannot override them (e.g. Fast's CODEX_HOME).
+    pinned = dict(pinned or {})
+    require(all(type(k) is str and type(v) is str and k and "=" not in k and "\0" not in k + v
+                for k, v in pinned.items()), "host_pinned_environment")
+    if pinned:
+        command += ["/usr/bin/env", *(f"{k}={v}" for k, v in sorted(pinned.items()))]
+    return command + [str(native), "app-server", *options, "--listen", "stdio://"]
 
 
 def private_environment_file(path):

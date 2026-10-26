@@ -23,6 +23,8 @@ pub struct CodexRpc {
     native_session: Option<String>,
     turn_submitted: bool,
     reported_model: Option<String>,
+    /// Fast connections are read-only on every instance (see `for_role`).
+    fast_read_only: bool,
 }
 enum Request {
     Initialize,
@@ -41,10 +43,28 @@ impl Default for CodexRpc {
             native_session: None,
             turn_submitted: false,
             reported_model: None,
+            fast_read_only: false,
         }
     }
 }
 impl CodexRpc {
+    /// Fast runs in parallel with Deep on the same input, so any Fast side
+    /// effect would happen twice. A Fast connection therefore always requests
+    /// (and requires the provider to confirm) the read-only sandbox, even when
+    /// the instance otherwise runs providers with host full access. The broker
+    /// enforces the same rule independently for a Fast identity.
+    pub(crate) fn for_role(role: orkestr_v2_contracts::runtime::Role) -> Self {
+        Self {
+            fast_read_only: role == orkestr_v2_contracts::runtime::Role::Fast,
+            ..Self::default()
+        }
+    }
+
+    /// The sandbox this connection requests and requires.
+    pub(crate) fn access(&self) -> crate::provider_access::ProviderAccess {
+        connection_access(self.fast_read_only, crate::provider_access::current())
+    }
+
     // One consumed turn per connection in this slice. Any enqueue/transport
     // failure leaves it latched; reconnect never restores the consumed grant.
     pub(crate) fn claim_turn_request(&mut self, native: &str) -> Result<u64, Blocker> {
@@ -127,7 +147,7 @@ impl CodexRpc {
         let cwd = cwd.to_str().ok_or(Blocker::Protocol)?;
         let mut params = json!({
             "cwd":cwd,"approvalPolicy":"never",
-            "sandbox":crate::provider_access::current().request(),
+            "sandbox":self.access().request(),
             "ephemeral":false,"modelProvider":"openai"
         });
         if let Some(model) = model {
@@ -210,6 +230,7 @@ impl CodexRpc {
                 Err(Blocker::Protocol)
             };
         }
+        let access = self.access();
         let (id, kind) = self.pending.as_ref().ok_or(Blocker::Protocol)?;
         if value.get("id").and_then(Value::as_u64) != Some(*id) || value.get("error").is_some() {
             return Err(Blocker::Protocol);
@@ -250,7 +271,7 @@ impl CodexRpc {
                     || result.get("cwd").and_then(Value::as_str) != Some(cwd.as_str())
                     || result.pointer("/thread/cwd").and_then(Value::as_str) != Some(cwd.as_str())
                     || result.get("approvalPolicy").and_then(Value::as_str) != Some("never")
-                    || !sandbox_reply(result, crate::provider_access::current())
+                    || !sandbox_reply(result, access)
                 {
                     return Err(Blocker::Protocol);
                 }
@@ -275,6 +296,18 @@ impl CodexRpc {
         };
         self.pending = None;
         Ok(notification)
+    }
+}
+
+/// A Fast connection is read-only whatever the instance selection is.
+fn connection_access(
+    fast_read_only: bool,
+    instance: crate::provider_access::ProviderAccess,
+) -> crate::provider_access::ProviderAccess {
+    if fast_read_only {
+        crate::provider_access::ProviderAccess::ReadOnly
+    } else {
+        instance
     }
 }
 
@@ -309,6 +342,44 @@ mod access_tests {
             "danger-full-access"
         );
         assert_eq!(crate::provider_access::current(), ProviderAccess::ReadOnly);
+    }
+
+    #[test]
+    fn fast_connection_is_read_only_even_with_host_full_access() {
+        use orkestr_v2_contracts::runtime::Role;
+        // Host full access widens Deep and Workers only, never Fast.
+        assert_eq!(
+            connection_access(true, ProviderAccess::HostFullAccess),
+            ProviderAccess::ReadOnly
+        );
+        assert_eq!(
+            connection_access(false, ProviderAccess::HostFullAccess),
+            ProviderAccess::HostFullAccess
+        );
+        assert_eq!(
+            connection_access(true, ProviderAccess::ReadOnly),
+            ProviderAccess::ReadOnly
+        );
+        assert!(CodexRpc::for_role(Role::Fast).fast_read_only);
+        assert!(!CodexRpc::for_role(Role::Deep).fast_read_only);
+        assert!(!CodexRpc::for_role(Role::Worker).fast_read_only);
+        // A Fast thread requests read-only and refuses a full-access reply.
+        let mut rpc = CodexRpc::for_role(Role::Fast);
+        rpc.initialize().unwrap();
+        rpc.receive(&json!({"id":1,"result":{"userAgent":"synthetic","platformFamily":"unix","platformOs":"linux","codexHome":"/synthetic"}}).to_string()).unwrap();
+        rpc.account_read().unwrap();
+        rpc.receive(
+            &json!({"id":2,"result":{"requiresOpenaiAuth":true,"account":{"type":"chatgpt"}}})
+                .to_string(),
+        )
+        .unwrap();
+        let frame = rpc
+            .create_session(std::path::Path::new("/synthetic"))
+            .unwrap();
+        assert_eq!(frame["params"]["sandbox"], "read-only");
+        let full = json!({"id":3,"result":{"thread":{"id":"synthetic-native","cwd":"/synthetic","ephemeral":false,"modelProvider":"openai"},"cwd":"/synthetic","modelProvider":"openai","approvalPolicy":"never","sandbox":{"type":"dangerFullAccess"}}});
+        assert_eq!(rpc.receive(&full.to_string()), Err(Blocker::Protocol));
+        assert_eq!(rpc.native_session(), None);
     }
 }
 

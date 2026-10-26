@@ -3,6 +3,25 @@ use super::*;
 use crate::runtime::ledger::{self, hash, secret, Ledger};
 use sqlx::sqlite::SqliteRow;
 impl Store {
+    /// Handoff context and the Fast history digest, both prefixed to `text`.
+    async fn attach_turn_context(
+        &self,
+        tx: &mut SqliteConnection,
+        provider: &ProviderAdmission,
+        row: &sqlx::sqlite::SqliteRow,
+        text: String,
+    ) -> Result<String> {
+        let text = super::execution_window::handoff_context::attach(tx, provider, text).await?;
+        super::fast_digest::attach(
+            tx,
+            provider,
+            row.get("event_id"),
+            row.get("scope_sequence"),
+            text,
+        )
+        .await
+    }
+
     pub(crate) async fn check_context_in(
         &self,
         conn: &mut SqliteConnection,
@@ -293,16 +312,45 @@ impl Store {
                 .map_err(|_| RuntimeStoreError::Unavailable)?,
             ),
         };
-        let text = super::execution_window::handoff_context::attach(&mut tx, &claim.provider, text)
-            .await?;
-        let text = super::fast_digest::attach(
-            &mut tx,
-            &claim.provider,
-            row.get("event_id"),
-            row.get("scope_sequence"),
-            text,
-        )
-        .await?;
+        // Fast gets the chat rules inline (no forced tool call per reply), but
+        // only when the final turn still fits the provider input bound;
+        // otherwise the savepoint drops that attempt and Fast keeps the line.
+        let inlined = (claim.provider.run.role == orkestr_v2_contracts::runtime::Role::Fast)
+            .then(|| super::fast_rules::inline(text.clone()))
+            .filter(|inlined| *inlined != text);
+        let mut final_text = None;
+        if let Some(inlined) = inlined {
+            sqlx::query("SAVEPOINT fast_rules_inline")
+                .execute(&mut *tx)
+                .await
+                .map_err(db)?;
+            let attached = self
+                .attach_turn_context(&mut tx, &claim.provider, &row, inlined)
+                .await?;
+            if super::fast_rules::fits(&attached) {
+                sqlx::query("RELEASE fast_rules_inline")
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(db)?;
+                final_text = Some(attached);
+            } else {
+                sqlx::query("ROLLBACK TO fast_rules_inline")
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(db)?;
+                sqlx::query("RELEASE fast_rules_inline")
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(db)?;
+            }
+        }
+        let text = match final_text {
+            Some(text) => text,
+            None => {
+                self.attach_turn_context(&mut tx, &claim.provider, &row, text)
+                    .await?
+            }
+        };
         let capability = ConsumedProviderDispatch {
             launch,
             parent_run,
