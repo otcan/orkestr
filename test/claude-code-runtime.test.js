@@ -45,6 +45,7 @@ import {
   startClaudeCodeThread,
 } from "../packages/core/src/runtime-claude-code-adapter.js";
 import { createThread, enqueueThreadInput, getThread, listThreadMessages, updateThread } from "../packages/core/src/threads.js";
+import { waitForFixtureCall } from "./support/fixture-file-events.js";
 
 async function fixture(t, name = "runtime") {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), `orkestr-claude-${name}-`));
@@ -862,7 +863,7 @@ test("Claude WhatsApp turns persist bounded progress before the final answer", a
 });
 
 test("Claude runtime enforces one active turn and interruption leaves no late assistant mutation", async (t) => {
-  const { delayFile, env } = await fixture(t, "interrupt");
+  const { delayFile, calls, env } = await fixture(t, "interrupt");
   await fs.writeFile(delayFile, "500", "utf8");
   const profile = await readyProfile("owner", "Interrupt", env);
   const thread = await claudeThread("owner", profile.id, env, "claude-interrupt");
@@ -870,7 +871,7 @@ test("Claude runtime enforces one active turn and interruption leaves no late as
   const running = sendClaudeCodeInput(thread, first, env);
   const second = await enqueueThreadInput(thread.id, { text: "concurrent request", source: "test" }, env);
   await assert.rejects(sendClaudeCodeInput(thread, second, env), /claude_code_turn_active/);
-  await new Promise((resolve) => setTimeout(resolve, 50));
+  await waitForFixtureCall(calls, (record) => record.prompt?.includes("long request"));
   assert.equal((await interruptClaudeCodeThread(thread, env)).interrupted, true);
   const result = await running;
   assert.equal(result.interrupted, true);
