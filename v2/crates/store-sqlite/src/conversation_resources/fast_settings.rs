@@ -55,6 +55,23 @@ pub(crate) async fn turn_launch(
 }
 
 impl Store {
+    /// The explicit Codex model the next Fast turn will request, exactly as
+    /// its dispatch computes it. A fresh Fast thread may start with it so the
+    /// native start reply reports the model; None keeps the native default.
+    pub async fn fast_launch_model(
+        &self,
+        credential: &str,
+        owner: &OwnerId,
+        conversation: &ConversationId,
+    ) -> Result<Option<String>> {
+        let mut tx = self
+            .owner_scope(credential, owner, conversation, false)
+            .await?;
+        let launch = turn_launch(&mut tx, conversation).await?;
+        tx.commit().await.map_err(unavailable)?;
+        Ok(launch.and_then(|launch| launch.model))
+    }
+
     pub async fn fast_role_settings(
         &self,
         credential: &str,

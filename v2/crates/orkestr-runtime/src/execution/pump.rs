@@ -149,6 +149,20 @@ impl Provider for CodexOutput {
     }
 }
 
+/// The native thread-start/resume model answers a turn that uses the thread
+/// default, or that overrides with exactly that native-reported model (Codex
+/// sends no settings update for an unchanged value). Any other override stays
+/// unreported until the native itself confirms or reroutes it.
+pub(super) fn native_model_evidence<'a>(
+    native: Option<&'a str>,
+    requested: Option<&str>,
+) -> Option<&'a str> {
+    match requested {
+        None => native,
+        Some(requested) => native.filter(|native| *native == requested),
+    }
+}
+
 /// Private composition only. The caller transfers its already attached owned
 /// child; neither this pump nor its protocol parser can acquire/start a turn.
 /// PendingObservation retains original admission, sequence and body on Busy or
@@ -205,10 +219,18 @@ impl CodexPump {
         self.source.broker = Some(channel);
         self
     }
-    pub(super) fn with_native_model(mut self, model: Option<String>, uses_default: bool) -> Self {
+    /// `requested` is the turn's explicit model override, if any. The native
+    /// thread-start/resume model is evidence for a turn using that default or
+    /// overriding with exactly the same native-reported model; any other
+    /// override stays unreported until the native confirms it.
+    pub(super) fn with_native_model(
+        mut self,
+        model: Option<String>,
+        requested: Option<&str>,
+    ) -> Self {
         self.source
             .stream
-            .report_model(if uses_default { model.as_deref() } else { None });
+            .report_model(native_model_evidence(model.as_deref(), requested));
         self.source.native_model = model;
         self
     }

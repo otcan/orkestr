@@ -56,6 +56,14 @@ impl ConfiguredExecution {
             }
             return Ok(None);
         }
+        // Best effort: an unreadable preference keeps the native default
+        // thread model, and the Fast model then stays unreported.
+        let thread_model = self
+            .store
+            .fast_launch_model(&self.token, &self.owner, &self.config.conversation_id)
+            .await
+            .ok()
+            .flatten();
         let directories = ChildDirectories::new(
             &self.config.workspace,
             &self.directory.join("home"),
@@ -91,6 +99,7 @@ impl ConfiguredExecution {
                 self.children.retain(),
             )
         }
+        .and_then(|setup| setup.with_thread_model(thread_model))
         .map_err(|_| "Fast broker setup refused")?;
         let deadline = Instant::now() + Duration::from_secs(15);
         loop {

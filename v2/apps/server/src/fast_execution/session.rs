@@ -90,6 +90,13 @@ impl PreparingFast {
         )?;
         Ok(Self { store, preparing })
     }
+    /// Start the fresh native thread with the Fast turn's explicit model.
+    pub(crate) fn with_thread_model(self, model: Option<String>) -> Result<Self, SetupFailure> {
+        Ok(Self {
+            store: self.store,
+            preparing: self.preparing.with_thread_model(model)?,
+        })
+    }
     pub fn poll_ready(&mut self) -> Result<bool, SetupFailure> {
         self.preparing.poll()
     }

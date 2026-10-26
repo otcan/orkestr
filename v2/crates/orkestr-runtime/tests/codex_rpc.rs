@@ -233,3 +233,38 @@ fn persistent_thread_requires_matching_explicit_openai_provider_proof() {
     assert_eq!(rpc.receive(&valid.to_string()), Ok(None));
     assert_eq!(rpc.native_session(), Some("synthetic-thread"));
 }
+
+#[test]
+fn fresh_session_may_name_a_valid_model_and_resume_never_does() {
+    let mut rpc = CodexRpc::default();
+    initialized(&mut rpc);
+    rpc.account_read().unwrap();
+    rpc.receive(r#"{"id":2,"result":{"requiresOpenaiAuth":true,"account":{"type":"chatgpt"}}}"#)
+        .unwrap();
+    assert_eq!(
+        rpc.create_session_with_model(std::path::Path::new("/synthetic/workspace"), Some("a b")),
+        Err(Blocker::Protocol)
+    );
+    let request = rpc
+        .create_session_with_model(
+            std::path::Path::new("/synthetic/workspace"),
+            Some("synthetic-fast-model"),
+        )
+        .unwrap();
+    assert_eq!(request["method"], "thread/start");
+    assert_eq!(request["params"]["model"], "synthetic-fast-model");
+    assert_eq!(request["params"]["modelProvider"], "openai");
+}
+
+#[test]
+fn default_session_names_no_model() {
+    let mut rpc = CodexRpc::default();
+    initialized(&mut rpc);
+    rpc.account_read().unwrap();
+    rpc.receive(r#"{"id":2,"result":{"requiresOpenaiAuth":true,"account":{"type":"chatgpt"}}}"#)
+        .unwrap();
+    let request = rpc
+        .create_session(std::path::Path::new("/synthetic/workspace"))
+        .unwrap();
+    assert!(request["params"].get("model").is_none());
+}

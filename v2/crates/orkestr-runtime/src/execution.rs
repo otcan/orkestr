@@ -22,6 +22,8 @@ pub use pump::{CodexPump, StopFailure, StoppingCodex};
 pub use session::{PreparingCodex, ReadyCodex, SetupFailure};
 pub use steering::{SteeringProgress, SteeringReadiness};
 #[cfg(test)]
+mod native_model_tests;
+#[cfg(test)]
 mod session_tests;
 #[cfg(test)]
 mod tests;

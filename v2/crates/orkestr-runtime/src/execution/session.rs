@@ -55,8 +55,23 @@ pub struct PreparingCodex {
     actual_fd: bool,
     tool_profile: ToolProfile,
     writing: Option<super::provider_write::PendingWrite>,
+    thread_model: Option<String>,
 }
 impl PreparingCodex {
+    /// Explicit model for a fresh native thread (bounded Fast). The native
+    /// start reply then reports it, so a turn overriding with the same model
+    /// is native-confirmed. A resumed thread keeps its own native model.
+    pub fn with_thread_model(mut self, model: Option<String>) -> Result<Self, SetupFailure> {
+        if model
+            .as_deref()
+            .is_some_and(|m| !orkestr_v2_contracts::launch_model_valid(m))
+            || !matches!(self.phase, Phase::Open)
+        {
+            return Err(Blocker::Protocol.into());
+        }
+        self.thread_model = model;
+        Ok(self)
+    }
     pub fn open(
         store: Store,
         grant: BoundSessionMetadata,
@@ -218,6 +233,7 @@ impl PreparingCodex {
             actual_fd,
             tool_profile,
             writing: None,
+            thread_model: None,
         })
     }
     fn queue(&mut self, mut frame: serde_json::Value) -> Result<(), SetupFailure> {
@@ -344,7 +360,9 @@ impl PreparingCodex {
                 self.rpc.receive(&frame.to_string())?;
                 let thread = match self.binding.native_session_id.as_deref() {
                     Some(native) => self.rpc.resume_session(&self.workspace, native)?,
-                    None => self.rpc.create_session(&self.workspace)?,
+                    None => self
+                        .rpc
+                        .create_session_with_model(&self.workspace, self.thread_model.as_deref())?,
                 };
                 self.queue(thread)?;
                 self.phase = Phase::Thread;
@@ -443,7 +461,10 @@ impl ReadyCodex {
             .map_err(SubmissionFailure::Protocol)?;
         let raw = super::turn_frame(&capability, request_id);
         let native_model = self.rpc.reported_model().map(str::to_owned);
-        let uses_default_model = raw.pointer("/params/model").is_none();
+        let requested_model = raw
+            .pointer("/params/model")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned);
         let writing = if self.actual_fd {
             Some(
                 super::provider_write::PendingWrite::new(&raw)
@@ -480,7 +501,7 @@ impl ReadyCodex {
             })
             .map_err(|failure| SubmissionFailure::Transport(failure.cause))?;
         let pump = super::pump::CodexPump::new(child, scope, provider, stream)
-            .with_native_model(native_model, uses_default_model)
+            .with_native_model(native_model, requested_model.as_deref())
             .with_broker(self.channel)
             .with_provider_write(writing);
         #[cfg(all(test, feature = "fixture-test-controls"))]
