@@ -663,7 +663,10 @@ Each chat or V1-local input is posted to Rust with the `author` the adapter
 verified (`owner`, `member`, `v1_owner`, `v1_agent` or `v1_external`; timer,
 digest and post rows have none). Rust lets only a turn that serves an owner
 message ask another thread, so a member or a V1-local sender can never make
-an agent contact other threads.
+an agent contact other threads. The field is sent only when the server's
+`/api/v2/health` lists `message_author` in `features`; an older server
+(whose request body refuses unknown fields) never receives it, and its
+inputs stay unattributed.
 
 ## Progress, NO_REPLY and attachments
 

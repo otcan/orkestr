@@ -108,15 +108,25 @@ class VerifiedAuthorTests(Base):
         self.assertIsNone(verified_author({"author": {"role": "someone"}}))
         self.assertIsNone(verified_author({}))
 
-    def test_owner_message_is_posted_with_author_owner(self):
+    def post_owner_message(self, features):
         peer = AskPeer()
+        if features is not None:
+            peer.features = frozenset(features)
         worker = Worker(peer, self.ledger)
         self.ledger.enqueue({"publicThreadId": "v1-thread", "publicMessageId": "wa-1", "chatId": "chat@g.us",
                              "accountId": "account", "text": "ask hosting for the Bedrock region"},
                             author={"role": "owner", "id": "owner@c.us", "label": "Owner"})
         worker.step(self.ledger.next_input())
-        posted = [body for route, body in peer.mutations if route == "/messages"]
-        self.assertEqual(posted[0]["author"], "owner")
+        return [body for route, body in peer.mutations if route == "/messages"][0]
+
+    def test_owner_message_carries_author_only_where_the_server_accepts_it(self):
+        self.assertEqual(self.post_owner_message({"message_author"})["author"], "owner")
+
+    def test_older_server_without_the_feature_gets_no_author_field(self):
+        self.assertNotIn("author", self.post_owner_message(set()))
+
+    def test_client_without_features_gets_no_author_field(self):
+        self.assertNotIn("author", self.post_owner_message(None))
 
 
 if __name__ == "__main__":

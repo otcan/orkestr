@@ -7,8 +7,21 @@ from .participants import compose
 
 # Stored author role -> Core's verified input author. Only "owner" may command
 # a thread ask; a burst only ever merges inputs of one author.
+AUTHOR_FEATURE = "message_author"
 AUTHORS = {"owner": "owner", "member": "member", "v1_owner": "v1_owner", "v1_agent": "v1_agent",
            "v1_external": "v1_external"}
+
+
+def author_supported(client):
+    """Whether the server advertises `message_author`. Before the first
+    identity check of this process, one (cached) check reads it."""
+    features = getattr(client, "features", None)
+    if features is None:
+        return False
+    if not features and hasattr(client, "ensure_login"):
+        client.ensure_login(mutation=False)
+        features = client.features
+    return AUTHOR_FEATURE in features
 
 
 def verified_author(data):
@@ -37,7 +50,8 @@ def admit(worker, data, merge_burst=True):
             text = worker.with_rules(data, text)
         request = {"client_message_id": data["keys"]["message"], "text": text}
         author = verified_author(data)
-        if author:
+        if author and author_supported(worker.client):
+            # Only to a server that accepts it: its body refuses unknown fields.
             request["author"] = author
         if data.get("reply_to"):
             request["reply_to"] = data["reply_to"]
