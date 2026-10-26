@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { listAgentMessages } from "../packages/core/src/messages.js";
-import { createTimer, doctorTimers, listTimers, markDueTimers, nextRunAt, normalizeStoredTimer, parseTimerDelayMs, runTimerNow, timerRunAtFromDelay, updateTimer } from "../packages/core/src/timers.js";
+import { createTimer, doctorTimers, listTimers, markDueTimers, nextRunAt, normalizeStoredTimer, parseTimerDelayMs, runTimerNow, timerRunAtFromDelay, timerSpreadMaxMs, timerSpreadMs, updateTimer } from "../packages/core/src/timers.js";
 import { createThread, listThreadMessages } from "../packages/core/src/threads.js";
 
 test("daily timers schedule the next future clock time", () => {
@@ -19,6 +19,34 @@ test("daily timers can schedule clock time in an IANA timezone", () => {
   const timer = { cadence: "daily", time: "09:30", timezone: "Europe/Berlin" };
   assert.equal(nextRunAt(timer, new Date("2026-01-15T08:00:00.000Z")), "2026-01-15T08:30:00.000Z");
   assert.equal(nextRunAt(timer, new Date("2026-01-15T08:40:00.000Z")), "2026-01-16T08:30:00.000Z");
+});
+
+test("top-of-the-hour clock timers get a stable bounded per-timer spread", () => {
+  const timer = { id: "spread-a", cadence: "daily", time: "13:00", timezone: "Europe/Berlin" };
+  const spread = timerSpreadMs(timer);
+  assert.equal(spread, timerSpreadMs({ ...timer }));
+  assert.ok(spread >= 0 && spread <= timerSpreadMaxMs && spread % 1000 === 0);
+  const offsets = new Set(Array.from({ length: 64 }, (_, index) => timerSpreadMs({ ...timer, id: `spread-${index}` })));
+  assert.ok(offsets.size > 32);
+  const natural = Date.parse("2026-01-15T12:00:00.000Z");
+  const due = new Date(natural + spread).toISOString();
+  assert.equal(nextRunAt(timer, new Date("2026-01-15T08:00:00.000Z")), due);
+  // Between the natural time and the spread time the same run is still next.
+  assert.equal(nextRunAt(timer, new Date(natural)), due);
+  // Fired at its spread time, the next run is the next day's, never the same one twice.
+  assert.equal(nextRunAt(timer, new Date(due)), new Date(natural + 86_400_000 + spread).toISOString());
+  const weekly = { ...timer, cadence: "weekly" };
+  assert.equal(nextRunAt(weekly, new Date(due)), new Date(natural + 7 * 86_400_000 + spread).toISOString());
+});
+
+test("exact, off-the-hour, interval, once and id-less timers keep their exact time", () => {
+  const from = new Date("2026-01-15T08:00:00.000Z");
+  assert.equal(timerSpreadMs({ id: "x", cadence: "daily", time: "13:00", exact: true }), 0);
+  assert.equal(nextRunAt({ id: "x", cadence: "daily", time: "13:00", timezone: "Europe/Berlin", exact: true }, from), "2026-01-15T12:00:00.000Z");
+  assert.equal(nextRunAt({ id: "x", cadence: "daily", time: "13:20", timezone: "Europe/Berlin" }, from), "2026-01-15T12:20:00.000Z");
+  assert.equal(nextRunAt({ id: "x", cadence: "interval", every: "1h" }, from), "2026-01-15T09:00:00.000Z");
+  assert.equal(nextRunAt({ id: "x", cadence: "once", runAt: "2026-01-15T12:00:00.000Z" }, from), "2026-01-15T12:00:00.000Z");
+  assert.equal(nextRunAt({ cadence: "daily", time: "13:00", timezone: "Europe/Berlin" }, from), "2026-01-15T12:00:00.000Z");
 });
 
 test("timer persistence creates records with a next run", async () => {
