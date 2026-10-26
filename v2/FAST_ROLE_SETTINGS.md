@@ -26,3 +26,26 @@ clear the override. Codex-specific preferences cannot be set for a Claude
 conversation; if its provider later changes to Claude, stored Codex Fast
 preferences do not apply. Availability and actual model latency depend on the
 configured Codex account and must be verified separately.
+
+## Fast is read-only
+
+Fast runs in parallel with Deep on the same input, so a Fast side effect would
+happen twice. Fast is therefore read-only on every instance, including one with
+host full access:
+
+- Runtime requests, and requires the provider to confirm, the Codex
+  `read-only` sandbox (network off) for every Fast thread
+  (`CodexRpc::for_role`). The broker independently refuses any other sandbox for
+  a Fast identity (`protocol.FAST_SANDBOX`), and the dedicated Fast broker
+  serves only Fast identities.
+- The host Fast native starts with ChatGPT apps/connectors, plugins, browser and
+  desktop control, sub-agents, memories, goals, worktrees and dependency
+  installs disabled, and with every MCP server in the operator's Codex config
+  disabled (`codex_service/profile.py`, `FAST_DISABLED_FEATURES`).
+- A Claude Fast session gets only `Read`, `Grep`, `Glob` and `WebSearch`, no MCP
+  server and no hooks (`claude_connector.FAST_TOOLS`).
+- Every Fast turn starts with the reply contract `FAST_TURN_NOTE`
+  (`orkestr-runtime/src/execution.rs`): acknowledge and restate, answer only
+  from the message or history, never claim anything was done, never treat a bug
+  report as user error, open listed attachments, short and in the owner's
+  language.

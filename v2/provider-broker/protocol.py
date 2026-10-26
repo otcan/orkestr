@@ -107,11 +107,20 @@ def encode(value):
     return raw
 
 
+# Fast runs in parallel with Deep on the same input. Any Fast side effect would
+# happen twice (once per layer), so Fast never gets more than read-only.
+FAST_SANDBOX = ("read-only", "readOnly")
+
+
 class Channel:
     def __init__(self, workspace, *, expected_native=None, offline_python=False, workspace_exec=False,
-                 workspace_trusted=False, host_full_access=False, conversation_workspaces=()):
+                 workspace_trusted=False, host_full_access=False, conversation_workspaces=(),
+                 fast_only=False):
         # Operator instance opt-in only: Codex danger-full-access on the host.
         require(type(host_full_access) is bool)
+        # The dedicated Fast broker serves only Fast identities.
+        require(type(fast_only) is bool)
+        self.fast_only = fast_only
         # Operator-pinned per-conversation working directories (host full
         # access only). Runtime selects one for a Deep/Fast thread; no other
         # directory is ever accepted.
@@ -177,7 +186,14 @@ class Channel:
             # parent/task admission; role JSON cannot create that authority.
             require(identity["role"] in ("fast", "deep", "worker"))
             require(not self.tool_enabled or identity["role"] == "worker")
+            require(not self.fast_only or identity["role"] == "fast")
             self.role = identity["role"]
+            if self.role == "fast":
+                # Fast is read-only on every instance, including host full
+                # access: Codex's read-only sandbox denies file writes and
+                # network to every command. Runtime must request it and the
+                # provider must confirm it (see thread/start below).
+                self.sandbox = FAST_SANDBOX
             self.handle = secrets.token_hex(24)
             return None, {"id": outer, "result": {"protocol": PROTOCOL,
                     "identity": identity, "metadata_only": True, "owned_handle": self.handle}}

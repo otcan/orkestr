@@ -71,6 +71,12 @@ class ClaudeChannel:
             exact(identity, ("provider", "role", "owner_id", "session_id", "namespace", "incarnation"))
             require(all(identifier(v) for v in identity.values()))
             require(identity["provider"] == "claude" and identity["role"] in ("fast", "deep"))
+            if identity["role"] == "fast":
+                # Before launch: the native process starts after this request.
+                # A session that cannot become read-only never serves Fast.
+                restrict = getattr(self.session, "restrict_to_read_only", None)
+                require(callable(restrict))
+                restrict()
             self.owner_id = identity['owner_id']
             self.handle = secrets.token_hex(24)
             return None, {"id": outer, "result": {"protocol": PROTOCOL, "identity": identity,

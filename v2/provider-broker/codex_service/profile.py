@@ -14,6 +14,7 @@ class Configuration:
     def __init__(self, package, role="deep"):
         self.package = package
         require(role in package.role_profiles, "unconfigured_role")
+        self.role = role
         self.profile = SelectedCodexProfile(package.role_profiles[role])
         self.workspace_descriptor = None
         self.workspace = self.profile.workspace
@@ -35,8 +36,9 @@ class Configuration:
         require(not self.issued, "isolated_command_already_issued")
         self.issued = True
         if self.host_full_access:
+            options = fast_host_options(self.host_environment) if self.role == "fast" else ()
             return host_command(self.profile.native, self.host_environment,
-                                self.host_environment_files), ()
+                                self.host_environment_files, options), ()
         descriptor = policy.filter_fd(allow_inet=True)
         try:
             command = self.profile._command(descriptor, "codex-bounded")
@@ -139,7 +141,49 @@ def import_rollout(state_root, codex_home, native):
     return "imported"
 
 
-def host_command(native, environment, environment_files=()):
+# Fast is read-only (protocol.FAST_SANDBOX). The sandbox covers commands and
+# file edits only, so the host Fast native also loses every tool family that
+# acts outside it: ChatGPT apps/connectors (e.g. cross-thread messaging),
+# plugins, browser and desktop control, sub-agents, memory and goal writes,
+# dependency installs and worktrees. Names are this pinned native's features;
+# an unknown name makes the native refuse to start (fail closed).
+FAST_DISABLED_FEATURES = (
+    "apps", "plugins", "remote_plugin", "browser_use", "browser_use_external",
+    "browser_use_full_cdp_access", "computer_use", "in_app_browser",
+    "in_app_local_automation", "multi_agent", "multi_agent_v2", "memories", "goals",
+    "worktrees", "workspace_dependencies", "skill_mcp_dependency_install",
+    "image_generation",
+)
+MCP_SERVER_NAME = re.compile(r"[A-Za-z0-9_-]{1,64}")
+
+
+def fast_host_options(environment):
+    """App-server options for a host Fast native: disabled side-effect features
+    and every MCP server the operator's Codex config declares, by name."""
+    options = []
+    for feature in FAST_DISABLED_FEATURES:
+        options += ["--disable", feature]
+    for name in configured_mcp_servers(host_codex_home(environment) / "config.toml"):
+        options += ["-c", f"mcp_servers.{name}.enabled=false"]
+    return tuple(options)
+
+
+def configured_mcp_servers(path):
+    """MCP server names in the operator's config.toml (none if absent). A name
+    that cannot be disabled by a dotted override refuses the launch."""
+    import tomllib
+    try:
+        with open(path, "rb") as handle:
+            config = tomllib.load(handle)
+    except FileNotFoundError:
+        return []
+    servers = config.get("mcp_servers", {})
+    require(type(servers) is dict and all(type(name) is str and MCP_SERVER_NAME.fullmatch(name)
+                                          for name in servers), "fast_mcp_servers")
+    return sorted(servers)
+
+
+def host_command(native, environment, environment_files=(), options=()):
     """No namespace, seccomp, egress proxy or mounts: `env -i` installs exactly
     the operator's real executor environment before the pinned native.
 
@@ -156,7 +200,8 @@ def host_command(native, environment, environment_files=()):
         script = 'set -a; for f in ' + " ".join('"$%d"' % (i + 1) for i in range(len(files))) + \
             '; do . "$f"; done; set +a; shift %d; exec "$@"' % len(files)
         command += ["/bin/sh", "-c", script, "orkestr-host-env", *files]
-    return command + [str(native), "app-server", "--listen", "stdio://"]
+    require(all(type(option) is str and "\0" not in option for option in options), "host_options")
+    return command + [str(native), "app-server", *options, "--listen", "stdio://"]
 
 
 def private_environment_file(path):

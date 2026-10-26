@@ -55,7 +55,8 @@ def main(root, role="deep"):
                             package.beta["workspace_exec"].get("trusted")) is dict,
                         host_full_access=getattr(config, "host_full_access", False) is True,
                         conversation_workspaces=conversation_workspace_paths(getattr(package, "beta", {}))
-                        if not worker and getattr(config, "host_full_access", False) is True else ()),
+                        if not worker and getattr(config, "host_full_access", False) is True else (),
+                        fast_only=role == "fast"),
                 handoff=handoff,
                 diagnostics=True)
             pump.run()
