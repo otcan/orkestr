@@ -22,7 +22,8 @@ from .activity import observe as observe_activity
 from .input_activity import record as record_transport_activity
 from .intake import admit as admit_input, window as admit_window
 from .acceptance_retry import reconcile as reconcile_acceptance
-from .intake_fast import EVENT_WAIT_S, eligible as early_fast_eligible, drive as drive_intake_fast
+from .intake_fast import (EVENT_WAIT_S, eligible as early_fast_eligible, isolated as isolated_fast,
+                          drive as drive_intake_fast)
 
 PROGRESS_INTERVAL_S = 60
 PROGRESS_MAX_CHARS = 3500
@@ -746,7 +747,8 @@ class Worker:
     def observe(self, data):
         if "window" not in data:
             return
-        event_deadline = {"timeout_s": EVENT_WAIT_S} if early_fast_eligible(self, data) else {}
+        independent_fast = isolated_fast(self, data)
+        event_deadline = {"timeout_s": EVENT_WAIT_S} if independent_fast else {}
         events = self.client.read_events(after=data["cursor"], maximum=100, **event_deadline)
         # The client returns only complete validated envelopes. Advance the cursor
         # together with the exact source tuple's run IDs, before reading statuses.
@@ -756,11 +758,23 @@ class Worker:
         data["matched_runs"] = sorted(ids)
         data["cursor"] = max([data["cursor"]] + [event["sequence"] for event in events])
         self.ledger.save(data)
-        self.capture_questions(data, events, ids)
+        # Owner-only Fast questions/status/payload/acceptance belong solely
+        # to the guarded original-source watch, including on this serial pass.
         # A later timer or browser input can replace the current views before
         # this input is observed. Match every origin to its own proven run IDs.
-        statuses = self.own_statuses(ids)
+        statuses = self.own_statuses(ids, roles=("deep",) if independent_fast else ("fast", "deep"))
+        if independent_fast:
+            statuses = {"deep": statuses["deep"]}
+        question_ids = ids
+        if independent_fast:
+            question_ids = {statuses["deep"]["run_id"]} if statuses.get("deep") else set()
+        self.capture_questions(data, events, question_ids)
         record_transport_activity(data, statuses, ids)
+        if independent_fast:
+            evidence = data.get("first_response") or {}
+            # A verified retained payload proves readiness without a fallible
+            # Fast endpoint read in the Deep-only serial path.
+            data["transport_activity"]["fast_ready"] = bool(evidence.get("run_id") and evidence.get("payload_id"))
         self.ledger.save(data)
         deep_status = statuses.get("deep") or {}
         if deep_status.get("run_id") in ids and deep_status.get("phase") in ("awaiting_acceptance", "completed"):
@@ -776,7 +790,8 @@ class Worker:
             self.settle_own_fast(data, statuses.get("fast"), ids)
             self.ledger.refuse(data, "provider_policy_refusal", alert=data.get("origin") == "timer", notice=notice)
             return
-        capture_first_response(self, data, statuses, ids)
+        if not independent_fast:
+            capture_first_response(self, data, statuses, ids)
         self.capture_progress(data, statuses["deep"], ids)
         observe_activity(self, data, statuses)
         accepted = data.setdefault("accepted", {})
@@ -803,9 +818,9 @@ class Worker:
                 raise Refused("execution_requires_review")
             if value.get("phase") != "awaiting_acceptance":
                 return
-        # Wait for both proposals before accepting either. This avoids a sibling
-        # revision race and never automatically accepts another browser input.
-        for role in ("fast", "deep"):
+        # Legacy bindings wait for both proposals. Isolated owner Fast has its
+        # own guarded acceptance; neither path accepts another source's run.
+        for role in (("deep",) if independent_fast else ("fast", "deep")):
             if role not in accepted:
                 if not self.accept_role(data, role, ids):
                     return
@@ -824,6 +839,9 @@ class Worker:
         if len(matches) != 1 or matches[0].get("payload_removed") is not False or any(matches[0].get(k) != deep[k] for k in ("run_id", "completion_event_id")) or matches[0].get("payload_id") != data["deep_payload"]["payload_id"]:
             raise Refused("accepted_history_mismatch")
         text = self.timer_final(data, data["deep_payload"]["text"])
+        if independent_fast and text is not None:
+            data.setdefault("substantive_deep_final_prepared", {"run_id": deep["run_id"], "at": time.time()})
+            self.ledger.save(data)
         reply = {"id": deep["acceptance_event_id"], "role": "assistant", "state": "completed",
                  "phase": "final_answer", "source": "rust-v2-pilot", "parentMessageId": data["remote_id"], "text": text}
         reply.update(self.provider_identity(run_id=deep["run_id"]))
@@ -886,7 +904,7 @@ class Worker:
         return len(rows) == 1 and rows[0]["event_id"] == data["intake"]["event_id"] and rows[0].get("window") == "queued"
 
     def role_status(self, data, role, ids):
-        return self.own_statuses(ids)[role]
+        return self.own_statuses(ids, roles=(role,))[role]
 
     @staticmethod
     def fast_unusable(value, ids):
@@ -942,7 +960,7 @@ class Worker:
         except ClientError as error:
             if error.status != 409:
                 raise
-            if early_fast_eligible(self, data):
+            if isolated_fast(self, data):
                 return reconcile_acceptance(self, data, role, ids)
             # Other policies keep their existing canonical-adoption path.
             self.adopt_acceptance(data, role, request["run_id"], ids)
@@ -1156,7 +1174,7 @@ class Worker:
 
     def run_once(self, stop):
         """One pass. Fast intake is independent; Deep finishes in ledger order."""
-        drive_intake_fast(self)
+        fast_pending = drive_intake_fast(self)
         if self._due(self._timers_checked, TIMER_POLL_S):
             self._timers_checked = time.monotonic()
             try:
@@ -1194,7 +1212,7 @@ class Worker:
                 pass
         data = self.ledger.next_input()
         if not data:
-            return False
+            return fast_pending
         if data.get("blocked"):
             # Written by an earlier adapter version: close it visibly so the
             # inputs behind it proceed.

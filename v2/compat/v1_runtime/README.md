@@ -192,6 +192,28 @@ Independent Fast observation failures are logged and retried; they never
 refuse or complete the originating input. Admission/window refusals keep
 their existing per-input handling.
 
+The owner-only serial observer reads and accepts only Deep. An additive adapter
+`fast_watch` table retains the original Fast source, request key, run IDs, cursor
+and frozen acceptance independently of any Deep continuation or final delivery.
+Only pending inputs create watches; historical completed inputs are not scanned.
+At most eight watches are polled per pass, ordered by last poll so old failures
+cannot monopolize new intake. Fast failure/uncertainty does not invent acceptance
+or retirement. A substantive Deep final prevents a newly late Fast export;
+`NO_REPLY` leaves Fast eligible, including after its silent final is acknowledged.
+Already exported Fast and uncertain delivery evidence keep their existing fence.
+
+An unstarted watch closes only after its exact source's canonical Deep acceptance,
+a completely read authenticated journal snapshot, and proof its original window
+is closed or superseded. This records source/window ineligibility, never an
+inferred provider terminal. Otherwise the bounded watch remains for reconciliation.
+
+A repeatedly failing observation gives up locally after 600 seconds from the
+committed, canonically accepted Deep final (including `NO_REPLY`). The timestamp
+is written atomically with that final export and survives its ACK/restart.
+Give-up logs one static operator diagnostic and retains the frozen Fast request,
+uncertainty, exports and late-ACK history. It never accepts, cancels or replays a
+native run; age alone does not suppress a recovered, valid Fast observation.
+
 Window capacity, queued successor windows, holds, reconciliation and original
 child custody still gate execution. This path does not create another provider
 actor or bypass those gates. A definite acceptance revision conflict can retry
