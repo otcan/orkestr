@@ -14,6 +14,7 @@ from . import instructions
 from . import continuation_guard
 from . import auto_steer
 from . import recovery
+from . import thread_ask_relay
 from .notices import TEMPLATES
 from .participants import compose
 from .rust_client import ClientError
@@ -1278,6 +1279,11 @@ class Worker:
             self._web_checked = time.monotonic()
             try:
                 self.discover_web()
+            except Exception:
+                pass
+            try:
+                # Returned thread-ask answers: their turns ride the same watch.
+                thread_ask_relay.discover(self)
             except Exception:
                 pass
             try:

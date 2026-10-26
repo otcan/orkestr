@@ -647,6 +647,18 @@ mirror and the awaited answer in one transaction, so a restart or a lost
 cursor write adopts nothing twice. The first scan of a ledger only records the
 current position.
 
+## Returned thread-ask answers
+
+When another conversation answers this binding's thread-ask request after the
+asking turn ended, Rust admits the outcome as an input of this conversation
+and queues its Deep turn itself. Every web poll, the adapter reads
+`GET /thread-ask-inputs?after_sequence=N` and adopts each new row as an
+awaited answer. The existing web-answer watch then exports the accepted Deep
+answer of exactly that input once, as `🖥️ (web) ↩ thread answer from <name>`.
+The other agent's answer text itself is not posted, and the adapter never
+opens a window or accepts a run. The first scan only records the current
+position. A server without the route answers 404, and nothing happens.
+
 ## Progress, NO_REPLY and attachments
 
 With `progress_updates`, intermediate payloads of the exact matched Deep run
