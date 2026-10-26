@@ -28,6 +28,10 @@ use std::{
 
 pub const REQUEST_FILE: &str = "deploy-drain.request";
 pub const STATUS_FILE: &str = "deploy-drain.status.json";
+#[path = "deploy_drain_diagnostics.rs"]
+mod diagnostics;
+pub use diagnostics::{DrainDiagnostics, DrainWindowDiagnostic, DrainWindowOutcome};
+
 const POLL: Duration = Duration::from_secs(1);
 /// Unknown counts (no owner credential seen yet) are reported as -1.
 const UNKNOWN: i64 = -1;
@@ -39,6 +43,7 @@ pub struct DeployDrain {
     unresolved: AtomicI64,
     queued: AtomicI64,
     files: Mutex<Option<(PathBuf, PathBuf)>>,
+    diagnostics: Mutex<DrainDiagnostics>,
 }
 
 #[derive(Serialize, Debug, PartialEq, Eq)]
@@ -53,9 +58,10 @@ pub struct DrainStatus {
     /// Draining and Core shows no unresolved window: safe to stop.
     pub drained: bool,
     pub updated_ms: i64,
+    pub diagnostics: DrainDiagnostics,
 }
 
-fn now_ms() -> i64 {
+pub(crate) fn now_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .ok()
@@ -94,6 +100,19 @@ impl DeployDrain {
         );
     }
 
+    /// Metadata only: never changes the unresolved-count drain decision.
+    pub(crate) fn observe_diagnostics(&self, mut windows: Vec<DrainWindowDiagnostic>) {
+        let total = windows.len();
+        windows.truncate(64);
+        if let Ok(mut value) = self.diagnostics.lock() {
+            *value = DrainDiagnostics {
+                observed_ms: now_ms(),
+                total,
+                windows,
+            };
+        }
+    }
+
     /// Apply the request file's presence; returns whether the state changed.
     pub fn poll(&self) -> bool {
         let Some(request) = self.request_path() else {
@@ -111,6 +130,9 @@ impl DeployDrain {
         if draining {
             self.since_ms.store(now_ms(), Ordering::Release);
             self.observe(None, None);
+            if let Ok(mut value) = self.diagnostics.lock() {
+                *value = DrainDiagnostics::default();
+            }
             eprintln!("deploy drain: requested; admission paused, timer fires deferred");
         } else {
             eprintln!("deploy drain: request removed; admission resumed");
@@ -141,6 +163,15 @@ impl DeployDrain {
             },
             drained: draining && unresolved == 0,
             updated_ms: now_ms(),
+            diagnostics: if draining {
+                self.diagnostics
+                    .lock()
+                    .ok()
+                    .map(|d| d.clone())
+                    .unwrap_or_default()
+            } else {
+                DrainDiagnostics::default()
+            },
         }
     }
 

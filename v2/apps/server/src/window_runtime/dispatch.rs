@@ -5,6 +5,8 @@
 //! The latest authenticated browser credential is retained in memory only so
 //! queued intents can start without another request. Core rejects it once the
 //! session expires or logs out; queued rows then wait for the next sign-in.
+#[path = "deploy_drain_step.rs"]
+mod deploy_drain_step;
 use super::controller::Controller;
 use orkestr_v2_application::runtime::RuntimeStoreError;
 use orkestr_v2_contracts::{
@@ -240,45 +242,6 @@ impl Controller {
         self.sweep(&browser).await;
         self.reconcile_expired_locked(&browser).await;
         self.drain_locked(&browser).await;
-    }
-
-    /// One deploy-drain pass: admit nothing, retire every live window of this
-    /// process once it is idle, reconcile released ones, and report Core's
-    /// unresolved windows and queued intents to the drain status.
-    pub(super) async fn drain_step(&self) {
-        // Queued rows are admitted by the first ordinary pass after resume.
-        self.queue.pending.store(true, Ordering::Release);
-        let Some(browser) = self.queue.credential() else {
-            self.drain.observe(None, None);
-            return;
-        };
-        let _opening = self.opening.lock().await;
-        if self.queue.is_closed() {
-            return;
-        }
-        self.sweep(&browser).await;
-        self.reconcile_expired_locked(&browser).await;
-        for (_, entry) in self.entries_by_conversation() {
-            if !entry.has_local_task().await {
-                continue;
-            }
-            if let Err(reason) = entry.retire_if_idle(&browser).await {
-                eprintln!("deploy drain: idle window retirement failed: {reason}");
-            }
-        }
-        let unresolved = self
-            .store
-            .unresolved_execution_windows_authenticated(&browser)
-            .await
-            .ok()
-            .and_then(|windows| u32::try_from(windows.len()).ok());
-        let queued = self
-            .store
-            .execution_window_queue_authenticated(&browser, None)
-            .await
-            .ok()
-            .map(|rows| rows.len());
-        self.drain.observe(unresolved, queued);
     }
 
     /// Once per process: windows left unfinished by a previous process have no

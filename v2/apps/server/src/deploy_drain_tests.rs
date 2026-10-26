@@ -60,3 +60,58 @@ fn request_file_pauses_and_its_removal_resumes() {
     assert!(!status.draining && !status.drained);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn predicate_metadata_is_bounded_and_cannot_decide_the_drain() {
+    let drain = DeployDrain::default();
+    drain.set(true);
+    drain.observe(Some(1), Some(3));
+    let conversation = orkestr_v2_contracts::ConversationId(uuid::Uuid::new_v4());
+    let mut diagnostic = DrainWindowDiagnostic::new(conversation);
+    diagnostic.local_roles_ready = Some(true);
+    diagnostic.core_switch_ready = Some(false);
+    diagnostic.outcome = DrainWindowOutcome::CoreSwitchNotReady;
+    drain.observe_diagnostics(vec![diagnostic; 65]);
+    let status = drain.status();
+    assert!(
+        !status.drained,
+        "metadata never declares an unresolved window drained"
+    );
+    assert_eq!(status.diagnostics.total, 65);
+    assert_eq!(status.diagnostics.windows.len(), 64);
+    assert!(status.diagnostics.observed_ms > 0);
+    let json = serde_json::to_value(&status).unwrap();
+    assert_eq!(
+        json["diagnostics"]["windows"][0]["outcome"],
+        "core_switch_not_ready"
+    );
+    assert_eq!(
+        json["diagnostics"]["windows"][0]["core_switch_ready"],
+        false
+    );
+    // Existing gate remains solely the existing authenticated unresolved count.
+    drain.observe(Some(0), Some(3));
+    assert!(drain.status().drained);
+    drain.set(false);
+    assert_eq!(drain.status().diagnostics, DrainDiagnostics::default());
+}
+
+#[test]
+fn unobserved_core_predicate_stays_unknown_and_resets_between_requests() {
+    let drain = DeployDrain::default();
+    drain.set(true);
+    let mut diagnostic =
+        DrainWindowDiagnostic::new(orkestr_v2_contracts::ConversationId(uuid::Uuid::new_v4()));
+    diagnostic.local_roles_ready = Some(false);
+    diagnostic.outcome = DrainWindowOutcome::LocalRolesNotReady;
+    drain.observe_diagnostics(vec![diagnostic]);
+    let json = serde_json::to_value(drain.status()).unwrap();
+    assert!(json["diagnostics"]["windows"][0]["core_switch_ready"].is_null());
+    assert!(
+        !drain.status().drained,
+        "unknown Core count remains unknown"
+    );
+    drain.set(false);
+    drain.set(true);
+    assert_eq!(drain.status().diagnostics, DrainDiagnostics::default());
+}
