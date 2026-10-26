@@ -10,6 +10,12 @@ pub(super) struct Models {
 }
 
 impl Models {
+    pub(super) fn confirm(&mut self, model: Option<&str>) {
+        // Never replace a resolved default or a later native reroute.
+        if self.current.is_none() {
+            self.initialize(model);
+        }
+    }
     pub(super) fn initialize(&mut self, model: Option<&str>) {
         self.current = model
             .filter(|m| orkestr_v2_contracts::valid_observed_model(m))

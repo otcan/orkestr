@@ -145,6 +145,8 @@ class Channel:
         self.last_outer = 0
         self.retired_turns = set()
         self.last_turn_inner = 0
+        self.requested_model = None
+        self.model_observed = False
         self.native = None
         self.committed = False
         self.turn = None
@@ -241,6 +243,8 @@ class Channel:
             self.validate_turn(frame)
             require(frame["id"] > self.last_turn_inner)
             self.last_turn_inner = frame["id"]
+            self.requested_model = frame["params"].get("model")
+            self.model_observed = False
             message = frame["params"]["clientUserMessageId"]
             require(message not in self.messages and len(self.messages) < 256)
             self.messages.add(message)
@@ -322,6 +326,22 @@ class Channel:
         exact(item, ("type", "text", "text_elements"))
         require(item["type"] == "text" and isinstance(item["text"], str) and item["text_elements"] == [])
 
+    def observed_model(self, params):
+        # Settings lack a turnId. Bind only a native-confirmed explicit override
+        # to this channel's current committed request; never forward settings.
+        if not self.committed or self.terminal or self.cancelled or self.model_observed \
+                or not isinstance(params, dict) or params.get("threadId") != self.native:
+            return None
+        settings = params.get("threadSettings")
+        model = settings.get("model") if isinstance(settings, dict) else None
+        if not reported_model(model) or model != self.requested_model \
+                or settings.get("modelProvider") != "openai":
+            return None
+        self.model_observed = True
+        return {"method": "BrokerOutput", "params": {"owned_handle": self.handle, "frame": {
+            "method": "model/observed", "params": {"threadId": self.native,
+                "requestId": self.last_turn_inner, "model": model}}}}
+
     def provider(self, frame):
         require(isinstance(frame, dict), Failure.PROVIDER_OUTER)
         if frame.get("method") == "item/tool/call":
@@ -334,6 +354,8 @@ class Channel:
             # Never pass server tool/approval requests through as notifications.
             require(isinstance(frame.get("method"), str) and "params" in frame,
                     Failure.PROVIDER_OUTER)
+            if frame["method"] == "thread/settings/updated":
+                return self.observed_model(frame["params"])
             item_event = frame["method"] in ("item/started", "item/completed")
             if item_event:
                 params = frame["params"]
