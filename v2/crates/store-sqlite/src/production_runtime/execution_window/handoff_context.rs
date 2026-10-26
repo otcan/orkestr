@@ -21,7 +21,7 @@ pub(super) async fn target(
     Ok(false)
 }
 
-pub(super) async fn bind(
+pub(in crate::production_runtime) async fn bind(
     tx: &mut SqliteConnection,
     owner: &OwnerId,
     conversation: &ConversationId,
