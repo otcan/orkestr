@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { ensureDataDirs } from "../../storage/src/paths.js";
@@ -379,7 +379,32 @@ function whatsappTimerThreadDefaults(thread, input = {}) {
   };
 }
 
+// Largest deterministic delay given to a top-of-the-hour daily/weekly timer.
+export const timerSpreadMaxMs = 8 * 60 * 1000;
+
+// Stable per-timer delay in whole seconds (0..timerSpreadMaxMs) so timers set
+// to "13:00" do not all call the model provider in the same minute. Only clock
+// timers on the hour are spread; HH:MM times other than :00, intervals,
+// one-shots, timers without an id (Agent Job slots) and timers marked
+// `exact: true` keep their exact time.
+export function timerSpreadMs(timer = {}) {
+  const cadence = String(timer.cadence || "daily").toLowerCase();
+  const id = String(timer.id || "").trim();
+  if (!id || timer.exact === true || (cadence !== "daily" && cadence !== "weekly")) return 0;
+  if (parseClock(timer.time || "09:00").minute !== 0) return 0;
+  const digest = createHash("sha256").update(`orkestr.timer.spread.v1:${id}`).digest();
+  return Number(digest.readBigUInt64BE(0) % BigInt(timerSpreadMaxMs / 1000 + 1)) * 1000;
+}
+
 export function nextRunAt(timer, from = new Date()) {
+  const spread = timerSpreadMs(timer);
+  if (!spread) return naturalNextRunAt(timer, from);
+  // An occurrence whose natural time is in (from - spread, from] is still ahead.
+  const natural = Date.parse(naturalNextRunAt(timer, new Date(from.getTime() - spread)));
+  return new Date(natural + spread).toISOString();
+}
+
+function naturalNextRunAt(timer, from = new Date()) {
   const cadence = String(timer.cadence || "daily").toLowerCase();
   if (cadence === "once") {
     return new Date(timer.runAt || from.getTime() + hourMs).toISOString();
