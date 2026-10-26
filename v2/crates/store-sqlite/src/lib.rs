@@ -55,7 +55,7 @@ pub use production_runtime::{
     OfflinePythonResultConsumption, OfflinePythonResultPreparation, OfflinePythonResultReservation,
     OfflinePythonState, ProductionSupervisorStore, ReadySessionTransition,
     RetiredExecutionWindowContext, RunLeaseTransition, RunRenewalAuthority,
-    StrandedExecutionWindow, StrandedExecutionWindowPlan, TimerSchedulerIssuer,
+    StrandedExecutionWindow, StrandedExecutionWindowPlan, ThreadAskTick, TimerSchedulerIssuer,
     WorkerAdmissionInput, WorkerDelegation, WorkerDelegationReceipt, WorkerDelegationResult,
     WorkerDelegationState, WorkerTaskClaim, EXECUTION_WINDOW_BASE_LIFETIME_MS,
     EXECUTION_WINDOW_CLEANUP_MS, EXECUTION_WINDOW_MAX_LIFETIME_MS, FAST_INPUT_BUDGET,

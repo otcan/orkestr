@@ -68,6 +68,7 @@ mod sidebar_v1;
 mod steering_http;
 mod steering_registry;
 pub mod stop_execution;
+mod thread_asks_http;
 pub mod thread_icons;
 pub mod timer_bootstrap;
 pub mod timer_http;
@@ -545,6 +546,7 @@ pub fn router_with_google_catalog(
         .merge(tracker_actions_http::router())
         .merge(tracker_automation_http::router())
         .merge(thread_icons::router())
+        .merge(thread_asks_http::router())
         .merge(v1_links::router())
         .merge(v1_manage_http::router())
         .merge(v1_workers_http::router())
