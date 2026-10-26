@@ -12,12 +12,23 @@ from .intake import admit, window
 from . import fast_watch
 from .auto_steer import in_rust
 
-MAX_ADMISSIONS = 8
-MAX_WINDOW_ATTEMPTS = 8
-MAX_FAST_OBSERVATIONS = 8
+# No per-pass admission throttle: every pending owner message is admitted in
+# the same pass it is seen (the pending snapshot itself holds at most 64 rows,
+# the ledger's hard capacity). Window requests and Fast observations are
+# bounded per pass only so one pass stays short; both cover a whole burst.
+MAX_ADMISSIONS = 64
+MAX_WINDOW_ATTEMPTS = 64
+MAX_FAST_OBSERVATIONS = 24
 # A caught-up SSE stream otherwise holds the binding worker for five seconds
 # per pending source, delaying the next intake pass behind unrelated Deep work.
 EVENT_WAIT_S = 0.15
+# One shared journal scan per pass serves every pending Fast watch. Before,
+# each watch crawled the journal from its own cursor (one bounded read per
+# watch per pass, eight watches per pass), so in a burst a finished Fast reply
+# waited minutes for its watch to reach the run's events (live p95 ~13 min
+# between Core acceptance and export). Bounded by pages and wall time.
+SCAN_PAGES = 20
+SCAN_BUDGET_S = 3.0
 
 
 def isolated(worker, data):
@@ -29,7 +40,11 @@ def eligible(worker, data):
     """Explicit binding consent plus the author verified at HTTP intake."""
     return (isolated(worker, data) and data.get("phase") != "completed" and not data.get("origin") and
             not any(data.get(key) for key in
-                    ("blocked", "digest", "refused", "absorbed_into", "burst", "requeued", "continued", "steer")))
+                    ("blocked", "digest", "refused", "absorbed_into", "burst", "requeued", "steer")))
+# A deadline-continued or re-admitted owner row is an ordinary owner event
+# again: it is admitted here at once (its own continuation fence still
+# applies in intake.admit) instead of holding every later owner message's
+# admission, and so its Fast reply, until it reaches the ledger head.
 
 
 def failed(worker, data, error):
@@ -46,14 +61,51 @@ def failed(worker, data, error):
               file=sys.stderr, flush=True)
 
 
-def observe(worker, data):
-    """Observe only exact-source Fast; do not advance Deep's event cursor."""
+def scan(worker, watches):
+    """Read the journal once, from the oldest watch cursor, for all watches.
+
+    Returns (events, complete): `complete` means an empty read proved the scan
+    reached the end of the journal."""
+    import time
+    cursors = [w.get("fast_cursor", w["intake"]["sequence"] - 1) for w in watches if "window" in w]
+    if not cursors:
+        return [], True
+    cursor, events, started = min(cursors), [], time.monotonic()
+    for _ in range(SCAN_PAGES):
+        batch = worker.client.read_events(after=cursor, maximum=100, timeout_s=EVENT_WAIT_S)
+        if not batch:
+            return events, True
+        events.extend(batch)
+        cursor = batch[-1]["sequence"]
+        if time.monotonic() - started > SCAN_BUDGET_S:
+            break
+    return events, False
+
+
+def observe(worker, data, shared=None):
+    """Observe only exact-source Fast; do not advance Deep's event cursor.
+
+    `shared` is this pass's shared journal scan (see `scan`); without it the
+    watch reads the journal itself as before."""
     from .worker import Refused
     if "window" not in data:
         return
     cursor = data.get("fast_cursor", data["intake"]["sequence"] - 1)
-    events = worker.client.read_events(after=cursor, maximum=100, timeout_s=EVENT_WAIT_S)
-    ids = set(data.get("matched_runs", [])) | set(worker.client.matching_run_ids(events, data["intake"]))
+    if shared is None:
+        events = worker.client.read_events(after=cursor, maximum=100, timeout_s=EVENT_WAIT_S)
+    else:
+        scanned, complete = shared
+        events = [event for event in scanned if event["sequence"] > cursor]
+        if complete:
+            # Events written during this pass (an accepted Fast lets Core start
+            # the next message's Fast at once) are read from the scan's end.
+            tail = max([cursor] + [event["sequence"] for event in scanned])
+            events += worker.client.read_events(after=tail, maximum=100, timeout_s=EVENT_WAIT_S)
+        elif not events:
+            return  # The bounded scan did not reach this watch yet.
+    ids = set(data.get("matched_runs", []))
+    for start in range(0, len(events), 100):  # The matcher takes pages of 100.
+        ids |= set(worker.client.matching_run_ids(events[start:start + 100], data["intake"]))
     if len(ids) > 128:
         raise Refused("too_many_runs")
     data["matched_runs"] = sorted(ids)
@@ -131,9 +183,13 @@ def drive(worker):
         return True
     fast_worker = copy.copy(worker)
     fast_worker.ledger = fast_watch.Ledger(worker.ledger)
+    try:
+        shared = scan(worker, watches)
+    except Exception:
+        shared = None  # Each watch falls back to its own bounded read.
     for data in watches:
         try:
-            observe(fast_worker, data)
+            observe(fast_worker, data, shared)
         except Exception:
             try:
                 from .fast_watch_giveup import give_up

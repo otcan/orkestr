@@ -59,7 +59,8 @@ class RefusalTests(unittest.TestCase):
         notice = self.assistant()
         self.assertEqual([m["parentMessageId"] for m in notice], [first["remote_id"]])
         self.assertEqual(notice[0]["refusal"], "window_refused")
-        self.assertIn("Not accepted: window_refused", notice[0]["text"])
+        # No author on a legacy binding: possibly a member, so the short notice.
+        self.assertIn("technical problem", notice[0]["text"])
         self.worker.run_once(Stop())
         replies = self.assistant()
         self.assertEqual(replies[-1]["text"], "deep result")

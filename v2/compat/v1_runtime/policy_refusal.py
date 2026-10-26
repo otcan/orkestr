@@ -1,5 +1,6 @@
 """A closed, exact-run policy failure becomes one honest owner notice."""
 from .model_identity import token
+from .notices import render
 
 
 def notice(status, own_runs):
@@ -11,6 +12,8 @@ def notice(status, own_runs):
     models = models if isinstance(models, dict) else {}
     model = token(models.get("refused_model")) or token(models.get("resolved_model")) or "unreported"
     provider = token(models.get("provider"))
-    return {"text": "Provider policy refusal from %s. No fallback answer was accepted." %
-                    (model if model != "unreported" else "an unreported model"),
+    values = {"model": model if model != "unreported" else "unreported model"}
+    # `text` is the English rendering (web answers); the ledger renders the
+    # template in the chat's language for WhatsApp.
+    return {"text": render("en", "policy", **values), "template": "policy", "values": values,
             "model": model, **({"provider": provider} if provider else {})}

@@ -13,11 +13,13 @@ from .ledger import (DEFAULT_MAX_INPUT_AGE_S, DIGEST_NAMESPACE as DIGEST_REPLY_N
 from . import instructions
 from . import continuation_guard
 from . import auto_steer
+from . import recovery
+from .notices import TEMPLATES
 from .participants import compose
 from .rust_client import ClientError
 from .model_identity import observed_identity
 from .policy_refusal import notice as policy_notice
-from .first_response import capture as capture_first_response
+from .first_response import capture as capture_first_response, repeats_fast
 from .questions import QUESTION_PREFIX, QUESTION_LABEL, QUESTION_SCAN_LIMIT, export_question
 from .activity import observe as observe_activity
 from .input_activity import record as record_transport_activity
@@ -74,13 +76,19 @@ BURST_NOTE = ("[%d messages arrived together and are delivered as one turn. Read
 # Frozen per-attempt state dropped when an input is sent again as a new turn.
 RESET_KEYS = ("intake", "cursor", "fast_cursor", "window", "window_request", "previous_window", "matched_runs", "accepted",
               "fast_accept_request", "deep_accept_request", "fast_payload", "deep_payload", "admitted_at",
-              "progress_at", "fast_unusable_since", "intake_rules", "questions_scanned", "question_payloads", "activity", "deep_final_ready_at", "transport_activity")
+              "progress_at", "fast_unusable_since", "intake_rules", "questions_scanned", "question_payloads", "activity", "deep_final_ready_at", "transport_activity",
+              "deep_stop_seen_ms")
 # An admitted input whose window ended without starting any run of it.
 ORPHAN_GRACE_S = 60
 # Deep phases a window work deadline leaves behind.
 DEADLINE_STOP_PHASES = ("cancelled", "stopped", "interrupted")
-CONTINUE_NOTICE = ("Continuing in a new turn: the previous turn reached its time limit "
-                   "before it finished.")
+# A Deep stop counts as the window's work deadline only when the deadline had
+# passed (within this slack) when the adapter first saw the stop. Core's window
+# status has no terminal cause, so a closed window alone (for example after a
+# failed reconciliation) is not deadline evidence.
+DEADLINE_SLACK_MS = 30_000
+# English rendering; `Ledger.continue_notice` sends it in the chat's language.
+CONTINUE_NOTICE = TEMPLATES["continue"]["en"]
 CONTINUE_PREFIX = ("[The previous turn for this message reached its time limit and was stopped "
                    "before it finished. Continue the same task from where it stopped; do not "
                    "repeat steps that already succeeded.]\n\n")
@@ -802,7 +810,12 @@ class Worker:
         accepted = data.setdefault("accepted", {})
         if self.continue_after_deadline(data, statuses, ids):
             return
-        self.refuse_orphaned(data, ids)
+        # A Deep that ended without an accepted answer settles the input
+        # (one silent retry, else one notice) before any Fast wait below.
+        if self.deep_terminal(data, statuses, ids, caught_up=not events):
+            return
+        if self.refuse_orphaned(data, ids):
+            return
         for role, value in statuses.items():
             if role in accepted or role + "_accept_request" in data:
                 continue
@@ -844,6 +857,12 @@ class Worker:
         if len(matches) != 1 or matches[0].get("payload_removed") is not False or any(matches[0].get(k) != deep[k] for k in ("run_id", "completion_event_id")) or matches[0].get("payload_id") != data["deep_payload"]["payload_id"]:
             raise Refused("accepted_history_mismatch")
         text = self.timer_final(data, data["deep_payload"]["text"])
+        if text is not None and data.get("origin") is None and repeats_fast(data, text):
+            # "Thanks" answered twice: the Fast reply already said this.
+            print("orkestr-v2-wa-adapter deep_final_repeats_fast conversation=%s input=%s"
+                  % (getattr(self.client, "conversation", "?"), data["remote_id"]), file=sys.stderr, flush=True)
+            data["deep_final_suppressed"] = {"reason": "repeats_fast", "run_id": deep["run_id"]}
+            text = None
         if independent_fast and text is not None:
             data.setdefault("substantive_deep_final_prepared", {"run_id": deep["run_id"], "at": time.time()})
             self.ledger.save(data)
@@ -900,7 +919,7 @@ class Worker:
                 data["phase"] = "waiting_for_timer_retry"
             self.ledger.save(data)
             return True
-        raise Refused("timer_window_ended_without_run")
+        return recovery.recover(self, data, "timer_window_ended_without_run")
 
     def timer_requeued(self, data):
         """Whether Core put this timer occurrence back in its window queue."""
@@ -1019,17 +1038,56 @@ class Worker:
         self.ledger.save(data)
 
     def deadline_stopped(self, data):
-        """Whether this input's window ran out of work time (not an owner stop)."""
+        """Whether this input's window ran out of work time (not an owner stop,
+        a lapsed lease or a failed reconciliation): the work deadline had
+        passed when the stopped Deep was first seen."""
         window = data.get("window") or {}
         own = (window.get("status") or {}).get("window_id") or window.get("window_id")
         current = self.call("GET", "/window", allowed=(200, 204))
         if not isinstance(current, dict) or (own is not None and current.get("window_id") != own):
             return False
-        if current.get("state") in ("retiring", "closed"):
-            return True
-        deadline = current.get("work_deadline_ms")
-        return (current.get("state") == "active" and type(deadline) is int and
-                deadline <= time.time() * 1000)
+        deadline, seen = current.get("work_deadline_ms"), data.get("deep_stop_seen_ms")
+        return (current.get("state") in ("active", "retiring", "closed") and type(deadline) is int and
+                isinstance(seen, int) and deadline <= seen + DEADLINE_SLACK_MS)
+
+    def deep_terminal(self, data, statuses, ids, caught_up=True):
+        """Settle an input whose own Deep ended without an accepted answer, or
+        whose window ended before its Deep started. Returns True when handled.
+
+        A Deep run of the input exists, so Core will not retire it and it is
+        never retried (it may already have acted): one notice. Only an input
+        whose Deep never existed goes through the retirement-gated retry
+        (see recovery.py)."""
+        accepted = data.get("accepted") or {}
+        if "deep" in accepted or "deep_accept_request" in data:
+            return False  # Its acceptance is reconciled by the ordinary path.
+        deep = statuses.get("deep")
+        if isinstance(deep, dict) and deep.get("run_id") in ids:
+            if deep.get("phase") not in DEEP_TERMINAL_PHASES:
+                data.pop("deep_missing_since", None)
+                return False
+            if not caught_up:
+                return True  # Read the rest of the journal before deciding.
+            reason = "deep_run_" + str(deep["phase"])
+            failure = (deep.get("failure") or {}).get("class")
+            if isinstance(failure, str) and re.fullmatch("[a-z_]{1,32}", failure):
+                reason += ":" + failure  # The provider's closed failure class.
+            started = True
+        elif data.get("origin") == "timer":
+            return False  # timer_without_deep owns a timer without its Deep.
+        elif ids:
+            # Own runs exist (Fast) but no Deep of its own was ever seen.
+            now = time.time()
+            since = data.setdefault("deep_missing_since", now)
+            if since == now:
+                self.ledger.save(data)
+            if now - since < ORPHAN_GRACE_S or not caught_up or not self.window_ended(data):
+                return False
+            reason, started = "window_ended_without_deep", False
+        else:
+            return False  # refuse_orphaned owns an input without any run.
+        self.settle_own_fast(data, statuses.get("fast"), ids)
+        return recovery.recover(self, data, reason, started=started)
 
     def settle_own_fast(self, data, fast, ids):
         """Before refusing an input, accept its own pending Fast proposal so the
@@ -1071,7 +1129,7 @@ class Worker:
             self.ledger.save(data)
         if now - since < ORPHAN_GRACE_S or not self.window_ended(data):
             return False
-        raise Refused("window_setup_failed")
+        return recovery.recover(self, data, "window_setup_failed")
 
     def continue_after_deadline(self, data, statuses, ids):
         """Re-queue an input once when a window deadline stopped its Deep turn.
@@ -1084,8 +1142,13 @@ class Worker:
         """
         deep = statuses.get("deep")
         if ("deep" in data.get("accepted", {}) or "deep_accept_request" in data or data.get("continued") or
-                data.get("origin") == "timer" or not isinstance(deep, dict) or deep.get("run_id") not in ids or
-                deep.get("phase") not in DEADLINE_STOP_PHASES or not self.deadline_stopped(data)):
+                data.get("readmitted") or data.get("origin") == "timer" or not isinstance(deep, dict) or
+                deep.get("run_id") not in ids or deep.get("phase") not in DEADLINE_STOP_PHASES):
+            return False
+        if "deep_stop_seen_ms" not in data:
+            data["deep_stop_seen_ms"] = int(time.time() * 1000)
+            self.ledger.save(data)
+        if not self.deadline_stopped(data):
             return False
         try:
             guard = continuation_guard.freeze(self.call, deep)
@@ -1180,6 +1243,10 @@ class Worker:
     def run_once(self, stop):
         """One pass. Fast intake is independent; Deep finishes in ledger order."""
         # Decide steering before independent Fast intake could admit the input.
+        try:
+            recovery.drive(self)  # Operator re-admission requests, on this thread.
+        except Exception:
+            pass  # Retried next pass; never blocks the binding.
         steering = auto_steer.drive(self)
         fast_pending = drive_intake_fast(self) or steering
         if self._due(self._timers_checked, TIMER_POLL_S):

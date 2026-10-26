@@ -5,6 +5,7 @@ import sys
 import time
 import uuid
 
+from . import notices
 from .ledger import LOCAL_ROLES, NOTICE_NAMESPACE, POST_NAMESPACE
 
 INTERVAL_S = 10 * 60
@@ -26,6 +27,21 @@ def delivered_at(raw):
         return None
 
 
+LAG_ALERT_S = 20 * 60
+
+
+def match_lagging(worker, data):
+    """Whether Core's journal head (non-streaming snapshot) is past this
+    input's own event cursor, so its run match may simply not be read yet."""
+    try:
+        snapshot = worker.call("GET", "")
+    except Exception:
+        return False  # Unknown is not lag evidence; keep the old rule.
+    head = snapshot.get("last_sequence") if isinstance(snapshot, dict) else None
+    cursor = data.get("cursor")
+    return type(head) is int and type(cursor) is int and head > cursor
+
+
 def observe(worker, data, statuses, now=None):
     """Called only after a successful own-run status read, never during an outage.
 
@@ -44,6 +60,18 @@ def observe(worker, data, statuses, now=None):
         return
     if deep.get("run_id") not in data.get("matched_runs", []):
         deep, phase = {}, None
+        if now - since >= INTERVAL_S and match_lagging(worker, data):  # Only when a notice could be due.
+            # This input's own journal match is behind Core's head (a burst,
+            # timer traffic), so "no running task" is not established: no
+            # notice. The operator is still alerted once it lags too long.
+            lag = data.setdefault("activity", {}).setdefault("match_lag_since", now)
+            if now - lag >= LAG_ALERT_S and not data["activity"].get("match_lag_alerted"):
+                data["activity"]["match_lag_alerted"] = True
+                print("ALERT orkestr-v2-wa-adapter run_match_lagging conversation=%s input=%s"
+                      % (getattr(worker.client, "conversation", "?"), data["remote_id"]), file=sys.stderr, flush=True)
+            worker.ledger.save(data)
+            return
+        (data.get("activity") or {}).pop("match_lag_since", None)
     activity = data.setdefault("activity", {})
     gap = now - activity.get("observed_at", now)
     if gap > POLL_GAP_S:
@@ -108,9 +136,9 @@ def observe(worker, data, statuses, now=None):
         if pending:
             return  # One unresolved status message for this whole binding.
         minutes = max(0, int((now - since - activity.get("paused_s", 0)) // 60))
-        text = ("Still running, %d minutes since admission. No new progress in the last 10 minutes." % minutes
-                if running else "No running task is confirmed (%s), %d minutes since admission. The result is still pending."
-                % (phase or "no run observed", minutes))
+        lang = notices.language_for(db, data)
+        text = (notices.render(lang, "activity_running", minutes=minutes) if running else
+                notices.render(lang, "activity_missing", state=phase or "no run observed", minutes=minutes))
         sequence = int(now * 1000)
         source = "heartbeat:%s:%d" % (data["remote_id"], sequence)
         remote = str(uuid.uuid5(NOTICE_NAMESPACE, "input:" + source))

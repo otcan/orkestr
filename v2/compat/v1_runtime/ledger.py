@@ -10,10 +10,12 @@ import os
 from pathlib import Path
 from .layer_identity import IDENTITY_FIELDS, attach_scope, post_identity
 import sqlite3
+import sys
 import time
 import uuid
 
 from .export_changes import ExportConnection
+from . import notices
 
 SCHEMA = "2"
 # Terminal outcomes settle an export. "uncertain" is recorded but keeps it listed.
@@ -46,6 +48,16 @@ NOTICE_NAMESPACE = uuid.UUID("5d0c3f7e-8a41-4c2b-9e6d-1b7f2a9c4e83")
 # Phases in which no Rust execution window was opened for the input yet.
 NOT_STARTED = ("queued", "admitted", "waiting_for_window")
 DEFAULT_MAX_INPUT_AGE_S = 30 * 60
+# On owner-only bindings `max_outstanding_inputs` no longer refuses: an owner
+# burst above it is accepted and queued (each message is admitted at once and
+# still gets its own Fast reply; Deep runs in ledger order). Only this many
+# unsettled chat inputs (Fast/timer/post pseudo rows excluded) refuse there,
+# against real abuse or a V1 that never acknowledges. Other bindings keep the
+# configured limit unchanged.
+HARD_MAX_OUTSTANDING = 64
+# Refusals that are never retried because the run may have acted already.
+WITHHELD_REASONS = ("execution_requires_review", "continuation_admission_requires_review",
+                    "continuation_lineage_unknown", "continuation_provider_changed")
 RECENT_REFUSALS = 10
 # V1-local input (see local_inputs.py); listed with its own source and connector.
 LOCAL_KIND = "v1_local"
@@ -67,14 +79,12 @@ def burst_compatible(head, row):
             author(row) == author(head))
 
 
-def refusal_notice(reason):
-    return ("Not accepted: %s. Orkestr V2 did not produce a reply to this message; "
-            "send it again if it is still needed." % reason)
+def refusal_notice(reason, lang="en", technical=True):
+    return notices.refusal(lang, reason, technical)
 
 
 # Appended to a refused turn's notice when owner messages were steered into it.
-STEERED_REFUSAL_NOTE = ("\n\nThis also applies to %d message(s) you sent while it was running; "
-                        "send them again if they are still needed.")
+STEERED_REFUSAL_NOTE = notices.TEMPLATES["steered"]["en"].replace("%(count)d", "%d")
 
 
 class Conflict(ValueError):
@@ -108,6 +118,9 @@ class Ledger:
         self.on_export = on_export
         self.scope = dict(scope)
         self.max_outstanding = max_outstanding
+        # Set by the registry from `fast_reply_policy`: the verified owner of an
+        # owner-only chat gets technical notices, everyone else plain ones.
+        self.owner_only = False
         identity = json.dumps({"schema": 1, "scope": scope}, sort_keys=True, separators=(",", ":"))
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
@@ -132,6 +145,8 @@ class Ledger:
             db.execute("CREATE TABLE IF NOT EXISTS web_watch (message_id TEXT PRIMARY KEY, data TEXT NOT NULL)")
             from .fast_watch import initialize as initialize_fast_watch
             initialize_fast_watch(db)
+            from .recovery import initialize as initialize_recovery
+            initialize_recovery(db)
             version = db.execute("SELECT value FROM ledger_meta WHERE key='schema'").fetchone()
             if version is None:
                 # Pilot ledgers (schema 1) kept the accepted reply inside the input row.
@@ -241,14 +256,27 @@ class Ledger:
                     raise Conflict("input_identity_changed")
                 return json.loads(row[1]), True
             outstanding = db.execute("SELECT count(*) FROM inputs WHERE json_extract(data,'$.settled') IS NULL").fetchone()[0]
-            if outstanding >= self.max_outstanding:
-                raise Conflict("binding_capacity_reached")
+            if not self.owner_only:
+                # Serial (legacy) bindings keep the configured limit: queueing
+                # past it there would only expire inputs after 30 minutes.
+                if outstanding >= self.max_outstanding:
+                    raise Conflict("binding_capacity_reached")
+            else:
+                chat = db.execute("SELECT count(*) FROM inputs WHERE json_extract(data,'$.settled') IS NULL "
+                                  "AND json_extract(data,'$.origin') IS NULL").fetchone()[0]
+                if chat >= max(HARD_MAX_OUTSTANDING, self.max_outstanding):
+                    raise Conflict("binding_capacity_reached")
             attachments = self._attachments(db, body["publicMessageId"], body.get("attachments") or [])
             remote_id = str(uuid.uuid4())
             keys = ("message", "window", "fast", "deep") + (("attachments",) if attachments else ())
             data = {"remote_id": remote_id, "public_id": body["publicMessageId"], "text": body["text"],
                     "public_thread_id": body.get("publicThreadId"), "chat_id": body.get("chatId"), "account_id": body.get("accountId"),
                     "phase": "queued", "queued_at": time.time(), "keys": {k: str(uuid.uuid4()) for k in keys}}
+            # Original arrival; never reset by a continuation or re-admission.
+            data["arrived_at"] = data["queued_at"]
+            if outstanding >= self.max_outstanding:
+                # Over the soft capacity: accepted and queued, never refused.
+                data["capacity_queued"] = {"outstanding": outstanding, "limit": self.max_outstanding}
             if attachments:
                 data["attachments"] = attachments
             quoted = self.reply_to(body.get("replyTo"))
@@ -256,6 +284,7 @@ class Ledger:
                 data["reply_to"] = quoted
             if author:
                 data["author"] = {k: author[k] for k in ("role", "id", "label", "labelled", "phone", "source") if author.get(k) is not None}
+            notices.remember(db, body.get("text"), (author or {}).get("role"))
             db.execute("INSERT INTO inputs VALUES (?,?,?,?)", (body["publicMessageId"], digest, remote_id, json.dumps(data)))
             return data, False
 
@@ -487,14 +516,33 @@ class Ledger:
             row = db.execute("SELECT data FROM inputs WHERE remote_id=?", (data["remote_id"],)).fetchone()
             if not row or json.loads(row[0]).get("phase") == "completed":
                 return None
+            lang = notices.language_for(db, data)
+            # Never retried: the run may have acted, it needs human review, or
+            # Core could not prove a deadline continuation resumes the same
+            # native session.
+            withheld = (bool(data.get("retry_withheld")) or bool(data.get("continued")) or
+                        reason in WITHHELD_REASONS)
             message = {"id": str(uuid.uuid5(NOTICE_NAMESPACE, data["remote_id"])), "role": "assistant", "state": "completed",
                        "phase": "final_answer", "kind": "notice", "source": "rust-v2-adapter",
-                       "parentMessageId": data["remote_id"], "refusal": reason, "text": refusal_notice(reason)}
+                       "parentMessageId": data["remote_id"], "refusal": reason,
+                       "text": (notices.render(lang, "interrupted_owner", reason=reason)
+                                if withheld and self.technical_audience(data) else
+                                refusal_notice(reason, lang, self.technical_audience(data)))}
             if notice is not None:
                 message.update({k: v for k, v in notice.items() if k in ("text", "provider", "model")})
+                if notice.get("template") in notices.TEMPLATES:
+                    message["text"] = notices.render(lang, notice["template"], **(notice.get("values") or {}))
+                else:
+                    message["text"] = notices.localize(lang, message["text"])
+            elif data.get("origin") == "timer" and not data.get("post") and not data.get("digest"):
+                # Nobody resends a timer: say what failed and what happens next.
+                message["text"] = notices.render(lang, "timer_interrupted" if withheld else
+                                                 "timer_failure", label=(data.get("timer") or {}).get("label")
+                                                 or "Scheduled task", reason=reason)
             if data.get("steered"):
                 # Messages steered into this turn settle with this notice; say so.
-                message["text"] += STEERED_REFUSAL_NOTE % len(data["steered"])
+                message["text"] += notices.render(lang, "steered", count=len(data["steered"]))
+            data["notice_language"] = lang  # Audit only; the export shape is unchanged.
             data.pop("blocked", None)
             if alert:
                 now = time.time()
@@ -502,7 +550,22 @@ class Ledger:
             data.update(phase="completed", refused={"reason": reason, "phase": data.get("phase"), "atMs": int(time.time() * 1000)})
             self.save(data, db)
             self._export(db, data, "final", "final:" + data["remote_id"], message)
-            return message
+        # Every visible chat failure reaches the operator, not only the chat
+        # (timer refusals keep their own `input_failed` alert in the worker).
+        if data.get("origin") != "timer":
+            print("ALERT orkestr-v2-wa-adapter input_refused thread=%s input=%s reason=%s language=%s"
+                % (self.scope.get("remote_thread_id", "?"), data["remote_id"], reason, lang), file=sys.stderr, flush=True)
+        return message
+
+    def technical_audience(self, data):
+        """The owner (and timers, which are the owner's automation) get the
+        technical notice; members of a shared chat get the short one."""
+        if data.get("origin") == "timer":
+            return True
+        role = (data.get("author") or {}).get("role")
+        # Rows without an author predate participants: the owner on owner-only
+        # bindings, but possibly anyone in a legacy group, so the short notice.
+        return role in ("owner", "v1_owner") or (role is None and self.owner_only)
 
     def expire_stale(self, max_age_s, now=None):
         """Refuse inputs that waited longer than max_age_s without a Rust window.
@@ -644,7 +707,8 @@ class Ledger:
             self.save(data, db)
             message = {"id": str(uuid.uuid5(NOTICE_NAMESPACE, "continued:" + data["remote_id"])),
                        "role": "assistant", "state": "completed", "phase": "commentary", "kind": "progress",
-                       "source": "rust-v2-adapter", "parentMessageId": data["remote_id"], "text": text}
+                       "source": "rust-v2-adapter", "parentMessageId": data["remote_id"],
+                       "text": notices.localize(notices.language_for(db, data), text)}
             self._export(db, data, "progress", "continued:" + data["remote_id"], message)
             return message
 
@@ -768,6 +832,8 @@ class Ledger:
             data.pop(key, None)
         if isinstance(data.get("reply"), dict):
             data["reply"].pop("text", None)
+        if isinstance(data.get("first_response"), dict):
+            data["first_response"].pop("echo", None)
         if isinstance(data.get("digest"), dict):
             data["digest"].pop("text", None)
         data["settled"] = {"outcome": outcome, "atMs": int(time.time() * 1000)}
@@ -798,6 +864,7 @@ class Ledger:
                 "pendingExports": outcomes.get("pending", 0), "uncertainDeliveries": outcomes.get("uncertain", 0),
                 "failedDeliveries": outcomes.get("failed", 0), "revoked": self.revoked(),
                 "refusedInputs": refused, "stalledInputs": stalled, "webAnswersAwaited": web,
+                "hardMaxOutstandingInputs": max(HARD_MAX_OUTSTANDING, self.max_outstanding),
                 "recentRefusals": [{"publicMessageId": d["public_id"], "reason": d["refused"]["reason"],
                                     "phase": d["refused"].get("phase"), "atMs": d["refused"]["atMs"],
                                     "settled": bool(d.get("settled"))} for d in recent]}

@@ -27,6 +27,12 @@ class Peer:
         self.reply_settings = dict(prefix=None, footer=None, honor_no_reply=True)
         self.render_missing = False
         self.triggers, self.outcome = [], None
+        # Core's owner retire route: None answers 409 (Core still owns the
+        # input: a run, an open window or a queued intent references it).
+        self.retire_state = None
+        # Core's held inputs (an owner stop). Like real Core, retiring a held
+        # queued row is still allowed: the adapter itself must refuse.
+        self.held = []
 
     def window_request(self, intake, input_key, request_key, current):
         return dict(request_key=request_key, input_message_id=intake["message_id"], input_event_id=intake["event_id"],
@@ -50,6 +56,16 @@ class Peer:
             return 200, self.outcome(body)
         if method == "POST":
             self.mutations.append((route, copy.deepcopy(body)))
+        if method == "POST" and route.startswith("/inputs/") and route.endswith("/retire"):
+            if self.retire_state is None:
+                raise ClientError("unexpected_status", 409)
+            return 200, dict(message_id=route.split("/")[2], state=self.retire_state, retirement_id="retirement")
+        if method == "GET" and route == "/held-inputs":
+            return 200, dict(schema_version=1, conversation_id=self.conversation, revision=1, observed_at_ms=1,
+                             held=[dict(message_id=m) for m in self.held], next_after_sequence=None,
+                             eligible_input_available=False)
+        if method == "GET" and route == "":
+            return 200, dict(conversation_id=self.conversation, last_sequence=getattr(self, "head", 3))
         if route == "/messages":
             return 202, dict(status="accepted", message_id="message", event_id="event", sequence=1)
         if route == "/window" and method == "GET":
@@ -201,7 +217,7 @@ class WorkerTests(unittest.TestCase):
                 self.calls = 0
             def wait(self, duration):
                 self.calls += 1
-                return self.calls > 2
+                return self.calls > 6
         for failure in ("cancelled", "blocked", "session_revoked"):
             with self.subTest(failure=failure):
                 ledger = Ledger(Path(self.temp.name) / (failure + ".sqlite3"), {"test_scope": "one"})
@@ -234,8 +250,12 @@ class WorkerTests(unittest.TestCase):
                 notice = [m for m in ledger.messages() if m["role"] == "assistant"]
                 self.assertEqual(len(notice), 1)
                 self.assertEqual(notice[0]["kind"], "notice")
-                self.assertEqual(notice[0]["refusal"], "execution_requires_review")
-                self.assertTrue(notice[0]["text"].startswith("Not accepted: execution_requires_review"))
+                # One silent automatic retry, then one honest notice (no resend request).
+                self.assertEqual(notice[0]["refusal"], "deep_run_" + failure)
+                self.assertNotIn("send it again", notice[0]["text"])
+                self.assertIn("technical problem", notice[0]["text"])  # No author: member-safe.
+                self.assertEqual(len([r for r, _ in peer.mutations if r == "/messages"]), 1)
+                self.assertEqual(stderr.getvalue().count("ALERT orkestr-v2-wa-adapter input_refused"), 1)
 
     def test_mismatched_canonical_history_cannot_be_mirrored(self):
         original = self.peer.request
