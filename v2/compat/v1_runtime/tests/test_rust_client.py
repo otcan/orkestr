@@ -402,6 +402,80 @@ class ClientTests(unittest.TestCase):
         self.assertFalse(any(path.startswith(f"/api/v2/conversations/{WINDOW}/") for _, path, _, _ in self.server.observed))
         self.assertIsInstance(session, RustSession)
 
+    def test_one_bindings_event_wait_does_not_stall_another_binding(self):
+        other = RustClient(conversation_id=OTHER, session=self.client.session)
+        self.client.ensure_login()
+        other.ensure_login()
+        waiting, release = threading.Event(), threading.Event()
+        original = self.respond
+
+        def respond(method, path):
+            if path.startswith(PREFIX + "/events?"):
+                waiting.set()
+                release.wait(0.25)  # A caught-up stream: nothing to send yet.
+                return 200, b": keepalive\n\n", {"Content-Type": "text/event-stream"}
+            if path == f"/api/v2/conversations/{OTHER}/window":
+                return 204, b"", {}
+            return original(method, path)
+        self.server.respond = respond
+        reader = threading.Thread(target=self.client.read_events, args=(4,))
+        reader.start()
+        try:
+            self.assertTrue(waiting.wait(2))
+            start = time.monotonic()
+            self.assertEqual(other.request("GET", "/window", allowed=(200, 204)), (204, None))
+            elapsed = time.monotonic() - start
+            self.assertFalse(release.is_set())
+            self.assertLess(elapsed, 0.2, "another binding's read waits for this binding's event wait")
+        finally:
+            release.set()
+            reader.join()
+        self.assertEqual(len(self.posts(client_module.SESSION)), 1, "the bindings still share one login")
+
+    def test_a_401_for_a_session_renewed_meanwhile_is_not_a_revocation(self):
+        self.client.ensure_login()
+        session, original = self.client.session, self.respond
+
+        def renewed_during_request(method, path):
+            if path == PREFIX + "/window":
+                # Another binding renewed the shared session while this
+                # request carried the previous cookie.
+                session._cookie = "orkestr_v2_session=" + "c" * 64
+                return 401, {"error": "stale"}, {}
+            return original(method, path)
+        self.server.respond = renewed_during_request
+        with self.assertRaisesRegex(ClientError, "transport_failed"):
+            self.client.request("GET", "/window", allowed=(200, 204))
+        self.assertFalse(self.client._revoked)
+        self.assertEqual(session._cookie, "orkestr_v2_session=" + "c" * 64)
+        # A 401 for the current session is still a revocation.
+        self.server.respond = lambda method, path: ((401, {"error": "revoked"}, {}) if path == PREFIX + "/window"
+                                                    else original(method, path))
+        with self.assertRaisesRegex(ClientError, "session_revoked"):
+            self.client.request("GET", "/window", allowed=(200, 204))
+        self.assertTrue(self.client._revoked)
+        self.assertIsNone(session._cookie)
+
+    def test_a_failed_renewal_never_sends_another_bindings_request_unauthenticated(self):
+        self.client.ensure_login()
+        session, original = self.client.session, self.respond
+        session._logged_in_at -= client_module.SESSION_RENEW_S
+        self.server.respond = lambda method, path: ((503, {}, {}) if path == "/api/v2/health"
+                                                    else (401, {}, {}) if path == PREFIX + "/window"
+                                                    else original(method, path))
+        with self.assertRaisesRegex(ClientError, "unexpected_status"):
+            self.client.ensure_login()  # The renewal fails after dropping the aging cookie.
+        self.assertIsNone(session._cookie)
+        sent = len(self.server.observed)
+        # Another binding passed its login check before the failed renewal.
+        with self.assertRaisesRegex(ClientError, "transport_failed"):
+            self.client._wire("GET", PREFIX + "/window", allowed=(200, 204))
+        self.assertEqual(len(self.server.observed), sent, "nothing is sent without the session cookie")
+        self.assertFalse(session._revoked)
+        self.server.respond = original
+        self.assertEqual(self.client.request("GET", "/window", allowed=(200, 204)), (204, None))
+        self.assertEqual(len(self.posts(client_module.SESSION)), 2, "the next request logs in again")
+
     def test_attachment_import_is_conversation_pinned_and_receipt_checked(self):
         reference = dict(reference_id=MESSAGE, message_id=None, filename="a.txt", media_type="text/plain",
                          byte_length=1, sha256=hashlib.sha256(b"a").hexdigest(), state="available")
