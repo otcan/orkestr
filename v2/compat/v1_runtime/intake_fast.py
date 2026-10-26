@@ -10,6 +10,7 @@ import sys
 from .first_response import capture
 from .intake import admit, window
 from . import fast_watch
+from .auto_steer import in_rust
 
 MAX_ADMISSIONS = 8
 MAX_WINDOW_ATTEMPTS = 8
@@ -92,7 +93,10 @@ def drive(worker):
     rows = worker.ledger.pending_inputs()
     admissions = 0
     for data in rows:
-        if "intake" in data:
+        if "intake" in data or in_rust(data):
+            # A steer Rust already holds never needs FIFO admission before a
+            # later input: it either joins the running turn or comes back as
+            # a fresh message after it. Do not hold later Fast replies on it.
             continue
         # Do not admit an owner event ahead of an earlier, unadmitted member,
         # local-agent input or frozen legacy burst. The serial path owns it.

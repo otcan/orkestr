@@ -88,7 +88,7 @@ Each binding is `<bindings_dir>/<remote_thread_id>.json`:
 | `revoked` | `true` permanently withdraws the route (intake and export answer 410) |
 | `progress_updates` | Export intermediate Deep progress for this binding |
 | `fast_reply_policy` | Optional: `legacy` (default) preserves the progress-dependent Fast policy. Explicit `owner_only` enables immediate Fast replies for a group the operator verified has only owner-visible recipients; participant grants do not establish that visibility. `disabled` suppresses Fast replies (for example a coordinator chat). |
-| `auto_steer` | Optional: `off`, `question` or `running`. Unset means `question` for a binding without listed `participants` (owner-only group) and `off` otherwise. See "Auto-steer" below. |
+| `auto_steer` | Optional: `off` (default), `question` or `running`; enable per binding. See "Auto-steer" below. Adapters before this field refuse a binding that contains it (`binding_fields`). |
 | `attachments` | Accept inbound attachments for this binding |
 | `max_outstanding_inputs` | 1–64 unsettled inputs before intake answers 409 |
 | `max_input_age_seconds` | Optional, 60–604800 (default 1800): how long an input may wait without a Rust window before it is refused as `input_expired` |
@@ -196,6 +196,35 @@ ordinary queue once (`steer_fallback` audit). A queued, non-native steer
 admission is first retired through the owner retire route so Core holds no
 second copy. Written but unacknowledged delivery is closed with a visible
 notice and an operator alert instead of being replayed.
+
+A held input never waits longer than 20 minutes for a definite outcome; it is
+then closed with a visible notice and an alert. Unexpected (non-transport)
+errors alert once per input and error class. Owner-only Fast intake does not
+wait behind a steer Rust already admitted. A steer reference's Core message is
+recorded as the adapter's own, so it is never mirrored back as web input.
+If the head turn is refused after accepting steered messages, its notice says
+so; a deadline continuation carries their text into the new turn.
+
+Known limit: `written_bytes = 0` in Rust's steering status is treated as "no
+byte reached the provider". Rust records written bytes in the same transaction
+as the bounded write, but a write whose commit fails can leave 0 while bytes
+were written, so this is strong evidence, not strict proof. In that rare case
+the message may reach the turn and also run once more as an ordinary input.
+
+Rollback (to an adapter without auto-steer):
+
+1. Set `auto_steer: "off"` in the binding (SIGHUP or wait for the rescan). No
+   new steers start; held ones still resolve.
+2. Wait until the ledger has no input in phase `steering`, and every input
+   with a non-empty `steered` list is settled (its final was acknowledged).
+3. Remove the `auto_steer` key from the binding file, then install the older
+   adapter.
+
+The older adapter refuses a binding that still contains `auto_steer`
+(`binding_fields`). It does not know `steer`: it would admit a `steering` row
+as an ordinary input (a possible duplicate) and it settles only `burst`
+children, so steered rows of an unsettled head would stay listed as
+outstanding. Rows with `steer_fallback` or settled steered rows need nothing.
 
 ### Owner-only Fast intake
 

@@ -72,6 +72,11 @@ def refusal_notice(reason):
             "send it again if it is still needed." % reason)
 
 
+# Appended to a refused turn's notice when owner messages were steered into it.
+STEERED_REFUSAL_NOTE = ("\n\nThis also applies to %d message(s) you sent while it was running; "
+                        "send them again if they are still needed.")
+
+
 class Conflict(ValueError):
     pass
 
@@ -487,6 +492,9 @@ class Ledger:
                        "parentMessageId": data["remote_id"], "refusal": reason, "text": refusal_notice(reason)}
             if notice is not None:
                 message.update({k: v for k, v in notice.items() if k in ("text", "provider", "model")})
+            if data.get("steered"):
+                # Messages steered into this turn settle with this notice; say so.
+                message["text"] += STEERED_REFUSAL_NOTE % len(data["steered"])
             data.pop("blocked", None)
             if alert:
                 now = time.time()
@@ -573,6 +581,11 @@ class Ledger:
                 self.save(row, db)
             head["burst"] = [row["remote_id"] for row in rows]
             self.save(head, db)
+
+    def input(self, remote_id):
+        with self.connect() as db:
+            row = db.execute("SELECT data FROM inputs WHERE remote_id=?", (remote_id,)).fetchone()
+        return json.loads(row[0]) if row else None
 
     # Auto-steer: steer state transitions live in auto_steer_store.py.
     def begin_steer(self, row, record):

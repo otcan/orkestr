@@ -23,9 +23,8 @@ def begin(ledger, row, record):
     with ledger.connect() as db:
         db.execute("BEGIN IMMEDIATE")
         current = _current(db, row["remote_id"])
-        if (current.get("phase") != "queued" or current.get("settled") or
-                any(current.get(k) for k in ("intake", "burst", "absorbed_into", "steer", "steer_fallback",
-                                             "refused", "blocked", "origin"))):
+        from .auto_steer import admission_started
+        if current.get("phase") != "queued" or current.get("settled") or admission_started(current):
             return False
         current.update(steer=record, phase="steering")
         ledger.save(current, db)

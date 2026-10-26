@@ -20,13 +20,14 @@ Exactly-once:
   A queued (not native) steer admission is retired through the supported owner
   route first, so Core never holds a second copy. Written-but-unacknowledged
   delivery is uncertain: it is closed with a visible owner notice and an
-  operator alert, never replayed.
+  operator alert, never replayed, as is a hold that finds no definite outcome
+  within STEER_MAX_HOLD_S. `written_bytes == 0` is strong evidence that
+  nothing reached the provider, not strict proof (see README).
 
 Only verified owner chat input is steered, never timer, post, digest, member,
 local-agent or web input, and only into a running, currently steerable Deep run
 of the binding's own head chat input.
 """
-import re
 import sys
 import time
 
@@ -39,6 +40,9 @@ STEER_TEXT_LIMIT = 16384
 MAX_STEERS_PER_HEAD = 8
 # A reservation without native consumption, seen after the handler answered.
 RESERVED_GRACE_S = 30
+# A held input never waits longer than this for a definite outcome: it is then
+# closed with a visible notice and an operator alert (never replayed).
+STEER_MAX_HOLD_S = 20 * 60
 STEER_NOTE = ("[The owner sent this message while you were still working on this turn. It may answer a "
               "question you asked. Take it into account now and continue the same task; your final reply "
               "for this turn also answers this message.]\n\n")
@@ -46,21 +50,22 @@ UNKNOWN_NOTICE = ("Your message was sent to the running task, but Orkestr could 
                   "If the reply does not cover it, please send it again.")
 QUEUED_NOTICE = ("Your message was queued in Orkestr but could not be added to the running task or confirmed "
                  "as a separate request. If the reply does not cover it, please send it again.")
-KEY = re.compile(r"^[A-Za-z0-9:._-]{1,128}$")
 TERMINAL_RUN_PHASES = ("awaiting_acceptance", "completed", "failed", "lost", "cancelled", "blocked", "stopped",
                        "interrupted")
 # Row markers that mean "not an ordinary unadmitted chat input any more".
-NOT_PLAIN = ("origin", "digest", "blocked", "refused", "requeued", "continued", "burst", "absorbed_into", "intake",
-             "attachment_request", "steer", "steer_fallback")
+# Admission state counts by key presence: intake saves `burst: []` (and a
+# window request) before its POST, whose outcome may be unknown.
+ADMISSION_KEYS = ("intake", "burst", "window", "window_request", "attachment_request", "steer", "steer_fallback")
+NOT_PLAIN = ("origin", "digest", "blocked", "refused", "requeued", "continued", "absorbed_into")
+
+
+def admission_started(row):
+    return any(key in row for key in ADMISSION_KEYS) or any(row.get(key) for key in NOT_PLAIN)
 
 
 def default_mode(config):
-    """`auto_steer` binding setting; unset means on (question mode) for an
-    owner-only group and off for a group with listed members."""
-    value = config.get("auto_steer")
-    if value is None:
-        return "question" if not config.get("participants") else "off"
-    return value
+    """`auto_steer` binding setting; unset means off (enable per binding)."""
+    return config.get("auto_steer") or "off"
 
 
 def log(worker, event, row, alert=False, **fields):
@@ -79,7 +84,7 @@ def steer_text(row):
     return text
 
 
-def candidate_refusal(mode, head, row, now=None):
+def candidate_refusal(mode, head, row):
     """Why `row` may not be steered into `head`'s turn, or None. Pure."""
     if mode not in MODES or mode == "off":
         return "disabled"
@@ -87,7 +92,7 @@ def candidate_refusal(mode, head, row, now=None):
         return "same_input"
     if (row.get("author") or {}).get("role") != "owner":
         return "not_owner"
-    if row.get("phase") != "queued" or any(row.get(key) for key in NOT_PLAIN):
+    if row.get("phase") != "queued" or admission_started(row):
         return "not_plain_queued_input"
     if row.get("attachments"):
         return "attachments"
@@ -106,7 +111,18 @@ def candidate_refusal(mode, head, row, now=None):
         return "head_final_ready"
     if len(head.get("steered") or []) >= MAX_STEERS_PER_HEAD:
         return "steer_limit"
+    if mode == "question" and not question_before(head, row):
+        # Checked again for the exact run; this only spares status reads.
+        return "no_open_question"
     return None
+
+
+def question_before(head, row, run_id=None):
+    arrived = row.get("queued_at")
+    asked = [q["at"] for q in head.get("questions_asked") or []
+             if isinstance(q, dict) and isinstance(q.get("at"), (int, float)) and
+             (run_id is None or q.get("run_id") == run_id)]
+    return bool(asked) and isinstance(arrived, (int, float)) and min(asked) <= arrived
 
 
 def run_refusal(mode, head, row, deep):
@@ -119,12 +135,8 @@ def run_refusal(mode, head, row, deep):
         return "run_not_steerable"
     if type(deep.get("revision")) is not int or type(deep.get("control_revision")) is not int or deep["control_revision"] < 1:
         return "run_revision_unknown"
-    if mode == "question":
-        arrived = row.get("queued_at")
-        asked = [q for q in head.get("questions_asked") or []
-                 if q.get("run_id") == deep["run_id"] and isinstance(q.get("at"), (int, float))]
-        if not asked or not isinstance(arrived, (int, float)) or min(q["at"] for q in asked) > arrived:
-            return "no_open_question"
+    if mode == "question" and not question_before(head, row, deep["run_id"]):
+        return "no_open_question"
     return None
 
 
@@ -137,6 +149,24 @@ def decide(mode, head, row, deep):
 def holds(row):
     """Whether a steer decision owns this row (no queue path may admit it)."""
     return bool(row.get("steer"))
+
+
+def in_rust(row):
+    """A held row whose steer Rust already admitted: it can never need ordinary
+    FIFO admission again before a later input (its fallback is a new message)."""
+    return holds(row) and "receipt" in row["steer"]
+
+
+def hold_expired(worker, row, now=None):
+    """Close a held input that found no definite outcome in time."""
+    now = time.time() if now is None else now
+    decided = row["steer"].get("decided_at")
+    if not isinstance(decided, (int, float)) or now - decided < STEER_MAX_HOLD_S:
+        return False
+    worker.ledger.refuse(dict(row, steered_uncertain={"reason": "hold_expired", "receipt": row["steer"].get("receipt")}),
+                         "steer_hold_expired", alert=True, notice={"text": UNKNOWN_NOTICE})
+    log(worker, "auto_steer_hold_expired", row, alert=True, receipt="receipt" in row["steer"])
+    return True
 
 
 def drive(worker):
@@ -157,6 +187,12 @@ def drive(worker):
                 resolve(worker, row)
             except Exception as error:
                 transient_failure(worker, row, error)
+            try:
+                current = worker.ledger.input(row["remote_id"])
+                if holds(current) and current.get("phase") == "steering":
+                    hold_expired(worker, current)
+            except Exception as error:
+                log(worker, "auto_steer_expiry_failed", row, alert=True, code=type(error).__name__)
     if mode == "off" or len(rows) < 2 or busy:
         return busy
     head, row = rows[0], rows[1]
@@ -187,15 +223,20 @@ def transient_failure(worker, row, error):
     from .worker import transient
     if not holds(row):
         return
-    if transient(error) or "receipt" in row["steer"]:
+    client = isinstance(error, ClientError)
+    if (client and transient(error)) or not client or "receipt" in row["steer"]:
         # Once Rust admitted the steer, only its own delivery state may decide:
-        # an unexpected error never re-queues (that could run it twice).
-        # Retried every pass with the same frozen request; logged once per input.
+        # an unexpected error never re-queues (that could run it twice). A
+        # shape/ledger error is not a transport hiccup: it alerts. Retried
+        # every pass (bounded by STEER_MAX_HOLD_S); logged once per input and
+        # error class so a later, different failure is still reported.
+        code = getattr(error, "code", None) if client else None
+        kind = "%s:%s:%s" % (type(error).__name__, code, getattr(error, "status", None))
         seen = worker.__dict__.setdefault("_steer_retry_logged", set())
-        if row["remote_id"] not in seen:
-            seen.add(row["remote_id"])
-            log(worker, "auto_steer_retry", row, alert=not transient(error),
-                code=getattr(error, "code", None) or type(error).__name__)
+        if (row["remote_id"], kind) not in seen:
+            seen.add((row["remote_id"], kind))
+            log(worker, "auto_steer_retry", row, alert=not (client and transient(error)),
+                error=type(error).__name__, code=code or getattr(error, "status", None) or str(error)[:64])
     else:
         fallback(worker, row, "steer_error:%s" % getattr(error, "status", getattr(error, "code", "error")))
 
@@ -210,18 +251,33 @@ def submit(worker, row):
         from .worker import transient
         if transient(error):
             raise
-        # A definite 4xx refusal commits nothing: no Core message exists.
-        return fallback(worker, row, "steer_refused:%s" % error.status)
+        # A refusal before Rust's admission transaction commits nothing, but the
+        # handler can also refuse after it (for example while consuming the
+        # reservation), leaving a consumed Core message. Rust's steering record
+        # tells the two apart: no record means nothing was admitted.
+        value = status(worker, row)
+        if value is None:
+            return fallback(worker, row, "steer_refused:%s" % error.status)
+        return adopt(worker, row, value["receipt"])
     control = request["control"]
     if (not isinstance(receipt, dict) or receipt.get("run_id") != control["run_id"] or
             receipt.get("request_key") != control["request_key"] or
             not all(isinstance(receipt.get(k), str) and receipt[k] for k in ("message_id", "event_id")) or
             receipt.get("disposition") not in ("reserved", "queued_unsupported", "queued_ordered")):
         raise ValueError("steer_receipt_shape")
+    return adopt(worker, row, receipt)
+
+
+def adopt(worker, row, receipt):
+    """Record Rust's receipt; its Core message is this adapter's own (never mirrored)."""
+    steer = row["steer"]
     steer["receipt"] = receipt
     steer["receipt_at"] = time.time()
+    own = row.setdefault("own_messages", [])
+    if isinstance(receipt.get("message_id"), str) and receipt["message_id"] not in own:
+        own.append(receipt["message_id"])
     worker.ledger.save(row)
-    if receipt["disposition"] != "reserved":
+    if receipt.get("disposition") != "reserved":
         return retire_queued(worker, row)
     return resolve(worker, row)
 
@@ -255,11 +311,7 @@ def resolve(worker, row):
             if run_running(worker, row):
                 return submit(worker, row)
             return fallback(worker, row, "run_ended_before_steer")
-        steer["receipt"] = value["receipt"]
-        steer["receipt_at"] = time.time()
-        worker.ledger.save(row)
-        if value["receipt"].get("disposition") != "reserved":
-            return retire_queued(worker, row)
+        return adopt(worker, row, value["receipt"])
     if steer.get("retire"):
         return retire_queued(worker, row)
     value = status(worker, row)
@@ -315,6 +367,20 @@ def retire_queued(worker, row):
     if not isinstance(value, dict) or value.get("message_id") != receipt["message_id"] or value.get("state") != "retired":
         raise ValueError("retire_receipt_shape")
     return fallback(worker, row, "steer_queued_%s" % receipt["disposition"], {"receipt": receipt, "retired": value})
+
+
+CARRY_NOTE = "[Messages the owner added to the previous turn while it was running:]"
+
+
+def carry(ledger, head, text):
+    """A continuation of a turn that took steered messages carries their text,
+    so a stopped turn's new attempt cannot drop them. They still settle with it."""
+    texts = []
+    for remote_id in head.get("steered") or ():
+        row = ledger.input(remote_id)
+        if row and isinstance(row.get("text"), str) and row["text"].strip():
+            texts.append(compose(row))
+    return text + "\n\n" + CARRY_NOTE + "\n\n" + "\n\n".join(texts) if texts else text
 
 
 def fallback(worker, row, reason, audit=None):

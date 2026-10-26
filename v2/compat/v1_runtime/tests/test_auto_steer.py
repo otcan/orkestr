@@ -60,6 +60,10 @@ class DecisionTests(unittest.TestCase):
                        dict(burst=["b"]), dict(continued={"at": 1}), dict(requeued={"at": 1}),
                        dict(steer_fallback={"reason": "r"}), dict(phase="running")):
             self.assertEqual(decide("running", head(), row(**marker), deep())[1], "not_plain_queued_input", marker)
+        for key in ("burst", "window_request", "window", "intake"):
+            # Admission state counts by presence: intake saves `burst: []` before its POST.
+            self.assertEqual(decide("running", head(), row(**{key: [] if key == "burst" else {}}), deep())[1],
+                             "not_plain_queued_input", key)
         self.assertEqual(decide("running", head(), row(attachments=[{"upload_id": "u"}]), deep())[1], "attachments")
         self.assertEqual(decide("running", head(), row(text="x" * 17000), deep())[1], "too_long")
         self.assertEqual(decide("running", head(), row(chat_id="other"), deep())[1], "other_chat")
@@ -81,9 +85,9 @@ class DecisionTests(unittest.TestCase):
 
     def test_off_disables_and_defaults_follow_the_group_shape(self):
         self.assertEqual(decide("off", head(), row(), deep())[1], "disabled")
-        self.assertEqual(default_mode({"participants": []}), "question")
-        self.assertEqual(default_mode({"participants": [{"ids": ["1@c.us"], "label": "A", "role": "member"}]}), "off")
-        self.assertEqual(default_mode({"participants": [], "auto_steer": "off"}), "off")
+        self.assertEqual(default_mode({"participants": []}), "off", "off unless enabled per binding")
+        self.assertEqual(default_mode({"participants": [], "auto_steer": None}), "off")
+        self.assertEqual(default_mode({"participants": [], "auto_steer": "question"}), "question")
         self.assertEqual(default_mode({"participants": [], "auto_steer": "running"}), "running")
 
     def test_binding_setting_is_validated(self):
@@ -97,6 +101,25 @@ class DecisionTests(unittest.TestCase):
             validate_binding(dict(base, auto_steer="always"), identity(3))
 
 
+class StoreTests(fixture.IntakeBase):
+    def test_begin_refuses_an_input_whose_admission_may_have_been_sent(self):
+        data = self.enqueue("answer")
+        data["burst"] = []  # What intake.admit saves before an uncertain POST /messages.
+        self.ledger.save(data)
+        self.assertFalse(self.ledger.begin_steer(dict(data), {"request": {}}))
+        self.assertNotIn("steer", self.row("answer"))
+
+    def test_continuation_carries_steered_text(self):
+        first = self.enqueue("first")
+        answer = self.enqueue("answer")
+        first["steered"] = [answer["remote_id"]]
+        text = auto_steer.carry(self.ledger, first, "Request first")
+        self.assertTrue(text.startswith("Request first"))
+        self.assertIn(auto_steer.CARRY_NOTE, text)
+        self.assertIn("Request answer", text)
+        self.assertEqual(auto_steer.carry(self.ledger, dict(first, steered=[]), "x"), "x")
+
+
 class SteerPeer(fixture.IntakePeer):
     """IntakePeer plus Rust's steer, steering-status and retire routes."""
 
@@ -108,12 +131,15 @@ class SteerPeer(fixture.IntakePeer):
         self.disposition = "reserved"
         self.retire_error = None
         self.steering_down = False
+        self.refuse_after_commit = False
+        self.reads = []
 
     def deep(self, index=0):
         return self.runs[index, "deep"]
 
     def request(self, method, route, body=None, allowed=(200,)):
         path, _, run_id = route.partition("?run_id=")
+        self.reads.append(path)
         if path == "/execution":
             code, value = super().request(method, route, body, allowed)
             if code == 200:
@@ -146,6 +172,10 @@ class SteerPeer(fixture.IntakePeer):
                                     state="reserved" if self.disposition == "reserved" else "queued", text=body["text"])
             if self.disposition == "reserved":
                 self.steers[key]["state"] = "delivery_unknown"
+            if self.refuse_after_commit:
+                # Committed admission, then the handler refuses consuming the reservation.
+                self.steers[key]["state"] = "reserved"
+                raise ClientError("unexpected_status", 409)
             if self.lose_steer_response:
                 self.lose_steer_response = False
                 raise ClientError("transport_outcome_unknown")
@@ -338,6 +368,88 @@ class AutoSteerFlowTests(fixture.IntakeBase):
         self.run_passes(3)
         self.assertEqual(self.row("answer")["phase"], "steering", "held until Rust's delivery state is readable")
         self.assertEqual(self.texts(), ["Request first"])
+
+    def test_shape_errors_alert_per_error_class_and_the_hold_is_bounded(self):
+        self.running_head_with_question()
+        self.enqueue("answer")
+        self.run_passes(1)
+        receipt = self.row("answer")["steer"]["receipt"]
+        self.assertIn(receipt["message_id"], self.row("answer")["own_messages"], "web-mirror echo guard")
+        original = self.peer.request
+        def broken(method, route, body=None, allowed=(200,)):
+            if route.startswith("/steering/"):
+                return 200, {"state": "nonsense"}
+            return original(method, route, body, allowed)
+        self.peer.request = broken
+        self.run_passes(3)
+        alerts = [line for line in self.log.getvalue().splitlines() if line.startswith("ALERT ") and "auto_steer_retry" in line]
+        self.assertEqual(len(alerts), 1, "a shape error alerts once, not every pass")
+        self.peer.request = original
+        self.peer.steering_down = ClientError("unexpected_status", 403)
+        self.run_passes(2)
+        alerts = [line for line in self.log.getvalue().splitlines() if line.startswith("ALERT ") and "auto_steer_retry" in line]
+        self.assertEqual(len(alerts), 2, "a different error class is reported again")
+        self.assertEqual(self.row("answer")["phase"], "steering")
+        # Past the maximum hold the input is closed visibly, never replayed.
+        with self.ledger.connect() as db:
+            db.execute("UPDATE inputs SET data=json_set(data,'$.steer.decided_at',?) WHERE public_id='answer'",
+                       (time.time() - auto_steer.STEER_MAX_HOLD_S - 1,))
+        self.run_passes(1)
+        answer = self.row("answer")
+        self.assertEqual(answer["refused"]["reason"], "steer_hold_expired")
+        self.assertIn("ALERT orkestr-v2-wa-adapter auto_steer_hold_expired", self.log.getvalue())
+        self.assertEqual(len(self.finals(answer["remote_id"])), 1)
+        self.peer.steering_down = False
+        self.finish_head()
+        self.run_passes(3)
+        self.assertEqual(self.texts(), ["Request first"])
+
+    def test_owner_fast_intake_passes_a_steer_rust_already_holds(self):
+        self.running_head_with_question()
+        self.enqueue("answer")
+        self.run_passes(1)
+        self.assertIn("receipt", self.row("answer")["steer"])  # delivery_unknown, 0 bytes, run running
+        self.enqueue("later")
+        self.run_passes(2)
+        self.assertEqual(self.texts(), ["Request first", "Request later"], "later owner input is not held")
+        self.assertEqual(self.row("answer")["phase"], "steering")
+
+    def test_refusal_after_rust_committed_the_steer_is_resolved_by_its_record(self):
+        self.running_head_with_question()
+        self.enqueue("answer")
+        self.peer.refuse_after_commit = True
+        self.run_passes(1)
+        steer = self.row("answer")["steer"]
+        self.assertIn("receipt", steer, "the committed record is adopted, not ignored")
+        self.peer.refuse_after_commit = False
+        self.finish_head()
+        self.run_passes(3)
+        self.assertEqual(self.row("answer")["steer_fallback"]["reason"], "steer_not_consumed")
+        self.assertEqual(self.texts(), ["Request first", "Request answer"], "one ordinary admission, no duplicate")
+
+    def test_refused_head_tells_the_owner_about_steered_messages(self):
+        first = self.running_head_with_question()
+        self.enqueue("answer")
+        self.run_passes(1)
+        self.peer.acknowledge_all()
+        self.run_passes(1)
+        self.peer.deep()["phase"] = "failed"
+        self.run_passes(2)
+        [notice] = self.finals(first["remote_id"])
+        self.assertIn("also applies to 1 message", notice["text"])
+        self.ledger.acknowledge(notice["id"], {"outcome": "delivered", "outboxJobId": "job",
+                                               "parentPublicMessageId": "first"})
+        self.assertTrue(self.row("answer")["settled"])
+        self.assertEqual(self.texts(), ["Request first"])
+
+    def test_question_mode_reads_no_status_without_a_question(self):
+        self.worker.fast_reply_policy = "legacy"
+        self.enqueue("first")
+        self.run_passes(2)
+        self.enqueue("second")
+        self.peer.reads.clear()
+        auto_steer.drive(self.worker)
+        self.assertNotIn("/execution", self.peer.reads)
 
     def test_native_rejection_falls_back_once(self):
         self.running_head_with_question()

@@ -1099,7 +1099,7 @@ class Worker:
                 self.accept_role(data, "fast", ids)
             except Exception:
                 pass
-        text = data.get("intake_text") or compose(data)
+        text = auto_steer.carry(self.ledger, data, data.get("intake_text") or compose(data))
         previous = data["intake"]["message_id"]
         for key in RESET_KEYS:
             data.pop(key, None)
