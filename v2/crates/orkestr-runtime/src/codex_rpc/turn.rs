@@ -3,6 +3,8 @@ use crate::{ports::Blocker, ports::ProviderEvent};
 use serde_json::Value;
 use std::collections::VecDeque;
 #[cfg(test)]
+mod capacity_tests;
+#[cfg(test)]
 mod model_tests;
 mod models;
 mod text;
@@ -22,6 +24,16 @@ pub struct TurnStream {
     interrupt_claimed: bool,
     text: text::TurnText,
     models: models::Models,
+    /// A capacity fallback retry of the same run: Core already holds Started.
+    suppress_started: bool,
+    /// A capacity/overload terminal withheld from Core until Runtime decides
+    /// on the one fallback retry. `true`: the broker proved no side effect.
+    capacity_hold: Option<bool>,
+    /// The native turn produced its first model item or text.
+    activity: bool,
+    /// Runtime's own stall interrupt (never a Core stop) and its reply.
+    watchdog: Option<u64>,
+    watchdog_acked: bool,
 }
 impl TurnStream {
     /// Protocol correlation only. The process layer separately consumes Core's
@@ -42,7 +54,72 @@ impl TurnStream {
             interrupt_claimed: false,
             text: text::TurnText::default(),
             models: Default::default(),
+            suppress_started: false,
+            capacity_hold: None,
+            activity: false,
+            watchdog: None,
+            watchdog_acked: false,
         })
+    }
+    /// Whether the turn is acknowledged, started, still silent and open.
+    pub(crate) fn stalled_candidate(&self) -> bool {
+        !self.poisoned
+            && self.acknowledged
+            && self.started
+            && !self.activity
+            && self.terminal.is_none()
+            && self.events.is_empty()
+            && !self.interrupt_claimed
+            && !self.text.asked_question()
+    }
+    /// Runtime's stall interrupt for a silent turn (no Core stop). Its
+    /// `interrupted` terminal becomes a held capacity terminal.
+    pub(crate) fn claim_stall_interrupt(&mut self, request: u64) -> Result<Value, Blocker> {
+        if !self.stalled_candidate() {
+            return Err(Blocker::Protocol);
+        }
+        let frame = self.claim_interrupt(request)?;
+        self.watchdog = Some(request);
+        Ok(frame)
+    }
+    /// A stall interrupt was sent and its reply has not arrived yet.
+    pub(crate) fn stall_reply_pending(&self) -> bool {
+        self.watchdog.is_some() && !self.watchdog_acked
+    }
+    /// The same run's one capacity fallback turn on the same native thread.
+    /// Only a held, side-effect-free capacity terminal permits it.
+    pub(crate) fn fallback_retry(&self, request: u64) -> Result<Self, Blocker> {
+        if self.poisoned
+            || (self.interrupt_claimed && self.watchdog.is_none())
+            || self.stall_reply_pending()
+            || self.capacity_hold != Some(true)
+            || request <= self.request
+            || request >= (1_u64 << 53)
+        {
+            return Err(Blocker::Protocol);
+        }
+        let mut next = Self::new(&self.thread, request)?;
+        next.suppress_started = true;
+        Ok(next)
+    }
+    /// `Some(side_effect_free)` while a capacity terminal is withheld.
+    pub(crate) fn capacity_held(&self) -> Option<bool> {
+        self.capacity_hold
+    }
+    /// Deliver the withheld capacity terminal (closed `provider` class).
+    pub(crate) fn release_capacity_hold(&mut self) -> Result<(), Blocker> {
+        if self.capacity_hold.take().is_none() {
+            return Err(Blocker::Protocol);
+        }
+        let event = self.terminal.clone().ok_or(Blocker::Protocol)?;
+        self.queue(event)
+    }
+    pub(crate) fn request(&self) -> u64 {
+        self.request
+    }
+    /// The model this turn is known to run on (native evidence), if any.
+    pub(crate) fn current_model(&self) -> Option<&str> {
+        self.models.current()
     }
     pub fn next_event(&mut self) -> Option<ProviderEvent> {
         if self.acknowledged {
@@ -150,6 +227,17 @@ impl TurnStream {
             return Err(Blocker::Protocol);
         }
         let value: Value = serde_json::from_str(line).map_err(|_| Blocker::Protocol)?;
+        if let Some(watchdog) = self.watchdog.filter(|_| !self.watchdog_acked) {
+            if value.get("method").is_none()
+                && value.get("id").and_then(Value::as_u64) == Some(watchdog)
+            {
+                if value.get("result") != Some(&serde_json::json!({})) {
+                    return Err(Blocker::Protocol);
+                }
+                self.watchdog_acked = true;
+                return Ok(());
+            }
+        }
         if value.get("id").is_some() {
             // Requests from the server are never interpreted as replies or grants.
             if value.get("method").is_some()
@@ -207,12 +295,22 @@ impl TurnStream {
                 | "item/started"
                 | "item/completed"
                 | "model/rerouted"
+                | "turn/activity"
         ) {
             return Ok(());
         }
         let params = value.get("params").ok_or(Blocker::Protocol)?;
         if text(params, "threadId")? != self.thread {
             return Err(Blocker::StaleLease);
+        }
+        if method == "turn/activity" {
+            // Broker's closed marker: the first model item of this turn.
+            self.turn_id(text(params, "turnId")?)?;
+            if self.terminal.is_some() {
+                return Err(Blocker::Protocol);
+            }
+            self.activity = true;
+            return Ok(());
         }
         if method == "model/rerouted" {
             self.turn_id(text(params, "turnId")?)?;
@@ -229,6 +327,9 @@ impl TurnStream {
             if self.terminal.is_some() {
                 return Err(Blocker::Protocol);
             }
+            if method == "item/agentMessage/delta" || method == "item/started" {
+                self.activity = true;
+            }
             if let Some(snapshot) = self.text.receive(method, params)? {
                 self.models.answered();
                 self.queue(ProviderEvent::Progress(snapshot))?;
@@ -243,13 +344,22 @@ impl TurnStream {
                 return Err(Blocker::Protocol);
             }
             if !self.started {
-                self.queue(ProviderEvent::Started)?;
+                if !self.suppress_started {
+                    self.queue(ProviderEvent::Started)?;
+                }
                 self.started = true;
             }
             return Ok(());
         }
+        // Runtime's own stall interrupt ends a silent, overloaded turn.
+        let capacity = (status == "failed" && capacity_error(turn)?)
+            || (status == "interrupted" && self.watchdog.is_some());
         let event = match status {
             "completed" => ProviderEvent::CompletedProposal { synthetic: false },
+            // Capacity/overload is the provider's closed `provider` class.
+            "failed" | "interrupted" if capacity => {
+                ProviderEvent::FailedWith(orkestr_v2_contracts::ExecutionFailureClass::Provider)
+            }
             "failed" => ProviderEvent::Failed,
             "interrupted" => ProviderEvent::Stopped,
             _ => return Err(Blocker::Protocol),
@@ -267,9 +377,32 @@ impl TurnStream {
                 self.queue(ProviderEvent::Progress(snapshot))?;
             }
         }
+        if capacity {
+            // Withheld: Runtime retries once on the fallback model or delivers
+            // it. Only the broker's explicit `sideEffects: false` and no
+            // delivered async question make the turn side-effect free.
+            let clean =
+                turn.get("sideEffects") == Some(&Value::Bool(false)) && !self.text.asked_question();
+            self.terminal = Some(event);
+            self.capacity_hold = Some(clean);
+            return Ok(());
+        }
         self.queue(event.clone())?;
         self.terminal = Some(event);
         Ok(())
+    }
+}
+/// The broker's closed failure evidence: absent, or exactly `capacity`.
+fn capacity_error(turn: &Value) -> Result<bool, Blocker> {
+    match turn.get("error") {
+        None | Some(Value::Null) => Ok(false),
+        Some(Value::Object(error))
+            if error.len() == 1
+                && error.get("class").and_then(Value::as_str) == Some("capacity") =>
+        {
+            Ok(true)
+        }
+        Some(_) => Err(Blocker::Protocol),
     }
 }
 fn text<'a>(value: &'a Value, key: &str) -> Result<&'a str, Blocker> {

@@ -60,4 +60,27 @@ impl OwnedChild {
                 .write_suffix(bytes)
         })
     }
+
+    /// Runtime's capacity stall interrupt for its own still-running turn. No
+    /// Core stop exists: it passes the run's ORIGINAL durable dispatch fence,
+    /// so a cancelled, renewed-away or fenced run cannot send it.
+    pub(crate) fn enqueue_stall_interrupt(
+        &self,
+        scope: &ExecutionScope,
+        lineage: &std::sync::Arc<()>,
+        bytes: &[u8],
+    ) -> Result<(), Error> {
+        let canonical = super::broker_frames::cancellation(bytes, lineage, &self.process)?;
+        if canonical.len() > self.process.max_frame {
+            return Err(Error::FrameTooLarge);
+        }
+        self.shared.dispatch(scope, |_| {
+            self.process
+                .live
+                .lock()
+                .map_err(|_| Error::Revoked)?
+                .framing
+                .enqueue(&canonical)
+        })
+    }
 }

@@ -26,6 +26,7 @@ pub(super) struct CodexOutput {
     pub(super) writing: Option<super::provider_write::PendingWrite>,
     pub(super) native_model: Option<String>,
     models: super::model_evidence::ModelEvidence,
+    pub(super) capacity: super::capacity::CapacityRetry,
 }
 impl Provider for CodexOutput {
     fn start(&mut self, _: &RunAdmission) -> Result<(), Blocker> {
@@ -41,6 +42,7 @@ impl Provider for CodexOutput {
         if let Some(error) = &self.failed {
             return Err(error.clone());
         }
+        self.check_stall()?;
         if self.models.pending() {
             return Ok(None);
         }
@@ -123,6 +125,7 @@ impl Provider for CodexOutput {
                 };
                 let text = std::str::from_utf8(&bytes).map_err(|_| Blocker::Protocol);
                 text.and_then(|text| self.stream.receive(text))
+                    .and_then(|()| self.resolve_capacity())
             }
             Ok(Output::Eof) => {
                 self.eof = true;
@@ -204,6 +207,7 @@ impl CodexPump {
                 steering: None,
                 native_model: None,
                 models: Default::default(),
+                capacity: Default::default(),
             },
             #[cfg(all(test, feature = "fixture-test-controls"))]
             test_fence: None,
@@ -240,6 +244,33 @@ impl CodexPump {
     ) -> Self {
         self.source.writing = writing;
         self
+    }
+    /// Retain this turn's own frame for at most one same-run capacity
+    /// fallback retry under the installed operator policy.
+    pub(super) fn with_capacity_retry(
+        mut self,
+        frame: &serde_json::Value,
+        owner_model: bool,
+    ) -> Self {
+        let actual_fd = self.source.writing.is_some();
+        self.source.capacity = super::capacity::CapacityRetry::new(
+            crate::capacity_fallback::current(),
+            frame,
+            actual_fd,
+            owner_model,
+        );
+        self
+    }
+    #[cfg(test)]
+    pub(super) fn set_capacity_policy(
+        &mut self,
+        policy: crate::capacity_fallback::CapacityFallback,
+    ) {
+        self.source.capacity.set_policy(policy);
+    }
+    #[cfg(test)]
+    pub(super) fn capacity_retried(&self) -> bool {
+        self.source.capacity.attempted()
     }
     /// Consume the owned broker for descendant-aware cleanup. The returned
     /// evidence is not a Core continuation grant and never confirms Stopped.

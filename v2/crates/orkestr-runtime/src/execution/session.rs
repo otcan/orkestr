@@ -496,6 +496,7 @@ impl ReadyCodex {
                         scope,
                         request_id,
                         broker: Some(envelope),
+                        restore_model: None,
                     },
                     fence as std::sync::Arc<dyn crate::containment::DispatchFence>,
                 ))
@@ -504,7 +505,8 @@ impl ReadyCodex {
         let pump = super::pump::CodexPump::new(child, scope, provider, stream)
             .with_native_model(native_model, requested_model.as_deref())
             .with_broker(self.channel)
-            .with_provider_write(writing);
+            .with_provider_write(writing)
+            .with_capacity_retry(&raw, requested_model.is_some());
         #[cfg(all(test, feature = "fixture-test-controls"))]
         let pump = pump.with_test_fence(test_fence.unwrap());
         Ok((authority, pump))

@@ -151,6 +151,10 @@ impl AppState {
             // Operator opt-in, before any provider session exists.
             orkestr_runtime::provider_access::enable_host_full_access();
         }
+        if let Some(fallback) = &config.capacity_fallback {
+            // Validated by loading; operator policy before any provider session.
+            orkestr_runtime::capacity_fallback::install(fallback.policy()?);
+        }
         let stat = std::fs::read_to_string("/proc/self/stat")
             .map_err(|_| "beta manager parent unavailable")?;
         let (_, fields) = stat

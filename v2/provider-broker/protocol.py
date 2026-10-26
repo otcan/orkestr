@@ -53,6 +53,51 @@ def launch_model(value):
             and value.lower() not in ("openai", "azure", "openrouter"))
 
 
+# Item types that are model output, never an action. Any other item (command,
+# file change, MCP/dynamic tool call, web search, image view, sub-agent...) is
+# a possible side effect, and so is every notification not listed below.
+# (Codex 0.163 app-server notification names.)
+BENIGN_ITEMS = ("agentMessage", "reasoning", "userMessage", "contextCompaction", "plan")
+BENIGN_METHODS = ("turn/started", "turn/completed", "turn/plan/updated", "turn/moderationMetadata",
+                  "item/agentMessage/delta", "item/plan/delta", "model/rerouted", "model/verification",
+                  "model/safetyBuffering/updated", "thread/started", "thread/settings/updated",
+                  "thread/tokenUsage/updated", "thread/status/changed", "thread/readState/changed",
+                  "thread/name/updated", "account/updated", "account/rateLimits/updated",
+                  "modelProvider/authRecoveryStarted", "modelProvider/authRecoveryCompleted",
+                  "mcpServer/startupStatus/updated", "remoteControl/status/changed",
+                  "warning", "guardianWarning", "deprecationNotice", "configWarning", "error")
+CAPACITY_INFO = ("serverOverloaded", "server_overloaded")
+CAPACITY_TEXT = ("selected model is at capacity", "model is at capacity", "server is overloaded")
+
+
+def capacity_error(error):
+    """Closed capacity/overload evidence from Codex's own error class (or its
+    fixed message): server overloaded, or HTTP 429 after retries ran out.
+    Never forwards provider text; the result is a boolean only."""
+    if not isinstance(error, dict):
+        return False
+    info = error.get("codexErrorInfo", error.get("codex_error_info"))
+    if isinstance(info, str) and info in CAPACITY_INFO:
+        return True
+    if isinstance(info, dict):
+        for key in ("responseTooManyFailedAttempts", "response_too_many_failed_attempts"):
+            detail = info.get(key)
+            if isinstance(detail, dict) and 429 in (detail.get("httpStatusCode"), detail.get("http_status_code")):
+                return True
+    message = error.get("message")
+    return isinstance(message, str) and any(text in message.lower() for text in CAPACITY_TEXT)
+
+
+def side_effect(method, params):
+    """Whether a provider notification is evidence of a possible side effect."""
+    if method in ("item/started", "item/completed"):
+        item = params.get("item") if isinstance(params, dict) else None
+        return not (isinstance(item, dict) and item.get("type") in BENIGN_ITEMS)
+    if method.startswith("item/reasoning/"):
+        return False
+    return method not in BENIGN_METHODS
+
+
 def reported_model(value):
     return (isinstance(value, str) and 0 < len(value) <= 120 and
             all(c.isascii() and (c.isalnum() or c in "-_.:/") for c in value))
@@ -164,6 +209,10 @@ class Channel:
         self.last_turn_inner = 0
         self.requested_model = None
         self.model_observed = False
+        # Current turn: any possible side effect, and a closed capacity error.
+        self.side_effects = False
+        self.capacity = False
+        self.activity = False
         self.native = None
         self.committed = False
         self.turn = None
@@ -269,6 +318,9 @@ class Channel:
             self.last_turn_inner = frame["id"]
             self.requested_model = frame["params"].get("model")
             self.model_observed = False
+            self.side_effects = False
+            self.capacity = False
+            self.activity = False
             message = frame["params"]["clientUserMessageId"]
             require(message not in self.messages and len(self.messages) < 256)
             self.messages.add(message)
@@ -369,9 +421,38 @@ class Channel:
             "method": "model/observed", "params": {"threadId": self.native,
                 "requestId": self.last_turn_inner, "model": model}}}}
 
+    def activity_marker(self, params):
+        """One `turn/activity` per turn: the model produced its first item."""
+        if (self.activity or not self.committed or self.terminal or self.cancelled
+                or params.get("item", {}).get("type") == "userMessage"
+                or params.get("threadId") != self.native or not identifier(params.get("turnId"))
+                or (self.turn is not None and params["turnId"] != self.turn)
+                or params["turnId"] in self.retired_turns):
+            return None
+        self.activity = True
+        self.turn = params["turnId"]
+        return {"method": "BrokerOutput", "params": {"owned_handle": self.handle, "frame": {
+            "method": "turn/activity", "params": {"threadId": self.native, "turnId": self.turn}}}}
+
+    def observe_effects(self, method, params):
+        """Record side-effect and capacity evidence for the committed turn."""
+        if not self.committed or self.terminal or not isinstance(params, dict):
+            return
+        thread = params.get("threadId")
+        if isinstance(thread, str) and thread and self.native is not None and thread != self.native:
+            self.side_effects = True  # A sub-agent thread of this turn acted.
+            return
+        if method == "error":
+            if params.get("willRetry") is False and capacity_error(params.get("error")):
+                self.capacity = True
+            return
+        if side_effect(method, params):
+            self.side_effects = True
+
     def provider(self, frame):
         require(isinstance(frame, dict), Failure.PROVIDER_OUTER)
         if frame.get("method") == "item/tool/call":
+            self.side_effects = True
             require(self.tool_enabled and self.pending is None and self.committed
                     and self.turn is not None and not self.terminal and not self.cancelled,
                     Failure.UNSUPPORTED_TOOL)
@@ -381,6 +462,7 @@ class Channel:
             # Never pass server tool/approval requests through as notifications.
             require(isinstance(frame.get("method"), str) and "params" in frame,
                     Failure.PROVIDER_OUTER)
+            self.observe_effects(frame["method"], frame["params"])
             if frame["method"] == "thread/settings/updated":
                 return self.observed_model(frame["params"])
             item_event = frame["method"] in ("item/started", "item/completed")
@@ -389,7 +471,10 @@ class Channel:
                 require(isinstance(params, dict) and isinstance(params.get("item"), dict),
                         Failure.TURN_SCHEMA)
                 if params["item"].get("type") != "agentMessage":
-                    return None  # Tool items remain metadata, never an execution grant.
+                    # Tool items remain metadata, never an execution grant. The
+                    # first model item of a turn yields one closed activity
+                    # marker (no item content) for Runtime's stall watchdog.
+                    return self.activity_marker(params)
             if not item_event and frame["method"] not in (
                     "turn/started", "turn/completed", "item/agentMessage/delta", "model/rerouted"):
                 return None
@@ -444,6 +529,15 @@ class Channel:
                     clean["turn"]["items"] = [agent_item(item) for item in turn["items"]
                                               if item.get("type") == "agentMessage"]
                     clean["turn"]["itemsView"] = turn.get("itemsView", "full")
+                    if any(item.get("type") not in BENIGN_ITEMS for item in turn["items"]):
+                        self.side_effects = True
+                if frame["method"] == "turn/completed" and turn["status"] in ("failed", "interrupted"):
+                    # Closed evidence only: Runtime may retry a capacity failure
+                    # (or its own stall interrupt) once on a fallback model,
+                    # never after a side effect.
+                    if turn["status"] == "failed" and (self.capacity or capacity_error(turn.get("error"))):
+                        clean["turn"]["error"] = {"class": "capacity"}
+                    clean["turn"]["sideEffects"] = self.side_effects
             require(turn_id not in self.retired_turns, Failure.RETIRED_TURN)
             if self.turn is not None:
                 require(turn_id == self.turn, Failure.TURN_MISMATCH)

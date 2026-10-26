@@ -1,6 +1,7 @@
 //! By-value bridge from Core's committed dispatch to the owned transport.
 //! This does not construct a supervisor, credentials, or a permissive fence.
 pub(crate) mod cancellation_fence;
+mod capacity;
 mod claude_lifecycle;
 mod claude_pump;
 mod claude_session;
@@ -21,6 +22,8 @@ pub use claude_session::{PreparingClaude, ReadyClaude};
 pub use pump::{CodexPump, StopFailure, StoppingCodex};
 pub use session::{PreparingCodex, ReadyCodex, SetupFailure};
 pub use steering::{SteeringProgress, SteeringReadiness};
+#[cfg(test)]
+mod capacity_flow_tests;
 #[cfg(test)]
 mod native_model_tests;
 #[cfg(test)]
@@ -49,6 +52,10 @@ struct CodexTurn {
     scope: ExecutionScope,
     request_id: u64,
     broker: Option<crate::broker::channel::BrokerExecutionEnvelope>,
+    /// Restores the native thread default after a capacity fallback override
+    /// (Codex keeps a turn override for later turns). Only for a turn that
+    /// carries no explicit owner model.
+    restore_model: Option<String>,
 }
 
 fn execution_scope(
@@ -105,12 +112,25 @@ fn turn_frame(capability: &ConsumedProviderDispatch, request_id: u64) -> serde_j
     frame
 }
 
+/// Adds `model` only to a turn without an explicit owner model.
+fn with_restored_model(mut frame: serde_json::Value, model: Option<&str>) -> serde_json::Value {
+    if let Some(model) = model.filter(|m| orkestr_v2_contracts::launch_model_valid(m)) {
+        if frame.pointer("/params/model").is_none() {
+            frame["params"]["model"] = json!(model);
+        }
+    }
+    frame
+}
+
 impl ConsumedTurn for CodexTurn {
     fn broker_lineage(&self) -> Option<std::sync::Arc<()>> {
         self.broker.as_ref().map(|b| b.lineage.clone())
     }
     fn into_submission(self) -> (ExecutionScope, Vec<u8>) {
-        let frame = turn_frame(&self.capability, self.request_id);
+        let frame = with_restored_model(
+            turn_frame(&self.capability, self.request_id),
+            self.restore_model.as_deref(),
+        );
         let bytes = match self.broker {
             Some(broker) => broker.wrap(frame),
             None => frame.to_string().into_bytes(),
@@ -155,6 +175,7 @@ pub fn submit_codex(
             scope,
             request_id,
             broker: None,
+            restore_model: None,
         })
         .map_err(|failure| SubmissionFailure::Transport(failure.cause))
 }

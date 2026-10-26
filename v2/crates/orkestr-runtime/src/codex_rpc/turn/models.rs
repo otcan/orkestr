@@ -44,6 +44,9 @@ impl Models {
             model: self.current.clone().unwrap(),
         });
     }
+    pub(super) fn current(&self) -> Option<&str> {
+        self.current.as_deref()
+    }
     pub(super) fn take(&mut self) -> Option<ExecutionModelObservation> {
         self.pending.pop_front()
     }
