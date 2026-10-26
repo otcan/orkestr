@@ -34,6 +34,7 @@ class FakeV2(http.server.BaseHTTPRequestHandler):
     calls = []
     states = []
     collected = False
+    collects = 0
 
     def log_message(self, *_):
         pass
@@ -68,9 +69,9 @@ class FakeV2(http.server.BaseHTTPRequestHandler):
             state = FakeV2.states.pop(0) if len(FakeV2.states) > 1 else FakeV2.states[0]
             return self._reply(200, view(state, 'tool_result' if FakeV2.collected else None))
         if path == f'/thread-asks/{ASK_ID}/collect':
-            first = not FakeV2.collected
             FakeV2.collected = True
-            return self._reply(200, view('answered', 'tool_result', 'eu-central-1' if first else None))
+            FakeV2.collects += 1
+            return self._reply(200, view('answered', 'tool_result', 'eu-central-1'))
         return self._reply(404, {'code': 'not_found'})
 
     do_GET = _handle
@@ -79,7 +80,7 @@ class FakeV2(http.server.BaseHTTPRequestHandler):
 
 class ThreadAskClient(unittest.TestCase):
     def setUp(self):
-        FakeV2.calls, FakeV2.states, FakeV2.collected = [], ['sent'], False
+        FakeV2.calls, FakeV2.states, FakeV2.collected, FakeV2.collects = [], ['sent'], False, 0
         self.server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), FakeV2)
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
         self.url = f'http://127.0.0.1:{self.server.server_address[1]}'
@@ -111,17 +112,30 @@ class ThreadAskClient(unittest.TestCase):
         keys = {c[2]['request_key'] for c in FakeV2.calls if c[0] == 'POST'}
         self.assertEqual(len(keys), 1)
 
-    def test_wait_collects_the_answer_once(self):
+    def test_wait_collects_and_the_same_turn_may_collect_again(self):
         FakeV2.states = ['sent', 'running', 'answered']
         client = ASK.Client(self.url, CONVERSATION, GRANT)
         result = ASK.wait(client, ASK_ID, timeout=60, interval=0, sleep=lambda _s: None)
         self.assertEqual(result['answer'], 'eu-central-1')
         collects = [c for c in FakeV2.calls if c[1].endswith('/collect')]
         self.assertEqual(len(collects), 1)
-        # Already returned: no second collect and no second copy.
+        # A lost response: the collecting turn collects again (Core decides
+        # which run may), and gets the same answer.
         again = ASK.wait(client, ASK_ID, timeout=0, interval=0, sleep=lambda _s: None)
-        self.assertNotIn('answer', again)
-        self.assertEqual(len([c for c in FakeV2.calls if c[1].endswith('/collect')]), 1)
+        self.assertEqual(again['answer'], 'eu-central-1')
+        self.assertEqual(FakeV2.collects, 2)
+
+    def test_outcome_returned_as_input_is_never_collected(self):
+        FakeV2.states = ['answered']
+        client = ASK.Client(self.url, CONVERSATION, GRANT)
+        original = view
+        try:
+            globals()['view'] = lambda state, returned=None, answer=None, text='s': original(state, 'input')
+            result = ASK.wait(client, ASK_ID, timeout=0, interval=0, sleep=lambda _s: None)
+        finally:
+            globals()['view'] = original
+        self.assertEqual(result['returned'], 'input')
+        self.assertEqual(FakeV2.collects, 0)
 
     def test_wait_timeout_is_pending_not_success(self):
         FakeV2.states = ['running']

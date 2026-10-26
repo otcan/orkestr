@@ -11,9 +11,10 @@ V1 CLI or browser pairing) against the V2 API:
 
 TARGET is a conversation UUID or an exact (case-insensitive) name from
 `targets`. `ask` records the request in the target thread; Orkestr starts the
-target's own turn and returns its final answer exactly once: to this turn if it
-is still running and collects it (`--wait` or `wait`), otherwise as a new
-message in this thread. A request that is only `sent` has NOT been processed.
+target's own turn and returns its final answer exactly once: to the asking turn
+if it is still running and collects it (`--wait` or `wait`; that turn may
+collect again), otherwise as a new message in this thread. Requests that are
+not answered within the window lifetime ceiling fail as `expired`. A request that is only `sent` has NOT been processed.
 
 Exit status: 0 answered (or sent, without --wait), 3 not answered yet when the
 wait ended, 4 the target did not answer, 2 refused or failed.
@@ -57,7 +58,10 @@ def read_grant(path=None, environ=os.environ):
 
 
 def default_key(target, text):
-    """Stable for the same target and text, so a retried call is one request."""
+    """Stable for the same target and text, so a retried call is one request.
+
+    Core scopes a key to the asking run: the same key from a later turn is a
+    new request, never an old answered or failed one."""
     return 'ask-' + hashlib.sha256(f'{target}\n{text}'.encode()).hexdigest()[:40]
 
 
@@ -119,13 +123,15 @@ class Client:
 
 
 def wait(client, ask, timeout, interval=5.0, clock=time.monotonic, sleep=time.sleep):
-    """Poll until the outcome is final, then collect it once. Returns the view."""
+    """Poll until the outcome is final, then collect it. The collecting run may
+    collect again (for example after a lost response); an outcome already
+    delivered as a new message of this thread is never collected."""
     deadline = clock() + max(0.0, timeout)
     view = client.status(ask)
     while view['state'] not in TERMINAL and clock() < deadline:
         sleep(min(interval, max(0.0, deadline - clock())))
         view = client.status(ask)
-    if view['state'] in TERMINAL and not view.get('returned'):
+    if view['state'] in TERMINAL and view.get('returned') != 'input':
         view = client.collect(ask)
     return view
 

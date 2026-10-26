@@ -37,10 +37,13 @@ CREATE TABLE thread_asks (
  answer_text TEXT CHECK(answer_text IS NULL OR length(CAST(answer_text AS BLOB))<=8192),
  settled_ms INTEGER,
  return_path TEXT CHECK(return_path IS NULL OR return_path IN ('tool_result','input')),
+ -- The asking run that collected a tool result; only it may collect again.
+ collected_run_id TEXT REFERENCES production_runs(id),
  reply_message_id TEXT UNIQUE REFERENCES messages(id),
  reply_event_id TEXT UNIQUE REFERENCES events(id),
  returned_ms INTEGER,
- UNIQUE(owner_id,source_conversation_id,request_key),
+ -- A key replays only within the asking run; a later turn starts a new request.
+ UNIQUE(owner_id,source_conversation_id,source_run_id,request_key),
  FOREIGN KEY(source_conversation_id,owner_id) REFERENCES conversations(id,owner_id),
  FOREIGN KEY(target_conversation_id,owner_id) REFERENCES conversations(id,owner_id),
  CHECK(source_conversation_id!=target_conversation_id),
@@ -50,10 +53,12 @@ CREATE TABLE thread_asks (
  CHECK((return_path IS NULL)=(returned_ms IS NULL)),
  CHECK(return_path IS NULL OR outcome IS NOT NULL),
  CHECK((return_path IS 'input')=(reply_message_id IS NOT NULL)),
+ CHECK((return_path IS 'tool_result')=(collected_run_id IS NOT NULL)),
  CHECK((reply_message_id IS NULL)=(reply_event_id IS NULL))
 );
 CREATE INDEX thread_asks_open ON thread_asks(owner_id,return_path,created_ms);
 CREATE INDEX thread_asks_target ON thread_asks(target_conversation_id,created_ms);
+CREATE INDEX thread_asks_pair ON thread_asks(owner_id,source_conversation_id,target_conversation_id,return_path);
 -- Identity, correlation and every settled decision are write-once.
 CREATE TRIGGER thread_asks_fixed BEFORE UPDATE ON thread_asks
  WHEN NEW.id<>OLD.id OR NEW.owner_id<>OLD.owner_id
@@ -68,6 +73,7 @@ CREATE TRIGGER thread_asks_fixed BEFORE UPDATE ON thread_asks
    OR NEW.settled_ms IS NOT OLD.settled_ms))
   OR (OLD.return_path IS NOT NULL AND (NEW.return_path IS NOT OLD.return_path
    OR NEW.reply_message_id IS NOT OLD.reply_message_id OR NEW.reply_event_id IS NOT OLD.reply_event_id
+   OR NEW.collected_run_id IS NOT OLD.collected_run_id
    OR NEW.returned_ms IS NOT OLD.returned_ms))
 BEGIN SELECT RAISE(ABORT,'thread ask decision is fixed'); END;
 CREATE TRIGGER thread_asks_no_delete BEFORE DELETE ON thread_asks

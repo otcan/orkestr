@@ -51,6 +51,8 @@ pub struct DurableTimerController {
     timeout_retry: Option<Instant>,
     /// Last logged thread-ask refusal, so a lasting one is logged once.
     thread_ask_refusal: Option<String>,
+    /// Rotation over open requests; process-local, never authority.
+    thread_ask_cursor: orkestr_v2_store_sqlite::ThreadAskCursor,
     #[cfg(test)]
     pub(crate) test_scan_delay: Option<Duration>,
     #[cfg(test)]
@@ -72,6 +74,7 @@ impl DurableTimerController {
             scan_in_progress: None,
             timeout_retry: None,
             thread_ask_refusal: None,
+            thread_ask_cursor: Default::default(),
             #[cfg(test)]
             test_scan_delay: None,
             #[cfg(test)]
@@ -243,7 +246,11 @@ impl DurableTimerController {
             self.digest_checked = Some(Instant::now());
         }
         let mut asked = false;
-        match self.supervisor.advance_thread_asks(self.queue_window).await {
+        match self
+            .supervisor
+            .advance_thread_asks(self.queue_window, &mut self.thread_ask_cursor)
+            .await
+        {
             Ok(tick) => {
                 result.thread_asks = tick.queued + tick.settled + tick.returned;
                 asked = tick.queued + tick.returned > 0;

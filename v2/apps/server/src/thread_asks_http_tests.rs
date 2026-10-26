@@ -192,6 +192,12 @@ async fn grant_auth_refusals_and_owner_views() {
         (status, value["code"].as_str()),
         (404, Some("thread_ask_target_not_found"))
     );
+    // Owner cancel: unknown requests are 404 and a grant cannot cancel.
+    let cancel = case.path(&format!("/thread-asks/{}/cancel", Uuid::new_v4()));
+    let (status, _) = send(&case.state, "POST", &cancel, &[&auth], "{}").await;
+    assert_eq!(status, 404);
+    let (status, _) = send(&case.state, "POST", &cancel, &[&header], "{}").await;
+    assert_eq!(status, 401);
     // Revocation is immediate.
     let (status, value) = send(
         &case.state,

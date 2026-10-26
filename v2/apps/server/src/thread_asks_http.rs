@@ -5,6 +5,8 @@
 //!   issue/rotate (shown once) or revoke the conversation's grant.
 //! - `GET /api/v2/conversations/{id}/thread-asks?limit=N`: requests sent from
 //!   or received by this conversation, newest first (no answers).
+//! - `POST .../thread-asks/{ask}/cancel`: fail an unsettled request sent from
+//!   or to this conversation (`cancelled_by_owner`).
 //!
 //! Grant holder (header `x-orkestr-thread-ask-grant`, machine requests only,
 //! never with a cookie, bearer or Origin):
@@ -12,7 +14,7 @@
 //! - `POST .../thread-asks`: send one request (202, or 200 for a replay).
 //! - `GET  .../thread-asks/{ask}`: read-only status.
 //! - `POST .../thread-asks/{ask}/collect`: return a settled outcome to the
-//!   running asking turn, at most once.
+//!   running asking turn; that same run may collect again while it runs.
 //!
 //! No route here starts a provider: the trusted scheduler queues the target's
 //! ordinary Deep turn and returns the outcome. There is no V1 CLI or browser
@@ -40,6 +42,7 @@ pub(crate) fn router() -> Router<AppState> {
             &format!("{base}/thread-asks/{{ask}}/collect"),
             post(collect),
         )
+        .route(&format!("{base}/thread-asks/{{ask}}/cancel"), post(cancel))
 }
 
 fn invalid() -> Error {
@@ -80,6 +83,14 @@ pub(crate) fn failure(error: ResourceError) -> Error {
                 "thread_ask_conflict" => (
                     StatusCode::CONFLICT,
                     "This request_key was already used for a different request",
+                ),
+                "thread_ask_cycle" => (
+                    StatusCode::CONFLICT,
+                    "That conversation is waiting on a request from this one",
+                ),
+                "thread_ask_no_dispatcher" => (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "No window dispatcher runs, so the target turn could not start",
                 ),
                 "thread_ask_target_unavailable" | "thread_ask_conversation_unavailable" => (
                     StatusCode::CONFLICT,
@@ -209,7 +220,12 @@ async fn create(
     let request = body(request)?;
     let receipt = state
         .store
-        .create_thread_ask(&grant, &conversation(&id)?, &request)
+        .create_thread_ask(
+            &grant,
+            &conversation(&id)?,
+            &request,
+            state.window_controller.is_some(),
+        )
         .await
         .map_err(failure)?;
     Ok((
@@ -244,6 +260,20 @@ async fn collect(
     let value = state
         .store
         .collect_thread_ask(&grant, &conversation(&id)?, ask_id(&ask)?)
+        .await
+        .map_err(failure)?;
+    Ok(Json(value).into_response())
+}
+
+async fn cancel(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((id, ask)): Path<(String, String)>,
+) -> Result<Response, Error> {
+    let (owner, credential) = owner_credential(&state, &headers).await?;
+    let value = state
+        .store
+        .cancel_thread_ask(&credential, &owner, &conversation(&id)?, ask_id(&ask)?)
         .await
         .map_err(failure)?;
     Ok(Json(value).into_response())

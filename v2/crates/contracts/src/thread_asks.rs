@@ -22,6 +22,12 @@ pub const THREAD_ASK_HOURLY_MAX: i64 = 12;
 /// A request admitted while handling another thread's request is depth 1;
 /// a request from such a turn would be depth 2 and is refused (no loops).
 pub const THREAD_ASK_MAX_DEPTH: i64 = 1;
+/// An unsettled request fails as `expired` after the execution window
+/// lifetime ceiling (4 h) plus 30 minutes of grace.
+pub const THREAD_ASK_EXPIRY_MS: i64 = 4 * 3_600_000 + 30 * 60_000;
+/// Refused attempts per asking conversation per 10 minutes that are audited;
+/// beyond this, attempts are refused without any write.
+pub const THREAD_ASK_REFUSALS_MAX: i64 = 20;
 
 fn key(s: &str) -> bool {
     !s.is_empty()

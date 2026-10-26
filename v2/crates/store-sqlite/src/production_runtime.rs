@@ -95,7 +95,7 @@ mod timer_issuer;
 mod timer_schedule;
 mod timer_supervisor;
 mod timer_window;
-pub use thread_asks::ThreadAskTick;
+pub use thread_asks::{ThreadAskCursor, ThreadAskTick};
 pub use timer_issuer::TimerSchedulerIssuer;
 mod worker_tool;
 pub use worker_tool::*;
