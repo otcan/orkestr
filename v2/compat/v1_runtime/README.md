@@ -188,6 +188,9 @@ cursor leaves Deep progress and questions available to the serial observer.
 Caught-up event reads in this path wait at most 150 ms each. Only the ledger
 head can finish and export its Deep result. Its existing Fast delivery fence
 still waits at most 15 seconds and retains uncertain/late transport evidence.
+Independent Fast observation failures are logged and retried; they never
+refuse or complete the originating input. Admission/window refusals keep
+their existing per-input handling.
 
 Window capacity, queued successor windows, holds, reconciliation and original
 child custody still gate execution. This path does not create another provider

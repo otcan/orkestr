@@ -370,3 +370,6 @@ mod stranded;
 
 #[path = "launch_tests.rs"]
 mod launch;
+
+#[path = "role_fast_acceptance_tests.rs"]
+mod fast_acceptance;

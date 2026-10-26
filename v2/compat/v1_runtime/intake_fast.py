@@ -106,5 +106,10 @@ def drive(worker):
         observations += 1
         try:
             observe(worker, data)
-        except Exception as error:
-            failed(worker, data, error)
+        except Exception:
+            # Presentation/read/acceptance failure is not a decision about the
+            # originating Deep input. Keep its state and frozen requests for
+            # the next pass; only the existing serial path may finish it.
+            print("ALERT orkestr-v2-wa-adapter fast_observation_deferred conversation=%s input=%s"
+                  % (getattr(worker.client, "conversation", "?"), data["remote_id"]),
+                  file=sys.stderr, flush=True)

@@ -70,7 +70,7 @@ class AcceptanceRaceTests(fixture.IntakeBase):
         self.assertEqual(len(self.peer.receipts), 1)
         self.assertEqual(len(self.fast()), 1)
 
-    def test_changed_completion_payload_role_or_phase_refuses_instead_of_refreshing(self):
+    def test_changed_completion_payload_role_or_phase_keeps_input_pending_without_refreshing(self):
         for field in ("completion", "payload", "phase", "run"):
             with self.subTest(field=field):
                 self.setUp()
@@ -87,7 +87,8 @@ class AcceptanceRaceTests(fixture.IntakeBase):
                         value["run_id"] = "another-run"
                 self.conflict_once(change)
                 drive(self.worker)
-                self.assertIn("refused", self.row("first"))
+                self.assertNotIn("refused", self.row("first"))
+                self.assertNotEqual(self.row("first")["phase"], "completed")
                 self.assertEqual(self.peer.receipts, {})
                 self.assertEqual(self.row("first")["fast_accept_request"], self.mutations("/accept")[0])
 
@@ -98,7 +99,8 @@ class AcceptanceRaceTests(fixture.IntakeBase):
             raise ClientError("unexpected_status", 409)
         self.peer.before_accept = conflict
         drive(self.worker)
-        self.assertEqual(self.row("first")["refused"]["reason"], "execution_requires_review")
+        self.assertNotIn("refused", self.row("first"))
+        self.assertNotEqual(self.row("first")["phase"], "completed")
         self.assertEqual(self.peer.receipts, {})
 
     def test_head_deep_refresh_after_new_intake_preserves_original_final_run(self):
