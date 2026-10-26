@@ -22,7 +22,7 @@ test("adapter refusal notices have their own writer and cannot fill the Deep lay
   const imported = remoteLayerMetadata({ kind: "notice", source: "rust-v2-adapter", phase: "final_answer" });
   assert.deepEqual(imported, { remoteLayer: "notice" });
   const notice = { ...scope, id: "notice", ...imported, remoteProvider: "codex", remoteModel: "unreported" };
-  assert.equal(remoteLayerFooter(notice, [fast]), "⚡ Quick: codex gpt-example-mini/low · 🧠 Deep: unknown unknown/unknown · ▶ Notice");
+  assert.equal(remoteLayerFooter(notice, [fast]), "⚡ Quick: codex gpt-example-mini/low · ▶ Notice");
   assert.equal(remoteLayerFooter(fast, [notice]), "⚡ Quick: codex gpt-example-mini/low · 🧠 Deep: pending · ▶ Quick");
   assert.deepEqual(remoteLayerMetadata({ kind: "notice", phase: "final_answer", layer: "deep" }), { remoteLayer: "notice" });
   assert.deepEqual(remoteLayerMetadata({ kind: "notice", firstResponse: true }), { remoteLayer: "fast" });
@@ -32,33 +32,34 @@ test("adapter refusal notices have their own writer and cannot fill the Deep lay
 });
 
 test("a coordinator post keeps its declared post identity and never the native Deep", () => {
-  assert.equal(remoteLayerFooter(coordinator, [fast, deep, coordinator]), "⚡ Quick: codex gpt-example-mini/low · 🧠 Coordinator: claude opus-5.5/unknown · ▶ Coordinator");
+  assert.equal(remoteLayerFooter(coordinator, [fast, deep, coordinator]), "⚡ Quick: codex gpt-example-mini/low · 🧠 Coordinator: claude opus-5.5 · ▶ Coordinator");
   const old = { ...coordinator, remoteIdentitySource: undefined, remoteProvider: "codex", remoteModel: "unreported" };
-  assert.match(remoteLayerFooter(old, [fast, deep]), /Coordinator: unknown unknown\/unknown · ▶ Coordinator$/);
+  assert.equal(remoteLayerFooter(old, [fast, deep]), "⚡ Quick: codex gpt-example-mini/low · ▶ Coordinator");
+  assert.equal(remoteLayerFooter(old), "", "no observed layer: no layer line at all");
   assert.deepEqual(remoteLayerMetadata({ provider: "codex", model: "unreported" }, { postAuthor: "coordinator" }), { remoteLayer: "coordinator", remoteProvider: null, remoteModel: null });
   assert.deepEqual(remoteLayerMetadata({ phase: "final_answer", provider: "codex", model: "native-deep" }, { timerId: "post", postAuthor: "coordinator" }), { remoteLayer: "coordinator", remoteProvider: null, remoteModel: null });
   assert.deepEqual(remoteLayerMetadata({ phase: "final_answer" }, { timerId: "post" }), {}, "a post with no author must not become Deep");
 });
 
-test("unknown model and effort stay unknown despite local configured defaults", () => {
+test("unknown model and effort are omitted, never filled from local configured defaults", () => {
   const message = { ...deep, remoteModel: "unreported", remoteObservedReasoningEffort: undefined, model: "configured-wrong", codexReasoningEffort: "xhigh" };
   const footer = whatsappDebugFooter({ message, thread: { codexModel: "thread-wrong", codexReasoningEffort: "xhigh" }, env: { OPENAI_MODEL: "env-wrong" } });
-  assert.match(footer, /🧠 Deep: codex unknown\/unknown · ▶ Deep/);
-  assert.doesNotMatch(footer, /configured-wrong|thread-wrong|env-wrong|xhigh/);
+  assert.match(footer, /^🧠 Deep: codex · ▶ Deep\n/);
+  assert.doesNotMatch(footer, /unknown|configured-wrong|thread-wrong|env-wrong|xhigh/);
 });
 
 test("a Claude conversation uses the two distinct observed Claude runs", () => {
   const quick = { ...fast, remoteProvider: "claude", remoteModel: "haiku-example", remoteObservedReasoningEffort: undefined };
   const final = { ...deep, remoteProvider: "claude", remoteModel: "opus-example", remoteObservedReasoningEffort: "medium" };
-  assert.equal(remoteLayerFooter(final, [quick]), "⚡ Quick: claude haiku-example/unknown · 🧠 Deep: claude opus-example/medium · ▶ Deep");
+  assert.equal(remoteLayerFooter(final, [quick]), "⚡ Quick: claude haiku-example · 🧠 Deep: claude opus-example/medium · ▶ Deep");
 });
 
 test("foreign inputs/runtime scopes and conflicting peer evidence cannot fill a layer", () => {
   for (const foreign of [{ ...fast, remoteOriginalInputId: "another-input" }, { ...fast, remoteBackend: "other" }, { ...fast, remoteThreadId: "other" }]) {
-    assert.match(remoteLayerFooter(deep, [foreign]), /^⚡ Quick: unknown unknown\/unknown/);
+    assert.match(remoteLayerFooter(deep, [foreign]), /^🧠 Deep: codex gpt-example\/high · ▶ Deep$/);
   }
-  assert.match(remoteLayerFooter(deep, [fast, { ...fast, id: "other", remoteModel: "conflict" }]), /^⚡ Quick: unknown unknown\/unknown/);
-  assert.match(remoteLayerFooter({ ...deep, remoteOriginalInputId: undefined }, [fast]), /^⚡ Quick: unknown unknown\/unknown/);
+  assert.match(remoteLayerFooter(deep, [fast, { ...fast, id: "other", remoteModel: "conflict" }]), /^🧠 Deep: codex gpt-example\/high · ▶ Deep$/);
+  assert.match(remoteLayerFooter({ ...deep, remoteOriginalInputId: undefined }, [fast]), /^🧠 Deep: codex gpt-example\/high · ▶ Deep$/);
 });
 
 test("new remote footers strip idempotently and preserve the existing quota/load lines", () => {

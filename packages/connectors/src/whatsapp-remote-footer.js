@@ -3,7 +3,7 @@
 const layers = new Set(["fast", "deep", "coordinator", "notice"]);
 const efforts = new Set(["low", "medium", "high", "xhigh", "max", "ultra"]);
 const token = (value) => typeof value === "string" && /^[A-Za-z0-9._:-]{1,128}$/.test(value) ? value : "";
-const known = (value) => token(value) && !["unknown", "unreported"].includes(value.toLowerCase()) ? value : "unknown";
+const known = (value) => token(value) && !["unknown", "unreported"].includes(value.toLowerCase()) ? value : "";
 
 export function remoteLayerMetadata(remote = {}, parent = {}) {
   parent = parent || {};
@@ -26,12 +26,15 @@ export function remoteLayerMetadata(remote = {}, parent = {}) {
   };
 }
 
+// Observed facts only. An unknown provider, model or effort is omitted, never
+// rendered as "unknown"; a layer with no observed fact yields "".
 function identity(message = {}) {
-  if (message.remoteLayer === "coordinator" && message.remoteIdentitySource !== "post") return "unknown unknown/unknown";
+  if (message.remoteLayer === "coordinator" && message.remoteIdentitySource !== "post") return "";
   const provider = known(message.remoteProvider);
   const model = known(message.remoteModel);
-  const effort = efforts.has(message.remoteObservedReasoningEffort) ? message.remoteObservedReasoningEffort : "unknown";
-  return `${provider} ${model}/${effort}`;
+  const effort = efforts.has(message.remoteObservedReasoningEffort) ? message.remoteObservedReasoningEffort : "";
+  const modelEffort = model && effort ? `${model}/${effort}` : model || effort;
+  return [provider, modelEffort].filter(Boolean).join(" ");
 }
 
 function counterpart(message, messages, role) {
@@ -43,13 +46,21 @@ function counterpart(message, messages, role) {
   return peers.length && new Set(peers.map(identity)).size === 1 ? peers[0] : {};
 }
 
+// One compact line; "" when neither layer has an observed identity.
 export function remoteLayerFooter(message = {}, messages = []) {
-  const layer = layers.has(message.remoteLayer) ? message.remoteLayer : "unknown";
+  const layer = layers.has(message.remoteLayer) ? message.remoteLayer : "";
   const quick = layer === "fast" ? message : counterpart(message, messages, "fast");
   const coordinator = layer === "coordinator" ? message : counterpart(message, messages, "coordinator");
   const isCoordinator = layer === "coordinator" || coordinator.remoteLayer === "coordinator";
   const main = isCoordinator ? coordinator : layer === "deep" ? message : counterpart(message, messages, "deep");
-  const writer = { fast: "Quick", deep: "Deep", coordinator: "Coordinator", notice: "Notice", unknown: "unknown" }[layer];
-  const mainIdentity = layer === "fast" && !main.remoteLayer ? "pending" : identity(main);
-  return `⚡ Quick: ${identity(quick)} · 🧠 ${isCoordinator ? "Coordinator" : "Deep"}: ${mainIdentity} · ▶ ${writer}`;
+  const quickIdentity = identity(quick);
+  const mainIdentity = identity(main);
+  if (!quickIdentity && !mainIdentity) return "";
+  const writer = { fast: "Quick", deep: "Deep", coordinator: "Coordinator", notice: "Notice" }[layer];
+  return [
+    quickIdentity ? `⚡ Quick: ${quickIdentity}` : "",
+    mainIdentity ? `🧠 ${isCoordinator ? "Coordinator" : "Deep"}: ${mainIdentity}`
+      : layer === "fast" && !main.remoteLayer ? "🧠 Deep: pending" : "",
+    writer ? `▶ ${writer}` : "",
+  ].filter(Boolean).join(" · ");
 }

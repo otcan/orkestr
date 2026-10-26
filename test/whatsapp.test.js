@@ -15984,7 +15984,8 @@ test("whatsapp delivery forwards failed routed inputs using inbound event metada
   assert.equal(calls[0].body.accountId, "main");
   assert.match(calls[0].body.text, /^Delivery failed\n\nYour message could not be delivered to Codex\./);
   assert.match(calls[0].body.text, /pasted into Codex but was not accepted/);
-  assertDebugFooter(calls[0].body.text, { messageType: "update" });
+  // A delivery-failure notice is not a model reply: no debug footer.
+  assert.doesNotMatch(calls[0].body.text, /\n\ndbg:|\nq:\d+ · load:/);
 });
 
 test("whatsapp passive mirror recovers a failed thread input instead of sending a failure notice", async () => {

@@ -4,6 +4,7 @@ import { threadQuotaProvider } from "../../core/src/provider-quota-snapshot.js";
 import { threadRequiresTenantIsolation } from "../../core/src/tenant-policy.js";
 import { codexAssistantSource, threadSuppressesWhatsAppDebugFooter } from "./whatsapp-mirror-policy.js";
 import { remoteLayerFooter } from "./whatsapp-remote-footer.js";
+import { footerAudienceAllowed } from "./whatsapp-footer-audience.js";
 
 const proposedPlanOpenTagPattern = /^\s*<\s*proposed[\s_-]*plan\s*>\s*/i;
 const proposedPlanCloseTagPattern = /\s*<\s*\/\s*proposed[\s_-]*plan\s*>\s*$/i;
@@ -102,7 +103,10 @@ function footerEnabled(env = process.env) {
 
 // Matches the multi-line footer ("dbg: ..." then provider quota lines and the
 // queue/load line) and the older single-line "dbg: m:..." footer.
-const WHATSAPP_DEBUG_FOOTER_PATTERN = /\s*\n(?:dbg:|⚡ Quick:)[^\n]*(?:\n(?:codex|claude)\b[^\n]*){0,2}(?:\n(?:q|queue):[^\n]*)?\s*$/i;
+// A remote footer may start at its layer line ("⚡ Quick:", or "🧠 Deep:" /
+// "🧠 Coordinator:" when Quick is unobserved) or, with no observed layer, at
+// the quota lines; that form must end with the "help:/help" load line.
+const WHATSAPP_DEBUG_FOOTER_PATTERN = /\s*(?:\n(?:dbg:|⚡ Quick:|🧠 (?:Deep|Coordinator):)[^\n]*(?:\n(?:codex|claude)\b[^\n]*){0,2}(?:\n(?:q|queue):[^\n]*)?|\n(?:(?:codex|claude)\b[^\n]*\n){0,2}(?:q|queue):[^\n]*help:\/help)\s*$/i;
 
 export function stripWhatsAppDebugFooter(text) {
   return String(text || "").replace(WHATSAPP_DEBUG_FOOTER_PATTERN, "").trim();
@@ -318,10 +322,12 @@ function remoteRuntimeReply(message = {}, env = process.env) {
   return false;
 }
 
-export function shouldAppendWhatsAppDebugFooter(message = {}, env = process.env, deliveryType = "", thread = null) {
+export function shouldAppendWhatsAppDebugFooter(message = {}, env = process.env, deliveryType = "", thread = null, messages = []) {
   if (!footerEnabled(env)) return false;
   if (thread && threadRequiresTenantIsolation(thread, env)) return false;
   if (thread && threadSuppressesWhatsAppDebugFooter(thread, message?.chatId, env)) return false;
+  // Owner-only: no shared chat, no reply to a member's input, no notice.
+  if (!footerAudienceAllowed({ message, thread, messages, deliveryType })) return false;
   if (codexAssistantSource(message) || message.source === "claude-code" || message.source === "orkestr_runtime") return true;
   if (remoteRuntimeReply(message, env)) return true;
   return ["delivery_error", "mode_queued", "queue_notice", "router_update"].includes(String(deliveryType || "").trim());
@@ -360,12 +366,13 @@ export function whatsappDebugFooter({ message = {}, thread = {}, messages = [], 
     `api:${processCpuDebugPercent()}%`,
     "help:/help",
   ];
-  return [identity.join(" · "), ...dualProviderQuotaLines(thread, env), load.join(" · ")].join("\n");
+  return [identity.filter(Boolean).join(" · "), ...dualProviderQuotaLines(thread, env), load.join(" · ")]
+    .filter(Boolean).join("\n");
 }
 
 export function appendWhatsAppDebugFooter(text, options = {}) {
   const cleanText = stripWhatsAppDebugFooter(text);
   if (options.appendDebugFooter === false || options.debugFooter === false) return cleanText;
-  if (!cleanText || !shouldAppendWhatsAppDebugFooter(options.message, options.env, options.deliveryType, options.thread)) return cleanText;
+  if (!cleanText || !shouldAppendWhatsAppDebugFooter(options.message, options.env, options.deliveryType, options.thread, options.messages)) return cleanText;
   return `${cleanText}\n\n${whatsappDebugFooter(options)}`;
 }

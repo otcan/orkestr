@@ -45,7 +45,9 @@ test("WhatsApp debug footer covers replies mirrored from a remote runtime", () =
   const base = { role: "assistant", source: "rust-v2-pilot", phase: "final_answer", remoteBackend: "rust-v2", remoteMessageId: "remote-1" };
 
   const plain = appendWhatsAppDebugFooter("Done", { env, thread, message: base });
-  assert.match(plain, /^Done\n\n⚡ Quick: unknown unknown\/unknown · 🧠 Deep: unknown unknown\/unknown · ▶ unknown\n/);
+  // No observed layer identity: the layer line is omitted, never "unknown".
+  assert.match(plain, /^Done\n\n(?:codex|claude)\b/);
+  assert.doesNotMatch(plain, /unknown|⚡|🧠|▶/);
   assert.match(plain, /\nq:0 · load:\d+% · api:\d+% · help:\/help$/);
   assert.doesNotMatch(plain, /local-model|mode:plan|fast:on|rt:api/);
   assert.equal(stripWhatsAppDebugFooter(plain), "Done");
@@ -53,14 +55,17 @@ test("WhatsApp debug footer covers replies mirrored from a remote runtime", () =
   const withModel = appendWhatsAppDebugFooter("Done", {
     env, thread, message: { ...base, remoteLayer: "deep", remoteProvider: "codex", remoteModel: "example-model" },
   });
-  assert.match(withModel, /\n⚡ Quick: unknown unknown\/unknown · 🧠 Deep: codex example-model\/unknown · ▶ Deep\n/);
+  assert.match(withModel, /\n\n🧠 Deep: codex example-model · ▶ Deep\n/);
+  assert.equal(stripWhatsAppDebugFooter(withModel), "Done");
 
   // A configured backend source without remote ids still gets the footer.
   const bySource = appendWhatsAppDebugFooter("Done", {
     env: { ...env, ORKESTR_REMOTE_RUNTIME_BACKENDS_JSON: JSON.stringify({ "rust-v2": { baseUrl: "http://127.0.0.1:1" } }) },
     message: { role: "assistant", source: "rust-v2-pilot", phase: "final_answer" },
   });
-  assert.match(bySource, /\n⚡ Quick: unknown unknown\/unknown · 🧠 Deep: unknown unknown\/unknown · ▶ unknown\n/);
+  assert.match(bySource, /\nq:0 · load:\d+% · api:\d+% · help:\/help$/);
+  assert.doesNotMatch(bySource, /unknown/);
+  assert.equal(stripWhatsAppDebugFooter(bySource), "Done");
 
   assert.equal(appendWhatsAppDebugFooter("Done", { env, message: { role: "assistant", source: "rust-v2-pilot" } }), "Done");
   assert.equal(appendWhatsAppDebugFooter("Hi", { env, message: { ...base, role: "user" } }), "Hi");

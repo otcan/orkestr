@@ -115,7 +115,9 @@ test('a reply mirrored from a remote runtime carries the remote debug footer', (
     message: {id: 'm2', chatId: 'group-1', role: 'assistant', source: 'rust-v2-pilot', phase: 'final_answer', remoteBackend: 'rust-v2', remoteMessageId: 'r1'},
     thread: {codexModel: 'example-model', binding: {remoteBackend: 'rust-v2'}}, messages: [], config: {appendDebugFooter: true}, formatter, env: {}});
   assert.equal(entries.length, 1);
-  assert.match(entries[0], /^Done\n\n⚡ Quick: unknown unknown\/unknown · 🧠 Deep: unknown unknown\/unknown · ▶ unknown\n/);
+  // No observed layer: quota and load lines only, never "unknown".
+  assert.match(entries[0], /^Done\n\n(?:codex|claude)\b[^\n]*\n(?:[^\n]*\n)?q:0 · load:\d+% · api:\d+% · help:\/help$/);
+  assert.doesNotMatch(entries[0], /unknown/);
 });
 
 test('a footer embedded at the end of a long reply stays on the message', () => {
@@ -129,7 +131,7 @@ test('a footer embedded at the end of a long reply stays on the message', () => 
 });
 
 test('a two-layer footer stays on the preview of a long remote reply', () => {
-  const footer = '⚡ Quick: codex example/low · 🧠 Deep: unknown unknown/unknown · ▶ Quick\nq:0 · load:1%';
+  const footer = '⚡ Quick: codex example/low · 🧠 Deep: pending · ▶ Quick\nq:0 · load:1%';
   const entries = chunk(`${words(5000)}\n\n${footer}`);
   assert.ok(entries[0].endsWith(`${SCOPED_ATTACHED_MARKER}\n\n${footer}`));
 });
