@@ -21,6 +21,11 @@ pub trait Sender: Send + Sync {
 pub trait GpuControl: Send + Sync {
     /// Start the GPU. Only ever called after the owner approved this exact request.
     async fn start(&self, reason: &str) -> Result<String, String>;
+    /// Checked before the owner is asked: `Ok(description)` (cost, caps, credit) is shown
+    /// in the approval; `Err(reason)` means a start would be refused anyway.
+    async fn precheck(&self) -> Result<String, String> {
+        Ok(String::new())
+    }
 }
 pub struct NoChannel;
 #[async_trait]
@@ -252,7 +257,31 @@ impl Broker {
             )
             .await
             .map_err(|_| ())?;
-        let summary = self.summary(thread, action);
+        let mut summary = self.summary(thread, action);
+        if matches!(action, Action::StartGpu { .. }) {
+            match self.backends.gpu.precheck().await {
+                Ok(info) if !info.is_empty() => summary = format!("{summary}\n{info}"),
+                Ok(_) => {}
+                Err(reason) => {
+                    store
+                        .restricted_audit_settle(
+                            audit,
+                            RestrictedDecision::Deny,
+                            RestrictedDecider::Policy,
+                            Some(&reason),
+                            None,
+                        )
+                        .await
+                        .map_err(|_| ())?;
+                    let text = format!("not allowed: {reason}");
+                    store
+                        .restricted_audit_result(audit, "denied", &text)
+                        .await
+                        .map_err(|_| ())?;
+                    return Ok(Err(text));
+                }
+            }
+        }
         let approval = store
             .restricted_approval_create(
                 conv,

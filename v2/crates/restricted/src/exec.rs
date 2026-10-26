@@ -44,7 +44,19 @@ fn capped_reader<R: Read + Send + 'static>(
 /// `on_timeout` runs once when the deadline passes, before the child is killed
 /// (the sandbox uses it to `docker kill` the named container).
 pub fn run_bounded(
+    command: Command,
+    stdin: Option<Vec<u8>>,
+    timeout: Duration,
+    cap: usize,
+    on_timeout: impl FnOnce(),
+) -> std::io::Result<Output> {
+    run_bounded_env(command, &[], stdin, timeout, cap, on_timeout)
+}
+
+/// Like [`run_bounded`], with an explicit list of extra environment variables.
+pub fn run_bounded_env(
     mut command: Command,
+    env: &[(&str, &str)],
     stdin: Option<Vec<u8>>,
     timeout: Duration,
     cap: usize,
@@ -53,6 +65,7 @@ pub fn run_bounded(
     command
         .env_clear()
         .env("PATH", "/usr/local/bin:/usr/bin:/bin")
+        .envs(env.iter().copied())
         .stdin(if stdin.is_some() {
             Stdio::piped()
         } else {

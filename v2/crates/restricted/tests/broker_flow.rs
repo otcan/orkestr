@@ -275,6 +275,11 @@ async fn gpu_always_asks_and_is_never_session_scoped() {
             })
         };
         let a = case.next_pending().await;
+        assert!(
+            a.summary.contains("L40S"),
+            "the owner sees the cost: {}",
+            a.summary
+        );
         assert!(a.session_grant_label.is_none());
         assert!(
             matches!(
@@ -582,4 +587,33 @@ async fn restart_recovery_settles_open_requests() {
         .unwrap()
         .is_none());
     std::fs::remove_dir_all(&case.root).ok();
+}
+
+#[tokio::test]
+async fn gpu_start_blocked_by_the_helper_never_reaches_the_owner() {
+    let case = Case::new().await;
+    case.enable(case.policy()).await;
+    *case.fakes.gpu_block.lock().unwrap() =
+        Some("the GPU cannot be started now: daily cap reached".into());
+    let reply = call(&case, "start_gpu", serde_json::json!({"reason":"x"})).await;
+    assert_eq!(
+        reply,
+        "not allowed: the GPU cannot be started now: daily cap reached"
+    );
+    assert!(case.pending().await.is_empty());
+    assert!(case.fakes.gpu_starts.lock().unwrap().is_empty());
+    let audit = case.audit().await;
+    assert_eq!(
+        (
+            audit[0].decision,
+            audit[0].decider,
+            audit[0].outcome.as_deref()
+        ),
+        (
+            RestrictedDecision::Deny,
+            RestrictedDecider::Policy,
+            Some("denied")
+        )
+    );
+    case.finish();
 }
