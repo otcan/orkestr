@@ -84,6 +84,18 @@ class FastCodexSandboxTests(unittest.TestCase):
         start(channel, "danger-full-access")
         reply(channel, {"type": "dangerFullAccess"})
 
+    def test_fast_thread_model_uses_the_turn_model_rule(self):
+        base = {"approvalPolicy": "never", "sandbox": "read-only", "ephemeral": False,
+                "modelProvider": "openai"}
+        def begin(model):
+            channel = opened(FAST)
+            return request(channel, {"id": 3, "method": "thread/start", "params": {
+                **base, "cwd": channel.workspace, "model": model}}, outer=5)
+        begin("gpt-6-luna")
+        for model in ("vendor/model", "123", "openai", "Azure", "openrouter", "a b", ""):
+            with self.assertRaises(Refused):
+                begin(model)
+
     def test_fast_broker_serves_only_fast_identities(self):
         with self.assertRaises(Refused):
             opened(IDENTITY, fast_only=True)

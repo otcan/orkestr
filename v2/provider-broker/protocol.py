@@ -45,6 +45,14 @@ class Refused(Exception):
 CODEX_EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra")
 
 
+def launch_model(value):
+    """A model Runtime may request (thread/start or turn/start): the same rule
+    as Core's launch_model_valid; never a provider name, path or number."""
+    return (isinstance(value, str) and 0 < len(value) <= 120 and not value.isdigit()
+            and all(c.isascii() and (c.isalnum() or c in "._:-") for c in value)
+            and value.lower() not in ("openai", "azure", "openrouter"))
+
+
 def reported_model(value):
     return (isinstance(value, str) and 0 < len(value) <= 120 and
             all(c.isascii() and (c.isalnum() or c in "-_.:/") for c in value))
@@ -315,7 +323,7 @@ class Channel:
             if kind == "thread/start" and isinstance(params, dict) and "model" in params:
                 # Optional explicit model for a fresh thread (bounded Fast). It
                 # is a request only; the native start reply is the evidence.
-                require(reported_model(params["model"]))
+                require(launch_model(params["model"]))
                 params = dict(params)
                 del params["model"]
             cwd = params.get("cwd") if isinstance(params, dict) else None
@@ -335,10 +343,7 @@ class Channel:
         # Optional owner conversation settings, as V1 turnStartParams sends them.
         overrides = tuple(key for key in ("model", "effort") if isinstance(params, dict) and key in params)
         if "model" in overrides:
-            model = params["model"]
-            require(isinstance(model, str) and 0 < len(model) <= 120 and not model.isdigit()
-                    and all(c.isascii() and (c.isalnum() or c in "._:-") for c in model)
-                    and model.lower() not in ("openai", "azure", "openrouter"))
+            require(launch_model(params["model"]))
         if "effort" in overrides:
             require(params["effort"] in CODEX_EFFORTS)
         exact(params, ("threadId", "clientUserMessageId", "input") + overrides)
