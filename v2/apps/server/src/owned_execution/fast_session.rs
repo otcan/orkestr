@@ -51,7 +51,7 @@ impl ConfiguredExecution {
                         // reap the exact child and let the caller close
                         // normally or issue a fresh bounded Fast setup.
                         let reuse = match &input {
-                            Some(input) => self.fast_reusable(input).await?,
+                            Some(input) => self.fast_reusable(input).await,
                             None => false,
                         };
                         if !reuse {
@@ -183,26 +183,27 @@ impl ConfiguredExecution {
         Ok(fast::FastExit::Shutdown)
     }
 
-    async fn fast_reusable(
-        &self,
-        input: &orkestr_v2_store_sqlite::FastAdmissionInput,
-    ) -> Result<bool, &'static str> {
-        let binding = self
+    /// Advisory only: any doubt (including a busy or unavailable Store) means
+    /// rotate to a fresh bounded presentation, never a failed companion.
+    async fn fast_reusable(&self, input: &orkestr_v2_store_sqlite::FastAdmissionInput) -> bool {
+        let Ok(bindings) = self
             .store
             .ensure_role_bindings(&self.owner, &self.config.conversation_id)
             .await
-            .map_err(|_| "Fast reuse binding unavailable")?
-            .fast;
+        else {
+            return false;
+        };
+        let binding = bindings.fast;
         if binding.session_id != input.fast_binding_id
             || binding.generation != input.expected_binding_generation
             || binding.conversation_id != self.config.conversation_id
         {
-            return Ok(false);
+            return false;
         }
         self.store
             .bounded_fast_reusable(&self.token, &binding, &input.source_event_id)
             .await
-            .map_err(|_| "Fast reuse eligibility unavailable")
+            .unwrap_or(false)
     }
 
     pub(super) async fn fast_status(
