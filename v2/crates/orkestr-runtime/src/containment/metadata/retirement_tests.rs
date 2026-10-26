@@ -35,7 +35,7 @@ async fn broker() -> Case {
 
 async fn wait(
     retiring: &mut retirement::RetiringMetadata,
-) -> Result<retirement::ReapedMetadata, Error> {
+) -> std::result::Result<retirement::ReapedMetadata, Error> {
     let deadline = Instant::now() + Duration::from_secs(2);
     loop {
         if let Some(proof) = retiring.poll_reaped()? {
