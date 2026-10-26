@@ -6,7 +6,7 @@ is durably left for reconciliation, not retired). The hard deadline passes
 while it is down and another conversation holds a saved input. After a restart
 the first owner request reconciles the stranded window (audited abandonment,
 no acceptance, no re-execution), the other conversation opens, and the
-abandoned conversation resumes its own native sessions in a successor window.
+abandoned conversation resumes Deep and starts Fast fresh in a successor window.
 
 Run as root with a server built from the same source, like service_roles_http.
 """
@@ -112,7 +112,7 @@ def run(case):
     bfast["_role"] = "fast"
     accept(case, second, bdeep, "accept:second-deep")
     accept(case, second, bfast, "accept:second-fast")
-    # The abandoned conversation continues from its own native sessions.
+    # The abandoned conversation resumes Deep and starts Fast with bounded history.
     akey = "first:2"
     resumed = expect(case, path(first) + "/window", 201, "POST",
                      window_request(intake(case, first, akey, 3), akey, 1, a["window_id"]))["status"]
@@ -129,7 +129,8 @@ def run(case):
     assert len(runs) == 6
     for role in ("deep", "fast"):
         mine = [row for row in runs if row["role"] == role and row["conversation_id"] == first]
-        assert len(mine) == 2 and len({row["native_session_id"] for row in mine}) == 1
+        identities = 2 if role == "fast" else 1
+        assert len(mine) == 2 and len({row["native_session_id"] for row in mine}) == identities
     case.stop()
     final = windows(case)
     assert len(final) == 3 and all(row["state"] == "closed" for row in final)
