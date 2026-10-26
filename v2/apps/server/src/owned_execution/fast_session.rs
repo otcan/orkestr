@@ -40,21 +40,30 @@ impl ConfiguredExecution {
                 ExecutionPhase::Completed => {
                     control.disable();
                     drop(schedule);
-                    if self.window.is_some() {
-                        // Reap outside the next input's latency path. The caller
-                        // retains the original witness while idle, then either
-                        // closes normally or issues a fresh bounded Fast setup.
-                        let retiring = live
-                            .retire_accepted(&self.token)
-                            .await
-                            .map_err(|_| "Fast accepted-session retirement refused")?;
-                        let proof = self.reaped(retiring, &run, heartbeat).await?;
-                        return Ok(fast::FastExit::Accepted { run, proof });
-                    }
-                    let Some(input) = self
+                    let input = self
                         .fast_input_checked(shutdown, heartbeat, || live.check_broker_liveness())
-                        .await?
-                    else {
+                        .await?;
+                    if self.window.is_some() {
+                        // Keep the accepted native child warm for the next
+                        // owner input of this same window (and conversation).
+                        // Core decides reuse: same window incarnation, accepted
+                        // non-timer turns only, capped turn count. Otherwise
+                        // reap the exact child and let the caller close
+                        // normally or issue a fresh bounded Fast setup.
+                        let reuse = match &input {
+                            Some(input) => self.fast_reusable(input).await?,
+                            None => false,
+                        };
+                        if !reuse {
+                            let retiring = live
+                                .retire_accepted(&self.token)
+                                .await
+                                .map_err(|_| "Fast accepted-session retirement refused")?;
+                            let proof = self.reaped(retiring, &run, heartbeat).await?;
+                            return Ok(fast::FastExit::Accepted { run, proof });
+                        }
+                    }
+                    let Some(input) = input else {
                         let retiring = live
                             .retire_accepted(&self.token)
                             .await
@@ -172,6 +181,28 @@ impl ConfiguredExecution {
             return Err("Fast window terminal remains unresolved");
         }
         Ok(fast::FastExit::Shutdown)
+    }
+
+    async fn fast_reusable(
+        &self,
+        input: &orkestr_v2_store_sqlite::FastAdmissionInput,
+    ) -> Result<bool, &'static str> {
+        let binding = self
+            .store
+            .ensure_role_bindings(&self.owner, &self.config.conversation_id)
+            .await
+            .map_err(|_| "Fast reuse binding unavailable")?
+            .fast;
+        if binding.session_id != input.fast_binding_id
+            || binding.generation != input.expected_binding_generation
+            || binding.conversation_id != self.config.conversation_id
+        {
+            return Ok(false);
+        }
+        self.store
+            .bounded_fast_reusable(&self.token, &binding, &input.source_event_id)
+            .await
+            .map_err(|_| "Fast reuse eligibility unavailable")
     }
 
     pub(super) async fn fast_status(

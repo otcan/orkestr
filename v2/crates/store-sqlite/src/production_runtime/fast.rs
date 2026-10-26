@@ -102,7 +102,14 @@ impl Store {
         if binding.state != SessionState::Ready {
             return Err(RuntimeStoreError::Busy);
         }
-        super::fast_continuity::require_unused(&mut tx, &binding.session_id).await?;
+        super::fast_continuity::require_admissible(
+            &mut tx,
+            &c.id,
+            &c.incarnation,
+            &binding.session_id,
+            &input.source_event_id.to_string(),
+        )
+        .await?;
         let occupied: i64 = sqlx::query_scalar("SELECT count(*) FROM production_runs WHERE session_id=? AND state NOT IN ('cancelled','succeeded')")
             .bind(input.fast_binding_id.to_string()).fetch_one(&mut *tx).await.map_err(db)?;
         if occupied != 0 {

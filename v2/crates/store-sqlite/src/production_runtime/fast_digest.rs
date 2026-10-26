@@ -67,6 +67,18 @@ pub(super) async fn attach(
     if bounded == 0 {
         return Ok(current);
     }
+    // A same-window continuation runs on the native child that already holds
+    // this window's earlier turns; only a fresh session needs the digest.
+    let earlier: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM production_runs WHERE session_id=? AND id!=?")
+            .bind(admission.run.session_id.to_string())
+            .bind(admission.run.run_id.to_string())
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(db)?;
+    if earlier != 0 {
+        return Ok(current);
+    }
     // A timer's Fast turn must receive only the fixed no-action note, including
     // after rotation. Never carry scheduled instructions in historical context.
     let timer: i64 =

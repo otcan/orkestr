@@ -132,21 +132,14 @@ async fn accepted_fast_rotates_once_without_changing_deep_input_order_or_dispatc
         .admit_execution_window_authenticated(&w.browser_credential, &w.f.conversation, &next)
         .await
         .unwrap();
+    // Same-window reuse is allowed, but the scheduler may still rotate; the
+    // read-only eligibility query never changes state.
     let before = fixtures::snapshot(&w.f.store).await;
     assert!(w
         .bound
-        .admit_fast(
-            w.credential.credential(),
-            &FastAdmissionInput {
-                source_message_id: next.input_message_id.clone(),
-                source_event_id: next.input_event_id.clone(),
-                fast_binding_id: released.session_id.clone(),
-                expected_binding_generation: released.generation,
-                request_key: format!("fast-http:{}", next.input_event_id),
-            }
-        )
+        .bounded_fast_reusable(w.credential.credential(), &released, &next.input_event_id)
         .await
-        .is_err());
+        .unwrap());
     assert_eq!(before, fixtures::snapshot(&w.f.store).await);
     let deep = w
         .bound
@@ -218,6 +211,115 @@ async fn accepted_fast_rotates_once_without_changing_deep_input_order_or_dispatc
     assert_eq!(digest.0, next.input_event_id.to_string());
     assert!(digest.1.len() <= 8192);
     assert!(digest.1.contains("accepted historical answer"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn same_window_fast_reuses_the_accepted_child_without_digest_until_the_cap() {
+    let w = Window::open().await;
+    let first = fresh(&w, &w.roles.fast, "warm-native").await;
+    w.activate().await;
+    let cap = present(&w, &first, &w.source).await;
+    let done = propose(&w, cap.provider(), "warm first answer").await;
+    accept(&w, cap.provider(), done).await;
+    let digests = |run: String| {
+        let pool = w.f.store.pool.clone();
+        async move {
+            sqlx::query_scalar::<_, i64>(
+                "SELECT count(*) FROM production_fast_digests WHERE run_id=?",
+            )
+            .bind(run)
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+        }
+    };
+    assert_eq!(digests(cap.provider().run.run_id.to_string()).await, 1);
+    let join = |key: String| {
+        let w = &w;
+        async move {
+            let mut next = input(&w.f, &key).await;
+            next.expected_generation = 1;
+            next.window_id = Some(w.status.window_id);
+            w.f.store
+                .admit_execution_window_authenticated(
+                    &w.browser_credential,
+                    &w.f.conversation,
+                    &next,
+                )
+                .await
+                .unwrap();
+            next
+        }
+    };
+    for turn in 2..=super::super::fast_continuity::MAX_WINDOW_FAST_TURNS {
+        let released = ready(&w).await;
+        assert_eq!(released.session_id, first.session_id);
+        let next = join(format!("warm-{turn}")).await;
+        // Another conversation's binding identity is never eligible here.
+        let foreign = Binding {
+            conversation_id: ConversationId(uuid::Uuid::new_v4()),
+            ..released.clone()
+        };
+        assert!(!w
+            .bound
+            .bounded_fast_reusable(w.credential.credential(), &foreign, &next.input_event_id)
+            .await
+            .unwrap());
+        assert!(!w
+            .bound
+            .bounded_fast_reusable(
+                w.credential.credential(),
+                &w.roles.deep,
+                &next.input_event_id
+            )
+            .await
+            .unwrap());
+        assert!(w
+            .bound
+            .bounded_fast_reusable(w.credential.credential(), &released, &next.input_event_id)
+            .await
+            .unwrap());
+        let cap = present(&w, &released, &next).await;
+        assert_eq!(cap.provider().run.session_id, first.session_id);
+        assert_eq!(
+            cap.provider().run.native_session_id,
+            first.native_session_id
+        );
+        // The warm native child already holds this window's turns.
+        assert_eq!(cap.text(), "synthetic window input");
+        assert_eq!(digests(cap.provider().run.run_id.to_string()).await, 0);
+        let done = propose(&w, cap.provider(), "warm later answer").await;
+        accept(&w, cap.provider(), done).await;
+    }
+    // The cap forces a fresh bounded presentation with the digest again.
+    let released = ready(&w).await;
+    let next = join("warm-capped".into()).await;
+    let before = fixtures::snapshot(&w.f.store).await;
+    assert!(!w
+        .bound
+        .bounded_fast_reusable(w.credential.credential(), &released, &next.input_event_id)
+        .await
+        .unwrap());
+    assert!(w
+        .bound
+        .admit_fast(
+            w.credential.credential(),
+            &FastAdmissionInput {
+                source_message_id: next.input_message_id.clone(),
+                source_event_id: next.input_event_id.clone(),
+                fast_binding_id: released.session_id.clone(),
+                expected_binding_generation: released.generation,
+                request_key: format!("fast-http:{}", next.input_event_id),
+            }
+        )
+        .await
+        .is_err());
+    assert_eq!(before, fixtures::snapshot(&w.f.store).await);
+    let rotated = fresh(&w, &released, "warm-rotated").await;
+    assert_ne!(rotated.session_id, first.session_id);
+    let cap = present(&w, &rotated, &next).await;
+    assert!(cap.text().contains("warm later answer"));
+    assert_eq!(digests(cap.provider().run.run_id.to_string()).await, 1);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

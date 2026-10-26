@@ -197,8 +197,8 @@ def run(case):
     for role in ("deep", "fast"):
         rows = [row for row in runs if row["role"] == role and row["conversation_id"] == first]
         assert len(rows) == 2
-        identities = 2 if role == "fast" else 1
-        assert len({row["session_id"] for row in rows}) == len({row["native_session_id"] for row in rows}) == identities
+        # A follow-up in the same window reuses the warm accepted Fast child.
+        assert len({row["session_id"] for row in rows}) == len({row["native_session_id"] for row in rows}) == 1
         assert len({row["incarnation_id"] for row in rows}) == 1
         for conversation in (second, third):
             other = next(row for row in runs if row["role"] == role and row["conversation_id"] == conversation)
@@ -207,10 +207,11 @@ def run(case):
     trace = case.trace()
     assert len([row for row in trace if row["kind"] == "turn"]) == 9
     for role in ("deep", "fast"):
-        setups = 4 if role == "fast" else 3
-        assert [row["resumed"] for row in trace if row["kind"] == "ready" and row["role"] == role] == [False] * setups
-    digests = case.rows("SELECT digest_text,cutoff_sequence FROM production_fast_digests")
-    assert len(digests) == 4 and all(len(row["digest_text"].encode()) <= 8192 for row in digests)
+        assert [row["resumed"] for row in trace if row["kind"] == "ready" and row["role"] == role] == [False] * 3
+    digests = case.rows("SELECT run_id,digest_text,cutoff_sequence FROM production_fast_digests")
+    assert len(digests) == 3 and all(len(row["digest_text"].encode()) <= 8192 for row in digests)
+    # Only a fresh Fast session gets the digest; the warm continuation has its history.
+    assert afast["run_id"] not in {row["run_id"] for row in digests}
     assert case.rows("SELECT count(*) AS n FROM production_acceptances") == [{"n": 9}]
     from service_roles_retention import run as retained_workers
     retention = retained_workers(case)
