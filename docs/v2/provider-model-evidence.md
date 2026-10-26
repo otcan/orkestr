@@ -21,10 +21,15 @@ acceptance, or retirement state. Requested settings are not answering evidence.
 
 Claude `system/init.model` records the initialized model; assistant text records
 its native `message.model`; a refusal records its declining model. The Codex
-native thread-start/resume model is retained for turns using that default, and
+native thread-start/resume model is retained for turns using that default, or
+overriding with exactly that native-reported model (Codex sends no settings
+update for an unchanged value), and
 scoped `model/rerouted` notifications update the model attached to subsequent
-assistant output. For an explicit Codex override, a native
-`thread/settings/updated` notification can confirm the model. The broker accepts
+assistant output. For a different explicit Codex override, a native
+`thread/settings/updated` notification can confirm the model. Codex 0.163
+emits that notification only to clients that opted into its experimental API,
+which ordinary Deep/Fast channels do not, so such an override currently
+remains unreported. The broker accepts
 only the owned thread, a live committed request and a native model matching that
 request's override; it strips all other settings and adds the current request
 ID. Runtime checks that exact request and thread, and records answering evidence

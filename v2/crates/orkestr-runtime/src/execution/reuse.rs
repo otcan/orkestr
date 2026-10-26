@@ -104,9 +104,10 @@ impl CodexPump {
         let writing =
             super::provider_write::PendingWrite::new(&turn_frame(&capability, request_id))
                 .map_err(SubmissionFailure::Protocol)?;
-        let uses_default_model = turn_frame(&capability, request_id)
+        let requested_model = turn_frame(&capability, request_id)
             .pointer("/params/model")
-            .is_none();
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned);
         let scope = execution_scope(&capability).map_err(SubmissionFailure::Transport)?;
         let fence = Arc::new(
             super::fence::StoreFence::from_consumed(store, &capability)
@@ -125,7 +126,7 @@ impl CodexPump {
             .reattach_turn(&self.source.scope, turn, fence.clone())
             .map_err(|failure| SubmissionFailure::Transport(failure.cause))?;
         let pump = Self::new(child, scope, provider, stream)
-            .with_native_model(self.source.native_model.clone(), uses_default_model)
+            .with_native_model(self.source.native_model.clone(), requested_model.as_deref())
             .with_broker(channel)
             .with_provider_write(Some(writing));
         #[cfg(all(test, feature = "fixture-test-controls"))]

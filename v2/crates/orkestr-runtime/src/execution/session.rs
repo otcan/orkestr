@@ -443,7 +443,10 @@ impl ReadyCodex {
             .map_err(SubmissionFailure::Protocol)?;
         let raw = super::turn_frame(&capability, request_id);
         let native_model = self.rpc.reported_model().map(str::to_owned);
-        let uses_default_model = raw.pointer("/params/model").is_none();
+        let requested_model = raw
+            .pointer("/params/model")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned);
         let writing = if self.actual_fd {
             Some(
                 super::provider_write::PendingWrite::new(&raw)
@@ -480,7 +483,7 @@ impl ReadyCodex {
             })
             .map_err(|failure| SubmissionFailure::Transport(failure.cause))?;
         let pump = super::pump::CodexPump::new(child, scope, provider, stream)
-            .with_native_model(native_model, uses_default_model)
+            .with_native_model(native_model, requested_model.as_deref())
             .with_broker(self.channel)
             .with_provider_write(writing);
         #[cfg(all(test, feature = "fixture-test-controls"))]
