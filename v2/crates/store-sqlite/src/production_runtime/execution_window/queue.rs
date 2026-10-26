@@ -280,7 +280,13 @@ pub(in crate::production_runtime) async fn enqueue_timer_intent(
     input_event_id: EventId,
     input_request_key: &str,
 ) -> Result<()> {
-    let key = timer_intent(input_message_id, input_event_id, input_request_key, 0).request_key;
+    let key = timer_intent(
+        input_message_id.clone(),
+        input_event_id.clone(),
+        input_request_key,
+        0,
+    )
+    .request_key;
     enqueue_trusted_intent(
         tx,
         owner,
