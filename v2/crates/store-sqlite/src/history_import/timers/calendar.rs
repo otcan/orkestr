@@ -55,6 +55,13 @@ pub(super) fn next(rule: &CalendarRule, now_ms: i64) -> Result<i64> {
     best.ok_or(HistoryError::Invalid)
 }
 
+/// Local minute of the day (0..1440) of an instant in a zone.
+pub(super) fn local_minute_of_day(zone_name: &str, ms: i64) -> Option<u16> {
+    let tz = zoned::zone(zone_name)?;
+    let at = Timestamp::from_millisecond(ms).ok()?.to_zoned(tz);
+    u16::try_from(i32::from(at.hour()) * 60 + i32::from(at.minute())).ok()
+}
+
 /// Local calendar date (`YYYY-MM-DD`) of an instant in a zone, for skip dates.
 pub(super) fn local_date(zone_name: &str, ms: i64) -> Option<String> {
     let tz = zoned::zone(zone_name)?;

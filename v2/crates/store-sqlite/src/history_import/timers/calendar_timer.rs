@@ -114,7 +114,7 @@ impl Store {
         let digest = timer_source_digest(&import_request(namespace, new))?;
         let revision = revision(expected_revision)?;
         let next = if state == TimerState::Enabled {
-            let natural = schedule::next(new, now_ms)?;
+            let natural = schedule::next_for(new, namespace, now_ms)?;
             let conversation: String = current.get("conversation_id");
             Some(
                 policy_pause::adjust_next(&mut tx, owner, namespace, new, &conversation, natural)

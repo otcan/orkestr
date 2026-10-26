@@ -28,6 +28,8 @@ use super::{unavailable, HistoryError, Result};
 use crate::Store;
 pub use import::timer_source_digest;
 use orkestr_v2_contracts::{ConversationId, OwnerId};
+/// Deterministic delay of a timer's top-of-the-hour runs (see `schedule`).
+pub use schedule::{spread_ms as timer_spread_ms, SPREAD_MAX_MS as TIMER_SPREAD_MAX_MS};
 use sha2::{Digest, Sha256};
 use sqlx::{sqlite::SqliteRow, Row, Sqlite, Transaction};
 pub use types::*;
