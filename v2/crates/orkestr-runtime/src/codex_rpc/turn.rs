@@ -3,6 +3,8 @@ use crate::{ports::Blocker, ports::ProviderEvent};
 use serde_json::Value;
 use std::collections::VecDeque;
 #[cfg(test)]
+mod capacity_tests;
+#[cfg(test)]
 mod model_tests;
 mod models;
 mod text;
@@ -22,6 +24,24 @@ pub struct TurnStream {
     interrupt_claimed: bool,
     text: text::TurnText,
     models: models::Models,
+    /// A capacity fallback retry of the same run: Core already holds Started.
+    suppress_started: bool,
+    /// A capacity/overload terminal withheld from Core until Runtime decides
+    /// on the one fallback retry. `true`: the broker proved no side effect.
+    capacity_hold: Option<bool>,
+    /// The native turn produced its first model item or text.
+    activity: bool,
+    /// Runtime's own stall interrupt (never a Core stop) and its reply.
+    watchdog: Option<u64>,
+    watchdog_acked: bool,
+    /// A terminal that arrived while the stall interrupt's reply was still
+    /// outstanding: delivered once the reply frees the channel.
+    deferred: Option<ProviderEvent>,
+    /// A committed Core stop adopted this stream: no capacity hold, and an
+    /// `interrupted` terminal is Stopped again.
+    stop_adopted: bool,
+    /// When `turn/started` arrived, for the stall watchdog.
+    started_at: Option<std::time::Instant>,
 }
 impl TurnStream {
     /// Protocol correlation only. The process layer separately consumes Core's
@@ -42,7 +62,98 @@ impl TurnStream {
             interrupt_claimed: false,
             text: text::TurnText::default(),
             models: Default::default(),
+            suppress_started: false,
+            capacity_hold: None,
+            activity: false,
+            watchdog: None,
+            watchdog_acked: false,
+            deferred: None,
+            stop_adopted: false,
+            started_at: None,
         })
+    }
+    /// When the native turn started (the stall watchdog's clock).
+    pub(crate) fn started_at(&self) -> Option<std::time::Instant> {
+        self.started_at
+    }
+    /// The outstanding stall interrupt: its request id and whether its reply
+    /// has arrived. A Core stop adopts it instead of sending another.
+    pub(crate) fn stall_interrupt(&self) -> Option<(u64, bool)> {
+        self.watchdog.map(|request| (request, self.watchdog_acked))
+    }
+    /// Adopt this stream for a committed Core stop: a held capacity terminal
+    /// is released as Stopped and no later terminal is ever held.
+    pub(crate) fn adopt_stop(&mut self) -> Result<(), Blocker> {
+        // The stopping reader correlates the stall interrupt's reply itself.
+        self.stop_adopted = true;
+        if let Some(event) = self.deferred.take() {
+            return self.queue(event);
+        }
+        if self.capacity_hold.take().is_some() {
+            self.terminal = Some(ProviderEvent::Stopped);
+            return self.queue(ProviderEvent::Stopped);
+        }
+        Ok(())
+    }
+    /// Whether the turn is acknowledged, started, still silent and open.
+    pub(crate) fn stalled_candidate(&self) -> bool {
+        !self.poisoned
+            && self.acknowledged
+            && self.started
+            && !self.activity
+            && self.terminal.is_none()
+            && self.events.is_empty()
+            && !self.interrupt_claimed
+            && !self.text.asked_question()
+    }
+    /// Runtime's stall interrupt for a silent turn (no Core stop). Its
+    /// `interrupted` terminal becomes a held capacity terminal.
+    pub(crate) fn claim_stall_interrupt(&mut self, request: u64) -> Result<Value, Blocker> {
+        if !self.stalled_candidate() {
+            return Err(Blocker::Protocol);
+        }
+        let frame = self.claim_interrupt(request)?;
+        self.watchdog = Some(request);
+        Ok(frame)
+    }
+    /// A stall interrupt was sent and its reply has not arrived yet.
+    pub(crate) fn stall_reply_pending(&self) -> bool {
+        self.watchdog.is_some() && !self.watchdog_acked
+    }
+    /// The same run's one capacity fallback turn on the same native thread.
+    /// Only a held, side-effect-free capacity terminal permits it.
+    pub(crate) fn fallback_retry(&self, request: u64) -> Result<Self, Blocker> {
+        if self.poisoned
+            || (self.interrupt_claimed && self.watchdog.is_none())
+            || self.stall_reply_pending()
+            || self.capacity_hold != Some(true)
+            || request <= self.request
+            || request >= (1_u64 << 53)
+        {
+            return Err(Blocker::Protocol);
+        }
+        let mut next = Self::new(&self.thread, request)?;
+        next.suppress_started = true;
+        Ok(next)
+    }
+    /// `Some(side_effect_free)` while a capacity terminal is withheld.
+    pub(crate) fn capacity_held(&self) -> Option<bool> {
+        self.capacity_hold
+    }
+    /// Deliver the withheld capacity terminal (closed `provider` class).
+    pub(crate) fn release_capacity_hold(&mut self) -> Result<(), Blocker> {
+        if self.capacity_hold.take().is_none() {
+            return Err(Blocker::Protocol);
+        }
+        let event = self.terminal.clone().ok_or(Blocker::Protocol)?;
+        self.queue(event)
+    }
+    pub(crate) fn request(&self) -> u64 {
+        self.request
+    }
+    /// The model this turn is known to run on (native evidence), if any.
+    pub(crate) fn current_model(&self) -> Option<&str> {
+        self.models.current()
     }
     pub fn next_event(&mut self) -> Option<ProviderEvent> {
         if self.acknowledged {
@@ -75,7 +186,8 @@ impl TurnStream {
     pub(crate) fn completed_continuation(&self) -> Result<(String, u64), Blocker> {
         if self.poisoned
             || !self.acknowledged
-            || self.interrupt_claimed
+            || (self.interrupt_claimed && !(self.watchdog.is_some() && self.watchdog_acked))
+            || self.deferred.is_some()
             || !self.events.is_empty()
             || !matches!(self.terminal, Some(ProviderEvent::CompletedProposal { .. }))
         {
@@ -150,6 +262,27 @@ impl TurnStream {
             return Err(Blocker::Protocol);
         }
         let value: Value = serde_json::from_str(line).map_err(|_| Blocker::Protocol)?;
+        if let Some(watchdog) = self
+            .watchdog
+            .filter(|_| !self.watchdog_acked && !self.stop_adopted)
+        {
+            if value.get("method").is_none()
+                && value.get("id").and_then(Value::as_u64) == Some(watchdog)
+            {
+                // A late interrupt (the turn already ended) may be refused by
+                // the native; either reply only frees the channel.
+                if !(value.get("result") == Some(&serde_json::json!({}))
+                    || value.get("error").is_some_and(Value::is_object))
+                {
+                    return Err(Blocker::Protocol);
+                }
+                self.watchdog_acked = true;
+                if let Some(event) = self.deferred.take() {
+                    self.queue(event)?;
+                }
+                return Ok(());
+            }
+        }
         if value.get("id").is_some() {
             // Requests from the server are never interpreted as replies or grants.
             if value.get("method").is_some()
@@ -207,12 +340,22 @@ impl TurnStream {
                 | "item/started"
                 | "item/completed"
                 | "model/rerouted"
+                | "turn/activity"
         ) {
             return Ok(());
         }
         let params = value.get("params").ok_or(Blocker::Protocol)?;
         if text(params, "threadId")? != self.thread {
             return Err(Blocker::StaleLease);
+        }
+        if method == "turn/activity" {
+            // Broker's closed marker: the first model item of this turn.
+            self.turn_id(text(params, "turnId")?)?;
+            if self.terminal.is_some() {
+                return Err(Blocker::Protocol);
+            }
+            self.activity = true;
+            return Ok(());
         }
         if method == "model/rerouted" {
             self.turn_id(text(params, "turnId")?)?;
@@ -229,6 +372,9 @@ impl TurnStream {
             if self.terminal.is_some() {
                 return Err(Blocker::Protocol);
             }
+            if method == "item/agentMessage/delta" || method == "item/started" {
+                self.activity = true;
+            }
             if let Some(snapshot) = self.text.receive(method, params)? {
                 self.models.answered();
                 self.queue(ProviderEvent::Progress(snapshot))?;
@@ -243,13 +389,23 @@ impl TurnStream {
                 return Err(Blocker::Protocol);
             }
             if !self.started {
-                self.queue(ProviderEvent::Started)?;
+                if !self.suppress_started {
+                    self.queue(ProviderEvent::Started)?;
+                }
                 self.started = true;
+                self.started_at = Some(std::time::Instant::now());
             }
             return Ok(());
         }
+        // Runtime's own stall interrupt ends a silent, overloaded turn.
+        let capacity = (status == "failed" && capacity_error(turn)?)
+            || (status == "interrupted" && self.watchdog.is_some() && !self.stop_adopted);
         let event = match status {
             "completed" => ProviderEvent::CompletedProposal { synthetic: false },
+            // Capacity/overload is the provider's closed `provider` class.
+            "failed" | "interrupted" if capacity => {
+                ProviderEvent::FailedWith(orkestr_v2_contracts::ExecutionFailureClass::Provider)
+            }
             "failed" => ProviderEvent::Failed,
             "interrupted" => ProviderEvent::Stopped,
             _ => return Err(Blocker::Protocol),
@@ -267,9 +423,35 @@ impl TurnStream {
                 self.queue(ProviderEvent::Progress(snapshot))?;
             }
         }
-        self.queue(event.clone())?;
-        self.terminal = Some(event);
-        Ok(())
+        if capacity && !self.stop_adopted {
+            // Withheld: Runtime retries once on the fallback model or delivers
+            // it. Only the broker's explicit `sideEffects: false` and no
+            // delivered async question make the turn side-effect free.
+            let clean =
+                turn.get("sideEffects") == Some(&Value::Bool(false)) && !self.text.asked_question();
+            self.terminal = Some(event);
+            self.capacity_hold = Some(clean);
+            return Ok(());
+        }
+        self.terminal = Some(event.clone());
+        if self.stall_reply_pending() && !self.stop_adopted {
+            self.deferred = Some(event);
+            return Ok(());
+        }
+        self.queue(event)
+    }
+}
+/// The broker's closed failure evidence: absent, or exactly `capacity`.
+fn capacity_error(turn: &Value) -> Result<bool, Blocker> {
+    match turn.get("error") {
+        None | Some(Value::Null) => Ok(false),
+        Some(Value::Object(error))
+            if error.len() == 1
+                && error.get("class").and_then(Value::as_str) == Some("capacity") =>
+        {
+            Ok(true)
+        }
+        Some(_) => Err(Blocker::Protocol),
     }
 }
 fn text<'a>(value: &'a Value, key: &str) -> Result<&'a str, Blocker> {

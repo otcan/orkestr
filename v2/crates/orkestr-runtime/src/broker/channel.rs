@@ -25,6 +25,10 @@ pub(crate) struct BrokerChannel {
     retired_turns: std::collections::HashSet<String>,
     last_execution_inner: u64,
     preparation: Option<Preparation>,
+    /// The current turn routed a tool call or accepted a steer: a capacity
+    /// failure after either is never retried.
+    turn_tool_called: bool,
+    turn_steered: bool,
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Preparation {
@@ -61,6 +65,8 @@ impl OwnedMetadataHandle {
             retired_turns: std::collections::HashSet::new(),
             last_execution_inner: 0,
             preparation: None,
+            turn_tool_called: false,
+            turn_steered: false,
         }
     }
 }
@@ -162,6 +168,8 @@ impl BrokerChannel {
         }
         self.last_execution_inner = inner_id;
         self.execution_claimed = true;
+        self.turn_tool_called = false;
+        self.turn_steered = false;
         let lineage = self.lineage.clone().ok_or(Blocker::Protocol)?;
         let outer = self.next;
         self.next += 1;
@@ -202,11 +210,46 @@ impl BrokerChannel {
         self.reserve_execution(inner_id)
     }
 
+    /// Runtime-side evidence for a capacity retry: this channel routed no
+    /// tool call and no steer for the current turn and holds no pending work.
+    pub(crate) fn turn_side_effect_free(&self) -> bool {
+        !self.poisoned
+            && self.execution_claimed
+            && self.terminal_observed
+            && !self.turn_tool_called
+            && !self.turn_steered
+            && self.steering.is_none()
+            && self.offline.pending.is_none()
+            && self.workspace_tool.pending.is_none()
+            && !self.cancellation_pending
+    }
+
+    /// Whether Runtime's stall watchdog may interrupt the current turn: the
+    /// same preconditions as `cancellation`, and no tool call or steer yet.
+    pub(crate) fn stall_interruptible(&self) -> bool {
+        !self.poisoned
+            && self.execution_claimed
+            && self.preparation.is_none_or(|p| p == Preparation::Written)
+            && self.pending.is_none()
+            && self.active_turn.is_some()
+            && !self.terminal_observed
+            && !self.turn_tool_called
+            && !self.turn_steered
+            && self.steering.is_none()
+            && self.offline.pending.is_none()
+            && self.workspace_tool.pending.is_none()
+            && !self.cancellation_pending
+    }
+
     fn observe_turn(&mut self, frame: &Value) -> Result<(), Blocker> {
         let method = frame.get("method").and_then(Value::as_str);
         let turn = match method {
             Some(
-                "item/agentMessage/delta" | "item/started" | "item/completed" | "model/rerouted",
+                "item/agentMessage/delta"
+                | "item/started"
+                | "item/completed"
+                | "model/rerouted"
+                | "turn/activity",
             ) => frame.pointer("/params/turnId"),
             Some("turn/started" | "turn/completed") => frame.pointer("/params/turn/id"),
             _ => return Err(Blocker::Protocol),
@@ -326,6 +369,7 @@ impl BrokerChannel {
                 .filter(|v| v.is_object())
                 .ok_or(Blocker::Protocol)?;
             if frame.get("method").and_then(Value::as_str) == Some("item/tool/call") {
+                self.turn_tool_called = true;
                 if self.workspace_tool.enabled {
                     self.accept_workspace_call(frame)?;
                 } else {

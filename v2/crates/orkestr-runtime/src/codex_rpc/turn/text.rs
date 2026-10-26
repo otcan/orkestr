@@ -245,6 +245,12 @@ impl TurnText {
         Ok(self.snapshot(index, completed))
     }
 
+    /// Whether this turn delivered (or began) an asynchronous question: owner
+    /// visible output, so a capacity retry would repeat it.
+    pub(super) fn asked_question(&self) -> bool {
+        self.items.iter().any(|item| item.question)
+    }
+
     /// The marked snapshot of one completed asynchronous question.
     fn question_snapshot(&mut self, index: usize) -> Option<String> {
         let text = self.items[index].text.trim();

@@ -46,6 +46,7 @@ impl BrokerChannel {
         let lineage = self.lineage.clone().ok_or(Blocker::Protocol)?;
         let bytes = self.wrap("SteerExecution", frame)?;
         self.steering_ids.insert(id.clone());
+        self.turn_steered = true;
         self.steering = Some(Correlation {
             id,
             turn: turn.to_owned(),
