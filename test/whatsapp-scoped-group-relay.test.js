@@ -546,6 +546,23 @@ test('an open route past the late-reply window is no longer re-read on every pas
   assert.equal(Number(opened.opened_ms), clock);
 });
 
+test('a question on an open route restarts its late-reply window', async t => {
+  const start = Date.parse('2026-01-01T00:00:00Z') + 60_000;
+  let clock = start;
+  const {relay, state} = fixture(t, false, false, {now: () => clock});
+  const page = '/api/threads/thread-1/messages?limit=200';
+  await relay.tick();
+  clock += 5 * 60 * 60 * 1000;
+  // The turn asks the owner and waits on the answer.
+  state.pages[page] = {messages: [{...answer('question', 'input-thread-1', 'question'), createdAt: new Date(clock).toISOString()}]};
+  await relay.tick();
+  assert.equal(state.sent.length, 1, 'the question is delivered');
+  clock += 5 * 60 * 60 * 1000;
+  state.pages[page].messages.push({...answer('final'), createdAt: new Date(clock).toISOString()});
+  assert.equal((await relay.tick()).completed, 1, 'its final, 10 h after routing but 5 h after the question, is still delivered');
+  assert.equal(state.sent.length, 2);
+});
+
 test('a late reply is not sent while any transport delivery is uncertain', async t => {
   let clock = Date.parse('2026-01-01T00:01:00Z');
   const {relay, state, inboxDb} = fixture(t, false, false, {now: () => clock});

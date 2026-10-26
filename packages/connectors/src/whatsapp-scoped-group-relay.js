@@ -309,6 +309,15 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
     return opened;
   }
 
+  // A question or progress update shows the turn is still live: the window
+  // then counts from that answer, so a turn that asked and waited is still
+  // watched for its final. The answer's own time keeps re-reads idempotent.
+  function routeActive(id, answer) {
+    const at = Date.parse(answer.createdAt);
+    if (!Number.isFinite(at)) return;
+    db.prepare('UPDATE route_opened SET opened_ms=? WHERE id=? AND opened_ms<?').run(Math.min(at, now()), id, Math.min(at, now()));
+  }
+
   const routeInput = (input, group, admissionOnly = false) => inputSerial(input.id, async () => {
     if (deliveryBlocked()) throw new Error('group_delivery_requires_review');
     return routeInputOnce(input, group, admissionOnly);
@@ -425,6 +434,7 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
       await deliverAnswer(input, group, answer, messages);
       if (answer === progress) progressBudget.delivered(input.id, answer, localCommentary);
       if (['final_answer', 'final'].includes(answer.phase)) db.prepare('UPDATE routed SET completed=1 WHERE id=?').run(input.id);
+      else routeActive(input.id, answer);
     }
   }
 
