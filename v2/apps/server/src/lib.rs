@@ -19,6 +19,7 @@ use std::{
 use tokio::sync::Mutex;
 use uuid::Uuid;
 mod accepted_results_http;
+mod agent_timers_http;
 mod archived_history_http;
 pub mod attachment_keys_http;
 mod attachment_transfer;
@@ -496,7 +497,7 @@ pub fn router_with_google_catalog(
     catalog: google_registry_metadata::RegistryCatalog,
 ) -> Router {
     Router::new()
-        .route("/api/v2/health",get(|| async { Json(serde_json::json!({"status":"ok","product":"orkestr-v2","contract_version":0,"fixture_mode":false,"features":["message_author","thread_asks"],"build":build_identity::identity()})) }))
+        .route("/api/v2/health",get(|| async { Json(serde_json::json!({"status":"ok","product":"orkestr-v2","contract_version":0,"fixture_mode":false,"features":["message_author","thread_asks","agent_timers"],"build":build_identity::identity()})) }))
         .route("/api/v2/setup",get(auth::setup_status).post(auth::setup))
         .route("/api/v2/session",post(auth::session))
         .route("/api/v2/machine/session",post(auth::session))
@@ -551,6 +552,7 @@ pub fn router_with_google_catalog(
         .merge(tracker_automation_http::router())
         .merge(thread_icons::router())
         .merge(thread_asks_http::router())
+        .merge(agent_timers_http::router())
         .merge(v1_links::router())
         .merge(v1_manage_http::router())
         .merge(v1_workers_http::router())

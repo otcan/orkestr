@@ -33,6 +33,50 @@ fn authority(row: &SqliteRow, duplicate: bool) -> Result<DurableTimerAuthority> 
         duplicate,
     })
 }
+/// The durable enable inside an already authorized write transaction: the
+/// immutable instruction and the enable commit together.
+pub(super) async fn enable_durable_in(
+    tx: &mut Transaction<'_, Sqlite>,
+    owner: &OwnerId,
+    request: &DurableTimerEnable,
+    now_ms: i64,
+) -> Result<DurableTimerAuthority> {
+    if request.instruction.trim().is_empty() || request.instruction.len() > 32768 {
+        return Err(HistoryError::Invalid);
+    }
+    let digest = instruction_digest(&request.instruction);
+    // Lookup is after auth, before attempting any new transition.
+    let old=sqlx::query("SELECT * FROM durable_timer_authorities WHERE owner_id=? AND namespace=? AND request_key=?")
+        .bind(owner.to_string()).bind(request.timer.namespace.to_string()).bind(&request.timer.request_key).fetch_optional(&mut **tx).await.map_err(unavailable)?;
+    if let Some(old) = old {
+        if old.get::<String, _>("instruction") != request.instruction
+            || old.get::<String, _>("instruction_digest") != digest
+            || old.get::<String, _>("conversation_id") != request.timer.conversation_id.to_string()
+            || old.get::<i64, _>("expected_revision") != request.timer.expected_revision
+        {
+            return Err(HistoryError::Conflict);
+        }
+        // Historical retry is read-only: never renew, re-enable or recreate authority.
+        return authority(&old, true);
+    }
+    let enabled = input::enable_in_transaction(tx, owner, &request.timer, now_ms).await?;
+    if enabled.duplicate {
+        return Err(HistoryError::Conflict);
+    }
+    let stop: i64=sqlx::query_scalar("SELECT stop_sequence FROM dormant_timer_input_guards WHERE owner_id=? AND namespace=? AND generation=?")
+        .bind(owner.to_string()).bind(request.timer.namespace.to_string()).bind(enabled.receipt.generation).fetch_one(&mut **tx).await.map_err(unavailable)?;
+    let id = Uuid::new_v4();
+    sqlx::query("INSERT INTO durable_timer_authorities(owner_id,namespace,generation,authority_id,conversation_id,request_key,expected_revision,instruction,instruction_digest,stop_sequence) VALUES(?,?,?,?,?,?,?,?,?,?)")
+        .bind(owner.to_string()).bind(request.timer.namespace.to_string()).bind(enabled.receipt.generation).bind(id.to_string()).bind(request.timer.conversation_id.to_string()).bind(&request.timer.request_key).bind(request.timer.expected_revision).bind(&request.instruction).bind(&digest).bind(stop).execute(&mut **tx).await.map_err(unavailable)?;
+    Ok(DurableTimerAuthority {
+        authority_id: id,
+        namespace: request.timer.namespace,
+        generation: enabled.receipt.generation,
+        conversation_id: request.timer.conversation_id.clone(),
+        instruction_digest: digest,
+        duplicate: false,
+    })
+}
 impl Store {
     /// Current owner auth before replay; immutable instructions and enable commit together.
     pub async fn enable_durable_timer(
@@ -46,42 +90,9 @@ impl Store {
         }
         let mut tx = self.history_transaction(credential, owner, true).await?;
         let now_ms = store_clock(&mut tx).await?;
-        let digest = instruction_digest(&request.instruction);
-        // Lookup is after auth, before attempting any new transition.
-        let old=sqlx::query("SELECT * FROM durable_timer_authorities WHERE owner_id=? AND namespace=? AND request_key=?")
-            .bind(owner.to_string()).bind(request.timer.namespace.to_string()).bind(&request.timer.request_key).fetch_optional(&mut *tx).await.map_err(unavailable)?;
-        if let Some(old) = old {
-            if old.get::<String, _>("instruction") != request.instruction
-                || old.get::<String, _>("instruction_digest") != digest
-                || old.get::<String, _>("conversation_id")
-                    != request.timer.conversation_id.to_string()
-                || old.get::<i64, _>("expected_revision") != request.timer.expected_revision
-            {
-                return Err(HistoryError::Conflict);
-            }
-            // Historical retry is read-only: never renew, re-enable or recreate authority.
-            let result = authority(&old, true)?;
-            tx.commit().await.map_err(unavailable)?;
-            return Ok(result);
-        }
-        let enabled = input::enable_in_transaction(&mut tx, owner, &request.timer, now_ms).await?;
-        if enabled.duplicate {
-            return Err(HistoryError::Conflict);
-        }
-        let stop: i64=sqlx::query_scalar("SELECT stop_sequence FROM dormant_timer_input_guards WHERE owner_id=? AND namespace=? AND generation=?")
-            .bind(owner.to_string()).bind(request.timer.namespace.to_string()).bind(enabled.receipt.generation).fetch_one(&mut *tx).await.map_err(unavailable)?;
-        let id = Uuid::new_v4();
-        sqlx::query("INSERT INTO durable_timer_authorities(owner_id,namespace,generation,authority_id,conversation_id,request_key,expected_revision,instruction,instruction_digest,stop_sequence) VALUES(?,?,?,?,?,?,?,?,?,?)")
-            .bind(owner.to_string()).bind(request.timer.namespace.to_string()).bind(enabled.receipt.generation).bind(id.to_string()).bind(request.timer.conversation_id.to_string()).bind(&request.timer.request_key).bind(request.timer.expected_revision).bind(&request.instruction).bind(&digest).bind(stop).execute(&mut *tx).await.map_err(unavailable)?;
+        let result = enable_durable_in(&mut tx, owner, request, now_ms).await?;
         tx.commit().await.map_err(unavailable)?;
-        Ok(DurableTimerAuthority {
-            authority_id: id,
-            namespace: request.timer.namespace,
-            generation: enabled.receipt.generation,
-            conversation_id: request.timer.conversation_id.clone(),
-            instruction_digest: digest,
-            duplicate: false,
-        })
+        Ok(result)
     }
     /// Revoke uses the canonical disable transaction: cancels claims, changes generation,
     /// and immediately holds outstanding ordinary inputs through Core eligibility filters.

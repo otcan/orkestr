@@ -5,7 +5,7 @@ use orkestr_v2_application::IntakeStore;
 use orkestr_v2_contracts::{ExecutionAcceptanceRequest, ProjectInput};
 use std::time::Duration;
 
-pub(super) async fn conversation(f: &Case, name: &str) -> ConversationId {
+pub(in crate::production_runtime) async fn conversation(f: &Case, name: &str) -> ConversationId {
     f.store
         .create_project(
             &f.owner,
@@ -19,7 +19,7 @@ pub(super) async fn conversation(f: &Case, name: &str) -> ConversationId {
         .project
         .conversation_id
 }
-pub(super) async fn ready_in(f: &Case, c: &ConversationId) -> Binding {
+pub(in crate::production_runtime) async fn ready_in(f: &Case, c: &ConversationId) -> Binding {
     let roles = f.handle.ensure_role_bindings(&f.owner, c).await.unwrap();
     f.handle
         .confirm_native_session(NativeSessionConfirmation {
@@ -33,7 +33,7 @@ pub(super) async fn ready_in(f: &Case, c: &ConversationId) -> Binding {
         .unwrap()
 }
 /// Claims the next queued input of `c` and drives its Deep run to running.
-pub(super) async fn start(
+pub(in crate::production_runtime) async fn start(
     f: &Case,
     c: &ConversationId,
     b: &Binding,
@@ -64,7 +64,7 @@ pub(super) async fn start(
     ));
     run.provider
 }
-pub(super) async fn input_by(
+pub(in crate::production_runtime) async fn input_by(
     f: &Case,
     c: &ConversationId,
     key: &str,
@@ -86,11 +86,15 @@ pub(super) async fn input_by(
         .await
         .unwrap();
 }
-pub(super) async fn owner_input(f: &Case, c: &ConversationId, key: &str) {
+pub(in crate::production_runtime) async fn owner_input(f: &Case, c: &ConversationId, key: &str) {
     input_by(f, c, key, Some(orkestr_v2_contracts::InputAuthor::Owner)).await;
 }
 /// The next Deep turn of `c` (claims its next queued input), after earlier ones.
-pub(super) async fn next_turn(f: &Case, c: &ConversationId, key: &str) -> ProviderAdmission {
+pub(in crate::production_runtime) async fn next_turn(
+    f: &Case,
+    c: &ConversationId,
+    key: &str,
+) -> ProviderAdmission {
     let deep = f
         .handle
         .ensure_role_bindings(&f.owner, c)
@@ -105,7 +109,7 @@ pub(super) async fn next_turn(f: &Case, c: &ConversationId, key: &str) -> Provid
     start(f, c, &deep, key).await
 }
 /// Running asking turn of `c` from a fresh owner input.
-pub(super) async fn asking_turn(
+pub(in crate::production_runtime) async fn asking_turn(
     f: &Case,
     c: &ConversationId,
     key: &str,
@@ -115,7 +119,7 @@ pub(super) async fn asking_turn(
     let p = start(f, c, &b, key).await;
     (b, p)
 }
-pub(super) async fn finish(
+pub(in crate::production_runtime) async fn finish(
     f: &Case,
     c: &ConversationId,
     p: &ProviderAdmission,
@@ -161,7 +165,7 @@ pub(super) async fn finish(
         .await
         .unwrap();
 }
-pub(super) async fn grant(
+pub(in crate::production_runtime) async fn grant(
     f: &Case,
     c: &ConversationId,
     targets: Option<Vec<ConversationId>>,
@@ -179,14 +183,14 @@ pub(super) fn ask(key: &str, target: &ConversationId, text: &str) -> ThreadAskRe
         text: text.into(),
     }
 }
-pub(super) async fn count(f: &Case, sql: &str, bind: &str) -> i64 {
+pub(in crate::production_runtime) async fn count(f: &Case, sql: &str, bind: &str) -> i64 {
     sqlx::query_scalar(sql)
         .bind(bind)
         .fetch_one(&f.store.pool)
         .await
         .unwrap()
 }
-pub(super) async fn messages(f: &Case, c: &ConversationId) -> i64 {
+pub(in crate::production_runtime) async fn messages(f: &Case, c: &ConversationId) -> i64 {
     count(
         f,
         "SELECT count(*) FROM messages WHERE conversation_id=?",

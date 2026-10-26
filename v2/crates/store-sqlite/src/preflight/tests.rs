@@ -376,6 +376,9 @@ async fn populated_payload_prefix_upgrade_preserves_all_rows_and_foreign_links()
     );
     // New optional preferences, tracker and continuity tables remain empty.
     for table in [
+        "agent_timer_grants",
+        "agent_timers",
+        "agent_timer_audit",
         "thread_ask_grants",
         "thread_asks",
         "message_authors",
@@ -507,7 +510,7 @@ async fn populated_payload_prefix_upgrade_preserves_all_rows_and_foreign_links()
             .fetch_one(&mut conn)
             .await
             .unwrap(),
-        78
+        79
     );
     for table in [
         "history_imports",
