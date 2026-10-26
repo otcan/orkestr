@@ -53,6 +53,18 @@ function fixture(t) {
   return {notifier, state, options, proofs, fence, advance: ms => clock += ms};
 }
 
+test('V2 Quick replies are marked with the Quick bolt, real timers keep the clock', async t => {
+  for (const [parent, header] of [
+    [{text: 'Quick reply', timerId: 'fast'}, '⚡ Quick reply'],
+    [{text: 'Daily inbox check', timerId: 'timer-1'}, '⏰ Daily inbox check'],
+  ]) {
+    const {notifier, state} = fixture(t);
+    Object.assign(state.messages[0], parent);
+    assert.equal((await notifier.tick()).sent, 1);
+    assert.equal(state.sent[0].text, `${header}\nGood morning.`);
+  }
+});
+
 test('V2 conversation posts are labelled by author, never as timers', async t => {
   for (const [parent, header] of [
     [{text: 'Coordinator', timerId: 'post', postAuthor: 'coordinator'}, '🤖 Coordinator:'],
