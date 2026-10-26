@@ -319,11 +319,17 @@ impl Store {
         // rules version earlier in its session: say so instead of inlining the
         // file again (or prompting a re-read), so the session does not grow by
         // one copy of the rules per reply.
+        // Only the same native thread counts (a fresh native under the same
+        // binding has no such history), never a timer turn (it saw only the
+        // fixed note), and only while this version is inlinable, so the
+        // earlier turn received the content rather than just the read line.
         let text = if claim.provider.run.role == orkestr_v2_contracts::runtime::Role::Fast {
             match super::fast_rules::leading_line(&text) {
                 Some(line)
-                    if sqlx::query_scalar::<_, i64>("SELECT count(*) FROM production_runs r JOIN messages m ON m.id=r.message_id WHERE r.session_id=? AND r.id!=? AND r.role='fast' AND substr(m.text,1,?)=?")
+                    if super::fast_rules::inline(text.clone()) != text
+                        && sqlx::query_scalar::<_, i64>("SELECT count(*) FROM production_runs r JOIN messages m ON m.id=r.message_id WHERE r.session_id=? AND r.native_session_id=? AND r.id!=? AND r.role='fast' AND NOT EXISTS(SELECT 1 FROM dormant_timer_inputs t WHERE t.event_id=r.event_id) AND substr(m.text,1,?)=?")
                         .bind(claim.provider.run.session_id.to_string())
+                        .bind(claim.provider.run.native_session_id.clone())
                         .bind(claim.provider.run.run_id.to_string())
                         .bind(i64::try_from(line.chars().count() + 1).map_err(db)?)
                         .bind(format!("{line}\n"))
