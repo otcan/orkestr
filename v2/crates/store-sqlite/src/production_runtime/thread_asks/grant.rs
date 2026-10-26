@@ -222,4 +222,51 @@ impl Store {
         tx.commit().await.map_err(unavailable)?;
         Ok(result)
     }
+
+    /// Returned outcomes admitted into this conversation after `after`, in
+    /// sequence order. Read-only; a delivery adapter exports the follow-up
+    /// turn of each (the owner sees the asking thread's use of the answer).
+    pub async fn thread_ask_reply_inputs(
+        &self,
+        credential: &str,
+        owner: &OwnerId,
+        conversation: &ConversationId,
+        after: i64,
+        limit: u16,
+    ) -> R<ThreadAskReplyInputs> {
+        if after < 0 || !(1..=50).contains(&limit) {
+            return Err(ResourceError::Invalid);
+        }
+        let mut tx = self
+            .owner_scope(credential, owner, conversation, false)
+            .await?;
+        let last_sequence: i64 =
+            sqlx::query_scalar("SELECT sequence FROM conversations WHERE id=?")
+                .bind(conversation.to_string())
+                .fetch_one(&mut *tx)
+                .await
+                .map_err(unavailable)?;
+        let rows = sqlx::query("SELECT a.id,a.target_conversation_id,a.outcome,a.reply_message_id,a.reply_event_id,m.sequence FROM thread_asks a JOIN messages m ON m.id=a.reply_message_id WHERE a.owner_id=?1 AND a.source_conversation_id=?2 AND a.return_path='input' AND m.sequence>?3 ORDER BY m.sequence LIMIT ?4")
+            .bind(owner.to_string()).bind(conversation.to_string()).bind(after).bind(i64::from(limit))
+            .fetch_all(&mut *tx).await.map_err(unavailable)?;
+        let mut inputs = Vec::with_capacity(rows.len());
+        for row in &rows {
+            inputs.push(ThreadAskReplyInput {
+                sequence: row.get("sequence"),
+                message_id: uuid(row.get("reply_message_id"))?,
+                event_id: uuid(row.get("reply_event_id"))?,
+                ask_id: uuid(row.get("id"))?,
+                target_name: name(&mut tx, row.get("target_conversation_id")).await?,
+                state: match row.get::<&str, _>("outcome") {
+                    "answered" => ThreadAskState::Answered,
+                    _ => ThreadAskState::Failed,
+                },
+            });
+        }
+        tx.commit().await.map_err(unavailable)?;
+        Ok(ThreadAskReplyInputs {
+            inputs,
+            last_sequence,
+        })
+    }
 }

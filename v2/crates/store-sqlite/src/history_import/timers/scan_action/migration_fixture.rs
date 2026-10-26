@@ -14,7 +14,7 @@ pub(crate) async fn downgrade_empty(store: &Store) {
             .await
             .unwrap();
     }
-    sqlx::query("DELETE FROM _sqlx_migrations WHERE version=78")
+    sqlx::query("DELETE FROM _sqlx_migrations WHERE version=79")
         .execute(&mut *tx)
         .await
         .unwrap();

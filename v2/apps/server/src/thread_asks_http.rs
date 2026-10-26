@@ -5,6 +5,9 @@
 //!   issue/rotate (shown once) or revoke the conversation's grant.
 //! - `GET /api/v2/conversations/{id}/thread-asks?limit=N`: requests sent from
 //!   or received by this conversation, newest first (no answers).
+//! - `GET /api/v2/conversations/{id}/thread-ask-inputs?after_sequence=N&limit=M`:
+//!   returned outcomes admitted into this conversation (a delivery adapter
+//!   exports the follow-up turn of each).
 //! - `POST .../thread-asks/{ask}/cancel`: fail an unsettled request sent from
 //!   or to this conversation (`cancelled_by_owner`).
 //!
@@ -36,6 +39,7 @@ pub(crate) fn router() -> Router<AppState> {
             get(grant_read).put(grant_issue).delete(grant_revoke),
         )
         .route(&format!("{base}/thread-asks"), get(list).post(create))
+        .route(&format!("{base}/thread-ask-inputs"), get(reply_inputs))
         .route(&format!("{base}/thread-asks/targets"), get(targets))
         .route(&format!("{base}/thread-asks/{{ask}}"), get(status))
         .route(
@@ -191,6 +195,34 @@ async fn list(
             &owner,
             &conversation(&id)?,
             listing.limit.unwrap_or(20),
+        )
+        .await
+        .map_err(failure)?;
+    Ok(Json(value).into_response())
+}
+
+#[derive(Default, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ReplyPage {
+    after_sequence: Option<i64>,
+    limit: Option<u16>,
+}
+async fn reply_inputs(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    query: Result<Query<ReplyPage>, QueryRejection>,
+) -> Result<Response, Error> {
+    let (owner, credential) = owner_credential(&state, &headers).await?;
+    let Query(page) = query.map_err(|_| invalid())?;
+    let value = state
+        .store
+        .thread_ask_reply_inputs(
+            &credential,
+            &owner,
+            &conversation(&id)?,
+            page.after_sequence.unwrap_or(0),
+            page.limit.unwrap_or(20),
         )
         .await
         .map_err(failure)?;

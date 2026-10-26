@@ -366,6 +366,31 @@ async fn ended_asker_receives_one_attributed_reply_input() {
     assert_eq!(status.returned, Some(ThreadAskReturn::Input));
     assert!(status.reply_message_id.is_some());
     assert!(status.status_text.contains("as a new message"));
+    // A delivery adapter can list the returned input and export its turn.
+    let listed = f
+        .store
+        .thread_ask_reply_inputs(&f.token, &f.owner, &a, 0, 10)
+        .await
+        .unwrap();
+    assert_eq!(listed.inputs.len(), 1);
+    assert_eq!(Some(listed.inputs[0].message_id), status.reply_message_id);
+    assert_eq!(listed.inputs[0].ask_id, id);
+    assert_eq!(listed.inputs[0].state, ThreadAskState::Answered);
+    assert_eq!(listed.inputs[0].target_name, "Hosting");
+    assert!(f
+        .store
+        .thread_ask_reply_inputs(&f.token, &f.owner, &a, listed.inputs[0].sequence, 10)
+        .await
+        .unwrap()
+        .inputs
+        .is_empty());
+    assert!(f
+        .store
+        .thread_ask_reply_inputs(&f.token, &f.owner, &b, 0, 10)
+        .await
+        .unwrap()
+        .inputs
+        .is_empty());
     // The turn processing the reply cannot collect a second copy; it may ask
     // again.
     let ab = f

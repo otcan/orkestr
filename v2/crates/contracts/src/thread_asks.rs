@@ -156,6 +156,24 @@ pub struct ThreadAskTarget {
     pub name: String,
 }
 
+/// One returned outcome admitted as an input of the asking conversation, for
+/// a delivery adapter that exports the follow-up turn it starts.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ThreadAskReplyInput {
+    pub sequence: i64,
+    pub message_id: Uuid,
+    pub event_id: Uuid,
+    pub ask_id: Uuid,
+    pub target_name: String,
+    pub state: ThreadAskState,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ThreadAskReplyInputs {
+    pub inputs: Vec<ThreadAskReplyInput>,
+    /// The conversation's current sequence, so a first scan can start here.
+    pub last_sequence: i64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ThreadAskList {
     pub asks: Vec<ThreadAskView>,

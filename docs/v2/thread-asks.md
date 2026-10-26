@@ -101,13 +101,14 @@ never reports `sent` as progress ("Sent to ..., not processed yet").
 - The grant is per conversation and owner-issued, and it is gated on a
   running turn. A broker-injected per-run capability, with no environment
   variable or file, belongs with the TASK-52 typed-tool channel.
-- The V1 WhatsApp adapter does not export turns started by these inputs. The
-  answer and the asking thread's follow-up turn show in the V2 conversation,
-  not in the chat.
+- WhatsApp export of the asking thread's follow-up turn: the owner route
+  `GET /api/v2/conversations/{id}/thread-ask-inputs?after_sequence=N` lists
+  returned outcomes admitted into the conversation. The adapter change that
+  exports those turns is a separate PR, stacked on the adapter branch.
 - The UI shows these inputs as owner messages with the attribution header. A
   separate badge is not implemented.
 
 ## Deployment note
 
-Migration 78 adds tables, which disables the release train's automatic code
+Migration 79 adds tables, which disables the release train's automatic code
 rollback for this train. Ship it in a train with nothing else risky.
