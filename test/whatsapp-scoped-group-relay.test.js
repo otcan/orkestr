@@ -519,6 +519,50 @@ test('a late api-session reply to the newest completed input is sent once, withi
   assert.equal(state.sent.length, 2, 'outside the window nothing is sent');
 });
 
+test('an open route past the late-reply window is no longer re-read on every pass', async t => {
+  let clock = Date.parse('2026-01-01T00:00:00Z') + 60_000;
+  const {relay, state, inboxDb, relayDb} = fixture(t, false, false, {now: () => clock});
+  const page = '/api/threads/thread-1/messages?limit=200';
+  // A turn that never produced a final for its own input keeps its route open.
+  state.pages[page] = {messages: [answer('other', 'elsewhere')]};
+  assert.equal((await relay.tick()).routed, 1);
+  let reads = state.messageReads;
+  clock += 5 * 60 * 60 * 1000;
+  await relay.tick();
+  assert.ok(state.messageReads > reads, 'inside the window the open route is still watched');
+  clock += 60 * 60 * 1000 + 1;
+  reads = state.messageReads;
+  inboxDb.exec(`INSERT INTO group_input(id,chat_id,body,created_at) VALUES('wa-new','group-1','new','${new Date(clock).toISOString()}')`);
+  state.pages[page] = {messages: [{id: 'input-thread-1', role: 'user'}, answer('final')]};
+  const status = await relay.tick();
+  assert.equal(state.posts.length, 2, 'a new input is still routed');
+  // The new route reads the history once and the late-reply poll once; the stale route is not read.
+  assert.equal(state.messageReads - reads, 2);
+  assert.equal(status.completed, 1);
+  // The age counts from routing, not from the WhatsApp time of a late-arriving message.
+  inboxDb.exec(`INSERT INTO group_input(id,chat_id,body,created_at) VALUES('wa-offline','group-2','queued on a phone','2025-12-01T00:00:00.000Z')`);
+  await relay.tick();
+  const opened = relayDb.prepare("SELECT opened_ms FROM route_opened WHERE id='wa-offline'").get();
+  assert.equal(Number(opened.opened_ms), clock);
+});
+
+test('a question on an open route restarts its late-reply window', async t => {
+  const start = Date.parse('2026-01-01T00:00:00Z') + 60_000;
+  let clock = start;
+  const {relay, state} = fixture(t, false, false, {now: () => clock});
+  const page = '/api/threads/thread-1/messages?limit=200';
+  await relay.tick();
+  clock += 5 * 60 * 60 * 1000;
+  // The turn asks the owner and waits on the answer.
+  state.pages[page] = {messages: [{...answer('question', 'input-thread-1', 'question'), createdAt: new Date(clock).toISOString()}]};
+  await relay.tick();
+  assert.equal(state.sent.length, 1, 'the question is delivered');
+  clock += 5 * 60 * 60 * 1000;
+  state.pages[page].messages.push({...answer('final'), createdAt: new Date(clock).toISOString()});
+  assert.equal((await relay.tick()).completed, 1, 'its final, 10 h after routing but 5 h after the question, is still delivered');
+  assert.equal(state.sent.length, 2);
+});
+
 test('a late reply is not sent while any transport delivery is uncertain', async t => {
   let clock = Date.parse('2026-01-01T00:01:00Z');
   const {relay, state, inboxDb} = fixture(t, false, false, {now: () => clock});

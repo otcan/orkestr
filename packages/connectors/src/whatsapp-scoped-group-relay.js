@@ -14,6 +14,7 @@ import {DatabaseSync} from 'node:sqlite';
 import {isReplyDocument, scopedGroupReplyChunks} from './whatsapp-scoped-group-formatting.js';
 import {createRelayReplyFiles} from './whatsapp-scoped-relay-reply-files.js';
 import {createProgressBudget, progressPhases, progressPolicy} from './scoped-group-progress.js';
+import {createRouteAge} from './scoped-group-route-age.js';
 import {createDynamicGroupRegistry, createDynamicGroupView, eligibleGroups, validateDynamicGroups} from './whatsapp-scoped-dynamic-groups.js';
 
 const key = value => crypto.createHash('sha256').update(value).digest('hex');
@@ -181,7 +182,7 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
     return {thread, metadata};
   }
 
-  const progressBudget = createProgressBudget(db, now);
+  const progressBudget = createProgressBudget(db, now), routeAge = createRouteAge(db, now);
   async function answersFor(group, route, suppressUpdates = false) {
     // Walk older pages until the parent is found, so a long-running turn cannot
     // lose its final answer merely because another turn produced many messages.
@@ -298,7 +299,7 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
       if (active?.route !== config.routeControl.routeId || !Number.isFinite(Date.parse(input.created_at)) || Date.parse(input.created_at) < Date.parse(active.since)) return;
     }
     let route = db.prepare('SELECT * FROM routed WHERE id=?').get(input.id);
-    if (route?.completed || (admissionOnly && route)) return;
+    if (route?.completed || (admissionOnly && route) || (route && routeAge.expired(input))) return;
     const {metadata, thread: routeThread} = await inputThread(input, group);
     if (!route) {
       let attachments = [];
@@ -389,6 +390,7 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
       const messageId = response.message?.id || response.messageId;
       if (!messageId) throw new Error('group_input_unacknowledged');
       db.prepare('INSERT OR IGNORE INTO routed(id,thread_id,message_id) VALUES(?,?,?)').run(input.id, group.threadId, messageId);
+      routeAge.routed(input.id);
       route = db.prepare('SELECT * FROM routed WHERE id=?').get(input.id);
       log({event: 'input_routed', threadId: group.threadId, messageId});
     }
@@ -401,7 +403,7 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
       if (localCommentary.includes(answer) && answer !== progress) continue;
       await deliverAnswer(input, group, answer, messages);
       if (answer === progress) progressBudget.delivered(input.id, answer, localCommentary);
-      if (['final_answer', 'final'].includes(answer.phase)) db.prepare('UPDATE routed SET completed=1 WHERE id=?').run(input.id);
+      routeAge.answered(input.id, answer);
     }
   }
 
