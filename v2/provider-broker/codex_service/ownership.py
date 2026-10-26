@@ -10,7 +10,7 @@ import sys
 import time
 import threading
 from codex_bounded.trust import belongs, exists, process
-from .contract import MAX_BIND_MS, require
+from .contract import MAX_BIND_MS, Refused, require
 from .role_profiles import ROLE_NAMES
 
 MAX_CHILDREN = 256
@@ -35,16 +35,41 @@ def same(identity, any_uid=False):
     return bool(current and current["start"] == identity["start"])
 
 
+class Vanished(Refused):
+    """The original identity was reaped before its pidfd pinned it.
+
+    Same closed codes as before, so every strict caller (broker bind) refuses
+    exactly as it did. Only the descendant walk may skip it: a reaped process
+    can no longer run, and the bound broker is a child subreaper, so any
+    orphan it left is re-parented inside the walked broker tree and is found
+    on the next pass. A live process whose identity changed is never this.
+    """
+
+
+def _refuse(identity, reason):
+    current = process(identity["pid"])
+    if current is None or current["start"] != identity["start"]:
+        # No process, or the pid was reused: the original was already reaped.
+        raise Vanished(reason)
+    raise Refused(reason)
+
+
 class Process:
     def __init__(self, identity, any_uid=False):
         self.identity = dict(identity)
         # Host mode: an original descendant may exec a setuid program (sudo);
         # it stays the same owned process for cleanup and reap proof.
         self.any_uid = any_uid
-        require(same(identity, any_uid), "owned_process_missing")
-        self.fd = os.pidfd_open(identity["pid"], 0)
+        self.fd = None
+        if not same(identity, any_uid):
+            _refuse(identity, "owned_process_missing")
         try:
-            require(same(identity, any_uid), "owned_process_changed")
+            self.fd = os.pidfd_open(identity["pid"], 0)
+        except ProcessLookupError:
+            raise Vanished("owned_process_missing") from None
+        try:
+            if not same(identity, any_uid):
+                _refuse(identity, "owned_process_changed")
         except BaseException:
             self.close()
             raise
@@ -173,7 +198,9 @@ class Children:
                 try:
                     with path.open("rb") as stream:
                         raw = stream.read(8193)
-                except FileNotFoundError:
+                except (FileNotFoundError, ProcessLookupError):
+                    # Pinned descendant reaped since `same` above (ESRCH):
+                    # its orphans re-parent under the broker subreaper.
                     continue
                 require(len(raw) <= 8192, "owned_child_bound")
                 for token in raw.split():
@@ -182,7 +209,12 @@ class Children:
                     if child is None or child["ppid"] != parent["pid"]:
                         continue
                     require(self.host or child["uid"] == self.package.uid, "owned_child_identity")
-                    self.remember(child)
+                    try:
+                        self.remember(child)
+                    except Vanished:
+                        # A short-lived descendant (CLI helper, shell probe)
+                        # exited and was reaped mid-walk. Not uncertainty.
+                        continue
                     pending.append(child)
         except BaseException as error:
             self._observation_failed(error)

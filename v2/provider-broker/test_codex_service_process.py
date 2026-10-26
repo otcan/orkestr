@@ -183,6 +183,111 @@ class ProcessTests(unittest.TestCase):
             # Every reaped original remains proven gone; nothing live was dropped.
             self.assertTrue(all(record.gone() for record in children.records.values()))
 
+    def churning_parent(self, children):
+        # The bound broker keeps starting and reaping short-lived helpers,
+        # like a native CLI probing git/shell at startup.
+        self.entry.write_text("import os,signal,subprocess,time\nos.kill(os.getpid(),signal.SIGSTOP)\n"
+                              "end=time.monotonic()+30\n"
+                              "while time.monotonic()<end:\n"
+                              "    subprocess.run(['/usr/bin/true'])\n")
+        child = self.spawn()
+        identity = process(child.pid)
+        self.assertTrue(children.bind(child.pid, identity["start"], time.monotonic() + 2))
+        return child
+
+    def test_short_lived_descendants_never_make_cleanup_uncertain(self):
+        # Host full access is the deployed mode. (Without it, /proc may briefly
+        # report another uid for an exec-ing child; that stays strict.)
+        for children in (self.host_children(),):
+            child = self.churning_parent(children)
+            deadline = time.monotonic() + 1.5
+            while time.monotonic() < deadline:
+                children.observe()
+            self.assertFalse(children.uncertain)
+            self.assertIsNone(children.uncertainty_reason)
+            self.assertTrue(children.cleanup())
+            child.wait(3)
+            self.assertTrue(children.released())
+
+    def test_descendant_reaped_while_pinned_is_skipped_not_uncertain(self):
+        import codex_bounded.trust as trust
+        import codex_service.ownership as ownership
+        real_process, real_open = trust.process, ownership.os.pidfd_open
+        for host in (False, True):
+            for mode in ("before_pin", "pin_refused", "after_pin", "pid_reused"):
+                children = self.host_children() if host else Children(self.package, process(os.getpid()))
+                self.addCleanup(children.close)
+                child, grandchild = self.bound_parent(children)
+                state = {"lookups": 0, "pinned": False}
+
+                def view(pid):
+                    identity = real_process(pid)
+                    if identity is None or pid != grandchild:
+                        return identity
+                    state["lookups"] += 1
+                    if mode == "before_pin" and state["lookups"] > 1:
+                        return None
+                    if mode == "after_pin" and state["pinned"]:
+                        return None
+                    if mode == "pid_reused" and state["pinned"]:
+                        identity["start"] += 1
+                    return identity
+
+                def pin(pid, flags):
+                    if pid == grandchild:
+                        state["pinned"] = True
+                        if mode == "pin_refused":
+                            raise ProcessLookupError(3, "No such process")
+                    return real_open(pid, flags)
+                with unittest.mock.patch.object(ownership, "process", view), \
+                        unittest.mock.patch.object(trust, "process", view), \
+                        unittest.mock.patch.object(ownership.os, "pidfd_open", pin):
+                    children.observe()
+                self.assertFalse(children.uncertain, (host, mode))
+                self.assertNotIn(grandchild, {key[0] for key in children.records}, (host, mode))
+                # The real descendant is found again on the next pass.
+                children.observe()
+                self.assertIn(grandchild, {key[0] for key in children.records}, (host, mode))
+                self.assertTrue(children.cleanup())
+                self.assertTrue(children.forced)
+                child.wait(3)
+                self.assertTrue(children.released(), (host, mode))
+
+    def test_live_identity_change_after_pin_stays_uncertain(self):
+        import codex_bounded.trust as trust
+        import codex_service.ownership as ownership
+        real_process, real_open = trust.process, ownership.os.pidfd_open
+        child, grandchild = self.bound_parent(self.children)
+        pinned = []
+
+        def view(pid):
+            identity = real_process(pid)
+            if identity is not None and pid == grandchild and pinned:
+                identity["uid"] = 0  # Alive, same start, another uid: not reaped.
+            return identity
+
+        def pin(pid, flags):
+            if pid == grandchild:
+                pinned.append(pid)
+            return real_open(pid, flags)
+        with unittest.mock.patch.object(ownership, "process", view), \
+                unittest.mock.patch.object(trust, "process", view), \
+                unittest.mock.patch.object(ownership.os, "pidfd_open", pin):
+            with self.assertRaisesRegex(Refused, "owned_process_changed"):
+                self.children.observe()
+        self.assertTrue(self.children.uncertain)
+        self.assertEqual(self.children.uncertainty_reason, "owned_process_changed")
+        self.assertFalse(self.children.released())
+        child.kill()
+        child.wait(3)
+
+    def test_strict_pin_of_reaped_identity_still_refuses(self):
+        done = subprocess.Popen(["/usr/bin/true"])
+        identity = process(done.pid)
+        done.wait(3)
+        with self.assertRaisesRegex(Refused, "owned_process_missing"):
+            self.children.remember(identity)
+
     def test_frame_deadline_truncation_and_extra_bytes_are_bounded(self):
         request = {"version": 1, "operation": "status", "request_id": "synthetic",
                    "owner_id": uid(), "conversation_id": uid()}
