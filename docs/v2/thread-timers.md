@@ -56,6 +56,14 @@ file says enabled), and `run`, update, pause/resume and delete are refused with
   scanned; disabling holds an outstanding occurrence so it never executes. A due
   occurrence that cannot be admitted (Stop boundary changed, conversation
   removed, window queue full) backs off 5 s doubling to 15 min per timer.
+- **Failed open.** When an occurrence's window fails to open before anything
+  of it ran, Core closes the window as `failed` and queues the intent once
+  more under its own key (`timer-window:<event>:retry1`). The manager admits
+  the same input again only because its earlier window retired as a failed
+  open with no run. A second failed open leaves the input released. A window
+  the manager never admitted (no acknowledgement, no credential) is closed by
+  Core alone once the manager reports an earlier retired generation for the
+  conversation; the manager accepts the successor across that generation gap.
 - **Deep turn.** Dispatch re-authenticates with the owner's current browser
   session, exactly like queued owner input; the turn's results await
   acceptance as usual. `ORKESTR_V2_TIMER_CONFIG` may now be combined with

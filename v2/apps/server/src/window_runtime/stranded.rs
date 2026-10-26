@@ -35,6 +35,10 @@ use orkestr_v2_contracts::{
 };
 use orkestr_v2_store_sqlite::StrandedExecutionWindow;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use unadmitted::warn_refused;
+
+#[path = "stranded_unadmitted.rs"]
+mod unadmitted;
 
 /// Which plans a reconciliation attempt may carry out.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -53,6 +57,13 @@ pub(crate) enum ReconcileError {
     NotFound,
     /// Core or manager refused; the window stays exactly as it was.
     Refused,
+}
+
+fn now_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
 }
 
 /// The operator alert for a committed failed open, in the `ALERT <source>
@@ -82,17 +93,18 @@ pub(in crate::window_runtime) fn open_failure_alert(
 impl Controller {
     /// Best-effort automatic path; the caller holds `self.opening`.
     pub(in crate::window_runtime) async fn reconcile_expired_locked(&self, browser: &str) {
-        let Ok(windows) = self
+        let windows = match self
             .store
             .unfinished_execution_windows_authenticated(browser)
             .await
-        else {
-            return;
+        {
+            Ok(windows) => windows,
+            Err(_) => {
+                eprintln!("WARN orkestr-v2-server window_reconcile_deferred cause=\"unfinished windows unavailable\"");
+                return;
+            }
         };
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_millis() as i64)
-            .unwrap_or(0);
+        let now = now_ms();
         for window in windows {
             if self.live_owner(&window.conversation_id).await {
                 continue;
@@ -102,20 +114,25 @@ impl Controller {
                 // already ended with every original child reaped: its provider
                 // is gone, so waiting for expiry only strands the conversation.
                 if self.custody_released(&window.conversation_id).await {
-                    let _ = self.reconcile_released(browser, &window).await;
+                    if let Err(cause) = self.reconcile_released(browser, &window).await {
+                        warn_refused("released", &window, cause);
+                    }
                 }
                 continue;
             }
             // A refused window remains blocked exactly as before; the owner can
             // still use the explicit endpoint once the cause is understood.
-            let _ = self
+            if let Err(cause) = self
                 .reconcile_one(
                     browser,
                     &window,
                     Decision::AbandonUnaccepted,
                     Actor::Startup,
                 )
-                .await;
+                .await
+            {
+                warn_refused("deadline", &window, cause);
+            }
         }
     }
 
@@ -140,7 +157,7 @@ impl Controller {
         if status.state != ExecutionWindowState::ReconciliationRequired {
             return;
         }
-        let _ = self
+        if let Err(cause) = self
             .reconcile_planned(
                 browser,
                 &status,
@@ -148,7 +165,10 @@ impl Controller {
                 Actor::Owner,
                 Scope::FailedOpenOnly,
             )
-            .await;
+            .await
+        {
+            warn_refused("owner_failed_open", &status, cause);
+        }
     }
 
     /// Whether this process ran (or observed) the conversation's window and
@@ -176,8 +196,8 @@ impl Controller {
             .for_conversation(window.conversation_id.clone())
             .map_err(|_| "manager scope refused")?;
         // Idempotent; a window the manager already retired or marked keeps
-        // its committed state.
-        let _ = manager
+        // its committed state (or never admitted: the plan below decides).
+        if manager
             .uncertain(
                 &format!("released:{}", uuid::Uuid::new_v4()),
                 &Window {
@@ -187,7 +207,11 @@ impl Controller {
                 super::super::manager_client::Uncertainty::RuntimeRefused,
                 Instant::now() + Duration::from_secs(5),
             )
-            .await;
+            .await
+            .is_err()
+        {
+            warn_refused("released_uncertain", window, "manager uncertainty refused");
+        }
         self.reconcile_planned(
             browser,
             window,
@@ -279,8 +303,8 @@ impl Controller {
         // first, so a parent proposal waiting on them stays acceptable. This
         // process holds no custody (the caller checked); the manager must also
         // report no live budget for the window. A refusal changes nothing.
-        if self.manager_released(window, false).await {
-            let _ = self
+        if self.manager_released(window, false).await
+            && self
                 .store
                 .settle_lapsed_runs_authenticated(
                     browser,
@@ -289,7 +313,10 @@ impl Controller {
                     window.generation,
                     actor,
                 )
-                .await;
+                .await
+                .is_err()
+        {
+            warn_refused("settle_lapsed", window, "lapsed run settlement refused");
         }
         let plan = self
             .store
@@ -337,21 +364,31 @@ impl Controller {
             (None, None) => None,
             _ => return Err("stranded window plan is inconsistent"),
         };
-        self.manager
-            .for_conversation(conversation.clone())
-            .map_err(|_| "manager scope refused")?
-            .reconcile(
-                &format!("reconcile:{}", uuid::Uuid::new_v4()),
-                &Window {
-                    window_id: window.window_id,
-                    generation: window.generation,
-                },
-                manager_outcome,
-                run,
-                Instant::now() + Duration::from_secs(5),
-            )
-            .await
-            .map_err(|_| "manager reconciliation refused")?;
+        if self.manager_never_admitted(window, &plan, now_ms()).await {
+            // Nothing of the manager's exists to retire: commit Core's failed
+            // open locally. Inputs are released exactly as on the manager
+            // path; nothing is replayed.
+            eprintln!(
+                "ALERT orkestr-v2-server window_unadmitted_closed conversation={} window={} generation={}",
+                conversation, window.window_id, window.generation,
+            );
+        } else {
+            self.manager
+                .for_conversation(conversation.clone())
+                .map_err(|_| "manager scope refused")?
+                .reconcile(
+                    &format!("reconcile:{}", uuid::Uuid::new_v4()),
+                    &Window {
+                        window_id: window.window_id,
+                        generation: window.generation,
+                    },
+                    manager_outcome,
+                    run,
+                    Instant::now() + Duration::from_secs(5),
+                )
+                .await
+                .map_err(|_| "manager reconciliation refused")?;
+        }
         let receipt = match plan {
             StrandedExecutionWindow::Reconciled(receipt) => receipt,
             // Core commits only the exact decision the manager just recorded.

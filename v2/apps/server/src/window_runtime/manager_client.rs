@@ -544,21 +544,7 @@ impl ManagerClient {
             || r.reserved_bytes > 67_108_864
             || r.limits != ExecutionWindowLimits::default()
             || !dates(r.opened_at_ms, r.work_deadline_ms, r.expires_at_ms)
-            || r.reason.as_deref().is_some_and(|s| {
-                ![
-                    "manager_restarted",
-                    "clock_changed",
-                    "hard_deadline",
-                    "shutdown_margin",
-                    "runtime_drain",
-                    "runtime_refused",
-                    "auth_revoked",
-                    "cleanup_unknown",
-                    "server_lost",
-                    "manager_stopped",
-                ]
-                .contains(&s)
-            })
+            || r.reason.as_deref().is_some_and(|s| !reason_accepted(s))
             // Only a failed window may be retired without naming a run.
             || (r.state == WindowState::Retired
                 && (r.outcome.is_none()
@@ -571,6 +557,50 @@ impl ManagerClient {
         }
         Ok(ManagerReceipt::Window(Box::new(r)))
     }
+}
+
+/// Reasons this server knows the manager ledger to record.
+const KNOWN_REASONS: [&str; 10] = [
+    "manager_restarted",
+    "clock_changed",
+    "hard_deadline",
+    "shutdown_margin",
+    "runtime_drain",
+    "runtime_refused",
+    "auth_revoked",
+    "cleanup_unknown",
+    "server_lost",
+    "manager_stopped",
+];
+
+/// A window's `reason` is a diagnostic, never authority. A newer manager may
+/// record a reason this server does not know yet: refusing the whole receipt
+/// for it silently blocked every reconcile path, so a well-formed closed token
+/// is accepted with one warning per value. Anything else is still refused, and
+/// says so.
+fn reason_accepted(reason: &str) -> bool {
+    if KNOWN_REASONS.contains(&reason) {
+        return true;
+    }
+    let token = !reason.is_empty()
+        && reason.len() <= 64
+        && reason.bytes().all(|b| b.is_ascii_lowercase() || b == b'_');
+    static WARNED: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> =
+        std::sync::OnceLock::new();
+    let first = WARNED
+        .get_or_init(Default::default)
+        .lock()
+        .is_ok_and(|mut seen| seen.len() < 64 && seen.insert(reason.to_owned()));
+    if token && first {
+        eprintln!("WARN orkestr-v2-server manager_receipt_unknown_reason reason={reason}");
+    } else if !token {
+        // Never echo a malformed value: it is not a closed token.
+        eprintln!(
+            "WARN orkestr-v2-server manager_receipt_refused cause=malformed_reason length={}",
+            reason.len()
+        );
+    }
+    token
 }
 
 #[cfg(test)]
