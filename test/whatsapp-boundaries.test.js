@@ -45,7 +45,9 @@ test("WhatsApp debug footer covers replies mirrored from a remote runtime", () =
   const base = { role: "assistant", source: "rust-v2-pilot", phase: "final_answer", remoteBackend: "rust-v2", remoteMessageId: "remote-1" };
 
   const plain = appendWhatsAppDebugFooter("Done", { env, thread, message: base });
-  assert.match(plain, /^Done\n\n⚡ Quick: unknown unknown\/unknown · 🧠 Deep: unknown unknown\/unknown · ▶ unknown\n/);
+  // No observed layer identity: the layer line is omitted, never "unknown".
+  assert.match(plain, /^Done\n\n(?:codex|claude)\b/);
+  assert.doesNotMatch(plain, /unknown|⚡|🧠|▶/);
   assert.match(plain, /\nq:0 · load:\d+% · api:\d+% · help:\/help$/);
   assert.doesNotMatch(plain, /local-model|mode:plan|fast:on|rt:api/);
   assert.equal(stripWhatsAppDebugFooter(plain), "Done");
@@ -53,14 +55,17 @@ test("WhatsApp debug footer covers replies mirrored from a remote runtime", () =
   const withModel = appendWhatsAppDebugFooter("Done", {
     env, thread, message: { ...base, remoteLayer: "deep", remoteProvider: "codex", remoteModel: "example-model" },
   });
-  assert.match(withModel, /\n⚡ Quick: unknown unknown\/unknown · 🧠 Deep: codex example-model\/unknown · ▶ Deep\n/);
+  assert.match(withModel, /\n\n🧠 Deep: codex example-model · ▶ Deep\n/);
+  assert.equal(stripWhatsAppDebugFooter(withModel), "Done");
 
   // A configured backend source without remote ids still gets the footer.
   const bySource = appendWhatsAppDebugFooter("Done", {
     env: { ...env, ORKESTR_REMOTE_RUNTIME_BACKENDS_JSON: JSON.stringify({ "rust-v2": { baseUrl: "http://127.0.0.1:1" } }) },
     message: { role: "assistant", source: "rust-v2-pilot", phase: "final_answer" },
   });
-  assert.match(bySource, /\n⚡ Quick: unknown unknown\/unknown · 🧠 Deep: unknown unknown\/unknown · ▶ unknown\n/);
+  assert.match(bySource, /\nq:0 · load:\d+% · api:\d+% · help:\/help$/);
+  assert.doesNotMatch(bySource, /unknown/);
+  assert.equal(stripWhatsAppDebugFooter(bySource), "Done");
 
   assert.equal(appendWhatsAppDebugFooter("Done", { env, message: { role: "assistant", source: "rust-v2-pilot" } }), "Done");
   assert.equal(appendWhatsAppDebugFooter("Hi", { env, message: { ...base, role: "user" } }), "Hi");
@@ -121,7 +126,9 @@ test("WhatsApp debug footer is gated and marks progress as update", () => {
     message: { source: "codex-app-server", phase: "final_answer" },
     thread: { runtimeKind: "codex-app-server" },
   });
-  assert.match(apiRuntime, /\ndbg: codex\/[^\n]* · rt:api · msg:\*final\*\n/);
+  // No configured model: the label is omitted, never "unknown".
+  assert.match(apiRuntime, /\ndbg: codex(?:\/[^\n·]+)? · rt:api · msg:\*final\*\n/);
+  assert.doesNotMatch(apiRuntime, /unknown/);
   assert.doesNotMatch(apiRuntime, /mode:plan|fast:on|mode-switch:|rt-switch:/);
   assert.equal(stripWhatsAppDebugFooter(apiRuntime), "Done");
 });
@@ -155,7 +162,8 @@ test("WhatsApp debug footer reports Claude Code model, runtime, and usage withou
     thread,
     messages: [],
   });
-  assert.match(waking, /^Waking this thread\.\n\ndbg: claude\/sonnet\/h · rt:claude · msg:\*update\*\ncodex: no data\nclaude 5h: 80% wk: 65%\nqueue:1 · reason:waking · load:\d+% · api:\d+% · help:\/help$/);
+  // A queue notice is not a model reply: no footer.
+  assert.equal(waking, "Waking this thread.");
   assert.doesNotMatch(waking, /mode-switch:|rt-switch:|switch:\//);
   assert.equal(stripWhatsAppDebugFooter(waking), "Waking this thread.");
 });

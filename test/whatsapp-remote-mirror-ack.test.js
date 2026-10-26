@@ -239,7 +239,7 @@ test("a mirrored reply keeps the remote provider and model for the debug footer"
   assert.equal(reply.remoteRunId, "example-run");
   const footer = whatsappDebugFooter({ message: reply, thread: {}, messages: [], deliveryType: "final", env: {} });
   assert.equal(reply.remoteBackend, "example");
-  assert.match(footer, /^⚡ Quick: unknown unknown\/unknown · 🧠 Deep: codex example-model-1\/low · ▶ Deep/);
+  assert.match(footer, /^🧠 Deep: codex example-model-1\/low · ▶ Deep\n/);
 });
 
 test("a mirrored Fast export preserves the explicit first-response role", async t => {
@@ -249,7 +249,7 @@ test("a mirrored Fast export preserves the explicit first-response role", async 
   await deliver(f);
   const reply = (await listThreadMessages("example-thread", f.env)).find((row) => row.role === "assistant");
   assert.equal(reply.remoteLayer, "fast");
-  assert.match(whatsappDebugFooter({ message: reply }), /^⚡ Quick: codex example-mini\/unknown .*▶ Quick\n/);
+  assert.match(whatsappDebugFooter({ message: reply }), /^⚡ Quick: codex example-mini · 🧠 Deep: pending · ▶ Quick\n/);
 });
 
 // Counts full reads of one thread's message list (listThreadMessageRows).

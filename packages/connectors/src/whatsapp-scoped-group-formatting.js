@@ -149,7 +149,7 @@ export function scopedGroupReplyChunks({text, message, thread, messages, config,
   const limit = scopedGroupReplyLimit(config, env);
   const footerEnv = config.appendDebugFooter === true ? {...env, ORKESTR_WHATSAPP_DEBUG_FOOTER: '1'} : env;
   let suffix = '';
-  if (formatter && config.appendDebugFooter !== false && formatter.shouldAppendWhatsAppDebugFooter(message, footerEnv, deliveryType, thread)) {
+  if (formatter && config.appendDebugFooter !== false && formatter.shouldAppendWhatsAppDebugFooter(message, footerEnv, deliveryType, thread, messages)) {
     const footer = formatter.whatsappDebugFooter({message, thread, messages, deliveryType, env: footerEnv});
     if (footer.length > SCOPED_FOOTER_MAX_CHARS) throw new Error('group_footer_too_large');
     suffix = `\n\n${footer}`;
@@ -162,7 +162,7 @@ export function scopedGroupReplyChunks({text, message, thread, messages, config,
   const marker = `\n\n${SCOPED_ATTACHED_MARKER}`;
   // A footer already embedded at the end of the reply text (a final "dbg:"
   // block of up to five lines) stays on the message too, not only in the file.
-  const embedded = suffix ? null : body.match(/\n\n((?:dbg: |⚡ Quick:)[^\n]*(?:\n[^\n]+){0,4})$/);
+  const embedded = suffix ? null : body.match(/\n\n((?:dbg: |⚡ Quick:|🧠 (?:Deep|Coordinator):)[^\n]*(?:\n[^\n]+){0,4}|(?:(?:codex|claude)\b[^\n]*\n){0,2}(?:q|queue):[^\n]*help:\/help)$/);
   if (embedded && embedded[1].length <= SCOPED_FOOTER_MAX_CHARS) suffix = `\n\n${embedded[1]}`;
   const lead = embedded && suffix ? body.slice(0, embedded.index).trimEnd() : body;
   const preview = scopedReplyPreview(lead, limit - marker.length);
