@@ -12,10 +12,10 @@ import * as formatter from '../packages/connectors/src/whatsapp-formatting.js';
 const epoch = Date.parse('2026-01-01T00:00:00Z'), iso = ms => new Date(epoch + ms).toISOString();
 const chatId = '120000000001@g.us';
 
-function fixture(t) {
+function fixture(t, {footer = false} = {}) {
   let clock = epoch + 10000; const now = () => clock;
   const config = {ownChatId: '15550000001@c.us', ownerUserId: 'admin', activatedAt: iso(0),
-    groups: [{chatId, threadId: 'thread-1', name: 'Example'}], appendDebugFooter: false,
+    groups: [{chatId, threadId: 'thread-1', name: 'Example'}], appendDebugFooter: footer,
     timerNotifications: {enabled: true, threadId: 'thread-1', since: iso(0), proofDbPath: ':memory:'},
     routeControl: {threadId: 'thread-1', routeId: 'temporary', dbPath: ':memory:'}};
   const fence = createDeliveryRouteFence({dbPath: ':memory:', now});
@@ -28,7 +28,11 @@ function fixture(t) {
   const answer = {id: 'answer1', role: 'assistant', state: 'completed', phase: 'final_answer', source: 'rust-v2-pilot',
     parentMessageId: parent.id, chatId, remoteBackend: 'example-backend', remoteThreadId: 'remote-thread', remoteMessageId: 'acceptance1',
     createdAt: iso(9000), text: 'Good morning.', cursor: 2};
-  const binding = {chatId, enabled: true, mirrorToWhatsApp: false, remoteBackend: 'example-backend', remoteThreadId: 'remote-thread', remoteRuntimeEnabled: true};
+  // Owner-only relay binding as in a real owner group: the owner's two
+  // accounts are both owner and authorized; no additional participants.
+  const binding = {chatId, enabled: true, mirrorToWhatsApp: false, remoteBackend: 'example-backend', remoteThreadId: 'remote-thread', remoteRuntimeEnabled: true,
+    allowOtherPeople: true, ownerContactIds: ['15550000001@c.us', '5550001@lid'], authorizedContactIds: ['15550000001@c.us', '5550001@lid'],
+    additionalParticipantsEnabled: false, additionalParticipantIds: [], suppressWhatsAppDebugFooter: false, inboundSecurity: {}};
   const state = {events: [event], timers: [], messages: [parent, answer], binding, sent: [], reports: [], fail: false, reportFail: false};
   const api = async (url, options = {}) => {
     if (url === '/api/timers') return {timers: state.timers};
@@ -63,6 +67,25 @@ test('V2 Quick replies are marked with the Quick bolt, real timers keep the cloc
     assert.equal((await notifier.tick()).sent, 1);
     assert.equal(state.sent[0].text, `${header}\nGood morning.`);
   }
+});
+
+test('V2 Quick, coordinator and timer replies keep the owner footer; system posts do not', async t => {
+  for (const [parent, layer, footer] of [
+    [{text: 'Quick reply', timerId: 'fast'}, {remoteLayer: 'fast', remoteProvider: 'codex', remoteModel: 'example-luna'}, /\n\n⚡ Quick: codex example-luna · 🧠 Deep: pending · ▶ Quick\n/],
+    [{text: 'Coordinator', timerId: 'post', postAuthor: 'coordinator'}, {remoteLayer: 'coordinator', remoteProvider: 'claude-code', remoteModel: 'opus-example', remoteIdentitySource: 'post'}, /\n\n🧠 Coordinator: claude-code opus-example · ▶ Coordinator\n/],
+    [{text: 'Daily inbox check', timerId: 'timer-1'}, {remoteLayer: 'deep', remoteProvider: 'codex'}, /\n\n🧠 Deep: codex · ▶ Deep\n/],
+  ]) {
+    const {notifier, state} = fixture(t, {footer: true});
+    Object.assign(state.messages[0], parent);
+    Object.assign(state.messages[1], layer);
+    assert.equal((await notifier.tick()).sent, 1);
+    assert.match(state.sent[0].text, footer);
+    assert.match(state.sent[0].text, /help:\/help$/);
+  }
+  const {notifier, state} = fixture(t, {footer: true});
+  Object.assign(state.messages[0], {text: 'Operator', timerId: 'post', postAuthor: 'operator'});
+  assert.equal((await notifier.tick()).sent, 1);
+  assert.equal(state.sent[0].text, '⚙️ System:\nGood morning.', 'a system notice carries no footer');
 });
 
 test('V2 conversation posts are labelled by author, never as timers', async t => {
