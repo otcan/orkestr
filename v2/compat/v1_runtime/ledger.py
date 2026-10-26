@@ -48,12 +48,16 @@ NOTICE_NAMESPACE = uuid.UUID("5d0c3f7e-8a41-4c2b-9e6d-1b7f2a9c4e83")
 # Phases in which no Rust execution window was opened for the input yet.
 NOT_STARTED = ("queued", "admitted", "waiting_for_window")
 DEFAULT_MAX_INPUT_AGE_S = 30 * 60
-# `max_outstanding_inputs` no longer refuses: an owner burst above it is
-# accepted and queued (each message still gets its own Fast reply; Deep runs
-# in ledger order as earlier inputs finish). Only this many unsettled chat
-# inputs (Fast/timer/post pseudo rows excluded) refuse, against real abuse or a
-# V1 that never acknowledges.
+# On owner-only bindings `max_outstanding_inputs` no longer refuses: an owner
+# burst above it is accepted and queued (each message is admitted at once and
+# still gets its own Fast reply; Deep runs in ledger order). Only this many
+# unsettled chat inputs (Fast/timer/post pseudo rows excluded) refuse there,
+# against real abuse or a V1 that never acknowledges. Other bindings keep the
+# configured limit unchanged.
 HARD_MAX_OUTSTANDING = 64
+# Refusals that are never retried because the run may have acted already.
+WITHHELD_REASONS = ("execution_requires_review", "continuation_admission_requires_review",
+                    "continuation_lineage_unknown", "continuation_provider_changed")
 RECENT_REFUSALS = 10
 # V1-local input (see local_inputs.py); listed with its own source and connector.
 LOCAL_KIND = "v1_local"
@@ -252,10 +256,16 @@ class Ledger:
                     raise Conflict("input_identity_changed")
                 return json.loads(row[1]), True
             outstanding = db.execute("SELECT count(*) FROM inputs WHERE json_extract(data,'$.settled') IS NULL").fetchone()[0]
-            chat = db.execute("SELECT count(*) FROM inputs WHERE json_extract(data,'$.settled') IS NULL "
-                              "AND json_extract(data,'$.origin') IS NULL").fetchone()[0]
-            if chat >= max(HARD_MAX_OUTSTANDING, self.max_outstanding):
-                raise Conflict("binding_capacity_reached")
+            if not self.owner_only:
+                # Serial (legacy) bindings keep the configured limit: queueing
+                # past it there would only expire inputs after 30 minutes.
+                if outstanding >= self.max_outstanding:
+                    raise Conflict("binding_capacity_reached")
+            else:
+                chat = db.execute("SELECT count(*) FROM inputs WHERE json_extract(data,'$.settled') IS NULL "
+                                  "AND json_extract(data,'$.origin') IS NULL").fetchone()[0]
+                if chat >= max(HARD_MAX_OUTSTANDING, self.max_outstanding):
+                    raise Conflict("binding_capacity_reached")
             attachments = self._attachments(db, body["publicMessageId"], body.get("attachments") or [])
             remote_id = str(uuid.uuid4())
             keys = ("message", "window", "fast", "deep") + (("attachments",) if attachments else ())
@@ -507,8 +517,11 @@ class Ledger:
             if not row or json.loads(row[0]).get("phase") == "completed":
                 return None
             lang = notices.language_for(db, data)
-            # Never retried: the run may have acted, or it needs human review.
-            withheld = bool(data.get("retry_withheld")) or reason == "execution_requires_review"
+            # Never retried: the run may have acted, it needs human review, or
+            # Core could not prove a deadline continuation resumes the same
+            # native session.
+            withheld = (bool(data.get("retry_withheld")) or bool(data.get("continued")) or
+                        reason in WITHHELD_REASONS)
             message = {"id": str(uuid.uuid5(NOTICE_NAMESPACE, data["remote_id"])), "role": "assistant", "state": "completed",
                        "phase": "final_answer", "kind": "notice", "source": "rust-v2-adapter",
                        "parentMessageId": data["remote_id"], "refusal": reason,
@@ -524,7 +537,6 @@ class Ledger:
             elif data.get("origin") == "timer" and not data.get("post") and not data.get("digest"):
                 # Nobody resends a timer: say what failed and what happens next.
                 message["text"] = notices.render(lang, "timer_interrupted" if withheld else
-                                                 "timer_failure_retried" if data.get("readmitted") else
                                                  "timer_failure", label=(data.get("timer") or {}).get("label")
                                                  or "Scheduled task", reason=reason)
             if data.get("steered"):
@@ -546,9 +558,11 @@ class Ledger:
         return message
 
     def technical_audience(self, data):
+        """The owner (and timers, which are the owner's automation) get the
+        technical notice; members of a shared chat get the short one."""
         if data.get("origin") == "timer":
             return True
-        return self.owner_only and (data.get("author") or {}).get("role") in ("owner", "v1_owner")
+        return (data.get("author") or {}).get("role") in (None, "owner", "v1_owner")
 
     def expire_stale(self, max_age_s, now=None):
         """Refuse inputs that waited longer than max_age_s without a Rust window.

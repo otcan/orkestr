@@ -1,42 +1,37 @@
-"""One guarded re-admission of a failed or stranded chat input.
+"""One guarded re-admission of a stranded chat input, or one honest notice.
 
-An input whose own runs all ended without an accepted Deep answer (both
-cancelled after a lapsed lease, a failed Deep, a window that closed before
-its Deep started) used to stay `running` forever or be refused with a notice
-asking the person to resend. Now the adapter itself retries it, exactly once
-and silently, as a fresh turn of the same conversation:
+An input whose attempt ended for good (a terminal Deep, or a window that ended
+before its Deep started) settles instead of staying `running`. It is retried
+automatically, once and silently, only when Core itself proves that nothing of
+the original ran or can still run: the adapter first retires the original Core
+input through the owner route `POST /inputs/<message>/retire`. Core allows that
+only while the inbox row is still queued, no run (Fast or Deep) references
+the message, it is in no open window and no window intent is queued for it
+(store-sqlite `retired_inputs.rs`). That one gate also covers an input Core
+handed to a successor window, an input an owner stop moved to the held
+inputs, and a run that never emitted a journal observation. Only after a
+successful retirement is the input admitted again under fresh keys:
 
-* only an input younger than MAX_AGE_S, measured from its original arrival
-  (a continuation or re-admission never resets that clock);
-* only when the input has no final export and no uncertain delivery, its
-  Deep was never accepted, and its own window is over;
-* the original public and remote IDs stay; the previous Core message, window
-  and runs are kept as an audit record (`readmitted.previous`), and their
-  message IDs stay in `own_messages`, so nothing is mirrored back as web input;
-* a timer occurrence is retried as an ordinary owner message carrying the
-  occurrence's own Core prompt text (read back from the conversation by its
-  exact message ID) under a retry note; its answer still goes through Core's
-  timer outcome rules for the original claim;
-* only when the failed attempt provably never started executing (no Deep run,
-  or a Deep run with no start/progress/question evidence in a fully read
-  journal). A run that started may already have sent mail or posted, so it is
-  never retried: the notice says nothing is retried automatically, and the
-  owner can ask for it. `execution_requires_review` is never retried either;
-* never twice, and not
-  after a deadline continuation (that already was the one automatic retry);
-* never while the input's own window is still live: a cancelled Deep in a
-  live window is an owner stop (or a provider failure), refused as before.
+* younger than MAX_AGE_S from its original `arrived_at` (rows written before
+  this field existed are treated as possibly started and never retried);
+* no final or uncertain export, no accepted Deep, never retried before, not a
+  deadline continuation, and the journal read through Core's current head
+  (a non-streaming snapshot read, not a bounded stream read);
+* never a timer occurrence: Core owns timer retries (`stranded_open.rs`), so
+  the adapter only reports a failed occurrence;
+* the original public and remote IDs stay; the retired Core message, window
+  and runs are kept in `readmitted.previous` and in `own_messages`.
 
-Only when that one retry also fails does the input close with one notice in
-the chat's language (see notices.py) plus an operator ALERT. An input older
-than MAX_AGE_S is never retried or announced: it is settled silently (no
-export) with an ALERT, following the no-historic-replay rule.
+When Core refuses the retirement it still owns the input (for example in a
+successor window): the adapter keeps matching and waiting, at most
+RETIRE_WAIT_S, then closes it as before this change. A terminal Deep always
+has a run, so it is never retried: the input closes with one notice in the
+chat's language plus an operator ALERT. Older than MAX_AGE_S: settled
+silently (no export) with an ALERT (no historic replay).
 
-The same re-admission is available to an operator (`main` below). The command
-only records a request row in the binding's ledger; the live binding worker
-performs every check and the mutation in-process on its own thread, so it is
-serialized with all other work on that input and its exports reach V1's
-change feed like any other.
+The same retirement-gated re-admission is available to an operator (`main`):
+the command records a request row; the live binding worker decides and
+performs it in-process on its own thread.
 """
 import argparse
 import json
@@ -50,12 +45,9 @@ MAX_AGE_S = 24 * 3600
 # A continued row from an adapter that did not record `arrived_at` may have
 # arrived up to one window ceiling before its continuation.
 LEGACY_CONTINUED_MARGIN_S = 5 * 3600
-# Own window still awaiting Core's reconciliation: wait this long for it to close.
-RECONCILIATION_WAIT_S = 600
 # An operator request that cannot be decided within this time is refused.
 REQUEST_MAX_PENDING_S = 600
 REQUESTS_PER_PASS = 4
-RUN_TERMINAL = ("failed", "lost", "cancelled", "blocked", "stopped", "interrupted")
 
 
 def initialize(db):
@@ -117,7 +109,7 @@ def readmit(worker, data, trigger, reason, request_key=None, operator=None):
         data["intake_text"] = carry(worker.ledger, data, data.get("intake_text") or compose(data))
     if "arrived_at" not in data and arrival(data) is not None:
         data["arrived_at"] = arrival(data)
-    for key in RESET_KEYS + ("deep_missing_since", "unstarted_since", "terminal_since", "closed"):
+    for key in RESET_KEYS + ("deep_missing_since", "unstarted_since", "terminal_since", "retry_wait_since", "closed"):
         data.pop(key, None)
     for key in ("message", "window", "fast", "deep"):
         data["keys"][key] = str(uuid.uuid4())
@@ -131,98 +123,76 @@ def readmit(worker, data, trigger, reason, request_key=None, operator=None):
         previous_message=previous["message_id"] or "none")
 
 
-# Journal observations that prove a provider run actually began executing.
-# There is no tool-call evidence in Core's journal, so any of these means the
-# run may already have acted (sent mail, posted, applied) and is never retried.
-STARTED_OBSERVATIONS = ("started", "progress_ref", "approval_requested", "completed_proposal")
-STARTED_LIMIT = 32
-
-
-def note_started(data, events, ids):
-    """Record own runs whose journal shows they began executing."""
-    seen = data.get("started_runs") or []
-    for event in events:
-        payload = event.get("payload_ref_or_safe_payload") or {}
-        observation = payload.get("observation") or {}
-        run = payload.get("run_id")
-        if (payload.get("kind") == "provider_observed" and run in ids and run not in seen and
-                observation.get("kind") in STARTED_OBSERVATIONS and len(seen) < STARTED_LIMIT):
-            seen.append(run)
-    if seen:
-        data["started_runs"] = seen
-
-
-def run_started(data, deep):
-    """Whether this Deep run may have acted: any start evidence, or unknown."""
-    if not isinstance(deep, dict):
-        return True
-    return bool(deep.get("run_id") in (data.get("started_runs") or []) or deep.get("progress") or
-                (data.get("activity") or {}).get("run_id") == deep.get("run_id"))
-
-
 def recover(worker, data, reason, started=False):
-    """The input's own attempt failed for good. Retry it once, or close it.
+    """The input's attempt ended for good. Retry it once, or close it.
 
-    `started` says the failed Deep run may have acted; such an input is never
-    retried (one notice saying so, plus an ALERT). Returns True when handled
-    (retried, waiting for Core's reconciliation, or settled); raises the
-    worker's Refused otherwise."""
+    `started`: a Deep run of this input exists or may have acted. Returns True
+    when handled (retried, waiting, or settled); raises the worker's Refused
+    (one notice + ALERT) otherwise."""
     from .worker import Refused
     now = time.time()
     if too_old(data, now):
         worker.ledger.finish_silently(data, "suppressed")
         log(worker, "input_failed_too_old", data, alert=True, reason=reason)
         return True
-    if started:
-        data["retry_withheld"] = "run_started"  # Side effects possible: a human decides.
+    timer = data.get("origin") == "timer"
+    if started or ("arrived_at" not in data and not timer):
+        data["retry_withheld"] = "run_started" if started else "pre_upgrade_row"
         raise Refused(reason)
-    if data.get("readmitted") or data.get("continued"):
-        raise Refused(reason)  # The one automatic retry also failed.
-    if blocking_export(worker.ledger, data):
+    if timer:
+        raise Refused(reason)  # Core retries timer occurrences itself.
+    if data.get("readmitted") or data.get("continued") or blocking_export(worker.ledger, data):
         raise Refused(reason)
-    state = own_window_state(worker, data)
-    if state == "reconciliation_required":
-        since = data.setdefault("terminal_since", now)
-        if since == now:
-            worker.ledger.save(data)
-        if now - since < RECONCILIATION_WAIT_S:
-            return True
-        raise Refused(reason)
-    if state != "ended":
-        raise Refused(reason)
-    if data.get("origin") == "timer":
-        text = timer_text(worker, data)
-        if text is None:
-            raise Refused(reason)
-        label = (data.get("timer") or {}).get("label") or "Scheduled task"
-        data["intake_text"] = TIMER_RETRY_NOTE % label + text
+    since = data.setdefault("retry_wait_since", now)
+    if since == now:
+        worker.ledger.save(data)
+    if not journal_caught_up(worker, data) or own_window_state(worker, data) != "ended":
+        return wait_or_close(data, now, reason)
+    if retire_original(worker, data) != "retired":
+        return wait_or_close(data, now, reason)  # Core still owns it: keep matching.
     readmit(worker, data, "automatic", reason)
     return True
 
 
-TIMER_RETRY_NOTE = ("[Automatic retry of the scheduled task \"%s\": its previous run ended without a result "
-                    "because of a technical failure. Run the task below once now.]\n\n")
+# Core still owns (or may still run) the input: keep matching at most this
+# long, then close it with the pre-change refusal.
+RETIRE_WAIT_S = 3600
 
 
-def timer_text(worker, data):
-    """The timer occurrence's own prompt, read back from Core by its exact ID."""
-    intake = data.get("intake") or {}
-    if type(intake.get("sequence")) is not int or not intake.get("message_id"):
-        return None
+def wait_or_close(data, now, reason):
+    from .worker import Refused
+    if now - data.get("retry_wait_since", now) < RETIRE_WAIT_S:
+        return True
+    raise Refused(reason)
+
+
+def journal_caught_up(worker, data):
+    """Core's current journal head (a non-streaming snapshot read) is no
+    later than this input's own cursor: no unread run evidence remains."""
+    snapshot = worker.call("GET", "")
+    head = snapshot.get("last_sequence") if isinstance(snapshot, dict) else None
+    cursor = data.get("cursor")
+    return type(head) is int and type(cursor) is int and head <= cursor
+
+
+def retire_original(worker, data):
+    """'retired' when Core retired the original input, else 'conflict'."""
     from .rust_client import ClientError
+    from .worker import transient
+    message = (data.get("intake") or {}).get("message_id")
+    if not message:
+        return "retired" if "intake" not in data and "window" not in data else "conflict"
+    body = {"request_key": ("adapter-readmit:" + message)[:128], "reason": "adapter_readmit"}
     try:
-        value = worker.call("GET", "?after=%d&limit=1" % (intake["sequence"] - 1))
+        status, value = worker.client.request("POST", "/inputs/%s/retire" % message, body=body, allowed=(200, 201))
     except ClientError as error:
-        from .worker import transient
         if transient(error):
             raise
-        return None  # A definite refusal: the prompt cannot be proven, no retry.
-    rows = value.get("messages") if isinstance(value, dict) else None
-    if (not isinstance(rows, list) or len(rows) != 1 or not isinstance(rows[0], dict) or
-            rows[0].get("message_id") != intake["message_id"] or not isinstance(rows[0].get("text"), str) or
-            not rows[0]["text"].strip()):
-        return None
-    return rows[0]["text"]
+        return "conflict"  # 409 (still queued elsewhere, held, run, open window) or 404.
+    if not isinstance(value, dict) or value.get("message_id") != message or value.get("state") != "retired":
+        return "conflict"
+    data["retired_original"] = {k: value.get(k) for k in ("retirement_id", "message_id", "event_id", "retired_at_ms")}
+    return "retired"
 
 
 def own_window_state(worker, data):
@@ -237,20 +207,9 @@ def own_window_state(worker, data):
 
 
 # Operator re-admission ------------------------------------------------------
-def run_states(worker, runs):
-    """Phase of every own run, by run ID, from its own role's status route."""
-    phases = {}
-    for run in runs:
-        for route in ("/execution", "/fast/execution"):
-            status, value = worker.client.request("GET", "%s?run_id=%s" % (route, run), allowed=(200, 404))
-            if status == 200 and isinstance(value, dict) and value.get("run_id") == run:
-                phases[run] = (route, value.get("phase"))
-                break
-    return phases
-
-
 def check(worker, data, now):
-    """Why the operator re-admission of `data` is refused, or None."""
+    """Why the operator re-admission of `data` is refused before Core's
+    retirement gate, or None."""
     if data.get("origin"):
         return "not_chat_input"
     if data.get("phase") == "completed" or data.get("settled"):
@@ -265,16 +224,8 @@ def check(worker, data, now):
         return "deep_accepted"
     if blocking_export(worker.ledger, data):
         return "final_or_uncertain_export"
-    current = worker.call("GET", "/window", allowed=(200, 204))
-    if isinstance(current, dict) and current.get("state") != "closed":
+    if own_window_state(worker, data) != "ended":
         return "window_live"
-    runs = list(data.get("matched_runs") or [])
-    phases = run_states(worker, runs)
-    if len(phases) != len(runs):
-        return "run_state_unknown"
-    for route, phase in phases.values():
-        if phase not in RUN_TERMINAL and not (route == "/fast/execution" and phase == "completed"):
-            return "run_not_terminal"
     return None
 
 
@@ -298,6 +249,14 @@ def drive(worker):
                 continue
             reason = "stale_request:" + type(error).__name__
         if reason is None:
+            try:
+                retired = retire_original(worker, data)
+            except Exception:
+                if now - request.get("requested_at", now) < REQUEST_MAX_PENDING_S:
+                    continue
+                retired = "conflict"
+            reason = None if retired == "retired" else "core_still_owns_input"
+        if reason is None:
             readmit(worker, data, "operator", "operator_request", key, request.get("operator"))
             request.update(state="readmitted", input_id=data["remote_id"])
         else:
@@ -313,6 +272,10 @@ def request(path, public_id, request_key, operator):
     """Record one operator request (idempotent by request key). Returns its row."""
     if os.path.islink(path) or not os.path.isfile(path):
         raise ValueError("ledger_path")
+    if os.stat(path).st_uid != os.geteuid():
+        # Run as the adapter service user: a SQLite journal created by another
+        # user (for example root through sudo) would lock the service out.
+        raise ValueError("run_as_ledger_owner")
     db = sqlite3.connect(path, timeout=5)
     try:
         with db:

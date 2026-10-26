@@ -718,8 +718,7 @@ class Worker:
             return  # Only auto_steer.drive settles a frozen steer; never admitted here.
         if not admit_input(self, data, merge_burst=not early_fast_eligible(self, data)):
             return
-        if (data.get("origin") == "timer" and "window" not in data and "window_request" not in data and
-                not data.get("readmitted")):  # A re-admitted timer is an ordinary message.
+        if data.get("origin") == "timer" and "window" not in data and "window_request" not in data:
             if not self.timer_window(data):
                 return
         if not admit_window(self, data):
@@ -771,7 +770,6 @@ class Worker:
             raise Refused("too_many_runs")
         data["matched_runs"] = sorted(ids)
         data["cursor"] = max([data["cursor"]] + [event["sequence"] for event in events])
-        recovery.note_started(data, events, ids)
         self.ledger.save(data)
         # Owner-only Fast questions/status/payload/acceptance belong solely
         # to the guarded original-source watch, including on this serial pass.
@@ -1056,9 +1054,10 @@ class Worker:
         """Settle an input whose own Deep ended without an accepted answer, or
         whose window ended before its Deep started. Returns True when handled.
 
-        Only a Deep that provably never started may be retried automatically:
-        the journal has no tool-call evidence, so a started run may already
-        have sent mail or posted something (see recovery.py)."""
+        A Deep run of the input exists, so Core will not retire it and it is
+        never retried (it may already have acted): one notice. Only an input
+        whose Deep never existed goes through the retirement-gated retry
+        (see recovery.py)."""
         accepted = data.get("accepted") or {}
         if "deep" in accepted or "deep_accept_request" in data:
             return False  # Its acceptance is reconciled by the ordinary path.
@@ -1073,7 +1072,7 @@ class Worker:
             failure = (deep.get("failure") or {}).get("class")
             if isinstance(failure, str) and re.fullmatch("[a-z_]{1,32}", failure):
                 reason += ":" + failure  # The provider's closed failure class.
-            started = recovery.run_started(data, deep)
+            started = True
         elif data.get("origin") == "timer":
             return False  # timer_without_deep owns a timer without its Deep.
         elif ids:

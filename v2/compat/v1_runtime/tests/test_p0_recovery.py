@@ -142,82 +142,60 @@ class GulsahPeer(QueuePeer):
         return super().request(method, route, body=body, allowed=allowed)
 
 
-class StrandedInputTests(unittest.TestCase):
+class Base(unittest.TestCase):
+    peer_class = GulsahPeer
+
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
-        self.ledger = Ledger(Path(temporary.name) / "ledger.sqlite3", {"test_scope": "gulsah"})
+        self.ledger = Ledger(Path(temporary.name) / "ledger.sqlite3", {"test_scope": "stranded"})
         self.data, _ = self.ledger.enqueue(dict(publicMessageId="member-msg", publicThreadId="thread", chatId="chat",
             accountId="account", text="Merhaba, bu profili bugün güncelleyebilir misin? Teşekkürler"),
             author=dict(role="member", id="synthetic-member", label="Member"))
-        self.peer = GulsahPeer()
+        self.peer = self.peer_class()
         self.worker = Worker(self.peer, self.ledger)
 
     def notices(self):
         return [m for m in self.ledger.messages() if m.get("kind") == "notice"]
 
-    def passes(self, passes=2):
+    def passes(self, count=2):
         err = io.StringIO()
         with contextlib.redirect_stderr(err):
-            for _ in range(passes):
+            for _ in range(count):
                 self.worker.run_once(fixture.Stop())
         return err.getvalue()
 
-    def test_started_deep_cancelled_with_closed_window_settles_with_one_localized_notice(self):
-        # The live state: the Deep had been seen running before the lease lapsed.
-        self.passes(1)
-        data = self.ledger.next_input()
-        data["activity"] = {"run_id": "deep-run", "phase": "running"}
-        self.ledger.save(data)
+    def messages_sent(self):
+        return len([r for r, _ in self.peer.mutations if r == "/messages"])
+
+    def retires(self):
+        return [r for r, _ in self.peer.mutations if r.endswith("/retire")]
+
+
+class StrandedInputTests(Base):
+    def test_cancelled_fast_and_deep_in_a_closed_window_settle_with_one_localized_notice(self):
         log = self.passes(2)
         data = self.ledger.input(self.data["remote_id"])
         self.assertEqual(data["phase"], "completed", "never stranded in running")
         self.assertEqual(data["refused"]["reason"], "deep_run_cancelled")
-        self.assertNotIn("readmitted", data, "a started run may have acted: never retried")
+        self.assertNotIn("readmitted", data, "a Deep run existed: never retried")
         (notice,) = self.notices()
         self.assertEqual(data["notice_language"], "tr")
         self.assertEqual(notice["text"], notices.TEMPLATES["failure"]["tr"])
         self.assertIn("ALERT orkestr-v2-wa-adapter input_refused", log)
-        self.assertEqual(len([r for r, _ in self.peer.mutations if r == "/messages"]), 1)
+        self.assertEqual(self.messages_sent(), 1)
+        self.assertEqual(self.retires(), [])
 
-    def test_unstarted_failure_retries_once_silently_then_notices(self):
-        log = self.passes(2)
-        data = self.ledger.next_input()
-        self.assertEqual(data["readmitted"]["trigger"], "automatic")
-        self.assertEqual(data["phase"], "queued")
-        self.assertEqual(self.notices(), [])
-        self.assertIn("input_readmitted", log)
-        self.assertNotIn("ALERT", log)
-        log = self.passes(3)  # The retry fails the same way.
-        self.assertEqual(self.ledger.input(self.data["remote_id"])["phase"], "completed")
-        self.assertEqual(len(self.notices()), 1)
-        self.assertIn("ALERT orkestr-v2-wa-adapter input_refused", log)
-        self.assertEqual(len([r for r, _ in self.peer.mutations if r == "/messages"]), 2)
-
-    def test_unstarted_retry_that_succeeds_sends_no_notice(self):
+    def test_owner_stop_is_never_retried(self):
+        # An owner stop cancels the Deep and Core holds the input: no retry.
+        self.peer.retire_state = "retired"  # Even if Core would allow it.
         self.passes(2)
-        self.peer.deep_phase = self.peer.fast_phase = None
-        self.peer.current = None
-        self.peer.accepted.clear()
-        self.passes(2)
-        self.assertEqual(self.notices(), [])
-        self.assertEqual(self.ledger.messages()[-1]["text"], "deep result")
-
-    def test_older_than_a_day_is_never_retried_or_announced(self):
-        self.passes(1)
-        data = self.ledger.next_input()
-        data["arrived_at"] = time.time() - recovery.MAX_AGE_S - 1
-        self.ledger.save(data)
-        log = self.passes(2)
         data = self.ledger.input(self.data["remote_id"])
         self.assertEqual(data["phase"], "completed")
-        self.assertEqual(data["settled"]["outcome"], "suppressed")
         self.assertNotIn("readmitted", data)
-        self.assertEqual(self.notices(), [])
-        self.assertIn("ALERT orkestr-v2-wa-adapter input_failed_too_old", log)
+        self.assertEqual(self.messages_sent(), 1)
 
     def test_requires_review_is_never_retried_and_says_so_to_the_owner(self):
-        self.ledger.owner_only = True
         owner, _ = self.ledger.enqueue(dict(publicMessageId="owner-msg", publicThreadId="thread", chatId="chat",
             accountId="account", text="Send the four drafts now, please"), author=dict(role="owner", id="o", label="O"))
         self.ledger.finish_silently(self.ledger.input(self.data["remote_id"]), "suppressed")
@@ -225,11 +203,107 @@ class StrandedInputTests(unittest.TestCase):
             message = self.ledger.refuse(self.ledger.input(owner["remote_id"]), "execution_requires_review")
         self.assertEqual(message["text"], notices.render("en", "interrupted_owner", reason="execution_requires_review"))
         self.assertIn("nothing is retried", message["text"])
-        self.assertNotIn("readmitted", self.ledger.input(owner["remote_id"]))
 
 
-class TimerRetryTests(unittest.TestCase):
-    """Nobody resends a timer: an unstarted one is retried once; otherwise a timer notice."""
+class NoRunPeer(QueuePeer):
+    """An admitted input with no run of its own; its window has closed."""
+
+    def __init__(self):
+        super().__init__()
+        self.foreign = True
+        self.current = dict(window_id="window", state="closed", conversation_id="conversation")
+
+
+class UnstartedInputTests(Base):
+    peer_class = NoRunPeer
+
+    def stranded(self):
+        self.passes(1)
+        data = self.ledger.next_input()
+        data["unstarted_since"] -= 61
+        self.ledger.save(data)
+        return data
+
+    def test_successor_window_handoff_never_duplicates_the_run(self):
+        """Core moved the joined-but-unrun input to a successor window: its
+        retirement is refused, so the adapter keeps matching the original."""
+        self.stranded()
+        self.passes(2)
+        data = self.ledger.next_input()
+        self.assertEqual(data["phase"], "running")
+        self.assertNotIn("readmitted", data)
+        self.assertEqual(len(self.retires()), 2, "asked Core each pass, refused each time")
+        self.peer.foreign, self.peer.current = False, None  # The successor runs it.
+        self.passes(2)
+        self.assertEqual(self.messages_sent(), 1, "exactly one Core message, one run")
+        self.assertEqual(self.ledger.messages()[-1]["text"], "deep result")
+        self.assertEqual(self.notices(), [])
+
+    def test_held_or_owned_input_closes_after_the_bound_without_a_retry(self):
+        self.stranded()
+        self.passes(1)
+        data = self.ledger.next_input()
+        data["retry_wait_since"] -= recovery.RETIRE_WAIT_S + 1
+        self.ledger.save(data)
+        log = self.passes(1)
+        data = self.ledger.input(self.data["remote_id"])
+        self.assertEqual(data["refused"]["reason"], "window_setup_failed")
+        self.assertNotIn("readmitted", data)
+        self.assertEqual(len(self.notices()), 1)
+        self.assertIn("ALERT orkestr-v2-wa-adapter input_refused", log)
+        self.assertEqual(self.messages_sent(), 1)
+
+    def test_retired_original_is_readmitted_once_silently_and_its_retry_answers(self):
+        self.stranded()
+        self.peer.retire_state = "retired"
+        log = self.passes(1)
+        data = self.ledger.next_input()
+        self.assertEqual(data["readmitted"]["trigger"], "automatic")
+        self.assertEqual(data["retired_original"]["message_id"], "message")
+        self.assertIn("input_readmitted", log)
+        self.assertNotIn("ALERT", log)
+        self.assertEqual(self.notices(), [])
+        self.peer.foreign, self.peer.current = False, None
+        self.passes(2)
+        self.assertEqual(self.ledger.messages()[-1]["text"], "deep result")
+        self.assertEqual(self.notices(), [])
+        self.assertEqual(self.messages_sent(), 2)
+
+    def test_a_timed_out_stream_read_is_not_proof_of_the_journal_head(self):
+        self.stranded()
+        self.peer.retire_state = "retired"
+        self.peer.head = 99  # Core's snapshot is ahead of everything read.
+        self.passes(2)
+        self.assertNotIn("readmitted", self.ledger.next_input())
+        self.assertEqual(self.retires(), [], "never asks Core to retire before catching up")
+
+    def test_pre_upgrade_row_without_arrival_is_never_retried(self):
+        data = self.stranded()
+        data.pop("arrived_at")
+        self.ledger.save(data)
+        self.peer.retire_state = "retired"
+        self.passes(1)
+        data = self.ledger.input(self.data["remote_id"])
+        self.assertEqual(data["phase"], "completed")
+        self.assertEqual(data["retry_withheld"], "pre_upgrade_row")
+        self.assertEqual(self.retires(), [])
+        self.assertEqual(len(self.notices()), 1)
+
+    def test_older_than_a_day_is_never_retried_or_announced(self):
+        data = self.stranded()
+        data["arrived_at"] = time.time() - recovery.MAX_AGE_S - 1
+        self.ledger.save(data)
+        self.peer.retire_state = "retired"
+        log = self.passes(1)
+        data = self.ledger.input(self.data["remote_id"])
+        self.assertEqual(data["settled"]["outcome"], "suppressed")
+        self.assertNotIn("readmitted", data)
+        self.assertEqual(self.notices(), [])
+        self.assertIn("ALERT orkestr-v2-wa-adapter input_failed_too_old", log)
+
+
+class TimerFailureTests(unittest.TestCase):
+    """Nobody resends a timer and Core owns its retry: one timer notice."""
 
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
@@ -237,44 +311,18 @@ class TimerRetryTests(unittest.TestCase):
         self.ledger = Ledger(Path(temporary.name) / "ledger.sqlite3", {"test_scope": "timer"})
         self.data, _ = self.ledger.enqueue_timer(dict(message_id=identity(7), event_id=identity(8), sequence=5,
             request_key="timer:synthetic", namespace="ns", claim_id="claim", label="Morning pass"))
-        self.data.update(phase="running", window={"dispatched_by": "server_timer_queue"}, matched_runs=[])
-        self.ledger.save(self.data)
-        self.calls = []
-        worker = self
+        self.worker = object()  # recover() must not touch Core for a timer.
 
-        class FakeWorker:
-            ledger = self.ledger
-            client = type("C", (), {"conversation": "synthetic"})()
-
-            def call(self, method, route, body=None, allowed=(200,)):
-                worker.calls.append(route)
-                if route == "/window":
-                    return None  # 204: no live window
-                if route.startswith("?after="):
-                    return dict(messages=[dict(message_id=identity(7), text="Run the morning pass.", sequence=5)])
-                raise AssertionError(route)
-
-            def window_ended(self, data):
-                return True
-        self.worker = FakeWorker()
-
-    def test_unstarted_timer_is_retried_once_with_its_own_prompt(self):
-        with quiet():
-            self.assertTrue(recovery.recover(self.worker, self.data, "timer_window_ended_without_run"))
-        data = self.ledger.input(self.data["remote_id"])
-        self.assertEqual(data["origin"], "timer")
-        self.assertEqual(data["phase"], "queued")
-        self.assertTrue(data["intake_text"].endswith("Run the morning pass."))
-        self.assertIn("Morning pass", data["intake_text"])
-        self.assertNotIn("intake", data)
+    def test_unstarted_timer_is_not_resent_by_the_adapter(self):
         with self.assertRaises(Refused):
-            recovery.recover(self.worker, data, "timer_window_ended_without_run")
+            recovery.recover(self.worker, self.data, "timer_window_ended_without_run")
         with quiet():
-            message = self.ledger.refuse(data, "timer_window_ended_without_run", alert=True)
-        self.assertTrue(message["text"].startswith("⏰ Morning pass failed twice"))
+            message = self.ledger.refuse(self.data, "timer_window_ended_without_run", alert=True)
+        self.assertTrue(message["text"].startswith("\u23f0 Morning pass failed"))
         self.assertNotIn("send it again", message["text"])
+        self.assertNotIn("readmitted", self.ledger.input(self.data["remote_id"]))
 
-    def test_started_timer_is_not_retried_and_says_so(self):
+    def test_started_timer_says_it_is_not_retried(self):
         with self.assertRaises(Refused):
             recovery.recover(self.worker, self.data, "deep_run_cancelled", started=True)
         with quiet():
@@ -295,6 +343,7 @@ class OperatorReadmitTests(fixture.IntakeBase):
 
     def test_readmits_once_refuses_older_and_is_idempotent(self):
         data = self.stranded()
+        self.peer.retire_state = "retired"  # Core proves nothing of it ran.
         first = recovery.request(self.ledger.path, "stranded", "op-1", "operator")
         self.assertEqual(first["state"], "requested")
         self.assertTrue(recovery.request(self.ledger.path, "stranded", "op-1", "operator")["duplicate"])
@@ -319,6 +368,16 @@ class OperatorReadmitTests(fixture.IntakeBase):
         with self.assertRaisesRegex(ValueError, "older_than_24h"):
             recovery.request(self.ledger.path, "stranded", "op-old", "operator")
         self.assertNotIn("readmitted", self.row("stranded"))
+
+    def test_core_refusing_retirement_refuses_the_operator_request(self):
+        self.stranded()  # A cancelled run references it: Core keeps it.
+        recovery.request(self.ledger.path, "stranded", "op-run", "operator")
+        with quiet():
+            recovery.drive(self.worker)
+        self.assertNotIn("readmitted", self.row("stranded"))
+        with self.ledger.connect() as db:
+            state = json.loads(db.execute("SELECT data FROM readmit_requests").fetchone()[0])
+        self.assertEqual((state["state"], state["reason"]), ("refused", "core_still_owns_input"))
 
     def test_live_window_or_final_refuses_in_the_worker(self):
         self.stranded()
@@ -356,7 +415,8 @@ class LanguageTests(unittest.TestCase):
             data = ledger.next_input()
             with quiet():
                 message = ledger.refuse(dict(data, text="ok"), "window_refused")
-            self.assertEqual(message["text"], notices.TEMPLATES["failure"]["tr"])
+            # The owner gets the technical notice on every binding policy.
+            self.assertEqual(message["text"], notices.render("tr", "failure_owner", reason="window_refused"))
             ledger.owner_only = True
             second = ledger.input(ledger.enqueue(dict(publicMessageId="de", publicThreadId="t", chatId="c",
                 accountId="a", text="Bitte prüfe das noch einmal, danke"), author=dict(role="owner", id="o",
@@ -364,6 +424,16 @@ class LanguageTests(unittest.TestCase):
             with quiet():
                 message = ledger.refuse(second, "window_refused")
             self.assertEqual(message["text"], notices.render("de", "failure_owner", reason="window_refused"))
+
+    def test_a_continuation_core_did_not_accept_is_reported_as_interrupted(self):
+        with tempfile.TemporaryDirectory() as directory:
+            ledger = Ledger(Path(directory) / "l.sqlite3", {"test_scope": "cont"})
+            data, _ = ledger.enqueue(dict(publicMessageId="p", publicThreadId="t", chatId="c", accountId="a",
+                                          text="Please finish the report"), author=dict(role="owner", id="o", label="O"))
+            data["continued"] = {"previous_message_id": "m", "at": 1}
+            with quiet():
+                message = ledger.refuse(data, "continuation_admission_requires_review")
+            self.assertIn("nothing is retried", message["text"])
 
     def test_every_template_has_all_languages(self):
         for key, table in notices.TEMPLATES.items():
@@ -373,21 +443,28 @@ class LanguageTests(unittest.TestCase):
 
 
 class DuplicateAndStatusTests(unittest.TestCase):
-    def test_deep_final_that_repeats_fast_is_detected(self):
-        data = {"first_response": {"echo": "you re welcome happy to help"}}
-        self.assertTrue(repeats_fast(data, "You're welcome! Happy to help."))
-        self.assertFalse(repeats_fast(data, "The RDB value is a system bug; I fixed the mapping and redeployed."))
+    def test_only_an_exact_digit_free_repeat_of_fast_is_suppressed(self):
+        def fast(text):
+            from v2.compat.v1_runtime.first_response import echo_key
+            return {"first_response": {"echo": echo_key(text)}}
+        self.assertTrue(repeats_fast(fast("You're welcome, happy to help!"), "You're welcome, happy to help."))
+        for before, after in (("See you at 10:00.", "See you at 11:00."), ("Total 1,250 EUR", "Total 1,520 EUR"),
+                              ("Meet on Monday at gate B12", "Meet on Monday at gate B14"),
+                              ("We meet on Monday", "We meet on Tuesday")):
+            with self.subTest(after=after):
+                self.assertFalse(repeats_fast(fast(before), after))
+        steered = dict(fast("Thanks, noted."), steered=["other"])
+        self.assertFalse(repeats_fast(steered, "Thanks, noted."))
         self.assertFalse(repeats_fast({}, "You're welcome!"))
 
-    def test_missing_run_notice_is_not_sent_while_core_runs_a_deep(self):
+    def test_missing_run_notice_only_waits_while_this_inputs_match_lags(self):
         from v2.compat.v1_runtime import activity
-        busy = type("W", (), {})()
-        busy.client = type("C", (), {"request": staticmethod(
-            lambda method, route, allowed=(200,): (200, dict(phase="running", run_id="synthetic")))})()
-        self.assertTrue(activity.conversation_busy(busy))
-        idle = type("W", (), {})()
-        idle.client = type("C", (), {"request": staticmethod(lambda method, route, allowed=(200,): (204, None))})()
-        self.assertFalse(activity.conversation_busy(idle))
+        def worker(head):
+            value = type("W", (), {})()
+            value.call = lambda method, route, body=None, allowed=(200,): dict(last_sequence=head)
+            return value
+        self.assertTrue(activity.match_lagging(worker(10), {"cursor": 4}))
+        self.assertFalse(activity.match_lagging(worker(4), {"cursor": 4}))
 
 
 if __name__ == "__main__":

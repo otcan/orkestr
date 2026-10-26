@@ -247,12 +247,8 @@ class MultiBindingTests(Harness):
 
 class AcknowledgementTests(Harness):
     def test_delivery_ack_settles_prunes_and_frees_capacity(self):
-        from unittest.mock import patch
-        from v2.compat.v1_runtime import ledger as ledger_module
-        # The hard bound (not the soft max_outstanding, which only queues).
-        self.enterContext(patch.object(ledger_module, "HARD_MAX_OUTSTANDING", 2))
         ledger = self.binding(1).ledger
-        ledger.max_outstanding = 1
+        ledger.max_outstanding = 2
         self.finish(1)
         self.post(1, body=self.body(1, publicMessageId="second"))
         self.assertEqual(self.post(1, body=self.body(1, publicMessageId="third"))[1]["error"], "binding_capacity_reached")

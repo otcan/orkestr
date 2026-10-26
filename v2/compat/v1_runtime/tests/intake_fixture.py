@@ -134,6 +134,7 @@ class IntakeBase(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.ledger = Ledger(Path(temporary.name) / "ledger.sqlite3", {"test_scope": "intake"})
+        self.ledger.owner_only = True  # As the registry sets it for owner_only bindings.
         self.peer = IntakePeer()
         self.worker = self.new_worker()
 

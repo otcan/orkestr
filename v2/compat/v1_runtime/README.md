@@ -90,7 +90,7 @@ Each binding is `<bindings_dir>/<remote_thread_id>.json`:
 | `fast_reply_policy` | Optional: `legacy` (default) preserves the progress-dependent Fast policy. Explicit `owner_only` enables immediate Fast replies for a group the operator verified has only owner-visible recipients; participant grants do not establish that visibility. `disabled` suppresses Fast replies (for example a coordinator chat). |
 | `auto_steer` | Optional: `off` (default), `question` or `running`; enable per binding. See "Auto-steer" below. Adapters before this field refuse a binding that contains it (`binding_fields`). |
 | `attachments` | Accept inbound attachments for this binding |
-| `max_outstanding_inputs` | 1–64 soft limit: inputs above it are accepted and queued (`capacity_queued`), never refused; only 64 unsettled chat inputs (`HARD_MAX_OUTSTANDING`) answer 409 `binding_capacity_reached` |
+| `max_outstanding_inputs` | 1–64 unsettled inputs before intake answers 409. With `fast_reply_policy: "owner_only"` it is a soft limit: inputs above it are accepted and queued (`capacity_queued`) and only 64 unsettled chat inputs (`HARD_MAX_OUTSTANDING`) answer 409 `binding_capacity_reached` |
 | `max_input_age_seconds` | Optional, 60–604800 (default 1800): how long an input may wait without a Rust window before it is refused as `input_expired` |
 | `participants` | Optional (default `[]`): other people in the group, see [Group participants](#group-participants) |
 | `owner_label` | Optional (default `"Owner"`): the owner's label once the binding has participants |
@@ -285,10 +285,11 @@ message's Fast starts only after the previous one is accepted or stopped
 (`apps/server/src/owned_execution/fast.rs` `run_fast`). The adapter accepts
 each Fast as soon as it is proposed, so it is not the gate.
 
-A short Deep final that only repeats the exported Fast reply (normalized word
-similarity of at least 0.85, both at most 600 characters) is exported as
-`NO_REPLY` instead of a second near-identical message
-(`deep_final_suppressed`). The comparison text is pruned at settlement.
+A short Deep final that is exactly the exported Fast reply after
+normalization (lowercase words, at most 600 characters) is exported as
+`NO_REPLY` (`deep_final_suppressed`). Any digit in either text, or messages
+steered into the turn, disable this, so a correction ("11:00", "1,520",
+"B14") is always sent. The comparison text is pruned at settlement.
 
 ### Bursts
 
@@ -414,66 +415,72 @@ adapter version are closed with a notice the same way.
 A V1 build without acknowledgements never settles anything, so the adapter
 then behaves exactly like the pilot: at most `max_outstanding_inputs` inputs.
 
-## One automatic retry, then one honest notice
+## Stranded inputs: Core-gated retry, then one honest notice
 
-An input whose own attempt failed for good is retried once, silently, by the
-adapter itself (`recovery.py`), never by asking the person to resend:
+A terminal Deep without an accepted answer, or a window that ended before
+the input's Deep started, settles the input (`recovery.py`) instead of
+leaving it `running` behind a Fast wait.
 
-* Only when the attempt provably never started executing: no Deep run of its
-  own, or a terminal Deep with no `started`/progress/question evidence in a
-  fully read journal and never seen running. Core's journal has no tool-call
-  evidence, so a run that started may already have sent mail or posted; it
-  is never retried, and neither is `execution_requires_review`.
-* Only younger than 24 h from the original arrival (`arrived_at`; a
-  continuation or retry never resets it), with no final or uncertain export,
-  no accepted Deep, and the input's own window over (a cancelled Deep in a
-  live window is an owner stop). A window awaiting Core's reconciliation is
-  waited for (10 min).
-* Never after a deadline continuation, never twice. Timer occurrences are
-  retried as an ordinary message carrying the occurrence's own Core prompt
-  (read back by its exact message ID) under a retry note.
-* The retry keeps the public and remote IDs; the previous Core message,
-  window and runs are kept in `readmitted.previous` and in `own_messages`.
-
-If the retry also fails, or no safe retry exists, the input closes with one
-notice in the chat's language plus `ALERT orkestr-v2-wa-adapter
-input_refused` (timers: `input_failed`). Older than 24 h: settled silently
-(`suppressed`, no export) with `ALERT … input_failed_too_old`.
+* A terminal Deep always has a run, so it is never retried (it may already
+  have sent mail or posted): one notice plus `ALERT … input_refused`. An owner
+  stop is a terminal Deep too.
+* An input whose Deep never existed is retried once, silently, only after
+  Core retired the original input (`POST /inputs/<message>/retire`). Core
+  allows that only while the inbox row is queued, no run references the
+  message, it is in no open window and has no queued window intent, so an
+  input Core handed to a successor window, an input an owner stop moved to
+  the held inputs, or one any run touched is never duplicated. Also required:
+  younger than 24 h from `arrived_at` (rows written before that field existed
+  are never retried), no final or uncertain export, the journal read through
+  Core's head (a non-streaming snapshot read), never retried or continued
+  before. While Core refuses the retirement the adapter keeps matching the
+  original for up to an hour, then refuses as before this change.
+* Timer occurrences are never re-sent by the adapter; Core owns their retry.
+* Older than 24 h: settled silently (`suppressed`, no export) with
+  `ALERT … input_failed_too_old`.
 
 A Deep stop counts as the window's work deadline (and so gets the one-time
 `continued` turn) only when `work_deadline_ms` had passed, within 30 s, when
 the stop was first seen; a closed window alone (a lapsed lease, a failed
-reconciliation) is not deadline evidence.
+reconciliation) is not deadline evidence. The continuation is admitted only if
+Core proves the same native session resumes: Core's intake refuses it unless
+the source run's Deep session binding is still current and the provider
+generation unchanged (`store-sqlite/src/intake.rs`). A refused or unproven
+continuation closes with the "interrupted, nothing is retried" notice.
 
 ### Operator re-admission
 
+Run as the adapter service user (the ledger's owner), never as another user
+through `sudo`: a SQLite journal created by another user would lock the
+service out. The command refuses when its user does not own the ledger.
+
 ```
-sudo python3 -I -B -m v2.compat.v1_runtime.recovery --ledger <ledger.sqlite3> \
+PYTHONDONTWRITEBYTECODE=1 python3 -I -B -m v2.compat.v1_runtime.recovery --ledger <ledger.sqlite3> \
     --public-id <publicMessageId> --request-key <stable-key> --operator <name>
 ```
 
-(run from the installed release directory, with `PYTHONDONTWRITEBYTECODE=1`).
-The command only records a request row (`readmit_requests`); the live binding
-worker decides and performs it on its own thread, so the re-admission is
-serialized with the binding and its exports reach `/changes`. It refuses an
-input older than 24 h, completed or settled, already re-admitted, held by a
-steer, with an accepted Deep, a final or uncertain export, a live window, or
-any own run that is not terminal (or unknown). One request per input;
-repeating the same key returns the recorded outcome.
+(from the installed release directory). The command only records a request
+row (`readmit_requests`); the live binding worker decides and performs it on
+its own thread. It refuses an input older than 24 h, completed or settled,
+already re-admitted, held by a steer, with an accepted Deep, a final or
+uncertain export, or a live window, and then requires the same Core
+retirement as above (`core_still_owns_input` otherwise). One request per
+input; repeating the same key returns the recorded outcome.
 
 ## Notices
 
 Every notice follows the chat's language (English, Turkish, German), detected
 from recent owner/member WhatsApp text (`notices.py`, kept as
 `ledger_meta.chat_language`, no text) or the input's own text; anything else
-is English. Wording rules: no blame, no resend request for a plain chat
-audience, honest about what happened. The verified owner of an owner-only
-chat gets the technical reason. Templates: `failure`, `failure_owner`,
-`interrupted_owner` (never retried), `timer_failure`,
-`timer_failure_retried`, `timer_interrupted`, `steered`, `continue`,
+is English. Wording rules: no blame, no promise nothing keeps, honest about
+what happened. Members of a shared chat get the short `failure` notice; the
+owner (any binding policy) and timers get the technical reason. Templates:
+`failure`, `failure_owner`, `interrupted_owner` (never retried),
+`timer_failure`, `timer_interrupted`, `steered`, `continue`,
 `steer_unknown`, `steer_queued`, `policy`, `activity_running`,
-`activity_missing`. The missing-run status is not sent (and not alerted)
-while Core reports a live Deep run in the conversation.
+`activity_missing`. The missing-run status is not sent while this input's own
+journal match lags Core's head (snapshot `last_sequence` past its cursor);
+after 20 minutes of lag the operator gets `ALERT … run_match_lagging`.
 
 ## Timer occurrences
 
@@ -747,15 +754,16 @@ The older adapter runs safely on a ledger written by this one; nothing needs
 a migration and no binding field was added:
 
 * New tables/keys (`readmit_requests`, `ledger_meta.chat_language`) and input
-  fields (`arrived_at`, `capacity_queued`, `readmitted`, `started_runs`,
-  `deep_stop_seen_ms`, `retry_withheld`, `notice_language`,
+  fields (`arrived_at`, `capacity_queued`, `readmitted`, `retired_original`,
+  `retry_wait_since`, `deep_stop_seen_ms`, `retry_withheld`, `notice_language`,
   `first_response.echo`, `deep_final_suppressed`) are ignored by it.
 * Export rows keep their shape. A re-admitted row is an ordinary queued row
   under fresh keys, which it admits once like any input.
 * The older adapter counts every unsettled row against
-  `max_outstanding_inputs` again, so a binding holding more than that
-  refuses new intake (`binding_capacity_reached`) until settlements bring it
-  under the limit; raise the binding's limit first if that matters.
+  `max_outstanding_inputs` on owner-only bindings again, so one holding more
+  than that refuses new intake (`binding_capacity_reached`) until
+  settlements bring it under the limit; raise the binding's limit first if
+  that matters. Core input retirements the adapter made are final either way.
 * It reverts to the previous behavior: stranded `running` inputs after a
   closed window, English notices, per-watch journal crawl and the per-pass
   admission limit. Pending operator requests are not executed by it.

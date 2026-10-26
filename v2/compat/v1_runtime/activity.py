@@ -27,16 +27,19 @@ def delivered_at(raw):
         return None
 
 
-LIVE_PHASES = ("queued", "starting", "running", "cancel_requested")
+LAG_ALERT_S = 20 * 60
 
 
-def conversation_busy(worker):
-    """Whether Core reports a live Deep run in this conversation (any input)."""
+def match_lagging(worker, data):
+    """Whether Core's journal head (non-streaming snapshot) is past this
+    input's own event cursor, so its run match may simply not be read yet."""
     try:
-        status, value = worker.client.request("GET", "/execution", allowed=(200, 204, 404))
+        snapshot = worker.call("GET", "")
     except Exception:
-        return False  # Unknown is not evidence either way; keep the old rule.
-    return status == 200 and isinstance(value, dict) and value.get("phase") in LIVE_PHASES
+        return False  # Unknown is not lag evidence; keep the old rule.
+    head = snapshot.get("last_sequence") if isinstance(snapshot, dict) else None
+    cursor = data.get("cursor")
+    return type(head) is int and type(cursor) is int and head > cursor
 
 
 def observe(worker, data, statuses, now=None):
@@ -57,11 +60,18 @@ def observe(worker, data, statuses, now=None):
         return
     if deep.get("run_id") not in data.get("matched_runs", []):
         deep, phase = {}, None
-        if conversation_busy(worker):
-            # The adapter's own run match lags Core's journal (a burst, timer
-            # traffic): Core is running a Deep turn, so "no running task" would
-            # be false. Treat it as running; no alert, no missing-run notice.
-            phase = "running"
+        if now - since >= INTERVAL_S and match_lagging(worker, data):  # Only when a notice could be due.
+            # This input's own journal match is behind Core's head (a burst,
+            # timer traffic), so "no running task" is not established: no
+            # notice. The operator is still alerted once it lags too long.
+            lag = data.setdefault("activity", {}).setdefault("match_lag_since", now)
+            if now - lag >= LAG_ALERT_S and not data["activity"].get("match_lag_alerted"):
+                data["activity"]["match_lag_alerted"] = True
+                print("ALERT orkestr-v2-wa-adapter run_match_lagging conversation=%s input=%s"
+                      % (getattr(worker.client, "conversation", "?"), data["remote_id"]), file=sys.stderr, flush=True)
+            worker.ledger.save(data)
+            return
+        (data.get("activity") or {}).pop("match_lag_since", None)
     activity = data.setdefault("activity", {})
     gap = now - activity.get("observed_at", now)
     if gap > POLL_GAP_S:

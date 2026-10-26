@@ -24,12 +24,11 @@ CHAT_ROLES = (None, "owner", "member", "v1_owner", "v1_external")
 TEMPLATES = {
     # A failed input after the one automatic retry (or when none was safe).
     "failure": {
-        "en": "I received your message, but a technical problem kept me from answering it right now. "
-              "I have reported it, and you will get a reply as soon as possible.",
-        "tr": "Mesajınızı aldım ama şu an teknik bir sorun nedeniyle yanıt veremedim; konuyu ilettim, "
-              "en kısa sürede dönüş yapılacak.",
-        "de": "Deine Nachricht ist angekommen, aber ich konnte sie wegen eines technischen Problems gerade "
-              "nicht bearbeiten. Ich habe es weitergegeben; du bekommst so bald wie möglich eine Antwort.",
+        "en": "I received your message, but a technical problem kept me from answering it. "
+              "I have reported it to the operator.",
+        "tr": "Mesajınızı aldım ama teknik bir sorun nedeniyle yanıt veremedim; konuyu operatöre ilettim.",
+        "de": "Deine Nachricht ist angekommen, aber wegen eines technischen Problems konnte ich sie nicht "
+              "beantworten. Ich habe es an den Betreiber weitergegeben.",
     },
     "failure_owner": {
         "en": "Technical failure (%(reason)s): this message was not processed. The operator was alerted; "
@@ -51,30 +50,23 @@ TEMPLATES = {
     },
     "timer_interrupted": {
         "en": "\u23f0 %(label)s was interrupted before it finished (%(reason)s). It may already have done part of "
-              "its work, so it is not retried automatically; the next scheduled run follows its normal schedule. "
-              "The operator was alerted.",
+              "its work, so it is not retried automatically. Its later scheduled runs are not affected; "
+              "the operator was alerted.",
         "tr": "\u23f0 %(label)s bitmeden yarıda kesildi (%(reason)s). İşinin bir kısmını zaten yapmış olabilir, bu "
-              "yüzden otomatik olarak yeniden denenmiyor; bir sonraki planlı çalışma normal zamanında yapılacak. "
-              "Operatöre bildirildi.",
+              "yüzden otomatik olarak yeniden denenmiyor. Sonraki planlı çalışmalar etkilenmez; "
+              "operatöre bildirildi.",
         "de": "\u23f0 %(label)s wurde vor dem Abschluss unterbrochen (%(reason)s). Er hat womöglich schon einen "
-              "Teil erledigt, deshalb wird er nicht automatisch wiederholt; der nächste geplante Lauf folgt dem "
-              "normalen Zeitplan. Der Betreiber wurde benachrichtigt.",
+              "Teil erledigt, deshalb wird er nicht automatisch wiederholt. Spätere geplante Läufe sind nicht "
+              "betroffen; der Betreiber wurde benachrichtigt.",
     },
     # A scheduled timer occurrence that produced no result.
     "timer_failure": {
-        "en": "\u23f0 %(label)s failed (%(reason)s). The next scheduled run will try again; the operator was alerted.",
-        "tr": "\u23f0 %(label)s başarısız oldu (%(reason)s). Bir sonraki planlı çalışmada yeniden denenecek; "
-              "operatöre bildirildi.",
-        "de": "\u23f0 %(label)s ist fehlgeschlagen (%(reason)s). Der nächste geplante Lauf versucht es erneut; "
-              "der Betreiber wurde benachrichtigt.",
-    },
-    "timer_failure_retried": {
-        "en": "\u23f0 %(label)s failed twice (%(reason)s), also on its automatic retry. The next scheduled run "
-              "will try again; the operator was alerted.",
-        "tr": "\u23f0 %(label)s otomatik yeniden deneme dahil iki kez başarısız oldu (%(reason)s). Bir sonraki "
-              "planlı çalışmada yeniden denenecek; operatöre bildirildi.",
-        "de": "\u23f0 %(label)s ist zweimal fehlgeschlagen (%(reason)s), auch beim automatischen erneuten Versuch. "
-              "Der nächste geplante Lauf versucht es erneut; der Betreiber wurde benachrichtigt.",
+        "en": "\u23f0 %(label)s failed (%(reason)s) and produced no result this time. Its later scheduled runs "
+              "are not affected; the operator was alerted.",
+        "tr": "\u23f0 %(label)s başarısız oldu (%(reason)s) ve bu sefer sonuç üretmedi. Sonraki planlı "
+              "çalışmalar etkilenmez; operatöre bildirildi.",
+        "de": "\u23f0 %(label)s ist fehlgeschlagen (%(reason)s) und hat diesmal kein Ergebnis geliefert. Spätere "
+              "geplante Läufe sind nicht betroffen; der Betreiber wurde benachrichtigt.",
     },
     # Appended when owner messages had been steered into the failed turn.
     "steered": {
