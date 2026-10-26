@@ -6,11 +6,14 @@ is exported only when its text ends at a sentence or paragraph boundary, or
 once the same snapshot has stayed the latest one for `PROGRESS_HOLD_S` (the
 item stopped growing, so it is finished).
 
-Replies may reference files on the host ("[Deck](/var/lib/.../deck.pptx)").
-WhatsApp cannot open such a link and the full path must never leave the
-host. The adapter has no outbound binary attachment transport (exports are
-text; V1 only sends the reply documents it renders itself), so each local
-path is replaced by its file name marked "(not attached)".
+Replies in a chat shared with other members may reference files on the
+host ("[Deck](/var/lib/.../deck.pptx)"). WhatsApp cannot open such a link and
+the full path must not reach other members. The adapter has no outbound binary
+attachment transport (exports are text; V1 only sends the reply documents it
+renders itself), so a link to a local file, or a bare path that clearly ends
+in a file name with an extension, becomes the file name marked
+"(not attached)". Code (fenced blocks, inline spans), directories and routes
+are never touched, and owner-only chats are not scrubbed at all.
 """
 import re
 from urllib.parse import unquote
@@ -22,14 +25,19 @@ _TERMINALS = ".!?…。！？"
 # Closing marks that may follow a terminal ("**Done.**", "(see above.)", "\"Yes.\"").
 _CLOSERS = "*_`)]}\"'”’»"
 
-# Host roots whose absolute paths are server-local (never URLs or API routes).
+# Host roots whose absolute paths are server-local (never URLs).
 _ROOTS = r"(?:home|var|tmp|root|srv|opt|mnt|data|run|etc|usr|workspace|private|Users)"
-_PATH = r"(?:file://)?/" + _ROOTS + r"/[^\s<>()\[\]`'\"]+"
-# Markdown link or image whose target is a local path: [label](path) / [label](<path>).
-_LINK = re.compile(r"!?\[([^\]\n]*)\]\(\s*<?((?:file://)?/" + _ROOTS + r"/[^\n<>()]+?)>?\s*\)")
-# A bare path, not inside a URL or a longer path (no word char, "/", ":" or "." just before).
-_BARE = re.compile(r"(?<![\w/:.~-])(" + _PATH + r")")
-_TRAILING = ".,;:!?"
+# A file name extension: 1-8 alphanumerics with at least one letter (not "python3.11").
+_EXT = r"\.(?=[A-Za-z0-9]{0,7}[A-Za-z])[A-Za-z0-9]{1,8}"
+# Markdown link or image to a local file: [label](<path>) (any characters) or
+# [label](path) (spaces and parentheses allowed, must end in an extension).
+_LINK = re.compile(r"!?\[([^\]\n]*)\]\(\s*(?:<((?:file://)?/" + _ROOTS + r"/[^\n<>]*?" + _EXT + r")>"
+                   r"|((?:file://)?/" + _ROOTS + r"/[^\n<>]*?" + _EXT + r"))\s*\)")
+# A bare path ending in a file name, not inside a URL, a longer path or a word.
+_SEGMENT = r"[^\s<>()\[\]`'\"/]+"
+_BARE = re.compile(r"(?<![\w/:.~-])((?:file://)?/" + _ROOTS + r"/(?:" + _SEGMENT + r"/)*" + _SEGMENT + _EXT + r")(?![\w/])")
+# Fenced code blocks (to their closing fence or the end) and inline code spans.
+_CODE = re.compile(r"(^|\n)[ \t]*(`{3,}|~{3,})[^\n]*\n.*?(?:\n[ \t]*\2[^\n]*(?=\n|$)|$)|(`+)[^`]*?\3", re.S)
 
 
 def complete_progress(text):
@@ -53,24 +61,29 @@ def _name(path):
 
 
 def _bare(match):
-    path = match.group(1)
-    tail = ""
-    while path and path[-1] in _TRAILING:
-        tail, path = path[-1] + tail, path[:-1]
-    if path.count("/") < 2:
-        return match.group(0)
-    return "%s (not attached)%s" % (_name(path), tail)
+    return "%s (not attached)" % _name(match.group(1))
 
 
 def _link(match):
-    label, name = match.group(1).strip(), _name(match.group(2).strip())
-    if not label or label == name or label == match.group(2).strip():
+    target = (match.group(2) or match.group(3)).strip()
+    label, name = match.group(1).strip(), _name(target)
+    if not label or label in (name, target):
         return "%s (not attached)" % name
     return "%s: %s (not attached)" % (label, name)
 
 
+def _prose(text):
+    return _BARE.sub(_bare, _LINK.sub(_link, text))
+
+
 def scrub_local_paths(text):
-    """Replace every server-local absolute path with its bare file name."""
+    """Replace server-local file references outside code with their file names."""
     if not isinstance(text, str) or "/" not in text:
         return text
-    return _BARE.sub(_bare, _LINK.sub(_link, text))
+    parts, at = [], 0
+    for code in _CODE.finditer(text):
+        parts.append(_prose(text[at:code.start()]))
+        parts.append(code.group(0))
+        at = code.end()
+    parts.append(_prose(text[at:]))
+    return "".join(parts)

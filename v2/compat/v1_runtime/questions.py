@@ -9,8 +9,8 @@ QUESTION_SCAN_LIMIT = 1024
 # Question texts kept per input to keep a commentary repeat out of progress.
 QUESTION_TEXT_LIMIT = 16
 QUESTION_TEXT_CHARS = 2000
-# Shorter progress inside a question is too generic to call a repeat.
-REPEAT_MIN_CHARS = 24
+# A progress update repeats a question when it adds at most this much text.
+REPEAT_SLACK_CHARS = 16
 
 
 def _normal(text):
@@ -18,11 +18,12 @@ def _normal(text):
 
 
 def repeats_question(data, text):
-    """True when progress text repeats a question this input already sent."""
-    progress = _normal(text)
+    """True when progress is essentially a question this input already sent;
+    an update that adds more than a short lead-in is still exported."""
+    progress = _normal(text).strip(" :.-")
     for question in data.get('question_texts', []):
-        if progress == question or (len(question) >= REPEAT_MIN_CHARS and question in progress) or (
-                len(progress) >= REPEAT_MIN_CHARS and progress in question):
+        question = question.strip(" :.-")
+        if question and question in progress and len(progress) - len(question) <= REPEAT_SLACK_CHARS:
             return True
     return False
 

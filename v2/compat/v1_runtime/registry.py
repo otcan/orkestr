@@ -161,6 +161,8 @@ class Registry:
         binding.worker.progress_updates = binding.config["progress_updates"]
         binding.worker.fast_reply_policy = binding.config["fast_reply_policy"]
         binding.ledger.owner_only = binding.config["fast_reply_policy"] == "owner_only"
+        # Only a chat with non-owner members has paths scrubbed from replies.
+        binding.ledger.scrub_paths = (not binding.ledger.owner_only) and bool(binding.config["participants"])
         binding.worker.auto_steer = auto_steer_mode(binding.config)
         binding.worker.attachments = binding.config["attachments"]
         binding.worker.max_input_age_s = binding.config["max_input_age_seconds"]
