@@ -10,12 +10,15 @@ import { resetLocalInputKindsCacheForTest } from "../packages/connectors/src/wha
 import { deliverCodexAppServerPendingInputs, stopCodexAppServerClients } from "../packages/core/src/codex-app-server.js";
 import { deliverPendingThreadInputs, resetThreadInputDeliveryTimersForTest } from "../packages/core/src/runtime-leases.js";
 import { processApiAgentThreadInput } from "../packages/core/src/tenant-api-agent.js";
-import { appendThreadMessage, createThread, getThread, getThreadMessage, listThreadMessages } from "../packages/core/src/threads.js";
+import { appendThreadMessage, createThread, getThread, getThreadMessage, listThreadMessages, updateThreadMessage } from "../packages/core/src/threads.js";
 import {
+  expireV1ExecutionRetiredFileCacheForTest,
   resetV1ExecutionRetiredForTest,
   setV1ExecutionRetiredAlertHook,
   v1ExecutionDecision,
   v1ExecutionRetiredDeliveryState,
+  v1ExecutionExpiredDeliveryState,
+  v1ExecutionExpiredEvent,
   v1ExecutionRetiredEvent,
 } from "../packages/core/src/v1-execution-retired.js";
 import { listEvents } from "../packages/storage/src/store.js";
@@ -208,4 +211,80 @@ test("api-agent threads are refused at the direct entry point used by WhatsApp, 
   assert.equal((await listThreadMessages("example-thread", env)).filter(m => m.role === "assistant").length, 0);
   assert.equal((await events(env, v1ExecutionRetiredEvent)).length, 1);
   assert.equal(alerts.length, 1);
+});
+
+test("a flag file that exists but is invalid fails closed, and keeps the last good setting once one was read", async t => {
+  const { env, home } = await fixture(t);
+  const file = path.join(home, "v1-execution-retired.json");
+  await fs.writeFile(file, "{\"enabled\": tru");
+  const first = await v1ExecutionDecision(await getThread("example-thread", env), env);
+  assert.equal(first.allowed, false, "an unparseable file must not silently turn the guard off");
+  assert.equal((await events(env, "v1_execution_retired_config_invalid")).length, 1);
+  // A good file that turns the guard off, then a truncated write: the last good
+  // value (off) is kept and the same error is logged only once.
+  await fs.writeFile(file, JSON.stringify({ enabled: false }));
+  expireV1ExecutionRetiredFileCacheForTest();
+  assert.equal((await v1ExecutionDecision(await getThread("example-thread", env), env)).allowed, true);
+  await fs.writeFile(file, "");
+  expireV1ExecutionRetiredFileCacheForTest();
+  assert.equal((await v1ExecutionDecision(await getThread("example-thread", env), env)).allowed, true);
+  expireV1ExecutionRetiredFileCacheForTest();
+  assert.equal((await v1ExecutionDecision(await getThread("example-thread", env), env)).allowed, true);
+  assert.equal((await events(env, "v1_execution_retired_config_invalid")).length, 2);
+  // The kill switch still wins over an invalid file.
+  expireV1ExecutionRetiredFileCacheForTest();
+  assert.equal((await v1ExecutionDecision(await getThread("example-thread", env), { ...env, ORKESTR_V1_EXECUTION_RETIRED: "0" })).allowed, true);
+  // "enabled": "true" (a string) counts as on.
+  await fs.writeFile(file, JSON.stringify({ enabled: "true" }));
+  expireV1ExecutionRetiredFileCacheForTest();
+  assert.equal((await v1ExecutionDecision(await getThread("example-thread", env), env)).allowed, false);
+});
+
+test("a refusal never overwrites in-flight delivery provenance", async t => {
+  const { env, attempts } = await fixture(t, { extraEnv: { ORKESTR_V1_EXECUTION_RETIRED: "1" } });
+  const uncertain = await queue(env, { state: "pending_delivery", deliveryState: "codex_acceptance_uncertain", text: "Example in-flight input" });
+  const plain = await queue(env, { source: "ui", text: "Example UI message" });
+  await deliverPendingThreadInputs("example-thread", env);
+  const kept = await getThreadMessage("example-thread", uncertain.id, env);
+  assert.equal(kept.deliveryState, "codex_acceptance_uncertain");
+  assert.ok(kept.v1ExecutionRefusedAt);
+  assert.equal((await getThreadMessage("example-thread", plain.id, env)).deliveryState, v1ExecutionRetiredDeliveryState);
+  assert.equal((await events(env, v1ExecutionRetiredEvent)).length, 2);
+  await deliverPendingThreadInputs("example-thread", env);
+  assert.equal((await events(env, v1ExecutionRetiredEvent)).length, 2, "no duplicate audit for an input without the delivery marker");
+  assert.equal(await attemptCount(attempts), 0);
+});
+
+test("turning the guard off cancels refused inputs older than 24 hours and lets fresh ones run", async t => {
+  const { env, attempts, home } = await fixture(t);
+  const file = path.join(home, "v1-execution-retired.json");
+  await fs.writeFile(file, JSON.stringify({ enabled: true }));
+  const old = await queue(env, { source: "timer_due", timerId: "example-timer", text: "Example stale timer run", createdAt: new Date(Date.now() - 25 * 60 * 60_000).toISOString() });
+  const fresh = await queue(env, { source: "whatsapp_inbound", connector: "whatsapp", text: "Example owner message" });
+  await deliverPendingThreadInputs("example-thread", env);
+  // While refused, the stale input (already refused once) is expired on the next pass.
+  await deliverPendingThreadInputs("example-thread", env);
+  const expired = await getThreadMessage("example-thread", old.id, env);
+  assert.equal(expired.state, "cancelled");
+  assert.equal(expired.deliveryState, v1ExecutionExpiredDeliveryState);
+  assert.equal((await events(env, v1ExecutionExpiredEvent)).length, 1);
+  assert.equal(await attemptCount(attempts), 0);
+  await fs.writeFile(file, JSON.stringify({ enabled: false }));
+  expireV1ExecutionRetiredFileCacheForTest();
+  await deliverPendingThreadInputs("example-thread", env);
+  const cleared = await getThreadMessage("example-thread", fresh.id, env);
+  assert.equal(cleared.v1ExecutionRefusedAt ?? null, null);
+  assert.notEqual(cleared.deliveryState, v1ExecutionRetiredDeliveryState);
+  assert.equal(await waitForAttempt(attempts), true, "the fresh input runs once the guard is off");
+});
+
+test("an old refused input left over from before a restart is cancelled, not replayed, when the guard is off", async t => {
+  const { env, attempts } = await fixture(t);
+  const longAgo = new Date(Date.now() - 30 * 60 * 60_000).toISOString();
+  const old = await queue(env, { source: "timer_due", text: "Example stale timer run", createdAt: longAgo });
+  await updateThreadMessage("example-thread", old.id, { deliveryState: v1ExecutionRetiredDeliveryState, v1ExecutionRefusedAt: longAgo }, env);
+  await deliverPendingThreadInputs("example-thread", env);
+  assert.equal((await getThreadMessage("example-thread", old.id, env)).state, "cancelled");
+  await new Promise(resolve => setTimeout(resolve, 200));
+  assert.equal(await attemptCount(attempts), 0);
 });

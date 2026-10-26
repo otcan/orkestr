@@ -34,8 +34,10 @@ and thread wake/sleep (these start or stop a runtime process, not a turn).
 
 ## What a refusal looks like
 
-- The input stays recorded with `state: "queued"`. Its `deliveryState` becomes
-  `refused_v1_execution_retired`, and `v1ExecutionRefusedAt` is set.
+- The input stays recorded with `state: "queued"`. `v1ExecutionRefusedAt` is
+  set, and its `deliveryState` becomes `refused_v1_execution_retired` unless it
+  already carries in-flight delivery provenance (for example
+  `codex_acceptance_uncertain`), which is kept for recovery.
 - One audit event per refused input: `thread_turn_refused_v1_retired`, with
   `threadId`, `messageId`, `source`, `timerId`, `entryPoint`, `runtimeKind`
   and `reason`. Repeated dispatch passes do not log the same input again.
@@ -48,18 +50,23 @@ and thread wake/sleep (these start or stop a runtime process, not a turn).
 
 Refused inputs stay queued, just like they do under a queue hold. If the thread
 is later delegated, they are forwarded to V2. If it is allowlisted, they run.
-**If the guard is turned off, all refused inputs run in one burst.** Review
-them first with `GET /api/threads/:id/queue`.
+Refused inputs older than 24 hours
+(`ORKESTR_V1_EXECUTION_RETIRED_MAX_INPUT_AGE_MS`) are never replayed: they are
+cancelled with `deliveryState: expired_v1_execution_retired` and one
+`thread_input_expired_v1_retired` event, both while the guard stays on and on
+the first dispatch after it is turned off. Younger refused inputs do run once
+the guard is off, so review them first with `GET /api/threads/:id/queue`.
 
 ## Configuration
 
 | Setting | Meaning |
 |---|---|
 | `ORKESTR_V1_EXECUTION_RETIRED` | `1`/`true` forces the guard on. `0`/`false` forces it off and overrides the file (kill switch). If unset, the file decides. |
-| `$ORKESTR_HOME/v1-execution-retired.json` (path override: `ORKESTR_V1_EXECUTION_RETIRED_FILE`) | `{"enabled": true, "allowlist": ["<thread id or name>"]}`. Read on use and cached for 2 s, so it can be flipped **without a V1 restart**. A missing or invalid file means "not configured". An invalid file also logs `v1_execution_retired_config_invalid`. |
+| `$ORKESTR_HOME/v1-execution-retired.json` (path override: `ORKESTR_V1_EXECUTION_RETIRED_FILE`) | `{"enabled": true, "allowlist": ["<thread id or name>"]}`. Read on use and cached for 2 s, so it can be flipped **without a V1 restart**. A missing file means "not configured". A file that exists but cannot be read or parsed (for example mid-write) keeps the last good file setting, and with none it **fails closed** (guard on); it logs `v1_execution_retired_config_invalid` once per distinct error. `"enabled"` accepts `true`/`"true"`/`1`/`"on"`. Write the file atomically (write a temp file, then rename). |
 | `ORKESTR_V1_EXECUTION_ALLOWLIST` | Thread ids or names, separated by commas or spaces. Merged with the file allowlist. |
 | `ORKESTR_V1_EXECUTION_RETIRED_ALERT_INTERVAL_MS` | Per-thread alert interval. Default `900000`. |
 | `ORKESTR_V1_EXECUTION_RETIRED_ALERT_COMMAND` | Optional absolute path to an executable. It receives the alert as JSON on stdin. No shell is used, and it times out after 10 s. |
+| `ORKESTR_V1_EXECUTION_RETIRED_MAX_INPUT_AGE_MS` | Refused inputs older than this are cancelled instead of replayed. Default `86400000` (24 h). |
 
 Prefer the flag file: an env change needs a V1 restart, which blips the
 WhatsApp transport. Write the file as the V1 service user and make it readable
@@ -101,4 +108,4 @@ refusal side.
    undelivered.
 
 **Rollback:** set `"enabled": false` in the file, or delete the file. Check the
-queues of refused threads first (see the burst warning above).
+queues of refused threads first: inputs younger than 24 hours will run.

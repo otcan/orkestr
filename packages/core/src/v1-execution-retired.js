@@ -28,6 +28,14 @@
 // - ORKESTR_V1_EXECUTION_RETIRED_ALERT_COMMAND: optional absolute path of an
 //   executable (for example orkestr-notify) that receives the alert as JSON on
 //   stdin. No shell is used.
+// - ORKESTR_V1_EXECUTION_RETIRED_MAX_INPUT_AGE_MS: a refused input older than
+//   this (default 24 hours) is cancelled instead of being run later, so turning
+//   the guard off never replays a stale backlog.
+//
+// A flag file that exists but cannot be read or parsed keeps the last good
+// file setting; with none, the guard fails closed (on). Delivery, relay and
+// forwarding are unaffected either way, and ORKESTR_V1_EXECUTION_RETIRED=0
+// still overrides.
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -38,12 +46,24 @@ import { listThreadMessageCandidates, updateThreadMessage } from "./threads.js";
 
 export const v1ExecutionRetiredEvent = "thread_turn_refused_v1_retired";
 export const v1ExecutionRetiredDeliveryState = "refused_v1_execution_retired";
+export const v1ExecutionExpiredDeliveryState = "expired_v1_execution_retired";
+export const v1ExecutionExpiredEvent = "thread_input_expired_v1_retired";
 const pendingStates = ["queued", "pending_delivery"];
+// Delivery states that carry no in-flight provenance; only these are replaced
+// by the refusal marker. Others (for example codex_acceptance_uncertain) are
+// kept so recovery still sees them after the guard is turned off.
+const neutralDeliveryStates = new Set(["", "queued"]);
 const fileCacheMs = 2_000;
 const defaultAlertIntervalMs = 15 * 60_000;
+const defaultMaxInputAgeMs = 24 * 60 * 60_000;
 
 let fileCache = { path: "", readAt: 0, value: null };
+let lastGoodFile = { path: "", value: null };
+let lastConfigError = "";
 const lastAlertAt = new Map();
+// Threads whose refused inputs were already settled after the guard allowed
+// them, so the allowed path scans each thread at most once per refusal.
+const settledThreads = new Set();
 let alertHook = null;
 
 function clean(value) {
@@ -73,12 +93,27 @@ async function readFlagFile(env = process.env) {
   let value = null;
   try {
     const parsed = JSON.parse(await fs.readFile(filePath, "utf8"));
-    value = parsed && typeof parsed === "object" ? parsed : null;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("v1_execution_retired_config_not_object");
+    value = parsed;
+    lastGoodFile = { path: filePath, value };
+    lastConfigError = "";
   } catch (error) {
-    // A missing file means "not configured". An unreadable or invalid file is
-    // logged and also treated as not configured, so a typo never blocks V1.
+    // A missing file means "not configured". A file that exists but cannot be
+    // read or parsed (for example mid-write) keeps the last good setting, and
+    // with none it fails closed: refusing turns is the safe side here, since
+    // relay, delivery and V2 forwarding never depend on this guard.
     if (error?.code !== "ENOENT") {
-      await appendEvent({ type: "v1_execution_retired_config_invalid", error: clean(error?.message).slice(0, 200) }, env).catch(() => {});
+      value = lastGoodFile.path === filePath && lastGoodFile.value
+        ? lastGoodFile.value
+        : { enabled: true, allowlist: [], invalid: true };
+      const message = clean(error?.message).slice(0, 200);
+      if (message !== lastConfigError) {
+        lastConfigError = message;
+        await appendEvent({ type: "v1_execution_retired_config_invalid", error: message, failClosed: value.invalid === true }, env).catch(() => {});
+      }
+    } else {
+      lastGoodFile = { path: "", value: null };
+      lastConfigError = "";
     }
   }
   fileCache = { path: filePath, readAt: now, value };
@@ -88,7 +123,7 @@ async function readFlagFile(env = process.env) {
 export async function v1ExecutionRetiredConfig(env = process.env) {
   const file = await readFlagFile(env);
   const envFlag = flagValue(env.ORKESTR_V1_EXECUTION_RETIRED);
-  const enabled = envFlag !== null ? envFlag : file?.enabled === true;
+  const enabled = envFlag !== null ? envFlag : flagValue(file?.enabled) === true;
   const allowlist = new Set([...listValue(env.ORKESTR_V1_EXECUTION_ALLOWLIST), ...listValue(file?.allowlist)]);
   return { enabled, allowlist, source: envFlag !== null ? "env" : file ? "file" : "default" };
 }
@@ -142,8 +177,67 @@ export function setV1ExecutionRetiredAlertHook(hook) {
 
 export function resetV1ExecutionRetiredForTest() {
   fileCache = { path: "", readAt: 0, value: null };
+  lastGoodFile = { path: "", value: null };
+  lastConfigError = "";
   lastAlertAt.clear();
+  settledThreads.clear();
   alertHook = null;
+}
+
+// Test seam: forces the next read of the flag file (keeps the last good value).
+export function expireV1ExecutionRetiredFileCacheForTest() {
+  fileCache = { path: "", readAt: 0, value: null };
+}
+
+function maxInputAgeMs(env = process.env) {
+  const parsed = Number(env.ORKESTR_V1_EXECUTION_RETIRED_MAX_INPUT_AGE_MS);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : defaultMaxInputAgeMs;
+}
+
+function inputAgeMs(message = {}, now = Date.now()) {
+  const at = Date.parse(message.createdAt || message.timestamp || message.v1ExecutionRefusedAt || "");
+  return Number.isFinite(at) ? now - at : 0;
+}
+
+async function pendingUserInputs(threadId, env) {
+  return (await listThreadMessageCandidates(threadId, { states: pendingStates }, env).catch(() => []))
+    .filter((message) => message.role === "user" && pendingStates.includes(clean(message.state)));
+}
+
+// Cancels refused inputs older than the max age (never replay stale input) and,
+// when the guard now allows the thread, clears the marker from the rest so they
+// run normally and a later refusal audits them again.
+async function settleRefusedInputs(thread, pending, env, { clearFresh, entryPoint }) {
+  const now = Date.now();
+  const limit = maxInputAgeMs(env);
+  const expired = [];
+  for (const message of pending.filter((entry) => clean(entry.v1ExecutionRefusedAt))) {
+    if (inputAgeMs(message, now) > limit) {
+      const updated = await updateThreadMessage(thread.id, message.id, {
+        state: "cancelled",
+        deliveryState: v1ExecutionExpiredDeliveryState,
+        error: "v1_execution_retired_input_expired",
+      }, env, { expectedFields: { state: message.state } }).catch(() => null);
+      if (updated) expired.push(message);
+    } else if (clearFresh) {
+      await updateThreadMessage(thread.id, message.id, {
+        v1ExecutionRefusedAt: null,
+        ...(clean(message.deliveryState) === v1ExecutionRetiredDeliveryState ? { deliveryState: "queued" } : {}),
+      }, env, { expectedFields: { state: message.state } }).catch(() => null);
+    }
+  }
+  for (const message of expired) {
+    await appendEvent({
+      type: v1ExecutionExpiredEvent,
+      threadId: thread.id,
+      messageId: message.id,
+      source: clean(message.source) || null,
+      timerId: clean(message.timerId) || null,
+      entryPoint,
+      maxInputAgeMs: limit,
+    }, env).catch(() => {});
+  }
+  return expired.map((message) => message.id);
 }
 
 async function maybeAlert(payload, env = process.env) {
@@ -166,19 +260,29 @@ async function maybeAlert(payload, env = process.env) {
 export async function refuseV1ExecutionIfRetired(thread = null, env = process.env, context = {}) {
   if (!thread?.id) return null;
   const decision = await v1ExecutionDecision(thread, env);
-  if (decision.allowed) return null;
-  if (decision.delegated) return { refused: true, delegated: true, reason: decision.reason };
   const entryPoint = clean(context.entryPoint) || "unknown";
-  const pending = (await listThreadMessageCandidates(thread.id, { states: pendingStates }, env).catch(() => []))
-    .filter((message) => message.role === "user" && pendingStates.includes(clean(message.state)));
-  const fresh = pending.filter((message) => clean(message.deliveryState) !== v1ExecutionRetiredDeliveryState);
+  if (decision.allowed) {
+    // Settle any held backlog once per thread per process (and again after each
+    // refusal), so turning the guard off never bursts stale inputs.
+    if (!settledThreads.has(thread.id)) {
+      settledThreads.add(thread.id);
+      await settleRefusedInputs(thread, await pendingUserInputs(thread.id, env), env, { clearFresh: true, entryPoint });
+    }
+    return null;
+  }
+  if (decision.delegated) return { refused: true, delegated: true, reason: decision.reason };
+  settledThreads.delete(thread.id);
+  const pending = await pendingUserInputs(thread.id, env);
+  const expiredIds = new Set(await settleRefusedInputs(thread, pending, env, { clearFresh: false, entryPoint }));
+  const fresh = pending.filter((message) => !expiredIds.has(message.id) && !clean(message.v1ExecutionRefusedAt));
   const refusedAt = new Date().toISOString();
   const marked = [];
   for (const message of fresh) {
-    // The input stays queued; only the delivery marker changes, so the refusal
-    // is visible and audited once per input.
+    // The input stays queued, so the refusal is visible and audited once per
+    // input. In-flight delivery provenance is never overwritten.
+    const neutral = clean(message.state) === "queued" && neutralDeliveryStates.has(clean(message.deliveryState).toLowerCase());
     const updated = await updateThreadMessage(thread.id, message.id, {
-      deliveryState: v1ExecutionRetiredDeliveryState,
+      ...(neutral ? { deliveryState: v1ExecutionRetiredDeliveryState } : {}),
       v1ExecutionRefusedAt: refusedAt,
     }, env, { expectedFields: { state: message.state } }).catch(() => null);
     if (updated) marked.push(message);
