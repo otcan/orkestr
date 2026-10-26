@@ -183,6 +183,22 @@ impl TurnStream {
             return Ok(());
         }
         let method = text(&value, "method")?;
+        if method == "model/observed" {
+            // Broker-normalized native settings evidence, scoped to the exact
+            // owned request even when it arrives before turn/start's reply.
+            // Optional metadata never creates turn, start or terminal evidence.
+            if let Some(params) = value.get("params") {
+                if self.terminal.is_none()
+                    && !self.interrupt_claimed
+                    && params.get("threadId").and_then(Value::as_str) == Some(self.thread.as_str())
+                    && params.get("requestId").and_then(Value::as_u64) == Some(self.request)
+                {
+                    self.models
+                        .confirm(params.get("model").and_then(Value::as_str));
+                }
+            }
+            return Ok(());
+        }
         if !matches!(
             method,
             "turn/started"

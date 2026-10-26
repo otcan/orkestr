@@ -23,7 +23,14 @@ Claude `system/init.model` records the initialized model; assistant text records
 its native `message.model`; a refusal records its declining model. The Codex
 native thread-start/resume model is retained for turns using that default, and
 scoped `model/rerouted` notifications update the model attached to subsequent
-assistant output. An unconfirmed per-turn override, missing native model, or
+assistant output. For an explicit Codex override, a native
+`thread/settings/updated` notification can confirm the model. The broker accepts
+only the owned thread, a live committed request and a native model matching that
+request's override; it strips all other settings and adds the current request
+ID. Runtime checks that exact request and thread, and records answering evidence
+only when native assistant text follows. A late confirmation cannot overwrite a
+native reroute or complete a run. Requested effort is never inferred as observed
+effort. An unconfirmed per-turn override, missing native model, or
 legacy run remains explicitly unreported. Merely initializing or rerouting is
 not evidence that a model answered. Different initialized and answering values
 remain distinct in the UI; reply footers use only the exact answering run.
