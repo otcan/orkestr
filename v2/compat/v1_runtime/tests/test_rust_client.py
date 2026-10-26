@@ -327,6 +327,26 @@ class ClientTests(unittest.TestCase):
         with self.assertRaisesRegex(ClientError, "event_scope_mismatch"):
             self.client.read_events(4)
 
+    def test_event_read_deadline_is_bounded_without_changing_authentication_or_correlation(self):
+        value = self.event(5)
+        raw = f"id: 5\nevent: provider_observed\ndata: {json.dumps(value)}\n\n".encode()
+        original = self.respond
+        self.server.respond = lambda method, path: ((200, raw, {"Content-Type": "text/event-stream"})
+                                                    if "/events?" in path else original(method, path))
+        with patch.object(self.client, "_wire", wraps=self.client._wire) as wire:
+            events = self.client.read_events(4, timeout_s=0.15)
+        self.assertEqual(self.client.matching_run_ids(events, INTAKE), [RUN])
+        event_calls = [call for call in wire.call_args_list if "/events?" in call.args[1]]
+        self.assertEqual(event_calls[0].kwargs["timeout_s"], 0.15)
+        self.assertEqual(len(self.posts(client_module.SESSION)), 1)
+        with patch.object(self.client, "_wire", wraps=self.client._wire) as wire:
+            self.client.read_events(4, timeout_s=2)
+        self.assertEqual(wire.call_args.kwargs["timeout_s"], self.client.session.timeout_s,
+                         "an event wait cannot extend the client's configured deadline")
+        for invalid in (0, -1, True, "0.15", float("nan"), 21):
+            with self.subTest(invalid=invalid), self.assertRaisesRegex(ClientError, "event_deadline_refused"):
+                self.client.read_events(4, timeout_s=invalid)
+
     def test_window_tuple_matches_ui_first_active_closed_and_refuses_drift(self):
         first = self.client.window_request(INTAKE, "input:1", "window:1", None)
         self.assertEqual((first["expected_generation"], first["window_id"], first["predecessor_window_id"]),

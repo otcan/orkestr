@@ -386,11 +386,14 @@ class RustClient:
         identity(value.get("import_id"))
         return value
 
-    def read_events(self, after, maximum=100):
+    def read_events(self, after, maximum=100, timeout_s=None):
         require(integer(after) and type(maximum) is int and 1 <= maximum <= 100, "cursor_refused")
+        require(timeout_s is None or (type(timeout_s) in (int, float) and 0 < timeout_s <= 20),
+                "event_deadline_refused")
         with self._lock:
             self.ensure_login(mutation=False)
-            _, raw, _ = self._wire("GET", f"{self.prefix}/events?after={after}&limit={maximum}", events=True)
+            _, raw, _ = self._wire("GET", f"{self.prefix}/events?after={after}&limit={maximum}",
+                                   events=True, timeout_s=None if timeout_s is None else min(timeout_s, self.session.timeout_s))
         events, cursor = [], after
         for frame in raw.replace(b"\r\n", b"\n").split(b"\n\n")[:-1]:
             fields = {}

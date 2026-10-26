@@ -57,7 +57,7 @@ A binding with an input in flight steps it every second. An idle binding
 sleeps until its next Rust poll is due (timer occurrences and posts every 5 s,
 digests every 30 s, at most 5 s per pass); a new inbound input wakes its
 worker at once. A single plain text message is admitted immediately. A queued
-burst or attachment waits until its chat has been quiet for 3 s (each new message of the burst restarts the
+burst or attachment under the legacy policy waits until its chat has been quiet for 3 s (each new message of the burst restarts the
 wait), and the worker wakes exactly then rather than up to a pass later. With dozens of bindings this keeps idle polling to roughly
 about `0.43 x bindings` requests per second.
 
@@ -173,10 +173,34 @@ and only admits input from the binding's account, group, V1 thread and
 verified owner aliases or listed members. Forwarded `originOwner`, command and control flags
 confer no additional permission. Edits receive explicit refusals.
 
+### Owner-only Fast intake
+
+With explicit `fast_reply_policy: "owner_only"`, each verified WhatsApp owner
+event is admitted individually, even while an earlier Deep turn is running.
+Each pass admits at most eight inputs in FIFO order, using the existing owner
+HTTP message and execution-window APIs. It does not pass an earlier unadmitted
+member, local-agent input or frozen legacy burst. Member/local inputs and other
+Fast policies keep their existing behavior.
+
+Fast results are observed, exported once, and accepted independently of Deep.
+The original message/event IDs select the exact producing run; a separate Fast
+cursor leaves Deep progress and questions available to the serial observer.
+Caught-up event reads in this path wait at most 150 ms each. Only the ledger
+head can finish and export its Deep result. Its existing Fast delivery fence
+still waits at most 15 seconds and retains uncertain/late transport evidence.
+
+Window capacity, queued successor windows, holds, reconciliation and original
+child custody still gate execution. This path does not create another provider
+actor or bypass those gates. A definite acceptance revision conflict can retry
+only the same still-awaiting run/completion/payload after checking canonical
+acceptance; unknown transport outcomes retain the frozen request.
+
 ### Bursts
 
 Messages sent in quick succession, such as a text followed by photos sent one
-by one, go to Rust as one input, so one turn answers all of them with one reply.
+by one, go to Rust as one input under the legacy policy, so one turn answers all
+of them with one reply. Explicit owner-only Fast intake keeps each original
+owner event separate.
 Before an input is sent, the worker waits until the chat has been quiet for 3 s
 (`DEFAULT_BURST_QUIET_S`). A continuous stream holds the first input for at
 most `BURST_MAX_WAIT_S` (10 s).

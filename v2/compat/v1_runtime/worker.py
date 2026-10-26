@@ -20,6 +20,9 @@ from .first_response import capture as capture_first_response
 from .questions import QUESTION_PREFIX, QUESTION_LABEL, QUESTION_SCAN_LIMIT, export_question
 from .activity import observe as observe_activity
 from .input_activity import record as record_transport_activity
+from .intake import admit as admit_input, window as admit_window
+from .acceptance_retry import reconcile as reconcile_acceptance
+from .intake_fast import EVENT_WAIT_S, eligible as early_fast_eligible, drive as drive_intake_fast
 
 PROGRESS_INTERVAL_S = 60
 PROGRESS_MAX_CHARS = 3500
@@ -53,8 +56,6 @@ APP_FILES = re.compile(r"\n*\[Files attached in the Orkestr app[^\n]*:\n((?:- [^
 # Runtime marker of an asynchronous question (Codex `request_user_input_async`)
 # in a progress payload; must equal the runtime's ASYNC_QUESTION_PREFIX. Such a
 # question is sent at once as its own message, never as the input's final.
-# Window states that are neither open for a follow-up nor closed for a successor.
-UNSETTLED_WINDOW_STATES = ("opening", "retiring", "reconciliation_required")
 # A Fast in these phases (or missing) can never become this input's proposal.
 FAST_UNUSABLE_PHASES = ("failed", "lost", "cancelled", "blocked", "stopped", "interrupted", "completed")
 FAST_GRACE_S = 60
@@ -69,7 +70,7 @@ BURST_TEXT_MAX_BYTES = 16 * 1024
 BURST_NOTE = ("[%d messages arrived together and are delivered as one turn. Read all of them, then answer "
               "in a single reply that covers everything; do not reply to each message separately.]")
 # Frozen per-attempt state dropped when an input is sent again as a new turn.
-RESET_KEYS = ("intake", "cursor", "window", "window_request", "previous_window", "matched_runs", "accepted",
+RESET_KEYS = ("intake", "cursor", "fast_cursor", "window", "window_request", "previous_window", "matched_runs", "accepted",
               "fast_accept_request", "deep_accept_request", "fast_payload", "deep_payload", "admitted_at",
               "progress_at", "fast_unusable_since", "intake_rules", "questions_scanned", "question_payloads", "activity", "deep_final_ready_at", "transport_activity")
 # An admitted input whose window ended without starting any run of it.
@@ -701,74 +702,13 @@ class Worker:
             return
         if data.get("digest"):
             return self.finish_digest(data)
-        if not self.gather_burst(data):
+        if not admit_input(self, data, merge_burst=not early_fast_eligible(self, data)):
             return
-        if data.get("attachments") and "attachment_receipt" not in data:
-            self.import_attachments(data)
-        if "intake" not in data:
-            text = data.get("intake_text") or compose(data)
-            if data.get("origin") != "timer":
-                text = self.with_rules(data, text)
-            request = {"client_message_id": data["keys"]["message"], "text": text}
-            if data.get("reply_to"):
-                request["reply_to"] = data["reply_to"]
-            if data.get("continued"):
-                try:
-                    request["expected_provider_generation"] = continuation_guard.generation(data)
-                    request["continuation_source_run_id"] = data["continuation_guard"]["source_run_id"]
-                except ValueError as error:
-                    raise Refused(str(error)) from None
-                status, intake = self.client.request("POST", "/messages", body=request, allowed=(200, 202, 409))
-                if status == 409:
-                    raise Refused("continuation_admission_requires_review")
-            else:
-                intake = self.call("POST", "/messages", request, (200, 202))
-            if intake.get("status") != "accepted" or not all(intake.get(k) for k in ("message_id", "event_id", "sequence")):
-                raise Refused("intake_receipt")
-            data.update(intake=intake, cursor=intake["sequence"] - 1, phase="admitted", admitted_at=time.time())
-            # Every Core message this adapter admitted is never mirrored back as web input.
-            own = data.setdefault("own_messages", [])
-            if intake["message_id"] not in own:
-                own.append(intake["message_id"])
-            self.ledger.save(data)
-        self.fire_trigger(data)
         if data.get("origin") == "timer" and "window" not in data and "window_request" not in data:
             if not self.timer_window(data):
                 return
-        if "window" not in data:
-            if "window_request" not in data:
-                current = self.call("GET", "/window", allowed=(200, 204))
-                if isinstance(current, dict) and current.get("state") in UNSETTLED_WINDOW_STATES:
-                    # The previous window is still closing or awaits Core's
-                    # reconciliation: nothing is frozen yet, so wait and retry.
-                    if data.get("phase") != "waiting_for_window":
-                        data["phase"] = "waiting_for_window"
-                        self.ledger.save(data)
-                    return
-                data["previous_window"] = current
-                data["window_request"] = self.client.window_request(data["intake"], data["keys"]["message"], data["keys"]["window"], current)
-                self.ledger.save(data)
-            status, reply = self.client.request("POST", "/window", body=data["window_request"], allowed=(200, 201, 202, 409))
-            if status == 202:
-                # Durably queued in Core (capacity, or a follow-up that would get
-                # under ten minutes of work time): Core's dispatcher opens the
-                # window later, possibly as a successor. Replays of the same
-                # frozen request report the queue row until it is dispatched.
-                if not self.window_queued(data, reply):
-                    return
-            elif status == 409:
-                # A definite refusal is not authority to change the frozen request.
-                # Busy windows may clear; stale tuples require operator review.
-                code = reply.get("error", reply.get("code"))
-                if isinstance(code, dict):
-                    code = code.get("code")
-                if code == "window_busy":
-                    data["phase"] = "waiting_for_window"
-                    self.ledger.save(data)
-                    return
-                raise Refused("window_refused")
-            if status != 202:
-                self.window_admitted(data, reply)
+        if not admit_window(self, data):
+            return
         self.observe(data)
 
     def window_queued(self, data, reply):
@@ -806,7 +746,8 @@ class Worker:
     def observe(self, data):
         if "window" not in data:
             return
-        events = self.client.read_events(after=data["cursor"], maximum=100)
+        event_deadline = {"timeout_s": EVENT_WAIT_S} if early_fast_eligible(self, data) else {}
+        events = self.client.read_events(after=data["cursor"], maximum=100, **event_deadline)
         # The client returns only complete validated envelopes. Advance the cursor
         # together with the exact source tuple's run IDs, before reading statuses.
         ids = set(data.get("matched_runs", [])) | set(self.client.matching_run_ids(events, data["intake"]))
@@ -866,7 +807,8 @@ class Worker:
         # revision race and never automatically accepts another browser input.
         for role in ("fast", "deep"):
             if role not in accepted:
-                self.accept_role(data, role, ids)
+                if not self.accept_role(data, role, ids):
+                    return
         # Confirm the canonical accepted-results view, including frozen payload.
         deep = accepted["deep"]
         matches, after = [], data["intake"]["sequence"]
@@ -890,13 +832,13 @@ class Worker:
             reply.update(text="NO_REPLY", noReply=True)
         self.ledger.complete(data, reply)
 
-    def own_statuses(self, ids):
+    def own_statuses(self, ids, roles=("fast", "deep")):
         """Status of this input's own Fast and Deep runs, looked up by run ID
         (a run of the other role answers 404). Missing roles are None."""
         found = {"fast": None, "deep": None}
         for run in sorted(ids):
             for role, route in (("deep", "/execution"), ("fast", "/fast/execution")):
-                if found[role] is not None:
+                if role not in roles or found[role] is not None:
                     continue
                 status, value = self.client.request("GET", "%s?run_id=%s" % (route, run), allowed=(200, 404))
                 if status == 200 and isinstance(value, dict) and value.get("run_id") == run:
@@ -980,7 +922,7 @@ class Worker:
             value = self.role_status(data, role, ids) or {}
             if self.accepted_elsewhere(value, ids):
                 self.adopt_acceptance(data, role, value["run_id"], ids)
-                return
+                return True
             if value.get("run_id") not in ids or value.get("phase") != "awaiting_acceptance":
                 raise Refused("proposal_replaced")
             candidate = value.get("acceptance_candidate", {})
@@ -1000,14 +942,16 @@ class Worker:
         except ClientError as error:
             if error.status != 409:
                 raise
-            # The server may have accepted this same run first (owner
-            # auto-accept); a conflict for any other reason still refuses.
+            if early_fast_eligible(self, data):
+                return reconcile_acceptance(self, data, role, ids)
+            # Other policies keep their existing canonical-adoption path.
             self.adopt_acceptance(data, role, request["run_id"], ids)
-            return
+            return True
         if receipt.get("outcome") != "succeeded" or any(receipt.get(k) != request[k] for k in ("run_id", "completion_event_id", "request_key")) or receipt.get("requested_revision") != request["expected_revision"] or not receipt.get("acceptance_event_id"):
             raise Refused("acceptance_receipt")
         accepted[role] = receipt
         self.ledger.save(data)
+        return True
 
     def adopt_acceptance(self, data, role, run_id, ids):
         """Record the canonical acceptance of this input's own run, made by
@@ -1211,7 +1155,8 @@ class Worker:
             pass
 
     def run_once(self, stop):
-        """One pass. Returns True while an input is pending (step again soon)."""
+        """One pass. Fast intake is independent; Deep finishes in ledger order."""
+        drive_intake_fast(self)
         if self._due(self._timers_checked, TIMER_POLL_S):
             self._timers_checked = time.monotonic()
             try:

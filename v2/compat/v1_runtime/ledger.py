@@ -572,6 +572,13 @@ class Ledger:
             head["burst"] = [row["remote_id"] for row in rows]
             self.save(head, db)
 
+    def pending_inputs(self):
+        """A bounded FIFO snapshot for independent owner intake/Fast work."""
+        with self.connect() as db:
+            rows = db.execute("SELECT data FROM inputs WHERE json_extract(data,'$.phase') != 'completed' "
+                              "ORDER BY rowid LIMIT 64").fetchall()
+        return [json.loads(row[0]) for row in rows]
+
     def next_input(self):
         with self.connect() as db:
             row = db.execute("SELECT data FROM inputs WHERE json_extract(data,'$.phase') != 'completed' ORDER BY rowid LIMIT 1").fetchone()

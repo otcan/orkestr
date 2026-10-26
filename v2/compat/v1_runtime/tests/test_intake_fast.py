@@ -1,0 +1,201 @@
+"""An unfinished Deep input cannot hold later original owner Fast replies."""
+import copy
+import unittest
+from unittest.mock import patch
+
+from v2.compat.v1_runtime.intake_fast import MAX_ADMISSIONS, drive, eligible, observe
+from v2.compat.v1_runtime.ledger import Conflict
+from v2.compat.v1_runtime.rust_client import ClientError
+from v2.compat.v1_runtime.tests import intake_fixture as fixture
+from v2.compat.v1_runtime.tests.intake_fixture import identity
+
+
+class IntakeFastTests(fixture.IntakeBase):
+    def test_later_fast_admits_exports_and_accepts_while_head_deep_is_running(self):
+        first = self.enqueue()
+        self.worker.run_once(fixture.Stop())
+        first_run = self.row("first")["first_response"]["run_id"]
+        second = self.enqueue("second")
+        self.worker.run_once(fixture.Stop())
+        self.assertEqual([body["text"] for body in self.mutations("/messages")],
+                         ["Request first", "Request second"])
+        self.assertEqual([message["sourceInputId"] for message in self.fast()],
+                         [first["remote_id"], second["remote_id"]])
+        self.assertEqual(len(self.mutations("/accept")), 2)
+        self.assertTrue(all(row["run_id"] != self.peer.runs[0, "deep"]["run_id"]
+                            for row in self.mutations("/accept")))
+        self.assertEqual(self.row("first")["phase"], "running")
+        self.assertEqual(self.row("second")["phase"], "running")
+        self.assertNotEqual(first_run, self.row("second")["first_response"]["run_id"])
+        self.assertEqual(self.peer.runs[0, "deep"]["phase"], "running")
+        self.assertNotIn((1, "deep"), self.peer.runs, "Core's Deep remains serialized")
+
+    def test_multiple_original_events_are_not_absorbed_and_restart_exports_each_once(self):
+        originals = [self.enqueue(str(index)) for index in range(3)]
+        drive(self.worker)
+        self.assertEqual(len(self.fast()), 3)
+        self.assertEqual([message["sourceInputId"] for message in self.fast()],
+                         [data["remote_id"] for data in originals])
+        self.assertTrue(all(self.row(str(index))["burst"] == [] for index in range(3)))
+        before = copy.deepcopy(self.peer.mutations)
+        self.worker = self.new_worker()
+        drive(self.worker)
+        self.assertEqual(self.peer.mutations, before)
+        self.assertEqual(len(self.fast()), 3)
+
+    def test_fifo_intake_is_bounded_without_starving_new_owners_behind_old_deep_work(self):
+        for index in range(MAX_ADMISSIONS + 2):
+            self.enqueue(str(index))
+        drive(self.worker)
+        self.assertEqual(len(self.peer.inputs), MAX_ADMISSIONS)
+        self.assertNotIn("intake", self.row(str(MAX_ADMISSIONS)))
+        drive(self.worker)
+        self.assertEqual([body["text"] for body in self.mutations("/messages")],
+                         ["Request " + str(index) for index in range(MAX_ADMISSIONS + 2)])
+        self.assertEqual(len(self.fast()), MAX_ADMISSIONS + 2)
+
+    def test_no_owner_or_consent_is_inferred_and_unadmitted_member_keeps_fifo(self):
+        self.enqueue("first")
+        self.enqueue("member", role="member")
+        self.enqueue("later")
+        drive(self.worker)
+        self.assertEqual([body["text"] for body in self.mutations("/messages")], ["Request first"])
+        for role in (None, "member", "v1_owner", "v1_agent", "v1_external"):
+            data = dict(phase="queued", author=dict(role=role))
+            self.assertFalse(eligible(self.worker, data))
+        for policy in ("disabled", "legacy"):
+            self.worker.fast_reply_policy = policy
+            before = copy.deepcopy(self.peer.mutations)
+            drive(self.worker)
+            self.assertEqual(self.peer.mutations, before)
+
+    def test_ledger_and_server_capacity_are_preserved_without_bypassing_a_queued_window(self):
+        self.ledger.max_outstanding = 2
+        self.enqueue("first")
+        self.enqueue("second")
+        with self.assertRaisesRegex(Conflict, "binding_capacity_reached"):
+            self.enqueue("third")
+        self.peer.capacity = True
+        drive(self.worker)
+        self.assertEqual(len(self.peer.inputs), 2, "immutable messages are admitted in FIFO order")
+        self.assertEqual(self.row("first")["phase"], "waiting_for_window_dispatch")
+        self.assertNotIn("window", self.row("second"))
+        self.assertEqual(self.fast(), [])
+        self.assertEqual(self.mutations("/accept"), [])
+        frozen = self.row("first")["window_request"]
+        drive(self.worker)
+        self.assertEqual(self.row("first")["window_request"], frozen)
+        self.assertEqual(len(self.mutations("/messages")), 2)
+
+    def test_busy_window_does_not_delay_admission_of_later_original_inputs(self):
+        self.peer.busy = True
+        self.enqueue("first")
+        self.enqueue("second")
+        drive(self.worker)
+        self.assertEqual(len(self.peer.inputs), 2)
+        self.assertEqual(self.row("first")["phase"], "waiting_for_window")
+        self.assertEqual(self.fast(), [])
+        frozen = self.row("first")["window_request"]
+        self.peer.busy = False
+        drive(self.worker)
+        self.assertEqual(self.row("first")["window_request"], frozen)
+        self.assertEqual(len(self.fast()), 2)
+
+    def test_unknown_intake_keeps_fifo_and_retries_only_its_frozen_source(self):
+        self.enqueue("first")
+        self.enqueue("second")
+        request = self.peer.request
+        lost = [False]
+        def lose_after_commit(method, route, **kwargs):
+            result = request(method, route, **kwargs)
+            if route == "/messages" and not lost[0]:
+                lost[0] = True
+                raise ClientError("transport_outcome_unknown")
+            return result
+        self.peer.request = lose_after_commit
+        drive(self.worker)
+        self.assertEqual(len(self.peer.inputs), 1)
+        self.assertNotIn("intake", self.row("first"))
+        self.assertNotIn("intake", self.row("second"))
+        self.assertEqual(self.fast(), [])
+        drive(self.worker)
+        self.assertEqual(self.mutations("/messages")[0], self.mutations("/messages")[1])
+        self.assertEqual(len(self.peer.inputs), 2)
+        self.assertEqual(len(self.fast()), 2)
+
+    def test_definite_intake_refusal_is_terminal_only_for_that_input(self):
+        self.enqueue("first")
+        self.enqueue("second")
+        request = self.peer.request
+        def refuse(method, route, **kwargs):
+            if route == "/messages":
+                self.peer.request = request
+                raise ClientError("unexpected_status", 403)
+            return request(method, route, **kwargs)
+        self.peer.request = refuse
+        drive(self.worker)
+        self.assertEqual(self.row("first")["refused"]["reason"], "upstream_refused:403")
+        self.assertNotIn("intake", self.row("second"))
+        drive(self.worker)
+        self.assertEqual([body["text"] for body in self.mutations("/messages")], ["Request second"])
+        self.assertEqual(len(self.fast()), 1)
+
+    def test_foreign_message_event_and_role_cannot_be_used_for_early_fast(self):
+        self.enqueue()
+        drive(self.worker)
+        data = self.row("first")
+        data.pop("first_response")
+        data.pop("accepted")
+        data["matched_runs"] = []
+        data["fast_cursor"] = data["intake"]["sequence"] - 1
+        self.ledger.save(data)
+        own = self.peer.runs[0, "fast"]["run_id"]
+        for event in self.peer.events:
+            if (event.get("payload_ref_or_safe_payload") or {}).get("run_id") == own:
+                event["source_message_id"] = identity(9999)
+        self.peer.event(dict(data["intake"], event_id=identity(9998)), own)
+        before = copy.deepcopy(self.peer.mutations)
+        observe(self.worker, data)
+        self.assertNotIn(own, data["matched_runs"])
+        self.assertNotIn("first_response", data)
+        self.assertEqual(self.peer.mutations, before)
+
+    def test_fast_cursor_cannot_consume_deep_events_before_the_serial_observer(self):
+        self.enqueue()
+        drive(self.worker)
+        data = self.row("first")
+        initial_cursor = data["cursor"]
+        self.assertGreater(data["fast_cursor"], initial_cursor)
+        self.assertEqual(data["cursor"], initial_cursor)
+        deep = self.peer.runs[0, "deep"]["run_id"]
+        self.assertIn(deep, data["matched_runs"])
+        with patch.object(self.worker, "capture_questions", wraps=self.worker.capture_questions) as capture:
+            self.worker.observe(data)
+        self.assertTrue(any((event.get("payload_ref_or_safe_payload") or {}).get("run_id") == deep
+                            for event in capture.call_args.args[1]))
+
+    def test_independent_fast_keeps_unknown_send_and_fifteen_second_final_fence(self):
+        self.enqueue()
+        with patch("time.time", return_value=100):
+            drive(self.worker)
+        fast = self.fast()[0]
+        pseudo = next(message for message in self.ledger.messages() if message["id"] == fast["parentMessageId"])
+        self.ledger.acknowledge(fast["id"], dict(outcome="uncertain", outboxJobId="unknown-job",
+            parentPublicMessageId=pseudo["publicMessageId"], connectorMessageIds=[]))
+        self.peer.runs[0, "deep"]["phase"] = "awaiting_acceptance"
+        with patch("time.time", return_value=102):
+            self.worker.step(self.ledger.next_input())
+        self.assertEqual(self.row("first")["phase"], "running")
+        self.assertEqual(self.row("first")["first_response"]["delivery_blocker"], "unverified_uncertain")
+        self.worker = self.new_worker()
+        with patch("time.time", return_value=117):
+            self.worker.step(self.ledger.next_input())
+        self.assertEqual(self.row("first")["phase"], "completed")
+        with self.ledger.connect() as db:
+            outcome = db.execute("SELECT outcome FROM exports WHERE export_id=?", (fast["id"],)).fetchone()[0]
+        self.assertEqual(outcome, "superseded")
+        self.assertEqual(len(self.mutations("/messages")), 1)
+
+
+if __name__ == "__main__":
+    unittest.main()
