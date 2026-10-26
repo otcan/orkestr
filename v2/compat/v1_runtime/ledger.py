@@ -574,6 +574,19 @@ class Ledger:
             head["burst"] = [row["remote_id"] for row in rows]
             self.save(head, db)
 
+    # Auto-steer: steer state transitions live in auto_steer_store.py.
+    def begin_steer(self, row, record):
+        from .auto_steer_store import begin
+        return begin(self, row, record)
+
+    def steered(self, row, head_id, audit):
+        from .auto_steer_store import steered
+        return steered(self, row, head_id, audit)
+
+    def unsteer(self, row, reason, audit=None):
+        from .auto_steer_store import unsteer
+        return unsteer(self, row, reason, audit)
+
     def pending_inputs(self):
         """A bounded FIFO snapshot for independent owner intake/Fast work."""
         with self.connect() as db:
@@ -749,7 +762,7 @@ class Ledger:
         ids = [a["upload_id"] for a in data.get("attachments", [])]
         db.executemany("UPDATE uploads SET bytes=NULL WHERE upload_id=?", [(i,) for i in ids])
         # Inputs folded into this one were answered by its reply (or notice).
-        for remote_id in data.get("burst") or ():
+        for remote_id in list(data.get("burst") or ()) + list(data.get("steered") or ()):
             row = db.execute("SELECT data FROM inputs WHERE remote_id=?", (remote_id,)).fetchone()
             if row and not json.loads(row[0]).get("settled"):
                 self._settle(db, json.loads(row[0]), outcome)

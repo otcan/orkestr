@@ -88,6 +88,7 @@ Each binding is `<bindings_dir>/<remote_thread_id>.json`:
 | `revoked` | `true` permanently withdraws the route (intake and export answer 410) |
 | `progress_updates` | Export intermediate Deep progress for this binding |
 | `fast_reply_policy` | Optional: `legacy` (default) preserves the progress-dependent Fast policy. Explicit `owner_only` enables immediate Fast replies for a group the operator verified has only owner-visible recipients; participant grants do not establish that visibility. `disabled` suppresses Fast replies (for example a coordinator chat). |
+| `auto_steer` | Optional: `off`, `question` or `running`. Unset means `question` for a binding without listed `participants` (owner-only group) and `off` otherwise. See "Auto-steer" below. |
 | `attachments` | Accept inbound attachments for this binding |
 | `max_outstanding_inputs` | 1–64 unsettled inputs before intake answers 409 |
 | `max_input_age_seconds` | Optional, 60–604800 (default 1800): how long an input may wait without a Rust window before it is refused as `input_expired` |
@@ -172,6 +173,29 @@ The compatibility API requires the configured Bearer secret on every route
 and only admits input from the binding's account, group, V1 thread and
 verified owner aliases or listed members. Forwarded `originOwner`, command and control flags
 confer no additional permission. Edits receive explicit refusals.
+
+### Auto-steer
+
+An owner message that arrives while the head input's Deep run is still running
+can go into that same native turn through Rust's supported
+`POST /steer` route instead of waiting as a separate turn. `question` mode
+does so only after that run asked an asynchronous question (the case where a
+queued answer arrives too late); `running` mode does so for any owner message;
+`off` keeps the ordinary queue. Only verified owner chat input directly behind
+the head is considered, never timer, post, digest, web, member or local-agent
+input, attachments, or a message longer than Rust's 16 KiB steer bound, and
+only while Rust reports the exact run `running` with the `steer` capability.
+
+The steer request is frozen on the input before any I/O; from then on no queue
+path admits it, and a restart replays the same request key. Rust's own steering
+state decides: `acknowledged` folds the input into the head (`absorbed_into`,
+`steered` audit) so the head's one final answers it and both settle together;
+`rejected`, an unconsumed reservation, a definite refusal (for example the run
+ended) or a run that ended before any byte was written return it to the
+ordinary queue once (`steer_fallback` audit). A queued, non-native steer
+admission is first retired through the owner retire route so Core holds no
+second copy. Written but unacknowledged delivery is closed with a visible
+notice and an operator alert instead of being replayed.
 
 ### Owner-only Fast intake
 

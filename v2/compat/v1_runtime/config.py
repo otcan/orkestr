@@ -16,7 +16,8 @@ SCOPE_FIELDS = {"conversation_id", "public_thread_id", "chat_id", "account_id", 
 BINDING_FIELDS = SCOPE_FIELDS | {"enabled", "revoked", "progress_updates", "attachments", "max_outstanding_inputs"}
 # Optional binding fields and their defaults.
 OPTIONAL_BINDING_FIELDS = {"max_input_age_seconds": 30 * 60, "participants": [], "owner_label": "Owner",
-                           "instructions_path": None, "fast_reply_policy": "legacy"}
+                           "instructions_path": None, "fast_reply_policy": "legacy",
+                           "auto_steer": None}
 # Group participants other than the owner. The owner is only ever the verified
 # `allowed_principals`; a participant can never hold the owner role.
 PARTICIPANT_ROLES = ("member", "none")
@@ -113,6 +114,9 @@ def binding(value, owner):
     value = dict(OPTIONAL_BINDING_FIELDS, **value)
     if value["fast_reply_policy"] not in ("owner_only", "legacy", "disabled"):
         raise ValueError("config_fast_reply_policy")
+    # None: on (question mode) for an owner-only group, off with members.
+    if value["auto_steer"] not in (None, "off", "question", "running"):
+        raise ValueError("config_auto_steer")
     age = value["max_input_age_seconds"]
     if type(age) is not int or not MAX_INPUT_AGE_RANGE[0] <= age <= MAX_INPUT_AGE_RANGE[1]:
         raise ValueError("config_input_age")

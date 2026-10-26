@@ -28,7 +28,7 @@ def eligible(worker, data):
     """Explicit binding consent plus the author verified at HTTP intake."""
     return (isolated(worker, data) and data.get("phase") != "completed" and not data.get("origin") and
             not any(data.get(key) for key in
-                    ("blocked", "digest", "refused", "absorbed_into", "burst", "requeued", "continued")))
+                    ("blocked", "digest", "refused", "absorbed_into", "burst", "requeued", "continued", "steer")))
 
 
 def failed(worker, data, error):

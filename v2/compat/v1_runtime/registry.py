@@ -13,11 +13,12 @@ import threading
 from . import config as config_module
 from .export_changes import ExportChanges
 from .ledger import Ledger
+from .auto_steer import default_mode as auto_steer_mode
 from .worker import DEFAULT_BURST_QUIET_S, Signal, Worker, attachment_export_settings
 
 UNIQUE_KEYS = ("remote_thread_id", "conversation_id", "public_thread_id", "chat_id")
 MUTABLE_KEYS = ("enabled", "revoked", "progress_updates", "attachments", "max_outstanding_inputs", "max_input_age_seconds",
-                "participants", "owner_label", "instructions_path", "fast_reply_policy")
+                "participants", "owner_label", "instructions_path", "fast_reply_policy", "auto_steer")
 
 
 class Binding:
@@ -159,6 +160,7 @@ class Registry:
                                     burst_quiet_s=DEFAULT_BURST_QUIET_S)
         binding.worker.progress_updates = binding.config["progress_updates"]
         binding.worker.fast_reply_policy = binding.config["fast_reply_policy"]
+        binding.worker.auto_steer = auto_steer_mode(binding.config)
         binding.worker.attachments = binding.config["attachments"]
         binding.worker.max_input_age_s = binding.config["max_input_age_seconds"]
         binding.worker.instructions_path = binding.config["instructions_path"]

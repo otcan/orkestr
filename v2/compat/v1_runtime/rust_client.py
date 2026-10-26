@@ -335,9 +335,13 @@ class RustClient:
                       path.path.endswith("/delivered") and identity(path.path[15:-10]))
         post_ack = (method == "POST" and path.path.startswith("/posts/") and
                     path.path.endswith("/delivered") and identity(path.path[7:-10]))
-        require((method == "GET" and (path.path in read or payload)) or digest_ack or post_ack or
+        steering = (method == "GET" and path.path.startswith("/steering/") and
+                    re.fullmatch(r"[A-Za-z0-9:._-]{1,128}", path.path[10:]))
+        retire = (method == "POST" and path.path.startswith("/inputs/") and path.path.endswith("/retire") and
+                  identity(path.path[8:-7]))
+        require((method == "GET" and (path.path in read or payload or steering)) or digest_ack or post_ack or retire or
                 (method == "POST" and path.path in ("/messages", "/window", "/accept", "/settings/render",
-                                                    "/timer-outcomes", "/timer-triggers")), "route_refused")
+                                                    "/timer-outcomes", "/timer-triggers", "/steer")), "route_refused")
         try:
             query = parse_qsl(path.query, strict_parsing=True, max_num_fields=2)
         except ValueError:
