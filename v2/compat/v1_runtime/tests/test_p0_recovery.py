@@ -144,8 +144,10 @@ class GulsahPeer(QueuePeer):
 
 class Base(unittest.TestCase):
     peer_class = GulsahPeer
+    ended_confirm_s = 0  # The two-observation rule has its own tests below.
 
     def setUp(self):
+        self.enterContext(patch.object(recovery, "ENDED_CONFIRM_S", self.ended_confirm_s))
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.ledger = Ledger(Path(temporary.name) / "ledger.sqlite3", {"test_scope": "stranded"})
@@ -383,6 +385,47 @@ class OwnerStopTests(Base):
         self.passes(1)
         self.assertEqual(self.ledger.input(self.data["remote_id"])["phase"], "completed")
         self.assertNotIn("readmitted", self.ledger.input(self.data["remote_id"]))
+
+
+class RequeueGapTests(Base):
+    """Core requeued the joined-but-unrun input for a successor window, but
+    the dispatcher (1 s poll) has not opened it: /window reads the old window
+    closed. The input (with its Fast run) must not be refused."""
+    peer_class = FastOnlyPeer
+    ended_confirm_s = recovery.ENDED_CONFIRM_S
+
+    def stuck(self):
+        self.passes(1)
+        data = self.ledger.next_input()
+        data["deep_missing_since"] -= 61
+        self.ledger.save(data)
+
+    def test_a_queued_successor_request_keeps_the_input_waiting(self):
+        self.stuck()
+        self.peer.window_queue = [dict(input_event_id="event", input_message_id="message", state="queued")]
+        log = self.passes(2)
+        self.assertEqual(self.ledger.next_input()["phase"], "running")
+        self.assertEqual(self.notices(), [])
+        self.assertIn("wait=successor_queued", log)
+        # The dispatcher opens the successor and Core runs the same input there.
+        self.peer.window_queue, self.peer.no_deep, self.peer.current = [], False, None
+        self.peer.accepted.clear()
+        self.passes(2)
+        self.assertEqual(self.ledger.messages()[-1]["text"], "deep result")
+        self.assertEqual(self.notices(), [])
+        self.assertEqual(self.messages_sent(), 1)
+
+    def test_ended_must_be_seen_twice_thirty_seconds_apart(self):
+        self.stuck()
+        self.passes(2)
+        data = self.ledger.next_input()
+        self.assertEqual(data["phase"], "running", "first 'ended' observation only starts the clock")
+        self.assertEqual(self.notices(), [])
+        data["ended_seen_at"] -= recovery.ENDED_CONFIRM_S + 1
+        self.ledger.save(data)
+        self.passes(1)
+        self.assertEqual(self.ledger.input(self.data["remote_id"])["refused"]["reason"], "window_ended_without_deep")
+        self.assertEqual(len(self.notices()), 1)
 
 
 class TimerFailureTests(unittest.TestCase):

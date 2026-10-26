@@ -4,6 +4,7 @@ from pathlib import Path
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 
 from v2.compat.v1_runtime import recovery
 from v2.compat.v1_runtime.ledger import Ledger
@@ -225,6 +226,10 @@ class SettlingWindowTests(Case):
 
 
 class OrphanedFollowUpTests(Case):
+    def setUp(self):
+        super().setUp()
+        self.enterContext(patch.object(recovery, "ENDED_CONFIRM_S", 0))
+
     def orphan(self):
         self.peer.foreign = True  # No run of this input ever starts.
         self.worker.step(self.data)

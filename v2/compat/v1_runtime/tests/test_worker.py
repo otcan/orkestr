@@ -33,6 +33,7 @@ class Peer:
         # Core's held inputs (an owner stop). Like real Core, retiring a held
         # queued row is still allowed: the adapter itself must refuse.
         self.held = []
+        self.window_queue = []  # Core's queued window requests (entries).
 
     def window_request(self, intake, input_key, request_key, current):
         return dict(request_key=request_key, input_message_id=intake["message_id"], input_event_id=intake["event_id"],
@@ -60,6 +61,9 @@ class Peer:
             if self.retire_state is None:
                 raise ClientError("unexpected_status", 409)
             return 200, dict(message_id=route.split("/")[2], state=self.retire_state, retirement_id="retirement")
+        if method == "GET" and route == "/window/queue":
+            return 200, dict(conversation_id=self.conversation, capacity=4, active=1,
+                             queued_total=len(self.window_queue), entries=list(self.window_queue))
         if method == "GET" and route == "/held-inputs":
             return 200, dict(schema_version=1, conversation_id=self.conversation, revision=1, observed_at_ms=1,
                              held=[dict(message_id=m) for m in self.held], next_after_sequence=None,

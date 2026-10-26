@@ -436,9 +436,12 @@ leaving it `running` behind a Fast wait.
   before. When a run references the message (in owner-only chats usually
   its Fast) Core never retires it, so the input closes at once with the
   "interrupted" notice and an ALERT. Only while Core may still run it itself
-  (a newer open window, reconciliation, a refused retirement) does the
+  (a newer open window, a window request for its event still in Core's
+  `/window/queue`, reconciliation, a refused retirement) does the
   serial queue wait, at most 10 minutes, with `ALERT … input_waiting_for_core`
-  when the wait starts. An input in Core's held inputs (an owner stop) is
+  when the wait starts. "Window ended, no successor" must also be observed
+  twice at least 30 s apart, because Core can requeue the input just before
+  its dispatcher (1 s poll) opens the successor window. An input in Core's held inputs (an owner stop) is
   never retired or re-admitted: it closes silently (`held`).
 * In practice this retry, like the operator re-admission below, applies
   mostly to inputs that never got a Fast run.
