@@ -1,6 +1,6 @@
 // Only identities reported by the remote message/run describe remote replies.
 // Counterpart layers require the same explicit original input and runtime scope.
-const layers = new Set(["fast", "deep", "coordinator"]);
+const layers = new Set(["fast", "deep", "coordinator", "notice"]);
 const efforts = new Set(["low", "medium", "high", "xhigh", "max", "ultra"]);
 const token = (value) => typeof value === "string" && /^[A-Za-z0-9._:-]{1,128}$/.test(value) ? value : "";
 const known = (value) => token(value) && !["unknown", "unreported"].includes(value.toLowerCase()) ? value : "unknown";
@@ -11,8 +11,9 @@ export function remoteLayerMetadata(remote = {}, parent = {}) {
   const layer = parent.postAuthor === "coordinator" ? "coordinator"
     : post ? ""
       : remote.firstResponse === true ? "fast"
-        : layers.has(remote.layer) ? remote.layer
-          : remote.phase === "final_answer" ? "deep" : "";
+        : remote.kind === "notice" ? "notice"
+          : layers.has(remote.layer) ? remote.layer
+            : remote.phase === "final_answer" ? "deep" : "";
   return {
     ...(layer ? { remoteLayer: layer } : {}),
     ...(efforts.has(remote.observedReasoningEffort) ? { remoteObservedReasoningEffort: remote.observedReasoningEffort } : {}),
@@ -48,7 +49,7 @@ export function remoteLayerFooter(message = {}, messages = []) {
   const coordinator = layer === "coordinator" ? message : counterpart(message, messages, "coordinator");
   const isCoordinator = layer === "coordinator" || coordinator.remoteLayer === "coordinator";
   const main = isCoordinator ? coordinator : layer === "deep" ? message : counterpart(message, messages, "deep");
-  const writer = { fast: "Quick", deep: "Deep", coordinator: "Coordinator", unknown: "unknown" }[layer];
+  const writer = { fast: "Quick", deep: "Deep", coordinator: "Coordinator", notice: "Notice", unknown: "unknown" }[layer];
   const mainIdentity = layer === "fast" && !main.remoteLayer ? "pending" : identity(main);
   return `⚡ Quick: ${identity(quick)} · 🧠 ${isCoordinator ? "Coordinator" : "Deep"}: ${mainIdentity} · ▶ ${writer}`;
 }

@@ -6,7 +6,7 @@ Coordinator posts use `Coordinator` in place of `Deep`. Quota and queue/load lin
 These fields belong to exported message/run evidence, never local thread or account defaults:
 
 - `provider`, `model`: the answering run's observed identity; a coordinator post's own preserved identity.
-- `layer`: `fast`, `deep`, or `coordinator`. The existing explicit `firstResponse: true` also identifies Fast. Non-first, non-post `final_answer` exports default to Deep. Post parents without an author never become Deep.
+- `layer`: `fast`, `deep`, `coordinator`, or `notice`. The existing explicit `firstResponse: true` also identifies Fast. An adapter export with `kind: notice` uses writer `Notice`, independently of its delivery phase; it cannot fill a counterpart Deep identity. Other non-first, non-post `final_answer` exports default to Deep. Post parents without an author never become Deep.
 - `identitySource`: `run` or `post`. Coordinator identities require `post`; older adapters can overwrite these with an unrelated native identity, so they display unknown.
 - `observedReasoningEffort`: optional observed `low`, `medium`, `high`, `xhigh`, `max`, or `ultra`. Configured effort alone does not qualify.
 - `sourceInputId`: original input identity shared by the layers, including synthetic notification parents.

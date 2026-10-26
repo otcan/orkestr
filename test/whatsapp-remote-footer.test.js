@@ -18,6 +18,19 @@ test("a Deep final shows the original input's Fast and its own writer", () => {
   assert.equal(remoteLayerFooter(deep, [fast, deep]), "⚡ Quick: codex gpt-example-mini/low · 🧠 Deep: codex gpt-example/high · ▶ Deep");
 });
 
+test("adapter refusal notices have their own writer and cannot fill the Deep layer", () => {
+  const imported = remoteLayerMetadata({ kind: "notice", source: "rust-v2-adapter", phase: "final_answer" });
+  assert.deepEqual(imported, { remoteLayer: "notice" });
+  const notice = { ...scope, id: "notice", ...imported, remoteProvider: "codex", remoteModel: "unreported" };
+  assert.equal(remoteLayerFooter(notice, [fast]), "⚡ Quick: codex gpt-example-mini/low · 🧠 Deep: unknown unknown/unknown · ▶ Notice");
+  assert.equal(remoteLayerFooter(fast, [notice]), "⚡ Quick: codex gpt-example-mini/low · 🧠 Deep: pending · ▶ Quick");
+  assert.deepEqual(remoteLayerMetadata({ kind: "notice", phase: "final_answer", layer: "deep" }), { remoteLayer: "notice" });
+  assert.deepEqual(remoteLayerMetadata({ kind: "notice", firstResponse: true }), { remoteLayer: "fast" });
+  assert.deepEqual(remoteLayerMetadata({ kind: "notice" }, { postAuthor: "coordinator" }), {
+    remoteLayer: "coordinator", remoteProvider: null, remoteModel: null,
+  });
+});
+
 test("a coordinator post keeps its declared post identity and never the native Deep", () => {
   assert.equal(remoteLayerFooter(coordinator, [fast, deep, coordinator]), "⚡ Quick: codex gpt-example-mini/low · 🧠 Coordinator: claude opus-5.5/unknown · ▶ Coordinator");
   const old = { ...coordinator, remoteIdentitySource: undefined, remoteProvider: "codex", remoteModel: "unreported" };
