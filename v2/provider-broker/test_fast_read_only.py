@@ -113,6 +113,7 @@ class FastCodexToolTests(unittest.TestCase):
         operator = root / "operator/.codex"
         (operator / "rules").mkdir(parents=True)
         (operator / "auth.json").write_text("{}")
+        os.chmod(operator / "auth.json", 0o600)
         # The operator's own layers that must never reach Fast.
         (operator / "config.toml").write_text('[mcp_servers.alpha]\ncommand = "/bin/true"\n')
         (operator / "rules/default.rules").write_text(
@@ -138,6 +139,8 @@ class FastCodexToolTests(unittest.TestCase):
         system = root / "etc-codex"
         home = prepare_fast_home(state / "host-codex-home", operator / "auth.json", system)
         self.assertEqual(sorted(p.name for p in home.iterdir()), ["auth.json"])
+        # One shared credential: a link to the operator's auth file.
+        self.assertTrue((home / "auth.json").is_symlink())
         self.assertEqual(os.readlink(home / "auth.json"), str(operator / "auth.json"))
         self.assertEqual(os.stat(home).st_mode & 0o777, 0o700)
         # Anything Codex (or anyone) left there is removed before each launch.
@@ -173,6 +176,11 @@ class FastCodexToolTests(unittest.TestCase):
         with self.assertRaises(ContractRefused):
             prepare_fast_home(state / "home", operator / "auth.json", system)
 
+    @staticmethod
+    def expected_home(operator, state):
+        from codex_service.profile import fast_home
+        return fast_home(types.SimpleNamespace(state_root=str(state)), {"HOME": str(operator.parent)})
+
     def configuration(self, role, operator, state, files=()):
         from codex_service.profile import Configuration
         config = object.__new__(Configuration)
@@ -194,14 +202,14 @@ class FastCodexToolTests(unittest.TestCase):
         fast = commands["fast"]
         native = fast.index("/opt/example/native")
         self.assertEqual(fast[native - 2:native], ["/usr/bin/env",
-                         f"CODEX_HOME={state / 'host-codex-home'}"])
+                         f"CODEX_HOME={self.expected_home(operator, state)}"])
         self.assertEqual(fast[native + 1], "app-server")
         self.assertIn("hooks", fast)
         for role in ("deep", "worker-0"):
             self.assertEqual(commands[role][-4:], ["/opt/example/native", "app-server",
                                                    "--listen", "stdio://"])
             self.assertIn(f"CODEX_HOME={operator}", commands[role])
-            self.assertNotIn(f"CODEX_HOME={state / 'host-codex-home'}", commands[role])
+            self.assertNotIn(f"CODEX_HOME={self.expected_home(operator, state)}", commands[role])
 
     def test_an_environment_file_cannot_move_fast_back_to_the_operator_home(self):
         root, operator, state = self.tree()
@@ -215,7 +223,7 @@ class FastCodexToolTests(unittest.TestCase):
         config.profile.native = native
         command, _ = config.isolated_command()
         output = subprocess.run(command, capture_output=True, text=True, check=True).stdout
-        self.assertEqual(output, str(state / "host-codex-home"))
+        self.assertEqual(output, str(self.expected_home(operator, state)))
 
     def test_fast_resume_finds_threads_from_before_its_own_home(self):
         root, operator, state = self.tree()
@@ -225,7 +233,7 @@ class FastCodexToolTests(unittest.TestCase):
         rollout.write_bytes(b'{"synthetic":1}\n')
         config = self.configuration("fast", operator, state)
         self.assertEqual(config.host_resume(native), "imported")
-        self.assertTrue((state / "host-codex-home/sessions/2026/10/20" / rollout.name).is_file())
+        self.assertTrue((self.expected_home(operator, state) / "sessions/2026/10/20" / rollout.name).is_file())
         self.assertEqual(config.host_resume(native), "present")
 
     def test_disabled_feature_list_is_verified_for_the_pinned_native(self):
@@ -290,6 +298,118 @@ class FastCodexToolTests(unittest.TestCase):
         project_layers = [layer for layer in result["layers"] if layer["name"]["type"] == "project"]
         self.assertTrue(project_layers)
         self.assertTrue(all(layer.get("disabledReason") for layer in project_layers))
+
+
+class FastHomeRegressionTests(unittest.TestCase):
+    """Incident 2026-10-26: a Fast home inside the Fast native state root made
+    every later Fast launch fail `private_state` ("unexpected private native
+    state"). The home must live outside every checked tree."""
+
+    @staticmethod
+    def private_base():
+        """private_state requires ancestors writable only by root or us
+        (/tmp is not); use the first such base directory."""
+        for candidate in (os.environ.get("ORKESTR_V2_HOME"), os.environ.get("HOME")):
+            if not candidate or not Path(candidate).is_dir():
+                continue
+            path = Path(candidate).resolve()
+            if all(item.stat().st_uid in (0, os.geteuid()) and not item.stat().st_mode & 0o022
+                   for item in (path, *path.parents)):
+                return path
+        return None
+
+    def layout(self):
+        base = self.private_base()
+        if base is None:
+            self.skipTest("no private base directory for the real private_state check")
+        root = Path(tempfile.mkdtemp(prefix="synthetic-fast-state-", dir=base))
+        self.addCleanup(shutil.rmtree, root)
+        operator = root / "home/.codex"
+        operator.mkdir(parents=True, mode=0o700)
+        (operator / "auth.json").write_text('{"synthetic": "token-a"}')
+        os.chmod(operator / "auth.json", 0o600)
+        state = root / "native-fast"
+        state.mkdir(mode=0o700)
+        # The real production layout of a used Fast state root.
+        (state / "sessions/2026/10/26").mkdir(parents=True, mode=0o700)
+        for name in ("sessions", "sessions/2026", "sessions/2026/10", "sessions/2026/10/26"):
+            os.chmod(state / name, 0o700)
+        for name in ("state_5.sqlite", "logs_2.sqlite", "installation_id"):
+            (state / name).write_bytes(b"synthetic")
+            os.chmod(state / name, 0o600)
+        (state / "auth.json").write_bytes(b"")
+        os.chmod(state / "auth.json", 0o600)
+        for name in ("tmp", "cache"):
+            (state / name).mkdir(mode=0o700)
+        return root, operator, state
+
+    def configuration(self, operator, state):
+        from codex_service.profile import Configuration
+        config = object.__new__(Configuration)
+        config.role, config.issued, config.host_full_access = "fast", False, True
+        config.profile = types.SimpleNamespace(native=Path("/opt/example/native"),
+                                               state_root=str(state))
+        config.host_environment = {"HOME": str(operator.parent), "PATH": "/usr/bin:/bin",
+                                   "CODEX_HOME": str(operator)}
+        config.host_environment_files = []
+        return config
+
+    def test_real_private_state_accepts_the_state_root_after_fast_launches(self):
+        from isolation.authenticated import private_state
+        root, operator, state = self.layout()
+        private_state(str(state))  # Sanity: the fixture is a valid state root.
+        for _ in range(3):  # Every launch prepares the home, then the next loads the profile.
+            config = self.configuration(operator, state)
+            config.isolated_command()
+            private_state(str(state))
+        home = config.prepare_fast_home()
+        self.assertNotIn(state, home.parents)
+        self.assertNotIn(operator, home.parents)
+        self.assertEqual(sorted(p.name for p in state.iterdir()),
+                         ["auth.json", "cache", "installation_id", "logs_2.sqlite",
+                          "sessions", "state_5.sqlite", "tmp"])
+        # The old location is exactly what private_state refuses.
+        (state / "host-codex-home").mkdir(mode=0o700)
+        with self.assertRaisesRegex(ValueError, "unexpected private native state"):
+            private_state(str(state))
+
+    def test_a_home_inside_a_checked_tree_is_refused(self):
+        from codex_service.contract import Refused as ContractRefused
+        from codex_service import profile
+        root, operator, state = self.layout()
+        config = self.configuration(operator, state)
+        for inside in (state / "host-codex-home", operator / "fast"):
+            original = profile.fast_home
+            profile.fast_home = lambda *_: inside
+            try:
+                with self.assertRaises(ContractRefused):
+                    config.prepare_fast_home()
+            finally:
+                profile.fast_home = original
+
+    def test_auth_link_resolves_to_the_operator_file_and_state_stays_valid(self):
+        from isolation.authenticated import private_state
+        root, operator, state = self.layout()
+        config = self.configuration(operator, state)
+        home = config.prepare_fast_home()
+        link = home / "auth.json"
+        self.assertTrue(link.is_symlink())
+        self.assertEqual(link.resolve(strict=True), (operator / "auth.json").resolve(strict=True))
+        # A refresh written by either native is the credential the other reads.
+        (operator / "auth.json").write_text('{"synthetic": "token-b"}')
+        self.assertEqual(link.read_text(), '{"synthetic": "token-b"}')
+        private_state(str(state))
+        # A replaced or retargeted link is restored on the next launch.
+        link.unlink()
+        link.write_text('{"synthetic": "stale"}')
+        config.prepare_fast_home()
+        self.assertEqual(os.readlink(link), str(operator / "auth.json"))
+        private_state(str(state))
+        # The operator file must be ours and private, or Fast does not launch.
+        from codex_service.contract import Refused as ContractRefused
+        os.chmod(operator / "auth.json", 0o644)
+        with self.assertRaises(ContractRefused):
+            config.prepare_fast_home()
 
 
 class FastClaudeTests(unittest.TestCase):

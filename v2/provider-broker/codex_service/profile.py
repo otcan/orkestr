@@ -1,4 +1,5 @@
 """The same selected read-only account and bounded isolation, explicit service role."""
+import hashlib
 import os
 from pathlib import Path
 import re
@@ -61,7 +62,14 @@ class Configuration:
         """Host Fast's own CODEX_HOME; the operator's home is never used."""
         require(self.host_full_access and self.role == "fast", "fast_home_role")
         operator = host_codex_home(self.host_environment)
-        return prepare_fast_home(fast_home(self.profile), operator / "auth.json")
+        home = fast_home(self.profile, self.host_environment)
+        state = Path(getattr(self.profile, "state_root"))
+        # Never inside a checked native state root (private_state refuses any
+        # unknown entry there) and never inside the operator's Codex home.
+        for other in (state, operator):
+            require(home != other and other not in home.parents and home not in other.parents,
+                    "fast_home_scope_overlap")
+        return prepare_fast_home(home, operator / "auth.json")
 
     def host_resume(self, native):
         """Host mode reads native threads from the real CODEX_HOME, but a thread
@@ -202,30 +210,54 @@ SYSTEM_CODEX = Path("/etc/codex")
 ALLOW_RULE = re.compile(rb"""decision\s*=\s*["']allow["']""")
 
 
-def fast_home(profile):
-    """The Fast role's private Codex home inside its own native state root."""
+FAST_HOME_ROOT = Path(".local/state/orkestr-v2")
+
+
+def fast_home(profile, environment):
+    """The Fast role's private Codex home: OUTSIDE its native state root, which
+    `isolation.authenticated.private_state` checks against a closed inventory,
+    in the service user's own home (always creatable by this broker), one per
+    Fast state root."""
     state = getattr(profile, "state_root", None)
     require(state is not None, "fast_home_state_root")
-    return Path(state) / "host-codex-home"
+    home = Path(environment["HOME"])
+    require(home.is_absolute() and ".." not in home.parts, "fast_home")
+    key = hashlib.sha256(str(Path(state)).encode()).hexdigest()[:16]
+    return home / FAST_HOME_ROOT / f"fast-codex-home-{key}"
+
+
+def _private_directory(path):
+    try:
+        os.mkdir(path, 0o700)
+    except FileExistsError:
+        pass
+    info = os.lstat(path)
+    require(stat.S_ISDIR(info.st_mode) and info.st_uid == os.geteuid()
+            and stat.S_IMODE(info.st_mode) & 0o077 == 0, "fast_home")
 
 
 def prepare_fast_home(home, auth, system=SYSTEM_CODEX):
     """Make `home` a Fast-only CODEX_HOME: private, holding only a link to the
-    operator's auth file (Codex writes refreshed tokens in place, so Fast and
-    Deep keep one credential) plus Codex's own state. With no config.toml no
-    project is trusted, so project `.codex` config, rules and hooks stay
-    disabled too. Refuses to launch when an `allow` exec-policy rule or
-    an operator config layer could still reach Fast."""
+    operator's auth file plus Codex's own state. One shared file keeps Deep
+    and Fast on one credential: Codex rewrites auth.json in place, so a token
+    either native refreshes is the one the other uses next (a copy would let a
+    long-lived Fast native rotate the refresh token while the operator file
+    keeps the old one). The link lives outside every native state root, which
+    `private_state` checks and where links are refused.
+    With no config.toml no project is trusted, so project `.codex` config,
+    rules and hooks stay disabled too. Refuses to launch when an `allow`
+    exec-policy rule or an operator config layer could still reach Fast."""
     home = Path(home)
     auth = Path(auth)
     require(home.is_absolute() and auth.is_absolute(), "fast_home")
-    try:
-        os.mkdir(home, 0o700)
-    except FileExistsError:
-        pass
-    info = os.lstat(home)
-    require(stat.S_ISDIR(info.st_mode) and info.st_uid == os.geteuid()
-            and stat.S_IMODE(info.st_mode) & 0o077 == 0, "fast_home")
+    for parent in reversed(home.parents):
+        if not parent.exists():
+            _private_directory(parent)
+    # The directory holding the Fast home must be ours and not writable by others.
+    parent = os.lstat(home.parent)
+    require(stat.S_ISDIR(parent.st_mode) and parent.st_uid == os.geteuid()
+            and parent.st_mode & 0o022 == 0, "fast_home_parent")
+    _private_directory(home)
     for name in FAST_HOME_FORBIDDEN:
         path = home / name
         if path.is_dir() and not path.is_symlink():
@@ -233,6 +265,9 @@ def prepare_fast_home(home, auth, system=SYSTEM_CODEX):
             shutil.rmtree(path)
         elif os.path.lexists(path):
             os.unlink(path)
+    info = os.stat(auth)
+    require(stat.S_ISREG(info.st_mode) and info.st_uid == os.geteuid()
+            and stat.S_IMODE(info.st_mode) & 0o077 == 0, "fast_auth_source")
     link = home / "auth.json"
     if not (link.is_symlink() and os.readlink(link) == str(auth)):
         if os.path.lexists(link):
