@@ -10,6 +10,17 @@ async fn context_depth(tx: &mut SqliteConnection, owner: &OwnerId, message: &str
     Ok(parent.map_or(0, |depth| depth + 1))
 }
 
+/// Whether the asking run serves an input the owner authored: a verified
+/// owner message, or the returned outcome of a request that itself was
+/// owner-commanded. Members, timers, V1-local senders, unattributed machine
+/// inputs and another thread's request never command a thread ask.
+async fn owner_commanded(tx: &mut SqliteConnection, owner: &OwnerId, message: &str) -> R<bool> {
+    let kind: Option<String> = sqlx::query_scalar("SELECT CASE WHEN EXISTS(SELECT 1 FROM thread_asks WHERE owner_id=?2 AND input_message_id=?1) THEN 'ask' WHEN EXISTS(SELECT 1 FROM thread_asks WHERE owner_id=?2 AND reply_message_id=?1) THEN 'reply' WHEN EXISTS(SELECT 1 FROM dormant_timer_inputs WHERE message_id=?1) THEN 'timer' ELSE (SELECT author FROM message_authors WHERE message_id=?1) END")
+        .bind(message).bind(owner.to_string())
+        .fetch_one(tx).await.map_err(unavailable)?;
+    Ok(matches!(kind.as_deref(), Some("owner" | "reply")))
+}
+
 impl Store {
     /// Conversations this grant may ask, with their names.
     pub async fn thread_ask_targets(
@@ -115,9 +126,12 @@ impl Store {
         } else {
             None
         };
-        let depth = match &running {
-            Some((_, message)) => context_depth(&mut tx, &owner, message).await?,
-            None => 0,
+        let (depth, commanded) = match &running {
+            Some((_, message)) => (
+                context_depth(&mut tx, &owner, message).await?,
+                owner_commanded(&mut tx, &owner, message).await?,
+            ),
+            None => (0, true),
         };
         // The target is itself waiting on this conversation: asking back would deadlock.
         let cycle: i64 = sqlx::query_scalar("SELECT count(*) FROM thread_asks WHERE owner_id=? AND source_conversation_id=? AND target_conversation_id=? AND return_path IS NULL")
@@ -129,7 +143,9 @@ impl Store {
         let hourly: i64 = sqlx::query_scalar("SELECT count(*) FROM thread_ask_audit WHERE source_conversation_id=? AND outcome='accepted' AND at_ms>?")
             .bind(conversation.to_string()).bind(now_ms() - 3_600_000)
             .fetch_one(&mut *tx).await.map_err(unavailable)?;
-        let refusal = refusal.or(if depth > THREAD_ASK_MAX_DEPTH {
+        let refusal = refusal.or(if !commanded {
+            Some("thread_ask_not_owner_commanded")
+        } else if depth > THREAD_ASK_MAX_DEPTH {
             Some("thread_ask_chain_too_deep")
         } else if cycle != 0 {
             Some("thread_ask_cycle")

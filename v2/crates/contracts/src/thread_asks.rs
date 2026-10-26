@@ -14,7 +14,7 @@ pub const THREAD_ASK_GRANT_HEADER: &str = "x-orkestr-thread-ask-grant";
 /// Request text bound; the composed target input stays below the message limit.
 pub const THREAD_ASK_TEXT_MAX: usize = 8_000;
 /// Explicit target allowlist bound for one grant.
-pub const THREAD_ASK_TARGETS_MAX: usize = 32;
+pub const THREAD_ASK_TARGETS_MAX: usize = 256;
 /// At most this many unsettled requests per asking conversation.
 pub const THREAD_ASK_OPEN_MAX: i64 = 4;
 /// At most this many accepted requests per asking conversation per hour.
@@ -63,6 +63,19 @@ pub struct ThreadAskGrant {
     pub issued: bool,
     pub generation: i64,
     pub targets: Option<Vec<ConversationId>>,
+}
+/// One conversation of the owner in the grant directory used by provisioning.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ThreadAskGrantEntry {
+    pub conversation_id: ConversationId,
+    pub name: String,
+    /// False for a restricted or archived conversation (it can neither ask nor be asked).
+    pub eligible: bool,
+    pub grant: ThreadAskGrant,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ThreadAskGrantDirectory {
+    pub conversations: Vec<ThreadAskGrantEntry>,
 }
 /// Returned once at issue; only its hash is stored.
 #[derive(Debug, Clone, Serialize, Deserialize)]

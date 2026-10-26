@@ -109,16 +109,23 @@ pub async fn message(
     let request = json(body)?;
     let expected_provider_generation = request.expected_provider_generation;
     let continuation_source_run_id = request.continuation_source_run_id.clone();
+    // The owner's own browser session is the owner. A machine credential (a
+    // delivery adapter) states the author it verified; without that the input
+    // is unattributed and cannot command a thread ask.
+    let author = request.author.or(headers
+        .contains_key(axum::http::header::COOKIE)
+        .then_some(InputAuthor::Owner));
     let (input, reply_to) = request.into_parts();
     let admitted = s
         .store
-        .admit_with_provider_generation(
+        .admit_attributed(
             &owner,
             &conversation(id)?,
             &input,
             reply_to.as_ref(),
             expected_provider_generation,
             continuation_source_run_id.as_ref(),
+            author,
         )
         .await?;
     Ok((

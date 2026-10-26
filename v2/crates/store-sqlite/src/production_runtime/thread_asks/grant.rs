@@ -269,4 +269,43 @@ impl Store {
             last_sequence,
         })
     }
+
+    /// Every conversation of the owner with its grant state, for provisioning.
+    /// Never returns a grant value.
+    pub async fn thread_ask_grant_directory(
+        &self,
+        credential: &str,
+        owner: &OwnerId,
+    ) -> R<ThreadAskGrantDirectory> {
+        if self.authority.is_some() || credential.is_empty() || credential.len() > 1024 {
+            return Err(ResourceError::Unauthorized);
+        }
+        let mut tx = self.pool.begin().await.map_err(unavailable)?;
+        let sessions: i64 = sqlx::query_scalar("SELECT count(*) FROM auth_sessions WHERE token_hash=? AND owner_id=? AND expires_at>unixepoch()")
+            .bind(crate::digest(credential)).bind(owner.to_string())
+            .fetch_one(&mut *tx).await.map_err(unavailable)?;
+        if sessions != 1 {
+            return Err(ResourceError::Unauthorized);
+        }
+        let ids: Vec<String> = sqlx::query_scalar(
+            "SELECT id FROM conversations WHERE owner_id=? ORDER BY rowid LIMIT 1000",
+        )
+        .bind(owner.to_string())
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(unavailable)?;
+        let mut conversations = Vec::with_capacity(ids.len());
+        for id in ids {
+            let conversation = ConversationId(uuid(&id)?);
+            let row = grant_row(&mut tx, &conversation).await?;
+            conversations.push(ThreadAskGrantEntry {
+                name: name(&mut tx, &id).await?,
+                eligible: !unavailable_conversation(&mut tx, owner, &id).await?,
+                grant: grant_of(&conversation, row.as_ref())?,
+                conversation_id: conversation,
+            });
+        }
+        tx.commit().await.map_err(unavailable)?;
+        Ok(ThreadAskGrantDirectory { conversations })
+    }
 }

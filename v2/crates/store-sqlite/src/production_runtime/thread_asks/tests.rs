@@ -64,18 +64,45 @@ pub(super) async fn start(
     ));
     run.provider
 }
-pub(super) async fn owner_input(f: &Case, c: &ConversationId, key: &str) {
+pub(super) async fn input_by(
+    f: &Case,
+    c: &ConversationId,
+    key: &str,
+    author: Option<orkestr_v2_contracts::InputAuthor>,
+) {
     f.store
-        .admit(
+        .admit_attributed(
             &f.owner,
             c,
             &MessageInput {
                 client_message_id: key.into(),
-                text: format!("synthetic owner input {key}"),
+                text: format!("synthetic input {key}"),
             },
+            None,
+            None,
+            None,
+            author,
         )
         .await
         .unwrap();
+}
+pub(super) async fn owner_input(f: &Case, c: &ConversationId, key: &str) {
+    input_by(f, c, key, Some(orkestr_v2_contracts::InputAuthor::Owner)).await;
+}
+/// The next Deep turn of `c` (claims its next queued input), after earlier ones.
+pub(super) async fn next_turn(f: &Case, c: &ConversationId, key: &str) -> ProviderAdmission {
+    let deep = f
+        .handle
+        .ensure_role_bindings(&f.owner, c)
+        .await
+        .unwrap()
+        .deep;
+    let deep = if deep.native_session_id.is_some() {
+        deep
+    } else {
+        ready_in(f, c).await
+    };
+    start(f, c, &deep, key).await
 }
 /// Running asking turn of `c` from a fresh owner input.
 pub(super) async fn asking_turn(

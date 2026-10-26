@@ -6,6 +6,16 @@ uses the V1 CLI, an owner session or browser pairing.
 
 ## Authority
 
+A thread asks another thread only because the owner told it to. The asking
+Deep run must be serving an input the owner authored: the owner's own message
+(from his web session, or a WhatsApp message the adapter verified as the
+owner's), or the returned answer of a request that itself passed this check.
+Group members, timers, V1-local senders, unattributed machine inputs and
+another thread's request are refused with 403 `thread_ask_not_owner_commanded`.
+Core records the verified author of each admitted input in `message_authors`:
+the adapter states it (`author` on `POST /messages`), and a browser session is
+the owner.
+
 - The owner issues a grant for the asking conversation:
   `PUT /api/v2/conversations/{id}/thread-ask-grant` with `{}` (every other
   conversation of the owner) or `{"targets": [ids]}` (an explicit allowlist).
@@ -79,6 +89,30 @@ Why both: a short answer fits in the asking turn. If the answer has to be a
 tool result, it is lost once the turn ends. A later answer has to start a new
 turn of the asking thread, and an input does that through the ordinary path.
 
+## Provisioning
+
+`v2/tools/thread_ask_provision.py` is the operator script. It logs in once
+with the owner credential file, reads `GET /api/v2/thread-ask-grants`, and for
+every eligible conversation makes sure a grant exists whose allowlist is
+exactly the owner's other eligible conversations. It installs each grant as
+`<grant-dir>/<conversation>.grant` (0600, optional `--chown`). Reruns change
+nothing. A changed allowlist or a missing file rotates that grant, `--rotate`
+forces rotation, and `--revoke` revokes and deletes. Restricted or archived
+conversations lose their grant. Agents read the file when
+`ORKESTR_V2_THREAD_ASK_GRANT_DIR` points at the directory.
+
+## Agent instructions
+
+`thread_ask.py instructions` prints the short rules to add to a thread's
+instructions:
+
+- Use it only when the owner asked for cross-thread work in this
+  conversation.
+- `thread_ask.py targets`, then
+  `thread_ask.py ask "<thread name>" --text "<request>" --wait 240`.
+- Relay the printed status as is. A request that is only sent is "not
+  processed yet", never "delivered". A later answer arrives as a new message.
+
 ## Agent tool
 
 `v2/tools/thread_ask.py` (same pattern as `desktop_lease.py`). It takes the
@@ -110,5 +144,5 @@ never reports `sent` as progress ("Sent to ..., not processed yet").
 
 ## Deployment note
 
-Migration 79 adds tables, which disables the release train's automatic code
+Migration 78 adds tables, which disables the release train's automatic code
 rollback for this train. Ship it in a train with nothing else risky.

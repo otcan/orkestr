@@ -100,3 +100,15 @@ CREATE TRIGGER thread_ask_audit_append_only BEFORE UPDATE ON thread_ask_audit
 BEGIN SELECT RAISE(ABORT,'thread ask audit is append-only'); END;
 CREATE TRIGGER thread_ask_audit_no_delete BEFORE DELETE ON thread_ask_audit
 BEGIN SELECT RAISE(ABORT,'thread ask audit is append-only'); END;
+
+-- Verified author of an admitted input, as stated by the trusted connector
+-- (or the owner's own browser session). Absent: unattributed. Only an input
+-- authored by the owner may command a thread ask.
+CREATE TABLE message_authors (
+ message_id TEXT PRIMARY KEY REFERENCES messages(id),
+ author TEXT NOT NULL CHECK(author IN ('owner','member','v1_owner','v1_agent','v1_external'))
+);
+CREATE TRIGGER message_authors_fixed BEFORE UPDATE ON message_authors
+BEGIN SELECT RAISE(ABORT,'message author is fixed'); END;
+CREATE TRIGGER message_authors_no_delete BEFORE DELETE ON message_authors
+BEGIN SELECT RAISE(ABORT,'message author is fixed'); END;

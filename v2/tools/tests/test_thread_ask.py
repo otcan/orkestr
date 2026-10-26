@@ -144,6 +144,22 @@ class ThreadAskClient(unittest.TestCase):
         self.assertEqual(json.loads(out)['ask']['state'], 'running')
         self.assertFalse(any(c[1].endswith('/collect') for c in FakeV2.calls))
 
+    def test_instructions_and_provisioned_grant_file(self):
+        code, out, _ = self.run_cli('instructions')
+        self.assertEqual(code, 0)
+        self.assertIn('Only when the owner asked you', out)
+        self.assertIn('thread_ask.py ask', out)
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / f'{CONVERSATION}.grant'
+            path.write_text(GRANT)
+            path.chmod(0o600)
+            env = {'ORKESTR_V2_THREAD_ASK_GRANT_DIR': root}
+            with unittest.mock.patch.dict(os.environ, env):
+                os.environ.pop('ORKESTR_V2_THREAD_ASK_GRANT', None)
+                code, out, _ = self.run_cli('targets')
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out)['targets'][0]['name'], 'Hosting')
+
     def test_refusals_and_bad_grants(self):
         code, _, err = self.run_cli('ask', 'nobody', '--text', 'x')
         self.assertEqual((code, json.loads(err)['code']), (ASK.ERROR_EXIT, 'target_unknown'))

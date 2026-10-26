@@ -1,6 +1,8 @@
 //! Scoped agent requests between conversations of one owner ("ask thread X").
 //!
 //! Owner (browser cookie with CSRF, or machine bearer):
+//! - `GET /api/v2/thread-ask-grants`: every conversation with its grant state
+//!   (never a grant value), for provisioning.
 //! - `GET|PUT|DELETE /api/v2/conversations/{id}/thread-ask-grant`: read,
 //!   issue/rotate (shown once) or revoke the conversation's grant.
 //! - `GET /api/v2/conversations/{id}/thread-asks?limit=N`: requests sent from
@@ -34,6 +36,7 @@ use orkestr_v2_store_sqlite::ResourceError;
 pub(crate) fn router() -> Router<AppState> {
     let base = "/api/v2/conversations/{id}";
     Router::new()
+        .route("/api/v2/thread-ask-grants", get(directory))
         .route(
             &format!("{base}/thread-ask-grant"),
             get(grant_read).put(grant_issue).delete(grant_revoke),
@@ -67,6 +70,10 @@ pub(crate) fn failure(error: ResourceError) -> Error {
                 "thread_ask_target_not_found" => (
                     StatusCode::NOT_FOUND,
                     "No conversation of this owner has that ID",
+                ),
+                "thread_ask_not_owner_commanded" => (
+                    StatusCode::FORBIDDEN,
+                    "Only a turn serving the owner's own message may ask another thread",
                 ),
                 "thread_ask_target_not_allowed" => (
                     StatusCode::FORBIDDEN,
@@ -134,6 +141,15 @@ fn grant(headers: &HeaderMap) -> Result<String, Error> {
     Ok(value.to_str().map_err(|_| unauthorized())?.to_owned())
 }
 
+async fn directory(State(state): State<AppState>, headers: HeaderMap) -> Result<Response, Error> {
+    let (owner, credential) = owner_credential(&state, &headers).await?;
+    let value = state
+        .store
+        .thread_ask_grant_directory(&credential, &owner)
+        .await
+        .map_err(failure)?;
+    Ok(Json(value).into_response())
+}
 async fn grant_read(
     State(state): State<AppState>,
     headers: HeaderMap,

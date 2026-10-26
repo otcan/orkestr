@@ -3,7 +3,12 @@ use crate::Store;
 
 pub(crate) async fn downgrade_empty(store: &Store) {
     let mut tx = store.pool.begin().await.unwrap();
-    for table in ["thread_ask_audit", "thread_asks", "thread_ask_grants"] {
+    for table in [
+        "message_authors",
+        "thread_ask_audit",
+        "thread_asks",
+        "thread_ask_grants",
+    ] {
         let count: i64 = sqlx::query_scalar(&format!("SELECT count(*) FROM {table}"))
             .fetch_one(&mut *tx)
             .await
@@ -14,7 +19,7 @@ pub(crate) async fn downgrade_empty(store: &Store) {
             .await
             .unwrap();
     }
-    sqlx::query("DELETE FROM _sqlx_migrations WHERE version=79")
+    sqlx::query("DELETE FROM _sqlx_migrations WHERE version=78")
         .execute(&mut *tx)
         .await
         .unwrap();

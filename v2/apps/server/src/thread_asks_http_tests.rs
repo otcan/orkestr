@@ -213,6 +213,30 @@ async fn grant_auth_refusals_and_owner_views() {
     )
     .await;
     assert_eq!(status, 401);
+    // Provisioning directory: owner only, never a grant value.
+    let (status, value) = send(
+        &case.state,
+        "GET",
+        "/api/v2/thread-ask-grants",
+        &[&auth],
+        "",
+    )
+    .await;
+    assert_eq!(status, 200);
+    let rows = value["conversations"].as_array().unwrap();
+    assert!(rows
+        .iter()
+        .any(|r| r["name"] == "Hosting" && r["eligible"] == true));
+    assert!(!value.to_string().contains(&grant));
+    let (status, _) = send(
+        &case.state,
+        "GET",
+        "/api/v2/thread-ask-grants",
+        &[&header],
+        "",
+    )
+    .await;
+    assert_eq!(status, 401);
     // Owner cancel: unknown requests are 404 and a grant cannot cancel.
     let cancel = case.path(&format!("/thread-asks/{}/cancel", Uuid::new_v4()));
     let (status, _) = send(&case.state, "POST", &cancel, &[&auth], "{}").await;

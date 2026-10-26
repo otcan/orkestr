@@ -154,25 +154,149 @@ async fn cross_owner_allowlist_self_rate_and_revocation_are_refused_and_audited(
 }
 
 #[tokio::test]
-async fn request_chains_stop_at_depth_one() {
+async fn only_turns_serving_the_owners_own_message_may_ask() {
+    use crate::history_import::timers::{authority::DurableTimerEnable, *};
     let f = setup().await;
-    let a = conversation(&f, "Academic").await;
+    let member = conversation(&f, "Members").await;
+    let machine = conversation(&f, "Machine").await;
     let b = conversation(&f, "Hosting").await;
-    let c = conversation(&f, "Design").await;
+    let refused = Err(ResourceError::Conflict("thread_ask_not_owner_commanded"));
+    // A group member's message.
+    let g = grant(&f, &member, None).await;
+    input_by(
+        &f,
+        &member,
+        "m1",
+        Some(orkestr_v2_contracts::InputAuthor::Member),
+    )
+    .await;
+    next_turn(&f, &member, "m1").await;
+    assert_eq!(
+        f.store
+            .create_thread_ask(&g, &member, &ask("q", &b, "Hi"), true)
+            .await,
+        refused
+    );
+    // An unattributed machine input (no verified author).
+    let g = grant(&f, &machine, None).await;
+    input_by(&f, &machine, "u1", None).await;
+    next_turn(&f, &machine, "u1").await;
+    assert_eq!(
+        f.store
+            .create_thread_ask(&g, &machine, &ask("q", &b, "Hi"), true)
+            .await,
+        refused
+    );
+    // A timer occurrence in the main conversation.
+    let namespace = Uuid::new_v4();
+    f.store
+        .import_dormant_timer_for(
+            &f.token,
+            &f.owner,
+            &TimerImportRequest {
+                namespace,
+                source_namespace: "synthetic-v1".into(),
+                source_timer_id: "timer-ask".into(),
+                source_enabled: true,
+                schedule: TimerSchedule::Interval { every_ms: 60_000 },
+            },
+            &TimerTarget {
+                conversation_id: f.conversation.clone(),
+                label: "Synthetic".into(),
+                source_thread_id: "synthetic-thread".into(),
+            },
+        )
+        .await
+        .unwrap();
+    f.store
+        .enable_durable_timer(
+            &f.token,
+            &f.owner,
+            &DurableTimerEnable {
+                timer: TimerEnableRequest {
+                    namespace,
+                    expected_revision: 1,
+                    request_key: "enable-ask".into(),
+                    conversation_id: f.conversation.clone(),
+                },
+                instruction: "Synthetic scheduled task".into(),
+            },
+        )
+        .await
+        .unwrap();
+    sqlx::query("UPDATE dormant_timers SET next_due_ms=0 WHERE namespace=?")
+        .bind(namespace.to_string())
+        .execute(&f.store.pool)
+        .await
+        .unwrap();
+    let issuer = f.handle.authorize_timer_scheduler(namespace).await.unwrap();
+    f.handle
+        .admit_authorized_timer_turn(&issuer, namespace, false)
+        .await
+        .unwrap();
+    let g = grant(&f, &f.conversation, None).await;
+    next_turn(&f, &f.conversation, "t1").await;
+    assert_eq!(
+        f.store
+            .create_thread_ask(&g, &f.conversation, &ask("q", &b, "Hi"), true)
+            .await,
+        refused
+    );
+    // Another thread's request: the turn answering it cannot forward it.
+    let a = conversation(&f, "Academic").await;
     let ga = grant(&f, &a, None).await;
     let gb = grant(&f, &b, None).await;
-    let gc = grant(&f, &c, None).await;
     let _turn = asking_turn(&f, &a, "owner-a1").await;
     f.store
         .create_thread_ask(&ga, &a, &ask("q1", &b, "Step one"), true)
         .await
         .unwrap();
-    // Hosting's turn handling that request may ask once more (depth 1).
-    let bb = ready_in(&f, &b).await;
-    let _b_turn = start(&f, &b, &bb, "b1").await;
+    next_turn(&f, &b, "b1").await;
+    assert_eq!(
+        f.store
+            .create_thread_ask(&gb, &b, &ask("q2", &member, "Fwd"), true)
+            .await,
+        refused
+    );
+    // Every refusal is audited with its code.
+    assert_eq!(
+        count(
+            &f,
+            "SELECT count(*) FROM thread_ask_audit WHERE outcome=?",
+            "thread_ask_not_owner_commanded"
+        )
+        .await,
+        4
+    );
+}
+
+#[tokio::test]
+async fn returned_answer_turns_count_as_hops_and_stop_at_depth_one() {
+    let f = setup().await;
+    let a = conversation(&f, "Academic").await;
+    let b = conversation(&f, "Hosting").await;
+    let g = grant(&f, &a, None).await;
+    let (_, turn) = asking_turn(&f, &a, "owner-a1").await;
+    f.store
+        .create_thread_ask(&g, &a, &ask("q1", &b, "Step one"), true)
+        .await
+        .unwrap();
+    finish(&f, &a, &turn, "asked", "a1").await;
+    let answer = next_turn(&f, &b, "b1").await;
+    finish(&f, &b, &answer, "one", "b1").await;
+    assert_eq!(
+        f.handle
+            .advance_thread_asks(true, &mut Default::default())
+            .await
+            .unwrap()
+            .returned,
+        1
+    );
+    // The turn handling the returned answer may follow up once (depth 1).
+    let turn = next_turn(&f, &a, "a2").await;
     let second = f
         .store
-        .create_thread_ask(&gb, &b, &ask("q2", &c, "Step two"), true)
+        .create_thread_ask(&g, &a, &ask("q2", &b, "Step two"), true)
         .await
         .unwrap();
     assert_eq!(
@@ -184,12 +308,21 @@ async fn request_chains_stop_at_depth_one() {
         .await,
         1
     );
-    // Design's turn handling the depth-1 request cannot start another hop.
-    let cb = ready_in(&f, &c).await;
-    let _c_turn = start(&f, &c, &cb, "c1").await;
+    finish(&f, &a, &turn, "asked again", "a2").await;
+    let answer = next_turn(&f, &b, "b2").await;
+    finish(&f, &b, &answer, "two", "b2").await;
+    assert_eq!(
+        f.handle
+            .advance_thread_asks(true, &mut Default::default())
+            .await
+            .unwrap()
+            .returned,
+        1
+    );
+    next_turn(&f, &a, "a3").await;
     assert_eq!(
         f.store
-            .create_thread_ask(&gc, &c, &ask("q3", &a, "Step three"), true)
+            .create_thread_ask(&g, &a, &ask("q3", &b, "Step three"), true)
             .await,
         Err(ResourceError::Conflict("thread_ask_chain_too_deep"))
     );
@@ -323,6 +456,10 @@ async fn no_dispatcher_cycles_and_no_reply_answers_are_explicit() {
         Err(ResourceError::Conflict("thread_ask_no_dispatcher"))
     );
     assert_eq!(messages(&f, &b).await, 0);
+    // Hosting runs its own owner's message while Academic's request waits.
+    owner_input(&f, &b, "owner-b1").await;
+    let bb = ready_in(&f, &b).await;
+    let b_owner = start(&f, &b, &bb, "b0").await;
     let id = f
         .store
         .create_thread_ask(&ga, &a, &ask("q1", &b, "Hi"), true)
@@ -330,15 +467,15 @@ async fn no_dispatcher_cycles_and_no_reply_answers_are_explicit() {
         .unwrap()
         .ask
         .ask_id;
-    let bb = ready_in(&f, &b).await;
-    let target = start(&f, &b, &bb, "b1").await;
-    // Hosting cannot ask back while Academic waits on it.
+    // Hosting's owner-commanded turn cannot ask back while Academic waits on it.
     assert_eq!(
         f.store
             .create_thread_ask(&gb, &b, &ask("back", &a, "Which one?"), true)
             .await,
         Err(ResourceError::Conflict("thread_ask_cycle"))
     );
+    finish(&f, &b, &b_owner, "done", "b0").await;
+    let target = next_turn(&f, &b, "b1").await;
     finish(&f, &b, &target, "NO_REPLY", "b1").await;
     let collected = f.store.collect_thread_ask(&ga, &a, id).await.unwrap();
     assert_eq!(

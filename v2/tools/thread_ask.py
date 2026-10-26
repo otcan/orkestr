@@ -18,8 +18,10 @@ not answered within the window lifetime ceiling fail as `expired`. A request tha
 
 Exit status: 0 answered (or sent, without --wait), 3 not answered yet when the
 wait ended, 4 the target did not answer, 2 refused or failed.
-The grant comes from ORKESTR_V2_THREAD_ASK_GRANT or a private --grant-file and
-is never printed.
+The grant comes from --grant-file, ORKESTR_V2_THREAD_ASK_GRANT, or the
+provisioned file ORKESTR_V2_THREAD_ASK_GRANT_DIR/<conversation>.grant (see
+thread_ask_provision.py); it is never printed. `instructions` prints the short
+agent rules.
 """
 import argparse
 import hashlib
@@ -41,6 +43,28 @@ class AskError(RuntimeError):
     def __init__(self, status, code):
         super().__init__(f'{status}:{code}')
         self.status, self.code = status, code
+
+
+AGENT_INSTRUCTIONS = """Asking another thread (Orkestr thread asks)
+
+Only when the owner asked you, in this conversation, to get something from or
+done by another of his threads. Never on your own initiative, never for a
+group member, a timer or another thread's request (Orkestr refuses those).
+
+  thread_ask.py targets                          # the threads you may ask
+  thread_ask.py ask "<thread name>" --text "<what the owner wants>" --wait 240
+
+Write the request so the other agent can act on it without this chat. With
+--wait you get its answer here if it comes in time. Otherwise tell the owner
+exactly what the tool printed (for example "Sent ..., not processed yet");
+never say "delivered" or "done" for a request that is only sent. A later
+answer arrives in this thread as a new message, and you continue from there.
+"""
+
+
+def grant_path(conversation, environ=os.environ):
+    root = environ.get('ORKESTR_V2_THREAD_ASK_GRANT_DIR', '').strip()
+    return Path(root) / f'{conversation}.grant' if root else None
 
 
 def read_grant(path=None, environ=os.environ):
@@ -151,6 +175,7 @@ def parser():
     root.add_argument('--grant-file')
     commands = root.add_subparsers(dest='action', required=True)
     commands.add_parser('targets')
+    commands.add_parser('instructions')
     ask = commands.add_parser('ask')
     ask.add_argument('target')
     text = ask.add_mutually_exclusive_group(required=True)
@@ -168,10 +193,16 @@ def parser():
 
 def main(argv=None):
     args = parser().parse_args(argv)
+    if args.action == 'instructions':
+        print(AGENT_INSTRUCTIONS, end='')
+        return 0
     try:
         if not args.v2_url or not args.conversation:
             raise AskError(0, 'v2_url_and_conversation_required')
-        client = Client(args.v2_url, args.conversation, read_grant(args.grant_file))
+        path = args.grant_file
+        if not path and not os.environ.get('ORKESTR_V2_THREAD_ASK_GRANT'):
+            path = grant_path(args.conversation)
+        client = Client(args.v2_url, args.conversation, read_grant(path))
         if args.action == 'targets':
             print(json.dumps({'ok': True, 'targets': client.targets()}, indent=2, sort_keys=True))
             return 0

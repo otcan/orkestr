@@ -22,10 +22,10 @@ use crate::conversation_resources::{now_ms, owned};
 use crate::ResourceError;
 use orkestr_v2_contracts::{
     thread_ask_status_text, ConversationId, EventId, MessageId, MessageInput, ThreadAskGrant,
-    ThreadAskGrantIssued, ThreadAskGrantRequest, ThreadAskList, ThreadAskReceipt,
-    ThreadAskReplyInput, ThreadAskReplyInputs, ThreadAskRequest, ThreadAskReturn, ThreadAskState,
-    ThreadAskTarget, ThreadAskView, THREAD_ASK_EXPIRY_MS, THREAD_ASK_HOURLY_MAX,
-    THREAD_ASK_MAX_DEPTH, THREAD_ASK_OPEN_MAX, THREAD_ASK_REFUSALS_MAX,
+    ThreadAskGrantDirectory, ThreadAskGrantEntry, ThreadAskGrantIssued, ThreadAskGrantRequest,
+    ThreadAskList, ThreadAskReceipt, ThreadAskReplyInput, ThreadAskReplyInputs, ThreadAskRequest,
+    ThreadAskReturn, ThreadAskState, ThreadAskTarget, ThreadAskView, THREAD_ASK_EXPIRY_MS,
+    THREAD_ASK_HOURLY_MAX, THREAD_ASK_MAX_DEPTH, THREAD_ASK_OPEN_MAX, THREAD_ASK_REFUSALS_MAX,
 };
 use sqlx::{sqlite::SqliteRow, Sqlite, Transaction};
 mod ask;
