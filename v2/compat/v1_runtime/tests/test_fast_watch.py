@@ -6,6 +6,7 @@ import json
 from unittest.mock import patch
 
 from v2.compat.v1_runtime import fast_watch
+from v2.compat.v1_runtime import worker as worker_module
 from v2.compat.v1_runtime.intake_fast import MAX_FAST_OBSERVATIONS, drive
 from v2.compat.v1_runtime.rust_client import ClientError
 from v2.compat.v1_runtime.tests import intake_fixture as fixture
@@ -130,7 +131,11 @@ class FastWatchTests(fixture.IntakeBase):
                 with patch("time.time", return_value=102), contextlib.redirect_stderr(io.StringIO()):
                     busy = self.worker.run_once(fixture.Stop())
                 self.assertTrue(busy, "retained Fast must not fall back to the five-second idle pass")
-                self.assertEqual(self.worker.busy_pause(), 1)
+                self.assertEqual(self.worker.busy_pause(), worker_module.FAST_PASS_S,
+                                 "pending owner Fast work is passed at the fast pace")
+                self.worker._fast_since -= worker_module.FAST_PACE_S
+                self.assertEqual(self.worker.busy_pause(), worker_module.PASS_S,
+                                 "a long-retained watch falls back to the ordinary busy pass")
                 self.assertFalse(self.watches()[0].get("closed", False))
                 self.peer.runs[0, "fast"]["phase"] = "awaiting_acceptance"
                 self.peer.request = request
