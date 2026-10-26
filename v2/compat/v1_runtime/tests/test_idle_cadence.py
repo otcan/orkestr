@@ -125,15 +125,16 @@ class BurstWakeTests(unittest.TestCase):
         peer, signal = Peer(), Signal()
         worker = Worker(peer, ledger, burst_quiet_s=0.6)
         def message(public_id, text):
-            ledger.enqueue(dict(publicMessageId=public_id, publicThreadId="thread", chatId="chat",
-                                accountId="account", text=text))
+            data, _ = ledger.enqueue(dict(publicMessageId=public_id, publicThreadId="thread", chatId="chat",
+                                          accountId="account", text=text))
             signal.wake()  # What the intake handler does.
+            return data["queued_at"]
         sent = []
         intakes = lambda: list(sent)
         original = peer.request
         def request(method, route, body=None, allowed=(200,)):
             if method == "POST" and route == "/messages":
-                sent.append((time.monotonic(), body["text"]))
+                sent.append((time.time(), body["text"]))
             return original(method, route, body=body, allowed=allowed)
         peer.request = request
         thread = threading.Thread(target=worker.run, args=(signal,), daemon=True)
@@ -142,16 +143,21 @@ class BurstWakeTests(unittest.TestCase):
             message("b", "second")
             thread.start()
             time.sleep(0.3)
-            message("c", "third")
-            last = time.monotonic()
-            deadline = last + 5
+            # The debounce runs from the arrival stamp the ledger gives the last
+            # input (wall clock, taken inside the enqueue transaction), not from
+            # when enqueue() returned: the commit and wake-up can take tens of
+            # milliseconds under load, which made a "time since return" bound flaky.
+            last = message("c", "third")
+            deadline = time.monotonic() + 5
             while not intakes() and time.monotonic() < deadline:
                 time.sleep(0.01)
             signal.set()
             thread.join(5)
         (at, text), = intakes()
         self.assertEqual(text, "\n\n".join([BURST_NOTE % 3, "first", "second", "third"]))
-        self.assertGreaterEqual(at - last, 0.55, "the quiet period is kept")
+        # Exact: the worker re-checks the wall clock and never sends before the
+        # full quiet period since the last arrival has passed.
+        self.assertGreaterEqual(at - last, 0.6, "the quiet period is kept")
         self.assertLess(at - last, 0.6 + 0.5, "sent when quiet, not a whole pass later")
 
     def test_busy_pause_is_one_pass_or_until_the_burst_is_due(self):
