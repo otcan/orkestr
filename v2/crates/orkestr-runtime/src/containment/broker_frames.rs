@@ -87,6 +87,16 @@ pub(super) fn metadata(frame: &[u8], workspace: &Path) -> Result<Vec<u8>, Error>
         {
             return Err(Error::InvalidFrame);
         }
+        // Optional explicit thread model for a fresh thread only: a resume
+        // already failed its exact parameter count above.
+        if let Some(model) = params.remove("model") {
+            if !model
+                .as_str()
+                .is_some_and(orkestr_v2_contracts::launch_model_valid)
+            {
+                return Err(Error::InvalidFrame);
+            }
+        }
     }
     // Only the broker envelope adds the fixed provider field. The raw setup
     // whitelist remains unchanged; forward the original pinned envelope.
@@ -281,6 +291,27 @@ mod tests {
             }
             assert!(metadata(&envelope("BrokerMetadata", denied), workspace).is_err());
         }
+    }
+    #[test]
+    fn fresh_thread_may_name_only_a_valid_explicit_model() {
+        let workspace = Path::new("/synthetic/workspace");
+        let start = json!({"id":3,"method":"thread/start","params":{"cwd":"/synthetic/workspace","approvalPolicy":"never","sandbox":"read-only","ephemeral":false,"modelProvider":"openai"}});
+        assert!(metadata(&envelope("BrokerMetadata", start.clone()), workspace).is_ok());
+        let mut named = start.clone();
+        named["params"]["model"] = json!("synthetic-fast-model");
+        let original = envelope("BrokerMetadata", named.clone());
+        assert_eq!(metadata(&original, workspace).unwrap(), original);
+        for value in [json!("openai"), json!("a b"), json!(5), json!(null)] {
+            let mut denied = start.clone();
+            denied["params"]["model"] = value;
+            assert!(metadata(&envelope("BrokerMetadata", denied), workspace).is_err());
+        }
+        let mut resume = json!({"id":3,"method":"thread/resume","params":{"excludeTurns":true,"threadId":"synthetic-native","cwd":"/synthetic/workspace","approvalPolicy":"never","sandbox":"read-only","modelProvider":"openai"}});
+        resume["params"]["model"] = json!("synthetic-fast-model");
+        assert!(
+            metadata(&envelope("BrokerMetadata", resume), workspace).is_err(),
+            "a resumed thread keeps its own native model"
+        );
     }
     #[test]
     fn resume_is_broker_only_and_closed() {

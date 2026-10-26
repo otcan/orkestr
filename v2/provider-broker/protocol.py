@@ -296,6 +296,12 @@ class Channel:
                 require(isinstance(params, dict) and params.get("dynamicTools") == [tool])
                 params = dict(params)
                 del params["dynamicTools"]
+            if kind == "thread/start" and isinstance(params, dict) and "model" in params:
+                # Optional explicit model for a fresh thread (bounded Fast). It
+                # is a request only; the native start reply is the evidence.
+                require(reported_model(params["model"]))
+                params = dict(params)
+                del params["model"]
             cwd = params.get("cwd") if isinstance(params, dict) else None
             if cwd != self.workspace and cwd in self.conversation_workspaces:
                 self.workspace = cwd

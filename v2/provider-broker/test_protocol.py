@@ -45,6 +45,25 @@ def turn(native="synthetic-native"):
 
 
 class ProtocolTests(unittest.TestCase):
+    def test_fresh_thread_may_request_a_valid_model_only(self):
+        start = {"cwd": "/synthetic/workspace", "approvalPolicy": "never", "sandbox": "read-only",
+                 "ephemeral": False, "modelProvider": "openai"}
+        def to_thread(params):
+            channel, _ = opened()
+            request(channel, {"id": 1, "method": "initialize", "params": {
+                "clientInfo": {"name": "synthetic", "title": "Synthetic", "version": "1"},
+                "capabilities": {"experimentalApi": False}}})
+            channel.provider({"id": 1, "result": {"userAgent": "synthetic", "platformFamily": "unix",
+                "platformOs": "linux", "codexHome": "/synthetic/private"}})
+            request(channel, {"method": "initialized"}, outer=3)
+            request(channel, {"id": 2, "method": "account/read", "params": {"refreshToken": False}}, outer=4)
+            channel.provider({"id": 2, "result": {"requiresOpenaiAuth": True, "account": {"type": "chatgpt"}}})
+            return request(channel, {"id": 3, "method": "thread/start", "params": params}, outer=5)
+        forwarded = to_thread({**start, "model": "synthetic-fast-model"})
+        self.assertNotIn("error", forwarded)
+        for model in ("a b", 5, "", None):
+            with self.assertRaises(Refused):
+                to_thread({**start, "model": model})
     def test_native_model_reroute_is_scoped_and_strips_private_details(self):
         channel, _ = opened()
         ready(channel)

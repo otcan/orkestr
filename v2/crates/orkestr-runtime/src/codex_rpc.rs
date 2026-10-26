@@ -93,6 +93,20 @@ impl CodexRpc {
     /// Creates a distinct persistent native session without starting inference.
     /// Cwd must come from trusted containment configuration, never a web field.
     pub fn create_session(&mut self, cwd: &std::path::Path) -> Result<Value, Blocker> {
+        self.create_session_with_model(cwd, None)
+    }
+
+    /// As `create_session`, optionally naming the thread's model. The native
+    /// start reply reports the resolved model; that, not this request, is the
+    /// model evidence.
+    pub fn create_session_with_model(
+        &mut self,
+        cwd: &std::path::Path,
+        model: Option<&str>,
+    ) -> Result<Value, Blocker> {
+        if model.is_some_and(|m| !orkestr_v2_contracts::launch_model_valid(m)) {
+            return Err(Blocker::Protocol);
+        }
         if self.readiness != Readiness::Subscription || self.native_session.is_some() {
             return Err(Blocker::Protocol);
         }
@@ -111,17 +125,21 @@ impl CodexRpc {
             return Err(Blocker::Protocol);
         }
         let cwd = cwd.to_str().ok_or(Blocker::Protocol)?;
+        let mut params = json!({
+            "cwd":cwd,"approvalPolicy":"never",
+            "sandbox":crate::provider_access::current().request(),
+            "ephemeral":false,"modelProvider":"openai"
+        });
+        if let Some(model) = model {
+            params["model"] = json!(model);
+        }
         self.request(
             Request::Thread {
                 cwd: cwd.to_owned(),
                 expected_native: None,
             },
             "thread/start",
-            json!({
-                "cwd":cwd,"approvalPolicy":"never",
-                "sandbox":crate::provider_access::current().request(),
-                "ephemeral":false,"modelProvider":"openai"
-            }),
+            params,
         )
     }
 
