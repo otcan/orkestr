@@ -66,4 +66,10 @@ def main(root, role="deep"):
     except Exception:
         sys.stderr.write("selected Codex service broker refused; reconcile uncertain delivery\n")
         code = pump.failure_exit if pump is not None else 2
-        return code if type(code) is int and 80 <= code <= 217 else 2
+        if not (type(code) is int and 80 <= code <= 217):
+            return 2
+        try:
+            from reaping import native_ended_exit
+            return native_ended_exit(pump, code)
+        except Exception:
+            return code  # Diagnostics only; never a weaker proof.

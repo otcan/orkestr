@@ -248,6 +248,17 @@ impl CodexPump {
     ) -> Result<crate::containment::RetiringBroker, crate::containment::Error> {
         self.source.child.retire_broker()
     }
+    /// Idle observation only (no quarantine): has the owned broker exited?
+    pub fn broker_exited(&self) -> Result<bool, crate::containment::Error> {
+        Ok(self.source.child.poll_exit(&self.source.scope)?.is_some())
+    }
+    /// Claim an already-exited broker's own native-ended ECHILD status as
+    /// retirement evidence. Anything else refuses; the caller quarantines.
+    pub fn retire_ended_broker(
+        self,
+    ) -> Result<crate::containment::RetiringBroker, crate::containment::Error> {
+        self.source.child.retire_ended_broker()
+    }
     pub fn flush(&mut self) -> Result<(), crate::containment::Error> {
         if self.source.failed.is_some() {
             return Err(crate::containment::Error::Revoked);

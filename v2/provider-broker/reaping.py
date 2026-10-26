@@ -6,6 +6,21 @@ import signal
 import time
 
 REAPED_EXIT = 73
+# 218..223: the native ended on its own (EOF), and this broker, as subreaper,
+# then reaped its whole owned tree to ECHILD. +0..5 keeps the diagnostic
+# native state of the PROVIDER_EOF failure class. Runtime accepts it as
+# cleanup proof only for an idle accepted Fast native, never as a delivery.
+NATIVE_ENDED_REAPED = 218
+
+
+def native_ended_exit(pump, code):
+    """The native-ended-and-reaped exit for a PROVIDER_EOF failure class."""
+    from protocol import Failure
+    base = 80 + (int(Failure.PROVIDER_EOF) - 1) * 6
+    if (type(code) is int and base <= code < base + 6 and pump is not None
+            and pump.reaped is True and pump.parent_eof is False and pump.child is not None):
+        return NATIVE_ENDED_REAPED + code - base
+    return code
 
 
 def contained_command(command):

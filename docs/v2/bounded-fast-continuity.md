@@ -24,6 +24,16 @@ the exact current input alone. This keeps the
 warm start (about 0.15 s instead of 3-4 s for a fresh Codex session) and lets a
 chat-rules line be read once per window instead of once per message.
 
+Idle native death: if the kept-alive Fast native dies between turns (OOM, a
+resource-monitor kill), the Codex service broker, as subreaper, reaps its
+owned tree to ECHILD and exits with 218..223 (the PROVIDER_EOF class's native
+state added to 218). The idle scheduler observes the exit without quarantine,
+claims only that status as the reap witness (`retire_ended_broker`; a signal,
+0, 73 or any other class stays unproven), waits the broker, and rotates
+exactly like a refused reuse: the next input gets a fresh session with the
+digest. If the broker itself is killed there is no proof and Fast ends for
+that window as before.
+
 Rotation: when reuse is refused, or after Stop, the scheduler reaps the
 original Fast native child. It holds that exact non-clone cleanup witness while
 idle. A new eligible source then permits the dedicated Fast metadata issuer to

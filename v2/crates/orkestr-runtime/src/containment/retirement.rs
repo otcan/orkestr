@@ -8,7 +8,16 @@ use std::sync::{atomic::Ordering, Arc};
 pub struct RetiringBroker {
     child: OwnedChild,
     completed: bool,
+    /// Claimed through `retire_ended_broker`: the broker had already exited
+    /// with a native-ended-and-reaped status before this retirement.
+    ended: bool,
 }
+
+/// Broker exits 218..=223: the native ended on its own (the low part is the
+/// broker's diagnostic native state) and the broker, as subreaper, then
+/// reaped its whole owned tree to ECHILD. Like exit 73 it proves cleanup;
+/// unlike 73 it was not requested, so only an idle caller may claim it.
+pub const NATIVE_ENDED_REAPED: std::ops::RangeInclusive<i32> = 218..=223;
 
 /// Non-Clone, non-serializable evidence tied to the original transport scope.
 /// This grants no metadata, dispatch, recovery, or native-session authority.
@@ -47,7 +56,29 @@ impl OwnedChild {
         Ok(RetiringBroker {
             child: self,
             completed: false,
+            ended: false,
         })
+    }
+
+    /// The broker already exited on its own (idle native death: OOM, a
+    /// resource-monitor kill). Accept only the broker's own native-ended
+    /// ECHILD status; a signal, 0 or any failure class stays unproven.
+    pub fn retire_ended_broker(self) -> Result<RetiringBroker, Error> {
+        {
+            let live = self.process.live.lock().map_err(|_| Error::Revoked)?;
+            let child = live.child.as_ref().ok_or(Error::PipeClosed)?;
+            let exit = super::sys::observe_exit(child.id())?.ok_or(Error::AuthorityProtocol)?;
+            if exit.signal.is_some()
+                || !exit
+                    .code
+                    .is_some_and(|code| NATIVE_ENDED_REAPED.contains(&code))
+            {
+                return Err(Error::AuthorityProtocol);
+            }
+        }
+        let mut retiring = self.retire_broker()?;
+        retiring.ended = true;
+        Ok(retiring)
     }
 }
 impl RetiringBroker {
@@ -70,7 +101,12 @@ impl RetiringBroker {
         }
         self.child.shared.active.fetch_sub(1, Ordering::AcqRel);
         self.completed = true;
-        if exit.code != Some(73) || exit.signal.is_some() {
+        let proven = exit.code == Some(73)
+            || (self.ended
+                && exit
+                    .code
+                    .is_some_and(|code| NATIVE_ENDED_REAPED.contains(&code)));
+        if !proven || exit.signal.is_some() {
             // Exit status only (a broker failure class 80..217, 0 or a signal):
             // the one diagnostic for an unconfirmed native-tree retirement.
             eprintln!(

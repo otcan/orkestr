@@ -6,6 +6,7 @@ use crate::{
 use orkestr_runtime::containment::ReapedBroker;
 use orkestr_v2_application::runtime::{RuntimeStore, RuntimeStoreError};
 use orkestr_v2_contracts::{ExecutionPhase, RunId};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 impl ConfiguredExecution {
@@ -40,10 +41,33 @@ impl ConfiguredExecution {
                 ExecutionPhase::Completed => {
                     control.disable();
                     drop(schedule);
-                    let input = self
-                        .fast_input_checked(shutdown, heartbeat, || live.check_broker_liveness())
-                        .await?;
-                    if self.window.is_some() {
+                    // An idle window Fast whose native dies (OOM, resource
+                    // monitor) rotates to a fresh session instead of ending
+                    // Fast for the rest of the window. Only the broker's own
+                    // native-ended ECHILD exit proves the old tree is gone.
+                    let window = self.window.is_some();
+                    let ended = AtomicBool::new(false);
+                    let waited = self
+                        .fast_input_checked(shutdown, heartbeat, || {
+                            if window && live.idle_broker_exited() {
+                                ended.store(true, Ordering::Release);
+                                return Err("Fast idle broker exited");
+                            }
+                            live.check_broker_liveness()
+                        })
+                        .await;
+                    let input = match waited {
+                        Err(_) if ended.load(Ordering::Acquire) => {
+                            return self.rotate_ended_fast(live, run, heartbeat).await;
+                        }
+                        other => other?,
+                    };
+                    if window && live.idle_broker_exited() {
+                        // Died after the source was selected: nothing was
+                        // admitted yet, so the input stays eligible.
+                        return self.rotate_ended_fast(live, run, heartbeat).await;
+                    }
+                    if window {
                         // Keep the accepted native child warm for the next
                         // owner input of this same window (and conversation).
                         // Core decides reuse: same window incarnation, accepted
@@ -181,6 +205,23 @@ impl ConfiguredExecution {
             return Err("Fast window terminal remains unresolved");
         }
         Ok(fast::FastExit::Shutdown)
+    }
+
+    /// Reap the already-exited idle Fast broker on its own ECHILD evidence
+    /// and hand the witness to the caller's ordinary fresh-setup rotation.
+    async fn rotate_ended_fast(
+        &self,
+        live: Box<LiveFast>,
+        run: RunId,
+        heartbeat: &mut Instant,
+    ) -> Result<fast::FastExit, &'static str> {
+        let retiring = match live.retire_ended_accepted(&self.token).await {
+            Ok(retiring) => retiring,
+            Err(_) => return Err("Fast broker exited"),
+        };
+        let proof = self.reaped(retiring, &run, heartbeat).await?;
+        eprintln!("owned window Fast idle native ended; reaped, next input starts a fresh session");
+        Ok(fast::FastExit::Accepted { run, proof })
     }
 
     /// Advisory only: any doubt (including a busy or unavailable Store) means
