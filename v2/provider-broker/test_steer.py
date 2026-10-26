@@ -39,10 +39,10 @@ class SteerTests(unittest.TestCase):
             with self.assertRaises(Refused):request(self.active(),frame,'SteerExecution',7)
         for method in ('BrokerMetadata','CommitExecution'):
             with self.assertRaises(Refused):request(self.active(),steer(),method,7)
-        for state in ('terminal','cancelled','worker','offline'):
+        for state in ('terminal','cancelled','worker','tool'):
             channel=self.active()
             if state=='worker':channel.role='worker'
-            elif state=='offline':channel.offline_python=True
+            elif state=='tool':channel.tool_enabled=True
             else:setattr(channel,state,True)
             with self.assertRaises(Refused):request(channel,steer(),'SteerExecution',7)
 
