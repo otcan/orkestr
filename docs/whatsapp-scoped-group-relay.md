@@ -347,6 +347,15 @@ config is private and lives with the operator. It names `chatId`, `threadId`,
 `statePath`, `timeoutMs`, `alertAfter` (default 2) and `alertCommand` (argv;
 the alert body arrives on stdin, the subject in `PROBE_ALERT_SUBJECT`).
 
+Optional `providerRateLimitLogs` lists Codex log databases (for example
+`~/.codex/logs_2.sqlite` of the account running the probe thread). When the
+input was recorded but the reply did not arrive in time, and one of those logs
+shows an HTTP 429 retry from the model provider since shortly before the probe
+started (`rateLimitLookbackMs`, default 10 minutes), the run is `degraded`
+(`probe_reply_delayed_provider_rate_limit`) instead of failed: exit code 0, no
+failure alert, and the failure streak is neither counted nor reset. A long
+degraded streak alerts once after `degradedAlertAfter` runs (default 8).
+
 The probe refuses to run in these cases:
 
 - the group has any participant other than the two owner accounts
