@@ -109,7 +109,7 @@ def readmit(worker, data, trigger, reason, request_key=None, operator=None):
         data["intake_text"] = carry(worker.ledger, data, data.get("intake_text") or compose(data))
     if "arrived_at" not in data and arrival(data) is not None:
         data["arrived_at"] = arrival(data)
-    for key in RESET_KEYS + ("deep_missing_since", "unstarted_since", "terminal_since", "retry_wait_since", "closed"):
+    for key in RESET_KEYS + ("deep_missing_since", "unstarted_since", "terminal_since", "retry_wait_since", "ended_seen_at", "closed"):
         data.pop(key, None)
     for key in ("message", "window", "fast", "deep"):
         data["keys"][key] = str(uuid.uuid4())
@@ -153,11 +153,19 @@ def recover(worker, data, reason, started=False):
     if not journal_caught_up(worker, data):
         return wait_or_close(worker, data, now, reason, "journal_behind")
     state = own_window_state(worker, data)
-    if state in ("successor_open", "reconciliation_required"):
+    if state in ("successor_open", "successor_queued", "reconciliation_required"):
         # Core may hand the joined-but-unrun input to that window and run it.
+        data.pop("ended_seen_at", None)
         return wait_or_close(worker, data, now, reason, state)
     if state != "ended":
         raise Refused(reason)
+    # "Ended, no successor" must hold on two observations ENDED_CONFIRM_S
+    # apart: a requeue can precede the dispatcher's next poll.
+    seen = data.setdefault("ended_seen_at", now)
+    if seen == now:
+        worker.ledger.save(data)
+    if now - seen < ENDED_CONFIRM_S:
+        return True
     if data.get("matched_runs") or held(worker, data) != "not_held":
         # A run references the message (often its Fast), so Core will never
         # retire it: close now instead of holding the chat's queue.
@@ -173,6 +181,7 @@ def recover(worker, data, reason, started=False):
 # intent, reconciliation): the serial queue waits at most this long, with one
 # operator ALERT when the wait starts, then the input is closed.
 RETIRE_WAIT_S = 600
+ENDED_CONFIRM_S = 30
 
 
 def wait_or_close(worker, data, now, reason, why):
@@ -249,7 +258,32 @@ def own_window_state(worker, data):
     if (isinstance(current, dict) and own is not None and current.get("window_id") != own and
             current.get("state") in ("opening", "active")):
         return "successor_open"
+    if queued_for(worker, data) != "not_queued":
+        # Core requeued the joined-but-unrun input for a successor window the
+        # dispatcher has not opened yet: the old window already reads closed.
+        return "successor_queued"
     return "ended"
+
+
+def queued_for(worker, data):
+    """'queued' / 'not_queued' / 'unknown': a window request for this input's
+    own event waits in Core's window queue."""
+    from .rust_client import ClientError
+    event = (data.get("intake") or {}).get("event_id")
+    if not event:
+        return "not_queued"
+    try:
+        value = worker.call("GET", "/window/queue")
+    except ClientError as error:
+        from .worker import transient
+        if transient(error):
+            raise
+        return "not_queued" if error.status == 404 else "unknown"  # 404: no window queue configured.
+    entries = value.get("entries") if isinstance(value, dict) else None
+    if not isinstance(entries, list):
+        return "unknown"
+    return "queued" if any(isinstance(e, dict) and e.get("input_event_id") == event and
+                           e.get("state") == "queued" for e in entries) else "not_queued"
 
 
 # Operator re-admission ------------------------------------------------------
