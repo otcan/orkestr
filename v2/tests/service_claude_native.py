@@ -9,7 +9,17 @@ import uuid
 FULL_ACCESS = ["-p", "--input-format", "stream-json", "--output-format", "stream-json",
                "--verbose", "--dangerously-skip-permissions", "--no-chrome",
                "--prompt-suggestions", "false"]
-assert sys.argv[1:-2] == FULL_ACCESS, sys.argv
+# Fast is read-only (claude_connector.FAST_TOOLS): its own fixed argv; Deep
+# keeps exactly the full-access argv above.
+FAST_TOOLS = "Read,Grep,Glob,WebSearch"
+FAST_READ_ONLY = ["-p", "--input-format", "stream-json", "--output-format", "stream-json",
+                  "--verbose", "--permission-mode", "dontAsk", "--tools", FAST_TOOLS,
+                  "--allowedTools", FAST_TOOLS, "--disallowedTools",
+                  "Bash,Edit,Write,NotebookEdit,WebFetch,Task,Agent,TodoWrite,Skill,SlashCommand",
+                  "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}',
+                  "--setting-sources", "", "--settings", '{"disableAllHooks":true}',
+                  "--disable-slash-commands", "--no-chrome", "--prompt-suggestions", "false"]
+assert sys.argv[1:-2] in (FULL_ACCESS, FAST_READ_ONLY), sys.argv
 mode, native = sys.argv[-2], str(uuid.UUID(sys.argv[-1]))
 assert mode in ("--session-id", "--resume")
 assert os.environ["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] == "1"
@@ -29,7 +39,7 @@ def emit(value):
     print(json.dumps(value), flush=True)
 
 
-record("spawn", model=os.environ.get("ANTHROPIC_MODEL"),
+record("spawn", read_only=sys.argv[1:-2] == FAST_READ_ONLY, model=os.environ.get("ANTHROPIC_MODEL"),
        effort=os.environ.get("CLAUDE_CODE_EFFORT_LEVEL"))
 setup = json.loads(sys.stdin.readline())
 assert setup["request"] == {"subtype": "initialize", "hooks": None}
@@ -90,7 +100,7 @@ emit({"type": "rate_limit_event", "uuid": str(uuid.uuid4()), "session_id": nativ
       "rate_limit_info": {"status": "allowed_warning", "resetsAt": 1, "rateLimitType": "seven_day",
                           "utilization": 0.3, "overageStatus": "rejected", "overageEnabled": False,
                           "isUsingOverage": False}})
-if Path("fast-crash").exists() and "ANTHROPIC_MODEL" not in os.environ:
+if Path("fast-crash").exists() and sys.argv[1:-2] == FAST_READ_ONLY:
     record("fast-crash")
     os._exit(1)  # A lost Fast native: no terminal result, abrupt exit.
 emit({"type": "result", "subtype": "success", "is_error": False, "session_id": native,
