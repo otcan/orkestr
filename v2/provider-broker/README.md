@@ -173,3 +173,22 @@ not establish a cause. Other brokers retain their default stderr behavior.
 These records are diagnostic only. Stderr EOF, child exit, zero production runs,
 and an empty process snapshot cannot authorize retirement or clear uncertain
 process custody. Reconciliation still requires the original cleanup proof.
+
+## Codex native upgrade checklist (Fast)
+
+Fast's read-only enforcement names features of the pinned native. When
+`packaging/desktop/codex-pins.json` changes version,
+`test_fast_read_only.FastCodexToolTests.test_disabled_feature_list_is_verified_for_the_pinned_native`
+fails until it is re-verified:
+
+1. Run `ORKESTR_TEST_CODEX_NATIVE=<new native> python3 -B -m unittest test_fast_read_only`
+   from `v2/provider-broker`. This checks every name in `FAST_DISABLED_FEATURES`
+   against `features list` (an unknown name makes the native refuse to start).
+   It also checks that the Fast-only `CODEX_HOME` leaves a workspace's
+   `.codex` config, rules and hooks disabled.
+2. Review the new native's feature list for new side-effect tool families and
+   add them to `FAST_DISABLED_FEATURES`.
+3. Confirm that exec-policy `allow` rules and config are still read only from
+   `CODEX_HOME`, `/etc/codex` and trusted project `.codex` folders
+   (`prepare_fast_home` guards exactly these).
+4. Update `FAST_FEATURES_VERIFIED_FOR` in `codex_service/profile.py`.

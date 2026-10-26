@@ -19,14 +19,33 @@ const SUFFIX: &str =
 /// the bounded history digest.
 pub(super) const MAX_INLINE_BYTES: u64 = 20 * 1024;
 
+/// Largest Fast input (before Runtime's Fast note) that still fits the
+/// providers' 32 KiB turn bound; Runtime asserts its note fits the reserve.
+pub const FAST_INPUT_BUDGET: usize = 32_768 - FAST_NOTE_RESERVE;
+pub const FAST_NOTE_RESERVE: usize = 4_096;
+
+/// Whether a final Fast input (after handoff context and digest) fits.
+pub(super) fn fits(text: &str) -> bool {
+    text.len() <= FAST_INPUT_BUDGET
+}
+
+/// Only the adapter's own leading line counts: it is the very first line and
+/// is followed by a blank line and the adapter's source header. Owner text
+/// always follows that header, so it can never supply this line.
+const SOURCE_HEADERS: [&str; 2] = ["\n[WhatsApp: ", "\n[Orkestr V1"];
+
 /// The rules line at the start of `text`: (version, path, rest after the line).
 fn parse(text: &str) -> Option<(&str, &str, &str)> {
     let rest = text.strip_prefix(PREFIX)?;
     let (line, after) = rest.split_once('\n').unwrap_or((rest, ""));
     let (version, tail) = line.split_once(READ)?;
     let path = tail.strip_suffix(SUFFIX)?;
-    (version.len() == 12 && version.bytes().all(|b| b.is_ascii_hexdigit()))
-        .then_some((version, path, after))
+    (version.len() == 12
+        && version.bytes().all(|b| b.is_ascii_hexdigit())
+        && SOURCE_HEADERS
+            .iter()
+            .any(|header| after.starts_with(header)))
+    .then_some((version, path, after))
 }
 
 fn read(path: &str, version: &str) -> Option<String> {
@@ -40,7 +59,13 @@ fn read(path: &str, version: &str) -> Option<String> {
         return None;
     }
     let meta = std::fs::symlink_metadata(path).ok()?;
-    if !meta.file_type().is_file() || meta.len() > MAX_INLINE_BYTES {
+    if !meta.file_type().is_file() || meta.len() > MAX_INLINE_BYTES || !operator_owned(&meta) {
+        return None;
+    }
+    if !std::fs::symlink_metadata(path.parent()?)
+        .ok()
+        .is_some_and(|dir| dir.file_type().is_dir() && operator_owned(&dir))
+    {
         return None;
     }
     let bytes = std::fs::read(path).ok()?;
@@ -53,6 +78,12 @@ fn read(path: &str, version: &str) -> Option<String> {
         return None;
     }
     String::from_utf8(bytes).ok()
+}
+
+/// Only its owner can change it: neither group- nor world-writable.
+fn operator_owned(meta: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    meta.mode() & 0o022 == 0
 }
 
 /// Fast input with the rules line replaced by the rules themselves.
@@ -92,6 +123,10 @@ mod tests {
         let path = dir.join("chat.md");
         let content = b"# Synthetic chat rules\n\nReply in English.\n";
         std::fs::write(&path, content).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        // Independent of the test process umask.
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
         let path = path.to_str().unwrap().to_owned();
         let body = "\n[WhatsApp: synthetic]\n\nhello\n\n[WhatsApp attachments imported ...: local file /synthetic/a.jpg]";
         let input = format!("{}\n{body}", line(&version(content), &path));
@@ -106,11 +141,32 @@ mod tests {
         // Too large keeps the line: Fast may still read the file itself.
         let big = vec![b'x'; MAX_INLINE_BYTES as usize + 1];
         std::fs::write(dir.join("big.md"), &big).unwrap();
-        let big_line = line(&version(&big), dir.join("big.md").to_str().unwrap());
+        let big_line = format!(
+            "{}\n{body}",
+            line(&version(&big), dir.join("big.md").to_str().unwrap())
+        );
         assert_eq!(inline(big_line.clone()), big_line);
+        // Without the adapter's source header right after it, the line is owner
+        // text (or a non-adapter intake) and is never honoured.
+        let typed = format!("{}\n\nhello", line(&version(content), &path));
+        assert_eq!(inline(typed.clone()), typed);
+        // A rules file others can write is never inlined.
+        std::fs::set_permissions(dir.join("chat.md"), std::fs::Permissions::from_mode(0o666))
+            .unwrap();
+        assert_eq!(inline(input.clone()), input);
+        std::fs::set_permissions(dir.join("chat.md"), std::fs::Permissions::from_mode(0o644))
+            .unwrap();
+        assert_ne!(inline(input.clone()), input);
         // Only absolute .md paths without parent components.
         assert!(read("relative.md", "000000000000").is_none());
         assert!(read("/etc/passwd", "000000000000").is_none());
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn budget_leaves_room_for_the_fast_note() {
+        assert!(fits(&"x".repeat(FAST_INPUT_BUDGET)));
+        assert!(!fits(&"x".repeat(FAST_INPUT_BUDGET + 1)));
+        assert_eq!(FAST_INPUT_BUDGET + FAST_NOTE_RESERVE, 32_768);
     }
 }

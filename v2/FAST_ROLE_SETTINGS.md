@@ -41,18 +41,26 @@ host full access:
   (`CodexRpc::for_role`). The broker independently refuses any other sandbox for
   a Fast identity (`protocol.FAST_SANDBOX`), and the dedicated Fast broker
   serves only Fast identities.
-- The host Fast native starts with ChatGPT apps/connectors, plugins, browser and
-  desktop control, sub-agents, memories, goals, worktrees and dependency
-  installs disabled, and with every MCP server in the operator's Codex config
-  disabled (`codex_service/profile.py`, `FAST_DISABLED_FEATURES`).
+- The host Fast native runs with its own `CODEX_HOME` (in the Fast role's native
+  state root). That home holds only a link to the operator's auth file: no
+  `config.toml`, exec-policy rules, hooks or plugins. With no config.toml no
+  project is trusted, so a workspace's `.codex` config, rules and MCP servers
+  stay disabled. The broker refuses to launch Fast if an `allow` rule or an
+  operator layer under `/etc/codex` is still reachable. Apps/connectors,
+  plugins, hooks, browser and desktop control, sub-agents, memories, goals,
+  worktrees and dependency installs are also disabled
+  (`codex_service/profile.py`).
 - A Claude Fast session gets only `Read`, `Grep`, `Glob` and `WebSearch`, no MCP
-  server and no hooks (`claude_connector.FAST_TOOLS`).
+  server, no settings sources and no hooks (`claude_connector.FAST_TOOLS`).
 - Every Fast turn starts with the reply contract `FAST_TURN_NOTE`
   (`orkestr-runtime/src/execution.rs`): acknowledge and restate, answer only
   from the message or history, never claim anything was done, never treat a bug
   report as user error, open listed attachments, short and in the owner's
   language.
-- The binding's chat rules are inlined into every Fast turn when the file
-  matches the version in the intake's rules line and is at most 20 KiB
-  (`store-sqlite/src/production_runtime/fast_rules.rs`), so Fast does not spend
-  a tool call reading them. Deep keeps the line.
+- The binding's chat rules are inlined into a Fast turn only when the adapter's
+  own leading line names them (first line, followed by the adapter's source
+  header), the file matches that line's version, is at most 20 KiB and is
+  writable only by its owner, and the whole Fast input (with handoff context
+  and digest) still fits the 32 KiB turn bound
+  (`store-sqlite/src/production_runtime/fast_rules.rs`). Otherwise Fast keeps
+  the line. Deep always keeps the line.

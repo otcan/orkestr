@@ -384,3 +384,72 @@ mod fast_acceptance;
 
 #[path = "bounded_fast_tests.rs"]
 mod bounded_fast;
+
+/// Fast input text for the window's admitted source message, after the given
+/// text is stored as that message.
+async fn fast_text_for(label: &str, text: &str) -> String {
+    let w = Window::open().await;
+    let fast = w.ready_fast().await;
+    w.activate().await;
+    sqlx::query("UPDATE messages SET text=? WHERE id=?")
+        .bind(text)
+        .bind(w.source.input_message_id.to_string())
+        .execute(&w.f.store.pool)
+        .await
+        .unwrap();
+    let admission = w
+        .bound
+        .admit_fast(
+            w.credential.credential(),
+            &crate::production_runtime::FastAdmissionInput {
+                source_message_id: w.source.input_message_id.clone(),
+                source_event_id: w.source.input_event_id.clone(),
+                fast_binding_id: fast.session_id.clone(),
+                expected_binding_generation: fast.generation,
+                request_key: format!("fast-rules-{label}"),
+            },
+        )
+        .await
+        .unwrap();
+    w.consume(&admission).await.text().to_owned()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fast_chat_rules_inline_only_when_the_whole_turn_fits() {
+    use sha2::{Digest, Sha256};
+    let dir = std::env::temp_dir().join(format!(
+        "synthetic-fast-rules-dispatch-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let rules = "# Synthetic chat rules\n\nReply in English.\n".to_owned() + &"r".repeat(16 * 1024);
+    let path = dir.join("chat.md");
+    std::fs::write(&path, &rules).unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+    let version: String = Sha256::digest(rules.as_bytes())
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect::<String>()[..12]
+        .to_owned();
+    let line = format!(
+        "[Chat rules v{version}: before answering, read {} (cat it) unless you already read this version in this session, and follow it.]",
+        path.display()
+    );
+    let small = format!("{line}\n\n[WhatsApp: synthetic]\n\nhello");
+    let inlined = fast_text_for("small", &small).await;
+    assert!(inlined.contains("Reply in English."));
+    assert!(!inlined.contains("(cat it)"));
+    assert!(inlined.len() <= crate::production_runtime::fast_rules::FAST_INPUT_BUDGET);
+    // Rules + a long message would exceed the provider bound: keep the line.
+    let long = format!(
+        "{line}\n\n[WhatsApp: synthetic]\n\n{}",
+        "m".repeat(14 * 1024)
+    );
+    let kept = fast_text_for("long", &long).await;
+    assert!(kept.contains("(cat it)"));
+    assert!(!kept.contains("Reply in English."));
+    assert!(kept.ends_with(&long));
+    std::fs::remove_dir_all(&dir).unwrap();
+}

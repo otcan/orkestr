@@ -201,7 +201,9 @@ mod fast_contract_tests {
         assert!(note.contains("no long-running commands, waits or polling loops"));
         assert!(note.contains("at most two quick read-only lookups"));
         assert!(FAST_TURN_NOTE.starts_with('[') && FAST_TURN_NOTE.ends_with(']'));
-        assert!(FAST_TURN_NOTE.len() < 2048);
+        // Core budgets Fast inputs so note + input fit the 32 KiB turn bound.
+        assert!(FAST_TURN_NOTE.len() + 2 <= orkestr_v2_store_sqlite::FAST_NOTE_RESERVE);
+        assert!(FAST_TURN_NOTE.len() + 2 + orkestr_v2_store_sqlite::FAST_INPUT_BUDGET <= 32_768);
     }
 
     #[test]

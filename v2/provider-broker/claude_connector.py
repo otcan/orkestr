@@ -11,7 +11,8 @@ import json
 PATHS = ("executable", "account", "workspace", "home", "temporary")
 # Fast runs in parallel with Deep on the same input, so it is read-only: only
 # these read-only built-in tools exist, they are the only pre-approved ones
-# (dontAsk denies everything else), no MCP server is loaded and no hook runs.
+# (dontAsk denies everything else), no MCP server is loaded, no user/project
+# settings source is read and no hook runs.
 FAST_TOOLS = "Read,Grep,Glob,WebSearch"
 FAST_DISALLOWED_TOOLS = "Bash,Edit,Write,NotebookEdit,WebFetch,Task,Agent,TodoWrite,Skill,SlashCommand"
 FAST_SETTINGS = '{"disableAllHooks":true}'
@@ -146,7 +147,8 @@ class ClaudeOwnedSession:
                     "--permission-mode", "dontAsk", "--tools", FAST_TOOLS,
                     "--allowedTools", FAST_TOOLS, "--disallowedTools", FAST_DISALLOWED_TOOLS,
                     "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}',
-                    "--settings", FAST_SETTINGS, "--disable-slash-commands", "--no-chrome",
+                    "--setting-sources", "", "--settings", FAST_SETTINGS,
+                    "--disable-slash-commands", "--no-chrome",
                     "--prompt-suggestions", "false", *session]
         if self.uncontained:
             return [str(self._config.executable), "-p", "--input-format", "stream-json",
