@@ -131,6 +131,12 @@ def drive(worker):
         try:
             observe(fast_worker, data)
         except Exception:
+            try:
+                from .fast_watch_giveup import give_up
+                if give_up(fast_worker, data):
+                    continue
+            except Exception:
+                pass  # Failed local give-up cannot imply a native outcome.
             data["diagnostic"] = {"reason": "fast_observation_deferred"}
             try:
                 fast_worker.ledger.save(data)

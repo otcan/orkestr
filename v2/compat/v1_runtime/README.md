@@ -207,6 +207,13 @@ a completely read authenticated journal snapshot, and proof its original window
 is closed or superseded. This records source/window ineligibility, never an
 inferred provider terminal. Otherwise the bounded watch remains for reconciliation.
 
+A repeatedly failing observation gives up locally after 600 seconds from the
+committed, canonically accepted Deep final (including `NO_REPLY`). The timestamp
+is written atomically with that final export and survives its ACK/restart.
+Give-up logs one static operator diagnostic and retains the frozen Fast request,
+uncertainty, exports and late-ACK history. It never accepts, cancels or replays a
+native run; age alone does not suppress a recovered, valid Fast observation.
+
 Window capacity, queued successor windows, holds, reconciliation and original
 child custody still gate execution. This path does not create another provider
 actor or bypass those gates. A definite acceptance revision conflict can retry

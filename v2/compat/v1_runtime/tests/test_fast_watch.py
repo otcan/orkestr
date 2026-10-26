@@ -127,14 +127,15 @@ class FastWatchTests(fixture.IntakeBase):
                 self.ledger.acknowledge(final["id"], dict(outcome="no_reply", parentPublicMessageId="first", connectorMessageIds=[]))
                 self.assertIsNone(self.ledger.next_input())
                 self.worker = self.new_worker()
-                with contextlib.redirect_stderr(io.StringIO()):
+                with patch("time.time", return_value=102), contextlib.redirect_stderr(io.StringIO()):
                     busy = self.worker.run_once(fixture.Stop())
                 self.assertTrue(busy, "retained Fast must not fall back to the five-second idle pass")
                 self.assertEqual(self.worker.busy_pause(), 1)
                 self.assertFalse(self.watches()[0].get("closed", False))
                 self.peer.runs[0, "fast"]["phase"] = "awaiting_acceptance"
                 self.peer.request = request
-                self.assertFalse(self.worker.run_once(fixture.Stop()), "idle resumes once retained work is resolved")
+                with patch("time.time", return_value=103):
+                    self.assertFalse(self.worker.run_once(fixture.Stop()), "idle resumes once retained work is resolved")
                 self.assertEqual(len(self.fast()), 1)
 
     def test_failed_lost_and_blocked_diagnostics_do_not_claim_provider_terminal(self):
