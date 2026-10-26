@@ -259,6 +259,9 @@ pub(super) async fn commit(
 ) -> Result<()> {
     let cause = p.open_failure_cause.ok_or(RuntimeStoreError::Fenced)?;
     let lineage = plan.lineage.as_ref();
+    if let (Some(context), Some(incarnation)) = (&plan.context, &plan.incarnation) {
+        super::super::fast_continuity::retire_failed_setups(tx, context, incarnation).await?;
+    }
     sqlx::query("INSERT INTO execution_window_open_failures(id,window_id,owner_id,conversation_id,generation,actor,decision,cause,context_id,failed_incarnation_id,failed_generation,restored_window_id,restored_incarnation_id,restored_generation,hard_deadline_passed,reconciled_at_ms) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
         .bind(id.to_string()).bind(p.window_id.to_string()).bind(owner.to_string())
         .bind(p.conversation_id.to_string()).bind(i64::try_from(p.generation).map_err(db)?)

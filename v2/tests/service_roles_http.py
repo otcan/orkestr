@@ -197,7 +197,8 @@ def run(case):
     for role in ("deep", "fast"):
         rows = [row for row in runs if row["role"] == role and row["conversation_id"] == first]
         assert len(rows) == 2
-        assert len({row["session_id"] for row in rows}) == len({row["native_session_id"] for row in rows}) == 1
+        identities = 2 if role == "fast" else 1
+        assert len({row["session_id"] for row in rows}) == len({row["native_session_id"] for row in rows}) == identities
         assert len({row["incarnation_id"] for row in rows}) == 1
         for conversation in (second, third):
             other = next(row for row in runs if row["role"] == role and row["conversation_id"] == conversation)
@@ -206,7 +207,10 @@ def run(case):
     trace = case.trace()
     assert len([row for row in trace if row["kind"] == "turn"]) == 9
     for role in ("deep", "fast"):
-        assert [row["resumed"] for row in trace if row["kind"] == "ready" and row["role"] == role] == [False, False, False]
+        setups = 4 if role == "fast" else 3
+        assert [row["resumed"] for row in trace if row["kind"] == "ready" and row["role"] == role] == [False] * setups
+    digests = case.rows("SELECT digest_text,cutoff_sequence FROM production_fast_digests")
+    assert len(digests) == 4 and all(len(row["digest_text"].encode()) <= 8192 for row in digests)
     assert case.rows("SELECT count(*) AS n FROM production_acceptances") == [{"n": 9}]
     from service_roles_retention import run as retained_workers
     retention = retained_workers(case)

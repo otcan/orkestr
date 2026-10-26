@@ -372,6 +372,16 @@ async fn lost_worker_fails_and_unblocks_its_conversation() {
 /// its own exists. A restart left it stranded forever before this change.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn failed_successor_open_restores_its_retired_predecessor() {
+    failed_successor_case(None).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn failed_bounded_fast_setup_is_retired_without_reusing_uncertain_metadata() {
+    failed_successor_case(Some(false)).await;
+    failed_successor_case(Some(true)).await;
+}
+
+async fn failed_successor_case(bounded_setup: Option<bool>) {
     let p = pending().await;
     let w = &p.w;
     let fresh = restart(w, true).await;
@@ -422,7 +432,7 @@ async fn failed_successor_open_restores_its_retired_predecessor() {
                 )
                 .await
                 .unwrap();
-            let (_, metadata) = fresh
+            let (bound, metadata) = fresh
                 .reattach_terminal_supervisor(
                     grant.credential(),
                     fixtures::config(ProductionTakeover::ExpiredPredecessor {
@@ -436,6 +446,34 @@ async fn failed_successor_open_restores_its_retired_predecessor() {
                 metadata.binding().native_session_id,
                 deep.binding.native_session_id
             );
+            if let Some(confirm) = bounded_setup {
+                let fast = bound
+                    .ensure_role_bindings(&w.f.owner, &w.f.conversation)
+                    .await
+                    .unwrap()
+                    .fast;
+                let setup = bound
+                    .authorize_bounded_fast_metadata(grant.credential(), &fast)
+                    .await
+                    .unwrap();
+                assert_eq!(setup.binding().native_session_id, None);
+                if confirm {
+                    let binding = setup.binding().clone();
+                    bound
+                        .confirm_metadata_session(
+                            setup,
+                            NativeSessionConfirmation {
+                                session_id: binding.session_id.clone(),
+                                expected_generation: binding.generation,
+                                native_session_id: format!("synthetic-unused-fast-{generation}"),
+                                protocol_version: "synthetic-codex-1".into(),
+                                source_event_key: format!("unused:{generation}"),
+                            },
+                        )
+                        .await
+                        .unwrap();
+                }
+            }
             (next, request)
         }
     };
@@ -463,6 +501,10 @@ async fn failed_successor_open_restores_its_retired_predecessor() {
         vec![request.input_event_id.clone()]
     );
     assert_eq!(window_state(&fresh, second_id).await, "closed");
+    if bounded_setup.is_some() {
+        assert_eq!(count(&fresh, "SELECT count(*) FROM production_fast_continuity c JOIN session_bindings b ON b.id=c.session_id WHERE b.state='retired'").await, 1);
+        assert_eq!(count(&fresh, "SELECT count(*) FROM production_runs r JOIN production_fast_continuity c ON c.session_id=r.session_id").await, 0);
+    }
     // The retired supervisor is exactly as the predecessor left it.
     assert_eq!(
         sqlx::query_as::<_, (String, i64, i64)>("SELECT incarnation_id,generation,lease_deadline_ms FROM production_supervisors WHERE context_id=(SELECT context_id FROM execution_windows WHERE id=?)")

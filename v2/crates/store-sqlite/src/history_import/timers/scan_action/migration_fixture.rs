@@ -3,6 +3,24 @@ use crate::Store;
 
 pub(crate) async fn downgrade_empty(store: &Store) {
     let mut tx = store.pool.begin().await.unwrap();
+    for table in ["production_fast_digests", "production_fast_continuity"] {
+        let count: i64 = sqlx::query_scalar(&format!("SELECT count(*) FROM {table}"))
+            .fetch_one(&mut *tx)
+            .await
+            .unwrap();
+        assert_eq!(
+            count, 0,
+            "historical fixture must not erase Fast continuity"
+        );
+        sqlx::query(&format!("DROP TABLE {table}"))
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+    }
+    sqlx::query("DELETE FROM _sqlx_migrations WHERE version=77")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
     let fast_settings: i64 = sqlx::query_scalar("SELECT count(*) FROM conversation_fast_settings")
         .fetch_one(&mut *tx)
         .await

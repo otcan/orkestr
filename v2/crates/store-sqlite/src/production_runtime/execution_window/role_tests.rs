@@ -370,3 +370,6 @@ mod stranded;
 
 #[path = "launch_tests.rs"]
 mod launch;
+
+#[path = "bounded_fast_tests.rs"]
+mod bounded_fast;

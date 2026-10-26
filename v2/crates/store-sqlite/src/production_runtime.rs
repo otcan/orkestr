@@ -33,6 +33,8 @@ mod capability;
 pub use capability::{ConsumedProviderDispatch, ExecutionConsumption};
 mod dispatch;
 mod fast;
+mod fast_continuity;
+mod fast_digest;
 mod fence;
 mod held_inputs;
 mod retired_inputs;
