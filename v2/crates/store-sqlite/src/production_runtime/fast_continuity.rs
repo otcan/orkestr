@@ -251,6 +251,8 @@ pub(super) const MAX_WINDOW_FAST_TURNS: i64 = 8;
 /// exact supervisor context and incarnation (one window, one conversation),
 /// every earlier run was accepted, and neither an earlier run nor the next
 /// source is a timer input (a timer Fast turn only ever sees its fixed note).
+/// A source that Stop later held never stays in a warm native history either:
+/// the digest excludes it and its answer, so the session rotates instead.
 async fn reusable_in(
     tx: &mut SqliteConnection,
     context: &str,
@@ -258,7 +260,7 @@ async fn reusable_in(
     session: &orkestr_v2_contracts::SessionId,
     source_event: &str,
 ) -> Result<(i64, bool)> {
-    let row = sqlx::query("SELECT (SELECT count(*) FROM production_runs r WHERE r.session_id=?1) AS runs, (SELECT count(*) FROM production_runs r WHERE r.session_id=?1 AND (r.role!='fast' OR r.state!='succeeded' OR r.context_id!=?2 OR r.incarnation_id!=?3 OR EXISTS(SELECT 1 FROM dormant_timer_inputs t WHERE t.event_id=r.event_id))) AS foreign_runs, (SELECT count(*) FROM production_fast_continuity f WHERE f.session_id=?1 AND f.context_id=?2 AND f.incarnation_id=?3) AS owned, (SELECT count(*) FROM dormant_timer_inputs t WHERE t.event_id=?4) AS timer")
+    let row = sqlx::query("SELECT (SELECT count(*) FROM production_runs r WHERE r.session_id=?1) AS runs, (SELECT count(*) FROM production_runs r WHERE r.session_id=?1 AND (r.role!='fast' OR r.state!='succeeded' OR r.context_id!=?2 OR r.incarnation_id!=?3 OR EXISTS(SELECT 1 FROM dormant_timer_inputs t WHERE t.event_id=r.event_id) OR EXISTS(SELECT 1 FROM ordinary_input_holds h WHERE h.event_id=r.event_id))) AS foreign_runs, (SELECT count(*) FROM production_fast_continuity f WHERE f.session_id=?1 AND f.context_id=?2 AND f.incarnation_id=?3) AS owned, (SELECT count(*) FROM dormant_timer_inputs t WHERE t.event_id=?4) AS timer")
         .bind(session.to_string()).bind(context).bind(incarnation).bind(source_event)
         .fetch_one(tx).await.map_err(db)?;
     let runs: i64 = row.get("runs");

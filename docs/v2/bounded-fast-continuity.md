@@ -12,10 +12,15 @@ Fast child alive while idle and asks Core (`bounded_fast_reusable`, read-only)
 whether the next source may continue on it. Core allows it only when the
 binding was created by this exact window incarnation (one window belongs to one
 conversation), every earlier run on it was accepted and was not a timer input,
-the next source is not a timer input, and fewer than eight turns used it. Fast
-admission enforces the same rule, so a refused continuation can never dispatch.
-A continued turn receives the exact current input without the digest, because
-the warm native child already holds the window's earlier turns. This keeps the
+the next source is not a timer input, no source it presented was later held by
+Stop, and fewer than eight turns used it. Fast admission enforces the same rule,
+so a refused continuation can never dispatch. The scheduler treats any doubt in
+that query as a refusal and rotates. A continued turn does not receive the full
+digest, because the warm native child already holds its own earlier turns. It
+receives only a bounded update of what it did not see since its previous turn
+(owner-accepted Deep proposals, or inputs another session presented), with the
+same limits, exclusions and labelling as the digest; with nothing new it gets
+the exact current input alone. This keeps the
 warm start (about 0.15 s instead of 3-4 s for a fresh Codex session) and lets a
 chat-rules line be read once per window instead of once per message.
 

@@ -209,9 +209,11 @@ def run(case):
     for role in ("deep", "fast"):
         assert [row["resumed"] for row in trace if row["kind"] == "ready" and row["role"] == role] == [False] * 3
     digests = case.rows("SELECT run_id,digest_text,cutoff_sequence FROM production_fast_digests")
-    assert len(digests) == 3 and all(len(row["digest_text"].encode()) <= 8192 for row in digests)
-    # Only a fresh Fast session gets the digest; the warm continuation has its history.
-    assert afast["run_id"] not in {row["run_id"] for row in digests}
+    assert len(digests) == 4 and all(len(row["digest_text"].encode()) <= 8192 for row in digests)
+    # A fresh Fast session gets the full digest; the warm continuation already
+    # has its own turns and gets only Deep's answer accepted since.
+    update = [row["digest_text"] for row in digests if row["run_id"] == afast["run_id"]]
+    assert len(update) == 1 and update[0].startswith("Conversation update since your previous turn"), update
     assert case.rows("SELECT count(*) AS n FROM production_acceptances") == [{"n": 9}]
     from service_roles_retention import run as retained_workers
     retention = retained_workers(case)
