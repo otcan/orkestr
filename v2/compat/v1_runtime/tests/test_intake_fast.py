@@ -3,7 +3,7 @@ import copy
 import unittest
 from unittest.mock import patch
 
-from v2.compat.v1_runtime.intake_fast import MAX_ADMISSIONS, drive, eligible, observe
+from v2.compat.v1_runtime.intake_fast import MAX_ADMISSIONS, drive, eligible
 from v2.compat.v1_runtime.ledger import Conflict
 from v2.compat.v1_runtime.rust_client import ClientError
 from v2.compat.v1_runtime.tests import intake_fixture as fixture
@@ -142,33 +142,35 @@ class IntakeFastTests(fixture.IntakeBase):
 
     def test_foreign_message_event_and_role_cannot_be_used_for_early_fast(self):
         self.enqueue()
+        event = self.peer.event
+        def foreign(intake, run, **kwargs):
+            fast = self.peer.runs.get((0, "fast")) or {}
+            if run == fast.get("run_id"):
+                event(dict(intake, message_id=identity(9999)), run, **kwargs)
+                event(dict(intake, event_id=identity(9998)), run, **kwargs)
+                return
+            event(intake, run, **kwargs)
+        self.peer.event = foreign
         drive(self.worker)
-        data = self.row("first")
-        data.pop("first_response")
-        data.pop("accepted")
-        data["matched_runs"] = []
-        data["fast_cursor"] = data["intake"]["sequence"] - 1
-        self.ledger.save(data)
-        own = self.peer.runs[0, "fast"]["run_id"]
-        for event in self.peer.events:
-            if (event.get("payload_ref_or_safe_payload") or {}).get("run_id") == own:
-                event["source_message_id"] = identity(9999)
-        self.peer.event(dict(data["intake"], event_id=identity(9998)), own)
-        before = copy.deepcopy(self.peer.mutations)
-        observe(self.worker, data)
-        self.assertNotIn(own, data["matched_runs"])
-        self.assertNotIn("first_response", data)
-        self.assertEqual(self.peer.mutations, before)
+        with self.ledger.connect() as db:
+            import json
+            watch = json.loads(db.execute("SELECT data FROM fast_watch").fetchone()[0])
+        self.assertNotIn(self.peer.runs[0, "fast"]["run_id"], watch["matched_runs"])
+        self.assertNotIn("first_response", self.row("first"))
+        self.assertEqual(self.mutations("/accept"), [])
 
     def test_fast_cursor_cannot_consume_deep_events_before_the_serial_observer(self):
         self.enqueue()
         drive(self.worker)
         data = self.row("first")
         initial_cursor = data["cursor"]
-        self.assertGreater(data["fast_cursor"], initial_cursor)
+        with self.ledger.connect() as db:
+            import json
+            watch = json.loads(db.execute("SELECT data FROM fast_watch").fetchone()[0])
+        self.assertGreater(watch["fast_cursor"], initial_cursor)
         self.assertEqual(data["cursor"], initial_cursor)
         deep = self.peer.runs[0, "deep"]["run_id"]
-        self.assertIn(deep, data["matched_runs"])
+        self.assertIn(deep, watch["matched_runs"])
         with patch.object(self.worker, "capture_questions", wraps=self.worker.capture_questions) as capture:
             self.worker.observe(data)
         self.assertTrue(any((event.get("payload_ref_or_safe_payload") or {}).get("run_id") == deep

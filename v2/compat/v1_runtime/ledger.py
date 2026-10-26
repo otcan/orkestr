@@ -125,6 +125,8 @@ class Ledger:
             # Web-UI messages whose answer is still awaited; never listed to V1
             # and never in the serial input queue (see Worker.drive_web).
             db.execute("CREATE TABLE IF NOT EXISTS web_watch (message_id TEXT PRIMARY KEY, data TEXT NOT NULL)")
+            from .fast_watch import initialize as initialize_fast_watch
+            initialize_fast_watch(db)
             version = db.execute("SELECT value FROM ledger_meta WHERE key='schema'").fetchone()
             if version is None:
                 # Pilot ledgers (schema 1) kept the accepted reply inside the input row.

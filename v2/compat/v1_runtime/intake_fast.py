@@ -4,10 +4,12 @@ Only existing authenticated intake/window/acceptance APIs are used. Core still
 owns capacity, input eligibility, Fast uniqueness and the original child tree.
 Deep observation and final export remain on the ledger's serial head path.
 """
+import copy
 import sys
 
 from .first_response import capture
 from .intake import admit, window
+from . import fast_watch
 
 MAX_ADMISSIONS = 8
 MAX_WINDOW_ATTEMPTS = 8
@@ -17,11 +19,14 @@ MAX_FAST_OBSERVATIONS = 8
 EVENT_WAIT_S = 0.15
 
 
+def isolated(worker, data):
+    return (worker.fast_reply_policy == "owner_only" and
+            (data.get("author") or {}).get("role") == "owner" and not data.get("origin"))
+
+
 def eligible(worker, data):
     """Explicit binding consent plus the author verified at HTTP intake."""
-    return (worker.fast_reply_policy == "owner_only" and
-            (data.get("author") or {}).get("role") == "owner" and
-            data.get("phase") != "completed" and not data.get("origin") and
+    return (isolated(worker, data) and data.get("phase") != "completed" and not data.get("origin") and
             not any(data.get(key) for key in
                     ("blocked", "digest", "refused", "absorbed_into", "burst", "requeued", "continued")))
 
@@ -54,15 +59,31 @@ def observe(worker, data):
     data["fast_cursor"] = max([cursor] + [event["sequence"] for event in events])
     worker.ledger.save(data)
     fast = worker.own_statuses(ids, roles=("fast",))["fast"]
+    if fast is None and not events:
+        from .fast_watch_eligibility import close_if_ineligible
+        close_if_ineligible(worker, data)
+        if data.get("closed"):
+            return
     fast_ids = {fast["run_id"]} if isinstance(fast, dict) else set()
-    worker.capture_questions(data, events, fast_ids)
-    capture(worker, data, {"fast": fast}, ids)
+    if worker.ledger.presentation_allowed(data):
+        worker.capture_questions(data, events, fast_ids)
+        capture(worker, data, {"fast": fast}, ids)
+    elif not data.get("first_response"):
+        data["diagnostic"] = {"reason": "substantive_deep_final_prepared", "presentation": "skipped"}
+        worker.ledger.save(data)
+    if isinstance(fast, dict) and fast.get("phase") in ("failed", "lost", "cancelled", "blocked", "stopped", "interrupted"):
+        data.update(closed=True, diagnostic={"reason": "observed_fast_terminal", "phase": fast["phase"], "run_id": fast["run_id"]})
+        worker.ledger.save(data)
+        return
     if (isinstance(fast, dict) and fast.get("run_id") in ids and
             fast.get("phase") in ("awaiting_acceptance", "completed") and
             "fast" not in data.get("accepted", {})):
         # The same owner-authenticated acceptance path releases this binding
         # for the next original event without waiting for its sibling Deep.
         worker.accept_role(data, "fast", ids)
+    if "fast" in data.get("accepted", {}):
+        data["closed"] = True
+        worker.ledger.save(data)
 
 
 def drive(worker):
@@ -96,20 +117,25 @@ def drive(worker):
         except Exception as error:
             failed(worker, data, error)
             break
-    observations = 0
-    for data in rows:
-        if (not eligible(worker, data) or "intake" not in data or
-                (data.get("first_response") and "fast" in data.get("accepted", {}))):
-            continue
-        if observations >= MAX_FAST_OBSERVATIONS:
-            break
-        observations += 1
+    try:
+        for data in rows:
+            if isolated(worker, data) and data.get("phase") != "completed" and "intake" in data and "window" in data:
+                fast_watch.ensure(worker.ledger, data)
+        watches = fast_watch.pending(worker.ledger, MAX_FAST_OBSERVATIONS)
+    except Exception:
+        print("ALERT orkestr-v2-wa-adapter fast_watch_deferred", file=sys.stderr, flush=True)
+        return
+    fast_worker = copy.copy(worker)
+    fast_worker.ledger = fast_watch.Ledger(worker.ledger)
+    for data in watches:
         try:
-            observe(worker, data)
+            observe(fast_worker, data)
         except Exception:
-            # Presentation/read/acceptance failure is not a decision about the
-            # originating Deep input. Keep its state and frozen requests for
-            # the next pass; only the existing serial path may finish it.
+            data["diagnostic"] = {"reason": "fast_observation_deferred"}
+            try:
+                fast_worker.ledger.save(data)
+            except Exception:
+                pass  # Fast diagnostics cannot decide or block Deep.
             print("ALERT orkestr-v2-wa-adapter fast_observation_deferred conversation=%s input=%s"
                   % (getattr(worker.client, "conversation", "?"), data["remote_id"]),
                   file=sys.stderr, flush=True)
