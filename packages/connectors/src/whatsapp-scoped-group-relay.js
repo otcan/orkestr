@@ -23,6 +23,14 @@ const lateSources = new Set(['api-session']);
 const finalPhases = new Set(['final_answer', 'final']);
 const LATE_REPLY_WINDOW_MS = 6 * 60 * 60 * 1000;
 const LATE_REPLY_POLL_MS = 10_000;
+// A routed input whose turn never produced a final here (a remote-runtime turn
+// that answered NO_REPLY, a Fast reply delivered under its own parent) stays
+// open forever. Each delivery pass re-read the thread history for every such
+// input, oldest first, before reaching a new reply: on the busiest group, 44
+// open routes since days cost ~6 s per reply. Past the late-reply window no
+// answer can still arrive (remote turns end within their 4 h window), so the
+// route is no longer read.
+const OPEN_ROUTE_MAX_AGE_MS = LATE_REPLY_WINDOW_MS;
 // How often the relay reconciles registered groups with V1's thread registry.
 const REGISTRATION_POLL_MS = 30_000;
 // The binding flags of whatsapp-mirror-policy's update suppression, kept local
@@ -68,7 +76,8 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
     CREATE TABLE IF NOT EXISTS reply_receipts(id TEXT PRIMARY KEY,provider_ids TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS reply_sent_text(provider_id TEXT PRIMARY KEY,request_id TEXT NOT NULL,text TEXT NOT NULL,sent_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS remote_delivery_reports(id TEXT PRIMARY KEY,reported_at TEXT NOT NULL);
-    CREATE TABLE IF NOT EXISTS reply_file_attempts(id TEXT PRIMARY KEY,attempts INTEGER NOT NULL DEFAULT 0);`);
+    CREATE TABLE IF NOT EXISTS reply_file_attempts(id TEXT PRIMARY KEY,attempts INTEGER NOT NULL DEFAULT 0);
+    CREATE TABLE IF NOT EXISTS route_opened(id TEXT PRIMARY KEY,opened_ms INTEGER NOT NULL);`);
   const routeFence = config.routeControl ? createDeliveryRouteFence({dbPath:config.routeControl.dbPath}) : null;
   const staticGroups = new Map(config.groups.map(g => [g.chatId, g]));
   // With dynamicGroups, groups registered in the transport journal join live.
@@ -288,6 +297,18 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
     return receipts.some(row => JSON.parse(row.provider_ids || '[]').some(p => p === id || (suffix && String(p).endsWith(suffix)))) ? {text: ''} : null;
   }
 
+  // When an open route started: the routing time this relay recorded, or, for
+  // a route routed before that record existed, its WhatsApp time (never later
+  // than now). Only an already routed input is ever skipped by its age.
+  function routeOpenedMs(input) {
+    const row = db.prepare('SELECT opened_ms FROM route_opened WHERE id=?').get(input.id);
+    if (row) return Number(row.opened_ms);
+    const at = Date.parse(input.created_at);
+    const opened = Number.isFinite(at) ? Math.min(at, now()) : now();
+    db.prepare('INSERT OR IGNORE INTO route_opened(id,opened_ms) VALUES(?,?)').run(input.id, opened);
+    return opened;
+  }
+
   const routeInput = (input, group, admissionOnly = false) => inputSerial(input.id, async () => {
     if (deliveryBlocked()) throw new Error('group_delivery_requires_review');
     return routeInputOnce(input, group, admissionOnly);
@@ -299,6 +320,7 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
     }
     let route = db.prepare('SELECT * FROM routed WHERE id=?').get(input.id);
     if (route?.completed || (admissionOnly && route)) return;
+    if (route && now() - routeOpenedMs(input) > OPEN_ROUTE_MAX_AGE_MS) return;
     const {metadata, thread: routeThread} = await inputThread(input, group);
     if (!route) {
       let attachments = [];
@@ -389,6 +411,7 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
       const messageId = response.message?.id || response.messageId;
       if (!messageId) throw new Error('group_input_unacknowledged');
       db.prepare('INSERT OR IGNORE INTO routed(id,thread_id,message_id) VALUES(?,?,?)').run(input.id, group.threadId, messageId);
+      db.prepare('INSERT OR IGNORE INTO route_opened(id,opened_ms) VALUES(?,?)').run(input.id, now());
       route = db.prepare('SELECT * FROM routed WHERE id=?').get(input.id);
       log({event: 'input_routed', threadId: group.threadId, messageId});
     }
