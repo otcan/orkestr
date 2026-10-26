@@ -433,10 +433,13 @@ class AutoSteerFlowTests(fixture.IntakeBase):
         self.run_passes(1)
         self.peer.acknowledge_all()
         self.run_passes(1)
+        head = self.row("first")
+        head["readmitted"] = {"at": 1, "trigger": "automatic"}  # Its one retry was used.
+        self.ledger.save(head)
         self.peer.deep()["phase"] = "failed"
         self.run_passes(2)
         [notice] = self.finals(first["remote_id"])
-        self.assertIn("also applies to 1 message", notice["text"])
+        self.assertIn("also covers the 1 message", notice["text"])
         self.ledger.acknowledge(notice["id"], {"outcome": "delivered", "outboxJobId": "job",
                                                "parentPublicMessageId": "first"})
         self.assertTrue(self.row("answer")["settled"])

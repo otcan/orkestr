@@ -51,6 +51,11 @@ class Case(unittest.TestCase):
     def notices(self):
         return [m for m in self.ledger.messages() if m.get("kind") == "progress"]
 
+    def settle_terminal(self, data):
+        """A terminal Deep is decided only on a pass whose journal read is empty."""
+        self.worker.step(data)
+        return self.worker.step(self.ledger.next_input())
+
 
 class QueuedWindowTests(Case):
     def test_queued_request_waits_without_expiring_then_runs_once_dispatched(self):
@@ -76,7 +81,8 @@ class QueuedWindowTests(Case):
 class DeadlineContinuationTests(Case):
     def stop_by_deadline(self):
         self.peer.deep_phase = "cancelled"
-        self.peer.current = dict(window_id="window", state="closed", conversation_id="conversation")
+        self.peer.current = dict(window_id="window", state="closed", conversation_id="conversation",
+                                 work_deadline_ms=int(time.time() * 1000) - 1000)
 
     def test_deadline_stop_requeues_once_and_tells_the_owner(self):
         original = dict(self.data["keys"])
@@ -118,23 +124,42 @@ class DeadlineContinuationTests(Case):
         self.worker.step(self.data)
         resumed = self.ledger.next_input()
         self.peer.accepted.clear()
-        with self.assertRaisesRegex(Refused, "execution_requires_review"):
-            self.worker.step(resumed)
+        # The continuation was the one automatic retry: no re-admission now.
+        with self.assertRaisesRegex(Refused, "deep_run_cancelled"):
+            self.settle_terminal(resumed)
         self.assertEqual(len(self.notices()), 1)
+        self.assertNotIn("readmitted", self.ledger.next_input())
+
+    def test_closed_window_before_the_deadline_is_not_a_deadline_stop(self):
+        # A lapsed lease / failed reconciliation closes the window early: the
+        # input is re-admitted once, silently, instead of "continued".
+        self.peer.deep_phase = "cancelled"
+        self.peer.current = dict(window_id="window", state="closed", conversation_id="conversation",
+                                 work_deadline_ms=int(time.time() * 1000) + 600_000)
+        self.settle_terminal(self.data)
+        data = self.ledger.next_input()
+        self.assertNotIn("continued", data)
+        self.assertEqual(data["readmitted"]["trigger"], "automatic")
+        self.assertEqual(data["readmitted"]["reason"], "deep_run_cancelled")
+        self.assertEqual(self.notices(), [])
+        self.assertEqual([m for m in self.ledger.messages() if m.get("kind") == "notice"], [])
 
     def test_owner_stop_before_the_deadline_still_refuses(self):
         self.peer.deep_phase = "cancelled"
         self.peer.current = dict(window_id="window", state="active", conversation_id="conversation",
                                  work_deadline_ms=int(time.time() * 1000) + 600_000)
-        with self.assertRaisesRegex(Refused, "execution_requires_review"):
-            self.worker.step(self.data)
+        with self.assertRaisesRegex(Refused, "deep_run_cancelled"):
+            self.settle_terminal(self.data)
         self.assertEqual(self.notices(), [])
+        self.assertNotIn("readmitted", self.ledger.next_input())
 
     def test_failed_deep_is_never_continued(self):
         self.peer.deep_phase = "failed"
         self.peer.current = dict(window_id="window", state="closed", conversation_id="conversation")
-        with self.assertRaisesRegex(Refused, "execution_requires_review"):
-            self.worker.step(self.data)
+        self.settle_terminal(self.data)
+        data = self.ledger.next_input()
+        self.assertNotIn("continued", data)
+        self.assertEqual(data["readmitted"]["reason"], "deep_run_failed")
 
 
 if __name__ == "__main__":
@@ -219,14 +244,22 @@ class OrphanedFollowUpTests(Case):
         self.peer.current = dict(window_id="window", state="closed", conversation_id="conversation")
         self.worker.step(data)  # Still inside the grace period.
         self.end_window(data)
+        # First failure: one silent re-admission under new keys, same identity.
+        self.worker.step(self.ledger.next_input())
+        data = self.ledger.next_input()
+        self.assertEqual(data["readmitted"]["previous"]["message_id"], original["intake"]["message_id"])
+        self.assertEqual((data["public_id"], data["remote_id"]), (original["public_id"], original["remote_id"]))
+        self.assertNotEqual(data["keys"]["message"], original["keys"]["message"])
+        self.assertIn(original["intake"]["message_id"], self.ledger.own_message_ids())
+        self.peer.current = None
+        self.worker.step(data)  # The retry is admitted once and again never starts.
+        retry = self.ledger.next_input()
+        self.end_window(retry)
         for _ in range(2):
             with self.assertRaisesRegex(Refused, "window_setup_failed"):
                 self.worker.step(self.ledger.next_input())
-        data = self.ledger.next_input()
-        self.assertEqual(data["keys"], original["keys"])
-        self.assertEqual(data["intake"], original["intake"])
-        self.assertNotIn("requeued", data)
-        self.assertEqual(len([r for r, _ in self.peer.mutations if r == "/messages"]), 1)
+        self.assertNotIn("requeued", self.ledger.next_input())
+        self.assertEqual(len([r for r, _ in self.peer.mutations if r == "/messages"]), 2)
 
     def test_open_window_keeps_waiting(self):
         data = self.orphan()
@@ -241,6 +274,7 @@ class OrphanedFollowUpTests(Case):
         data = self.orphan()
         later, _ = self.ledger.enqueue(dict(publicMessageId="later", publicThreadId="thread", chatId="chat",
                                             accountId="account", text="next"))
+        data["readmitted"] = {"at": time.time(), "trigger": "automatic"}  # Its one retry was used.
         self.end_window(data)
         self.worker.run_once(_Stop())
         self.worker.run_once(_Stop())
@@ -257,6 +291,7 @@ class OrphanedFollowUpTests(Case):
     def test_legacy_requeued_input_is_not_cloned_again_after_restart(self):
         data = self.orphan()
         data["requeued"] = {"previous_message_id": "legacy", "at": 1}
+        data["readmitted"] = {"at": time.time(), "trigger": "automatic"}
         self.end_window(data)
         restarted = Worker(self.peer, Ledger(Path(self.temp.name) / "ledger.sqlite3", {"test_scope": "one"}))
         with self.assertRaisesRegex(Refused, "window_setup_failed"):
@@ -265,6 +300,7 @@ class OrphanedFollowUpTests(Case):
 
     def test_missing_window_refuses_after_grace(self):
         data = self.orphan()
+        data["readmitted"] = {"at": time.time(), "trigger": "automatic"}
         self.end_window(data)
         self.peer.current = None
         with self.assertRaisesRegex(Refused, "window_setup_failed"):
@@ -279,8 +315,10 @@ class _Stop:
 class RefusalSettlesFastTests(Case):
     def test_failed_deep_refusal_accepts_its_own_pending_fast(self):
         self.peer.deep_phase = "failed"
-        with self.assertRaisesRegex(Refused, "execution_requires_review"):
-            self.worker.step(self.data)
+        self.peer.current = dict(window_id="window", state="active", conversation_id="conversation",
+                                 work_deadline_ms=int(time.time() * 1000) + 600_000)
+        with self.assertRaisesRegex(Refused, "deep_run_failed"):
+            self.settle_terminal(self.data)
         self.assertIn("fast", self.peer.accepted)
         self.assertNotIn("deep", self.peer.accepted)
 

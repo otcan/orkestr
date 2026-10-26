@@ -1,10 +1,30 @@
 """One durable interactive Fast reply, independent of ordinary progress or Deep readiness."""
+import difflib
+import re
 import time
 
 from .ledger import no_reply
 from .legacy_first_response import capture_legacy
 
 MAX_CHARS = 3500
+ECHO_MAX_CHARS = 600
+ECHO_SIMILARITY = 0.85
+
+
+def echo_key(text):
+    """Lowercased words only, for short replies; None for long ones."""
+    if not isinstance(text, str) or len(text) > ECHO_MAX_CHARS:
+        return None
+    return " ".join(re.findall(r"[^\W_]+", text.lower())) or None
+
+
+def repeats_fast(data, final_text):
+    """Whether a short Deep final says the same as this input's exported Fast."""
+    echo = (data.get("first_response") or {}).get("echo")
+    final = echo_key(final_text)
+    if not echo or not final:
+        return False
+    return final == echo or difflib.SequenceMatcher(None, echo, final).ratio() >= ECHO_SIMILARITY
 QUESTION_PREFIX = "\u2753 Question while I keep working:\n\n"
 
 
@@ -45,6 +65,11 @@ def capture(worker, data, statuses, own_runs):
     # Persist the one-shot marker, spacing clock and export in the same ledger
     # transaction. A restart or lost transport acknowledgement cannot re-export.
     data["first_response"] = {**evidence, "outcome": "exported", "at": now}
+    echo = echo_key(text)
+    if echo:
+        # Bounded normalized copy (pruned at settlement) so a Deep final that
+        # only repeats this Fast reply is not sent a second time.
+        data["first_response"]["echo"] = echo
     data["progress_at"] = now
     identity = worker.provider_identity(run_id=fast["run_id"], status=fast, fast=True)
     worker.ledger.add_first_response(data, payload_id, text, identity)

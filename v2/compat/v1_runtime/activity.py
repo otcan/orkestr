@@ -5,6 +5,7 @@ import sys
 import time
 import uuid
 
+from . import notices
 from .ledger import LOCAL_ROLES, NOTICE_NAMESPACE, POST_NAMESPACE
 
 INTERVAL_S = 10 * 60
@@ -26,6 +27,18 @@ def delivered_at(raw):
         return None
 
 
+LIVE_PHASES = ("queued", "starting", "running", "cancel_requested")
+
+
+def conversation_busy(worker):
+    """Whether Core reports a live Deep run in this conversation (any input)."""
+    try:
+        status, value = worker.client.request("GET", "/execution", allowed=(200, 204, 404))
+    except Exception:
+        return False  # Unknown is not evidence either way; keep the old rule.
+    return status == 200 and isinstance(value, dict) and value.get("phase") in LIVE_PHASES
+
+
 def observe(worker, data, statuses, now=None):
     """Called only after a successful own-run status read, never during an outage.
 
@@ -44,6 +57,11 @@ def observe(worker, data, statuses, now=None):
         return
     if deep.get("run_id") not in data.get("matched_runs", []):
         deep, phase = {}, None
+        if conversation_busy(worker):
+            # The adapter's own run match lags Core's journal (a burst, timer
+            # traffic): Core is running a Deep turn, so "no running task" would
+            # be false. Treat it as running; no alert, no missing-run notice.
+            phase = "running"
     activity = data.setdefault("activity", {})
     gap = now - activity.get("observed_at", now)
     if gap > POLL_GAP_S:
@@ -108,9 +126,9 @@ def observe(worker, data, statuses, now=None):
         if pending:
             return  # One unresolved status message for this whole binding.
         minutes = max(0, int((now - since - activity.get("paused_s", 0)) // 60))
-        text = ("Still running, %d minutes since admission. No new progress in the last 10 minutes." % minutes
-                if running else "No running task is confirmed (%s), %d minutes since admission. The result is still pending."
-                % (phase or "no run observed", minutes))
+        lang = notices.language_for(db, data)
+        text = (notices.render(lang, "activity_running", minutes=minutes) if running else
+                notices.render(lang, "activity_missing", state=phase or "no run observed", minutes=minutes))
         sequence = int(now * 1000)
         source = "heartbeat:%s:%d" % (data["remote_id"], sequence)
         remote = str(uuid.uuid5(NOTICE_NAMESPACE, "input:" + source))

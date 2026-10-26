@@ -59,7 +59,9 @@ class RefusalTests(unittest.TestCase):
         notice = self.assistant()
         self.assertEqual([m["parentMessageId"] for m in notice], [first["remote_id"]])
         self.assertEqual(notice[0]["refusal"], "window_refused")
-        self.assertIn("Not accepted: window_refused", notice[0]["text"])
+        # A plain chat audience gets an honest notice that does not ask for a resend.
+        self.assertIn("technical problem", notice[0]["text"])
+        self.assertNotIn("send it again", notice[0]["text"])
         self.worker.run_once(Stop())
         replies = self.assistant()
         self.assertEqual(replies[-1]["text"], "deep result")
@@ -77,10 +79,11 @@ class RefusalTests(unittest.TestCase):
         self.worker.run_once(Stop())
         notice = self.assistant()[0]
         self.assertEqual(notice["refusal"], "upstream_refused:422")
-        with self.assertRaises(Exception):
-            self.ledger.enqueue(body("third"))
+        # Above the soft limit an input is queued, never refused.
+        third, _ = self.ledger.enqueue(body("third"))
+        self.assertEqual(third["capacity_queued"], {"outstanding": 2, "limit": 2})
         self.ledger.acknowledge(notice["id"], {"outcome": "delivered", "parentPublicMessageId": "first", "outboxJobId": "job"})
-        self.ledger.enqueue(body("third"))
+        self.assertNotIn("capacity_queued", self.ledger.enqueue(body("fourth"))[0])
         self.assertTrue(self.ledger.health()["recentRefusals"][-1]["settled"])
 
     def test_refusal_is_idempotent_and_never_resent(self):

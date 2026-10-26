@@ -3,7 +3,7 @@ import copy
 import unittest
 from unittest.mock import patch
 
-from v2.compat.v1_runtime.intake_fast import MAX_ADMISSIONS, drive, eligible
+from v2.compat.v1_runtime.intake_fast import drive, eligible
 from v2.compat.v1_runtime.ledger import Conflict
 from v2.compat.v1_runtime.rust_client import ClientError
 from v2.compat.v1_runtime.tests import intake_fixture as fixture
@@ -43,16 +43,15 @@ class IntakeFastTests(fixture.IntakeBase):
         self.assertEqual(self.peer.mutations, before)
         self.assertEqual(len(self.fast()), 3)
 
-    def test_fifo_intake_is_bounded_without_starving_new_owners_behind_old_deep_work(self):
-        for index in range(MAX_ADMISSIONS + 2):
+    def test_fifo_intake_admits_a_whole_burst_in_one_pass(self):
+        # No per-pass admission throttle: a burst is admitted at once, in order.
+        for index in range(12):
             self.enqueue(str(index))
         drive(self.worker)
-        self.assertEqual(len(self.peer.inputs), MAX_ADMISSIONS)
-        self.assertNotIn("intake", self.row(str(MAX_ADMISSIONS)))
-        drive(self.worker)
         self.assertEqual([body["text"] for body in self.mutations("/messages")],
-                         ["Request " + str(index) for index in range(MAX_ADMISSIONS + 2)])
-        self.assertEqual(len(self.fast()), MAX_ADMISSIONS + 2)
+                         ["Request " + str(index) for index in range(12)])
+        drive(self.worker)
+        self.assertEqual(len(self.fast()), 12)
 
     def test_no_owner_or_consent_is_inferred_and_unadmitted_member_keeps_fifo(self):
         self.enqueue("first")
@@ -73,11 +72,11 @@ class IntakeFastTests(fixture.IntakeBase):
         self.ledger.max_outstanding = 2
         self.enqueue("first")
         self.enqueue("second")
-        with self.assertRaisesRegex(Conflict, "binding_capacity_reached"):
-            self.enqueue("third")
+        # Above the soft limit the message is queued, not refused.
+        self.assertIn("capacity_queued", self.enqueue("third"))
         self.peer.capacity = True
         drive(self.worker)
-        self.assertEqual(len(self.peer.inputs), 2, "immutable messages are admitted in FIFO order")
+        self.assertEqual(len(self.peer.inputs), 3, "immutable messages are admitted in FIFO order")
         self.assertEqual(self.row("first")["phase"], "waiting_for_window_dispatch")
         self.assertNotIn("window", self.row("second"))
         self.assertEqual(self.fast(), [])
@@ -85,7 +84,7 @@ class IntakeFastTests(fixture.IntakeBase):
         frozen = self.row("first")["window_request"]
         drive(self.worker)
         self.assertEqual(self.row("first")["window_request"], frozen)
-        self.assertEqual(len(self.mutations("/messages")), 2)
+        self.assertEqual(len(self.mutations("/messages")), 3)
 
     def test_busy_window_does_not_delay_admission_of_later_original_inputs(self):
         self.peer.busy = True

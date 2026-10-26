@@ -90,7 +90,7 @@ Each binding is `<bindings_dir>/<remote_thread_id>.json`:
 | `fast_reply_policy` | Optional: `legacy` (default) preserves the progress-dependent Fast policy. Explicit `owner_only` enables immediate Fast replies for a group the operator verified has only owner-visible recipients; participant grants do not establish that visibility. `disabled` suppresses Fast replies (for example a coordinator chat). |
 | `auto_steer` | Optional: `off` (default), `question` or `running`; enable per binding. See "Auto-steer" below. Adapters before this field refuse a binding that contains it (`binding_fields`). |
 | `attachments` | Accept inbound attachments for this binding |
-| `max_outstanding_inputs` | 1–64 unsettled inputs before intake answers 409 |
+| `max_outstanding_inputs` | 1–64 soft limit: inputs above it are accepted and queued (`capacity_queued`), never refused; only 64 unsettled chat inputs (`HARD_MAX_OUTSTANDING`) answer 409 `binding_capacity_reached` |
 | `max_input_age_seconds` | Optional, 60–604800 (default 1800): how long an input may wait without a Rust window before it is refused as `input_expired` |
 | `participants` | Optional (default `[]`): other people in the group, see [Group participants](#group-participants) |
 | `owner_label` | Optional (default `"Owner"`): the owner's label once the binding has participants |
@@ -230,15 +230,22 @@ outstanding. Rows with `steer_fallback` or settled steered rows need nothing.
 
 With explicit `fast_reply_policy: "owner_only"`, each verified WhatsApp owner
 event is admitted individually, even while an earlier Deep turn is running.
-Each pass admits at most eight inputs in FIFO order, using the existing owner
-HTTP message and execution-window APIs. It does not pass an earlier unadmitted
+Each pass admits every pending owner input in FIFO order (no per-pass
+throttle, no grouping, no quiet window), using the existing owner HTTP message
+and execution-window APIs. A deadline-continued or re-admitted owner row is
+admitted the same way instead of holding later owner messages until it is the
+ledger head. It does not pass an earlier unadmitted
 member, local-agent input or frozen legacy burst. Member/local inputs and other
 Fast policies keep their existing behavior.
 
 Fast results are observed, exported once, and accepted independently of Deep.
 The original message/event IDs select the exact producing run; a separate Fast
 cursor leaves Deep progress and questions available to the serial observer.
-Caught-up event reads in this path wait at most 150 ms each. Only the ledger
+One shared journal scan per pass (up to 20 pages of 100 events, 3 s) serves
+every pending Fast watch, plus one 150 ms tail read per watch, so a finished
+Fast reply is exported in the pass that first sees it however far the
+journal has moved; before, each watch crawled the journal from its own cursor
+100 events per pass, which delayed burst replies by minutes. Only the ledger
 head can finish and export its Deep result. Its existing Fast delivery fence
 still waits at most 15 seconds and retains uncertain/late transport evidence.
 Independent Fast observation failures are logged and retried; they never
@@ -249,7 +256,7 @@ The owner-only serial observer reads and accepts only Deep. An additive adapter
 `fast_watch` table retains the original Fast source, request key, run IDs, cursor
 and frozen acceptance independently of any Deep continuation or final delivery.
 Only pending inputs create watches; historical completed inputs are not scanned.
-At most eight watches are polled per pass, ordered by last poll so old failures
+At most 24 watches are polled per pass, ordered by last poll so old failures
 cannot monopolize new intake. Fast failure/uncertainty does not invent acceptance
 or retirement. A substantive Deep final prevents a newly late Fast export;
 `NO_REPLY` leaves Fast eligible, including after its silent final is acknowledged.
@@ -272,6 +279,16 @@ child custody still gate execution. This path does not create another provider
 actor or bypass those gates. A definite acceptance revision conflict can retry
 only the same still-awaiting run/completion/payload after checking canonical
 acceptance; unknown transport outcomes retain the frozen request.
+
+Core itself still runs one Fast per execution window at a time: the next
+message's Fast starts only after the previous one is accepted or stopped
+(`apps/server/src/owned_execution/fast.rs` `run_fast`). The adapter accepts
+each Fast as soon as it is proposed, so it is not the gate.
+
+A short Deep final that only repeats the exported Fast reply (normalized word
+similarity of at least 0.85, both at most 600 characters) is exported as
+`NO_REPLY` instead of a second near-identical message
+(`deep_final_suppressed`). The comparison text is pruned at settlement.
 
 ### Bursts
 
@@ -396,6 +413,67 @@ adapter version are closed with a notice the same way.
 
 A V1 build without acknowledgements never settles anything, so the adapter
 then behaves exactly like the pilot: at most `max_outstanding_inputs` inputs.
+
+## One automatic retry, then one honest notice
+
+An input whose own attempt failed for good is retried once, silently, by the
+adapter itself (`recovery.py`), never by asking the person to resend:
+
+* Only when the attempt provably never started executing: no Deep run of its
+  own, or a terminal Deep with no `started`/progress/question evidence in a
+  fully read journal and never seen running. Core's journal has no tool-call
+  evidence, so a run that started may already have sent mail or posted; it
+  is never retried, and neither is `execution_requires_review`.
+* Only younger than 24 h from the original arrival (`arrived_at`; a
+  continuation or retry never resets it), with no final or uncertain export,
+  no accepted Deep, and the input's own window over (a cancelled Deep in a
+  live window is an owner stop). A window awaiting Core's reconciliation is
+  waited for (10 min).
+* Never after a deadline continuation, never twice. Timer occurrences are
+  retried as an ordinary message carrying the occurrence's own Core prompt
+  (read back by its exact message ID) under a retry note.
+* The retry keeps the public and remote IDs; the previous Core message,
+  window and runs are kept in `readmitted.previous` and in `own_messages`.
+
+If the retry also fails, or no safe retry exists, the input closes with one
+notice in the chat's language plus `ALERT orkestr-v2-wa-adapter
+input_refused` (timers: `input_failed`). Older than 24 h: settled silently
+(`suppressed`, no export) with `ALERT … input_failed_too_old`.
+
+A Deep stop counts as the window's work deadline (and so gets the one-time
+`continued` turn) only when `work_deadline_ms` had passed, within 30 s, when
+the stop was first seen; a closed window alone (a lapsed lease, a failed
+reconciliation) is not deadline evidence.
+
+### Operator re-admission
+
+```
+sudo python3 -I -B -m v2.compat.v1_runtime.recovery --ledger <ledger.sqlite3> \
+    --public-id <publicMessageId> --request-key <stable-key> --operator <name>
+```
+
+(run from the installed release directory, with `PYTHONDONTWRITEBYTECODE=1`).
+The command only records a request row (`readmit_requests`); the live binding
+worker decides and performs it on its own thread, so the re-admission is
+serialized with the binding and its exports reach `/changes`. It refuses an
+input older than 24 h, completed or settled, already re-admitted, held by a
+steer, with an accepted Deep, a final or uncertain export, a live window, or
+any own run that is not terminal (or unknown). One request per input;
+repeating the same key returns the recorded outcome.
+
+## Notices
+
+Every notice follows the chat's language (English, Turkish, German), detected
+from recent owner/member WhatsApp text (`notices.py`, kept as
+`ledger_meta.chat_language`, no text) or the input's own text; anything else
+is English. Wording rules: no blame, no resend request for a plain chat
+audience, honest about what happened. The verified owner of an owner-only
+chat gets the technical reason. Templates: `failure`, `failure_owner`,
+`interrupted_owner` (never retried), `timer_failure`,
+`timer_failure_retried`, `timer_interrupted`, `steered`, `continue`,
+`steer_unknown`, `steer_queued`, `policy`, `activity_running`,
+`activity_missing`. The missing-run status is not sent (and not alerted)
+while Core reports a live Deep run in the conversation.
 
 ## Timer occurrences
 
@@ -662,6 +740,25 @@ existing dedupe ledgers. Never reset global WhatsApp routing, replay an
 uncertain send, retire the production chat, or release the selected queue
 hold while a delegated input could still execute locally. Verify the original
 route with a fresh message.
+
+### Rolling back the P0 recovery release
+
+The older adapter runs safely on a ledger written by this one; nothing needs
+a migration and no binding field was added:
+
+* New tables/keys (`readmit_requests`, `ledger_meta.chat_language`) and input
+  fields (`arrived_at`, `capacity_queued`, `readmitted`, `started_runs`,
+  `deep_stop_seen_ms`, `retry_withheld`, `notice_language`,
+  `first_response.echo`, `deep_final_suppressed`) are ignored by it.
+* Export rows keep their shape. A re-admitted row is an ordinary queued row
+  under fresh keys, which it admits once like any input.
+* The older adapter counts every unsettled row against
+  `max_outstanding_inputs` again, so a binding holding more than that
+  refuses new intake (`binding_capacity_reached`) until settlements bring it
+  under the limit; raise the binding's limit first if that matters.
+* It reverts to the previous behavior: stranded `running` inputs after a
+  closed window, English notices, per-watch journal crawl and the per-pass
+  admission limit. Pending operator requests are not executed by it.
 
 ### Export change feed
 

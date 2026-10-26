@@ -201,7 +201,7 @@ class WorkerTests(unittest.TestCase):
                 self.calls = 0
             def wait(self, duration):
                 self.calls += 1
-                return self.calls > 2
+                return self.calls > 6
         for failure in ("cancelled", "blocked", "session_revoked"):
             with self.subTest(failure=failure):
                 ledger = Ledger(Path(self.temp.name) / (failure + ".sqlite3"), {"test_scope": "one"})
@@ -234,8 +234,11 @@ class WorkerTests(unittest.TestCase):
                 notice = [m for m in ledger.messages() if m["role"] == "assistant"]
                 self.assertEqual(len(notice), 1)
                 self.assertEqual(notice[0]["kind"], "notice")
-                self.assertEqual(notice[0]["refusal"], "execution_requires_review")
-                self.assertTrue(notice[0]["text"].startswith("Not accepted: execution_requires_review"))
+                # One silent automatic retry, then one honest notice (no resend request).
+                self.assertEqual(notice[0]["refusal"], "deep_run_" + failure)
+                self.assertNotIn("send it again", notice[0]["text"])
+                self.assertEqual(len([r for r, _ in peer.mutations if r == "/messages"]), 2)
+                self.assertEqual(stderr.getvalue().count("ALERT orkestr-v2-wa-adapter input_refused"), 1)
 
     def test_mismatched_canonical_history_cannot_be_mirrored(self):
         original = self.peer.request

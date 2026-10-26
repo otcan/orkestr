@@ -16,6 +16,7 @@ import time
 import unittest
 
 from v2.compat.v1_runtime.ledger import Ledger
+from v2.compat.v1_runtime.rust_client import ClientError
 from v2.compat.v1_runtime.worker import ORPHAN_GRACE_S, Worker
 from v2.compat.v1_runtime.tests.test_timer_relay import SCOPE, TimerPeer, _Stop, occurrence
 
@@ -58,6 +59,9 @@ class OwnRunPeer(TimerPeer):
             return (200, dict(value)) if value else (404, {"code": "not_found"})
         if route == "/window" and method == "GET":
             return (200, dict(self.window)) if self.window else (204, None)
+        if route.startswith("?after="):
+            # Older servers / unproven prompt text: no automatic timer retry.
+            raise ClientError("unexpected_status", 404)
         if route.startswith("/payloads/"):
             payload = route.split("/")[2]
             run = payload[:-len("-payload")]
@@ -172,11 +176,14 @@ class GenuineStallTests(Base):
     def test_failed_deep_run_without_an_answer_alerts(self):
         self.peer.ran(2, deep="failed", fast="completed")
         self.peer.timer_rows = [occurrence(2)]
-        log = self.drive()
+        log = self.drive(2)
         data = self.row(2)
         self.assertEqual(data["phase"], "completed")
-        self.assertEqual(data["refused"]["reason"], "execution_requires_review")
-        self.assertEqual(data["stalled"]["failed"], "execution_requires_review")
+        self.assertEqual(data["refused"]["reason"], "deep_run_failed")
+        self.assertEqual(data["stalled"]["failed"], "deep_run_failed")
+        (notice,) = [r for r in self.replies() if r.get("kind") == "notice"]
+        self.assertTrue(notice["text"].startswith("\u23f0 "))
+        self.assertNotIn("send it again", notice["text"])
         self.assertEqual(data["stalled"]["since"], data["admitted_at"])
         self.assertIn("ALERT orkestr-v2-wa-adapter input_failed", log)
 

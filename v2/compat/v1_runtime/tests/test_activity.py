@@ -45,7 +45,7 @@ class ActivityTests(unittest.TestCase):
     def test_running_heartbeat_at_ten_minutes_is_truthful_and_does_not_complete_work(self):
         self.advance(1590);self.assertEqual(self.notices(),[])
         self.poll(1600);self.assertEqual(len(self.notices()),1)
-        text=self.notices()[0]['text'];self.assertIn('Still running, 10 minutes since admission',text)
+        text=self.notices()[0]['text'];self.assertIn('Still working on it, 10 minutes so far',text)
         self.assertNotIn('retry',text);self.assertNotIn('alert',text)
         self.assertEqual(self.ledger.next_input()['remote_id'],self.data['remote_id'])
         self.assertEqual(self.ledger.health()['stalledInputs'],0)
@@ -76,7 +76,7 @@ class ActivityTests(unittest.TestCase):
 
     def test_missing_run_has_truthful_wording_and_ready_final_needs_no_heartbeat(self):
         self.advance(1590);self.poll(1600,dict(deep=None))
-        self.assertIn('No running task is confirmed',self.notices()[0]['text'])
+        self.assertIn('I cannot confirm that this task is still running',self.notices()[0]['text'])
 
     def test_notices_do_not_consume_progress_budget_and_timer_notices_use_a_deliverable_parent(self):
         self.data['origin']='timer';self.advance(1600)

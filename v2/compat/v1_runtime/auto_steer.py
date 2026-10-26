@@ -31,6 +31,7 @@ of the binding's own head chat input.
 import sys
 import time
 
+from .notices import TEMPLATES
 from .participants import compose
 from .rust_client import ClientError
 
@@ -46,10 +47,9 @@ STEER_MAX_HOLD_S = 20 * 60
 STEER_NOTE = ("[The owner sent this message while you were still working on this turn. It may answer a "
               "question you asked. Take it into account now and continue the same task; your final reply "
               "for this turn also answers this message.]\n\n")
-UNKNOWN_NOTICE = ("Your message was sent to the running task, but Orkestr could not confirm it arrived. "
-                  "If the reply does not cover it, please send it again.")
-QUEUED_NOTICE = ("Your message was queued in Orkestr but could not be added to the running task or confirmed "
-                 "as a separate request. If the reply does not cover it, please send it again.")
+# English renderings; the ledger sends them in the chat's language.
+UNKNOWN_NOTICE = TEMPLATES["steer_unknown"]["en"]
+QUEUED_NOTICE = TEMPLATES["steer_queued"]["en"]
 TERMINAL_RUN_PHASES = ("awaiting_acceptance", "completed", "failed", "lost", "cancelled", "blocked", "stopped",
                        "interrupted")
 # Row markers that mean "not an ordinary unadmitted chat input any more".

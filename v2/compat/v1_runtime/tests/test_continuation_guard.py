@@ -1,5 +1,6 @@
 """A provider decision never authorizes replay of an old automatic turn."""
 import copy
+import time
 import unittest
 from unittest.mock import Mock
 
@@ -26,7 +27,8 @@ class GuardUnitTests(unittest.TestCase):
 class ProviderContinuationTests(Case):
     def closed(self):
         self.peer.deep_phase = "cancelled"
-        self.peer.current = dict(window_id="window", state="closed", conversation_id="conversation")
+        self.peer.current = dict(window_id="window", state="closed", conversation_id="conversation",
+                                 work_deadline_ms=int(time.time() * 1000) - 1000)
 
     def test_handoff_refuses_before_keys_fast_acceptance_or_continuation_notice(self):
         self.closed()

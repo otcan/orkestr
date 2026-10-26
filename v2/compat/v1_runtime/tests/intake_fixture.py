@@ -28,6 +28,7 @@ class IntakePeer(Peer):
         self.revision = 1
         self.capacity = False
         self.before_accept = None
+        self.texts = {}  # run id -> payload text override
 
     def read_events(self, after, maximum, timeout_s=None):
         return copy.deepcopy([event for event in self.events if event["sequence"] > after][:maximum])
@@ -91,7 +92,10 @@ class IntakePeer(Peer):
         if route.startswith("/payloads/"):
             payload = route.removeprefix("/payloads/")
             run = payload.removesuffix("-payload")
-            return 200, dict(run_id=run, payload_id=payload, text="Answer from " + run)
+            role = next((value["role"] for value in self.runs.values() if value["run_id"] == run), "deep")
+            text = ("Quick reply: looking into it now. " if role == "fast" else
+                    "Here is the complete, checked result of the whole request: ") + run
+            return 200, dict(run_id=run, payload_id=payload, text=self.texts.get(run, text))
         if route == "/accept":
             self.mutations.append((route, copy.deepcopy(body)))
             if body["request_key"] in self.receipts:

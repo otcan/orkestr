@@ -160,6 +160,7 @@ class Registry:
                                     burst_quiet_s=DEFAULT_BURST_QUIET_S)
         binding.worker.progress_updates = binding.config["progress_updates"]
         binding.worker.fast_reply_policy = binding.config["fast_reply_policy"]
+        binding.ledger.owner_only = binding.config["fast_reply_policy"] == "owner_only"
         binding.worker.auto_steer = auto_steer_mode(binding.config)
         binding.worker.attachments = binding.config["attachments"]
         binding.worker.max_input_age_s = binding.config["max_input_age_seconds"]
