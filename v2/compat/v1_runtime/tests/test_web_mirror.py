@@ -206,18 +206,18 @@ class WebMirrorTests(Base):
         self.peer.snapshot = [row()]
         self.peer.runs[WEB] = ["deep-a"]
         self.peer.deep["deep-a"] = "running"
-        self.peer.payloads["p-deep-a"] = {"run_id": "deep-a", "payload_id": "p-deep-a", "text": "halfway"}
+        self.peer.payloads["p-deep-a"] = {"run_id": "deep-a", "payload_id": "p-deep-a", "text": "halfway."}
         self.scan()
         watch, = self.ledger.web_watches()
         watch["since"] -= 120
         self.ledger.save_web_watch(watch)
         self.scan()
-        self.assertNotIn("halfway", [m["text"] for m in self.replies()])
+        self.assertNotIn("halfway.", [m["text"] for m in self.replies()])
         self.worker.progress_updates = True
         self.scan()
-        self.assertIn("halfway", [m["text"] for m in self.replies()])
+        self.assertIn("halfway.", [m["text"] for m in self.replies()])
         self.scan()
-        self.assertEqual([m["text"] for m in self.replies()].count("halfway"), 1)
+        self.assertEqual([m["text"] for m in self.replies()].count("halfway."), 1)
 
     def test_app_attachment_notes_become_names_or_a_count(self):
         text = ("see these\n\n[Files attached in the Orkestr app, stored in this conversation's attachment store, "

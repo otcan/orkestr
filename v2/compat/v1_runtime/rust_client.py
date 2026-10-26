@@ -133,6 +133,7 @@ class RustSession:
         self.owner = identity(expected_owner)
         self.source, self.credentials_path = expected_source, credentials_path
         self._cookie = self._csrf = None
+        self.features = frozenset()
         self._revoked = False
         self.generation = 0
         self._verified_at = None
@@ -236,6 +237,10 @@ class RustSession:
                 value["build"].get("format") == "orkestr-v2-build-identity-v1" and
                 value["build"].get("component") == "server" and
                 value["build"].get("source_commit") == self.source, "source_mismatch")
+        # Optional request fields the server accepts (its request bodies refuse
+        # unknown fields, so an unadvertised field is never sent).
+        features = value.get("features")
+        self.features = frozenset(f for f in features if isinstance(f, str)) if isinstance(features, list) else frozenset()
 
     def _session(self, value):
         require(isinstance(value, dict) and value.get("owner_id") == self.owner and
@@ -309,6 +314,11 @@ class RustClient:
         self._scope_refused = False
         self._client_lock = threading.RLock()
 
+    @property
+    def features(self):
+        """Server features seen at the last identity check (empty before login)."""
+        return self.session.features
+
     # Compatibility views used by diagnostics and tests.
     @property
     def _cookie(self):
@@ -356,7 +366,8 @@ class RustClient:
                 "/fast/execution": ("run_id",), "/accepted-results": ("after_sequence", "limit"),
                 "/intelligence": (), "/held-inputs": (), "/window/queue": (), "/events": ("after", "limit"),
                 "/timer-inputs": ("after_sequence", "limit"), "/settings": (),
-                "/timer-digests": ("limit",), "/posts": ("pending", "limit")}
+                "/timer-digests": ("limit",), "/posts": ("pending", "limit"),
+                "/thread-ask-inputs": ("after_sequence", "limit")}
         payload = path.path.startswith("/payloads/") and identity(path.path[10:])
         digest_ack = (method == "POST" and path.path.startswith("/timer-digests/") and
                       path.path.endswith("/delivered") and identity(path.path[15:-10]))

@@ -63,7 +63,12 @@ pub(super) async fn load(
 
 /// Move a candidate occurrence past pauses and skip dates. An indefinite pause is
 /// left to the scheduler's candidate filter; `resume` recomputes from "now".
-pub(super) fn first_allowed(supp: &Suppression, schedule: &TimerSchedule, candidate: i64) -> i64 {
+pub(super) fn first_allowed(
+    supp: &Suppression,
+    schedule: &TimerSchedule,
+    spread: i64,
+    candidate: i64,
+) -> i64 {
     let mut due = candidate;
     if supp.until >= FOREVER_MS {
         return due;
@@ -77,7 +82,7 @@ pub(super) fn first_allowed(supp: &Suppression, schedule: &TimerSchedule, candid
         } else {
             due
         };
-        match schedule::next(schedule, from) {
+        match schedule::next_spread(schedule, spread, from) {
             Ok(next) => due = next,
             Err(_) => return due,
         }
@@ -94,7 +99,12 @@ pub(super) async fn adjust_next(
     candidate: i64,
 ) -> Result<i64> {
     let supp = load(tx, owner, namespace, schedule, Some(conversation)).await?;
-    Ok(first_allowed(&supp, schedule, candidate))
+    Ok(first_allowed(
+        &supp,
+        schedule,
+        schedule::spread_ms(namespace),
+        candidate,
+    ))
 }
 
 /// Recompute one enabled timer's next occurrence after a policy or pause change.
@@ -119,11 +129,11 @@ pub(super) async fn refresh_one(
     }
     let namespace = Uuid::parse_str(row.get("namespace")).map_err(unavailable)?;
     let schedule = schedule::decode(row.get("schedule_json"))?;
-    let Ok(natural) = schedule::next(&schedule, now_ms) else {
+    let Ok(natural) = schedule::next_for(&schedule, namespace, now_ms) else {
         return Ok(());
     };
     let supp = load(tx, owner, namespace, &schedule, Some(&conversation)).await?;
-    let allowed = first_allowed(&supp, &schedule, natural);
+    let allowed = first_allowed(&supp, &schedule, schedule::spread_ms(namespace), natural);
     if supp.blocks(current) || current > allowed || (was_paused && current <= now_ms) {
         sqlx::query("UPDATE dormant_timers SET next_due_ms=? WHERE owner_id=? AND namespace=? AND state='enabled'")
             .bind(allowed)

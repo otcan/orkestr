@@ -89,6 +89,11 @@ class OutputItems(unittest.TestCase):
         channel = active()
         frame = item()
         frame["params"]["item"] = {"type": "commandExecution", "command": "untrusted"}
+        # The first model item yields only a closed activity marker (no item
+        # content) for Runtime's stall watchdog; later ones nothing at all.
+        marker = channel.provider(frame)["params"]["frame"]
+        self.assertEqual(marker, {"method": "turn/activity", "params": {
+            "threadId": "synthetic-native", "turnId": "synthetic-turn"}})
         self.assertIsNone(channel.provider(frame))
         self.assertFalse(channel.terminal)
         self.assertIsNone(channel.pending)

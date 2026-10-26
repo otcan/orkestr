@@ -23,7 +23,7 @@ mod fast_metadata;
 mod guard;
 mod lifecycle;
 mod queue;
-pub(super) use queue::enqueue_timer_intent;
+pub(super) use queue::{enqueue_timer_intent, enqueue_trusted_intent};
 mod provider_choice;
 mod switching;
 pub use credential::{ExecutionWindowCredential, ExecutionWindowRetirement};

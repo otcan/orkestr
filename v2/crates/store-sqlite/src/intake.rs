@@ -59,6 +59,31 @@ impl Store {
         expected_provider_generation: Option<i64>,
         continuation_source_run_id: Option<&orkestr_v2_contracts::RunId>,
     ) -> Result<Admission> {
+        self.admit_attributed(
+            owner,
+            conversation,
+            input,
+            reply_to,
+            expected_provider_generation,
+            continuation_source_run_id,
+            None,
+        )
+        .await
+    }
+
+    /// The same admission, also recording the verified author of a fresh input
+    /// (first writer wins; a replay never changes it).
+    #[allow(clippy::too_many_arguments)]
+    pub async fn admit_attributed(
+        &self,
+        owner: &OwnerId,
+        conversation: &ConversationId,
+        input: &MessageInput,
+        reply_to: Option<&ReplyTo>,
+        expected_provider_generation: Option<i64>,
+        continuation_source_run_id: Option<&orkestr_v2_contracts::RunId>,
+        author: Option<InputAuthor>,
+    ) -> Result<Admission> {
         if expected_provider_generation.is_some_and(|generation| generation < 0) {
             return Err(StoreError::Invalid);
         }
@@ -97,6 +122,14 @@ impl Store {
                     return Err(StoreError::ProviderGenerationMismatch);
                 }
             }
+        }
+        if let (Some(author), false) = (author, admission.duplicate) {
+            sqlx::query("INSERT OR IGNORE INTO message_authors(message_id,author) VALUES (?,?)")
+                .bind(admission.receipt.message_id.to_string())
+                .bind(author.as_str())
+                .execute(&mut *tx)
+                .await
+                .map_err(db)?;
         }
         if let Some(reply_to) = reply_to {
             // First writer wins; a retry of the same input never rewrites it.

@@ -55,11 +55,11 @@ pub use production_runtime::{
     OfflinePythonResultConsumption, OfflinePythonResultPreparation, OfflinePythonResultReservation,
     OfflinePythonState, ProductionSupervisorStore, ReadySessionTransition,
     RetiredExecutionWindowContext, RunLeaseTransition, RunRenewalAuthority,
-    StrandedExecutionWindow, StrandedExecutionWindowPlan, TimerSchedulerIssuer,
-    WorkerAdmissionInput, WorkerDelegation, WorkerDelegationReceipt, WorkerDelegationResult,
-    WorkerDelegationState, WorkerTaskClaim, EXECUTION_WINDOW_BASE_LIFETIME_MS,
-    EXECUTION_WINDOW_CLEANUP_MS, EXECUTION_WINDOW_MAX_LIFETIME_MS, FAST_INPUT_BUDGET,
-    FAST_NOTE_RESERVE,
+    StrandedExecutionWindow, StrandedExecutionWindowPlan, ThreadAskCursor, ThreadAskTick,
+    TimerSchedulerIssuer, WorkerAdmissionInput, WorkerDelegation, WorkerDelegationReceipt,
+    WorkerDelegationResult, WorkerDelegationState, WorkerTaskClaim,
+    EXECUTION_WINDOW_BASE_LIFETIME_MS, EXECUTION_WINDOW_CLEANUP_MS,
+    EXECUTION_WINDOW_MAX_LIFETIME_MS, FAST_INPUT_BUDGET, FAST_NOTE_RESERVE,
 };
 
 pub use production_runtime::inspection::{

@@ -101,10 +101,16 @@ impl CodexPump {
         let envelope = channel
             .reserve_continuation(request_id)
             .map_err(SubmissionFailure::Protocol)?;
-        let writing =
-            super::provider_write::PendingWrite::new(&turn_frame(&capability, request_id))
-                .map_err(SubmissionFailure::Protocol)?;
-        let requested_model = turn_frame(&capability, request_id)
+        // After a capacity fallback on a thread-default turn, the next
+        // thread-default turn requests the original default again.
+        let restore_model = self.source.capacity.restore_model.take();
+        let frame = with_restored_model(
+            turn_frame(&capability, request_id),
+            restore_model.as_deref(),
+        );
+        let writing = super::provider_write::PendingWrite::new(&frame)
+            .map_err(SubmissionFailure::Protocol)?;
+        let requested_model = frame
             .pointer("/params/model")
             .and_then(serde_json::Value::as_str)
             .map(str::to_owned);
@@ -118,6 +124,7 @@ impl CodexPump {
             scope: scope.clone(),
             request_id,
             broker: Some(envelope),
+            restore_model,
         };
         let stream = TurnStream::new(&native, request_id).map_err(SubmissionFailure::Protocol)?;
         let (authority, child) = self
@@ -128,7 +135,8 @@ impl CodexPump {
         let pump = Self::new(child, scope, provider, stream)
             .with_native_model(self.source.native_model.clone(), requested_model.as_deref())
             .with_broker(channel)
-            .with_provider_write(Some(writing));
+            .with_provider_write(Some(writing))
+            .with_capacity_retry(&frame);
         #[cfg(all(test, feature = "fixture-test-controls"))]
         let pump = pump.with_test_fence(fence);
         Ok((authority, pump))

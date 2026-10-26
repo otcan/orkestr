@@ -15,6 +15,7 @@ import time
 import uuid
 
 from .export_changes import ExportConnection
+from .outbound_text import scrub_local_paths
 from . import notices
 
 SCHEMA = "2"
@@ -41,6 +42,17 @@ POST_SOURCE_ID = "post"
 WEB_NAMESPACE = uuid.UUID("7c2e9b14-6d3a-4f8e-a1b5-9e0d4c7f2a68")
 WEB_SOURCE_ID = "web"
 WEB_LABEL = "\U0001f5a5\ufe0f (web)"
+
+
+def watch_label(watch, kind):
+    """Parent label of a web-watch export. A returned thread-ask answer's turn
+    reads "↩ from <thread name>"; a web message keeps its web labels."""
+    source = watch.get("thread_name")
+    if watch.get("thread_ask") and source:
+        return "\u21a9 from %s%s" % (source, " (progress)" if kind == "progress" else "")
+    if kind == "progress":
+        return "%s progress: %s" % (WEB_LABEL, watch["excerpt"])
+    return "%s \u21a9 %s" % (WEB_LABEL, watch["excerpt"])
 WEB_TEXT_LIMIT = 3500
 WEB_EXCERPT_CHARS = 60
 # Deterministic IDs for the owner notice that closes a refused input.
@@ -121,6 +133,9 @@ class Ledger:
         # Set by the registry from `fast_reply_policy`: the verified owner of an
         # owner-only chat gets technical notices, everyone else plain ones.
         self.owner_only = False
+        # Set by the registry for every chat that is not owner-only: it never
+        # sees server-local paths. The owner alone works with paths on this host.
+        self.scrub_paths = False
         identity = json.dumps({"schema": 1, "scope": scope}, sort_keys=True, separators=(",", ":"))
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
@@ -360,6 +375,8 @@ class Ledger:
         supply exact-run `identity`; neither path borrows conversation settings. Returns (reply, existed).
         """
         post_id = record["id"]
+        if self.scrub_paths and isinstance(record.get("text"), str):
+            record = dict(record, text=scrub_local_paths(record["text"]))
         digest = hashlib.sha256(json.dumps({k: record.get(k) for k in ("id", "author", "label", "text", "provider", "model")},
                                            sort_keys=True, separators=(",", ":")).encode()).hexdigest()
         remote_id = str(uuid.uuid5(POST_NAMESPACE, "post:" + post_id))
@@ -414,6 +431,7 @@ class Ledger:
     def _pseudo_timer(self, db, remote_id, label, created_ms, extra, reply, source_id=WEB_SOURCE_ID):
         """One completed pseudo timer input (V1's only parent shape for a reply
         without a WhatsApp input) and its final export, in the caller's transaction."""
+        self.scrub(reply)
         data = {"remote_id": remote_id, "public_id": TIMER_PREFIX + remote_id, "origin": "timer", "text": label[:TIMER_TEXT_LIMIT],
                 "public_thread_id": self.scope.get("public_thread_id"), "chat_id": self.scope.get("chat_id"),
                 "account_id": self.scope.get("account_id"),
@@ -475,7 +493,7 @@ class Ledger:
         reply.update({k: v for k, v in (identity or {}).items() if k in IDENTITY_FIELDS and v})
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
-            self._pseudo_timer(db, remote_id, "%s progress: %s" % (WEB_LABEL, watch["excerpt"]), int(time.time() * 1000),
+            self._pseudo_timer(db, remote_id, watch_label(watch, "progress"), int(time.time() * 1000),
                                {"web": {"message_id": message_id, "kind": "progress"}}, reply)
             watch.setdefault("progress", []).append(payload_id)
             db.execute("UPDATE web_watch SET data=? WHERE message_id=?", (json.dumps(watch), message_id))
@@ -490,7 +508,7 @@ class Ledger:
         reply.update({k: v for k, v in (identity or {}).items() if k in IDENTITY_FIELDS and v})
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
-            self._pseudo_timer(db, remote_id, "%s \u21a9 %s" % (WEB_LABEL, watch["excerpt"]), int(time.time() * 1000),
+            self._pseudo_timer(db, remote_id, watch_label(watch, "answer"), int(time.time() * 1000),
                                {"web": {"message_id": message_id, "kind": "answer"}}, reply)
             db.execute("DELETE FROM web_watch WHERE message_id=?", (message_id,))
 
@@ -676,8 +694,16 @@ class Ledger:
         return json.loads(row[0]) if row else None
 
     # Exports -----------------------------------------------------------
+    def scrub(self, message):
+        """Shared chats: replace server-local file references, in place, before
+        the message is stored anywhere, so every replay carries the same text."""
+        if self.scrub_paths and isinstance(message, dict) and isinstance(message.get("text"), str):
+            message["text"] = scrub_local_paths(message["text"])
+        return message
+
     def _export(self, db, data, kind, source_key, message):
         attach_scope(message, data)
+        self.scrub(message)
         inserted = db.execute("INSERT OR IGNORE INTO exports(export_id,input_id,kind,source_key,message) VALUES (?,?,?,?,?)",
                               (message["id"], data["remote_id"], kind, source_key, json.dumps(message)))
         if inserted.rowcount:
@@ -691,6 +717,7 @@ class Ledger:
             if not final_ready(self, db, data):
                 return False
             from .fast_watch_giveup import stamp_final
+            self.scrub(reply)
             stamp_final(data, reply)
             data.update(reply=reply, phase="completed")
             self.save(data, db)

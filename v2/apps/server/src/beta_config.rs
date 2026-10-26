@@ -1,4 +1,5 @@
 //! Closed operator configuration; never accepted from HTTP.
+pub(crate) mod capacity_fallback;
 mod conversation_workspaces;
 pub(crate) mod host_full_access;
 pub(crate) mod loading;
@@ -36,6 +37,10 @@ pub(crate) struct BetaConfig {
     /// Owner/instance-level V1-equivalent full access; absent by default.
     #[serde(default)]
     pub host_full_access: Option<host_full_access::HostFullAccess>,
+    /// Codex capacity fallback (one same-run retry on a fallback model);
+    /// absent means the enabled built-in default.
+    #[serde(default)]
+    pub capacity_fallback: Option<capacity_fallback::CapacityFallbackConfig>,
     /// Total window lifetime (minutes) an active window may be extended to
     /// while its Deep or Worker runs are still working. Default 60, at most 240.
     #[serde(default)]
@@ -136,6 +141,9 @@ impl BetaConfig {
         }
         if let Some(access) = &self.host_full_access {
             access.validate()?;
+        }
+        if let Some(fallback) = &self.capacity_fallback {
+            fallback.policy()?;
         }
         if self
             .window_max_minutes

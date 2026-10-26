@@ -202,3 +202,80 @@ pub(super) fn next(schedule: &TimerSchedule, now_ms: i64) -> Result<i64> {
     clock(due)?;
     Ok(due)
 }
+
+/// Largest deterministic delay given to a top-of-the-hour occurrence.
+pub const SPREAD_MAX_MS: i64 = 8 * 60_000;
+
+/// Stable per-timer delay in whole seconds, `0..=SPREAD_MAX_MS`. Derived only
+/// from the timer namespace, so every host and every recomputation agree.
+pub fn spread_ms(namespace: Uuid) -> i64 {
+    let hash = Sha256::digest(format!("orkestr.timer.spread.v1:{namespace}").as_bytes());
+    let mut first = [0_u8; 8];
+    first.copy_from_slice(&hash[..8]);
+    let seconds = u64::from_be_bytes(first) % (SPREAD_MAX_MS as u64 / 1000 + 1);
+    seconds as i64 * 1000
+}
+
+/// Spread applied to one natural occurrence. Only wall-clock schedules that fire
+/// on the hour are spread, so many timers created as "every hour" or "at 13:00"
+/// do not all call the provider in the same minute. Minute-specific schedules
+/// (13:05, :30), intervals, one-shot and event timers stay exact, and a calendar
+/// occurrence whose spread would leave the rule's hour window stays exact too.
+fn occurrence_spread(schedule: &TimerSchedule, spread: i64, natural: i64) -> i64 {
+    match schedule {
+        TimerSchedule::UtcClock { minute_of_day, .. }
+        | TimerSchedule::ZonedClock { minute_of_day, .. }
+            if minute_of_day % 60 == 0 =>
+        {
+            spread
+        }
+        TimerSchedule::Calendar(rule) if rule.minutes == [0] => {
+            match calendar::local_minute_of_day(&rule.timezone, natural) {
+                Some(minute)
+                    if minute % 60 == 0
+                        && i64::from(minute) * 60_000 + spread
+                            <= i64::from(rule.end_minute) * 60_000 =>
+                {
+                    spread
+                }
+                _ => 0,
+            }
+        }
+        _ => 0,
+    }
+}
+
+/// First occurrence of this timer strictly after `now_ms`, including its
+/// deterministic top-of-the-hour spread. Every write of `next_due_ms` uses this,
+/// so claims, enables, edits and pause refreshes agree on the same instant.
+pub(super) fn next_for(schedule: &TimerSchedule, namespace: Uuid, now_ms: i64) -> Result<i64> {
+    next_spread(schedule, spread_ms(namespace), now_ms)
+}
+
+/// `next_for` with an explicit spread (`0` is the natural schedule).
+pub(super) fn next_spread(schedule: &TimerSchedule, spread: i64, now_ms: i64) -> Result<i64> {
+    if spread == 0 || !occurrence_spread_possible(schedule) {
+        return next(schedule, now_ms);
+    }
+    // A natural occurrence in (now - spread, now] may still be due after now.
+    let mut from = now_ms.saturating_sub(spread).max(0);
+    for _ in 0..4 {
+        let natural = next(schedule, from)?;
+        let due = natural + occurrence_spread(schedule, spread, natural);
+        if due > now_ms {
+            clock(due)?;
+            return Ok(due);
+        }
+        from = natural;
+    }
+    next(schedule, now_ms)
+}
+
+fn occurrence_spread_possible(schedule: &TimerSchedule) -> bool {
+    match schedule {
+        TimerSchedule::UtcClock { minute_of_day, .. }
+        | TimerSchedule::ZonedClock { minute_of_day, .. } => minute_of_day % 60 == 0,
+        TimerSchedule::Calendar(rule) => rule.minutes == [0],
+        _ => false,
+    }
+}

@@ -6,6 +6,7 @@ pub mod protocol;
 pub mod supervisor;
 
 pub mod broker;
+pub mod capacity_fallback;
 pub mod claude_rpc;
 pub mod codex_rpc;
 pub mod containment;

@@ -1,4 +1,5 @@
 """Timer moves between V1 and V2 keep exactly one owner at every step."""
+import io
 import json
 import os
 from pathlib import Path
@@ -8,6 +9,7 @@ import tempfile
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import thread_timers
 import timer_moves
 import v2_client
 
@@ -197,6 +199,75 @@ class MoveTests(unittest.TestCase):
                                     timer_ids=['daily'], apply=True)
         self.assertEqual(fixed['timers'][0]['result'], 'fence_completed')
         self.assertEqual(self.owners()['daily'], 'v2')
+
+    def assert_disabled_skipped(self, moved):
+        row = next(t for t in moved['timers'] if t['id'] == 'paused')
+        self.assertEqual(row['result'], 'skipped_disabled_in_v1')
+        self.assertEqual(row['reason'], 'source_disabled')
+        self.assertIn({'id': 'paused', 'reason': 'source_disabled'}, moved['skipped'])
+        self.assertNotIn(('POST', '/api/v2/timers/%s/enable' % row['namespace']), self.v2.calls)
+        self.assertNotIn(('handoff', 'paused'), self.v1.calls)
+        self.assertEqual(self.v2.timers[row['namespace']]['state'], 'paused')
+        self.assertFalse(self.v1.timers_by_id['paused']['enabled'])
+        self.assertNotEqual(self.v1.timers_by_id['paused'].get('ownedBy'), 'v2')
+
+    def test_v1_disabled_timer_is_never_enabled_in_v2_by_default(self):
+        timer_moves.import_thread(self.v2, self.bundle, 'thread-a', CONVERSATION, apply=True)
+        moved = timer_moves.handoff(self.v2, self.v1, self.bundle, 'thread-a', CONVERSATION, apply=True)
+        self.assert_disabled_skipped(moved)
+        self.assertEqual(moved['skipped'], [{'id': 'paused', 'reason': 'source_disabled'},
+                                            {'id': 'nozone', 'reason': 'dormant_schedule:missing_timezone'}])
+
+    def test_v1_disabled_timer_stays_off_even_when_selected_by_id(self):
+        timer_moves.import_thread(self.v2, self.bundle, 'thread-a', CONVERSATION, apply=True)
+        moved = timer_moves.handoff(self.v2, self.v1, self.bundle, 'thread-a', CONVERSATION,
+                                    timer_ids=['paused'], apply=True)
+        self.assert_disabled_skipped(moved)
+        self.assertEqual(self.v1.calls, [])
+
+    def test_v1_disabled_timer_stays_off_with_include_disabled(self):
+        timer_moves.import_thread(self.v2, self.bundle, 'thread-a', CONVERSATION, apply=True)
+        moved = timer_moves.handoff(self.v2, self.v1, self.bundle, 'thread-a', CONVERSATION,
+                                    include_disabled=True, apply=True)
+        self.assert_disabled_skipped(moved)
+        moved = timer_moves.handoff(self.v2, self.v1, self.bundle, 'thread-a', CONVERSATION,
+                                    timer_ids=['paused'], include_disabled=True, apply=True)
+        self.assert_disabled_skipped(moved)
+        # Enabled timers still move exactly as before.
+        self.assertEqual(self.owners()['daily'], 'v2')
+
+    def test_only_force_enable_disabled_hands_off_a_v1_disabled_timer(self):
+        timer_moves.import_thread(self.v2, self.bundle, 'thread-a', CONVERSATION, apply=True)
+        plan = timer_moves.handoff(self.v2, self.v1, self.bundle, 'thread-a', CONVERSATION,
+                                   timer_ids=['paused'], force_enable_disabled=True)
+        self.assertEqual(plan['timers'][0]['result'], 'would_hand_off')
+        self.assertEqual(plan['skipped'], [])
+        moved = timer_moves.handoff(self.v2, self.v1, self.bundle, 'thread-a', CONVERSATION,
+                                    timer_ids=['paused'], force_enable_disabled=True, apply=True)
+        row = moved['timers'][0]
+        self.assertEqual((row['result'], row['forced_enable_disabled']), ('handed_off', True))
+        self.assertEqual(moved['skipped'], [])
+        self.assertEqual(self.v1.calls, [('handoff', 'paused')])
+        self.assertEqual(self.v2.timers[row['namespace']]['state'], 'enabled')
+        self.assertEqual(self.owners()['paused'], 'v2')
+
+    def test_cli_has_separate_force_flag_and_prints_skipped_timers(self):
+        common = ['handoff', '--bundle', 'b', '--thread', 'thread-a', '--conversation', CONVERSATION,
+                  '--v2-url', 'http://127.0.0.1:1', '--credentials-file', 'c']
+        parser = thread_timers.parser()
+        args = parser.parse_args(common + ['--include-disabled'])
+        self.assertEqual((args.include_disabled, args.force_enable_disabled), (True, False))
+        self.assertTrue(parser.parse_args(common + ['--force-enable-disabled']).force_enable_disabled)
+        timer_moves.import_thread(self.v2, self.bundle, 'thread-a', CONVERSATION, apply=True)
+        moved = timer_moves.handoff(self.v2, self.v1, self.bundle, 'thread-a', CONVERSATION, apply=True)
+        out = io.StringIO()
+        thread_timers._summarize_skipped(moved, out)
+        self.assertEqual(out.getvalue(), 'handoff skipped 2 timer(s): paused (source_disabled), '
+                                         'nozone (dormant_schedule:missing_timezone)\n')
+        self.assertNotIn('Synthetic instruction', out.getvalue())
+        quiet = io.StringIO()
+        thread_timers._summarize_skipped({'skipped': []}, quiet)
+        self.assertEqual(quiet.getvalue(), '')
 
     def test_bundle_must_be_private_and_unknown_timer_is_refused(self):
         loose = self.root / 'loose.json'

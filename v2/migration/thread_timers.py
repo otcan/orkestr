@@ -58,7 +58,17 @@ def _handoff(args):
     bundle = timer_moves.load_bundle(args.bundle)
     return _with_client(args, lambda client: timer_moves.handoff(
         client, _v1(args), bundle, args.thread, args.conversation, timer_ids=args.timer,
-        include_disabled=args.include_disabled, inline_prompt_file=args.inline_prompt_file, apply=args.apply))
+        include_disabled=args.include_disabled, inline_prompt_file=args.inline_prompt_file, apply=args.apply,
+        force_enable_disabled=args.force_enable_disabled))
+
+
+def _summarize_skipped(result, stream):
+    """Name every timer a handoff skipped and why (identifiers and reason codes only)."""
+    skipped = result.get('skipped') if isinstance(result, dict) else None
+    if not skipped:
+        return
+    print('handoff skipped %d timer(s): %s' % (len(skipped), ', '.join(
+        '%s (%s)' % (row['id'], row['reason']) for row in skipped)), file=stream)
 
 
 def _handback(args):
@@ -138,7 +148,10 @@ def parser():
     off = commands.add_parser('handoff')
     remote(off)
     off.add_argument('--timer', action='append', help='V1 timer id (repeatable); default: all enabled in V1')
-    off.add_argument('--include-disabled', action='store_true', help='also move timers disabled in V1')
+    off.add_argument('--include-disabled', action='store_true',
+                     help='compatibility only: timers disabled in V1 are still skipped (never enabled in V2)')
+    off.add_argument('--force-enable-disabled', action='store_true',
+                     help='explicitly hand off AND enable in V2 timers that are disabled in V1')
     off.add_argument('--inline-prompt-file', action='store_true',
                      help='use the V1 prompt file content as the V2 instruction')
     off.add_argument('--apply', action='store_true')
@@ -196,6 +209,8 @@ def main(argv=None):
         print(json.dumps({'ok': False, 'code': type(error).__name__}), file=sys.stderr)
         return 2
     print(json.dumps({'ok': True, 'result': result}, indent=2, sort_keys=True))
+    if args.command == 'handoff':
+        _summarize_skipped(result, sys.stderr)
     return 0
 
 
