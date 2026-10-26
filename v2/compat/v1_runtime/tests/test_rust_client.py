@@ -254,6 +254,28 @@ class ClientTests(unittest.TestCase):
                 self.client.request("POST", suffix, body={})
         self.assertEqual(self.server.observed, [])
 
+    def test_health_features_and_thread_ask_inputs_route(self):
+        self.client.ensure_login()
+        self.assertEqual(self.client.features, frozenset())
+        original = self.respond
+
+        def respond(method, path):
+            status, value, headers = original(method, path)
+            if path == "/api/v2/health":
+                value = dict(value, features=["message_author", 7])
+            return status, value, headers
+        self.server.respond = respond
+        self.client.session._verified_at = None
+        self.client.ensure_login()
+        self.assertEqual(self.client.features, frozenset({"message_author"}))
+        self.assertTrue(self.client._path("GET", "/thread-ask-inputs?after_sequence=0&limit=20")
+                        .endswith("/thread-ask-inputs?after_sequence=0&limit=20"))
+        for suffix in ("/thread-ask-inputs?after=1", "/thread-ask-inputs?limit=101"):
+            with self.subTest(suffix=suffix), self.assertRaises(ClientError):
+                self.client._path("GET", suffix)
+        with self.assertRaises(ClientError):
+            self.client._path("POST", "/thread-ask-inputs")
+
     def test_steer_routes_are_exact(self):
         for method, suffix in (("GET", "/steer"), ("POST", "/steering/auto-steer:x"), ("GET", "/steering/a b"),
                                ("GET", "/steering/" + "k" * 129), ("GET", "/steering/x?limit=1"),

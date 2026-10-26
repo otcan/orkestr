@@ -22,7 +22,9 @@ pub use calendar_rule::*;
 mod timer_results;
 pub use timer_results::*;
 mod desktop_leases;
+mod thread_asks;
 pub use desktop_leases::*;
+pub use thread_asks::*;
 mod legacy_workers;
 pub use legacy_workers::*;
 mod sidebar;
@@ -167,6 +169,33 @@ pub struct MessageRequest {
     /// Exact prior run whose session must still belong to this provider epoch.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub continuation_source_run_id: Option<RunId>,
+    /// Who authored the input, as stated by the caller that verified it (the
+    /// web composer: `owner`; the delivery adapter: the sender it checked).
+    /// Absent: unattributed. A session never implies an author. Servers that
+    /// accept it advertise `message_author` in `/api/v2/health` `features`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author: Option<InputAuthor>,
+}
+/// Verified author of an admitted input. Only `Owner` may command a thread ask.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InputAuthor {
+    Owner,
+    Member,
+    V1Owner,
+    V1Agent,
+    V1External,
+}
+impl InputAuthor {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Owner => "owner",
+            Self::Member => "member",
+            Self::V1Owner => "v1_owner",
+            Self::V1Agent => "v1_agent",
+            Self::V1External => "v1_external",
+        }
+    }
 }
 impl MessageRequest {
     pub fn into_parts(self) -> (MessageInput, Option<ReplyTo>) {

@@ -109,16 +109,24 @@ pub async fn message(
     let request = json(body)?;
     let expected_provider_generation = request.expected_provider_generation;
     let continuation_source_run_id = request.continuation_source_run_id.clone();
+    // The caller states the author it verified: the web composer sends
+    // `owner`, a delivery adapter the sender it checked. A session (cookie or
+    // bearer) proves only the owner's credential, never who wrote the text:
+    // the adapter uses the owner's session for member messages too. Without
+    // an explicit author the input is unattributed and never commands a
+    // thread ask.
+    let author = request.author;
     let (input, reply_to) = request.into_parts();
     let admitted = s
         .store
-        .admit_with_provider_generation(
+        .admit_attributed(
             &owner,
             &conversation(id)?,
             &input,
             reply_to.as_ref(),
             expected_provider_generation,
             continuation_source_run_id.as_ref(),
+            author,
         )
         .await?;
     Ok((

@@ -29,6 +29,8 @@ pub struct DurableTick {
     pub digests: u32,
     /// Typed mailbox actions; these admit no model or window work.
     pub tracker_actions: u32,
+    /// Cross-conversation requests queued, settled or returned (same authority).
+    pub thread_asks: u32,
 }
 /// Own exactly one per authenticated supervisor lifecycle. Not a cloned task pool.
 pub struct DurableTimerController {
@@ -47,6 +49,10 @@ pub struct DurableTimerController {
     tracker_mail: Option<Arc<crate::tracker_mail_runtime::TrackerMailRuntime>>,
     scan_in_progress: Option<Uuid>,
     timeout_retry: Option<Instant>,
+    /// Last logged thread-ask refusal, so a lasting one is logged once.
+    thread_ask_refusal: Option<String>,
+    /// Rotation over open requests; process-local, never authority.
+    thread_ask_cursor: orkestr_v2_store_sqlite::ThreadAskCursor,
     #[cfg(test)]
     pub(crate) test_scan_delay: Option<Duration>,
     #[cfg(test)]
@@ -67,6 +73,8 @@ impl DurableTimerController {
             tracker_mail: None,
             scan_in_progress: None,
             timeout_retry: None,
+            thread_ask_refusal: None,
+            thread_ask_cursor: Default::default(),
             #[cfg(test)]
             test_scan_delay: None,
             #[cfg(test)]
@@ -237,7 +245,30 @@ impl DurableTimerController {
             result.digests = self.supervisor.generate_timer_digests().await?;
             self.digest_checked = Some(Instant::now());
         }
-        if result.admitted + result.triggered > 0 {
+        let mut asked = false;
+        match self
+            .supervisor
+            .advance_thread_asks(self.queue_window, &mut self.thread_ask_cursor)
+            .await
+        {
+            Ok(tick) => {
+                result.thread_asks = tick.queued + tick.settled + tick.returned;
+                asked = tick.queued + tick.returned > 0;
+                self.thread_ask_refusal = None;
+            }
+            // Never stops timers: requests stay durable and retry next pass.
+            Err(error) => {
+                let reason = format!("{error:?}");
+                if self.thread_ask_refusal.as_deref() != Some(reason.as_str()) {
+                    eprintln!(
+                        "{}",
+                        serde_json::json!({"event":"thread_ask_pass_refused","reason":reason,"requests_remain_durable":true})
+                    );
+                    self.thread_ask_refusal = Some(reason);
+                }
+            }
+        }
+        if result.admitted + result.triggered > 0 || asked {
             if let Some(wake) = &self.wake {
                 wake();
             }

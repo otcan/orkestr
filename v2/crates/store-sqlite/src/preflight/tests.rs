@@ -376,6 +376,10 @@ async fn populated_payload_prefix_upgrade_preserves_all_rows_and_foreign_links()
     );
     // New optional preferences, tracker and continuity tables remain empty.
     for table in [
+        "thread_ask_grants",
+        "thread_asks",
+        "message_authors",
+        "thread_ask_audit",
         "production_fast_continuity",
         "production_fast_digests",
         "conversation_provider_handoffs",
@@ -503,7 +507,7 @@ async fn populated_payload_prefix_upgrade_preserves_all_rows_and_foreign_links()
             .fetch_one(&mut conn)
             .await
             .unwrap(),
-        77
+        78
     );
     for table in [
         "history_imports",

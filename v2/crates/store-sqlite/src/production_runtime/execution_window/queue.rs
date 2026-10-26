@@ -280,7 +280,45 @@ pub(in crate::production_runtime) async fn enqueue_timer_intent(
     input_event_id: EventId,
     input_request_key: &str,
 ) -> Result<()> {
-    let input = timer_intent(input_message_id, input_event_id, input_request_key, 0);
+    let key = timer_intent(
+        input_message_id.clone(),
+        input_event_id.clone(),
+        input_request_key,
+        0,
+    )
+    .request_key;
+    enqueue_trusted_intent(
+        tx,
+        owner,
+        conversation,
+        input_message_id,
+        input_event_id,
+        input_request_key,
+        key,
+    )
+    .await
+}
+
+/// The same durable intent for another trusted scheduler grant (for example a
+/// thread-ask input). `request_key` must name the source kind and its event.
+pub(in crate::production_runtime) async fn enqueue_trusted_intent(
+    tx: &mut SqliteConnection,
+    owner: &OwnerId,
+    conversation: &ConversationId,
+    input_message_id: MessageId,
+    input_event_id: EventId,
+    input_request_key: &str,
+    request_key: String,
+) -> Result<()> {
+    let input = ExecutionWindowRequest {
+        request_key,
+        input_message_id,
+        input_event_id,
+        input_request_key: input_request_key.to_owned(),
+        expected_generation: 0,
+        window_id: None,
+        predecessor_window_id: None,
+    };
     if !input.is_valid() {
         return Err(RuntimeStoreError::InvalidInput);
     }
