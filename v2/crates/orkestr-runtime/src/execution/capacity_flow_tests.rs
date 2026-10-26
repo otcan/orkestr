@@ -248,7 +248,7 @@ async fn capacity_before_any_tool_call_retries_once_on_the_fallback_and_records_
     assert_eq!(turns[0]["text"], INPUT);
     assert_eq!(turns[1]["model"], "gpt-6-sol");
     let retried = turns[1]["text"].as_str().unwrap();
-    assert!(retried.starts_with("[Orkestr: the previous attempt"));
+    assert!(retried.starts_with("[Orkestr retry on gpt-6-sol: gpt-6.1-sol was at capacity"));
     assert!(retried.ends_with(&format!("\n\n{INPUT}")));
     assert_ne!(turns[0]["message"], turns[1]["message"]);
     let payload = status.progress.as_ref().unwrap().payload_id.clone();
@@ -311,6 +311,10 @@ async fn a_silent_turn_is_interrupted_by_the_watchdog_and_retried_on_the_fallbac
     let turns = case.turns();
     assert_eq!(turns.len(), 2);
     assert_eq!(turns[1]["model"], "gpt-6-sol");
+    assert!(turns[1]["text"]
+        .as_str()
+        .unwrap()
+        .contains("was slow/overloaded"));
     let trace = std::fs::read_to_string(case.root.join("workspace/synthetic-peer.jsonl")).unwrap();
     assert_eq!(trace.matches("\"interrupt\"").count(), 1);
     let models = status.models.expect("native model evidence");
@@ -326,5 +330,61 @@ async fn a_turn_that_is_already_producing_items_is_never_interrupted() {
     assert_eq!(case.turns().len(), 1);
     let trace = std::fs::read_to_string(case.root.join("workspace/synthetic-peer.jsonl")).unwrap();
     assert!(!trace.contains("\"interrupt\""));
+    case.cleanup();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_stop_during_the_stall_interrupt_adopts_it_and_never_retries() {
+    let case = Case::new("stall-stop", "stall-stop").await;
+    let ready = case.ready().await;
+    let capability = case.consume().await;
+    let run = capability.provider().run.run_id.clone();
+    let (authority, mut pump) = ready.attach(case.bound.clone(), capability).unwrap();
+    pump.set_capacity_policy(CapacityFallback::default().with_stall(1, 1).unwrap());
+    let trace = case.root.join("workspace/synthetic-peer.jsonl");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !std::fs::read_to_string(&trace)
+        .unwrap_or_default()
+        .contains("\"interrupt\"")
+    {
+        if pump.pending().is_none() {
+            pump.flush().unwrap();
+        }
+        pump.step(&case.bound).await.unwrap();
+        assert!(
+            Instant::now() < deadline,
+            "watchdog interrupt reaches the native"
+        );
+        tokio::time::sleep(Duration::from_millis(2)).await;
+    }
+    let receipt = case
+        .bound
+        .request_cancel(&case.owner, &run, "synthetic-stop")
+        .await
+        .unwrap();
+    // Adopted: no second interrupt, no Busy refusal, no retry.
+    let mut stopping = pump.into_stopping(case.bound.clone(), &receipt).unwrap();
+    std::fs::write(case.root.join("workspace/release-stop"), "").unwrap();
+    while !stopping.stopped() {
+        let _ = stopping.flush();
+        stopping.step(&case.bound).await.unwrap();
+        assert!(
+            Instant::now() < deadline,
+            "adopted interrupt confirms Stopped"
+        );
+        tokio::time::sleep(Duration::from_millis(2)).await;
+    }
+    let status = case
+        .store
+        .execution_status(&case.owner, &case.conversation)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(status.phase, ExecutionPhase::Cancelled);
+    assert_eq!(case.turns().len(), 1);
+    let text = std::fs::read_to_string(&trace).unwrap();
+    assert_eq!(text.matches("\"interrupt\"").count(), 1);
+    authority.revoke().unwrap();
+    drop(stopping);
     case.cleanup();
 }

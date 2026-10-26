@@ -506,7 +506,7 @@ impl ReadyCodex {
             .with_native_model(native_model, requested_model.as_deref())
             .with_broker(self.channel)
             .with_provider_write(writing)
-            .with_capacity_retry(&raw, requested_model.is_some());
+            .with_capacity_retry(&raw);
         #[cfg(all(test, feature = "fixture-test-controls"))]
         let pump = pump.with_test_fence(test_fence.unwrap());
         Ok((authority, pump))

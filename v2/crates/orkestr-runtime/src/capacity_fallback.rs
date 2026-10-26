@@ -48,8 +48,10 @@ impl Default for CapacityFallback {
     }
 }
 
-pub const DEFAULT_STALL_DEEP_SECS: u64 = 90;
-pub const DEFAULT_STALL_FAST_SECS: u64 = 20;
+/// Off by default until a canary trace measures `turn/started` -> first item
+/// (compaction, xhigh reasoning); the capacity-class retry stays on.
+pub const DEFAULT_STALL_DEEP_SECS: u64 = 0;
+pub const DEFAULT_STALL_FAST_SECS: u64 = 0;
 const MAX_STALL_SECS: u64 = 3600;
 
 /// A fallback target must be a Codex launch model, never Claude (Fable).

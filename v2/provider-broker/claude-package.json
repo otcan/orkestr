@@ -5,7 +5,7 @@
     "claude_server.py": "e66ed5ce8f13d9b4e589783c2bc3144973c6c2c8db634a8bb3a7d63130cf37f0",
     "claude_connector.py": "bdd70975e7ffefedff279b7ab83d774b5f76d0c2abfcf1ccecca1f8d155f8be4",
     "claude_protocol.py": "79af21ae0e64b77eb9c68f140d15de9943651e7f22730a509d8e92e23f4ea04d",
-    "protocol.py": "9cca987d957f50b85b37434a0a7c1cf10e3ae07850487294a51f57eddedf97a9",
+    "protocol.py": "f4ac3ba1a8ad73c36d95a7bc283d3ec1733b89a76f6394c932528e18e2230c94",
     "transport.py": "67f7525c4a4356b3d4620a82cc550ab0a021d34e0fe385117cc6cb8b9600710d",
     "claude_resume.py": "ecc014ec6578791adc2086b3d83dc161c61fbdffa043c957b0cc919c9a2d2850",
     "claude_bootstrap.py": "5fda8c272078640696b7ec2069829454f348fc13db586b7ca6916d75df236244",

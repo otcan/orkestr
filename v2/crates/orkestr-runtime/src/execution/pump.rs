@@ -42,7 +42,6 @@ impl Provider for CodexOutput {
         if let Some(error) = &self.failed {
             return Err(error.clone());
         }
-        self.check_stall()?;
         if self.models.pending() {
             return Ok(None);
         }
@@ -91,7 +90,12 @@ impl Provider for CodexOutput {
             return Ok(None);
         }
         let result = match self.child.poll_stdout(&self.scope) {
-            Ok(Output::Pending) => return Ok(None),
+            Ok(Output::Pending) => {
+                // Only with the pipe drained: a terminal already written by
+                // the native is read before any stall interrupt.
+                self.check_stall()?;
+                return Ok(None);
+            }
             Ok(Output::Frame(bytes)) => {
                 let bytes = match self.broker.as_mut() {
                     Some(broker) => match broker.receive(&bytes) {
@@ -247,17 +251,12 @@ impl CodexPump {
     }
     /// Retain this turn's own frame for at most one same-run capacity
     /// fallback retry under the installed operator policy.
-    pub(super) fn with_capacity_retry(
-        mut self,
-        frame: &serde_json::Value,
-        owner_model: bool,
-    ) -> Self {
+    pub(super) fn with_capacity_retry(mut self, frame: &serde_json::Value) -> Self {
         let actual_fd = self.source.writing.is_some();
         self.source.capacity = super::capacity::CapacityRetry::new(
             crate::capacity_fallback::current(),
             frame,
             actual_fd,
-            owner_model,
         );
         self
     }

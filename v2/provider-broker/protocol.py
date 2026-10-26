@@ -298,7 +298,9 @@ class Channel:
         elif method == "CancelExecution":
             # Parent must hold Core cancellation fence for the ORIGINAL binding
             # and receipt.new_fenced_admission. JSON is not issuer evidence.
-            require(self.committed and self.turn is not None and not self.terminal and not self.cancelled)
+            # A terminal may already be in flight to Runtime: an interrupt for
+            # the same, just-ended turn is forwarded and its refusal tolerated.
+            require(self.committed and self.turn is not None and not self.cancelled)
             exact(frame, ("id", "method", "params"))
             require(type(frame["id"]) is int and frame["id"] > 0 and frame["method"] == "turn/interrupt")
             exact(frame["params"], ("threadId", "turnId"))
@@ -436,7 +438,12 @@ class Channel:
 
     def observe_effects(self, method, params):
         """Record side-effect and capacity evidence for the committed turn."""
-        if not self.committed or self.terminal or not isinstance(params, dict):
+        if not self.committed or self.terminal:
+            return
+        if not isinstance(params, dict):
+            # No thread or item to inspect: only a known benign method is safe.
+            if method not in BENIGN_METHODS:
+                self.side_effects = True
             return
         thread = params.get("threadId")
         if isinstance(thread, str) and thread and self.native is not None and thread != self.native:
@@ -553,6 +560,16 @@ class Channel:
             return {"method": "BrokerOutput", "params": {"owned_handle": self.handle, "frame": frame}}
         require(self.pending is not None, Failure.UNEXPECTED_RESPONSE)
         outer, inner, kind = self.pending
+        if kind == "turn/interrupt" and isinstance(frame, dict) and set(frame) == {"id", "error"}:
+            # A late interrupt (the turn had just ended) may be refused by the
+            # native. Forward a closed refusal only; Runtime decides.
+            require(type(frame["id"]) is type(inner) and frame["id"] == inner,
+                    Failure.RESPONSE_CORRELATION)
+            require(isinstance(frame["error"], dict))
+            code = frame["error"].get("code")
+            self.pending = None
+            return {"id": outer, "result": {"owned_handle": self.handle, "frame": {
+                "id": inner, "error": {"code": code if type(code) is int else 0}}}}
         exact(frame, ("id", "result"))
         require(type(frame["id"]) is type(inner) and frame["id"] == inner,
                 Failure.RESPONSE_CORRELATION)

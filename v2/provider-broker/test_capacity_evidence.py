@@ -105,6 +105,25 @@ class CapacityEvidence(unittest.TestCase):
         self.assertEqual(frame["params"]["frame"]["params"]["turn"],
                          {"id": "t1", "status": "interrupted", "sideEffects": False})
 
+    def test_unknown_method_without_dict_params_is_a_side_effect(self):
+        channel = active()
+        channel.provider({"method": "deprecationNotice", "params": None})
+        self.assertFalse(channel.side_effects)
+        channel.provider({"method": "fs/changed", "params": ["x"]})
+        self.assertTrue(channel.side_effects)
+
+    def test_late_stall_interrupt_after_terminal_is_tolerated(self):
+        channel = active()
+        channel.provider({"method": "turn/completed", "params": {"threadId": NATIVE,
+                          "turn": {"id": "t1", "status": "completed"}}})
+        interrupt = {"id": 9, "method": "turn/interrupt",
+                     "params": {"threadId": NATIVE, "turnId": "t1"}}
+        forwarded, _ = request(channel, interrupt, "CancelExecution", 7)
+        self.assertEqual(forwarded, interrupt)
+        reply = channel.provider({"id": 9, "error": {"code": -32600, "message": "no active turn"}})
+        self.assertEqual(reply["result"]["frame"], {"id": 9, "error": {"code": -32600}})
+        self.assertIsNone(channel.pending)
+
     def test_evidence_resets_for_the_retry_turn(self):
         channel = active()
         channel.provider(item("commandExecution"))
@@ -115,6 +134,44 @@ class CapacityEvidence(unittest.TestCase):
         retry["params"]["model"] = "gpt-6-sol"
         request(channel, retry, "CommitExecution", 7)
         self.assertFalse(channel.side_effects or channel.capacity)
+        self.assertEqual(channel.requested_model, "gpt-6-sol")
+
+
+class FastFallbackStaysReadOnly(unittest.TestCase):
+    """A Fast capacity retry is one more turn on the same read-only Fast
+    thread of the Fast broker: no sandbox field exists on a turn."""
+
+    def test_fast_retry_runs_on_the_same_read_only_channel(self):
+        from protocol import FAST_SANDBOX, Refused
+        from test_fast_read_only import FAST, opened as fast_opened, reply, start
+        channel = fast_opened(FAST, fast_only=True)
+        start(channel, "read-only")
+        reply(channel, {"type": "readOnly", "networkAccess": False})
+        first = turn()
+        request(channel, first, "CommitExecution", 6)
+        channel.provider({"id": 4, "result": {"turn": {"id": "t1", "status": "inProgress"}}})
+        clean = failed(channel, OVERLOADED)
+        self.assertEqual(clean["sideEffects"], False)
+        widened = turn()
+        widened["id"] = 5
+        widened["params"]["clientUserMessageId"] = "synthetic-message-retry"
+        widened["params"]["model"] = "gpt-6-sol"
+        widened["params"]["sandboxPolicy"] = {"type": "dangerFullAccess"}
+        with self.assertRaises(Refused):
+            request(channel, widened, "CommitExecution", 7)
+        channel = fast_opened(FAST, fast_only=True)
+        start(channel, "read-only")
+        reply(channel, {"type": "readOnly", "networkAccess": False})
+        request(channel, turn(), "CommitExecution", 6)
+        channel.provider({"id": 4, "result": {"turn": {"id": "t1", "status": "inProgress"}}})
+        failed(channel, OVERLOADED)
+        retry = turn()
+        retry["id"] = 5
+        retry["params"]["clientUserMessageId"] = "synthetic-message-retry"
+        retry["params"]["model"] = "gpt-6-sol"
+        request(channel, retry, "CommitExecution", 7)
+        self.assertEqual(channel.sandbox, FAST_SANDBOX)
+        self.assertEqual(channel.role, "fast")
         self.assertEqual(channel.requested_model, "gpt-6-sol")
 
 

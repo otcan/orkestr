@@ -20,6 +20,8 @@ pub struct StoppingCodex {
     writing: Option<PendingWrite>,
     request: u64,
     acknowledged: bool,
+    /// Adopted a stall interrupt: a refusal reply (late interrupt) is benign.
+    adopted_stall: bool,
     next_sequence: u64,
     pending: Option<ProviderEventInput>,
     retained: Vec<ProviderEvent>,
@@ -60,11 +62,35 @@ impl CodexPump {
                 .cursor
                 .next_control_sequence()
                 .map_err(|_| Blocker::Busy)?;
-            if self.source.failed.is_some()
-                || self.source.eof
-                || self.source.writing.is_some()
-                || self.source.stream.terminal().is_some()
-            {
+            if self.source.failed.is_some() || self.source.eof {
+                return Err(Blocker::Busy);
+            }
+            // Runtime's own stall interrupt (or a capacity terminal held for
+            // the fallback decision) is adopted: never a second interrupt,
+            // never the pending retry, and its terminal is Stopped.
+            let stall = self.source.stream.stall_interrupt();
+            if stall.is_some() || self.source.stream.capacity_held().is_some() {
+                let fence = CancellationFence::new(
+                    store,
+                    &self.admission,
+                    receipt,
+                    self.source.scope.clone(),
+                )
+                .map_err(|_| Blocker::StaleLease)?;
+                if self.source.steering.is_some() {
+                    self.source.child.quarantine();
+                    return Err(Blocker::Protocol);
+                }
+                self.source.capacity.abandon();
+                self.source.stream.adopt_stop()?;
+                self.source.tool_write = None;
+                self.source.workspace_write = None;
+                // The stall interrupt's own unfinished write, if any.
+                let writing = self.source.writing.take();
+                let (request, acknowledged) = stall.unwrap_or(((1_u64 << 53) - 2, true));
+                return Ok((fence, writing, next_sequence, request, acknowledged, true));
+            }
+            if self.source.writing.is_some() || self.source.stream.terminal().is_some() {
                 return Err(Blocker::Busy);
             }
             let fence =
@@ -94,23 +120,26 @@ impl CodexPump {
                 .child
                 .enqueue_cancellation(&self.source.scope, &fence, &lineage, &bytes)
                 .map_err(|_| Blocker::Protocol)?;
-            Ok((fence, writing, next_sequence, request))
+            Ok((fence, Some(writing), next_sequence, request, false, false))
         })();
         match result {
-            Ok((fence, writing, next_sequence, request)) => Ok(StoppingCodex {
-                pump: self,
-                fence,
-                writing: Some(writing),
-                request,
-                acknowledged: false,
-                next_sequence,
-                pending: None,
-                retained: Vec::new(),
-                omitted_nonterminal: 0,
-                failed: false,
-                stopped: false,
-                retain_terminal: false,
-            }),
+            Ok((fence, writing, next_sequence, request, acknowledged, adopted_stall)) => {
+                Ok(StoppingCodex {
+                    pump: self,
+                    fence,
+                    writing,
+                    request,
+                    acknowledged,
+                    adopted_stall,
+                    next_sequence,
+                    pending: None,
+                    retained: Vec::new(),
+                    omitted_nonterminal: 0,
+                    failed: false,
+                    stopped: false,
+                    retain_terminal: false,
+                })
+            }
             Err(cause) => {
                 self.source.child.quarantine();
                 Err(StopFailure {
@@ -293,10 +322,12 @@ impl StoppingCodex {
             if self.acknowledged
                 || object.len() != 2
                 || frame.get("id").and_then(serde_json::Value::as_u64) != Some(self.request)
-                || frame
+                || (frame
                     .get("result")
                     .and_then(serde_json::Value::as_object)
                     .is_none_or(|r| !r.is_empty())
+                    && !(self.adopted_stall
+                        && frame.get("error").is_some_and(serde_json::Value::is_object)))
             {
                 return Err(Blocker::Protocol);
             }

@@ -34,6 +34,14 @@ pub struct TurnStream {
     /// Runtime's own stall interrupt (never a Core stop) and its reply.
     watchdog: Option<u64>,
     watchdog_acked: bool,
+    /// A terminal that arrived while the stall interrupt's reply was still
+    /// outstanding: delivered once the reply frees the channel.
+    deferred: Option<ProviderEvent>,
+    /// A committed Core stop adopted this stream: no capacity hold, and an
+    /// `interrupted` terminal is Stopped again.
+    stop_adopted: bool,
+    /// When `turn/started` arrived, for the stall watchdog.
+    started_at: Option<std::time::Instant>,
 }
 impl TurnStream {
     /// Protocol correlation only. The process layer separately consumes Core's
@@ -59,7 +67,33 @@ impl TurnStream {
             activity: false,
             watchdog: None,
             watchdog_acked: false,
+            deferred: None,
+            stop_adopted: false,
+            started_at: None,
         })
+    }
+    /// When the native turn started (the stall watchdog's clock).
+    pub(crate) fn started_at(&self) -> Option<std::time::Instant> {
+        self.started_at
+    }
+    /// The outstanding stall interrupt: its request id and whether its reply
+    /// has arrived. A Core stop adopts it instead of sending another.
+    pub(crate) fn stall_interrupt(&self) -> Option<(u64, bool)> {
+        self.watchdog.map(|request| (request, self.watchdog_acked))
+    }
+    /// Adopt this stream for a committed Core stop: a held capacity terminal
+    /// is released as Stopped and no later terminal is ever held.
+    pub(crate) fn adopt_stop(&mut self) -> Result<(), Blocker> {
+        // The stopping reader correlates the stall interrupt's reply itself.
+        self.stop_adopted = true;
+        if let Some(event) = self.deferred.take() {
+            return self.queue(event);
+        }
+        if self.capacity_hold.take().is_some() {
+            self.terminal = Some(ProviderEvent::Stopped);
+            return self.queue(ProviderEvent::Stopped);
+        }
+        Ok(())
     }
     /// Whether the turn is acknowledged, started, still silent and open.
     pub(crate) fn stalled_candidate(&self) -> bool {
@@ -152,7 +186,8 @@ impl TurnStream {
     pub(crate) fn completed_continuation(&self) -> Result<(String, u64), Blocker> {
         if self.poisoned
             || !self.acknowledged
-            || self.interrupt_claimed
+            || (self.interrupt_claimed && !(self.watchdog.is_some() && self.watchdog_acked))
+            || self.deferred.is_some()
             || !self.events.is_empty()
             || !matches!(self.terminal, Some(ProviderEvent::CompletedProposal { .. }))
         {
@@ -227,14 +262,24 @@ impl TurnStream {
             return Err(Blocker::Protocol);
         }
         let value: Value = serde_json::from_str(line).map_err(|_| Blocker::Protocol)?;
-        if let Some(watchdog) = self.watchdog.filter(|_| !self.watchdog_acked) {
+        if let Some(watchdog) = self
+            .watchdog
+            .filter(|_| !self.watchdog_acked && !self.stop_adopted)
+        {
             if value.get("method").is_none()
                 && value.get("id").and_then(Value::as_u64) == Some(watchdog)
             {
-                if value.get("result") != Some(&serde_json::json!({})) {
+                // A late interrupt (the turn already ended) may be refused by
+                // the native; either reply only frees the channel.
+                if !(value.get("result") == Some(&serde_json::json!({}))
+                    || value.get("error").is_some_and(Value::is_object))
+                {
                     return Err(Blocker::Protocol);
                 }
                 self.watchdog_acked = true;
+                if let Some(event) = self.deferred.take() {
+                    self.queue(event)?;
+                }
                 return Ok(());
             }
         }
@@ -348,12 +393,13 @@ impl TurnStream {
                     self.queue(ProviderEvent::Started)?;
                 }
                 self.started = true;
+                self.started_at = Some(std::time::Instant::now());
             }
             return Ok(());
         }
         // Runtime's own stall interrupt ends a silent, overloaded turn.
         let capacity = (status == "failed" && capacity_error(turn)?)
-            || (status == "interrupted" && self.watchdog.is_some());
+            || (status == "interrupted" && self.watchdog.is_some() && !self.stop_adopted);
         let event = match status {
             "completed" => ProviderEvent::CompletedProposal { synthetic: false },
             // Capacity/overload is the provider's closed `provider` class.
@@ -377,7 +423,7 @@ impl TurnStream {
                 self.queue(ProviderEvent::Progress(snapshot))?;
             }
         }
-        if capacity {
+        if capacity && !self.stop_adopted {
             // Withheld: Runtime retries once on the fallback model or delivers
             // it. Only the broker's explicit `sideEffects: false` and no
             // delivered async question make the turn side-effect free.
@@ -387,9 +433,12 @@ impl TurnStream {
             self.capacity_hold = Some(clean);
             return Ok(());
         }
-        self.queue(event.clone())?;
-        self.terminal = Some(event);
-        Ok(())
+        self.terminal = Some(event.clone());
+        if self.stall_reply_pending() && !self.stop_adopted {
+            self.deferred = Some(event);
+            return Ok(());
+        }
+        self.queue(event)
     }
 }
 /// The broker's closed failure evidence: absent, or exactly `capacity`.

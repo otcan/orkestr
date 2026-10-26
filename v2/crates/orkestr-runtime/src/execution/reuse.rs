@@ -104,9 +104,6 @@ impl CodexPump {
         // After a capacity fallback on a thread-default turn, the next
         // thread-default turn requests the original default again.
         let restore_model = self.source.capacity.restore_model.take();
-        let owner_model = turn_frame(&capability, request_id)
-            .pointer("/params/model")
-            .is_some();
         let frame = with_restored_model(
             turn_frame(&capability, request_id),
             restore_model.as_deref(),
@@ -139,7 +136,7 @@ impl CodexPump {
             .with_native_model(self.source.native_model.clone(), requested_model.as_deref())
             .with_broker(channel)
             .with_provider_write(Some(writing))
-            .with_capacity_retry(&frame, owner_model);
+            .with_capacity_retry(&frame);
         #[cfg(all(test, feature = "fixture-test-controls"))]
         let pump = pump.with_test_fence(fence);
         Ok((authority, pump))

@@ -181,3 +181,57 @@ fn stall_interrupt_only_for_a_silent_turn_and_its_interrupted_terminal_is_held()
     .unwrap();
     assert_eq!(drain(&mut stopped), vec![ProviderEvent::Stopped]);
 }
+
+#[test]
+fn a_committed_stop_releases_a_held_capacity_terminal_as_stopped() {
+    let mut stream = active(4);
+    drain(&mut stream);
+    fail(
+        &mut stream,
+        json!({"id":"turn-owned","status":"failed",
+        "error":{"class":"capacity"},"sideEffects":false}),
+    )
+    .unwrap();
+    stream.adopt_stop().unwrap();
+    assert_eq!(stream.capacity_held(), None);
+    assert_eq!(drain(&mut stream), vec![ProviderEvent::Stopped]);
+    // An adopted stall interrupt's `interrupted` terminal is Stopped, never held.
+    let mut stream = active(4);
+    drain(&mut stream);
+    stream.claim_stall_interrupt(9).unwrap();
+    stream.adopt_stop().unwrap();
+    fail(
+        &mut stream,
+        json!({"id":"turn-owned","status":"interrupted","sideEffects":false}),
+    )
+    .unwrap();
+    assert_eq!(stream.capacity_held(), None);
+    assert_eq!(drain(&mut stream), vec![ProviderEvent::Stopped]);
+}
+
+#[test]
+fn a_late_refused_stall_interrupt_is_harmless_when_a_terminal_follows() {
+    let mut stream = active(4);
+    drain(&mut stream);
+    stream.claim_stall_interrupt(9).unwrap();
+    // The native finished first: the terminal waits for the interrupt reply.
+    stream.receive(&json!({"method":"item/completed","params":{"threadId":"thread-owned","turnId":"turn-owned",
+        "item":{"id":"a","type":"agentMessage","text":"done","phase":"final_answer"}}}).to_string()).unwrap();
+    stream.receive(&json!({"method":"turn/completed","params":{"threadId":"thread-owned","turn":{"id":"turn-owned","status":"completed"}}}).to_string()).unwrap();
+    assert_eq!(
+        drain(&mut stream),
+        vec![ProviderEvent::Progress("done".into())]
+    );
+    assert!(
+        stream.completed_continuation().is_err(),
+        "reply still occupies the channel"
+    );
+    stream
+        .receive(&json!({"id":9,"error":{"code":-32600}}).to_string())
+        .unwrap();
+    assert_eq!(
+        drain(&mut stream),
+        vec![ProviderEvent::CompletedProposal { synthetic: false }]
+    );
+    assert!(stream.completed_continuation().is_ok());
+}

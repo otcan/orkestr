@@ -60,7 +60,22 @@ mod tests {
             policy.fallback_for(Role::Deep, "gpt-6.1-sol"),
             Some("gpt-6-sol")
         );
-        assert_eq!(policy.stall_after(Role::Fast).unwrap().as_secs(), 20);
+        // The stall watchdog is off unless the operator sets it.
+        assert_eq!(policy.stall_after(Role::Fast), None);
+        assert_eq!(policy.stall_after(Role::Deep), None);
+        let stall: CapacityFallbackConfig = serde_json::from_value(
+            serde_json::json!({"stall_deep_secs": 90, "stall_fast_secs": 20}),
+        )
+        .unwrap();
+        assert_eq!(
+            stall
+                .policy()
+                .unwrap()
+                .stall_after(Role::Fast)
+                .unwrap()
+                .as_secs(),
+            20
+        );
         let off: CapacityFallbackConfig =
             serde_json::from_value(serde_json::json!({"enabled": false})).unwrap();
         assert_eq!(

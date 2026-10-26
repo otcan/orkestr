@@ -17,11 +17,15 @@ use serde_json::{json, Value};
 
 /// Prefixed to the retried input. The failed attempt's input is already in
 /// the native thread's history; the note says why it appears again.
-pub(crate) fn retry_note(from: &str, to: &str) -> String {
+/// Kept short: Fast turns carry a bounded input budget.
+pub(crate) fn retry_note(from: &str, to: &str, stalled: bool) -> String {
+    let cause = if stalled {
+        "slow/overloaded"
+    } else {
+        "at capacity"
+    };
     format!(
-        "[Orkestr: the previous attempt at this message ended before any work was done \
-because the model {from} was at capacity. This is the one automatic retry, on {to}. \
-Answer the message below as usual.]"
+        "[Orkestr retry on {to}: {from} was {cause} before any work. Answer the message below.]"
     )
 }
 
@@ -32,11 +36,7 @@ pub(super) struct CapacityRetry {
     policy: Option<CapacityFallback>,
     frame: Option<Value>,
     actual_fd: bool,
-    /// The turn carries the owner's explicit model (not the thread default).
-    owner_model: bool,
     attempted: bool,
-    /// When this turn was submitted, for the stall watchdog.
-    submitted: Option<std::time::Instant>,
     stall_fired: bool,
     /// The native thread default before a fallback override: Codex keeps a
     /// turn override for later turns, so the next default turn restores it.
@@ -44,22 +44,21 @@ pub(super) struct CapacityRetry {
 }
 
 impl CapacityRetry {
-    pub(super) fn new(
-        policy: CapacityFallback,
-        frame: &Value,
-        actual_fd: bool,
-        owner_model: bool,
-    ) -> Self {
+    pub(super) fn new(policy: CapacityFallback, frame: &Value, actual_fd: bool) -> Self {
         Self {
             policy: Some(policy),
             frame: Some(frame.clone()),
             actual_fd,
-            owner_model,
             attempted: false,
-            submitted: Some(std::time::Instant::now()),
             stall_fired: false,
             restore_model: None,
         }
+    }
+    /// A committed stop owns the run now: never retry it.
+    pub(super) fn abandon(&mut self) {
+        self.attempted = true;
+        self.stall_fired = true;
+        self.frame = None;
     }
     #[cfg(test)]
     pub(super) fn set_policy(&mut self, policy: CapacityFallback) {
@@ -114,6 +113,7 @@ pub(super) fn retry_frame(
     request: u64,
     from: &str,
     to: &str,
+    stalled: bool,
 ) -> Result<Value, Blocker> {
     let mut frame = original.clone();
     if frame.get("method").and_then(Value::as_str) != Some("turn/start") {
@@ -139,7 +139,10 @@ pub(super) fn retry_frame(
         .and_then(|item| item.get_mut("text"))
         .ok_or(Blocker::Protocol)?;
     let original_text = text.as_str().ok_or(Blocker::Protocol)?;
-    *text = json!(format!("{}\n\n{original_text}", retry_note(from, to)));
+    *text = json!(format!(
+        "{}\n\n{original_text}",
+        retry_note(from, to, stalled)
+    ));
     frame["id"] = json!(request);
     Ok(frame)
 }
@@ -181,8 +184,7 @@ impl CodexOutput {
             "not_retried_no_retained_turn"
         } else {
             let (from, to) = (from.clone().unwrap(), to.clone().unwrap());
-            let default_turn = !self.capacity.owner_model;
-            match self.start_fallback(&from, &to, default_turn) {
+            match self.start_fallback(&from, &to) {
                 Ok(()) => "retried_on_fallback",
                 Err(_) => "retry_submission_refused",
             }
@@ -232,9 +234,9 @@ impl CodexOutput {
             || self.capacity.stall_fired
             || self.capacity.frame.is_none()
             || self
-                .capacity
-                .submitted
-                .is_none_or(|submitted| submitted.elapsed() < after)
+                .stream
+                .started_at()
+                .is_none_or(|started| started.elapsed() < after)
             || self.writing.is_some()
             || self.steering.is_some()
             || self.tool_write.is_some()
@@ -279,7 +281,8 @@ impl CodexOutput {
         Ok(())
     }
 
-    fn start_fallback(&mut self, from: &str, to: &str, default_turn: bool) -> Result<(), Blocker> {
+    fn start_fallback(&mut self, from: &str, to: &str) -> Result<(), Blocker> {
+        let stalled = self.stream.stall_interrupt().is_some();
         let original = self.capacity.frame.as_ref().ok_or(Blocker::Protocol)?;
         let request = self
             .stream
@@ -287,7 +290,7 @@ impl CodexOutput {
             .checked_add(1)
             .ok_or(Blocker::Protocol)?;
         let mut next = self.stream.fallback_retry(request)?;
-        let frame = retry_frame(original, request, from, to)?;
+        let frame = retry_frame(original, request, from, to, stalled)?;
         let writing = if self.capacity.actual_fd {
             Some(super::provider_write::PendingWrite::new(&frame)?)
         } else {
@@ -315,9 +318,9 @@ impl CodexOutput {
             self.native_model.as_deref(),
             Some(to),
         ));
-        if default_turn && self.capacity.restore_model.is_none() {
-            self.capacity.restore_model = self.native_model.clone();
-        }
+        // Codex keeps a turn override for later turns: the next turn that
+        // has no owner model asks for the model this turn started on again.
+        self.capacity.restore_model = Some(from.to_owned());
         self.writing = writing;
         self.stream = next;
         Ok(())
@@ -347,7 +350,7 @@ mod tests {
 
     #[test]
     fn retry_frame_keeps_thread_and_input_with_a_new_id_model_and_note() {
-        let retry = retry_frame(&frame(), 5, "gpt-6.1-sol", "gpt-6-sol").unwrap();
+        let retry = retry_frame(&frame(), 5, "gpt-6.1-sol", "gpt-6-sol", false).unwrap();
         assert_eq!(retry["id"], 5);
         assert_eq!(retry["params"]["threadId"], "native");
         assert_eq!(retry["params"]["model"], "gpt-6-sol");
@@ -356,7 +359,9 @@ mod tests {
         assert_eq!(id.len(), 36);
         assert_eq!(&id[14..15], "4");
         let text = retry["params"]["input"][0]["text"].as_str().unwrap();
-        assert!(text.starts_with("[Orkestr: the previous attempt"));
+        assert!(text.starts_with("[Orkestr retry on gpt-6-sol: gpt-6.1-sol was at capacity"));
+        assert!(retry_note("a", "b", true).contains("slow/overloaded"));
+        assert!(retry_note("gpt-6.1-sol", "gpt-6-sol", true).len() < 120);
         assert!(text.contains("gpt-6.1-sol") && text.contains("gpt-6-sol"));
         assert!(text.ends_with("\n\noriginal input"));
         assert_eq!(retry["params"].as_object().unwrap().len(), 4);
@@ -370,10 +375,10 @@ mod tests {
         let mut original = frame();
         original["params"]["model"] = json!("gpt-6.1-sol");
         original["params"]["effort"] = json!("high");
-        let retry = retry_frame(&original, 5, "gpt-6.1-sol", "gpt-6-sol").unwrap();
+        let retry = retry_frame(&original, 5, "gpt-6.1-sol", "gpt-6-sol", false).unwrap();
         assert_eq!(retry["params"]["model"], "gpt-6-sol");
         assert_eq!(retry["params"]["effort"], "high");
         original["method"] = json!("turn/steer");
-        assert!(retry_frame(&original, 5, "a", "b").is_err());
+        assert!(retry_frame(&original, 5, "a", "b", true).is_err());
     }
 }
