@@ -119,7 +119,9 @@ async fn calendar_timer_fires_once_per_slot_and_advances_on_the_rule() {
     .await;
     let now = clock(&f).await;
     let due = next_due(&f, namespace).await;
-    assert!(due > now && due - now <= 3_600_000 && due % 3_600_000 == 0);
+    // Top-of-the-hour runs carry the timer's deterministic spread.
+    let spread = timer_spread_ms(namespace);
+    assert!(due > now && due - now <= 3_600_000 + spread && due % 3_600_000 == spread);
     assert!(due_now(&f).await.is_empty());
     make_overdue(&f, namespace).await;
     assert_eq!(due_now(&f).await, vec![namespace]);
@@ -127,7 +129,7 @@ async fn calendar_timer_fires_once_per_slot_and_advances_on_the_rule() {
     assert!(!receipt.duplicate);
     // Downtime coalesces: exactly one run, then the next top of the hour.
     let after = next_due(&f, namespace).await;
-    assert!(after > now && after % 3_600_000 == 0);
+    assert!(after > now && after % 3_600_000 == spread);
     assert!(due_now(&f).await.is_empty());
     let issuer = f.handle.authorize_timer_scheduler(namespace).await.unwrap();
     assert!(f
@@ -158,7 +160,8 @@ async fn pause_until_blocks_runs_then_resumes_without_catch_up() {
     assert_eq!(policy.pause_until_ms, Some(until));
     // The next run moved to the first top of the hour at or after the pause end.
     let moved = next_due(&f, namespace).await;
-    assert!(moved >= until && moved - until < 3_600_000 && moved % 3_600_000 == 0);
+    let spread = timer_spread_ms(namespace);
+    assert!(moved >= until && moved - until < 3_600_000 + spread && moved % 3_600_000 == spread);
     // Even a stored past-due occurrence is not a candidate while paused.
     make_overdue(&f, namespace).await;
     assert!(due_now(&f).await.is_empty());
@@ -177,7 +180,7 @@ async fn pause_until_blocks_runs_then_resumes_without_catch_up() {
     assert_eq!(policy.pause_until_ms, None);
     let resumed = next_due(&f, namespace).await;
     assert!(
-        resumed > now && resumed - now <= 3_600_000 + 5_000,
+        resumed > now && resumed - now <= 3_600_000 + spread + 5_000,
         "{resumed} {now}"
     );
     finish(f).await;

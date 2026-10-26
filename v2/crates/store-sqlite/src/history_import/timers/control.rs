@@ -96,7 +96,7 @@ pub(super) async fn enable_in_transaction(
         return Err(HistoryError::Conflict);
     }
     let schedule = schedule::decode(current.get("schedule_json"))?;
-    let due = schedule::next(&schedule, now_ms)?;
+    let due = schedule::next_for(&schedule, request.namespace, now_ms)?;
     let due = policy_pause::adjust_next(
         tx,
         owner,

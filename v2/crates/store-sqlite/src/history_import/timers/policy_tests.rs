@@ -37,18 +37,18 @@ fn pause_until_resumes_at_the_first_run_at_or_after_the_end() {
     let s = supp(ms("2026-10-21T10:30:00Z"), &[]);
     let candidate = ms("2026-10-21T07:00:00Z");
     assert_eq!(
-        iso(first_allowed(&s, &schedule, candidate)),
+        iso(first_allowed(&s, &schedule, 0, candidate)),
         "2026-10-21T11:00:00Z"
     );
     // Pause ending exactly on a run time allows that run.
     let s = supp(ms("2026-10-21T11:00:00Z"), &[]);
     assert_eq!(
-        iso(first_allowed(&s, &schedule, candidate)),
+        iso(first_allowed(&s, &schedule, 0, candidate)),
         "2026-10-21T11:00:00Z"
     );
     // A pause already over changes nothing.
     let s = supp(ms("2026-10-20T00:00:00Z"), &[]);
-    assert_eq!(first_allowed(&s, &schedule, candidate), candidate);
+    assert_eq!(first_allowed(&s, &schedule, 0, candidate), candidate);
 }
 
 #[test]
@@ -58,16 +58,16 @@ fn skip_dates_use_the_local_date_of_the_run() {
     let s = supp(0, &["2026-10-22"]);
     let candidate = ms("2026-10-22T06:00:00Z");
     assert_eq!(
-        iso(first_allowed(&s, &schedule, candidate)),
+        iso(first_allowed(&s, &schedule, 0, candidate)),
         "2026-10-23T06:00:00Z"
     );
     // The day before is untouched.
     let before = ms("2026-10-21T17:00:00Z");
-    assert_eq!(first_allowed(&s, &schedule, before), before);
+    assert_eq!(first_allowed(&s, &schedule, 0, before), before);
     // A skipped Friday over a weekend resumes Monday.
     let s = supp(0, &["2026-10-23"]);
     assert_eq!(
-        iso(first_allowed(&s, &schedule, ms("2026-10-23T06:00:00Z"))),
+        iso(first_allowed(&s, &schedule, 0, ms("2026-10-23T06:00:00Z"))),
         "2026-10-26T07:00:00Z"
     );
 }
@@ -86,12 +86,12 @@ fn pause_and_skip_combine() {
     let s = supp(ms("2026-10-22T10:00:00Z"), &["2026-10-23"]);
     // Paused until Thu 12:00 Berlin; Friday is a holiday: Thursday 12:00 runs.
     assert_eq!(
-        iso(first_allowed(&s, &schedule, ms("2026-10-21T08:00:00Z"))),
+        iso(first_allowed(&s, &schedule, 0, ms("2026-10-21T08:00:00Z"))),
         "2026-10-22T10:00:00Z"
     );
     let s = supp(ms("2026-10-23T08:00:00Z"), &["2026-10-23"]);
     assert_eq!(
-        iso(first_allowed(&s, &schedule, ms("2026-10-21T08:00:00Z"))),
+        iso(first_allowed(&s, &schedule, 0, ms("2026-10-21T08:00:00Z"))),
         "2026-10-26T07:00:00Z"
     );
 }
@@ -101,7 +101,7 @@ fn indefinite_pause_leaves_the_candidate_to_the_scheduler_filter() {
     let schedule = berlin();
     let s = supp(FOREVER_MS, &[]);
     let candidate = ms("2026-10-21T07:00:00Z");
-    assert_eq!(first_allowed(&s, &schedule, candidate), candidate);
+    assert_eq!(first_allowed(&s, &schedule, 0, candidate), candidate);
     assert!(s.blocks(candidate));
 }
 

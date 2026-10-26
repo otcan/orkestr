@@ -89,7 +89,7 @@ async fn claim_in_transaction(
     let next = if matches!(schedule, TimerSchedule::Once { .. }) {
         None
     } else {
-        let natural = schedule::next(&schedule, now_ms)?;
+        let natural = schedule::next_for(&schedule, request.namespace, now_ms)?;
         Some(
             policy_pause::adjust_next(
                 tx,

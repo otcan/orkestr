@@ -476,3 +476,107 @@ async fn failed_claim_transaction_leaves_no_partial_occurrence() {
 mod input_atomic_tests;
 #[path = "input_tests.rs"]
 mod input_tests;
+
+#[test]
+fn top_of_hour_spread_is_deterministic_bounded_and_keeps_exact_schedules() {
+    use orkestr_v2_contracts::CalendarRule;
+    const HOUR: i64 = 3_600_000;
+    let ns = Uuid::parse_str("00000000-0000-4000-8000-000000000001").unwrap();
+    let spread = schedule::spread_ms(ns);
+    assert_eq!(spread, schedule::spread_ms(ns));
+    assert!((0..=schedule::SPREAD_MAX_MS).contains(&spread) && spread % 1000 == 0);
+    // Different timers land on different offsets inside the bound.
+    let offsets: std::collections::BTreeSet<i64> = (1..=64_u128)
+        .map(|n| schedule::spread_ms(Uuid::from_u128(n)))
+        .collect();
+    assert!(offsets.len() > 32);
+    assert!(offsets
+        .iter()
+        .all(|o| (0..=schedule::SPREAD_MAX_MS).contains(o)));
+    let s = 300_000; // explicit five minute spread
+    let on_hour = TimerSchedule::UtcClock {
+        weekly: false,
+        minute_of_day: 13 * 60,
+    };
+    assert_eq!(
+        schedule::next_spread(&on_hour, s, NOW),
+        Ok(NOW + 13 * HOUR + s)
+    );
+    // Between the natural time and the spread time the same occurrence is still next.
+    assert_eq!(
+        schedule::next_spread(&on_hour, s, NOW + 13 * HOUR + 1),
+        Ok(NOW + 13 * HOUR + s)
+    );
+    // Claimed at its spread time, the next run is tomorrow's, never the same one twice.
+    assert_eq!(
+        schedule::next_spread(&on_hour, s, NOW + 13 * HOUR + s),
+        Ok(NOW + 37 * HOUR + s)
+    );
+    // Off-the-hour, interval and one-shot timers stay exact.
+    let minute = TimerSchedule::UtcClock {
+        weekly: false,
+        minute_of_day: 13 * 60 + 5,
+    };
+    assert_eq!(
+        schedule::next_spread(&minute, s, NOW),
+        schedule::next(&minute, NOW)
+    );
+    let interval = TimerSchedule::Interval { every_ms: HOUR };
+    assert_eq!(schedule::next_spread(&interval, s, NOW), Ok(NOW + HOUR));
+    let once = TimerSchedule::Once { due_ms: NOW + HOUR };
+    assert_eq!(schedule::next_spread(&once, s, NOW), Ok(NOW + HOUR));
+    // Hourly calendar window 09:00-20:00 UTC: inner hours are spread, the last
+    // run of the window stays exact so a run never leaves the window.
+    let window = TimerSchedule::Calendar(
+        CalendarRule {
+            timezone: "UTC".into(),
+            weekdays: vec![],
+            start_minute: 9 * 60,
+            end_minute: 20 * 60,
+            every_hours: 1,
+            minutes: vec![0],
+        }
+        .normalized()
+        .unwrap(),
+    );
+    assert_eq!(
+        schedule::next_spread(&window, s, NOW),
+        Ok(NOW + 9 * HOUR + s)
+    );
+    assert_eq!(
+        schedule::next_spread(&window, s, NOW + 19 * HOUR + s),
+        Ok(NOW + 20 * HOUR)
+    );
+    assert_eq!(
+        schedule::next_spread(&window, s, NOW + 20 * HOUR),
+        Ok(NOW + 33 * HOUR + s)
+    );
+    // Calendar rules with explicit minutes are exact.
+    let half = TimerSchedule::Calendar(
+        CalendarRule {
+            timezone: "UTC".into(),
+            weekdays: vec![],
+            start_minute: 9 * 60,
+            end_minute: 20 * 60,
+            every_hours: 1,
+            minutes: vec![0, 30],
+        }
+        .normalized()
+        .unwrap(),
+    );
+    assert_eq!(schedule::next_spread(&half, s, NOW), Ok(NOW + 9 * HOUR));
+    // Zoned wall-clock timers on the hour are spread too.
+    let zoned = TimerSchedule::ZonedClock {
+        timezone: "Europe/Berlin".into(),
+        weekday: None,
+        minute_of_day: 13 * 60,
+    };
+    assert_eq!(
+        schedule::next_spread(&zoned, s, NOW),
+        Ok(NOW + 12 * HOUR + s)
+    );
+    assert_eq!(
+        schedule::next_for(&zoned, ns, NOW),
+        Ok(NOW + 12 * HOUR + spread)
+    );
+}
