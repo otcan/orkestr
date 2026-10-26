@@ -36,7 +36,8 @@ class QuestionExportTests(unittest.TestCase):
             self.worker.observe(self.ledger.next_input())
 
     def assert_once(self):
-        questions=[message for message in self.ledger.messages() if message.get('text')==self.text]
+        body=self.text[len(QUESTION_PREFIX):]
+        questions=[message for message in self.ledger.messages() if message.get('text')==body]
         self.assertEqual(len(questions),1)
         self.assertNotEqual(questions[0]['parentMessageId'],self.data['remote_id'])
         self.assertEqual(questions[0]['phase'],'final_answer')

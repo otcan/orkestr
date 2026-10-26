@@ -20,7 +20,8 @@ from .rust_client import ClientError
 from .model_identity import observed_identity
 from .policy_refusal import notice as policy_notice
 from .first_response import capture as capture_first_response, repeats_fast
-from .questions import QUESTION_PREFIX, QUESTION_LABEL, QUESTION_SCAN_LIMIT, export_question
+from .questions import QUESTION_PREFIX, QUESTION_LABEL, QUESTION_SCAN_LIMIT, export_question, repeats_question
+from .outbound_text import PROGRESS_HOLD_S, complete_progress
 from .activity import observe as observe_activity
 from .input_activity import record as record_transport_activity
 from .intake import admit as admit_input, window as admit_window
@@ -76,7 +77,7 @@ BURST_NOTE = ("[%d messages arrived together and are delivered as one turn. Read
 # Frozen per-attempt state dropped when an input is sent again as a new turn.
 RESET_KEYS = ("intake", "cursor", "fast_cursor", "window", "window_request", "previous_window", "matched_runs", "accepted",
               "fast_accept_request", "deep_accept_request", "fast_payload", "deep_payload", "admitted_at",
-              "progress_at", "fast_unusable_since", "intake_rules", "questions_scanned", "question_payloads", "activity", "deep_final_ready_at", "transport_activity",
+              "progress_at", "fast_unusable_since", "intake_rules", "questions_scanned", "question_payloads", "question_texts", "progress_hold", "activity", "deep_final_ready_at", "transport_activity",
               "deep_stop_seen_ms")
 # An admitted input whose window ended without starting any run of it.
 ORPHAN_GRACE_S = 60
@@ -289,6 +290,9 @@ class Worker:
         now = time.time()
         if now - data.get("progress_at", data.get("admitted_at", now)) < PROGRESS_INTERVAL_S:
             return
+        held = data.get("progress_hold") or {}
+        if held.get("payload_id") == payload_id and now - held.get("since", now) < PROGRESS_HOLD_S:
+            return  # A held fragment: wait until it grows or stays the latest.
         payload = self.call("GET", "/payloads/" + payload_id)
         if payload.get("run_id") != status["run_id"] or payload.get("payload_id") != payload_id:
             raise Refused("progress_payload_mismatch")
@@ -296,9 +300,18 @@ class Worker:
         if export_question(self, data, payload_id, text, status["run_id"]):
             self.ledger.save(data)
             return
+        if (isinstance(text, str) and text.strip() and not complete_progress(text)
+                and held.get("payload_id") != payload_id):
+            # Core snapshots an item while the model is still writing it: never
+            # post a half sentence. A later snapshot supersedes this one; if it
+            # stays the latest for PROGRESS_HOLD_S the item is done as it is.
+            data["progress_hold"] = {"payload_id": payload_id, "since": now}
+            self.ledger.save(data)
+            return
+        data.pop("progress_hold", None)
         seen.append(payload_id)
         data["progress_at"] = now
-        if not isinstance(text, str) or not text.strip() or no_reply(text):
+        if not isinstance(text, str) or not text.strip() or no_reply(text) or repeats_question(data, text):
             self.ledger.save(data)
             return
         if len(text) > PROGRESS_MAX_CHARS:
@@ -591,14 +604,21 @@ class Worker:
         payload_id = (status.get("progress") or {}).get("payload_id")
         seen = watch.setdefault("progress", [])
         now = time.time()
+        held = watch.get("progress_hold") or {}
         if (not payload_id or payload_id in seen or len(seen) >= PROGRESS_LIMIT or
-                now - watch.get("progress_at", watch["since"]) < PROGRESS_INTERVAL_S):
+                now - watch.get("progress_at", watch["since"]) < PROGRESS_INTERVAL_S or
+                (held.get("payload_id") == payload_id and now - held.get("since", now) < PROGRESS_HOLD_S)):
             return
         payload = self.call("GET", "/payloads/" + payload_id)
         if payload.get("run_id") != status["run_id"] or payload.get("payload_id") != payload_id:
             raise Refused("progress_payload_mismatch")
-        watch["progress_at"] = now
         text = payload.get("text")
+        if (isinstance(text, str) and text.strip() and not text.startswith(QUESTION_PREFIX)
+                and not complete_progress(text) and held.get("payload_id") != payload_id):
+            watch["progress_hold"] = {"payload_id": payload_id, "since": now}
+            return self.ledger.save_web_watch(watch)
+        watch.pop("progress_hold", None)
+        watch["progress_at"] = now
         if not isinstance(text, str) or not text.strip() or no_reply(text) or text.startswith(QUESTION_PREFIX):
             seen.append(payload_id)
             return self.ledger.save_web_watch(watch)

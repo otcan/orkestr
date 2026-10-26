@@ -340,7 +340,7 @@ class ExtensionTests(unittest.TestCase):
                     if route in ("/payloads/p1", "/payloads/p2", "/payloads/p3"):
                         payload = route.rsplit("/", 1)[1]
                         return 200, dict(run_id="deep-run", payload_id=payload,
-                                         text="NO_REPLY" if payload == "p2" else "working on " + payload)
+                                         text="NO_REPLY" if payload == "p2" else "working on " + payload + ".")
                     return original(method, route, **kwargs)
                 peer.request = request
                 worker = Worker(peer, ledger, progress_updates=enabled)
@@ -350,7 +350,7 @@ class ExtensionTests(unittest.TestCase):
                         worker.step(ledger.next_input() or data)
                 rows = ledger.messages()
                 progress = [r["text"] for r in rows if r.get("kind") == "progress"]
-                self.assertEqual(progress, ["working on p1", "working on p3"] if enabled else [])
+                self.assertEqual(progress, ["working on p1.", "working on p3."] if enabled else [])
                 self.assertEqual(rows[-1]["text"], "deep result")
                 self.assertTrue(all(r["parentMessageId"] == data["remote_id"] for r in rows[1:]))
 
@@ -380,8 +380,11 @@ class ExtensionTests(unittest.TestCase):
         worker.step(self.ledger.next_input() or data)
         rows = self.ledger.messages()
         replies = [r for r in rows if r["role"] == "assistant"]
-        questions = [r["text"] for r in replies if r["text"].startswith(worker_module.QUESTION_PREFIX)]
-        self.assertEqual(questions, [texts[q1], texts[q2]])
+        bare = {q: texts[q][len(worker_module.QUESTION_PREFIX):] for q in (q1, q2)}
+        questions = [r["text"] for r in replies if r["text"] in bare.values()]
+        self.assertEqual(questions, [bare[q1], bare[q2]])
+        self.assertFalse(any(worker_module.QUESTION_PREFIX in r["text"] for r in replies),
+                         "V1 renders the question header; the post text must not repeat it")
         # Each question has its own pseudo parent; only the Deep result answers the input.
         finals = [r for r in replies if r["parentMessageId"] == data["remote_id"]]
         self.assertEqual([r["text"] for r in finals], ["deep result"])

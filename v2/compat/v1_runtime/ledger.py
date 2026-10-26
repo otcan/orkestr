@@ -15,6 +15,7 @@ import time
 import uuid
 
 from .export_changes import ExportConnection
+from .outbound_text import scrub_local_paths
 from . import notices
 
 SCHEMA = "2"
@@ -678,6 +679,9 @@ class Ledger:
     # Exports -----------------------------------------------------------
     def _export(self, db, data, kind, source_key, message):
         attach_scope(message, data)
+        # Server-local paths never leave the host (WhatsApp cannot open them).
+        if "text" in message:
+            message["text"] = scrub_local_paths(message["text"])
         inserted = db.execute("INSERT OR IGNORE INTO exports(export_id,input_id,kind,source_key,message) VALUES (?,?,?,?,?)",
                               (message["id"], data["remote_id"], kind, source_key, json.dumps(message)))
         if inserted.rowcount:
