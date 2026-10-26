@@ -62,7 +62,9 @@ impl ExecutionWindowTerminalOutcome {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ExecutionWindowOpenFailureCause {
-    /// The manager admitted the window but its private credential was never issued.
+    /// The window's private credential was never issued. Usually the manager
+    /// admitted it first; a window the manager refused to admit has this
+    /// cause too and is closed by Core without a manager record.
     CredentialUnissued,
     /// The credential was issued but the opening never bound it.
     CredentialUnbound,

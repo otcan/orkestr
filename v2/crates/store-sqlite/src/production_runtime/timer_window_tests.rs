@@ -521,7 +521,10 @@ async fn a_timer_whose_window_failed_to_open_is_retried_once() {
     let event = timer.input.event_id.clone();
     // Exactly what the server's queue dispatcher admits for the intent.
     let request = |generation: u64, predecessor: Option<Uuid>| ExecutionWindowRequest {
-        request_key: format!("timer-window:{}", event.0),
+        request_key: match generation {
+            0 => format!("timer-window:{}", event.0),
+            _ => format!("timer-window:{}:retry1", event.0),
+        },
         input_message_id: timer.input.message_id.clone(),
         input_event_id: event.clone(),
         input_request_key: format!("timer:{}", timer.claim.claim_id),
@@ -560,6 +563,30 @@ async fn a_timer_whose_window_failed_to_open_is_retried_once() {
     assert_eq!(failed.open_failure_cause, Some(Cause::SetupIncomplete));
     assert_eq!(failed.released_input_event_ids, vec![event.clone()]);
     assert_eq!(queue_row(&f).await, ("queued".into(), None));
+    // The retry is a fresh admission under its own key: the manager keeps the
+    // failed window's request as evidence and never sees it replayed changed.
+    let queued = f
+        .store
+        .execution_window_queue_authenticated(browser, Some(&f.conversation))
+        .await
+        .unwrap();
+    assert_eq!(
+        queued[0].request_key,
+        format!("timer-window:{}:retry1", event.0)
+    );
+    assert!(f
+        .store
+        .queued_execution_window_authenticated(
+            browser,
+            &f.conversation,
+            &ExecutionWindowRequest {
+                request_key: queued[0].request_key.clone(),
+                ..request(0, None)
+            },
+        )
+        .await
+        .unwrap()
+        .is_some());
     let listed = f
         .store
         .conversation_timer_inputs(browser, &f.owner, &f.conversation, 0, 10)
@@ -626,6 +653,165 @@ async fn a_timer_whose_window_failed_to_open_is_retried_once() {
     );
     // Nothing ever ran for it: no run of any role exists.
     assert_eq!(count(&f, "SELECT count(*) FROM production_runs").await, 0);
+}
+
+/// 2026-10-26: the retry window was refused by the manager before admission,
+/// so it never got a credential and stayed `reconciliation_required`. The
+/// server commits Core's failed open locally (the manager has nothing to
+/// retire); the input stays released and is never queued a third time.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_retry_window_the_manager_never_admitted_closes_and_stays_released() {
+    use orkestr_v2_contracts::{
+        ExecutionWindowOpenFailureCause as Cause, ExecutionWindowReconciliationActor as Actor,
+        ExecutionWindowReconciliationDecision as Decision, ExecutionWindowState,
+    };
+    let f = setup().await;
+    let browser = "synthetic-browser-timer-unadmitted";
+    f.store.save_session(browser, &f.owner).await.unwrap();
+    ready(&f).await;
+    let namespace = enabled(
+        &f,
+        TimerSchedule::Interval { every_ms: 60_000 },
+        "unadmitted",
+    )
+    .await;
+    overdue(&f, namespace, 1).await;
+    let issuer = f.handle.authorize_timer_scheduler(namespace).await.unwrap();
+    let timer = f
+        .handle
+        .admit_authorized_timer_turn(&issuer, namespace, true)
+        .await
+        .unwrap();
+    let event = timer.input.event_id.clone();
+    let request =
+        |key: String, generation: u64, predecessor: Option<Uuid>| ExecutionWindowRequest {
+            request_key: key,
+            input_message_id: timer.input.message_id.clone(),
+            input_event_id: event.clone(),
+            input_request_key: format!("timer:{}", timer.claim.claim_id),
+            expected_generation: generation,
+            window_id: None,
+            predecessor_window_id: predecessor,
+        };
+    let first = f
+        .store
+        .admit_execution_window_authenticated(
+            browser,
+            &f.conversation,
+            &request(format!("timer-window:{}", event.0), 0, None),
+        )
+        .await
+        .unwrap()
+        .status;
+    // As in production: the first window was admitted, bound, then its Fast
+    // setup failed.
+    let credential = f
+        .handle
+        .issue_execution_window_credential(
+            &f.token,
+            first.window_id,
+            1,
+            "timer-unadmitted-boot",
+            first.expires_at_ms,
+            &"a".repeat(64),
+        )
+        .await
+        .unwrap();
+    f.handle
+        .bind_execution_window(&f.token, &credential)
+        .await
+        .unwrap();
+    fail_open(&f, browser, first.window_id, 1).await;
+    let key = f
+        .store
+        .execution_window_queue_authenticated(browser, Some(&f.conversation))
+        .await
+        .unwrap()[0]
+        .request_key
+        .clone();
+    assert_eq!(key, format!("timer-window:{}:retry1", event.0));
+    let fresh = Store::open(&f.root.join("core.sqlite3")).await.unwrap();
+    fresh
+        .rebootstrap_execution_window_authenticated(
+            browser,
+            &f.conversation,
+            config(ProductionTakeover::First),
+        )
+        .await
+        .unwrap();
+    let second = fresh
+        .admit_execution_window_authenticated(
+            browser,
+            &f.conversation,
+            &request(key, 1, Some(first.window_id)),
+        )
+        .await
+        .unwrap()
+        .status;
+    // Manager admission refused: no credential is ever issued for it.
+    let restarted = Store::open(&f.root.join("core.sqlite3")).await.unwrap();
+    restarted
+        .reconcile_execution_window_authenticated(browser, &f.conversation, second.window_id, 2)
+        .await
+        .unwrap();
+    let StrandedExecutionWindow::Pending(plan) = restarted
+        .plan_stranded_execution_window_authenticated(
+            browser,
+            &f.conversation,
+            second.window_id,
+            2,
+            Decision::AbandonUnaccepted,
+            Actor::Owner,
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("a never-admitted window must plan as a failed open")
+    };
+    assert_eq!(plan.open_failure_cause, Some(Cause::CredentialUnissued));
+    assert_eq!(
+        (plan.prior_run_id.as_ref(), plan.terminal_event_id.as_ref()),
+        (None, None)
+    );
+    let closed = restarted
+        .reconcile_stranded_execution_window_authenticated(
+            browser,
+            &plan,
+            Decision::AbandonUnaccepted,
+            Actor::Owner,
+        )
+        .await
+        .unwrap();
+    assert_eq!(closed.released_input_event_ids, vec![event.clone()]);
+    let status = restarted
+        .execution_window_status_authenticated(browser, &f.conversation)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        (status.generation, status.state),
+        (2, ExecutionWindowState::Closed)
+    );
+    // Released, not replayed: no third queue entry, no window input, no run.
+    assert_eq!(
+        queue_row(&f).await,
+        ("dispatched".into(), Some(second.window_id.to_string()))
+    );
+    assert_eq!(
+        count(
+            &f,
+            "SELECT count(*) FROM execution_window_open_failure_inputs"
+        )
+        .await,
+        2
+    );
+    assert_eq!(
+        count(&f, "SELECT count(*) FROM execution_window_inputs").await,
+        0
+    );
+    assert_eq!(count(&f, "SELECT count(*) FROM production_runs").await, 0);
+    f.store.close().await;
+    std::fs::remove_dir_all(f.root).unwrap();
 }
 
 /// A user input released by a failed open is never queued again by Core:

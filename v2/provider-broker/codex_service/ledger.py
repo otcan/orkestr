@@ -29,28 +29,59 @@ class Clock:
         return self.boot, time.time_ns(), time.monotonic_ns()
 
 
+WINDOWS = ("CREATE TABLE IF NOT EXISTS windows (id TEXT PRIMARY KEY, conversation TEXT NOT NULL, generation INTEGER NOT NULL, request_id TEXT NOT NULL, input_id TEXT NOT NULL, fingerprint TEXT NOT NULL, state TEXT NOT NULL CHECK(state IN ('active','draining','expired','retired','reconciliation')), boot TEXT NOT NULL, created_wall_ns INTEGER NOT NULL, deadline_wall_ns INTEGER NOT NULL, deadline_mono_ns INTEGER NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, reserved_bytes INTEGER NOT NULL DEFAULT 0, reason TEXT, outcome TEXT, run_id TEXT, terminal_event_id TEXT, UNIQUE(conversation,generation), UNIQUE(conversation,request_id))")
+RESERVATIONS = "CREATE TABLE IF NOT EXISTS reservations (id TEXT PRIMARY KEY, window_id TEXT NOT NULL REFERENCES windows(id), kind TEXT NOT NULL CHECK(kind IN ('attempt','bytes')), amount INTEGER NOT NULL CHECK(amount>0))"
+# An input may be admitted again only after every earlier window holding it
+# retired as a runless failed open (Ledger.admit); never twice into one window.
+ADMISSIONS = "CREATE TABLE IF NOT EXISTS admissions (conversation TEXT NOT NULL, request_id TEXT NOT NULL, fingerprint TEXT NOT NULL, window_id TEXT NOT NULL REFERENCES windows(id), input_id TEXT NOT NULL, event_id TEXT NOT NULL, PRIMARY KEY(conversation,request_id), UNIQUE(window_id,input_id), UNIQUE(window_id,event_id))"
+INDEXES = ("CREATE INDEX IF NOT EXISTS windows_input ON windows(input_id)",
+           "CREATE INDEX IF NOT EXISTS admissions_input ON admissions(input_id)",
+           "CREATE INDEX IF NOT EXISTS admissions_event ON admissions(event_id)")
+WINDOW_COLUMNS = "id,generation,request_id,input_id,fingerprint,state,boot,created_wall_ns,deadline_wall_ns,deadline_mono_ns,attempts,reserved_bytes,reason,outcome,run_id,terminal_event_id"
+
+
+def _single_unique(db, table, column):
+    """Whether `table` still carries a one-column UNIQUE constraint on `column`."""
+    for index in db.execute(f"PRAGMA index_list({table})").fetchall():
+        if index[2] and [info[2] for info in db.execute(f"PRAGMA index_info({index[1]})")] == [column]:
+            return True
+    return False
+
+
 def schema(db, owner, conversation):
-    """Atomic closed-row migration. Existing IDs, counters and failures survive."""
+    """Atomic closed-row migration. Existing IDs, counters and failures survive.
+
+    Version 2 is kept for the widened shape (no single-column input/event
+    uniqueness) so a rolled-back manager still opens the ledger; its own
+    `input_reused` check then keeps refusing re-admission exactly as before.
+    """
     db.execute("CREATE TABLE IF NOT EXISTS service_scope (singleton INTEGER PRIMARY KEY CHECK(singleton=1), version INTEGER NOT NULL, owner TEXT NOT NULL, conversation TEXT NOT NULL)")
     db.execute("INSERT OR IGNORE INTO service_scope VALUES(1,2,?,?)", (owner, conversation))
     scope = db.execute("SELECT * FROM service_scope").fetchone()
     require(tuple(scope) in ((1, 1, owner, conversation), (1, 2, owner, conversation)), "ledger_scope")
-    legacy = scope["version"] == 1
+    exists = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='windows'").fetchone()
+    legacy = "v1" if scope[1] == 1 else "v2" if exists and (
+        _single_unique(db, "windows", "input_id") or _single_unique(db, "admissions", "input_id")
+        or _single_unique(db, "admissions", "event_id")) else None
     if legacy:
         # Rename the old dependents first. SQLite retargets their FKs when the
         # parent is renamed; none of these records are discarded or refunded.
         for name in ("reservations", "admissions", "windows"):
-            db.execute(f"ALTER TABLE {name} RENAME TO legacy_{name}_v1")
-    db.execute("CREATE TABLE IF NOT EXISTS windows (id TEXT PRIMARY KEY, conversation TEXT NOT NULL, generation INTEGER NOT NULL, request_id TEXT NOT NULL, input_id TEXT NOT NULL UNIQUE, fingerprint TEXT NOT NULL, state TEXT NOT NULL CHECK(state IN ('active','draining','expired','retired','reconciliation')), boot TEXT NOT NULL, created_wall_ns INTEGER NOT NULL, deadline_wall_ns INTEGER NOT NULL, deadline_mono_ns INTEGER NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, reserved_bytes INTEGER NOT NULL DEFAULT 0, reason TEXT, outcome TEXT, run_id TEXT, terminal_event_id TEXT, UNIQUE(conversation,generation), UNIQUE(conversation,request_id))")
-    db.execute("CREATE TABLE IF NOT EXISTS reservations (id TEXT PRIMARY KEY, window_id TEXT NOT NULL REFERENCES windows(id), kind TEXT NOT NULL CHECK(kind IN ('attempt','bytes')), amount INTEGER NOT NULL CHECK(amount>0))")
-    db.execute("CREATE TABLE IF NOT EXISTS admissions (conversation TEXT NOT NULL, request_id TEXT NOT NULL, fingerprint TEXT NOT NULL, window_id TEXT NOT NULL REFERENCES windows(id), input_id TEXT NOT NULL UNIQUE, event_id TEXT NOT NULL UNIQUE, PRIMARY KEY(conversation,request_id))")
-    if legacy:
-        columns = "id,generation,request_id,input_id,fingerprint,state,boot,created_wall_ns,deadline_wall_ns,deadline_mono_ns,attempts,reserved_bytes,reason,outcome,run_id,terminal_event_id"
-        db.execute(f"INSERT INTO windows(conversation,{columns}) SELECT ?,{columns} FROM legacy_windows_v1 ORDER BY generation", (conversation,))
+            db.execute(f"ALTER TABLE {name} RENAME TO legacy_{name}_{legacy}")
+    for statement in (WINDOWS, RESERVATIONS, ADMISSIONS, *INDEXES):
+        db.execute(statement)
+    if legacy == "v1":
+        db.execute(f"INSERT INTO windows(conversation,{WINDOW_COLUMNS}) SELECT ?,{WINDOW_COLUMNS} FROM legacy_windows_v1 ORDER BY generation", (conversation,))
         db.execute("INSERT INTO reservations SELECT * FROM legacy_reservations_v1")
         db.execute("INSERT INTO admissions SELECT ?,request_id,fingerprint,window_id,input_id,event_id FROM legacy_admissions_v1", (conversation,))
+    elif legacy == "v2":
+        # Same columns; rowid order kept so the physical history is unchanged.
+        db.execute(f"INSERT INTO windows(conversation,{WINDOW_COLUMNS}) SELECT conversation,{WINDOW_COLUMNS} FROM legacy_windows_v2 ORDER BY rowid")
+        db.execute("INSERT INTO reservations SELECT id,window_id,kind,amount FROM legacy_reservations_v2 ORDER BY rowid")
+        db.execute("INSERT INTO admissions SELECT conversation,request_id,fingerprint,window_id,input_id,event_id FROM legacy_admissions_v2 ORDER BY rowid")
+    if legacy:
         for name in ("reservations", "admissions", "windows"):
-            db.execute(f"DROP TABLE legacy_{name}_v1")
+            db.execute(f"DROP TABLE legacy_{name}_{legacy}")
         db.execute("UPDATE service_scope SET version=2 WHERE singleton=1")
     require(not db.execute("PRAGMA foreign_key_check").fetchall(), "ledger_foreign_keys")
 
@@ -198,11 +229,13 @@ class Ledger:
                 return self._receipt(old), False
             latest = self._latest(conversation)
             previous = latest["generation"] if latest else 0
-            require(request["expected_generation"] == previous, "window_generation")
-            require(self.db.execute("SELECT 1 FROM admissions WHERE input_id=? OR event_id=?",
-                (request["input_message_id"], request["input_event_id"])).fetchone() is None,
-                "input_reused")
-            if latest is not None and latest["id"] == request["window_id"]:
+            # Core may have closed later generations that never reached this
+            # manager (an opening refused before admission, closed by Core as
+            # a failed open). Their successor names a predecessor unknown here.
+            gap = request["expected_generation"] > previous
+            require(request["expected_generation"] == previous or gap, "window_generation")
+            self._require_fresh_input(request)
+            if not gap and latest is not None and latest["id"] == request["window_id"]:
                 require(latest["state"] == "active", "window_not_accepting_inputs")
                 boot, wall, mono = self._live_clock(latest)
                 require(request["generation"] == previous and latest["state"] == "active" and
@@ -216,7 +249,7 @@ class Ledger:
                         "window_not_accepting_inputs")
                 self._record_admission(request, fingerprint)
                 return self._receipt(latest), False
-            require(request["generation"] == previous + 1, "window_generation")
+            require(request["generation"] == request["expected_generation"] + 1, "window_generation")
             require(latest is None or latest["state"] == "retired", "previous_window_unretired")
             # Each window owns its own child set, relay pool and durable budget.
             # An uncertain/unfinished scope still blocks its own conversation
@@ -225,7 +258,13 @@ class Ledger:
             # one stuck awaiting retirement never holds a live slot.
             live = self.db.execute("SELECT count(*) FROM windows WHERE state IN ('active','draining')").fetchone()[0]
             require(live < self.live_windows, "window_capacity")
-            require(request["predecessor_window_id"] == (latest["id"] if latest else None), "window_predecessor")
+            if gap:
+                predecessor = request["predecessor_window_id"]
+                require(predecessor is not None and self.db.execute(
+                    "SELECT 1 FROM windows WHERE id=?", (predecessor,)).fetchone() is None,
+                    "window_predecessor")
+            else:
+                require(request["predecessor_window_id"] == (latest["id"] if latest else None), "window_predecessor")
             require(self.db.execute("SELECT 1 FROM windows WHERE id=?", (request["window_id"],)).fetchone() is None,
                     "window_reused")
             opened = request["opened_at_ms"] * 1_000_000
@@ -239,6 +278,23 @@ class Ledger:
                  fingerprint, boot, opened, deadline, mono + deadline - wall))
             self._record_admission(request, fingerprint)
             return self._receipt(self._latest(conversation)), True
+
+    def _require_fresh_input(self, request):
+        """An input is admitted once, unless every earlier window holding it
+        retired as a failed open that ran nothing (no run, no terminal event)
+        and, by this manager's own budget evidence, spent nothing (no attempt
+        or byte reserved: no provider traffic, so no Fast or Deep turn ran).
+        Core then re-queues a timer occurrence under a new request key."""
+        earlier = self.db.execute(
+            "SELECT a.conversation,a.input_id,a.event_id,w.state,w.outcome,w.run_id,w.terminal_event_id,w.attempts,w.reserved_bytes FROM admissions a JOIN windows w ON w.id=a.window_id WHERE a.input_id=? OR a.event_id=?",
+            (request["input_message_id"], request["input_event_id"])).fetchall()
+        require(all(row["conversation"] == request["conversation_id"] and
+                    row["input_id"] == request["input_message_id"] and
+                    row["event_id"] == request["input_event_id"] and
+                    row["state"] == "retired" and row["outcome"] == "failed" and
+                    row["run_id"] is None and row["terminal_event_id"] is None and
+                    row["attempts"] == 0 and row["reserved_bytes"] == 0
+                    for row in earlier), "input_reused")
 
     def _record_admission(self, request, fingerprint):
         self.db.execute("INSERT INTO admissions VALUES(?,?,?,?,?,?)", (request["conversation_id"], request["request_id"], fingerprint,

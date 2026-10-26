@@ -37,6 +37,12 @@ TIMER_PAGE = 50
 # dozens of bindings, so idle polling dominates the adapter and server CPU.
 PASS_S = 1
 IDLE_PASS_S = 5
+# While an owner Fast reply is in flight, its proposal is picked up, accepted
+# and exported by the next pass: pass every FAST_PASS_S for at most
+# FAST_PACE_S (a Fast turn takes 2-10 s), then fall back to PASS_S so a
+# stranded or long-retained watch never keeps the fast pace.
+FAST_PASS_S = 0.25
+FAST_PACE_S = 20
 # Scheduled timer occurrences: a few seconds of pickup delay is invisible.
 TIMER_POLL_S = 5
 # Digests are due a few times a day.
@@ -230,6 +236,7 @@ class Worker:
         self.attachments = False
         self._timers_checked = None
         self._burst_due = None  # Wall time a waiting burst head may be sent.
+        self._fast_since = None  # Monotonic time owner Fast work became pending.
         self._revoked_alerted = False
         # Optional per-binding chat rules file (see instructions.py); not pinned.
         self.instructions_path = None
@@ -1213,10 +1220,13 @@ class Worker:
         """PASS_S, or less when a waiting burst head becomes due sooner. A new
         message of the burst wakes the worker anyway and restarts the wait."""
         due, self._burst_due = self._burst_due, None
+        pause = PASS_S
+        if self._fast_since is not None and time.monotonic() - self._fast_since < FAST_PACE_S:
+            pause = FAST_PASS_S
         if due is None:
-            return PASS_S
+            return pause
         now = time.time() if now is None else now
-        return min(PASS_S, max(0.05, due - now))
+        return min(pause, max(0.05, due - now))
 
     def idle_pause(self, now=None):
         """Seconds until the next Rust poll is due, between PASS_S and IDLE_PASS_S."""
@@ -1249,6 +1259,10 @@ class Worker:
             pass  # Retried next pass; never blocks the binding.
         steering = auto_steer.drive(self)
         fast_pending = drive_intake_fast(self) or steering
+        if not fast_pending:
+            self._fast_since = None
+        elif self._fast_since is None:
+            self._fast_since = time.monotonic()
         if self._due(self._timers_checked, TIMER_POLL_S):
             self._timers_checked = time.monotonic()
             try:

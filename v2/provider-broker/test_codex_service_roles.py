@@ -85,6 +85,77 @@ class RolePackageTests(unittest.TestCase):
             Package(self.root)
 
 
+    def host_fast(self):
+        """Host full access with a real service-user home and operator auth."""
+        from codex_service_fixture import packager
+        home = self.fixture.root / "service-user-home"
+        (home / ".codex").mkdir(parents=True, mode=0o700)
+        (home / ".codex/auth.json").write_text('{"synthetic": "auth"}')
+        for path in (home, home / ".codex", home / ".codex/auth.json"):
+            os.chown(path, UID, GID)
+        os.chmod(home / ".codex/auth.json", 0o600)
+        host = self.root / "codex-code-mode-host"
+        packager.write(host, b"synthetic code-mode host", GID, 0o550)
+        manifest = json.loads((self.root / "manifest.json").read_bytes())
+        manifest["files"]["codex-code-mode-host"] = digest(host)
+        (self.root / "manifest.json").write_text(json.dumps(manifest))
+        access = {"providers": True, "environment": {"HOME": str(home), "PATH": "/usr/bin:/bin",
+                                                    "CODEX_HOME": str(home / ".codex")}}
+        self.fixture.alter("beta.json", lambda value: value.update(host_full_access=access))
+        return home
+
+    def test_repeated_host_fast_launches_keep_the_real_state_root_valid(self):
+        """Incident 2026-10-26: the second host Fast launch failed loading its
+        own role profile (private_state) because the first had created the Fast
+        CODEX_HOME inside the Fast native state root. Run real launches as the
+        service user against the real package and a synthetic native."""
+        home = self.host_fast()
+        import socket
+        egress = socket.socket(socket.AF_UNIX)  # The root-owned egress endpoint a profile requires.
+        self.addCleanup(egress.close)
+        egress.bind(str(self.fixture.endpoint / "egress.sock"))
+        os.chown(self.fixture.endpoint / "egress.sock", 0, GID)
+        os.chmod(self.fixture.endpoint / "egress.sock", 0o660)
+        native = self.fixture.root / "synthetic-fast-native"
+        auth = home / ".codex/auth.json"
+        native.write_text('#!/bin/sh\n[ -L "$CODEX_HOME/auth.json" ] '
+                          f'&& [ "$(readlink "$CODEX_HOME/auth.json")" = "{auth}" ] '
+                          '&& [ -f "$CODEX_HOME/auth.json" ] && printf "%s|%s" "$CODEX_HOME" "$*"\n')
+        native.chmod(0o755)
+        script = (
+            "import json,subprocess,sys\n"
+            "from pathlib import Path\n"
+            "sys.path.insert(0,sys.argv[1])\n"
+            "from codex_service.package import Package\n"
+            "from codex_service.profile import Configuration\n"
+            "root,native=sys.argv[1],sys.argv[2]\n"
+            "out=[]\n"
+            "for _ in range(3):\n"
+            "    # Loading the role profile re-runs private_state on the Fast state root.\n"
+            "    config=Configuration(Package(Path(root)),'fast')\n"
+            "    command,_=config.isolated_command()\n"
+            "    command[command.index(str(config.profile.native))]=native\n"
+            "    out.append(subprocess.run(command,capture_output=True,text=True).stdout)\n"
+            "print(json.dumps(out))\n")
+        result = subprocess.run([str(Path("/usr/bin/python3").resolve()), "-I", "-S", "-B", "-c", script,
+                                 str(self.root), str(native)],
+                                cwd=str(self.fixture.root), env={"PATH": "/usr/bin:/bin"},
+                                user=UID, group=GID, extra_groups=[], capture_output=True, text=True,
+                                timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr[-2000:])
+        outputs = json.loads(result.stdout)
+        self.assertEqual(len(outputs), 3)
+        fast_home = {output.split("|")[0] for output in outputs}
+        self.assertEqual(len(fast_home), 1)
+        fast_home = Path(fast_home.pop())
+        state = self.fixture.root / "native-fast"
+        self.assertNotIn(state, fast_home.parents)
+        self.assertIn(home, fast_home.parents)
+        # Each launch saw the Fast home's link to the operator auth file.
+        self.assertTrue(all("app-server" in output and "--disable" in output for output in outputs))
+        self.assertEqual({p.name for p in state.iterdir()} & {"host-codex-home"}, set())
+
+
 class PausedRoleTests(unittest.TestCase):
     def check_launch(self, mode, operation, enabled, accepted):
         with tempfile.TemporaryDirectory(prefix="synthetic-role-bind-") as name:
