@@ -15,6 +15,7 @@ import time
 import uuid
 
 from .export_changes import ExportConnection
+from .outbound_text import scrub_local_paths
 from . import notices
 
 SCHEMA = "2"
@@ -121,6 +122,9 @@ class Ledger:
         # Set by the registry from `fast_reply_policy`: the verified owner of an
         # owner-only chat gets technical notices, everyone else plain ones.
         self.owner_only = False
+        # Set by the registry for every chat that is not owner-only: it never
+        # sees server-local paths. The owner alone works with paths on this host.
+        self.scrub_paths = False
         identity = json.dumps({"schema": 1, "scope": scope}, sort_keys=True, separators=(",", ":"))
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
@@ -360,6 +364,8 @@ class Ledger:
         supply exact-run `identity`; neither path borrows conversation settings. Returns (reply, existed).
         """
         post_id = record["id"]
+        if self.scrub_paths and isinstance(record.get("text"), str):
+            record = dict(record, text=scrub_local_paths(record["text"]))
         digest = hashlib.sha256(json.dumps({k: record.get(k) for k in ("id", "author", "label", "text", "provider", "model")},
                                            sort_keys=True, separators=(",", ":")).encode()).hexdigest()
         remote_id = str(uuid.uuid5(POST_NAMESPACE, "post:" + post_id))
@@ -414,6 +420,7 @@ class Ledger:
     def _pseudo_timer(self, db, remote_id, label, created_ms, extra, reply, source_id=WEB_SOURCE_ID):
         """One completed pseudo timer input (V1's only parent shape for a reply
         without a WhatsApp input) and its final export, in the caller's transaction."""
+        self.scrub(reply)
         data = {"remote_id": remote_id, "public_id": TIMER_PREFIX + remote_id, "origin": "timer", "text": label[:TIMER_TEXT_LIMIT],
                 "public_thread_id": self.scope.get("public_thread_id"), "chat_id": self.scope.get("chat_id"),
                 "account_id": self.scope.get("account_id"),
@@ -676,8 +683,16 @@ class Ledger:
         return json.loads(row[0]) if row else None
 
     # Exports -----------------------------------------------------------
+    def scrub(self, message):
+        """Shared chats: replace server-local file references, in place, before
+        the message is stored anywhere, so every replay carries the same text."""
+        if self.scrub_paths and isinstance(message, dict) and isinstance(message.get("text"), str):
+            message["text"] = scrub_local_paths(message["text"])
+        return message
+
     def _export(self, db, data, kind, source_key, message):
         attach_scope(message, data)
+        self.scrub(message)
         inserted = db.execute("INSERT OR IGNORE INTO exports(export_id,input_id,kind,source_key,message) VALUES (?,?,?,?,?)",
                               (message["id"], data["remote_id"], kind, source_key, json.dumps(message)))
         if inserted.rowcount:
@@ -691,6 +706,7 @@ class Ledger:
             if not final_ready(self, db, data):
                 return False
             from .fast_watch_giveup import stamp_final
+            self.scrub(reply)
             stamp_final(data, reply)
             data.update(reply=reply, phase="completed")
             self.save(data, db)
