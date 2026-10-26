@@ -376,6 +376,8 @@ async fn populated_payload_prefix_upgrade_preserves_all_rows_and_foreign_links()
     );
     // New optional preferences, tracker and continuity tables remain empty.
     for table in [
+        "production_fast_continuity",
+        "production_fast_digests",
         "conversation_provider_handoffs",
         "conversation_handoff_sessions",
         "conversation_handoff_context_delivery",
