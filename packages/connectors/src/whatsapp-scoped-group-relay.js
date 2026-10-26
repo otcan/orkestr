@@ -1,4 +1,5 @@
 import {readGroupInputs} from './scoped-group-inbox.js';
+import {createScopedInputAdmission} from './scoped-group-input-intake.js';
 import {buildReplyTo} from './scoped-group-reply-quote.js';
 import {createScopedAcknowledgements} from './scoped-group-acknowledgements.js';
 import {acknowledgementActivity} from './scoped-acknowledgement-activity.js';
@@ -287,17 +288,17 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
     return receipts.some(row => JSON.parse(row.provider_ids || '[]').some(p => p === id || (suffix && String(p).endsWith(suffix)))) ? {text: ''} : null;
   }
 
-  const routeInput = (input, group) => inputSerial(input.id, async () => {
+  const routeInput = (input, group, admissionOnly = false) => inputSerial(input.id, async () => {
     if (deliveryBlocked()) throw new Error('group_delivery_requires_review');
-    return routeInputOnce(input, group);
+    return routeInputOnce(input, group, admissionOnly);
   });
-  async function routeInputOnce(input, group) {
+  async function routeInputOnce(input, group, admissionOnly) {
     if (routeFence && fencedGroup(group)) {
       const active = routeFence.current();
       if (active?.route !== config.routeControl.routeId || !Number.isFinite(Date.parse(input.created_at)) || Date.parse(input.created_at) < Date.parse(active.since)) return;
     }
     let route = db.prepare('SELECT * FROM routed WHERE id=?').get(input.id);
-    if (route?.completed) return;
+    if (route?.completed || (admissionOnly && route)) return;
     const {metadata, thread: routeThread} = await inputThread(input, group);
     if (!route) {
       let attachments = [];
@@ -391,6 +392,7 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
       route = db.prepare('SELECT * FROM routed WHERE id=?').get(input.id);
       log({event: 'input_routed', threadId: group.threadId, messageId});
     }
+    if (admissionOnly) return;
     const suppressUpdates = threadSuppressesUpdates(routeThread);
     const {answers, messages} = await answersFor(group, route, suppressUpdates);
     const localCommentary = answers.filter(m => m.phase === 'commentary' && m.source !== 'rust-v2-adapter');
@@ -442,7 +444,10 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
     }
   }
 
+  const admitNewInputs = createScopedInputAdmission({inbox, db, groups, heldInputIds, routeInput,
+    blocked: deliveryBlocked, errors, errorCode, log});
   return {
+    admitNewInputs,
     scheduleAcknowledgements() {
       const inputs = readGroupInputs(inbox).filter(input => !heldInputIds.has(input.id) && groups.has(input.chat_id));
       acknowledgements.schedule(inputs);
