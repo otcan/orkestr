@@ -14,6 +14,7 @@ import {DatabaseSync} from 'node:sqlite';
 import {isReplyDocument, scopedGroupReplyChunks} from './whatsapp-scoped-group-formatting.js';
 import {createRelayReplyFiles} from './whatsapp-scoped-relay-reply-files.js';
 import {createProgressBudget, progressPhases, progressPolicy} from './scoped-group-progress.js';
+import {createRouteAge} from './scoped-group-route-age.js';
 import {createDynamicGroupRegistry, createDynamicGroupView, eligibleGroups, validateDynamicGroups} from './whatsapp-scoped-dynamic-groups.js';
 
 const key = value => crypto.createHash('sha256').update(value).digest('hex');
@@ -23,14 +24,6 @@ const lateSources = new Set(['api-session']);
 const finalPhases = new Set(['final_answer', 'final']);
 const LATE_REPLY_WINDOW_MS = 6 * 60 * 60 * 1000;
 const LATE_REPLY_POLL_MS = 10_000;
-// A routed input whose turn never produced a final here (a remote-runtime turn
-// that answered NO_REPLY, a Fast reply delivered under its own parent) stays
-// open forever. Each delivery pass re-read the thread history for every such
-// input, oldest first, before reaching a new reply: on the busiest group, 44
-// open routes since days cost ~6 s per reply. Past the late-reply window no
-// answer can still arrive (remote turns end within their 4 h window), so the
-// route is no longer read.
-const OPEN_ROUTE_MAX_AGE_MS = LATE_REPLY_WINDOW_MS;
 // How often the relay reconciles registered groups with V1's thread registry.
 const REGISTRATION_POLL_MS = 30_000;
 // The binding flags of whatsapp-mirror-policy's update suppression, kept local
@@ -76,8 +69,7 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
     CREATE TABLE IF NOT EXISTS reply_receipts(id TEXT PRIMARY KEY,provider_ids TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS reply_sent_text(provider_id TEXT PRIMARY KEY,request_id TEXT NOT NULL,text TEXT NOT NULL,sent_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS remote_delivery_reports(id TEXT PRIMARY KEY,reported_at TEXT NOT NULL);
-    CREATE TABLE IF NOT EXISTS reply_file_attempts(id TEXT PRIMARY KEY,attempts INTEGER NOT NULL DEFAULT 0);
-    CREATE TABLE IF NOT EXISTS route_opened(id TEXT PRIMARY KEY,opened_ms INTEGER NOT NULL);`);
+    CREATE TABLE IF NOT EXISTS reply_file_attempts(id TEXT PRIMARY KEY,attempts INTEGER NOT NULL DEFAULT 0);`);
   const routeFence = config.routeControl ? createDeliveryRouteFence({dbPath:config.routeControl.dbPath}) : null;
   const staticGroups = new Map(config.groups.map(g => [g.chatId, g]));
   // With dynamicGroups, groups registered in the transport journal join live.
@@ -190,7 +182,7 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
     return {thread, metadata};
   }
 
-  const progressBudget = createProgressBudget(db, now);
+  const progressBudget = createProgressBudget(db, now), routeAge = createRouteAge(db, now);
   async function answersFor(group, route, suppressUpdates = false) {
     // Walk older pages until the parent is found, so a long-running turn cannot
     // lose its final answer merely because another turn produced many messages.
@@ -297,27 +289,6 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
     return receipts.some(row => JSON.parse(row.provider_ids || '[]').some(p => p === id || (suffix && String(p).endsWith(suffix)))) ? {text: ''} : null;
   }
 
-  // When an open route started: the routing time this relay recorded, or, for
-  // a route routed before that record existed, its WhatsApp time (never later
-  // than now). Only an already routed input is ever skipped by its age.
-  function routeOpenedMs(input) {
-    const row = db.prepare('SELECT opened_ms FROM route_opened WHERE id=?').get(input.id);
-    if (row) return Number(row.opened_ms);
-    const at = Date.parse(input.created_at);
-    const opened = Number.isFinite(at) ? Math.min(at, now()) : now();
-    db.prepare('INSERT OR IGNORE INTO route_opened(id,opened_ms) VALUES(?,?)').run(input.id, opened);
-    return opened;
-  }
-
-  // A question or progress update shows the turn is still live: the window
-  // then counts from that answer, so a turn that asked and waited is still
-  // watched for its final. The answer's own time keeps re-reads idempotent.
-  function routeActive(id, answer) {
-    const at = Date.parse(answer.createdAt);
-    if (!Number.isFinite(at)) return;
-    db.prepare('UPDATE route_opened SET opened_ms=? WHERE id=? AND opened_ms<?').run(Math.min(at, now()), id, Math.min(at, now()));
-  }
-
   const routeInput = (input, group, admissionOnly = false) => inputSerial(input.id, async () => {
     if (deliveryBlocked()) throw new Error('group_delivery_requires_review');
     return routeInputOnce(input, group, admissionOnly);
@@ -328,8 +299,7 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
       if (active?.route !== config.routeControl.routeId || !Number.isFinite(Date.parse(input.created_at)) || Date.parse(input.created_at) < Date.parse(active.since)) return;
     }
     let route = db.prepare('SELECT * FROM routed WHERE id=?').get(input.id);
-    if (route?.completed || (admissionOnly && route)) return;
-    if (route && now() - routeOpenedMs(input) > OPEN_ROUTE_MAX_AGE_MS) return;
+    if (route?.completed || (admissionOnly && route) || (route && routeAge.expired(input))) return;
     const {metadata, thread: routeThread} = await inputThread(input, group);
     if (!route) {
       let attachments = [];
@@ -420,7 +390,7 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
       const messageId = response.message?.id || response.messageId;
       if (!messageId) throw new Error('group_input_unacknowledged');
       db.prepare('INSERT OR IGNORE INTO routed(id,thread_id,message_id) VALUES(?,?,?)').run(input.id, group.threadId, messageId);
-      db.prepare('INSERT OR IGNORE INTO route_opened(id,opened_ms) VALUES(?,?)').run(input.id, now());
+      routeAge.routed(input.id);
       route = db.prepare('SELECT * FROM routed WHERE id=?').get(input.id);
       log({event: 'input_routed', threadId: group.threadId, messageId});
     }
@@ -433,8 +403,7 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
       if (localCommentary.includes(answer) && answer !== progress) continue;
       await deliverAnswer(input, group, answer, messages);
       if (answer === progress) progressBudget.delivered(input.id, answer, localCommentary);
-      if (['final_answer', 'final'].includes(answer.phase)) db.prepare('UPDATE routed SET completed=1 WHERE id=?').run(input.id);
-      else routeActive(input.id, answer);
+      routeAge.answered(input.id, answer);
     }
   }
 
