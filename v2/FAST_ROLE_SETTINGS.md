@@ -44,9 +44,9 @@ host full access:
 - The host Fast native runs with its own `CODEX_HOME`, under the service
   user's home (`~/.local/state/orkestr-v2/fast-codex-home-<id>`, 0700), never
   inside a native state root (`private_state` refuses unknown entries there)
-  or the operator's Codex home. It holds only a private 0600 copy of the
-  operator's `auth.json`, synced before every launch (the newer side wins, so a
-  token Fast's native refreshed is written back): no `config.toml`,
+  or the operator's Codex home. It holds only a link to the operator's
+  `auth.json` (one shared credential: a token either native refreshes is the
+  one the other uses next): no `config.toml`,
   exec-policy rules, hooks or plugins. With no config.toml no project is
   trusted, so a workspace's `.codex` config, rules and MCP servers stay
   disabled. The broker refuses to launch Fast if an `allow` rule or an operator

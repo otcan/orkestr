@@ -113,6 +113,7 @@ class FastCodexToolTests(unittest.TestCase):
         operator = root / "operator/.codex"
         (operator / "rules").mkdir(parents=True)
         (operator / "auth.json").write_text("{}")
+        os.chmod(operator / "auth.json", 0o600)
         # The operator's own layers that must never reach Fast.
         (operator / "config.toml").write_text('[mcp_servers.alpha]\ncommand = "/bin/true"\n')
         (operator / "rules/default.rules").write_text(
@@ -138,10 +139,9 @@ class FastCodexToolTests(unittest.TestCase):
         system = root / "etc-codex"
         home = prepare_fast_home(state / "host-codex-home", operator / "auth.json", system)
         self.assertEqual(sorted(p.name for p in home.iterdir()), ["auth.json"])
-        # A private 0600 copy, never a link into (or out of) any checked tree.
-        self.assertFalse((home / "auth.json").is_symlink())
-        self.assertEqual((home / "auth.json").read_bytes(), (operator / "auth.json").read_bytes())
-        self.assertEqual(os.stat(home / "auth.json").st_mode & 0o777, 0o600)
+        # One shared credential: a link to the operator's auth file.
+        self.assertTrue((home / "auth.json").is_symlink())
+        self.assertEqual(os.readlink(home / "auth.json"), str(operator / "auth.json"))
         self.assertEqual(os.stat(home).st_mode & 0o777, 0o700)
         # Anything Codex (or anyone) left there is removed before each launch.
         for name in FAST_HOME_FORBIDDEN:
@@ -387,75 +387,29 @@ class FastHomeRegressionTests(unittest.TestCase):
             finally:
                 profile.fast_home = original
 
-    def test_auth_copy_stays_coherent_with_the_operator_file(self):
-        from codex_service.profile import sync_fast_auth
+    def test_auth_link_resolves_to_the_operator_file_and_state_stays_valid(self):
+        from isolation.authenticated import private_state
         root, operator, state = self.layout()
-        source, copy = operator / "auth.json", root / "copy.json"
-        self.assertEqual(sync_fast_auth(source, copy), "copied")
-        self.assertEqual(sync_fast_auth(source, copy), "current")
-        # Deep (or the owner) refreshed the operator file: the copy follows.
-        source.write_text('{"synthetic": "token-b"}')
-        os.utime(source, ns=(os.stat(copy).st_mtime_ns + 10**9,) * 2)
-        self.assertEqual(sync_fast_auth(source, copy), "refreshed")
-        self.assertEqual(copy.read_text(), '{"synthetic": "token-b"}')
-        # Fast's native refreshed its copy: the rotated token is written back.
-        copy.write_text('{"synthetic": "token-c"}')
-        os.utime(copy, ns=(os.stat(source).st_mtime_ns + 10**9,) * 2)
-        self.assertEqual(sync_fast_auth(source, copy), "written_back")
-        self.assertEqual(source.read_text(), '{"synthetic": "token-c"}')
-        self.assertEqual(os.stat(source).st_mode & 0o777, 0o600)
-        # A link is never followed or kept.
-        copy.unlink()
-        copy.symlink_to(root / "elsewhere.json")
-        self.assertEqual(sync_fast_auth(source, copy), "copied")
-        self.assertFalse(copy.is_symlink())
-
-    def test_auth_sync_never_propagates_a_partial_file_or_clobbers_a_fresh_one(self):
-        from codex_service import profile
+        config = self.configuration(operator, state)
+        home = config.prepare_fast_home()
+        link = home / "auth.json"
+        self.assertTrue(link.is_symlink())
+        self.assertEqual(link.resolve(strict=True), (operator / "auth.json").resolve(strict=True))
+        # A refresh written by either native is the credential the other reads.
+        (operator / "auth.json").write_text('{"synthetic": "token-b"}')
+        self.assertEqual(link.read_text(), '{"synthetic": "token-b"}')
+        private_state(str(state))
+        # A replaced or retargeted link is restored on the next launch.
+        link.unlink()
+        link.write_text('{"synthetic": "stale"}')
+        config.prepare_fast_home()
+        self.assertEqual(os.readlink(link), str(operator / "auth.json"))
+        private_state(str(state))
+        # The operator file must be ours and private, or Fast does not launch.
         from codex_service.contract import Refused as ContractRefused
-        root, operator, state = self.layout()
-        source, copy = operator / "auth.json", root / "copy.json"
-        self.assertEqual(profile.sync_fast_auth(source, copy), "copied")
-        # Fast's native caught mid-write (truncate, then write): newer but not
-        # a complete JSON object. The operator file is kept, the copy restored.
-        copy.write_text('{"synthetic": "tok')
-        os.utime(copy, ns=(os.stat(source).st_mtime_ns + 10**9,) * 2)
-        self.assertEqual(profile.sync_fast_auth(source, copy), "refreshed")
-        self.assertEqual(source.read_text(), '{"synthetic": "token-a"}')
-        self.assertEqual(copy.read_text(), '{"synthetic": "token-a"}')
-        # A partial operator file is never copied; the launch is refused.
-        source.write_text("")
+        os.chmod(operator / "auth.json", 0o644)
         with self.assertRaises(ContractRefused):
-            profile.sync_fast_auth(source, copy)
-        self.assertEqual(copy.read_text(), '{"synthetic": "token-a"}')
-        # The operator file changes after it was read (Deep refreshed): the
-        # stale copy is not written back over it; the sync re-reads instead.
-        source.write_text('{"synthetic": "token-a"}')
-        os.utime(source, ns=(os.stat(copy).st_mtime_ns,) * 2)
-        copy.write_text('{"synthetic": "token-old"}')
-        os.utime(copy, ns=(os.stat(source).st_mtime_ns + 10**9,) * 2)
-        original, calls = profile._read_private, []
-
-        def deep_refreshes_after_the_first_read(path):
-            result = original(path)
-            if Path(path) == source and not calls:
-                calls.append(path)
-                source.write_text('{"synthetic": "token-deep"}')
-                os.utime(source, ns=(os.stat(copy).st_mtime_ns + 2 * 10**9,) * 2)
-            return result
-        profile._read_private = deep_refreshes_after_the_first_read
-        try:
-            self.assertEqual(profile.sync_fast_auth(source, copy), "refreshed")
-        finally:
-            profile._read_private = original
-        self.assertEqual(source.read_text(), '{"synthetic": "token-deep"}')
-        self.assertEqual(copy.read_text(), '{"synthetic": "token-deep"}')
-        self.assertEqual([p.name for p in operator.iterdir()], ["auth.json"])
-        # A linked operator file is never followed.
-        link = operator / "linked.json"
-        link.symlink_to(source)
-        with self.assertRaises(OSError):
-            profile.sync_fast_auth(link, copy)
+            config.prepare_fast_home()
 
 
 class FastClaudeTests(unittest.TestCase):

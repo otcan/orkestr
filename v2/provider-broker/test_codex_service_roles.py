@@ -117,8 +117,10 @@ class RolePackageTests(unittest.TestCase):
         os.chown(self.fixture.endpoint / "egress.sock", 0, GID)
         os.chmod(self.fixture.endpoint / "egress.sock", 0o660)
         native = self.fixture.root / "synthetic-fast-native"
-        native.write_text('#!/bin/sh\n[ -f "$CODEX_HOME/auth.json" ] && [ ! -L "$CODEX_HOME/auth.json" ] '
-                          '&& printf "%s|%s" "$CODEX_HOME" "$*"\n')
+        auth = home / ".codex/auth.json"
+        native.write_text('#!/bin/sh\n[ -L "$CODEX_HOME/auth.json" ] '
+                          f'&& [ "$(readlink "$CODEX_HOME/auth.json")" = "{auth}" ] '
+                          '&& [ -f "$CODEX_HOME/auth.json" ] && printf "%s|%s" "$CODEX_HOME" "$*"\n')
         native.chmod(0o755)
         script = (
             "import json,subprocess,sys\n"
@@ -149,7 +151,7 @@ class RolePackageTests(unittest.TestCase):
         state = self.fixture.root / "native-fast"
         self.assertNotIn(state, fast_home.parents)
         self.assertIn(home, fast_home.parents)
-        # Each launch saw a private auth copy (not a link) in the Fast home.
+        # Each launch saw the Fast home's link to the operator auth file.
         self.assertTrue(all("app-server" in output and "--disable" in output for output in outputs))
         self.assertEqual({p.name for p in state.iterdir()} & {"host-codex-home"}, set())
 

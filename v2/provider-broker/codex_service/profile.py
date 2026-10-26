@@ -1,6 +1,5 @@
 """The same selected read-only account and bounded isolation, explicit service role."""
 import hashlib
-import json
 import os
 from pathlib import Path
 import re
@@ -237,113 +236,14 @@ def _private_directory(path):
             and stat.S_IMODE(info.st_mode) & 0o077 == 0, "fast_home")
 
 
-AUTH_LIMIT = 1024 * 1024
-
-
-def _read_private(path):
-    """(content, stat) of a regular file, opened without following a link."""
-    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
-    try:
-        info = os.fstat(descriptor)
-        require(stat.S_ISREG(info.st_mode) and info.st_uid == os.geteuid()
-                and info.st_size <= AUTH_LIMIT, "fast_auth_file")
-        data = b""
-        while chunk := os.read(descriptor, AUTH_LIMIT + 1 - len(data)):
-            data += chunk
-            require(len(data) <= AUTH_LIMIT, "fast_auth_file")
-        return data, info
-    finally:
-        os.close(descriptor)
-
-
-def _valid_auth(data):
-    """Only a complete JSON object is ever propagated. Codex rewrites auth.json
-    in place (truncate, then write), so a reader can catch it half written."""
-    try:
-        return isinstance(json.loads(data), dict)
-    except ValueError:
-        return False
-
-
-def _unchanged(path, info):
-    try:
-        now = os.lstat(path)
-    except FileNotFoundError:
-        return False
-    return (now.st_dev, now.st_ino, now.st_size, now.st_mtime_ns) == (
-        info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns)
-
-
-def _write_private(target, data, mtime_ns, expected=None):
-    """Atomic, durable 0600 replace of `target` with `data`, keeping `mtime_ns`.
-    With `expected`, the target is replaced only while it is still that file,
-    so a token another process wrote meanwhile is never clobbered."""
-    temporary = target.parent / f".{target.name}.{os.getpid()}.sync"
-    if os.path.lexists(temporary):
-        os.unlink(temporary)  # Left by a crashed launch that had this pid.
-    try:
-        writer = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
-                         | os.O_CLOEXEC, 0o600)
-        try:
-            view = memoryview(data)
-            while view:
-                view = view[os.write(writer, view):]
-            os.fsync(writer)
-        finally:
-            os.close(writer)
-        os.utime(temporary, ns=(mtime_ns, mtime_ns))
-        if expected is not None and not _unchanged(target, expected):
-            return False
-        os.replace(temporary, target)
-        directory = os.open(target.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
-        try:
-            os.fsync(directory)
-        finally:
-            os.close(directory)
-        return True
-    finally:
-        if os.path.lexists(temporary):
-            os.unlink(temporary)
-
-
-def _sync_fast_auth_once(source, copy):
-    data, info = _read_private(source)
-    # A partial or corrupt operator file is never copied; this launch waits.
-    require(_valid_auth(data), "fast_auth_source")
-    if os.path.lexists(copy) and not stat.S_ISREG(os.lstat(copy).st_mode):
-        os.unlink(copy)  # A link or anything else is never followed.
-    if not os.path.lexists(copy):
-        return _write_private(copy, data, info.st_mtime_ns) and "copied"
-    current_data, current = _read_private(copy)
-    if current_data == data:
-        if stat.S_IMODE(current.st_mode) == 0o600:
-            return "current"
-        return _write_private(copy, data, info.st_mtime_ns, current) and "current"
-    # Ties go to the operator file. A copy caught half written is never written back.
-    if current.st_mtime_ns > info.st_mtime_ns and _valid_auth(current_data):
-        return _write_private(source, current_data, current.st_mtime_ns, info) and "written_back"
-    return _write_private(copy, data, info.st_mtime_ns, current) and "refreshed"
-
-
-def sync_fast_auth(source, copy):
-    """Keep one credential for Deep and Fast. The Fast home holds a private
-    0600 copy (never a link). Before every launch the newer side wins: a
-    newer operator file (Deep or the owner refreshed it) replaces the copy; a
-    copy Fast's native refreshed since the last sync is written back, so a
-    rotated refresh token is never lost. Equal content is left alone. Neither
-    file is replaced if it changed after it was read (the sync is retried),
-    and only a complete JSON object is ever propagated."""
-    source, copy = Path(source), Path(copy)
-    for _ in range(3):
-        result = _sync_fast_auth_once(source, copy)
-        if result:
-            return result
-    require(False, "fast_auth_busy")
-
-
 def prepare_fast_home(home, auth, system=SYSTEM_CODEX):
-    """Make `home` a Fast-only CODEX_HOME: private, holding only a private copy
-    of the operator's auth file (`sync_fast_auth`) plus Codex's own state.
+    """Make `home` a Fast-only CODEX_HOME: private, holding only a link to the
+    operator's auth file plus Codex's own state. One shared file keeps Deep
+    and Fast on one credential: Codex rewrites auth.json in place, so a token
+    either native refreshes is the one the other uses next (a copy would let a
+    long-lived Fast native rotate the refresh token while the operator file
+    keeps the old one). The link lives outside every native state root, which
+    `private_state` checks and where links are refused.
     With no config.toml no project is trusted, so project `.codex` config,
     rules and hooks stay disabled too. Refuses to launch when an `allow`
     exec-policy rule or an operator config layer could still reach Fast."""
@@ -365,7 +265,14 @@ def prepare_fast_home(home, auth, system=SYSTEM_CODEX):
             shutil.rmtree(path)
         elif os.path.lexists(path):
             os.unlink(path)
-    sync_fast_auth(auth, home / "auth.json")
+    info = os.stat(auth)
+    require(stat.S_ISREG(info.st_mode) and info.st_uid == os.geteuid()
+            and stat.S_IMODE(info.st_mode) & 0o077 == 0, "fast_auth_source")
+    link = home / "auth.json"
+    if not (link.is_symlink() and os.readlink(link) == str(auth)):
+        if os.path.lexists(link):
+            os.unlink(link)
+        os.symlink(auth, link)
     require(not reachable_allow_rules(home, system), "fast_allow_rules")
     require(not any((system / name).exists() for name in ("config.toml", "managed_config.toml",
                                                           "hooks.json")), "fast_system_config")
