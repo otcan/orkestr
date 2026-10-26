@@ -7,6 +7,88 @@ fn channel() -> BrokerChannel {
     .into_channel()
 }
 #[test]
+fn native_model_metadata_crosses_owned_channel_without_claiming_a_turn() {
+    for acknowledged in [false, true] {
+        let mut c = channel();
+        c.bind_tool_native(Some("native".into()));
+        c.reserve_execution(7).unwrap();
+        if acknowledged {
+            c.receive(
+                json!({"id":2,"result":{"owned_handle":"synthetic_owned","frame":{
+                "id":7,"result":{"turn":{"id":"turn","status":"inProgress"}}}}})
+                .to_string()
+                .as_bytes(),
+            )
+            .unwrap();
+        }
+        let old_pending = c.pending;
+        let frame = json!({"method":"model/observed","params":{
+            "threadId":"native","requestId":7,"model":"native-confirmed"}});
+        let envelope = json!({"method":"BrokerOutput","params":{
+            "owned_handle":"synthetic_owned","frame":frame}});
+        assert_eq!(
+            c.receive(envelope.to_string().as_bytes()).unwrap(),
+            Some(frame)
+        );
+        assert_eq!(c.pending, old_pending);
+        assert_eq!(c.active_turn.as_deref(), acknowledged.then_some("turn"));
+        assert!(!c.terminal_observed);
+        assert!(c.reserve_continuation(8).is_err());
+    }
+}
+#[test]
+fn foreign_request_or_late_model_metadata_cannot_change_channel_state() {
+    for (key, value) in [("threadId", json!("foreign")), ("requestId", json!(8))] {
+        let mut c = channel();
+        c.bind_tool_native(Some("native".into()));
+        c.reserve_execution(7).unwrap();
+        let mut frame = json!({"method":"model/observed","params":{
+            "threadId":"native","requestId":7,"model":"native-confirmed"}});
+        frame["params"][key] = value;
+        let envelope = json!({"method":"BrokerOutput","params":{
+            "owned_handle":"synthetic_owned","frame":frame}});
+        assert!(c
+            .receive(envelope.to_string().as_bytes())
+            .unwrap()
+            .is_none());
+        assert!(c.active_turn.is_none() && !c.terminal_observed);
+    }
+    for cancelled in [false, true] {
+        let mut c = channel();
+        c.bind_tool_native(Some("native".into()));
+        c.reserve_execution(7).unwrap();
+        c.cancellation_pending = cancelled;
+        c.terminal_observed = !cancelled;
+        let frame = json!({"method":"BrokerOutput","params":{"owned_handle":"synthetic_owned",
+            "frame":{"method":"model/observed","params":{"threadId":"native",
+                "requestId":7,"model":"native-confirmed"}}}});
+        assert!(c.receive(frame.to_string().as_bytes()).unwrap().is_none());
+        assert!(c.active_turn.is_none());
+    }
+}
+#[test]
+fn rerouted_model_preserves_owned_turn_fences_without_terminal_authority() {
+    let mut c = channel();
+    c.reserve_execution(7).unwrap();
+    c.receive(
+        json!({"id":2,"result":{"owned_handle":"synthetic_owned","frame":{
+        "id":7,"result":{"turn":{"id":"turn","status":"inProgress"}}}}})
+        .to_string()
+        .as_bytes(),
+    )
+    .unwrap();
+    let mut envelope = json!({"method":"BrokerOutput","params":{"owned_handle":"synthetic_owned",
+        "frame":{"method":"model/rerouted","params":{"threadId":"native","turnId":"turn",
+            "toModel":"native-rerouted"}}}});
+    assert!(c
+        .receive(envelope.to_string().as_bytes())
+        .unwrap()
+        .is_some());
+    assert!(!c.terminal_observed);
+    envelope["params"]["frame"]["params"]["turnId"] = json!("foreign");
+    assert!(c.receive(envelope.to_string().as_bytes()).is_err());
+}
+#[test]
 fn agent_item_boundaries_preserve_original_handle_and_turn_fences() {
     for method in ["item/started", "item/completed"] {
         let mut c = channel();

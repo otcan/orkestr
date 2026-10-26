@@ -205,9 +205,9 @@ impl BrokerChannel {
     fn observe_turn(&mut self, frame: &Value) -> Result<(), Blocker> {
         let method = frame.get("method").and_then(Value::as_str);
         let turn = match method {
-            Some("item/agentMessage/delta" | "item/started" | "item/completed") => {
-                frame.pointer("/params/turnId")
-            }
+            Some(
+                "item/agentMessage/delta" | "item/started" | "item/completed" | "model/rerouted",
+            ) => frame.pointer("/params/turnId"),
             Some("turn/started" | "turn/completed") => frame.pointer("/params/turn/id"),
             _ => return Err(Blocker::Protocol),
         }
@@ -335,6 +335,18 @@ impl BrokerChannel {
             }
             if frame.get("id").is_some() {
                 return Err(Blocker::Protocol);
+            }
+            if frame.get("method").and_then(Value::as_str) == Some("model/observed") {
+                // Evidence only: preserve all preparation/owned-handle fences
+                // above, but never infer a native turn ID from settings.
+                let params = &frame["params"];
+                return Ok((!self.terminal_observed
+                    && !self.cancellation_pending
+                    && self.native.is_some()
+                    && params.get("threadId").and_then(Value::as_str) == self.native.as_deref()
+                    && params.get("requestId").and_then(Value::as_u64)
+                        == Some(self.last_execution_inner))
+                .then(|| frame.clone()));
             }
             self.validate_offline_terminal(frame)?;
             self.validate_workspace_terminal(frame)?;
