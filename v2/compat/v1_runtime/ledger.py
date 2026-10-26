@@ -122,8 +122,8 @@ class Ledger:
         # Set by the registry from `fast_reply_policy`: the verified owner of an
         # owner-only chat gets technical notices, everyone else plain ones.
         self.owner_only = False
-        # Set by the registry: a chat with non-owner members never sees
-        # server-local file paths. The owner alone works with paths on this host.
+        # Set by the registry for every chat that is not owner-only: it never
+        # sees server-local paths. The owner alone works with paths on this host.
         self.scrub_paths = False
         identity = json.dumps({"schema": 1, "scope": scope}, sort_keys=True, separators=(",", ":"))
         with self.connect() as db:

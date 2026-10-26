@@ -42,14 +42,25 @@ class LocalPathTests(unittest.TestCase):
         out = scrub_local_paths("Saved to /home/orkestr/work/cv.pdf. Also (/tmp/build/log.txt) and file:///srv/x/a.csv")
         self.assertEqual(out, "Saved to cv.pdf (not attached). Also (log.txt (not attached)) and a.csv (not attached)")
 
-    def test_bare_path_with_spaces_is_not_mangled(self):
-        text = "It is /home/o/My File (1).pdf on disk."
-        self.assertEqual(scrub_local_paths(text), text)
+    def test_bare_path_with_spaces_never_leaks_its_directories(self):
+        # Without link brackets the end of a spaced name is ambiguous; the
+        # folder part is still replaced, so no server directory leaks.
+        out = scrub_local_paths("It is /home/o/My File (1).pdf on disk.")
+        self.assertNotIn("/home/", out)
 
-    def test_routes_directories_urls_and_versions_are_kept(self):
-        for text in ("POST /run/start then GET /data/items/1", "Look in /home/orkestr/work/ and /var/log",
-                     "See https://example.com/home/user/a.pdf or ./home/x.pdf", "Uses /usr/lib/python3.11 now",
-                     "[logs](/var/log/app)"):
+    def test_folder_paths_and_extensionless_files_become_server_folder_names(self):
+        self.assertEqual(scrub_local_paths("Logs are in /var/log/orkestr. Work in /home/orkestr/work/, see /etc/hostname"),
+                         "Logs are in the server folder orkestr. Work in the server folder work, see the server folder hostname")
+        self.assertEqual(scrub_local_paths("[logs](/var/log/app) and [deck](/home/o/d.pptx)"),
+                         "logs (the server folder app) and deck: d.pptx (not attached)")
+        self.assertEqual(scrub_local_paths("Cache: /opt/x/cache, /srv/site, /tmp/run1 and /root/.config"),
+                         "Cache: the server folder cache, the server folder site, the server folder run1 and "
+                         "the server folder .config")
+
+    def test_routes_urls_and_other_roots_are_kept(self):
+        for text in ("POST /run/start then GET /data/items/1", "GET /data/items/1.json", "DELETE /home/sessions/7",
+                     "call /api/v1/files/report.pdf", "See https://example.com/home/user/a.pdf or ./home/x.pdf",
+                     "Uses /usr/lib/python3.11 now", "/usr/local/bin is on PATH", "just /etc alone"):
             with self.subTest(text=text):
                 self.assertEqual(scrub_local_paths(text), text)
 
@@ -134,14 +145,20 @@ class WorkerOutboundTests(unittest.TestCase):
             self.assertNotIn("/var/lib", str(db.execute("SELECT message FROM exports").fetchall()))
 
     def test_owner_only_chat_keeps_paths(self):
-        text = "Done: [deck](/var/lib/orkestr-v2-pilot/workspace/a/deck.pptx)"
+        text = "Done: [deck](/var/lib/orkestr-v2-pilot/workspace/a/deck.pptx) in /home/orkestr/work/"
         self.assertEqual(self.final(text), text)
 
-    def test_registry_scrubs_only_chats_with_members(self):
+    def test_shared_chat_folder_paths_are_rewritten(self):
+        self.ledger.scrub_paths = True
+        self.assertEqual(self.final("Saved under /home/orkestr/work/deck-v2/ (run `ls /home/orkestr/work`)."),
+                         "Saved under the server folder deck-v2 (run `ls /home/orkestr/work`).")
+
+    def test_registry_scrubs_every_chat_that_is_not_owner_only(self):
         from types import SimpleNamespace
         from v2.compat.v1_runtime.registry import Registry
-        for policy, members, expected in (("owner_only", [{"id": "m"}], False), ("legacy", [], False),
-                                          ("legacy", [{"id": "m"}], True)):
+        # A group with other members but no participants list is shared too.
+        for policy, members, expected in (("owner_only", [{"id": "m"}], False), ("owner_only", [], False),
+                                          ("legacy", [], True), ("disabled", [], True), ("legacy", [{"id": "m"}], True)):
             with self.subTest(policy=policy, members=members):
                 ledger = SimpleNamespace(owner_only=None, scrub_paths=None)
                 binding = SimpleNamespace(worker=self.worker, ledger=ledger, thread=True, config=dict(
