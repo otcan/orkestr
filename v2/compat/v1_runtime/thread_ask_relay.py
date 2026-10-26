@@ -5,7 +5,8 @@ ended, Core admits the outcome as an input of this conversation and queues
 its own Deep turn. Nothing in the WhatsApp queue knows that input, so the
 owner never saw what the agent did with the answer. This adopts each such
 input as an awaited web-style answer: the existing `drive_web` watch then
-exports the accepted Deep answer of exactly that input to the group, once.
+exports the accepted Deep answer of exactly that input to the group, once,
+labelled "↩ from <thread name>".
 
 The adapter never opens a window, accepts a run or mirrors the input text
 (it is another agent's answer, not an owner message). A server without the
@@ -49,7 +50,7 @@ def _adopt(ledger, row):
     label = " ".join(row["target_name"].split())[:60] or "another thread"
     watch = {"message_id": row["message_id"], "event_id": row["event_id"], "sequence": row["sequence"],
              "cursor": row["sequence"], "excerpt": "thread answer from %s" % label, "since": time.time(),
-             "runs": [], "progress": [], "thread_ask": row["ask_id"]}
+             "runs": [], "progress": [], "thread_ask": row["ask_id"], "thread_name": label}
     with ledger.connect() as db:
         db.execute("INSERT OR IGNORE INTO web_watch VALUES (?,?)", (row["message_id"], json.dumps(watch)))
 

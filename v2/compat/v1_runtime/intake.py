@@ -5,6 +5,20 @@ from . import continuation_guard
 from .participants import compose
 
 
+# Stored author role -> Core's verified input author. Only "owner" may command
+# a thread ask; a burst only ever merges inputs of one author.
+AUTHORS = {"owner": "owner", "member": "member", "v1_owner": "v1_owner", "v1_agent": "v1_agent",
+           "v1_external": "v1_external"}
+
+
+def verified_author(data):
+    """The author this adapter verified for a chat or V1-local input, else None
+    (timer, digest and post rows have no human author)."""
+    if data.get("origin"):
+        return None
+    return AUTHORS.get((data.get("author") or {}).get("role"))
+
+
 def admit(worker, data, merge_burst=True):
     """Freeze and admit one source through the existing owner HTTP surface."""
     from .worker import Refused
@@ -22,6 +36,9 @@ def admit(worker, data, merge_burst=True):
         if data.get("origin") != "timer":
             text = worker.with_rules(data, text)
         request = {"client_message_id": data["keys"]["message"], "text": text}
+        author = verified_author(data)
+        if author:
+            request["author"] = author
         if data.get("reply_to"):
             request["reply_to"] = data["reply_to"]
         if data.get("continued"):

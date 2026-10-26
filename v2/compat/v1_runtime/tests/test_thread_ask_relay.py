@@ -73,7 +73,7 @@ class ThreadAskRelayTests(Base):
         reply, = self.replies()
         self.assertEqual(reply["text"], "Hosting confirmed Bedrock in eu-central-1; continuing.")
         user = next(m for m in self.ledger.messages() if m["id"] == reply["parentMessageId"])
-        self.assertEqual(user["text"], LABEL + " ↩ thread answer from Hosting")
+        self.assertEqual(user["text"], "↩ from Hosting")
         self.assertEqual(self.ledger.web_watches(), [])
         # Replays (lost cursor write, restart) adopt nothing new.
         thread_ask_relay._set_cursor(self.ledger, 20)
@@ -93,6 +93,30 @@ class ThreadAskRelayTests(Base):
         self.peer.asks = [dict(reply_row(), message_id="not-a-uuid"), reply_row(sequence=22)]
         self.assertEqual(thread_ask_relay.discover(self.worker), 0)
         self.assertEqual(thread_ask_relay._cursor(self.ledger), 20)
+
+
+class VerifiedAuthorTests(Base):
+    """Core lets only owner-authored turns ask another thread; the adapter
+    states the author it verified with each admitted chat input."""
+
+    def test_admitted_inputs_carry_the_verified_author(self):
+        from v2.compat.v1_runtime.intake import verified_author
+        self.assertEqual(verified_author({"author": {"role": "owner", "id": "o"}}), "owner")
+        self.assertEqual(verified_author({"author": {"role": "member", "id": "m"}}), "member")
+        self.assertEqual(verified_author({"author": {"role": "v1_agent", "id": "a"}}), "v1_agent")
+        self.assertIsNone(verified_author({"origin": "timer", "author": {"role": "owner"}}))
+        self.assertIsNone(verified_author({"author": {"role": "someone"}}))
+        self.assertIsNone(verified_author({}))
+
+    def test_owner_message_is_posted_with_author_owner(self):
+        peer = AskPeer()
+        worker = Worker(peer, self.ledger)
+        self.ledger.enqueue({"publicThreadId": "v1-thread", "publicMessageId": "wa-1", "chatId": "chat@g.us",
+                             "accountId": "account", "text": "ask hosting for the Bedrock region"},
+                            author={"role": "owner", "id": "owner@c.us", "label": "Owner"})
+        worker.step(self.ledger.next_input())
+        posted = [body for route, body in peer.mutations if route == "/messages"]
+        self.assertEqual(posted[0]["author"], "owner")
 
 
 if __name__ == "__main__":

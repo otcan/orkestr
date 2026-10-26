@@ -654,10 +654,16 @@ asking turn ended, Rust admits the outcome as an input of this conversation
 and queues its Deep turn itself. Every web poll, the adapter reads
 `GET /thread-ask-inputs?after_sequence=N` and adopts each new row as an
 awaited answer. The existing web-answer watch then exports the accepted Deep
-answer of exactly that input once, as `🖥️ (web) ↩ thread answer from <name>`.
+answer of exactly that input once, labelled `↩ from <thread name>`.
 The other agent's answer text itself is not posted, and the adapter never
 opens a window or accepts a run. The first scan only records the current
 position. A server without the route answers 404, and nothing happens.
+
+Each chat or V1-local input is posted to Rust with the `author` the adapter
+verified (`owner`, `member`, `v1_owner`, `v1_agent` or `v1_external`; timer,
+digest and post rows have none). Rust lets only a turn that serves an owner
+message ask another thread, so a member or a V1-local sender can never make
+an agent contact other threads.
 
 ## Progress, NO_REPLY and attachments
 
