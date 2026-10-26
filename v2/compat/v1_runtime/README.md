@@ -433,8 +433,15 @@ leaving it `running` behind a Fast wait.
   younger than 24 h from `arrived_at` (rows written before that field existed
   are never retried), no final or uncertain export, the journal read through
   Core's head (a non-streaming snapshot read), never retried or continued
-  before. While Core refuses the retirement the adapter keeps matching the
-  original for up to an hour, then refuses as before this change.
+  before. When a run references the message (in owner-only chats usually
+  its Fast) Core never retires it, so the input closes at once with the
+  "interrupted" notice and an ALERT. Only while Core may still run it itself
+  (a newer open window, reconciliation, a refused retirement) does the
+  serial queue wait, at most 10 minutes, with `ALERT … input_waiting_for_core`
+  when the wait starts. An input in Core's held inputs (an owner stop) is
+  never retired or re-admitted: it closes silently (`held`).
+* In practice this retry, like the operator re-admission below, applies
+  mostly to inputs that never got a Fast run.
 * Timer occurrences are never re-sent by the adapter; Core owns their retry.
 * Older than 24 h: settled silently (`suppressed`, no export) with
   `ALERT … input_failed_too_old`.
@@ -463,8 +470,8 @@ PYTHONDONTWRITEBYTECODE=1 python3 -I -B -m v2.compat.v1_runtime.recovery --ledge
 row (`readmit_requests`); the live binding worker decides and performs it on
 its own thread. It refuses an input older than 24 h, completed or settled,
 already re-admitted, held by a steer, with an accepted Deep, a final or
-uncertain export, or a live window, and then requires the same Core
-retirement as above (`core_still_owns_input` otherwise). One request per
+uncertain export, a live window or an owner-stop hold, and then requires
+the same Core retirement as above (`core_still_owns_input` otherwise). One request per
 input; repeating the same key returns the recorded outcome.
 
 ## Notices

@@ -562,7 +562,10 @@ class Ledger:
         technical notice; members of a shared chat get the short one."""
         if data.get("origin") == "timer":
             return True
-        return (data.get("author") or {}).get("role") in (None, "owner", "v1_owner")
+        role = (data.get("author") or {}).get("role")
+        # Rows without an author predate participants: the owner on owner-only
+        # bindings, but possibly anyone in a legacy group, so the short notice.
+        return role in ("owner", "v1_owner") or (role is None and self.owner_only)
 
     def expire_stale(self, max_age_s, now=None):
         """Refuse inputs that waited longer than max_age_s without a Rust window.

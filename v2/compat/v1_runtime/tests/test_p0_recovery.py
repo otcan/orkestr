@@ -302,6 +302,89 @@ class UnstartedInputTests(Base):
         self.assertIn("ALERT orkestr-v2-wa-adapter input_failed_too_old", log)
 
 
+class FastOnlyPeer(QueuePeer):
+    """The input's Fast ran; its Deep never started; its window closed."""
+
+    def __init__(self):
+        super().__init__()
+        self.current = dict(window_id="window", state="closed", conversation_id="conversation")
+        self.no_deep = True
+
+    def request(self, method, route, body=None, allowed=(200,)):
+        if route.split("?", 1)[0] == "/execution" and self.no_deep:
+            return 404, {"code": "not_found"}
+        return super().request(method, route, body=body, allowed=allowed)
+
+
+class StuckQueueTests(Base):
+    peer_class = FastOnlyPeer
+
+    def test_input_with_a_fast_run_closes_in_one_pass_and_later_finals_are_not_held(self):
+        self.passes(1)
+        data = self.ledger.next_input()
+        data["deep_missing_since"] -= 61
+        self.ledger.save(data)
+        later, _ = self.ledger.enqueue(dict(publicMessageId="later", publicThreadId="thread", chatId="chat",
+                                            accountId="account", text="Next question"),
+                                       author=dict(role="member", id="synthetic-member", label="Member"))
+        self.peer.retire_state = "retired"  # Never even asked: a run references it.
+        log = self.passes(1)
+        first = self.ledger.input(self.data["remote_id"])
+        self.assertEqual(first["phase"], "completed", "closed within one pass")
+        self.assertEqual(first["refused"]["reason"], "window_ended_without_deep")
+        self.assertEqual(first["retry_withheld"], "run_exists")
+        self.assertEqual(self.retires(), [])
+        self.assertIn("ALERT orkestr-v2-wa-adapter input_refused", log)
+        self.assertNotIn("input_waiting_for_core", log)
+        (notice,) = self.notices()
+        self.ledger.acknowledge(notice["id"], dict(outcome="delivered", outboxJobId="job",
+                                                   parentPublicMessageId="member-msg"))
+        self.peer.no_deep, self.peer.current = False, None
+        self.peer.accepted.clear()
+        self.passes(2)
+        self.assertEqual(self.ledger.messages()[-1]["text"], "deep result")
+        self.assertEqual(self.ledger.messages()[-1]["parentMessageId"], later["remote_id"])
+
+
+class OwnerStopTests(Base):
+    peer_class = NoRunPeer
+
+    def stranded(self):
+        self.passes(1)
+        data = self.ledger.next_input()
+        data["unstarted_since"] -= 61
+        self.ledger.save(data)
+
+    def test_held_input_is_closed_silently_and_never_retired_even_if_core_would(self):
+        self.stranded()
+        self.peer.held = ["message"]       # The owner pressed Stop.
+        self.peer.retire_state = "retired"  # Real Core would still retire it.
+        log = self.passes(1)
+        data = self.ledger.input(self.data["remote_id"])
+        self.assertEqual(data["phase"], "completed")
+        self.assertEqual(data["settled"]["outcome"], "held")
+        self.assertNotIn("readmitted", data)
+        self.assertEqual(self.retires(), [])
+        self.assertEqual(self.notices(), [])
+        self.assertIn("input_closed_owner_stop", log)
+        self.assertEqual(self.messages_sent(), 1)
+
+    def test_successor_window_wait_is_bounded_and_alerted_once(self):
+        self.stranded()
+        self.peer.current = dict(window_id="successor", state="active", conversation_id="conversation")
+        self.peer.retire_state = "retired"
+        log = self.passes(2)
+        data = self.ledger.next_input()
+        self.assertEqual(data["phase"], "running")
+        self.assertEqual(self.retires(), [], "Core may still run it there")
+        self.assertEqual(log.count("input_waiting_for_core"), 1)
+        data["retry_wait_since"] -= recovery.RETIRE_WAIT_S + 1
+        self.ledger.save(data)
+        self.passes(1)
+        self.assertEqual(self.ledger.input(self.data["remote_id"])["phase"], "completed")
+        self.assertNotIn("readmitted", self.ledger.input(self.data["remote_id"]))
+
+
 class TimerFailureTests(unittest.TestCase):
     """Nobody resends a timer and Core owns its retry: one timer notice."""
 
@@ -378,6 +461,19 @@ class OperatorReadmitTests(fixture.IntakeBase):
         with self.ledger.connect() as db:
             state = json.loads(db.execute("SELECT data FROM readmit_requests").fetchone()[0])
         self.assertEqual((state["state"], state["reason"]), ("refused", "core_still_owns_input"))
+
+    def test_owner_stop_hold_refuses_the_operator_request(self):
+        self.stranded()
+        self.peer.retire_state = "retired"
+        self.peer.held = [identity(50)]
+        recovery.request(self.ledger.path, "stranded", "op-held", "operator")
+        with quiet():
+            recovery.drive(self.worker)
+        self.assertNotIn("readmitted", self.row("stranded"))
+        with self.ledger.connect() as db:
+            state = json.loads(db.execute("SELECT data FROM readmit_requests").fetchone()[0])
+        self.assertEqual((state["state"], state["reason"]), ("refused", "input_held"))
+        self.assertFalse(any(r.endswith("/retire") for r, _ in self.peer.mutations))
 
     def test_live_window_or_final_refuses_in_the_worker(self):
         self.stranded()

@@ -30,6 +30,9 @@ class Peer:
         # Core's owner retire route: None answers 409 (Core still owns the
         # input: a run, an open window or a queued intent references it).
         self.retire_state = None
+        # Core's held inputs (an owner stop). Like real Core, retiring a held
+        # queued row is still allowed: the adapter itself must refuse.
+        self.held = []
 
     def window_request(self, intake, input_key, request_key, current):
         return dict(request_key=request_key, input_message_id=intake["message_id"], input_event_id=intake["event_id"],
@@ -57,6 +60,10 @@ class Peer:
             if self.retire_state is None:
                 raise ClientError("unexpected_status", 409)
             return 200, dict(message_id=route.split("/")[2], state=self.retire_state, retirement_id="retirement")
+        if method == "GET" and route == "/held-inputs":
+            return 200, dict(schema_version=1, conversation_id=self.conversation, revision=1, observed_at_ms=1,
+                             held=[dict(message_id=m) for m in self.held], next_after_sequence=None,
+                             eligible_input_available=False)
         if method == "GET" and route == "":
             return 200, dict(conversation_id=self.conversation, last_sequence=getattr(self, "head", 3))
         if route == "/messages":
@@ -246,7 +253,7 @@ class WorkerTests(unittest.TestCase):
                 # One silent automatic retry, then one honest notice (no resend request).
                 self.assertEqual(notice[0]["refusal"], "deep_run_" + failure)
                 self.assertNotIn("send it again", notice[0]["text"])
-                self.assertIn("nothing is retried", notice[0]["text"])
+                self.assertIn("technical problem", notice[0]["text"])  # No author: member-safe.
                 self.assertEqual(len([r for r, _ in peer.mutations if r == "/messages"]), 1)
                 self.assertEqual(stderr.getvalue().count("ALERT orkestr-v2-wa-adapter input_refused"), 1)
 

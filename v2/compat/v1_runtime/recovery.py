@@ -127,8 +127,9 @@ def recover(worker, data, reason, started=False):
     """The input's attempt ended for good. Retry it once, or close it.
 
     `started`: a Deep run of this input exists or may have acted. Returns True
-    when handled (retried, waiting, or settled); raises the worker's Refused
-    (one notice + ALERT) otherwise."""
+    when handled (retried, briefly waiting, or settled); raises the worker's
+    Refused (one notice + ALERT) otherwise. The serial queue waits only while
+    Core may still run the input itself, at most RETIRE_WAIT_S."""
     from .worker import Refused
     now = time.time()
     if too_old(data, now):
@@ -136,6 +137,12 @@ def recover(worker, data, reason, started=False):
         log(worker, "input_failed_too_old", data, alert=True, reason=reason)
         return True
     timer = data.get("origin") == "timer"
+    if not timer and held(worker, data) == "held":
+        # An owner stop moved it to Core's held inputs: honour the stop. Core
+        # would still retire a held queued row, so the adapter itself refuses.
+        worker.ledger.finish_silently(data, "held")
+        log(worker, "input_closed_owner_stop", data, reason=reason)
+        return True
     if started or ("arrived_at" not in data and not timer):
         data["retry_withheld"] = "run_started" if started else "pre_upgrade_row"
         raise Refused(reason)
@@ -143,27 +150,61 @@ def recover(worker, data, reason, started=False):
         raise Refused(reason)  # Core retries timer occurrences itself.
     if data.get("readmitted") or data.get("continued") or blocking_export(worker.ledger, data):
         raise Refused(reason)
-    since = data.setdefault("retry_wait_since", now)
-    if since == now:
-        worker.ledger.save(data)
-    if not journal_caught_up(worker, data) or own_window_state(worker, data) != "ended":
-        return wait_or_close(data, now, reason)
+    if not journal_caught_up(worker, data):
+        return wait_or_close(worker, data, now, reason, "journal_behind")
+    state = own_window_state(worker, data)
+    if state in ("successor_open", "reconciliation_required"):
+        # Core may hand the joined-but-unrun input to that window and run it.
+        return wait_or_close(worker, data, now, reason, state)
+    if state != "ended":
+        raise Refused(reason)
+    if data.get("matched_runs") or held(worker, data) != "not_held":
+        # A run references the message (often its Fast), so Core will never
+        # retire it: close now instead of holding the chat's queue.
+        data["retry_withheld"] = "run_exists" if data.get("matched_runs") else "hold_unknown"
+        raise Refused(reason)
     if retire_original(worker, data) != "retired":
-        return wait_or_close(data, now, reason)  # Core still owns it: keep matching.
+        return wait_or_close(worker, data, now, reason, "retire_refused")
     readmit(worker, data, "automatic", reason)
     return True
 
 
-# Core still owns (or may still run) the input: keep matching at most this
-# long, then close it with the pre-change refusal.
-RETIRE_WAIT_S = 3600
+# Core may still run the input itself (a newer open window, a queued window
+# intent, reconciliation): the serial queue waits at most this long, with one
+# operator ALERT when the wait starts, then the input is closed.
+RETIRE_WAIT_S = 600
 
 
-def wait_or_close(data, now, reason):
+def wait_or_close(worker, data, now, reason, why):
     from .worker import Refused
-    if now - data.get("retry_wait_since", now) < RETIRE_WAIT_S:
+    since = data.get("retry_wait_since")
+    if since is None:
+        data["retry_wait_since"] = since = now
+        worker.ledger.save(data)
+        log(worker, "input_waiting_for_core", data, alert=True, reason=reason, wait=why)
+    if now - since < RETIRE_WAIT_S:
         return True
     raise Refused(reason)
+
+
+def held(worker, data):
+    """'held' / 'not_held' / 'unknown' from Core's held-input page."""
+    message = (data.get("intake") or {}).get("message_id")
+    if not message:
+        return "not_held"
+    try:
+        page = worker.call("GET", "/held-inputs")
+    except Exception as error:
+        from .worker import transient
+        if transient(error):
+            raise
+        return "unknown"
+    rows = page.get("held") if isinstance(page, dict) else None
+    if not isinstance(rows, list):
+        return "unknown"
+    if any(isinstance(row, dict) and row.get("message_id") == message for row in rows):
+        return "held"
+    return "not_held" if page.get("next_after_sequence") is None else "unknown"
 
 
 def journal_caught_up(worker, data):
@@ -203,7 +244,12 @@ def own_window_state(worker, data):
     if (isinstance(current, dict) and current.get("state") == "reconciliation_required" and
             (own is None or current.get("window_id") == own)):
         return "reconciliation_required"
-    return "ended" if worker.window_ended(data) else "live"
+    if not worker.window_ended(data):
+        return "live"
+    if (isinstance(current, dict) and own is not None and current.get("window_id") != own and
+            current.get("state") in ("opening", "active")):
+        return "successor_open"
+    return "ended"
 
 
 # Operator re-admission ------------------------------------------------------
@@ -226,6 +272,8 @@ def check(worker, data, now):
         return "final_or_uncertain_export"
     if own_window_state(worker, data) != "ended":
         return "window_live"
+    if held(worker, data) != "not_held":
+        return "input_held"  # An owner stop is never undone.
     return None
 
 
