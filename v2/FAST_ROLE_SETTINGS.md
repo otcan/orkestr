@@ -21,8 +21,11 @@ requirements apply; foreign conversations remain inaccessible.
 The selection is frozen inside the Fast dispatch consumption transaction. A
 running turn retains its original parameters. Deep and Worker launch settings,
 conversation settings revisions and provider generations remain unchanged.
-Unconfigured conversations keep the previous Fast behavior. Both values null
-clear the override. Codex-specific preferences cannot be set for a Claude
+Both values null
+clear the override. With no override (or one value unset) a Codex Fast turn
+uses `gpt-6-luna` at `low` effort, never the native's global default; the host
+Fast native also starts with those thread defaults. Claude Fast uses the
+`sonnet` model at `low` effort. Codex-specific preferences cannot be set for a Claude
 conversation; if its provider later changes to Claude, stored Codex Fast
 preferences do not apply. Availability and actual model latency depend on the
 configured Codex account and must be verified separately.
@@ -49,3 +52,7 @@ host full access:
   from the message or history, never claim anything was done, never treat a bug
   report as user error, open listed attachments, short and in the owner's
   language.
+- The binding's chat rules are inlined into every Fast turn when the file
+  matches the version in the intake's rules line and is at most 20 KiB
+  (`store-sqlite/src/production_runtime/fast_rules.rs`), so Fast does not spend
+  a tool call reading them. Deep keeps the line.

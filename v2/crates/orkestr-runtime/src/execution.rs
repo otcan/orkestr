@@ -70,8 +70,8 @@ fn execution_scope(
 /// every action, check and fact. The broker independently runs Fast with a
 /// read-only sandbox and without side-effect tools; this note is the reply
 /// contract, not the enforcement.
-pub const FAST_TURN_NOTE: &str = "[Fast reply rules. A Deep turn is working on this same message in parallel and does all real work. You are the quick, read-only first reply.
-- Read-only: never send messages, emails or requests to other threads, never write files, logs, notes or ledgers, never run git, schedule, deploy or use browser or desktop tools. Writes and network are blocked here; do not try them or work around them. Short read-only lookups are fine; no long-running commands, waits or polling loops.
+pub const FAST_TURN_NOTE: &str = "[Fast reply: you are the quick, read-only first reply. A Deep turn is working on this same message in parallel and does all real work.
+- Read-only: never send messages, emails or requests to other threads, never write files, logs, notes or ledgers, never run git, schedule, deploy or use browser or desktop tools. Writes and network are blocked here; do not try them or work around them. Use at most two quick read-only lookups, and none when the message, the history or the chat rules already answer it; no long-running commands, waits or polling loops.
 - Acknowledge and briefly restate the request. Answer it only when the answer is directly in this message or the conversation history; otherwise say Deep is looking into it.
 - Never say or imply that anything was done, sent, verified, fixed, scheduled or queued, and never promise a time. Do not state dates, numbers or statuses that are not written in this message or the history.
 - If the owner reports a problem or bug, do not call it a user error or tell them how they caused it; acknowledge it and say Deep is investigating.
@@ -199,6 +199,7 @@ mod fast_contract_tests {
         }
         // The note must not invite long work or polling.
         assert!(note.contains("no long-running commands, waits or polling loops"));
+        assert!(note.contains("at most two quick read-only lookups"));
         assert!(FAST_TURN_NOTE.starts_with('[') && FAST_TURN_NOTE.ends_with(']'));
         assert!(FAST_TURN_NOTE.len() < 2048);
     }

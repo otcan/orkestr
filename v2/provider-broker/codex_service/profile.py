@@ -155,12 +155,18 @@ FAST_DISABLED_FEATURES = (
     "image_generation",
 )
 MCP_SERVER_NAME = re.compile(r"[A-Za-z0-9_-]{1,64}")
+# Thread defaults for Fast. Core sends the owner's Fast model/effort (else these
+# same defaults) on every turn; this keeps a Fast native from ever falling back
+# to the operator's global Codex default (a Deep-class model at high effort).
+FAST_DEFAULT_MODEL = "gpt-6-luna"
+FAST_DEFAULT_EFFORT = "low"
 
 
 def fast_host_options(environment):
     """App-server options for a host Fast native: disabled side-effect features
     and every MCP server the operator's Codex config declares, by name."""
-    options = []
+    options = ["-c", f'model="{FAST_DEFAULT_MODEL}"',
+               "-c", f'model_reasoning_effort="{FAST_DEFAULT_EFFORT}"']
     for feature in FAST_DISABLED_FEATURES:
         options += ["--disable", feature]
     for name in configured_mcp_servers(host_codex_home(environment) / "config.toml"):

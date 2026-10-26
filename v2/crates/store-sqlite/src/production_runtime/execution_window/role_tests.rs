@@ -165,7 +165,15 @@ async fn fast_setup_is_not_inference_and_only_admitted_input_is_selected() {
         .unwrap();
     let dispatch = w.consume(&admission).await;
     assert_eq!(dispatch.provider().run.role, Role::Fast);
-    assert!(dispatch.launch().is_none(), "Fast keeps its pinned launch");
+    // An unconfigured Codex Fast never inherits the native's global default.
+    assert_eq!(
+        dispatch.launch().unwrap().codex_overrides(),
+        Some((
+            Some(crate::conversation_resources::fast_settings::FAST_DEFAULT_MODEL),
+            Some(crate::conversation_resources::fast_settings::FAST_DEFAULT_EFFORT)
+        )),
+        "unconfigured Fast uses the Fast defaults"
+    );
     assert_eq!(
         w.bound
             .with_execution_fence(dispatch.provider(), || Ok::<_, ()>(7))

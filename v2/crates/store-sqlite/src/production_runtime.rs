@@ -35,6 +35,7 @@ mod dispatch;
 mod fast;
 mod fast_continuity;
 mod fast_digest;
+mod fast_rules;
 mod fence;
 mod held_inputs;
 mod retired_inputs;

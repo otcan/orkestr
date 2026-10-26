@@ -12,6 +12,10 @@ use orkestr_v2_application::runtime::{RuntimeStore, RuntimeStoreError};
 use orkestr_v2_contracts::ExecutionPhase;
 use std::time::Instant;
 
+/// Claude Fast model (Claude Code alias for the current Sonnet): a quick
+/// read-only reply does not need the account's default Opus. Never Fable.
+pub(crate) const CLAUDE_FAST_MODEL: &str = "sonnet";
+
 impl PendingControl {
     /// Consume only the exact mailbox receipt with the already-owned lifecycle.
     fn dispatch_claude(
@@ -334,9 +338,10 @@ impl ConfiguredExecution {
             .await
             .map_err(|_| "Claude turn settings unavailable")?;
         let directories = if self.config.role == super::config::ExecutionRole::Fast {
-            // Fast presents the input quickly: lowest effort, default model.
+            // Fast presents the input quickly: a smaller model at the lowest
+            // effort, never the account default (Opus) and never Fable.
             directories
-                .with_claude_launch(None, Some("low"))
+                .with_claude_launch(Some(CLAUDE_FAST_MODEL), Some("low"))
                 .map_err(|_| "Claude turn settings invalid")?
         } else if launch.provider == orkestr_v2_contracts::ConversationProvider::Claude {
             directories
@@ -428,5 +433,17 @@ impl ConfiguredExecution {
             }
         }
         Ok(Some(ready))
+    }
+}
+
+#[cfg(test)]
+mod fast_model_tests {
+    #[test]
+    fn claude_fast_uses_a_smaller_valid_model_never_opus_or_fable() {
+        let model = super::CLAUDE_FAST_MODEL;
+        assert!(orkestr_v2_contracts::launch_model_valid(model));
+        assert!(!orkestr_v2_contracts::model_denied(model));
+        let lower = model.to_ascii_lowercase();
+        assert!(!lower.contains("opus") && !lower.contains("fable"));
     }
 }

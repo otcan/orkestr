@@ -293,6 +293,12 @@ impl Store {
                 .map_err(|_| RuntimeStoreError::Unavailable)?,
             ),
         };
+        // Fast gets the chat rules inline: no forced tool call per reply.
+        let text = if claim.provider.run.role == orkestr_v2_contracts::runtime::Role::Fast {
+            super::fast_rules::inline(text)
+        } else {
+            text
+        };
         let text = super::execution_window::handoff_context::attach(&mut tx, &claim.provider, text)
             .await?;
         let text = super::fast_digest::attach(

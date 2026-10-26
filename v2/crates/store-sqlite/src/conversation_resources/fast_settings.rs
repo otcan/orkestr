@@ -23,8 +23,16 @@ async fn current(
     })
 }
 
-/// Historical schemas and unconfigured conversations preserve the existing
-/// native Fast defaults. Claude Fast never receives Codex model overrides.
+/// Codex Fast model and effort when the owner selected none. Fast is a quick
+/// read-only reply: it must never inherit the native's global default (a
+/// Deep-class model at high effort from the operator's Codex config).
+pub const FAST_DEFAULT_MODEL: &str = "gpt-6-luna";
+pub const FAST_DEFAULT_EFFORT: &str = "low";
+
+/// Historical schemas keep the native launch. Every other Codex Fast turn
+/// carries an explicit model and effort: the owner's choice, else the Fast
+/// defaults for whichever value is unset. Claude Fast never receives Codex
+/// model overrides.
 pub(crate) async fn turn_launch(
     tx: &mut Transaction<'_, Sqlite>,
     conversation: &ConversationId,
@@ -35,9 +43,6 @@ pub(crate) async fn turn_launch(
         return Ok(None);
     }
     let fast = current(tx, conversation).await?;
-    if fast.model.is_none() && fast.reasoning_effort.is_none() {
-        return Ok(None);
-    }
     let deep = settings::current(tx, conversation).await?;
     if deep.provider != ConversationProvider::Codex {
         return Ok(None);
@@ -49,8 +54,11 @@ pub(crate) async fn turn_launch(
         settings_revision: fast.revision,
         provider: ConversationProvider::Codex,
         provider_generation: deep.provider_generation,
-        model: fast.model,
-        reasoning_effort: fast.reasoning_effort,
+        model: Some(fast.model.unwrap_or_else(|| FAST_DEFAULT_MODEL.to_owned())),
+        reasoning_effort: Some(
+            fast.reasoning_effort
+                .unwrap_or_else(|| FAST_DEFAULT_EFFORT.to_owned()),
+        ),
     }))
 }
 

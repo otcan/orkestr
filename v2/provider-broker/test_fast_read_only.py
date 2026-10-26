@@ -106,6 +106,9 @@ class FastCodexToolTests(unittest.TestCase):
         self.assertEqual(disabled, set(FAST_DISABLED_FEATURES))
         for feature in SIDE_EFFECT_FEATURES:
             self.assertIn(feature, disabled)
+        # Never the operator's global (Deep-class) default model.
+        self.assertIn('model="gpt-6-luna"', options)
+        self.assertIn('model_reasoning_effort="low"', options)
 
     def test_every_configured_mcp_server_is_disabled_for_fast(self):
         from codex_service.profile import fast_host_options
