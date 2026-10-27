@@ -580,3 +580,258 @@ fn top_of_hour_spread_is_deterministic_bounded_and_keeps_exact_schedules() {
         Ok(NOW + 12 * HOUR + spread)
     );
 }
+
+/// A slot fired at its raw (unspread) time never comes back at `slot + spread`.
+#[test]
+fn a_fired_slot_is_never_rescheduled_at_its_spread_time() {
+    const HOUR: i64 = 3_600_000;
+    let s = 300_000;
+    let on_hour = TimerSchedule::UtcClock {
+        weekly: false,
+        minute_of_day: 13 * 60,
+    };
+    let raw = NOW + 13 * HOUR;
+    // Claimed at the raw slot time (a next_due stored before the spread existed).
+    assert_eq!(
+        schedule::next_spread_after(&on_hour, s, raw + 250, Some(raw)),
+        Ok(raw + 24 * HOUR + s)
+    );
+    // The unguarded variant is what double fired: same slot, spread time.
+    assert_eq!(schedule::next_spread(&on_hour, s, raw + 250), Ok(raw + s));
+    // Claimed at the spread time: tomorrow, as before.
+    assert_eq!(
+        schedule::next_spread_after(&on_hour, s, raw + s, Some(raw + s)),
+        Ok(raw + 24 * HOUR + s)
+    );
+    // An older fired slot does not hide a pending one.
+    assert_eq!(
+        schedule::next_spread_after(&on_hour, s, raw + 1, Some(raw - 24 * HOUR + s)),
+        Ok(raw + s)
+    );
+    // A pause or skip that walks forward keeps the fired slot excluded.
+    let supp = policy_pause::Suppression {
+        until: raw + 60_000,
+        skip: vec![],
+        zone: "UTC".into(),
+    };
+    assert_eq!(
+        policy_pause::first_allowed(&supp, &on_hour, s, Some(raw), raw + 24 * HOUR + s),
+        raw + 24 * HOUR + s
+    );
+}
+
+fn spread_namespace() -> Uuid {
+    (1..=64_u128)
+        .map(Uuid::from_u128)
+        .find(|ns| schedule::spread_ms(*ns) >= 60_000)
+        .unwrap()
+}
+
+async fn next_due(store: &Store, owner: &OwnerId, namespace: Uuid) -> Option<i64> {
+    store
+        .dormant_timer_receipt(TOKEN, owner, namespace)
+        .await
+        .unwrap()
+        .next_due_ms
+}
+
+/// Regression for the post-#354 double fire: a recurring timer whose stored
+/// next_due_ms is the raw top-of-the-hour time (computed before the spread was
+/// deployed) fires once at that time, then not again at the spread time of the
+/// same slot, also not after a pause refresh or a re-enable inside the window.
+#[tokio::test]
+async fn pre_spread_stored_next_due_fires_exactly_once_per_slot() {
+    const HOUR: i64 = 3_600_000;
+    let (store, owner, conversation, directory) = fixture().await;
+    let namespace = spread_namespace();
+    let spread = schedule::spread_ms(namespace);
+    let request = TimerImportRequest {
+        namespace,
+        schedule: TimerSchedule::UtcClock {
+            weekly: false,
+            minute_of_day: 8 * 60,
+        },
+        ..input()
+    };
+    store
+        .import_dormant_timer(TOKEN, &owner, &request)
+        .await
+        .unwrap();
+    let enabled = store
+        .enable_dormant_timer(TOKEN, &owner, &enable(&request, &conversation), NOW)
+        .await
+        .unwrap();
+    let raw = NOW + 8 * HOUR;
+    assert_eq!(enabled.next_due_ms, Some(raw + spread));
+    // Simulate the row as written by the pre-spread binary: raw slot time.
+    sqlx::query("UPDATE dormant_timers SET next_due_ms=? WHERE namespace=?")
+        .bind(raw)
+        .bind(namespace.to_string())
+        .execute(&store.pool)
+        .await
+        .unwrap();
+    let mut first = claim(&request, &enabled);
+    first.due_ms = raw;
+    store
+        .claim_dormant_timer(TOKEN, &owner, &first, raw + 400)
+        .await
+        .unwrap();
+    let tomorrow = raw + 24 * HOUR + spread;
+    assert_eq!(next_due(&store, &owner, namespace).await, Some(tomorrow));
+    // The spread time of the fired slot is not claimable.
+    let mut second = first.clone();
+    second.request_key = "fake-claim-b".into();
+    second.due_ms = raw + spread;
+    assert_eq!(
+        store
+            .claim_dormant_timer(TOKEN, &owner, &second, raw + spread)
+            .await,
+        Err(HistoryError::Conflict)
+    );
+    // A pause/policy refresh inside the spread window keeps tomorrow.
+    let mut tx = store
+        .history_transaction(TOKEN, &owner, true)
+        .await
+        .unwrap();
+    policy_pause::refresh_timer(&mut tx, &owner, namespace, raw + 60_000, false)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    assert_eq!(next_due(&store, &owner, namespace).await, Some(tomorrow));
+    // Disable and re-enable inside the window: still tomorrow, not today + spread.
+    let paused = store
+        .control_dormant_timer(
+            TOKEN,
+            &owner,
+            &TimerControlRequest {
+                namespace,
+                expected_revision: enabled.revision,
+                request_key: "fake-disable-a".into(),
+                action: TimerControl::Disable,
+            },
+        )
+        .await
+        .unwrap();
+    let mut again = enable(&request, &conversation);
+    again.expected_revision = paused.revision;
+    again.request_key = "fake-enable-b".into();
+    let reenabled = store
+        .enable_dormant_timer(TOKEN, &owner, &again, raw + 90_000)
+        .await
+        .unwrap();
+    assert_eq!(reenabled.next_due_ms, Some(tomorrow));
+    // Tomorrow's slot fires once, at its spread time, then the day after.
+    let mut third = claim(&request, &reenabled);
+    third.request_key = "fake-claim-c".into();
+    store
+        .claim_dormant_timer(TOKEN, &owner, &third, tomorrow + 300)
+        .await
+        .unwrap();
+    assert_eq!(
+        next_due(&store, &owner, namespace).await,
+        Some(tomorrow + 24 * HOUR)
+    );
+    let fired: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM dormant_timer_claims WHERE namespace=?")
+            .bind(namespace.to_string())
+            .fetch_one(&store.pool)
+            .await
+            .unwrap();
+    assert_eq!(fired, 2);
+    cleanup(store, directory).await;
+}
+
+/// A one-shot timer on an exact hour is never spread and fires exactly once.
+#[tokio::test]
+async fn once_timer_on_the_hour_fires_exactly_once() {
+    const HOUR: i64 = 3_600_000;
+    let (store, owner, conversation, directory) = fixture().await;
+    let namespace = spread_namespace();
+    let due = NOW + 9 * HOUR;
+    let request = TimerImportRequest {
+        namespace,
+        schedule: TimerSchedule::Once { due_ms: due },
+        ..input()
+    };
+    store
+        .import_dormant_timer(TOKEN, &owner, &request)
+        .await
+        .unwrap();
+    let enabled = store
+        .enable_dormant_timer(TOKEN, &owner, &enable(&request, &conversation), NOW)
+        .await
+        .unwrap();
+    assert_eq!(enabled.next_due_ms, Some(due));
+    store
+        .claim_dormant_timer(TOKEN, &owner, &claim(&request, &enabled), due + 200)
+        .await
+        .unwrap();
+    let after = store
+        .dormant_timer_receipt(TOKEN, &owner, namespace)
+        .await
+        .unwrap();
+    assert_eq!(after.state, TimerState::Exhausted);
+    assert_eq!(after.next_due_ms, None);
+    let mut spread_time = claim(&request, &enabled);
+    spread_time.request_key = "fake-claim-b".into();
+    spread_time.due_ms = due + schedule::spread_ms(namespace);
+    assert_eq!(
+        store
+            .claim_dormant_timer(TOKEN, &owner, &spread_time, spread_time.due_ms)
+            .await,
+        Err(HistoryError::Conflict)
+    );
+    cleanup(store, directory).await;
+}
+
+/// The fired-slot floor holds across the Europe/Berlin fall-back of 2026-10-25
+/// (the repeated 02:00 hour fires once) and never hides a slot still due.
+#[test]
+fn fired_floor_holds_across_berlin_dst_and_keeps_due_slots() {
+    const HOUR: i64 = 3_600_000;
+    let s = 300_000;
+    let at = |text: &str| text.parse::<jiff::Timestamp>().unwrap().as_millisecond();
+    let ten = TimerSchedule::ZonedClock {
+        timezone: "Europe/Berlin".into(),
+        weekday: None,
+        minute_of_day: 10 * 60,
+    };
+    // 10:00 CEST fired raw on Saturday; Sunday's 10:00 is CET (09:00Z).
+    let raw = at("2026-10-24T08:00:00Z");
+    assert_eq!(
+        schedule::next_spread_after(&ten, s, raw + 250, Some(raw)),
+        Ok(at("2026-10-25T09:00:00Z") + s)
+    );
+    // 02:00 occurs twice on 2026-10-25; once fired (raw or spread), the
+    // repeated instant is not scheduled.
+    let two = TimerSchedule::ZonedClock {
+        timezone: "Europe/Berlin".into(),
+        weekday: None,
+        minute_of_day: 2 * 60,
+    };
+    let first = at("2026-10-25T00:00:00Z");
+    let next_day = at("2026-10-26T01:00:00Z") + s;
+    for fired in [first, first + s] {
+        assert_eq!(
+            schedule::next_spread_after(&two, s, fired + 250, Some(fired)),
+            Ok(next_day)
+        );
+    }
+    // No missed run: yesterday's claim does not hide today's pending spread
+    // time, after a long disable or an edit to an earlier time today.
+    let today = at("2026-10-27T09:00:00Z");
+    assert_eq!(
+        schedule::next_spread_after(&ten, s, today + 60_000, Some(today - 3 * 24 * HOUR)),
+        Ok(today + s)
+    );
+    // A pause over several slots resumes at the first slot after it.
+    let supp = policy_pause::Suppression {
+        until: today + 2 * 24 * HOUR + 1,
+        skip: vec![],
+        zone: "UTC".into(),
+    };
+    assert_eq!(
+        policy_pause::first_allowed(&supp, &ten, s, Some(today - 24 * HOUR), today + s),
+        today + 2 * 24 * HOUR + s
+    );
+}

@@ -114,11 +114,20 @@ impl Store {
         let digest = timer_source_digest(&import_request(namespace, new))?;
         let revision = revision(expected_revision)?;
         let next = if state == TimerState::Enabled {
-            let natural = schedule::next_for(new, namespace, now_ms)?;
+            let fired = policy_pause::last_fired(&mut tx, owner, namespace).await?;
+            let natural = schedule::next_for_after(new, namespace, now_ms, fired)?;
             let conversation: String = current.get("conversation_id");
             Some(
-                policy_pause::adjust_next(&mut tx, owner, namespace, new, &conversation, natural)
-                    .await?,
+                policy_pause::adjust_next(
+                    &mut tx,
+                    owner,
+                    namespace,
+                    new,
+                    &conversation,
+                    fired,
+                    natural,
+                )
+                .await?,
             )
         } else {
             None
