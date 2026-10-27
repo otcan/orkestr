@@ -138,3 +138,50 @@ test("real Python projector file is consumed by the real Node snapshot reader", 
   assert.equal(snapshot.claude.weeklyRemainingPct, 59);
   assert.equal(snapshot.claude.stale, false);
 });
+
+test("an enrolled Codex projection replaces aged-out V1 Codex thread telemetry", async t => {
+  const f = await fixture(t);
+  const codexOutput = path.join(f.directory, "codex.json");
+  const codexAccount = "30000000-0000-4000-8000-000000000001";
+  const codexSource = { ...f.source, accountRef: codexAccount, path: codexOutput, provider: "codex" };
+  await fs.writeFile(f.config, JSON.stringify({ format: "orkestr-provider-quota-sources-v1", sources: [f.source, codexSource] }), { mode: 0o600 });
+  await f.save(projection({ five_hour: record(23) }));
+  await fs.writeFile(codexOutput, JSON.stringify({ ...projection({ seven_day: record(4, now - hour, now + 96 * hour) }), provider: "codex", account_ref: codexAccount }), { mode: 0o600 });
+  // V1 retired its Codex executor: the last thread record is ten hours old.
+  const legacy = { ownerUserId: "owner-a", runtimeKind: "codex-app-server", updatedAt: new Date(now - 10 * hour).toISOString(),
+    codexRateLimits: { primary: { used_percent: 30, window_minutes: 10080, resets_at: (now + 96 * hour) / 1000 } } };
+  const snapshot = await providerQuotaSnapshot({ ownerUserId: "owner-a", now, useCache: false, loadThreads: async () => [legacy], loadClaudeProfiles: async () => [] }, f.env);
+  assert.equal(snapshot.codex.weeklyRemainingPct, 96);
+  assert.equal(snapshot.codex.fiveHourRemainingPct, null);
+  assert.equal(snapshot.codex.stale, false);
+  assert.equal(snapshot.codex.observedAt, new Date(now - hour).toISOString());
+  assert.equal(snapshot.claude.fiveHourRemainingPct, 77);
+  assert.ok(!JSON.stringify(snapshot).includes(codexAccount));
+  const enriched = mergeThreadIntoProviderQuota(snapshot, legacy, { now });
+  assert.equal(enriched.codex.weeklyRemainingPct, 96);
+  assert.equal(enriched.codex.stale, false);
+});
+
+test("Codex projections must match their provider, account and a unique enrollment", async t => {
+  const f = await fixture(t);
+  const codexOutput = path.join(f.directory, "codex.json");
+  const codexSource = { ...f.source, path: codexOutput, provider: "codex" };
+  const configure = sources => fs.writeFile(f.config, JSON.stringify({ format: "orkestr-provider-quota-sources-v1", sources }), { mode: 0o600 });
+  // A Claude-format file at the Codex path never becomes Codex quota.
+  await fs.writeFile(codexOutput, JSON.stringify(projection({ seven_day: record(4) })), { mode: 0o600 });
+  await configure([codexSource]);
+  assert.deepEqual(await loadProviderQuotaProjections("owner-a", f.env, now), []);
+  await fs.writeFile(codexOutput, JSON.stringify({ ...projection({ seven_day: record(4) }), provider: "codex" }), { mode: 0o600 });
+  const windows = await loadProviderQuotaProjections("owner-a", f.env, now);
+  assert.deepEqual(windows.map(entry => [entry.provider, entry.period]), [["codex", "weekly"]]);
+  await configure([codexSource, { ...codexSource, accountRef: owner }]);
+  assert.deepEqual(await loadProviderQuotaProjections("owner-a", f.env, now), []);
+  await configure([{ ...codexSource, provider: "openai" }]);
+  assert.deepEqual(await loadProviderQuotaProjections("owner-a", f.env, now), []);
+  // Without a Codex enrollment, legacy thread telemetry still drives the footer.
+  await configure([f.source]);
+  const legacy = { ownerUserId: "owner-a", runtimeKind: "codex-app-server", updatedAt: new Date(now).toISOString(),
+    codexRateLimits: { primary: { used_percent: 30, window_minutes: 10080, resets_at: (now + 96 * hour) / 1000 } } };
+  const snapshot = await providerQuotaSnapshot({ ownerUserId: "owner-a", now, useCache: false, loadThreads: async () => [legacy], loadClaudeProfiles: async () => [] }, f.env);
+  assert.equal(snapshot.codex.weeklyRemainingPct, 70);
+});
