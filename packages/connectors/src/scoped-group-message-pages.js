@@ -6,9 +6,13 @@
 // The relay and V1 deploy separately. A V1 without the flag rejects the unknown
 // query parameter with 400; the relay then reads the plain page (the previous
 // behaviour, where such a route waits for the age window) and probes the flag
-// again after FLAG_RETRY_MS. A V1 that ignores the flag (another auth path)
-// simply returns the filtered page.
+// again after FLAG_RETRY_MS. Any other 400 is a real error and is rethrown.
+// A V1 that ignores the flag (another auth path) simply returns the filtered page.
 export const FLAG_RETRY_MS = 10 * 60 * 1000;
+
+// V1's schema rejection: "query.includeNoReply is not allowed".
+const flagRejected = error => Number(error?.status || error?.statusCode || 0) === 400
+  && /includeNoReply/.test(String(error?.payload?.error || error?.message || ''));
 
 export function isSilentNoReply(message = {}) {
   if (String(message?.text || '').trim() === 'NO_REPLY') return true;
@@ -28,7 +32,7 @@ export function createMessagePageReader({api, now = Date.now, log = () => {}}) {
         unsupportedSince = null;
         return page;
       } catch (error) {
-        if (Number(error?.status || error?.statusCode || 0) !== 400) throw error;
+        if (!flagRejected(error)) throw error;
         if (unsupportedSince === null) log({event: 'relay_no_reply_pages_unsupported'});
         unsupportedSince = now();
       }

@@ -6,6 +6,7 @@ import path from 'node:path';
 import test from 'node:test';
 import {DatabaseSync} from 'node:sqlite';
 import {createScopedGroupRelay} from '../packages/connectors/src/whatsapp-scoped-group-relay.js';
+import {createMessagePageReader} from '../packages/connectors/src/scoped-group-message-pages.js';
 import * as formatter from '../packages/connectors/src/whatsapp-formatting.js';
 
 function fixture(t, footer = false, progress = false, extraConfig = {}) {
@@ -593,6 +594,23 @@ test('a V1 without includeNoReply keeps the previous behaviour and is probed aga
   status = await relay.tick();
   assert.equal(status.completed, 1, 'once V1 supports the flag the route closes');
   assert.equal(state.sent.length, 0);
+});
+
+test('only the includeNoReply schema rejection falls back to the plain page', async () => {
+  const calls = [];
+  const reject = message => Object.assign(new Error(message), {status: 400, payload: {error: message}});
+  let failure = reject('query.limit must be string');
+  const readPage = createMessagePageReader({api: async url => {
+    calls.push(url);
+    if (url.endsWith('&includeNoReply=1') && failure) throw failure;
+    return {messages: []};
+  }});
+  await assert.rejects(readPage('t'), /query.limit/);
+  assert.deepEqual(calls, ['/api/threads/t/messages?limit=200&includeNoReply=1'], 'another 400 is not treated as an old V1');
+  failure = reject('query.includeNoReply is not allowed');
+  calls.length = 0;
+  await readPage('t');
+  assert.deepEqual(calls, ['/api/threads/t/messages?limit=200&includeNoReply=1', '/api/threads/t/messages?limit=200']);
 });
 
 test('a question on an open route restarts its late-reply window', async t => {
