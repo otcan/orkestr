@@ -78,7 +78,10 @@ function supersedingTerminalIdsByTurn(messages = []) {
   return byTurn;
 }
 
-export function visibleThreadMessages(messages = []) {
+// includeNoReply keeps silent NO_REPLY finals. Only the scoped group relay asks
+// for them (to close the route of a turn that answered NO_REPLY); every other
+// reader keeps the default and never sees them.
+export function visibleThreadMessages(messages = [], { includeNoReply = false } = {}) {
   let supersedingIds = null;
   const superseded = (message) => {
     if (!runtimeInterruptedMessage(message)) return false;
@@ -89,7 +92,7 @@ export function visibleThreadMessages(messages = []) {
     return Boolean(ids && (ids.size > 1 || !ids.has(message.id)));
   };
   return messages.filter((message) =>
-    !isNoReplyAssistantMessage(message) &&
+    (includeNoReply || !isNoReplyAssistantMessage(message)) &&
     clean(message?.visibility).toLowerCase() !== "internal" &&
     !superseded(message)
   );

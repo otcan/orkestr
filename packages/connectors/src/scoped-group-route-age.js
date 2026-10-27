@@ -1,6 +1,7 @@
 // How long the relay keeps re-reading an open route (a routed input with no
 // final yet). A turn that never produced a visible final here (a remote-runtime
-// Deep NO_REPLY, which V1's message pages hide; a Fast reply delivered under
+// Deep NO_REPLY on a V1 without includeNoReply pages, see
+// scoped-group-message-pages.js; a Fast reply delivered under
 // its own parent; a silently finished input) stays open forever. Each delivery
 // pass re-read the thread history for every such input, oldest first, before
 // reaching a new reply: on the busiest group, 44 open routes since days cost

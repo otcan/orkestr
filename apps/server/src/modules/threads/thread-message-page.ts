@@ -4,6 +4,7 @@ import {
 } from "../../../../../packages/core/src/threads.js";
 import { addAttachmentDownloadUrls } from "../../../../../packages/core/src/thread-attachments.js";
 import { visibleThreadMessages } from "../../../../../packages/core/src/thread-message-visibility.js";
+import { isNoReplyAssistantMessage } from "../../../../../packages/core/src/no-reply.js";
 import { publicEncryptedAttachmentMessage } from "../../../../../packages/core/src/encrypted-attachment-projection.js";
 import { publicReplyDeliveryIntentMessage } from "../../../../../packages/core/src/reply-delivery-intent.js";
 import { canonicalTimestamp, timestampMs } from "../../../../../packages/core/src/timestamp-normalization.js";
@@ -174,21 +175,37 @@ function dedupeDisplayMessages(messages: any[] = []) {
   return deduped;
 }
 
-export function threadMessagePageQuery(query: Record<string, unknown> = {}) {
+// Server-decided page options, never read from the raw query string.
+// includeNoReply: keep silent NO_REPLY finals (scoped group relay only).
+export type ThreadMessagePageOptions = { includeNoReply?: boolean };
+
+const flagValue = /^(1|true|yes|on)$/i;
+
+// The scoped group relay reads pages with includeNoReply=1 so a turn that
+// answered NO_REPLY closes its route. The flag is honoured only for the relay's
+// own auth path (the local CLI machine token); a browser session, mobile device,
+// broker proxy or any other caller keeps the default filtered page.
+export function threadMessagePageOptions(request: any, query: Record<string, unknown> = {}): ThreadMessagePageOptions {
+  const requested = flagValue.test(String(query?.includeNoReply ?? "").trim());
+  return { includeNoReply: requested && request?.orkestrMachineAuth === "cli" };
+}
+
+export function threadMessagePageQuery(query: Record<string, unknown> = {}, options: ThreadMessagePageOptions = {}) {
   const since = Math.max(0, Number.parseInt(String(query.since || "0"), 10) || 0);
   const before = Math.max(0, Number.parseInt(String(query.before || "0"), 10) || 0);
   const requestedLimit = Math.max(0, Number.parseInt(String(query.limit || "0"), 10) || 0);
   const limit = requestedLimit ? Math.min(requestedLimit, 100) : 100;
   const includes = (message: any) => !!String(message?.text || "").trim() &&
     !(since > 0 && message.cursor <= since) && !(before > 0 && message.cursor >= before);
-  return { since, before, limit, includes };
+  return { since, before, limit, includes, includeNoReply: options.includeNoReply === true };
 }
 
-export function threadMessagePage(thread: any, rawMessages: any[] = [], query: Record<string, unknown> = {}, status: any = null) {
-  const pageQuery = threadMessagePageQuery(query);
+export function threadMessagePage(thread: any, rawMessages: any[] = [], query: Record<string, unknown> = {}, status: any = null,
+  options: ThreadMessagePageOptions = {}) {
+  const pageQuery = threadMessagePageQuery(query, options);
   const orderedMessages = visibleThreadMessages(chronologicalMessages(rawMessages.map((message, index) => ({
     ...message, cursor: messageCursor(message, index),
-  }))));
+  }))), { includeNoReply: pageQuery.includeNoReply });
   // Select the page before bridging so only the returned messages are decorated.
   const pageIndexes: number[] = [];
   orderedMessages.forEach((message, index) => {
@@ -197,7 +214,10 @@ export function threadMessagePage(thread: any, rawMessages: any[] = [], query: R
   const allCursors = rawMessages.map((message, index) => messageCursor(message, index));
   return threadMessagePagePayload(thread, pageQuery, status, {
     page: pageIndexes.slice(-pageQuery.limit).map((index) => ({ message: orderedMessages[index], index })),
-    pendingQuestion: latestPendingQuestion(newestFirst(orderedMessages)),
+    // The pending question is the same for every caller: silent finals never count.
+    pendingQuestion: latestPendingQuestion(newestFirst(pageQuery.includeNoReply
+      ? orderedMessages.filter((message) => !isNoReplyAssistantMessage(message))
+      : orderedMessages)),
     cursor: Math.max(0, ...allCursors),
     minCursor: Math.min(...allCursors),
     supersededMessageIds: rawMessages.filter(message => message.supersededBy).map(message => message.id),
@@ -236,6 +256,7 @@ export function threadMessagePagePayload(thread: any, pageQuery: any, status: an
     awaitingInput: !!pendingQuestion,
     awaitingInputEventId: pendingQuestion?.eventId || null,
     pendingQuestion,
+    ...(pageQuery.includeNoReply ? { includeNoReply: true } : {}),
   };
 }
 
