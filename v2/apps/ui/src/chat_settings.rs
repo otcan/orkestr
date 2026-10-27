@@ -17,6 +17,12 @@ pub struct SettingsForm {
     pub reply_footer: String,
     /// Off (default): owner turns are accepted automatically, like V1.
     pub review_before_accepting: bool,
+    /// Off (default): one Deep turn at a time. On: read-only parallel Deep
+    /// turns may answer queued messages (docs/v2/parallel-deep.md).
+    pub parallel_deep: bool,
+    /// The value read with `revision`; an update sends the switch only
+    /// when the owner changed it.
+    pub parallel_deep_loaded: bool,
 }
 
 fn optional(value: &str) -> Option<String> {
@@ -35,6 +41,8 @@ impl SettingsForm {
             reply_prefix: value.reply_prefix.clone().unwrap_or_default(),
             reply_footer: value.reply_footer.clone().unwrap_or_default(),
             review_before_accepting: value.review_before_accepting,
+            parallel_deep: value.parallel_deep,
+            parallel_deep_loaded: value.parallel_deep,
         }
     }
     /// Switching provider keeps the effort only when the new provider has it.
@@ -55,6 +63,8 @@ impl SettingsForm {
             reply_footer: optional(&self.reply_footer),
             review_before_accepting: self.review_before_accepting,
             deep_grouping: None,
+            parallel_deep: (self.parallel_deep != self.parallel_deep_loaded)
+                .then_some(self.parallel_deep),
         };
         if update.is_valid() {
             Ok(update)

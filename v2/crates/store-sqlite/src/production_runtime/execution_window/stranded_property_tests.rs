@@ -425,7 +425,7 @@ async fn schema54_fitness_window_becomes_terminal_after_upgrade() {
     let upgraded = Store::open(&w.f.root.join("core.sqlite3")).await.unwrap();
     assert_eq!(
         count(&upgraded, "SELECT max(version) FROM _sqlx_migrations").await,
-        81
+        82
     );
     assert_eq!(
         before,

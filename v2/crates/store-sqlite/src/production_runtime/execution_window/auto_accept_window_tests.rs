@@ -42,6 +42,7 @@ async fn review(w: &Window) {
         reply_footer: None,
         review_before_accepting: true,
         deep_grouping: None,
+        parallel_deep: None,
     };
     w.f.store
         .update_conversation_settings(

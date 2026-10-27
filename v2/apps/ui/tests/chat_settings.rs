@@ -50,6 +50,28 @@ fn review_before_accepting_defaults_off_and_round_trips() {
 }
 
 #[test]
+fn parallel_deep_defaults_off_and_is_sent_only_when_changed() {
+    let mut form = SettingsForm::from_settings(&settings());
+    assert!(
+        !form.parallel_deep,
+        "one Deep turn at a time is the default"
+    );
+    assert_eq!(
+        form.update().unwrap().parallel_deep,
+        None,
+        "unchanged: omitted"
+    );
+    form.parallel_deep = true;
+    assert_eq!(form.update().unwrap().parallel_deep, Some(true));
+    let mut value = settings();
+    value.parallel_deep = true;
+    let mut form = SettingsForm::from_settings(&value);
+    assert_eq!(form.update().unwrap().parallel_deep, None);
+    form.parallel_deep = false;
+    assert_eq!(form.update().unwrap().parallel_deep, Some(false));
+}
+
+#[test]
 fn slugs_are_split_and_deduplicated() {
     assert_eq!(
         slugs("sales-nav, gmail  sales-nav\nlinkedin"),

@@ -191,7 +191,12 @@ impl Store {
             .fetch_one(&mut *tx).await.map_err(db)?;
         // Only Deep consumes this inbox. A Worker/Fast Stop must not hold its
         // parent's independent owner input. The cancellation event is the cut.
-        if provider.run.role == Role::Deep {
+        // A read-only parallel Deep run consumed only its own input: stopping
+        // it alone (deadline, shutdown, budget) holds no other input. The
+        // owner's Stop still stops the canonical run, which holds the queue.
+        if provider.run.role == Role::Deep
+            && !super::parallel_deep::is_slot(&mut tx, &provider.run.session_id.to_string()).await?
+        {
             sqlx::query("INSERT INTO production_stop_boundaries(event_id,owner_id,conversation_id,run_id,through_scope_sequence) VALUES(?,?,?,?,?)")
                 .bind(event.to_string()).bind(owner.to_string()).bind(provider.run.conversation_id.to_string())
                 .bind(run.to_string()).bind(sequence-1).execute(&mut *tx).await.map_err(db)?;

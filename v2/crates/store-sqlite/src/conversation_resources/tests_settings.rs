@@ -74,6 +74,7 @@ fn update(revision: i64, provider: ConversationProvider) -> ConversationSettings
         reply_footer: None,
         review_before_accepting: false,
         deep_grouping: None,
+        parallel_deep: None,
     }
 }
 
@@ -193,6 +194,76 @@ async fn settings_require_exact_owner_credential_and_conversation() {
             .conversation_settings(&case.token, &other, c)
             .await,
         Err(ResourceError::Unauthorized)
+    );
+    case.finish().await;
+}
+
+#[tokio::test]
+async fn parallel_deep_defaults_off_is_kept_when_omitted_and_never_serialized_off() {
+    let case = Case::new().await;
+    let (t, o, c) = (&case.token, &case.owner, &case.conversation);
+    let initial = case.store.conversation_settings(t, o, c).await.unwrap();
+    assert!(!initial.parallel_deep);
+    // Off is never serialized: the default response shape is unchanged.
+    let body = serde_json::to_value(&initial).unwrap();
+    assert!(body.get("parallel_deep").is_none(), "{body}");
+    // An update that omits the switch stores nothing for it.
+    let first = case
+        .store
+        .update_conversation_settings(t, o, c, &update(0, ConversationProvider::Codex))
+        .await
+        .unwrap();
+    assert!(!first.parallel_deep);
+    let mut on = update(1, ConversationProvider::Codex);
+    on.parallel_deep = Some(true);
+    let enabled = case
+        .store
+        .update_conversation_settings(t, o, c, &on)
+        .await
+        .unwrap();
+    assert_eq!((enabled.revision, enabled.parallel_deep), (2, true));
+    assert_eq!(
+        serde_json::to_value(&enabled).unwrap()["parallel_deep"],
+        serde_json::Value::Bool(true)
+    );
+    // Same request at the preceding revision is an idempotent replay.
+    assert_eq!(
+        case.store
+            .update_conversation_settings(t, o, c, &on)
+            .await
+            .unwrap(),
+        enabled
+    );
+    // Turning it off at the preceding revision is a different request.
+    let mut off_stale = on.clone();
+    off_stale.parallel_deep = Some(false);
+    assert_eq!(
+        case.store
+            .update_conversation_settings(t, o, c, &off_stale)
+            .await,
+        Err(ResourceError::Conflict("settings_revision_mismatch"))
+    );
+    // A model change that omits the switch keeps it on.
+    let mut model = update(2, ConversationProvider::Codex);
+    model.model = Some("gpt-5.2-codex".into());
+    let kept = case
+        .store
+        .update_conversation_settings(t, o, c, &model)
+        .await
+        .unwrap();
+    assert_eq!((kept.revision, kept.parallel_deep), (3, true));
+    let mut off = update(3, ConversationProvider::Codex);
+    off.parallel_deep = Some(false);
+    let disabled = case
+        .store
+        .update_conversation_settings(t, o, c, &off)
+        .await
+        .unwrap();
+    assert_eq!((disabled.revision, disabled.parallel_deep), (4, false));
+    assert_eq!(
+        case.count("SELECT parallel_deep FROM conversation_settings")
+            .await,
+        0
     );
     case.finish().await;
 }

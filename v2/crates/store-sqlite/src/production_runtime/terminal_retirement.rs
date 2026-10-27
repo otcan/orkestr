@@ -38,6 +38,17 @@ impl Store {
         if exact != 1 {
             return Err(RuntimeStoreError::Fenced);
         }
+        // The successor resumes the canonical lineage: a read-only parallel
+        // slot run (fresh, single-turn session) is never the prior run.
+        let session: String =
+            sqlx::query_scalar("SELECT session_id FROM production_runs WHERE id=?")
+                .bind(prior_run.to_string())
+                .fetch_one(&mut *tx)
+                .await
+                .map_err(db)?;
+        if super::parallel_deep::is_slot(&mut tx, &session).await? {
+            return Err(RuntimeStoreError::Fenced);
+        }
         // A terminal label alone is insufficient: acceptance or a genuine
         // issued-control Stopped acknowledgement must establish its truth.
         let unresolved: i64 = sqlx::query_scalar("SELECT count(*) FROM production_runs r WHERE r.context_id=? AND NOT EXISTS(SELECT 1 FROM production_terminal_evidence t WHERE t.run_id=r.id)")
@@ -58,6 +69,8 @@ impl Store {
                 .await
                 .map_err(db)?;
         super::fast_slots::retire_settled(&mut tx, &c.owner.to_string(), &conversation, None)
+            .await?;
+        super::parallel_deep::retire_settled(&mut tx, &c.owner.to_string(), &conversation, None)
             .await?;
         // Immutable provenance is issued only after the canonical terminal checks
         // above. Other expiry/revocation paths must never create this evidence.

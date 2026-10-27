@@ -25,10 +25,18 @@ pub(super) async fn ensure(
     };
     #[cfg(not(test))]
     let canonical = " AND fast_slot=0";
+    // Only the canonical Deep lineage (slot 0); a read-only parallel slot
+    // never becomes the conversation's Deep binding. Fast rows are always
+    // Deep slot 0 (schema CHECK).
+    let deep = if crate::production_runtime::parallel_deep::present(&mut tx).await? {
+        " AND deep_slot=0"
+    } else {
+        ""
+    };
     for role in ["fast", "deep"] {
         // Only the canonical slot-0 lineage; auxiliary window slots never
         // become a conversation's Fast binding.
-        let existing = sqlx::query(&format!("SELECT * FROM session_bindings WHERE owner_id=? AND conversation_id=? AND role=? AND state <> 'retired'{canonical}"))
+        let existing = sqlx::query(&format!("SELECT * FROM session_bindings WHERE owner_id=? AND conversation_id=? AND role=? AND state <> 'retired'{canonical}{deep}"))
             .bind(owner.to_string()).bind(conversation.to_string()).bind(role)
             .fetch_optional(&mut *tx).await.map_err(db)?;
         let row = match existing {

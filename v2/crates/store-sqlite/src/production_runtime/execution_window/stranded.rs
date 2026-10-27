@@ -379,7 +379,14 @@ async fn plan_in(
     if foreign != 0 {
         return Err(RuntimeStoreError::Fenced);
     }
-    let runs = sqlx::query("SELECT r.*,(SELECT t.terminal_kind FROM production_terminal_evidence t WHERE t.run_id=r.id) AS terminal FROM production_runs r WHERE r.context_id=? AND r.incarnation_id=? ORDER BY r.scope_sequence,r.id")
+    // A read-only parallel Deep run (slot > 0) settles like any proposal but
+    // never anchors the successor lineage.
+    let slot = if super::super::parallel_deep::present(tx).await? {
+        "(SELECT b.deep_slot FROM session_bindings b WHERE b.id=r.session_id)"
+    } else {
+        "0"
+    };
+    let runs = sqlx::query(&format!("SELECT r.*,(SELECT t.terminal_kind FROM production_terminal_evidence t WHERE t.run_id=r.id) AS terminal,{slot} AS parallel_slot FROM production_runs r WHERE r.context_id=? AND r.incarnation_id=? ORDER BY r.scope_sequence,r.id"))
         .bind(&context).bind(&incarnation).fetch_all(&mut *tx).await.map_err(db)?;
     let unresolved: Vec<&SqliteRow> = runs
         .iter()
@@ -460,11 +467,15 @@ async fn plan_in(
     {
         return Err(RuntimeStoreError::Fenced);
     }
-    // The successor lineage is anchored on this window's own last Deep turn.
+    // The successor lineage is anchored on this window's own last canonical
+    // Deep turn, never on a read-only parallel slot run.
     let prior = runs
         .iter()
         .rev()
-        .find(|r| r.get::<&str, _>("role") == "deep")
+        .find(|r| {
+            r.get::<&str, _>("role") == "deep"
+                && r.get::<Option<i64>, _>("parallel_slot").unwrap_or(0) == 0
+        })
         .ok_or(RuntimeStoreError::Fenced)?;
     let prior_run: String = prior.get("id");
     let member: i64 = sqlx::query_scalar(
