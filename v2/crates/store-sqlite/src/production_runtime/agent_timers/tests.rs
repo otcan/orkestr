@@ -1,5 +1,5 @@
 use super::super::tests::{setup, Case};
-use super::super::thread_asks::tests::{asking_turn, conversation};
+use super::super::thread_asks::tests::{asking_turn, conversation, next_turn};
 use super::*;
 use crate::history_import::timers::{TimerImportRequest, TimerTarget};
 use orkestr_v2_contracts::{AgentTimerOperation, AgentTimerSchedule};
@@ -647,4 +647,113 @@ async fn dormant_imports_and_indefinite_owner_pauses_stay_with_the_owner() {
         .await
         .unwrap();
     assert_eq!(policy.pause_until_ms, Some(FOREVER_MS));
+}
+
+#[tokio::test]
+async fn a_timer_turn_controls_timers_but_never_creates_one() {
+    let f = setup().await;
+    let c = f.conversation.clone();
+    let g = grant(&f, &c).await;
+    // The owner's check timer fires and starts the Deep turn.
+    let check = owner_timer(&f, &c, "check").await;
+    sqlx::query("UPDATE dormant_timers SET next_due_ms=0 WHERE namespace=?")
+        .bind(check.to_string())
+        .execute(&f.store.pool)
+        .await
+        .unwrap();
+    let issuer = f.handle.authorize_timer_scheduler(check).await.unwrap();
+    f.handle
+        .admit_authorized_timer_turn(&issuer, check, false)
+        .await
+        .unwrap();
+    next_turn(&f, &c, "timer-turn").await;
+    assert_eq!(
+        f.store
+            .create_agent_timer(&g, &c, &once("chained", now_ms() + DAY))
+            .await,
+        refused("agent_timer_timer_turn")
+    );
+    // It can still pause (and resume) itself after its window ended.
+    let paused = f
+        .store
+        .control_agent_timer(
+            &g,
+            &c,
+            check,
+            &control(
+                "self-pause",
+                AgentTimerOperation::Pause,
+                Some(now_ms() + DAY),
+            ),
+        )
+        .await
+        .unwrap();
+    assert!(paused.changed);
+    assert!(f
+        .store
+        .control_agent_timer(
+            &g,
+            &c,
+            check,
+            &control("self-skip", AgentTimerOperation::SkipNext, None)
+        )
+        .await
+        .is_ok());
+    let outcomes = f
+        .store
+        .agent_timer_audit_outcomes(&f.owner, &c)
+        .await
+        .unwrap();
+    assert!(outcomes.contains(&("create".into(), "agent_timer_timer_turn".into())));
+}
+
+#[tokio::test]
+async fn daily_create_cap_applies_beyond_the_hourly_one() {
+    let f = setup().await;
+    let c = f.conversation.clone();
+    let g = grant(&f, &c).await;
+    asking_turn(&f, &c, "turn").await;
+    let mut conn = f.store.pool.acquire().await.unwrap();
+    let (run, _) = running_deep(&mut conn, &f.owner, &c)
+        .await
+        .unwrap()
+        .unwrap();
+    drop(conn);
+    // A day's worth of creates, all more than an hour old.
+    let mut tx = f.store.pool.begin_with("BEGIN IMMEDIATE").await.unwrap();
+    for i in 0..AGENT_TIMER_DAILY_CREATES_MAX {
+        let key = format!("day{i}");
+        agent_timer_create(
+            &mut tx,
+            &f.owner,
+            &c,
+            &AgentTimerNew {
+                namespace: agent_namespace(&f.owner, &c, &key),
+                label: "Day",
+                schedule: TimerSchedule::Once {
+                    due_ms: now_ms() + DAY,
+                },
+                instruction: "day".into(),
+                request_key: &key,
+                request_digest: &"0".repeat(64),
+                run_id: &run,
+                grant_generation: 1,
+            },
+        )
+        .await
+        .unwrap();
+    }
+    sqlx::raw_sql(
+        "DROP TRIGGER agent_timers_fixed; UPDATE agent_timers SET created_ms=created_ms-7200000;",
+    )
+    .execute(&mut *tx)
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    assert_eq!(
+        f.store
+            .create_agent_timer(&g, &c, &once("one-more", now_ms() + DAY))
+            .await,
+        refused("agent_timer_daily_limit")
+    );
 }

@@ -30,11 +30,14 @@ The design is the thread-ask grant's (#341, migration 78), with its own grant:
 - **Fast never gets this tool.** Fast runs in the read-only sandbox, is never
   given the grant (never set `ORKESTR_V2_AGENT_TIMER_GRANT_DIR` for Fast), and
   a Fast run does not satisfy the running-Deep check.
-- Any Deep turn of the conversation may use it, including a timer's own turn
-  (a check timer that pauses itself after its end date) and a turn serving a
+- Any Deep turn of the conversation may use it, including a turn serving a
   group member. This differs from thread asks, which only the owner's own
   message may command: a timer step can only affect this conversation, and the
   caps below bound it.
+- **No timer chains.** A turn that a timer started may list, cancel, pause,
+  resume and skip timers (a check timer pauses itself after its end date), but
+  it may not create one (`403 agent_timer_timer_turn`). Only a turn serving an
+  ordinary input (an owner or member message) creates timers.
 
 ## Operations
 
@@ -57,8 +60,14 @@ The design is the thread-ask grant's (#341, migration 78), with its own grant:
   just after that run). A one-shot timer cannot skip, only cancel
   (`agent_timer_skip_once`).
 - A control step with a request key already accepted for the same timer and
-  operation replays (`changed: false`), so a retried `skip_next` never skips a
-  second run. Repeating a step that is already in effect also changes nothing.
+  operation replays (`changed: false`). Repeating a step that is already in
+  effect also changes nothing.
+- **Retries must reuse the key.** `agent_timer.py` prints the request key of
+  every change before sending it, and again on failure (with the exact rerun
+  hint). After a failure or a lost response, agents rerun the same command
+  with `--request-key KEY`. This matters most for `skip-next`: its default key
+  names the next run, and after a lost but accepted response the next run has
+  moved, so a fresh key would skip a second run.
 - Every run of an agent-created timer receives its text behind one line that
   says the agent set it with this tool (not the owner just now).
 
@@ -68,6 +77,8 @@ The design is the thread-ask grant's (#341, migration 78), with its own grant:
 |---|---|---|
 | Live agent-created timers per conversation (enabled or paused; owner and imported timers do not count) | 32 | `429 agent_timer_limit_reached` |
 | Creates per conversation per hour | 12 | `429 agent_timer_rate_limited` |
+| Creates per conversation per 24 hours | 24 | `429 agent_timer_daily_limit` |
+| Creates from a turn a timer started | none | `403 agent_timer_timer_turn` |
 | One-shot lead time | at least 2 minutes ahead | `422 agent_timer_too_soon` |
 | Horizon | at most 400 days ahead | `422 agent_timer_too_far` |
 | Recurring interval | never more often than every 30 minutes | `422 agent_timer_too_frequent` |
@@ -103,9 +114,16 @@ the label, schedule and text, so a retried create is the same timer.
 ## Provisioning
 
 `v2/tools/agent_timer_provision.py --v2-url URL --credentials FILE --grant-dir
-DIR (--only ID_OR_NAME ... | --all-owner-conversations) [--rotate] [--revoke]
-[--chown USER] [--dry-run]` issues and installs grants as
-`DIR/<conversation>.grant` (0600). Reruns change nothing; a missing file or
+DIR --only <conversation> [--rotate] [--revoke] [--chown USER] [--dry-run]`
+issues and installs grants as `DIR/<conversation>.grant`. The default and
+recommended scope is one conversation (`--only`). `--all-owner-conversations`
+refuses unless `--i-understand-shared-grant-dir` is also given, because every
+grant then sits in one directory. The script creates DIR owned by the caller
+with mode 0710 and the `--chown` user's group (0700 without `--chown`): the
+agent user can enter it and open its own file but cannot list it. Each grant
+file is 0600 and owned by the `--chown` user, which is the agent that reads it
+(`agent_timer.py` refuses a grant file owned by anyone else). An existing DIR of
+another user must not be group- or world-writable. Reruns change nothing; a missing file or
 `--rotate` rotates; restricted or archived conversations are revoked. Use a
 directory separate from the thread-ask grants and readable only by the Deep
 agents' user. Grants are owner-scoped, not thread-isolated: a process that can

@@ -159,6 +159,62 @@ class AgentTimerClient(unittest.TestCase):
                 TIMER.read_grant(path)
 
 
+class Retry(unittest.TestCase):
+    def setUp(self):
+        FakeV2.calls = []
+        self.server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Flaky)
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.url = f'http://127.0.0.1:{self.server.server_address[1]}'
+        self.env = unittest.mock.patch.dict(os.environ, {'ORKESTR_V2_AGENT_TIMER_GRANT': GRANT})
+        self.env.start()
+
+    def tearDown(self):
+        self.env.stop()
+        self.server.shutdown()
+        self.server.server_close()
+
+    def run_cli(self, *argv):
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = TIMER.main(['--v2-url', self.url, '--conversation', CONVERSATION, *argv])
+        return code, out.getvalue(), err.getvalue()
+
+    def test_failed_skip_prints_its_key_and_a_rerun_reuses_it(self):
+        Flaky.fail = True
+        code, _, err = self.run_cli('skip-next', CHECK)
+        self.assertEqual(code, TIMER.ERROR_EXIT)
+        failure = json.loads(err.strip().splitlines()[-1])
+        key = failure['request_key']
+        self.assertIn(f'--request-key {key}', failure['retry'])
+        # The next run moved meanwhile: a fresh key would differ, so reuse it.
+        Flaky.fail, Flaky.due = False, Flaky.due + 3_600_000
+        self.assertNotEqual(TIMER.Client(self.url, CONVERSATION, GRANT).control_key(CHECK, 'skip_next'), key)
+        code, _, err = self.run_cli('skip-next', CHECK, '--request-key', key)
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(err.splitlines()[0])['request_key'], key)
+        sent = [c[2]['request_key'] for c in FakeV2.calls if c[0] == 'POST']
+        self.assertEqual(sent, [key, key])
+
+
+class Flaky(FakeV2):
+    fail = False
+    due = 1_800_000_000_000
+
+    def _handle(self):
+        if self.command == 'GET':
+            FakeV2.calls.append(('GET', '/agent-timers', None))
+            return self._reply(200, {'conversation_id': CONVERSATION, 'timers': [timer(due=Flaky.due)]})
+        length = int(self.headers.get('Content-Length') or 0)
+        body = json.loads(self.rfile.read(length))
+        FakeV2.calls.append(('POST', self.path, body))
+        if Flaky.fail:
+            return self._reply(503, {'code': 'store_unavailable'})
+        return self._reply(200, {'changed': False, 'timer': timer(due=Flaky.due)})
+
+    do_GET = _handle
+    do_POST = _handle
+
+
 A, B, R = (f'00000000-0000-4000-8000-00000000000{n}' for n in 'abd')
 
 
@@ -180,6 +236,28 @@ class Provision(unittest.TestCase):
             self.assertEqual(PROV.plan(self.rows({A}), only={A}, rotate=True, grant_dir=root),
                              [(A, 'rotate')])
             self.assertEqual(PROV.plan(self.rows({A}), revoke=True, grant_dir=root), [(A, 'revoke')])
+
+    def test_all_conversations_needs_the_shared_dir_acknowledgement(self):
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            code = PROV.main(['--v2-url', 'http://127.0.0.1:1', '--credentials', '/nonexistent',
+                              '--grant-dir', '/nonexistent', '--all-owner-conversations'], api=object())
+        self.assertEqual((code, json.loads(err.getvalue())['code']), (2, 'shared_grant_dir_not_acknowledged'))
+
+    def test_install_makes_an_enterable_private_dir_and_0600_files(self):
+        import pwd
+        me = pwd.getpwuid(os.getuid())
+        with tempfile.TemporaryDirectory() as root:
+            grant_dir = Path(root) / 'grants'
+            PROV.install(grant_dir / f'{A}.grant', GRANT, me)
+            info = grant_dir.stat()
+            self.assertEqual((info.st_mode & 0o777, info.st_gid, info.st_uid), (0o710, me.pw_gid, os.getuid()))
+            grant = (grant_dir / f'{A}.grant').stat()
+            self.assertEqual((grant.st_mode & 0o777, grant.st_uid), (0o600, me.pw_uid))
+            self.assertEqual(TIMER.read_grant(grant_dir / f'{A}.grant'), GRANT)
+            other = Path(root) / 'plain'
+            PROV.install(other / f'{B}.grant', GRANT)
+            self.assertEqual(other.stat().st_mode & 0o777, 0o700)
 
 
 if __name__ == '__main__':

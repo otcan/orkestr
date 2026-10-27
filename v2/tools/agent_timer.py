@@ -7,10 +7,13 @@ the V1 timer API) against the V2 API:
   list
   create --label LABEL (--at WHEN | --daily HH:MM [--weekdays 1,2,3] --timezone TZ)
          (--text TEXT | --text-file PATH) [--request-key KEY]
-  cancel TIMER
-  pause TIMER [--until WHEN]
-  resume TIMER
-  skip-next TIMER
+  cancel TIMER [--request-key KEY]
+  pause TIMER [--until WHEN] [--request-key KEY]
+  resume TIMER [--request-key KEY]
+  skip-next TIMER [--request-key KEY]
+
+Each change prints its request key first (stderr). After a failure or a lost
+response, rerun with --request-key KEY: an accepted key never applies twice.
 
 TIMER is a timer ID or an exact (case-insensitive) label from `list`. WHEN is
 an ISO 8601 time with an offset (2026-10-27T12:15:00+01:00 or ...Z). Every
@@ -61,6 +64,11 @@ V1 no longer runs this thread and refuses changes to its timers.
   agent_timer.py pause "CHECK 08:00" --until 2026-11-03T08:00:00+01:00
   agent_timer.py resume "CHECK 08:00"
   agent_timer.py skip-next "CHECK 08:00"
+
+Retries: every change prints the request_key it uses. If a call fails or its
+answer is lost (timeout, unreachable), rerun the SAME command with
+--request-key <that key>. Never rerun skip-next without it: the next run has
+already moved, so a new key would skip a second run.
 
 Write the timer text so a later turn can act on it without this chat. Report
 to the owner exactly what the tool printed. If it refuses (too soon, too
@@ -169,19 +177,35 @@ class Client:
     def create(self, label, schedule, text, request_key=None):
         body = {'request_key': request_key or default_key(label, schedule, text),
                 'label': label, 'schedule': schedule, 'text': text}
-        return self.call('POST', '/agent-timers', body)
+        try:
+            return self.call('POST', '/agent-timers', body)
+        except TimerError as failure:
+            failure.request_key = body['request_key']
+            raise
 
-    def control(self, timer, operation, until_ms=None, request_key=None):
-        namespace = self.resolve(timer)
-        if request_key is None and operation == 'skip_next':
-            # Keyed on the run it skips: a retried call never skips two runs.
+    def control_key(self, namespace, operation):
+        """A fresh key for one control step. For skip_next it names the run
+        it skips. Reuse the printed key on a retry: after a lost response
+        the next run has already moved, so a recomputed key would skip
+        twice."""
+        if operation == 'skip_next':
             due = next((t.get('next_due_ms') for t in self.list() if t['namespace'] == namespace), None)
-            request_key = f'skip_next-{namespace}-{due}'
-        body = {'request_key': request_key or f'{operation}-{uuid.uuid4().hex[:24]}',
-                'operation': operation}
+            return f'skip_next-{namespace}-{due}'
+        return f'{operation}-{uuid.uuid4().hex[:24]}'
+
+    def control(self, timer, operation, until_ms=None, request_key=None, announce=None):
+        namespace = self.resolve(timer)
+        key = request_key or self.control_key(namespace, operation)
+        if announce:
+            announce(key)
+        body = {'request_key': key, 'operation': operation}
         if until_ms is not None:
             body['until_ms'] = until_ms
-        return self.call('POST', f'/agent-timers/{parse.quote(namespace)}/control', body)
+        try:
+            return self.call('POST', f'/agent-timers/{parse.quote(namespace)}/control', body)
+        except TimerError as failure:
+            failure.request_key = key
+            raise
 
 
 def summary(receipt, verb):
@@ -214,11 +238,12 @@ def parser():
     text.add_argument('--text')
     text.add_argument('--text-file')
     create.add_argument('--request-key')
-    for name in ('cancel', 'resume', 'skip-next'):
-        commands.add_parser(name).add_argument('timer')
-    pause = commands.add_parser('pause')
-    pause.add_argument('timer')
-    pause.add_argument('--until')
+    for name in ('cancel', 'resume', 'skip-next', 'pause'):
+        command = commands.add_parser(name)
+        command.add_argument('timer')
+        command.add_argument('--request-key', help='reuse the key a failed or unanswered call printed')
+        if name == 'pause':
+            command.add_argument('--until')
     return root
 
 
@@ -250,11 +275,19 @@ def main(argv=None):
         else:
             operation = args.action.replace('-', '_')
             until = instant_ms(args.until) if getattr(args, 'until', None) else None
-            receipt = client.control(args.timer, operation, until)
+            receipt = client.control(
+                args.timer, operation, until, args.request_key,
+                announce=lambda key: print(json.dumps({'request_key': key}), file=sys.stderr))
             verb = {'cancel': 'cancelled', 'pause': 'paused', 'resume': 'resumed',
                     'skip_next': 'skips its next run'}[operation]
     except TimerError as failure:
-        print(json.dumps({'ok': False, 'status': failure.status, 'code': failure.code}), file=sys.stderr)
+        line = {'ok': False, 'status': failure.status, 'code': failure.code}
+        key = getattr(failure, 'request_key', None)
+        if key:
+            # Rerun with --request-key KEY: the same key never applies twice.
+            line['request_key'] = key
+            line['retry'] = f'rerun the same command with --request-key {key}'
+        print(json.dumps(line), file=sys.stderr)
         return ERROR_EXIT
     print(json.dumps({'ok': True, **receipt}, indent=2, sort_keys=True))
     print(summary(receipt, verb), file=sys.stderr)

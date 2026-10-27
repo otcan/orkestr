@@ -19,6 +19,8 @@ pub const AGENT_TIMER_LABEL_MAX: usize = 120;
 pub const AGENT_TIMER_ACTIVE_MAX: i64 = 32;
 /// At most this many timers created by agents per conversation per hour.
 pub const AGENT_TIMER_HOURLY_CREATES_MAX: i64 = 12;
+/// ... and at most this many per conversation per 24 hours.
+pub const AGENT_TIMER_DAILY_CREATES_MAX: i64 = 24;
 /// A one-shot timer must be at least this far in the future.
 pub const AGENT_TIMER_MIN_LEAD_MS: i64 = 2 * 60_000;
 /// ... and at most this far (400 days).

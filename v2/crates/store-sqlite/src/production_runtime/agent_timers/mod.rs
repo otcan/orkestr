@@ -13,7 +13,9 @@
 //! not satisfy the running-Deep check.
 //!
 //! Caps: at most `AGENT_TIMER_ACTIVE_MAX` live agent-created timers and
-//! `AGENT_TIMER_HOURLY_CREATES_MAX` creates per hour per conversation; a
+//! `AGENT_TIMER_HOURLY_CREATES_MAX` creates per hour and
+//! `AGENT_TIMER_DAILY_CREATES_MAX` per day per conversation; a turn started by
+//! a timer may control timers but never create one (no timer chains); a
 //! one-shot run at least 2 minutes ahead; a recurring rule never more often
 //! than every 30 minutes; pauses of at most 60 days. Stop and rollback stay
 //! owner-only, and an agent cancel is an ordinary disable the owner can undo.
@@ -36,8 +38,8 @@ use crate::ResourceError;
 use orkestr_v2_contracts::{
     AgentTimerControl, AgentTimerCreate, AgentTimerGrant, AgentTimerGrantDirectory,
     AgentTimerGrantEntry, AgentTimerGrantIssued, AgentTimerList, AgentTimerReceipt, AgentTimerView,
-    ConversationId, AGENT_TIMER_ACTIVE_MAX, AGENT_TIMER_HOURLY_CREATES_MAX,
-    AGENT_TIMER_REFUSALS_MAX,
+    ConversationId, AGENT_TIMER_ACTIVE_MAX, AGENT_TIMER_DAILY_CREATES_MAX,
+    AGENT_TIMER_HOURLY_CREATES_MAX, AGENT_TIMER_REFUSALS_MAX,
 };
 use sqlx::{sqlite::SqliteRow, Acquire, Sqlite, Transaction};
 mod grant;
@@ -178,6 +180,16 @@ async fn audit(
         .bind(operation).bind(namespace.map(|n| n.to_string())).bind(request_key).bind(outcome).bind(now_ms())
         .execute(tx).await.map_err(unavailable)?;
     Ok(())
+}
+
+/// Whether the running turn serves a timer occurrence's input.
+async fn timer_started(tx: &mut SqliteConnection, input: &str) -> Step<bool> {
+    let n: i64 = sqlx::query_scalar("SELECT count(*) FROM dormant_timer_inputs WHERE message_id=?")
+        .bind(input)
+        .fetch_one(tx)
+        .await
+        .map_err(|_| "agent_timer_unavailable")?;
+    Ok(n != 0)
 }
 
 /// Refusal codes of one step; mapped to HTTP statuses by the server.
@@ -347,12 +359,14 @@ impl Store {
         let (mut tx, caller) = self.agent_timer_scope(grant, conversation, true).await?;
         let owner = caller.owner.clone();
         let namespace = agent_namespace(&owner, conversation, &request.request_key);
-        let run = running_deep(&mut tx, &owner, conversation)
-            .await?
-            .map(|(run, _)| run);
+        let running = running_deep(&mut tx, &owner, conversation).await?;
+        let run = running.as_ref().map(|(run, _)| run.clone());
         let mut savepoint = tx.begin().await.map_err(unavailable)?;
         let step: Step<bool> = async {
-            let run = run.as_deref().ok_or("agent_timer_no_running_turn")?;
+            let (run, input) = running
+                .as_ref()
+                .map(|(run, input)| (run.as_str(), input.as_str()))
+                .ok_or("agent_timer_no_running_turn")?;
             if unavailable_conversation(&mut savepoint, &owner, &conversation.to_string())
                 .await
                 .map_err(|_| "agent_timer_unavailable")?
@@ -366,6 +380,12 @@ impl Store {
                 Some(prior) if prior == digest => return Ok(false),
                 Some(_) => return Err("agent_timer_conflict"),
                 None => {}
+            }
+            // Chain cap: a turn a timer started may control timers (a check
+            // timer pauses itself) but never creates one, so timers cannot
+            // breed timers.
+            if timer_started(&mut savepoint, input).await? {
+                return Err("agent_timer_timer_turn");
             }
             let now = store_clock(&mut savepoint)
                 .await
@@ -382,6 +402,13 @@ impl Store {
             }
             if recent >= AGENT_TIMER_HOURLY_CREATES_MAX {
                 return Err("agent_timer_rate_limited");
+            }
+            let today =
+                agent_timers_created_since(&mut savepoint, &owner, conversation, now - 86_400_000)
+                    .await
+                    .map_err(|r| r.code())?;
+            if today >= AGENT_TIMER_DAILY_CREATES_MAX {
+                return Err("agent_timer_daily_limit");
             }
             let schedule = agent_schedule(&request.schedule, now).map_err(|r| r.code())?;
             agent_timer_create(

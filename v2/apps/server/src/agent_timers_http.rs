@@ -64,6 +64,14 @@ pub(crate) fn failure(error: ResourceError) -> Error {
                     StatusCode::TOO_MANY_REQUESTS,
                     "Too many recent timer requests from this conversation",
                 ),
+                "agent_timer_daily_limit" => (
+                    StatusCode::TOO_MANY_REQUESTS,
+                    "This conversation created the most agent timers allowed in 24 hours",
+                ),
+                "agent_timer_timer_turn" => (
+                    StatusCode::FORBIDDEN,
+                    "A turn started by a timer may change timers but not create them",
+                ),
                 "agent_timer_limit_reached" => (
                     StatusCode::TOO_MANY_REQUESTS,
                     "This conversation has the most live agent timers allowed",

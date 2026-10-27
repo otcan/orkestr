@@ -194,6 +194,8 @@ fn refusal_codes_map_to_statuses() {
         ("agent_timer_not_found", 404),
         ("agent_timer_rate_limited", 429),
         ("agent_timer_limit_reached", 429),
+        ("agent_timer_daily_limit", 429),
+        ("agent_timer_timer_turn", 403),
         ("agent_timer_too_soon", 422),
         ("agent_timer_too_frequent", 422),
         ("agent_timer_skip_once", 422),

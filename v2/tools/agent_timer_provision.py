@@ -2,8 +2,15 @@
 """Operator provisioning of V2 agent-timer grants (idempotent).
 
   agent_timer_provision.py --v2-url URL --credentials FILE --grant-dir DIR
-                           (--only ID_OR_NAME ... | --all-owner-conversations)
-                           [--rotate] [--revoke] [--chown USER] [--dry-run]
+                           --only ID_OR_NAME ... [--rotate] [--revoke]
+                           [--chown USER] [--dry-run]
+
+The default is one conversation at a time (--only). --all-owner-conversations
+also needs --i-understand-shared-grant-dir, because every grant then sits in
+one directory. The directory is owned by the caller with mode 0710 and the
+--chown user's group (0700 without --chown), so the agent can open its file but
+not list the others. Each grant file is 0600 and owned by the --chown user, the
+agent that reads it (agent_timer.py refuses a file owned by anyone else).
 
 Same shape as thread_ask_provision.py (whose login, selection and atomic 0600
 install it reuses). For each selected eligible conversation (not restricted
@@ -26,15 +33,42 @@ import argparse
 import importlib.util
 import json
 from pathlib import Path
+import os
 import pwd
+import stat
 import sys
 
 _SPEC = importlib.util.spec_from_file_location(
     'thread_ask_provision', Path(__file__).resolve().with_name('thread_ask_provision.py'))
 _BASE = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(_BASE)
-ProvisionError, private_json, install, select, valid_grant_file = (
-    _BASE.ProvisionError, _BASE.private_json, _BASE.install, _BASE.select, _BASE.valid_grant_file)
+ProvisionError, private_json, select, valid_grant_file = (
+    _BASE.ProvisionError, _BASE.private_json, _BASE.select, _BASE.valid_grant_file)
+
+
+def prepare_dir(grant_dir, owner=None):
+    """The grant directory: owned by the caller, mode 0710 with the agent
+    user's group when --chown names one (the agent can enter it and open its
+    own file, but not list it), else 0700. An existing directory of another
+    user must not be group- or world-writable."""
+    grant_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    info = grant_dir.lstat()
+    if not stat.S_ISDIR(info.st_mode):
+        raise ProvisionError(0, 'grant_dir_not_a_directory')
+    if info.st_uid != os.getuid():
+        if info.st_mode & 0o022:
+            raise ProvisionError(0, 'grant_dir_unsafe')
+        return
+    if owner is not None:
+        os.chown(grant_dir, -1, owner.pw_gid)
+    os.chmod(grant_dir, 0o710 if owner is not None else 0o700)
+
+
+def install(path, grant, owner=None):
+    """Atomic 0600 grant file, owned by the agent user (--chown) that reads
+    it with agent_timer.py, else by the caller."""
+    prepare_dir(path.parent, owner)
+    _BASE.install(path, grant, owner)
 
 
 class Api(_BASE.Api):
@@ -77,6 +111,8 @@ def parser():
     selection = root.add_mutually_exclusive_group(required=True)
     selection.add_argument('--only', nargs='+', metavar='ID_OR_NAME')
     selection.add_argument('--all-owner-conversations', action='store_true')
+    root.add_argument('--i-understand-shared-grant-dir', action='store_true',
+                      help='required with --all-owner-conversations: every grant lands in one directory')
     root.add_argument('--chown')
     root.add_argument('--dry-run', action='store_true')
     return root
@@ -85,6 +121,11 @@ def parser():
 def main(argv=None, api=None):
     args = parser().parse_args(argv)
     grant_dir = Path(args.grant_dir)
+    if args.all_owner_conversations and not args.i_understand_shared_grant_dir:
+        # Every conversation's grant in one directory: any reader of it can act
+        # for all of them. The default is one conversation (--only).
+        print(json.dumps({'ok': False, 'code': 'shared_grant_dir_not_acknowledged'}), file=sys.stderr)
+        return 2
     try:
         owner = pwd.getpwnam(args.chown) if args.chown else None
         if api is None:
