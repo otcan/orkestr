@@ -109,7 +109,8 @@ def readmit(worker, data, trigger, reason, request_key=None, operator=None):
         data["intake_text"] = carry(worker.ledger, data, data.get("intake_text") or compose(data))
     if "arrived_at" not in data and arrival(data) is not None:
         data["arrived_at"] = arrival(data)
-    for key in RESET_KEYS + ("deep_missing_since", "unstarted_since", "terminal_since", "retry_wait_since", "ended_seen_at", "closed"):
+    for key in RESET_KEYS + ("deep_missing_since", "unstarted_since", "terminal_since", "retry_wait_since", "ended_seen_at", "closed",
+                "journal_behind_logged"):
         data.pop(key, None)
     for key in ("message", "window", "fast", "deep"):
         data["keys"][key] = str(uuid.uuid4())
@@ -150,8 +151,20 @@ def recover(worker, data, reason, started=False):
         raise Refused(reason)  # Core retries timer occurrences itself.
     if data.get("readmitted") or data.get("continued") or blocking_export(worker.ledger, data):
         raise Refused(reason)
-    if not journal_caught_up(worker, data):
-        return wait_or_close(worker, data, now, reason, "journal_behind")
+    caught = journal_caught_up(worker, data)
+    if caught == "unreadable":
+        # Core's head is ahead but its stream shows nothing more: no catch-up
+        # is happening, so the bounded wait applies as before.
+        return wait_or_close(worker, data, now, reason, "journal_unreadable")
+    if caught is not True:
+        # Unread journal may still hold this input's runs: Core may well have
+        # run (even answered) it. Never start the close countdown for that;
+        # the next passes read on until the input's cursor reaches the head.
+        if not data.get("journal_behind_logged"):
+            data["journal_behind_logged"] = True
+            worker.ledger.save(data)
+            log(worker, "input_journal_behind", data, reason=reason)
+        return True
     state = own_window_state(worker, data)
     if state in ("successor_open", "successor_queued", "reconciliation_required"):
         # Core may hand the joined-but-unrun input to that window and run it.
@@ -216,13 +229,39 @@ def held(worker, data):
     return "not_held" if page.get("next_after_sequence") is None else "unknown"
 
 
+# Events between an input's cursor and Core's head checked in one decision.
+HEAD_CHECK_PAGES = 20
+
+
 def journal_caught_up(worker, data):
-    """Core's current journal head (a non-streaming snapshot read) is no
-    later than this input's own cursor: no unread run evidence remains."""
+    """True when no unread run evidence of this input remains up to Core's
+    current journal head (a non-streaming snapshot read); False while it is
+    behind or one of its own runs appears; "unreadable" when Core's head is
+    ahead but its event stream returns nothing more.
+
+    Events written after the input's last read (another input's Fast often
+    streams meanwhile) are read through the binding's shared journal and
+    checked against this input's own source tuple; none of them may match.
+    The input's cursor is left as is: its own observation reads them again
+    from memory."""
+    from .journal import PAGE, shared
+    from .intake_fast import EVENT_WAIT_S
     snapshot = worker.call("GET", "")
     head = snapshot.get("last_sequence") if isinstance(snapshot, dict) else None
     cursor = data.get("cursor")
-    return type(head) is int and type(cursor) is int and head <= cursor
+    if type(head) is not int or type(cursor) is not int:
+        return False
+    journal = shared(worker)
+    for _ in range(HEAD_CHECK_PAGES):
+        if head <= cursor:
+            return True
+        events = journal.read(worker.client, cursor, PAGE, timeout_s=EVENT_WAIT_S)
+        if not events:
+            return "unreadable"
+        if worker.client.matching_run_ids(events, data["intake"]):
+            return False  # Its own run: the ordinary path settles it.
+        cursor = events[-1]["sequence"]
+    return head <= cursor
 
 
 def retire_original(worker, data):

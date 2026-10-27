@@ -44,6 +44,21 @@ class Peer(BaseHTTPRequestHandler):
         self.server.observed.append((self.command, self.path, dict(self.headers),
                                      json.loads(body) if body else None))
         status, value, headers = self.server.respond(self.command, self.path)
+        if isinstance(value, list):
+            # A live event stream: one write per frame, then held open like
+            # Core's caught-up stream (no length; the client ends the read).
+            try:
+                self.send_response(status)
+                for name, header in headers.items():
+                    self.send_header(name, header)
+                self.end_headers()
+                for frame in value:
+                    self.wfile.write(frame)
+                    self.wfile.flush()
+                time.sleep(getattr(self.server, "hold_s", 0))
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+            return
         content = value if isinstance(value, bytes) else json.dumps(value).encode()
         try:
             self.send_response(status)
@@ -379,6 +394,36 @@ class ClientTests(unittest.TestCase):
         for invalid in (0, -1, True, "0.15", float("nan"), 21):
             with self.subTest(invalid=invalid), self.assertRaisesRegex(ClientError, "event_deadline_refused"):
                 self.client.read_events(4, timeout_s=invalid)
+
+    def test_a_stream_read_returns_the_whole_page_core_wrote_not_its_first_frame(self):
+        """Core writes each frame of a page separately, then keeps the stream
+        open. Before, a read ended at the first frame: about one event per
+        pass after a burst (moteks, 2026-10-27)."""
+        journal = [self.event(s) for s in range(5, 505)]
+        original = self.respond
+
+        def respond(method, path):
+            if "/events?" not in path:
+                return original(method, path)
+            after = int(path.split("after=")[1].split("&")[0])
+            limit = int(path.split("limit=")[1])
+            rows = [row for row in journal if row["sequence"] > after][:limit]
+            return 200, [f"id: {row['sequence']}\nevent: provider_observed\ndata: {json.dumps(row)}\n\n".encode()
+                         for row in rows], {"Content-Type": "text/event-stream"}
+        self.server.respond, self.server.hold_s = respond, 1.0
+        self.client.ensure_login()
+        started, cursor, read = time.monotonic(), 4, []
+        while True:
+            events = self.client.read_events(cursor, timeout_s=0.3)
+            if not events:
+                break
+            read.extend(events)
+            cursor = events[-1]["sequence"]
+        elapsed = time.monotonic() - started
+        self.assertEqual([e["sequence"] for e in read], list(range(5, 505)))
+        self.assertEqual(len([row for row in self.server.observed if "/events?" in row[1]]), 6,
+                         "five full pages of 100, then one empty read")
+        self.assertLess(elapsed, 3.0, "%.0f events/s" % (len(read) / elapsed))
 
     def test_window_tuple_matches_ui_first_active_closed_and_refuses_drift(self):
         first = self.client.window_request(INTAKE, "input:1", "window:1", None)
