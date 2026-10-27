@@ -14,6 +14,7 @@ import {createScopedGroupTransport} from '../packages/connectors/src/whatsapp-sc
 import {createScopedNativeWorkerPolicy} from '../packages/connectors/src/whatsapp-scoped-native-worker.js';
 import {remoteTimerParentEvent} from '../packages/connectors/src/whatsapp-scoped-remote-timer-replies.js';
 import * as formatter from '../packages/connectors/src/whatsapp-formatting.js';
+import {sendWithQuoteFallback} from '../packages/connectors/src/whatsapp-scoped-wrapper-errors.js';
 
 const epoch = Date.parse('2026-01-01T00:00:00Z'), iso = ms => new Date(epoch + ms).toISOString();
 const chatId = '120000000001@g.us', own = '15550000001@c.us';
@@ -185,4 +186,24 @@ test('the routed input lookup reads one relay route read-only and never throws',
   assert.equal(routed.lookup('thread-1', 'missing'), '');
   assert.equal(createRoutedInputLookup(path.join(dir, 'absent.sqlite')).lookup('thread-1', 'local-input-1'), '');
   assert.equal(createRoutedInputLookup(undefined).lookup('thread-1', 'local-input-1'), '');
+});
+
+test('a quoted send that fails degrades to one unquoted retry of the same request', async () => {
+  const rejected = code => Object.assign(new Error('exit 1'), {stderr: JSON.stringify({ok: false, error: code}) + '\n'});
+  const calls = [];
+  const sent = await sendWithQuoteFallback(async quoted => {
+    calls.push(quoted);
+    if (quoted) throw new Error('unknown command group-send');
+    return {ok: true, ids: ['wa-1']};
+  }, waInput);
+  assert.deepEqual(sent, {ok: true, ids: ['wa-1']});
+  assert.deepEqual(calls, [waInput, undefined], 'one quoted try, then unquoted');
+  calls.length = 0;
+  await assert.rejects(sendWithQuoteFallback(async quoted => { calls.push(quoted); throw rejected('scoped_reply_invalid'); }, waInput),
+    error => error.definitive === true && error.message === 'scoped_reply_invalid');
+  assert.deepEqual(calls, [waInput, undefined], 'the retry decides the outcome');
+  calls.length = 0;
+  await assert.rejects(sendWithQuoteFallback(async quoted => { calls.push(quoted); throw rejected('delivery_uncertain'); }, undefined),
+    error => error.definitive === false && error.message === 'delivery_uncertain');
+  assert.deepEqual(calls, [undefined], 'an unquoted send is never retried');
 });
