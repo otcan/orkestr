@@ -119,6 +119,16 @@ def failed(worker, data, run):
     return True
 
 
+def head_failed(worker, data, status, ids):
+    """The serial path's twin of `failed`: a failed slot run of the ledger
+    head sends no notice; Core returned the input to the writer."""
+    if (not isinstance(status, dict) or status.get("parallel_deep") is not True
+            or status.get("run_id") not in ids or status.get("phase") not in ("failed", "blocked")):
+        return False
+    forget(worker, data, status["run_id"], "parallel_deep_failed")
+    return True
+
+
 def forget(worker, data, run, event):
     data["parallel_deferred"] = sorted(ignored(data) | {run})
     data["matched_runs"] = [value for value in data.get("matched_runs", []) if value != run]
@@ -135,10 +145,18 @@ def forget(worker, data, run, event):
           % (event, getattr(worker.client, "conversation", "?"), data["remote_id"], run), file=sys.stderr, flush=True)
 
 
-def deferred(worker, data, deep, text):
+def is_slot(data, run, status=None):
+    """Whether `run` is a parallel slot run: found by this watch, or marked so
+    by its own exact-run status (an input that reached the ledger head before
+    the watch saw its slot run, or while the switch read was off)."""
+    return bool(run) and (data.get("parallel_run") == run or (
+        isinstance(status, dict) and status.get("run_id") == run and status.get("parallel_deep") is True))
+
+
+def deferred(worker, data, deep, text, status=None):
     """True when this input's accepted slot answer is the defer marker: forget
     that run (nothing is exported) and wait for the writer's own Deep run."""
-    if data.get("parallel_run") != deep.get("run_id") or not isinstance(text, str) or text.strip() != DEFER:
+    if not is_slot(data, deep.get("run_id"), status) or not isinstance(text, str) or text.strip() != DEFER:
         return False
     forget(worker, data, deep["run_id"], "parallel_deep_deferred")
     return True

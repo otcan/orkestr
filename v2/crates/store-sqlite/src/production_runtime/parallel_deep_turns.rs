@@ -265,7 +265,7 @@ impl Store {
         if !super::parallel_deep::present(&mut tx).await? {
             return Ok((false, false));
         }
-        let row = sqlx::query("SELECT r.deep_slot AS slot,(SELECT count(*) FROM production_runs o WHERE o.role='deep' AND o.deep_slot>0 AND o.context_id=r.context_id AND o.incarnation_id=r.incarnation_id AND o.id!=r.id AND o.scope_sequence>r.scope_sequence) AS later FROM production_runs r WHERE r.id=? AND r.owner_id=? AND r.conversation_id=? AND r.role='deep'")
+        let row = sqlx::query("SELECT r.deep_slot AS slot,(SELECT count(*) FROM production_runs o WHERE o.role='deep' AND o.deep_slot>0 AND o.conversation_id=r.conversation_id AND o.context_id=r.context_id AND o.incarnation_id=r.incarnation_id AND o.id!=r.id AND o.scope_sequence>r.scope_sequence) AS later FROM production_runs r WHERE r.id=? AND r.owner_id=? AND r.conversation_id=? AND r.role='deep'")
             .bind(run.to_string()).bind(owner.to_string()).bind(conversation.to_string())
             .fetch_optional(&mut *tx).await.map_err(db)?;
         tx.commit().await.map_err(db)?;

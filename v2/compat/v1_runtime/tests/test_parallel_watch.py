@@ -135,3 +135,37 @@ class ParallelWatchTests(fixture.IntakeBase):
         self.assertNotIn("refused", row)
         self.assertNotEqual(row["phase"], "completed")
         self.assertEqual(self.finals(), [])
+
+    def head_slot(self):
+        """Input b's slot run is first seen at the ledger head: the watch never
+        recorded it (switch read off), and the writer's head final went first."""
+        self.worker._parallel_deep = (time.monotonic(), False)
+        self.burst()
+        slot = self.slot(1)
+        self.ack_fast("head")
+        self.peer.runs[0, "deep"]["phase"] = "awaiting_acceptance"
+        self.passes(2)
+        self.assertEqual(len(self.finals()), 1)
+        self.assertNotIn("parallel_run", self.row("b"))
+        return slot
+
+    def test_a_deferred_answer_at_the_head_is_never_exported(self):
+        slot = self.head_slot()
+        self.peer.texts[slot["run_id"]] = "PARALLEL_DEFER"
+        self.ack_fast("b")
+        slot["phase"] = "awaiting_acceptance"
+        self.passes(3)
+        self.assertEqual(len(self.finals()), 1, "the defer marker is never sent")
+        row = self.row("b")
+        self.assertEqual(row["parallel_deferred"], [slot["run_id"]])
+        self.assertNotEqual(row["phase"], "completed")
+
+    def test_a_failed_slot_at_the_head_sends_no_notice(self):
+        slot = self.head_slot()
+        slot["phase"] = "failed"
+        self.passes(2)
+        row = self.row("b")
+        self.assertEqual(row["parallel_deferred"], [slot["run_id"]])
+        self.assertNotIn("refused", row)
+        self.assertNotEqual(row["phase"], "completed")
+        self.assertEqual(len(self.finals()), 1)

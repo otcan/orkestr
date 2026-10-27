@@ -5,10 +5,14 @@ ALTER TABLE production_runs ADD COLUMN deep_slot INTEGER NOT NULL DEFAULT 0
  CHECK(deep_slot BETWEEN 0 AND 3 AND (deep_slot = 0 OR role = 'deep'));
 -- One canonical Deep run per inbox input, and at most one parallel run. A
 -- parallel run that deferred (PARALLEL_DEFER) returns its input to the
--- writer, which then takes it exactly once.
+-- writer, which then takes it exactly once. The claim index is keyed on
+-- (deep_slot>0) and keeps the old `role='deep'` partial predicate, so every
+-- existing Deep query keeps its index plan (grouping, stranded, status).
+-- The parallel-only index (empty while the switch is off) serves the slot
+-- lookups.
 DROP INDEX production_deep_claim;
-CREATE UNIQUE INDEX production_deep_claim ON production_runs(conversation_id,scope_sequence)
- WHERE role='deep' AND deep_slot=0;
+CREATE UNIQUE INDEX production_deep_claim ON production_runs(conversation_id,scope_sequence,deep_slot>0)
+ WHERE role='deep';
 CREATE UNIQUE INDEX production_parallel_deep_claim ON production_runs(conversation_id,scope_sequence)
  WHERE role='deep' AND deep_slot>0;
 -- An accepted parallel answer that was exactly the defer marker. The input

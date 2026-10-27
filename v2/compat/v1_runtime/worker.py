@@ -846,6 +846,8 @@ class Worker:
             # are buffered. Only an empty read proves this cursor caught up.
             if self.timer_without_deep(data, statuses, caught_up=caught_up):
                 return
+        if parallel_watch.head_failed(self, data, statuses.get("deep"), ids):
+            return  # A failed slot turn: the writer answers this input.
         notice = policy_notice(statuses["deep"], ids)
         if notice:
             self.settle_own_fast(data, statuses.get("fast"), ids)
@@ -905,7 +907,7 @@ class Worker:
         if len(matches) != 1 or matches[0].get("payload_removed") is not False or any(matches[0].get(k) != deep[k] for k in ("run_id", "completion_event_id")) or matches[0].get("payload_id") != data["deep_payload"]["payload_id"]:
             raise Refused("accepted_history_mismatch")
         text = self.timer_final(data, data["deep_payload"]["text"])
-        if parallel_watch.deferred(self, data, deep, text):
+        if parallel_watch.deferred(self, data, deep, text, statuses.get("deep")):
             return  # The writer answers it: its own Deep run is awaited.
         if (text is not None and data.get("origin") is None and not deep_group.grouped(data)
                 and repeats_fast(data, text)):

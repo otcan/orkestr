@@ -456,6 +456,7 @@ impl ConfiguredExecution {
                 let slots = self.deep_slots.clone();
                 let side = {
                     let shutdown = shutdown.clone();
+                    let companion = companion.clone();
                     async move {
                         // The parallel Deep pool is its own task (Core fences
                         // block in place) and fails alone: it then starts no
@@ -473,6 +474,13 @@ impl ConfiguredExecution {
                             }))
                         });
                         let fast = fast.run(shutdown).await;
+                        // Report a failed Fast now, not after the pool ends:
+                        // Deep must stop waiting on (and steering to) it.
+                        if fast.is_err() {
+                            if let Some(companion) = &companion {
+                                companion.fail();
+                            }
+                        }
                         if let Some(mut pool) = pool {
                             let _ = (&mut pool.0).await;
                         }

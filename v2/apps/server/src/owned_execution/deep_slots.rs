@@ -219,22 +219,12 @@ impl ConfiguredExecution {
             {
                 break;
             }
-            pressure.observe();
-            // The owner's Stop of the writer stops every parallel turn.
-            if let Ok(Some(status)) = this
-                .store
-                .execution_status(&this.owner, &this.config.conversation_id)
-                .await
-            {
-                if matches!(
-                    status.phase,
-                    ExecutionPhase::CancelRequested | ExecutionPhase::Cancelled
-                ) {
-                    slots.stop_all();
-                }
-            }
-            if !slots.stopping() && slots.active() < usize::from(MAX_PARALLEL_DEEP_SLOTS) {
-                let enabled = match switch {
+            // Read the owner's switch first: while it is off and no slot is
+            // live the pool reads nothing else (no status poll, no pressure).
+            let enabled = if slots.stopping() {
+                false
+            } else {
+                match switch {
                     Some((at, enabled)) if at.elapsed() < SWITCH_READ => enabled,
                     _ => {
                         // Any doubt (busy or unavailable Store) means off now.
@@ -246,40 +236,57 @@ impl ConfiguredExecution {
                         switch = Some((Instant::now(), enabled));
                         enabled
                     }
-                };
-                if enabled
-                    && this
-                        .store
-                        .parallel_deep_candidate(&this.token)
-                        .await
-                        .unwrap_or(false)
-                    && pressure
-                        .admit_one_deep(slots.active().max(HOST_SLOTS.load(Ordering::Acquire)))
+                }
+            };
+            if enabled || slots.active() > 0 {
+                pressure.observe();
+                // The owner's Stop of the writer stops every parallel turn.
+                if let Ok(Some(status)) = this
+                    .store
+                    .execution_status(&this.owner, &this.config.conversation_id)
+                    .await
                 {
-                    if let Some(backstop) = HostSlot::acquire() {
-                        if slots.enter() {
-                            let this = this.clone();
-                            let slots = slots.clone();
-                            let shutdown = shutdown.clone();
-                            tasks.spawn(async move {
-                                let _backstop = backstop;
-                                let result = this.present_parallel(&slots, shutdown).await;
-                                match result {
-                                    Ok(SlotEnd::Unstarted(setup)) => {
-                                        slots.leave(None, setup);
-                                        Ok(())
-                                    }
-                                    Ok(SlotEnd::Ran(proof)) => {
-                                        slots.leave(proof, None);
-                                        Ok(())
-                                    }
-                                    Err(error) => {
-                                        slots.leave(None, None);
-                                        Err(error)
-                                    }
+                    if matches!(
+                        status.phase,
+                        ExecutionPhase::CancelRequested | ExecutionPhase::Cancelled
+                    ) {
+                        slots.stop_all();
+                    }
+                }
+            }
+            if enabled
+                && !slots.stopping()
+                && slots.active() < usize::from(MAX_PARALLEL_DEEP_SLOTS)
+                && this
+                    .store
+                    .parallel_deep_candidate(&this.token)
+                    .await
+                    .unwrap_or(false)
+                && pressure.admit_one_deep(slots.active().max(HOST_SLOTS.load(Ordering::Acquire)))
+            {
+                if let Some(backstop) = HostSlot::acquire() {
+                    if slots.enter() {
+                        let this = this.clone();
+                        let slots = slots.clone();
+                        let shutdown = shutdown.clone();
+                        tasks.spawn(async move {
+                            let _backstop = backstop;
+                            let result = this.present_parallel(&slots, shutdown).await;
+                            match result {
+                                Ok(SlotEnd::Unstarted(setup)) => {
+                                    slots.leave(None, setup);
+                                    Ok(())
                                 }
-                            });
-                        }
+                                Ok(SlotEnd::Ran(proof)) => {
+                                    slots.leave(proof, None);
+                                    Ok(())
+                                }
+                                Err(error) => {
+                                    slots.leave(None, None);
+                                    Err(error)
+                                }
+                            }
+                        });
                     }
                 }
             }
@@ -426,12 +433,22 @@ impl ConfiguredExecution {
             .await?;
         // A deferred answer, or a failed turn, returns its input to the
         // writer's queue (Core decides; a Stop keeps it with the turn).
-        if let Ok(true) = self
-            .store
-            .defer_parallel_deep_input(&self.token, &run)
-            .await
-        {
-            eprintln!("parallel Deep slot returned its input to the writer");
+        // Idempotent in Core; retried briefly so a busy Store does not leave
+        // the input consumed by a run the adapter has already forgotten.
+        for attempt in 0..5 {
+            match self
+                .store
+                .defer_parallel_deep_input(&self.token, &run)
+                .await
+            {
+                Ok(true) => {
+                    eprintln!("parallel Deep slot returned its input to the writer");
+                    break;
+                }
+                Ok(false) => break,
+                Err(_) if attempt < 4 => tokio::time::sleep(Duration::from_millis(200)).await,
+                Err(_) => eprintln!("parallel Deep defer handback failed"),
+            }
         }
         if proof.is_some() {
             // Accepted or Stopped: retire the used session now. A failed or
