@@ -110,14 +110,19 @@ pub(super) async fn adjust_next(
     ))
 }
 
-/// `due_ms` of the latest clock occurrence claimed for this timer, if any.
-/// Trigger-event claims (`event:` keys) are not clock slots and are ignored.
+/// Floor of the next occurrence: the later of the `due_ms` of the latest clock
+/// occurrence claimed for this timer and the time it was last enabled
+/// (`enable_floor_ms`), if any. Trigger-event claims (`event:` keys) are not
+/// clock slots and are ignored. The enable time matters for a timer handed off
+/// from V1: it has no V2 claims, and V1 may have just fired the slot at its raw
+/// time, so a slot that started before the enable must not come back at its
+/// spread time.
 pub(super) async fn last_fired(
     tx: &mut Transaction<'_, Sqlite>,
     owner: &OwnerId,
     namespace: Uuid,
 ) -> Result<Option<i64>> {
-    sqlx::query_scalar("SELECT max(due_ms) FROM dormant_timer_claims WHERE owner_id=? AND namespace=? AND request_key NOT LIKE 'event:%'")
+    sqlx::query_scalar("SELECT max(floor) FROM (SELECT max(due_ms) AS floor FROM dormant_timer_claims WHERE owner_id=?1 AND namespace=?2 AND request_key NOT LIKE 'event:%' UNION ALL SELECT enable_floor_ms FROM dormant_timers WHERE owner_id=?1 AND namespace=?2)")
         .bind(owner.to_string())
         .bind(namespace.to_string())
         .fetch_one(&mut **tx)

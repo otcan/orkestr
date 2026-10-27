@@ -3,6 +3,15 @@ use crate::Store;
 
 pub(crate) async fn downgrade_empty(store: &Store) {
     let mut tx = store.pool.begin().await.unwrap();
+    // Migration 81 down: the enable floor is a derived bound, safe to drop.
+    sqlx::raw_sql("ALTER TABLE dormant_timers DROP COLUMN enable_floor_ms")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM _sqlx_migrations WHERE version=81")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
     // Migration 80 down: only with no live auxiliary Fast slot, restore the
     // single canonical Fast/Deep index and drop the slot column.
     let slots: i64 = sqlx::query_scalar(

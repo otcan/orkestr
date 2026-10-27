@@ -835,3 +835,138 @@ fn fired_floor_holds_across_berlin_dst_and_keeps_due_slots() {
         today + 2 * 24 * HOUR + s
     );
 }
+
+/// V1 -> V2 handoff inside a slot's spread window: V1 fired the top-of-the-hour
+/// slot at its raw time, the timer has no V2 claim history, and it is enabled
+/// in V2 a few minutes later. The slot must not fire again at its spread time,
+/// not after the enable, a pause refresh, or a later re-handoff. A slot that
+/// has not started at enable time still fires today.
+#[tokio::test]
+async fn handoff_enable_inside_the_spread_window_never_refires_the_slot() {
+    const HOUR: i64 = 3_600_000;
+    let (store, owner, conversation, directory) = fixture().await;
+    let namespace = spread_namespace();
+    let spread = schedule::spread_ms(namespace);
+    let request = TimerImportRequest {
+        namespace,
+        schedule: TimerSchedule::UtcClock {
+            weekly: false,
+            minute_of_day: 8 * 60,
+        },
+        ..input()
+    };
+    store
+        .import_dormant_timer(TOKEN, &owner, &request)
+        .await
+        .unwrap();
+    let raw = NOW + 8 * HOUR;
+    let tomorrow = raw + 24 * HOUR + spread;
+    // V1 ran 08:00:00; the handoff enables in V2 halfway through the spread.
+    let handoff_at = raw + spread / 2;
+    let enabled = store
+        .enable_dormant_timer(TOKEN, &owner, &enable(&request, &conversation), handoff_at)
+        .await
+        .unwrap();
+    assert_eq!(enabled.next_due_ms, Some(tomorrow));
+    let floor: Option<i64> =
+        sqlx::query_scalar("SELECT enable_floor_ms FROM dormant_timers WHERE namespace=?")
+            .bind(namespace.to_string())
+            .fetch_one(&store.pool)
+            .await
+            .unwrap();
+    assert_eq!(floor, Some(handoff_at));
+    // The spread time of today's slot is not claimable.
+    let mut today = claim(&request, &enabled);
+    today.due_ms = raw + spread;
+    assert_eq!(
+        store
+            .claim_dormant_timer(TOKEN, &owner, &today, raw + spread)
+            .await,
+        Err(HistoryError::Conflict)
+    );
+    // A pause/policy refresh right after the handoff keeps tomorrow.
+    let mut tx = store
+        .history_transaction(TOKEN, &owner, true)
+        .await
+        .unwrap();
+    policy_pause::refresh_timer(&mut tx, &owner, namespace, handoff_at + 1_000, true)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    assert_eq!(next_due(&store, &owner, namespace).await, Some(tomorrow));
+    // Tomorrow fires once; then a handback/re-handoff inside the next day's
+    // window (old V2 claim history, V1 fired raw meanwhile) still skips it.
+    store
+        .claim_dormant_timer(TOKEN, &owner, &claim(&request, &enabled), tomorrow + 200)
+        .await
+        .unwrap();
+    let paused = store
+        .control_dormant_timer(
+            TOKEN,
+            &owner,
+            &TimerControlRequest {
+                namespace,
+                expected_revision: store
+                    .dormant_timer_receipt(TOKEN, &owner, namespace)
+                    .await
+                    .unwrap()
+                    .revision,
+                request_key: "fake-handback-a".into(),
+                action: TimerControl::Disable,
+            },
+        )
+        .await
+        .unwrap();
+    let mut again = enable(&request, &conversation);
+    again.expected_revision = paused.revision;
+    again.request_key = "fake-handoff-b".into();
+    let day3_raw = raw + 2 * 24 * HOUR;
+    let reenabled = store
+        .enable_dormant_timer(TOKEN, &owner, &again, day3_raw + spread / 2)
+        .await
+        .unwrap();
+    assert_eq!(reenabled.next_due_ms, Some(day3_raw + 24 * HOUR + spread));
+    cleanup(store, directory).await;
+}
+
+/// The enable floor only removes slots that started before the enable: a
+/// handoff before the raw slot time keeps today's spread run.
+#[tokio::test]
+async fn handoff_enable_before_the_slot_keeps_todays_spread_run() {
+    const HOUR: i64 = 3_600_000;
+    let (store, owner, conversation, directory) = fixture().await;
+    let namespace = spread_namespace();
+    let spread = schedule::spread_ms(namespace);
+    let request = TimerImportRequest {
+        namespace,
+        schedule: TimerSchedule::UtcClock {
+            weekly: false,
+            minute_of_day: 8 * 60,
+        },
+        ..input()
+    };
+    store
+        .import_dormant_timer(TOKEN, &owner, &request)
+        .await
+        .unwrap();
+    let raw = NOW + 8 * HOUR;
+    let enabled = store
+        .enable_dormant_timer(TOKEN, &owner, &enable(&request, &conversation), raw - 1_000)
+        .await
+        .unwrap();
+    assert_eq!(enabled.next_due_ms, Some(raw + spread));
+    // A refresh inside the window keeps the pending run (no missed slot).
+    let mut tx = store
+        .history_transaction(TOKEN, &owner, true)
+        .await
+        .unwrap();
+    policy_pause::refresh_timer(&mut tx, &owner, namespace, raw + spread / 2, false)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    assert_eq!(
+        next_due(&store, &owner, namespace).await,
+        Some(raw + spread)
+    );
+    cleanup(store, directory).await;
+}
