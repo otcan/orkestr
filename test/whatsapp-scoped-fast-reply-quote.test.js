@@ -20,14 +20,16 @@ const epoch = Date.parse('2026-01-01T00:00:00Z'), iso = ms => new Date(epoch + m
 const chatId = '120000000001@g.us', own = '15550000001@c.us';
 const waInput = `false_${chatId}_3EB0EXAMPLE01_${own}`;
 
-test('V2 quoteSource maps to remoteQuoteSource only on a Fast reply naming its source input', () => {
+test('V2 quoteSource maps to remoteQuoteSource only on a Fast reply or grouped Deep final naming its input', () => {
   assert.deepEqual(remoteLayerMetadata({firstResponse: true, layer: 'fast', quoteSource: true, sourceInputId: 'input-1'}),
     {remoteLayer: 'fast', remoteOriginalInputId: 'input-1', remoteQuoteSource: true});
   assert.deepEqual(remoteLayerMetadata({firstResponse: true, layer: 'fast', sourceInputId: 'input-1'}),
     {remoteLayer: 'fast', remoteOriginalInputId: 'input-1'}, 'a lone Quick reply is not quoted');
   assert.equal(remoteLayerMetadata({firstResponse: true, quoteSource: true}).remoteQuoteSource, undefined, 'no source input');
   assert.equal(remoteLayerMetadata({firstResponse: true, quoteSource: 'true', sourceInputId: 'input-1'}).remoteQuoteSource, undefined);
-  assert.equal(remoteLayerMetadata({phase: 'final_answer', layer: 'deep', quoteSource: true, sourceInputId: 'input-1'}).remoteQuoteSource, undefined, 'Deep');
+  // A grouped Deep final (V2 #377) names its burst's last input; the relay quotes it.
+  assert.equal(remoteLayerMetadata({phase: 'final_answer', layer: 'deep', quoteSource: true, sourceInputId: 'input-1'}).remoteQuoteSource, true, 'grouped Deep');
+  assert.equal(remoteLayerMetadata({kind: 'notice', quoteSource: true, sourceInputId: 'input-1'}).remoteQuoteSource, undefined, 'notice');
   assert.equal(remoteLayerMetadata({firstResponse: true, quoteSource: true, sourceInputId: 'input-1'}, {timerId: 'post', postAuthor: 'coordinator'}).remoteQuoteSource, undefined);
 });
 
