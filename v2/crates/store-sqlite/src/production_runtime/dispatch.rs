@@ -272,6 +272,10 @@ impl Store {
             Some(grouped) => grouped,
             None => text,
         };
+        // A read-only parallel slot turn gets its note; the writer's turn the
+        // parallel answers accepted since its previous one. Unchanged while
+        // no slot run exists (the owner's switch off).
+        let text = super::parallel_deep_turns::turn_text(&mut tx, &row, text).await?;
         // A timer occurrence executes in Deep only. Its Fast presentation keeps
         // the window's Fast lifecycle but never receives the scheduled
         // instructions, so they cannot run (or cause side effects) twice.
@@ -317,6 +321,7 @@ impl Store {
                 .map_err(|_| RuntimeStoreError::Unavailable)?,
             ),
         };
+        let launch = super::parallel_deep_turns::slot_launch(&mut tx, &row, launch).await?;
         // Fast gets the chat rules inline (no forced tool call per reply), but
         // only when the final turn still fits the provider input bound;
         // otherwise the savepoint drops that attempt and Fast keeps the line.

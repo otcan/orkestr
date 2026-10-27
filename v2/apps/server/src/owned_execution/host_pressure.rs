@@ -121,6 +121,16 @@ impl HostPressure {
         self.admit_with(active, slot_cost(), host_start)
     }
 
+    /// The same rule for one more read-only parallel Deep slot, projected
+    /// with the measured Deep slot cost (heavier than Fast).
+    pub(super) fn admit_one_deep(&mut self, active: usize) -> bool {
+        self.admit_with(
+            active,
+            DEEP_SLOT_COST.current_or(DEFAULT_DEEP_SLOT_COST),
+            host_start,
+        )
+    }
+
     fn admit_with(
         &mut self,
         active: usize,
@@ -286,12 +296,25 @@ impl SlotCost {
         }
     }
     fn current(&self) -> u64 {
+        self.current_or(DEFAULT_SLOT_COST)
+    }
+    fn current_or(&self, default: u64) -> u64 {
         self.0
             .lock()
             .ok()
             .and_then(|peaks| peaks.iter().copied().max())
-            .unwrap_or(DEFAULT_SLOT_COST)
+            .unwrap_or(default)
     }
+}
+
+/// Measured cost of one read-only parallel Deep native. Until measured: 1 GiB,
+/// about twice the 431-493 MiB tree peaks read on the pilot host (2026-10-27).
+pub(super) const DEFAULT_DEEP_SLOT_COST: u64 = 1 << 30;
+static DEEP_SLOT_COST: SlotCost = SlotCost::new();
+
+/// One finished parallel Deep native's measured peak RSS (its whole tree).
+pub(super) fn record_deep_slot_peak(peak: u64) {
+    DEEP_SLOT_COST.record(peak);
 }
 
 /// One finished Fast native's measured peak RSS (bytes, its whole tree).

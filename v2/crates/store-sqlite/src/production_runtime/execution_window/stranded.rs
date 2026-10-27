@@ -275,8 +275,15 @@ async fn release_inputs(
 }
 
 /// Inputs admitted to this window but never consumed by a Deep run.
+/// An input a parallel slot deferred back to the writer counts as unconsumed:
+/// only a canonical run consumes for good.
 async fn unconsumed_inputs(tx: &mut SqliteConnection, window: Uuid) -> Result<Vec<String>> {
-    sqlx::query_scalar("SELECT wi.event_id FROM execution_window_inputs wi JOIN reasoning_inbox i ON i.event_id=wi.event_id WHERE wi.window_id=? AND i.state IN ('queued','claimed') AND NOT EXISTS(SELECT 1 FROM production_runs r WHERE r.event_id=wi.event_id AND r.role='deep') ORDER BY i.sequence")
+    let canonical = if super::super::parallel_deep::present(tx).await? {
+        format!(" AND {}", super::super::parallel_deep::canonical_run("r"))
+    } else {
+        String::new()
+    };
+    sqlx::query_scalar(&format!("SELECT wi.event_id FROM execution_window_inputs wi JOIN reasoning_inbox i ON i.event_id=wi.event_id WHERE wi.window_id=? AND i.state IN ('queued','claimed') AND NOT EXISTS(SELECT 1 FROM production_runs r WHERE r.event_id=wi.event_id AND r.role='deep'{canonical}) ORDER BY i.sequence"))
         .bind(window.to_string()).fetch_all(&mut *tx).await.map_err(db)
 }
 

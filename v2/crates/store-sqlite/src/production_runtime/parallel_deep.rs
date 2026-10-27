@@ -22,11 +22,12 @@ pub const MAX_PARALLEL_DEEP_SLOTS: u8 = 3;
 const CLAIM_MS: i64 = 60_000;
 
 /// SQL predicate over an inbox row aliased `{inbox}`: the row is claimed by a
-/// parallel slot session other than `?` (bind the claimant, or '' for none).
+/// parallel slot session other than `?` (bind the claimant, or '' for none),
+/// while that claim is live. An expired slot claim is the lineage's again.
 /// The canonical lineage never waits behind, or counts, such a row.
 pub(crate) fn claimed_by_other_slot(inbox: &str) -> String {
     format!(
-        "({inbox}.state='claimed' AND {inbox}.claimant_session_id IS NOT ? AND EXISTS(SELECT 1 FROM session_bindings ps WHERE ps.id={inbox}.claimant_session_id AND ps.deep_slot>0))"
+        "({inbox}.state='claimed' AND {inbox}.claim_deadline_ms>CAST((julianday('now')-2440587.5)*86400000 AS INTEGER) AND {inbox}.claimant_session_id IS NOT ? AND EXISTS(SELECT 1 FROM session_bindings ps WHERE ps.id={inbox}.claimant_session_id AND ps.deep_slot>0))"
     )
 }
 
@@ -34,7 +35,7 @@ pub(crate) fn claimed_by_other_slot(inbox: &str) -> String {
 /// any parallel slot session (no bind). Deep grouping skips such rows.
 pub(crate) fn claimed_by_slot(inbox: &str) -> String {
     format!(
-        "({inbox}.state='claimed' AND EXISTS(SELECT 1 FROM session_bindings ps WHERE ps.id={inbox}.claimant_session_id AND ps.deep_slot>0))"
+        "({inbox}.state='claimed' AND {inbox}.claim_deadline_ms>CAST((julianday('now')-2440587.5)*86400000 AS INTEGER) AND EXISTS(SELECT 1 FROM session_bindings ps WHERE ps.id={inbox}.claimant_session_id AND ps.deep_slot>0))"
     )
 }
 
@@ -88,15 +89,19 @@ pub(crate) async fn enabled_in(
     if !present(tx).await? {
         return Ok(false);
     }
-    let value: Option<i64> = sqlx::query_scalar(
-        "SELECT parallel_deep FROM conversation_settings WHERE conversation_id=? AND owner_id=?",
+    // Parallel answers are accepted by the server for the owner: with
+    // "review before accepting" on, no parallel slot starts.
+    let row = sqlx::query(
+        "SELECT parallel_deep,review_before_accepting FROM conversation_settings WHERE conversation_id=? AND owner_id=?",
     )
     .bind(conversation)
     .bind(owner)
     .fetch_optional(&mut *tx)
     .await
     .map_err(db)?;
-    Ok(value == Some(1))
+    Ok(row.is_some_and(|row| {
+        row.get::<i64, _>("parallel_deep") == 1 && row.get::<i64, _>("review_before_accepting") != 1
+    }))
 }
 
 impl Store {
@@ -251,38 +256,22 @@ impl Store {
         if binding.state != SessionState::Ready || used != 0 {
             return Err(RuntimeStoreError::Fenced);
         }
-        if !enabled_in(&mut tx, &owner, &conversation).await? {
-            tx.commit().await.map_err(db)?;
-            return Ok(None);
-        }
-        // Only while the single writer is running a turn of this window.
-        let writing: i64 = sqlx::query_scalar("SELECT count(*) FROM production_runs r JOIN session_bindings b ON b.id=r.session_id WHERE r.owner_id=? AND r.conversation_id=? AND r.context_id=? AND r.incarnation_id=? AND r.role='deep' AND r.state IN ('starting','running') AND b.deep_slot=0 AND b.state='busy'")
-            .bind(&owner).bind(&conversation).bind(&c.id).bind(&c.incarnation)
-            .fetch_one(&mut *tx).await.map_err(db)?;
-        if writing != 1 {
-            tx.commit().await.map_err(db)?;
-            return Ok(None);
-        }
-        // Earliest pending input of this window, as the canonical claim sees
-        // it, ignoring only rows other slots already claimed.
-        let row = sqlx::query(&format!("SELECT i.* FROM reasoning_inbox i WHERE i.conversation_id=? AND i.state IN ('queued','claimed') AND NOT EXISTS(SELECT 1 FROM ordinary_input_holds h WHERE h.event_id=i.event_id) AND EXISTS(SELECT 1 FROM execution_window_inputs wi WHERE wi.window_id=? AND wi.event_id=i.event_id) AND NOT {} ORDER BY i.sequence LIMIT 1", claimed_by_other_slot("i")))
-            .bind(&conversation).bind(&window_id).bind(session.to_string())
-            .fetch_optional(&mut *tx).await.map_err(db)?;
-        let Some(row) = row else {
+        let Some(row) = candidate_in(
+            &mut tx,
+            &c.id,
+            &c.incarnation,
+            &owner,
+            &conversation,
+            &window_id,
+            &session.to_string(),
+        )
+        .await?
+        else {
             tx.commit().await.map_err(db)?;
             return Ok(None);
         };
         let event: String = row.get("event_id");
         let message: String = row.get("message_id");
-        // Owner chat input only: never a timer occurrence (typically
-        // outreach), a thread ask, or an agent-relayed input.
-        let eligible: i64 = sqlx::query_scalar("SELECT count(*) FROM messages m WHERE m.id=?1 AND m.actor_kind='owner' AND NOT EXISTS(SELECT 1 FROM dormant_timer_inputs t WHERE t.event_id=?2) AND NOT EXISTS(SELECT 1 FROM production_steering s WHERE s.event_id=?2) AND NOT EXISTS(SELECT 1 FROM thread_asks a WHERE a.input_message_id=m.id OR a.reply_message_id=m.id) AND NOT EXISTS(SELECT 1 FROM message_authors au WHERE au.message_id=m.id AND au.author NOT IN ('owner','member','v1_owner'))")
-            .bind(&message).bind(&event)
-            .fetch_one(&mut *tx).await.map_err(db)?;
-        if row.get::<&str, _>("state") != "queued" || eligible != 1 {
-            tx.commit().await.map_err(db)?;
-            return Ok(None);
-        }
         let generation = row
             .get::<i64, _>("claim_generation")
             .checked_add(1)
@@ -309,6 +298,52 @@ impl Store {
         };
         tx.commit().await.map_err(db)?;
         Ok(Some(claim))
+    }
+
+    /// Current record of one slot session this live incarnation set up,
+    /// e.g. after its readiness commit. Grants nothing.
+    pub async fn parallel_deep_slot_binding(
+        &self,
+        credential: &str,
+        session: &SessionId,
+    ) -> Result<Binding> {
+        self.worker_credential(credential)?;
+        let c = self.context()?;
+        let mut tx = self.pool.begin().await.map_err(db)?;
+        c.validate(&mut tx).await?;
+        own_slot(&mut tx, &c.id, &c.incarnation, session).await?;
+        let row = sqlx::query("SELECT * FROM session_bindings WHERE id=?")
+            .bind(session.to_string())
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(db)?;
+        let binding = crate::runtime::binding(&row)?;
+        tx.commit().await.map_err(db)?;
+        Ok(binding)
+    }
+
+    /// A slot session this live incarnation set up but never ran (no input
+    /// was left to claim, or the window closed during setup): retire it so
+    /// it does not hold a slot until window close. The caller already reaped
+    /// its native. Never touches a session that ran.
+    pub async fn retire_unused_parallel_deep_slot(
+        &self,
+        credential: &str,
+        session: &SessionId,
+    ) -> Result<()> {
+        self.worker_credential(credential)?;
+        let c = self.context()?;
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        c.validate(&mut tx).await?;
+        own_slot(&mut tx, &c.id, &c.incarnation, session).await?;
+        let changed = sqlx::query("UPDATE session_bindings SET state='retired' WHERE id=? AND role='deep' AND deep_slot>0 AND state IN ('starting','ready') AND NOT EXISTS(SELECT 1 FROM production_runs r WHERE r.session_id=session_bindings.id) AND NOT EXISTS(SELECT 1 FROM reasoning_inbox i WHERE i.claimant_session_id=session_bindings.id AND i.state='claimed')")
+            .bind(session.to_string())
+            .execute(&mut *tx).await.map_err(db)?.rows_affected();
+        if changed != 1 {
+            return Err(RuntimeStoreError::Fenced);
+        }
+        tx.commit().await.map_err(db)?;
+        Ok(())
     }
 
     /// After the exact slot run was owner-accepted or canonically Stopped and
@@ -339,6 +374,48 @@ impl Store {
         tx.commit().await.map_err(db)?;
         Ok(())
     }
+}
+
+/// The input a parallel slot may claim now, or None: the switch is off, the
+/// writer is not running a turn of this incarnation, or the earliest pending
+/// input (ignoring rows other slots claimed) is not a queued, eligible owner
+/// chat input. Never looks past that earliest input. Writes nothing.
+pub(super) async fn candidate_in(
+    tx: &mut SqliteConnection,
+    context: &str,
+    incarnation: &str,
+    owner: &str,
+    conversation: &str,
+    window_id: &str,
+    claimant: &str,
+) -> Result<Option<sqlx::sqlite::SqliteRow>> {
+    if !enabled_in(tx, owner, conversation).await? {
+        return Ok(None);
+    }
+    // Only while the single writer is running a turn of this window.
+    let writing: i64 = sqlx::query_scalar("SELECT count(*) FROM production_runs r JOIN session_bindings b ON b.id=r.session_id WHERE r.owner_id=? AND r.conversation_id=? AND r.context_id=? AND r.incarnation_id=? AND r.role='deep' AND r.state IN ('starting','running') AND b.deep_slot=0 AND b.state='busy'")
+        .bind(owner).bind(conversation).bind(context).bind(incarnation)
+        .fetch_one(&mut *tx).await.map_err(db)?;
+    if writing != 1 {
+        return Ok(None);
+    }
+    // Earliest pending input of this window, as the canonical claim sees
+    // it, ignoring only rows other slots already claimed.
+    let row = sqlx::query(&format!("SELECT i.* FROM reasoning_inbox i WHERE i.conversation_id=? AND i.state IN ('queued','claimed') AND NOT EXISTS(SELECT 1 FROM ordinary_input_holds h WHERE h.event_id=i.event_id) AND EXISTS(SELECT 1 FROM execution_window_inputs wi WHERE wi.window_id=? AND wi.event_id=i.event_id) AND NOT {} ORDER BY i.sequence LIMIT 1", claimed_by_other_slot("i")))
+        .bind(conversation).bind(window_id).bind(claimant)
+        .fetch_optional(&mut *tx).await.map_err(db)?;
+    let Some(row) = row else {
+        return Ok(None);
+    };
+    let event: String = row.get("event_id");
+    let message: String = row.get("message_id");
+    // Owner chat input only: never a timer occurrence (typically outreach),
+    // a steered message, a thread ask, an agent-relayed input, or an input a
+    // parallel turn already deferred to the writer.
+    let eligible: i64 = sqlx::query_scalar("SELECT count(*) FROM messages m WHERE m.id=?1 AND m.actor_kind='owner' AND NOT EXISTS(SELECT 1 FROM dormant_timer_inputs t WHERE t.event_id=?2) AND NOT EXISTS(SELECT 1 FROM production_steering s WHERE s.event_id=?2) AND NOT EXISTS(SELECT 1 FROM thread_asks a WHERE a.input_message_id=m.id OR a.reply_message_id=m.id) AND NOT EXISTS(SELECT 1 FROM message_authors au WHERE au.message_id=m.id AND au.author NOT IN ('owner','member','v1_owner')) AND NOT EXISTS(SELECT 1 FROM production_parallel_deep_deferrals d WHERE d.event_id=?2)")
+        .bind(&message).bind(&event)
+        .fetch_one(&mut *tx).await.map_err(db)?;
+    Ok((row.get::<&str, _>("state") == "queued" && eligible == 1).then_some(row))
 }
 
 /// `session` is a parallel slot set up by exactly this live incarnation.

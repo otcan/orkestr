@@ -138,6 +138,8 @@ impl ConfiguredExecution {
             companion: None,
             window_activated: std::sync::atomic::AtomicBool::new(false),
             fast_factory: None,
+            deep_slots: None,
+            parallel_factory: None,
         };
         if claude.is_none() {
             factory.attach_window_roles(home, config)?;
@@ -158,6 +160,9 @@ impl ConfiguredExecution {
         heartbeat: &mut Instant,
         shutdown: &mut watch::Receiver<bool>,
     ) -> Result<(), &'static str> {
+        // Parallel Deep slots stop while the window is still active; their
+        // witnesses are held until this close returns.
+        let _slot_proofs = self.drain_deep_slots().await?;
         self.begin_role_retirement().await?;
         loop {
             if *shutdown.borrow() {

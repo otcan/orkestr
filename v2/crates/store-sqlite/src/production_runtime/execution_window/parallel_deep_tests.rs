@@ -875,3 +875,268 @@ async fn grouping_skips_slot_claims_and_a_slot_never_groups() {
     let dup: i64 = count(&w.f.store, "SELECT count(*) FROM (SELECT admitted_run_id FROM reasoning_inbox GROUP BY event_id HAVING count(*)>1)").await;
     assert_eq!(dup, 0);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_slot_turn_is_noted_read_only_with_a_digest_and_a_deep_model() {
+    let w = Window::open().await;
+    w.activate().await;
+    switch(&w, true).await;
+    let question = join(&w, 1).await;
+    let writing = writer(&w, "note-writer").await;
+    // The writer's own first turn is unchanged by the switch.
+    assert!(!writing.text().contains("Parallel"));
+    let (binding, _) = slot(&w, "note-slot").await;
+    let cap = parallel(&w, &binding).await;
+    assert_eq!(cap.source_event_id(), &question.input_event_id);
+    let text = cap.text();
+    assert!(text.contains(crate::production_runtime::parallel_deep_turns::SLOT_NOTE.trim()));
+    assert!(text.ends_with("PARALLEL_QUESTION_1"), "{text}");
+    // A fresh native: the bounded history digest comes first.
+    assert!(text.starts_with("Historical conversation digest"), "{text}");
+    // A slot runs on the read-only Fast profile: it always names a Deep model.
+    assert_eq!(
+        cap.launch().unwrap().codex_overrides(),
+        Some((
+            Some(crate::production_runtime::PARALLEL_DEEP_DEFAULT_MODEL),
+            Some(crate::production_runtime::PARALLEL_DEEP_DEFAULT_EFFORT)
+        ))
+    );
+    assert_eq!(
+        writing.launch().unwrap().codex_overrides(),
+        Some((None, None))
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_writer_is_told_each_parallel_answer_once() {
+    let w = Window::open().await;
+    w.activate().await;
+    switch(&w, true).await;
+    let _question = join(&w, 1).await;
+    let writing = writer(&w, "told-writer").await;
+    let (binding, _) = slot(&w, "told-slot").await;
+    let cap = parallel(&w, &binding).await;
+    accept(&w, cap.provider(), "PARALLEL_ANSWER_TEXT").await;
+    accept(&w, writing.provider(), "writer").await;
+    let next_input = join(&w, 2).await;
+    let next = writer(&w, "told-writer-2").await;
+    assert_eq!(next.source_event_id(), &next_input.input_event_id);
+    assert!(next
+        .text()
+        .contains("Parallel answers since your previous turn"));
+    assert!(next.text().contains("PARALLEL_ANSWER_TEXT"));
+    assert!(next.text().contains("PARALLEL_QUESTION_1"));
+    assert!(next.text().ends_with("PARALLEL_QUESTION_2"));
+    accept(&w, next.provider(), "writer 2").await;
+    let _third = join(&w, 3).await;
+    let later = writer(&w, "told-writer-3").await;
+    assert!(!later.text().contains("PARALLEL_ANSWER_TEXT"), "noted once");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_deferred_input_goes_to_the_writer_exactly_once() {
+    let w = Window::open().await;
+    w.activate().await;
+    switch(&w, true).await;
+    let action = join(&w, 1).await;
+    let writing = writer(&w, "defer-writer").await;
+    let (binding, _) = slot(&w, "defer-slot").await;
+    let cap = parallel(&w, &binding).await;
+    let run = cap.provider().run.run_id.clone();
+    // Before acceptance nothing defers.
+    assert!(w
+        .bound
+        .defer_parallel_deep_input(w.credential.credential(), &run)
+        .await
+        .is_err());
+    accept(&w, cap.provider(), "  PARALLEL_DEFER\n").await;
+    assert!(w
+        .bound
+        .defer_parallel_deep_input(w.credential.credential(), &run)
+        .await
+        .unwrap());
+    // Idempotent.
+    assert!(w
+        .bound
+        .defer_parallel_deep_input(w.credential.credential(), &run)
+        .await
+        .unwrap());
+    assert_eq!(
+        scalar(
+            &w,
+            "SELECT state FROM reasoning_inbox WHERE event_id=?",
+            &action.input_event_id.to_string()
+        )
+        .await,
+        "queued"
+    );
+    // Another slot never takes it again.
+    let (other, _) = slot(&w, "defer-other").await;
+    assert!(claim(&w, &other).await.is_none());
+    // The writer takes it, and its note does not repeat the marker.
+    accept(&w, writing.provider(), "writer").await;
+    let next = writer(&w, "defer-writer-2").await;
+    assert_eq!(next.source_event_id(), &action.input_event_id);
+    assert!(!next.text().contains("PARALLEL_DEFER"));
+    // An ordinary answer never defers.
+    let w2 = Window::open().await;
+    w2.activate().await;
+    switch(&w2, true).await;
+    let _q = join(&w2, 1).await;
+    let _writing = writer(&w2, "nodefer-writer").await;
+    let (binding, _) = slot(&w2, "nodefer-slot").await;
+    let cap = parallel(&w2, &binding).await;
+    accept(
+        &w2,
+        cap.provider(),
+        "PARALLEL_DEFER is mentioned, but this is an answer",
+    )
+    .await;
+    assert!(!w2
+        .bound
+        .defer_parallel_deep_input(w2.credential.credential(), &cap.provider().run.run_id)
+        .await
+        .unwrap());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn burst_marker_and_review_gate() {
+    let w = Window::open().await;
+    w.activate().await;
+    switch(&w, true).await;
+    let _q = join(&w, 1).await;
+    let writing = writer(&w, "marker-writer").await;
+    let marker = |run: RunId| {
+        let w = &w;
+        async move {
+            w.f.store
+                .deep_run_parallel_authenticated(
+                    &w.browser_credential,
+                    &w.f.owner,
+                    &w.f.conversation,
+                    &run,
+                )
+                .await
+                .unwrap()
+        }
+    };
+    // A lone writer turn carries no marker.
+    assert_eq!(
+        marker(writing.provider().run.run_id.clone()).await,
+        (false, false)
+    );
+    assert!(w
+        .bound
+        .parallel_deep_candidate(w.credential.credential())
+        .await
+        .unwrap());
+    let (binding, _) = slot(&w, "marker-slot").await;
+    let cap = parallel(&w, &binding).await;
+    assert!(!w
+        .bound
+        .parallel_deep_candidate(w.credential.credential())
+        .await
+        .unwrap());
+    assert_eq!(
+        marker(cap.provider().run.run_id.clone()).await,
+        (true, true)
+    );
+    assert_eq!(
+        marker(writing.provider().run.run_id.clone()).await,
+        (false, true)
+    );
+    assert!(w
+        .f
+        .store
+        .deep_run_parallel_authenticated(
+            &"f".repeat(64),
+            &w.f.owner,
+            &w.f.conversation,
+            &writing.provider().run.run_id
+        )
+        .await
+        .is_err());
+    // Review before accepting: parallel answers are server-accepted, so no
+    // slot starts while the owner reviews each reply.
+    let current =
+        w.f.store
+            .conversation_settings(&w.browser_credential, &w.f.owner, &w.f.conversation)
+            .await
+            .unwrap();
+    w.f.store
+        .update_conversation_settings(
+            &w.browser_credential,
+            &w.f.owner,
+            &w.f.conversation,
+            &ConversationSettingsUpdate {
+                expected_revision: current.revision,
+                provider: ConversationProvider::Codex,
+                model: None,
+                reasoning_effort: None,
+                honor_no_reply: true,
+                reply_prefix: None,
+                reply_footer: None,
+                review_before_accepting: true,
+                parallel_deep: None,
+                deep_grouping: None,
+            },
+        )
+        .await
+        .unwrap();
+    assert!(!w
+        .bound
+        .parallel_deep_enabled(w.credential.credential())
+        .await
+        .unwrap());
+    assert!(matches!(
+        w.bound
+            .allocate_parallel_deep_slot(w.credential.credential())
+            .await,
+        Err(RuntimeStoreError::Fenced)
+    ));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_failed_slot_turn_returns_its_input_to_the_writer() {
+    let w = Window::open().await;
+    w.activate().await;
+    switch(&w, true).await;
+    let question = join(&w, 1).await;
+    let writing = writer(&w, "failed-writer").await;
+    let (binding, _) = slot(&w, "failed-slot").await;
+    let cap = parallel(&w, &binding).await;
+    let p = cap.provider();
+    w.bound
+        .append_provider_event(&w.f.owner, p, &observation(p, 1, ProviderEvent::Started))
+        .await
+        .unwrap();
+    w.bound
+        .append_provider_event(
+            &w.f.owner,
+            p,
+            &observation(
+                p,
+                2,
+                ProviderEvent::FailedWith(orkestr_v2_contracts::ExecutionFailureClass::Quota),
+            ),
+        )
+        .await
+        .unwrap();
+    assert!(w
+        .bound
+        .defer_parallel_deep_input(w.credential.credential(), &p.run.run_id)
+        .await
+        .unwrap());
+    assert_eq!(
+        scalar(
+            &w,
+            "SELECT state FROM reasoning_inbox WHERE event_id=?",
+            &question.input_event_id.to_string()
+        )
+        .await,
+        "queued"
+    );
+    accept(&w, writing.provider(), "writer").await;
+    let next = writer(&w, "failed-writer-2").await;
+    assert_eq!(next.source_event_id(), &question.input_event_id);
+}

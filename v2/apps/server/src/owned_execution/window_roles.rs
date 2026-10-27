@@ -378,6 +378,8 @@ impl ConfiguredExecution {
             companion: Some(companion.clone()),
             window_activated: std::sync::atomic::AtomicBool::new(false),
             fast_factory: None,
+            deep_slots: None,
+            parallel_factory: None,
         };
         self.config.worker = Some(
             if let Some(run_ms) = self
@@ -394,6 +396,49 @@ impl ConfiguredExecution {
         );
         self.companion = Some(companion);
         self.fast_factory = Some(Box::new(fast));
+        // Read-only parallel Deep slots (docs/v2/parallel-deep.md) launch on
+        // the read-only Fast service profile under this window's Deep context.
+        // The pool starts nothing while the owner's `parallel_deep` is off.
+        let slots = super::deep_slots::DeepSlots::new(home);
+        let parallel = Self {
+            config: Config {
+                schema_version: 1,
+                mode: "isolated_acceptance".into(),
+                conversation_id: config.conversation_id.clone(),
+                machine_token_file: PathBuf::new(),
+                launcher: roles.fast.launcher.clone(),
+                launcher_sha256: roles.fast.launcher_sha256.clone(),
+                workspace: roles.fast.workspace.clone(),
+                workspace_authority: None,
+                namespace: self.config.namespace.clone(),
+                supervisor_key: self.config.supervisor_key.clone(),
+                provider: config::Provider::Codex,
+                role: config::ExecutionRole::Deep,
+                execution_budget: self.config.execution_budget.clone(),
+                worker: None,
+            },
+            store: self.store.clone(),
+            owner: self.owner.clone(),
+            token: self.token.clone(),
+            directory: self.directory.clone(),
+            control: self.control.clone(),
+            tasks: self.tasks.clone(),
+            children: self.children.clone(),
+            worker_reaps: self.worker_reaps.clone(),
+            offline_python: None,
+            workspace_exec: None,
+            initial_grant: None,
+            workspace_grant: None,
+            window: self.window.clone(),
+            window_workers: None,
+            companion: None,
+            window_activated: std::sync::atomic::AtomicBool::new(false),
+            fast_factory: None,
+            deep_slots: Some(slots.clone()),
+            parallel_factory: None,
+        };
+        self.deep_slots = Some(slots);
+        self.parallel_factory = Some(Box::new(parallel));
         Ok(())
     }
 
@@ -407,16 +452,39 @@ impl ConfiguredExecution {
                 // A lost or failed Fast companion fails alone: Deep (and its
                 // Workers) keep the window. Core still decides retirement.
                 let companion = self.companion.clone();
-                join_roles(
-                    self.run(shutdown.clone()),
-                    fast.run(shutdown),
-                    move |reason| {
-                        eprintln!("owned window Fast companion failed: {reason}");
-                        if let Some(companion) = companion {
-                            companion.fail();
+                let parallel = self.parallel_factory.take();
+                let slots = self.deep_slots.clone();
+                let side = {
+                    let shutdown = shutdown.clone();
+                    async move {
+                        // The parallel Deep pool is its own task (Core fences
+                        // block in place) and fails alone: it then starts no
+                        // slot, and the writer's close still waits for the
+                        // started ones. Aborted with this role set.
+                        let pool = parallel.map(|parallel| {
+                            let shutdown = shutdown.clone();
+                            AbortOnDrop(tokio::spawn(async move {
+                                if let Err(reason) = parallel.run_deep_slots(shutdown).await {
+                                    eprintln!("owned window parallel Deep pool failed: {reason}");
+                                    if let Some(slots) = slots {
+                                        slots.retire();
+                                    }
+                                }
+                            }))
+                        });
+                        let fast = fast.run(shutdown).await;
+                        if let Some(mut pool) = pool {
+                            let _ = (&mut pool.0).await;
                         }
-                    },
-                )
+                        fast
+                    }
+                };
+                join_roles(self.run(shutdown.clone()), side, move |reason| {
+                    eprintln!("owned window Fast companion failed: {reason}");
+                    if let Some(companion) = companion {
+                        companion.fail();
+                    }
+                })
                 .await
             }
         }
@@ -492,6 +560,9 @@ impl ConfiguredExecution {
         if let Some(companion) = &self.companion {
             companion.retire();
         }
+        if let Some(slots) = &self.deep_slots {
+            slots.retire();
+        }
         if let Some(window) = &self.window {
             window.begin_retirement(&self.store, &self.token).await?;
         }
@@ -536,6 +607,14 @@ impl ConfiguredExecution {
             self.maintain(&mut heartbeat).await?;
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
+    }
+}
+
+/// A spawned role task that is aborted when its owning future is dropped.
+struct AbortOnDrop(tokio::task::JoinHandle<()>);
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
     }
 }
 

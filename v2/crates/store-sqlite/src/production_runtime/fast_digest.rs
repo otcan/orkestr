@@ -56,7 +56,14 @@ pub(super) async fn attach(
     source_sequence: i64,
     current: String,
 ) -> Result<String> {
-    if admission.run.role != Role::Fast || admission.binding.provider_kind != ProviderKind::Codex {
+    if admission.binding.provider_kind != ProviderKind::Codex {
+        return Ok(current);
+    }
+    // A read-only parallel Deep slot is a fresh native too: it gets the same
+    // bounded digest of the history before its input.
+    let slot = admission.run.role == Role::Deep
+        && super::parallel_deep::is_slot(tx, &admission.run.session_id.to_string()).await?;
+    if admission.run.role != Role::Fast && !slot {
         return Ok(current);
     }
     // Historical producers intentionally dispatch against exact older schemas.
@@ -71,7 +78,7 @@ pub(super) async fn attach(
             .fetch_one(&mut *tx)
             .await
             .map_err(db)?;
-    if bounded == 0 {
+    if bounded == 0 && !slot {
         return Ok(current);
     }
     // A same-window continuation runs on the native child that already holds
@@ -112,9 +119,13 @@ pub(super) async fn attach(
             update
         }
     };
-    sqlx::query("INSERT INTO production_fast_digests(run_id,session_id,source_event_id,cutoff_sequence,digest_text) VALUES(?,?,?,?,?)")
-        .bind(admission.run.run_id.to_string()).bind(admission.run.session_id.to_string()).bind(source_event)
-        .bind(source_sequence).bind(&digest).execute(&mut *tx).await.map_err(db)?;
+    // A parallel slot's digest is part of its consumed turn text only (the
+    // digest ledger belongs to bounded Fast sessions).
+    if !slot {
+        sqlx::query("INSERT INTO production_fast_digests(run_id,session_id,source_event_id,cutoff_sequence,digest_text) VALUES(?,?,?,?,?)")
+            .bind(admission.run.run_id.to_string()).bind(admission.run.session_id.to_string()).bind(source_event)
+            .bind(source_sequence).bind(&digest).execute(&mut *tx).await.map_err(db)?;
+    }
     Ok(format!("{digest}{current}"))
 }
 

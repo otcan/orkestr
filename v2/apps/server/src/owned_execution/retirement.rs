@@ -37,6 +37,7 @@ impl ConfiguredExecution {
         // final retirement checks the global resource barrier with all proofs.
         if self.config.worker.is_none()
             && self.companion.is_none()
+            && self.deep_slots.is_none()
             && !self.children.wait_empty(Duration::from_secs(2)).await
         {
             return Err("execution retained child resources remain active");
@@ -61,6 +62,10 @@ impl ConfiguredExecution {
                 return companion.retain(proof);
             }
         }
+        // Every parallel Deep slot stops and finishes its own exact close
+        // while the window is still active (a slot's Stop needs its fences);
+        // their witnesses stay held through Core and manager close.
+        let slot_proofs = self.drain_deep_slots().await?;
         self.begin_role_retirement().await?;
         let fast_proof = self.companion_reap().await?;
         // Freezing consumes the original parent witness and every retained
@@ -82,6 +87,7 @@ impl ConfiguredExecution {
         // Retain the original native-tree witness through Core AND manager close.
         drop(proofs);
         drop(fast_proof);
+        drop(slot_proofs);
         Ok(())
     }
 }

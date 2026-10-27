@@ -206,6 +206,7 @@ class Channel:
         self.expected_native = expected_native
         self.workspace = str(workspace)
         self.handle = None
+        self.parallel_deep = False
         self.stage = "new"
         self.pending = None
         self.seen = set()
@@ -248,10 +249,14 @@ class Channel:
             # parent/task admission; role JSON cannot create that authority.
             require(identity["role"] in ("fast", "deep", "worker"))
             require(not self.tool_enabled or identity["role"] == "worker")
-            require(not self.fast_only or identity["role"] == "fast")
+            # The read-only (Fast) service broker also serves a read-only
+            # parallel Deep slot (docs/v2/parallel-deep.md): same sandbox,
+            # same native profile without MCP servers, apps or hooks.
+            require(not self.fast_only or identity["role"] in ("fast", "deep"))
             self.role = identity["role"]
             self.owner_id = identity["owner_id"]
-            if self.role == "fast":
+            self.parallel_deep = self.fast_only and self.role == "deep"
+            if self.role == "fast" or self.fast_only:
                 # Fast is read-only on every instance, including host full
                 # access: Codex's read-only sandbox denies file writes and
                 # network to every command. Runtime must request it and the
@@ -279,7 +284,9 @@ class Channel:
         elif method == "SteerExecution":
             # Exclusively owned parent pipe; only Core-issued consumed steer
             # authority may derive this frame. JSON is not that authority.
-            require(self.role in ("fast", "deep") and not self.tool_enabled and self.committed and self.turn is not None
+            # A read-only parallel Deep turn is never steered (only the writer).
+            require(self.role in ("fast", "deep") and not self.parallel_deep and not self.tool_enabled
+                    and self.committed and self.turn is not None
                     and not self.terminal and not self.cancelled)
             exact(frame, ("id", "method", "params"))
             request_id = frame["id"]

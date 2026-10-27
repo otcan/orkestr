@@ -155,6 +155,27 @@ pub(super) fn window_fast(
     }
 }
 
+/// One read-only parallel Deep slot's own scratch custody (home and tmp of
+/// its fresh native). Core's slot uniqueness keeps one live child here.
+pub(super) fn window_deep_slot(
+    home: &Path,
+    conversation: &orkestr_v2_contracts::ConversationId,
+    slot: u8,
+) -> Result<PathBuf, &'static str> {
+    if conversation.0.is_nil() {
+        return Err("parallel Deep scope requires a conversation");
+    }
+    if slot == 0 || slot > orkestr_v2_store_sqlite::MAX_PARALLEL_DEEP_SLOTS {
+        return Err("parallel Deep slot is out of range");
+    }
+    let path = scoped_root(home)?.join(format!("deep-{conversation}-slot{slot}"));
+    match std::fs::symlink_metadata(&path) {
+        Ok(_) => existing_directory(home, path),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => create_directory(path),
+        Err(_) => Err("parallel Deep slot scratch custody unavailable"),
+    }
+}
+
 /// One auxiliary Fast slot's own scratch custody beside the lineage's
 /// `window_fast` directory. Core's slot uniqueness keeps one live child here.
 pub(super) fn window_fast_slot(lineage: &Path, slot: u8) -> Result<PathBuf, &'static str> {

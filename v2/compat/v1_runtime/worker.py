@@ -16,6 +16,7 @@ from . import auto_steer
 from . import recovery
 from . import thread_ask_relay
 from . import deep_group
+from . import parallel_watch
 from .notices import TEMPLATES
 from .participants import compose
 from .rust_client import ClientError
@@ -808,6 +809,8 @@ class Worker:
         ids = set(data.get("matched_runs", []))
         for start in range(0, max(1, len(events)), 100):  # The matcher takes pages of 100.
             ids |= set(self.client.matching_run_ids(events[start:start + 100], data["intake"]))
+        # A parallel slot run that deferred to the writer never answers it.
+        ids -= parallel_watch.ignored(data)
         if len(ids) > 128:
             raise Refused("too_many_runs")
         data["matched_runs"] = sorted(ids)
@@ -902,6 +905,8 @@ class Worker:
         if len(matches) != 1 or matches[0].get("payload_removed") is not False or any(matches[0].get(k) != deep[k] for k in ("run_id", "completion_event_id")) or matches[0].get("payload_id") != data["deep_payload"]["payload_id"]:
             raise Refused("accepted_history_mismatch")
         text = self.timer_final(data, data["deep_payload"]["text"])
+        if parallel_watch.deferred(self, data, deep, text):
+            return  # The writer answers it: its own Deep run is awaited.
         if (text is not None and data.get("origin") is None and not deep_group.grouped(data)
                 and repeats_fast(data, text)):
             # "Thanks" answered twice: the Fast reply already said this.
@@ -916,6 +921,7 @@ class Worker:
                  "phase": "final_answer", "source": "rust-v2-pilot", "parentMessageId": data["remote_id"], "text": text}
         reply.update(self.provider_identity(run_id=deep["run_id"]))
         deep_group.quote(data, reply)
+        parallel_watch.quote(data, statuses.get("deep"), reply)
         if text is None:
             # V1 never transports an exact NO_REPLY; it acknowledges it as no_reply.
             reply.update(text="NO_REPLY", noReply=True)
@@ -1307,6 +1313,11 @@ class Worker:
             pass  # Retried next pass; never blocks the binding.
         steering = auto_steer.drive(self)
         fast_pending = drive_intake_fast(self) or steering
+        try:
+            # Parallel Deep finals settle out of ledger order (switch on only).
+            fast_pending = parallel_watch.drive(self) or fast_pending
+        except Exception:
+            pass  # Retried next pass; never blocks the binding.
         if not fast_pending:
             self._fast_since = None
         elif self._fast_since is None:
