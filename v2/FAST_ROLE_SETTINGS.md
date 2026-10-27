@@ -19,10 +19,12 @@ time on its single lineage (slot 0), exactly as before parallel slots. The
 window scheduler reads it live (cached for at most 2 s), so no restart or
 deploy is needed; slots already running finish normally. An update that
 omits `parallel_replies` keeps its current value, so changing the model never
-re-enables a disabled switch:
+re-enables a disabled switch. `model` and `reasoning_effort` are still a full
+replacement, so a switch change sends their current values (`null` clears an
+override):
 
 ```json
-{"expected_revision":1,"model":null,"reasoning_effort":null,"parallel_replies":false}
+{"expected_revision":1,"model":"gpt-6-luna","reasoning_effort":"low","parallel_replies":false}
 ```
 
 A Fast reply that is part of a burst (presented by an extra slot, or while
