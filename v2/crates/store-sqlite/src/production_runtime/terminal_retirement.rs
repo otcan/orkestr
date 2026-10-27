@@ -49,6 +49,16 @@ impl Store {
             return Err(RuntimeStoreError::Fenced);
         }
         super::fast_continuity::retire_failed_setups(&mut tx, &c.id, &c.incarnation).await?;
+        // Every run of this context is terminal: no auxiliary Fast session of
+        // the conversation outlives its window (slot 0 keeps its lineage).
+        let conversation: String =
+            sqlx::query_scalar("SELECT conversation_id FROM production_runs WHERE id=?")
+                .bind(prior_run.to_string())
+                .fetch_one(&mut *tx)
+                .await
+                .map_err(db)?;
+        super::fast_slots::retire_settled(&mut tx, &c.owner.to_string(), &conversation, None)
+            .await?;
         // Immutable provenance is issued only after the canonical terminal checks
         // above. Other expiry/revocation paths must never create this evidence.
         let clock = now(&mut tx).await?;

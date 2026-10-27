@@ -278,6 +278,10 @@ impl CodexPump {
     ) -> Result<crate::containment::RetiringBroker, crate::containment::Error> {
         self.source.child.retire_broker()
     }
+    /// Peak resident memory of the owned broker tree; estimates only.
+    pub fn tree_peak_rss_bytes(&self) -> Option<u64> {
+        self.source.child.tree_peak_rss_bytes()
+    }
     /// Idle observation only (no quarantine): has the owned broker exited?
     pub fn broker_exited(&self) -> Result<bool, crate::containment::Error> {
         Ok(self.source.child.poll_exit(&self.source.scope)?.is_some())

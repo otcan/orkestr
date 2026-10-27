@@ -136,6 +136,32 @@ async fn status_for(
                             control.steering_available(&owner, &conversation, run)
                         })
                     });
+            if let (true, Some(run)) = (fast, query.run_id.as_ref()) {
+                // Burst marker for channel adapters: quote this reply's
+                // source message. Absent (not false) for a lone reply, so the
+                // single-message shape is unchanged.
+                let concurrent = state
+                    .store
+                    .fast_run_concurrent_authenticated(
+                        &browser::credential(&headers)?,
+                        &owner,
+                        &conversation,
+                        run,
+                    )
+                    .await
+                    .unwrap_or(false);
+                if concurrent {
+                    let mut value = serde_json::to_value(&status).map_err(|_| {
+                        Error(
+                            StatusCode::SERVICE_UNAVAILABLE,
+                            "invalid_projection",
+                            "Execution status unavailable",
+                        )
+                    })?;
+                    value["concurrent_fast"] = serde_json::Value::Bool(true);
+                    return Ok(Json(value).into_response());
+                }
+            }
             Ok(Json(status).into_response())
         }
         Some(_) => Err(Error(

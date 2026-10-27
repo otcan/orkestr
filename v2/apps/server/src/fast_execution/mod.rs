@@ -53,6 +53,15 @@ pub async fn consume_fast(
     input: &FastAdmissionInput,
 ) -> Result<FastDispatch, RuntimeStoreError> {
     let admitted = store.admit_fast(credential, input).await?;
+    consume_admitted(store, admitted, input).await
+}
+
+/// The rest of `consume_fast` after Core committed (or replayed) admission.
+pub(crate) async fn consume_admitted(
+    store: &Store,
+    admitted: RunAdmissionResult,
+    input: &FastAdmissionInput,
+) -> Result<FastDispatch, RuntimeStoreError> {
     validate(&admitted, input)?;
     match admitted.disposition {
         AdmissionDisposition::Replay => return Ok(FastDispatch::Replay),

@@ -23,9 +23,7 @@ impl ConfiguredExecution {
     ) -> Result<(), &'static str> {
         self.current().await?;
         let mut heartbeat = Instant::now();
-        let mut pending =
-            super::fast_continuity::PendingFastRetirement::new(self.companion.clone());
-        let mut grant = if let Some(grant) = self.initial_grant.take() {
+        let grant = if let Some(grant) = self.initial_grant.take() {
             if self
                 .fast_source(&mut shutdown, &mut heartbeat)
                 .await?
@@ -68,6 +66,24 @@ impl ConfiguredExecution {
                     .map_err(|_| "Fast setup authority refused")?
             }
         };
+        if self.window.is_some() && self.companion.is_some() {
+            // A window's Fast serves each owner input in its own concurrent
+            // slot; the canonical lineage below is slot 0.
+            return super::fast_pool::run(std::sync::Arc::new(self), grant, shutdown).await;
+        }
+        self.fast_lineage(grant, shutdown, heartbeat).await
+    }
+
+    /// The canonical Fast lineage: one fresh native per presentation, each
+    /// replacement issued only after its predecessor's exact terminal truth.
+    pub(super) async fn fast_lineage(
+        &self,
+        mut grant: BoundSessionMetadata,
+        mut shutdown: watch::Receiver<bool>,
+        mut heartbeat: Instant,
+    ) -> Result<(), &'static str> {
+        let mut pending =
+            super::fast_continuity::PendingFastRetirement::new(self.companion.clone());
         loop {
             let Some(ready) = self
                 .prepare_fast(grant, &mut shutdown, &mut heartbeat)
@@ -103,6 +119,8 @@ impl ConfiguredExecution {
                     return Err(ABANDONED);
                 }
             }
+            // The input stays claimed for the window's life: a slot that
+            // read it before this admission committed can never take it.
             let live = started(
                 ready
                     .dispatch(&self.token, &input)
@@ -113,15 +131,21 @@ impl ConfiguredExecution {
                 companion.started();
             }
             pending.dispatched();
-            match self.drive_fast(live, &mut shutdown, &mut heartbeat).await? {
+            match self
+                .drive_fast(live, &mut shutdown, &mut heartbeat, false)
+                .await?
+            {
                 FastExit::Shutdown => return Ok(()),
                 FastExit::Accepted { run, proof } | FastExit::Stopped { run, proof } => {
                     pending.keep(run.clone(), proof);
                     // ReapedBroker is retained until the terminal metadata
                     // issuer has checked the same Fast predecessor and binding,
                     // or shutdown records its proven retirement without a new run.
+                    // The lineage counts as idle while it waits, then claims
+                    // and holds the next input across its fresh setup, so no
+                    // extra slot sets up a second session for it.
                     if self
-                        .fast_source(&mut shutdown, &mut heartbeat)
+                        .fast_source_held(&mut shutdown, &mut heartbeat)
                         .await?
                         .is_none()
                     {
@@ -204,7 +228,7 @@ impl ConfiguredExecution {
         shutdown: &mut watch::Receiver<bool>,
         heartbeat: &mut Instant,
     ) -> Result<Option<FastSource>, &'static str> {
-        self.fast_source_checked(shutdown, heartbeat, || Ok(()))
+        self.fast_source_checked(shutdown, heartbeat, false, || Ok(()))
             .await
     }
 
@@ -212,21 +236,18 @@ impl ConfiguredExecution {
         &self,
         shutdown: &mut watch::Receiver<bool>,
         heartbeat: &mut Instant,
+        claim: bool,
         mut check: impl FnMut() -> Result<(), &'static str>,
     ) -> Result<Option<FastSource>, &'static str> {
+        // A ready lineage waiting here takes the next input itself.
+        let _idle = claim.then(|| PrimaryIdle::new(self.companion.as_deref()));
         loop {
             if *shutdown.borrow() || self.fast_window_due() {
                 return Ok(None);
             }
             self.maintain(heartbeat).await?;
             check()?;
-            // Zero is intentional: the durable Fast run ledger deduplicates
-            // every admitted source, including unknown/failed attempts. A
-            // volatile cursor must never skip a held input after release.
-            let source = self
-                .store
-                .next_fast_source(&self.token, &self.config.conversation_id, 0)
-                .await;
+            let source = self.unclaimed_fast_source(claim).await;
             let source = match source {
                 Ok(source) => source,
                 Err(
@@ -238,13 +259,36 @@ impl ConfiguredExecution {
             // A query racing the shared retirement fence yields no next input.
             // Original terminal/reap checks still decide whether close is legal.
             if let Some(source) = source {
-                return Ok(Some(source));
+                let Some(companion) = self.companion.as_ref().filter(|_| claim) else {
+                    return Ok(Some(source));
+                };
+                if companion.claim_source(&source.event_id)
+                    || companion.lineage_holds(&source.event_id)
+                {
+                    return Ok(Some(source));
+                }
+                continue;
             }
             tokio::select! {
                 _ = tokio::time::sleep(Duration::from_millis(100)) => {},
                 _ = shutdown.changed() => return Ok(None),
             }
         }
+    }
+
+    /// The lineage's next input, claimed and held for its next presentation.
+    async fn fast_source_held(
+        &self,
+        shutdown: &mut watch::Receiver<bool>,
+        heartbeat: &mut Instant,
+    ) -> Result<Option<FastSource>, &'static str> {
+        let source = self
+            .fast_source_checked(shutdown, heartbeat, true, || Ok(()))
+            .await?;
+        if let (Some(source), Some(companion)) = (&source, &self.companion) {
+            companion.hold_for_lineage(&source.event_id);
+        }
+        Ok(source)
     }
 
     pub(super) async fn fast_input(
@@ -262,18 +306,30 @@ impl ConfiguredExecution {
         heartbeat: &mut Instant,
         check: impl FnMut() -> Result<(), &'static str>,
     ) -> Result<Option<FastAdmissionInput>, &'static str> {
-        let Some(source) = self.fast_source_checked(shutdown, heartbeat, check).await? else {
+        let Some(source) = self
+            .fast_source_checked(shutdown, heartbeat, true, check)
+            .await?
+        else {
             return Ok(None);
         };
-        let binding = self
+        if let Some(companion) = &self.companion {
+            // Presenting it now: the hold ends, the claim stays.
+            companion.take_lineage_hold(&source.event_id);
+        }
+        let binding = match self
             .store
             .ensure_role_bindings(&self.owner, &self.config.conversation_id)
             .await
-            .map_err(|_| "Fast ready binding unavailable")?
-            .fast;
-        if binding.state != SessionState::Ready {
-            return Err("Fast binding is not ready for another presentation");
-        }
+        {
+            Ok(bindings) if bindings.fast.state == SessionState::Ready => Ok(bindings.fast),
+            Ok(_) => Err("Fast binding is not ready for another presentation"),
+            Err(_) => Err("Fast ready binding unavailable"),
+        };
+        let binding = binding.inspect_err(|_| {
+            if let Some(companion) = &self.companion {
+                companion.release_source(&source.event_id);
+            }
+        })?;
         Ok(Some(FastAdmissionInput {
             source_message_id: source.message_id,
             request_key: format!("fast-http:{}", source.event_id),
@@ -281,6 +337,55 @@ impl ConfiguredExecution {
             fast_binding_id: binding.session_id,
             expected_binding_generation: binding.generation,
         }))
+    }
+}
+
+impl ConfiguredExecution {
+    /// Earliest admissible owner input no Fast task of this window claimed.
+    /// Zero is intentional: the durable Fast run ledger deduplicates every
+    /// admitted source, including unknown/failed attempts. A volatile cursor
+    /// must never skip a held input after release; only claimed inputs (at
+    /// most one per live slot) are stepped over.
+    /// `lineage`: the canonical lineage also sees the input it holds across
+    /// its own rotation; an extra slot never does.
+    pub(super) async fn unclaimed_fast_source(
+        &self,
+        lineage: bool,
+    ) -> Result<Option<FastSource>, orkestr_v2_application::runtime::RuntimeStoreError> {
+        let mut after = 0;
+        loop {
+            let source = self
+                .store
+                .next_fast_source(&self.token, &self.config.conversation_id, after)
+                .await?;
+            match (source, &self.companion) {
+                (Some(source), Some(companion))
+                    if companion.is_claimed(&source.event_id)
+                        && !(lineage && companion.lineage_holds(&source.event_id)) =>
+                {
+                    after = source.sequence;
+                }
+                (source, _) => return Ok(source),
+            }
+        }
+    }
+}
+
+/// Marks the canonical lineage idle (ready, waiting for input) while held.
+struct PrimaryIdle<'a>(Option<&'a super::window_roles::Companion>);
+impl<'a> PrimaryIdle<'a> {
+    fn new(companion: Option<&'a super::window_roles::Companion>) -> Self {
+        if let Some(companion) = companion {
+            companion.set_primary_idle(true);
+        }
+        Self(companion)
+    }
+}
+impl Drop for PrimaryIdle<'_> {
+    fn drop(&mut self) {
+        if let Some(companion) = self.0 {
+            companion.set_primary_idle(false);
+        }
     }
 }
 

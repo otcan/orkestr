@@ -367,6 +367,10 @@ async fn populated_payload_prefix_upgrade_preserves_all_rows_and_foreign_links()
     for row in expected.get_mut("conversations").unwrap() {
         row.push_str("|0");
     }
+    // Migration 80 places every existing role record in Fast slot 0.
+    for row in expected.get_mut("session_bindings").unwrap() {
+        row.push_str("|0");
+    }
     expected.insert(
         "conversation_directory".into(),
         vec![
@@ -510,7 +514,7 @@ async fn populated_payload_prefix_upgrade_preserves_all_rows_and_foreign_links()
             .fetch_one(&mut conn)
             .await
             .unwrap(),
-        79
+        80
     );
     for table in [
         "history_imports",
@@ -557,3 +561,121 @@ async fn populated_payload_prefix(dir: &Directory) -> SqliteConnection {
 }
 
 mod schema36_edges;
+
+async fn assert_parallel_fast_schema(pool: &sqlx::SqlitePool) {
+    let index: String = sqlx::query_scalar(
+        "SELECT sql FROM sqlite_schema WHERE type='index' AND name='canonical_role'",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert!(index.contains("(owner_id, conversation_id, role, fast_slot)"));
+    let unslotted: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM session_bindings WHERE fast_slot!=0")
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    assert_eq!(unslotted, 0, "every existing record becomes slot 0");
+    let duplicated: i64 = sqlx::query_scalar("SELECT count(*) FROM (SELECT 1 FROM session_bindings WHERE role IN ('fast','deep') AND state!='retired' GROUP BY owner_id,conversation_id,role HAVING count(*)>1)")
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    assert_eq!(duplicated, 0);
+    assert!(sqlx::query("PRAGMA foreign_key_check")
+        .fetch_all(pool)
+        .await
+        .unwrap()
+        .is_empty());
+    let integrity: String = sqlx::query_scalar("PRAGMA integrity_check")
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    assert_eq!(integrity, "ok");
+}
+
+#[tokio::test]
+async fn schema_77_fast_lineage_upgrades_into_slot_zero_with_bounded_slots() {
+    let dir = Directory::new();
+    let mut conn = populated_dispatch_prefix(&dir).await;
+    let migrator = sqlx::migrate!("./migrations");
+    for migration in migrator.iter().skip(4).filter(|m| m.version <= 77) {
+        conn.apply(migration).await.unwrap();
+    }
+    // A schema-77 conversation: retired Fast history, one live Fast lineage,
+    // the live Deep record from the dispatch prefix.
+    sqlx::raw_sql("INSERT INTO session_bindings(id,owner_id,conversation_id,role,provider_kind,provider_namespace,native_session_id,state) VALUES('old-fast','owner','conversation','fast','codex','synthetic','old-fast-native','retired');
+    INSERT INTO session_bindings(id,owner_id,conversation_id,role,provider_kind,provider_namespace,native_session_id,state) VALUES('live-fast','owner','conversation','fast','codex','synthetic','live-fast-native','lost');")
+        .execute(&mut conn).await.unwrap();
+    let before: Vec<(String, String, String)> =
+        sqlx::query_as("SELECT id,role,state FROM session_bindings ORDER BY id")
+            .fetch_all(&mut conn)
+            .await
+            .unwrap();
+    conn.close().await.unwrap();
+    let store = Store::open(&dir.db()).await.unwrap();
+    let after: Vec<(String, String, String)> =
+        sqlx::query_as("SELECT id,role,state FROM session_bindings ORDER BY id")
+            .fetch_all(&store.pool)
+            .await
+            .unwrap();
+    assert_eq!(before, after);
+    assert_parallel_fast_schema(&store.pool).await;
+    let insert = |slot: i64| {
+        sqlx::query("INSERT INTO session_bindings(id,owner_id,conversation_id,role,fast_slot) VALUES(?,'owner','conversation','fast',?)")
+            .bind(Uuid::new_v4().to_string())
+            .bind(slot)
+    };
+    // The live lineage stays the only slot-0 Fast; slots 1-7 only.
+    assert!(insert(0).execute(&store.pool).await.is_err());
+    for slot in 1..=7 {
+        insert(slot).execute(&store.pool).await.unwrap();
+    }
+    assert!(insert(8).execute(&store.pool).await.is_err());
+    assert!(insert(7).execute(&store.pool).await.is_err());
+    store.close().await;
+    Store::open(&dir.db()).await.unwrap().close().await;
+}
+
+/// Manual rehearsal on a private COPY of a real schema 77-79 store:
+/// `ORKESTR_SCHEMA77_COPY=/path/copy.sqlite3 cargo test -- --ignored`. The
+/// copy is upgraded in place; never point this at a live database.
+#[tokio::test]
+#[ignore]
+async fn real_schema_77_copy_upgrades() {
+    let Some(copy) = std::env::var_os("ORKESTR_SCHEMA77_COPY") else {
+        return;
+    };
+    let copy = PathBuf::from(copy);
+    let mut conn = SqliteConnection::connect_with(
+        &SqliteConnectOptions::new()
+            .filename(&copy)
+            .create_if_missing(false),
+    )
+    .await
+    .unwrap();
+    let version: i64 = sqlx::query_scalar("SELECT max(version) FROM _sqlx_migrations")
+        .fetch_one(&mut conn)
+        .await
+        .unwrap();
+    // Any pre-slot schema the live train can hold: 77 (pre-#341) to 79.
+    assert!(
+        (77..=79).contains(&version),
+        "rehearsal needs a schema 77-79 copy, got {version}"
+    );
+    let before: Vec<(String, String, String)> =
+        sqlx::query_as("SELECT id,role,state FROM session_bindings ORDER BY id")
+            .fetch_all(&mut conn)
+            .await
+            .unwrap();
+    conn.close().await.unwrap();
+    let store = Store::open(&copy).await.unwrap();
+    let after: Vec<(String, String, String)> =
+        sqlx::query_as("SELECT id,role,state FROM session_bindings ORDER BY id")
+            .fetch_all(&store.pool)
+            .await
+            .unwrap();
+    assert_eq!(before, after);
+    assert_parallel_fast_schema(&store.pool).await;
+    println!("rehearsed {} session records", after.len());
+    store.close().await;
+}

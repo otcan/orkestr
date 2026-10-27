@@ -83,3 +83,24 @@ async fn codex_fast_override_refuses_a_claude_conversation_without_changing_it()
     assert_eq!(after, deep);
     case.finish().await;
 }
+
+#[tokio::test]
+async fn parallel_replies_switch_is_on_by_default_and_owner_settable() {
+    let case = case().await;
+    let auth = case.auth();
+    let path = case.path("/fast/settings");
+    let (_, initial) = send(&case.state, "GET", &path, &[&auth], "").await;
+    assert_eq!(initial["parallel_replies"], true);
+    let off = json!({"expected_revision":0,"model":null,"reasoning_effort":null,"parallel_replies":false});
+    let (status, value) = send(&case.state, "PUT", &path, &[&auth], &off.to_string()).await;
+    assert_eq!(status, 200);
+    assert_eq!(value["parallel_replies"], false);
+    // An older client that omits the field keeps the switch as it is.
+    let model = json!({"expected_revision":1,"model":"gpt-6-luna","reasoning_effort":"low"});
+    let (status, value) = send(&case.state, "PUT", &path, &[&auth], &model.to_string()).await;
+    assert_eq!(status, 200);
+    assert_eq!(value["parallel_replies"], false);
+    let bad = json!({"expected_revision":2,"parallel_replies":"no"});
+    let (status, _) = send(&case.state, "PUT", &path, &[&auth], &bad.to_string()).await;
+    assert_eq!(status, 400);
+}

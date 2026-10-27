@@ -75,4 +75,6 @@ def capture(worker, data, statuses, own_runs):
         data["first_response"]["echo"] = echo
     data["progress_at"] = now
     identity = worker.provider_identity(run_id=fast["run_id"], status=fast, fast=True)
-    worker.ledger.add_first_response(data, payload_id, text, identity)
+    # Rust marks a reply of a Fast burst; only then does the channel quote.
+    quote = fast.get("concurrent_fast") is True
+    worker.ledger.add_first_response(data, payload_id, text, identity, quote)

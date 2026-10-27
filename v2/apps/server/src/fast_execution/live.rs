@@ -56,6 +56,13 @@ impl LiveFast {
             .map_err(|_| "Fast broker exited")
     }
 
+    /// Peak resident memory of this Fast native's tree; estimates only.
+    pub(crate) fn tree_peak_rss_bytes(&self) -> Option<u64> {
+        self.owned
+            .as_ref()
+            .and_then(|owned| owned.pump.tree_peak_rss_bytes())
+    }
+
     pub fn pending(&self) -> Option<&ProviderEventInput> {
         self.owned.as_ref().and_then(|owned| owned.pump.pending())
     }

@@ -9,13 +9,45 @@ use orkestr_v2_contracts::{ExecutionPhase, RunId};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
+/// How often a running window Fast samples its native tree's peak memory.
+const METER_INTERVAL: Duration = Duration::from_secs(2);
+
 impl ConfiguredExecution {
+    /// Drive one window or standalone Fast presentation. An auxiliary slot
+    /// answers exactly one input and retires; only the canonical slot-0
+    /// lineage keeps its accepted native warm for the next input.
     pub(super) async fn drive_fast(
+        &self,
+        live: Box<LiveFast>,
+        shutdown: &mut watch::Receiver<bool>,
+        heartbeat: &mut Instant,
+        auxiliary: bool,
+    ) -> Result<fast::FastExit, &'static str> {
+        let mut peak = 0;
+        let result = self
+            .drive_fast_metered(live, shutdown, heartbeat, auxiliary, &mut peak)
+            .await;
+        if self.window.is_some() {
+            // The measured cost of one more concurrent Fast slot.
+            super::host_pressure::record_slot_peak(peak);
+        }
+        result
+    }
+
+    async fn drive_fast_metered(
         &self,
         mut live: Box<LiveFast>,
         shutdown: &mut watch::Receiver<bool>,
         heartbeat: &mut Instant,
+        auxiliary: bool,
+        peak: &mut u64,
     ) -> Result<fast::FastExit, &'static str> {
+        let mut meter = |live: &LiveFast| {
+            if let Some(bytes) = live.tree_peak_rss_bytes() {
+                *peak = (*peak).max(bytes);
+            }
+        };
+        let mut meter_at = Instant::now();
         let mut run = live.run_id().clone();
         let (mut control, mut controls) = self
             .control
@@ -24,6 +56,10 @@ impl ConfiguredExecution {
         let mut budget = self.config.execution_budget.start(Instant::now());
         let mut renew_at = Instant::now() + Duration::from_secs(20);
         loop {
+            if self.window.is_some() && Instant::now() >= meter_at {
+                meter(&live);
+                meter_at = Instant::now() + METER_INTERVAL;
+            }
             self.maintain(heartbeat).await?;
             let schedule = control.serialize().await;
             let status = self.fast_status(&run).await?;
@@ -41,6 +77,19 @@ impl ConfiguredExecution {
                 ExecutionPhase::Completed => {
                     control.disable();
                     drop(schedule);
+                    if self.window.is_some() {
+                        meter(&live);
+                    }
+                    if auxiliary {
+                        // An extra slot answers once and retires: it never
+                        // waits for, claims or continues on another input.
+                        let retiring = live
+                            .retire_accepted(&self.token)
+                            .await
+                            .map_err(|_| "Fast accepted-session retirement refused")?;
+                        let proof = self.reaped(retiring, &run, heartbeat).await?;
+                        return Ok(fast::FastExit::Accepted { run, proof });
+                    }
                     // An idle window Fast whose native dies (OOM, resource
                     // monitor) rotates to a fresh session instead of ending
                     // Fast for the rest of the window. Only the broker's own
@@ -65,6 +114,7 @@ impl ConfiguredExecution {
                     if window && live.idle_broker_exited() {
                         // Died after the source was selected: nothing was
                         // admitted yet, so the input stays eligible.
+                        self.hold_unpresented(input.as_ref());
                         return self.rotate_ended_fast(live, run, heartbeat).await;
                     }
                     if window {
@@ -79,6 +129,8 @@ impl ConfiguredExecution {
                             None => false,
                         };
                         if !reuse {
+                            // The fresh presentation takes this input next.
+                            self.hold_unpresented(input.as_ref());
                             let retiring = live
                                 .retire_accepted(&self.token)
                                 .await
@@ -122,6 +174,11 @@ impl ConfiguredExecution {
                             .await
                             .map_err(|_| "Fast proposal cleanup refused")?;
                         let proof = self.reaped(retiring, &run, heartbeat).await?;
+                        if auxiliary {
+                            // The slot retires its own session with this witness.
+                            self.await_fast_accepted(&run, heartbeat, shutdown).await?;
+                            return Ok(fast::FastExit::Accepted { run, proof });
+                        }
                         self.wait_fast_acceptance(&run, proof, heartbeat, shutdown)
                             .await?;
                         return Ok(fast::FastExit::Shutdown);
@@ -222,6 +279,14 @@ impl ConfiguredExecution {
         let proof = self.reaped(retiring, &run, heartbeat).await?;
         eprintln!("owned window Fast idle native ended; reaped, next input starts a fresh session");
         Ok(fast::FastExit::Accepted { run, proof })
+    }
+
+    /// Keep an input this lineage selected but did not admit for its fresh
+    /// successor presentation; no extra slot takes it meanwhile.
+    fn hold_unpresented(&self, input: Option<&orkestr_v2_store_sqlite::FastAdmissionInput>) {
+        if let (Some(companion), Some(input)) = (&self.companion, input) {
+            companion.hold_for_lineage(&input.source_event_id);
+        }
     }
 
     /// Advisory only: any doubt (including a busy or unavailable Store) means

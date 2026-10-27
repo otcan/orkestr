@@ -98,8 +98,8 @@ class Ledger:
         db.execute("UPDATE fast_watch SET data=?,closed=? WHERE event_id=? AND input_id=?",
                    (json.dumps(watch), int(bool(watch.get("closed"))), watch["watch_id"], watch["remote_id"]))
 
-    def add_first_response(self, data, payload_id, text, identity=None):
-        return add(self, data, payload_id, text, identity)
+    def add_first_response(self, data, payload_id, text, identity=None, quote=False):
+        return add(self, data, payload_id, text, identity, quote)
 
     def presentation_allowed(self, watch):
         with self.connect() as db:

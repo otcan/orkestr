@@ -37,6 +37,8 @@ mod fast_continuity;
 mod fast_digest;
 pub(crate) mod fast_rules;
 pub use fast_rules::{FAST_INPUT_BUDGET, FAST_NOTE_RESERVE};
+mod fast_slots;
+pub use fast_slots::MAX_AUXILIARY_FAST_SLOTS;
 mod fence;
 mod held_inputs;
 mod retired_inputs;

@@ -70,6 +70,36 @@ impl Store {
         self.execution_status_in_scope(owner, conversation, Some(run), Some(credential), fast_only)
             .await
     }
+    /// Whether one exact Fast reply was part of a burst: presented by an
+    /// extra slot (`fast_slot>0`), or another Fast run of the same window
+    /// incarnation is live right now. A channel quotes such a reply's source
+    /// message so out-of-order replies stay attributable. Read-time sample;
+    /// same browser-session authentication as the exact-run status.
+    pub async fn fast_run_concurrent_authenticated(
+        &self,
+        credential: &str,
+        owner: &OwnerId,
+        conversation: &ConversationId,
+        run: &RunId,
+    ) -> Result<bool> {
+        if self.authority.is_some() || credential.is_empty() || credential.len() > 1024 {
+            return Err(RuntimeStoreError::Unauthorized);
+        }
+        let mut tx = self.pool.begin().await.map_err(db)?;
+        let authorized: i64 = sqlx::query_scalar("SELECT count(*) FROM auth_sessions WHERE token_hash=? AND owner_id=? AND expires_at>unixepoch()")
+            .bind(crate::digest(credential)).bind(owner.to_string())
+            .fetch_one(&mut *tx).await.map_err(db)?;
+        if authorized != 1 {
+            return Err(RuntimeStoreError::Unauthorized);
+        }
+        let row = sqlx::query("SELECT (SELECT b.fast_slot FROM session_bindings b WHERE b.id=r.session_id) AS slot, (SELECT count(*) FROM production_runs o WHERE o.role='fast' AND o.context_id=r.context_id AND o.incarnation_id=r.incarnation_id AND o.id!=r.id AND o.state NOT IN ('succeeded','cancelled','failed','blocked')) AS live FROM production_runs r WHERE r.id=? AND r.owner_id=? AND r.conversation_id=? AND r.role='fast'")
+            .bind(run.to_string()).bind(owner.to_string()).bind(conversation.to_string())
+            .fetch_optional(&mut *tx).await.map_err(db)?;
+        tx.commit().await.map_err(db)?;
+        Ok(row.is_some_and(|row| {
+            row.get::<Option<i64>, _>("slot").unwrap_or(0) > 0 || row.get::<i64, _>("live") > 0
+        }))
+    }
     /// Latest Fast execution in this exact live supervisor context. No Deep queue
     /// projection or execution authority is returned.
     pub async fn execution_fast_status(

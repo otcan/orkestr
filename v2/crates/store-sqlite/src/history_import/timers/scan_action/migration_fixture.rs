@@ -3,6 +3,26 @@ use crate::Store;
 
 pub(crate) async fn downgrade_empty(store: &Store) {
     let mut tx = store.pool.begin().await.unwrap();
+    // Migration 80 down: only with no live auxiliary Fast slot, restore the
+    // single canonical Fast/Deep index and drop the slot column.
+    let slots: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM session_bindings WHERE fast_slot>0 AND state!='retired'",
+    )
+    .fetch_one(&mut *tx)
+    .await
+    .unwrap();
+    assert_eq!(
+        slots, 0,
+        "historical fixture must not erase live Fast slots"
+    );
+    sqlx::raw_sql("ALTER TABLE conversation_fast_settings DROP COLUMN parallel_replies; DROP INDEX canonical_role; ALTER TABLE session_bindings DROP COLUMN fast_slot; CREATE UNIQUE INDEX canonical_role ON session_bindings(owner_id, conversation_id, role)\n WHERE role IN ('fast','deep') AND state <> 'retired';")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM _sqlx_migrations WHERE version=80")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
     // Migration 79 down: only empty agent-timer tables.
     for table in ["agent_timer_audit", "agent_timers", "agent_timer_grants"] {
         let count: i64 = sqlx::query_scalar(&format!("SELECT count(*) FROM {table}"))

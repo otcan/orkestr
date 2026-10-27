@@ -7,6 +7,7 @@ mod claude_cancellation;
 mod environment;
 mod framing;
 mod lease_refresh;
+mod memory;
 pub mod metadata;
 mod process;
 mod provider_fd;

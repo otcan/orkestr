@@ -328,6 +328,17 @@ impl OwnedChild {
         sys::observe_exit(live.child.as_ref().ok_or(Error::PipeClosed)?.id())
     }
 
+    /// Peak resident memory of this child's live process tree (bytes), for
+    /// host admission estimates only. The leader stays unreaped while this
+    /// handle lives, so its PID cannot name another process.
+    pub fn tree_peak_rss_bytes(&self) -> Option<u64> {
+        let root = {
+            let live = self.process.live.lock().ok()?;
+            live.child.as_ref()?.id()
+        };
+        super::memory::tree_peak_rss_bytes(root)
+    }
+
     pub fn signal(&self, scope: &ExecutionScope, signal: Signal) -> Result<(), Error> {
         self.shared.dispatch(scope, |_| {
             let live = self.process.live.lock().map_err(|_| Error::Revoked)?;
