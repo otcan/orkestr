@@ -123,10 +123,39 @@ impl ReadyFast {
         credential: &str,
         input: &FastAdmissionInput,
     ) -> Result<FastStart, FastFailure> {
-        match consume_fast(&self.store, credential, input)
+        let dispatch = consume_fast(&self.store, credential, input)
             .await
-            .map_err(FastFailure::Store)?
-        {
+            .map_err(FastFailure::Store)?;
+        self.start(dispatch).await
+    }
+
+    /// Like `dispatch`, but when Core refuses the admission itself (no run
+    /// was created: held, already presented elsewhere, stale or busy) this
+    /// unused setup is handed back so its child can be retired normally.
+    pub(crate) async fn dispatch_or_refused(
+        self,
+        credential: &str,
+        input: &FastAdmissionInput,
+    ) -> Result<Result<FastStart, (Box<Self>, RuntimeStoreError)>, FastFailure> {
+        let admitted = match self.store.admit_fast(credential, input).await {
+            Ok(admitted) => admitted,
+            Err(
+                error @ (RuntimeStoreError::Fenced
+                | RuntimeStoreError::Conflict
+                | RuntimeStoreError::Busy
+                | RuntimeStoreError::StaleLease
+                | RuntimeStoreError::NotFound),
+            ) => return Ok(Err((Box::new(self), error))),
+            Err(error) => return Err(FastFailure::Store(error)),
+        };
+        let dispatch = super::consume_admitted(&self.store, admitted, input)
+            .await
+            .map_err(FastFailure::Store)?;
+        self.start(dispatch).await.map(Ok)
+    }
+
+    async fn start(self, dispatch: FastDispatch) -> Result<FastStart, FastFailure> {
+        match dispatch {
             FastDispatch::Replay => Ok(FastStart::Replay),
             FastDispatch::ReconciliationRequired => Ok(FastStart::ReconciliationRequired),
             FastDispatch::Consumed(cap) => {

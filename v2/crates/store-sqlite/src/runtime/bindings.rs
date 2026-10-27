@@ -9,8 +9,26 @@ pub(super) async fn ensure(
     store.check_context_in(&mut tx, owner).await?;
     scope(&mut tx, owner, conversation).await?;
     let mut records = Vec::new();
+    // Historical unit fixtures run pre-80 schemas; production always migrates.
+    #[cfg(test)]
+    let canonical = if sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM pragma_table_info('session_bindings') WHERE name='fast_slot'",
+    )
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(db)?
+        == 0
+    {
+        ""
+    } else {
+        " AND fast_slot=0"
+    };
+    #[cfg(not(test))]
+    let canonical = " AND fast_slot=0";
     for role in ["fast", "deep"] {
-        let existing = sqlx::query("SELECT * FROM session_bindings WHERE owner_id=? AND conversation_id=? AND role=? AND state <> 'retired'")
+        // Only the canonical slot-0 lineage; auxiliary window slots never
+        // become a conversation's Fast binding.
+        let existing = sqlx::query(&format!("SELECT * FROM session_bindings WHERE owner_id=? AND conversation_id=? AND role=? AND state <> 'retired'{canonical}"))
             .bind(owner.to_string()).bind(conversation.to_string()).bind(role)
             .fetch_optional(&mut *tx).await.map_err(db)?;
         let row = match existing {

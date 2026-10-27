@@ -1,4 +1,6 @@
 //! One Fast companion shares the window, never its native identity or reap proof.
+//! Its canonical lineage may be joined by bounded auxiliary slots, each with
+//! its own fresh native session, scratch directory and original reap witness.
 use super::*;
 use crate::execution_registry::ExecutionScope;
 use orkestr_runtime::containment::ReapedBroker;
@@ -22,6 +24,25 @@ pub(super) struct Companion {
     setup: Mutex<()>,
     proof: Mutex<Option<ReapedBroker>>,
     setup_proofs: Mutex<Vec<orkestr_runtime::containment::metadata::ReapedMetadata>>,
+    slots: Mutex<Slots>,
+    /// The canonical lineage holds a ready native and waits for input.
+    primary_idle: AtomicBool,
+}
+
+/// Auxiliary Fast custody of this window.
+#[derive(Default)]
+struct Slots {
+    active: usize,
+    /// Original auxiliary reap witnesses, kept through Core and manager close.
+    proofs: Vec<ReapedBroker>,
+    /// Owner inputs a Fast task selected but has not admitted yet.
+    claims: std::collections::HashSet<orkestr_v2_contracts::EventId>,
+}
+
+/// Original witnesses Deep holds until window close completes.
+pub(super) struct CompanionProofs {
+    _lineage: Option<ReapedBroker>,
+    _slots: Vec<ReapedBroker>,
 }
 
 /// How long Deep waits for each Fast setup stage before going on alone.
@@ -40,6 +61,8 @@ impl Companion {
             setup: Mutex::new(()),
             proof: Mutex::new(None),
             setup_proofs: Mutex::new(Vec::new()),
+            slots: Mutex::new(Slots::default()),
+            primary_idle: AtomicBool::new(false),
         })
     }
     pub(super) fn scope(&self) -> ExecutionScope {
@@ -121,7 +144,66 @@ impl Companion {
         self.started.store(true, Ordering::Release);
     }
     pub(super) fn retire(&self) {
+        // Ordered with `enter_slot`: no auxiliary slot starts after this.
+        let _setup = self.setup.lock();
         self.retiring.store(true, Ordering::Release);
+    }
+    /// Reserve one auxiliary slot. `false` once retiring or failed, so Deep's
+    /// close never misses a slot that started after its retirement began.
+    pub(super) fn enter_slot(&self) -> bool {
+        let Ok(_setup) = self.setup.lock() else {
+            return false;
+        };
+        if self.retiring.load(Ordering::Acquire)
+            || self.failed.load(Ordering::Acquire)
+            || !self.started.load(Ordering::Acquire)
+        {
+            return false;
+        }
+        let Ok(mut slots) = self.slots.lock() else {
+            return false;
+        };
+        slots.active += 1;
+        true
+    }
+    /// A slot ended; its original reap witness (if it launched) stays here.
+    pub(super) fn leave_slot(&self, proof: Option<ReapedBroker>) {
+        if let Ok(mut slots) = self.slots.lock() {
+            slots.active = slots.active.saturating_sub(1);
+            slots.proofs.extend(proof);
+        } else {
+            self.fail();
+        }
+    }
+    pub(super) fn active_slots(&self) -> usize {
+        self.slots.lock().map_or(usize::MAX, |slots| slots.active)
+    }
+    /// One Fast task per owner input: `false` when another task holds it.
+    pub(super) fn claim_source(&self, event: &orkestr_v2_contracts::EventId) -> bool {
+        self.slots
+            .lock()
+            .is_ok_and(|mut slots| slots.claims.insert(event.clone()))
+    }
+    pub(super) fn is_claimed(&self, event: &orkestr_v2_contracts::EventId) -> bool {
+        self.slots
+            .lock()
+            .map_or(true, |slots| slots.claims.contains(event))
+    }
+    /// After admission committed (Core then excludes the source) or abandon.
+    pub(super) fn release_source(&self, event: &orkestr_v2_contracts::EventId) {
+        if let Ok(mut slots) = self.slots.lock() {
+            slots.claims.remove(event);
+        }
+    }
+    pub(super) fn set_primary_idle(&self, idle: bool) {
+        self.primary_idle.store(idle, Ordering::Release);
+    }
+    /// Another slot may start: the lineage presented first and is busy now.
+    pub(super) fn wants_slot(&self) -> bool {
+        self.started.load(Ordering::Acquire)
+            && !self.primary_idle.load(Ordering::Acquire)
+            && !self.retiring()
+            && !self.has_failed()
     }
     pub(super) fn retiring(&self) -> bool {
         self.retiring.load(Ordering::Acquire)
@@ -181,12 +263,21 @@ impl ConfiguredExecution {
         heartbeat: &mut Instant,
         shutdown: &mut watch::Receiver<bool>,
     ) -> Result<(), &'static str> {
+        self.await_fast_accepted(run, heartbeat, shutdown).await?;
+        self.retire_terminal(run, proof).await
+    }
+
+    /// A reaped proposal of a closing window: wait for the owner decision.
+    pub(super) async fn await_fast_accepted(
+        &self,
+        run: &orkestr_v2_contracts::RunId,
+        heartbeat: &mut Instant,
+        shutdown: &mut watch::Receiver<bool>,
+    ) -> Result<(), &'static str> {
         loop {
             self.maintain(heartbeat).await?;
             match self.fast_status(run).await?.phase {
-                orkestr_v2_contracts::ExecutionPhase::Completed => {
-                    return self.retire_terminal(run, proof).await;
-                }
+                orkestr_v2_contracts::ExecutionPhase::Completed => return Ok(()),
                 orkestr_v2_contracts::ExecutionPhase::AwaitingAcceptance if !*shutdown.borrow() => {
                 }
                 _ => return Err("Fast owner decision remains unresolved"),
@@ -377,19 +468,38 @@ impl ConfiguredExecution {
         Ok(())
     }
 
-    pub(super) async fn companion_reap(&self) -> Result<Option<ReapedBroker>, &'static str> {
+    pub(super) async fn companion_reap(&self) -> Result<CompanionProofs, &'static str> {
         let Some(companion) = &self.companion else {
-            return Ok(None);
+            return Ok(CompanionProofs {
+                _lineage: None,
+                _slots: Vec::new(),
+            });
         };
         let mut heartbeat = Instant::now();
         loop {
             // A failed companion has no proof to hand over; Core's terminal
             // and retirement checks still refuse an unresolved Fast run.
             if companion.failed.load(Ordering::Acquire) {
-                return Ok(None);
+                return Ok(CompanionProofs {
+                    _lineage: None,
+                    _slots: Vec::new(),
+                });
             }
-            if let Some(proof) = companion.take()? {
-                return Ok(Some(proof));
+            // Every auxiliary slot finishes its own exact close first.
+            if companion.active_slots() == 0 {
+                if let Some(proof) = companion.take()? {
+                    let slots = std::mem::take(
+                        &mut companion
+                            .slots
+                            .lock()
+                            .map_err(|_| "Fast slot storage poisoned")?
+                            .proofs,
+                    );
+                    return Ok(CompanionProofs {
+                        _lineage: Some(proof),
+                        _slots: slots,
+                    });
+                }
             }
             // An unaccepted proposal keeps this metadata-only wait pending.
             // Auth and Core canonical terminal checks still decide retirement.

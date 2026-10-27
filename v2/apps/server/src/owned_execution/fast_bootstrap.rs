@@ -45,6 +45,19 @@ impl ConfiguredExecution {
         shutdown: &mut watch::Receiver<bool>,
         heartbeat: &mut Instant,
     ) -> Result<Option<crate::fast_execution::ReadyFast>, &'static str> {
+        self.prepare_fast_in(grant, &self.directory, shutdown, heartbeat)
+            .await
+    }
+
+    /// `directory` is this native's private scratch custody: the lineage's
+    /// own, or one auxiliary slot's (never shared by two live children).
+    pub(super) async fn prepare_fast_in(
+        &self,
+        grant: BoundSessionMetadata,
+        directory: &Path,
+        shutdown: &mut watch::Receiver<bool>,
+        heartbeat: &mut Instant,
+    ) -> Result<Option<crate::fast_execution::ReadyFast>, &'static str> {
         self.maintain(heartbeat).await?;
         self.config.verify_launcher()?;
         if *shutdown.borrow() || self.fast_window_due() {
@@ -66,8 +79,8 @@ impl ConfiguredExecution {
             .flatten();
         let directories = ChildDirectories::new(
             &self.config.workspace,
-            &self.directory.join("home"),
-            &self.directory.join("tmp"),
+            &directory.join("home"),
+            &directory.join("tmp"),
         )
         .map_err(|_| "Fast child directories unavailable")?;
         let mut setup = if let Some(context) = &self.window {

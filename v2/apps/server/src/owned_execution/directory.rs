@@ -155,6 +155,31 @@ pub(super) fn window_fast(
     }
 }
 
+/// One auxiliary Fast slot's own scratch custody beside the lineage's
+/// `window_fast` directory. Core's slot uniqueness keeps one live child here.
+pub(super) fn window_fast_slot(lineage: &Path, slot: u8) -> Result<PathBuf, &'static str> {
+    let root = lineage
+        .parent()
+        .ok_or("Fast slot scratch custody unavailable")?;
+    let home = root
+        .parent()
+        .ok_or("Fast slot scratch custody unavailable")?;
+    let name = lineage
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| name.starts_with("fast-"))
+        .ok_or("Fast slot scratch custody unavailable")?;
+    if slot == 0 || slot > orkestr_v2_store_sqlite::MAX_AUXILIARY_FAST_SLOTS {
+        return Err("Fast slot is out of range");
+    }
+    let path = root.join(format!("{name}-slot{slot}"));
+    match std::fs::symlink_metadata(&path) {
+        Ok(_) => existing_directory(home, path),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => create_directory(path),
+        Err(_) => Err("Fast slot scratch custody unavailable"),
+    }
+}
+
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
@@ -179,6 +204,26 @@ mod tests {
         )
         .unwrap();
         assert!(window_deep(&home, &conversation).is_err());
+        std::fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn each_fast_slot_has_its_own_private_scratch() {
+        let home = std::env::temp_dir().join(format!("fast-slot-dir-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&home).unwrap();
+        std::fs::set_permissions(&home, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let conversation = orkestr_v2_contracts::ConversationId(uuid::Uuid::new_v4());
+        let lineage = window_fast(&home, &conversation).unwrap();
+        let one = window_fast_slot(&lineage, 1).unwrap();
+        let seven = window_fast_slot(&lineage, 7).unwrap();
+        assert_ne!(one, lineage);
+        assert_ne!(one, seven);
+        assert_eq!(one.parent(), lineage.parent());
+        assert_eq!(window_fast_slot(&lineage, 1).unwrap(), one);
+        assert!(window_fast_slot(&lineage, 0).is_err());
+        assert!(window_fast_slot(&lineage, 8).is_err());
+        std::fs::set_permissions(one.join("home"), std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(window_fast_slot(&lineage, 1).is_err());
         std::fs::remove_dir_all(home).unwrap();
     }
 

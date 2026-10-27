@@ -56,7 +56,11 @@ impl WindowTask {
     pub(crate) fn roles_ready_to_close(&self) -> bool {
         self.companion
             .as_ref()
-            .is_none_or(|companion| companion.ready_to_close() || companion.has_failed())
+            // A slot still in setup has no Core run yet: drain must wait for it.
+            .is_none_or(|companion| {
+                (companion.ready_to_close() && companion.active_slots() == 0)
+                    || companion.has_failed()
+            })
     }
     pub(crate) fn cleanup_deadline(&self) -> tokio::time::Instant {
         self.context

@@ -15,6 +15,7 @@ impl ConfiguredExecution {
         mut live: Box<LiveFast>,
         shutdown: &mut watch::Receiver<bool>,
         heartbeat: &mut Instant,
+        auxiliary: bool,
     ) -> Result<fast::FastExit, &'static str> {
         let mut run = live.run_id().clone();
         let (mut control, mut controls) = self
@@ -122,6 +123,11 @@ impl ConfiguredExecution {
                             .await
                             .map_err(|_| "Fast proposal cleanup refused")?;
                         let proof = self.reaped(retiring, &run, heartbeat).await?;
+                        if auxiliary {
+                            // The slot retires its own session with this witness.
+                            self.await_fast_accepted(&run, heartbeat, shutdown).await?;
+                            return Ok(fast::FastExit::Accepted { run, proof });
+                        }
                         self.wait_fast_acceptance(&run, proof, heartbeat, shutdown)
                             .await?;
                         return Ok(fast::FastExit::Shutdown);

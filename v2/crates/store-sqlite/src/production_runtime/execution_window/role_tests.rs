@@ -453,3 +453,5 @@ async fn fast_chat_rules_inline_only_when_the_whole_turn_fits() {
     assert!(kept.ends_with(&long));
     std::fs::remove_dir_all(&dir).unwrap();
 }
+#[path = "fast_slot_tests.rs"]
+mod fast_slots;

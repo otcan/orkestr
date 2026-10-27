@@ -67,3 +67,33 @@ async fn finished_task_is_observable_after_original_cleanup_deadline() {
     assert_eq!(finished.poll().await, Some(Ok(())));
     assert!(finished.poll().await.is_none());
 }
+
+#[tokio::test]
+async fn idle_close_waits_for_a_fast_slot_still_in_setup() {
+    use orkestr_v2_contracts::{ConversationId, OwnerId};
+    let directory =
+        std::env::temp_dir().join(format!("window-slot-close-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir(&directory).unwrap();
+    let store = orkestr_v2_store_sqlite::Store::open(&directory.join("core.sqlite3"))
+        .await
+        .unwrap();
+    let companion = window_roles::Companion::new(crate::execution_registry::ExecutionScope {
+        store,
+        control: Some(crate::control_registry::ControlRegistry::new(
+            OwnerId(uuid::Uuid::new_v4()),
+            ConversationId(uuid::Uuid::new_v4()),
+        )),
+        tasks: None,
+    });
+    assert!(companion.claim_ready());
+    assert!(companion.claim_start());
+    companion.started();
+    let mut task = task(std::future::pending());
+    task.companion = Some(companion.clone());
+    assert!(task.roles_ready_to_close());
+    assert!(companion.enter_slot());
+    assert!(!task.roles_ready_to_close());
+    companion.leave_slot(None);
+    assert!(task.roles_ready_to_close());
+    std::fs::remove_dir_all(directory).unwrap();
+}

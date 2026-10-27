@@ -130,6 +130,15 @@ impl Store {
                 failed.push(RunId(run.parse().map_err(db)?));
             }
         }
+        // A lapsed (process-gone) incarnation's auxiliary Fast slots whose
+        // runs are now all terminal never stay live after the crash.
+        super::super::fast_slots::retire_settled(
+            &mut tx,
+            &owner.to_string(),
+            &conversation.to_string(),
+            None,
+        )
+        .await?;
         tx.commit().await.map_err(db)?;
         Ok(failed)
     }

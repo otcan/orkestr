@@ -131,7 +131,12 @@ impl Store {
             }
             binding.clone()
         } else {
-            if binding.provider_kind != ProviderKind::Codex || binding.native_session_id.is_none() {
+            // Auxiliary slot sessions present once and retire; only the
+            // canonical slot-0 lineage is ever replaced or reattached.
+            if binding.provider_kind != ProviderKind::Codex
+                || binding.native_session_id.is_none()
+                || row.try_get::<i64, _>("fast_slot").map_err(db)? != 0
+            {
                 return Err(RuntimeStoreError::Fenced);
             }
             let incarnation = match binding.state {
