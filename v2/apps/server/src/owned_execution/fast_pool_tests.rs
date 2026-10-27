@@ -13,6 +13,8 @@ struct Burst {
     finishes: Mutex<Vec<(EventId, Instant)>>,
     closing: AtomicBool,
     headroom: AtomicBool,
+    /// The owner's kill switch (`parallel_replies`).
+    parallel: AtomicBool,
     work: Duration,
     fail: Option<EventId>,
     setup_fail: Option<EventId>,
@@ -57,6 +59,7 @@ impl Burst {
             finishes: Mutex::new(Vec::new()),
             closing: AtomicBool::new(false),
             headroom: AtomicBool::new(true),
+            parallel: AtomicBool::new(true),
             work,
             fail: None,
             setup_fail: None,
@@ -127,6 +130,9 @@ impl SlotHost for Burst {
     }
     fn admit_one(&self) -> bool {
         self.headroom.load(Ordering::Acquire)
+    }
+    async fn extra_slots_enabled(&self) -> bool {
+        self.parallel.load(Ordering::Acquire)
     }
     async fn next_source(&self) -> Result<Option<FastSource>, &'static str> {
         // Core's earliest-unpresented order, stepping over claimed inputs.
@@ -373,4 +379,25 @@ async fn lineage_keeps_its_held_input_across_rotation() {
     companion.hold_for_lineage(&event);
     companion.release_source(&event);
     assert!(!companion.lineage_holds(&event) && !companion.is_claimed(&event));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn owner_kill_switch_keeps_fast_on_slot_zero_and_is_read_live() {
+    let burst = Burst::new(3, Duration::from_millis(100)).await;
+    burst.parallel.store(false, Ordering::Release);
+    let (_stop, shutdown) = channel();
+    let pool = tokio::spawn(schedule(burst.clone(), burst.lineage(), shutdown));
+    burst.wait_started(1, Duration::from_secs(2)).await;
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    assert_eq!(
+        burst.started(),
+        1,
+        "switch off: slot 0 only, as before slots"
+    );
+    assert_eq!(burst.companion.active_slots(), 0);
+    // Turned back on without a restart: the waiting inputs get extra slots.
+    burst.parallel.store(true, Ordering::Release);
+    burst.wait_started(3, Duration::from_secs(2)).await;
+    burst.closing.store(true, Ordering::Release);
+    pool.await.unwrap().unwrap();
 }

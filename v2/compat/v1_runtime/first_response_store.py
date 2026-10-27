@@ -9,14 +9,20 @@ FIRST_RESPONSE_NAMESPACE = uuid.UUID("e1cc360c-9c08-4cc5-8798-817864e93f23")
 FINAL_ORDERING_LIMIT_S = 15
 
 
-def add(ledger, data, payload_id, text, identity=None):
-    """One durable Fast reply, independently linked to its originating input."""
+def add(ledger, data, payload_id, text, identity=None, quote=False):
+    """One durable Fast reply, independently linked to its originating input.
+
+    `quote`: the reply is part of a Fast burst (an extra slot, or another Fast
+    run live in the window); the channel then quotes the source message so
+    out-of-order replies stay attributable. A lone reply stays unquoted."""
     source = data["remote_id"] + ":" + payload_id
     remote = str(uuid.uuid5(FIRST_RESPONSE_NAMESPACE, "input:" + source))
     message = dict(id=str(uuid.uuid5(FIRST_RESPONSE_NAMESPACE, "reply:" + source)), role="assistant",
                    state="completed", phase="final_answer", source="rust-v2-adapter",
                    parentMessageId=remote, text=text, firstResponse=True, layer="fast", sourceInputId=data["remote_id"])
     message.update({k:v for k,v in (identity or {}).items() if k in IDENTITY_FIELDS and v})
+    if quote:
+        message["quoteSource"] = True
     with ledger.connect() as db:
         db.execute("BEGIN IMMEDIATE")
         data["first_response"].update(remote_id=remote, export_id=message["id"])
@@ -24,6 +30,7 @@ def add(ledger, data, payload_id, text, identity=None):
         if (data.get("author") or {}).get("role") in LOCAL_ROLES:
             # No group notification for a local-only request.
             message.update(parentMessageId=data["remote_id"], phase="commentary", kind="progress")
+            message.pop("quoteSource", None)
             ledger._export(db, data, "progress", "first-response:" + source, message)
         else:
             ledger._pseudo_timer(db, remote, "Quick reply", int(data["first_response"]["at"] * 1000),

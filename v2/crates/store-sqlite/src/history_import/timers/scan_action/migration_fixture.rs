@@ -15,7 +15,7 @@ pub(crate) async fn downgrade_empty(store: &Store) {
         slots, 0,
         "historical fixture must not erase live Fast slots"
     );
-    sqlx::raw_sql("DROP INDEX canonical_role; ALTER TABLE session_bindings DROP COLUMN fast_slot; CREATE UNIQUE INDEX canonical_role ON session_bindings(owner_id, conversation_id, role)\n WHERE role IN ('fast','deep') AND state <> 'retired';")
+    sqlx::raw_sql("ALTER TABLE conversation_fast_settings DROP COLUMN parallel_replies; DROP INDEX canonical_role; ALTER TABLE session_bindings DROP COLUMN fast_slot; CREATE UNIQUE INDEX canonical_role ON session_bindings(owner_id, conversation_id, role)\n WHERE role IN ('fast','deep') AND state <> 'retired';")
         .execute(&mut *tx)
         .await
         .unwrap();

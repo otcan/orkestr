@@ -13,6 +13,24 @@ revision:
 {"expected_revision":0,"model":"gpt-6-luna","reasoning_effort":"low"}
 ```
 
+`parallel_replies` (default `true`) is the owner's kill switch for
+concurrent Fast slots: with `false`, Fast answers a window's inputs one at a
+time on its single lineage (slot 0), exactly as before parallel slots. The
+window scheduler reads it live (cached for at most 2 s), so no restart or
+deploy is needed; slots already running finish normally. An update that
+omits `parallel_replies` keeps its current value, so changing the model never
+re-enables a disabled switch:
+
+```json
+{"expected_revision":1,"model":null,"reasoning_effort":null,"parallel_replies":false}
+```
+
+A Fast reply that is part of a burst (presented by an extra slot, or while
+another Fast run of the window is live) reports `"concurrent_fast": true` in
+`GET .../fast/execution?run_id=`; the field is absent for a lone reply. The V1
+adapter then marks the exported reply `quoteSource`, so WhatsApp quotes the
+source message and out-of-order replies stay attributable.
+
 A repeat with the same values and preceding revision is idempotent. Other stale
 updates return `fast_settings_revision_mismatch`. Unknown fields and malformed or
 policy-denied models are rejected. Existing owner authentication and browser CSRF

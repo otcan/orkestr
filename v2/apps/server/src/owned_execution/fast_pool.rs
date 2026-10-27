@@ -33,6 +33,9 @@ pub(super) trait SlotHost: Send + Sync + 'static {
     /// Live host pressure allows this window to start one more slot now.
     /// Consumes that allowance.
     fn admit_one(&self) -> bool;
+    /// The owner's live kill switch (`parallel_replies` in the Fast
+    /// settings): `false` means slot 0 only, exactly as before slots.
+    fn extra_slots_enabled(&self) -> impl Future<Output = bool> + Send;
     /// Take the current host reading (cheap while unchanged), so pressure
     /// averages are warm before a burst asks for a slot.
     fn observe(&self) {}
@@ -89,6 +92,7 @@ pub(super) async fn run(
         execution: this,
         shutdown: shutdown.clone(),
         pressure: std::sync::Mutex::new(super::host_pressure::HostPressure::new()),
+        switch: std::sync::Mutex::new(None),
     });
     schedule(host, lineage, shutdown).await
 }
@@ -167,6 +171,9 @@ async fn start_slot<H: SlotHost>(
     if !companion.wants_slot() || companion.active_slots() >= MAX_AUXILIARY_FAST_SLOTS.into() {
         return Ok(false);
     }
+    if !host.extra_slots_enabled().await {
+        return Ok(false);
+    }
     let Some(source) = host.next_source().await? else {
         return Ok(false);
     };
@@ -221,9 +228,36 @@ struct WindowSlots {
     execution: Arc<ConfiguredExecution>,
     shutdown: watch::Receiver<bool>,
     pressure: std::sync::Mutex<super::host_pressure::HostPressure>,
+    /// Last read of the owner's kill switch and when it was read.
+    switch: std::sync::Mutex<Option<(Instant, bool)>>,
 }
 
+/// How long one read of the owner's kill switch stays current.
+const SWITCH_READ: Duration = Duration::from_secs(2);
+
 impl SlotHost for WindowSlots {
+    async fn extra_slots_enabled(&self) -> bool {
+        if let Some((at, enabled)) = self.switch.lock().ok().and_then(|cached| *cached) {
+            if at.elapsed() < SWITCH_READ {
+                return enabled;
+            }
+        }
+        let execution = &self.execution;
+        // Any doubt (busy or unavailable Store) means no extra slot now.
+        let enabled = execution
+            .store
+            .fast_role_settings(
+                &execution.token,
+                &execution.owner,
+                &execution.config.conversation_id,
+            )
+            .await
+            .is_ok_and(|settings| settings.parallel_replies);
+        if let Ok(mut cached) = self.switch.lock() {
+            *cached = Some((Instant::now(), enabled));
+        }
+        enabled
+    }
     fn companion(&self) -> &Companion {
         self.execution
             .companion

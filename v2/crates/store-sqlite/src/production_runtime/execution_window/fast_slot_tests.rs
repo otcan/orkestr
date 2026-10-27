@@ -295,7 +295,34 @@ async fn slot_retirement_needs_exact_terminal_truth_and_never_replaces() {
             .is_err());
     }
     assert_eq!(before, fixtures::snapshot(&w.f.store).await);
+    let concurrent = |run: RunId| {
+        let w = &w;
+        async move {
+            w.f.store
+                .fast_run_concurrent_authenticated(
+                    &w.browser_credential,
+                    &w.f.owner,
+                    &w.f.conversation,
+                    &run,
+                )
+                .await
+                .unwrap()
+        }
+    };
+    let lineage_run = lineage_cap.provider().run.run_id.clone();
+    // Both live: each reply belongs to a burst and quotes its source.
+    assert!(concurrent(run.clone()).await);
+    assert!(concurrent(lineage_run.clone()).await);
+    assert!(w
+        .f
+        .store
+        .fast_run_concurrent_authenticated(&"f".repeat(64), &w.f.owner, &w.f.conversation, &run)
+        .await
+        .is_err());
     accept(&w, cap.provider(), "slot answer").await;
+    // A lone lineage reply stays unquoted; an extra slot's always quotes.
+    assert!(!concurrent(lineage_run.clone()).await);
+    assert!(concurrent(run.clone()).await);
     accept(&w, lineage_cap.provider(), "lineage answer").await;
     assert!(w
         .bound

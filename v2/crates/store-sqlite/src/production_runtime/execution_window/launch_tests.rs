@@ -85,6 +85,7 @@ async fn fast_override_is_read_at_consumption_and_never_replaces_deep_launch() {
                     expected_revision: 0,
                     model: Some("gpt-6-luna".into()),
                     reasoning_effort: Some("low".into()),
+                    parallel_replies: None,
                 },
             )
             .await

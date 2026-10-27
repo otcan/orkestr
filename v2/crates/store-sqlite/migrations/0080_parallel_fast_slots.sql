@@ -9,3 +9,7 @@ ALTER TABLE session_bindings ADD COLUMN fast_slot INTEGER NOT NULL DEFAULT 0
 DROP INDEX canonical_role;
 CREATE UNIQUE INDEX canonical_role ON session_bindings(owner_id, conversation_id, role, fast_slot)
  WHERE role IN ('fast','deep') AND state <> 'retired';
+-- Owner kill switch for extra slots, read live by the window scheduler.
+-- Default on; off means Fast answers on slot 0 only, as before this schema.
+ALTER TABLE conversation_fast_settings ADD COLUMN parallel_replies INTEGER NOT NULL DEFAULT 1
+ CHECK(parallel_replies IN (0,1));

@@ -754,9 +754,9 @@ class Ledger:
             self._export(db, data, "progress", "progress:%s:%s" % (data["remote_id"], payload_id), message)
             return message
 
-    def add_first_response(self, data, payload_id, text, identity=None):
+    def add_first_response(self, data, payload_id, text, identity=None, quote=False):
         from .first_response_store import add
-        return add(self, data, payload_id, text, identity)
+        return add(self, data, payload_id, text, identity, quote)
 
     def _acked_through(self, db):
         pending = db.execute("SELECT min(seq) FROM exports WHERE outcome IS NULL OR outcome='uncertain'").fetchone()[0]

@@ -55,6 +55,26 @@ class FirstResponseTests(unittest.TestCase):
         self.assertEqual(self.replies(), first)
         self.assertNotIn("deep", self.peer.accepted)
 
+    def test_only_a_burst_fast_reply_quotes_its_source(self):
+        self.configure()
+        self.step_at(1)
+        lone = next(row for row in self.replies() if row.get("firstResponse"))
+        self.assertNotIn("quoteSource", lone)
+
+    def test_burst_fast_reply_is_marked_to_quote_its_source(self):
+        self.configure()
+        inner = self.peer.request
+        def request(method, route, **kwargs):
+            status, value = inner(method, route, **kwargs)
+            if route.split("?", 1)[0] == "/fast/execution" and isinstance(value, dict):
+                value = dict(value, concurrent_fast=True)
+            return status, value
+        self.peer.request = request
+        self.step_at(1)
+        fast = next(row for row in self.replies() if row.get("firstResponse"))
+        self.assertIs(fast["quoteSource"], True)
+        self.assertEqual(fast["sourceInputId"], self.data["remote_id"])
+
     def test_ack_then_final_and_later_progress_are_spaced_by_a_minute(self):
         self.configure()
         self.step_at(5)

@@ -8,8 +8,11 @@ async fn current(
     tx: &mut Transaction<'_, Sqlite>,
     conversation: &ConversationId,
 ) -> Result<FastRoleSettings> {
-    let row=sqlx::query("SELECT revision,model,reasoning_effort,updated_at_ms FROM conversation_fast_settings WHERE conversation_id=?")
-        .bind(conversation.to_string()).fetch_optional(&mut **tx).await.map_err(unavailable)?;
+    let row = sqlx::query("SELECT * FROM conversation_fast_settings WHERE conversation_id=?")
+        .bind(conversation.to_string())
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(unavailable)?;
     Ok(match row {
         None => FastRoleSettings::defaults(conversation.clone()),
         Some(row) => FastRoleSettings {
@@ -18,6 +21,10 @@ async fn current(
             revision: row.get("revision"),
             model: row.get("model"),
             reasoning_effort: row.get("reasoning_effort"),
+            // Historical (pre-80) unit schemas lack the column: default on.
+            parallel_replies: row
+                .try_get::<i64, _>("parallel_replies")
+                .map_or(true, |value| value != 0),
             updated_at_ms: Some(row.get("updated_at_ms")),
         },
     })
@@ -118,14 +125,18 @@ impl Store {
             if before.revision == update.expected_revision + 1
                 && before.model == update.model
                 && before.reasoning_effort == update.reasoning_effort
+                && update
+                    .parallel_replies
+                    .is_none_or(|parallel| parallel == before.parallel_replies)
             {
                 tx.commit().await.map_err(unavailable)?;
                 return Ok(before);
             }
             return Err(ResourceError::Conflict("fast_settings_revision_mismatch"));
         }
-        sqlx::query("INSERT INTO conversation_fast_settings(conversation_id,owner_id,revision,model,reasoning_effort,updated_at_ms) VALUES(?,?,?,?,?,?) ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision,model=excluded.model,reasoning_effort=excluded.reasoning_effort,updated_at_ms=excluded.updated_at_ms")
-            .bind(conversation.to_string()).bind(owner.to_string()).bind(before.revision+1).bind(&update.model).bind(&update.reasoning_effort).bind(now_ms())
+        let parallel = update.parallel_replies.unwrap_or(before.parallel_replies);
+        sqlx::query("INSERT INTO conversation_fast_settings(conversation_id,owner_id,revision,model,reasoning_effort,parallel_replies,updated_at_ms) VALUES(?,?,?,?,?,?,?) ON CONFLICT(conversation_id) DO UPDATE SET revision=excluded.revision,model=excluded.model,reasoning_effort=excluded.reasoning_effort,parallel_replies=excluded.parallel_replies,updated_at_ms=excluded.updated_at_ms")
+            .bind(conversation.to_string()).bind(owner.to_string()).bind(before.revision+1).bind(&update.model).bind(&update.reasoning_effort).bind(i64::from(parallel)).bind(now_ms())
             .execute(&mut *tx).await.map_err(unavailable)?;
         let value = current(&mut tx, conversation).await?;
         tx.commit().await.map_err(unavailable)?;
