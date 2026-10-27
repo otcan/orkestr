@@ -87,3 +87,24 @@ After activation, accept only an actual event from the next existing canary or
 ordinary Claude session and verify its timestamp/reset values through V1 GET.
 No manual provider probe is part of acceptance; until such data exists there is
 no fresh quota claim. Real bindings and configuration remain in operator state.
+
+## Codex projection
+
+The Codex service broker projects the same way from Codex app-server's
+`account/rateLimits/updated` notification (`broker/codex_quota.py`, shipped in
+every service package). Only the account-wide bucket (`limitId` absent or
+`codex`) is used; windows are classified by `windowDurationMins` (at most 360
+is five-hour, at least 10080 is weekly). Model-specific limits, credits and plan
+data are never copied, and no status is inferred. The notification is never
+forwarded and cannot start, renew, finish or cancel a turn.
+
+The protected selected-service plan optionally includes
+`"codex_quota_projection": {"directory": ..., "account_ref": ...}` with the
+same custody rules as the Claude binding; the directory additionally must not
+overlap the real host `HOME`/`CODEX_HOME`. The sink writes `codex.json` under its
+own `.codex-quota.lock`, so it may share the Claude projection directory.
+
+V1 enrolls it as a second source with `"provider": "codex"` (a source without
+`provider` stays Claude). One source per owner and provider is allowed. A valid
+Codex projection replaces legacy V1 thread Codex telemetry, which ages out once
+Codex no longer runs on V1 threads.
