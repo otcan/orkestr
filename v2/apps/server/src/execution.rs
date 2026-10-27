@@ -176,7 +176,16 @@ async fn status_for(
                         run,
                     )
                     .await
-                    .unwrap_or_default();
+                    // Unlike the Fast quote marker this settles inputs: a
+                    // store error must not read as a single-input run, or the
+                    // adapter would settle the head without its group.
+                    .map_err(|_| {
+                        Error(
+                            StatusCode::SERVICE_UNAVAILABLE,
+                            "store_unavailable",
+                            "Execution status unavailable",
+                        )
+                    })?;
                 if !group.is_empty() {
                     let mut value = serde_json::to_value(&status).map_err(|_| {
                         Error(

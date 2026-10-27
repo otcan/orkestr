@@ -137,6 +137,11 @@ class DeepGroupTests(fixture.IntakeBase):
         self.assertTrue(text.startswith("[3 owner messages were answered together"), text)
         self.assertLess(text.index("\n\n1. Request head"), text.index("\n\n2. Request b"))
         self.assertLess(text.index("\n\n2. Request b"), text.index("\n\n3. Request c"))
+        # A member's attachment note (the text Core received) is carried too.
+        b["intake_text"] = "Request b\n\n[WhatsApp attachments imported into this conversation's attachment store"
+        self.ledger.save(b)
+        text = deep_group.carry(self.ledger, head, "Request head")
+        self.assertIn("2. Request b\n\n[WhatsApp attachments imported", text)
         reply = {}
         deep_group.quote(head, reply)
         self.assertEqual(reply, dict(quoteSource=True, sourceInputId=c["remote_id"]))

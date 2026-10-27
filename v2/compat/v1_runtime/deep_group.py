@@ -137,7 +137,10 @@ def carry(ledger, head, text):
     message, numbered in arrival order, so none is dropped. They still settle
     with the head."""
     rows = [ledger.input(remote_id) for remote_id in settled_with(head)]
-    texts = [compose(row) for row in rows if row and isinstance(row.get("text"), str) and row["text"].strip()]
+    # The text Core received (`intake_text` keeps an attachment note), as in
+    # the grouped turn itself; an attachment-only message is kept too.
+    texts = [row.get("intake_text") or compose(row) for row in rows if row and (
+        row.get("intake_text") or isinstance(row.get("text"), str) and row["text"].strip())]
     if not texts:
         return text
     items = [text] + texts

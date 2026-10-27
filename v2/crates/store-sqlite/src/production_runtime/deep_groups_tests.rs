@@ -473,3 +473,25 @@ fn a_shared_chat_rules_line_is_given_once_at_the_top() {
         text.contains("\n\n2. [source: message m-2, sequence 9]\n[WhatsApp: synthetic]\nsecond")
     );
 }
+
+#[tokio::test]
+async fn an_input_that_arrived_after_deep_went_idle_keeps_its_own_turn() {
+    let f = setup().await;
+    let first = busy(&f).await;
+    owner(&f, "a").await;
+    owner(&f, "b").await;
+    finish(&f, &first, "accept-first").await;
+    // Deep is idle now, but `a` was not admitted yet: a later input (a new
+    // task, or a deadline continuation re-admitted for an older adapter row)
+    // never joins the burst that waited behind the finished turn.
+    owner(&f, "late").await;
+    let run = admit(&f, "grouped").await.unwrap();
+    assert_eq!(group(&f, &run).await, ["a", "b"]);
+    assert_eq!(queued(&f).await, 1);
+    dispatch(&f, &run, "grouped-reserve").await;
+    start(&f, &run.provider).await;
+    finish(&f, &run.provider, "accept-grouped").await;
+    let lone = admit(&f, "lone").await.unwrap();
+    assert!(group(&f, &lone).await.is_empty());
+    assert_eq!(dispatch(&f, &lone, "lone-reserve").await, "owner says late");
+}

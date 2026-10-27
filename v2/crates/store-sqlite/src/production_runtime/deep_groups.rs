@@ -55,19 +55,25 @@ pub(super) async fn form(
     };
     // Deep was busy when the head arrived: the conversation's previous Deep
     // run (of an earlier input) still recorded progress, its proposal, its
-    // acceptance or a stop after the head's own journal sequence.
-    let waited: i64 = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM production_runs p WHERE p.conversation_id=?1 AND p.role='deep' AND p.id!=?3 AND p.scope_sequence<?2 AND (EXISTS(SELECT 1 FROM production_observations o JOIN events e ON e.id=o.event_id WHERE o.run_id=p.id AND e.sequence>?2) OR EXISTS(SELECT 1 FROM production_acceptances a JOIN events e ON e.id=a.event_id WHERE a.run_id=p.id AND e.sequence>?2) OR EXISTS(SELECT 1 FROM production_cancellations c JOIN events e ON e.id=c.event_id WHERE c.run_id=p.id AND e.sequence>?2)))")
+    // acceptance or a stop after the head's own journal sequence. The last
+    // such event bounds the group: a member must also have arrived while that
+    // run was still busy, so an input admitted after Deep went idle (a
+    // deadline continuation or re-admission of an older adapter row, or a
+    // new task sent once the turn ended) keeps its own turn.
+    let busy_through: Option<i64> = sqlx::query_scalar("SELECT max(last) FROM (SELECT max(coalesce((SELECT max(e.sequence) FROM production_observations o JOIN events e ON e.id=o.event_id WHERE o.run_id=p.id),0),coalesce((SELECT max(e.sequence) FROM production_acceptances a JOIN events e ON e.id=a.event_id WHERE a.run_id=p.id),0),coalesce((SELECT max(e.sequence) FROM production_cancellations c JOIN events e ON e.id=c.event_id WHERE c.run_id=p.id),0)) AS last FROM production_runs p WHERE p.conversation_id=?1 AND p.role='deep' AND p.id!=?3 AND p.scope_sequence<?2) WHERE last>?2")
         .bind(&conversation).bind(head).bind(run).fetch_one(&mut *tx).await.map_err(db)?;
-    if waited == 0 {
+    let Some(busy_through) = busy_through else {
         return Ok(0);
-    }
+    };
     let rows = sqlx::query(&format!("SELECT i.sequence,i.state,length(CAST(m.text AS BLOB)) AS bytes,({OWNER_INPUT}) AS owner_input,EXISTS(SELECT 1 FROM ordinary_input_holds h WHERE h.event_id=i.event_id) AS held,(?3 IS NULL OR EXISTS(SELECT 1 FROM execution_window_inputs wi WHERE wi.window_id=?3 AND wi.event_id=i.event_id)) AS scoped FROM reasoning_inbox i JOIN messages m ON m.id=i.message_id WHERE i.conversation_id=?1 AND i.sequence>?2 AND i.state IN ('queued','claimed') ORDER BY i.sequence LIMIT 64"))
         .bind(&conversation).bind(head).bind(window).fetch_all(&mut *tx).await.map_err(db)?;
     let mut bytes = usize::try_from(head_bytes).map_err(db)?;
     let mut members = Vec::new();
     for row in rows {
-        if members.len() + 1 >= DEEP_GROUP_MAX_INPUTS {
-            break;
+        if members.len() + 1 >= DEEP_GROUP_MAX_INPUTS
+            || row.get::<i64, _>("sequence") >= busy_through
+        {
+            break; // Arrived after Deep went idle: its own turn.
         }
         if row.get::<bool, _>("held") {
             continue; // Held per input; released later, it queues on its own.
