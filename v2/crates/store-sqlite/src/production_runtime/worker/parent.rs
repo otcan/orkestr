@@ -39,6 +39,10 @@ impl Store {
         {
             return Err(RuntimeStoreError::Fenced);
         }
+        // A read-only parallel Deep run never delegates: a Worker could act.
+        if super::super::parallel_deep::is_slot(tx, row.get::<&str, _>("session_id")).await? {
+            return Err(RuntimeStoreError::Fenced);
+        }
         self.production_authorized_run(tx, &canonical).await
     }
 }

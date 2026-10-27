@@ -60,7 +60,7 @@ pub use production_runtime::{
     WorkerDelegationResult, WorkerDelegationState, WorkerTaskClaim,
     EXECUTION_WINDOW_BASE_LIFETIME_MS, EXECUTION_WINDOW_CLEANUP_MS,
     EXECUTION_WINDOW_MAX_LIFETIME_MS, FAST_INPUT_BUDGET, FAST_NOTE_RESERVE,
-    MAX_AUXILIARY_FAST_SLOTS,
+    MAX_AUXILIARY_FAST_SLOTS, MAX_PARALLEL_DEEP_SLOTS,
 };
 
 pub use production_runtime::inspection::{

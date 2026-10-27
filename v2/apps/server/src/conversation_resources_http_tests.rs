@@ -248,6 +248,41 @@ async fn deep_grouping_switch_defaults_on_and_survives_an_omitting_update() {
 }
 
 #[tokio::test]
+async fn parallel_deep_switch_is_off_by_default_and_round_trips() {
+    let case = case().await;
+    let auth = case.auth();
+    let path = case.path("/settings");
+    let (status, value) = send(&case.state, "GET", &path, &[&auth], "").await;
+    assert_eq!(status, 200);
+    // Off is not serialized: the default body is unchanged.
+    assert!(value.get("parallel_deep").is_none(), "{value}");
+    let on = serde_json::json!({"expected_revision":0,"provider":"codex","honor_no_reply":true,"parallel_deep":true});
+    let (status, value) = send(&case.state, "PUT", &path, &[&auth], &on.to_string()).await;
+    assert_eq!(
+        (status, value["parallel_deep"].as_bool()),
+        (200, Some(true)),
+        "{value}"
+    );
+    // Omitting the switch keeps it.
+    let keep = serde_json::json!({"expected_revision":1,"provider":"codex","honor_no_reply":false});
+    let (status, value) = send(&case.state, "PUT", &path, &[&auth], &keep.to_string()).await;
+    assert_eq!(
+        (status, value["parallel_deep"].as_bool()),
+        (200, Some(true)),
+        "{value}"
+    );
+    let off = serde_json::json!({"expected_revision":2,"provider":"codex","honor_no_reply":false,"parallel_deep":false});
+    let (status, value) = send(&case.state, "PUT", &path, &[&auth], &off.to_string()).await;
+    assert_eq!(status, 200);
+    assert!(value.get("parallel_deep").is_none(), "{value}");
+    // Not a boolean: refused.
+    let bad = serde_json::json!({"expected_revision":3,"provider":"codex","honor_no_reply":false,"parallel_deep":"yes"});
+    let (status, _) = send(&case.state, "PUT", &path, &[&auth], &bad.to_string()).await;
+    assert!((400..500).contains(&status));
+    case.finish().await;
+}
+
+#[tokio::test]
 async fn legacy_workers_register_list_and_transition() {
     let case = case().await;
     let auth = case.auth();

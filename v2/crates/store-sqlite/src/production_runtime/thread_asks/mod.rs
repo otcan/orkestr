@@ -152,7 +152,19 @@ pub(super) async fn running_deep(
     owner: &OwnerId,
     conversation: &ConversationId,
 ) -> R<Option<(String, String)>> {
-    let row = sqlx::query("SELECT id,message_id FROM production_runs WHERE owner_id=? AND conversation_id=? AND role='deep' AND state IN ('starting','running') AND dispatch_state='delivery_unknown' ORDER BY rowid DESC LIMIT 1")
+    // Only the canonical lineage asks; a read-only parallel run never does.
+    let canonical = if crate::production_runtime::parallel_deep::present(&mut *tx)
+        .await
+        .map_err(|_| ResourceError::Unavailable)?
+    {
+        format!(
+            " AND {}",
+            crate::production_runtime::parallel_deep::canonical_run("production_runs")
+        )
+    } else {
+        String::new()
+    };
+    let row = sqlx::query(&format!("SELECT id,message_id FROM production_runs WHERE owner_id=? AND conversation_id=? AND role='deep' AND state IN ('starting','running') AND dispatch_state='delivery_unknown'{canonical} ORDER BY rowid DESC LIMIT 1"))
         .bind(owner.to_string()).bind(conversation.to_string())
         .fetch_optional(tx).await.map_err(unavailable)?;
     Ok(row.map(|r| (r.get("id"), r.get("message_id"))))

@@ -37,6 +37,10 @@ pub(crate) async fn current(
         deep_grouping: row
             .try_get::<i64, _>("deep_grouping")
             .map_or(true, |value| value != 0),
+        // Absent only on a test store downgraded below 0082: off.
+        parallel_deep: row
+            .try_get::<i64, _>("parallel_deep")
+            .is_ok_and(|value| value == 1),
     })
 }
 
@@ -143,6 +147,9 @@ impl Store {
                 && update
                     .deep_grouping
                     .is_none_or(|grouping| grouping == s.deep_grouping)
+                && update
+                    .parallel_deep
+                    .is_none_or(|parallel| parallel == s.parallel_deep)
         };
         if before.revision != update.expected_revision {
             if before.revision == update.expected_revision + 1 && same(&before) {
@@ -180,6 +187,17 @@ impl Store {
         if let Some(grouping) = update.deep_grouping {
             sqlx::query("UPDATE conversation_settings SET deep_grouping=? WHERE conversation_id=?")
                 .bind(i64::from(grouping))
+                .bind(conversation.to_string())
+                .execute(&mut *tx)
+                .await
+                .map_err(unavailable)?;
+        }
+        if let Some(parallel) = update
+            .parallel_deep
+            .filter(|parallel| *parallel != before.parallel_deep)
+        {
+            sqlx::query("UPDATE conversation_settings SET parallel_deep=? WHERE conversation_id=?")
+                .bind(i64::from(parallel))
                 .bind(conversation.to_string())
                 .execute(&mut *tx)
                 .await

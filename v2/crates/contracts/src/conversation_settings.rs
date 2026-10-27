@@ -76,6 +76,11 @@ pub struct ConversationSettingsUpdate {
     /// model or provider change never re-enables a disabled switch.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deep_grouping: Option<bool>,
+    /// Owner opt-in to read-only parallel Deep turns (docs/v2/parallel-deep.md).
+    /// `None` (omitted) keeps the current value, so a provider, model or
+    /// decoration update never turns parallel Deep on or off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parallel_deep: Option<bool>,
 }
 
 fn model_valid(value: &str) -> bool {
@@ -146,9 +151,18 @@ pub struct ConversationSettings {
     /// before. Read live at each Deep admission.
     #[serde(default = "deep_grouping_default")]
     pub deep_grouping: bool,
+    /// Owner opt-in (default off): while the conversation's Deep turn is
+    /// running, a queued owner chat input may be answered by a read-only
+    /// parallel Deep turn (docs/v2/parallel-deep.md). Serialized only while
+    /// on, so the default response shape is unchanged.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub parallel_deep: bool,
 }
 fn deep_grouping_default() -> bool {
     true
+}
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 impl ConversationSettings {
     pub fn defaults(conversation_id: ConversationId) -> Self {
@@ -166,6 +180,7 @@ impl ConversationSettings {
             updated_at_ms: None,
             review_before_accepting: false,
             deep_grouping: true,
+            parallel_deep: false,
         }
     }
 
@@ -289,6 +304,7 @@ mod tests {
             reply_footer: Some("-- sent by Orkestr\nreply STOP".into()),
             review_before_accepting: false,
             deep_grouping: None,
+            parallel_deep: None,
         }
     }
 

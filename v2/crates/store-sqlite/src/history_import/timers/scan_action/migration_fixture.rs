@@ -3,6 +3,26 @@ use crate::Store;
 
 pub(crate) async fn downgrade_empty(store: &Store) {
     let mut tx = store.pool.begin().await.unwrap();
+    // Migration 82 down: only with no live parallel Deep slot and the switch
+    // off everywhere, restore the 80 canonical index and drop the columns.
+    let slots: i64 = sqlx::query_scalar(
+        "SELECT (SELECT count(*) FROM session_bindings WHERE deep_slot>0 AND state!='retired')+(SELECT count(*) FROM conversation_settings WHERE parallel_deep!=0)",
+    )
+    .fetch_one(&mut *tx)
+    .await
+    .unwrap();
+    assert_eq!(
+        slots, 0,
+        "historical fixture must not erase parallel Deep slots or the switch"
+    );
+    sqlx::raw_sql("DROP TABLE production_parallel_deep_slots; ALTER TABLE conversation_settings DROP COLUMN parallel_deep; DROP INDEX canonical_role; ALTER TABLE session_bindings DROP COLUMN deep_slot; CREATE UNIQUE INDEX canonical_role ON session_bindings(owner_id, conversation_id, role, fast_slot)\n WHERE role IN ('fast','deep') AND state <> 'retired';")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM _sqlx_migrations WHERE version=82")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
     // Migration 81 down: the Deep grouping switch is a preference only.
     sqlx::raw_sql("ALTER TABLE conversation_settings DROP COLUMN deep_grouping;")
         .execute(&mut *tx)

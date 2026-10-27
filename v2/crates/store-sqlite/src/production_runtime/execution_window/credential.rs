@@ -187,14 +187,21 @@ impl Store {
                 return Err(RuntimeStoreError::Fenced);
             }
         }
-        let scoped:i64=sqlx::query_scalar("SELECT count(*) FROM production_readiness r JOIN session_bindings b ON b.id=r.session_id WHERE r.context_id=? AND r.incarnation_id=? AND b.owner_id=? AND b.conversation_id=? AND b.role='deep'")
+        // The canonical Deep lineage's readiness: a parallel slot session of
+        // an earlier window of this context never counts.
+        let canonical = if super::super::parallel_deep::present(&mut tx).await? {
+            " AND b.deep_slot=0"
+        } else {
+            ""
+        };
+        let scoped:i64=sqlx::query_scalar(&format!("SELECT count(*) FROM production_readiness r JOIN session_bindings b ON b.id=r.session_id WHERE r.context_id=? AND r.incarnation_id=? AND b.owner_id=? AND b.conversation_id=? AND b.role='deep'{canonical}"))
             .bind(&c.id).bind(&c.incarnation).bind(c.owner.to_string()).bind(row.get::<String,_>("conversation_id"))
             .fetch_one(&mut *tx).await.map_err(db)?;
         // First boot has only an owner-scoped Starting binding: native readiness
         // is produced later under the newly bound window's metadata fence. This
         // exception cannot recover a retired/expired context or an existing run.
         if scoped != 1 {
-            let bootstrap: i64 = sqlx::query_scalar("SELECT count(*) FROM session_bindings b WHERE b.owner_id=? AND b.conversation_id=? AND b.role='deep' AND b.state='starting' AND b.provider_kind='unconfigured' AND b.native_session_id IS NULL AND NOT EXISTS(SELECT 1 FROM production_readiness r WHERE r.session_id=b.id) AND NOT EXISTS(SELECT 1 FROM production_runs r WHERE r.session_id=b.id OR (r.context_id=? AND r.incarnation_id=?))")
+            let bootstrap: i64 = sqlx::query_scalar(&format!("SELECT count(*) FROM session_bindings b WHERE b.owner_id=? AND b.conversation_id=? AND b.role='deep'{canonical} AND b.state='starting' AND b.provider_kind='unconfigured' AND b.native_session_id IS NULL AND NOT EXISTS(SELECT 1 FROM production_readiness r WHERE r.session_id=b.id) AND NOT EXISTS(SELECT 1 FROM production_runs r WHERE r.session_id=b.id OR (r.context_id=? AND r.incarnation_id=?))"))
                 .bind(c.owner.to_string()).bind(row.get::<String, _>("conversation_id")).bind(&c.id).bind(&c.incarnation)
                 .fetch_one(&mut *tx).await.map_err(db)?;
             if idle_owner || deadline <= now(&mut tx).await? || scoped != 0 || bootstrap != 1 {

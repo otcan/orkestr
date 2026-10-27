@@ -176,7 +176,17 @@ impl Store {
                 .bind(owner.to_string()).bind(conversation.to_string()).bind(&context.id).bind(&context.incarnation)
                 .fetch_optional(&mut *tx).await.map_err(db)?
         } else {
-            sqlx::query("SELECT id,state FROM production_runs WHERE owner_id=? AND conversation_id=? AND role='deep' ORDER BY scope_sequence DESC LIMIT 1")
+            // The conversation's Deep status is its canonical lineage's; a
+            // read-only parallel slot run is read by its exact run ID only.
+            let canonical = if super::parallel_deep::present(&mut tx).await? {
+                format!(
+                    " AND {}",
+                    super::parallel_deep::canonical_run("production_runs")
+                )
+            } else {
+                String::new()
+            };
+            sqlx::query(&format!("SELECT id,state FROM production_runs WHERE owner_id=? AND conversation_id=? AND role='deep'{canonical} ORDER BY scope_sequence DESC LIMIT 1"))
                 .bind(owner.to_string()).bind(conversation.to_string()).fetch_optional(&mut *tx).await.map_err(db)?
         };
         let queued: Option<i64> = if exact_run.is_some() || fast_only {

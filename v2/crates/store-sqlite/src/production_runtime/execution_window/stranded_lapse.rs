@@ -139,6 +139,13 @@ impl Store {
             None,
         )
         .await?;
+        super::super::parallel_deep::retire_settled(
+            &mut tx,
+            &owner.to_string(),
+            &conversation.to_string(),
+            None,
+        )
+        .await?;
         tx.commit().await.map_err(db)?;
         Ok(failed)
     }

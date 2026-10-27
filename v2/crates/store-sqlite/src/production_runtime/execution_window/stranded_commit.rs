@@ -140,6 +140,13 @@ pub(super) async fn commit_turns(
         None,
     )
     .await?;
+    super::super::parallel_deep::retire_settled(
+        tx,
+        &owner.to_string(),
+        &conversation.to_string(),
+        None,
+    )
+    .await?;
     sqlx::query("UPDATE production_supervisors SET lease_deadline_ms=0 WHERE context_id=? AND incarnation_id=? AND generation=?")
         .bind(&plan.context).bind(&plan.incarnation).bind(plan.supervisor_generation)
         .execute(&mut *tx).await.map_err(db)?;

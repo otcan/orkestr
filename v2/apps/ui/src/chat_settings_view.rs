@@ -121,6 +121,11 @@ fn ThreadSettings(
                 "Review replies before accepting"
             }
             p { class: "field-help", "Off (default): replies are accepted automatically, like V1. On: each reply waits for your Accept." }
+            label { class: "checkbox",
+                input { r#type: "checkbox", checked: current.parallel_deep, onchange: move |e| if let Some(f) = form.write().as_mut() { f.parallel_deep = e.checked(); } }
+                "Answer queued messages in parallel (read-only)"
+            }
+            p { class: "field-help", "Off (default): one Deep turn at a time; queued messages are answered together next. On: while a turn runs, a queued question may get its own read-only Deep turn. Changes, sends and timers always wait for the main turn." }
             label { r#for: "settings-prefix", "Reply prefix" }
             input { id: "settings-prefix", value: "{current.reply_prefix}", maxlength: 64,
                 oninput: move |e| if let Some(f) = form.write().as_mut() { f.reply_prefix = e.value(); } }

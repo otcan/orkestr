@@ -367,9 +367,10 @@ async fn populated_payload_prefix_upgrade_preserves_all_rows_and_foreign_links()
     for row in expected.get_mut("conversations").unwrap() {
         row.push_str("|0");
     }
-    // Migration 80 places every existing role record in Fast slot 0.
+    // Migration 80 places every existing role record in Fast slot 0, and
+    // migration 82 in Deep slot 0.
     for row in expected.get_mut("session_bindings").unwrap() {
-        row.push_str("|0");
+        row.push_str("|0|0");
     }
     expected.insert(
         "conversation_directory".into(),
@@ -414,6 +415,7 @@ async fn populated_payload_prefix_upgrade_preserves_all_rows_and_foreign_links()
         "tracker_check_cancellations",
         "tracker_manual_checks",
         "tracker_action_digests",
+        "production_parallel_deep_slots",
     ] {
         expected.insert(table.into(), Vec::new());
     }
@@ -514,7 +516,7 @@ async fn populated_payload_prefix_upgrade_preserves_all_rows_and_foreign_links()
             .fetch_one(&mut conn)
             .await
             .unwrap(),
-        81
+        82
     );
     for table in [
         "history_imports",
@@ -569,12 +571,13 @@ async fn assert_parallel_fast_schema(pool: &sqlx::SqlitePool) {
     .fetch_one(pool)
     .await
     .unwrap();
-    assert!(index.contains("(owner_id, conversation_id, role, fast_slot)"));
-    let unslotted: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM session_bindings WHERE fast_slot!=0")
-            .fetch_one(pool)
-            .await
-            .unwrap();
+    assert!(index.contains("(owner_id, conversation_id, role, fast_slot, deep_slot)"));
+    let unslotted: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM session_bindings WHERE fast_slot!=0 OR deep_slot!=0",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap();
     assert_eq!(unslotted, 0, "every existing record becomes slot 0");
     let duplicated: i64 = sqlx::query_scalar("SELECT count(*) FROM (SELECT 1 FROM session_bindings WHERE role IN ('fast','deep') AND state!='retired' GROUP BY owner_id,conversation_id,role HAVING count(*)>1)")
         .fetch_one(pool)

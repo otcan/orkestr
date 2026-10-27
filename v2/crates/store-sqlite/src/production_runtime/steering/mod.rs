@@ -67,6 +67,13 @@ impl Store {
         {
             return Err(RuntimeStoreError::Fenced);
         }
+        // Owner messages steer only the canonical lineage, never a read-only
+        // parallel turn.
+        if super::parallel_deep::is_slot(&mut tx, &cap.provider().run.session_id.to_string())
+            .await?
+        {
+            return Err(RuntimeStoreError::Fenced);
+        }
         tx.commit().await.map_err(db)?;
         Ok(CodexSteeringAuthority {
             provider: cap.provider().clone(),
