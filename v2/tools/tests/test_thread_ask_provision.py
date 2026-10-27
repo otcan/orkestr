@@ -221,6 +221,15 @@ class Provision(unittest.TestCase):
         self.assertEqual(lines[0]['targets_added'], [{'id': B, 'name': 'Tb'}])
         self.assertEqual(self.api.grants[A][1], [C])
 
+    def test_an_empty_allowlist_keeps_the_grant_and_reports_no_diff(self):
+        self.run_main('--only', A, '--targets', B)
+        grant = self.api.grants[A]
+        code, lines = self.run_main('--only', A, '--targets', A)
+        self.assertEqual(code, 0)
+        self.assertEqual((lines[0]['action'], lines[0]['targets_added'], lines[0]['targets_removed']),
+                         ('no_targets', [], []))
+        self.assertEqual(self.api.grants[A], grant)
+
     def test_credentials_must_be_private(self):
         path = Path(self.temp.name) / 'creds.json'
         path.write_text(json.dumps({'username': 'u', 'password': 'p'}))

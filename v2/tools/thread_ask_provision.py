@@ -178,7 +178,9 @@ def plan(rows, only=None, targets=None, rotate=False, revoke=False, grant_dir=No
         added = sorted(set(wanted) - set(current or []))
         removed = sorted(set(current or []) - set(wanted))
         if not wanted:
-            actions.append((conversation, 'no_targets', wanted, added, removed))
+            # Nothing is issued, rotated or revoked here (use --revoke), so the
+            # line must not claim the issued grant lost its targets.
+            actions.append((conversation, 'no_targets', wanted, [], []))
             continue
         if len(wanted) > TARGETS_MAX:
             actions.append((conversation, 'too_large', wanted, added, removed))
