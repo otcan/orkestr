@@ -6,10 +6,13 @@ native ELF are entirely disposable; retained evidence contains synthetic data.
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
+import signal
 import time
 
 from owned_execution_http import wait_for
+from owned_native_probe import process_start
 from service_roles_case import ServiceRolesCase
 
 
@@ -185,6 +188,29 @@ def run(case):
     afast["_role"] = "fast"
     accept(case, first, afast, "accept:resumed-fast")
     accept(case, first, adeep, "accept:resumed-deep")
+    # The idle warm Fast native dies between turns (OOM or a resource-monitor
+    # kill). Fast must rotate to a fresh session, not end for the window.
+    warm = case.rows("SELECT native_session_id FROM production_runs WHERE id=?",
+                     (afast["run_id"],))[0]["native_session_id"]
+    victims = [row for row in case.trace()
+               if row["kind"] == "ready" and row["role"] == "fast" and row["native"] == warm]
+    assert len(victims) == 1, victims
+    victim = victims[0]
+    assert process_start(victim["pid"]) == victim["process_start"]
+    os.kill(victim["pid"], signal.SIGKILL)
+    wait_for(lambda: process_start(victim["pid"]) != victim["process_start"] or None,
+             "killed idle Fast native", 10)
+    time.sleep(1)  # The idle Fast wait observes its broker every 100 ms.
+    dkey = "first:3"
+    pending_d = {**window_request(intake(case, first, dkey, 5), dkey, 1), "window_id": a["window_id"]}
+    rejoined = expect(case, path(first) + "/window", 201, "POST", pending_d)["status"]
+    assert rejoined["window_id"] == a["window_id"]
+    (case.workspaces["deep"] / "release-5").touch()
+    ddeep = ready(case, first, "deep", previous=adeep["run_id"])
+    dfast = ready(case, first, "fast", previous=afast["run_id"])
+    dfast["_role"] = "fast"
+    accept(case, first, dfast, "accept:fresh-after-kill-fast")
+    accept(case, first, ddeep, "accept:fresh-after-kill-deep")
     (case.workspaces["deep"] / "release-4").touch()
     cdeep = ready(case, third, "deep", run=cdeep_running["run_id"])
     cfast = ready(case, third, "fast")
@@ -193,25 +219,37 @@ def run(case):
     accept(case, third, cfast, "accept:third-fast")
     # Both remaining windows are idle; later fresh windows reclaim them inline.
     runs = case.rows("SELECT id,role,conversation_id,state,session_id,native_session_id,context_id,incarnation_id FROM production_runs ORDER BY rowid")
-    assert len(runs) == 9 and all(row["state"] == "succeeded" for row in runs)
+    assert len(runs) == 11 and all(row["state"] == "succeeded" for row in runs)
     for role in ("deep", "fast"):
         rows = [row for row in runs if row["role"] == role and row["conversation_id"] == first]
-        assert len(rows) == 2
+        assert len(rows) == 3
+        # A follow-up in the same window reuses the warm accepted Fast child;
+        # after the idle Fast native was killed the next input starts fresh.
         identities = 2 if role == "fast" else 1
         assert len({row["session_id"] for row in rows}) == len({row["native_session_id"] for row in rows}) == identities
+        if role == "fast":
+            assert rows[0]["native_session_id"] == rows[1]["native_session_id"] != rows[2]["native_session_id"]
+            assert rows[2]["id"] == dfast["run_id"]
         assert len({row["incarnation_id"] for row in rows}) == 1
         for conversation in (second, third):
             other = next(row for row in runs if row["role"] == role and row["conversation_id"] == conversation)
             assert other["native_session_id"] != rows[0]["native_session_id"]
             assert other["context_id"] not in {row["context_id"] for row in rows}
     trace = case.trace()
-    assert len([row for row in trace if row["kind"] == "turn"]) == 9
+    assert len([row for row in trace if row["kind"] == "turn"]) == 11
     for role in ("deep", "fast"):
         setups = 4 if role == "fast" else 3
         assert [row["resumed"] for row in trace if row["kind"] == "ready" and row["role"] == role] == [False] * setups
-    digests = case.rows("SELECT digest_text,cutoff_sequence FROM production_fast_digests")
-    assert len(digests) == 4 and all(len(row["digest_text"].encode()) <= 8192 for row in digests)
-    assert case.rows("SELECT count(*) AS n FROM production_acceptances") == [{"n": 9}]
+    digests = case.rows("SELECT run_id,digest_text,cutoff_sequence FROM production_fast_digests")
+    assert len(digests) == 5 and all(len(row["digest_text"].encode()) <= 8192 for row in digests)
+    # The fresh session after the kill gets the full digest, as on first launch.
+    fresh = [row["digest_text"] for row in digests if row["run_id"] == dfast["run_id"]]
+    assert len(fresh) == 1 and not fresh[0].startswith("Conversation update"), fresh
+    # A fresh Fast session gets the full digest; the warm continuation already
+    # has its own turns and gets only Deep's answer accepted since.
+    update = [row["digest_text"] for row in digests if row["run_id"] == afast["run_id"]]
+    assert len(update) == 1 and update[0].startswith("Conversation update since your previous turn"), update
+    assert case.rows("SELECT count(*) AS n FROM production_acceptances") == [{"n": 11}]
     from service_roles_retention import run as retained_workers
     retention = retained_workers(case)
     case.stop()

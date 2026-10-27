@@ -227,6 +227,16 @@ class ExitDiagnostics(unittest.TestCase):
             self.assertNotEqual(self.service(resumed=resumed, parent_eof=False), 73)
             self.assertNotEqual(self.service(resumed=resumed, reaped=False), 73)
 
+    def test_native_ended_and_reaped_maps_only_provider_eof(self):
+        # PROVIDER_EOF (98..103) with the owned tree reaped to ECHILD and no
+        # parent EOF: the idle native died on its own; 218 + native state.
+        for resumed in (False, True):
+            self.assertEqual(self.service(resumed=resumed, failure=102, parent_eof=False), 222)
+            self.assertEqual(self.service(resumed=resumed, failure=98, parent_eof=False), 218)
+            self.assertEqual(self.service(resumed=resumed, failure=102, parent_eof=False, reaped=False), 102)
+            self.assertEqual(self.service(resumed=resumed, failure=102), 102)
+            self.assertEqual(self.service(resumed=resumed, failure=140, parent_eof=False), 140)
+
 
 if __name__ == "__main__":
     unittest.main()

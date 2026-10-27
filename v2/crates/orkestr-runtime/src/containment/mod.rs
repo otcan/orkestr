@@ -13,7 +13,7 @@ mod provider_fd;
 mod reaper;
 mod resume_bootstrap;
 mod retirement;
-pub use retirement::{ReapedBroker, RetiringBroker};
+pub use retirement::{ReapedBroker, RetiringBroker, NATIVE_ENDED_REAPED};
 mod reuse;
 mod scope;
 mod sys;

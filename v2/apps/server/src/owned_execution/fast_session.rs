@@ -6,6 +6,7 @@ use crate::{
 use orkestr_runtime::containment::ReapedBroker;
 use orkestr_v2_application::runtime::{RuntimeStore, RuntimeStoreError};
 use orkestr_v2_contracts::{ExecutionPhase, RunId};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 impl ConfiguredExecution {
@@ -40,21 +41,53 @@ impl ConfiguredExecution {
                 ExecutionPhase::Completed => {
                     control.disable();
                     drop(schedule);
-                    if self.window.is_some() {
-                        // Reap outside the next input's latency path. The caller
-                        // retains the original witness while idle, then either
-                        // closes normally or issues a fresh bounded Fast setup.
-                        let retiring = live
-                            .retire_accepted(&self.token)
-                            .await
-                            .map_err(|_| "Fast accepted-session retirement refused")?;
-                        let proof = self.reaped(retiring, &run, heartbeat).await?;
-                        return Ok(fast::FastExit::Accepted { run, proof });
+                    // An idle window Fast whose native dies (OOM, resource
+                    // monitor) rotates to a fresh session instead of ending
+                    // Fast for the rest of the window. Only the broker's own
+                    // native-ended ECHILD exit proves the old tree is gone.
+                    let window = self.window.is_some();
+                    let ended = AtomicBool::new(false);
+                    let waited = self
+                        .fast_input_checked(shutdown, heartbeat, || {
+                            if window && live.idle_broker_exited() {
+                                ended.store(true, Ordering::Release);
+                                return Err("Fast idle broker exited");
+                            }
+                            live.check_broker_liveness()
+                        })
+                        .await;
+                    let input = match waited {
+                        Err(_) if ended.load(Ordering::Acquire) => {
+                            return self.rotate_ended_fast(live, run, heartbeat).await;
+                        }
+                        other => other?,
+                    };
+                    if window && live.idle_broker_exited() {
+                        // Died after the source was selected: nothing was
+                        // admitted yet, so the input stays eligible.
+                        return self.rotate_ended_fast(live, run, heartbeat).await;
                     }
-                    let Some(input) = self
-                        .fast_input_checked(shutdown, heartbeat, || live.check_broker_liveness())
-                        .await?
-                    else {
+                    if window {
+                        // Keep the accepted native child warm for the next
+                        // owner input of this same window (and conversation).
+                        // Core decides reuse: same window incarnation, accepted
+                        // non-timer turns only, capped turn count. Otherwise
+                        // reap the exact child and let the caller close
+                        // normally or issue a fresh bounded Fast setup.
+                        let reuse = match &input {
+                            Some(input) => self.fast_reusable(input).await,
+                            None => false,
+                        };
+                        if !reuse {
+                            let retiring = live
+                                .retire_accepted(&self.token)
+                                .await
+                                .map_err(|_| "Fast accepted-session retirement refused")?;
+                            let proof = self.reaped(retiring, &run, heartbeat).await?;
+                            return Ok(fast::FastExit::Accepted { run, proof });
+                        }
+                    }
+                    let Some(input) = input else {
                         let retiring = live
                             .retire_accepted(&self.token)
                             .await
@@ -172,6 +205,46 @@ impl ConfiguredExecution {
             return Err("Fast window terminal remains unresolved");
         }
         Ok(fast::FastExit::Shutdown)
+    }
+
+    /// Reap the already-exited idle Fast broker on its own ECHILD evidence
+    /// and hand the witness to the caller's ordinary fresh-setup rotation.
+    async fn rotate_ended_fast(
+        &self,
+        live: Box<LiveFast>,
+        run: RunId,
+        heartbeat: &mut Instant,
+    ) -> Result<fast::FastExit, &'static str> {
+        let retiring = match live.retire_ended_accepted(&self.token).await {
+            Ok(retiring) => retiring,
+            Err(_) => return Err("Fast broker exited"),
+        };
+        let proof = self.reaped(retiring, &run, heartbeat).await?;
+        eprintln!("owned window Fast idle native ended; reaped, next input starts a fresh session");
+        Ok(fast::FastExit::Accepted { run, proof })
+    }
+
+    /// Advisory only: any doubt (including a busy or unavailable Store) means
+    /// rotate to a fresh bounded presentation, never a failed companion.
+    async fn fast_reusable(&self, input: &orkestr_v2_store_sqlite::FastAdmissionInput) -> bool {
+        let Ok(bindings) = self
+            .store
+            .ensure_role_bindings(&self.owner, &self.config.conversation_id)
+            .await
+        else {
+            return false;
+        };
+        let binding = bindings.fast;
+        if binding.session_id != input.fast_binding_id
+            || binding.generation != input.expected_binding_generation
+            || binding.conversation_id != self.config.conversation_id
+        {
+            return false;
+        }
+        self.store
+            .bounded_fast_reusable(&self.token, &binding, &input.source_event_id)
+            .await
+            .unwrap_or(false)
     }
 
     pub(super) async fn fast_status(

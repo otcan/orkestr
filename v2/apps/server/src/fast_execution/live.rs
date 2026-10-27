@@ -213,6 +213,35 @@ impl LiveFast {
         Ok(retiring)
     }
 
+    /// Idle accepted state only: has the retained broker exited (for example
+    /// after its native was OOM-killed)? Pure observation, no quarantine, so
+    /// the original child can still be claimed by `retire_ended_accepted`.
+    pub(crate) fn idle_broker_exited(&self) -> bool {
+        self.owned
+            .as_ref()
+            .is_none_or(|owned| !matches!(owned.pump.broker_exited(), Ok(false)))
+    }
+
+    /// The accepted broker already exited on its own. Claims its exact
+    /// native-ended ECHILD status as retirement evidence; any other status
+    /// refuses (and dropping the transport quarantines as before).
+    pub async fn retire_ended_accepted(
+        mut self,
+        credential: &str,
+    ) -> Result<RetiringBroker, FastFailure> {
+        self.accepted(credential).await?;
+        let owned = self
+            .owned
+            .take()
+            .ok_or(FastFailure::Store(RuntimeStoreError::Fenced))?;
+        let retiring = owned
+            .pump
+            .retire_ended_broker()
+            .map_err(FastFailure::Transport)?;
+        drop(owned.authority);
+        Ok(retiring)
+    }
+
     /// Window expiry removes transport authority while a genuine proposal stays
     /// pending. This supplies only original-child cleanup, never acceptance.
     pub(crate) async fn retire_for_owner_decision(

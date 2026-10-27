@@ -132,21 +132,14 @@ async fn accepted_fast_rotates_once_without_changing_deep_input_order_or_dispatc
         .admit_execution_window_authenticated(&w.browser_credential, &w.f.conversation, &next)
         .await
         .unwrap();
+    // Same-window reuse is allowed, but the scheduler may still rotate; the
+    // read-only eligibility query never changes state.
     let before = fixtures::snapshot(&w.f.store).await;
     assert!(w
         .bound
-        .admit_fast(
-            w.credential.credential(),
-            &FastAdmissionInput {
-                source_message_id: next.input_message_id.clone(),
-                source_event_id: next.input_event_id.clone(),
-                fast_binding_id: released.session_id.clone(),
-                expected_binding_generation: released.generation,
-                request_key: format!("fast-http:{}", next.input_event_id),
-            }
-        )
+        .bounded_fast_reusable(w.credential.credential(), &released, &next.input_event_id)
         .await
-        .is_err());
+        .unwrap());
     assert_eq!(before, fixtures::snapshot(&w.f.store).await);
     let deep = w
         .bound
@@ -218,6 +211,115 @@ async fn accepted_fast_rotates_once_without_changing_deep_input_order_or_dispatc
     assert_eq!(digest.0, next.input_event_id.to_string());
     assert!(digest.1.len() <= 8192);
     assert!(digest.1.contains("accepted historical answer"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn same_window_fast_reuses_the_accepted_child_without_digest_until_the_cap() {
+    let w = Window::open().await;
+    let first = fresh(&w, &w.roles.fast, "warm-native").await;
+    w.activate().await;
+    let cap = present(&w, &first, &w.source).await;
+    let done = propose(&w, cap.provider(), "warm first answer").await;
+    accept(&w, cap.provider(), done).await;
+    let digests = |run: String| {
+        let pool = w.f.store.pool.clone();
+        async move {
+            sqlx::query_scalar::<_, i64>(
+                "SELECT count(*) FROM production_fast_digests WHERE run_id=?",
+            )
+            .bind(run)
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+        }
+    };
+    assert_eq!(digests(cap.provider().run.run_id.to_string()).await, 1);
+    let join = |key: String| {
+        let w = &w;
+        async move {
+            let mut next = input(&w.f, &key).await;
+            next.expected_generation = 1;
+            next.window_id = Some(w.status.window_id);
+            w.f.store
+                .admit_execution_window_authenticated(
+                    &w.browser_credential,
+                    &w.f.conversation,
+                    &next,
+                )
+                .await
+                .unwrap();
+            next
+        }
+    };
+    for turn in 2..=super::super::fast_continuity::MAX_WINDOW_FAST_TURNS {
+        let released = ready(&w).await;
+        assert_eq!(released.session_id, first.session_id);
+        let next = join(format!("warm-{turn}")).await;
+        // Another conversation's binding identity is never eligible here.
+        let foreign = Binding {
+            conversation_id: ConversationId(uuid::Uuid::new_v4()),
+            ..released.clone()
+        };
+        assert!(!w
+            .bound
+            .bounded_fast_reusable(w.credential.credential(), &foreign, &next.input_event_id)
+            .await
+            .unwrap());
+        assert!(!w
+            .bound
+            .bounded_fast_reusable(
+                w.credential.credential(),
+                &w.roles.deep,
+                &next.input_event_id
+            )
+            .await
+            .unwrap());
+        assert!(w
+            .bound
+            .bounded_fast_reusable(w.credential.credential(), &released, &next.input_event_id)
+            .await
+            .unwrap());
+        let cap = present(&w, &released, &next).await;
+        assert_eq!(cap.provider().run.session_id, first.session_id);
+        assert_eq!(
+            cap.provider().run.native_session_id,
+            first.native_session_id
+        );
+        // The warm native child already holds this window's turns.
+        assert_eq!(cap.text(), "synthetic window input");
+        assert_eq!(digests(cap.provider().run.run_id.to_string()).await, 0);
+        let done = propose(&w, cap.provider(), "warm later answer").await;
+        accept(&w, cap.provider(), done).await;
+    }
+    // The cap forces a fresh bounded presentation with the digest again.
+    let released = ready(&w).await;
+    let next = join("warm-capped".into()).await;
+    let before = fixtures::snapshot(&w.f.store).await;
+    assert!(!w
+        .bound
+        .bounded_fast_reusable(w.credential.credential(), &released, &next.input_event_id)
+        .await
+        .unwrap());
+    assert!(w
+        .bound
+        .admit_fast(
+            w.credential.credential(),
+            &FastAdmissionInput {
+                source_message_id: next.input_message_id.clone(),
+                source_event_id: next.input_event_id.clone(),
+                fast_binding_id: released.session_id.clone(),
+                expected_binding_generation: released.generation,
+                request_key: format!("fast-http:{}", next.input_event_id),
+            }
+        )
+        .await
+        .is_err());
+    assert_eq!(before, fixtures::snapshot(&w.f.store).await);
+    let rotated = fresh(&w, &released, "warm-rotated").await;
+    assert_ne!(rotated.session_id, first.session_id);
+    let cap = present(&w, &rotated, &next).await;
+    assert!(cap.text().contains("warm later answer"));
+    assert_eq!(digests(cap.provider().run.run_id.to_string()).await, 1);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -404,6 +506,305 @@ async fn stop_holds_a_fast_accepted_source_still_queued_for_deep_and_excludes_it
     let current = join(&w, "after-hold", "NEW_CURRENT_INPUT").await;
     let third = fresh(&w, &ready(&w).await, "hold-third").await;
     let cap = present(&w, &third, &current).await;
+    assert!(!cap.text().contains("HELD_OWNER_SOURCE"));
+    assert!(!cap.text().contains("HELD_ACCEPTED_ANSWER"));
+    assert!(cap.text().contains("prior unheld answer"));
+    assert!(cap.text().ends_with("NEW_CURRENT_INPUT"));
+}
+
+async fn join_window(w: &Window, key: &str, text: &str) -> ExecutionWindowRequest {
+    let receipt =
+        w.f.store
+            .admit(
+                &w.f.owner,
+                &w.f.conversation,
+                &MessageInput {
+                    client_message_id: key.into(),
+                    text: text.into(),
+                },
+            )
+            .await
+            .unwrap()
+            .receipt;
+    let request = ExecutionWindowRequest {
+        request_key: format!("window:{key}"),
+        input_message_id: receipt.message_id,
+        input_event_id: receipt.event_id,
+        input_request_key: key.into(),
+        expected_generation: 1,
+        window_id: Some(w.status.window_id),
+        predecessor_window_id: None,
+    };
+    w.f.store
+        .admit_execution_window_authenticated(&w.browser_credential, &w.f.conversation, &request)
+        .await
+        .unwrap();
+    request
+}
+
+async fn deep_run(w: &Window, key: &str) -> ConsumedProviderDispatch {
+    let claim = w
+        .bound
+        .claim_next(
+            &w.f.owner,
+            &w.f.conversation,
+            &w.roles.deep.session_id,
+            Duration::from_secs(30),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    // The Deep binding generation advances with each accepted Deep turn.
+    let binding = w
+        .bound
+        .ensure_role_bindings(&w.f.owner, &w.f.conversation)
+        .await
+        .unwrap()
+        .deep;
+    let deep = w
+        .bound
+        .admit_run(&claim, &binding.session_id, binding.generation, key)
+        .await
+        .unwrap();
+    w.consume(&deep).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn warm_fast_receives_only_the_deep_answers_accepted_since_its_previous_turn() {
+    let w = Window::open().await;
+    let first = fresh(&w, &w.roles.fast, "warm-update").await;
+    w.activate().await;
+    let cap = present(&w, &first, &w.source).await;
+    let done = propose(&w, cap.provider(), "WARM_OWN_ANSWER").await;
+    accept(&w, cap.provider(), done).await;
+    let deep = deep_run(&w, "warm-update-deep").await;
+    let done = propose(&w, deep.provider(), "DEEP_ANSWER_SINCE").await;
+    accept(&w, deep.provider(), done).await;
+    let next = join_window(&w, "warm-update-next", "SECOND_OWNER_INPUT").await;
+    let released = ready(&w).await;
+    assert!(w
+        .bound
+        .bounded_fast_reusable(w.credential.credential(), &released, &next.input_event_id)
+        .await
+        .unwrap());
+    let cap = present(&w, &released, &next).await;
+    assert_eq!(
+        cap.provider().run.native_session_id,
+        first.native_session_id
+    );
+    // The warm child already holds its own turns; it gets only Deep's answer.
+    assert!(cap
+        .text()
+        .starts_with("Conversation update since your previous turn"));
+    assert!(cap.text().contains("DEEP_ANSWER_SINCE"));
+    assert!(!cap.text().contains("WARM_OWN_ANSWER"));
+    assert!(!cap.text().contains("synthetic window input"));
+    assert!(cap
+        .text()
+        .ends_with("Exact current input:\nSECOND_OWNER_INPUT"));
+    let done = propose(&w, cap.provider(), "WARM_SECOND_ANSWER").await;
+    accept(&w, cap.provider(), done).await;
+    // Nothing new since: the next warm turn is the exact input, no digest row.
+    let third = join_window(&w, "warm-update-third", "THIRD_OWNER_INPUT").await;
+    let cap = present(&w, &ready(&w).await, &third).await;
+    assert_eq!(cap.text(), "THIRD_OWNER_INPUT");
+    let rows: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM production_fast_digests WHERE run_id=?")
+            .bind(cap.provider().run.run_id.to_string())
+            .fetch_one(&w.f.store.pool)
+            .await
+            .unwrap();
+    assert_eq!(rows, 0);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn thread_ask_inputs_and_their_answers_stay_out_of_the_warm_update() {
+    let w = Window::open().await;
+    let first = fresh(&w, &w.roles.fast, "warm-ask").await;
+    w.activate().await;
+    let cap = present(&w, &first, &w.source).await;
+    let done = propose(&w, cap.provider(), "WARM_ASK_OWN_ANSWER").await;
+    accept(&w, cap.provider(), done).await;
+    // Another conversation of the same owner, for both thread-ask directions.
+    let other =
+        w.f.store
+            .create_project(
+                &w.f.owner,
+                &orkestr_v2_contracts::ProjectInput {
+                    client_request_id: "project-warm-ask-other".into(),
+                    name: "warm-ask-other".into(),
+                },
+            )
+            .await
+            .unwrap()
+            .project
+            .conversation_id;
+    let outward =
+        w.f.store
+            .admit(
+                &w.f.owner,
+                &other,
+                &MessageInput {
+                    client_message_id: "warm-ask-outward".into(),
+                    text: "OUTWARD_ASK_TEXT".into(),
+                },
+            )
+            .await
+            .unwrap()
+            .receipt;
+    // Between this session's two Fast turns: an ask from the other
+    // conversation admitted here, the returned reply of this conversation's
+    // own ask (both thread-ask inputs), and one ordinary owner input.
+    let inbound = join_window(&w, "warm-ask-inbound", "THREAD_ASK_INPUT_MUST_NOT_APPEAR").await;
+    let reply = join_window(&w, "warm-ask-reply", "THREAD_ASK_REPLY_MUST_NOT_APPEAR").await;
+    join_window(&w, "warm-ask-ordinary", "ORDINARY_OWNER_BETWEEN").await;
+    // Deep answers the original input (ordinary history) ...
+    let deep = deep_run(&w, "warm-ask-deep").await;
+    assert_eq!(deep.source_event_id(), &w.source.input_event_id);
+    let done = propose(&w, deep.provider(), "ORDINARY_DEEP_ANSWER").await;
+    accept(&w, deep.provider(), done).await;
+    let source_run = deep.provider().run.run_id.to_string();
+    let ask = "INSERT INTO thread_asks(id,owner_id,source_conversation_id,source_run_id,grant_generation,request_key,target_conversation_id,text_digest,depth,input_message_id,input_event_id,created_ms,outcome,settled_ms,return_path,returned_ms,reply_message_id,reply_event_id) VALUES(?,?,?,?,1,?,?,?,0,?,?,1,?,?,?,?,?,?)";
+    sqlx::query(ask)
+        .bind(uuid::Uuid::new_v4().to_string())
+        .bind(w.f.owner.to_string())
+        .bind(other.to_string())
+        .bind(&source_run)
+        .bind("warm-ask-inbound")
+        .bind(w.f.conversation.to_string())
+        .bind("0".repeat(64))
+        .bind(inbound.input_message_id.to_string())
+        .bind(inbound.input_event_id.to_string())
+        .bind(None::<String>)
+        .bind(None::<i64>)
+        .bind(None::<String>)
+        .bind(None::<i64>)
+        .bind(None::<String>)
+        .bind(None::<String>)
+        .execute(&w.f.store.pool)
+        .await
+        .unwrap();
+    sqlx::query(ask)
+        .bind(uuid::Uuid::new_v4().to_string())
+        .bind(w.f.owner.to_string())
+        .bind(w.f.conversation.to_string())
+        .bind(&source_run)
+        .bind("warm-ask-outward")
+        .bind(other.to_string())
+        .bind("1".repeat(64))
+        .bind(outward.message_id.to_string())
+        .bind(outward.event_id.to_string())
+        .bind("failed")
+        .bind(1_i64)
+        .bind("input")
+        .bind(1_i64)
+        .bind(reply.input_message_id.to_string())
+        .bind(reply.input_event_id.to_string())
+        .execute(&w.f.store.pool)
+        .await
+        .unwrap();
+    // ... and then the inbound ask; that accepted answer is thread-ask work.
+    let asked = deep_run(&w, "warm-ask-answer").await;
+    assert_eq!(asked.source_event_id(), &inbound.input_event_id);
+    let done = propose(&w, asked.provider(), "THREAD_ASK_ANSWER_MUST_NOT_APPEAR").await;
+    accept(&w, asked.provider(), done).await;
+    let next = join_window(&w, "warm-ask-next", "OWNER_INPUT_AFTER_ASKS").await;
+    let released = ready(&w).await;
+    assert!(w
+        .bound
+        .bounded_fast_reusable(w.credential.credential(), &released, &next.input_event_id)
+        .await
+        .unwrap());
+    let cap = present(&w, &released, &next).await;
+    assert_eq!(
+        cap.provider().run.native_session_id,
+        first.native_session_id
+    );
+    let text = cap.text();
+    assert!(
+        text.starts_with("Conversation update since your previous turn"),
+        "{text}"
+    );
+    assert!(text.contains("ORDINARY_DEEP_ANSWER"), "{text}");
+    assert!(text.contains("ORDINARY_OWNER_BETWEEN"), "{text}");
+    assert!(
+        text.ends_with("Exact current input:\nOWNER_INPUT_AFTER_ASKS"),
+        "{text}"
+    );
+    for hidden in [
+        "THREAD_ASK_INPUT_MUST_NOT_APPEAR",
+        "THREAD_ASK_REPLY_MUST_NOT_APPEAR",
+        "THREAD_ASK_ANSWER_MUST_NOT_APPEAR",
+        "OUTWARD_ASK_TEXT",
+    ] {
+        assert!(
+            !text.contains(hidden),
+            "{hidden} leaked into the warm update: {text}"
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_source_held_by_stop_never_stays_in_a_warm_fast_session() {
+    let w = Window::open().await;
+    let first = fresh(&w, &w.roles.fast, "warm-hold").await;
+    w.activate().await;
+    let cap = present(&w, &first, &w.source).await;
+    let done = propose(&w, cap.provider(), "prior unheld answer").await;
+    accept(&w, cap.provider(), done).await;
+    let deep = deep_run(&w, "warm-hold-parent").await;
+    w.bound
+        .append_provider_event(
+            &w.f.owner,
+            deep.provider(),
+            &observation(deep.provider(), 1, ProviderEvent::Started),
+        )
+        .await
+        .unwrap();
+    let held = join_window(&w, "warm-later-held", "HELD_OWNER_SOURCE").await;
+    let released = ready(&w).await;
+    assert!(w
+        .bound
+        .bounded_fast_reusable(w.credential.credential(), &released, &held.input_event_id)
+        .await
+        .unwrap());
+    let cap = present(&w, &released, &held).await;
+    let done = propose(&w, cap.provider(), "HELD_ACCEPTED_ANSWER").await;
+    accept(&w, cap.provider(), done).await;
+    w.bound
+        .request_cancel(&w.f.owner, &deep.provider().run.run_id, "warm-hold-stop")
+        .await
+        .unwrap();
+    let current = join_window(&w, "warm-after-hold", "NEW_CURRENT_INPUT").await;
+    let released = ready(&w).await;
+    assert_eq!(released.session_id, first.session_id);
+    let before = fixtures::snapshot(&w.f.store).await;
+    assert!(!w
+        .bound
+        .bounded_fast_reusable(
+            w.credential.credential(),
+            &released,
+            &current.input_event_id
+        )
+        .await
+        .unwrap());
+    assert!(w
+        .bound
+        .admit_fast(
+            w.credential.credential(),
+            &FastAdmissionInput {
+                source_message_id: current.input_message_id.clone(),
+                source_event_id: current.input_event_id.clone(),
+                fast_binding_id: released.session_id.clone(),
+                expected_binding_generation: released.generation,
+                request_key: format!("fast-http:{}", current.input_event_id),
+            }
+        )
+        .await
+        .is_err());
+    assert_eq!(before, fixtures::snapshot(&w.f.store).await);
+    let rotated = fresh(&w, &released, "warm-hold-rotated").await;
+    let cap = present(&w, &rotated, &current).await;
     assert!(!cap.text().contains("HELD_OWNER_SOURCE"));
     assert!(!cap.text().contains("HELD_ACCEPTED_ANSWER"));
     assert!(cap.text().contains("prior unheld answer"));

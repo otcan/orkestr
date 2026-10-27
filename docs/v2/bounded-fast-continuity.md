@@ -1,17 +1,47 @@
 # Bounded Fast native continuity
 
-The Codex Fast companion in an execution window starts one fresh native session
-for each presentation. It never resumes accumulated Fast native history. Deep
-and Worker identities, settings and native continuity use their existing paths.
-The isolated non-window factory and Claude Fast are unchanged.
+The Codex Fast companion in an execution window starts a fresh native session
+when the window opens and keeps that accepted native child warm for the
+window's later owner inputs. It never resumes accumulated Fast native history
+from an earlier window. Deep and Worker identities, settings and native
+continuity use their existing paths. The isolated non-window factory and Claude
+Fast are unchanged.
 
-After genuine acceptance, the scheduler reaps the original Fast native child
-immediately. It holds that exact non-clone cleanup witness while idle. A new
-eligible source then permits the dedicated Fast metadata issuer to retire the
-old binding and create a fresh Starting binding in one transaction. A genuine
-Stopped predecessor can use the same boundary. A proposal, interrupt ACK,
-unresolved run, unconfirmed native setup or stale binding cannot rotate. The old
-binding and native ID remain reserved history. No caller can supply a native ID.
+Same-window reuse: after genuine acceptance the scheduler keeps the original
+Fast child alive while idle and asks Core (`bounded_fast_reusable`, read-only)
+whether the next source may continue on it. Core allows it only when the
+binding was created by this exact window incarnation (one window belongs to one
+conversation), every earlier run on it was accepted and was not a timer input,
+the next source is not a timer input, no source it presented was later held by
+Stop, and fewer than eight turns used it. Fast admission enforces the same rule,
+so a refused continuation can never dispatch. The scheduler treats any doubt in
+that query as a refusal and rotates. A continued turn does not receive the full
+digest, because the warm native child already holds its own earlier turns. It
+receives only a bounded update of what it did not see since its previous turn
+(owner-accepted Deep proposals, or inputs another session presented), with the
+same limits, exclusions and labelling as the digest; with nothing new it gets
+the exact current input alone. This keeps the
+warm start (about 0.15 s instead of 3-4 s for a fresh Codex session) and lets a
+chat-rules line be read once per window instead of once per message.
+
+Idle native death: if the kept-alive Fast native dies between turns (OOM, a
+resource-monitor kill), the Codex service broker, as subreaper, reaps its
+owned tree to ECHILD and exits with 218..223 (the PROVIDER_EOF class's native
+state added to 218). The idle scheduler observes the exit without quarantine,
+claims only that status as the reap witness (`retire_ended_broker`; a signal,
+0, 73 or any other class stays unproven), waits the broker, and rotates
+exactly like a refused reuse: the next input gets a fresh session with the
+digest. If the broker itself is killed there is no proof and Fast ends for
+that window as before.
+
+Rotation: when reuse is refused, or after Stop, the scheduler reaps the
+original Fast native child. It holds that exact non-clone cleanup witness while
+idle. A new eligible source then permits the dedicated Fast metadata issuer to
+retire the old binding and create a fresh Starting binding in one transaction.
+A genuine Stopped predecessor can use the same boundary. A proposal, interrupt
+ACK, unresolved run, unconfirmed native setup or stale binding cannot rotate.
+The old binding and native ID remain reserved history. No caller can supply a
+native ID.
 
 The previous terminal witness remains held through fresh setup until a new
 consumed dispatch attaches to its original child. Shutdown or window expiry
@@ -42,6 +72,7 @@ owner-wide Fast deduplication stay unchanged. The digest receipt and one-use
 dispatch consumption commit together, so uncertainty never mints a replacement
 dispatch. Timer Fast turns still receive only the fixed no-action note.
 
-Fresh setup removes compaction caused by previous Fast turns. A single current
-turn still obeys its ordinary execution budget and native provider limits; this
-does not disable provider safety or context checks.
+Fresh setup per window (and after the eight-turn cap) removes compaction caused
+by accumulated Fast turns. A single current turn still obeys its ordinary
+execution budget and native provider limits; this does not disable provider
+safety or context checks.

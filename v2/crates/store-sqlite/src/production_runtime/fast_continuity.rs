@@ -1,4 +1,5 @@
-//! Fresh, single-presentation Codex Fast continuity. Old identities stay history.
+//! Bounded Codex Fast continuity: one native child per window (capped), fresh
+//! across windows. Old identities stay history.
 use super::*;
 
 impl Store {
@@ -240,20 +241,112 @@ pub(super) async fn retire_failed_setups(
     Ok(())
 }
 
-pub(super) async fn require_unused(
+/// Accepted Codex Fast turns one window may present on the same native child
+/// before the scheduler rotates to a fresh bounded presentation. A successor
+/// window always starts fresh, so native Fast history stays bounded twice.
+pub(super) const MAX_WINDOW_FAST_TURNS: i64 = 8;
+
+/// Same-child continuation stays inside the window that created the binding:
+/// the continuity row and every earlier run on the session belong to this
+/// exact supervisor context and incarnation (one window, one conversation),
+/// every earlier run was accepted, and neither an earlier run nor the next
+/// source is a timer input (a timer Fast turn only ever sees its fixed note).
+/// A source that Stop later held never stays in a warm native history either:
+/// the digest excludes it and its answer, so the session rotates instead.
+async fn reusable_in(
     tx: &mut SqliteConnection,
+    context: &str,
+    incarnation: &str,
     session: &orkestr_v2_contracts::SessionId,
+    source_event: &str,
+) -> Result<(i64, bool)> {
+    let row = sqlx::query("SELECT (SELECT count(*) FROM production_runs r WHERE r.session_id=?1) AS runs, (SELECT count(*) FROM production_runs r WHERE r.session_id=?1 AND (r.role!='fast' OR r.state!='succeeded' OR r.context_id!=?2 OR r.incarnation_id!=?3 OR EXISTS(SELECT 1 FROM dormant_timer_inputs t WHERE t.event_id=r.event_id) OR EXISTS(SELECT 1 FROM ordinary_input_holds h WHERE h.event_id=r.event_id))) AS foreign_runs, (SELECT count(*) FROM production_fast_continuity f WHERE f.session_id=?1 AND f.context_id=?2 AND f.incarnation_id=?3) AS owned, (SELECT count(*) FROM dormant_timer_inputs t WHERE t.event_id=?4) AS timer")
+        .bind(session.to_string()).bind(context).bind(incarnation).bind(source_event)
+        .fetch_one(tx).await.map_err(db)?;
+    let runs: i64 = row.get("runs");
+    let reusable = runs > 0
+        && runs < MAX_WINDOW_FAST_TURNS
+        && row.get::<i64, _>("foreign_runs") == 0
+        && row.get::<i64, _>("owned") == 1
+        && row.get::<i64, _>("timer") == 0;
+    Ok((runs, reusable))
+}
+
+/// Admission guard for a bounded Fast binding: a fresh session, or a
+/// same-window continuation that [`Store::bounded_fast_reusable`] allows.
+pub(super) async fn require_admissible(
+    tx: &mut SqliteConnection,
+    context: &str,
+    incarnation: &str,
+    session: &orkestr_v2_contracts::SessionId,
+    source_event: &str,
 ) -> Result<()> {
     #[cfg(test)]
     if legacy_fixture(tx).await? {
         return Ok(());
     }
-    let reused: i64 = sqlx::query_scalar("SELECT count(*) FROM production_fast_continuity c WHERE c.session_id=? AND EXISTS(SELECT 1 FROM production_runs r WHERE r.session_id=c.session_id)")
-        .bind(session.to_string()).fetch_one(tx).await.map_err(db)?;
-    if reused != 0 {
-        return Err(RuntimeStoreError::Fenced);
+    let bounded: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM production_fast_continuity WHERE session_id=?")
+            .bind(session.to_string())
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(db)?;
+    if bounded == 0 {
+        return Ok(());
     }
-    Ok(())
+    match reusable_in(tx, context, incarnation, session, source_event).await? {
+        (0, _) | (_, true) => Ok(()),
+        _ => Err(RuntimeStoreError::Fenced),
+    }
+}
+
+impl Store {
+    /// Read-only scheduler query: may the next source continue on the same
+    /// accepted Fast native child of this window? `false` means rotate to a
+    /// fresh bounded presentation; it never grants dispatch by itself.
+    pub async fn bounded_fast_reusable(
+        &self,
+        credential: &str,
+        binding: &Binding,
+        source_event: &orkestr_v2_contracts::EventId,
+    ) -> Result<bool> {
+        self.worker_credential(credential)?;
+        let c = self.context()?;
+        if c.provider != ProviderKind::Codex
+            || binding.owner_id != c.owner
+            || binding.role != Role::Fast
+            || binding.parent_session_id.is_some()
+            || binding.state != SessionState::Ready
+            || binding.provider_kind != ProviderKind::Codex
+        {
+            return Ok(false);
+        }
+        let mut tx = self.pool.begin().await.map_err(db)?;
+        c.validate(&mut tx).await?;
+        let Some(window) = c.window_scope(&mut tx).await? else {
+            return Ok(false);
+        };
+        if window.get::<String, _>("conversation_id") != binding.conversation_id.to_string() {
+            return Ok(false);
+        }
+        let current: i64 = sqlx::query_scalar("SELECT count(*) FROM session_bindings WHERE id=? AND owner_id=? AND conversation_id=? AND role='fast' AND state='ready' AND generation=? AND provider_namespace=?")
+            .bind(binding.session_id.to_string()).bind(c.owner.to_string()).bind(binding.conversation_id.to_string())
+            .bind(binding.generation as i64).bind(&c.namespace)
+            .fetch_one(&mut *tx).await.map_err(db)?;
+        if current != 1 {
+            return Ok(false);
+        }
+        let (_, reusable) = reusable_in(
+            &mut tx,
+            &c.id,
+            &c.incarnation,
+            &binding.session_id,
+            &source_event.to_string(),
+        )
+        .await?;
+        tx.commit().await.map_err(db)?;
+        Ok(reusable)
+    }
 }
 
 #[cfg(test)]
