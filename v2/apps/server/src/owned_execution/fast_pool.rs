@@ -246,7 +246,7 @@ impl SlotHost for WindowSlots {
         }
     }
     async fn next_source(&self) -> Result<Option<FastSource>, &'static str> {
-        match self.execution.unclaimed_fast_source().await {
+        match self.execution.unclaimed_fast_source(false).await {
             Ok(source) => Ok(source),
             Err(RuntimeStoreError::Fenced | RuntimeStoreError::Expired)
                 if self.execution.fast_window_due() =>

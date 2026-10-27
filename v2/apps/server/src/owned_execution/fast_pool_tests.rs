@@ -349,3 +349,28 @@ async fn one_slot_setup_failure_stays_local_to_that_slot_and_its_input() {
     pool.await.unwrap().unwrap();
     assert_eq!(burst.started(), 4);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn lineage_keeps_its_held_input_across_rotation() {
+    let burst = Burst::new(2, Duration::from_millis(10)).await;
+    let companion = &burst.companion;
+    let event = burst.sources[0].event_id.clone();
+    // Only a claimed input can be held.
+    companion.hold_for_lineage(&event);
+    assert!(!companion.lineage_holds(&event));
+    assert!(companion.claim_source(&event));
+    companion.hold_for_lineage(&event);
+    // Still claimed for every other task; the lineage alone may take it.
+    assert!(companion.is_claimed(&event));
+    assert!(!companion.claim_source(&event));
+    assert!(companion.lineage_holds(&event));
+    assert!(companion.take_lineage_hold(&event));
+    assert!(!companion.take_lineage_hold(&event));
+    assert!(
+        companion.is_claimed(&event),
+        "an admitted input stays claimed"
+    );
+    companion.hold_for_lineage(&event);
+    companion.release_source(&event);
+    assert!(!companion.lineage_holds(&event) && !companion.is_claimed(&event));
+}

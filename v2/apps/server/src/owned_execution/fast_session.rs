@@ -114,7 +114,7 @@ impl ConfiguredExecution {
                     if window && live.idle_broker_exited() {
                         // Died after the source was selected: nothing was
                         // admitted yet, so the input stays eligible.
-                        self.release_unpresented(input.as_ref());
+                        self.hold_unpresented(input.as_ref());
                         return self.rotate_ended_fast(live, run, heartbeat).await;
                     }
                     if window {
@@ -129,8 +129,8 @@ impl ConfiguredExecution {
                             None => false,
                         };
                         if !reuse {
-                            // The fresh presentation reads this input again.
-                            self.release_unpresented(input.as_ref());
+                            // The fresh presentation takes this input next.
+                            self.hold_unpresented(input.as_ref());
                             let retiring = live
                                 .retire_accepted(&self.token)
                                 .await
@@ -281,11 +281,11 @@ impl ConfiguredExecution {
         Ok(fast::FastExit::Accepted { run, proof })
     }
 
-    /// Unclaim an input this lineage selected but did not admit, so its
-    /// fresh successor presentation (or a slot) can still take it.
-    fn release_unpresented(&self, input: Option<&orkestr_v2_store_sqlite::FastAdmissionInput>) {
+    /// Keep an input this lineage selected but did not admit for its fresh
+    /// successor presentation; no extra slot takes it meanwhile.
+    fn hold_unpresented(&self, input: Option<&orkestr_v2_store_sqlite::FastAdmissionInput>) {
         if let (Some(companion), Some(input)) = (&self.companion, input) {
-            companion.release_source(&input.source_event_id);
+            companion.hold_for_lineage(&input.source_event_id);
         }
     }
 

@@ -141,8 +141,11 @@ impl ConfiguredExecution {
                     // ReapedBroker is retained until the terminal metadata
                     // issuer has checked the same Fast predecessor and binding,
                     // or shutdown records its proven retirement without a new run.
+                    // The lineage counts as idle while it waits, then claims
+                    // and holds the next input across its fresh setup, so no
+                    // extra slot sets up a second session for it.
                     if self
-                        .fast_source(&mut shutdown, &mut heartbeat)
+                        .fast_source_held(&mut shutdown, &mut heartbeat)
                         .await?
                         .is_none()
                     {
@@ -244,7 +247,7 @@ impl ConfiguredExecution {
             }
             self.maintain(heartbeat).await?;
             check()?;
-            let source = self.unclaimed_fast_source().await;
+            let source = self.unclaimed_fast_source(claim).await;
             let source = match source {
                 Ok(source) => source,
                 Err(
@@ -259,7 +262,9 @@ impl ConfiguredExecution {
                 let Some(companion) = self.companion.as_ref().filter(|_| claim) else {
                     return Ok(Some(source));
                 };
-                if companion.claim_source(&source.event_id) {
+                if companion.claim_source(&source.event_id)
+                    || companion.lineage_holds(&source.event_id)
+                {
                     return Ok(Some(source));
                 }
                 continue;
@@ -269,6 +274,21 @@ impl ConfiguredExecution {
                 _ = shutdown.changed() => return Ok(None),
             }
         }
+    }
+
+    /// The lineage's next input, claimed and held for its next presentation.
+    async fn fast_source_held(
+        &self,
+        shutdown: &mut watch::Receiver<bool>,
+        heartbeat: &mut Instant,
+    ) -> Result<Option<FastSource>, &'static str> {
+        let source = self
+            .fast_source_checked(shutdown, heartbeat, true, || Ok(()))
+            .await?;
+        if let (Some(source), Some(companion)) = (&source, &self.companion) {
+            companion.hold_for_lineage(&source.event_id);
+        }
+        Ok(source)
     }
 
     pub(super) async fn fast_input(
@@ -292,6 +312,10 @@ impl ConfiguredExecution {
         else {
             return Ok(None);
         };
+        if let Some(companion) = &self.companion {
+            // Presenting it now: the hold ends, the claim stays.
+            companion.take_lineage_hold(&source.event_id);
+        }
         let binding = match self
             .store
             .ensure_role_bindings(&self.owner, &self.config.conversation_id)
@@ -322,8 +346,11 @@ impl ConfiguredExecution {
     /// admitted source, including unknown/failed attempts. A volatile cursor
     /// must never skip a held input after release; only claimed inputs (at
     /// most one per live slot) are stepped over.
+    /// `lineage`: the canonical lineage also sees the input it holds across
+    /// its own rotation; an extra slot never does.
     pub(super) async fn unclaimed_fast_source(
         &self,
+        lineage: bool,
     ) -> Result<Option<FastSource>, orkestr_v2_application::runtime::RuntimeStoreError> {
         let mut after = 0;
         loop {
@@ -332,7 +359,10 @@ impl ConfiguredExecution {
                 .next_fast_source(&self.token, &self.config.conversation_id, after)
                 .await?;
             match (source, &self.companion) {
-                (Some(source), Some(companion)) if companion.is_claimed(&source.event_id) => {
+                (Some(source), Some(companion))
+                    if companion.is_claimed(&source.event_id)
+                        && !(lineage && companion.lineage_holds(&source.event_id)) =>
+                {
                     after = source.sequence;
                 }
                 (source, _) => return Ok(source),

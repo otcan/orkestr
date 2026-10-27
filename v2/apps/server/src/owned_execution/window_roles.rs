@@ -37,6 +37,9 @@ struct Slots {
     proofs: Vec<ReapedBroker>,
     /// Owner inputs a Fast task selected but has not admitted yet.
     claims: std::collections::HashSet<orkestr_v2_contracts::EventId>,
+    /// The claimed input the canonical lineage keeps across its own
+    /// rotation to a fresh presentation: no extra slot may take it.
+    lineage_hold: Option<orkestr_v2_contracts::EventId>,
 }
 
 /// Original witnesses Deep holds until window close completes.
@@ -189,10 +192,37 @@ impl Companion {
             .lock()
             .map_or(true, |slots| slots.claims.contains(event))
     }
+    /// Keep this claimed input for the lineage's next presentation.
+    pub(super) fn hold_for_lineage(&self, event: &orkestr_v2_contracts::EventId) {
+        if let Ok(mut slots) = self.slots.lock() {
+            if slots.claims.contains(event) {
+                slots.lineage_hold = Some(event.clone());
+            }
+        }
+    }
+    pub(super) fn lineage_holds(&self, event: &orkestr_v2_contracts::EventId) -> bool {
+        self.slots
+            .lock()
+            .is_ok_and(|slots| slots.lineage_hold.as_ref() == Some(event))
+    }
+    /// The lineage takes its held input (it stays claimed).
+    pub(super) fn take_lineage_hold(&self, event: &orkestr_v2_contracts::EventId) -> bool {
+        self.slots.lock().is_ok_and(|mut slots| {
+            if slots.lineage_hold.as_ref() == Some(event) {
+                slots.lineage_hold = None;
+                true
+            } else {
+                false
+            }
+        })
+    }
     /// After admission committed (Core then excludes the source) or abandon.
     pub(super) fn release_source(&self, event: &orkestr_v2_contracts::EventId) {
         if let Ok(mut slots) = self.slots.lock() {
             slots.claims.remove(event);
+            if slots.lineage_hold.as_ref() == Some(event) {
+                slots.lineage_hold = None;
+            }
         }
     }
     pub(super) fn set_primary_idle(&self, idle: bool) {
