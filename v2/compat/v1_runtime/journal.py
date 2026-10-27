@@ -43,7 +43,13 @@ class Journal:
 
     def _fetch(self, client, after, maximum, timeout_s):
         options = {} if timeout_s is None else {"timeout_s": timeout_s}
-        events = client.read_events(after=after, maximum=maximum, **options)
+        try:
+            events = client.read_events(after=after, maximum=maximum, **options)
+        except Exception:
+            # A lost, restarted or resynced Core: never serve memory read
+            # before it; the next reads start a new span from Core.
+            self._reset(client)
+            raise
         self.fetched += len(events)
         return events
 

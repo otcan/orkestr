@@ -237,7 +237,7 @@ def journal_caught_up(worker, data):
     """True when no unread run evidence of this input remains up to Core's
     current journal head (a non-streaming snapshot read); False while it is
     behind or one of its own runs appears; "unreadable" when Core's head is
-    ahead but its event stream returns nothing more.
+    ahead but its event stream returns nothing more, or no head is provable.
 
     Events written after the input's last read (another input's Fast often
     streams meanwhile) are read through the binding's shared journal and
@@ -250,7 +250,9 @@ def journal_caught_up(worker, data):
     head = snapshot.get("last_sequence") if isinstance(snapshot, dict) else None
     cursor = data.get("cursor")
     if type(head) is not int or type(cursor) is not int:
-        return False
+        # No provable head: keep the bounded wait (an unbounded journal-behind
+        # wait here would hold the serial queue forever).
+        return "unreadable"
     journal = shared(worker)
     for _ in range(HEAD_CHECK_PAGES):
         if head <= cursor:

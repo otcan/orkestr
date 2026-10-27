@@ -193,8 +193,22 @@ class JournalTests(unittest.TestCase):
         journal = journal_module.shared(worker)
         self.assertIs(journal_module.shared(copy.copy(worker)), journal)
 
+    def test_a_failed_core_read_drops_the_span(self):
+        self.journal.page(self.peer, 0, 20, 5)
+        self.peer.read_events = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("transport_failed"))
+        with self.assertRaises(RuntimeError):
+            self.journal.read(self.peer, 400, 100)
+        self.assertIsNone(self.journal.base)
+        self.assertEqual(self.journal.events, [])
+
 
 class HeadCheckTests(fixture.IntakeBase):
+    def test_an_unprovable_head_keeps_the_bounded_wait(self):
+        data = self.enqueue("x")
+        data.update(intake=dict(message_id=fixture.identity(5), event_id=fixture.identity(6), sequence=1), cursor=1)
+        with patch.object(self.worker, "call", lambda *a, **k: {}):
+            self.assertEqual(recovery.journal_caught_up(self.worker, data), "unreadable")
+
     def test_head_check_reads_on_and_never_moves_the_input_cursor(self):
         data = self.enqueue("x")
         message, event = fixture.identity(5), fixture.identity(6)
