@@ -509,6 +509,13 @@ export function parseSecureSecretReference(reference = "", options = {}) {
   // for a name owned by the requesting/fallback owner.
   if (parts.length >= 2) {
     const explicitOwner = normalizeUserId(parts[0]);
+    // A dot-only owner segment ("." / "..") would become a relative path under
+    // users/ when the store path is built; never treat it as an owner.
+    if (/^\.+$/.test(explicitOwner)) {
+      const error = new Error("secure_secret_owner_invalid");
+      error.statusCode = 400;
+      throw error;
+    }
     if (requestedOwner && explicitOwner && explicitOwner !== fallbackOwner && clean(options.allowCrossUserHandle) !== "true") {
       const error = new Error("secure_secret_owner_mismatch");
       error.statusCode = 403;

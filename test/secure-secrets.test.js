@@ -187,6 +187,29 @@ test("secure secret handles read the owner for flat and nested names", () => {
   assert.equal(shorthand.name, "example_api_key");
 });
 
+test("secure secret handles reject path tricks and owner-less nested names for another owner", () => {
+  // The undocumented owner-less nested form now names owner "openai", so it is
+  // refused for any other requesting owner instead of resolving silently.
+  assert.throws(
+    () => parseSecureSecretReference("secret://user/openai/api-key", { ownerUserId: "alice" }),
+    /secure_secret_owner_mismatch/,
+  );
+  for (const handle of ["secret://user/../alice/key", "secret://user/./key", "secret://user/../key"]) {
+    assert.throws(() => parseSecureSecretReference(handle), /secure_secret_owner_invalid/, handle);
+    assert.throws(() => parseSecureSecretReference(handle, { ownerUserId: "alice" }), /secure_secret_owner_(invalid|mismatch)/, handle);
+  }
+  const emptyOwner = parseSecureSecretReference("secret://user//key", { ownerUserId: "alice" });
+  assert.equal(emptyOwner.ownerUserId, "alice");
+  assert.equal(emptyOwner.name, "key");
+  assert.equal(parseSecureSecretReference("secret://user/ALICE/key", { ownerUserId: "alice" }).ownerUserId, "alice");
+  assert.throws(
+    () => parseSecureSecretReference("secret://user/bob%2Falice/key", { ownerUserId: "alice" }),
+    /secure_secret_owner_mismatch/,
+  );
+  const traversalName = parseSecureSecretReference("secret://user/alice/../bob/key", { ownerUserId: "alice" });
+  assert.equal(traversalName.ownerUserId, "alice");
+});
+
 test("secure secret handles printed by list resolve back to the same secret", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-secure-secret-roundtrip-"));
   const env = { ORKESTR_HOME: home, ORKESTR_ADMIN_USER_ID: "admin" };
