@@ -90,10 +90,13 @@ class InputOverlapTests(unittest.TestCase):
         self.peer.read_events = lambda after, maximum: ([{'sequence': after + 1}] if after < 5 else [])
         self.peer.matching_run_ids = lambda events, intake: (original_match(events, intake)
             if any(event['sequence'] == 5 for event in events) else [])
+        # One-event reads are paged through to the journal's end in one pass
+        # (before: one short read per pass, so the cursor stopped at 2).
         self.worker.step(timer)
-        self.assertNotEqual(timer['phase'], 'completed')
-        self.assertEqual(timer['cursor'], 2)
+        self.assertEqual(timer['cursor'], 5)
         for _ in range(3):
+            if timer['phase'] == 'completed':
+                break
             self.worker.step(timer)
         self.assertEqual(timer['phase'], 'completed')
         self.assertEqual(timer['reply']['text'], 'NO_REPLY')

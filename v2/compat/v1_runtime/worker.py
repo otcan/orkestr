@@ -27,6 +27,7 @@ from .activity import observe as observe_activity
 from .input_activity import record as record_transport_activity
 from .intake import admit as admit_input, window as admit_window
 from .acceptance_retry import reconcile as reconcile_acceptance
+from . import journal as shared_journal
 from .intake_fast import (EVENT_WAIT_S, eligible as early_fast_eligible, isolated as isolated_fast,
                           drive as drive_intake_fast)
 
@@ -88,6 +89,12 @@ RESET_KEYS = ("intake", "cursor", "fast_cursor", "window", "window_request", "pr
               "deep_stop_seen_ms")
 # An admitted input whose window ended without starting any run of it.
 ORPHAN_GRACE_S = 60
+# A pass reads the journal page by page until it reaches the end, at most
+# this many pages of 100 events or about this long (a binding has its own
+# thread and lock, so this only bounds this binding's pass). Before, one
+# short stream read per pass let a burst's later inputs fall minutes behind.
+OBSERVE_PAGES = 20
+OBSERVE_BUDGET_S = 2.0
 # Deep phases a window work deadline leaves behind.
 DEADLINE_STOP_PHASES = ("cancelled", "stopped", "interrupted")
 # A Deep stop counts as the window's work deadline only when the deadline had
@@ -243,6 +250,9 @@ class Worker:
         # Optional per-binding chat rules file (see instructions.py); not pinned.
         self.instructions_path = None
         self.instructions_error = None
+        # Events read once serve every input, Fast watch and web watch of
+        # this binding; each still keeps its own cursor (see journal.py).
+        self.journal = shared_journal.Journal()
 
     def import_attachments(self, data):
         if "attachment_request" not in data:
@@ -566,7 +576,7 @@ class Worker:
         if now - watch.get("since", now) > WEB_ANSWER_MAX_S:
             return self.web_dropped(watch, "answer_timeout")
         if "event_id" not in watch:
-            first = self.client.read_events(after=watch["sequence"] - 1, maximum=1)
+            first = shared_journal.shared(self).read(self.client, watch["sequence"] - 1, 1)
             event = first[0] if first else None
             if (not event or event.get("sequence") != watch["sequence"] or
                     (event.get("payload_ref_or_safe_payload") or {}).get("message_id") != watch["message_id"]):
@@ -574,7 +584,7 @@ class Worker:
             watch.update(event_id=event["event_id"], cursor=watch["sequence"])
             self.ledger.save_web_watch(watch)
         intake = {"message_id": watch["message_id"], "event_id": watch["event_id"]}
-        events = self.client.read_events(after=watch["cursor"], maximum=100)
+        events = shared_journal.shared(self).read(self.client, watch["cursor"], 100)
         ids = set(watch.get("runs", [])) | set(self.client.matching_run_ids(events, intake))
         if len(ids) > 128:
             raise Refused("too_many_runs")
@@ -789,11 +799,14 @@ class Worker:
         if "window" not in data:
             return
         independent_fast = isolated_fast(self, data)
-        event_deadline = {"timeout_s": EVENT_WAIT_S} if independent_fast else {}
-        events = self.client.read_events(after=data["cursor"], maximum=100, **event_deadline)
+        events, caught_up = shared_journal.shared(self).page(
+            self.client, data["cursor"], OBSERVE_PAGES, OBSERVE_BUDGET_S,
+            timeout_s=EVENT_WAIT_S if independent_fast else None)
         # The client returns only complete validated envelopes. Advance the cursor
         # together with the exact source tuple's run IDs, before reading statuses.
-        ids = set(data.get("matched_runs", [])) | set(self.client.matching_run_ids(events, data["intake"]))
+        ids = set(data.get("matched_runs", []))
+        for start in range(0, max(1, len(events)), 100):  # The matcher takes pages of 100.
+            ids |= set(self.client.matching_run_ids(events[start:start + 100], data["intake"]))
         if len(ids) > 128:
             raise Refused("too_many_runs")
         data["matched_runs"] = sorted(ids)
@@ -824,7 +837,7 @@ class Worker:
         if data.get("origin") == "timer":
             # A bounded SSE read can yield one complete frame even while more
             # are buffered. Only an empty read proves this cursor caught up.
-            if self.timer_without_deep(data, statuses, caught_up=not events):
+            if self.timer_without_deep(data, statuses, caught_up=caught_up):
                 return
         notice = policy_notice(statuses["deep"], ids)
         if notice:
@@ -840,9 +853,9 @@ class Worker:
             return
         # A Deep that ended without an accepted answer settles the input
         # (one silent retry, else one notice) before any Fast wait below.
-        if self.deep_terminal(data, statuses, ids, caught_up=not events):
+        if self.deep_terminal(data, statuses, ids, caught_up=caught_up):
             return
-        if self.refuse_orphaned(data, ids):
+        if self.refuse_orphaned(data, ids, caught_up):
             return
         for role, value in statuses.items():
             if role in accepted or role + "_accept_request" in data:
@@ -1141,7 +1154,7 @@ class Worker:
         return (current.get("state") == "active" and type(deadline) is int and
                 deadline <= time.time() * 1000)
 
-    def refuse_orphaned(self, data, ids):
+    def refuse_orphaned(self, data, ids, caught_up=True):
         """Settle an unstarted input after its window ends; never clone intake.
 
         Re-admitting with new message keys hides setup failure behind duplicate
@@ -1151,6 +1164,13 @@ class Worker:
         """
         if ids or data.get("origin") == "timer" or "window" not in data:
             return False
+        if not caught_up:
+            # Unread journal may still hold this input's runs (after a burst
+            # its cursor can be hundreds of events behind): keep reading, and
+            # never count that time toward a setup failure.
+            if data.pop("unstarted_since", None) is not None:
+                self.ledger.save(data)
+            return True
         now = time.time()
         since = data.setdefault("unstarted_since", now)
         if since == now:

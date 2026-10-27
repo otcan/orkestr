@@ -9,7 +9,7 @@ import sys
 
 from .first_response import capture
 from .intake import admit, window
-from . import fast_watch
+from . import fast_watch, journal
 from .auto_steer import in_rust
 
 # No per-pass admission throttle: every pending owner message is admitted in
@@ -75,20 +75,13 @@ def scan(worker, watches):
 
     Returns (events, complete): `complete` means an empty read proved the scan
     reached the end of the journal."""
-    import time
     cursors = [w.get("fast_cursor", w["intake"]["sequence"] - 1) for w in watches if "window" in w]
     if not cursors:
         return [], True
-    cursor, events, started = min(cursors), [], time.monotonic()
-    for _ in range(SCAN_PAGES):
-        batch = worker.client.read_events(after=cursor, maximum=100, timeout_s=EVENT_WAIT_S)
-        if not batch:
-            return events, True
-        events.extend(batch)
-        cursor = batch[-1]["sequence"]
-        if time.monotonic() - started > SCAN_BUDGET_S:
-            break
-    return events, False
+    # Through the binding's shared journal: events the serial Deep path (or
+    # an earlier pass) already read come from memory, not from Core again.
+    return journal.shared(worker).page(worker.client, min(cursors), SCAN_PAGES, SCAN_BUDGET_S,
+                                       timeout_s=EVENT_WAIT_S)
 
 
 def observe(worker, data, shared=None):
@@ -101,7 +94,7 @@ def observe(worker, data, shared=None):
         return
     cursor = data.get("fast_cursor", data["intake"]["sequence"] - 1)
     if shared is None:
-        events = worker.client.read_events(after=cursor, maximum=100, timeout_s=EVENT_WAIT_S)
+        events = journal.shared(worker).read(worker.client, cursor, 100, timeout_s=EVENT_WAIT_S)
     else:
         scanned, complete = shared
         events = [event for event in scanned if event["sequence"] > cursor]
@@ -109,7 +102,7 @@ def observe(worker, data, shared=None):
             # Events written during this pass (an accepted Fast lets Core start
             # the next message's Fast at once) are read from the scan's end.
             tail = max([cursor] + [event["sequence"] for event in scanned])
-            events += worker.client.read_events(after=tail, maximum=100, timeout_s=EVENT_WAIT_S)
+            events += journal.shared(worker).read(worker.client, tail, 100, timeout_s=EVENT_WAIT_S)
         elif not events:
             return  # The bounded scan did not reach this watch yet.
     ids = set(data.get("matched_runs", []))

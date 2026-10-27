@@ -28,6 +28,11 @@ READ_RECHECK_S = 30
 # revocation (no silent re-login), so the session is renewed well before it
 # would expire instead.
 SESSION_RENEW_S = 10 * 60 * 60
+# Core's event stream writes every available event of a page at once, then
+# polls its store every 100 ms. A stream read stops once this long passes
+# without new bytes after a complete frame, so one read returns the whole
+# page instead of the first chunk only (before: about one event per pass).
+EVENT_IDLE_GAP_S = 0.05
 
 
 class ClientError(RuntimeError):
@@ -141,7 +146,7 @@ class RustSession:
         self._lock = threading.RLock()
 
     def _wire(self, method, path, body=None, allowed=(200,), events=False,
-              max_request=32768, timeout_s=None):
+              max_request=32768, timeout_s=None, frames=1):
         try:
             data = None if body is None else json.dumps(body, allow_nan=False, separators=(",", ":")).encode()
         except (TypeError, ValueError, UnicodeError):
@@ -200,6 +205,7 @@ class RustSession:
             expected_type = "text/event-stream" if events else "application/json"
             require(response.getheader("Content-Type", "").split(";")[0].lower() == expected_type and
                     response.getheader("Content-Encoding", "identity") == "identity", "response_type_refused")
+            complete, scanned = 0, 0
             while len(raw) <= MAX_BODY:
                 try:
                     chunk = response.read1(min(8192, MAX_BODY + 1 - len(raw)))
@@ -210,8 +216,21 @@ class RustSession:
                 if not chunk:
                     break
                 raw.extend(chunk)
-                if events and (b"\n\n" in raw or b"\r\n\r\n" in raw):
-                    break
+                if events:
+                    # Count frame ends that start in the new bytes or straddle
+                    # the previous chunk. Over-counting only ends a read early.
+                    complete += (raw.count(b"\n\n", max(0, scanned - 1)) +
+                                 raw.count(b"\r\n\r\n", max(0, scanned - 3)))
+                    scanned = len(raw)
+                    if complete and (complete >= frames or len(raw) > MAX_BODY - 8192):
+                        break  # Enough frames; or keep the complete ones within the bound.
+                    if complete:
+                        try:
+                            retained_socket.settimeout(EVENT_IDLE_GAP_S)
+                        except OSError:
+                            pass  # The response already ended and released the socket.
+            if events and complete:
+                return response.status, bytes(raw[:MAX_BODY]), response.getheaders()
             require(len(raw) <= MAX_BODY, "response_too_large")
             if events:
                 return response.status, bytes(raw), response.getheaders()
@@ -435,7 +454,8 @@ class RustClient:
         with self._lock:
             self.ensure_login(mutation=False)
             _, raw, _ = self._wire("GET", f"{self.prefix}/events?after={after}&limit={maximum}",
-                                   events=True, timeout_s=None if timeout_s is None else min(timeout_s, self.session.timeout_s))
+                                   events=True, timeout_s=None if timeout_s is None else min(timeout_s, self.session.timeout_s),
+                                   frames=maximum)
         events, cursor = [], after
         for frame in raw.replace(b"\r\n", b"\n").split(b"\n\n")[:-1]:
             fields = {}
