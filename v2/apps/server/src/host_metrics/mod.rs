@@ -25,7 +25,10 @@ use orkestr_v2_contracts::{
 };
 use std::{
     path::{Path, PathBuf},
-    sync::{Arc, LazyLock, Mutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, LazyLock, Mutex,
+    },
     time::{Duration, Instant},
 };
 
@@ -124,10 +127,64 @@ fn persist(path: &Path) {
     }
 }
 
-/// Starts the sampler for the life of the process (trusted startup only).
-pub fn start(home: &Path) {
+/// How the sampler runs; tests shorten the tick and inject a fake `du`.
+pub(crate) struct Options {
+    pub(crate) tick: Duration,
+    /// Ticks before the first directory measurement.
+    pub(crate) first_directories_tick: u64,
+    pub(crate) directories_command: fn() -> std::process::Command,
+}
+
+impl Default for Options {
+    fn default() -> Self {
+        Self {
+            tick: Duration::from_millis(SAMPLE_MS as u64),
+            first_directories_tick: 24,
+            directories_command: disks::du_command,
+        }
+    }
+}
+
+/// The running sampler. `shutdown` stops it and kills a running `du`.
+pub struct HostMetrics {
+    cancel: Arc<AtomicBool>,
+    wake: Arc<tokio::sync::Notify>,
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl HostMetrics {
+    /// Stops sampling; a running directory measurement is killed and reaped.
+    /// Returns within about `DU_POLL` plus one in-flight `/proc` read.
+    pub async fn shutdown(self) {
+        self.cancel.store(true, Ordering::Release);
+        self.wake.notify_one();
+        let mut task = self.task;
+        if tokio::time::timeout(Duration::from_secs(2), &mut task)
+            .await
+            .is_err()
+        {
+            task.abort();
+        }
+    }
+}
+
+/// Starts the sampler (trusted startup only). No new directory measurement
+/// starts while an operator deploy drain is requested.
+pub fn start(home: &Path, drain: Arc<crate::deploy_drain::DeployDrain>) -> HostMetrics {
+    start_with(home, drain, Options::default())
+}
+
+pub(crate) fn start_with(
+    home: &Path,
+    drain: Arc<crate::deploy_drain::DeployDrain>,
+    options: Options,
+) -> HostMetrics {
     let home: PathBuf = home.to_owned();
-    tokio::spawn(async move {
+    let cancel = Arc::new(AtomicBool::new(false));
+    let wake = Arc::new(tokio::sync::Notify::new());
+    let (stop, notified) = (cancel.clone(), wake.clone());
+    let task = tokio::spawn(async move {
+        let cancel = stop;
         let file = home.join(PERSIST_FILE);
         let restored = {
             let file = file.clone();
@@ -145,14 +202,21 @@ pub fn start(home: &Path) {
         let labels = consumers::unit_labels(&units);
         let scanner = Arc::new(Mutex::new(consumers::Scanner::new()));
         let mut directories_at: Option<Instant> = None;
-        let mut ticker = tokio::time::interval(Duration::from_millis(SAMPLE_MS as u64));
+        let mut measuring: Option<tokio::task::JoinHandle<()>> = None;
+        let mut ticker = tokio::time::interval(options.tick);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let mut previous: Option<(Instant, procfs::Reading)> = None;
         let request_window = Duration::from_secs(60);
         let mut tick: u64 = 0;
         loop {
             tick = tick.wrapping_add(1);
-            ticker.tick().await;
+            tokio::select! {
+                _ = ticker.tick() => {}
+                _ = notified.notified() => break,
+            }
+            if cancel.load(Ordering::Acquire) {
+                break;
+            }
             let reading = tokio::task::spawn_blocking(procfs::read)
                 .await
                 .ok()
@@ -201,19 +265,22 @@ pub fn start(home: &Path) {
                     shared.consumers_at_ms = Some(now_ms());
                 }
             }
-            // Largest directories: two minutes after start, then hourly, one at a time.
+            // Largest directories: two minutes after start, then hourly, one
+            // at a time, never while a deploy drain is requested.
             let due = match directories_at {
-                None => tick >= 24,
+                None => tick >= options.first_directories_tick,
                 Some(at) => at.elapsed() >= disks::DIRECTORY_EVERY,
             };
-            if due {
+            let idle = measuring.as_ref().is_none_or(|task| task.is_finished());
+            if due && idle && !drain.is_draining() {
                 directories_at = Some(Instant::now());
                 shared()
                     .directories
                     .get_or_insert_with(disks::empty_directories)
                     .running = true;
-                tokio::task::spawn_blocking(|| {
-                    let measured = disks::measure_directories();
+                let (cancel, command) = (cancel.clone(), (options.directories_command)());
+                measuring = Some(tokio::task::spawn_blocking(move || {
+                    let measured = disks::measure_directories(command, &cancel);
                     let mut shared = shared();
                     let directories = shared
                         .directories
@@ -224,7 +291,7 @@ pub fn start(home: &Path) {
                         directories.entries = entries;
                         directories.observed_at_ms = Some(now_ms());
                     }
-                });
+                }));
             }
 
             if tick % SERVICES_EVERY == 1 {
@@ -242,7 +309,12 @@ pub fn start(home: &Path) {
                 let _ = tokio::task::spawn_blocking(move || persist(&file)).await;
             }
         }
+        // Cancel is set: a running `du` is killed and reaped within `DU_POLL`.
+        if let Some(measuring) = measuring {
+            let _ = measuring.await;
+        }
     });
+    HostMetrics { cancel, wake, task }
 }
 
 pub(crate) fn router() -> Router<AppState> {
