@@ -34,8 +34,10 @@ const relay = createScopedGroupRelay({
   config,
   formatter,
   api: (url, options = {}) => requestJson(url, {timeoutMs: 15000, ...options}),
-  send: async ({chatId, requestId, parentId, text, document, file}) => {
-    const {stdout} = await execute({kind: 'reply', to: chatId, requestId, parentId, text, document, file});
+  // A grouped Deep final may quote its burst's last input (group-send on stdin).
+  send: async ({chatId, requestId, parentId, text, document, file, quotedMessageId}) => {
+    const {stdout} = await execute({kind: 'reply', to: chatId, requestId, parentId, text, document, file,
+      ...(quotedMessageId ? {quotedMessageId} : {})});
     return JSON.parse(stdout);
   },
   log,

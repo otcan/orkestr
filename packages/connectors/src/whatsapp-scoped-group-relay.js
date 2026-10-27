@@ -13,6 +13,7 @@ import {scopedRouteMembership} from './whatsapp-scoped-route-membership.js';
 import {DatabaseSync} from 'node:sqlite';
 import {isReplyDocument, scopedGroupReplyChunks} from './whatsapp-scoped-group-formatting.js';
 import {createRelayReplyFiles} from './whatsapp-scoped-relay-reply-files.js';
+import {quotedGroupInput, relayQuoteLookups, sendQuotedOnce} from './whatsapp-scoped-deep-quote.js'; // Grouped V2 Deep finals.
 import {createProgressBudget, progressPhases, progressPolicy} from './scoped-group-progress.js';
 import {createRouteAge} from './scoped-group-route-age.js';
 import {createMessagePageReader, isSilentNoReply} from './scoped-group-message-pages.js';
@@ -41,7 +42,6 @@ const threadSuppressesUpdates = (thread = {}) => {
 const errorCode = error => /^[a-z_]+$/.test(error.message) ? error.message : 'operation_failed';
 const GROUP_IMAGE_MIMES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp']);
 const GROUP_MEDIA_MAX_BYTES = 10 * 1024 * 1024;
-
 export {buildReplyTo} from './scoped-group-reply-quote.js';
 
 export function createScopedGroupRelay({config, api, send, log = () => {}, inboxDb, relayDb, formatter, env = process.env, readMediaFile = fs.readFile, now = Date.now,
@@ -248,8 +248,8 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
       const entry = chunks[index];
       if (deliveryBlocked()) throw new Error('group_delivery_requires_review');
       acknowledgements.mark(input.id, 'real_send_attempt');
-      const result = await send({chatId: input.chat_id, requestId, parentId: input.id,
-        ...(isReplyDocument(entry) ? {document: entry.document} : {text: entry})});
+      const result = await sendQuotedOnce(send, {chatId: input.chat_id, requestId, parentId: input.id, ...(isReplyDocument(entry) ? {document: entry.document} : {text: entry})},
+        index === 0 && !isReplyDocument(entry) ? quotedGroupInput({answer, messages, input, group, ...relayQuoteLookups(db, inbox)}) : '', () => log({event: 'reply_quote_fallback', threadId: group.threadId, messageId: answer.id}));
       if (result.ok !== true || !result.ids?.length) throw new Error('group_reply_unconfirmed');
       db.prepare("INSERT OR REPLACE INTO replies VALUES(?,'sent')").run(requestId);
       db.prepare('INSERT OR REPLACE INTO reply_receipts VALUES(?,?)').run(requestId, JSON.stringify(result.ids.map(String)));

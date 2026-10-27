@@ -20,9 +20,10 @@ export function remoteLayerMetadata(remote = {}, parent = {}) {
     ...(token(remote.sourceInputId) ? { remoteOriginalInputId: remote.sourceInputId } : {}),
     ...(token(remote.runId) ? { remoteRunId: remote.runId } : {}),
     ...(["run", "post"].includes(remote.identitySource) ? { remoteIdentitySource: remote.identitySource } : {}),
-    // V2 marks a Quick reply that answers one input of a burst; the relay then
-    // quotes that input. Only a Fast reply naming its source input qualifies.
-    ...(layer === "fast" && remote.quoteSource === true && token(remote.sourceInputId) ? { remoteQuoteSource: true } : {}),
+    // V2 marks a Quick reply that answers one input of a burst, and a grouped
+    // Deep final that answers a whole burst (it names the burst's last input);
+    // the relay then quotes that input. Only Fast or Deep naming an input qualifies.
+    ...((layer === "fast" || layer === "deep") && remote.quoteSource === true && token(remote.sourceInputId) ? { remoteQuoteSource: true } : {}),
     // Older adapters replace a post's identity with the native Deep identity.
     // Only an explicitly preserved post identity can label the coordinator.
     ...(layer === "coordinator" && remote.identitySource !== "post" ? { remoteProvider: null, remoteModel: null } : {}),
