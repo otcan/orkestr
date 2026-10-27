@@ -650,7 +650,7 @@ async fn dormant_imports_and_indefinite_owner_pauses_stay_with_the_owner() {
 }
 
 #[tokio::test]
-async fn a_timer_turn_controls_timers_but_never_creates_one() {
+async fn a_timer_turn_creates_one_shots_but_never_recurring_timers() {
     let f = setup().await;
     let c = f.conversation.clone();
     let g = grant(&f, &c).await;
@@ -667,12 +667,20 @@ async fn a_timer_turn_controls_timers_but_never_creates_one() {
         .await
         .unwrap();
     next_turn(&f, &c, "timer-turn").await;
+    // A recurring timer from a timer turn could keep itself going: refused.
     assert_eq!(
         f.store
-            .create_agent_timer(&g, &c, &once("chained", now_ms() + DAY))
+            .create_agent_timer(&g, &c, &daily("chained", vec![0], 540, 540))
             .await,
         refused("agent_timer_timer_turn")
     );
+    // A one-shot reminder fires once: allowed, under the same caps.
+    let reminder = f
+        .store
+        .create_agent_timer(&g, &c, &once("reminder", now_ms() + DAY))
+        .await
+        .unwrap();
+    assert!(reminder.changed && reminder.timer.created_by_agent);
     // It can still pause (and resume) itself after its window ended.
     let paused = f
         .store
@@ -705,6 +713,7 @@ async fn a_timer_turn_controls_timers_but_never_creates_one() {
         .await
         .unwrap();
     assert!(outcomes.contains(&("create".into(), "agent_timer_timer_turn".into())));
+    assert!(outcomes.contains(&("create".into(), "accepted".into())));
 }
 
 #[tokio::test]

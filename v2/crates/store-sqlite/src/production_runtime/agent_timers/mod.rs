@@ -15,7 +15,8 @@
 //! Caps: at most `AGENT_TIMER_ACTIVE_MAX` live agent-created timers and
 //! `AGENT_TIMER_HOURLY_CREATES_MAX` creates per hour and
 //! `AGENT_TIMER_DAILY_CREATES_MAX` per day per conversation; a turn started by
-//! a timer may control timers but never create one (no timer chains); a
+//! a timer may control timers and create one-shot timers, never a recurring
+//! one (no self-perpetuating chains); a
 //! one-shot run at least 2 minutes ahead; a recurring rule never more often
 //! than every 30 minutes; pauses of at most 60 days. Stop and rollback stay
 //! owner-only, and an agent cancel is an ordinary disable the owner can undo.
@@ -37,9 +38,9 @@ use crate::history_import::timers::{
 use crate::ResourceError;
 use orkestr_v2_contracts::{
     AgentTimerControl, AgentTimerCreate, AgentTimerGrant, AgentTimerGrantDirectory,
-    AgentTimerGrantEntry, AgentTimerGrantIssued, AgentTimerList, AgentTimerReceipt, AgentTimerView,
-    ConversationId, AGENT_TIMER_ACTIVE_MAX, AGENT_TIMER_DAILY_CREATES_MAX,
-    AGENT_TIMER_HOURLY_CREATES_MAX, AGENT_TIMER_REFUSALS_MAX,
+    AgentTimerGrantEntry, AgentTimerGrantIssued, AgentTimerList, AgentTimerReceipt,
+    AgentTimerSchedule, AgentTimerView, ConversationId, AGENT_TIMER_ACTIVE_MAX,
+    AGENT_TIMER_DAILY_CREATES_MAX, AGENT_TIMER_HOURLY_CREATES_MAX, AGENT_TIMER_REFUSALS_MAX,
 };
 use sqlx::{sqlite::SqliteRow, Acquire, Sqlite, Transaction};
 mod grant;
@@ -382,9 +383,13 @@ impl Store {
                 None => {}
             }
             // Chain cap: a turn a timer started may control timers (a check
-            // timer pauses itself) but never creates one, so timers cannot
-            // breed timers.
-            if timer_started(&mut savepoint, input).await? {
+            // timer pauses itself) and create one-shot timers (meeting
+            // reminders), but never a recurring one, so nothing a timer
+            // creates can keep running by itself; one-shots stay under the
+            // hourly and daily caps.
+            if matches!(request.schedule, AgentTimerSchedule::Calendar { .. })
+                && timer_started(&mut savepoint, input).await?
+            {
                 return Err("agent_timer_timer_turn");
             }
             let now = store_clock(&mut savepoint)

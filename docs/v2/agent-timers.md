@@ -34,10 +34,12 @@ The design is the thread-ask grant's (#341, migration 78), with its own grant:
   group member. This differs from thread asks, which only the owner's own
   message may command: a timer step can only affect this conversation, and the
   caps below bound it.
-- **No timer chains.** A turn that a timer started may list, cancel, pause,
-  resume and skip timers (a check timer pauses itself after its end date), but
-  it may not create one (`403 agent_timer_timer_turn`). Only a turn serving an
-  ordinary input (an owner or member message) creates timers.
+- **No self-perpetuating chains.** A turn that a timer started may list,
+  cancel, pause, resume and skip timers (a check timer pauses itself after its
+  end date). It may also create **one-shot** timers (meeting reminders), but
+  never a **recurring** one (`403 agent_timer_timer_turn`). A one-shot fires
+  once, and the hourly and daily create caps still apply, so timers can never
+  keep themselves going beyond 24 creates a day.
 
 ## Operations
 
@@ -78,7 +80,7 @@ The design is the thread-ask grant's (#341, migration 78), with its own grant:
 | Live agent-created timers per conversation (enabled or paused; owner and imported timers do not count) | 32 | `429 agent_timer_limit_reached` |
 | Creates per conversation per hour | 12 | `429 agent_timer_rate_limited` |
 | Creates per conversation per 24 hours | 24 | `429 agent_timer_daily_limit` |
-| Creates from a turn a timer started | none | `403 agent_timer_timer_turn` |
+| Recurring creates from a turn a timer started | none (one-shots allowed) | `403 agent_timer_timer_turn` |
 | One-shot lead time | at least 2 minutes ahead | `422 agent_timer_too_soon` |
 | Horizon | at most 400 days ahead | `422 agent_timer_too_far` |
 | Recurring interval | never more often than every 30 minutes | `422 agent_timer_too_frequent` |

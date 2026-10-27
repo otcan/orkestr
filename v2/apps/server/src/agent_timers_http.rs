@@ -70,7 +70,7 @@ pub(crate) fn failure(error: ResourceError) -> Error {
                 ),
                 "agent_timer_timer_turn" => (
                     StatusCode::FORBIDDEN,
-                    "A turn started by a timer may change timers but not create them",
+                    "A turn started by a timer may not create a recurring timer",
                 ),
                 "agent_timer_limit_reached" => (
                     StatusCode::TOO_MANY_REQUESTS,
