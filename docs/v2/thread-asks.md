@@ -104,11 +104,17 @@ turn of the asking thread, and an input does that through the ordinary path.
 ## Provisioning
 
 `v2/tools/thread_ask_provision.py` is the operator script. It logs in once
-with the owner credential file and reads `GET /api/v2/thread-ask-grants`. The
-selection is explicit: `--only <ids or names>` or `--all-owner-conversations`.
-For each selected eligible conversation it makes sure a grant exists whose allowlist is
-exactly the owner's other eligible conversations. It installs each grant as
-`<grant-dir>/<conversation>.grant` (0600, optional `--chown`). Reruns change
+with the owner credential file and reads `GET /api/v2/thread-ask-grants`. Both
+the selection and the allowlist are explicit. `--only <ids or names>` or
+`--all-owner-conversations` picks the asking conversations. `--targets
+<id-or-name,...>` names whom they may ask; `--all-targets --i-understand` is
+the wide form (every other eligible conversation of the owner). Without
+either the run refuses: `--only` alone no longer means "all". It installs each grant as
+`<grant-dir>/<conversation>.grant` (0600, optional `--chown`). Every output
+line, also under `--dry-run`, carries `targets_added`/`targets_removed`
+against the issued allowlist. An issued grant is never widened silently:
+adding a target needs `--allow-widen`, otherwise that conversation fails with
+`widen_requires_allow_widen` and keeps its grant. Narrowing is always allowed. Reruns change
 nothing. A changed allowlist or a missing file rotates that grant, `--rotate`
 forces rotation, and `--revoke` revokes and deletes. Restricted or archived
 conversations lose their grant. An allowlist above 256 conversations fails
