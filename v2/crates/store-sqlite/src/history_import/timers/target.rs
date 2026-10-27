@@ -47,6 +47,76 @@ fn valid_label(value: &str) -> bool {
     !value.trim().is_empty() && value.len() <= 200 && !value.chars().any(char::is_control)
 }
 
+/// Dormant import plus immutable conversation mapping inside an authorized
+/// write transaction. Replays must repeat the identical mapping.
+pub(super) async fn import_for_in(
+    tx: &mut Transaction<'_, Sqlite>,
+    owner: &OwnerId,
+    request: &TimerImportRequest,
+    target_value: &TimerTarget,
+) -> Result<TimerReceipt> {
+    if !valid_label(&target_value.label) || !valid(&target_value.source_thread_id, 128) {
+        return Err(HistoryError::Invalid);
+    }
+    target(tx, owner, &target_value.conversation_id).await?;
+    let result = import::import_in_transaction(tx, owner, request).await?;
+    let existing = sqlx::query(
+        "SELECT conversation_id,label,source_thread_id FROM dormant_timer_targets WHERE owner_id=? AND namespace=?",
+    )
+    .bind(owner.to_string())
+    .bind(request.namespace.to_string())
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(unavailable)?;
+    match existing {
+        Some(row) => {
+            if row.get::<String, _>("conversation_id") != target_value.conversation_id.to_string()
+                || row.get::<String, _>("label") != target_value.label
+                || row.get::<String, _>("source_thread_id") != target_value.source_thread_id
+            {
+                return Err(HistoryError::Conflict);
+            }
+        }
+        None => {
+            // An unmapped timer already enabled elsewhere cannot be re-homed.
+            if result.state != TimerState::Paused {
+                return Err(HistoryError::Conflict);
+            }
+            sqlx::query("INSERT INTO dormant_timer_targets(owner_id,namespace,conversation_id,label,source_thread_id) VALUES(?,?,?,?,?)")
+                .bind(owner.to_string()).bind(request.namespace.to_string()).bind(target_value.conversation_id.to_string())
+                .bind(&target_value.label).bind(&target_value.source_thread_id)
+                .execute(&mut **tx).await.map_err(unavailable)?;
+        }
+    }
+    Ok(result)
+}
+/// Timers mapped to or enabled in one owned conversation, oldest import first.
+pub(super) async fn listings_in(
+    tx: &mut Transaction<'_, Sqlite>,
+    owner: &OwnerId,
+    conversation: &ConversationId,
+) -> Result<Vec<TimerListing>> {
+    target(tx, owner, conversation).await?;
+    let rows = sqlx::query("SELECT t.*, g.label AS target_label, g.source_thread_id AS target_thread FROM dormant_timers t LEFT JOIN dormant_timer_targets g ON g.owner_id=t.owner_id AND g.namespace=t.namespace WHERE t.owner_id=? AND (g.conversation_id=? OR t.conversation_id=?) ORDER BY t.rowid LIMIT 500")
+        .bind(owner.to_string()).bind(conversation.to_string()).bind(conversation.to_string())
+        .fetch_all(&mut **tx).await.map_err(unavailable)?;
+    let mut result = Vec::with_capacity(rows.len());
+    for row in &rows {
+        let namespace = Uuid::parse_str(row.get("namespace")).map_err(unavailable)?;
+        result.push(TimerListing {
+            policy: super::policy::read_in(tx, owner, namespace).await?,
+            stats: super::outcome::stats_in(tx, owner, namespace).await?,
+            detail: detail_in(tx, owner, row).await?,
+            label: row.get("target_label"),
+            source_thread_id: row.get("target_thread"),
+            source_namespace: row.get("source_namespace"),
+            source_timer_id: row.get("source_timer_id"),
+            source_enabled: row.get::<i64, _>("source_enabled") == 1,
+        });
+    }
+    Ok(result)
+}
+
 impl Store {
     /// Dormant import plus immutable conversation mapping, in one transaction.
     /// Replays must repeat the identical mapping; nothing is enabled here.
@@ -61,37 +131,7 @@ impl Store {
             return Err(HistoryError::Invalid);
         }
         let mut tx = self.history_transaction(credential, owner, true).await?;
-        target(&mut tx, owner, &target_value.conversation_id).await?;
-        let result = import::import_in_transaction(&mut tx, owner, request).await?;
-        let existing = sqlx::query(
-            "SELECT conversation_id,label,source_thread_id FROM dormant_timer_targets WHERE owner_id=? AND namespace=?",
-        )
-        .bind(owner.to_string())
-        .bind(request.namespace.to_string())
-        .fetch_optional(&mut *tx)
-        .await
-        .map_err(unavailable)?;
-        match existing {
-            Some(row) => {
-                if row.get::<String, _>("conversation_id")
-                    != target_value.conversation_id.to_string()
-                    || row.get::<String, _>("label") != target_value.label
-                    || row.get::<String, _>("source_thread_id") != target_value.source_thread_id
-                {
-                    return Err(HistoryError::Conflict);
-                }
-            }
-            None => {
-                // An unmapped timer already enabled elsewhere cannot be re-homed.
-                if result.state != TimerState::Paused {
-                    return Err(HistoryError::Conflict);
-                }
-                sqlx::query("INSERT INTO dormant_timer_targets(owner_id,namespace,conversation_id,label,source_thread_id) VALUES(?,?,?,?,?)")
-                    .bind(owner.to_string()).bind(request.namespace.to_string()).bind(target_value.conversation_id.to_string())
-                    .bind(&target_value.label).bind(&target_value.source_thread_id)
-                    .execute(&mut *tx).await.map_err(unavailable)?;
-            }
-        }
+        let result = import_for_in(&mut tx, owner, request, target_value).await?;
         tx.commit().await.map_err(unavailable)?;
         Ok(result)
     }
@@ -104,24 +144,7 @@ impl Store {
         conversation: &ConversationId,
     ) -> Result<Vec<TimerListing>> {
         let mut tx = self.history_transaction(credential, owner, false).await?;
-        target(&mut tx, owner, conversation).await?;
-        let rows = sqlx::query("SELECT t.*, g.label AS target_label, g.source_thread_id AS target_thread FROM dormant_timers t LEFT JOIN dormant_timer_targets g ON g.owner_id=t.owner_id AND g.namespace=t.namespace WHERE t.owner_id=? AND (g.conversation_id=? OR t.conversation_id=?) ORDER BY t.rowid LIMIT 500")
-            .bind(owner.to_string()).bind(conversation.to_string()).bind(conversation.to_string())
-            .fetch_all(&mut *tx).await.map_err(unavailable)?;
-        let mut result = Vec::with_capacity(rows.len());
-        for row in &rows {
-            let namespace = Uuid::parse_str(row.get("namespace")).map_err(unavailable)?;
-            result.push(TimerListing {
-                policy: super::policy::read_in(&mut tx, owner, namespace).await?,
-                stats: super::outcome::stats_in(&mut tx, owner, namespace).await?,
-                detail: detail_in(&mut tx, owner, row).await?,
-                label: row.get("target_label"),
-                source_thread_id: row.get("target_thread"),
-                source_namespace: row.get("source_namespace"),
-                source_timer_id: row.get("source_timer_id"),
-                source_enabled: row.get::<i64, _>("source_enabled") == 1,
-            });
-        }
+        let result = listings_in(&mut tx, owner, conversation).await?;
         tx.commit().await.map_err(unavailable)?;
         Ok(result)
     }

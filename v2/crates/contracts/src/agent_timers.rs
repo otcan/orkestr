@@ -1,0 +1,244 @@
+//! Agent-facing timers (TASK-52). A running Deep turn of a conversation holds
+//! that conversation's owner-issued agent-timer grant and may list, create,
+//! cancel, pause, resume and skip timers of that same conversation only. The
+//! conversation always comes from the grant, never from a request field, so
+//! no timer created or changed here can fire into another conversation.
+//! Fast never gets this tool (it is read-only and the grant needs a running
+//! Deep turn).
+use crate::{CalendarRule, ConversationId};
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
+
+/// Header carrying a per-conversation agent-timer grant (64 lowercase hex).
+pub const AGENT_TIMER_GRANT_HEADER: &str = "x-orkestr-agent-timer-grant";
+/// The instruction every run of the timer receives.
+pub const AGENT_TIMER_TEXT_MAX: usize = 8_000;
+pub const AGENT_TIMER_LABEL_MAX: usize = 120;
+/// At most this many live (enabled or paused, not exhausted, cancelled or
+/// stopped) agent-created timers per conversation.
+pub const AGENT_TIMER_ACTIVE_MAX: i64 = 32;
+/// At most this many timers created by agents per conversation per hour.
+pub const AGENT_TIMER_HOURLY_CREATES_MAX: i64 = 12;
+/// ... and at most this many per conversation per 24 hours.
+pub const AGENT_TIMER_DAILY_CREATES_MAX: i64 = 24;
+/// A one-shot timer must be at least this far in the future.
+pub const AGENT_TIMER_MIN_LEAD_MS: i64 = 2 * 60_000;
+/// ... and at most this far (400 days).
+pub const AGENT_TIMER_MAX_HORIZON_MS: i64 = 400 * 86_400_000;
+/// A recurring timer never runs more often than this.
+pub const AGENT_TIMER_MIN_INTERVAL_MS: i64 = 30 * 60_000;
+/// An agent pause lasts at most this long (60 days); the owner can pause longer.
+pub const AGENT_TIMER_MAX_PAUSE_MS: i64 = 60 * 86_400_000;
+/// Refused attempts per conversation per 10 minutes that are audited;
+/// beyond this, attempts are refused without any write.
+pub const AGENT_TIMER_REFUSALS_MAX: i64 = 20;
+
+fn key(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 128
+        && s.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"-_.:".contains(&b))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentTimerGrant {
+    pub conversation_id: ConversationId,
+    pub issued: bool,
+    pub generation: i64,
+}
+/// Returned once at issue; only its hash is stored.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentTimerGrantIssued {
+    pub grant: String,
+    pub binding: AgentTimerGrant,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentTimerGrantEntry {
+    pub conversation_id: ConversationId,
+    pub name: String,
+    /// False for a restricted or archived conversation.
+    pub eligible: bool,
+    pub grant: AgentTimerGrant,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentTimerGrantDirectory {
+    pub conversations: Vec<AgentTimerGrantEntry>,
+}
+
+/// What an agent may schedule: one run at an instant, or a calendar rule.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum AgentTimerSchedule {
+    Once {
+        due_ms: i64,
+    },
+    Calendar {
+        timezone: String,
+        #[serde(default)]
+        weekdays: Vec<u8>,
+        start_minute: u16,
+        end_minute: u16,
+        #[serde(default = "one")]
+        every_hours: u8,
+        minutes: Vec<u8>,
+    },
+}
+fn one() -> u8 {
+    1
+}
+impl AgentTimerSchedule {
+    pub fn calendar_rule(&self) -> Option<CalendarRule> {
+        match self {
+            Self::Once { .. } => None,
+            Self::Calendar {
+                timezone,
+                weekdays,
+                start_minute,
+                end_minute,
+                every_hours,
+                minutes,
+            } => Some(CalendarRule {
+                timezone: timezone.clone(),
+                weekdays: weekdays.clone(),
+                start_minute: *start_minute,
+                end_minute: *end_minute,
+                every_hours: *every_hours,
+                minutes: minutes.clone(),
+            }),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentTimerCreate {
+    /// Idempotency key, unique per conversation: the same key with the same
+    /// body is the same timer (a replay), with another body a conflict.
+    pub request_key: String,
+    pub label: String,
+    pub schedule: AgentTimerSchedule,
+    pub text: String,
+}
+impl AgentTimerCreate {
+    pub fn is_valid(&self) -> bool {
+        key(&self.request_key)
+            && !self.label.trim().is_empty()
+            && self.label.len() <= AGENT_TIMER_LABEL_MAX
+            && !self.label.chars().any(char::is_control)
+            && !self.text.trim().is_empty()
+            && self.text.len() <= AGENT_TIMER_TEXT_MAX
+            && !self.text.contains('\0')
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentTimerOperation {
+    /// Disable: no further runs. Reversible only by the owner.
+    Cancel,
+    /// Pause until `until_ms` (absent: the longest agent pause).
+    Pause,
+    /// Lift a pause; a run that came due while paused is not replayed.
+    Resume,
+    /// Drop only the next scheduled run.
+    SkipNext,
+}
+impl AgentTimerOperation {
+    pub fn text(self) -> &'static str {
+        match self {
+            Self::Cancel => "cancel",
+            Self::Pause => "pause",
+            Self::Resume => "resume",
+            Self::SkipNext => "skip_next",
+        }
+    }
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentTimerControl {
+    pub request_key: String,
+    pub operation: AgentTimerOperation,
+    #[serde(default)]
+    pub until_ms: Option<i64>,
+}
+impl AgentTimerControl {
+    pub fn is_valid(&self) -> bool {
+        key(&self.request_key)
+            && (self.operation == AgentTimerOperation::Pause || self.until_ms.is_none())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentTimerView {
+    pub namespace: Uuid,
+    pub label: Option<String>,
+    /// paused, enabled, disabled, stopped, rolled_back or exhausted.
+    pub state: String,
+    pub schedule: String,
+    pub next_due_ms: Option<i64>,
+    pub pause_until_ms: Option<i64>,
+    /// Created through this tool (else by the owner or imported from V1).
+    pub created_by_agent: bool,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentTimerList {
+    pub conversation_id: ConversationId,
+    pub timers: Vec<AgentTimerView>,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentTimerReceipt {
+    /// False for an idempotent replay of the same request.
+    pub changed: bool,
+    pub timer: AgentTimerView,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn create(key: &str, label: &str, text: &str) -> AgentTimerCreate {
+        AgentTimerCreate {
+            request_key: key.into(),
+            label: label.into(),
+            schedule: AgentTimerSchedule::Once { due_ms: 1 },
+            text: text.into(),
+        }
+    }
+
+    #[test]
+    fn request_validation() {
+        assert!(create("reminder-1", "Biocytogen 12:15", "Remind").is_valid());
+        assert!(!create("", "l", "t").is_valid());
+        assert!(!create("bad key", "l", "t").is_valid());
+        assert!(!create("k", " ", "t").is_valid());
+        assert!(!create("k", "l\nx", "t").is_valid());
+        assert!(!create("k", "l", " ").is_valid());
+        assert!(!create("k", "l", &"x".repeat(AGENT_TIMER_TEXT_MAX + 1)).is_valid());
+        let pause = |operation, until_ms| AgentTimerControl {
+            request_key: "k".into(),
+            operation,
+            until_ms,
+        };
+        assert!(pause(AgentTimerOperation::Pause, Some(5)).is_valid());
+        assert!(pause(AgentTimerOperation::Pause, None).is_valid());
+        assert!(!pause(AgentTimerOperation::Cancel, Some(5)).is_valid());
+        assert!(pause(AgentTimerOperation::SkipNext, None).is_valid());
+    }
+
+    #[test]
+    fn schedule_wire_format() {
+        let once: AgentTimerSchedule =
+            serde_json::from_str(r#"{"kind":"once","due_ms":42}"#).unwrap();
+        assert_eq!(once, AgentTimerSchedule::Once { due_ms: 42 });
+        assert!(once.calendar_rule().is_none());
+        let daily: AgentTimerSchedule = serde_json::from_str(
+            r#"{"kind":"calendar","timezone":"Europe/Berlin","start_minute":540,"end_minute":540,"minutes":[0]}"#,
+        )
+        .unwrap();
+        assert_eq!(daily.calendar_rule().unwrap().every_hours, 1);
+        assert!(serde_json::from_str::<AgentTimerSchedule>(
+            r#"{"kind":"interval","every_ms":60000}"#
+        )
+        .is_err());
+    }
+}

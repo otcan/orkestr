@@ -25,6 +25,8 @@ mod desktop_leases;
 mod thread_asks;
 pub use desktop_leases::*;
 pub use thread_asks::*;
+mod agent_timers;
+pub use agent_timers::*;
 mod legacy_workers;
 pub use legacy_workers::*;
 mod sidebar;

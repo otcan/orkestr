@@ -1,5 +1,6 @@
 //! Ordinary durable schedule ledger. Claims are inert records, never execution admissions.
 //! Core registers this child module and owns the authoritative SQL migration.
+pub(crate) mod agent;
 pub mod authority;
 mod calendar;
 pub mod calendar_timer;

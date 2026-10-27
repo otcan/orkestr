@@ -136,7 +136,7 @@ owner the result if it matters to them.]",
     }
 }
 
-async fn name(tx: &mut SqliteConnection, conversation: &str) -> R<String> {
+pub(super) async fn name(tx: &mut SqliteConnection, conversation: &str) -> R<String> {
     let value: Option<String> =
         sqlx::query_scalar("SELECT name FROM conversation_directory WHERE conversation_id=?")
             .bind(conversation)
@@ -147,7 +147,7 @@ async fn name(tx: &mut SqliteConnection, conversation: &str) -> R<String> {
 }
 
 /// The conversation's dispatched Deep run: `(run, input message)`.
-async fn running_deep(
+pub(super) async fn running_deep(
     tx: &mut SqliteConnection,
     owner: &OwnerId,
     conversation: &ConversationId,
@@ -158,7 +158,7 @@ async fn running_deep(
     Ok(row.map(|r| (r.get("id"), r.get("message_id"))))
 }
 
-async fn unavailable_conversation(
+pub(super) async fn unavailable_conversation(
     tx: &mut SqliteConnection,
     owner: &OwnerId,
     conversation: &str,
@@ -439,6 +439,6 @@ async fn audit(
 }
 
 #[cfg(test)]
-mod tests;
+pub(super) mod tests;
 #[cfg(test)]
 mod tests_limits;

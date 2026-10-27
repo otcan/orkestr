@@ -3,6 +3,22 @@ use crate::Store;
 
 pub(crate) async fn downgrade_empty(store: &Store) {
     let mut tx = store.pool.begin().await.unwrap();
+    // Migration 79 down: only empty agent-timer tables.
+    for table in ["agent_timer_audit", "agent_timers", "agent_timer_grants"] {
+        let count: i64 = sqlx::query_scalar(&format!("SELECT count(*) FROM {table}"))
+            .fetch_one(&mut *tx)
+            .await
+            .unwrap();
+        assert_eq!(count, 0, "historical fixture must not erase agent timers");
+        sqlx::query(&format!("DROP TABLE {table}"))
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+    }
+    sqlx::query("DELETE FROM _sqlx_migrations WHERE version=79")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
     for table in [
         "message_authors",
         "thread_ask_audit",
