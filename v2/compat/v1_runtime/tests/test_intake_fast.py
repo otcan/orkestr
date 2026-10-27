@@ -53,15 +53,35 @@ class IntakeFastTests(fixture.IntakeBase):
         drive(self.worker)
         self.assertEqual(len(self.fast()), 12)
 
-    def test_no_owner_or_consent_is_inferred_and_unadmitted_member_keeps_fifo(self):
+    def test_no_owner_or_consent_is_inferred_and_unadmitted_local_agent_keeps_fifo(self):
         self.enqueue("first")
-        self.enqueue("member", role="member")
+        self.enqueue("agent", role="v1_agent")
         self.enqueue("later")
         drive(self.worker)
         self.assertEqual([body["text"] for body in self.mutations("/messages")], ["Request first"])
-        for role in (None, "member", "v1_owner", "v1_agent", "v1_external"):
+        for role in (None, "v1_owner", "v1_agent", "v1_external"):
             data = dict(phase="queued", author=dict(role=role))
             self.assertFalse(eligible(self.worker, data))
+        self.assertTrue(eligible(self.worker, dict(phase="queued", author=dict(role="member"))))
+        self.assertFalse(eligible(self.worker, dict(phase="queued", origin="timer", author=dict(role="member"))))
+
+    def test_member_message_does_not_hold_a_later_owner_fast_behind_running_deep(self):
+        # Biofuture 2026-10-27: a member message sent during a running Deep turn
+        # waited for that turn on the serial path, and the owner's next message
+        # (and its Fast reply) waited behind it for ~60 s.
+        head = self.enqueue("head")
+        self.worker.run_once(fixture.Stop())
+        self.assertEqual(self.peer.runs[0, "deep"]["phase"], "running")
+        member = self.enqueue("member", role="member")
+        owner = self.enqueue("owner")
+        self.worker.run_once(fixture.Stop())
+        self.assertEqual([body["text"] for body in self.mutations("/messages")],
+                         ["Request head", "Request member", "Request owner"], "arrival order is kept")
+        self.assertEqual([message["sourceInputId"] for message in self.fast()],
+                         [head["remote_id"], member["remote_id"], owner["remote_id"]])
+        self.assertEqual(self.row("member")["burst"], [])
+        self.assertEqual(self.peer.runs[0, "deep"]["phase"], "running")
+        self.assertNotIn((1, "deep"), self.peer.runs, "Core's Deep remains serialized")
         for policy in ("disabled", "legacy"):
             self.worker.fast_reply_policy = policy
             before = copy.deepcopy(self.peer.mutations)

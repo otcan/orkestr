@@ -229,14 +229,17 @@ outstanding. Rows with `steer_fallback` or settled steered rows need nothing.
 ### Owner-only Fast intake
 
 With explicit `fast_reply_policy: "owner_only"`, each verified WhatsApp owner
-event is admitted individually, even while an earlier Deep turn is running.
+or listed-member event is admitted individually, even while an earlier Deep
+turn is running. (Before, a member message waited on the serial path for the
+running Deep turn and held every later owner message, and its Fast reply,
+behind it.)
 Each pass admits every pending owner input in FIFO order (no per-pass
 throttle, no grouping, no quiet window), using the existing owner HTTP message
 and execution-window APIs. A deadline-continued or re-admitted owner row is
 admitted the same way instead of holding later owner messages until it is the
 ledger head. It does not pass an earlier unadmitted
-member, local-agent input or frozen legacy burst. Member/local inputs and other
-Fast policies keep their existing behavior.
+local-agent input or frozen legacy burst. Local-agent/V1-relayed inputs and
+other Fast policies keep their existing behavior.
 
 Fast results are observed, exported once, and accepted independently of Deep.
 The original message/event IDs select the exact producing run; a separate Fast
