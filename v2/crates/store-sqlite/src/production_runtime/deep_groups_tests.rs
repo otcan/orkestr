@@ -173,6 +173,7 @@ async fn grouping(f: &Case, revision: i64, on: Option<bool>) {
                 reply_footer: None,
                 review_before_accepting: false,
                 deep_grouping: on,
+                parallel_deep: None,
             },
         )
         .await

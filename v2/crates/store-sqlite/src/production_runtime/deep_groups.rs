@@ -42,6 +42,16 @@ pub(super) async fn form(
     run: &str,
 ) -> Result<usize> {
     let conversation = conversation.to_string();
+    // A read-only parallel Deep slot answers exactly its own input: only the
+    // canonical writer ever groups (docs/v2/parallel-deep.md).
+    let session: String = sqlx::query_scalar("SELECT session_id FROM production_runs WHERE id=?")
+        .bind(run)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(db)?;
+    if super::parallel_deep::is_slot(tx, &session).await? {
+        return Ok(0);
+    }
     if !crate::conversation_resources::settings::deep_grouping(tx, &conversation)
         .await
         .map_err(db)?
@@ -60,12 +70,27 @@ pub(super) async fn form(
     // run was still busy, so an input admitted after Deep went idle (a
     // deadline continuation or re-admission of an older adapter row, or a
     // new task sent once the turn ended) keeps its own turn.
-    let busy_through: Option<i64> = sqlx::query_scalar("SELECT max(last) FROM (SELECT max(coalesce((SELECT max(e.sequence) FROM production_observations o JOIN events e ON e.id=o.event_id WHERE o.run_id=p.id),0),coalesce((SELECT max(e.sequence) FROM production_acceptances a JOIN events e ON e.id=a.event_id WHERE a.run_id=p.id),0),coalesce((SELECT max(e.sequence) FROM production_cancellations c JOIN events e ON e.id=c.event_id WHERE c.run_id=p.id),0)) AS last FROM production_runs p WHERE p.conversation_id=?1 AND p.role='deep' AND p.id!=?3 AND p.scope_sequence<?2) WHERE last>?2")
+    // Only the canonical lineage's runs count: a parallel slot's activity
+    // never makes the writer look busy.
+    let slots = super::parallel_deep::present(tx).await?;
+    let canonical = if slots {
+        format!(" AND {}", super::parallel_deep::canonical_run("p"))
+    } else {
+        String::new()
+    };
+    let busy_through: Option<i64> = sqlx::query_scalar(&format!("SELECT max(last) FROM (SELECT max(coalesce((SELECT max(e.sequence) FROM production_observations o JOIN events e ON e.id=o.event_id WHERE o.run_id=p.id),0),coalesce((SELECT max(e.sequence) FROM production_acceptances a JOIN events e ON e.id=a.event_id WHERE a.run_id=p.id),0),coalesce((SELECT max(e.sequence) FROM production_cancellations c JOIN events e ON e.id=c.event_id WHERE c.run_id=p.id),0)) AS last FROM production_runs p WHERE p.conversation_id=?1 AND p.role='deep' AND p.id!=?3 AND p.scope_sequence<?2{canonical}) WHERE last>?2"))
         .bind(&conversation).bind(head).bind(run).fetch_one(&mut *tx).await.map_err(db)?;
     let Some(busy_through) = busy_through else {
         return Ok(0);
     };
-    let rows = sqlx::query(&format!("SELECT i.sequence,i.state,length(CAST(m.text AS BLOB)) AS bytes,({OWNER_INPUT}) AS owner_input,EXISTS(SELECT 1 FROM ordinary_input_holds h WHERE h.event_id=i.event_id) AS held,(?3 IS NULL OR EXISTS(SELECT 1 FROM execution_window_inputs wi WHERE wi.window_id=?3 AND wi.event_id=i.event_id)) AS scoped FROM reasoning_inbox i JOIN messages m ON m.id=i.message_id WHERE i.conversation_id=?1 AND i.sequence>?2 AND i.state IN ('queued','claimed') ORDER BY i.sequence LIMIT 64"))
+    // A row a parallel slot claimed is that slot's (consumed at its own
+    // admission): skipped like a held row, never grouped and never a stop.
+    let slot_claimed = if slots {
+        super::parallel_deep::claimed_by_slot("i")
+    } else {
+        "0".to_owned()
+    };
+    let rows = sqlx::query(&format!("SELECT i.sequence,i.state,({slot_claimed}) AS slot_claimed,length(CAST(m.text AS BLOB)) AS bytes,({OWNER_INPUT}) AS owner_input,EXISTS(SELECT 1 FROM ordinary_input_holds h WHERE h.event_id=i.event_id) AS held,(?3 IS NULL OR EXISTS(SELECT 1 FROM execution_window_inputs wi WHERE wi.window_id=?3 AND wi.event_id=i.event_id)) AS scoped FROM reasoning_inbox i JOIN messages m ON m.id=i.message_id WHERE i.conversation_id=?1 AND i.sequence>?2 AND i.state IN ('queued','claimed') ORDER BY i.sequence LIMIT 64"))
         .bind(&conversation).bind(head).bind(window).fetch_all(&mut *tx).await.map_err(db)?;
     let mut bytes = usize::try_from(head_bytes).map_err(db)?;
     let mut members = Vec::new();
@@ -77,6 +102,9 @@ pub(super) async fn form(
         }
         if row.get::<bool, _>("held") {
             continue; // Held per input; released later, it queues on its own.
+        }
+        if row.get::<bool, _>("slot_claimed") {
+            continue; // A read-only parallel slot answers it.
         }
         if !row.get::<bool, _>("scoped")
             || row.get::<&str, _>("state") != "queued"

@@ -30,6 +30,14 @@ pub(crate) fn claimed_by_other_slot(inbox: &str) -> String {
     )
 }
 
+/// SQL predicate over an inbox row aliased `{inbox}`: the row is claimed by
+/// any parallel slot session (no bind). Deep grouping skips such rows.
+pub(crate) fn claimed_by_slot(inbox: &str) -> String {
+    format!(
+        "({inbox}.state='claimed' AND EXISTS(SELECT 1 FROM session_bindings ps WHERE ps.id={inbox}.claimant_session_id AND ps.deep_slot>0))"
+    )
+}
+
 /// SQL predicate over a run aliased `{run}`: it ran on the canonical Deep
 /// lineage (or is not a Deep run at all).
 pub(crate) fn canonical_run(run: &str) -> String {
@@ -268,7 +276,7 @@ impl Store {
         let message: String = row.get("message_id");
         // Owner chat input only: never a timer occurrence (typically
         // outreach), a thread ask, or an agent-relayed input.
-        let eligible: i64 = sqlx::query_scalar("SELECT count(*) FROM messages m WHERE m.id=? AND m.actor_kind='owner' AND NOT EXISTS(SELECT 1 FROM dormant_timer_inputs t WHERE t.event_id=?) AND NOT EXISTS(SELECT 1 FROM thread_asks a WHERE a.input_message_id=m.id OR a.reply_message_id=m.id) AND NOT EXISTS(SELECT 1 FROM message_authors au WHERE au.message_id=m.id AND au.author NOT IN ('owner','member','v1_owner'))")
+        let eligible: i64 = sqlx::query_scalar("SELECT count(*) FROM messages m WHERE m.id=?1 AND m.actor_kind='owner' AND NOT EXISTS(SELECT 1 FROM dormant_timer_inputs t WHERE t.event_id=?2) AND NOT EXISTS(SELECT 1 FROM production_steering s WHERE s.event_id=?2) AND NOT EXISTS(SELECT 1 FROM thread_asks a WHERE a.input_message_id=m.id OR a.reply_message_id=m.id) AND NOT EXISTS(SELECT 1 FROM message_authors au WHERE au.message_id=m.id AND au.author NOT IN ('owner','member','v1_owner'))")
             .bind(&message).bind(&event)
             .fetch_one(&mut *tx).await.map_err(db)?;
         if row.get::<&str, _>("state") != "queued" || eligible != 1 {

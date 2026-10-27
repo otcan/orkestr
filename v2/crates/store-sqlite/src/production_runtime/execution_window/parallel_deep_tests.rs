@@ -29,6 +29,7 @@ async fn switch(w: &Window, on: bool) {
                 reply_footer: None,
                 review_before_accepting: false,
                 parallel_deep: Some(on),
+                deep_grouping: None,
             },
         )
         .await
@@ -781,4 +782,96 @@ async fn schema_keeps_one_canonical_deep_and_bounded_slots() {
         assert!(insert(slot, "deep").await.is_ok());
     }
     assert!(insert(3, "deep").await.is_err());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn grouping_skips_slot_claims_and_a_slot_never_groups() {
+    let w = Window::open().await;
+    w.activate().await;
+    switch(&w, true).await;
+    // Owner chat inputs (grouping takes only verified owner input).
+    let mut burst = Vec::new();
+    for n in 1..=4 {
+        let request = join(&w, n).await;
+        sqlx::query("INSERT INTO message_authors(message_id,author) VALUES(?,'owner')")
+            .bind(request.input_message_id.to_string())
+            .execute(&w.f.store.pool)
+            .await
+            .unwrap();
+        burst.push(request);
+    }
+    let writing = writer(&w, "group-writer").await;
+    w.bound
+        .append_provider_event(
+            &w.f.owner,
+            writing.provider(),
+            &observation(writing.provider(), 1, ProviderEvent::Started),
+        )
+        .await
+        .unwrap();
+    // A slot admits the first queued input alone: the rest stays queued.
+    let (first, _) = slot(&w, "group-slot-1").await;
+    let alone = parallel(&w, &first).await;
+    assert_eq!(alone.source_event_id(), &burst[0].input_event_id);
+    for request in &burst[1..] {
+        assert_eq!(
+            scalar(
+                &w,
+                "SELECT state FROM reasoning_inbox WHERE event_id=?",
+                &request.input_event_id.to_string()
+            )
+            .await,
+            "queued"
+        );
+    }
+    // A second slot holds a claim on the next one (not yet admitted).
+    let (second, _) = slot(&w, "group-slot-2").await;
+    let held = claim(&w, &second).await.unwrap();
+    assert_eq!(held.event_id, burst[1].input_event_id);
+    // The writer finishes; its next turn groups the rest of the burst past
+    // the slot's claim, never taking it.
+    let done = w
+        .bound
+        .append_provider_event(
+            &w.f.owner,
+            writing.provider(),
+            &observation(
+                writing.provider(),
+                2,
+                ProviderEvent::CompletedProposal { synthetic: false },
+            ),
+        )
+        .await
+        .unwrap()
+        .event_id;
+    decide(&w, writing.provider(), done).await;
+    let grouped = writer(&w, "group-writer-2").await;
+    assert_eq!(grouped.source_event_id(), &burst[2].input_event_id);
+    assert_eq!(
+        scalar(
+            &w,
+            "SELECT state||':'||admitted_run_id FROM reasoning_inbox WHERE event_id=?",
+            &burst[3].input_event_id.to_string()
+        )
+        .await,
+        format!("consumed:{}", grouped.provider().run.run_id)
+    );
+    assert_eq!(
+        scalar(
+            &w,
+            "SELECT state FROM reasoning_inbox WHERE event_id=?",
+            &burst[1].input_event_id.to_string()
+        )
+        .await,
+        "claimed"
+    );
+    // The slot's claim still admits exactly its own input.
+    let admitted = w
+        .bound
+        .admit_run(&held, &second.session_id, second.generation, "group-slot-2")
+        .await
+        .unwrap();
+    assert_eq!(admitted.disposition, AdmissionDisposition::FreshCandidate);
+    let dup: i64 = count(&w.f.store, "SELECT count(*) FROM (SELECT admitted_run_id FROM reasoning_inbox GROUP BY event_id HAVING count(*)>1)").await;
+    assert_eq!(dup, 0);
 }
