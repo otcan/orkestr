@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {createGroupOwnerAuthorPolicy} from './whatsapp-group-owner-author.js';
 import {scopedRouteMembership} from './whatsapp-scoped-route-membership.js';
-import {SCOPED_SEND_MAX_TEXT_LENGTH, encodeReplyEntry, validReplyDocument} from './whatsapp-scoped-group-formatting.js';
+import {SCOPED_SEND_MAX_TEXT_LENGTH, encodeReplyEntry, validQuotedMessageId, validReplyDocument} from './whatsapp-scoped-group-formatting.js';
 import {DatabaseSync} from 'node:sqlite';
 import {createDeliveryRouteFence} from './whatsapp-delivery-route-fence.js';
 import {notificationScope, createTimerNotificationProofStore} from './whatsapp-timer-notification-proof.js';
@@ -152,7 +152,8 @@ export function createScopedGroupTransport({config,token,base,dbPath=config.jour
         const b=req.body || {};
         allowed=groups.has(b.to) && b.accountId==='main' && typeof b.text==='string' && b.text.trim() && b.text.length<=SCOPED_SEND_MAX_TEXT_LENGTH
           && ((typeof b.requestId==='string' && typeof b.parentId==='string'
-          && Object.keys(b).every(k=>['to','text','accountId','requestId','parentId','notificationId'].includes(k))
+          && (b.quotedMessageId===undefined || validQuotedMessageId(b.quotedMessageId))
+          && Object.keys(b).every(k=>['to','text','accountId','requestId','parentId','notificationId','quotedMessageId'].includes(k))
           && (b.notificationId===undefined || (scope?.allowsChat(b.to) && b.notificationId===b.requestId)))
             || operatorNoticeBodyValid(operator,b,'main'));
       }
@@ -251,7 +252,7 @@ export function createScopedGroupTransport({config,token,base,dbPath=config.jour
     },
     sendText(client,to,text,accountId,request={}) {
       const valid=typeof text==='string' && Boolean(text.trim()) && text.length<=SCOPED_SEND_MAX_TEXT_LENGTH;
-      return deliver(client,to,valid ? text : '',accountId,request,()=>client.sendMessage(to,text,{sendSeen:false}),valid,
+      return deliver(client,to,valid ? text : '',accountId,request,quoted=>client.sendMessage(to,text,{sendSeen:false,...(quoted?{quotedMessageId:quoted}:{})}),valid,
         message=>message?.type==='chat' && message.body===text);
     },
     // The full text of a long reply as one Markdown document. It is one more
@@ -309,6 +310,17 @@ export function createScopedGroupTransport({config,token,base,dbPath=config.jour
     }
     return null;
   }
+  // A text may quote (reply-to) an input of the same group. The quote is
+  // presentation only: it is not part of the hashed, proof-authorized payload.
+  // One naming no input of this group is dropped, not rejected: rejecting before
+  // dispatch would close the reply undelivered over a cosmetic detail.
+  function quotedInput(to,request) {
+    const id=request.quotedMessageId;
+    if(id===undefined || id===null || id==='')return null;
+    if(validQuotedMessageId(id) && db.prepare('SELECT 1 FROM group_input WHERE id=? AND chat_id=?').get(id,to))return id;
+    report({event:'group_send_quote_dropped',chatId:to,requestId:request.requestId});
+    return null;
+  }
   function deliver(client,to,text,accountId,request,dispatch,valid,matches) {
       return serial(async()=>{
         assertClient(client);
@@ -338,6 +350,7 @@ export function createScopedGroupTransport({config,token,base,dbPath=config.jour
         if(uncertain())fail('delivery_uncertain');
         if(parent.id===OPERATOR_NOTICE_PARENT && db.prepare('SELECT count(*) n FROM group_send WHERE parent_id=? AND created_at>=?')
             .get(OPERATOR_NOTICE_PARENT,new Date(now()-3600000).toISOString()).n>=operator.maxPerHour)fail('operator_notice_rate_limited');
+        const quoted=quotedInput(to,request);
         const routed=fenced(to);
         const shared=routed ? routeFence.reserve({id:request.requestId,hash:material,route:config.routeControl.routeId,createdAt:parent.run_at || parent.created_at}) : null;
         if(shared?.duplicate)return {ok:true,ids:[shared.providerId],duplicate:true};
@@ -352,7 +365,7 @@ export function createScopedGroupTransport({config,token,base,dbPath=config.jour
         try {
           let sent=null;
           try {
-            sent=await Promise.race([dispatch(),new Promise((_,reject)=>{
+            sent=await Promise.race([dispatch(quoted),new Promise((_,reject)=>{
               timer=setTimeout(()=>reject(new Error('send_timeout')),30000);
             })]);
           } catch { /* the outcome is unknown; confirmed or left uncertain below */ }

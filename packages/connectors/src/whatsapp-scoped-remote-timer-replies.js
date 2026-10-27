@@ -12,7 +12,7 @@
 //
 // Kept free of core imports: the standalone bridge's import graph stays closed.
 import {notificationKey} from './whatsapp-timer-notification-proof.js';
-import {encodeReplyEntry, replyEntrySendFields, scopedGroupReplyChunks, scopedReplyDeliveryType, scopedReplyHeader} from './whatsapp-scoped-group-formatting.js';
+import {FAST_TIMER_SOURCE_ID, encodeReplyEntry, validQuotedMessageId, replyEntrySendFields, scopedGroupReplyChunks, scopedReplyDeliveryType, scopedReplyHeader} from './whatsapp-scoped-group-formatting.js';
 
 export const remoteTimerParentEvent = 'whatsapp_remote_timer_parent_materialized';
 const remoteTimerParentSource = 'orkestr-v2-timer';
@@ -27,6 +27,24 @@ export function remoteTimerEventEligible(event, config, scope, since, now) {
     && Number.isFinite(at) && at >= since && at <= now;
 }
 
+// The WhatsApp input a burst Quick reply quotes, or ''. V2 marks such a reply
+// (`quoteSource`, imported as remoteQuoteSource) and names the adapter id of the
+// input it answers (`sourceInputId` -> remoteOriginalInputId). That id is the
+// remoteMessageId V1 recorded when it forwarded exactly one local relay input;
+// `routedInput` maps that local message to the relay-routed WhatsApp message.
+// Any missing link yields '' and the reply goes out unquoted.
+export function quotedSourceInput({threadId, parent, answer, messages, remoteThreadId, routedInput}) {
+  if (answer?.remoteQuoteSource !== true || answer.remoteLayer !== 'fast' || parent?.timerId !== FAST_TIMER_SOURCE_ID
+      || typeof routedInput !== 'function') return '';
+  const source = pick(answer.remoteOriginalInputId);
+  if (!source) return '';
+  const inputs = messages.filter(m => m.role === 'user' && m.remoteMessageId === source && m.remoteThreadId === remoteThreadId);
+  if (inputs.length !== 1) return '';
+  let id = '';
+  try { id = pick(routedInput(threadId, inputs[0].id)); } catch { return ''; }
+  return validQuotedMessageId(id) ? id : '';
+}
+
 // The thread is still delegated to the same remote thread the parent came from.
 export function delegatedTo(thread, remoteThreadId) {
   const b = thread?.binding || {};
@@ -35,7 +53,7 @@ export function delegatedTo(thread, remoteThreadId) {
   return Boolean(remoteThreadId) && pick(b.remoteThreadId, b.remoteRuntimeThreadId, b.delegatedThreadId) === remoteThreadId;
 }
 
-export function createRemoteTimerReplies({config, api, send, formatter, env, now, proofs, fence, scope, thread, runTtlMs}) {
+export function createRemoteTimerReplies({config, api, send, formatter, env, now, proofs, fence, scope, thread, runTtlMs, routedInput}) {
   const at = () => new Date(now()).toISOString();
   const report = (threadId, answer, body) => api(
     `/api/threads/${encodeURIComponent(threadId)}/messages/${encodeURIComponent(answer.id)}/scoped-relay-delivery`,
@@ -88,6 +106,9 @@ export function createRemoteTimerReplies({config, api, send, formatter, env, now
         parentId: parent.id, answerId: answer.id, text: encodeReplyEntry(entry), createdAt: answer.createdAt, runAt: event.ts,
         expiresAt: new Date(answerAt + scope.maxAgeMs).toISOString()})));
     }
+    // Presentation only: the proof and journal authorize text and parent, never
+    // the quote, and the transport drops a quote outside this chat.
+    const quotedMessageId = quotedSourceInput({threadId, parent, answer, messages, remoteThreadId: event.remoteThreadId, routedInput});
     let sent = 0;
     for (let i = 0; i < chunks.length; i++) {
       const id = baseId + ':' + i, row = proofs.get(id);
@@ -96,7 +117,9 @@ export function createRemoteTimerReplies({config, api, send, formatter, env, now
       if (!delegatedTo(await thread(threadId), event.remoteThreadId)) { proofs.mark(id, 'revoked'); continue; }
       fence.assertActive(config.routeControl.routeId);
       try {
-        const r = await send({chatId, requestId: id, notificationId: id, parentId: parent.id, ...replyEntrySendFields(row.text)});
+        const fields = replyEntrySendFields(row.text);
+        const r = await send({chatId, requestId: id, notificationId: id, parentId: parent.id, ...fields,
+          ...(i === 0 && quotedMessageId && fields.text !== undefined ? {quotedMessageId} : {})});
         if (r.ok !== true || !r.ids?.length) throw new Error('unconfirmed');
         proofs.mark(id, 'sent'); proofs.receipt(id, r.ids); sent++;
       } catch (error) {

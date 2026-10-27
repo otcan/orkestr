@@ -10,6 +10,9 @@ export const SCOPED_ATTACHED_MARKER = '… (full reply attached)';
 // Largest single WhatsApp text the scoped send path accepts (String#length):
 // the reply budget plus the attachment marker and the footer.
 export const SCOPED_SEND_MAX_TEXT_LENGTH = 65000;
+// Shape of a serialized WhatsApp message id a text may quote (reply-to).
+// Only the shape: the transport checks it names an input of the same group.
+export const validQuotedMessageId = value => typeof value === 'string' && /^[\w@.:-]{1,256}$/.test(value);
 export const SCOPED_DOCUMENT_MIMETYPE = 'text/markdown';
 export const SCOPED_DOCUMENT_MAX_CHARS = 2_000_000;
 export const SCOPED_DOCUMENT_NAME = /^reply-[0-9a-f]{10}\.md$/;

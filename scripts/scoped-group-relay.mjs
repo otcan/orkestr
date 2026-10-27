@@ -7,14 +7,15 @@ import {requestJson} from '../apps/cli/src/api-client.js';
 import {createScopedTimerNotifications} from '../packages/connectors/src/whatsapp-scoped-timer-notifications.js';
 import {createScopedGroupRelay} from '../packages/connectors/src/whatsapp-scoped-group-relay.js';
 import {createInputJournalWake} from '../packages/connectors/src/scoped-group-input-intake.js';
-import {wrapperRejection} from '../packages/connectors/src/whatsapp-scoped-wrapper-errors.js';
+import {sendWithQuoteFallback} from '../packages/connectors/src/whatsapp-scoped-wrapper-errors.js';
 
 // A text keeps the wrapper's argv contract. A reply document, or a text too
-// large for one argument (Linux allows 128 KiB), goes as JSON on stdin.
+// large for one argument (Linux allows 128 KiB), goes as JSON on stdin, as does
+// a text that quotes the input it answers (`quotedMessageId`).
 const ARGV_TEXT_MAX_BYTES = 100_000;
 const serializeTransport = createKeyedSerial();
 const execute = payload => serializeTransport('transport', () => new Promise((resolve, reject) => {
-  const viaArgv = payload.document === undefined && payload.file === undefined && Buffer.byteLength(payload.text || '') <= ARGV_TEXT_MAX_BYTES;
+  const viaArgv = payload.document === undefined && payload.file === undefined && payload.quotedMessageId === undefined && Buffer.byteLength(payload.text || '') <= ARGV_TEXT_MAX_BYTES;
   const args = viaArgv
     ? [config.wrapperPath, payload.kind === 'notify' ? 'group-notify' : 'group-reply', payload.to, payload.requestId, payload.parentId, payload.text]
     : [config.wrapperPath, 'group-send'];
@@ -41,14 +42,11 @@ const relay = createScopedGroupRelay({
 });
 const notifications = createScopedTimerNotifications({config,formatter,minIntervalMs:10000,
   api:(url,options={})=>requestJson(url,{timeoutMs:15000,...options}),
-  send:async({chatId,requestId,parentId,text,document})=>{
-    try {
-      const {stdout}=await execute({kind:'notify',to:chatId,requestId,parentId,text,document});
-      return JSON.parse(stdout);
-    } catch (error) {
-      throw wrapperRejection(error);
-    }
-  },
+  // A quoted send that fails retries once unquoted (same requestId), never lost.
+  send:({chatId,requestId,parentId,text,document,quotedMessageId})=>sendWithQuoteFallback(async quoted=>{
+    const {stdout}=await execute({kind:'notify',to:chatId,requestId,parentId,text,document,...(quoted?{quotedMessageId:quoted}:{})});
+    return JSON.parse(stdout);
+  },quotedMessageId),
 });
 const remoteWatch = startScopedRemoteWatch({
   api: (url, options = {}) => requestJson(url, options), log,
