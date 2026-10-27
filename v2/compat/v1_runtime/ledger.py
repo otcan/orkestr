@@ -869,7 +869,8 @@ class Ledger:
         ids = [a["upload_id"] for a in data.get("attachments", [])]
         db.executemany("UPDATE uploads SET bytes=NULL WHERE upload_id=?", [(i,) for i in ids])
         # Inputs folded into this one were answered by its reply (or notice).
-        for remote_id in list(data.get("burst") or ()) + list(data.get("steered") or ()):
+        from .deep_group import settled_with
+        for remote_id in list(data.get("burst") or ()) + list(data.get("steered") or ()) + settled_with(data):
             row = db.execute("SELECT data FROM inputs WHERE remote_id=?", (remote_id,)).fetchone()
             if row and not json.loads(row[0]).get("settled"):
                 self._settle(db, json.loads(row[0]), outcome)

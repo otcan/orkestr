@@ -267,6 +267,11 @@ impl Store {
             .await
             .map_err(db)?,
         };
+        // A grouped Deep turn answers every input it consumed, numbered.
+        let text = match super::deep_groups::text(&mut tx, &row).await? {
+            Some(grouped) => grouped,
+            None => text,
+        };
         // A timer occurrence executes in Deep only. Its Fast presentation keeps
         // the window's Fast lifecycle but never receives the scheduled
         // instructions, so they cannot run (or cause side effects) twice.

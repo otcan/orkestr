@@ -31,6 +31,9 @@ mod claude_identity;
 pub use claude_identity::ClaudeProcessInitialization;
 mod capability;
 pub use capability::{ConsumedProviderDispatch, ExecutionConsumption};
+mod deep_groups;
+#[cfg(test)]
+mod deep_groups_tests;
 mod dispatch;
 mod fast;
 mod fast_continuity;

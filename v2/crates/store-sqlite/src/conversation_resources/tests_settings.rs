@@ -73,6 +73,7 @@ fn update(revision: i64, provider: ConversationProvider) -> ConversationSettings
         reply_prefix: Some("orkestr:".into()),
         reply_footer: None,
         review_before_accepting: false,
+        deep_grouping: None,
     }
 }
 

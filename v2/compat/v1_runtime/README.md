@@ -320,6 +320,32 @@ once and settle together with the first input's reply or refusal notice.
 Each merge logs one `burst_merged` line with the conversation, the first
 input's ID, the number of absorbed inputs and the burst span (no message text).
 
+### Grouped Deep turns (owner-only Fast intake)
+
+Under owner-only Fast intake every owner message is admitted on its own and
+gets its own Fast reply at once. When several of them queue while a Deep turn
+is busy, Core gives the next Deep turn all of them (at most 12 inputs and
+20 KiB of owner text), as a numbered list in arrival order with each item's
+source reference, and asks the agent to answer every item explicitly
+(store-sqlite `deep_groups.rs`). Each grouped input is consumed by that one
+run in Core's admission transaction, so it never runs twice; a crash before
+that commit leaves the whole burst queued for the next turn. Only verified
+owner chat inputs are grouped: timer occurrences, members, local agents,
+steers and thread asks keep their own turns and a group never runs past one.
+Held inputs (owner Stop) stay held per input.
+
+The exact-run Deep status of such a run lists `grouped_inputs` (head first).
+The serial head path then folds the other inputs into the head (each keeps
+its own Fast watch), logs one `deep_group_folded` line (identifiers only),
+and settles them with the head's final or notice. The one final carries
+`quoteSource: true` and `sourceInputId` of the group's LAST input, the V1
+quote contract, so WhatsApp can quote the newest message it answers. A
+deadline continuation of a grouped turn carries every grouped message,
+numbered. The owner switch `deep_grouping` in the conversation settings
+(`PUT /api/v2/conversations/{id}/settings`, default `true`, an omitted value
+keeps the current one) is read at every Deep admission; `false` restores one
+Deep turn per input without a restart.
+
 ### V1-local input
 
 Everything else V1 queues for a delegated thread (thread-to-thread and agent
