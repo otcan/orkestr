@@ -54,9 +54,9 @@ pub(super) async fn form(
         return Ok(0);
     };
     // Deep was busy when the head arrived: the conversation's previous Deep
-    // run (of an earlier input) still recorded progress, its proposal or its
-    // acceptance after the head's own journal sequence.
-    let waited: i64 = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM production_runs p WHERE p.conversation_id=?1 AND p.role='deep' AND p.id!=?3 AND p.scope_sequence<?2 AND (EXISTS(SELECT 1 FROM production_observations o JOIN events e ON e.id=o.event_id WHERE o.run_id=p.id AND e.sequence>?2) OR EXISTS(SELECT 1 FROM production_acceptances a JOIN events e ON e.id=a.event_id WHERE a.run_id=p.id AND e.sequence>?2)))")
+    // run (of an earlier input) still recorded progress, its proposal, its
+    // acceptance or a stop after the head's own journal sequence.
+    let waited: i64 = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM production_runs p WHERE p.conversation_id=?1 AND p.role='deep' AND p.id!=?3 AND p.scope_sequence<?2 AND (EXISTS(SELECT 1 FROM production_observations o JOIN events e ON e.id=o.event_id WHERE o.run_id=p.id AND e.sequence>?2) OR EXISTS(SELECT 1 FROM production_acceptances a JOIN events e ON e.id=a.event_id WHERE a.run_id=p.id AND e.sequence>?2) OR EXISTS(SELECT 1 FROM production_cancellations c JOIN events e ON e.id=c.event_id WHERE c.run_id=p.id AND e.sequence>?2)))")
         .bind(&conversation).bind(head).bind(run).fetch_one(&mut *tx).await.map_err(db)?;
     if waited == 0 {
         return Ok(0);
