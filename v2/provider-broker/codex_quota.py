@@ -101,6 +101,10 @@ class QuotaSink:
                 workspace = getattr(native_config, 'workspace', None)
                 if workspace is not None:
                     private_paths.append(Path(workspace))
+                # The role's native account state (sandboxed auth.json lives here).
+                state_root = getattr(getattr(native_config, 'profile', None), 'state_root', None)
+                if state_root is not None:
+                    private_paths.append(Path(state_root))
                 environment = getattr(native_config, 'host_environment', None) or {}
                 for key in ('HOME', 'CODEX_HOME'):
                     if type(environment.get(key)) is str and environment[key].startswith('/'):

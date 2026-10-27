@@ -59,6 +59,21 @@ class CodexQuotaProjectionTests(unittest.TestCase):
             sink.observe(OWNER, {'rateLimits': {'limitId': 'codex_other', 'primary': {**WEEKLY, 'usedPercent': 80}}})
             self.assertEqual(path.read_bytes(), before)
 
+    def test_concurrent_brokers_keep_the_newest_observation_not_the_last_write(self):
+        with tempfile.TemporaryDirectory() as root:
+            sink = QuotaSink(root, OWNER, ACCOUNT, os.getuid())
+            newer = project({'primary': {**WEEKLY, 'usedPercent': 9}}, 2000)
+            older = project({'primary': {**WEEKLY, 'usedPercent': 50}}, 1000)
+            sink(OWNER, newer)
+            sink(OWNER, older)  # A slower broker's earlier observation lands last.
+            value = json.loads((Path(root) / 'codex.json').read_text())
+            self.assertEqual(value['windows']['seven_day'], newer['seven_day'])
+            # A window reset is a newer observation with a lower percentage.
+            reset = project({'primary': {**WEEKLY, 'usedPercent': 0, 'resetsAt': WEEKLY['resetsAt'] + 604800}}, 3000)
+            sink(OWNER, reset)
+            value = json.loads((Path(root) / 'codex.json').read_text())
+            self.assertEqual(value['windows']['seven_day'], reset['seven_day'])
+
     def test_symlink_and_writable_directory_refuse(self):
         for kind in ('symlink', 'directory'):
             with self.subTest(kind=kind), tempfile.TemporaryDirectory() as root:
@@ -84,6 +99,9 @@ class CodexQuotaProjectionTests(unittest.TestCase):
             self.assertIsInstance(QuotaSink.optional(package), QuotaSink)
             config = SimpleNamespace(workspace=root / 'workspace', host_environment={'HOME': str(root)})
             self.assertIsNone(QuotaSink.optional(package, config), 'real CODEX_HOME/HOME stays private')
+            config = SimpleNamespace(workspace=root / 'workspace', host_environment=None,
+                                     profile=SimpleNamespace(state_root=str(directory)))
+            self.assertIsNone(QuotaSink.optional(package, config), 'native account state stays private')
             package.home = directory
             self.assertIsNone(QuotaSink.optional(package))
 
