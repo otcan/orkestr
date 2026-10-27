@@ -168,9 +168,14 @@ FAST_SANDBOX = ("read-only", "readOnly")
 class Channel:
     def __init__(self, workspace, *, expected_native=None, offline_python=False, workspace_exec=False,
                  workspace_trusted=False, host_full_access=False, conversation_workspaces=(),
-                 fast_only=False):
+                 fast_only=False, quota_observer=None):
         # Operator instance opt-in only: Codex danger-full-access on the host.
         require(type(host_full_access) is bool)
+        # Optional passive quota cache (codex_quota.QuotaSink.observe). Never
+        # execution evidence; see provider() for its isolation.
+        require(quota_observer is None or callable(quota_observer))
+        self.quota_observer = quota_observer
+        self.owner_id = None
         # The dedicated Fast broker serves only Fast identities.
         require(type(fast_only) is bool)
         self.fast_only = fast_only
@@ -245,6 +250,7 @@ class Channel:
             require(not self.tool_enabled or identity["role"] == "worker")
             require(not self.fast_only or identity["role"] == "fast")
             self.role = identity["role"]
+            self.owner_id = identity["owner_id"]
             if self.role == "fast":
                 # Fast is read-only on every instance, including host full
                 # access: Codex's read-only sandbox denies file writes and
@@ -470,6 +476,17 @@ class Channel:
             require(isinstance(frame.get("method"), str) and "params" in frame,
                     Failure.PROVIDER_OUTER)
             self.observe_effects(frame["method"], frame["params"])
+            if frame["method"] == "account/rateLimits/updated":
+                # Account-wide usage metadata: never forwarded, and it cannot
+                # start, renew, finish or cancel a turn.
+                if self.quota_observer is not None and self.owner_id is not None:
+                    try:
+                        self.quota_observer(self.owner_id, frame["params"])
+                    except Refused:
+                        raise  # Preserve stop/control signals delivered during metadata I/O.
+                    except Exception:
+                        pass  # Quota metadata cannot fail a turn.
+                return None
             if frame["method"] == "thread/settings/updated":
                 return self.observed_model(frame["params"])
             item_event = frame["method"] in ("item/started", "item/completed")

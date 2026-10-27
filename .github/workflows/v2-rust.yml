@@ -76,6 +76,7 @@ jobs:
           python3 -I -S -B -m unittest discover -s provider-broker -p test_model_observation.py -v
           python3 -I -S -B -m unittest discover -s provider-broker -p test_steer.py -v
           python3 -I -S -B -m unittest discover -s provider-broker -p test_worker_entry.py -v
+          python3 -I -S -B -m unittest discover -s provider-broker -p test_codex_quota.py -v
       - name: Claude broker codec, full-access and owned-cleanup regressions
         run: |
           python3 -I -S -B -m unittest discover -s provider-broker -p 'test_claude_*.py' -v

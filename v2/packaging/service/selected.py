@@ -77,7 +77,7 @@ def pair_bytes(plan):
 
 OPTIONAL = {'roles', 'preserve_state', 'workspace_exec', 'additional_workspace_exec', 'max_active_windows', 'host_full_access',
             'window_max_minutes', 'conversation_window_max_minutes', 'conversation_workspaces',
-            'code_mode_host', 'code_mode_host_sha256', 'claude', 'claude_quota_projection', 'live_map', 'desktop_broker', 'timer_config', 'whatsapp_chats', 'v1_chat_icons_dir'}
+            'code_mode_host', 'code_mode_host_sha256', 'claude', 'claude_quota_projection', 'codex_quota_projection', 'live_map', 'desktop_broker', 'timer_config', 'whatsapp_chats', 'v1_chat_icons_dir'}
 CLAUDE_PATHS = ('executable', 'account', 'workspace', 'home', 'temporary')
 # Account selection stays with the Claude account reference, never the env.
 CLAUDE_FORBIDDEN_ENV = {'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN',
@@ -132,16 +132,19 @@ def optional(plan):
                 'pinned code_mode_host required')
     if 'claude' in plan:
         claude(plan)
-    if 'claude_quota_projection' in plan:
+    for key,label in (('claude_quota_projection','Claude'),('codex_quota_projection','Codex')):
+        if key not in plan:
+            continue
         import uuid
-        value=plan['claude_quota_projection']
-        require('claude' in plan and type(value) is dict and set(value)=={'directory','account_ref'}
+        value=plan[key]
+        require((key!='claude_quota_projection' or 'claude' in plan) and type(value) is dict
+                and set(value)=={'directory','account_ref'}
                 and type(value['directory']) is str and value['directory'].startswith('/')
                 and len(value['directory'])<=4096 and '\x00' not in value['directory']
                 and '..' not in Path(value['directory']).parts
                 and type(value['account_ref']) is str and str(uuid.UUID(value['account_ref']))==value['account_ref']
                 and uuid.UUID(value['account_ref']).int != 0,
-                'closed passive Claude quota projection required')
+                f'closed passive {label} quota projection required')
     privileged = plan.get('workspace_exec', {}).get('trusted', {}).get('host_privileged') is True
     require(not privileged or 'host_full_access' in plan,
             'host-privileged commands require host_full_access')
@@ -248,7 +251,8 @@ def prepare(plan):
         package_files = manager.FILES | role_files | host_files | claude_files
         modules={}
         for folder,names in (('broker',config.BROKER),('isolation',config.ISOLATION),
-                             ('codex_bounded',config.MODULES),('codex_service',manager.MODULES_SERVICE)):
+                             ('codex_bounded',config.MODULES),('codex_service',manager.MODULES_SERVICE),
+                             ('broker',getattr(manager,'SERVICE_BROKER',()))):
             for name in names:
                 original=src/('' if folder=='broker' else folder)/name
                 modules[folder+'/'+name]=original.read_bytes()
@@ -309,8 +313,9 @@ def prepare(plan):
                 runtime['v1_chat_icons_dir']=plan['v1_chat_icons_dir']
             if 'whatsapp_chats' in plan:
                 runtime['whatsapp_chats']=plan['whatsapp_chats']
-            if 'claude_quota_projection' in plan:
-                runtime['claude_quota_projection']=plan['claude_quota_projection']
+            for key in ('claude_quota_projection','codex_quota_projection'):
+                if key in plan:
+                    runtime[key]=plan[key]
             if claude_plan:
                 launcher=inner/'launcher-claude.py'
                 write(launcher,entry(inner,'broker-claude'),gid,True)
