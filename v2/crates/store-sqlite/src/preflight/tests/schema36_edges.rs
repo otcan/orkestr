@@ -152,7 +152,7 @@ async fn populated_prefixes_copy_first_edges_to_50_preserve_rows_and_rollback_so
                 .fetch_one(&mut upgraded)
                 .await
                 .unwrap(),
-            82
+            81
         );
         assert!(sqlx::query("PRAGMA foreign_key_check")
             .fetch_all(&mut upgraded)

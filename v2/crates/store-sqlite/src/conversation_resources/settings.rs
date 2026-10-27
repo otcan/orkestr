@@ -33,7 +33,7 @@ pub(crate) async fn current(
         review_before_accepting: row
             .try_get::<i64, _>("review_before_accepting")
             .is_ok_and(|value| value == 1),
-        // Absent only on a test store downgraded below 0082: default on.
+        // Absent only on a test store downgraded below 0081: default on.
         deep_grouping: row
             .try_get::<i64, _>("deep_grouping")
             .map_or(true, |value| value != 0),
@@ -42,7 +42,7 @@ pub(crate) async fn current(
 
 /// Whether the next Deep admission of `conversation` may group a burst of
 /// queued owner inputs. Read inside the admission transaction (live, no
-/// cache). A historical test store below 0082 never groups.
+/// cache). A historical test store below 0081 never groups.
 pub(crate) async fn deep_grouping(
     conn: &mut sqlx::SqliteConnection,
     conversation: &str,
