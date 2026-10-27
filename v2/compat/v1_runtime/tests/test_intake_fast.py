@@ -88,6 +88,45 @@ class IntakeFastTests(fixture.IntakeBase):
             drive(self.worker)
             self.assertEqual(self.peer.mutations, before)
 
+    def test_member_owner_member_burst_is_admitted_once_each_in_order_across_restart(self):
+        head = self.enqueue("head")
+        self.worker.run_once(fixture.Stop())
+        burst = [self.enqueue("m1", role="member"), self.enqueue("o1"),
+                 self.enqueue("m2", role="member"), self.enqueue("o2")]
+        for _ in range(3):
+            self.worker.run_once(fixture.Stop())
+        texts = ["Request " + name for name in ("head", "m1", "o1", "m2", "o2")]
+        self.assertEqual([body["text"] for body in self.mutations("/messages")], texts)
+        self.assertEqual([message["sourceInputId"] for message in self.fast()],
+                         [data["remote_id"] for data in [head] + burst], "one Fast each, none skipped")
+        self.assertTrue(all(self.row(name)["burst"] == [] for name in ("m1", "o1", "m2", "o2")))
+        self.assertEqual([key for key in self.peer.runs if key[1] == "deep"], [(0, "deep")],
+                         "Core's Deep remains serialized")
+        before = copy.deepcopy(self.peer.mutations)
+        self.worker = self.new_worker()  # Stop and restart: nothing is admitted or exported twice.
+        for _ in range(2):
+            self.worker.run_once(fixture.Stop())
+        self.assertEqual(self.mutations("/messages"), [body for path, body in before if path == "/messages"])
+        self.assertEqual(len(self.fast()), 5)
+
+    def test_member_is_not_admitted_ahead_of_an_unadmitted_local_agent_input(self):
+        self.enqueue("first")
+        self.enqueue("agent", role="v1_agent")
+        self.enqueue("member", role="member")
+        drive(self.worker)
+        self.assertEqual([body["text"] for body in self.mutations("/messages")], ["Request first"])
+        self.assertNotIn("intake", self.row("member"))
+
+    def test_member_message_during_a_timer_turn_is_admitted_after_the_timer(self):
+        timer, _ = self.ledger.enqueue_timer(dict(message_id=identity(7), event_id=identity(8), sequence=1,
+                                                  request_key="timer-key", namespace="ns", claim_id="claim"))
+        self.enqueue("member", role="member")
+        self.enqueue("owner")
+        drive(self.worker)
+        self.assertEqual([body["text"] for body in self.mutations("/messages")],
+                         ["Request member", "Request owner"], "the adopted timer is never re-posted")
+        self.assertNotIn("burst", self.row(timer["public_id"]))
+
     def test_ledger_and_server_capacity_are_preserved_without_bypassing_a_queued_window(self):
         self.ledger.max_outstanding = 2
         self.enqueue("first")

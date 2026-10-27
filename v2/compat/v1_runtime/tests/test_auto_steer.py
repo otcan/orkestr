@@ -514,6 +514,17 @@ class AutoSteerFlowTests(fixture.IntakeBase):
         self.assertEqual(self.mutations("/steer"), [])
 
 
+    def test_member_admitted_during_a_running_turn_is_never_steered_and_owner_stays_fresh(self):
+        self.worker.auto_steer = "running"
+        self.enqueue("first")
+        self.run_passes(2)
+        self.enqueue("member", role="member")
+        self.enqueue("second")
+        self.run_passes(3)
+        self.assertEqual(self.mutations("/steer"), [], "a member message is never steered")
+        self.assertEqual(self.texts(), ["Request first", "Request member", "Request second"])
+        self.assertNotIn("absorbed_into", self.row("second"))
+
 class LegacySerialTests(fixture.IntakeBase):
     """The serial (legacy Fast) policy steers the same way; the queued input waits unadmitted."""
 

@@ -150,7 +150,7 @@ class WorkerOutboundTests(unittest.TestCase):
         binding = SimpleNamespace(worker=self.worker, ledger=self.ledger, thread=True, config=dict(
             progress_updates=False, fast_reply_policy="owner_only", attachments=False,
             participants=[{"ids": ["491700000001@c.us"], "label": "Ayse", "role": "member"}],
-            max_input_age_seconds=60, instructions_path=None, auto_steer=None))
+            max_input_age_seconds=60, instructions_path=None, auto_steer=None, owner_only_verified=True))
         with patch("v2.compat.v1_runtime.registry.auto_steer_mode", return_value=None):
             Registry._start(SimpleNamespace(workers=False), binding)
         self.assertTrue(self.ledger.owner_only, "owner_only Fast intake is kept")
@@ -166,25 +166,53 @@ class WorkerOutboundTests(unittest.TestCase):
         self.assertEqual(self.final("Saved under /home/orkestr/work/deck-v2/ (run `ls /home/orkestr/work`)."),
                          "Saved under the server folder deck-v2 (run `ls /home/orkestr/work`).")
 
-    def test_registry_scrubs_every_chat_that_is_not_owner_only(self):
+    def test_registry_scrubs_every_chat_unless_marked_owner_only_verified(self):
         from types import SimpleNamespace
         from v2.compat.v1_runtime.registry import Registry
-        # A group with other members but no participants list is shared too.
-        # owner_only with any listed participant (member or none) has a
-        # non-owner reader, so it is scrubbed; owner_only alone is not.
+        # Scrubbed by default: fast_reply_policy alone (owner_only too) does not
+        # establish that only the owner reads the group. Only an explicit
+        # `owner_only_verified: true` with no listed participant keeps paths.
         member = {"ids": ["491700000001@c.us"], "label": "Ayse", "role": "member"}
         silent = {"ids": ["491700000002@c.us"], "label": "Ben", "role": "none"}
-        for policy, members, expected in (("owner_only", [member], True), ("owner_only", [silent], True),
-                                          ("owner_only", [], False), ("legacy", [], True),
-                                          ("disabled", [], True), ("legacy", [member], True)):
-            with self.subTest(policy=policy, members=members):
+        absent = object()
+        cases = (("owner_only", [], absent, True), ("owner_only", [], False, True),
+                 ("owner_only", [], True, False), ("owner_only", [member], True, True),
+                 ("owner_only", [silent], True, True), ("owner_only", [member], absent, True),
+                 ("legacy", [], absent, True), ("legacy", [], True, False), ("disabled", [], absent, True),
+                 ("legacy", [member], True, True), ("owner_only", [], "true", True))
+        for policy, members, verified, expected in cases:
+            with self.subTest(policy=policy, members=members, verified=verified):
                 ledger = SimpleNamespace(owner_only=None, scrub_paths=None)
-                binding = SimpleNamespace(worker=self.worker, ledger=ledger, thread=True, config=dict(
-                    progress_updates=False, fast_reply_policy=policy, participants=members, attachments=False,
-                    max_input_age_seconds=60, instructions_path=None, auto_steer=None))
+                config = dict(progress_updates=False, fast_reply_policy=policy, participants=members, attachments=False,
+                              max_input_age_seconds=60, instructions_path=None, auto_steer=None)
+                if verified is not absent:
+                    config["owner_only_verified"] = verified
+                binding = SimpleNamespace(worker=self.worker, ledger=ledger, thread=True, config=config)
                 with patch("v2.compat.v1_runtime.registry.auto_steer_mode", return_value=None):
                     Registry._start(SimpleNamespace(workers=False), binding)
                 self.assertIs(ledger.scrub_paths, expected)
+                self.assertIs(ledger.owner_only, policy == "owner_only", "Fast policy is unchanged")
+
+    def test_owner_only_verified_is_optional_boolean_and_defaults_to_scrubbed(self):
+        from v2.compat.v1_runtime.config import binding as validate_binding
+        from v2.compat.v1_runtime.registry import scrubs_paths
+        owner, conversation, remote = ("00000000-0000-4000-8000-00000000000%d" % n for n in (1, 2, 3))
+        base = dict(conversation_id=conversation, public_thread_id="t", chat_id="c", account_id="a",
+                    remote_thread_id=remote, allowed_principals=["p"], excluded_public_ids=[],
+                    automatic_accept_roles=["fast", "deep"], outbound_role="deep", enabled=True, revoked=False,
+                    progress_updates=False, attachments=False, max_outstanding_inputs=8,
+                    fast_reply_policy="owner_only")
+        legacy_file = validate_binding(dict(base), owner)
+        self.assertIs(legacy_file["owner_only_verified"], False, "a binding without the field is scrubbed")
+        self.assertTrue(scrubs_paths(legacy_file))
+        self.assertFalse(scrubs_paths(validate_binding(dict(base, owner_only_verified=True), owner)))
+        for bad in ("true", 1, None):
+            with self.subTest(value=bad), self.assertRaisesRegex(ValueError, "config_activation"):
+                validate_binding(dict(base, owner_only_verified=bad), owner)
+
+    def test_owner_only_verified_change_applies_on_reload(self):
+        from v2.compat.v1_runtime.registry import MUTABLE_KEYS
+        self.assertIn("owner_only_verified", MUTABLE_KEYS)
 
 if __name__ == "__main__":
     unittest.main()

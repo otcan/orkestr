@@ -18,7 +18,8 @@ from .worker import DEFAULT_BURST_QUIET_S, Signal, Worker, attachment_export_set
 
 UNIQUE_KEYS = ("remote_thread_id", "conversation_id", "public_thread_id", "chat_id")
 MUTABLE_KEYS = ("enabled", "revoked", "progress_updates", "attachments", "max_outstanding_inputs", "max_input_age_seconds",
-                "participants", "owner_label", "instructions_path", "fast_reply_policy", "auto_steer")
+                "participants", "owner_label", "instructions_path", "fast_reply_policy", "auto_steer",
+                "owner_only_verified")
 
 
 class Binding:
@@ -43,6 +44,18 @@ class Binding:
 
     def identity(self):
         return json.dumps(self.config["scope"], sort_keys=True)
+
+
+def scrubs_paths(config):
+    """Whether replies in this binding's chat have server-local paths scrubbed.
+
+    Every chat is scrubbed unless the operator marked the binding
+    `owner_only_verified: true` (the WhatsApp group was checked to hold only
+    the owner and the bot). `fast_reply_policy` alone does not establish that:
+    a binding without the field is scrubbed. A listed participant (`member`
+    or `none`; config refuses owner aliases as participants) is someone else
+    reading the chat, so it is scrubbed even when marked verified."""
+    return not (config.get("owner_only_verified") is True and not config.get("participants"))
 
 
 class Registry:
@@ -161,12 +174,7 @@ class Registry:
         binding.worker.progress_updates = binding.config["progress_updates"]
         binding.worker.fast_reply_policy = binding.config["fast_reply_policy"]
         binding.ledger.owner_only = binding.config["fast_reply_policy"] == "owner_only"
-        # Every chat that is not owner-only may have other members (a group
-        # without a participants list too): its replies never carry server paths.
-        # An owner_only chat that lists any participant is shared as well:
-        # config refuses owner aliases as participants, so every entry (also
-        # role `none`, who still reads the group) is someone other than the owner.
-        binding.ledger.scrub_paths = not binding.ledger.owner_only or bool(binding.config.get("participants"))
+        binding.ledger.scrub_paths = scrubs_paths(binding.config)
         binding.worker.auto_steer = auto_steer_mode(binding.config)
         binding.worker.attachments = binding.config["attachments"]
         binding.worker.max_input_age_s = binding.config["max_input_age_seconds"]
