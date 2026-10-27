@@ -6,7 +6,7 @@ import subprocess
 
 from codex_bounded.configuration import BROKER, ISOLATION, MODULES
 from codex_bounded.trust import digest
-from codex_service.package import FILES, MODULES_SERVICE, DEPENDENCIES, Package
+from codex_service.package import FILES, MODULES_SERVICE, SERVICE_BROKER, DEPENDENCIES, Package
 from selected_codex_fixture import Fixture, UID, GID, packager, ROOT
 
 
@@ -29,9 +29,11 @@ class ServiceFixture(Fixture):
         root = self.package
         source = ROOT / "v2/provider-broker"
         for directory, names in (("broker", BROKER), ("isolation", ISOLATION),
-                                  ("codex_bounded", MODULES), ("codex_service", MODULES_SERVICE)):
-            (root / directory).mkdir(mode=0o750)
-            os.chown(root / directory, 0, GID)
+                                  ("codex_bounded", MODULES), ("codex_service", MODULES_SERVICE),
+                                  ("broker", SERVICE_BROKER)):
+            if not (root / directory).exists():
+                (root / directory).mkdir(mode=0o750)
+                os.chown(root / directory, 0, GID)
             for name in names:
                 selected = source / ("" if directory == "broker" else directory) / name
                 packager.write(root / directory / name, selected.read_bytes(), GID,

@@ -199,6 +199,8 @@ class Selected(unittest.TestCase):
         self.plan['claude']=dict(claude)
         quota=r/'quota';quota.mkdir(mode=0o750);os.chown(quota,995,986)
         self.plan['claude_quota_projection']={'directory':str(quota),'account_ref':'33333333-3333-4333-8333-333333333333'}
+        codex_directory=r/'codex-quota';codex_directory.mkdir(mode=0o750);os.chown(codex_directory,995,986)
+        self.plan['codex_quota_projection']={'directory':str(codex_directory),'account_ref':'44444444-4444-4444-8444-444444444444'}
         self.plan['host_full_access']={'providers':True,'environment':{**environment,'ANTHROPIC_API_KEY':'x'}}
         with self.assertRaisesRegex(RuntimeError,'Claude account'):selected.prepare(self.plan)
         self.plan['host_full_access']={'providers':True,'environment':environment}
@@ -226,6 +228,13 @@ class Selected(unittest.TestCase):
             self.assertEqual(sink.owner,self.plan['owner_id'])
             package.runtime['claude_quota_projection']['directory']=str(package.endpoint.parent)
             self.assertIsNone(QuotaSink.optional(package,config))
+            # The Codex projection is part of every service package.
+            self.assertEqual(package.runtime['codex_quota_projection'],self.plan['codex_quota_projection'])
+            self.assertIn('broker/codex_quota.py',package.manifest['files'])
+            import codex_quota
+            codex_sink=codex_quota.QuotaSink.optional(package)
+            self.assertIsInstance(codex_sink,codex_quota.QuotaSink)
+            self.assertEqual((codex_sink.directory,codex_sink.uid,codex_sink.owner),(codex_directory,995,self.plan['owner_id']))
         self.assertIn('broker-claude',(r/'release/package/launcher-claude.py').read_text())
         private=json.loads((r/'release/package/claude-private.json').read_bytes())
         self.assertEqual(private['host_full_access'],{'environment':environment})

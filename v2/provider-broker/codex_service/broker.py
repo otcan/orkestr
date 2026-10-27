@@ -26,6 +26,16 @@ def native_ended_exit(pump, code):
     return code
 
 
+def quota_observer(package, config):
+    """The operator-enrolled passive Codex quota cache, or None."""
+    try:
+        from codex_quota import QuotaSink
+    except ImportError:
+        return None  # A package without the optional module projects nothing.
+    sink = QuotaSink.optional(package, config)
+    return sink.observe if sink is not None else None
+
+
 def main(root, role="deep"):
     pump = None
     try:
@@ -66,6 +76,7 @@ def main(root, role="deep"):
                     config.host_resume(expected_native)
             pump = pump_type(Pump, subreaper)(config,
                 Channel(config.workspace, expected_native=expected_native,
+                        quota_observer=quota_observer(package, config),
                         workspace_exec=sys.argv[1:] == workspace,
                         workspace_trusted=sys.argv[1:] == workspace and type(
                             package.beta["workspace_exec"].get("trusted")) is dict,

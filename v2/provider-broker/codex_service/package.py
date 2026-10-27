@@ -45,6 +45,9 @@ FILES |= {"broker/" + name for name in BROKER}
 FILES |= {"isolation/" + name for name in ISOLATION}
 FILES |= {"codex_bounded/" + name for name in MODULES}
 FILES |= {"codex_service/" + name for name in MODULES_SERVICE}
+# Service-only broker modules beside the shared bounded BROKER set.
+SERVICE_BROKER = ("codex_quota.py",)
+FILES |= {"broker/" + name for name in SERVICE_BROKER}
 # Host full access only: Codex starts its code-mode host (every dynamic tool
 # call, for example orkestr_workspace_exec) from the native's own directory.
 # Pinned beside the native; the sandboxed provider forbids subprocesses.
@@ -139,7 +142,7 @@ class Package:
 
     def _bind(self):
         value = self.runtime
-        require(set(value) - {"live_map", "desktop_broker", "timer_config", "v1_chat_icons_dir", "whatsapp_chats", "claude_quota_projection"} == {"format", "uid", "gid", "owner_id", "conversation_id", "home",
+        require(set(value) - {"live_map", "desktop_broker", "timer_config", "v1_chat_icons_dir", "whatsapp_chats", "claude_quota_projection", "codex_quota_projection"} == {"format", "uid", "gid", "owner_id", "conversation_id", "home",
                 "bootstrap_file", "ledger_directory", "endpoint_directory", "port", "trusted_origin"}
                 and value["format"] == "orkestr-v2-codex-service-v1", "service_format")
         self.live_map = live_map_path(value["live_map"]) if "live_map" in value else None
