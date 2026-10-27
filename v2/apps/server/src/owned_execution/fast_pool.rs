@@ -33,6 +33,9 @@ pub(super) trait SlotHost: Send + Sync + 'static {
     /// Live host pressure allows this window to start one more slot now.
     /// Consumes that allowance.
     fn admit_one(&self) -> bool;
+    /// Take the current host reading (cheap while unchanged), so pressure
+    /// averages are warm before a burst asks for a slot.
+    fn observe(&self) {}
     fn next_source(&self) -> impl Future<Output = Result<Option<FastSource>, &'static str>> + Send;
     /// One complete auxiliary presentation; its witness if a child launched.
     fn present(
@@ -119,6 +122,7 @@ pub(super) async fn schedule<H: SlotHost>(
         if lineage_done || host.closing() {
             break;
         }
+        host.observe();
         // Start every input that is waiting now, up to the live bounds.
         loop {
             match start_slot(&host, &mut tasks).await {
@@ -230,10 +234,16 @@ impl SlotHost for WindowSlots {
         *self.shutdown.borrow() || self.execution.fast_window_due()
     }
     fn admit_one(&self) -> bool {
+        let active = self.companion().active_slots();
         self.pressure
             .lock()
-            .map(|mut pressure| pressure.admit_one())
+            .map(|mut pressure| pressure.admit_one(active))
             .unwrap_or(false)
+    }
+    fn observe(&self) {
+        if let Ok(mut pressure) = self.pressure.lock() {
+            pressure.observe();
+        }
     }
     async fn next_source(&self) -> Result<Option<FastSource>, &'static str> {
         match self.execution.unclaimed_fast_source().await {

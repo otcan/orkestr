@@ -316,6 +316,31 @@ async fn slot_retirement_needs_exact_terminal_truth_and_never_replaces() {
         .authorize_bounded_fast_metadata(w.credential.credential(), &used)
         .await
         .is_err());
+    // Only slot 0 keeps a warm native: a used slot session is never
+    // continued on another input, while the accepted lineage may be.
+    let third = join(&w, 2).await;
+    assert!(!w
+        .bound
+        .bounded_fast_reusable(w.credential.credential(), &used, &third.input_event_id)
+        .await
+        .unwrap());
+    assert!(w
+        .bound
+        .admit_fast(w.credential.credential(), &fast_input(&used, &third))
+        .await
+        .is_err());
+    let canonical = w
+        .bound
+        .ensure_role_bindings(&w.f.owner, &w.f.conversation)
+        .await
+        .unwrap()
+        .fast;
+    assert_eq!(canonical.session_id, lineage.session_id);
+    assert!(w
+        .bound
+        .bounded_fast_reusable(w.credential.credential(), &canonical, &third.input_event_id)
+        .await
+        .unwrap());
     w.bound
         .retire_bounded_fast_slot(w.credential.credential(), &run)
         .await
