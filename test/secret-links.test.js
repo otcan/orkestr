@@ -11,7 +11,7 @@ import {
   sweepExpiredSecretLinks,
 } from "../packages/core/src/secret-links.js";
 import { parseSecretLinkTtl } from "../packages/core/src/secret-links-store.js";
-import { resolveSecureSecretReference, setSecureSecret } from "../packages/core/src/secure-secrets.js";
+import { listSecureSecrets, resolveSecureSecretReference, setSecureSecret } from "../packages/core/src/secure-secrets.js";
 import { createThread, listThreadMessages } from "../packages/core/src/threads.js";
 import { jsonPost, pairedCookie, rawRequest, startFixtureServer } from "./support/connector-security-fixture.js";
 
@@ -261,6 +261,30 @@ test("share --from reuses a stored secret, revoke kills the link, cross-user sou
   assert.equal((await form(server.port, `${linkPath(created.url)}/reveal`, aliceCookie)).status, 410);
   assert.match(await fs.readFile(path.join(server.home, "events.jsonl"), "utf8"), /secret_link_revoked/);
   assert.equal((await fs.readFile(path.join(server.home, "secrets", "secret-links.json"), "utf8")).includes("encryptedValue"), false);
+});
+
+test("share --from accepts the exact handles printed by secret list (flat and nested names)", async (t) => {
+  const server = await fixture(t);
+  const values = {
+    "example.service.can.password": "synthetic-flat-share-value-91c2",
+    "vendor/nested-key": "synthetic-nested-share-value-3e08",
+  };
+  for (const [name, value] of Object.entries(values)) {
+    await setSecureSecret({ scope: "user", name, value }, admin);
+  }
+  const listed = await listSecureSecrets({ scope: "user" }, admin);
+  assert.equal(listed.secrets.length, 2);
+  for (const secret of listed.secrets) {
+    assert.equal(secret.handle, `secret://user/admin/${secret.name}`);
+    const created = await createSecretShareLink({ from: secret.handle }, admin);
+    assert.equal(created.link.name, secret.name);
+    assert.equal(created.link.handle, secret.handle);
+    const token = linkPath(created.url).split("/").pop();
+    const revealed = await revealSecretShareLink(token, "admin");
+    assert.equal(revealed.state, "revealed");
+    assert.equal(revealed.value === values[secret.name], true, secret.handle);
+  }
+  for (const value of Object.values(values)) assert.deepEqual(await filesContaining(server.home, value), []);
 });
 
 test("unknown token lookups are throttled per client", async (t) => {

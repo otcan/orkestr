@@ -503,8 +503,19 @@ export function parseSecureSecretReference(reference = "", options = {}) {
   const parts = rest.split("/").map(clean).filter(Boolean);
   let ownerUserId = fallbackOwner;
   let nameParts = parts;
-  if (parts.length >= 3) {
+  // Canonical user handles are secret://user/<owner>/<name>, where <name> may
+  // itself contain "/" (nested) or be flat. Any handle with an owner segment and
+  // at least one name segment carries the owner; a single segment is shorthand
+  // for a name owned by the requesting/fallback owner.
+  if (parts.length >= 2) {
     const explicitOwner = normalizeUserId(parts[0]);
+    // A dot-only owner segment ("." / "..") would become a relative path under
+    // users/ when the store path is built; never treat it as an owner.
+    if (/^\.+$/.test(explicitOwner)) {
+      const error = new Error("secure_secret_owner_invalid");
+      error.statusCode = 400;
+      throw error;
+    }
     if (requestedOwner && explicitOwner && explicitOwner !== fallbackOwner && clean(options.allowCrossUserHandle) !== "true") {
       const error = new Error("secure_secret_owner_mismatch");
       error.statusCode = 403;
