@@ -96,7 +96,14 @@ pub(super) async fn enable_in_transaction(
         return Err(HistoryError::Conflict);
     }
     let schedule = schedule::decode(current.get("schedule_json"))?;
-    let fired = policy_pause::last_fired(tx, owner, request.namespace).await?;
+    // A slot that started before this enable is not ours to run: a timer
+    // handed off from V1 has no V2 claims, and V1 may have just fired that
+    // slot at its raw time. Floor at the enable time (kept in enable_floor_ms
+    // for later refreshes and edits), so the slot never refires at its spread
+    // time. `now_ms` is at or after any V1 fire, since V1 is fenced first.
+    let fired = policy_pause::last_fired(tx, owner, request.namespace)
+        .await?
+        .max(Some(now_ms));
     let due = schedule::next_for_after(&schedule, request.namespace, now_ms, fired)?;
     let due = policy_pause::adjust_next(
         tx,
@@ -110,8 +117,8 @@ pub(super) async fn enable_in_transaction(
     .await?;
     let rev = revision(result.revision)?;
     let generation = revision(result.generation)?;
-    sqlx::query("UPDATE dormant_timers SET state='enabled',revision=?,generation=?,conversation_id=?,next_due_ms=? WHERE owner_id=? AND namespace=?")
-            .bind(rev).bind(generation).bind(request.conversation_id.to_string()).bind(due).bind(owner.to_string()).bind(request.namespace.to_string()).execute(&mut **tx).await.map_err(unavailable)?;
+    sqlx::query("UPDATE dormant_timers SET state='enabled',revision=?,generation=?,conversation_id=?,next_due_ms=?,enable_floor_ms=? WHERE owner_id=? AND namespace=?")
+            .bind(rev).bind(generation).bind(request.conversation_id.to_string()).bind(due).bind(now_ms).bind(owner.to_string()).bind(request.namespace.to_string()).execute(&mut **tx).await.map_err(unavailable)?;
     sqlx::query("INSERT INTO dormant_timer_controls(owner_id,namespace,request_key,semantic_digest,action,receipt_revision,generation,conversation_id,due_ms) VALUES(?,?,?,?,'enable',?,?,?,?)")
             .bind(owner.to_string()).bind(request.namespace.to_string()).bind(&request.request_key).bind(digest).bind(rev).bind(generation).bind(request.conversation_id.to_string()).bind(due).execute(&mut **tx).await.map_err(unavailable)?;
     let result = receipt(&row(tx, owner, request.namespace).await?)?;
