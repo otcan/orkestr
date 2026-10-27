@@ -4,7 +4,7 @@ import {createScopedGroupTransport} from './whatsapp-scoped-group-transport.js';
 import {createScopedPairingPermit} from './whatsapp-scoped-pairing.js';
 import {scopedRouteMembership} from './whatsapp-scoped-route-membership.js';
 import {createScopedDirectSender,validateScopedDirectChats} from './whatsapp-scoped-direct-chats.js';
-import {SCOPED_SEND_MAX_TEXT_LENGTH, validReplyDocument} from './whatsapp-scoped-group-formatting.js';
+import {SCOPED_SEND_MAX_TEXT_LENGTH, validQuotedMessageId, validReplyDocument} from './whatsapp-scoped-group-formatting.js';
 import {validReplyFileShape} from './whatsapp-scoped-reply-files.js';
 import {validateOperatorNotifications, operatorNoticeBodyValid} from './whatsapp-scoped-operator-notices.js';
 import {createScopedGroupCreator, scopedGroupCreateRequest, validateScopedGroupCreate} from './whatsapp-scoped-group-create.js';
@@ -79,7 +79,8 @@ export function createScopedNativeWorkerPolicy(config,{createTransport=createSco
    if(method==='POST' && url.pathname==='/chats' && scopedGroupCreateRequest(groupCreate,config.workerAccountId,body))return;
    if(method==='POST' && url.pathname==='/send-text' && body.accountId===config.workerAccountId && groupAllowed(body.to)
       && typeof body.text==='string' && body.text.length<=SCOPED_SEND_MAX_TEXT_LENGTH && typeof body.requestId==='string' && typeof body.parentId==='string'
-      && Object.keys(body).every(k=>['accountId','to','text','requestId','parentId','notificationId'].includes(k)))return;
+      && (body.quotedMessageId===undefined || validQuotedMessageId(body.quotedMessageId))
+      && Object.keys(body).every(k=>['accountId','to','text','requestId','parentId','notificationId','quotedMessageId'].includes(k)))return;
    if(method==='POST' && url.pathname==='/send-text' && operatorNoticeBodyValid(operator,body,config.workerAccountId))return;
    if(method==='POST' && url.pathname==='/send-text' && ownsDirect(body.to,body.threadId) && body.accountId===config.workerAccountId
       && typeof body.text==='string' && body.text.length<=3000 && typeof body.requestId==='string'

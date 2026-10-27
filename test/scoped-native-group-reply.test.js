@@ -83,3 +83,24 @@ test('group-send reads a text or a reply document from stdin and calls the match
   }
   assert.equal(bodies.length, 2);
 });
+
+test('group-send forwards a text quote to the worker; a quote on a document or a malformed one is rejected', async t => {
+  const {bodies, env, paths} = await fixture(t);
+  const send = payload => new Promise((resolve, reject) => {
+    const child = execFile('node', [script, 'group-send'], {env}, (error, stdout, stderr) => error ? reject(Object.assign(error, {stderr})) : resolve(stdout));
+    child.stdin.end(JSON.stringify(payload));
+  });
+  const quotedMessageId = `false_${group}_3EB0EXAMPLE01_15550000001@c.us`;
+  await send({kind: 'notify', to: group, requestId: 'timer:abc:0', parentId: 'parent-1', text: 'On it.', quotedMessageId});
+  assert.deepEqual(paths, ['/send-text']);
+  assert.equal(bodies[0].quotedMessageId, quotedMessageId);
+  assert.equal(bodies[0].notificationId, 'timer:abc:0');
+  const document = {filename: 'reply-0123456789.md', mimetype: 'text/markdown', text: 'full'};
+  for (const bad of [{kind: 'notify', to: group, requestId: 'r', parentId: 'p', document, quotedMessageId},
+    {kind: 'notify', to: group, requestId: 'r', parentId: 'p', text: 'x', quotedMessageId: 'bad id'},
+    {kind: 'notify', to: group, requestId: 'r', parentId: 'p', text: 'x', quotedMessageId: {id: quotedMessageId}}]) {
+    const error = await send(bad).then(() => null, e => e);
+    assert.equal(wrapperRejection(error).message, 'scoped_reply_invalid');
+  }
+  assert.equal(bodies.length, 1);
+});

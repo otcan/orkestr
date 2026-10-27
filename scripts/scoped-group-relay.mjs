@@ -10,11 +10,12 @@ import {createInputJournalWake} from '../packages/connectors/src/scoped-group-in
 import {wrapperRejection} from '../packages/connectors/src/whatsapp-scoped-wrapper-errors.js';
 
 // A text keeps the wrapper's argv contract. A reply document, or a text too
-// large for one argument (Linux allows 128 KiB), goes as JSON on stdin.
+// large for one argument (Linux allows 128 KiB), goes as JSON on stdin, as does
+// a text that quotes the input it answers (`quotedMessageId`).
 const ARGV_TEXT_MAX_BYTES = 100_000;
 const serializeTransport = createKeyedSerial();
 const execute = payload => serializeTransport('transport', () => new Promise((resolve, reject) => {
-  const viaArgv = payload.document === undefined && payload.file === undefined && Buffer.byteLength(payload.text || '') <= ARGV_TEXT_MAX_BYTES;
+  const viaArgv = payload.document === undefined && payload.file === undefined && payload.quotedMessageId === undefined && Buffer.byteLength(payload.text || '') <= ARGV_TEXT_MAX_BYTES;
   const args = viaArgv
     ? [config.wrapperPath, payload.kind === 'notify' ? 'group-notify' : 'group-reply', payload.to, payload.requestId, payload.parentId, payload.text]
     : [config.wrapperPath, 'group-send'];
@@ -41,9 +42,9 @@ const relay = createScopedGroupRelay({
 });
 const notifications = createScopedTimerNotifications({config,formatter,minIntervalMs:10000,
   api:(url,options={})=>requestJson(url,{timeoutMs:15000,...options}),
-  send:async({chatId,requestId,parentId,text,document})=>{
+  send:async({chatId,requestId,parentId,text,document,quotedMessageId})=>{
     try {
-      const {stdout}=await execute({kind:'notify',to:chatId,requestId,parentId,text,document});
+      const {stdout}=await execute({kind:'notify',to:chatId,requestId,parentId,text,document,...(quotedMessageId?{quotedMessageId}:{})});
       return JSON.parse(stdout);
     } catch (error) {
       throw wrapperRejection(error);

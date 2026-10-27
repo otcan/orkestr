@@ -8,9 +8,11 @@
 // for an operator notice (requestId `opnotice:<id>`, no parent; needs `operatorNotifications` in the config) or the
 // same with `document: {filename, mimetype, text}` for a long reply's full text, or
 // `file: {path, filename, mimetype, sha256}` for a file the assistant attached to the reply.
+// A text may add `quotedMessageId` (a WhatsApp input id of the same group) to send
+// it as a reply-quote; the transport drops a quote that names no input of that group.
 import fs from 'node:fs';
 import {requestWhatsAppWorker} from '../packages/connectors/src/whatsapp-worker-client.js';
-import {SCOPED_SEND_MAX_TEXT_LENGTH, validReplyDocument} from '../packages/connectors/src/whatsapp-scoped-group-formatting.js';
+import {SCOPED_SEND_MAX_TEXT_LENGTH, validQuotedMessageId, validReplyDocument} from '../packages/connectors/src/whatsapp-scoped-group-formatting.js';
 import {validReplyFileShape} from '../packages/connectors/src/whatsapp-scoped-reply-files.js';
 
 const readStdin = async () => {
@@ -39,13 +41,13 @@ try {
     let input;
     try { input = await readStdin(); } catch { throw new Error('scoped_reply_invalid'); }
     request = {notify: input?.kind === 'notify', kind: input?.kind, to: input?.to, requestId: input?.requestId, parentId: input?.parentId,
-      text: input?.text, document: input?.document, file: input?.file};
+      text: input?.text, document: input?.document, file: input?.file, quotedMessageId: input?.quotedMessageId};
   } else {
       const [to, requestId, parentId, text, ...extra] = args;
       if (extra.length) throw new Error('scoped_reply_invalid');
       request = {notify: command === 'group-notify', kind: command === 'group-notify' ? 'notify' : command === 'group-reply' ? 'reply' : '', to, requestId, parentId, text};
     }
-    const {to, requestId, parentId, text, document, file} = request;
+    const {to, requestId, parentId, text, document, file, quotedMessageId} = request;
     if (request.kind === 'operator') {
       if (!config.workerAccountId || typeof text !== 'string' || !text.trim() || text.length > SCOPED_SEND_MAX_TEXT_LENGTH || parentId !== undefined
           || document !== undefined || file !== undefined || !/^opnotice:[A-Za-z0-9._-]{8,150}$/.test(requestId || '') || !config.groups.some(group => group.chatId === to))
@@ -65,7 +67,8 @@ try {
         : text === undefined && validReplyDocument(document);
     if (!['reply', 'notify'].includes(request.kind) || !config.workerAccountId
         || !(config.groups.some(group => group.chatId === to) || await registered(config, to))
-        || typeof requestId !== 'string' || !requestId || typeof parentId !== 'string' || !parentId || !validBody)
+        || typeof requestId !== 'string' || !requestId || typeof parentId !== 'string' || !parentId || !validBody
+        || (quotedMessageId !== undefined && (file !== undefined || document !== undefined || !validQuotedMessageId(quotedMessageId))))
       throw new Error('scoped_reply_invalid');
     const env = {...process.env, ORKESTR_WA_WORKER_URL: '',
       ORKESTR_WA_WORKER_TOKEN: process.env.ORKESTR_WA_WORKER_TOKEN || process.env.ORKESTR_WA_SERVICE_TOKEN
@@ -75,7 +78,7 @@ try {
       ? await requestWhatsAppWorker('/send-file', {method: 'POST', timeoutMs: 120000,
         body: {...base, path: file.path, filename: file.filename, mimetype: file.mimetype, sha256: file.sha256}}, env)
       : document === undefined
-      ? await requestWhatsAppWorker('/send-text', {method: 'POST', timeoutMs: 40000, body: {...base, text}}, env)
+      ? await requestWhatsAppWorker('/send-text', {method: 'POST', timeoutMs: 40000, body: {...base, text, ...(quotedMessageId ? {quotedMessageId} : {})}}, env)
       : await requestWhatsAppWorker('/send-document', {method: 'POST', timeoutMs: 40000,
         body: {...base, filename: document.filename, mimetype: document.mimetype, text: document.text}}, env);
     if (result.ok !== true || !Array.isArray(result.ids) || !result.ids.length)
