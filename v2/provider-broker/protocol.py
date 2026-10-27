@@ -256,6 +256,8 @@ class Channel:
             self.role = identity["role"]
             self.owner_id = identity["owner_id"]
             self.parallel_deep = self.fast_only and self.role == "deep"
+            # A parallel slot is a fresh single-turn session: never resumed.
+            require(not self.parallel_deep or self.expected_native is None)
             if self.role == "fast" or self.fast_only:
                 # Fast is read-only on every instance, including host full
                 # access: Codex's read-only sandbox denies file writes and

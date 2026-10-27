@@ -28,6 +28,9 @@ static HOST_SLOTS: AtomicUsize = AtomicUsize::new(0);
 const POLL: Duration = Duration::from_millis(200);
 /// How long one read of the owner's switch stays current.
 const SWITCH_READ: Duration = Duration::from_secs(2);
+/// How long a closing window waits for the owner decision on a slot proposal
+/// before releasing its native (the writer's close must not wait forever).
+const ACCEPT_DRAIN: Duration = Duration::from_secs(30);
 
 /// Custody shared by the writer and the pool.
 pub(super) struct DeepSlots {
@@ -262,6 +265,14 @@ impl ConfiguredExecution {
                     .parallel_deep_candidate(&this.token)
                     .await
                     .unwrap_or(false)
+                // The Codex five-hour quota and the window's egress budget
+                // (both fail closed), then live host pressure. Live slots
+                // are never cut by these gates.
+                && super::deep_slot_gates::quota_allows()
+                && super::deep_slot_gates::egress_allows(match this.window.as_ref() {
+                    Some(window) => window.egress_left().await,
+                    None => None,
+                })
                 && pressure.admit_one_deep(slots.active().max(HOST_SLOTS.load(Ordering::Acquire)))
             {
                 if let Some(backstop) = HostSlot::acquire() {
@@ -512,6 +523,7 @@ impl ConfiguredExecution {
             .map_err(|_| "parallel Deep control registration refused")?;
         let mut budget = self.config.execution_budget.start(Instant::now());
         let mut peak = 0;
+        let mut drain_since: Option<Instant> = None;
         let result = loop {
             self.maintain(heartbeat).await?;
             if let Some(bytes) = pump.tree_peak_rss_bytes() {
@@ -552,6 +564,21 @@ impl ConfiguredExecution {
                     // shutdown leaves the proposal to stranded handling.
                     if *shutdown.borrow() {
                         break None;
+                    }
+                    // The window closes: wait a bounded time for the owner
+                    // decision, then release the native. The proposal stays
+                    // unaccepted, so the window settles through stranded
+                    // reconciliation, which hands the input back to the writer.
+                    if slots.retiring() {
+                        let since = *drain_since.get_or_insert_with(Instant::now);
+                        if since.elapsed() >= ACCEPT_DRAIN {
+                            eprintln!("parallel Deep slot proposal unaccepted at window close; released for reconciliation");
+                            let retiring = pump
+                                .retire_broker()
+                                .map_err(|_| "parallel Deep proposal cleanup refused")?;
+                            drop(authority);
+                            break Some(self.reaped(retiring, &run, heartbeat).await?);
+                        }
                     }
                     tokio::select! {
                         _ = tokio::time::sleep(Duration::from_millis(100)) => {},

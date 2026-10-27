@@ -19,6 +19,8 @@ pub const PARALLEL_DEEP_DEFAULT_EFFORT: &str = "high";
 
 const NOTE_MAX_ITEMS: usize = 6;
 const NOTE_EXCERPT_BYTES: usize = 1_024;
+/// An item that alone exceeds the note bound is carried this short.
+const NOTE_SHORT_EXCERPT_BYTES: usize = 256;
 const NOTE_MAX_BYTES: usize = 8_192;
 
 /// Leads the current input of every parallel turn.
@@ -77,27 +79,36 @@ pub(super) async fn turn_text(
     let mut noted = Vec::new();
     for row in rows {
         let parallel: String = row.get("id");
-        let Some(answer) = accepted_text(tx, &parallel).await? else {
+        // An accepted answer without text, or the defer marker, carries
+        // nothing for the writer: it is marked noted all the same, so it never
+        // holds a place in this bounded selection again (no starvation).
+        let answer = accepted_text(tx, &parallel)
+            .await?
+            .filter(|answer| answer.trim() != PARALLEL_DEFER);
+        let Some(answer) = answer else {
+            noted.push(parallel);
             continue;
         };
-        if answer.trim() == PARALLEL_DEFER {
-            continue;
-        }
         let question: String = row.get("question");
-        items.push(serde_json::json!({
-            "sequence": row.get::<i64, _>("scope_sequence"),
-            "owner_message": excerpt(&question, NOTE_EXCERPT_BYTES),
-            "parallel_answer": excerpt(&answer, NOTE_EXCERPT_BYTES),
-            "may_be_truncated": true,
-        }));
+        let item = |limit| {
+            serde_json::json!({
+                "sequence": row.get::<i64, _>("scope_sequence"),
+                "owner_message": excerpt(&question, limit),
+                "parallel_answer": excerpt(&answer, limit),
+                "may_be_truncated": true,
+            })
+        };
+        items.push(item(NOTE_EXCERPT_BYTES));
         if WRITER_NOTE.len() + serde_json::to_string(&items).map_err(db)?.len() > NOTE_MAX_BYTES {
             items.pop();
-            break;
+            if !items.is_empty() {
+                break; // The next writer turn carries it first.
+            }
+            // Alone it is still too large (escaping can grow text sixfold):
+            // the oldest answer always fits shortened, so none starves.
+            items.push(item(NOTE_SHORT_EXCERPT_BYTES));
         }
         noted.push(parallel);
-    }
-    if items.is_empty() {
-        return Ok(text);
     }
     for parallel in &noted {
         sqlx::query(
@@ -108,6 +119,9 @@ pub(super) async fn turn_text(
         .execute(&mut *tx)
         .await
         .map_err(db)?;
+    }
+    if items.is_empty() {
+        return Ok(text);
     }
     Ok(format!(
         "{WRITER_NOTE}{}\n\nCurrent input:\n{text}",
@@ -240,18 +254,15 @@ impl Store {
         Ok(true)
     }
 
-    /// Burst marker for channel adapters, read with the exact-run status:
-    /// `(parallel, concurrent)`. `parallel`: the run is a read-only parallel
-    /// slot run. `concurrent`: it is, or another Deep run of the same window
-    /// incarnation on a slot is or was live alongside it. Both false for a
-    /// lone canonical run, so the single-turn shape is unchanged.
-    pub async fn deep_run_parallel_authenticated(
+    /// The owner's live read-only parallel Deep turns of one conversation
+    /// (browser session, same authentication as the exact-run status), so
+    /// the owner's Stop reaches turns that outlive the writer's.
+    pub async fn parallel_deep_live_runs_authenticated(
         &self,
         credential: &str,
         owner: &OwnerId,
         conversation: &ConversationId,
-        run: &RunId,
-    ) -> Result<(bool, bool)> {
+    ) -> Result<Vec<RunId>> {
         if self.authority.is_some() || credential.is_empty() || credential.len() > 1024 {
             return Err(RuntimeStoreError::Unauthorized);
         }
@@ -263,15 +274,54 @@ impl Store {
             return Err(RuntimeStoreError::Unauthorized);
         }
         if !super::parallel_deep::present(&mut tx).await? {
-            return Ok((false, false));
+            return Ok(Vec::new());
         }
-        let row = sqlx::query("SELECT r.deep_slot AS slot,(SELECT count(*) FROM production_runs o WHERE o.role='deep' AND o.deep_slot>0 AND o.conversation_id=r.conversation_id AND o.context_id=r.context_id AND o.incarnation_id=r.incarnation_id AND o.id!=r.id AND o.scope_sequence>r.scope_sequence) AS later FROM production_runs r WHERE r.id=? AND r.owner_id=? AND r.conversation_id=? AND r.role='deep'")
+        let rows: Vec<String> = sqlx::query_scalar("SELECT id FROM production_runs WHERE owner_id=? AND conversation_id=? AND role='deep' AND deep_slot>0 AND state IN ('starting','running') ORDER BY scope_sequence LIMIT 8")
+            .bind(owner.to_string()).bind(conversation.to_string())
+            .fetch_all(&mut *tx).await.map_err(db)?;
+        tx.commit().await.map_err(db)?;
+        rows.iter()
+            .map(|run| Ok(RunId(run.parse().map_err(db)?)))
+            .collect()
+    }
+
+    /// Burst marker for channel adapters, read with the exact-run status:
+    /// `(parallel, concurrent, deferred)`. `deferred`: Core handed this slot
+    /// run's input back to the writer (defer marker, failure or recovery). `parallel`: the run is a read-only parallel
+    /// slot run. `concurrent`: it is, or another Deep run of the same window
+    /// incarnation on a slot is or was live alongside it. Both false for a
+    /// lone canonical run, so the single-turn shape is unchanged.
+    pub async fn deep_run_parallel_authenticated(
+        &self,
+        credential: &str,
+        owner: &OwnerId,
+        conversation: &ConversationId,
+        run: &RunId,
+    ) -> Result<(bool, bool, bool)> {
+        if self.authority.is_some() || credential.is_empty() || credential.len() > 1024 {
+            return Err(RuntimeStoreError::Unauthorized);
+        }
+        let mut tx = self.pool.begin().await.map_err(db)?;
+        let authorized: i64 = sqlx::query_scalar("SELECT count(*) FROM auth_sessions WHERE token_hash=? AND owner_id=? AND expires_at>unixepoch()")
+            .bind(crate::digest(credential)).bind(owner.to_string())
+            .fetch_one(&mut *tx).await.map_err(db)?;
+        if authorized != 1 {
+            return Err(RuntimeStoreError::Unauthorized);
+        }
+        if !super::parallel_deep::present(&mut tx).await? {
+            return Ok((false, false, false));
+        }
+        let row = sqlx::query("SELECT r.deep_slot AS slot,EXISTS(SELECT 1 FROM production_parallel_deep_deferrals d WHERE d.run_id=r.id) AS deferred,(SELECT count(*) FROM production_runs o WHERE o.role='deep' AND o.deep_slot>0 AND o.conversation_id=r.conversation_id AND o.context_id=r.context_id AND o.incarnation_id=r.incarnation_id AND o.id!=r.id AND o.scope_sequence>r.scope_sequence) AS later FROM production_runs r WHERE r.id=? AND r.owner_id=? AND r.conversation_id=? AND r.role='deep'")
             .bind(run.to_string()).bind(owner.to_string()).bind(conversation.to_string())
             .fetch_optional(&mut *tx).await.map_err(db)?;
         tx.commit().await.map_err(db)?;
-        Ok(row.map_or((false, false), |row| {
+        Ok(row.map_or((false, false, false), |row| {
             let parallel = row.get::<i64, _>("slot") > 0;
-            (parallel, parallel || row.get::<i64, _>("later") > 0)
+            (
+                parallel,
+                parallel || row.get::<i64, _>("later") > 0,
+                parallel && row.get::<bool, _>("deferred"),
+            )
         }))
     }
 }

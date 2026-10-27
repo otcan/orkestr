@@ -63,6 +63,8 @@ DEPENDENCIES = ("/usr/bin/python3", "/usr/bin/bwrap", "/usr/bin/prlimit",
 
 
 LIVE_MAP_ENV = "ORKESTR_V2_LIVE_MAP"
+# The Codex quota projection file the server's parallel Deep gate reads.
+CODEX_QUOTA_FILE_ENV = "ORKESTR_V2_CODEX_QUOTA_FILE"
 # Private V1 desktop lease broker client file (0600, service user); the server
 # validates and reads it, the package never does.
 DESKTOP_BROKER_ENV = "ORKESTR_V2_DESKTOP_BROKER_CONFIG"
@@ -154,6 +156,12 @@ class Package:
                                   if "v1_chat_icons_dir" in value else None)
         self.whatsapp_chats = (live_map_path(value["whatsapp_chats"])
                                if "whatsapp_chats" in value else None)
+        projection = value.get("codex_quota_projection")
+        # Shape only: the broker's own quota sink keeps all custody checks.
+        # The server only reads this file, and fails closed when it cannot.
+        self.codex_quota_file = (live_map_path(str(Path(projection["directory"]) / "codex.json"))
+                                 if type(projection) is dict and type(projection.get("directory")) is str
+                                 and projection["directory"].startswith("/") else None)
         require(all(type(value[k]) is int and 0 < value[k] < 2**31 for k in ("uid", "gid")),
                 "service_identity")
         require(type(value["port"]) is int and 1024 <= value["port"] <= 65535, "service_port")
@@ -310,4 +318,6 @@ class Package:
                 **({WHATSAPP_CHATS_ENV: self.whatsapp_chats}
                    if getattr(self, "whatsapp_chats", None) else {}),
                 **({V1_CHAT_ICONS_ENV: self.v1_chat_icons_dir}
-                   if getattr(self, "v1_chat_icons_dir", None) else {})}
+                   if getattr(self, "v1_chat_icons_dir", None) else {}),
+                **({CODEX_QUOTA_FILE_ENV: self.codex_quota_file}
+                   if getattr(self, "codex_quota_file", None) else {})}

@@ -120,6 +120,17 @@ class FastCodexSandboxTests(unittest.TestCase):
         # The ordinary Deep broker is unchanged.
         self.assertFalse(opened(IDENTITY).parallel_deep)
 
+    def test_parallel_deep_on_the_read_only_broker_is_never_resumed(self):
+        native = "00000000-0000-4000-8000-000000000123"
+        channel = Channel(WORKSPACE, host_full_access=True, fast_only=True, expected_native=native)
+        with self.assertRaises(Refused):
+            channel.client({"id": 1, "method": "OpenOwnedSession",
+                            "params": {"protocol": PROTOCOL, "identity": dict(IDENTITY)}})
+        # A Fast identity on the same broker may still resume its own native.
+        channel = Channel(WORKSPACE, host_full_access=True, fast_only=True, expected_native=native)
+        channel.client({"id": 1, "method": "OpenOwnedSession",
+                        "params": {"protocol": PROTOCOL, "identity": dict(FAST)}})
+
 
 NATIVE_ENV = "ORKESTR_TEST_CODEX_NATIVE"
 REPO_V2 = Path(__file__).resolve().parent.parent

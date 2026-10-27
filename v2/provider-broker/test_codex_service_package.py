@@ -13,7 +13,7 @@ from codex_bounded.trust import digest, exists, process, protected, Refused as T
 from codex_service.contract import Refused
 from codex_service.custody import StateLock, OwnedSocket
 from codex_service.manager import Manager
-from codex_service.package import DESKTOP_BROKER_ENV, TIMER_CONFIG_ENV, V1_CHAT_ICONS_ENV, LIVE_MAP_ENV, METRICS_BIND_ENV, ACCESS_LOG_ENV, WHATSAPP_CHATS_ENV, Package, live_map_path
+from codex_service.package import CODEX_QUOTA_FILE_ENV, DESKTOP_BROKER_ENV, TIMER_CONFIG_ENV, V1_CHAT_ICONS_ENV, LIVE_MAP_ENV, METRICS_BIND_ENV, ACCESS_LOG_ENV, WHATSAPP_CHATS_ENV, Package, live_map_path
 from codex_service_fixture import ServiceFixture, UID, GID
 
 
@@ -44,6 +44,11 @@ class LiveMapPathTests(unittest.TestCase):
         self.assertNotIn(WHATSAPP_CHATS_ENV, Package.environment(stub))
         stub.whatsapp_chats = "/var/lib/synthetic/whatsapp-chats.json"
         self.assertEqual(Package.environment(stub)[WHATSAPP_CHATS_ENV], "/var/lib/synthetic/whatsapp-chats.json")
+        # The Codex quota projection file for the server's parallel Deep gate.
+        self.assertNotIn(CODEX_QUOTA_FILE_ENV, Package.environment(stub))
+        stub.codex_quota_file = "/var/lib/orkestr-provider-quota/codex.json"
+        self.assertEqual(Package.environment(stub)[CODEX_QUOTA_FILE_ENV],
+                         "/var/lib/orkestr-provider-quota/codex.json")
 
 
 @unittest.skipUnless(os.geteuid() == 0, "explicit root run required for protected synthetic fixture")

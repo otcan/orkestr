@@ -9,7 +9,11 @@ mod claude_continuation;
 mod config;
 #[cfg(all(test, unix))]
 mod config_tests;
+pub(crate) mod deep_slot_gates;
 mod deep_slots;
+pub use deep_slot_gates::{
+    set_quota_file as set_parallel_deep_quota_file, QUOTA_FILE_ENV as PARALLEL_DEEP_QUOTA_FILE_ENV,
+};
 mod directory;
 mod fast;
 mod fast_bootstrap;
