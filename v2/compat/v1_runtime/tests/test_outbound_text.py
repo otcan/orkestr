@@ -144,6 +144,19 @@ class WorkerOutboundTests(unittest.TestCase):
         with self.ledger.connect() as db:
             self.assertNotIn("/var/lib", str(db.execute("SELECT message FROM exports").fetchall()))
 
+    def test_owner_only_chat_with_a_member_is_scrubbed_end_to_end(self):
+        from types import SimpleNamespace
+        from v2.compat.v1_runtime.registry import Registry
+        binding = SimpleNamespace(worker=self.worker, ledger=self.ledger, thread=True, config=dict(
+            progress_updates=False, fast_reply_policy="owner_only", attachments=False,
+            participants=[{"ids": ["491700000001@c.us"], "label": "Ayse", "role": "member"}],
+            max_input_age_seconds=60, instructions_path=None, auto_steer=None))
+        with patch("v2.compat.v1_runtime.registry.auto_steer_mode", return_value=None):
+            Registry._start(SimpleNamespace(workers=False), binding)
+        self.assertTrue(self.ledger.owner_only, "owner_only Fast intake is kept")
+        text = "Done: [deck](/var/lib/orkestr-v2-pilot/workspace/a/deck.pptx)"
+        self.assertEqual(self.final(text), "Done: deck: deck.pptx (not attached)")
+
     def test_owner_only_chat_keeps_paths(self):
         text = "Done: [deck](/var/lib/orkestr-v2-pilot/workspace/a/deck.pptx) in /home/orkestr/work/"
         self.assertEqual(self.final(text), text)
@@ -157,8 +170,13 @@ class WorkerOutboundTests(unittest.TestCase):
         from types import SimpleNamespace
         from v2.compat.v1_runtime.registry import Registry
         # A group with other members but no participants list is shared too.
-        for policy, members, expected in (("owner_only", [{"id": "m"}], False), ("owner_only", [], False),
-                                          ("legacy", [], True), ("disabled", [], True), ("legacy", [{"id": "m"}], True)):
+        # owner_only with any listed participant (member or none) has a
+        # non-owner reader, so it is scrubbed; owner_only alone is not.
+        member = {"ids": ["491700000001@c.us"], "label": "Ayse", "role": "member"}
+        silent = {"ids": ["491700000002@c.us"], "label": "Ben", "role": "none"}
+        for policy, members, expected in (("owner_only", [member], True), ("owner_only", [silent], True),
+                                          ("owner_only", [], False), ("legacy", [], True),
+                                          ("disabled", [], True), ("legacy", [member], True)):
             with self.subTest(policy=policy, members=members):
                 ledger = SimpleNamespace(owner_only=None, scrub_paths=None)
                 binding = SimpleNamespace(worker=self.worker, ledger=ledger, thread=True, config=dict(

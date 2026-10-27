@@ -163,7 +163,10 @@ class Registry:
         binding.ledger.owner_only = binding.config["fast_reply_policy"] == "owner_only"
         # Every chat that is not owner-only may have other members (a group
         # without a participants list too): its replies never carry server paths.
-        binding.ledger.scrub_paths = not binding.ledger.owner_only
+        # An owner_only chat that lists any participant is shared as well:
+        # config refuses owner aliases as participants, so every entry (also
+        # role `none`, who still reads the group) is someone other than the owner.
+        binding.ledger.scrub_paths = not binding.ledger.owner_only or bool(binding.config.get("participants"))
         binding.worker.auto_steer = auto_steer_mode(binding.config)
         binding.worker.attachments = binding.config["attachments"]
         binding.worker.max_input_age_s = binding.config["max_input_age_seconds"]
