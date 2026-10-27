@@ -636,7 +636,7 @@ async fn schema_77_fast_lineage_upgrades_into_slot_zero_with_bounded_slots() {
     Store::open(&dir.db()).await.unwrap().close().await;
 }
 
-/// Manual rehearsal on a private read-only COPY of a real schema-77 store:
+/// Manual rehearsal on a private COPY of a real schema 77-79 store:
 /// `ORKESTR_SCHEMA77_COPY=/path/copy.sqlite3 cargo test -- --ignored`. The
 /// copy is upgraded in place; never point this at a live database.
 #[tokio::test]
@@ -657,7 +657,11 @@ async fn real_schema_77_copy_upgrades() {
         .fetch_one(&mut conn)
         .await
         .unwrap();
-    assert_eq!(version, 77, "rehearsal needs a schema-77 copy");
+    // Any pre-slot schema the live train can hold: 77 (pre-#341) to 79.
+    assert!(
+        (77..=79).contains(&version),
+        "rehearsal needs a schema 77-79 copy, got {version}"
+    );
     let before: Vec<(String, String, String)> =
         sqlx::query_as("SELECT id,role,state FROM session_bindings ORDER BY id")
             .fetch_all(&mut conn)

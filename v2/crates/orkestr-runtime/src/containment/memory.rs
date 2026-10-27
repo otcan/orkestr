@@ -9,25 +9,51 @@ const MAX_TREE: usize = 512;
 /// descendants, in bytes. `None` when the root cannot be read.
 pub(super) fn tree_peak_rss_bytes(root: u32) -> Option<u64> {
     let mut seen = HashSet::new();
-    let mut pending = vec![root];
+    let mut pending = vec![(root, None)];
     let mut total = 0u64;
     let mut root_read = false;
-    while let Some(pid) = pending.pop() {
+    while let Some((pid, parent)) = pending.pop() {
         if seen.len() >= MAX_TREE || !seen.insert(pid) {
             continue;
         }
-        let Some(peak) = peak_rss_bytes(pid) else {
+        let Some(status) = status(pid) else {
+            continue;
+        };
+        // A listed child that exited and whose PID was reused before this
+        // read names another process: count it (and its tree) only while it
+        // is still the child of the process that listed it.
+        if parent.is_some() && parent_pid(&status) != parent {
+            continue;
+        }
+        let Some(peak) = peak_rss_in(&status) else {
             continue;
         };
         root_read |= pid == root;
         total = total.saturating_add(peak);
-        pending.extend(children(pid));
+        pending.extend(children(pid).into_iter().map(|child| (child, Some(pid))));
     }
     root_read.then_some(total)
 }
 
+fn status(pid: u32) -> Option<String> {
+    std::fs::read_to_string(format!("/proc/{pid}/status")).ok()
+}
+
+fn parent_pid(status: &str) -> Option<u32> {
+    status
+        .lines()
+        .find_map(|line| line.strip_prefix("PPid:"))?
+        .trim()
+        .parse()
+        .ok()
+}
+
+#[cfg(test)]
 fn peak_rss_bytes(pid: u32) -> Option<u64> {
-    let status = std::fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
+    peak_rss_in(&status(pid)?)
+}
+
+fn peak_rss_in(status: &str) -> Option<u64> {
     let kib = status
         .lines()
         .find_map(|line| line.strip_prefix("VmHWM:"))
@@ -61,8 +87,10 @@ mod tests {
             .arg("5")
             .spawn()
             .unwrap();
-        let own = super::tree_peak_rss_bytes(std::process::id()).unwrap();
+        // VmHWM never shrinks, so the root alone, read first, is a lower
+        // bound of the root's share of the later tree reading.
         let alone = super::peak_rss_bytes(std::process::id()).unwrap();
+        let own = super::tree_peak_rss_bytes(std::process::id()).unwrap();
         assert!(alone > 0);
         // The tree includes the live child's peak.
         assert!(own > alone);

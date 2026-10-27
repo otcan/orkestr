@@ -234,7 +234,13 @@ impl SlotHost for WindowSlots {
         *self.shutdown.borrow() || self.execution.fast_window_due()
     }
     fn admit_one(&self) -> bool {
-        let active = self.companion().active_slots();
+        // Project every live extra slot of the host, not only this window's:
+        // a governor reading is up to 15 s old, so slots other windows
+        // started on it are not yet in its MemAvailable.
+        let active = self
+            .companion()
+            .active_slots()
+            .max(HOST_AUXILIARY.load(Ordering::Acquire));
         self.pressure
             .lock()
             .map(|mut pressure| pressure.admit_one(active))
