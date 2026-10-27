@@ -89,7 +89,10 @@ async fn claim_in_transaction(
     let next = if matches!(schedule, TimerSchedule::Once { .. }) {
         None
     } else {
-        let natural = schedule::next_for(&schedule, request.namespace, now_ms)?;
+        // The slot claimed now is fired: the next run is a later slot, even when
+        // this claim ran at the raw (unspread) time of a spread slot.
+        let fired = Some(request.due_ms);
+        let natural = schedule::next_for_after(&schedule, request.namespace, now_ms, fired)?;
         Some(
             policy_pause::adjust_next(
                 tx,
@@ -97,6 +100,7 @@ async fn claim_in_transaction(
                 request.namespace,
                 &schedule,
                 &conversation.to_string(),
+                fired,
                 natural,
             )
             .await?,

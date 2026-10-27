@@ -96,13 +96,15 @@ pub(super) async fn enable_in_transaction(
         return Err(HistoryError::Conflict);
     }
     let schedule = schedule::decode(current.get("schedule_json"))?;
-    let due = schedule::next_for(&schedule, request.namespace, now_ms)?;
+    let fired = policy_pause::last_fired(tx, owner, request.namespace).await?;
+    let due = schedule::next_for_after(&schedule, request.namespace, now_ms, fired)?;
     let due = policy_pause::adjust_next(
         tx,
         owner,
         request.namespace,
         &schedule,
         &request.conversation_id.to_string(),
+        fired,
         due,
     )
     .await?;

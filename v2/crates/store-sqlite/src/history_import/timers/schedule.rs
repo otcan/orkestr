@@ -248,17 +248,50 @@ fn occurrence_spread(schedule: &TimerSchedule, spread: i64, natural: i64) -> i64
 /// First occurrence of this timer strictly after `now_ms`, including its
 /// deterministic top-of-the-hour spread. Every write of `next_due_ms` uses this,
 /// so claims, enables, edits and pause refreshes agree on the same instant.
+/// Production writes go through `next_for_after`, which also skips fired slots.
+#[cfg(test)]
 pub(super) fn next_for(schedule: &TimerSchedule, namespace: Uuid, now_ms: i64) -> Result<i64> {
     next_spread(schedule, spread_ms(namespace), now_ms)
 }
 
+/// `next_for` that never returns the slot of an occurrence already fired.
+///
+/// `fired_ms` is the `due_ms` of the latest clock claim of this timer (raw or
+/// spread). Every natural slot at or before it has been run, so only a slot
+/// strictly after it may be scheduled. Without this, a slot fired at its raw
+/// time (a `next_due_ms` stored before the spread existed, or any raw claim)
+/// would come back at `slot + spread` and run twice.
+pub(super) fn next_for_after(
+    schedule: &TimerSchedule,
+    namespace: Uuid,
+    now_ms: i64,
+    fired_ms: Option<i64>,
+) -> Result<i64> {
+    next_spread_after(schedule, spread_ms(namespace), now_ms, fired_ms)
+}
+
 /// `next_for` with an explicit spread (`0` is the natural schedule).
+#[cfg(test)]
 pub(super) fn next_spread(schedule: &TimerSchedule, spread: i64, now_ms: i64) -> Result<i64> {
+    next_spread_after(schedule, spread, now_ms, None)
+}
+
+/// `next_spread` whose natural slot is strictly after `fired_ms` (see `next_for_after`).
+pub(super) fn next_spread_after(
+    schedule: &TimerSchedule,
+    spread: i64,
+    now_ms: i64,
+    fired_ms: Option<i64>,
+) -> Result<i64> {
     if spread == 0 || !occurrence_spread_possible(schedule) {
         return next(schedule, now_ms);
     }
-    // A natural occurrence in (now - spread, now] may still be due after now.
+    // A natural occurrence in (now - spread, now] may still be due after now,
+    // unless that slot already fired.
     let mut from = now_ms.saturating_sub(spread).max(0);
+    if let Some(fired) = fired_ms {
+        from = from.max(fired);
+    }
     for _ in 0..4 {
         let natural = next(schedule, from)?;
         let due = natural + occurrence_spread(schedule, spread, natural);
@@ -268,7 +301,7 @@ pub(super) fn next_spread(schedule: &TimerSchedule, spread: i64, now_ms: i64) ->
         }
         from = natural;
     }
-    next(schedule, now_ms)
+    next(schedule, now_ms.max(from))
 }
 
 fn occurrence_spread_possible(schedule: &TimerSchedule) -> bool {
