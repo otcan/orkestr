@@ -98,6 +98,14 @@ pub(crate) fn failure(error: ResourceError) -> Error {
                     StatusCode::CONFLICT,
                     "The timer is cancelled, stopped or finished",
                 ),
+                "agent_timer_dormant" => (
+                    StatusCode::CONFLICT,
+                    "The timer is not running in V2 yet (dormant import); ask the owner",
+                ),
+                "agent_timer_owner_paused" => (
+                    StatusCode::CONFLICT,
+                    "The owner paused this timer indefinitely; only the owner can change that",
+                ),
                 "agent_timer_conflict" => (
                     StatusCode::CONFLICT,
                     "This request_key was already used for a different request",

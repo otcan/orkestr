@@ -33,6 +33,8 @@ pub enum AgentTimerRefusal {
     SkipOnce,
     PauseInvalid,
     Ended,
+    Dormant,
+    OwnerPaused,
     Unavailable,
 }
 impl AgentTimerRefusal {
@@ -48,6 +50,8 @@ impl AgentTimerRefusal {
             Self::SkipOnce => "agent_timer_skip_once",
             Self::PauseInvalid => "agent_timer_pause_invalid",
             Self::Ended => "agent_timer_ended",
+            Self::Dormant => "agent_timer_dormant",
+            Self::OwnerPaused => "agent_timer_owner_paused",
             Self::Unavailable => "agent_timer_unavailable",
         }
     }
@@ -296,8 +300,13 @@ pub(crate) async fn agent_timer_control(
 ) -> Step<bool> {
     let facts = agent_timer_one(tx, owner, conversation, namespace).await?;
     let receipt = &facts.listing.detail.receipt;
+    // A dormant import was never enabled in V2: V1 may still own and run it
+    // (no handoff yet), so a V2-side change would not stop anything there.
+    if receipt.state == TimerState::Paused {
+        return Err(AgentTimerRefusal::Dormant);
+    }
     let now_ms = store_clock(tx).await?;
-    let live = matches!(receipt.state, TimerState::Enabled | TimerState::Paused);
+    let live = receipt.state == TimerState::Enabled;
     match operation {
         AgentTimerOperation::Cancel => {
             if !live {
@@ -328,6 +337,10 @@ pub(crate) async fn agent_timer_control(
             if policy.pause_until_ms == Some(until) {
                 return Ok(false);
             }
+            if policy.pause_until_ms.is_some_and(|u| u >= FOREVER_MS) {
+                // Replacing an owner's indefinite pause would end it.
+                return Err(AgentTimerRefusal::OwnerPaused);
+            }
             write_in(tx, owner, namespace, None, now_ms, |u, _| {
                 u.pause_until_ms = Some(until)
             })
@@ -341,7 +354,7 @@ pub(crate) async fn agent_timer_control(
             }
             if policy.pause_until_ms.is_some_and(|u| u >= FOREVER_MS) {
                 // An indefinite pause is the owner's; only the owner lifts it.
-                return Err(AgentTimerRefusal::Conflict);
+                return Err(AgentTimerRefusal::OwnerPaused);
             }
             write_in(tx, owner, namespace, None, now_ms, |u, _| {
                 u.pause_until_ms = None

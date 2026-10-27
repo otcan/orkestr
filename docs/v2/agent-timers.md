@@ -48,7 +48,11 @@ The design is the thread-ask grant's (#341, migration 78), with its own grant:
   Stop and rollback stay owner-only (`400` for any other operation).
 - `pause` sets the timer's pause until `until_ms` (default and maximum: 60
   days). `resume` lifts it. A run that came due while paused is not replayed.
-  An owner's indefinite pause cannot be lifted by the agent.
+  An owner's indefinite pause can be neither lifted nor replaced by the
+  agent (`409 agent_timer_owner_paused`).
+- A dormant import (never enabled in V2, so V1 may still own and run it) is
+  listed but not controllable (`409 agent_timer_dormant`): only a V2-enabled
+  timer can be cancelled, paused, resumed or skipped.
 - `skip_next` drops exactly the next run of a recurring timer (it pauses until
   just after that run). A one-shot timer cannot skip, only cancel
   (`agent_timer_skip_once`).
@@ -70,7 +74,8 @@ The design is the thread-ask grant's (#341, migration 78), with its own grant:
 | Pause length | at most 60 days | `422 agent_timer_pause_invalid` |
 | Audited refusals per conversation per 10 minutes | 20, then refused without any write | `429 agent_timer_rate_limited` |
 
-A replay is never rate limited. Every authenticated attempt, accepted or
+A replay is never refused by the create caps; over the refusal budget every
+write request, a replay included, is refused until the window passes. Every authenticated attempt, accepted or
 refused, is appended to `agent_timer_audit` (conversation, run, grant
 generation, operation, timer, request key, outcome, time). The audit and the
 `agent_timers` provenance rows are append-only.

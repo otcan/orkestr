@@ -580,3 +580,71 @@ async fn refusals_are_throttled_without_writes() {
         .unwrap();
     assert_eq!(audited.len() as i64, AGENT_TIMER_REFUSALS_MAX);
 }
+
+/// A dormant import (V1 may still run it) and an owner's indefinite pause are
+/// the owner's: the agent can neither cancel the first nor end the second.
+#[tokio::test]
+async fn dormant_imports_and_indefinite_owner_pauses_stay_with_the_owner() {
+    let f = setup().await;
+    let c = f.conversation.clone();
+    let g = grant(&f, &c).await;
+    asking_turn(&f, &c, "turn").await;
+    let dormant = Uuid::new_v4();
+    f.store
+        .import_dormant_timer_for(
+            &f.token,
+            &f.owner,
+            &TimerImportRequest {
+                namespace: dormant,
+                source_namespace: "synthetic-v1".into(),
+                source_timer_id: "still-v1".into(),
+                source_enabled: true,
+                schedule: TimerSchedule::Interval {
+                    every_ms: 3_600_000,
+                },
+            },
+            &TimerTarget {
+                conversation_id: c.clone(),
+                label: "Owner still-v1".into(),
+                source_thread_id: "synthetic-thread".into(),
+            },
+        )
+        .await
+        .unwrap();
+    for (key, operation, until) in [
+        ("d1", AgentTimerOperation::Cancel, None),
+        ("d2", AgentTimerOperation::Pause, Some(now_ms() + DAY)),
+        ("d3", AgentTimerOperation::Resume, None),
+        ("d4", AgentTimerOperation::SkipNext, None),
+    ] {
+        assert_eq!(
+            f.store
+                .control_agent_timer(&g, &c, dormant, &control(key, operation, until))
+                .await,
+            refused("agent_timer_dormant")
+        );
+    }
+    let check = owner_timer(&f, &c, "held").await;
+    f.store
+        .pause_timer(&f.token, &f.owner, check, Some(FOREVER_MS))
+        .await
+        .unwrap();
+    for (key, operation, until) in [
+        ("o1", AgentTimerOperation::Pause, Some(now_ms() + DAY)),
+        ("o2", AgentTimerOperation::Pause, None),
+        ("o3", AgentTimerOperation::Resume, None),
+    ] {
+        assert_eq!(
+            f.store
+                .control_agent_timer(&g, &c, check, &control(key, operation, until))
+                .await,
+            refused("agent_timer_owner_paused")
+        );
+    }
+    let policy = f
+        .store
+        .timer_policy(&f.token, &f.owner, check)
+        .await
+        .unwrap();
+    assert_eq!(policy.pause_until_ms, Some(FOREVER_MS));
+}

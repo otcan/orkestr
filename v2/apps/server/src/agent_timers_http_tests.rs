@@ -199,6 +199,8 @@ fn refusal_codes_map_to_statuses() {
         ("agent_timer_skip_once", 422),
         ("agent_timer_conflict", 409),
         ("agent_timer_ended", 409),
+        ("agent_timer_dormant", 409),
+        ("agent_timer_owner_paused", 409),
     ] {
         let Error(actual, actual_code, _) = failure(ResourceError::Conflict(code));
         assert_eq!((actual.as_u16(), actual_code), (status, code));
