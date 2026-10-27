@@ -178,6 +178,16 @@ impl Store {
         sqlx::query("UPDATE reasoning_inbox SET state='consumed',admitted_run_id=? WHERE conversation_id=? AND sequence=?")
             .bind(run_id.to_string()).bind(claim.conversation_id.to_string()).bind(claim.scope_sequence)
             .execute(&mut *tx).await.map_err(db)?;
+        // A burst queued behind a busy Deep turn joins this one run, consumed
+        // in this same commit (see deep_groups).
+        super::deep_groups::form(
+            &mut tx,
+            &claim.conversation_id,
+            claim.scope_sequence,
+            window.as_deref(),
+            &run_id.to_string(),
+        )
+        .await?;
         sqlx::query("UPDATE session_bindings SET state='busy' WHERE id=?")
             .bind(binding_id.to_string())
             .execute(&mut *tx)

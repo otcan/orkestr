@@ -162,6 +162,51 @@ async fn status_for(
                     return Ok(Json(value).into_response());
                 }
             }
+            if let (false, Some(run)) = (fast, query.run_id.as_ref()) {
+                // Grouped Deep turn: the inputs this one run answers, in
+                // arrival order (head first). Absent for a single-input run,
+                // so that shape is unchanged. Channel adapters settle every
+                // grouped input with this run's final.
+                let group = state
+                    .store
+                    .deep_run_group_authenticated(
+                        &browser::credential(&headers)?,
+                        &owner,
+                        &conversation,
+                        run,
+                    )
+                    .await
+                    // Unlike the Fast quote marker this settles inputs: a
+                    // store error must not read as a single-input run, or the
+                    // adapter would settle the head without its group.
+                    .map_err(|_| {
+                        Error(
+                            StatusCode::SERVICE_UNAVAILABLE,
+                            "store_unavailable",
+                            "Execution status unavailable",
+                        )
+                    })?;
+                if !group.is_empty() {
+                    let mut value = serde_json::to_value(&status).map_err(|_| {
+                        Error(
+                            StatusCode::SERVICE_UNAVAILABLE,
+                            "invalid_projection",
+                            "Execution status unavailable",
+                        )
+                    })?;
+                    value["grouped_inputs"] = group
+                        .into_iter()
+                        .map(|(message, event, request_key)| {
+                            serde_json::json!({
+                                "message_id": message,
+                                "event_id": event,
+                                "request_key": request_key,
+                            })
+                        })
+                        .collect();
+                    return Ok(Json(value).into_response());
+                }
+            }
             Ok(Json(status).into_response())
         }
         Some(_) => Err(Error(

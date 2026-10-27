@@ -3,6 +3,15 @@ use crate::Store;
 
 pub(crate) async fn downgrade_empty(store: &Store) {
     let mut tx = store.pool.begin().await.unwrap();
+    // Migration 81 down: the Deep grouping switch is a preference only.
+    sqlx::raw_sql("ALTER TABLE conversation_settings DROP COLUMN deep_grouping;")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM _sqlx_migrations WHERE version=81")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
     // Migration 80 down: only with no live auxiliary Fast slot, restore the
     // single canonical Fast/Deep index and drop the slot column.
     let slots: i64 = sqlx::query_scalar(

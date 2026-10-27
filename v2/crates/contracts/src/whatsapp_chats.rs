@@ -58,6 +58,7 @@ impl WhatsAppChatRequest {
             reply_prefix: None,
             reply_footer: None,
             review_before_accepting: false,
+            deep_grouping: None,
         }
     }
     pub fn is_valid(&self) -> bool {

@@ -207,6 +207,47 @@ async fn settings_round_trip_render_and_auth() {
 }
 
 #[tokio::test]
+async fn deep_grouping_switch_defaults_on_and_survives_an_omitting_update() {
+    let case = case().await;
+    let auth = case.auth();
+    let path = case.path("/settings");
+    let (status, value) = send(&case.state, "GET", &path, &[&auth], "").await;
+    assert_eq!(
+        (status, value["deep_grouping"].as_bool()),
+        (200, Some(true))
+    );
+    let off = serde_json::json!({"expected_revision":0,"provider":"codex","honor_no_reply":true,"deep_grouping":false});
+    let (status, value) = send(&case.state, "PUT", &path, &[&auth], &off.to_string()).await;
+    assert_eq!(
+        (status, value["deep_grouping"].as_bool()),
+        (200, Some(false)),
+        "{value}"
+    );
+    // The same request again at the preceding revision is idempotent.
+    let (status, value) = send(&case.state, "PUT", &path, &[&auth], &off.to_string()).await;
+    assert_eq!((status, value["revision"].as_i64()), (200, Some(1)));
+    // A settings change that omits the switch keeps it off.
+    let footer = serde_json::json!({"expected_revision":1,"provider":"codex","honor_no_reply":true,"reply_footer":"-- v2"});
+    let (status, value) = send(&case.state, "PUT", &path, &[&auth], &footer.to_string()).await;
+    assert_eq!(
+        (status, value["deep_grouping"].as_bool()),
+        (200, Some(false)),
+        "{value}"
+    );
+    let on = serde_json::json!({"expected_revision":2,"provider":"codex","honor_no_reply":true,"reply_footer":"-- v2","deep_grouping":true});
+    let (status, value) = send(&case.state, "PUT", &path, &[&auth], &on.to_string()).await;
+    assert_eq!(
+        (status, value["deep_grouping"].as_bool()),
+        (200, Some(true)),
+        "{value}"
+    );
+    let bad = serde_json::json!({"expected_revision":3,"provider":"codex","honor_no_reply":true,"deep_grouping":"off"});
+    let (status, _) = send(&case.state, "PUT", &path, &[&auth], &bad.to_string()).await;
+    assert_eq!(status, 400);
+    case.finish().await;
+}
+
+#[tokio::test]
 async fn legacy_workers_register_list_and_transition() {
     let case = case().await;
     let auth = case.auth();

@@ -33,7 +33,35 @@ pub(crate) async fn current(
         review_before_accepting: row
             .try_get::<i64, _>("review_before_accepting")
             .is_ok_and(|value| value == 1),
+        // Absent only on a test store downgraded below 0081: default on.
+        deep_grouping: row
+            .try_get::<i64, _>("deep_grouping")
+            .map_or(true, |value| value != 0),
     })
+}
+
+/// Whether the next Deep admission of `conversation` may group a burst of
+/// queued owner inputs. Read inside the admission transaction (live, no
+/// cache). A historical test store below 0081 never groups.
+pub(crate) async fn deep_grouping(
+    conn: &mut sqlx::SqliteConnection,
+    conversation: &str,
+) -> std::result::Result<bool, sqlx::Error> {
+    let present: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM pragma_table_info('conversation_settings') WHERE name='deep_grouping'",
+    )
+    .fetch_one(&mut *conn)
+    .await?;
+    if present == 0 {
+        return Ok(false);
+    }
+    let value: Option<i64> = sqlx::query_scalar(
+        "SELECT deep_grouping FROM conversation_settings WHERE conversation_id=?",
+    )
+    .bind(conversation)
+    .fetch_optional(&mut *conn)
+    .await?;
+    Ok(value.is_none_or(|value| value != 0))
 }
 
 /// Launch parameters for the next Deep/Worker turn of `conversation`, read
@@ -112,6 +140,9 @@ impl Store {
                 && s.reply_prefix == update.reply_prefix
                 && s.reply_footer == update.reply_footer
                 && s.review_before_accepting == update.review_before_accepting
+                && update
+                    .deep_grouping
+                    .is_none_or(|grouping| grouping == s.deep_grouping)
         };
         if before.revision != update.expected_revision {
             if before.revision == update.expected_revision + 1 && same(&before) {
@@ -144,6 +175,16 @@ impl Store {
         .execute(&mut *tx)
         .await
         .map_err(unavailable)?;
+        // The upsert leaves the switch alone: an omitted value keeps the
+        // current one (a fresh row has the default, on).
+        if let Some(grouping) = update.deep_grouping {
+            sqlx::query("UPDATE conversation_settings SET deep_grouping=? WHERE conversation_id=?")
+                .bind(i64::from(grouping))
+                .bind(conversation.to_string())
+                .execute(&mut *tx)
+                .await
+                .map_err(unavailable)?;
+        }
         let after = current(&mut tx, conversation).await?;
         tx.commit().await.map_err(unavailable)?;
         Ok(after)

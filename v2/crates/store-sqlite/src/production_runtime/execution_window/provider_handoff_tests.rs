@@ -85,6 +85,7 @@ async fn provider_handoff_concurrent_decisions_commit_one_and_settings_cannot_by
         reply_prefix: None,
         reply_footer: None,
         review_before_accepting: false,
+        deep_grouping: None,
     };
     assert!(matches!(
         fresh

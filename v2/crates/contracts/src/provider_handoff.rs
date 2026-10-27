@@ -45,6 +45,7 @@ impl ProviderHandoffRequest {
                 reply_prefix: None,
                 reply_footer: None,
                 review_before_accepting: false,
+                deep_grouping: None,
             }
             .is_valid()
     }

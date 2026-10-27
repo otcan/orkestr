@@ -15,6 +15,7 @@ from . import continuation_guard
 from . import auto_steer
 from . import recovery
 from . import thread_ask_relay
+from . import deep_group
 from .notices import TEMPLATES
 from .participants import compose
 from .rust_client import ClientError
@@ -822,6 +823,9 @@ class Worker:
         question_ids = ids
         if independent_fast:
             question_ids = {statuses["deep"]["run_id"]} if statuses.get("deep") else set()
+        # A grouped Deep turn answers the burst queued behind it: fold those
+        # inputs into this head so they settle with its one final.
+        deep_group.fold(self, data, statuses.get("deep"), ids)
         self.capture_questions(data, events, question_ids)
         record_transport_activity(data, statuses, ids)
         if independent_fast:
@@ -898,7 +902,8 @@ class Worker:
         if len(matches) != 1 or matches[0].get("payload_removed") is not False or any(matches[0].get(k) != deep[k] for k in ("run_id", "completion_event_id")) or matches[0].get("payload_id") != data["deep_payload"]["payload_id"]:
             raise Refused("accepted_history_mismatch")
         text = self.timer_final(data, data["deep_payload"]["text"])
-        if text is not None and data.get("origin") is None and repeats_fast(data, text):
+        if (text is not None and data.get("origin") is None and not deep_group.grouped(data)
+                and repeats_fast(data, text)):
             # "Thanks" answered twice: the Fast reply already said this.
             print("orkestr-v2-wa-adapter deep_final_repeats_fast conversation=%s input=%s"
                   % (getattr(self.client, "conversation", "?"), data["remote_id"]), file=sys.stderr, flush=True)
@@ -910,6 +915,7 @@ class Worker:
         reply = {"id": deep["acceptance_event_id"], "role": "assistant", "state": "completed",
                  "phase": "final_answer", "source": "rust-v2-pilot", "parentMessageId": data["remote_id"], "text": text}
         reply.update(self.provider_identity(run_id=deep["run_id"]))
+        deep_group.quote(data, reply)
         if text is None:
             # V1 never transports an exact NO_REPLY; it acknowledges it as no_reply.
             reply.update(text="NO_REPLY", noReply=True)
@@ -1210,7 +1216,8 @@ class Worker:
                 self.accept_role(data, "fast", ids)
             except Exception:
                 pass
-        text = auto_steer.carry(self.ledger, data, data.get("intake_text") or compose(data))
+        text = deep_group.carry(self.ledger, data, data.get("intake_text") or compose(data))
+        text = auto_steer.carry(self.ledger, data, text)
         previous = data["intake"]["message_id"]
         for key in RESET_KEYS:
             data.pop(key, None)

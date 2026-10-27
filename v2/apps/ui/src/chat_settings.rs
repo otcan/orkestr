@@ -54,6 +54,7 @@ impl SettingsForm {
             reply_prefix: optional(&self.reply_prefix),
             reply_footer: optional(&self.reply_footer),
             review_before_accepting: self.review_before_accepting,
+            deep_grouping: None,
         };
         if update.is_valid() {
             Ok(update)

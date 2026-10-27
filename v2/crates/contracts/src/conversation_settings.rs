@@ -72,6 +72,10 @@ pub struct ConversationSettingsUpdate {
     /// (false) auto-accepts owner turns like V1; see `ConversationSettings`.
     #[serde(default)]
     pub review_before_accepting: bool,
+    /// Deep burst grouping switch. `None` keeps the current value, so a
+    /// model or provider change never re-enables a disabled switch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deep_grouping: Option<bool>,
 }
 
 fn model_valid(value: &str) -> bool {
@@ -136,6 +140,15 @@ pub struct ConversationSettings {
     /// owner's behalf. True: proposals wait for a manual "Accept".
     #[serde(default)]
     pub review_before_accepting: bool,
+    /// Deep burst grouping (default on): owner inputs that queued while a
+    /// Deep turn was busy are answered together by the next Deep turn (at
+    /// most 12, within a byte budget). Off: one Deep turn per input, as
+    /// before. Read live at each Deep admission.
+    #[serde(default = "deep_grouping_default")]
+    pub deep_grouping: bool,
+}
+fn deep_grouping_default() -> bool {
+    true
 }
 impl ConversationSettings {
     pub fn defaults(conversation_id: ConversationId) -> Self {
@@ -152,6 +165,7 @@ impl ConversationSettings {
             provider_generation: 0,
             updated_at_ms: None,
             review_before_accepting: false,
+            deep_grouping: true,
         }
     }
 
@@ -274,6 +288,7 @@ mod tests {
             reply_prefix: Some("orkestr:".into()),
             reply_footer: Some("-- sent by Orkestr\nreply STOP".into()),
             review_before_accepting: false,
+            deep_grouping: None,
         }
     }
 
