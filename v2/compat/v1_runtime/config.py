@@ -17,7 +17,7 @@ BINDING_FIELDS = SCOPE_FIELDS | {"enabled", "revoked", "progress_updates", "atta
 # Optional binding fields and their defaults.
 OPTIONAL_BINDING_FIELDS = {"max_input_age_seconds": 30 * 60, "participants": [], "owner_label": "Owner",
                            "instructions_path": None, "fast_reply_policy": "legacy",
-                           "auto_steer": None}
+                           "auto_steer": None, "owner_only_verified": False}
 # Group participants other than the owner. The owner is only ever the verified
 # `allowed_principals`; a participant can never hold the owner role.
 PARTICIPANT_ROLES = ("member", "none")
@@ -128,7 +128,7 @@ def binding(value, owner):
             raise ValueError("binding_scope")
     if value["automatic_accept_roles"] != ["fast", "deep"] or value["outbound_role"] != "deep":
         raise ValueError("config_accept_policy")
-    for key in ("enabled", "revoked", "progress_updates", "attachments"):
+    for key in ("enabled", "revoked", "progress_updates", "attachments", "owner_only_verified"):
         if not isinstance(value[key], bool):
             raise ValueError("config_activation")
     if not isinstance(value["excluded_public_ids"], list) or not all(isinstance(x, str) for x in value["excluded_public_ids"]):

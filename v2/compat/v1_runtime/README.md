@@ -88,6 +88,7 @@ Each binding is `<bindings_dir>/<remote_thread_id>.json`:
 | `revoked` | `true` permanently withdraws the route (intake and export answer 410) |
 | `progress_updates` | Export intermediate Deep progress for this binding |
 | `fast_reply_policy` | Optional: `legacy` (default) preserves the progress-dependent Fast policy. Explicit `owner_only` enables immediate Fast replies for a group the operator verified has only owner-visible recipients; participant grants do not establish that visibility. `disabled` suppresses Fast replies (for example a coordinator chat). |
+| `owner_only_verified` | Optional, default `false`. Replies in every chat have server-local paths scrubbed (see `outbound_text.py`) unless the operator checked the WhatsApp group holds only the owner and the bot and set this to `true`. `fast_reply_policy` alone does not keep paths. A binding that lists any `participants` (`member` or `none`) is scrubbed even when marked. Adapters before this field refuse a binding that contains it (`binding_fields`): deploy the adapter first. |
 | `auto_steer` | Optional: `off` (default), `question` or `running`; enable per binding. See "Auto-steer" below. Adapters before this field refuse a binding that contains it (`binding_fields`). |
 | `attachments` | Accept inbound attachments for this binding |
 | `max_outstanding_inputs` | 1–64 unsettled inputs before intake answers 409. With `fast_reply_policy: "owner_only"` it is a soft limit: inputs above it are accepted and queued (`capacity_queued`) and only 64 unsettled chat inputs (`HARD_MAX_OUTSTANDING`) answer 409 `binding_capacity_reached` |
@@ -229,14 +230,17 @@ outstanding. Rows with `steer_fallback` or settled steered rows need nothing.
 ### Owner-only Fast intake
 
 With explicit `fast_reply_policy: "owner_only"`, each verified WhatsApp owner
-event is admitted individually, even while an earlier Deep turn is running.
+or listed-member event is admitted individually, even while an earlier Deep
+turn is running. (Before, a member message waited on the serial path for the
+running Deep turn and held every later owner message, and its Fast reply,
+behind it.)
 Each pass admits every pending owner input in FIFO order (no per-pass
 throttle, no grouping, no quiet window), using the existing owner HTTP message
 and execution-window APIs. A deadline-continued or re-admitted owner row is
 admitted the same way instead of holding later owner messages until it is the
 ledger head. It does not pass an earlier unadmitted
-member, local-agent input or frozen legacy burst. Member/local inputs and other
-Fast policies keep their existing behavior.
+local-agent input or frozen legacy burst. Local-agent/V1-relayed inputs and
+other Fast policies keep their existing behavior.
 
 Fast results are observed, exported once, and accepted independently of Deep.
 The original message/event IDs select the exact producing run; a separate Fast

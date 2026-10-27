@@ -53,20 +53,79 @@ class IntakeFastTests(fixture.IntakeBase):
         drive(self.worker)
         self.assertEqual(len(self.fast()), 12)
 
-    def test_no_owner_or_consent_is_inferred_and_unadmitted_member_keeps_fifo(self):
+    def test_no_owner_or_consent_is_inferred_and_unadmitted_local_agent_keeps_fifo(self):
         self.enqueue("first")
-        self.enqueue("member", role="member")
+        self.enqueue("agent", role="v1_agent")
         self.enqueue("later")
         drive(self.worker)
         self.assertEqual([body["text"] for body in self.mutations("/messages")], ["Request first"])
-        for role in (None, "member", "v1_owner", "v1_agent", "v1_external"):
+        for role in (None, "v1_owner", "v1_agent", "v1_external"):
             data = dict(phase="queued", author=dict(role=role))
             self.assertFalse(eligible(self.worker, data))
+        self.assertTrue(eligible(self.worker, dict(phase="queued", author=dict(role="member"))))
+        self.assertFalse(eligible(self.worker, dict(phase="queued", origin="timer", author=dict(role="member"))))
+
+    def test_member_message_does_not_hold_a_later_owner_fast_behind_running_deep(self):
+        # Biofuture 2026-10-27: a member message sent during a running Deep turn
+        # waited for that turn on the serial path, and the owner's next message
+        # (and its Fast reply) waited behind it for ~60 s.
+        head = self.enqueue("head")
+        self.worker.run_once(fixture.Stop())
+        self.assertEqual(self.peer.runs[0, "deep"]["phase"], "running")
+        member = self.enqueue("member", role="member")
+        owner = self.enqueue("owner")
+        self.worker.run_once(fixture.Stop())
+        self.assertEqual([body["text"] for body in self.mutations("/messages")],
+                         ["Request head", "Request member", "Request owner"], "arrival order is kept")
+        self.assertEqual([message["sourceInputId"] for message in self.fast()],
+                         [head["remote_id"], member["remote_id"], owner["remote_id"]])
+        self.assertEqual(self.row("member")["burst"], [])
+        self.assertEqual(self.peer.runs[0, "deep"]["phase"], "running")
+        self.assertNotIn((1, "deep"), self.peer.runs, "Core's Deep remains serialized")
         for policy in ("disabled", "legacy"):
             self.worker.fast_reply_policy = policy
             before = copy.deepcopy(self.peer.mutations)
             drive(self.worker)
             self.assertEqual(self.peer.mutations, before)
+
+    def test_member_owner_member_burst_is_admitted_once_each_in_order_across_restart(self):
+        head = self.enqueue("head")
+        self.worker.run_once(fixture.Stop())
+        burst = [self.enqueue("m1", role="member"), self.enqueue("o1"),
+                 self.enqueue("m2", role="member"), self.enqueue("o2")]
+        for _ in range(3):
+            self.worker.run_once(fixture.Stop())
+        texts = ["Request " + name for name in ("head", "m1", "o1", "m2", "o2")]
+        self.assertEqual([body["text"] for body in self.mutations("/messages")], texts)
+        self.assertEqual([message["sourceInputId"] for message in self.fast()],
+                         [data["remote_id"] for data in [head] + burst], "one Fast each, none skipped")
+        self.assertTrue(all(self.row(name)["burst"] == [] for name in ("m1", "o1", "m2", "o2")))
+        self.assertEqual([key for key in self.peer.runs if key[1] == "deep"], [(0, "deep")],
+                         "Core's Deep remains serialized")
+        before = copy.deepcopy(self.peer.mutations)
+        self.worker = self.new_worker()  # Stop and restart: nothing is admitted or exported twice.
+        for _ in range(2):
+            self.worker.run_once(fixture.Stop())
+        self.assertEqual(self.mutations("/messages"), [body for path, body in before if path == "/messages"])
+        self.assertEqual(len(self.fast()), 5)
+
+    def test_member_is_not_admitted_ahead_of_an_unadmitted_local_agent_input(self):
+        self.enqueue("first")
+        self.enqueue("agent", role="v1_agent")
+        self.enqueue("member", role="member")
+        drive(self.worker)
+        self.assertEqual([body["text"] for body in self.mutations("/messages")], ["Request first"])
+        self.assertNotIn("intake", self.row("member"))
+
+    def test_member_message_during_a_timer_turn_is_admitted_after_the_timer(self):
+        timer, _ = self.ledger.enqueue_timer(dict(message_id=identity(7), event_id=identity(8), sequence=1,
+                                                  request_key="timer-key", namespace="ns", claim_id="claim"))
+        self.enqueue("member", role="member")
+        self.enqueue("owner")
+        drive(self.worker)
+        self.assertEqual([body["text"] for body in self.mutations("/messages")],
+                         ["Request member", "Request owner"], "the adopted timer is never re-posted")
+        self.assertNotIn("burst", self.row(timer["public_id"]))
 
     def test_ledger_and_server_capacity_are_preserved_without_bypassing_a_queued_window(self):
         self.ledger.max_outstanding = 2

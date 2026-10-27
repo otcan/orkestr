@@ -6,8 +6,8 @@ is exported only when its text ends at a sentence or paragraph boundary, or
 once the same snapshot has stayed the latest one for `PROGRESS_HOLD_S` (the
 item stopped growing, so it is finished).
 
-Replies in a chat shared with other members (every chat that is not
-owner-only) may reference files on the host ("[Deck](/var/lib/.../deck.pptx)").
+Replies in a chat shared with other members (every chat whose binding is not
+marked `owner_only_verified` with no participants) may reference files on the host ("[Deck](/var/lib/.../deck.pptx)").
 WhatsApp cannot open such a link and the full path must not reach other
 members. The adapter has no outbound binary attachment transport (exports are
 text; V1 only sends the reply documents it renders itself), so a link to a
@@ -16,8 +16,8 @@ the file name marked "(not attached)". Any other absolute path under a host
 folder root (/home, /var, /opt, /srv, /tmp, /etc, /root) -- a folder or a file
 without an extension -- becomes "the server folder <last segment>". Code
 (fenced blocks, inline spans), URLs and API routes (a path after an HTTP verb,
-or under /api, /run, /data) are never touched, and owner-only chats are not
-scrubbed at all.
+or under /api, /run, /data) are never touched, and verified owner-only chats
+are not scrubbed at all.
 """
 import re
 from urllib.parse import unquote

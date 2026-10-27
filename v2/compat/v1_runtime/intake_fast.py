@@ -31,9 +31,18 @@ SCAN_PAGES = 20
 SCAN_BUDGET_S = 3.0
 
 
+# Chat authors verified at HTTP intake whose events are admitted one by one.
+# A listed group member is included: under the serial path an unadmitted member
+# message held every later owner message (and its Fast reply) until the
+# running Deep turn ended, because owner admission must not pass it. Admitting
+# both in arrival order keeps Core's message order and Deep stays serialized.
+# Local-agent and V1-relayed authors keep the serial path.
+ISOLATED_ROLES = ("owner", "member")
+
+
 def isolated(worker, data):
     return (worker.fast_reply_policy == "owner_only" and
-            (data.get("author") or {}).get("role") == "owner" and not data.get("origin"))
+            (data.get("author") or {}).get("role") in ISOLATED_ROLES and not data.get("origin"))
 
 
 def eligible(worker, data):
@@ -150,8 +159,8 @@ def drive(worker):
             # later input: it either joins the running turn or comes back as
             # a fresh message after it. Do not hold later Fast replies on it.
             continue
-        # Do not admit an owner event ahead of an earlier, unadmitted member,
-        # local-agent input or frozen legacy burst. The serial path owns it.
+        # Do not admit a chat event ahead of an earlier, unadmitted local-agent
+        # input or frozen legacy burst. The serial path owns it.
         if not eligible(worker, data) or admissions >= MAX_ADMISSIONS:
             break
         admissions += 1
