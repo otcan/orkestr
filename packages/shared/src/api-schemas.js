@@ -296,6 +296,8 @@ export const threadMessagesQuerySchema = {
       since: stringValue,
       before: stringValue,
       limit: stringValue,
+      // Honoured only for CLI machine auth (the scoped group relay); ignored otherwise.
+      includeNoReply: stringValue,
     },
     additionalProperties: false,
   },

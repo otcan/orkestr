@@ -15,6 +15,7 @@ import {isReplyDocument, scopedGroupReplyChunks} from './whatsapp-scoped-group-f
 import {createRelayReplyFiles} from './whatsapp-scoped-relay-reply-files.js';
 import {createProgressBudget, progressPhases, progressPolicy} from './scoped-group-progress.js';
 import {createRouteAge} from './scoped-group-route-age.js';
+import {createMessagePageReader, isSilentNoReply} from './scoped-group-message-pages.js';
 import {createDynamicGroupRegistry, createDynamicGroupView, eligibleGroups, validateDynamicGroups} from './whatsapp-scoped-dynamic-groups.js';
 
 const key = value => crypto.createHash('sha256').update(value).digest('hex');
@@ -93,7 +94,7 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
       if (threadSuppressesUpdates(thread)) return false;
       if (!route) return {active:false};
       const {messages} = await answersFor(group, route, false);
-      if (messages.some(m => m.parentMessageId === route.message_id && String(m.text || '').trim() === 'NO_REPLY')) {
+      if (messages.some(m => m.parentMessageId === route.message_id && isSilentNoReply(m))) {
         acknowledgements.mark(input.id, 'no_reply'); return false;
       }
       return acknowledgementActivity({api,group,thread,route,messages,now});
@@ -182,7 +183,7 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
     return {thread, metadata};
   }
 
-  const progressBudget = createProgressBudget(db, now), routeAge = createRouteAge(db, now);
+  const progressBudget = createProgressBudget(db, now), routeAge = createRouteAge(db, now), readPage = createMessagePageReader({api, now, log});
   async function answersFor(group, route, suppressUpdates = false) {
     // Walk older pages until the parent is found, so a long-running turn cannot
     // lose its final answer merely because another turn produced many messages.
@@ -190,7 +191,7 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
     const answers = new Map();
     const context = new Map();
     for (let pageNumber = 0; pageNumber < 100; pageNumber++) {
-      const page = await api(`/api/threads/${encodeURIComponent(group.threadId)}/messages?limit=200${before ? `&before=${before}` : ''}`);
+      const page = await readPage(group.threadId, {limit: 200, before});
       const messages = page.messages || [];
       for (const message of messages) {
         context.set(message.id, message);
@@ -220,8 +221,7 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
   });
   async function deliverAnswerOnce(input, group, answer, messages) {
     const text = String(answer.text || '').trim();
-    if (text === 'NO_REPLY') acknowledgements.mark(input.id, 'no_reply');
-    if (!text || text === 'NO_REPLY') return;
+    if (!text || isSilentNoReply(answer)) return void (text && acknowledgements.mark(input.id, 'no_reply')); // Silent: never sent.
     const payloadId = key(`${input.id}:${answer.id}`);
     let saved = db.prepare('SELECT chunks FROM reply_payloads WHERE id=?').get(payloadId);
     if (!saved) {
