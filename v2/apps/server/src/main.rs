@@ -13,10 +13,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("{output}");
         return Ok(());
     }
-    tokio::runtime::Builder::new_multi_thread()
+    let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
-        .build()?
-        .block_on(serve())
+        .build()?;
+    let result = runtime.block_on(serve());
+    // No detached task or blocking job may delay exit after serve() returns.
+    runtime.shutdown_timeout(std::time::Duration::from_secs(2));
+    result
 }
 
 async fn serve() -> Result<(), Box<dyn std::error::Error>> {
@@ -139,7 +142,7 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         app = orkestr_v2_server::with_static_ui(app, &PathBuf::from(dist))?;
     }
     // Host CPU, memory, disk, network and service samples for the metrics panel.
-    orkestr_v2_server::host_metrics::start(&home);
+    let host_metrics = orkestr_v2_server::host_metrics::start(&home, deploy_drain.clone());
     // Request ids, per-request logs and metrics for the API and the UI assets.
     let app = orkestr_v2_server::observability::layer(app);
     if let Ok(bind) =
@@ -178,6 +181,8 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     // An open SSE connection must not delay the owned execution fence/cleanup.
     // Stop accepting HTTP and stop the supervisor before waiting for HTTP drain.
     let _ = shutdown.send(true);
+    // Kills a running `du` so the stop never waits for a disk scan.
+    host_metrics.shutdown().await;
     if let Some(restricted) = restricted {
         restricted.shutdown().await;
     }

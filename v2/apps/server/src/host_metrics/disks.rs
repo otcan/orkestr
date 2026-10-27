@@ -1,7 +1,11 @@
 //! Local filesystems (like `df -l`) and the largest directories on `/`
 //! (like `du -x -d 2`, hourly, idle I/O priority, readable paths only).
 use orkestr_v2_contracts::{HostDirectories, HostDirectory, HostMount};
-use std::time::Duration;
+use std::{
+    process::{Command, Stdio},
+    sync::atomic::{AtomicBool, Ordering},
+    time::{Duration, Instant},
+};
 
 /// Real, local filesystems; pseudo, network and overlay mounts are skipped.
 const LOCAL: [&str; 10] = [
@@ -10,7 +14,10 @@ const LOCAL: [&str; 10] = [
 const MAX_MOUNTS: usize = 16;
 pub(crate) const DIRECTORY_EVERY: Duration = Duration::from_secs(3600);
 const DIRECTORY_ENTRIES: usize = 15;
-const DU_TIMEOUT: Duration = Duration::from_secs(900);
+/// Bounded: a slow `du` is abandoned well before the next hourly run.
+pub(crate) const DU_TIMEOUT: Duration = Duration::from_secs(120);
+/// How quickly a running measurement notices cancel (server shutdown).
+const DU_POLL: Duration = Duration::from_millis(100);
 
 /// `/proc/self/mounts` octal escapes (`\040` for a space).
 fn unescape(field: &str) -> String {
@@ -99,49 +106,84 @@ pub(crate) fn parse_du(text: &str) -> (u64, Vec<HostDirectory>) {
     (root, entries)
 }
 
-/// One measurement; blocking for up to `DU_TIMEOUT`.
-pub(crate) fn measure_directories() -> Option<(u64, Vec<HostDirectory>)> {
-    let mut child = std::process::Command::new("/usr/bin/ionice")
-        .args([
-            "-c3",
-            "/usr/bin/nice",
-            "-n19",
-            "/usr/bin/du",
-            "-x",
-            "-d",
-            "2",
-            "-B1",
-            "/",
-        ])
+/// `du -x -d 2 -B1 /` at idle I/O and CPU priority.
+pub(crate) fn du_command() -> Command {
+    let mut command = Command::new("/usr/bin/ionice");
+    command.args([
+        "-c3",
+        "/usr/bin/nice",
+        "-n19",
+        "/usr/bin/du",
+        "-x",
+        "-d",
+        "2",
+        "-B1",
+        "/",
+    ]);
+    command
+}
+
+/// Runs `command` (blocking) and returns its stdout once it exits. Returns
+/// `None` when it cannot start, exceeds `timeout`, or `cancel` is set; the
+/// child is then killed and reaped before returning, within `DU_POLL`.
+pub(crate) fn run_bounded(
+    mut command: Command,
+    cancel: &AtomicBool,
+    timeout: Duration,
+) -> Option<String> {
+    use std::os::unix::process::CommandExt;
+    if cancel.load(Ordering::Acquire) {
+        return None;
+    }
+    command
         .env_clear()
         .env("PATH", "/usr/bin:/bin")
         .env("LC_ALL", "C")
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .ok()?;
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    // SAFETY: between fork and exec the child only issues one raw `prctl`
+    // syscall (async-signal-safe, no allocation or locking). The kernel then
+    // SIGKILLs the child if the spawning thread (and so the server) dies;
+    // that thread stays in the wait loop below for the child's whole life.
+    unsafe {
+        command.pre_exec(|| {
+            rustix::process::set_parent_process_death_signal(Some(rustix::process::Signal::KILL))
+                .map_err(std::io::Error::from)
+        });
+    }
+    let mut child = command.spawn().ok()?;
     let mut stdout = child.stdout.take()?;
     let reader = std::thread::spawn(move || {
         let mut text = String::new();
         let _ = std::io::Read::read_to_string(&mut stdout, &mut text);
         text
     });
-    let started = std::time::Instant::now();
+    let started = Instant::now();
     loop {
         match child.try_wait() {
             Ok(Some(_)) => break,
-            Ok(None) if started.elapsed() < DU_TIMEOUT => {
-                std::thread::sleep(Duration::from_millis(500))
+            Ok(None) if !cancel.load(Ordering::Acquire) && started.elapsed() < timeout => {
+                std::thread::sleep(DU_POLL)
             }
             _ => {
                 let _ = child.kill();
                 let _ = child.wait();
+                // The reader ends on EOF now that the child is gone.
                 return None;
             }
         }
     }
+    reader.join().ok()
+}
+
+/// One measurement; blocking for up to `DU_TIMEOUT`, or until `cancel`.
+pub(crate) fn measure_directories(
+    command: Command,
+    cancel: &AtomicBool,
+) -> Option<(u64, Vec<HostDirectory>)> {
     // `du` exits non-zero when some directories are unreadable; its totals are still valid.
-    let text = reader.join().ok()?;
+    let text = run_bounded(command, cancel, DU_TIMEOUT)?;
     Some(parse_du(&text))
 }
 

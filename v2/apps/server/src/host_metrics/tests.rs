@@ -377,3 +377,152 @@ fn mounts_and_du_output_parse_like_df_and_du() {
         .iter()
         .any(|m| m.mount == "/" && m.used_bytes <= m.total_bytes));
 }
+
+/// `sh` writes its pid to `pidfile`, then becomes `sleep 60` (same pid).
+fn long_child(pidfile: &Path) -> std::process::Command {
+    let mut command = std::process::Command::new("/bin/sh");
+    command
+        .arg("-c")
+        .arg("echo $$ > \"$0\"; exec sleep 60")
+        .arg(pidfile);
+    command
+}
+
+fn scratch(name: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!(
+        "orkestr-host-metrics-{name}-{}-{}",
+        std::process::id(),
+        now_ms()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+/// Waits up to 5 s for the child's pid.
+fn child_pid(pidfile: &Path) -> u32 {
+    let started = Instant::now();
+    loop {
+        if let Some(pid) = std::fs::read_to_string(pidfile)
+            .ok()
+            .and_then(|text| text.trim().parse().ok())
+        {
+            return pid;
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "child never started"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// Killed and reaped: no `/proc` entry (not even a zombie) remains.
+fn gone(pid: u32) -> bool {
+    !Path::new(&format!("/proc/{pid}")).exists()
+}
+
+#[test]
+fn a_running_measurement_is_killed_and_reaped_on_cancel() {
+    let dir = scratch("cancel");
+    let pidfile = dir.join("pid");
+    let cancel = Arc::new(AtomicBool::new(false));
+    let runner = {
+        let (cancel, command) = (cancel.clone(), long_child(&pidfile));
+        std::thread::spawn(move || disks::run_bounded(command, &cancel, Duration::from_secs(60)))
+    };
+    let pid = child_pid(&pidfile);
+    assert!(!gone(pid));
+    let cancelled = Instant::now();
+    cancel.store(true, Ordering::Release);
+    assert_eq!(runner.join().unwrap(), None);
+    assert!(cancelled.elapsed() < Duration::from_secs(1));
+    assert!(gone(pid), "child {pid} survived cancel");
+    // A cancelled sampler starts no new child, and a timeout also kills.
+    assert_eq!(
+        disks::run_bounded(
+            long_child(&dir.join("never")),
+            &cancel,
+            Duration::from_secs(60)
+        ),
+        None
+    );
+    assert!(!dir.join("never").exists());
+    let timed_out = dir.join("timeout");
+    let quiet = AtomicBool::new(false);
+    let started = Instant::now();
+    assert_eq!(
+        disks::run_bounded(long_child(&timed_out), &quiet, Duration::from_millis(300)),
+        None
+    );
+    assert!(started.elapsed() < Duration::from_secs(2));
+    assert!(gone(child_pid(&timed_out)));
+    assert_eq!(
+        disks::run_bounded(
+            {
+                let mut c = std::process::Command::new("/bin/echo");
+                c.arg("ok");
+                c
+            },
+            &quiet,
+            Duration::from_secs(5)
+        )
+        .as_deref(),
+        Some("ok\n")
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+static SAMPLER_PIDFILE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+fn sampler_child() -> std::process::Command {
+    long_child(SAMPLER_PIDFILE.get().unwrap())
+}
+
+static DRAINING_PIDFILE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+fn draining_child() -> std::process::Command {
+    long_child(DRAINING_PIDFILE.get().unwrap())
+}
+
+fn fast(directories_command: fn() -> std::process::Command) -> Options {
+    Options {
+        tick: Duration::from_millis(20),
+        first_directories_tick: 0,
+        directories_command,
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shutdown_is_prompt_while_a_directory_measurement_runs() {
+    let dir = scratch("shutdown");
+    let pidfile = SAMPLER_PIDFILE.get_or_init(|| dir.join("pid")).clone();
+    let drain = Arc::new(crate::deploy_drain::DeployDrain::default());
+    let sampler = start_with(&dir, drain, fast(sampler_child));
+    let pid = {
+        let pidfile = pidfile.clone();
+        tokio::task::spawn_blocking(move || child_pid(&pidfile))
+            .await
+            .unwrap()
+    };
+    assert!(!gone(pid));
+    let started = Instant::now();
+    sampler.shutdown().await;
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "shutdown took {:?}",
+        started.elapsed()
+    );
+    assert!(gone(pid), "measurement {pid} survived shutdown");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn no_directory_measurement_starts_during_a_deploy_drain() {
+    let dir = scratch("drain");
+    let pidfile = DRAINING_PIDFILE.get_or_init(|| dir.join("pid")).clone();
+    let drain = Arc::new(crate::deploy_drain::DeployDrain::default());
+    drain.set(true);
+    let sampler = start_with(&dir, drain, fast(draining_child));
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(!pidfile.exists(), "du started while draining");
+    sampler.shutdown().await;
+    let _ = std::fs::remove_dir_all(dir);
+}
