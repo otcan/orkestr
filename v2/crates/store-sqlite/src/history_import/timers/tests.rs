@@ -783,3 +783,55 @@ async fn once_timer_on_the_hour_fires_exactly_once() {
     );
     cleanup(store, directory).await;
 }
+
+/// The fired-slot floor holds across the Europe/Berlin fall-back of 2026-10-25
+/// (the repeated 02:00 hour fires once) and never hides a slot still due.
+#[test]
+fn fired_floor_holds_across_berlin_dst_and_keeps_due_slots() {
+    const HOUR: i64 = 3_600_000;
+    let s = 300_000;
+    let at = |text: &str| text.parse::<jiff::Timestamp>().unwrap().as_millisecond();
+    let ten = TimerSchedule::ZonedClock {
+        timezone: "Europe/Berlin".into(),
+        weekday: None,
+        minute_of_day: 10 * 60,
+    };
+    // 10:00 CEST fired raw on Saturday; Sunday's 10:00 is CET (09:00Z).
+    let raw = at("2026-10-24T08:00:00Z");
+    assert_eq!(
+        schedule::next_spread_after(&ten, s, raw + 250, Some(raw)),
+        Ok(at("2026-10-25T09:00:00Z") + s)
+    );
+    // 02:00 occurs twice on 2026-10-25; once fired (raw or spread), the
+    // repeated instant is not scheduled.
+    let two = TimerSchedule::ZonedClock {
+        timezone: "Europe/Berlin".into(),
+        weekday: None,
+        minute_of_day: 2 * 60,
+    };
+    let first = at("2026-10-25T00:00:00Z");
+    let next_day = at("2026-10-26T01:00:00Z") + s;
+    for fired in [first, first + s] {
+        assert_eq!(
+            schedule::next_spread_after(&two, s, fired + 250, Some(fired)),
+            Ok(next_day)
+        );
+    }
+    // No missed run: yesterday's claim does not hide today's pending spread
+    // time, after a long disable or an edit to an earlier time today.
+    let today = at("2026-10-27T09:00:00Z");
+    assert_eq!(
+        schedule::next_spread_after(&ten, s, today + 60_000, Some(today - 3 * 24 * HOUR)),
+        Ok(today + s)
+    );
+    // A pause over several slots resumes at the first slot after it.
+    let supp = policy_pause::Suppression {
+        until: today + 2 * 24 * HOUR + 1,
+        skip: vec![],
+        zone: "UTC".into(),
+    };
+    assert_eq!(
+        policy_pause::first_allowed(&supp, &ten, s, Some(today - 24 * HOUR), today + s),
+        today + 2 * 24 * HOUR + s
+    );
+}
