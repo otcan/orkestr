@@ -4,7 +4,7 @@ import { threadQuotaProvider } from "../../core/src/provider-quota-snapshot.js";
 import { threadRequiresTenantIsolation } from "../../core/src/tenant-policy.js";
 import { codexAssistantSource, threadSuppressesWhatsAppDebugFooter } from "./whatsapp-mirror-policy.js";
 import { remoteLayerFooter } from "./whatsapp-remote-footer.js";
-import { footerAudienceAllowed } from "./whatsapp-footer-audience.js";
+import { footerAudienceAllowed, noticeMessage } from "./whatsapp-footer-audience.js";
 
 const proposedPlanOpenTagPattern = /^\s*<\s*proposed[\s_-]*plan\s*>\s*/i;
 const proposedPlanCloseTagPattern = /\s*<\s*\/\s*proposed[\s_-]*plan\s*>\s*$/i;
@@ -326,12 +326,14 @@ export function shouldAppendWhatsAppDebugFooter(message = {}, env = process.env,
   if (!footerEnabled(env)) return false;
   if (thread && threadRequiresTenantIsolation(thread, env)) return false;
   if (thread && threadSuppressesWhatsAppDebugFooter(thread, message?.chatId, env)) return false;
-  // Owner-only: no shared chat, no reply to a member's input, no notice.
-  if (!footerAudienceAllowed({ message, thread, messages, deliveryType })) return false;
+  // Owner-only: no shared chat, no reply to a member's input. A notice in an
+  // owner-only chat gets the compact quota/load footer (see whatsappDebugFooter).
+  if (!footerAudienceAllowed({ message, thread, messages, deliveryType, allowNotice: true })) return false;
+  if (noticeMessage(message, deliveryType)) return true;
   if (codexAssistantSource(message) || message.source === "claude-code" || message.source === "orkestr_runtime") return true;
   if (remoteRuntimeReply(message, env)) return true;
   // A scheduled timer's answer is a model reply; the other types are notices,
-  // which footerAudienceAllowed has already refused.
+  // which noticeMessage has already admitted above.
   return ["timer_reply", "delivery_error", "mode_queued", "queue_notice", "router_update"].includes(String(deliveryType || "").trim());
 }
 
@@ -345,6 +347,7 @@ function footerMessageType(deliveryType = "") {
 // time left until each reset), then queue and host load. Commands (model,
 // effort, fast, plan/code, runtime and executor switches) are listed by /help.
 export function whatsappDebugFooter({ message = {}, thread = {}, messages = [], deliveryType = "final", env = process.env } = {}) {
+  if (noticeMessage(message, deliveryType)) return whatsappNoticeFooter({ message, thread, messages, deliveryType, env });
   const isClaude = claudeCodeThread(thread);
   const agent = threadQuotaProvider(thread) || "api-agent";
   const mode = codexModeDebugValue(message, thread);
@@ -370,6 +373,24 @@ export function whatsappDebugFooter({ message = {}, thread = {}, messages = [], 
   ];
   return [identity.filter(Boolean).join(" · "), ...dualProviderQuotaLines(thread, env), load.join(" · ")]
     .filter(Boolean).join("\n");
+}
+
+// Compact footer for a notice ("⚙️ System", "🚨" alerts, queue/mode/router
+// and delivery notices): a notice has no run, so there is no Quick/Deep/dbg
+// layer line, only the provider quota lines and the q/load line. A provider
+// without quota data is left out rather than shown as unknown.
+export function whatsappNoticeFooter({ message = {}, thread = {}, messages = [], deliveryType = "", env = process.env } = {}) {
+  const queueNotice = String(deliveryType || "").trim() === "queue_notice";
+  const load = [
+    ...(queueNotice
+      ? [`queue:${queueNoticeDebugCount(messages, message)}`, `reason:${queueNoticeDebugReason(message)}`]
+      : [`q:${queueDebugCount(messages, message)}`]),
+    `load:${loadDebugPercent()}%`,
+    `api:${processCpuDebugPercent()}%`,
+    "help:/help",
+  ];
+  const quota = dualProviderQuotaLines(thread, env).filter((line) => !/^\S+: no data\b/.test(line));
+  return [...quota, load.join(" · ")].join("\n");
 }
 
 export function appendWhatsAppDebugFooter(text, options = {}) {

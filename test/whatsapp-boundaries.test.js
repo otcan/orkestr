@@ -162,8 +162,9 @@ test("WhatsApp debug footer reports Claude Code model, runtime, and usage withou
     thread,
     messages: [],
   });
-  // A queue notice is not a model reply: no footer.
-  assert.equal(waking, "Waking this thread.");
+  // A queue notice is not a model reply: only the compact quota/queue footer.
+  assert.match(waking, /^Waking this thread\.\n\nclaude 5h: 80% wk: 65%\nqueue:1 · reason:waking · load:\d+% · api:\d+% · help:\/help$/);
+  assert.doesNotMatch(waking, /dbg:|msg:|no data/);
   assert.doesNotMatch(waking, /mode-switch:|rt-switch:|switch:\//);
   assert.equal(stripWhatsAppDebugFooter(waking), "Waking this thread.");
 });

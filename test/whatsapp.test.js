@@ -324,15 +324,19 @@ async function writeTestDeliveryClaim(home, { accountId, chatId, textKey, claime
   return { claimKey, filePath };
 }
 
-// Notices (router, mode, queue, delivery failure) never carry the footer.
-function assertNoDebugFooter(text) {
-  assert.doesNotMatch(text, /\n\ndbg:|\nq(?:ueue)?:\d+ · |help:\/help/);
+// Notices (router, mode, queue, delivery failure) have no run: in an
+// owner-only chat they carry only the compact quota and q/load footer, with no
+// dbg layer line and never "unknown".
+function assertNoticeFooter(text, { queueReason = "" } = {}) {
+  assert.doesNotMatch(text, /\n\ndbg:|msg:\*|unknown/);
+  const load = queueReason ? `queue:\\d+ · reason:${queueReason}` : "q:\\d+";
+  assert.match(text, new RegExp(`\\n\\n(?:(?:codex|claude) [^\\n]*\\n){0,2}${load} · load:\\d+% · api:\\d+% · help:/help$`));
 }
 
 function assertDebugFooter(text, { mode = "", messageType = "final", model = "[^·\\n]+", queueReason = "", runtime = "", fiveHour = "", weekly = "" } = {}) {
-  // Queue, mode and router notices are not model replies: no debug footer.
+  // Queue notices are not model replies: only the compact notice footer.
   if (queueReason) {
-    assert.doesNotMatch(text, /\n\ndbg:|\nq(?:ueue)?:\d+ · /);
+    assertNoticeFooter(text, { queueReason });
     return;
   }
   const escapedModel = model.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -15126,7 +15130,7 @@ test("whatsapp delivery reports queued mode switches without marking the input d
   assert.equal(delivery.delivered[0].sourceMessageId, message.id);
   assert.equal(calls[0].body.to, "chat-mode-queued");
   assert.match(calls[0].body.text, /switch to code when Codex is ready/);
-  assertNoDebugFooter(calls[0].body.text);
+  assertNoticeFooter(calls[0].body.text);
   assert.equal(messages.find((entry) => entry.id === message.id).state, "queued");
 });
 
@@ -15257,7 +15261,7 @@ test("whatsapp delivery reports frozen runtime blocks without marking the input 
   assert.equal(calls[0].body.to, "chat-frozen-notice");
   assert.match(stripDebugFooter(calls[0].body.text), /^Codex pane looks frozen\.\n\nOrkestr paused automatic recovery and did not restart or resend anything\./);
   assert.match(stripDebugFooter(calls[0].body.text), /Your message is blocked until the pane changes or you request a manual recovery: "please continue"\./);
-  assertNoDebugFooter(calls[0].body.text);
+  assertNoticeFooter(calls[0].body.text);
   assert.equal(messages.find((entry) => entry.id === routed.message.id).state, "awaiting_ack");
   assert.equal(messages.find((entry) => entry.id === routed.message.id).deliveryState, "blocked_frozen_runtime");
 });
@@ -15326,9 +15330,9 @@ test("whatsapp delivery reports recovery action requests", async () => {
   assert.match(stripDebugFooter(calls[0].body.text), /^Restart requested\.\n\nOrkestr reset the current Codex runtime and resumed the thread\./);
   assert.match(stripDebugFooter(calls[1].body.text), /^Interrupting the current Codex turn and queued your message: "fix the pairing number"\./);
   assert.match(stripDebugFooter(calls[2].body.text), /^Safe reset requested\.\n\nOrkestr saved recent Orkestr context and started a fresh Codex session for this thread\./);
-  assertNoDebugFooter(calls[0].body.text);
+  assertNoticeFooter(calls[0].body.text);
   assertDebugFooter(calls[1].body.text, { messageType: "update", queueReason: "interrupting" });
-  assertNoDebugFooter(calls[2].body.text);
+  assertNoticeFooter(calls[2].body.text);
 });
 
 test("whatsapp delivery reports stale-ack recovery exhaustion as manual action", async () => {
@@ -15381,7 +15385,7 @@ test("whatsapp delivery reports stale-ack recovery exhaustion as manual action",
   assert.equal(calls[1].body.to, "chat-recovery-exhausted");
   assert.match(stripDebugFooter(calls[1].body.text), /^Manual recovery needed\.\n\nOrkestr stopped retrying this message to avoid duplicate input\./);
   assert.match(stripDebugFooter(calls[1].body.text), /Open the thread or request \/restart, then resend if needed: "hi"\./);
-  assertNoDebugFooter(calls[1].body.text);
+  assertNoticeFooter(calls[1].body.text);
   assert.equal(delivery.delivered.some((entry) => entry.deliveryType === "delivery_error"), false);
 });
 
@@ -15487,7 +15491,7 @@ test("whatsapp delivery reports mirror-disabled routed inputs once", async () =>
   assert.equal(calls[0].body.to, "chat-mirror-disabled-notice");
   assert.equal(calls[0].body.accountId, "account-1");
   assert.match(stripDebugFooter(calls[0].body.text), /^Message routed to Orkestr\.\n\nWhatsApp mirroring is disabled for this thread/);
-  assertNoDebugFooter(calls[0].body.text);
+  assertNoticeFooter(calls[0].body.text);
 });
 
 test("whatsapp /status replies from the router without queuing runtime work", async () => {
@@ -15994,8 +15998,8 @@ test("whatsapp delivery forwards failed routed inputs using inbound event metada
   assert.equal(calls[0].body.accountId, "main");
   assert.match(calls[0].body.text, /^Delivery failed\n\nYour message could not be delivered to Codex\./);
   assert.match(calls[0].body.text, /pasted into Codex but was not accepted/);
-  // A delivery-failure notice is not a model reply: no debug footer.
-  assert.doesNotMatch(calls[0].body.text, /\n\ndbg:|\nq:\d+ · load:/);
+  // A delivery-failure notice is not a model reply: only the compact footer.
+  assertNoticeFooter(calls[0].body.text);
 });
 
 test("whatsapp passive mirror recovers a failed thread input instead of sending a failure notice", async () => {
@@ -16163,7 +16167,7 @@ test("whatsapp delivery mirrors pane interruption notices", async () => {
   assert.equal(delivery.delivered.length, 1);
   assert.equal(calls[0].body.to, "chat-interruption");
   assert.match(calls[0].body.text, /^Codex pane interrupted/);
-  assertNoDebugFooter(calls[0].body.text);
+  assertNoticeFooter(calls[0].body.text);
 });
 
 test("whatsapp delivery does not forward local failed inputs", async () => {

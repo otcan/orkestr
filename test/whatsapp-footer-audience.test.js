@@ -66,11 +66,45 @@ test("a reply to a member-authored input never gets the footer, even in an owner
   assert.equal(appendWhatsAppDebugFooter("Answer", { env, thread: ownerOnly, message: { ...fast, parentMessageId: "x", remoteOriginalInputId: "y" }, messages: [{ ...memberInput, originOwner: false, senderPolicyMode: "", senderEffectiveRole: "", senderTrustLevel: "", id: "x" }] }), "Answer");
 });
 
-test("V1 queue, mode and router notices never carry a footer", () => {
+// A notice has no run: owner-only chats get only the quota lines and the
+// q/load line, never a Quick/Deep/dbg layer line or "unknown".
+const compactNoticeFooter = /^(?:(?:codex|claude) [^\n]*\n){0,2}(?:q|queue):[^\n]*load:\d+% · api:\d+% · help:\/help$/;
+function noticeFooter(text, body) {
+  assert.ok(text.startsWith(`${body}\n\n`), text);
+  const footer = text.slice(body.length + 2);
+  assert.match(footer, compactNoticeFooter);
+  assert.doesNotMatch(footer, /dbg:|⚡|🧠|▶|unknown|no data|\?/);
+  assert.equal(formatter.stripWhatsAppDebugFooter(text), body);
+  return footer;
+}
+const quotaThread = { ...ownerOnly, whatsAppDebugProviderQuota: {
+  codex: { weeklyRemainingPct: 80, weeklyResetsAt: new Date(Date.now() + 86_400_000).toISOString() },
+  claude: { fiveHourRemainingPct: 90, weeklyRemainingPct: 70 },
+} };
+
+test("V1 queue, mode and router notices in an owner-only chat get the compact footer", () => {
   const local = { role: "assistant", source: "codex-app-server", phase: "final_answer" };
   for (const deliveryType of ["queue_notice", "mode_queued", "router_update", "delivery_error"]) {
-    assert.equal(appendWhatsAppDebugFooter("Queued.", { env, thread: ownerOnly, message: local, deliveryType }), "Queued.", deliveryType);
+    const footer = noticeFooter(appendWhatsAppDebugFooter("Queued.", { env, thread: quotaThread, message: local, deliveryType }), "Queued.");
+    assert.match(footer, /^codex wk: 80% \([0-9dhm]+\)\nclaude 5h: 90% wk: 70%\n/, deliveryType);
+    assert.match(footer, deliveryType === "queue_notice" ? /\nqueue:\d+ · reason:queued · / : /\nq:0 · /, deliveryType);
   }
+});
+
+test("a notice omits a provider without quota data instead of printing unknown", () => {
+  const local = { role: "assistant", source: "orkestr_runtime" };
+  const footer = noticeFooter(appendWhatsAppDebugFooter("⚙️ System:\nRestarted.", { env, thread: ownerOnly, message: local, deliveryType: "router_update" }), "⚙️ System:\nRestarted.");
+  assert.match(footer, /^q:0 · load:/);
+});
+
+test("notices in a shared chat or answering a member never carry a footer", () => {
+  const local = { role: "assistant", source: "codex-app-server", phase: "final_answer" };
+  for (const deliveryType of ["queue_notice", "mode_queued", "router_update", "delivery_error"]) {
+    assert.equal(appendWhatsAppDebugFooter("Queued.", { env, thread: { ...shared, whatsAppDebugProviderQuota: quotaThread.whatsAppDebugProviderQuota }, message: local, deliveryType }), "Queued.", deliveryType);
+  }
+  const notice = { ...scope, id: "notice", remoteLayer: "notice" };
+  assert.equal(appendWhatsAppDebugFooter("🚨 Alert", { env, thread: shared, message: notice, messages: [ownerInput] }), "🚨 Alert");
+  assert.equal(appendWhatsAppDebugFooter("🚨 Alert", { env, thread: ownerOnly, message: notice, messages: [memberInput] }), "🚨 Alert");
 });
 
 test("the local dbg line never prints unknown", () => {
@@ -83,20 +117,26 @@ test("the local dbg line never prints unknown", () => {
   assert.match(appendWhatsAppDebugFooter("Done", { env, thread: { ...ownerOnly, codexModel: "example-model", codexReasoningEffort: "high" }, message: local }), /\n\ndbg: [^/\n]+\/example-model\/h /);
 });
 
-test("notices never carry a footer", () => {
+test("remote notices and delivery failures get the compact footer in an owner-only chat", () => {
   const notice = { ...scope, id: "notice", remoteLayer: "notice" };
-  assert.equal(appendWhatsAppDebugFooter("Sorry, please send it again.", { env, thread: ownerOnly, message: notice, messages: [ownerInput, fast] }), "Sorry, please send it again.");
+  noticeFooter(appendWhatsAppDebugFooter("Sorry, please send it again.", { env, thread: quotaThread, message: notice, messages: [ownerInput, fast] }), "Sorry, please send it again.");
+  noticeFooter(appendWhatsAppDebugFooter("🚨 Runtime down", { env, thread: ownerOnly, message: { ...scope, id: "alert", remoteKind: "notice" }, messages: [] }), "🚨 Runtime down");
   const failure = { role: "assistant", source: "codex-app-server", phase: "final_answer" };
-  assert.equal(appendWhatsAppDebugFooter("Delivery failed.", { env, thread: ownerOnly, message: failure, deliveryType: "delivery_error" }), "Delivery failed.");
+  noticeFooter(appendWhatsAppDebugFooter("Delivery failed.", { env, thread: ownerOnly, message: failure, deliveryType: "delivery_error" }), "Delivery failed.");
+  // Regular replies keep their full footer with the layer line.
+  assert.match(appendWhatsAppDebugFooter("Answer", { env, thread: quotaThread, message: fast, messages: [ownerInput, fast] }),
+    /^Answer\n\n⚡ Quick: codex example-luna\/low · 🧠 Deep: pending · ▶ Quick\ncodex wk: 80% [^\n]*\nclaude 5h: 90% wk: 70%\nq:0 · /);
 });
 
 test("the scoped group relay applies the same audience rules", () => {
   const chunk = (thread, message, messages) => scopedGroupReplyChunks({ text: "Done", deliveryType: "final", message: { ...message, chatId: "group-a@g.us" },
     thread, messages, config: { appendDebugFooter: true }, formatter, env: {} });
   assert.match(chunk(ownerOnly, fast, [ownerInput])[0], /^Done\n\n⚡ Quick: codex example-luna\/low/);
-  for (const [thread, message, messages] of [[shared, fast, [ownerInput]], [ownerOnly, fast, [memberInput]], [ownerOnly, { ...scope, remoteLayer: "notice" }, []]]) {
+  for (const [thread, message, messages] of [[shared, fast, [ownerInput]], [ownerOnly, fast, [memberInput]], [shared, { ...scope, remoteLayer: "notice" }, []]]) {
     const [entry] = chunk(thread, message, messages);
     assert.equal(entry, "Done");
     assert.doesNotMatch(entry, footerPattern);
   }
+  const [notice] = chunk(ownerOnly, { ...scope, remoteLayer: "notice" }, []);
+  assert.match(notice, /^Done\n\nq:0 · load:\d+% · api:\d+% · help:\/help$/);
 });

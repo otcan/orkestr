@@ -82,10 +82,21 @@ test('V2 Quick, coordinator and timer replies keep the owner footer; system post
     assert.match(state.sent[0].text, footer);
     assert.match(state.sent[0].text, /help:\/help$/);
   }
+  // A system post is a notice: in this owner-only chat it carries only the
+  // compact quota/load footer, with no Quick/Deep layer line.
   const {notifier, state} = fixture(t, {footer: true});
   Object.assign(state.messages[0], {text: 'Operator', timerId: 'post', postAuthor: 'operator'});
   assert.equal((await notifier.tick()).sent, 1);
-  assert.equal(state.sent[0].text, '⚙️ System:\nGood morning.', 'a system notice carries no footer');
+  assert.match(state.sent[0].text, /^⚙️ System:\nGood morning\.\n\nq:0 · load:\d+% · api:\d+% · help:\/help$/, 'a system notice carries the compact footer');
+  assert.doesNotMatch(state.sent[0].text, /⚡|🧠|▶|unknown/);
+});
+
+test('a system notice in a shared group carries no footer', async t => {
+  const {notifier, state} = fixture(t, {footer: true});
+  Object.assign(state.binding, {additionalParticipantsEnabled: true, additionalParticipantIds: ['15550000099@c.us']});
+  Object.assign(state.messages[0], {text: 'Operator', timerId: 'post', postAuthor: 'operator'});
+  assert.equal((await notifier.tick()).sent, 1);
+  assert.equal(state.sent[0].text, '⚙️ System:\nGood morning.');
 });
 
 test('V2 conversation posts are labelled by author, never as timers', async t => {
