@@ -72,8 +72,8 @@ test('V2 Quick replies are marked with the Quick bolt, real timers keep the cloc
 test('V2 Quick, coordinator and timer replies keep the owner footer; system posts do not', async t => {
   for (const [parent, layer, footer] of [
     [{text: 'Quick reply', timerId: 'fast'}, {remoteLayer: 'fast', remoteProvider: 'codex', remoteModel: 'example-luna'}, /\n\n⚡ Quick: codex example-luna · 🧠 Deep: pending · ▶ Quick\n/],
-    [{text: 'Coordinator', timerId: 'post', postAuthor: 'coordinator'}, {remoteLayer: 'coordinator', remoteProvider: 'claude-code', remoteModel: 'opus-example', remoteIdentitySource: 'post'}, /\n\n🧠 Coordinator: claude-code opus-example · ▶ Coordinator\n/],
-    [{text: 'Daily inbox check', timerId: 'timer-1'}, {remoteLayer: 'deep', remoteProvider: 'codex'}, /\n\n🧠 Deep: codex · ▶ Deep\n/],
+    [{text: 'Coordinator', timerId: 'post', postAuthor: 'coordinator'}, {remoteLayer: 'coordinator', remoteProvider: 'claude-code', remoteModel: 'opus-example', remoteIdentitySource: 'post'}, /\n\n⚡ Quick: — · 🧠 Coordinator: claude-code opus-example · ▶ Coordinator\n/],
+    [{text: 'Daily inbox check', timerId: 'timer-1'}, {remoteLayer: 'deep', remoteProvider: 'codex'}, /\n\n⚡ Quick: — · 🧠 Deep: codex \? · ▶ Deep\n/],
   ]) {
     const {notifier, state} = fixture(t, {footer: true});
     Object.assign(state.messages[0], parent);
@@ -82,10 +82,28 @@ test('V2 Quick, coordinator and timer replies keep the owner footer; system post
     assert.match(state.sent[0].text, footer);
     assert.match(state.sent[0].text, /help:\/help$/);
   }
+  // A system post is a notice: in this owner-only chat it carries only the
+  // compact quota/load footer, with no Quick/Deep layer line.
   const {notifier, state} = fixture(t, {footer: true});
   Object.assign(state.messages[0], {text: 'Operator', timerId: 'post', postAuthor: 'operator'});
   assert.equal((await notifier.tick()).sent, 1);
-  assert.equal(state.sent[0].text, '⚙️ System:\nGood morning.', 'a system notice carries no footer');
+  assert.match(state.sent[0].text, /^⚙️ System:\nGood morning\.\n\ncodex: no data\nclaude: no data\nq:0 · load:\d+% · api:\d+% · help:\/help$/, 'a system notice carries the compact footer');
+  assert.doesNotMatch(state.sent[0].text, /⚡|🧠|▶|unknown/);
+});
+
+test('a system notice in a shared group carries the compact footer; footer-off still removes it', async t => {
+  {
+    const {notifier, state} = fixture(t, {footer: true});
+    Object.assign(state.binding, {additionalParticipantsEnabled: true, additionalParticipantIds: ['15550000099@c.us']});
+    Object.assign(state.messages[0], {text: 'Operator', timerId: 'post', postAuthor: 'operator'});
+    assert.equal((await notifier.tick()).sent, 1);
+    assert.match(state.sent[0].text, /^⚙️ System:\nGood morning\.\n\ncodex: no data\nclaude: no data\nq:0 · load:\d+% · api:\d+% · help:\/help$/);
+  }
+  const {notifier, state} = fixture(t, {footer: true});
+  Object.assign(state.binding, {additionalParticipantsEnabled: true, additionalParticipantIds: ['15550000099@c.us'], suppressWhatsAppDebugFooter: true});
+  Object.assign(state.messages[0], {text: 'Operator', timerId: 'post', postAuthor: 'operator'});
+  assert.equal((await notifier.tick()).sent, 1);
+  assert.equal(state.sent[0].text, '⚙️ System:\nGood morning.');
 });
 
 test('V2 conversation posts are labelled by author, never as timers', async t => {

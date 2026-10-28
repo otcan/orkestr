@@ -40,7 +40,7 @@ Config fields:
 | `groups` | Array of `{chatId, threadId, name, forwardProgressUpdates?}`; each group's optional boolean overrides the global progress flag |
 | `heldInputIds` | Optional array of exact transport input IDs excluded before any API call or send; malformed values fail startup |
 | `replyPrefix` | Deployment's configured reply identity |
-| `appendDebugFooter` | Enable the shared WhatsApp model/quota/queue footer; per-thread suppression and tenant isolation still apply |
+| `appendDebugFooter` | Enable the shared WhatsApp model/quota/queue footer in every configured group, shared groups included, and on operator notices; per-thread/chat suppression and tenant isolation still apply |
 | `maxReplyChars` | Optional single-message budget for new replies, 1000 to 60000 characters (default 20000, or `ORKESTR_WHATSAPP_MAX_REPLY_CHARS`) |
 | `forwardProgressUpdates` | Boolean for completed assistant commentary and approval updates; defaults on for the validated owner groups, independently of the legacy mirror |
 | `forwardProgressSince` | ISO activation cutoff; required for explicit global `forwardProgressUpdates: true`. When omitted with default-on or group-only activation, process startup is the cutoff |
@@ -188,7 +188,7 @@ the same parent or timer-proof authorization, deduplication and uncertainty
 rules as a text; it needs a scoped native worker (`/send-document`). Timer
 notifications behave the same way. Payloads frozen by an older build keep their
 stored chunks on retry. The footer stays on the message and is not counted
-against the budget; a `dbg:` footer already embedded at the end of a long reply
+against the budget; a footer (`⚡ Quick:` or older `dbg:`) already embedded at the end of a long reply
 stays on the message as well. When WhatsApp Web delivers a message but
 `sendMessage` returns no usable model (or throws), the transport confirms the
 send only by exactly one own, server-acked, not yet journaled message in that
@@ -215,7 +215,7 @@ With progress enabled, only completed commentary/approval messages from known
 agent sources and matching the exact inbound parent are forwarded. Streaming
 fragments, analysis, tools and context-compaction events are excluded. Updates
 keep the turn open, use the same durable payload/receipt journal and label their
-footer `msg:*update*`. A final supersedes any unsent progress already in history.
+footer `· update` after the writer. A final supersedes any unsent progress already in history.
 Enabling updates does not reopen completed turns or change legacy group bindings.
 
 Local V1 commentary, including Claude Code's started-working acknowledgement,

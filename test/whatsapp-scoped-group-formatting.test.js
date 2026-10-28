@@ -71,11 +71,11 @@ test('emoji, surrogate pairs and joined emoji sequences are never split by the p
 test('the footer stays on the message, for short and for attached replies', () => {
   const short = chunk(words(500).slice(0, 2500), {appendDebugFooter: true}, {}, true);
   assert.equal(short.length, 1);
-  assert.match(short[0], /^word0 [\s\S]*\n\ndbg: codex\/example-model/);
+  assert.match(short[0], /^word0 [\s\S]*\n\n⚡ Quick: — · 🧠 Deep: codex example-model/);
   const full = words(5000);
   const long = chunk(full, {appendDebugFooter: true}, {}, true);
   assert.equal(long.length, 2);
-  assert.ok(long[0].includes(`${SCOPED_ATTACHED_MARKER}\n\ndbg: codex/example-model`));
+  assert.ok(long[0].includes(`${SCOPED_ATTACHED_MARKER}\n\n⚡ Quick: — · 🧠 Deep: codex example-model`));
   assert.ok(long[0].length <= SCOPED_SEND_MAX_TEXT_LENGTH);
   assert.equal(long[1].document.text, full, 'the document holds the full text without the footer');
 });
@@ -115,8 +115,8 @@ test('a reply mirrored from a remote runtime carries the remote debug footer', (
     message: {id: 'm2', chatId: 'group-1', role: 'assistant', source: 'rust-v2-pilot', phase: 'final_answer', remoteBackend: 'rust-v2', remoteMessageId: 'r1'},
     thread: {codexModel: 'example-model', binding: {remoteBackend: 'rust-v2'}}, messages: [], config: {appendDebugFooter: true}, formatter, env: {}});
   assert.equal(entries.length, 1);
-  // No observed layer: quota and load lines only, never "unknown".
-  assert.match(entries[0], /^Done\n\n(?:codex|claude)\b[^\n]*\n(?:[^\n]*\n)?q:0 · load:\d+% · api:\d+% · help:\/help$/);
+  // No observed layer: the layer line keeps its shape with "—", never "unknown".
+  assert.match(entries[0], /^Done\n\n⚡ Quick: — · 🧠 Deep: — · ▶ Deep\n(?:codex|claude)\b[^\n]*\n(?:[^\n]*\n)?q:0 · load:\d+% · api:\d+% · help:\/help$/);
   assert.doesNotMatch(entries[0], /unknown/);
 });
 

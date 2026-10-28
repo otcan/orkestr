@@ -63,7 +63,7 @@ function postAuthorKind(name, postAuthor) {
 
 // Delivery type for a V2 pseudo-timer reply: Quick answers, coordinator posts,
 // questions and scheduled timers are replies ("timer_reply", footer allowed);
-// an operator/system post is a notice ("router_update", no footer).
+// an operator/system post is a notice ("router_update", compact footer only).
 export function scopedReplyDeliveryType({label, timerId, postAuthor} = {}) {
   const source = String(timerId || '').trim();
   return source === POST_TIMER_SOURCE_ID && postAuthorKind(oneLine(label), postAuthor) === 'operator' ? 'router_update' : 'timer_reply';

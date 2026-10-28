@@ -238,10 +238,10 @@ test('shared footer includes model, both provider quotas and queue context once'
   state.pages['/api/threads/thread-1/messages?limit=200'] = {messages: [answer('final')]};
   assert.equal((await relay.tick()).completed, 1);
   const text = state.sent[0].text;
-  assert.match(text, /dbg: codex\/example-model/);
+  assert.match(text, /⚡ Quick: — · 🧠 Deep: codex example-model[^\n]* · ▶ Deep\n/);
   assert.match(text, /codex 5h: 73%/); assert.match(text, /claude wk: 64%/);
   assert.match(text, /q:0.*load:.*help:\/help/);
-  assert.equal(text.match(/dbg:/g).length, 1);
+  assert.equal(text.match(/⚡ Quick:/g).length, 1);
 });
 
 test('a long reply is one message with the footer plus the full text as a Markdown document', async t => {
@@ -251,7 +251,7 @@ test('a long reply is one message with the footer plus the full text as a Markdo
   assert.equal((await relay.tick()).completed, 1);
   assert.equal(state.sent.length, 2);
   assert.ok(state.sent[0].text.length <= 20000 + 4000);
-  assert.match(state.sent[0].text, /^agent: word0 [\s\S]*\n\n… \(full reply attached\)\n\ndbg:.*\ncodex.*\nclaude.*\nq:/);
+  assert.match(state.sent[0].text, /^agent: word0 [\s\S]*\n\n… \(full reply attached\)\n\n⚡ Quick:.*\ncodex.*\nclaude.*\nq:/);
   assert.equal(state.sent[1].text, undefined);
   assert.deepEqual(state.sent[1].document, {filename: state.sent[1].document.filename, mimetype: 'text/markdown', text});
   assert.match(state.sent[1].document.filename, /^reply-[0-9a-f]{10}\.md$/);
@@ -267,7 +267,7 @@ test('a 2500-character reply with its footer is delivered as one message', async
   await relay.tick();
   assert.equal(state.sent.length, 1);
   assert.ok(state.sent[0].text.startsWith(`agent: ${text}`));
-  assert.match(state.sent[0].text, /\n\ndbg:/);
+  assert.match(state.sent[0].text, /\n\n⚡ Quick:/);
 });
 
 test('relay config maxReplyChars sets the budget for new payloads', async t => {
@@ -345,12 +345,12 @@ test('opted-in progress arrives once, keeps turn open and labels footer as updat
   state.pages['/api/threads/thread-1/messages?limit=200'] = {messages: [update('progress')]};
   assert.equal((await relay.tick()).completed, 0);
   assert.equal(state.sent.length, 1);
-  assert.match(state.sent[0].text, /msg:\*update\*/);
+  assert.match(state.sent[0].text, /▶ Deep · update\n/);
   await relay.tick(); assert.equal(state.sent.length, 1);
   state.pages['/api/threads/thread-1/messages?limit=200'].messages.push(answer('final'));
   assert.equal((await relay.tick()).completed, 1);
   assert.equal(state.sent.length, 2);
-  assert.match(state.sent[1].text, /msg:\*final\*/);
+  assert.match(state.sent[1].text, /▶ Deep\n/);
   assert.equal(relayDb.prepare('SELECT count(*) n FROM reply_payloads').get().n, 2);
 });
 

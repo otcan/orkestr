@@ -100,7 +100,7 @@ export function createRemoteTimerReplies({config, api, send, formatter, env, now
       try { const {quota} = await api(`/api/quota/providers?ownerUserId=${encodeURIComponent(config.ownerUserId)}`, {timeoutMs: 1000}); if (quota) current = {...current, whatsAppDebugProviderQuota: quota}; } catch {}
       const label = {label: String(parent.text || '').replace(/^Scheduled timer:\s*/, ''), timerId: parent.timerId, postAuthor: parent.postAuthor};
       const header = scopedReplyHeader(label);
-      // Quick, coordinator and timer answers keep the owner footer; a system notice does not.
+      // Quick, coordinator and timer answers get the full footer; a system notice the compact one.
       chunks = scopedGroupReplyChunks({text: `${header}\n${answer.text}`, message: {...answer, chatId}, thread: current, messages, config, formatter, env, deliveryType: scopedReplyDeliveryType(label)});
       proofs.prepareBatch(chunks.map((entry, i) => ({id: baseId + ':' + i, threadId, chatId, timerId: pick(parent.timerId, event.timerSourceId, 'v2-timer'),
         parentId: parent.id, answerId: answer.id, text: encodeReplyEntry(entry), createdAt: answer.createdAt, runAt: event.ts,

@@ -3,8 +3,8 @@ import { dualProviderQuotaLines } from "./whatsapp-quota-footer.js";
 import { threadQuotaProvider } from "../../core/src/provider-quota-snapshot.js";
 import { threadRequiresTenantIsolation } from "../../core/src/tenant-policy.js";
 import { codexAssistantSource, threadSuppressesWhatsAppDebugFooter } from "./whatsapp-mirror-policy.js";
-import { remoteLayerFooter } from "./whatsapp-remote-footer.js";
-import { footerAudienceAllowed } from "./whatsapp-footer-audience.js";
+import { localLayerFooter, remoteLayerFooter } from "./whatsapp-remote-footer.js";
+import { footerAudienceAllowed, noticeMessage } from "./whatsapp-footer-audience.js";
 
 const proposedPlanOpenTagPattern = /^\s*<\s*proposed[\s_-]*plan\s*>\s*/i;
 const proposedPlanCloseTagPattern = /\s*<\s*\/\s*proposed[\s_-]*plan\s*>\s*$/i;
@@ -108,8 +108,16 @@ function footerEnabled(env = process.env) {
 // the quota lines; that form must end with the "help:/help" load line.
 const WHATSAPP_DEBUG_FOOTER_PATTERN = /\s*(?:\n(?:dbg:|⚡ Quick:|🧠 (?:Deep|Coordinator):)[^\n]*(?:\n(?:codex|claude)\b[^\n]*){0,2}(?:\n(?:q|queue):[^\n]*)?|\n(?:(?:codex|claude)\b[^\n]*\n){0,2}(?:q|queue):[^\n]*help:\/help)\s*$/i;
 
+// Repeated until none is left, so a text that already carries stacked
+// footers (a re-sent or quoted message) never keeps one under the new footer.
 export function stripWhatsAppDebugFooter(text) {
-  return String(text || "").replace(WHATSAPP_DEBUG_FOOTER_PATTERN, "").trim();
+  let current = String(text || "");
+  for (let i = 0; i < 8; i++) {
+    const next = current.replace(WHATSAPP_DEBUG_FOOTER_PATTERN, "");
+    if (next === current) break;
+    current = next;
+  }
+  return current.trim();
 }
 
 function shortReasoningEffort(value) {
@@ -201,25 +209,6 @@ function codexModeDebugValue(message = {}, thread = {}) {
     thread.codexModeSource === "runtime-pane" ? thread.codexMode : "",
   ).toLowerCase();
   return mode === "plan" ? "plan" : "";
-}
-
-function runtimeSurfaceDebugValue(thread = {}) {
-  if (claudeCodeThread(thread)) return "claude";
-  const runtime = thread?.runtime && typeof thread.runtime === "object" ? thread.runtime : {};
-  const explicit = pickString(thread.runtimeMode, runtime.runtimeMode).toLowerCase();
-  if (explicit === "codex-api") return "api";
-  if (explicit === "codex-tmux") return "tmux";
-  if (explicit === "attached-terminal") return "term";
-  if (explicit === "agent") return "agent";
-  if (explicit === "sleeping") return "sleep";
-
-  const kind = pickString(thread.runtimeKind, runtime.runtimeKind).toLowerCase();
-  if (kind === "codex-app-server" || kind === "app-server") return "api";
-  if (kind === "codex-tmux" || kind === "migration_required") return "tmux";
-  if (kind === "raw-terminal") return "term";
-  if (kind === "api-agent") return "agent";
-  if (thread.paneId || thread.tmuxTarget || runtime.paneId || runtime.tmuxTarget) return "tmux";
-  return "";
 }
 
 function queueDebugCount(messages = [], currentMessage = null) {
@@ -326,50 +315,76 @@ export function shouldAppendWhatsAppDebugFooter(message = {}, env = process.env,
   if (!footerEnabled(env)) return false;
   if (thread && threadRequiresTenantIsolation(thread, env)) return false;
   if (thread && threadSuppressesWhatsAppDebugFooter(thread, message?.chatId, env)) return false;
-  // Owner-only: no shared chat, no reply to a member's input, no notice.
-  if (!footerAudienceAllowed({ message, thread, messages, deliveryType })) return false;
+  // Every chat, shared groups and replies to a member's input included; a
+  // notice gets the compact quota/load footer (see whatsappDebugFooter).
+  if (!footerAudienceAllowed({ message, thread, messages, deliveryType, allowNotice: true })) return false;
+  if (noticeMessage(message, deliveryType)) return true;
   if (codexAssistantSource(message) || message.source === "claude-code" || message.source === "orkestr_runtime") return true;
   if (remoteRuntimeReply(message, env)) return true;
   // A scheduled timer's answer is a model reply; the other types are notices,
-  // which footerAudienceAllowed has already refused.
+  // which noticeMessage has already admitted above.
   return ["timer_reply", "delivery_error", "mode_queued", "queue_notice", "router_update"].includes(String(deliveryType || "").trim());
 }
 
-function footerMessageType(deliveryType = "") {
-  return ["progress", "timer_reply", "queue_notice", "mode_queued", "delivery_error", "router_update"].includes(String(deliveryType || "").trim())
-    ? "update"
-    : "final";
-}
-
-// Four lines: identity and message type, one quota line per provider (with
-// time left until each reset), then queue and host load. Commands (model,
-// effort, fast, plan/code, runtime and executor switches) are listed by /help.
-export function whatsappDebugFooter({ message = {}, thread = {}, messages = [], deliveryType = "final", env = process.env } = {}) {
-  const isClaude = claudeCodeThread(thread);
-  const agent = threadQuotaProvider(thread) || "api-agent";
-  const mode = codexModeDebugValue(message, thread);
-  const runtimeSurface = runtimeSurfaceDebugValue(thread);
+// The q/load line, the same on every footer: queue depth (a queue notice
+// also names why it waits), host load, this process's CPU, and the /help hint.
+function queueLoadLine(message = {}, messages = [], deliveryType = "") {
   const queueNotice = String(deliveryType || "").trim() === "queue_notice";
-  const identity = remoteRuntimeReply(message, env) ? [
-    remoteLayerFooter(message, messages),
-  ] : [
-    `dbg: ${[agent, modelDebugLabel(message, thread, env)].filter(Boolean).join("/")}`,
-    ...(runtimeSurface ? [`rt:${runtimeSurface}`] : []),
-    ...(!isClaude && mode ? [`mode:${mode}`] : []),
-    ...(!isClaude && codexFastDebugValue(message, thread) ? ["fast:on"] : []),
-    // WhatsApp renders *text* bold, so the message type stands out.
-    `msg:*${footerMessageType(deliveryType)}*`,
-  ];
-  const load = [
+  return [
     ...(queueNotice
       ? [`queue:${queueNoticeDebugCount(messages, message)}`, `reason:${queueNoticeDebugReason(message)}`]
       : [`q:${queueDebugCount(messages, message)}`]),
     `load:${loadDebugPercent()}%`,
     `api:${processCpuDebugPercent()}%`,
     "help:/help",
-  ];
-  return [identity.filter(Boolean).join(" · "), ...dualProviderQuotaLines(thread, env), load.join(" · ")]
-    .filter(Boolean).join("\n");
+  ].join(" · ");
+}
+
+// The one footer spec, for every message type in every chat with the footer on:
+//
+//   model reply (Quick, Deep final, grouped/parallel Deep final, coordinator
+//   post, timer answer, health-probe answer, V1-native reply):
+//     ⚡ Quick: <provider model | —> · 🧠 Deep: <provider model | pending | —> · ▶ <writer>[ · update]
+//     codex <5h/wk quota>      ("codex: no data" without a snapshot)
+//     claude <5h/wk quota>
+//     q:<n> · load:<n>% · api:<n>% · help:/help
+//   notice (⚙️ System, 🚨 alert, Operator post, queue/mode/router/delivery
+//   notice): the same three quota and q/load lines, no layer line.
+//
+// Shared groups and replies to a member's input get it too; only tenant
+// isolation, the per-thread/chat footer-off switch and the global footer flag
+// remove it. Commands are listed by /help.
+export function whatsappDebugFooter({ message = {}, thread = {}, messages = [], deliveryType = "final", env = process.env } = {}) {
+  if (noticeMessage(message, deliveryType)) return whatsappNoticeFooter({ message, thread, messages, deliveryType, env });
+  // A progress update (not a final) says so after the writer.
+  const progress = String(deliveryType || "").trim() === "progress" || String(message?.remoteKind || "").toLowerCase() === "progress";
+  const layer = layerLine({ message, thread, messages, env }) + (progress ? " · update" : "");
+  return [layer, ...quotaLines(thread, env), queueLoadLine(message, messages, deliveryType)]
+    .join("\n");
+}
+
+// Always one line per provider, codex first, on every footer alike; a
+// provider without quota data reads "<provider>: no data", never unknown.
+function quotaLines(thread = {}, env = process.env) {
+  return dualProviderQuotaLines(thread, env);
+}
+
+function layerLine({ message = {}, thread = {}, messages = [], env = process.env } = {}) {
+  if (remoteRuntimeReply(message, env)) return remoteLayerFooter(message, messages);
+  const isClaude = claudeCodeThread(thread);
+  const provider = threadQuotaProvider(thread) || (isClaude ? "claude" : "codex");
+  const model = modelDebugLabel(message, thread, env);
+  const mode = codexModeDebugValue(message, thread);
+  return localLayerFooter(`${provider} ${model || "?"}`, [
+    ...(!isClaude && mode ? [`mode:${mode}`] : []),
+    ...(!isClaude && codexFastDebugValue(message, thread) ? ["fast:on"] : []),
+  ]);
+}
+
+// Notice footer: a notice has no run, so it carries only the quota lines and
+// the q/load line, exactly as a model reply's footer without its layer line.
+export function whatsappNoticeFooter({ message = {}, thread = {}, messages = [], deliveryType = "", env = process.env } = {}) {
+  return [...quotaLines(thread, env), queueLoadLine(message, messages, deliveryType)].join("\n");
 }
 
 export function appendWhatsAppDebugFooter(text, options = {}) {

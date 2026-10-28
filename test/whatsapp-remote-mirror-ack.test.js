@@ -227,7 +227,8 @@ test("only explicitly remote progress changes mirror policy", () => {
 test("a mirrored reply keeps the remote provider and model for the debug footer", async t => {
   const f = await fixture(t);
   await f.route();
-  f.exportRow({ id: "example-model-final", phase: "final_answer", text: "Answer.", provider: "codex", model: "example-model-1", identitySource: "run", observedReasoningEffort: "low", sourceInputId: "example-remote-user", runId: "example-run" });
+  f.exportRow({ id: "example-model-final", phase: "final_answer", text: "Answer.", provider: "codex", model: "example-model-1", identitySource: "run", observedReasoningEffort: "low", sourceInputId: "example-remote-user", runId: "example-run",
+    quickProvider: "codex", quickModel: "example-mini", quickObservedReasoningEffort: "low" });
   await deliver(f);
   const reply = (await listThreadMessages("example-thread", f.env)).find((row) => row.role === "assistant");
   assert.equal(reply.remoteProvider, "codex");
@@ -239,7 +240,11 @@ test("a mirrored reply keeps the remote provider and model for the debug footer"
   assert.equal(reply.remoteRunId, "example-run");
   const footer = whatsappDebugFooter({ message: reply, thread: {}, messages: [], deliveryType: "final", env: {} });
   assert.equal(reply.remoteBackend, "example");
-  assert.match(footer, /^🧠 Deep: codex example-model-1\/low · ▶ Deep\n/);
+  // The adapter-reported Quick of the answered input is persisted with the reply.
+  assert.equal(reply.remoteQuickProvider, "codex");
+  assert.equal(reply.remoteQuickModel, "example-mini");
+  assert.equal(reply.remoteQuickEffort, "low");
+  assert.match(footer, /^⚡ Quick: codex example-mini\/low · 🧠 Deep: codex example-model-1\/low · ▶ Deep\n/);
 });
 
 test("a mirrored Fast export preserves the explicit first-response role", async t => {

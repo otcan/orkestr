@@ -14,6 +14,7 @@ import fs from 'node:fs';
 import {requestWhatsAppWorker} from '../packages/connectors/src/whatsapp-worker-client.js';
 import {SCOPED_SEND_MAX_TEXT_LENGTH, validQuotedMessageId, validReplyDocument} from '../packages/connectors/src/whatsapp-scoped-group-formatting.js';
 import {validReplyFileShape} from '../packages/connectors/src/whatsapp-scoped-reply-files.js';
+import {operatorNoticeText} from '../packages/connectors/src/whatsapp-scoped-operator-footer.js';
 
 const readStdin = async () => {
   const chunks = [];
@@ -55,8 +56,15 @@ try {
       const operatorEnv = {...process.env, ORKESTR_WA_WORKER_URL: '',
         ORKESTR_WA_WORKER_TOKEN: process.env.ORKESTR_WA_WORKER_TOKEN || process.env.ORKESTR_WA_SERVICE_TOKEN
           || process.env.WHATSAPP_BRIDGE_TOKEN || process.env.WA_HTTP_TOKEN || process.env.ORKESTR_WHATSAPP_BRIDGE_TOKEN};
+      // The same compact notice footer (quota + q/load) as an Operator post
+      // relayed through V1, in any configured group that opted into the footer.
+      const noticeText = await operatorNoticeText({text, to, config, env: process.env, maxLength: SCOPED_SEND_MAX_TEXT_LENGTH,
+        formatter: config.appendDebugFooter === true
+          ? await import(config.formattingModulePath || '../packages/connectors/src/whatsapp-formatting.js').catch(() => null) : null,
+        fetchQuota: async owner => (await import('../apps/cli/src/api-client.js'))
+          .requestJson(`/api/quota/providers?ownerUserId=${encodeURIComponent(owner)}`, {timeoutMs: 1000})});
       const sent = await requestWhatsAppWorker('/send-text', {method: 'POST', timeoutMs: 40000,
-        body: {accountId: config.workerAccountId, to, requestId, text, operatorNotice: true}}, operatorEnv);
+        body: {accountId: config.workerAccountId, to, requestId, text: noticeText, operatorNotice: true}}, operatorEnv);
       if (sent.ok !== true || !Array.isArray(sent.ids) || !sent.ids.length) throw new Error('scoped_reply_unconfirmed');
       process.stdout.write(JSON.stringify({ok: true, ids: sent.ids, duplicate: sent.duplicate === true}));
     } else {

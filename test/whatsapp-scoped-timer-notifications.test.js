@@ -40,7 +40,7 @@ function fixture(t) {
 test('only scheduler-verified thread notification is labeled, delivered once and not echoed',async t=>{
  const {notifier,state,options}=fixture(t);
  assert.equal((await notifier.tick()).sent,1);
- assert.equal(state.sent.length,1);assert.match(state.sent[0].text,/⏰ Example check/);assert.match(state.sent[0].text,/msg:\*update\*/);
+ assert.equal(state.sent.length,1);assert.match(state.sent[0].text,/⏰ Example check/);assert.match(state.sent[0].text,/\n⚡ Quick: — · 🧠 Deep: codex example · ▶ Deep\n/);
  assert.deepEqual(await Promise.all(state.echoes),[false]);
  await notifier.tick();const resumed=createScopedTimerNotifications(options);await resumed.tick();resumed.close();
  assert.equal(state.sent.length,1);assert.ok(state.apiCalls.every(x=>!x.includes('thread-2')));
@@ -251,7 +251,7 @@ test('a long timer reply goes out as one message with its footer through the gro
  assert.equal((await notifier.tick()).sent,1);
  assert.equal(state.sent.length,1);
  assert.ok(state.sent[0].text.length>3000 && state.sent[0].text.length<=4000);
- assert.match(state.sent[0].text,/^⏰ Example check\nitem0 [\s\S]*\n\ndbg:/);
+ assert.match(state.sent[0].text,/^⏰ Example check\nitem0 [\s\S]*\n\n⚡ Quick: /);
 });
 test('a timer reply over the budget is one message plus a journaled Markdown document',async t=>{
  const {state,options}=fixture(t);
@@ -262,7 +262,7 @@ test('a timer reply over the budget is one message plus a journaled Markdown doc
  t.after(()=>notifier.close());
  assert.equal((await notifier.tick()).sent,2);
  assert.equal(state.sent.length,2);
- assert.match(state.sent[0].text,/^⏰ Example check\nitem0 [\s\S]*\n\n… \(full reply attached\)\n\ndbg:/);
+ assert.match(state.sent[0].text,/^⏰ Example check\nitem0 [\s\S]*\n\n… \(full reply attached\)\n\n⚡ Quick: /);
  const {media}=state.sent[1].text;
  assert.equal(media.mimetype,'text/markdown');
  assert.match(media.filename,/^reply-[0-9a-f]{10}\.md$/);

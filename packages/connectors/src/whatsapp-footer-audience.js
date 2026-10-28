@@ -1,6 +1,10 @@
-// The WhatsApp debug footer (layer identities, quota, load) is an owner-only
-// aid. It never reaches a chat with a non-owner member, never rides on a reply
-// to a member-authored input, and never decorates a notice.
+// Who gets the WhatsApp debug footer (layer identities, quota, load): every
+// chat whose footer is enabled, owner-only and shared groups alike, including
+// replies to a member's input (owner decision 2026-10-28). Tenant isolation and
+// the per-thread/chat footer-off switch are checked by the formatter. A notice
+// (system post, alert, queue or delivery notice) has no run, so it gets only
+// the compact quota/load footer. The member helpers below stay for callers
+// that classify chats or inputs; they no longer gate the footer.
 
 import { whatsappBindingParticipantSets } from "./whatsapp-inbound-security.js";
 
@@ -62,9 +66,10 @@ export function noticeMessage(message = {}, deliveryType = "") {
     || NOTICE_DELIVERY_TYPES.has(lower(deliveryType));
 }
 
-export function footerAudienceAllowed({ message = {}, thread = null, messages = [], deliveryType = "" } = {}) {
-  if (noticeMessage(message, deliveryType)) return false;
-  if (thread && threadHasNonOwnerMembers(thread)) return false;
-  if (replyToMemberInput(message, messages)) return false;
+// `allowNotice` admits a notice for the compact footer; without it a notice is
+// refused, as before. Members in the chat, or a member-authored input, no
+// longer refuse the footer.
+export function footerAudienceAllowed({ message = {}, deliveryType = "", allowNotice = false } = {}) {
+  if (!allowNotice && noticeMessage(message, deliveryType)) return false;
   return true;
 }
