@@ -140,3 +140,9 @@ test("the scoped group relay applies the same audience rules", () => {
   const [notice] = chunk(ownerOnly, { ...scope, remoteLayer: "notice" }, []);
   assert.match(notice, /^Done\n\nq:0 · load:\d+% · api:\d+% · help:\/help$/);
 });
+
+test("a notice about a member's own input never carries a footer", () => {
+  for (const deliveryType of ["queue_notice", "mode_queued", "delivery_error", "router_update"]) {
+    assert.equal(appendWhatsAppDebugFooter("Queued.", { env, thread: ownerOnly, message: memberInput, messages: [memberInput], deliveryType }), "Queued.", deliveryType);
+  }
+});

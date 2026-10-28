@@ -68,6 +68,9 @@ export function noticeMessage(message = {}, deliveryType = "") {
 export function footerAudienceAllowed({ message = {}, thread = null, messages = [], deliveryType = "", allowNotice = false } = {}) {
   if (!allowNotice && noticeMessage(message, deliveryType)) return false;
   if (thread && threadHasNonOwnerMembers(thread)) return false;
+  // A notice about a member's own input (delivery failure, queue, mode notice)
+  // passes that input as the message itself, with no parent to look up.
+  if (memberAuthoredInput(message)) return false;
   if (replyToMemberInput(message, messages)) return false;
   return true;
 }
