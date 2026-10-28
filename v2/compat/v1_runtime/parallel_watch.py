@@ -13,6 +13,10 @@ contract of #369), so out-of-order answers stay attributable.
 A slot that answered exactly `PARALLEL_DEFER` needed a change or an action:
 Core returned the input to the writer's queue. Nothing is exported for it; the
 input forgets that run and waits for the writer's own Deep run as before.
+The adapter log names why a slot handed its input back: `parallel_deep_deferred`
+(a successful slot turn that answered the defer marker), `parallel_deep_failed`
+(the slot turn itself failed) or `parallel_deep_withdrawn` (its proposal was
+withdrawn or abandoned, e.g. at window close or after a crash).
 
 With the switch off no run is ever marked `parallel_deep`: nothing here acts.
 """
@@ -115,7 +119,7 @@ def failed(worker, data, run):
         return False
     if status != 200 or not isinstance(value, dict) or not handed_back(value):
         return False
-    forget(worker, data, run, "parallel_deep_failed")
+    forget(worker, data, run, handback_event(value))
     return True
 
 
@@ -126,13 +130,25 @@ def handed_back(value):
     return value.get("parallel_deferred") is True or value.get("phase") in ("failed", "blocked")
 
 
+def handback_event(value):
+    """Log event for a handed-back slot run. Core marks a successful
+    `PARALLEL_DEFER` turn with the same `parallel_deferred` flag as a failed
+    one, so the run's phase tells them apart: only a failed turn is a failure."""
+    phase = value.get("phase")
+    if phase in ("failed", "blocked"):
+        return "parallel_deep_failed"
+    if phase == "cancelled":
+        return "parallel_deep_withdrawn"
+    return "parallel_deep_deferred"
+
+
 def head_failed(worker, data, status, ids):
     """The serial path's twin of `failed`: a failed slot run of the ledger
     head sends no notice; Core returned the input to the writer."""
     if (not isinstance(status, dict) or status.get("parallel_deep") is not True
             or status.get("run_id") not in ids or not handed_back(status)):
         return False
-    forget(worker, data, status["run_id"], "parallel_deep_failed")
+    forget(worker, data, status["run_id"], handback_event(status))
     return True
 
 

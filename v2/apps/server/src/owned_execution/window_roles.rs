@@ -34,6 +34,8 @@ pub(super) struct Companion {
     /// decided to keep running: that step finishes first, and every later
     /// step sees `retiring` and takes the ordinary Stop path instead.
     steps: tokio::sync::RwLock<()>,
+    /// This window already logged its one transient eligibility WARN.
+    eligibility_warned: AtomicBool,
 }
 
 /// Auxiliary Fast custody of this window.
@@ -74,7 +76,12 @@ impl Companion {
             slots: Mutex::new(Slots::default()),
             primary_idle: AtomicBool::new(false),
             steps: tokio::sync::RwLock::new(()),
+            eligibility_warned: AtomicBool::new(false),
         })
+    }
+    /// Shared by the lineage and every slot: one WARN per window.
+    pub(super) fn eligibility_warned(&self) -> &AtomicBool {
+        &self.eligibility_warned
     }
     pub(super) fn scope(&self) -> ExecutionScope {
         self.scope.clone()

@@ -20,6 +20,12 @@ struct Burst {
     setup_fail: Option<EventId>,
     setup_attempts: AtomicUsize,
     cancelled: AtomicUsize,
+    /// Store errors the next eligibility reads return, in order.
+    store_errors: Mutex<std::collections::VecDeque<RuntimeStoreError>>,
+    /// Every read fails with this error (a persistent Store fault).
+    store_down: Option<RuntimeStoreError>,
+    reads: AtomicUsize,
+    retry_budget: Duration,
     _directory: Directory,
 }
 
@@ -65,6 +71,10 @@ impl Burst {
             setup_fail: None,
             setup_attempts: AtomicUsize::new(0),
             cancelled: AtomicUsize::new(0),
+            store_errors: Mutex::new(std::collections::VecDeque::new()),
+            store_down: None,
+            reads: AtomicUsize::new(0),
+            retry_budget: crate::owned_execution::fast_eligibility::RETRY_BUDGET,
             _directory: Directory(directory),
         })
     }
@@ -134,7 +144,17 @@ impl SlotHost for Burst {
     async fn extra_slots_enabled(&self) -> bool {
         self.parallel.load(Ordering::Acquire)
     }
-    async fn next_source(&self) -> Result<Option<FastSource>, &'static str> {
+    fn eligibility_retry(&self) -> TransientRetry {
+        TransientRetry::with_budget(self.retry_budget)
+    }
+    async fn next_source(&self) -> Result<Option<FastSource>, RuntimeStoreError> {
+        self.reads.fetch_add(1, Ordering::AcqRel);
+        if let Some(error) = self.store_down {
+            return Err(error);
+        }
+        if let Some(error) = self.store_errors.lock().unwrap().pop_front() {
+            return Err(error);
+        }
         // Core's earliest-unpresented order, stepping over claimed inputs.
         let presented = self.presented.lock().unwrap().clone();
         Ok(self
@@ -400,4 +420,61 @@ async fn owner_kill_switch_keeps_fast_on_slot_zero_and_is_read_live() {
     burst.wait_started(3, Duration::from_secs(2)).await;
     burst.closing.store(true, Ordering::Release);
     pool.await.unwrap().unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn busy_store_twice_then_a_source_keeps_fast_alive() {
+    let burst = Burst::new(3, Duration::from_millis(100)).await;
+    burst
+        .store_errors
+        .lock()
+        .unwrap()
+        .extend([RuntimeStoreError::Busy, RuntimeStoreError::Busy]);
+    let (_stop, shutdown) = channel();
+    let pool = tokio::spawn(schedule(burst.clone(), burst.lineage(), shutdown));
+    // Both waiting inputs still get a slot after the two Busy reads.
+    burst.wait_started(3, Duration::from_secs(3)).await;
+    assert!(burst.reads.load(Ordering::Acquire) >= 3);
+    assert!(burst.companion.eligibility_warned().load(Ordering::Acquire));
+    assert!(!pool.is_finished(), "a transient Store error ended Fast");
+    burst.closing.store(true, Ordering::Release);
+    pool.await.unwrap().unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn persistent_store_errors_still_end_fast_with_the_same_message() {
+    for (error, budget) in [
+        (RuntimeStoreError::Busy, Duration::from_millis(400)),
+        (RuntimeStoreError::Unavailable, Duration::from_millis(400)),
+        // Not transient: no retry at all.
+        (RuntimeStoreError::Conflict, Duration::from_secs(600)),
+    ] {
+        let mut burst = Burst::new(2, Duration::from_millis(50)).await;
+        let host = Arc::get_mut(&mut burst).unwrap();
+        host.store_down = Some(error);
+        host.retry_budget = budget;
+        let (_stop, shutdown) = channel();
+        let result = tokio::time::timeout(
+            Duration::from_secs(5),
+            schedule(burst.clone(), burst.lineage(), shutdown),
+        );
+        // The lineage only ends at window close; close it once the pool
+        // failed so the drain can complete.
+        let closer = {
+            let burst = burst.clone();
+            tokio::spawn(async move {
+                while burst.reads.load(Ordering::Acquire) == 0 {
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+                tokio::time::sleep(budget.min(Duration::from_secs(1)) * 2).await;
+                burst.closing.store(true, Ordering::Release);
+            })
+        };
+        assert_eq!(
+            result.await.expect("pool ends"),
+            Err("Fast input eligibility unavailable"),
+            "{error:?}"
+        );
+        closer.await.unwrap();
+    }
 }

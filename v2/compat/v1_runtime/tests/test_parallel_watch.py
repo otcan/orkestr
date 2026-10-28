@@ -14,9 +14,18 @@ class ParallelWatchTests(fixture.IntakeBase):
         self.worker._parallel_deep = (time.monotonic(), True)
 
     def passes(self, passes=1):
-        with contextlib.redirect_stderr(io.StringIO()):
+        """Run worker passes; the adapter's stderr log of them."""
+        log = io.StringIO()
+        with contextlib.redirect_stderr(log):
             for _ in range(passes):
                 self.worker.run_once(fixture.Stop())
+        return log.getvalue()
+
+    def assertHandback(self, log, event, run):
+        lines = [line for line in log.splitlines() if " parallel_deep_" in line]
+        self.assertEqual(len(lines), 1, log)
+        self.assertIn("orkestr-v2-wa-adapter %s " % event, lines[0])
+        self.assertIn("run=%s" % run, lines[0])
 
     def finals(self):
         with self.ledger.connect() as db:
@@ -81,7 +90,8 @@ class ParallelWatchTests(fixture.IntakeBase):
         self.peer.texts[slot["run_id"]] = "  PARALLEL_DEFER\n"
         self.ack_fast("b")
         slot["phase"] = "awaiting_acceptance"
-        self.passes(3)
+        log = self.passes(3)
+        self.assertHandback(log, "parallel_deep_deferred", slot["run_id"])
         self.assertEqual(self.finals(), [], "the defer marker is never sent")
         row = self.row("b")
         self.assertEqual(row["parallel_deferred"], [slot["run_id"]])
@@ -129,7 +139,8 @@ class ParallelWatchTests(fixture.IntakeBase):
         slot = self.slot(1)
         self.passes()
         slot["phase"] = "failed"
-        self.passes(2)
+        log = self.passes(2)
+        self.assertHandback(log, "parallel_deep_failed", slot["run_id"])
         row = self.row("b")
         self.assertEqual(row["parallel_deferred"], [slot["run_id"]])
         self.assertNotIn("refused", row)
@@ -163,7 +174,8 @@ class ParallelWatchTests(fixture.IntakeBase):
     def test_a_failed_slot_at_the_head_sends_no_notice(self):
         slot = self.head_slot()
         slot["phase"] = "failed"
-        self.passes(2)
+        log = self.passes(2)
+        self.assertHandback(log, "parallel_deep_failed", slot["run_id"])
         row = self.row("b")
         self.assertEqual(row["parallel_deferred"], [slot["run_id"]])
         self.assertNotIn("refused", row)
@@ -176,8 +188,40 @@ class ParallelWatchTests(fixture.IntakeBase):
         self.passes()
         # Recovery abandoned the slot proposal and handed its input back.
         slot.update(phase="cancelled", parallel_deferred=True)
-        self.passes(2)
+        log = self.passes(2)
+        self.assertHandback(log, "parallel_deep_withdrawn", slot["run_id"])
         row = self.row("b")
         self.assertEqual(row["parallel_deferred"], [slot["run_id"]])
         self.assertNotIn("refused", row)
         self.assertEqual(self.finals(), [])
+
+    def test_a_completed_defer_handed_back_by_core_logs_a_defer_not_a_failure(self):
+        """Production: Core already returned the input (deferral row) when the
+        watch reads the slot's exact-run status: completed + parallel_deferred."""
+        self.burst()
+        slot = self.slot(1)
+        self.passes()
+        slot.update(phase="completed", parallel_deferred=True)
+        log = self.passes(2)
+        self.assertHandback(log, "parallel_deep_deferred", slot["run_id"])
+        self.assertNotIn("parallel_deep_failed", log)
+        row = self.row("b")
+        self.assertEqual(row["parallel_deferred"], [slot["run_id"]])
+        self.assertNotEqual(row["phase"], "completed")
+        self.assertEqual(self.finals(), [])
+
+    def test_a_completed_defer_at_the_head_logs_a_defer_not_a_failure(self):
+        slot = self.head_slot()
+        slot.update(phase="completed", parallel_deferred=True)
+        log = self.passes(2)
+        self.assertHandback(log, "parallel_deep_deferred", slot["run_id"])
+        self.assertNotIn("parallel_deep_failed", log)
+        self.assertEqual(self.row("b")["parallel_deferred"], [slot["run_id"]])
+        self.assertEqual(len(self.finals()), 1)
+
+    def test_handback_event_names_only_a_failed_turn_a_failure(self):
+        event = parallel_watch.handback_event
+        self.assertEqual(event(dict(phase="failed", parallel_deferred=True)), "parallel_deep_failed")
+        self.assertEqual(event(dict(phase="blocked")), "parallel_deep_failed")
+        self.assertEqual(event(dict(phase="completed", parallel_deferred=True)), "parallel_deep_deferred")
+        self.assertEqual(event(dict(phase="cancelled", parallel_deferred=True)), "parallel_deep_withdrawn")

@@ -7,6 +7,7 @@
 //! bounds live slots per conversation (schema-enforced); extra slots start
 //! only while the host has headroom. Window close or shutdown starts nothing
 //! new, and the pool returns only after every slot finished its own close.
+use super::fast_eligibility::{Step, TransientRetry};
 use super::window_roles::Companion;
 use super::*;
 use orkestr_runtime::containment::ReapedBroker;
@@ -39,7 +40,15 @@ pub(super) trait SlotHost: Send + Sync + 'static {
     /// Take the current host reading (cheap while unchanged), so pressure
     /// averages are warm before a burst asks for a slot.
     fn observe(&self) {}
-    fn next_source(&self) -> impl Future<Output = Result<Option<FastSource>, &'static str>> + Send;
+    /// The earliest unclaimed input; the raw Store error, so the scheduler
+    /// can retry a transient one.
+    fn next_source(
+        &self,
+    ) -> impl Future<Output = Result<Option<FastSource>, RuntimeStoreError>> + Send;
+    /// Retry state for transient eligibility errors (tests shorten it).
+    fn eligibility_retry(&self) -> TransientRetry {
+        TransientRetry::new()
+    }
     /// One complete auxiliary presentation; its witness if a child launched.
     fn present(
         self: Arc<Self>,
@@ -113,6 +122,10 @@ pub(super) async fn schedule<H: SlotHost>(
     let lineage = tasks.spawn(lineage).id();
     let mut lineage_done = false;
     let mut failure = None;
+    let mut eligibility = Eligibility {
+        retry: host.eligibility_retry(),
+        not_before: None,
+    };
     'schedule: loop {
         while let Some(joined) = tasks.try_join_next_with_id() {
             match finished(joined) {
@@ -129,7 +142,7 @@ pub(super) async fn schedule<H: SlotHost>(
         host.observe();
         // Start every input that is waiting now, up to the live bounds.
         loop {
-            match start_slot(&host, &mut tasks).await {
+            match start_slot(&host, &mut tasks, &mut eligibility).await {
                 Ok(true) => {}
                 Ok(false) => break,
                 Err(error) => {
@@ -162,10 +175,17 @@ fn finished(
     }
 }
 
+/// The scheduler's transient-error backoff across its polls.
+struct Eligibility {
+    retry: TransientRetry,
+    not_before: Option<Instant>,
+}
+
 /// `true` when one more auxiliary presentation started.
 async fn start_slot<H: SlotHost>(
     host: &Arc<H>,
     tasks: &mut tokio::task::JoinSet<Result<(), &'static str>>,
+    eligibility: &mut Eligibility,
 ) -> Result<bool, &'static str> {
     let companion = host.companion();
     if !companion.wants_slot() || companion.active_slots() >= MAX_AUXILIARY_FAST_SLOTS.into() {
@@ -174,7 +194,31 @@ async fn start_slot<H: SlotHost>(
     if !host.extra_slots_enabled().await {
         return Ok(false);
     }
-    let Some(source) = host.next_source().await? else {
+    if eligibility
+        .not_before
+        .is_some_and(|not_before| Instant::now() < not_before)
+    {
+        return Ok(false);
+    }
+    eligibility.not_before = None;
+    let read = host.next_source().await;
+    let source = match eligibility.retry.step(
+        read,
+        host.closing(),
+        companion.eligibility_warned(),
+        Instant::now(),
+    ) {
+        Step::Read(source) => source,
+        Step::Closing => None,
+        Step::Failed(reason) => return Err(reason),
+        Step::Retry(wait) => {
+            // Busy or briefly unavailable Store: read again after the wait;
+            // the lineage and live slots keep running meanwhile.
+            eligibility.not_before = Some(Instant::now() + wait);
+            None
+        }
+    };
+    let Some(source) = source else {
         return Ok(false);
     };
     // More than one concurrent Fast only while the host has headroom.
@@ -285,16 +329,8 @@ impl SlotHost for WindowSlots {
             pressure.observe();
         }
     }
-    async fn next_source(&self) -> Result<Option<FastSource>, &'static str> {
-        match self.execution.unclaimed_fast_source(false).await {
-            Ok(source) => Ok(source),
-            Err(RuntimeStoreError::Fenced | RuntimeStoreError::Expired)
-                if self.execution.fast_window_due() =>
-            {
-                Ok(None)
-            }
-            Err(_) => Err("Fast input eligibility unavailable"),
-        }
+    async fn next_source(&self) -> Result<Option<FastSource>, RuntimeStoreError> {
+        self.execution.unclaimed_fast_source(false).await
     }
     async fn present(self: Arc<Self>, source: FastSource) -> Result<SlotEnd, &'static str> {
         self.execution
