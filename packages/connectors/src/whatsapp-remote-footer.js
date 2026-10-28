@@ -19,7 +19,7 @@ export function remoteLayerMetadata(remote = {}, parent = {}) {
             : layers.has(remote.layer) ? remote.layer
               : remote.phase === "final_answer" ? "deep" : "";
   // The Quick run of the input a Deep final answers, as the adapter observed
-  // it (V2 #383 follow-up): a grouped or parallel final names the burst's last
+  // it (V2 #386): a grouped or parallel final names the burst's last
   // input, whose own Quick reply V1 cannot always correlate. `quick: "none"`
   // says no Quick ran for that input (a timer, a probe, Fast off).
   const quick = layer === "deep" || layer === "coordinator" ? {
