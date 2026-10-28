@@ -1,13 +1,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import * as formatter from '../packages/connectors/src/whatsapp-formatting.js';
-import { operatorNoticeChatOwnerOnly, operatorNoticeText } from '../packages/connectors/src/whatsapp-scoped-operator-footer.js';
+import { operatorNoticeFooterChat, operatorNoticeText } from '../packages/connectors/src/whatsapp-scoped-operator-footer.js';
 
 const ownerChat = 'owner-chat@g.us';
 const memberChat = 'member-chat@g.us';
 const config = {
   appendDebugFooter: true, ownerUserId: 'owner-a',
-  groups: [{ chatId: ownerChat, name: 'Owner' }, { chatId: memberChat, name: 'Shared' }, { chatId: 'flagged@g.us', whatsappNonOwnerMembers: true }],
+  groups: [{ chatId: ownerChat, name: 'Owner' }, { chatId: memberChat, name: 'Shared' }, { chatId: 'flagged@g.us', whatsappNonOwnerMembers: true },
+    { chatId: 'off@g.us', suppressWhatsAppDebugFooter: true }],
   participantAuthors: [{ chatId: memberChat }],
 };
 const quota = { codex: { weeklyRemainingPct: 80 }, claude: { fiveHourRemainingPct: 90, weeklyRemainingPct: 70 } };
@@ -35,13 +36,20 @@ test('a failed or slow quota lookup still sends the notice with honest no-data l
   assert.ok(Date.now() - started < 3000);
 });
 
-test('no footer in a chat with members, without the opt-in, without a formatter, or over the size limit', async () => {
-  assert.equal(operatorNoticeChatOwnerOnly(config, ownerChat), true);
-  assert.equal(operatorNoticeChatOwnerOnly(config, memberChat), false);
-  assert.equal(operatorNoticeChatOwnerOnly(config, 'flagged@g.us'), false);
-  assert.equal(operatorNoticeChatOwnerOnly(config, 'unknown@g.us'), false);
+test('shared groups get the footer too (owner decision 2026-10-28)', async () => {
+  for (const to of [memberChat, 'flagged@g.us']) {
+    assert.equal(operatorNoticeFooterChat(config, to), true, to);
+    assert.match(await operatorNoticeText({ text: '🚨 Disk full', to, config, formatter, fetchQuota: async () => ({ quota }) }), COMPACT, to);
+  }
+});
+
+test('no footer in an unconfigured or footer-off chat, without the opt-in, without a formatter, or over the size limit', async () => {
+  assert.equal(operatorNoticeFooterChat(config, ownerChat), true);
+  assert.equal(operatorNoticeFooterChat(config, 'off@g.us'), false);
+  assert.equal(operatorNoticeFooterChat(config, 'unknown@g.us'), false);
+  assert.equal(operatorNoticeFooterChat(config, ownerChat, { ORKESTR_WHATSAPP_SUPPRESS_DEBUG_FOOTER_CHATS: ownerChat }), false);
   const fetchQuota = async () => ({ quota });
-  for (const [to, options] of [[memberChat, {}], ['flagged@g.us', {}], [ownerChat, { config: { ...config, appendDebugFooter: false } }],
+  for (const [to, options] of [['off@g.us', {}], ['unknown@g.us', {}], [ownerChat, { config: { ...config, appendDebugFooter: false } }],
     [ownerChat, { formatter: null }], [ownerChat, { maxLength: 20 }]]) {
     assert.equal(await operatorNoticeText({ text: '🚨 Disk full', to, config, formatter, fetchQuota, ...options }), '🚨 Disk full', to);
   }

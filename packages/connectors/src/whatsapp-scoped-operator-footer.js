@@ -4,25 +4,25 @@
 // through the V1 relay and gets the notice footer there; this direct path must
 // look the same: the provider quota lines and the q/load line, nothing else.
 //
-// Only when the transport config opts into the footer (`appendDebugFooter`)
-// and the chat is owner-only: a chat listed in `participantAuthors`, or whose
-// group entry names a non-owner member, never gets one. Any failure (no
-// formatter, no quota) degrades to the honest "no data" lines or the bare text;
-// the notice itself is always sent.
-import { threadHasNonOwnerMembers } from './whatsapp-footer-audience.js';
+// Only when the transport config opts into the footer (`appendDebugFooter`),
+// the chat is a configured group, and the group's footer-off switch (the same
+// flags and env lists as threadSuppressesWhatsAppDebugFooter) is not set.
+// Shared groups get it too (owner decision 2026-10-28). Any failure (no
+// formatter, no quota) degrades to the honest "no data" lines or the bare
+// text; the notice itself is always sent.
+import { threadSuppressesWhatsAppDebugFooter } from './whatsapp-mirror-policy.js';
 
 const QUOTA_TIMEOUT_MS = 1000;
 
-export function operatorNoticeChatOwnerOnly(config = {}, chatId = '') {
-  if ((config.participantAuthors || []).some(entry => entry?.chatId === chatId)) return false;
+export function operatorNoticeFooterChat(config = {}, chatId = '', env = process.env) {
   const group = (config.groups || []).find(entry => entry?.chatId === chatId);
   if (!group) return false;
-  return !threadHasNonOwnerMembers({ binding: group });
+  return !threadSuppressesWhatsAppDebugFooter({ binding: group }, chatId, env);
 }
 
 export async function operatorNoticeText({ text, to, config = {}, formatter = null, fetchQuota = null, maxLength = Infinity, env = process.env } = {}) {
   if (config.appendDebugFooter !== true || typeof formatter?.whatsappNoticeFooter !== 'function') return text;
-  if (!operatorNoticeChatOwnerOnly(config, to)) return text;
+  if (!operatorNoticeFooterChat(config, to, env)) return text;
   let thread = { id: 'operator-notice', ownerUserId: config.ownerUserId || '', binding: { chatId: to } };
   if (typeof fetchQuota === 'function' && config.ownerUserId) {
     let timer;

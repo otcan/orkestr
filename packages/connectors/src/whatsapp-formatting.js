@@ -307,8 +307,8 @@ export function shouldAppendWhatsAppDebugFooter(message = {}, env = process.env,
   if (!footerEnabled(env)) return false;
   if (thread && threadRequiresTenantIsolation(thread, env)) return false;
   if (thread && threadSuppressesWhatsAppDebugFooter(thread, message?.chatId, env)) return false;
-  // Owner-only: no shared chat, no reply to a member's input. A notice in an
-  // owner-only chat gets the compact quota/load footer (see whatsappDebugFooter).
+  // Every chat, shared groups and replies to a member's input included; a
+  // notice gets the compact quota/load footer (see whatsappDebugFooter).
   if (!footerAudienceAllowed({ message, thread, messages, deliveryType, allowNotice: true })) return false;
   if (noticeMessage(message, deliveryType)) return true;
   if (codexAssistantSource(message) || message.source === "claude-code" || message.source === "orkestr_runtime") return true;
@@ -332,7 +332,7 @@ function queueLoadLine(message = {}, messages = [], deliveryType = "") {
   ].join(" · ");
 }
 
-// The one footer spec, for every message type in an owner-only chat:
+// The one footer spec, for every message type in every chat with the footer on:
 //
 //   model reply (Quick, Deep final, grouped/parallel Deep final, coordinator
 //   post, timer answer, health-probe answer, V1-native reply):
@@ -343,8 +343,9 @@ function queueLoadLine(message = {}, messages = [], deliveryType = "") {
 //   notice (⚙️ System, 🚨 alert, Operator post, queue/mode/router/delivery
 //   notice): the same three quota and q/load lines, no layer line.
 //
-// A shared chat or a reply to a member's input gets no footer at all
-// (whatsapp-footer-audience.js). Commands are listed by /help.
+// Shared groups and replies to a member's input get it too; only tenant
+// isolation, the per-thread/chat footer-off switch and the global footer flag
+// remove it. Commands are listed by /help.
 export function whatsappDebugFooter({ message = {}, thread = {}, messages = [], deliveryType = "final", env = process.env } = {}) {
   if (noticeMessage(message, deliveryType)) return whatsappNoticeFooter({ message, thread, messages, deliveryType, env });
   // A progress update (not a final) says so after the writer.

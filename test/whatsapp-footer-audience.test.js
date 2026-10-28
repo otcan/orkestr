@@ -22,19 +22,27 @@ test("an owner-only chat gets the compact footer with the observed Quick model a
   assert.doesNotMatch(text, /unknown/);
 });
 
-test("a chat with a non-owner participant never gets the footer, quota or load", () => {
+const FULL = /^Answer\n\n⚡ Quick: codex example-luna\/low · 🧠 Deep: pending · ▶ Quick\n(?:codex|claude)[^\n]*\n(?:codex|claude)[^\n]*\nq:0 · load:\d+% · api:\d+% · help:\/help$/;
+
+test("a chat with non-owner members gets the same full footer (owner decision 2026-10-28)", () => {
   assert.equal(threadHasNonOwnerMembers(shared), true);
   assert.equal(threadHasNonOwnerMembers(ownerOnly), false);
-  assert.equal(appendWhatsAppDebugFooter("Answer", { env, thread: shared, message: fast, messages: [ownerInput] }), "Answer");
-  // Explicit inbound-security trusted participants are members too.
+  assert.match(appendWhatsAppDebugFooter("Answer", { env, thread: shared, message: fast, messages: [ownerInput] }), FULL);
   const trusted = { ...ownerOnly, binding: { ...ownerOnly.binding, inboundSecurity: { trustedParticipantIds: ["490000000002@c.us"] } } };
-  assert.equal(appendWhatsAppDebugFooter("Answer", { env, thread: trusted, message: fast }), "Answer");
-  // A census-verified non-owner WA member the binding does not name.
+  assert.match(appendWhatsAppDebugFooter("Answer", { env, thread: trusted, message: fast }), FULL);
   const census = { ...ownerOnly, binding: { ...ownerOnly.binding, whatsappNonOwnerMembers: true } };
-  assert.equal(appendWhatsAppDebugFooter("Answer", { env, thread: census, message: fast }), "Answer");
-  // Members with no owner identity at all fail closed.
+  assert.match(appendWhatsAppDebugFooter("Answer", { env, thread: census, message: fast }), FULL);
   const unverified = { id: "t-unverified", binding: { chatId: "group-b@g.us", additionalParticipantsEnabled: true, additionalParticipantIds: ["490000000001@c.us"] } };
-  assert.equal(appendWhatsAppDebugFooter("Answer", { env, thread: unverified, message: fast }), "Answer");
+  assert.match(appendWhatsAppDebugFooter("Answer", { env, thread: unverified, message: fast }), FULL);
+});
+
+test("tenant isolation, the per-thread/chat footer-off switch and the global flag still remove the footer in shared chats", () => {
+  for (const binding of [{ suppressWhatsAppDebugFooter: true }, { whatsappDebugFooter: false }]) {
+    assert.equal(appendWhatsAppDebugFooter("Answer", { env, thread: { ...shared, binding: { ...shared.binding, ...binding } }, message: fast, messages: [memberInput] }), "Answer");
+  }
+  assert.equal(appendWhatsAppDebugFooter("Answer", { env: { ...env, ORKESTR_WHATSAPP_SUPPRESS_DEBUG_FOOTER_CHATS: "group-a@g.us" }, thread: shared, message: fast }), "Answer");
+  assert.equal(appendWhatsAppDebugFooter("Answer", { env: { ORKESTR_WHATSAPP_DEBUG_FOOTER: "0" }, thread: shared, message: fast }), "Answer");
+  assert.equal(appendWhatsAppDebugFooter("Answer", { env: { ...env, ORKESTR_ADMIN_USER_ID: "owner-a" }, thread: { ...shared, ownerUserId: "contained-user" }, message: fast }), "Answer");
 });
 
 test("owner identities follow inbound security: authorized, sender and aliases, normalized", () => {
@@ -56,14 +64,12 @@ test("owner identities follow inbound security: authorized, sender and aliases, 
   assert.equal(threadHasNonOwnerMembers(explicitOwner), false);
 });
 
-test("a reply to a member-authored input never gets the footer, even in an owner-bound chat", () => {
+test("a reply to a member-authored input gets the footer too", () => {
   assert.equal(memberAuthoredInput(memberInput), true);
   assert.equal(memberAuthoredInput(ownerInput), false);
-  assert.equal(appendWhatsAppDebugFooter("Answer", { env, thread: ownerOnly, message: fast, messages: [memberInput] }), "Answer");
-  // Matched through the remote original input when the local parent differs.
+  assert.match(appendWhatsAppDebugFooter("Answer", { env, thread: ownerOnly, message: fast, messages: [memberInput] }), FULL);
   const viaRemote = { ...fast, parentMessageId: "timer-parent" };
-  assert.equal(appendWhatsAppDebugFooter("Answer", { env, thread: ownerOnly, message: viaRemote, messages: [memberInput] }), "Answer");
-  assert.equal(appendWhatsAppDebugFooter("Answer", { env, thread: ownerOnly, message: { ...fast, parentMessageId: "x", remoteOriginalInputId: "y" }, messages: [{ ...memberInput, originOwner: false, senderPolicyMode: "", senderEffectiveRole: "", senderTrustLevel: "", id: "x" }] }), "Answer");
+  assert.match(appendWhatsAppDebugFooter("Answer", { env, thread: shared, message: viaRemote, messages: [memberInput] }), FULL);
 });
 
 // A notice has no run: owner-only chats get only the quota lines and the
@@ -97,14 +103,14 @@ test("a notice keeps both quota lines, as no data, instead of printing unknown",
   assert.match(footer, /^codex: no data\nclaude: no data\nq:0 · load:/);
 });
 
-test("notices in a shared chat or answering a member never carry a footer", () => {
+test("notices in a shared chat or answering a member carry the compact footer too", () => {
   const local = { role: "assistant", source: "codex-app-server", phase: "final_answer" };
   for (const deliveryType of ["queue_notice", "mode_queued", "router_update", "delivery_error"]) {
-    assert.equal(appendWhatsAppDebugFooter("Queued.", { env, thread: { ...shared, whatsAppDebugProviderQuota: quotaThread.whatsAppDebugProviderQuota }, message: local, deliveryType }), "Queued.", deliveryType);
+    noticeFooter(appendWhatsAppDebugFooter("Queued.", { env, thread: { ...shared, whatsAppDebugProviderQuota: quotaThread.whatsAppDebugProviderQuota }, message: local, deliveryType }), "Queued.");
   }
   const notice = { ...scope, id: "notice", remoteLayer: "notice" };
-  assert.equal(appendWhatsAppDebugFooter("🚨 Alert", { env, thread: shared, message: notice, messages: [ownerInput] }), "🚨 Alert");
-  assert.equal(appendWhatsAppDebugFooter("🚨 Alert", { env, thread: ownerOnly, message: notice, messages: [memberInput] }), "🚨 Alert");
+  noticeFooter(appendWhatsAppDebugFooter("🚨 Alert", { env, thread: shared, message: notice, messages: [ownerInput] }), "🚨 Alert");
+  noticeFooter(appendWhatsAppDebugFooter("🚨 Alert", { env, thread: ownerOnly, message: notice, messages: [memberInput] }), "🚨 Alert");
 });
 
 test("the local (V1-native) layer line never prints unknown", () => {
@@ -129,20 +135,24 @@ test("remote notices and delivery failures get the compact footer in an owner-on
 });
 
 test("the scoped group relay applies the same audience rules", () => {
-  const chunk = (thread, message, messages) => scopedGroupReplyChunks({ text: "Done", deliveryType: "final", message: { ...message, chatId: "group-a@g.us" },
-    thread, messages, config: { appendDebugFooter: true }, formatter, env: {} });
-  assert.match(chunk(ownerOnly, fast, [ownerInput])[0], /^Done\n\n⚡ Quick: codex example-luna\/low/);
-  for (const [thread, message, messages] of [[shared, fast, [ownerInput]], [ownerOnly, fast, [memberInput]], [shared, { ...scope, remoteLayer: "notice" }, []]]) {
-    const [entry] = chunk(thread, message, messages);
-    assert.equal(entry, "Done");
-    assert.doesNotMatch(entry, footerPattern);
+  const chunk = (thread, message, messages, config = { appendDebugFooter: true }) => scopedGroupReplyChunks({ text: "Done", deliveryType: "final", message: { ...message, chatId: "group-a@g.us" },
+    thread, messages, config, formatter, env: {} });
+  for (const [thread, message, messages] of [[ownerOnly, fast, [ownerInput]], [shared, fast, [ownerInput]], [ownerOnly, fast, [memberInput]]]) {
+    assert.match(chunk(thread, message, messages)[0], /^Done\n\n⚡ Quick: codex example-luna\/low/);
   }
-  const [notice] = chunk(ownerOnly, { ...scope, remoteLayer: "notice" }, []);
-  assert.match(notice, /^Done\n\ncodex: no data\nclaude: no data\nq:0 · load:\d+% · api:\d+% · help:\/help$/);
+  for (const thread of [ownerOnly, shared]) {
+    const [notice] = chunk(thread, { ...scope, remoteLayer: "notice" }, []);
+    assert.match(notice, /^Done\n\ncodex: no data\nclaude: no data\nq:0 · load:\d+% · api:\d+% · help:\/help$/);
+  }
+  // The footer-off switch and a relay without the opt-in still send no footer.
+  const [off] = chunk({ ...shared, binding: { ...shared.binding, suppressWhatsAppDebugFooter: true } }, fast, [memberInput]);
+  assert.equal(off, "Done");
+  assert.equal(chunk(shared, fast, [], { appendDebugFooter: false })[0], "Done");
+  assert.doesNotMatch(off, footerPattern);
 });
 
-test("a notice about a member's own input never carries a footer", () => {
+test("a notice about a member's own input carries the compact footer", () => {
   for (const deliveryType of ["queue_notice", "mode_queued", "delivery_error", "router_update"]) {
-    assert.equal(appendWhatsAppDebugFooter("Queued.", { env, thread: ownerOnly, message: memberInput, messages: [memberInput], deliveryType }), "Queued.", deliveryType);
+    noticeFooter(appendWhatsAppDebugFooter("Queued.", { env, thread: ownerOnly, message: memberInput, messages: [memberInput], deliveryType }), "Queued.");
   }
 });

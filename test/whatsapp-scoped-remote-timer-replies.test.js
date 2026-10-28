@@ -91,9 +91,16 @@ test('V2 Quick, coordinator and timer replies keep the owner footer; system post
   assert.doesNotMatch(state.sent[0].text, /⚡|🧠|▶|unknown/);
 });
 
-test('a system notice in a shared group carries no footer', async t => {
+test('a system notice in a shared group carries the compact footer; footer-off still removes it', async t => {
+  {
+    const {notifier, state} = fixture(t, {footer: true});
+    Object.assign(state.binding, {additionalParticipantsEnabled: true, additionalParticipantIds: ['15550000099@c.us']});
+    Object.assign(state.messages[0], {text: 'Operator', timerId: 'post', postAuthor: 'operator'});
+    assert.equal((await notifier.tick()).sent, 1);
+    assert.match(state.sent[0].text, /^⚙️ System:\nGood morning\.\n\ncodex: no data\nclaude: no data\nq:0 · load:\d+% · api:\d+% · help:\/help$/);
+  }
   const {notifier, state} = fixture(t, {footer: true});
-  Object.assign(state.binding, {additionalParticipantsEnabled: true, additionalParticipantIds: ['15550000099@c.us']});
+  Object.assign(state.binding, {additionalParticipantsEnabled: true, additionalParticipantIds: ['15550000099@c.us'], suppressWhatsAppDebugFooter: true});
   Object.assign(state.messages[0], {text: 'Operator', timerId: 'post', postAuthor: 'operator'});
   assert.equal((await notifier.tick()).sent, 1);
   assert.equal(state.sent[0].text, '⚙️ System:\nGood morning.');

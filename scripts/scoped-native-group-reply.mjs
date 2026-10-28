@@ -57,7 +57,7 @@ try {
         ORKESTR_WA_WORKER_TOKEN: process.env.ORKESTR_WA_WORKER_TOKEN || process.env.ORKESTR_WA_SERVICE_TOKEN
           || process.env.WHATSAPP_BRIDGE_TOKEN || process.env.WA_HTTP_TOKEN || process.env.ORKESTR_WHATSAPP_BRIDGE_TOKEN};
       // The same compact notice footer (quota + q/load) as an Operator post
-      // relayed through V1, in an owner-only chat that opted into the footer.
+      // relayed through V1, in any configured group that opted into the footer.
       const noticeText = await operatorNoticeText({text, to, config, env: process.env, maxLength: SCOPED_SEND_MAX_TEXT_LENGTH,
         formatter: config.appendDebugFooter === true
           ? await import(config.formattingModulePath || '../packages/connectors/src/whatsapp-formatting.js').catch(() => null) : null,
