@@ -261,7 +261,11 @@ async fn new_chat_is_wired_to_v2_once_and_resumes_after_a_refusal() {
     state.desktop_broker = Some(Arc::new(
         desktop_broker::Broker::new(&v1_url, V1_TOKEN.into()).unwrap(),
     ));
-    state.whatsapp_chats = Some(Arc::new(chats::synthetic(&adapter_url, ADAPTER_TOKEN)));
+    let rules_dir = std::env::temp_dir().join(format!("wa-chat-rules-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir(&rules_dir).unwrap();
+    state.whatsapp_chats = Some(Arc::new(
+        chats::synthetic(&adapter_url, ADAPTER_TOKEN).with_rules_dir(rules_dir.to_str().unwrap()),
+    ));
 
     let (status, chat) = post(&state, &headers, request(1, "Synthetic chat")).await;
     assert_eq!(status, StatusCode::CREATED, "{chat:?}");
@@ -314,6 +318,24 @@ async fn new_chat_is_wired_to_v2_once_and_resumes_after_a_refusal() {
     assert_eq!(binding["public_thread_id"], chat.v1_thread_id.as_str());
     assert_eq!(binding["account_id"], "synthetic-account");
     assert_eq!(binding["excluded_public_ids"], json!([]));
+    // The full onboarding template: owner-only Fast, 24 inputs, no extra
+    // participants, unverified membership, and a generated rules file.
+    assert_eq!(binding["fast_reply_policy"], "owner_only");
+    assert_eq!(binding["max_outstanding_inputs"], 24);
+    assert_eq!(binding["participants"], json!([]));
+    assert_eq!(binding["owner_only_verified"], false);
+    let rules_path = rules_dir.join(format!("chat-{}.md", chat.conversation_id));
+    assert_eq!(binding["instructions_path"], rules_path.to_str().unwrap());
+    let rules = std::fs::read_to_string(&rules_path).unwrap();
+    assert!(rules.starts_with("Chat rules: Synthetic chat\n"));
+    assert!(rules.contains(&chat.v1_thread_id) && rules.contains("120000000000000001@g.us"));
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&rules_path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o037, 0, "no group write, nothing for others");
+    }
+    // An operator's edit survives a retry (create-only).
+    std::fs::write(&rules_path, "operator rules\n").unwrap();
     assert_eq!(
         (
             binding["enabled"].as_bool(),
@@ -330,6 +352,10 @@ async fn new_chat_is_wired_to_v2_once_and_resumes_after_a_refusal() {
         (StatusCode::CREATED, chat.v1_thread_id.clone())
     );
     assert_eq!(v1_peer.lock().unwrap().calls.len(), before);
+    assert_eq!(
+        std::fs::read_to_string(&rules_path).unwrap(),
+        "operator rules\n"
+    );
     // The same id for another chat is a conflict.
     let error = create(
         State(state.clone()),
