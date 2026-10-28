@@ -20,7 +20,7 @@ from . import parallel_watch
 from .notices import TEMPLATES
 from .participants import compose
 from .rust_client import ClientError
-from .model_identity import observed_identity
+from .model_identity import observed_identity, quick_identity
 from .policy_refusal import notice as policy_notice
 from .first_response import capture as capture_first_response, repeats_fast
 from .questions import QUESTION_PREFIX, QUESTION_LABEL, QUESTION_SCAN_LIMIT, export_question, repeats_question
@@ -924,6 +924,11 @@ class Worker:
         reply = {"id": deep["acceptance_event_id"], "role": "assistant", "state": "completed",
                  "phase": "final_answer", "source": "rust-v2-pilot", "parentMessageId": data["remote_id"], "text": text}
         reply.update(self.provider_identity(run_id=deep["run_id"]))
+        # The Quick of this input for the one footer layer line (V1 #389).
+        try:
+            reply.update(quick_identity(self.call, data, statuses.get("fast")))
+        except Exception:
+            pass  # A footer detail never holds up the final.
         deep_group.quote(data, reply)
         parallel_watch.quote(data, statuses.get("deep"), reply)
         if text is None:
