@@ -27,6 +27,13 @@ pub(super) struct Companion {
     slots: Mutex<Slots>,
     /// The canonical lineage holds a ready native and waits for input.
     primary_idle: AtomicBool,
+    /// Held (shared) by each running Fast step across its retiring check and
+    /// its fenced writes; window retirement takes it exclusively after
+    /// `retire`. So Core never moves the window to `retiring` (whose
+    /// execution fence refuses every Fast write) under a step that already
+    /// decided to keep running: that step finishes first, and every later
+    /// step sees `retiring` and takes the ordinary Stop path instead.
+    steps: tokio::sync::RwLock<()>,
 }
 
 /// Auxiliary Fast custody of this window.
@@ -66,6 +73,7 @@ impl Companion {
             setup_proofs: Mutex::new(Vec::new()),
             slots: Mutex::new(Slots::default()),
             primary_idle: AtomicBool::new(false),
+            steps: tokio::sync::RwLock::new(()),
         })
     }
     pub(super) fn scope(&self) -> ExecutionScope {
@@ -237,6 +245,16 @@ impl Companion {
     }
     pub(super) fn retiring(&self) -> bool {
         self.retiring.load(Ordering::Acquire)
+    }
+    /// One running Fast step: check `retiring` (via `fast_window_due`) and
+    /// do its fenced writes while holding this.
+    pub(super) async fn step(&self) -> tokio::sync::RwLockReadGuard<'_, ()> {
+        self.steps.read().await
+    }
+    /// Retire, then wait until no Fast step that missed it is still running.
+    pub(super) async fn retire_quiesced(&self) {
+        self.retire();
+        drop(self.steps.write().await);
     }
     pub(super) fn fail(&self) {
         self.failed.store(true, Ordering::Release);
@@ -556,7 +574,9 @@ impl ConfiguredExecution {
 
     pub(super) async fn begin_role_retirement(&self) -> Result<(), &'static str> {
         if let Some(companion) = &self.companion {
-            companion.retire();
+            // Before Core's window leaves `active`: a Fast step that saw no
+            // retirement must not hit the retiring fence mid-step.
+            companion.retire_quiesced().await;
         }
         if let Some(slots) = &self.deep_slots {
             slots.retire();
