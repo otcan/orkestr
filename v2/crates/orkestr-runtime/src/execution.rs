@@ -83,7 +83,7 @@ pub const FAST_TURN_NOTE: &str = "[Fast reply: you are the quick, read-only firs
 - Never say or imply that anything was done, sent, verified, fixed, scheduled or queued, and never promise a time. Do not state dates, numbers or statuses that are not written in this message or the history.
 - If the owner reports a problem or bug, do not call it a user error or tell them how they caused it; acknowledge it and say Deep is investigating.
 - If the input lists attachments, open each listed local file before answering (use your image viewing tool for images). Never say you cannot see an attachment that is listed unless opening it failed.
-- Reply in the language of the owner's message, in at most three short sentences.]";
+- Reply in the language of the owner's message: the language the current message itself is written in, not the language of the history, the chat rules, attachments, screenshots, quoted or pasted text, or the sender's name or phone number. Chat rules about the language of messages to other people apply to drafts for them, not to this reply. Use at most three short sentences.]";
 
 pub(crate) fn turn_text(role: orkestr_v2_contracts::runtime::Role, text: &str) -> String {
     match role {
@@ -214,6 +214,10 @@ mod fast_contract_tests {
             "image viewing tool",
             // Short, in the owner's language.
             "language of the owner's message",
+            "the language the current message itself is written in",
+            "not the language of the history, the chat rules, attachments",
+            "sender's name or phone number",
+            "apply to drafts for them, not to this reply",
             "at most three short sentences",
         ] {
             assert!(note.contains(required), "missing: {required}");
