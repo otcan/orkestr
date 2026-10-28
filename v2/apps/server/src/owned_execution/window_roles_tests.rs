@@ -1,4 +1,4 @@
-use super::{join_roles, Companion};
+use super::{fast_beside_pool, join_roles, Companion};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -197,4 +197,50 @@ async fn fast_claim_and_deep_abandonment_are_exclusive() {
         assert_eq!(decided.is_some(), companion.has_failed());
     }
     std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_failed_fast_is_reported_while_the_parallel_pool_still_runs() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let reported = std::sync::Arc::new(AtomicBool::new(false));
+    let (release, released) = tokio::sync::oneshot::channel::<()>();
+    let pool_done = std::sync::Arc::new(AtomicBool::new(false));
+    let pool = {
+        let pool_done = pool_done.clone();
+        async move {
+            let _ = released.await;
+            pool_done.store(true, Ordering::Release);
+        }
+    };
+    let side = tokio::spawn(fast_beside_pool(
+        async { Err::<(), _>("synthetic Fast failure") },
+        Some(pool),
+        {
+            let reported = reported.clone();
+            move || reported.store(true, Ordering::Release)
+        },
+    ));
+    // Reported promptly, while the pool (live slots) is still running.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !reported.load(Ordering::Acquire) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "Fast failure reported late"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    assert!(!pool_done.load(Ordering::Acquire));
+    assert!(!side.is_finished(), "the side role waits for its pool");
+    release.send(()).unwrap();
+    assert_eq!(side.await.unwrap(), Err("synthetic Fast failure"));
+    assert!(pool_done.load(Ordering::Acquire));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_healthy_fast_reports_nothing_and_no_pool_is_fine() {
+    let pool: Option<std::future::Ready<()>> = None;
+    assert_eq!(
+        fast_beside_pool(async { Ok(()) }, pool, || panic!("not failed")).await,
+        Ok(())
+    );
 }

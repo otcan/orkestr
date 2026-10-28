@@ -523,6 +523,7 @@ pub fn router_with_google_catalog(
         .route("/api/v2/conversations/{id}/worker-tasks/{task}/hold",post(worker_tasks::hold))
         .route("/api/v2/conversations/{id}/worker-tasks/{task}/payload",delete(worker_tasks::remove))
         .route("/api/v2/conversations/{id}/stop",post(execution::stop))
+        .route("/api/v2/conversations/{id}/parallel/stop",post(execution::parallel_stop))
         .route("/api/v2/conversations/{id}/fast/stop",post(execution::fast_stop))
         .route("/api/v2/conversations/{id}/steer",post(steering_http::submit))
         .route("/api/v2/conversations/{id}/steering/{key}",get(steering_http::status))

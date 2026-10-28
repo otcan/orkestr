@@ -725,10 +725,31 @@ async fn crash_abandons_slot_proposals_and_anchors_on_the_writer() {
     ];
     expected.sort_by_key(|r| r.to_string());
     assert_eq!(receipt.abandoned_run_ids, expected);
-    // The slot's input was consumed: never released for a second answer.
-    assert!(!receipt
+    // The defer rule after a crash: the abandoned slot never answered, so its
+    // input goes back to the writer's queue (released from the window,
+    // recorded once, never taken by a slot again). Delivered only by the
+    // writer of a successor window.
+    assert!(receipt
         .released_input_event_ids
         .contains(&second.input_event_id));
+    assert_eq!(
+        scalar(
+            &w,
+            "SELECT state||':'||coalesce(admitted_run_id,'') FROM reasoning_inbox WHERE event_id=?",
+            &second.input_event_id.to_string()
+        )
+        .await,
+        "queued:"
+    );
+    assert_eq!(
+        scalar(
+            &w,
+            "SELECT run_id FROM production_parallel_deep_deferrals WHERE event_id=?",
+            &second.input_event_id.to_string()
+        )
+        .await,
+        cap.provider().run.run_id.to_string()
+    );
     assert_eq!(
         scalar(
             &w,
@@ -961,6 +982,19 @@ async fn a_deferred_input_goes_to_the_writer_exactly_once() {
         .defer_parallel_deep_input(w.credential.credential(), &run)
         .await
         .unwrap());
+    assert!(
+        w.f.store
+            .deep_run_parallel_authenticated(
+                &w.browser_credential,
+                &w.f.owner,
+                &w.f.conversation,
+                &run
+            )
+            .await
+            .unwrap()
+            .2,
+        "the exact-run status reports the input handed back"
+    );
     assert_eq!(
         scalar(
             &w,
@@ -1023,7 +1057,7 @@ async fn burst_marker_and_review_gate() {
     // A lone writer turn carries no marker.
     assert_eq!(
         marker(writing.provider().run.run_id.clone()).await,
-        (false, false)
+        (false, false, false)
     );
     assert!(w
         .bound
@@ -1039,11 +1073,11 @@ async fn burst_marker_and_review_gate() {
         .unwrap());
     assert_eq!(
         marker(cap.provider().run.run_id.clone()).await,
-        (true, true)
+        (true, true, false)
     );
     assert_eq!(
         marker(writing.provider().run.run_id.clone()).await,
-        (false, true)
+        (false, true, false)
     );
     assert!(w
         .f
@@ -1139,4 +1173,73 @@ async fn a_failed_slot_turn_returns_its_input_to_the_writer() {
     accept(&w, writing.provider(), "writer").await;
     let next = writer(&w, "failed-writer-2").await;
     assert_eq!(next.source_event_id(), &question.input_event_id);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn writer_notes_never_starve_on_empty_or_oversized_answers() {
+    let w = Window::open().await;
+    w.activate().await;
+    switch(&w, true).await;
+    for n in 1..=8 {
+        join(&w, n).await;
+    }
+    let writing = writer(&w, "starve-writer").await;
+    // Eight slot answers (three at a time): two empty-of-text defers first,
+    // then one far larger than the note bound once escaped, then ordinary.
+    let texts = [
+        "PARALLEL_DEFER".to_owned(),
+        "PARALLEL_DEFER".to_owned(),
+        "\u{0001}".repeat(4_000),
+        "ANSWER_FOUR".into(),
+        "ANSWER_FIVE".into(),
+        "ANSWER_SIX".into(),
+        "ANSWER_SEVEN".into(),
+        "ANSWER_EIGHT".into(),
+    ];
+    let mut done = Vec::new();
+    for chunk in texts.chunks(3) {
+        let mut caps = Vec::new();
+        for (n, _) in chunk.iter().enumerate() {
+            let (binding, _) = slot(&w, &format!("starve-{}-{n}", done.len())).await;
+            caps.push(parallel(&w, &binding).await);
+        }
+        for (cap, text) in caps.iter().zip(chunk) {
+            accept(&w, cap.provider(), text).await;
+            w.bound
+                .retire_parallel_deep_slot(w.credential.credential(), &cap.provider().run.run_id)
+                .await
+                .unwrap();
+            done.push(cap.provider().run.run_id.clone());
+        }
+    }
+    accept(&w, writing.provider(), "writer").await;
+    let nine = join(&w, 9).await;
+    let next = writer(&w, "starve-writer-2").await;
+    assert_eq!(next.source_event_id(), &nine.input_event_id);
+    // The oversized answer is carried shortened, and every later answer is
+    // carried by this turn or the next: none is held back forever.
+    assert!(next
+        .text()
+        .contains("Parallel answers since your previous turn"));
+    let noted: i64 = count(
+        &w.f.store,
+        "SELECT count(*) FROM production_parallel_deep_notes",
+    )
+    .await;
+    assert!(
+        noted >= 3,
+        "the empty and oversized answers do not block the selection"
+    );
+    accept(&w, next.provider(), "writer 2").await;
+    join(&w, 10).await;
+    let later = writer(&w, "starve-writer-3").await;
+    accept(&w, later.provider(), "writer 3").await;
+    join(&w, 11).await;
+    let _last = writer(&w, "starve-writer-4").await;
+    let noted: i64 = count(
+        &w.f.store,
+        "SELECT count(*) FROM production_parallel_deep_notes",
+    )
+    .await;
+    assert_eq!(noted, 8, "every parallel answer is eventually noted once");
 }

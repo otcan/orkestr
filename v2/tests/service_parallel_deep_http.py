@@ -49,8 +49,12 @@ def run(case):
     window = expect(case, path(first) + "/window", 201, "POST",
                     window_request(intake(case, first, key, 1), key))["status"]["window_id"]
     writer = ready(case, first, "deep", "running")
-    # A burst while the writer's turn is held.
+    # The Codex five-hour quota gate: at 90 % used no parallel turn starts.
     join(case, first, window, "parallel:2", 2)
+    time.sleep(13)  # Past the gate's 10 s cache and many pool passes.
+    assert slot_runs(case, first) == [], "quota gate must stay closed at 90 %"
+    case.write_quota(10)
+    # A burst while the writer's turn is held.
     join(case, first, window, "parallel:3", 3)
 
     def two_slots():
@@ -89,10 +93,29 @@ def run(case):
     told = case.rows("SELECT run_id,noted_by_run_id FROM production_parallel_deep_notes ORDER BY run_id")
     assert {row["run_id"] for row in told} == {row["id"] for row in slots}, told
     assert {row["noted_by_run_id"] for row in told} == {second_writer["run_id"]}, told
-    # A further input gets a slot; the owner's Stop of the writer stops it.
+    # A further input gets a slot that outlives the writer's turn: the
+    # owner's parallel Stop reaches it.
     join(case, first, window, "parallel:5", 5)
     wait_for(lambda: len(slot_runs(case, first)) == 3 or None, "third slot run", 60)
-    live = ready(case, first, "deep", "running", run=second_writer["run_id"])
+    (case.workspaces["fast"] / "release-4").touch()
+    (case.workspaces["deep"] / "release-4").touch()
+    wait_for(lambda: status(case, first, phase="completed", run=second_writer["run_id"]),
+             "second writer accepted", 60)
+    stopped = expect(case, path(first) + "/parallel/stop", 200, "POST", {"request_key": "parallel:pstop"})
+    assert len(stopped["stopped"]) == 1, stopped
+
+    def slot_stopped(index):
+        rows = case.rows("SELECT r.id,r.state,t.terminal_kind FROM production_runs r LEFT JOIN "
+                         "production_terminal_evidence t ON t.run_id=r.id WHERE r.conversation_id=? AND "
+                         "r.role='deep' AND r.deep_slot>0 ORDER BY r.scope_sequence", (first,))
+        return rows if len(rows) > index and rows[index]["terminal_kind"] == "stopped" else None
+    wait_for(lambda: slot_stopped(2), "parallel Stop reaches the slot past the writer turn", 60)
+    # The owner's Stop of a running writer stops its live slot too.
+    join(case, first, window, "parallel:6", 6)
+    third_writer = ready(case, first, "deep", "running", previous=second_writer["run_id"])
+    join(case, first, window, "parallel:7", 7)
+    wait_for(lambda: len(slot_runs(case, first)) == 4 or None, "fourth slot run", 60)
+    live = ready(case, first, "deep", "running", run=third_writer["run_id"])
     stop = {"run_id": live["run_id"], "expected_revision": live["revision"],
             "expected_control_revision": live["control_revision"], "request_key": "parallel:stop"}
     code, receipt, _ = case.request(path(first) + "/stop", "POST", stop)
@@ -102,7 +125,7 @@ def run(case):
         rows = case.rows("SELECT r.id,r.state,t.terminal_kind FROM production_runs r LEFT JOIN "
                          "production_terminal_evidence t ON t.run_id=r.id WHERE r.conversation_id=? AND "
                          "r.role='deep' AND r.deep_slot>0 ORDER BY r.scope_sequence", (first,))
-        return rows if rows[-1]["terminal_kind"] == "stopped" else None
+        return rows if len(rows) == 4 and rows[-1]["terminal_kind"] == "stopped" else None
     fanned = wait_for(stopped, "owner Stop reaches the live slot", 60)
     assert fanned[-1]["state"] == "cancelled", fanned
     # Switch off: a second conversation's burst is answered by its writer alone.
@@ -131,7 +154,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
     record = {"source": args.source, "binary_sha256": hashlib.sha256(args.binary.read_bytes()).hexdigest(),
               "actual_provider": False, "passed": False}
-    case = ServiceRolesCase(args.source)
+    case = ServiceRolesCase(args.source, quota_used=90)
     record["fixture"] = str(case.root)
     started = time.monotonic()
     try:

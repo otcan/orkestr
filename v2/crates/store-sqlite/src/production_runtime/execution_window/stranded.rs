@@ -85,6 +85,10 @@ struct Turns {
     abandon: Vec<Abandon>,
     fail: Vec<Fail>,
     release: Vec<String>,
+    /// Read-only parallel Deep slot runs whose input goes back to the writer
+    /// (`(run, event)`): an abandoned slot proposal or a failed slot turn
+    /// never answered it (the defer rule, applied after a crash).
+    requeue: Vec<(String, String)>,
 }
 
 enum Planned {
@@ -272,6 +276,34 @@ async fn release_inputs(
         }
     }
     Ok(())
+}
+
+/// Slot runs of this incarnation that never answered their input: proposals
+/// this plan abandons and failed turns. Each input is still consumed by that
+/// run, belongs to this window and was not handed back already.
+async fn slot_returns(
+    tx: &mut SqliteConnection,
+    window: Uuid,
+    context: &str,
+    incarnation: &str,
+    abandon: &[Abandon],
+) -> Result<Vec<(String, String)>> {
+    if !super::super::parallel_deep::present(tx).await? {
+        return Ok(Vec::new());
+    }
+    let rows = sqlx::query("SELECT r.id,r.event_id,r.state,(SELECT t.terminal_kind FROM production_terminal_evidence t WHERE t.run_id=r.id) AS terminal FROM production_runs r JOIN reasoning_inbox i ON i.event_id=r.event_id AND i.admitted_run_id=r.id AND i.state='consumed' JOIN execution_window_inputs wi ON wi.event_id=r.event_id AND wi.window_id=? WHERE r.context_id=? AND r.incarnation_id=? AND r.role='deep' AND r.deep_slot>0 AND NOT EXISTS(SELECT 1 FROM production_parallel_deep_deferrals d WHERE d.run_id=r.id OR d.event_id=r.event_id) ORDER BY r.scope_sequence")
+        .bind(window.to_string()).bind(context).bind(incarnation)
+        .fetch_all(&mut *tx).await.map_err(db)?;
+    Ok(rows
+        .into_iter()
+        .filter(|row| {
+            let run: String = row.get("id");
+            abandon.iter().any(|a| a.run == run)
+                || matches!(row.get::<&str, _>("state"), "failed" | "blocked")
+                || row.get::<Option<String>, _>("terminal").as_deref() == Some("failed")
+        })
+        .map(|row| (row.get("id"), row.get("event_id")))
+        .collect())
 }
 
 /// Inputs admitted to this window but never consumed by a Deep run.
@@ -526,7 +558,9 @@ async fn plan_in(
     if provenance.iter().any(|run| run != &prior_run) {
         return Err(RuntimeStoreError::Fenced);
     }
-    let release = unconsumed_inputs(tx, window).await?;
+    let mut release = unconsumed_inputs(tx, window).await?;
+    let requeue = slot_returns(tx, window, &context, &incarnation, &abandon).await?;
+    release.extend(requeue.iter().map(|(_, event)| event.clone()));
     let ids = |runs: Vec<&String>| {
         runs.into_iter()
             .map(|run| Ok(RunId(run.parse().map_err(db)?)))
@@ -558,6 +592,7 @@ async fn plan_in(
             abandon,
             fail,
             release,
+            requeue,
         })),
         abandon_grace_passed: w.get::<i64, _>("expires_at_ms") + ACCEPTANCE_GRACE_MS <= clock,
     })))

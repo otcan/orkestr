@@ -124,6 +124,30 @@ impl Context {
         }
         extended
     }
+    /// The share of this window's egress budget (attempts and bytes, the
+    /// tighter of the two) still unused, from the manager's own receipt.
+    /// `None` when the manager cannot say (callers fail closed).
+    pub(crate) async fn egress_left(&self) -> Option<f64> {
+        let deadline = Instant::now().checked_add(std::time::Duration::from_secs(2))?;
+        let receipt = self
+            .manager
+            .status(&format!("status:{}", uuid::Uuid::new_v4()), deadline)
+            .await
+            .ok()?;
+        let super::manager_client::ManagerReceipt::Window(receipt) = receipt else {
+            return None;
+        };
+        if receipt.window_id != self.window.window_id
+            || receipt.generation != self.window.generation
+            || receipt.limits.attempts == 0
+            || receipt.limits.bytes == 0
+        {
+            return None;
+        }
+        let attempts = 1.0 - f64::from(receipt.attempts) / f64::from(receipt.limits.attempts);
+        let bytes = 1.0 - receipt.reserved_bytes as f64 / receipt.limits.bytes as f64;
+        Some(attempts.min(bytes))
+    }
     pub(crate) fn bind(&self, child: &BrokerChildLocator) -> Result<(), ()> {
         if self.work_due() {
             return Err(());

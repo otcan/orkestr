@@ -456,36 +456,26 @@ impl ConfiguredExecution {
                 let slots = self.deep_slots.clone();
                 let side = {
                     let shutdown = shutdown.clone();
-                    let companion = companion.clone();
-                    async move {
-                        // The parallel Deep pool is its own task (Core fences
-                        // block in place) and fails alone: it then starts no
-                        // slot, and the writer's close still waits for the
-                        // started ones. Aborted with this role set.
-                        let pool = parallel.map(|parallel| {
-                            let shutdown = shutdown.clone();
-                            AbortOnDrop(tokio::spawn(async move {
-                                if let Err(reason) = parallel.run_deep_slots(shutdown).await {
-                                    eprintln!("owned window parallel Deep pool failed: {reason}");
-                                    if let Some(slots) = slots {
-                                        slots.retire();
-                                    }
+                    let failed = companion.clone();
+                    // The parallel Deep pool fails alone: it then starts no
+                    // slot, and the writer's close still waits for the
+                    // started ones.
+                    let pool = parallel.map(|parallel| {
+                        let shutdown = shutdown.clone();
+                        async move {
+                            if let Err(reason) = parallel.run_deep_slots(shutdown).await {
+                                eprintln!("owned window parallel Deep pool failed: {reason}");
+                                if let Some(slots) = slots {
+                                    slots.retire();
                                 }
-                            }))
-                        });
-                        let fast = fast.run(shutdown).await;
-                        // Report a failed Fast now, not after the pool ends:
-                        // Deep must stop waiting on (and steering to) it.
-                        if fast.is_err() {
-                            if let Some(companion) = &companion {
-                                companion.fail();
                             }
                         }
-                        if let Some(mut pool) = pool {
-                            let _ = (&mut pool.0).await;
+                    });
+                    fast_beside_pool(fast.run(shutdown), pool, move || {
+                        if let Some(companion) = &failed {
+                            companion.fail();
                         }
-                        fast
-                    }
+                    })
                 };
                 join_roles(self.run(shutdown.clone()), side, move |reason| {
                     eprintln!("owned window Fast companion failed: {reason}");
@@ -616,6 +606,26 @@ impl ConfiguredExecution {
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
     }
+}
+
+/// Fast and the parallel Deep pool as one side role. The pool is its own
+/// task (Core fences block in place), aborted with this future. A failed
+/// Fast is reported at once, not after the pool ends: Deep must stop waiting
+/// on (and steering to) it while slots may still be live.
+async fn fast_beside_pool(
+    fast: impl std::future::Future<Output = Result<(), &'static str>>,
+    pool: Option<impl std::future::Future<Output = ()> + Send + 'static>,
+    fast_failed: impl FnOnce(),
+) -> Result<(), &'static str> {
+    let pool = pool.map(|pool| AbortOnDrop(tokio::spawn(pool)));
+    let fast = fast.await;
+    if fast.is_err() {
+        fast_failed();
+    }
+    if let Some(mut pool) = pool {
+        let _ = (&mut pool.0).await;
+    }
+    fast
 }
 
 /// A spawned role task that is aborted when its owning future is dropped.

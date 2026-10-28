@@ -94,6 +94,19 @@ pub(super) async fn commit_turns(
             .await
             .map_err(db)?;
     }
+    // The defer rule after a crash: a slot that never answered hands its
+    // input back to the writer (queued again, released from this window).
+    for (run, event) in &plan.requeue {
+        let changed = sqlx::query("UPDATE reasoning_inbox SET state='queued',claimant_session_id=NULL,claim_deadline_ms=NULL,admitted_run_id=NULL WHERE event_id=? AND admitted_run_id=? AND state='consumed'")
+            .bind(event).bind(run)
+            .execute(&mut *tx).await.map_err(db)?.rows_affected();
+        if changed != 1 {
+            return Err(RuntimeStoreError::Fenced);
+        }
+        sqlx::query("INSERT INTO production_parallel_deep_deferrals(event_id,run_id,deferred_at_ms) VALUES(?,?,?)")
+            .bind(event).bind(run).bind(clock)
+            .execute(&mut *tx).await.map_err(db)?;
+    }
     super::release_inputs(tx, &id, p.window_id, &plan.release, false).await?;
     // Post-condition: the whole context is now canonically terminal.
     let unresolved: i64 = sqlx::query_scalar("SELECT count(*) FROM production_runs r WHERE r.context_id=? AND NOT EXISTS(SELECT 1 FROM production_terminal_evidence t WHERE t.run_id=r.id)")

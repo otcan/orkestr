@@ -169,3 +169,15 @@ class ParallelWatchTests(fixture.IntakeBase):
         self.assertNotIn("refused", row)
         self.assertNotEqual(row["phase"], "completed")
         self.assertEqual(len(self.finals()), 1)
+
+    def test_a_slot_handed_back_after_a_crash_sends_no_notice(self):
+        self.burst()
+        slot = self.slot(1)
+        self.passes()
+        # Recovery abandoned the slot proposal and handed its input back.
+        slot.update(phase="cancelled", parallel_deferred=True)
+        self.passes(2)
+        row = self.row("b")
+        self.assertEqual(row["parallel_deferred"], [slot["run_id"]])
+        self.assertNotIn("refused", row)
+        self.assertEqual(self.finals(), [])

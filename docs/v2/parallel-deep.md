@@ -194,9 +194,10 @@ fails or stops the remaining turns. Nothing is replayed.
 **Provider quota.** All Deep turns of a conversation use one Codex account,
 so parallel turns multiply token use. The scheduler reads the passive
 `orkestr-provider-quota-v1` projection (`codex.json`, #367). It starts no
-parallel slot while the five-hour window is at 80 % or more, or the weekly
-window at 90 % or more. With a missing or stale (more than 10 minutes)
-projection it starts at most one slot. Quota is advisory, never execution
+parallel slot while the gating window is at 80 % or more used: the five-hour
+window when present, else the seven-day window. It fails closed (no new
+slot) when the projection is unconfigured, unreadable, malformed, more than
+30 minutes old, or has neither window. Quota is advisory, never execution
 evidence. A capacity error inside a parallel turn fails that turn alone: its
 input defers to the writer and is never retried in parallel.
 
@@ -391,9 +392,11 @@ Phase 1 (#376, migration 0082) and phases 2 and 3 (the runtime PR, migration
   no slot takes it again.
 - **Stop and close.**
   - The pool stops every live slot when the writer's run is cancel-requested
-    or cancelled. Known gap: a slot that outlives the writer's turn cannot
-    be stopped by the owner (the idle writer offers no Stop); it is
-    read-only and ends at its own turn end or the window deadline.
+    or cancelled.
+  - `POST /api/v2/conversations/{id}/parallel/stop` (`{"request_key"}`,
+    owner session and CSRF as for Stop) stops every live parallel turn,
+    including those that outlive the writer's turn. It returns their Stop
+    receipts, and none while the switch is off.
   - The writer stops and drains every slot while the window is still active,
     before window retirement and before a late owner-acceptance wait, and
     holds their reap witnesses through close.
@@ -411,12 +414,37 @@ Phase 1 (#376, migration 0082) and phases 2 and 3 (the runtime PR, migration
 - **Review gate.** Slot answers are accepted by the server, so no slot
   starts while the conversation has `review_before_accepting` on.
 
-Not yet implemented:
+Guards (the follow-up PR on top of the runtime PR):
 
-- the provider-quota gate on the `codex.json` projection;
-- the stop at 25 % of the window's egress budget.
-
-Live host pressure and the ceilings are the only admission limits today.
+- **Provider quota.** No new slot while the gating Codex quota window is
+  at 80 % or more used. That window is the five-hour one when present, and
+  otherwise the seven-day one: the projection is sparse, and Codex currently
+  reports only `seven_day`.
+  - The reading is the package's `codex_quota_projection`
+    (`<directory>/codex.json`, on the live host
+    `/var/lib/orkestr-provider-quota/codex.json`), passed to the server by
+    the manager in `ORKESTR_V2_CODEX_QUOTA_FILE` and cached for 10 s.
+  - It fails closed when the file is unconfigured, unreadable or malformed,
+    when the reading is more than 30 minutes old, or when it has neither
+    window. A fresh reading of a window that has since reset counts as
+    zero usage; a stale one stays closed.
+- **Egress budget.** No new slot once less than 25 % of the window's
+  attempts or bytes remain, from the manager's own receipt (fails closed).
+- **Drain deadline.** When the window closes, a slot proposal still
+  unaccepted after 30 s releases its native. The window then settles
+  through stranded reconciliation, so the writer's close never waits
+  forever.
+- **Crash recovery applies the defer rule.** Stranded reconciliation hands
+  every input of an abandoned slot proposal or a failed slot turn back to
+  the writer: queued, released from the window, recorded once. The
+  exact-run status reports `parallel_deferred: true` for such a run, and the
+  adapter forgets it without a notice.
+- **Writer note.** An accepted answer without text, or the defer marker, is
+  marked noted, so it never blocks the bounded selection. An answer that
+  alone exceeds the note bound is carried shortened.
+- **Broker.** A parallel slot identity on the read-only broker is never
+  resumed.
+- The Fast-failure path of the shared Fast-and-pool role is unit-tested.
 
 ## Risks
 

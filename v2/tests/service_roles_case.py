@@ -32,7 +32,10 @@ class PackageFixture(ServiceFixture):
 class ServiceRolesCase:
     request = ordinary.Case.request
 
-    def __init__(self, source):
+    def __init__(self, source, quota_used=None):
+        # Optional synthetic Codex five-hour usage (percent): the package then
+        # configures a quota projection the parallel Deep gate reads.
+        self.quota_used = quota_used
         assert os.geteuid() == 0, "explicit root synthetic fixture required"
         self.fixture = PackageFixture()
         f = self.fixture
@@ -137,8 +140,18 @@ class ServiceRolesCase:
         beta["max_active_windows"] = 2
         (f.package / "beta.json").write_bytes(packager.encoded(beta))
         (f.package / "beta.json").chmod(0o640)
+        changed = {*ROLE_FILES, "beta.json"}
+        if self.quota_used is not None:
+            self.quota = f.directory("codex-quota")
+            self.write_quota(self.quota_used)
+            service = json.loads((f.package / "service.json").read_bytes())
+            service["codex_quota_projection"] = {"directory": str(self.quota),
+                                                 "account_ref": "00000000-0000-4000-8000-0000000000aa"}
+            (f.package / "service.json").write_bytes(packager.encoded(service))
+            (f.package / "service.json").chmod(0o640)
+            changed.add("service.json")
         manifest = json.loads((f.package / "manifest.json").read_bytes())
-        manifest["files"].update({name: digest(f.package / name) for name in {*ROLE_FILES, "beta.json"}})
+        manifest["files"].update({name: digest(f.package / name) for name in changed})
         (f.package / "manifest.json").write_bytes(packager.encoded(manifest))
         self.receipt["manifest_sha256"] = digest(f.package / "manifest.json")
         Package(f.package, self.receipt["manifest_sha256"])
@@ -150,6 +163,20 @@ class ServiceRolesCase:
                    {"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8"}, label="manager")
         ordinary.wait_for(lambda: self.listener(f.package / "server"), "owned configured listener", 15)
         assert self.request("/api/v2/health", browser=False)[0] == 200
+
+    def write_quota(self, used, observed_ms=None):
+        """The closed Codex quota projection the server's gate reads."""
+        import time as clock
+        observed = int(clock.time() * 1000) if observed_ms is None else observed_ms
+        value = {"format": "orkestr-provider-quota-v1", "provider": "codex",
+                 "owner_id": "00000000-0000-4000-8000-0000000000ab",
+                 "account_ref": "00000000-0000-4000-8000-0000000000aa",
+                 "windows": {"five_hour": {"used_percent": used, "resets_at": observed // 1000 + 3600,
+                                           "status": None, "observed_at": observed}}}
+        path = self.quota / "codex.json"
+        path.write_bytes(json.dumps(value).encode())
+        os.chown(path, UID, GID)
+        path.chmod(0o640)
 
     def trace(self):
         self.observe()

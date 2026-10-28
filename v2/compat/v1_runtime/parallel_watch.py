@@ -113,17 +113,24 @@ def failed(worker, data, run):
         status, value = worker.client.request("GET", "/execution?run_id=" + run, allowed=(200, 404))
     except Exception:
         return False
-    if status != 200 or not isinstance(value, dict) or value.get("phase") not in ("failed", "blocked"):
+    if status != 200 or not isinstance(value, dict) or not handed_back(value):
         return False
     forget(worker, data, run, "parallel_deep_failed")
     return True
+
+
+def handed_back(value):
+    """Core gave the slot's input back to the writer: a failed turn, or an
+    exact-run `parallel_deferred` marker (defer, failure, or an abandoned
+    proposal after a crash). The slot run never answers it."""
+    return value.get("parallel_deferred") is True or value.get("phase") in ("failed", "blocked")
 
 
 def head_failed(worker, data, status, ids):
     """The serial path's twin of `failed`: a failed slot run of the ledger
     head sends no notice; Core returned the input to the writer."""
     if (not isinstance(status, dict) or status.get("parallel_deep") is not True
-            or status.get("run_id") not in ids or status.get("phase") not in ("failed", "blocked")):
+            or status.get("run_id") not in ids or not handed_back(status)):
         return False
     forget(worker, data, status["run_id"], "parallel_deep_failed")
     return True

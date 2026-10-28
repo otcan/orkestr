@@ -69,6 +69,13 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         }
         state = state.with_beta_config_file(&PathBuf::from(path), &home)?;
     }
+    if let Some(path) =
+        std::env::var_os(orkestr_v2_server::owned_execution::PARALLEL_DEEP_QUOTA_FILE_ENV)
+    {
+        // The Codex quota projection read by the parallel Deep gate; absent,
+        // the gate stays closed and no parallel turn starts.
+        orkestr_v2_server::owned_execution::set_parallel_deep_quota_file(PathBuf::from(path));
+    }
     if let Some(path) = std::env::var_os(orkestr_v2_server::live_map::LIVE_MAP_ENV) {
         // Opt-in: absent means the live map endpoint reports "not configured".
         state = state.with_live_map_file(&PathBuf::from(path))?;

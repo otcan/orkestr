@@ -189,7 +189,7 @@ async fn status_for(
                 // adapters quote its source message. Both absent otherwise.
                 // They route an input's final too: a store error is a 503,
                 // never "not parallel".
-                let (parallel, concurrent) = state
+                let (parallel, concurrent, deferred) = state
                     .store
                     .deep_run_parallel_authenticated(&credential, &owner, &conversation, run)
                     .await
@@ -222,6 +222,11 @@ async fn status_for(
                     }
                     if parallel {
                         value["parallel_deep"] = serde_json::Value::Bool(true);
+                    }
+                    if deferred {
+                        // Core handed this slot's input back to the writer:
+                        // this run never answers it.
+                        value["parallel_deferred"] = serde_json::Value::Bool(true);
                     }
                     if concurrent {
                         value["concurrent_deep"] = serde_json::Value::Bool(true);
@@ -297,6 +302,21 @@ async fn stop_for(
             "Invalid Stop request",
         ));
     }
+    let receipt = stop_run(&state, &headers, &owner, &conversation, &input, fast).await?;
+    Ok(Json(receipt).into_response())
+}
+
+/// Request Stop of one exact registered run (authenticated and guarded by
+/// the caller) and hand the issued control to its owned factory.
+async fn stop_run(
+    state: &AppState,
+    headers: &HeaderMap,
+    owner: &OwnerId,
+    conversation: &ConversationId,
+    input: &ExecutionControlRequest,
+    fast: bool,
+) -> Result<orkestr_v2_contracts::ExecutionStopReceipt, Error> {
+    let (owner, conversation) = (owner.clone(), conversation.clone());
     let scope = if fast {
         state.fast_execution_scope(&owner, &conversation).await?
     } else {
@@ -307,9 +327,9 @@ async fn stop_for(
         "control_unavailable",
         "Stop unavailable",
     ))?;
-    let credential = browser::credential(&headers)?;
+    let credential = browser::credential(headers)?;
     let requested = match &scope.control {
-        Some(control) => Some(control.request(&owner, &conversation, &input).ok_or(Error(
+        Some(control) => Some(control.request(&owner, &conversation, input).ok_or(Error(
             StatusCode::SERVICE_UNAVAILABLE,
             "control_unavailable",
             "Stop unavailable",
@@ -334,7 +354,7 @@ async fn stop_for(
     }
     let (receipt, issued_control) = scope
         .store
-        .stop_execution_control_authenticated(&credential, &conversation, &input)
+        .stop_execution_control_authenticated(&credential, &conversation, input)
         .await
         .map_err(stop_error)?;
     if !receipt.is_valid()
@@ -358,8 +378,112 @@ async fn stop_for(
             )
         })?;
     }
-    Ok(Json(receipt).into_response())
+    Ok(receipt)
 }
+
+/// The owner's Stop of every live read-only parallel Deep turn of the
+/// conversation, including turns that outlive the writer's own turn (whose
+/// Stop already reaches every live slot). Body: `{"request_key": "..."}`.
+/// Returns the receipts of the turns it stopped (none while the switch is
+/// off: no parallel turn exists then).
+pub(crate) async fn parallel_stop(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    body: Result<Json<ParallelStopRequest>, axum::extract::rejection::JsonRejection>,
+) -> Result<Response, Error> {
+    let owner = browser::owner(&state, &headers).await?;
+    browser::guard(
+        &state,
+        &axum::http::Method::POST,
+        "execution_stop",
+        &headers,
+    )
+    .await?;
+    let conversation = ConversationId(Uuid::parse_str(&id).map_err(|_| {
+        Error(
+            StatusCode::BAD_REQUEST,
+            "invalid_id",
+            "Invalid conversation ID",
+        )
+    })?);
+    let Json(input) = body.map_err(|_| {
+        Error(
+            StatusCode::BAD_REQUEST,
+            "invalid_input",
+            "Invalid Stop request",
+        )
+    })?;
+    let key = input.request_key;
+    if key.is_empty()
+        || key.len() > 96
+        || !key
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"-_.:".contains(&b))
+    {
+        return Err(Error(
+            StatusCode::BAD_REQUEST,
+            "invalid_input",
+            "Invalid Stop request",
+        ));
+    }
+    let credential = browser::credential(&headers)?;
+    let unavailable = || {
+        Error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "store_unavailable",
+            "Stop unavailable",
+        )
+    };
+    let runs = state
+        .store
+        .parallel_deep_live_runs_authenticated(&credential, &owner, &conversation)
+        .await
+        .map_err(|_| unavailable())?;
+    let mut receipts = Vec::new();
+    // A Stop that could not be requested (store busy or unavailable) must not
+    // read as success: the owner retries, and stopped turns are not listed
+    // again (they are no longer starting or running).
+    let mut incomplete = false;
+    for (n, run) in runs.into_iter().enumerate() {
+        let status = match state
+            .store
+            .execution_run_history_authenticated(&credential, &owner, &conversation, &run, false)
+            .await
+        {
+            Ok(Some(status)) => status,
+            Ok(None) => continue, // Ended meanwhile.
+            Err(_) => {
+                incomplete = true;
+                continue;
+            }
+        };
+        let request = ExecutionControlRequest {
+            run_id: run,
+            expected_revision: status.revision,
+            expected_control_revision: status.control_revision,
+            request_key: format!("{key}:{n}"),
+        };
+        match stop_run(&state, &headers, &owner, &conversation, &request, false).await {
+            Ok(receipt) => receipts.push(receipt),
+            // A turn that ended (or was stopped) meanwhile refuses its Stop:
+            // nothing to do.
+            Err(Error(_, "revision_conflict" | "execution_fenced" | "not_found", _)) => {}
+            Err(_) => incomplete = true,
+        }
+    }
+    if incomplete {
+        return Err(unavailable());
+    }
+    Ok(Json(serde_json::json!({ "stopped": receipts })).into_response())
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ParallelStopRequest {
+    request_key: String,
+}
+
 fn stop_error(error: RuntimeStoreError) -> Error {
     match error {
         RuntimeStoreError::InvalidInput => Error(
