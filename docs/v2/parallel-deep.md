@@ -194,9 +194,10 @@ fails or stops the remaining turns. Nothing is replayed.
 **Provider quota.** All Deep turns of a conversation use one Codex account,
 so parallel turns multiply token use. The scheduler reads the passive
 `orkestr-provider-quota-v1` projection (`codex.json`, #367). It starts no
-parallel slot while the five-hour window is at 80 % or more, or the weekly
-window at 90 % or more. With a missing or stale (more than 10 minutes)
-projection it starts at most one slot. Quota is advisory, never execution
+parallel slot while the gating window is at 80 % or more used: the five-hour
+window when present, else the seven-day window. It fails closed (no new
+slot) when the projection is unconfigured, unreadable, malformed, more than
+30 minutes old, or has neither window. Quota is advisory, never execution
 evidence. A capacity error inside a parallel turn fails that turn alone: its
 input defers to the writer and is never retried in parallel.
 
@@ -415,16 +416,17 @@ Phase 1 (#376, migration 0082) and phases 2 and 3 (the runtime PR, migration
 
 Guards (the follow-up PR on top of the runtime PR):
 
-- **Provider quota.** No new slot while the Codex five-hour window is at
-  80 % or more. The reading is the package's `codex_quota_projection`
-  (`<directory>/codex.json`, on the live host
-  `/var/lib/orkestr-provider-quota/codex.json`), passed to the server by the
-  manager in `ORKESTR_V2_CODEX_QUOTA_FILE` and cached for 10 s. It fails
-  closed when it is unconfigured, unreadable, malformed, more than 30
-  minutes old, or has no five-hour window. The projection is sparse: the
-  live file currently holds only `seven_day`, so no slot starts until the
-  provider reports a five-hour window. A window that reset after the
-  reading counts as fresh.
+- **Provider quota.** No new slot while the gating Codex quota window is
+  at 80 % or more used. That window is the five-hour one when present, and
+  otherwise the seven-day one: the projection is sparse, and Codex currently
+  reports only `seven_day`.
+  - The reading is the package's `codex_quota_projection`
+    (`<directory>/codex.json`, on the live host
+    `/var/lib/orkestr-provider-quota/codex.json`), passed to the server by
+    the manager in `ORKESTR_V2_CODEX_QUOTA_FILE` and cached for 10 s.
+  - It fails closed when the file is unconfigured, unreadable or malformed,
+    when the reading is more than 30 minutes old, or when it has neither
+    window. A window that reset after the reading counts as fresh.
 - **Egress budget.** No new slot once less than 25 % of the window's
   attempts or bytes remain, from the manager's own receipt (fails closed).
 - **Drain deadline.** When the window closes, a slot proposal still

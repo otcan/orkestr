@@ -9,7 +9,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 /// Operator-configured projection file, passed by the service manager from
 /// the package's `codex_quota_projection` (`<directory>/codex.json`).
 pub const QUOTA_FILE_ENV: &str = "ORKESTR_V2_CODEX_QUOTA_FILE";
-/// No new slot at or above this share of the five-hour window.
+/// No new slot at or above this share of the gating quota window.
 pub(super) const QUOTA_USED_LIMIT: f64 = 80.0;
 /// A reading older than this is stale (the projection updates on every
 /// provider turn, and slots only start while the writer runs one).
@@ -29,7 +29,7 @@ pub fn set_quota_file(path: PathBuf) {
     }
 }
 
-/// Whether the five-hour quota admits one more slot now (cached 10 s).
+/// Whether the Codex quota admits one more slot now (cached 10 s).
 pub(super) fn quota_allows() -> bool {
     if let Ok(cached) = QUOTA_CACHE.lock() {
         if let Some((at, allows)) = *cached {
@@ -43,7 +43,7 @@ pub(super) fn quota_allows() -> bool {
         .map_or(0, |since| i64::try_from(since.as_millis()).unwrap_or(0));
     let allows = QUOTA_FILE
         .get()
-        .is_some_and(|path| read(path).is_some_and(|value| five_hour_allows(&value, now_ms)));
+        .is_some_and(|path| read(path).is_some_and(|value| quota_window_allows(&value, now_ms)));
     if let Ok(mut cached) = QUOTA_CACHE.lock() {
         *cached = Some((Instant::now(), allows));
     }
@@ -64,17 +64,21 @@ fn read(path: &Path) -> Option<serde_json::Value> {
     serde_json::from_slice(&raw).ok()
 }
 
-/// The closed `orkestr-provider-quota-v1` Codex projection: the five-hour
-/// window must be present and either reset since it was observed, or fresh
-/// and below the limit. Anything else (absent window, stale, malformed)
-/// fails closed.
-pub(super) fn five_hour_allows(value: &serde_json::Value, now_ms: i64) -> bool {
+/// The closed `orkestr-provider-quota-v1` Codex projection. The gating
+/// window is the five-hour one when present, else the seven-day one (the
+/// projection is sparse: Codex may report only the weekly window). It must
+/// either have reset since it was observed, or be fresh and below the limit.
+/// Anything else (neither window, stale, malformed) fails closed.
+pub(super) fn quota_window_allows(value: &serde_json::Value, now_ms: i64) -> bool {
     if value.get("format").and_then(|v| v.as_str()) != Some("orkestr-provider-quota-v1")
         || value.get("provider").and_then(|v| v.as_str()) != Some("codex")
     {
         return false;
     }
-    let Some(window) = value.pointer("/windows/five_hour") else {
+    let Some(window) = value
+        .pointer("/windows/five_hour")
+        .or_else(|| value.pointer("/windows/seven_day"))
+    else {
         return false;
     };
     let (Some(used), Some(observed)) = (
@@ -130,37 +134,66 @@ mod tests {
                 json!({"five_hour":{"used_percent":used,"resets_at":later,"status":null,"observed_at":fresh}}),
             )
         };
-        assert!(five_hour_allows(&at(10.0), NOW));
-        assert!(five_hour_allows(&at(79.9), NOW));
-        assert!(!five_hour_allows(&at(80.0), NOW));
-        assert!(!five_hour_allows(&at(100.0), NOW));
+        assert!(quota_window_allows(&at(10.0), NOW));
+        assert!(quota_window_allows(&at(79.9), NOW));
+        assert!(!quota_window_allows(&at(80.0), NOW));
+        assert!(!quota_window_allows(&at(100.0), NOW));
         // Stale reading: closed.
         let stale = quota(
             json!({"five_hour":{"used_percent":5,"resets_at":later,"status":null,
             "observed_at": NOW - 31 * 60_000}}),
         );
-        assert!(!five_hour_allows(&stale, NOW));
+        assert!(!quota_window_allows(&stale, NOW));
         // Reset since the (old) reading: usage restarted from zero.
         let reset = quota(
             json!({"five_hour":{"used_percent":95,"resets_at": NOW / 1000 - 10,"status":null,
             "observed_at": NOW - 3 * 3_600_000}}),
         );
-        assert!(five_hour_allows(&reset, NOW));
-        // Only a weekly window (the live projection may be sparse): closed.
-        let weekly = quota(
-            json!({"seven_day":{"used_percent":10,"resets_at":later,"status":null,"observed_at":fresh}}),
-        );
-        assert!(!five_hour_allows(&weekly, NOW));
+        assert!(quota_window_allows(&reset, NOW));
+        // Neither window: closed.
+        assert!(!quota_window_allows(&quota(json!({})), NOW));
         // Malformed or foreign: closed.
-        assert!(!five_hour_allows(&json!({}), NOW));
+        assert!(!quota_window_allows(&json!({}), NOW));
         let mut claude = at(10.0);
         claude["provider"] = json!("claude");
-        assert!(!five_hour_allows(&claude, NOW));
+        assert!(!quota_window_allows(&claude, NOW));
         let future = quota(
             json!({"five_hour":{"used_percent":5,"resets_at":later,"status":null,
             "observed_at": NOW + 3_600_000}}),
         );
-        assert!(!five_hour_allows(&future, NOW));
+        assert!(!quota_window_allows(&future, NOW));
+    }
+
+    #[test]
+    fn without_a_five_hour_window_the_seven_day_window_gates() {
+        let fresh = NOW - 60_000;
+        let later = NOW / 1000 + 6 * 86_400;
+        let weekly = |used: f64, observed: i64| {
+            quota(
+                json!({"seven_day":{"used_percent":used,"resets_at":later,"status":null,"observed_at":observed}}),
+            )
+        };
+        // The live shape (seven_day only), fresh and low: open.
+        assert!(quota_window_allows(&weekly(10.0, fresh), NOW));
+        assert!(quota_window_allows(&weekly(79.9, fresh), NOW));
+        // Same refusal at 80 % used.
+        assert!(!quota_window_allows(&weekly(80.0, fresh), NOW));
+        assert!(!quota_window_allows(&weekly(100.0, fresh), NOW));
+        // Same staleness rule.
+        assert!(!quota_window_allows(&weekly(10.0, NOW - 31 * 60_000), NOW));
+        // Malformed weekly window: closed.
+        let broken = quota(
+            json!({"seven_day":{"used_percent":"10","resets_at":later,"status":null,"observed_at":fresh}}),
+        );
+        assert!(!quota_window_allows(&broken, NOW));
+        // A present five-hour window is the one that gates, either way.
+        let both = |five: f64, seven: f64| {
+            quota(json!({
+                "five_hour":{"used_percent":five,"resets_at":NOW / 1000 + 3600,"status":null,"observed_at":fresh},
+                "seven_day":{"used_percent":seven,"resets_at":later,"status":null,"observed_at":fresh}}))
+        };
+        assert!(quota_window_allows(&both(10.0, 95.0), NOW));
+        assert!(!quota_window_allows(&both(85.0, 10.0), NOW));
     }
 
     #[test]
