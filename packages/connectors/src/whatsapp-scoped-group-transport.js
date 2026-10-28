@@ -8,7 +8,7 @@ import {scopedRouteMembership} from './whatsapp-scoped-route-membership.js';
 import {SCOPED_SEND_MAX_TEXT_LENGTH, encodeReplyEntry, validQuotedMessageId, validReplyDocument} from './whatsapp-scoped-group-formatting.js';
 import {DatabaseSync} from 'node:sqlite';
 import {createDeliveryRouteFence} from './whatsapp-delivery-route-fence.js';
-import {notificationScope, createTimerNotificationProofStore} from './whatsapp-timer-notification-proof.js';
+import {notificationScope, liveNotificationScope, createTimerNotificationProofStore} from './whatsapp-timer-notification-proof.js';
 import {OPERATOR_NOTICE_PARENT, validateOperatorNotifications, operatorNoticeRequestValid, operatorNoticeBodyValid} from './whatsapp-scoped-operator-notices.js';
 import {downloadScopedGroupMedia} from './whatsapp-scoped-group-media.js';
 import {validateCoordinatorConfig, coordinatorTokenMatches, createCoordinatorAccess} from './whatsapp-scoped-coordinator.js';
@@ -82,7 +82,7 @@ export function createScopedGroupTransport({config,token,base,dbPath=config.jour
   if(!token)fail('configuration_invalid');
   // Validate the whole contract before opening durable state: a build that
   // rejects the live configuration must leave the journal untouched.
-  const {groups: staticGroups,authors,participants,scope,fencedThreads,coordinator,delegates,dynamic,operator}=validateScopedGroupConfig(config,now);
+  const {groups: staticGroups,authors,participants,scope: staticScope,fencedThreads,coordinator,delegates,dynamic,operator}=validateScopedGroupConfig(config,now);
   // The coordinator bearer must be a dedicated credential, never the transport token.
   if(coordinatorTokenMatches(coordinator,token) || delegateForBearer(delegates,token))fail('configuration_invalid');
   const db=new DatabaseSync(dbPath);db.exec(`PRAGMA journal_mode=WAL;
@@ -96,6 +96,8 @@ export function createScopedGroupTransport({config,token,base,dbPath=config.jour
   // contract below stays the static one, so enabling this needs no migration.
   if(dynamic)db.exec(DYNAMIC_GROUPS_TABLE);
   const groups=dynamic ? createDynamicGroupView(db,{static:staticGroups,now}) : staticGroups;
+  // allGroups timer notifications cover registered groups as well (same view).
+  const scope=dynamic ? liveNotificationScope(staticScope,groups) : staticScope;
   const mediaDir=path.resolve(config.mediaDir || (dbPath===':memory:'
     ? path.join(os.tmpdir(),`orkestr-scoped-group-media-${process.pid}`)
     : `${dbPath}.media`));
