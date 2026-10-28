@@ -132,7 +132,7 @@ class SwitchCommandTests(Harness):
     def test_fable_and_malformed_models_are_refused_without_running_the_tool(self):
         for text in ("/switch deep claude-fable-5", "/switch deep gpt-b from FABLE", "/switch fast Fable"):
             self.assertIn("Fable models are not allowed", self.answer(text))
-        for text in ("/switch deep", "/switch deep $(rm)", "/switch deep gpt-b sideways", "/switch Claude",
+        for text in ("/switch deep", "/switch deep $(rm)", "/switch deep gpt-b sideways", "/switch claude opus",
                      "/switch fast gpt-b for claude", "/switch deep opus for claude"):
             self.assertIn("/switch status", self.answer(text))  # Reason plus help.
         self.assertEqual(self.tool.calls, [])
@@ -166,6 +166,45 @@ class SwitchCommandTests(Harness):
         self.answer("/switch deep gpt-b")  # Another change cancels the waiting one.
         self.assertIn("No provider switch is waiting", self.answer("/switch yes"))
         self.assertEqual([c[3] for c in self.applied()], ["gpt-b"])
+
+    def test_provider_shorthand_moves_this_chats_deep_after_yes(self):
+        self.tool.chats = [chat(self.conversation, effort="xhigh")]
+        self.assertIn("Reply /switch yes within 2 minutes", self.answer("/switch Claude"))
+        self.assertEqual(self.applied(), [])
+        self.answer("/switch yes")
+        [apply] = self.applied()
+        self.assertEqual(apply[:10], ["--layer", "deep", "--to", "opus", "--effort", "high", "--scope", self.conversation,
+                                      "--provider", "claude"])
+        self.assertIn("--yes", apply)
+        # A valid Claude effort is kept.
+        self.tool.chats = [chat(self.conversation, effort="medium")]
+        self.answer("/switch claude")
+        dry = [c for c in self.tool.calls if "--dry-run" in c][-1]
+        self.assertEqual(dry[dry.index("--effort") + 1], "medium")
+
+    def test_codex_shorthand_uses_the_configured_codex_default_at_high(self):
+        self.tool.chats = [chat(self.conversation, provider="claude", model="opus", effort="max", fast=None)]
+        self.answer("/switch CODEX")
+        self.answer("/switch yes")
+        [apply] = self.applied()
+        self.assertEqual(apply[:10], ["--layer", "deep", "--to", "gpt-a", "--effort", "high", "--scope", self.conversation,
+                                      "--provider", "codex"])
+
+    def test_shorthand_on_the_same_provider_replies_with_status(self):
+        text = self.answer("/switch codex")
+        self.assertIn("Already on codex gpt-a, effort medium.", text)
+        self.assertIn("All live chats", text)
+        self.tool.chats = [chat(self.conversation, provider="claude", model="opus", effort="high", fast=None)]
+        self.assertIn("Already on claude opus, effort high.", self.answer("/switch claude"))
+        self.assertEqual(self.applied(), [])
+        self.assertEqual([c for c in self.tool.calls if "--dry-run" in c], [])
+
+    def test_fast_provider_shorthand(self):
+        self.assertIn("Fast is Codex-only", self.answer("/switch fast claude"))
+        self.assertIn("Fast is already on Codex: gpt-f, effort low.", self.answer("/switch fast Codex"))
+        self.tool.chats = [chat(self.conversation, provider="claude", model="opus", fast=None)]
+        self.assertIn("Fast preferences are Codex-only", self.answer("/switch fast codex"))
+        self.assertEqual([c for c in self.tool.calls if c[:1] != ["--status"]], [])
 
     def test_codex_model_for_the_claude_chats_is_a_provider_switch(self):
         self.answer("/switch deep gpt-b for claude")

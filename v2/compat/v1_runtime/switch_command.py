@@ -15,38 +15,35 @@ COORDINATION.md line; the adapter also logs one `SWITCH` line per call.
 """
 import json
 import os
-from pathlib import Path
 import re
-import stat
-import subprocess
-import sys
 import time
 import uuid
 
 from .participants import split_header
+from .switch_tool import Switcher, first_line, log, plan_lines, planned_count, reason  # noqa: F401 (re-exported)
 
-# Deployment paths come from the service environment (e.g. a systemd drop-in);
-# without them /switch answers that switching is not configured here.
-TOOL_ENV = "ORKESTR_V2_ADAPTER_MODEL_SWITCH"
-RECORDS_ENV = "ORKESTR_V2_ADAPTER_MODEL_SWITCH_RECORDS"
 COMMAND = re.compile(r"^/switch(?:\s|$)", re.I)
 MODEL = re.compile(r"^[A-Za-z0-9._:-]{1,120}$")
 EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra")
 CLAUDE_HINT = re.compile(r"^(claude|opus|sonnet|haiku)", re.I)
 KEYWORDS = ("deep", "fast", "all", "for", "from", "status", "back", "yes", "help", "claude", "codex")
 CONFIRM_S = 120
+CLAUDE_EFFORTS = ("low", "medium", "high", "max")
+# Shorthand targets: `/switch claude` and `/switch codex` (the configured
+# global Codex default wins over CODEX_DEFAULT when the tool reports one).
+CLAUDE_DEFAULT = "opus"
+CODEX_DEFAULT = "gpt-6.1-sol"
 PENDING_KEY = "switch_pending"
 NAMESPACE = uuid.UUID("2a7c4e91-5b3d-4f08-9e6a-c1d2b3a4f5e6")
 FOOTER = "\n\n⚙️ /switch · handled by the adapter, no model turn"
 PLAN_LIMIT = 6
-PLAN_ROW = re.compile(r"^  (.+?)\s+(\S+) -> (\S+)(.*)$")
-TIMEOUTS = {"status": 45, "dry": 90, "apply": 180}
 HELP = ("Model switch (owner only, handled without a model turn):\n"
         "/switch status: this chat's Deep and Fast model, plus all chats\n"
         "/switch deep <model> [effort]: this chat's Deep\n"
         "/switch fast <model> [effort]: this chat's Fast (Codex chats)\n"
         "  add `all` for every Codex chat, `from <old>` to change only chats on <old>\n"
         "  `default` as model or effort clears the override\n"
+        "/switch claude | /switch codex: this chat's Deep to that provider's default model (asks /switch yes)\n"
         "/switch deep <codex model> for claude: move the Claude chats to Codex (asks /switch yes)\n"
         "/switch back: undo the latest switch of this chat; /switch back all: the latest fallback switch\n"
         "/switch yes: confirm a provider switch within 2 minutes\n"
@@ -89,6 +86,9 @@ def parse(text):
         return {"op": "yes"}
     if low in (["back"], ["back", "all"]):
         return {"op": "back", "all": len(low) == 2}
+    if low in (["claude"], ["codex"], ["deep", "claude"], ["deep", "codex"], ["fast", "claude"], ["fast", "codex"]):
+        # Shorthand: this chat's layer to that provider's default model.
+        return {"op": "provider", "layer": "fast" if low[0] == "fast" else "deep", "provider": low[-1]}
     if low[0] not in ("deep", "fast"):
         raise Invalid("Unknown /switch form.")
     if len(words) < 2 or not model_ok(words[1]):
@@ -117,110 +117,11 @@ def parse(text):
     return out
 
 
-# ------------------------------------------------------------------ the tool
-
-class Switcher:
-    """Runs orkestr-model-switch with an argument list; `run` is replaceable in tests."""
-
-    def __init__(self, tool=None, records=None, run=None):
-        self.tool = tool or os.environ.get(TOOL_ENV) or ""
-        self.records = Path(records or os.environ.get(RECORDS_ENV) or "/nonexistent")
-        self._run = run
-
-    def trusted(self):
-        """The tool must be a root-owned regular file nobody else can rewrite."""
-        try:
-            info = os.stat(self.tool)
-        except OSError:
-            return False
-        return (os.path.isabs(self.tool) and stat.S_ISREG(info.st_mode) and info.st_uid == 0 and
-                not info.st_mode & 0o022 and info.st_mode & 0o100)
-
-    def call(self, args, kind):
-        if self._run is not None:
-            return self._run(list(args), kind)
-        if not self.trusted():
-            return 127, "", "model switching is not configured on this host (%s)" % TOOL_ENV
-        try:
-            done = subprocess.run([self.tool] + list(args), capture_output=True, text=True, timeout=TIMEOUTS[kind],
-                                  stdin=subprocess.DEVNULL, close_fds=True,
-                                  env={"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8", "PYTHONDONTWRITEBYTECODE": "1"})
-        except subprocess.TimeoutExpired:
-            return 124, "", "timed out"
-        except OSError as error:
-            return 126, "", "could not run the tool (%s)" % type(error).__name__
-        return done.returncode, done.stdout, done.stderr
-
-    def status(self):
-        code, out, err = self.call(["--status", "--json"], "status")
-        if code != 0:
-            raise RuntimeError(first_line(err) or "status failed (%d)" % code)
-        return json.loads(out)
-
-    def history(self):
-        """Switch records, newest first (unreadable ones are skipped)."""
-        out = []
-        try:
-            paths = sorted(self.records.glob("*.json"))
-        except OSError:
-            return out
-        for path in paths:
-            try:
-                value = json.loads(path.read_text())
-            except (OSError, ValueError):
-                continue
-            if isinstance(value, dict):
-                value.setdefault("record", path.stem)
-                out.append(value)
-        return sorted(out, key=lambda r: (str(r.get("at") or ""), str(r.get("record"))), reverse=True)
-
-
-def first_line(text):
-    for line in (text or "").splitlines():
-        line = line.strip()
-        if line:
-            return line[:300]
-    return ""
-
-
-def reason(err, code):
-    line = first_line(err)
-    for prefix in ("refused: ", "V2 API error: "):
-        if line.startswith(prefix):
-            return line[len(prefix):]
-    return line or "exit %d" % code
-
-
-def plan_lines(out):
-    """(header, [change lines]) from the tool's plan output."""
-    header, lines = None, []
-    for raw in (out or "").splitlines():
-        if raw.startswith("plan:") and header is None:
-            header = raw[5:].strip()
-        elif header is not None:
-            # "  <name padded to 40> <before> -> <after>[  [note]]"; values have no spaces.
-            match = PLAN_ROW.match(raw)
-            if match:
-                lines.append("%s: %s → %s%s" % (match[1].strip(), match[2], match[3], match[4].rstrip()))
-    return header, lines
-
-
-def planned_count(header):
-    match = re.search(r"for (\d+) (?:conversation|thread)", header or "")
-    return int(match.group(1)) if match else None
-
-
 def bullet(lines):
     shown = ["• " + line for line in lines[:PLAN_LIMIT]]
     if len(lines) > PLAN_LIMIT:
         shown.append("• … and %d more" % (len(lines) - PLAN_LIMIT))
     return "\n".join(shown)
-
-
-def log(conversation, args, code, note=""):
-    safe = " ".join(a if re.match(r"^[A-Za-z0-9._:/=-]{1,160}$", a) else json.dumps(a) for a in args)
-    print("SWITCH orkestr-v2-wa-adapter conversation=%s exit=%s args=%s%s"
-          % (conversation, code, safe, (" " + note) if note else ""), file=sys.stderr, flush=True)
 
 
 # ------------------------------------------------------------------ commands
@@ -283,6 +184,37 @@ def set_args(cmd, conversation, status):
     if provider:
         args += ["--provider", provider]
     return args, bool(provider)
+
+
+def provider_args(cmd, conversation, status):
+    """`/switch claude|codex` (and `fast ...`): (args, None) or (None, reply)."""
+    row = chat_row(status, conversation)
+    if not row:
+        return None, "This chat has no live V2 settings row."
+    current = row.get("provider") or "codex"
+    if cmd["layer"] == "fast":
+        if cmd["provider"] == "claude":
+            return None, "Fast is Codex-only: there is no Claude Fast setting. /switch claude moves this chat's Deep."
+        if current != "codex":
+            return None, "This is a Claude chat: its Fast preferences are Codex-only and not used here."
+        fast = row.get("fast") or {}
+        return None, "Fast is already on Codex: %s, effort %s." % (fast.get("model") or "same as Deep",
+                                                                   fast.get("effort") or "default")
+    if current == cmd["provider"]:
+        codex = (status.get("global_codex_default") or {}).get("model")
+        model = row.get("model") or ("default (%s)" % codex if current == "codex" and codex else "default")
+        return None, "Already on %s %s, effort %s.\n\n%s" % (current, model, row.get("effort") or "default",
+                                                              status_text(status, conversation))
+    if cmd["provider"] == "claude":
+        effort = row.get("effort") if row.get("effort") in CLAUDE_EFFORTS else "high"
+        model = CLAUDE_DEFAULT
+    else:
+        effort = "high"
+        model = (status.get("global_codex_default") or {}).get("model") or CODEX_DEFAULT
+        if not model_ok(model) or denied(model) or CLAUDE_HINT.match(model):
+            model = CODEX_DEFAULT
+    return ["--layer", "deep", "--to", model, "--effort", effort, "--scope", conversation,
+            "--provider", cmd["provider"]], None
 
 
 def back_args(conversation, status, history):
@@ -399,7 +331,11 @@ def answer(switcher, ledger, data, now=None):
         return "❌ Could not read the model settings: %s" % (str(error)[:300] or "status failed")
     if cmd["op"] == "status":
         return status_text(status, conversation)
-    if cmd["op"] == "back":
+    if cmd["op"] == "provider":
+        args, note = provider_args(cmd, conversation, status)
+        if args is None:
+            return note
+    elif cmd["op"] == "back":
         if cmd["all"]:
             args = ["--revert", "latest"]
         else:

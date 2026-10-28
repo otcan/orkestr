@@ -424,6 +424,8 @@ pass intake) are answered with a refusal and nothing runs. Forms:
 | `/switch deep\|fast <model> [effort]` | This chat only (`--scope <conversation_id>`) |
 | `... all` | Every live Codex chat (`--scope codex`) |
 | `... from <old>` | Only chats currently on `<old>` (`--from`) |
+| `/switch claude` / `/switch codex` (any case) | This chat's Deep to that provider's default: Claude `opus` at the chat's effort when Claude accepts it, else `high`; Codex the configured global Codex default (fallback `gpt-6.1-sol`) at `high`. A provider change, so it asks `/switch yes`; on the same provider it answers "Already on ..." with the status |
+| `/switch fast claude\|codex` | Fast is Codex-only: `claude` is refused with that reason, `codex` reports the current Codex Fast setting |
 | `/switch deep <codex model> for claude` | Moves the Claude chats to Codex (`--scope claude --provider codex`) |
 | `/switch deep <claude model>` in a Codex chat (or the reverse) | Provider switch of this chat |
 | `/switch yes` | Confirms a waiting provider switch; it expires after 2 minutes |
@@ -440,7 +442,7 @@ confirmation. The reply names what changed and ends with "/switch back to
 undo". An input whose command was running when the adapter stopped is answered
 "may or may not have applied" and is never re-run.
 
-The adapter runs the operator's model switch tool directly with an argument
+The adapter (`switch_tool.py`) runs the operator's model switch tool directly with an argument
 list (no shell, a fixed environment, timeouts). Its path comes from the
 service environment, never from a message: `ORKESTR_V2_ADAPTER_MODEL_SWITCH`
 (an absolute, root-owned, executable file that group and others cannot
