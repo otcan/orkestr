@@ -18,7 +18,7 @@ import time
 
 from owned_execution_http import wait_for
 from service_roles_case import ServiceRolesCase
-from service_roles_http import expect, intake, path, ready, status, window_request
+from service_roles_http import accept, expect, intake, path, ready, status, window_request
 
 
 def switch(case, conversation, on):
@@ -138,6 +138,54 @@ def run(case):
     join(case, second, off_window, "off:2", 12)
     time.sleep(3)
     assert slot_runs(case, second) == []
+    # Review switched on mid-slot: the slot's proposal is never server
+    # accepted. When the window closes (the owner stops the writer) the drain
+    # deadline withdraws it in this live process: abandoned, input back to
+    # the writer, and the window closes now (not after the hard deadline).
+    third = expect(case, "/api/v2/conversations", 201, "POST",
+                   {"client_request_id": "synthetic:parallel-review", "name": "Synthetic review"})["conversation_id"]
+    switch(case, third, True)
+    key = "review:1"
+    review_window = expect(case, path(third) + "/window", 201, "POST",
+                           window_request(intake(case, third, key, 21), key))["status"]["window_id"]
+    held = ready(case, third, "deep", "running")
+    join(case, third, review_window, "review:2", 22)
+    wait_for(lambda: len(slot_runs(case, third)) == 1 or None, "review-case slot run", 60)
+    current = expect(case, path(third) + "/settings")
+    expect(case, path(third) + "/settings", 200, "PUT",
+           {"expected_revision": current["revision"], "provider": "codex", "honor_no_reply": True,
+            "review_before_accepting": True})
+    (case.workspaces["fast"] / "release-21").touch()
+    (case.workspaces["fast"] / "release-22").touch()
+    proposal = wait_for(lambda: (row if (row := slot_runs(case, third)[0])["state"] == "awaiting_acceptance"
+                                 else None), "slot proposal awaiting review", 60)
+    # Fast proposals of this window wait for the owner too (review on):
+    # accept them, so only the slot proposal is left undecided.
+    deadline = time.monotonic() + 40
+    while time.monotonic() < deadline:
+        waiting = case.rows("SELECT id FROM production_runs WHERE conversation_id=? AND role='fast' "
+                            "AND state='awaiting_acceptance'", (third,))
+        for row in waiting:
+            accept(case, third, {"run_id": row["id"], "_role": "fast"}, "review:fast:" + row["id"])
+        if not waiting and case.rows("SELECT count(*) AS n FROM production_runs WHERE conversation_id=? "
+                                     "AND role='fast' AND state='succeeded'", (third,))[0]["n"] >= 2:
+            break
+        time.sleep(0.5)
+    live = ready(case, third, "deep", "running", run=held["run_id"])
+    code, _, _ = case.request(path(third) + "/stop", "POST", {
+        "run_id": live["run_id"], "expected_revision": live["revision"],
+        "expected_control_revision": live["control_revision"], "request_key": "review:stop"})
+    assert code == 200, code
+
+    def withdrawn():
+        rows = case.rows("SELECT t.terminal_kind FROM production_terminal_evidence t WHERE t.run_id=?",
+                         (proposal["id"],))
+        return rows if rows and rows[0]["terminal_kind"] == "abandoned" else None
+    wait_for(withdrawn, "unaccepted slot proposal withdrawn at the drain deadline", 90)
+    assert case.rows("SELECT count(*) AS n FROM production_parallel_deep_deferrals WHERE run_id=?",
+                     (proposal["id"],)) == [{"n": 1}]
+    wait_for(lambda: case.rows("SELECT state FROM execution_windows WHERE id=?", (review_window,))
+             [0]["state"] == "closed" or None, "review-case window closed", 60)
     case.stop()
     final = case.rows("SELECT id,conversation_id,state FROM execution_windows")
     assert all(row["state"] == "closed" for row in final), final

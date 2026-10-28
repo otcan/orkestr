@@ -1243,3 +1243,166 @@ async fn writer_notes_never_starve_on_empty_or_oversized_answers() {
     .await;
     assert_eq!(noted, 8, "every parallel answer is eventually noted once");
 }
+
+async fn review(w: &Window, on: bool) {
+    let current =
+        w.f.store
+            .conversation_settings(&w.browser_credential, &w.f.owner, &w.f.conversation)
+            .await
+            .unwrap();
+    w.f.store
+        .update_conversation_settings(
+            &w.browser_credential,
+            &w.f.owner,
+            &w.f.conversation,
+            &ConversationSettingsUpdate {
+                expected_revision: current.revision,
+                provider: ConversationProvider::Codex,
+                model: None,
+                reasoning_effort: None,
+                honor_no_reply: true,
+                reply_prefix: None,
+                reply_footer: None,
+                review_before_accepting: on,
+                parallel_deep: None,
+                deep_grouping: None,
+            },
+        )
+        .await
+        .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn review_switched_on_mid_slot_withdraws_the_proposal_at_close_and_the_writer_answers() {
+    let w = Window::open().await;
+    w.activate().await;
+    switch(&w, true).await;
+    let question = join(&w, 1).await;
+    let writing = writer(&w, "withdraw-writer").await;
+    let (binding, _) = slot(&w, "withdraw-slot").await;
+    let cap = parallel(&w, &binding).await;
+    let run = cap.provider().run.run_id.clone();
+    // The owner turns review on mid-turn: no server acceptance happens.
+    review(&w, true).await;
+    let done = propose(&w, cap.provider(), "slot answer awaiting review").await;
+    assert!(w
+        .bound
+        .auto_accept_window_proposals(&w.f.conversation)
+        .await
+        .unwrap()
+        .is_empty());
+    // A running turn, or a run of another kind, is never withdrawn.
+    assert!(w
+        .bound
+        .withdraw_parallel_deep_proposal(w.credential.credential(), &writing.provider().run.run_id)
+        .await
+        .is_err());
+    // The writer's turn ends; the window closes.
+    accept(&w, writing.provider(), "writer").await;
+    w.bound
+        .begin_execution_window_retirement(
+            w.credential.credential(),
+            w.status.window_id,
+            1,
+            "role-test-boot",
+        )
+        .await
+        .unwrap();
+    // The drain deadline withdraws it in the live process.
+    w.bound
+        .withdraw_parallel_deep_proposal(w.credential.credential(), &run)
+        .await
+        .unwrap();
+    assert!(w
+        .bound
+        .withdraw_parallel_deep_proposal(w.credential.credential(), &run)
+        .await
+        .is_err());
+    assert_eq!(
+        scalar(
+            &w,
+            "SELECT terminal_kind||':'||event_id FROM production_terminal_evidence WHERE run_id=?",
+            &run.to_string()
+        )
+        .await,
+        format!("abandoned:{done}")
+    );
+    // Never accepted afterwards.
+    let revision: i64 =
+        sqlx::query_scalar("SELECT revision FROM execution_revisions WHERE conversation_id=?")
+            .bind(w.f.conversation.to_string())
+            .fetch_one(&w.f.store.pool)
+            .await
+            .unwrap();
+    assert!(w
+        .f
+        .store
+        .accept_execution_authenticated(
+            &w.browser_credential,
+            &w.f.conversation,
+            &ExecutionAcceptanceRequest {
+                run_id: run.clone(),
+                completion_event_id: done,
+                expected_revision: revision,
+                request_key: "late-accept".into(),
+            },
+        )
+        .await
+        .is_err());
+    // The input is back with the writer, recorded once.
+    assert_eq!(
+        scalar(
+            &w,
+            "SELECT state FROM reasoning_inbox WHERE event_id=?",
+            &question.input_event_id.to_string()
+        )
+        .await,
+        "queued"
+    );
+    assert!(
+        w.f.store
+            .deep_run_parallel_authenticated(
+                &w.browser_credential,
+                &w.f.owner,
+                &w.f.conversation,
+                &run
+            )
+            .await
+            .unwrap()
+            .2
+    );
+    assert!(w
+        .bound
+        .defer_parallel_deep_input(w.credential.credential(), &run)
+        .await
+        .unwrap());
+    // The used slot retires and the window closes now, not after the hard
+    // deadline plus the acceptance grace.
+    w.bound
+        .retire_parallel_deep_slot(w.credential.credential(), &run)
+        .await
+        .unwrap();
+    w.bound
+        .retire_terminal_supervisor(w.credential.credential(), &writing.provider().run.run_id)
+        .await
+        .unwrap();
+    w.bound
+        .retire_execution_window(
+            w.credential.credential(),
+            w.status.window_id,
+            1,
+            "role-test-boot",
+            &writing.provider().run.run_id,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        scalar(
+            &w,
+            "SELECT state FROM execution_windows WHERE id=?",
+            &w.status.window_id.to_string()
+        )
+        .await,
+        "closed"
+    );
+}

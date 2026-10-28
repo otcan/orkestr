@@ -393,7 +393,8 @@ Phase 1 (#376, migration 0082) and phases 2 and 3 (the runtime PR, migration
 - **Stop and close.**
   - The pool stops every live slot when the writer's run is cancel-requested
     or cancelled.
-  - `POST /api/v2/conversations/{id}/parallel/stop` (`{"request_key"}`,
+  - `POST /api/v2/conversations/{id}/parallel/stop` (`{"request_key"}`, at
+    most 91 bytes; each turn's Stop key is `<request_key>:<run id>`,
     owner session and CSRF as for Stop) stops every live parallel turn,
     including those that outlive the writer's turn. It returns their Stop
     receipts, and none while the switch is off.
@@ -429,11 +430,20 @@ Guards (the follow-up PR on top of the runtime PR):
     window. A fresh reading of a window that has since reset counts as
     zero usage; a stale one stays closed.
 - **Egress budget.** No new slot once less than 25 % of the window's
-  attempts or bytes remain, from the manager's own receipt (fails closed).
-- **Drain deadline.** When the window closes, a slot proposal still
-  unaccepted after 30 s releases its native. The window then settles
-  through stranded reconciliation, so the writer's close never waits
-  forever.
+  attempts or bytes remain. The reading comes from the manager's own
+  receipt, is cached for 10 s like the quota gate, and fails closed.
+- **Drain deadline.** A slot proposal can still be unaccepted when the
+  window closes, for example when the owner switched "review before
+  accepting" on mid-turn. After 30 s the live process withdraws it in Core
+  (`withdraw_parallel_deep_proposal`, migration 0084):
+  - the run becomes Cancelled with abandoned terminal evidence and is never
+    accepted afterwards;
+  - its session is released as acceptance would release it;
+  - its input goes back to the writer (the defer rule).
+
+  Then the native is released and the window closes at once. It no longer
+  waits for the hard deadline plus the 24 h acceptance grace and stranded
+  reconciliation.
 - **Crash recovery applies the defer rule.** Stranded reconciliation hands
   every input of an abandoned slot proposal or a failed slot turn back to
   the writer: queued, released from the window, recorded once. The

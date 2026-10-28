@@ -416,7 +416,8 @@ pub(crate) async fn parallel_stop(
     })?;
     let key = input.request_key;
     if key.is_empty()
-        || key.len() > 96
+        // The per-run key appends `:<run id>` within the 128-byte bound.
+        || key.len() > 91
         || !key
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b"-_.:".contains(&b))
@@ -445,7 +446,7 @@ pub(crate) async fn parallel_stop(
     // read as success: the owner retries, and stopped turns are not listed
     // again (they are no longer starting or running).
     let mut incomplete = false;
-    for (n, run) in runs.into_iter().enumerate() {
+    for run in runs {
         let status = match state
             .store
             .execution_run_history_authenticated(&credential, &owner, &conversation, &run, false)
@@ -458,11 +459,14 @@ pub(crate) async fn parallel_stop(
                 continue;
             }
         };
+        let key_for_run = format!("{key}:{run}");
         let request = ExecutionControlRequest {
             run_id: run,
             expected_revision: status.revision,
             expected_control_revision: status.control_revision,
-            request_key: format!("{key}:{n}"),
+            // Keyed by run: a replay or a changed live set never pairs a
+            // key with another run.
+            request_key: key_for_run,
         };
         match stop_run(&state, &headers, &owner, &conversation, &request, false).await {
             Ok(receipt) => receipts.push(receipt),

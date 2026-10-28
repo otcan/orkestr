@@ -194,6 +194,80 @@ impl Store {
         Ok(found)
     }
 
+    /// Trusted window scheduler only, when this live window closes and a slot
+    /// proposal is still unaccepted past the drain deadline (for example the
+    /// owner switched "review before accepting" on mid-turn). Withdraws it in
+    /// one transaction: the run becomes Cancelled with abandoned terminal
+    /// evidence (never accepted afterwards), its session is released exactly
+    /// as acceptance would release it, and its input goes back to the
+    /// writer's queue (the defer rule). `Fenced` when the run is not such a
+    /// proposal any more (for example accepted meanwhile).
+    pub async fn withdraw_parallel_deep_proposal(
+        &self,
+        credential: &str,
+        run: &RunId,
+    ) -> Result<()> {
+        self.worker_credential(credential)?;
+        let c = self.context()?;
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        c.validate(&mut tx).await?;
+        let window = c
+            .window_scope(&mut tx)
+            .await?
+            .ok_or(RuntimeStoreError::Fenced)?;
+        if !matches!(
+            window.get::<&str, _>("state"),
+            "opening" | "active" | "retiring"
+        ) {
+            return Err(RuntimeStoreError::Fenced);
+        }
+        let row = sqlx::query("SELECT r.* FROM production_runs r JOIN production_parallel_deep_slots p ON p.session_id=r.session_id WHERE r.id=? AND r.owner_id=? AND r.conversation_id=? AND r.context_id=? AND r.incarnation_id=? AND r.role='deep' AND r.deep_slot>0 AND r.state='awaiting_acceptance' AND p.context_id=r.context_id AND p.incarnation_id=r.incarnation_id AND NOT EXISTS(SELECT 1 FROM production_acceptances a WHERE a.run_id=r.id)")
+            .bind(run.to_string()).bind(c.owner.to_string()).bind(window.get::<String, _>("conversation_id"))
+            .bind(&c.id).bind(&c.incarnation)
+            .fetch_optional(&mut *tx).await.map_err(db)?.ok_or(RuntimeStoreError::Fenced)?;
+        let completions: Vec<String> = sqlx::query_scalar("SELECT o.event_id FROM production_observations o JOIN events e ON e.id=o.event_id WHERE o.run_id=? AND o.kind='completed_proposal' AND o.receipt_state='awaiting_acceptance' AND e.kind='provider_observed' AND e.schema_version=5")
+            .bind(run.to_string())
+            .fetch_all(&mut *tx).await.map_err(db)?;
+        let [completion] = completions.as_slice() else {
+            return Err(RuntimeStoreError::Fenced);
+        };
+        let generation: i64 = row.get("binding_generation");
+        let released = sqlx::query("UPDATE session_bindings SET state='ready',generation=generation+1 WHERE id=? AND generation=? AND state='busy' AND NOT EXISTS(SELECT 1 FROM production_runs other WHERE other.session_id=session_bindings.id AND other.id!=? AND other.state NOT IN ('cancelled','succeeded'))")
+            .bind(row.get::<String, _>("session_id")).bind(generation).bind(run.to_string())
+            .execute(&mut *tx).await.map_err(db)?.rows_affected();
+        let cancelled = sqlx::query(
+            "UPDATE production_runs SET state='cancelled' WHERE id=? AND state='awaiting_acceptance'",
+        )
+        .bind(run.to_string())
+        .execute(&mut *tx)
+        .await
+        .map_err(db)?
+        .rows_affected();
+        if released != 1 || cancelled != 1 {
+            return Err(RuntimeStoreError::Fenced);
+        }
+        let clock = now(&mut tx).await?;
+        sqlx::query("INSERT INTO production_parallel_deep_withdrawals(run_id,completion_event_id,cause,binding_generation,withdrawn_at_ms) VALUES(?,?,'window_closing',?,?)")
+            .bind(run.to_string()).bind(completion).bind(generation + 1).bind(clock)
+            .execute(&mut *tx).await.map_err(db)?;
+        let abandoned: i64 = sqlx::query_scalar("SELECT count(*) FROM production_terminal_evidence WHERE run_id=? AND terminal_kind='abandoned' AND event_id=?")
+            .bind(run.to_string()).bind(completion)
+            .fetch_one(&mut *tx).await.map_err(db)?;
+        // The writer answers it: back to its queue, recorded once.
+        let requeued = sqlx::query("UPDATE reasoning_inbox SET state='queued',claimant_session_id=NULL,claim_deadline_ms=NULL,admitted_run_id=NULL WHERE conversation_id=? AND sequence=? AND event_id=? AND state='consumed' AND admitted_run_id=?")
+            .bind(row.get::<String, _>("conversation_id")).bind(row.get::<i64, _>("scope_sequence"))
+            .bind(row.get::<String, _>("event_id")).bind(run.to_string())
+            .execute(&mut *tx).await.map_err(db)?.rows_affected();
+        if abandoned != 1 || requeued != 1 {
+            return Err(RuntimeStoreError::Fenced);
+        }
+        sqlx::query("INSERT INTO production_parallel_deep_deferrals(event_id,run_id,deferred_at_ms) VALUES(?,?,?)")
+            .bind(row.get::<String, _>("event_id")).bind(run.to_string()).bind(clock)
+            .execute(&mut *tx).await.map_err(db)?;
+        tx.commit().await.map_err(db)?;
+        Ok(())
+    }
+
     /// Trusted window scheduler only, after the exact slot run ended: when its
     /// accepted answer is exactly `PARALLEL_DEFER`, or the run failed (for
     /// example a provider capacity error), return its input to the writer's
@@ -233,7 +307,7 @@ impl Store {
         // the stopped turn, as for the writer.
         let defers = match kind.as_str() {
             "accepted" => answer.as_deref().map(str::trim) == Some(PARALLEL_DEFER),
-            "failed" => true,
+            "failed" | "abandoned" => true,
             _ => false,
         };
         if !defers {

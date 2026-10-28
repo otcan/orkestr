@@ -18,6 +18,8 @@ pub(super) const QUOTA_FRESH: Duration = Duration::from_secs(30 * 60);
 pub(super) const EGRESS_LEFT_MIN: f64 = 0.25;
 const MAX_QUOTA_BYTES: u64 = 16 * 1024;
 const QUOTA_READ: Duration = Duration::from_secs(10);
+/// How long one manager reading of the window's egress budget stays current.
+pub(super) const EGRESS_READ: Duration = Duration::from_secs(10);
 
 static QUOTA_FILE: OnceLock<PathBuf> = OnceLock::new();
 static QUOTA_CACHE: Mutex<Option<(Instant, bool)>> = Mutex::new(None);

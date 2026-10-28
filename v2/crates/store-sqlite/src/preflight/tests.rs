@@ -422,6 +422,7 @@ async fn populated_payload_prefix_upgrade_preserves_all_rows_and_foreign_links()
         "production_parallel_deep_slots",
         "production_parallel_deep_deferrals",
         "production_parallel_deep_notes",
+        "production_parallel_deep_withdrawals",
     ] {
         expected.insert(table.into(), Vec::new());
     }
@@ -522,7 +523,7 @@ async fn populated_payload_prefix_upgrade_preserves_all_rows_and_foreign_links()
             .fetch_one(&mut conn)
             .await
             .unwrap(),
-        83
+        84
     );
     for table in [
         "history_imports",

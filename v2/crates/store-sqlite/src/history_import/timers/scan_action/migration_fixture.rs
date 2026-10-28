@@ -3,6 +3,33 @@ use crate::Store;
 
 pub(crate) async fn downgrade_empty(store: &Store) {
     let mut tx = store.pool.begin().await.unwrap();
+    // Migration 84 down: only with no withdrawn slot proposal; the 0055
+    // terminal evidence view comes back unchanged.
+    let withdrawn: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM production_parallel_deep_withdrawals")
+            .fetch_one(&mut *tx)
+            .await
+            .unwrap();
+    assert_eq!(
+        withdrawn, 0,
+        "historical fixture must not erase withdrawals"
+    );
+    let settlement = include_str!("../../../../migrations/0055_generalized_settlement.sql");
+    let start = settlement
+        .find("CREATE VIEW production_terminal_evidence AS")
+        .unwrap();
+    let end = start + settlement[start..].find(";\n").unwrap() + 1;
+    sqlx::raw_sql(&format!(
+        "DROP TABLE production_parallel_deep_withdrawals; DROP VIEW production_terminal_evidence; {}",
+        &settlement[start..end]
+    ))
+    .execute(&mut *tx)
+    .await
+    .unwrap();
+    sqlx::query("DELETE FROM _sqlx_migrations WHERE version=84")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
     // Migration 83 down: only with no parallel Deep run, deferral or note.
     let runs: i64 = sqlx::query_scalar(
         "SELECT (SELECT count(*) FROM production_runs WHERE deep_slot>0)+(SELECT count(*) FROM production_parallel_deep_deferrals)+(SELECT count(*) FROM production_parallel_deep_notes)",
