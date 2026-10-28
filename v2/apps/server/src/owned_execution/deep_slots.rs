@@ -534,6 +534,8 @@ impl ConfiguredExecution {
         let mut budget = self.config.execution_budget.start(Instant::now());
         let mut peak = 0;
         let mut drain_since: Option<Instant> = None;
+        let mut withdraw_attempts = 0_u32;
+        let mut withdraw_next: Option<Instant> = None;
         let result = loop {
             self.maintain(heartbeat).await?;
             if let Some(bytes) = pump.tree_peak_rss_bytes() {
@@ -576,22 +578,44 @@ impl ConfiguredExecution {
                         break None;
                     }
                     // The window closes: wait a bounded time for the owner
-                    // decision, then release the native. The proposal stays
-                    // unaccepted, so the window settles through stranded
-                    // reconciliation, which hands the input back to the writer.
+                    // decision, then withdraw the proposal in Core (abandoned,
+                    // session released, input back to the writer) and release
+                    // the native.
                     if slots.retiring() {
                         let since = *drain_since.get_or_insert_with(Instant::now);
-                        if since.elapsed() >= ACCEPT_DRAIN {
-                            // Withdraw it in Core (abandoned, session released,
-                            // input back to the writer), then release the
-                            // native. Refused (accepted meanwhile): keep going.
-                            if self
+                        let due = withdraw_next.is_none_or(|next| Instant::now() >= next);
+                        if since.elapsed() >= ACCEPT_DRAIN && due {
+                            let release = match self
                                 .store
                                 .withdraw_parallel_deep_proposal(&self.token, &run)
                                 .await
-                                .is_ok()
                             {
-                                eprintln!("parallel Deep slot proposal unaccepted at window close; withdrawn, input back to the writer");
+                                Ok(()) => {
+                                    eprintln!("parallel Deep slot proposal unaccepted at window close; withdrawn, input back to the writer");
+                                    true
+                                }
+                                Err(error) => {
+                                    withdraw_attempts += 1;
+                                    match super::deep_slot_gates::withdraw_retry(
+                                        &error,
+                                        withdraw_attempts,
+                                    ) {
+                                        super::deep_slot_gates::WithdrawRetry::After(wait) => {
+                                            withdraw_next = Some(Instant::now() + wait);
+                                            false
+                                        }
+                                        // Refused for good (for example accepted
+                                        // meanwhile): release as the accepted
+                                        // path does; an unaccepted proposal is
+                                        // left to stranded reconciliation.
+                                        super::deep_slot_gates::WithdrawRetry::Release => {
+                                            eprintln!("parallel Deep slot proposal withdrawal refused ({error:?}); releasing the native");
+                                            true
+                                        }
+                                    }
+                                }
+                            };
+                            if release {
                                 let retiring = pump
                                     .retire_broker()
                                     .map_err(|_| "parallel Deep proposal cleanup refused")?;

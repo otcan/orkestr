@@ -1406,3 +1406,97 @@ async fn review_switched_on_mid_slot_withdraws_the_proposal_at_close_and_the_wri
         "closed"
     );
 }
+
+#[tokio::test]
+async fn an_owner_acceptance_before_the_drain_deadline_wins_over_the_withdrawal() {
+    let w = Window::open().await;
+    w.activate().await;
+    switch(&w, true).await;
+    let question = join(&w, 1).await;
+    let writing = writer(&w, "accepted-writer").await;
+    let (binding, _) = slot(&w, "accepted-slot").await;
+    let cap = parallel(&w, &binding).await;
+    let run = cap.provider().run.run_id.clone();
+    review(&w, true).await;
+    let done = propose(&w, cap.provider(), "slot answer the owner accepts").await;
+    accept(&w, writing.provider(), "writer").await;
+    w.bound
+        .begin_execution_window_retirement(
+            w.credential.credential(),
+            w.status.window_id,
+            1,
+            "role-test-boot",
+        )
+        .await
+        .unwrap();
+    // The owner accepts during the drain; the deadline's withdrawal then
+    // finds no proposal and is refused for good (not retried).
+    decide(&w, cap.provider(), done.clone()).await;
+    assert_eq!(
+        w.bound
+            .withdraw_parallel_deep_proposal(w.credential.credential(), &run)
+            .await,
+        Err(RuntimeStoreError::Fenced)
+    );
+    // The acceptance stands: no abandonment, no withdrawal row, the input
+    // stays answered and nothing goes back to the writer.
+    assert_eq!(
+        scalar(
+            &w,
+            "SELECT group_concat(terminal_kind) FROM production_terminal_evidence WHERE run_id=?",
+            &run.to_string()
+        )
+        .await,
+        "accepted"
+    );
+    assert_eq!(
+        count(
+            &w.f.store,
+            "SELECT COUNT(*) FROM production_parallel_deep_withdrawals"
+        )
+        .await,
+        0
+    );
+    assert_eq!(
+        count(
+            &w.f.store,
+            "SELECT COUNT(*) FROM production_parallel_deep_deferrals"
+        )
+        .await,
+        0
+    );
+    assert_eq!(
+        scalar(
+            &w,
+            "SELECT state FROM reasoning_inbox WHERE event_id=?",
+            &question.input_event_id.to_string()
+        )
+        .await,
+        "consumed"
+    );
+    assert!(!w
+        .bound
+        .defer_parallel_deep_input(w.credential.credential(), &run)
+        .await
+        .unwrap());
+    // The release path (as for any accepted slot) retires it and the window
+    // closes.
+    w.bound
+        .retire_parallel_deep_slot(w.credential.credential(), &run)
+        .await
+        .unwrap();
+    w.bound
+        .retire_terminal_supervisor(w.credential.credential(), &writing.provider().run.run_id)
+        .await
+        .unwrap();
+    w.bound
+        .retire_execution_window(
+            w.credential.credential(),
+            w.status.window_id,
+            1,
+            "role-test-boot",
+            &writing.provider().run.run_id,
+        )
+        .await
+        .unwrap();
+}

@@ -40,6 +40,22 @@ def slot_runs(case, conversation):
                      "AND r.deep_slot>0 ORDER BY r.scope_sequence", (conversation,))
 
 
+def parallel_stop(case, conversation, key, timeout=30):
+    """The owner's parallel Stop, retried with the same key while it answers
+    503: a slot's control is unavailable between its bounded native steps
+    (and a store refusal is transient). The key is per run, so a retry never
+    pairs it with another turn."""
+    deadline = time.monotonic() + timeout
+    while True:
+        code, value, _ = case.request(path(conversation) + "/parallel/stop", "POST",
+                                      {"request_key": key})
+        case.trace()
+        if code == 200:
+            return value["stopped"]
+        assert code == 503 and time.monotonic() < deadline, ("parallel Stop", code, value)
+        time.sleep(0.2)
+
+
 def run(case):
     first = case.conversation
     for role in ("deep", "fast"):
@@ -101,8 +117,8 @@ def run(case):
     (case.workspaces["deep"] / "release-4").touch()
     wait_for(lambda: status(case, first, phase="completed", run=second_writer["run_id"]),
              "second writer accepted", 60)
-    stopped = expect(case, path(first) + "/parallel/stop", 200, "POST", {"request_key": "parallel:pstop"})
-    assert len(stopped["stopped"]) == 1, stopped
+    stopped = parallel_stop(case, first, "parallel:pstop")
+    assert len(stopped) == 1, stopped
 
     def slot_stopped(index):
         rows = case.rows("SELECT r.id,r.state,t.terminal_kind FROM production_runs r LEFT JOIN "

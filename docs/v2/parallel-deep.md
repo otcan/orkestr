@@ -397,7 +397,9 @@ Phase 1 (#376, migration 0082) and phases 2 and 3 (the runtime PR, migration
     most 91 bytes; each turn's Stop key is `<request_key>:<run id>`,
     owner session and CSRF as for Stop) stops every live parallel turn,
     including those that outlive the writer's turn. It returns their Stop
-    receipts, and none while the switch is off.
+    receipts, and none while the switch is off. A 503 is retryable with the
+    same key: a turn's control is unavailable between its bounded native
+    steps.
   - The writer stops and drains every slot while the window is still active,
     before window retirement and before a late owner-acceptance wait, and
     holds their reap witnesses through close.
@@ -444,6 +446,13 @@ Guards (the follow-up PR on top of the runtime PR):
   Then the native is released and the window closes at once. It no longer
   waits for the hard deadline plus the 24 h acceptance grace and stranded
   reconciliation.
+
+  A refused withdrawal is retried only when Core is busy or unavailable,
+  with backoff from 100 ms up to 2 s and at most 8 retries. Any other
+  refusal, or the last one, releases the native as the accepted path does.
+  That is safe when the refusal came from an acceptance (the acceptance
+  wins and the run is settled); an unaccepted proposal is then left to
+  stranded reconciliation, which applies the defer rule.
 - **Crash recovery applies the defer rule.** Stranded reconciliation hands
   every input of an abandoned slot proposal or a failed slot turn back to
   the writer: queued, released from the window, recorded once. The

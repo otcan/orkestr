@@ -385,7 +385,8 @@ async fn stop_run(
 /// conversation, including turns that outlive the writer's own turn (whose
 /// Stop already reaches every live slot). Body: `{"request_key": "..."}`.
 /// Returns the receipts of the turns it stopped (none while the switch is
-/// off: no parallel turn exists then).
+/// off: no parallel turn exists then). A 503 is retryable with the same key:
+/// a turn's control is unavailable between its bounded native steps.
 pub(crate) async fn parallel_stop(
     State(state): State<AppState>,
     headers: HeaderMap,

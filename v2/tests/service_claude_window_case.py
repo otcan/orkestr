@@ -7,7 +7,6 @@ service identity may then be set with ORKESTR_FIXTURE_SERVICE_UID/GID.
 """
 import json
 from pathlib import Path
-import shutil
 
 import owned_execution_http as ordinary
 from service_roles_case import ServiceRolesCase, GID, UID, packager, Package, digest
@@ -89,10 +88,4 @@ class ClaudeWindowCase(ServiceRolesCase):
         return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
 
     def cleanup(self, keep_logs=None):
-        try:
-            super().cleanup()
-        finally:
-            if keep_logs is not None:
-                for log in self.root.glob("*.log"):
-                    shutil.copyfile(log, Path(keep_logs) / log.name)
-            shutil.rmtree(self.root, ignore_errors=True)
+        super().cleanup(keep_logs)
