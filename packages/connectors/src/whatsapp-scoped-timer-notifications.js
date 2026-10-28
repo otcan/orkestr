@@ -1,6 +1,7 @@
 import {DatabaseSync} from 'node:sqlite';
 import {createKeyedSerial} from './scoped-relay-serial.js';
-import {notificationScope,notificationKey,createTimerNotificationProofStore} from './whatsapp-timer-notification-proof.js';
+import {notificationScope,liveNotificationScope,notificationKey,createTimerNotificationProofStore} from './whatsapp-timer-notification-proof.js';
+import {createDynamicGroupView,validateDynamicGroups} from './whatsapp-scoped-dynamic-groups.js';
 import {createDeliveryRouteFence} from './whatsapp-delivery-route-fence.js';
 import {encodeReplyEntry, replyEntrySendFields, scopedGroupReplyChunks, scopedReplyHeader} from './whatsapp-scoped-group-formatting.js';
 import {createRemoteTimerReplies,remoteTimerEventEligible,remoteTimerParentEvent} from './whatsapp-scoped-remote-timer-replies.js';
@@ -46,12 +47,23 @@ export function createRoutedInputLookup(relayJournalPath) {
     close(){try{db?.close();}catch{}db=null;},
   };
 }
-export function createScopedTimerNotifications({config,api,send,formatter,env=process.env,now=Date.now,proofStore:suppliedProof,routeFence:suppliedFence,minIntervalMs=0,routedInput:suppliedRouted}) {
-  const scope=notificationScope(config);
-  if(!scope)return {tick:async()=>({enabled:false}),close(){}};
+// Groups the relay registered at runtime (dynamicGroups), read live from the
+// transport journal, so an allGroups scope also covers chats created after start.
+function dynamicGroupView(config,now) {
+  if(!validateDynamicGroups(config) || !config.journalPath || config.journalPath===':memory:')return {view:null,close(){}};
+  let db=null;
+  try {db=new DatabaseSync(config.journalPath,{readOnly:true});}
+  catch {return {view:null,close(){}};}
+  return {view:createDynamicGroupView(db,{now}),close(){try{db.close();}catch{}}};
+}
+export function createScopedTimerNotifications({config,api,send,formatter,env=process.env,now=Date.now,proofStore:suppliedProof,routeFence:suppliedFence,minIntervalMs=0,routedInput:suppliedRouted,groups:suppliedGroups}) {
+  const staticScope=notificationScope(config);
+  if(!staticScope)return {tick:async()=>({enabled:false}),close(){}};
+  const dynamicGroups=suppliedGroups ? {view:suppliedGroups,close(){}} : dynamicGroupView(config,now);
+  const scope=liveNotificationScope(staticScope,dynamicGroups.view);
   const proofs=suppliedProof || createTimerNotificationProofStore({path:scope.proofDbPath,now});
   const fence=suppliedFence || createDeliveryRouteFence({dbPath:config.routeControl.dbPath,now});
-  const legacySingle=scope.threads.size===1;
+  const legacySingle=staticScope.threads.size===1;
   let lastTick=-Infinity,lastStatus=null;
   const threadSerial=createKeyedSerial();
   const allowedTimer=(timer,event,threadId)=>event.type==='thread_signal_appended'
@@ -155,7 +167,7 @@ export function createScopedTimerNotifications({config,api,send,formatter,env=pr
     return sent;
   }
   return {
-    close(){if(!suppliedProof)proofs.close();if(!suppliedFence)fence.close();routed?.close();},
+    close(){if(!suppliedProof)proofs.close();if(!suppliedFence)fence.close();routed?.close();dynamicGroups.close();},
     async tick({threadIds} = {}) {
       if(!threadIds && lastStatus && now()-lastTick<minIntervalMs)return lastStatus;
       lastTick=now();
