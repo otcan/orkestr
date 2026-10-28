@@ -185,4 +185,10 @@ test('language detection is conservative',()=>{
   assert.equal(detectLanguage('Did you deploy? Aysegul cannot login'),'en');
   assert.equal(detectLanguage('Toplantı saatini değiştirebilir misin?'),'tr');
   assert.equal(detectLanguage('Ich habe das noch nicht gesehen'),'de');
+  assert.equal(detectLanguage('Send it to Ayşe'),'en');
+  assert.equal(detectLanguage('Did you call Ayşegül?'),'en');
+  assert.equal(detectLanguage('Ayşe?'),null);
+  assert.equal(detectLanguage('👍🙏'),null);
+  assert.equal(detectLanguage('İyi akşamlar, bakar mısın?'),'tr');
+  assert.equal(detectLanguage('Sağol'),'tr');
 });

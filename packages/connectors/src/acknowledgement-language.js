@@ -1,6 +1,7 @@
 // Language of a deterministic acknowledgement: the language of the message it
 // answers, else the chat's configured language, else the policy's, else English.
-// Mirrors the V2 adapter's notice detector (v2/compat/v1_runtime/notices.py):
+// Same word lists as the V2 adapter's notice detector (v2/compat/v1_runtime/notices.py),
+// but a marker letter counts once per word (that one smooths over history):
 // a small, deterministic word and letter score; an ambiguous message counts
 // for nothing, so a short "ok" never switches the language of a chat.
 export const ACKNOWLEDGEMENT_LANGUAGES = ['en', 'tr', 'de'];
@@ -33,10 +34,12 @@ const LETTERS = {tr: 'ğşıçİĞŞ', de: 'ßä'};
 /** 'en', 'tr', 'de', or null when the text is too short or ambiguous. Pure. */
 export function detectLanguage(text) {
   if (typeof text !== 'string' || !text.trim()) return null;
-  const tokens = (text.match(/\p{L}+/gu) || []).map(w => w.toLowerCase());
+  const raw = text.match(/\p{L}+/gu) || [], tokens = raw.map(w => w.toLowerCase());
   const scores = Object.fromEntries(ACKNOWLEDGEMENT_LANGUAGES.map(lang => [lang, tokens.filter(w => WORDS[lang].has(w)).length]));
+  // A word with a language's own letters counts once, like a known word: a
+  // single name ("Send it to Ayşe") must not switch an English chat's notice.
   for (const [lang, letters] of Object.entries(LETTERS))
-    for (const c of letters) scores[lang] += 2 * (text.split(c).length - 1);
+    scores[lang] += raw.filter(w => [...letters].some(c => w.includes(c))).length;
   const [[best, top], [, second]] = Object.entries(scores).sort((a, b) => b[1] - a[1]);
   return top >= 2 && top >= 2 * second && top > second ? best : null;
 }
