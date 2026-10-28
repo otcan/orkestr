@@ -171,6 +171,13 @@ impl Store {
             .bind(c.generation).bind(deadline).bind(verifier).fetch_one(&mut *tx).await.map_err(db)?;
         sqlx::query("INSERT INTO production_run_leases(run_id,generation,lease_deadline_ms,dispatch_fence) VALUES(?,1,?,?)")
             .bind(run_id.to_string()).bind(deadline).bind(c.generation).execute(&mut *tx).await.map_err(db)?;
+        // A read-only parallel Deep slot run records its slot (never with the
+        // switch off: no slot session exists then).
+        if super::parallel_deep::is_slot(&mut tx, &binding_id.to_string()).await? {
+            sqlx::query("UPDATE production_runs SET deep_slot=(SELECT deep_slot FROM session_bindings WHERE id=?) WHERE id=?")
+                .bind(binding_id.to_string()).bind(run_id.to_string())
+                .execute(&mut *tx).await.map_err(db)?;
+        }
         #[cfg(all(test, unix))]
         super::process_tests::checkpoint("admit-before-ack");
         #[cfg(feature = "fixture-test-controls")]

@@ -163,18 +163,14 @@ async fn status_for(
                 }
             }
             if let (false, Some(run)) = (fast, query.run_id.as_ref()) {
+                let credential = browser::credential(&headers)?;
                 // Grouped Deep turn: the inputs this one run answers, in
                 // arrival order (head first). Absent for a single-input run,
                 // so that shape is unchanged. Channel adapters settle every
                 // grouped input with this run's final.
                 let group = state
                     .store
-                    .deep_run_group_authenticated(
-                        &browser::credential(&headers)?,
-                        &owner,
-                        &conversation,
-                        run,
-                    )
+                    .deep_run_group_authenticated(&credential, &owner, &conversation, run)
                     .await
                     // Unlike the Fast quote marker this settles inputs: a
                     // store error must not read as a single-input run, or the
@@ -186,7 +182,25 @@ async fn status_for(
                             "Execution status unavailable",
                         )
                     })?;
-                if !group.is_empty() {
+                // Parallel Deep burst markers: `parallel_deep` for a read-only
+                // parallel slot run (its final answers its own input; an exact
+                // PARALLEL_DEFER answer means the writer will answer it), and
+                // `concurrent_deep` for any Deep final of a parallel burst, so
+                // adapters quote its source message. Both absent otherwise.
+                // They route an input's final too: a store error is a 503,
+                // never "not parallel".
+                let (parallel, concurrent) = state
+                    .store
+                    .deep_run_parallel_authenticated(&credential, &owner, &conversation, run)
+                    .await
+                    .map_err(|_| {
+                        Error(
+                            StatusCode::SERVICE_UNAVAILABLE,
+                            "store_unavailable",
+                            "Execution status unavailable",
+                        )
+                    })?;
+                if !group.is_empty() || concurrent {
                     let mut value = serde_json::to_value(&status).map_err(|_| {
                         Error(
                             StatusCode::SERVICE_UNAVAILABLE,
@@ -194,16 +208,24 @@ async fn status_for(
                             "Execution status unavailable",
                         )
                     })?;
-                    value["grouped_inputs"] = group
-                        .into_iter()
-                        .map(|(message, event, request_key)| {
-                            serde_json::json!({
-                                "message_id": message,
-                                "event_id": event,
-                                "request_key": request_key,
+                    if !group.is_empty() {
+                        value["grouped_inputs"] = group
+                            .into_iter()
+                            .map(|(message, event, request_key)| {
+                                serde_json::json!({
+                                    "message_id": message,
+                                    "event_id": event,
+                                    "request_key": request_key,
+                                })
                             })
-                        })
-                        .collect();
+                            .collect();
+                    }
+                    if parallel {
+                        value["parallel_deep"] = serde_json::Value::Bool(true);
+                    }
+                    if concurrent {
+                        value["concurrent_deep"] = serde_json::Value::Bool(true);
+                    }
                     return Ok(Json(value).into_response());
                 }
             }

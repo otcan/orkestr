@@ -346,6 +346,25 @@ numbered. The owner switch `deep_grouping` in the conversation settings
 keeps the current one) is read at every Deep admission; `false` restores one
 Deep turn per input without a restart.
 
+### Read-only parallel Deep finals (owner-only Fast intake)
+
+With the conversation setting `parallel_deep` on (default off; read from
+`GET /settings` at most every 30 s), Core may answer an owner message that
+queued behind a running Deep turn with its own read-only parallel Deep turn
+(docs/v2/parallel-deep.md). Each pass, `parallel_watch.py` checks the inputs
+behind the ledger head for their own run whose exact-run status reports
+`parallel_deep: true`. It drives such an input through the ordinary
+per-input path, so it settles out of ledger order with its own final and
+its own Fast watch.
+
+A Deep final of a burst (`concurrent_deep: true`) carries `quoteSource:
+true` and `sourceInputId` of its own input, so WhatsApp quotes the message
+it answers. An accepted answer that is exactly `PARALLEL_DEFER` is never
+exported, and a failed slot turn sends no notice. In both cases the input
+forgets that run, takes a fresh acceptance key and waits for the writer's
+own Deep run, which Core gives it next. With the
+switch off the watch reads and writes nothing.
+
 ### V1-local input
 
 Everything else V1 queues for a delegated thread (thread-to-thread and agent

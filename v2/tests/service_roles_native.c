@@ -158,7 +158,19 @@ int main(int argc, char **argv) {
                 memcpy(native, given, 36); native[36] = 0;
             } else {
                 int group = !strcmp(role, "deep") ? 1 : !strcmp(role, "fast") ? 2 : 3 + role[7] - '0';
-                snprintf(native, sizeof(native), "%08d-2222-4333-8444-%012d", group, instance);
+                /* Concurrent natives of one account (parallel slots) each save
+                 * their own instance, so the counter can go back: the process
+                 * start time keeps every identity unique. */
+                char stat_line[4096];
+                read_fixed("/proc/self/stat", stat_line, sizeof(stat_line));
+                char *field = strrchr(stat_line, ')');
+                if (!field) return failure(54);
+                field += 2;
+                for (int i = 0; i < 19 && field; ++i) { field = strchr(field, ' '); if (field) ++field; }
+                if (!field) return failure(55);
+                unsigned long long started = strtoull(field, NULL, 10);
+                snprintf(native, sizeof(native), "%08d-2222-4333-8444-%04d%08llu", group,
+                         instance % 10000, started % 100000000ULL);
             }
             printf("{\"id\":%ld,\"result\":{\"modelProvider\":\"openai\",\"cwd\":\"%s\","
                    "\"approvalPolicy\":\"never\",\"sandbox\":{\"type\":\"readOnly\"},\"thread\":{"
@@ -167,7 +179,10 @@ int main(int argc, char **argv) {
             fflush(stdout); record("ready", 0, resumed);
         } else if (!strncmp(method, "\"turn/start\"", 12)) {
             record("turn-request", 0, 0);
-            const char *text = strstr(line, "synthetic ordinary HTTP input");
+            /* A writer turn may lead with a note of parallel answers (quoted
+             * past inputs): its own input follows "Current input:". */
+            const char *current = strstr(line, "Current input:");
+            const char *text = strstr(current ? current : line, "synthetic ordinary HTTP input");
             /* Fresh Fast receives quoted past evidence before the exact input. */
             if (!strcmp(role, "fast") && text) {
                 const char *next = text;

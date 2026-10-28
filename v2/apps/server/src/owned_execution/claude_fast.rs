@@ -68,6 +68,8 @@ impl ConfiguredExecution {
             companion: Some(companion.clone()),
             window_activated: std::sync::atomic::AtomicBool::new(false),
             fast_factory: None,
+            deep_slots: None,
+            parallel_factory: None,
         };
         self.companion = Some(companion);
         self.fast_factory = Some(Box::new(fast));

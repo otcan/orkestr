@@ -60,6 +60,17 @@ impl CodexRpc {
         }
     }
 
+    /// A read-only parallel Deep connection (docs/v2/parallel-deep.md): the
+    /// same read-only sandbox, network off, as Fast on every instance. The
+    /// broker independently forces it for every identity it serves on the
+    /// read-only (Fast) service profile.
+    pub(crate) fn read_only() -> Self {
+        Self {
+            fast_read_only: true,
+            ..Self::default()
+        }
+    }
+
     /// The sandbox this connection requests and requires.
     pub(crate) fn access(&self) -> crate::provider_access::ProviderAccess {
         connection_access(self.fast_read_only, crate::provider_access::current())
@@ -361,6 +372,7 @@ mod access_tests {
             ProviderAccess::ReadOnly
         );
         assert!(CodexRpc::for_role(Role::Fast).fast_read_only);
+        assert!(CodexRpc::read_only().fast_read_only);
         assert!(!CodexRpc::for_role(Role::Deep).fast_read_only);
         assert!(!CodexRpc::for_role(Role::Worker).fast_read_only);
         // A Fast thread requests read-only and refuses a full-access reply.

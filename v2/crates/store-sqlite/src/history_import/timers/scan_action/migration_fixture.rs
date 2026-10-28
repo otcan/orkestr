@@ -3,6 +3,25 @@ use crate::Store;
 
 pub(crate) async fn downgrade_empty(store: &Store) {
     let mut tx = store.pool.begin().await.unwrap();
+    // Migration 83 down: only with no parallel Deep run, deferral or note.
+    let runs: i64 = sqlx::query_scalar(
+        "SELECT (SELECT count(*) FROM production_runs WHERE deep_slot>0)+(SELECT count(*) FROM production_parallel_deep_deferrals)+(SELECT count(*) FROM production_parallel_deep_notes)",
+    )
+    .fetch_one(&mut *tx)
+    .await
+    .unwrap();
+    assert_eq!(
+        runs, 0,
+        "historical fixture must not erase parallel Deep runs"
+    );
+    sqlx::raw_sql("DROP TABLE production_parallel_deep_notes; DROP TABLE production_parallel_deep_deferrals; DROP INDEX production_parallel_deep_claim; DROP INDEX production_deep_claim; ALTER TABLE production_runs DROP COLUMN deep_slot; CREATE UNIQUE INDEX production_deep_claim ON production_runs(conversation_id,scope_sequence) WHERE role='deep';")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM _sqlx_migrations WHERE version=83")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
     // Migration 82 down: only with no live parallel Deep slot and the switch
     // off everywhere, restore the 80 canonical index and drop the columns.
     let slots: i64 = sqlx::query_scalar(

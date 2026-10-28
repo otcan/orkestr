@@ -1,8 +1,7 @@
 # Parallel Deep turns within one conversation
 
-Status: design. The first PR adds the switch and the Core custody for
-read-only parallel slots. The switch does nothing at runtime until the
-scheduler PR lands (see [Phases](#phases)).
+Status: phases 1 to 3 are implemented behind the owner switch `parallel_deep`
+(default off). See [Phases](#phases) and [What landed](#what-landed).
 
 ## Problem
 
@@ -350,6 +349,74 @@ Existing rows become slot 0. No binding, run, input or native ID changes.
    with a per-run worktree and an owner-visible merge at acceptance. This is
    only for requests that declare one repository, and only after phases 2
    and 3 have run in production.
+
+## What landed
+
+Phase 1 (#376, migration 0082) and phases 2 and 3 (the runtime PR, migration
+0083):
+
+- **Scheduler** (`owned_execution/deep_slots.rs`). One pool task per Codex
+  window with the read-only service profile configured:
+  - it starts a slot only while the writer runs a turn, the switch is on
+    (2 s cache, rechecked by Core), Core reports an eligible queued input
+    (`parallel_deep_candidate`), live pressure admits one more Deep-cost slot
+    (`admit_one_deep`), and both backstops have room (3 per conversation,
+    8 per host);
+  - one setup at a time, so a queued input never gets two natives;
+  - each slot allocates, sets up a fresh read-only native with the Fast
+    service launcher (`open_window_parallel_deep_retained`), claims, admits,
+    drives one turn with exact-run status and lease renewal, then defers or
+    retires;
+  - the measured tree peak RSS of each slot native feeds the Deep slot cost.
+- **Read-only, three layers.**
+  - Runtime: the slot connection requests and requires the read-only
+    sandbox (`CodexRpc::read_only`).
+  - Broker: the Fast service broker accepts a Deep identity only as a
+    parallel slot, keeps it at `FAST_SANDBOX` and refuses to steer it. The
+    native launches with the Fast home, so no MCP servers, apps or hooks.
+  - Core: refuses steering and Worker delegation for a slot run, and never
+    gives a slot a timer, steer, thread-ask or agent-relayed input. A slot
+    native's own thread asks or agent timers (conversation-scoped HTTP
+    grants) are stopped only by the network-off sandbox, as for Fast.
+- **Turn content** (Core dispatch):
+  - a slot turn gets the bounded history digest plus the read-only note;
+  - it names a Deep model: the owner's, else the writer's last resolved
+    model, else `gpt-6.1-sol`, at `high` effort unless the owner chose one;
+  - the writer's next turn carries each accepted parallel answer once.
+- **Defer.** An accepted slot answer that is exactly `PARALLEL_DEFER`, or
+  a slot turn that failed (for example a provider capacity or quota error),
+  returns the input to the writer's queue (`defer_parallel_deep_input`). A
+  stopped slot keeps its input, as the writer does. The
+  claim uniqueness is split per slot, so the writer takes it exactly once and
+  no slot takes it again.
+- **Stop and close.**
+  - The pool stops every live slot when the writer's run is cancel-requested
+    or cancelled. Known gap: a slot that outlives the writer's turn cannot
+    be stopped by the owner (the idle writer offers no Stop); it is
+    read-only and ends at its own turn end or the window deadline.
+  - The writer stops and drains every slot while the window is still active,
+    before window retirement and before a late owner-acceptance wait, and
+    holds their reap witnesses through close.
+  - A slot's own Stop holds no other input.
+- **Status markers.** `GET .../execution?run_id=` adds `parallel_deep: true`
+  for a slot run and `concurrent_deep: true` for any Deep final of a burst;
+  both are absent otherwise.
+- **Adapter** (`compat/v1_runtime/parallel_watch.py`):
+  - an input behind the head whose own Deep run is a slot settles out of
+    ledger order through the ordinary per-input path, quoted;
+  - a defer is never exported: the input forgets that run, takes a fresh
+    acceptance key and waits for the writer's run;
+  - the watch reads the switch from the settings (30 s) and does nothing
+    while it is off.
+- **Review gate.** Slot answers are accepted by the server, so no slot
+  starts while the conversation has `review_before_accepting` on.
+
+Not yet implemented:
+
+- the provider-quota gate on the `codex.json` projection;
+- the stop at 25 % of the window's egress budget.
+
+Live host pressure and the ceilings are the only admission limits today.
 
 ## Risks
 

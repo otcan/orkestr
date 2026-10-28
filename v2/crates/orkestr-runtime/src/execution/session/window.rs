@@ -52,6 +52,37 @@ impl PreparingCodex {
         )
     }
 
+    /// A read-only parallel Deep slot: a fresh native session on the
+    /// read-only service profile, whose connection requests and requires the
+    /// read-only sandbox (network off) whatever the instance access is.
+    #[allow(clippy::too_many_arguments)]
+    pub fn open_window_parallel_deep_retained(
+        store: Store,
+        grant: BoundSessionMetadata,
+        launcher: &Path,
+        workspace: &Path,
+        directories: ChildDirectories,
+        resources: Box<dyn Send + 'static>,
+        bind: impl FnOnce(BrokerChildLocator) -> Result<(), ()>,
+    ) -> Result<Self, SetupFailure> {
+        if grant.binding().native_session_id.is_some() {
+            return Err(Blocker::Protocol.into());
+        }
+        let mut setup = Self::open_window_role(
+            store,
+            grant,
+            launcher,
+            workspace,
+            directories,
+            resources,
+            bind,
+            Role::Deep,
+            ToolProfile::None,
+        )?;
+        setup.rpc = CodexRpc::read_only();
+        Ok(setup)
+    }
+
     /// A Worker starts only a fresh native session under its sealed parent grant.
     #[allow(clippy::too_many_arguments)]
     pub fn open_window_worker_retained(

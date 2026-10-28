@@ -50,6 +50,21 @@ impl RunningLease {
         Ok(result)
     }
 
+    /// A run without steering (a read-only parallel Deep slot): the same
+    /// same-child lease transfer, no issuer refresh.
+    pub(super) async fn refresh_plain(
+        &mut self,
+        store: Store,
+        pump: CodexPump,
+    ) -> Result<(Authority, CodexPump), &'static str> {
+        let result = pump
+            .renew_lease(store, &mut self.authority)
+            .await
+            .map_err(|_| "execution liveness transfer refused; reconciliation required")?;
+        self.next_refresh = Instant::now() + REFRESH_INTERVAL;
+        Ok(result)
+    }
+
     /// Claude counterpart: the same native child, turn and cursor continue.
     pub(super) async fn refresh_claude(
         &mut self,

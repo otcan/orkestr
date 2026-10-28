@@ -9,6 +9,7 @@ mod claude_continuation;
 mod config;
 #[cfg(all(test, unix))]
 mod config_tests;
+mod deep_slots;
 mod directory;
 mod fast;
 mod fast_bootstrap;
@@ -74,6 +75,11 @@ pub struct ConfiguredExecution {
     /// Claude windows activate on their first native setup only.
     window_activated: std::sync::atomic::AtomicBool,
     fast_factory: Option<Box<ConfiguredExecution>>,
+    /// Read-only parallel Deep slots of this window (docs/v2/parallel-deep.md):
+    /// shared by the writer (which waits for them before window close) and
+    /// the slot pool.
+    deep_slots: Option<std::sync::Arc<deep_slots::DeepSlots>>,
+    parallel_factory: Option<Box<ConfiguredExecution>>,
 }
 pub struct ExecutionTask {
     shutdown: watch::Sender<bool>,
@@ -222,6 +228,8 @@ impl ConfiguredExecution {
             companion: None,
             window_activated: std::sync::atomic::AtomicBool::new(false),
             fast_factory: None,
+            deep_slots: None,
+            parallel_factory: None,
         })
     }
 

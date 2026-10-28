@@ -96,10 +96,29 @@ class FastCodexSandboxTests(unittest.TestCase):
             with self.assertRaises(Refused):
                 begin(model)
 
-    def test_fast_broker_serves_only_fast_identities(self):
+    def test_fast_broker_serves_only_read_only_identities(self):
         with self.assertRaises(Refused):
-            opened(IDENTITY, fast_only=True)
+            opened(dict(IDENTITY, role="worker"), fast_only=True)
         start(opened(FAST, fast_only=True), "read-only")
+
+    def test_parallel_deep_on_the_read_only_broker_stays_read_only(self):
+        # A read-only parallel Deep slot runs on the Fast service broker:
+        # Runtime asking for full access is refused even on host full access,
+        # and the provider must confirm read-only with network off.
+        channel = opened(IDENTITY, fast_only=True)
+        self.assertTrue(channel.parallel_deep)
+        with self.assertRaises(Refused):
+            start(channel, "danger-full-access")
+        for bad in ({"type": "dangerFullAccess"}, {"type": "readOnly", "networkAccess": True}):
+            channel = opened(IDENTITY, fast_only=True)
+            start(channel, "read-only")
+            with self.assertRaises(Refused):
+                reply(channel, bad)
+        channel = opened(IDENTITY, fast_only=True)
+        start(channel, "read-only")
+        reply(channel, {"type": "readOnly", "networkAccess": False})
+        # The ordinary Deep broker is unchanged.
+        self.assertFalse(opened(IDENTITY).parallel_deep)
 
 
 NATIVE_ENV = "ORKESTR_TEST_CODEX_NATIVE"

@@ -372,6 +372,10 @@ async fn populated_payload_prefix_upgrade_preserves_all_rows_and_foreign_links()
     for row in expected.get_mut("session_bindings").unwrap() {
         row.push_str("|0|0");
     }
+    // Migration 83 places every existing run on the canonical Deep slot 0.
+    for row in expected.get_mut("production_runs").unwrap() {
+        row.push_str("|0");
+    }
     expected.insert(
         "conversation_directory".into(),
         vec![
@@ -416,6 +420,8 @@ async fn populated_payload_prefix_upgrade_preserves_all_rows_and_foreign_links()
         "tracker_manual_checks",
         "tracker_action_digests",
         "production_parallel_deep_slots",
+        "production_parallel_deep_deferrals",
+        "production_parallel_deep_notes",
     ] {
         expected.insert(table.into(), Vec::new());
     }
@@ -516,7 +522,7 @@ async fn populated_payload_prefix_upgrade_preserves_all_rows_and_foreign_links()
             .fetch_one(&mut conn)
             .await
             .unwrap(),
-        82
+        83
     );
     for table in [
         "history_imports",

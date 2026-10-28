@@ -44,6 +44,10 @@ mod fast_slots;
 pub(crate) mod parallel_deep;
 pub use fast_slots::MAX_AUXILIARY_FAST_SLOTS;
 pub use parallel_deep::MAX_PARALLEL_DEEP_SLOTS;
+mod parallel_deep_turns;
+pub use parallel_deep_turns::{
+    PARALLEL_DEEP_DEFAULT_EFFORT, PARALLEL_DEEP_DEFAULT_MODEL, PARALLEL_DEFER,
+};
 mod fence;
 mod held_inputs;
 mod retired_inputs;
