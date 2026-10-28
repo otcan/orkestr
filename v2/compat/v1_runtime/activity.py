@@ -14,11 +14,30 @@ SECOND_HEALTHY_AFTER_S = 60 * 60
 POLL_GAP_S = 60
 NOTICE_PREFIXES = ("stalled:", "heartbeat:", "continued:")
 # Deep heartbeat (binding `deep_heartbeat`, default on): a running Deep turn
-# with no final gets one short Core-template line after 3 minutes without a
-# visible message for its input, then at most one every 5 minutes. Model
-# progress that was not delivered to the chat does not postpone it.
-HEARTBEAT_FIRST_S = 3 * 60
-HEARTBEAT_EVERY_S = 5 * 60
+# for a person's WhatsApp input (owner or member; never a timer) with no final
+# gets one short template line after a quiet spell with no delivered message
+# for that input, backing off: 3, then 5, then 7 minutes (lines at 3, 8, 15
+# minutes), then every 15 minutes, at most HEARTBEAT_MAX lines per input.
+# Model progress that was not delivered to the chat does not postpone it.
+HEARTBEAT_GAPS_S = (3 * 60, 5 * 60, 7 * 60)
+HEARTBEAT_LATER_S = 15 * 60
+HEARTBEAT_MAX = 6
+# One heartbeat per chat at most this often, across inputs.
+HEARTBEAT_CHAT_SPACING_S = 5 * 60
+HUMAN_ROLES = ("owner", "member")
+
+
+def heartbeat_gap(sent):
+    """The quiet spell before heartbeat number `sent + 1`, or None once capped."""
+    if sent >= HEARTBEAT_MAX:
+        return None
+    return HEARTBEAT_GAPS_S[sent] if sent < len(HEARTBEAT_GAPS_S) else HEARTBEAT_LATER_S
+
+
+def heartbeat_applies(worker, data):
+    """Only where a person waits: their own WhatsApp input in an enabled binding."""
+    return (getattr(worker, "deep_heartbeat", True) and data.get("origin") is None
+            and (data.get("author") or {}).get("role") in HUMAN_ROLES)
 
 
 def delivered_at(raw):
@@ -94,7 +113,7 @@ def observe(worker, data, statuses, now=None):
     activity.update(observed_at=now, phase=phase, run_id=deep.get("run_id"))
     if phase == "running":
         activity.pop("problem", None)
-    heartbeat = phase == "running" and getattr(worker, "deep_heartbeat", True)
+    heartbeat = phase == "running" and heartbeat_applies(worker, data)
     ledger = worker.ledger
     with ledger.connect() as db:
         db.execute("BEGIN IMMEDIATE")
@@ -125,18 +144,15 @@ def observe(worker, data, statuses, now=None):
             if at is not None and at <= now:
                 times.append(at)
         ledger.save(data, db)
-        if heartbeat:
-            due = HEARTBEAT_EVERY_S if activity.get("heartbeat_at") else HEARTBEAT_FIRST_S
-        else:
-            due = INTERVAL_S
-        if now - max(times) < due:
-            return
+        due = heartbeat_gap(activity.get("heartbeats", 0)) if heartbeat else INTERVAL_S
+        if due is None or now - max(times) < due:
+            return  # Not due yet, or this input's heartbeats are spent.
         running = phase == "running"
         if running:
             activity.pop("problem", None)
             count = activity.get("healthy_notices", 0)
-            # A heartbeat repeats every HEARTBEAT_EVERY_S until the final; the
-            # legacy notice is sent once, then once more after an hour.
+            # Heartbeats follow heartbeat_gap() (capped there); the legacy
+            # notice is sent once, then once more after an hour.
             if not heartbeat and (count >= 2 or (count and now - since - activity.get("paused_s", 0) < SECOND_HEALTHY_AFTER_S)):
                 ledger.save(data, db)
                 return
@@ -149,7 +165,7 @@ def observe(worker, data, statuses, now=None):
             if now - activity.get("missing_notice_at", -MISSING_RUN_INTERVAL_S) < MISSING_RUN_INTERVAL_S:
                 return
         prior = db.execute("SELECT value FROM ledger_meta WHERE key='activity_notice'").fetchone()
-        spacing = (HEARTBEAT_EVERY_S if heartbeat else INTERVAL_S) if running else MISSING_RUN_INTERVAL_S
+        spacing = (HEARTBEAT_CHAT_SPACING_S if heartbeat else INTERVAL_S) if running else MISSING_RUN_INTERVAL_S
         if prior and now - json.loads(prior[0])["at"] < spacing:
             return  # At most one status line per chat per spacing.
         pending = db.execute("SELECT 1 FROM exports e JOIN inputs i ON i.remote_id=e.input_id "
@@ -179,6 +195,7 @@ def observe(worker, data, statuses, now=None):
             activity["healthy_notices"] = activity.get("healthy_notices", 0) + 1
             if heartbeat:
                 activity["heartbeat_at"] = now
+                activity["heartbeats"] = activity.get("heartbeats", 0) + 1
         else:
             activity["missing_notice_at"] = now
         ledger.save(data, db)

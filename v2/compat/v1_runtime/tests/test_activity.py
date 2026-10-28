@@ -124,8 +124,12 @@ class ActivityTests(ActivityCase):
 
 
 class DeepHeartbeatTests(ActivityCase):
-    """`deep_heartbeat` (default on): 3 minutes, then at most every 5, until the final."""
+    """`deep_heartbeat` (default on): lines at 3, 8, 15, then every 15 minutes, at most 6."""
     heartbeat=True
+
+    def setUp(self):
+        super().setUp()
+        self.data['author']=dict(role='owner',id='owner@c.us',label='Owner');self.ledger.save(self.data)
 
     def heartbeats(self):
         return [m for m in self.notices() if m['text'].startswith('\U0001f9e0')]
@@ -144,21 +148,38 @@ class DeepHeartbeatTests(ActivityCase):
         self.worker.deep_heartbeat=False;self.advance(1590);self.assertEqual(self.notices(),[])
         self.poll(1600);self.assertIn('Still working on it, 10 minutes',self.notices()[0]['text'])
 
-    def test_first_line_after_three_minutes_then_every_five_until_final(self):
+    def drain(self,end):
+        """Poll to `end`, acknowledging each line when it appears; their times."""
+        sent=[]
+        for now in range(self.last+10,end+1,10):
+            self.poll(now)
+            for line in self.heartbeats():
+                self.ack(line,now);sent.append(now)
+        return sent
+
+    def test_lines_back_off_at_three_eight_fifteen_then_every_fifteen_minutes_capped_at_six(self):
         self.advance(1170);self.assertEqual(self.notices(),[])
         self.poll(1180);self.assertEqual(len(self.heartbeats()),1)
         text=self.heartbeats()[0]['text']
-        self.assertEqual(text,'\U0001f9e0 Still working… 3 min so far, the full answer follows.')
+        self.assertEqual(text,'\U0001f9e0 Still working\u2026 3 min so far, the full answer follows.')
         self.assertEqual(self.ledger.next_input()['remote_id'],self.data['remote_id'])
         self.ack(self.heartbeats()[0],1180)
-        self.advance(1470);self.assertEqual(self.notices(),[])
-        self.poll(1480);self.assertEqual(len(self.heartbeats()),1)
-        self.assertIn('8 min so far',self.heartbeats()[0]['text'])
-        for at in range(1480,4000,300):
-            self.ack(self.heartbeats()[0],at);self.advance(at+300)
+        # A four-hour turn: lines at 3, 8, 15, 30, 45, 60 minutes and never a seventh.
+        sent=[1180]+self.drain(1000+4*3600)
+        self.assertEqual([(at-1000)//60 for at in sent],[3,8,15,30,45,60])
         with self.ledger.connect() as db:
             count=db.execute("SELECT count(*) FROM inputs WHERE json_extract(data,'$.activity_notice.heartbeat')=1").fetchone()[0]
-        self.assertEqual(count,1+1+len(range(1480,4000,300)))  # No cap while the run runs.
+        self.assertEqual(count,6)
+
+    def test_timer_and_non_person_inputs_get_no_heartbeat(self):
+        for change in (dict(origin='timer'),dict(author=None),dict(author=dict(role='guest',id='x',label='Guest'))):
+            with self.subTest(change=change):
+                self.setUp();self.data.update(change);self.ledger.save(self.data)
+                self.advance(1590);self.assertEqual(self.heartbeats(),[])
+
+    def test_a_member_input_gets_the_heartbeat(self):
+        self.data['author']=dict(role='member',id='491700000001@c.us',label='Ayse');self.ledger.save(self.data)
+        self.advance(1180);self.assertEqual(len(self.heartbeats()),1)
 
     def test_model_progress_does_not_postpone_but_a_delivered_message_does(self):
         self.advance(1100);self.status['deep']['progress']['payload_id']='new'
@@ -174,7 +195,8 @@ class DeepHeartbeatTests(ActivityCase):
     def test_one_line_per_chat_across_inputs(self):
         self.advance(1180);self.ack(self.heartbeats()[0],1180)
         other=self.ledger.enqueue(dict(publicMessageId='second',publicThreadId='thread',chatId='chat',accountId='account',text='other'))[0]
-        other.update(admitted_at=1000,phase='running',matched_runs=['own'],activity=dict(observed_at=1190,payload_id='payload'))
+        other.update(admitted_at=1000,phase='running',matched_runs=['own'],activity=dict(observed_at=1190,payload_id='payload'),
+                     author=dict(role='owner',id='owner@c.us',label='Owner'))
         self.ledger.save(other)
         observe(self.worker,other,self.status,now=1200);self.assertEqual(self.notices(),[])
 
