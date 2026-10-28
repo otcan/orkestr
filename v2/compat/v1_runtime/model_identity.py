@@ -26,7 +26,9 @@ def observed_identity(call, run_id=None, status=None, fast=False):
     models = status.get("models") if isinstance(status, dict) else None
     models = models if isinstance(models, dict) else {}
     provider = token(models.get("provider"))
-    model = token(models.get("actual_model"))
+    # The exact run's actual model; else the model Core resolved for that same
+    # run (the V2 UI's fallback too), so a footer never reads a bare provider.
+    model = token(models.get("actual_model")) or token(models.get("resolved_model"))
     failure = status.get("failure") if isinstance(status, dict) else None
     if isinstance(failure, dict) and failure.get("class") == "policy":
         model = token(models.get("refused_model")) or token(models.get("resolved_model"))
@@ -41,4 +43,29 @@ def observed_identity(call, run_id=None, status=None, fast=False):
             result["observedReasoningEffort"] = effort
     if provider:
         result["provider"] = provider
+    return result
+
+
+def quick_identity(call, data, fast_status=None):
+    """Footer metadata naming the Quick (Fast) run of the input a Deep final
+    answers, so V1 never has to correlate it: a grouped or parallel final names
+    another input, and V1's bounded message window can miss the Quick reply.
+    `quick: "none"` marks an input no Quick answers (a timer). Only the exact
+    Fast run's own status is used; otherwise nothing is reported."""
+    if data.get("origin") == "timer":
+        return {"quick": "none"}
+    status = fast_status if isinstance(fast_status, dict) and fast_status.get("run_id") else None
+    run_id = status["run_id"] if status else (data.get("first_response") or {}).get("run_id")
+    if not run_id:
+        return {}
+    observed = observed_identity(call, run_id=run_id, status=status, fast=True)
+    if observed.get("identitySource") != "run":
+        return {}
+    result = {}
+    if observed.get("provider"):
+        result["quickProvider"] = observed["provider"]
+    if observed.get("model") and observed["model"] != "unreported":
+        result["quickModel"] = observed["model"]
+    if observed.get("observedReasoningEffort"):
+        result["quickObservedReasoningEffort"] = observed["observedReasoningEffort"]
     return result

@@ -4,7 +4,8 @@ New exports retain their existing IDs, text, ordering and acknowledgement contra
 
 - `layer`: `fast`, `deep`, or `coordinator`.
 - `runId` and `identitySource: run`: exact run status, verified against the requested run ID.
-- `provider` and `model`: provider-reported model evidence for that run. Missing provider evidence stays absent; conversation settings never supply an observed identity.
+- `provider` and `model`: model evidence for that exact run: `models.actual_model`, else the `models.resolved_model` Core resolved for the same run (the V2 UI's fallback too). Missing evidence stays absent (`unreported`); conversation settings never supply an identity.
+- `quickProvider`, `quickModel`, `quickObservedReasoningEffort` (Deep finals only): the exact Fast run of the input the final answers, so V1's footer shows the Quick layer without correlating messages (grouped and parallel finals name another input). `quick: "none"` marks a timer final, which no Quick answers.
 - `observedReasoningEffort`: only an explicitly reported `models.actual_reasoning_effort` value. Current Core does not report this field, so live effort remains unknown. Selected Fast/Deep preferences are not used as observations.
 - `sourceInputId`: original same-ledger input identity, including Fast's notification parent.
 

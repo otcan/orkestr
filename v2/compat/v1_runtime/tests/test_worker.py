@@ -85,10 +85,13 @@ class Peer:
             role = "fast" if route.startswith("/fast") else "deep"
             if query and query != role + "-run":
                 return 404, {"code": "not_found"}
-            return 200, dict(run_id=role + "-run", revision=len(self.accepted) + 10,
+            status = dict(run_id=role + "-run", revision=len(self.accepted) + 10,
                 phase="completed" if role in self.accepted else "awaiting_acceptance",
                 acceptance_candidate=dict(run_id=role + "-run", completion_event_id=role + "-completion"),
                 progress=dict(payload_id=role + "-payload"))
+            if role in getattr(self, "models", {}):
+                status["models"] = self.models[role]
+            return 200, status
         if route.startswith("/payloads/"):
             role = "fast" if "fast" in route else "deep"
             return 200, dict(run_id=role + "-run", payload_id=role + "-payload", text="NO_REPLY" if role == "fast" else role + " result")
@@ -445,6 +448,32 @@ class ExtensionTests(unittest.TestCase):
         final = self.ledger.messages()[-1]
         self.assertNotIn("provider", final)
         self.assertEqual(final["model"], "unreported")
+
+    def test_deep_final_carries_its_inputs_quick_identity_for_the_footer(self):
+        # The fixture's run ids are not exact-run UUIDs, so the identity itself
+        # is covered in test_model_identity; here: the final carries it.
+        from unittest import mock
+        from v2.compat.v1_runtime import worker as worker_module
+        seen = []
+        def quick(call, data, fast_status=None):
+            seen.append((data["remote_id"], (fast_status or {}).get("run_id")))
+            return {"quickProvider": "codex", "quickModel": "quick-model"}
+        with mock.patch.object(worker_module, "quick_identity", quick):
+            data = self.enqueue()
+            Worker(self.peer, self.ledger).step(data)
+        final = self.ledger.messages()[-1]
+        self.assertEqual(final["phase"], "final_answer")
+        self.assertEqual((final["quickProvider"], final["quickModel"]), ("codex", "quick-model"))
+        self.assertEqual(seen, [(data["remote_id"], "fast-run")])
+        # A failing lookup never holds up the final.
+        def broken(*_args, **_kwargs):
+            raise RuntimeError("synthetic")
+        ledger = Ledger(Path(self.temp.name) / "second.sqlite3", {"test_scope": "one"})
+        second, _ = ledger.enqueue(dict(publicMessageId="public", publicThreadId="thread", chatId="chat", accountId="account", text="request"))
+        with mock.patch.object(worker_module, "quick_identity", broken):
+            Worker(Peer(), ledger).step(second)
+        self.assertEqual(ledger.messages()[-1]["phase"], "final_answer")
+        self.assertNotIn("quickModel", ledger.messages()[-1])
 
     def test_final_reply_without_settings_route_omits_provider(self):
         Worker(self.peer, self.ledger).step(self.enqueue())
