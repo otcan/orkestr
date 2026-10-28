@@ -24,7 +24,7 @@ from .model_identity import observed_identity
 from .policy_refusal import notice as policy_notice
 from .first_response import capture as capture_first_response, repeats_fast
 from .questions import QUESTION_PREFIX, QUESTION_LABEL, QUESTION_SCAN_LIMIT, export_question, repeats_question
-from .outbound_text import PROGRESS_HOLD_S, complete_progress
+from .outbound_text import complete_progress, progress_hold_s
 from .activity import observe as observe_activity
 from .input_activity import record as record_transport_activity
 from .intake import admit as admit_input, window as admit_window
@@ -311,8 +311,8 @@ class Worker:
         if now - data.get("progress_at", data.get("admitted_at", now)) < PROGRESS_INTERVAL_S:
             return
         held = data.get("progress_hold") or {}
-        if held.get("payload_id") == payload_id and now - held.get("since", now) < PROGRESS_HOLD_S:
-            return  # A held fragment: wait until it grows or stays the latest.
+        if held.get("payload_id") == payload_id and now - held.get("since", now) < progress_hold_s(held):
+            return  # A held snapshot: wait until it grows, or settles while the run still runs.
         payload = self.call("GET", "/payloads/" + payload_id)
         if payload.get("run_id") != status["run_id"] or payload.get("payload_id") != payload_id:
             raise Refused("progress_payload_mismatch")
@@ -320,12 +320,14 @@ class Worker:
         if export_question(self, data, payload_id, text, status["run_id"]):
             self.ledger.save(data)
             return
-        if (isinstance(text, str) and text.strip() and not complete_progress(text)
-                and held.get("payload_id") != payload_id):
+        if isinstance(text, str) and text.strip() and held.get("payload_id") != payload_id:
             # Core snapshots an item while the model is still writing it: never
             # post a half sentence. A later snapshot supersedes this one; if it
             # stays the latest for PROGRESS_HOLD_S the item is done as it is.
-            data["progress_hold"] = {"payload_id": payload_id, "since": now}
+            # A complete snapshot settles for PROGRESS_SETTLE_S: the turn's last
+            # item is snapshotted just before the run completes with it as the
+            # final, and must not be posted a second time as progress.
+            data["progress_hold"] = {"payload_id": payload_id, "since": now, "complete": complete_progress(text)}
             self.ledger.save(data)
             return
         data.pop("progress_hold", None)
@@ -627,15 +629,15 @@ class Worker:
         held = watch.get("progress_hold") or {}
         if (not payload_id or payload_id in seen or len(seen) >= PROGRESS_LIMIT or
                 now - watch.get("progress_at", watch["since"]) < PROGRESS_INTERVAL_S or
-                (held.get("payload_id") == payload_id and now - held.get("since", now) < PROGRESS_HOLD_S)):
+                (held.get("payload_id") == payload_id and now - held.get("since", now) < progress_hold_s(held))):
             return
         payload = self.call("GET", "/payloads/" + payload_id)
         if payload.get("run_id") != status["run_id"] or payload.get("payload_id") != payload_id:
             raise Refused("progress_payload_mismatch")
         text = payload.get("text")
         if (isinstance(text, str) and text.strip() and not text.startswith(QUESTION_PREFIX)
-                and not complete_progress(text) and held.get("payload_id") != payload_id):
-            watch["progress_hold"] = {"payload_id": payload_id, "since": now}
+                and held.get("payload_id") != payload_id):
+            watch["progress_hold"] = {"payload_id": payload_id, "since": now, "complete": complete_progress(text)}
             return self.ledger.save_web_watch(watch)
         watch.pop("progress_hold", None)
         watch["progress_at"] = now

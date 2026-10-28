@@ -6,6 +6,13 @@ is exported only when its text ends at a sentence or paragraph boundary, or
 once the same snapshot has stayed the latest one for `PROGRESS_HOLD_S` (the
 item stopped growing, so it is finished).
 
+A complete snapshot is also held, for `PROGRESS_SETTLE_S`: the item a Deep
+turn ends with is stored as a progress snapshot a few milliseconds before the
+turn completes with the same text as its final answer. Exporting that snapshot
+at once posted the final answer twice (biofuture, 2026-10-27 14:03Z). A
+snapshot is progress only once the run is still running after it settled; if
+the run completes first, the final is the only copy.
+
 Replies in a chat shared with other members (every chat whose binding is not
 marked `owner_only_verified` with no participants) may reference files on the host ("[Deck](/var/lib/.../deck.pptx)").
 WhatsApp cannot open such a link and the full path must not reach other
@@ -24,6 +31,8 @@ from urllib.parse import unquote
 
 # A held fragment is exported unchanged after it stayed the latest snapshot this long.
 PROGRESS_HOLD_S = 20
+# A complete snapshot must stay the latest, with the run still running, this long.
+PROGRESS_SETTLE_S = 5
 # Sentence terminals; ":" is excluded because it usually introduces a list that follows.
 _TERMINALS = ".!?…。！？"
 # Closing marks that may follow a terminal ("**Done.**", "(see above.)", "\"Yes.\"").
@@ -52,6 +61,11 @@ _TRAILING = ".,;:!?"
 _VERB = re.compile(r"\b(?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+$")
 # Fenced code blocks (to their closing fence or the end) and inline code spans.
 _CODE = re.compile(r"(^|\n)[ \t]*(`{3,}|~{3,})[^\n]*\n.*?(?:\n[ \t]*\2[^\n]*(?=\n|$)|$)|(?<!`)(`+)(?!`).*?(?<!`)\3(?!`)", re.S)
+
+
+def progress_hold_s(held):
+    """How long a held snapshot must stay the latest before it is exported."""
+    return PROGRESS_SETTLE_S if held.get("complete") else PROGRESS_HOLD_S
 
 
 def complete_progress(text):
