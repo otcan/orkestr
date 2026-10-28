@@ -922,7 +922,7 @@ class Worker:
         reply = {"id": deep["acceptance_event_id"], "role": "assistant", "state": "completed",
                  "phase": "final_answer", "source": "rust-v2-pilot", "parentMessageId": data["remote_id"], "text": text}
         reply.update(self.provider_identity(run_id=deep["run_id"]))
-        # The Quick of this input for the one footer layer line (V1 #384).
+        # The Quick of this input for the one footer layer line (V1 #389).
         try:
             reply.update(quick_identity(self.call, data, statuses.get("fast")))
         except Exception:
