@@ -23,7 +23,8 @@ from .participants import split_header
 from .switch_tool import Switcher, first_line, log, plan_lines, planned_count, reason  # noqa: F401 (re-exported)
 
 COMMAND = re.compile(r"^/switch(?:\s|$)", re.I)
-MODEL = re.compile(r"^[A-Za-z0-9._:-]{1,120}$")
+# Starts with a letter or digit: a value can never be read as an option (`--yes`, `-x`).
+MODEL = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$")
 EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra")
 CLAUDE_HINT = re.compile(r"^(claude|opus|sonnet|haiku)", re.I)
 KEYWORDS = ("deep", "fast", "all", "for", "from", "status", "back", "yes", "help", "claude", "codex")
@@ -408,8 +409,10 @@ def drive(worker, now=None):
         return False
     switcher = getattr(worker, "switcher", None) or Switcher()
     for data in rows:
-        if data["command"].get("state") == "started" and data["command"].get("pid") != os.getpid():
-            # The adapter stopped while this command ran: never re-run an apply blindly.
+        if data["command"].get("state") == "started":
+            # A pass (or the adapter) stopped while this command ran, before its
+            # reply was saved: never re-run an apply blindly (a second `back`
+            # would undo one more switch).
             reply(ledger, data, "The adapter restarted while this /switch was running, so it may or may not have "
                                 "applied. Check with /switch status.")
             continue

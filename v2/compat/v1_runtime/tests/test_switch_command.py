@@ -268,6 +268,15 @@ class SwitchCommandTests(Harness):
         self.assertIn("restarted while this /switch was running", self.listing(1)["messages"][-1]["text"])
         self.assertEqual(self.tool.calls, [])
 
+    def test_a_command_whose_reply_failed_in_this_process_is_never_re_run(self):
+        self.send("/switch deep gpt-b")
+        ledger = self.binding(1).ledger
+        [data] = switch_command.pending(ledger)
+        switch_command.mark(ledger, data, "started", pid=os.getpid())
+        switch_command.drive(self.binding(1).worker)
+        self.assertIn("may or may not have applied", self.listing(1)["messages"][-1]["text"])
+        self.assertEqual(self.tool.calls, [])
+
 
 class WorkerPassTests(unittest.TestCase):
     def test_a_worker_pass_answers_the_command_and_sends_nothing_to_rust(self):
@@ -315,7 +324,10 @@ class ParseAndToolTests(unittest.TestCase):
         self.assertEqual(parse("/switch back all"), {"op": "back", "all": True})
         self.assertEqual(parse("/switch STATUS"), {"op": "status"})
         self.assertEqual(parse("/switch deep gpt-b for claude")["scope"], "claude")
-        for text in ("/switch deep all", "/switch deep gpt-b all all", "/switch deep gpt-b from", "/switch yes please"):
+        for text in ("/switch deep all", "/switch deep gpt-b all all", "/switch deep gpt-b from", "/switch yes please",
+                     "/switch deep --global-codex-default", "/switch deep -x", "/switch deep -", "/switch deep gpt-b from --yes",
+                     "/switch deep gpt-b from -x", "/switch deep claude-f\u0430ble", "/switch deep gpt\u200bb",
+                     "/switch deep " + "g" * 121):
             with self.assertRaises(Invalid):
                 parse(text)
 
