@@ -6,7 +6,7 @@ import { operatorNoticeFooterChat, operatorNoticeText } from '../packages/connec
 const ownerChat = 'owner-chat@g.us';
 const memberChat = 'member-chat@g.us';
 const config = {
-  appendDebugFooter: true, ownerUserId: 'owner-a',
+  appendDebugFooter: true, ownerUserId: 'admin',
   groups: [{ chatId: ownerChat, name: 'Owner' }, { chatId: memberChat, name: 'Shared' }, { chatId: 'flagged@g.us', whatsappNonOwnerMembers: true },
     { chatId: 'off@g.us', suppressWhatsAppDebugFooter: true }],
   participantAuthors: [{ chatId: memberChat }],
@@ -18,7 +18,7 @@ test('an operator notice in the owner-only chat gets the compact notice footer, 
   const seen = [];
   const text = await operatorNoticeText({ text: '🚨 Disk full', to: ownerChat, config, formatter, fetchQuota: async owner => { seen.push(owner); return { quota }; } });
   assert.match(text, COMPACT);
-  assert.deepEqual(seen, ['owner-a']);
+  assert.deepEqual(seen, ['admin']);
   assert.doesNotMatch(text, /⚡|🧠|▶|dbg:|unknown/);
   // It is exactly the footer the V1 relay gives an Operator post (router_update notice).
   const relayed = formatter.whatsappNoticeFooter({ message: { role: 'assistant', kind: 'notice' }, thread: { whatsAppDebugProviderQuota: quota }, deliveryType: 'router_update' });
@@ -59,4 +59,27 @@ test('a notice text that already carries a footer is not footed twice', async ()
   const once = await operatorNoticeText({ text: '🚨 Disk full', to: ownerChat, config, formatter, fetchQuota: async () => ({ quota }) });
   const twice = await operatorNoticeText({ text: once, to: ownerChat, config, formatter, fetchQuota: async () => ({ quota }) });
   assert.equal((twice.match(/help:\/help/g) || []).length, 1);
+});
+
+test('tenant isolation suppresses the fallback footer like the V1 relay path', async () => {
+  const fetchQuota = async () => ({ quota });
+  const tenant = { ...config, ownerUserId: 'tenant-b' };
+  assert.equal(operatorNoticeFooterChat(tenant, ownerChat), false);
+  assert.equal(await operatorNoticeText({ text: '🚨 Disk full', to: ownerChat, config: tenant, formatter, fetchQuota }), '🚨 Disk full');
+  const isolated = { ...config, groups: [{ chatId: ownerChat, securityProfile: 'external-user' }] };
+  assert.equal(await operatorNoticeText({ text: '🚨 Disk full', to: ownerChat, config: isolated, formatter, fetchQuota }), '🚨 Disk full');
+});
+
+test('a footer failure never stops the alert: the bare text is returned', async () => {
+  const broken = { ...formatter, whatsappNoticeFooter() { throw new Error('boom'); } };
+  assert.equal(await operatorNoticeText({ text: '🚨 Disk full', to: ownerChat, config, formatter: broken, fetchQuota: async () => ({ quota }) }), '🚨 Disk full');
+});
+
+test('stacked footers (old and new forms) are all stripped before the new one is added', async () => {
+  const legacy = 'dbg: codex/gpt-5/h · rt:api · msg:*final*\ncodex wk: 80%\nclaude: no data\nq:0 · load:1% · api:0% · help:/help';
+  const layer = '⚡ Quick: — · 🧠 Deep: codex gpt-5.5 · ▶ Deep · update\ncodex: no data\nclaude: no data\nq:0 · load:1% · api:0% · help:/help';
+  const notice = 'codex: no data\nclaude: no data\nq:0 · load:1% · api:0% · help:/help';
+  assert.equal(formatter.stripWhatsAppDebugFooter(`Body\n\n${legacy}\n\n${layer}\n\n${notice}`), 'Body');
+  const sent = await operatorNoticeText({ text: `🚨 Disk full\n\n${legacy}\n\n${notice}`, to: ownerChat, config, formatter, fetchQuota: async () => ({ quota }) });
+  assert.match(sent, COMPACT);
 });

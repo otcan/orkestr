@@ -11,16 +11,25 @@
 // formatter, no quota) degrades to the honest "no data" lines or the bare
 // text; the notice itself is always sent.
 import { threadSuppressesWhatsAppDebugFooter } from './whatsapp-mirror-policy.js';
+import { threadRequiresTenantIsolation } from '../../core/src/tenant-policy.js';
 
 const QUOTA_TIMEOUT_MS = 1000;
 
 export function operatorNoticeFooterChat(config = {}, chatId = '', env = process.env) {
   const group = (config.groups || []).find(entry => entry?.chatId === chatId);
   if (!group) return false;
+  // Tenant isolation, as on the V1 relay path: a non-admin owner (or an
+  // isolated security profile on the group) never gets the footer.
+  if (threadRequiresTenantIsolation({ ownerUserId: config.ownerUserId || '', securityProfile: group.securityProfile }, env)) return false;
   return !threadSuppressesWhatsAppDebugFooter({ binding: group }, chatId, env);
 }
 
-export async function operatorNoticeText({ text, to, config = {}, formatter = null, fetchQuota = null, maxLength = Infinity, env = process.env } = {}) {
+// Never throws: any footer failure returns the bare text so the alert is sent.
+export async function operatorNoticeText(options = {}) {
+  try { return await noticeTextWithFooter(options); } catch { return options.text; }
+}
+
+async function noticeTextWithFooter({ text, to, config = {}, formatter = null, fetchQuota = null, maxLength = Infinity, env = process.env } = {}) {
   if (config.appendDebugFooter !== true || typeof formatter?.whatsappNoticeFooter !== 'function') return text;
   if (!operatorNoticeFooterChat(config, to, env)) return text;
   let thread = { id: 'operator-notice', ownerUserId: config.ownerUserId || '', binding: { chatId: to } };

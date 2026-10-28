@@ -108,8 +108,16 @@ function footerEnabled(env = process.env) {
 // the quota lines; that form must end with the "help:/help" load line.
 const WHATSAPP_DEBUG_FOOTER_PATTERN = /\s*(?:\n(?:dbg:|⚡ Quick:|🧠 (?:Deep|Coordinator):)[^\n]*(?:\n(?:codex|claude)\b[^\n]*){0,2}(?:\n(?:q|queue):[^\n]*)?|\n(?:(?:codex|claude)\b[^\n]*\n){0,2}(?:q|queue):[^\n]*help:\/help)\s*$/i;
 
+// Repeated until none is left, so a text that already carries stacked
+// footers (a re-sent or quoted message) never keeps one under the new footer.
 export function stripWhatsAppDebugFooter(text) {
-  return String(text || "").replace(WHATSAPP_DEBUG_FOOTER_PATTERN, "").trim();
+  let current = String(text || "");
+  for (let i = 0; i < 8; i++) {
+    const next = current.replace(WHATSAPP_DEBUG_FOOTER_PATTERN, "");
+    if (next === current) break;
+    current = next;
+  }
+  return current.trim();
 }
 
 function shortReasoningEffort(value) {
