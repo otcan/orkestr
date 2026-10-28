@@ -1,6 +1,13 @@
 //! Bounded retry of Fast's input-eligibility read across transient Store
 //! errors. A busy or briefly unavailable Store must not end the window's
 //! Fast companion; only a persistent or non-transient error does.
+//!
+//! Core fences a window's reads (`Fenced`, or `Expired`) from its own work
+//! deadline on, while the local window clock can still be a fraction of a
+//! millisecond short of it. Such a fence at the deadline is the window
+//! closing, not a Fast failure: it gets a short grace in which the local clock
+//! catches up and the caller's due check closes Fast normally. A fence that
+//! outlives the grace (a real takeover) still ends Fast.
 use orkestr_v2_application::runtime::RuntimeStoreError;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -13,6 +20,11 @@ const MAX_DELAY: Duration = Duration::from_secs(2);
 const EPISODE_GAP: Duration = Duration::from_secs(10);
 /// Total time one run of consecutive transient errors may last.
 pub(super) const RETRY_BUDGET: Duration = Duration::from_secs(30);
+/// How long a fence may precede the local window deadline before it counts
+/// as a real fence. Far above the clock skew between Core and the local
+/// clock; far below any window's lifetime.
+pub(super) const FENCE_GRACE: Duration = Duration::from_secs(2);
+const FENCE_POLL: Duration = Duration::from_millis(50);
 
 /// What the caller does with one eligibility read.
 #[derive(Debug, PartialEq, Eq)]
@@ -31,6 +43,8 @@ pub(super) struct TransientRetry {
     since: Option<Instant>,
     last: Option<Instant>,
     delay: Duration,
+    /// First fence of the current run of fences while the window was not due.
+    fenced_since: Option<Instant>,
 }
 
 impl TransientRetry {
@@ -44,6 +58,7 @@ impl TransientRetry {
             since: None,
             last: None,
             delay: FIRST_DELAY,
+            fenced_since: None,
         }
     }
 
@@ -60,6 +75,7 @@ impl TransientRetry {
             Ok(value) => {
                 self.since = None;
                 self.delay = FIRST_DELAY;
+                self.fenced_since = None;
                 return Step::Read(value);
             }
             Err(error) => error,
@@ -75,12 +91,6 @@ impl TransientRetry {
         {
             return Step::Closing;
         }
-        if !matches!(
-            error,
-            RuntimeStoreError::Busy | RuntimeStoreError::Unavailable
-        ) {
-            return Step::Failed(ELIGIBILITY_UNAVAILABLE);
-        }
         // A reader that skipped polls (no slot wanted) for longer than an
         // episode gap starts a fresh run instead of inheriting a stale one.
         if self
@@ -89,8 +99,34 @@ impl TransientRetry {
         {
             self.since = None;
             self.delay = FIRST_DELAY;
+            self.fenced_since = None;
         }
         self.last = Some(now);
+        if matches!(
+            error,
+            RuntimeStoreError::Fenced | RuntimeStoreError::Expired
+        ) {
+            // Core's deadline fence ahead of the local clock: read again
+            // shortly; the caller's due check then closes Fast.
+            let since = *self.fenced_since.get_or_insert(now);
+            let elapsed = now.saturating_duration_since(since);
+            if elapsed >= FENCE_GRACE {
+                eprintln!(
+                    "owned window Fast input eligibility {error:?} for {}ms before the window was due; Fast ends for this window",
+                    elapsed.as_millis()
+                );
+                return Step::Failed(ELIGIBILITY_UNAVAILABLE);
+            }
+            return Step::Retry(FENCE_POLL.min(FENCE_GRACE - elapsed));
+        }
+        if !matches!(
+            error,
+            RuntimeStoreError::Busy | RuntimeStoreError::Unavailable
+        ) {
+            // Static diagnostic: the Store error kind only.
+            eprintln!("owned window Fast input eligibility refused: {error:?}");
+            return Step::Failed(ELIGIBILITY_UNAVAILABLE);
+        }
         let since = *self.since.get_or_insert(now);
         let elapsed = now.saturating_duration_since(since);
         if elapsed >= self.budget {
@@ -204,8 +240,7 @@ mod tests {
         for error in [
             RuntimeStoreError::Conflict,
             RuntimeStoreError::Unauthorized,
-            RuntimeStoreError::Fenced,
-            RuntimeStoreError::Expired,
+            RuntimeStoreError::InvalidInput,
         ] {
             assert_eq!(
                 TransientRetry::new().step(Err::<(), _>(error), false, &warned, now),
@@ -231,6 +266,56 @@ mod tests {
                 now
             ),
             Step::Failed(ELIGIBILITY_UNAVAILABLE)
+        );
+    }
+
+    #[test]
+    fn a_fence_at_cores_deadline_waits_for_the_local_clock() {
+        // Core fences the read from its own work deadline on; the local
+        // window clock is still a fraction of a millisecond short of it.
+        for error in [RuntimeStoreError::Fenced, RuntimeStoreError::Expired] {
+            let mut retry = TransientRetry::new();
+            let warned = AtomicBool::new(false);
+            let start = Instant::now();
+            assert_eq!(
+                retry.step(Err::<(), _>(error), false, &warned, start),
+                Step::Retry(FENCE_POLL)
+            );
+            // The next read sees the window due locally: Fast closes.
+            assert_eq!(
+                retry.step(Err::<(), _>(error), true, &warned, start + FENCE_POLL),
+                Step::Closing
+            );
+            // An expected deadline fence is no Store warning.
+            assert!(!warned.load(Ordering::Acquire));
+        }
+    }
+
+    #[test]
+    fn a_fence_that_outlives_the_grace_still_ends_fast() {
+        let mut retry = TransientRetry::new();
+        let warned = AtomicBool::new(false);
+        let start = Instant::now();
+        let mut now = start;
+        loop {
+            match retry.step(Err::<(), _>(RuntimeStoreError::Fenced), false, &warned, now) {
+                Step::Retry(wait) => {
+                    assert!(wait <= FENCE_POLL);
+                    now += wait;
+                }
+                Step::Failed(reason) => {
+                    assert_eq!(reason, ELIGIBILITY_UNAVAILABLE);
+                    break;
+                }
+                other => panic!("unexpected {other:?}"),
+            }
+        }
+        assert_eq!(now - start, FENCE_GRACE);
+        // A success resets the grace, so a later fence starts a fresh one.
+        assert_eq!(retry.step(Ok(()), false, &warned, now), Step::Read(()));
+        assert_eq!(
+            retry.step(Err::<(), _>(RuntimeStoreError::Fenced), false, &warned, now),
+            Step::Retry(FENCE_POLL)
         );
     }
 }

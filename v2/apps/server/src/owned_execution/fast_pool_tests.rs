@@ -478,3 +478,25 @@ async fn persistent_store_errors_still_end_fast_with_the_same_message() {
         closer.await.unwrap();
     }
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn cores_deadline_fence_before_the_local_clock_closes_fast_cleanly() {
+    // Core fences every read from its work deadline on; the local window
+    // clock reaches the same deadline a moment later.
+    let mut burst = Burst::new(3, Duration::from_secs(60)).await;
+    Arc::get_mut(&mut burst).unwrap().store_down = Some(RuntimeStoreError::Fenced);
+    let (_stop, shutdown) = channel();
+    let pool = tokio::spawn(schedule(burst.clone(), burst.lineage(), shutdown));
+    while burst.reads.load(Ordering::Acquire) == 0 {
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    assert!(!pool.is_finished(), "Core's deadline fence ended Fast");
+    burst.closing.store(true, Ordering::Release);
+    tokio::time::timeout(Duration::from_secs(5), pool)
+        .await
+        .expect("pool ends")
+        .unwrap()
+        .expect("a deadline fence is the window closing, not a Fast failure");
+    assert!(!burst.companion.eligibility_warned().load(Ordering::Acquire));
+}
