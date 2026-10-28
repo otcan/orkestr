@@ -236,6 +236,8 @@ class Worker:
         self.burst_quiet_s = burst_quiet_s
         self.attachment_dir, self.attachment_gid = attachment_dir, attachment_gid
         self.progress_updates = progress_updates
+        # Core-template "still working" line for a long Deep turn (activity.py).
+        self.deep_heartbeat = True
         self.fast_reply_policy = "legacy"
         # Steer owner messages into the running head turn (auto_steer.MODES).
         self.auto_steer = "off"

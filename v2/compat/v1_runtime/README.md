@@ -87,6 +87,7 @@ Each binding is `<bindings_dir>/<remote_thread_id>.json`:
 | `enabled` | `false` pauses intake and execution; exports and acknowledgements continue |
 | `revoked` | `true` permanently withdraws the route (intake and export answer 410) |
 | `progress_updates` | Export intermediate Deep progress for this binding |
+| `deep_heartbeat` | Optional, default `true`. A running Deep turn for a person's WhatsApp input (owner or member; never timer, post or web-mirror input) without a final gets one short status line from an adapter template (never model text): `🧠 Still working… N min so far, the full answer follows.` (English, Turkish or German). Lines come after a quiet spell with no delivered message for that input of 3, 5, 7, then 15 minutes (3, 8, 15, 30, 45, 60 minutes into an otherwise silent turn), at most 6 per input and at most one per chat every 5 minutes, and stop at the final. Set `false` for chats where no person waits (health probe, canary); it keeps the legacy 10-minute `activity_running` notice. Adapters before this field refuse a binding that contains it (`binding_fields`): deploy the adapter first. |
 | `fast_reply_policy` | Optional: `legacy` (default) preserves the progress-dependent Fast policy. Explicit `owner_only` enables immediate Fast replies for a group the operator verified has only owner-visible recipients; participant grants do not establish that visibility. `disabled` suppresses Fast replies (for example a coordinator chat). |
 | `owner_only_verified` | Optional, default `false`. Replies in every chat have server-local paths scrubbed (see `outbound_text.py`) unless the operator checked the WhatsApp group holds only the owner and the bot and set this to `true`. `fast_reply_policy` alone does not keep paths. A binding that lists any `participants` (`member` or `none`) is scrubbed even when marked. Adapters before this field refuse a binding that contains it (`binding_fields`): deploy the adapter first. |
 | `auto_steer` | Optional: `off` (default), `question` or `running`; enable per binding. See "Auto-steer" below. Adapters before this field refuse a binding that contains it (`binding_fields`). |
@@ -584,8 +585,8 @@ what happened. Members of a shared chat get the short `failure` notice; the
 owner (any binding policy) and timers get the technical reason. Templates:
 `failure`, `failure_owner`, `interrupted_owner` (never retried),
 `timer_failure`, `timer_interrupted`, `steered`, `continue`,
-`steer_unknown`, `steer_queued`, `policy`, `activity_running`,
-`activity_missing`. The missing-run status is not sent while this input's own
+`steer_unknown`, `steer_queued`, `policy`, `deep_heartbeat`,
+`activity_running`, `activity_missing`. The missing-run status is not sent while this input's own
 journal match lags Core's head (snapshot `last_sequence` past its cursor);
 after 20 minutes of lag the operator gets `ALERT … run_match_lagging`.
 

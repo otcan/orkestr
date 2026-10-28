@@ -113,6 +113,12 @@ TEMPLATES = {
         "de": "Ich arbeite noch daran, bisher %(minutes)d Minuten. In den letzten 10 Minuten gab es keinen "
               "neuen Fortschritt.",
     },
+    # Deep heartbeat: a Core template, never model text, no paths or reasons.
+    "deep_heartbeat": {
+        "en": "\U0001f9e0 Still working\u2026 %(minutes)d min so far, the full answer follows.",
+        "tr": "\U0001f9e0 Hâlâ çalışıyorum\u2026 şu ana kadar %(minutes)d dk, tam yanıt gelecek.",
+        "de": "\U0001f9e0 Ich arbeite noch\u2026 bisher %(minutes)d Min., die vollständige Antwort folgt.",
+    },
     "activity_missing": {
         "en": "I cannot confirm that this task is still running (%(state)s, %(minutes)d minutes so far). "
               "The result is still pending, and the operator was alerted.",
