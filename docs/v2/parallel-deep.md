@@ -426,7 +426,8 @@ Guards (the follow-up PR on top of the runtime PR):
     the manager in `ORKESTR_V2_CODEX_QUOTA_FILE` and cached for 10 s.
   - It fails closed when the file is unconfigured, unreadable or malformed,
     when the reading is more than 30 minutes old, or when it has neither
-    window. A window that reset after the reading counts as fresh.
+    window. A fresh reading of a window that has since reset counts as
+    zero usage; a stale one stays closed.
 - **Egress budget.** No new slot once less than 25 % of the window's
   attempts or bytes remain, from the manager's own receipt (fails closed).
 - **Drain deadline.** When the window closes, a slot proposal still

@@ -67,7 +67,7 @@ fn read(path: &Path) -> Option<serde_json::Value> {
 /// The closed `orkestr-provider-quota-v1` Codex projection. The gating
 /// window is the five-hour one when present, else the seven-day one (the
 /// projection is sparse: Codex may report only the weekly window). It must
-/// either have reset since it was observed, or be fresh and below the limit.
+/// be fresh, and either below the limit or reset since it was observed.
 /// Anything else (neither window, stale, malformed) fails closed.
 pub(super) fn quota_window_allows(value: &serde_json::Value, now_ms: i64) -> bool {
     if value.get("format").and_then(|v| v.as_str()) != Some("orkestr-provider-quota-v1")
@@ -94,17 +94,20 @@ pub(super) fn quota_window_allows(value: &serde_json::Value, now_ms: i64) -> boo
     if !(0.0..=100.0).contains(&used) || observed <= 0 || observed > now_ms + 60_000 {
         return false;
     }
-    // The window reset after this reading: its usage started again from zero.
-    if window
-        .get("resets_at")
-        .and_then(serde_json::Value::as_i64)
-        .is_some_and(|reset| reset > 0 && reset.saturating_mul(1000) <= now_ms)
-    {
-        return true;
-    }
+    // A stale reading fails closed, even of a window that has since reset:
+    // usage may have grown again since then.
     let fresh =
         now_ms.saturating_sub(observed) <= i64::try_from(QUOTA_FRESH.as_millis()).unwrap_or(0);
-    fresh && used < QUOTA_USED_LIMIT
+    if !fresh {
+        return false;
+    }
+    // The window reset after this (fresh) reading: its usage started again
+    // from zero.
+    let reset = window
+        .get("resets_at")
+        .and_then(serde_json::Value::as_i64)
+        .is_some_and(|reset| reset > 0 && reset.saturating_mul(1000) <= now_ms);
+    reset || used < QUOTA_USED_LIMIT
 }
 
 /// Whether the window's remaining egress share admits one more slot.
@@ -144,12 +147,18 @@ mod tests {
             "observed_at": NOW - 31 * 60_000}}),
         );
         assert!(!quota_window_allows(&stale, NOW));
-        // Reset since the (old) reading: usage restarted from zero.
+        // Reset since a fresh reading: usage restarted from zero.
         let reset = quota(
             json!({"five_hour":{"used_percent":95,"resets_at": NOW / 1000 - 10,"status":null,
-            "observed_at": NOW - 3 * 3_600_000}}),
+            "observed_at": NOW - 20 * 60_000}}),
         );
         assert!(quota_window_allows(&reset, NOW));
+        // Reset since a stale reading: still closed (usage may have grown).
+        let reset_stale = quota(
+            json!({"five_hour":{"used_percent":5,"resets_at": NOW / 1000 - 10,"status":null,
+            "observed_at": NOW - 3 * 3_600_000}}),
+        );
+        assert!(!quota_window_allows(&reset_stale, NOW));
         // Neither window: closed.
         assert!(!quota_window_allows(&quota(json!({})), NOW));
         // Malformed or foreign: closed.

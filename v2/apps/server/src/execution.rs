@@ -441,13 +441,22 @@ pub(crate) async fn parallel_stop(
         .await
         .map_err(|_| unavailable())?;
     let mut receipts = Vec::new();
+    // A Stop that could not be requested (store busy or unavailable) must not
+    // read as success: the owner retries, and stopped turns are not listed
+    // again (they are no longer starting or running).
+    let mut incomplete = false;
     for (n, run) in runs.into_iter().enumerate() {
-        let Ok(Some(status)) = state
+        let status = match state
             .store
             .execution_run_history_authenticated(&credential, &owner, &conversation, &run, false)
             .await
-        else {
-            continue; // Ended meanwhile.
+        {
+            Ok(Some(status)) => status,
+            Ok(None) => continue, // Ended meanwhile.
+            Err(_) => {
+                incomplete = true;
+                continue;
+            }
         };
         let request = ExecutionControlRequest {
             run_id: run,
@@ -455,12 +464,16 @@ pub(crate) async fn parallel_stop(
             expected_control_revision: status.control_revision,
             request_key: format!("{key}:{n}"),
         };
-        // A turn that ended meanwhile refuses its Stop: nothing to do.
-        if let Ok(receipt) =
-            stop_run(&state, &headers, &owner, &conversation, &request, false).await
-        {
-            receipts.push(receipt);
+        match stop_run(&state, &headers, &owner, &conversation, &request, false).await {
+            Ok(receipt) => receipts.push(receipt),
+            // A turn that ended (or was stopped) meanwhile refuses its Stop:
+            // nothing to do.
+            Err(Error(_, "revision_conflict" | "execution_fenced" | "not_found", _)) => {}
+            Err(_) => incomplete = true,
         }
+    }
+    if incomplete {
+        return Err(unavailable());
     }
     Ok(Json(serde_json::json!({ "stopped": receipts })).into_response())
 }
