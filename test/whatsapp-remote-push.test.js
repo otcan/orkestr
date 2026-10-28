@@ -150,7 +150,9 @@ test('twenty-second active-work fallback and later Fast are both sent once throu
   assert.equal(f.state.sends.length,0);
   f.state.clock++;t.mock.timers.tick(1);
   await until(() => f.state.sends.length === 1);
-  assert.equal(f.state.sends[0].text, 'Empfangen ✓, ich arbeite daran');
+  // The configured German text has no `language`: an input without a detectable
+  // language falls back to the built-in English acknowledgement.
+  assert.equal(f.state.sends[0].text, 'Received ✓, working on it');
   f.publish();
   const batch = await importRemoteMessageChanges({backendId: 'example'}, f.env, f.fetchImpl);
   await f.relay.deliverThreads(batch.threadIds);
