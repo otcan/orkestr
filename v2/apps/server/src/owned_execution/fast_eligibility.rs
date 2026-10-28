@@ -9,6 +9,8 @@ use std::time::{Duration, Instant};
 pub(super) const ELIGIBILITY_UNAVAILABLE: &str = "Fast input eligibility unavailable";
 const FIRST_DELAY: Duration = Duration::from_millis(100);
 const MAX_DELAY: Duration = Duration::from_secs(2);
+/// Silence between two errors that separates one run of errors from the next.
+const EPISODE_GAP: Duration = Duration::from_secs(10);
 /// Total time one run of consecutive transient errors may last.
 pub(super) const RETRY_BUDGET: Duration = Duration::from_secs(30);
 
@@ -27,6 +29,7 @@ pub(super) enum Step<T> {
 pub(super) struct TransientRetry {
     budget: Duration,
     since: Option<Instant>,
+    last: Option<Instant>,
     delay: Duration,
 }
 
@@ -39,6 +42,7 @@ impl TransientRetry {
         Self {
             budget,
             since: None,
+            last: None,
             delay: FIRST_DELAY,
         }
     }
@@ -77,6 +81,16 @@ impl TransientRetry {
         ) {
             return Step::Failed(ELIGIBILITY_UNAVAILABLE);
         }
+        // A reader that skipped polls (no slot wanted) for longer than an
+        // episode gap starts a fresh run instead of inheriting a stale one.
+        if self
+            .last
+            .is_some_and(|last| now.saturating_duration_since(last) > EPISODE_GAP)
+        {
+            self.since = None;
+            self.delay = FIRST_DELAY;
+        }
+        self.last = Some(now);
         let since = *self.since.get_or_insert(now);
         let elapsed = now.saturating_duration_since(since);
         if elapsed >= self.budget {
@@ -133,6 +147,22 @@ mod tests {
                 &warned,
                 start + Duration::from_secs(60)
             ),
+            Step::Retry(Duration::from_millis(100))
+        );
+    }
+
+    #[test]
+    fn errors_separated_by_a_long_gap_are_separate_runs() {
+        let mut retry = TransientRetry::new();
+        let warned = AtomicBool::new(false);
+        let start = Instant::now();
+        let busy = || Err::<(), _>(RuntimeStoreError::Busy);
+        assert!(matches!(
+            retry.step(busy(), false, &warned, start),
+            Step::Retry(_)
+        ));
+        assert_eq!(
+            retry.step(busy(), false, &warned, start + Duration::from_secs(120)),
             Step::Retry(Duration::from_millis(100))
         );
     }
