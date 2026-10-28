@@ -18,6 +18,7 @@ mod directory;
 mod fast;
 mod fast_bootstrap;
 mod fast_continuity;
+mod fast_eligibility;
 mod fast_pool;
 mod fast_session;
 mod group;

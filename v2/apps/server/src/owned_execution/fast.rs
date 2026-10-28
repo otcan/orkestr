@@ -241,6 +241,12 @@ impl ConfiguredExecution {
     ) -> Result<Option<FastSource>, &'static str> {
         // A ready lineage waiting here takes the next input itself.
         let _idle = claim.then(|| PrimaryIdle::new(self.companion.as_deref()));
+        let mut retry = super::fast_eligibility::TransientRetry::new();
+        let local_warned = std::sync::atomic::AtomicBool::new(false);
+        let warned = self
+            .companion
+            .as_deref()
+            .map_or(&local_warned, |companion| companion.eligibility_warned());
         loop {
             if *shutdown.borrow() || self.fast_window_due() {
                 return Ok(None);
@@ -248,13 +254,19 @@ impl ConfiguredExecution {
             self.maintain(heartbeat).await?;
             check()?;
             let source = self.unclaimed_fast_source(claim).await;
-            let source = match source {
-                Ok(source) => source,
-                Err(
-                    orkestr_v2_application::runtime::RuntimeStoreError::Fenced
-                    | orkestr_v2_application::runtime::RuntimeStoreError::Expired,
-                ) if self.fast_window_due() => return Ok(None),
-                Err(_) => return Err("Fast input eligibility unavailable"),
+            let source = match retry.step(source, self.fast_window_due(), warned, Instant::now()) {
+                super::fast_eligibility::Step::Read(source) => source,
+                super::fast_eligibility::Step::Closing => return Ok(None),
+                super::fast_eligibility::Step::Failed(reason) => return Err(reason),
+                // Busy or briefly unavailable Store: wait, then read again
+                // (the loop keeps the heartbeat and its checks current).
+                super::fast_eligibility::Step::Retry(wait) => {
+                    tokio::select! {
+                        _ = tokio::time::sleep(wait) => {},
+                        _ = shutdown.changed() => return Ok(None),
+                    }
+                    continue;
+                }
             };
             // A query racing the shared retirement fence yields no next input.
             // Original terminal/reap checks still decide whether close is legal.
