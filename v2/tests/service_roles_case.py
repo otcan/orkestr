@@ -7,6 +7,7 @@ from contextlib import closing
 import json
 import os
 from pathlib import Path
+import shutil
 import signal
 import socket
 import sqlite3
@@ -31,6 +32,9 @@ class PackageFixture(ServiceFixture):
 
 class ServiceRolesCase:
     request = ordinary.Case.request
+    # Set to keep the whole fixture directory (several hundred MB) for
+    # debugging; by default every run removes it, pass or fail.
+    KEEP_FIXTURE_ENV = "ORKESTR_V2_E2E_KEEP_FIXTURE"
 
     def __init__(self, source, quota_used=None):
         # Optional synthetic Codex five-hour usage (percent): the package then
@@ -196,6 +200,20 @@ class ServiceRolesCase:
             db.execute("BEGIN")
             return [dict(row) for row in db.execute(sql, args)]
 
+    def remove_fixture(self, keep_logs=None):
+        """Remove this run's fixture directory, copying its logs first when
+        asked; never a path outside the fixture's own mkdtemp root."""
+        root = self.root
+        if not root.name.startswith("selected-codex-test-") or root.parent != Path("/"):
+            return
+        if keep_logs is not None:
+            for log in root.glob("*.log"):
+                shutil.copyfile(log, Path(keep_logs) / log.name)
+        if os.environ.get(self.KEEP_FIXTURE_ENV) == "1":
+            print(f"fixture kept: {root}", file=sys.stderr, flush=True)
+            return
+        shutil.rmtree(root, ignore_errors=True)
+
     def stop(self):
         child = self.process
         if child is None:
@@ -226,17 +244,22 @@ class ServiceRolesCase:
             raise observation_error
         assert child.returncode == 0, "owned service did not retire cleanly"
 
-    def cleanup(self):
+    def cleanup(self, keep_logs=None):
+        # The fixture directory goes last, pass or fail, after every check
+        # that reads it.
         try:
-            self.stop()
+            try:
+                self.stop()
+            finally:
+                for stream in self.logs:
+                    stream.close()
+                ordinary.wait_for(lambda: all(process_start(pid) != start for pid, start in self.known),
+                                  "retained original process remains", 5)
+            assert not self.forced
+            assert all(probe.gone() for probe in self.probes.values())
+            assert not (self.fixture.endpoint / "control.sock").exists()
+            assert not (self.fixture.endpoint / "egress.sock").exists()
+            with socket.socket() as sock:
+                assert sock.connect_ex(("127.0.0.1", self.port)) != 0
         finally:
-            for stream in self.logs:
-                stream.close()
-            ordinary.wait_for(lambda: all(process_start(pid) != start for pid, start in self.known),
-                              "retained original process remains", 5)
-        assert not self.forced
-        assert all(probe.gone() for probe in self.probes.values())
-        assert not (self.fixture.endpoint / "control.sock").exists()
-        assert not (self.fixture.endpoint / "egress.sock").exists()
-        with socket.socket() as sock:
-            assert sock.connect_ex(("127.0.0.1", self.port)) != 0
+            self.remove_fixture(keep_logs)

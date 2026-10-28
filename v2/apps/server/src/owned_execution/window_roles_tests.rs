@@ -244,3 +244,54 @@ async fn a_healthy_fast_reports_nothing_and_no_pool_is_fine() {
         Ok(())
     );
 }
+
+/// `service_parallel_deep_http` flake ("Fast observation refused by
+/// Provider(Protocol)", about 1 in 5 runs): the owner stopped the writer while
+/// a held Fast turn was running. Fast's step saw the companion not retiring,
+/// then Deep's close moved Core's window to `retiring` before that step's
+/// fenced stdin flush, whose execution fence then refused it (the window
+/// must be `active`), and the window needed reconciliation. Now retirement
+/// waits for such a step, and every later step sees `retiring` (the
+/// ordinary Stop path).
+#[tokio::test]
+async fn window_retirement_waits_for_a_running_fast_step() {
+    let (companion, directory) = companion().await;
+    // Core's window state as the Fast execution fence reads it.
+    let active = Arc::new(AtomicBool::new(true));
+    let step = companion.step().await;
+    assert!(!companion.retiring(), "this step goes on running");
+    let close = tokio::spawn({
+        let companion = companion.clone();
+        let active = active.clone();
+        async move {
+            companion.retire_quiesced().await;
+            // `begin_execution_window_retirement`: active -> retiring.
+            active.store(false, Ordering::Release);
+        }
+    });
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(companion.retiring(), "retirement already requested");
+    assert!(
+        !close.is_finished(),
+        "Core retirement must wait for the step"
+    );
+    // The step's fenced write (stdin flush) still sees an active window.
+    assert!(active.load(Ordering::Acquire));
+    drop(step);
+    tokio::time::timeout(Duration::from_secs(5), close)
+        .await
+        .expect("retirement proceeds once the step ended")
+        .unwrap();
+    assert!(!active.load(Ordering::Acquire));
+    // Every later step sees the retirement before any fenced write.
+    let later = companion.step().await;
+    assert!(companion.retiring());
+    drop(later);
+    // Without a running step, retirement never waits.
+    let (idle, idle_directory) = self::companion().await;
+    tokio::time::timeout(Duration::from_secs(5), idle.retire_quiesced())
+        .await
+        .expect("no step holds an idle companion's retirement");
+    let _ = std::fs::remove_dir_all(directory);
+    let _ = std::fs::remove_dir_all(idle_directory);
+}

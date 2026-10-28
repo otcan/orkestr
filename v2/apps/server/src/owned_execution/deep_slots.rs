@@ -208,6 +208,7 @@ impl ConfiguredExecution {
             .ok_or("parallel Deep pool lacks custody")?;
         let mut pressure = super::host_pressure::HostPressure::new();
         let mut switch: Option<(Instant, bool)> = None;
+        let mut egress: Option<(Instant, bool)> = None;
         let mut tasks = tokio::task::JoinSet::new();
         let mut failure = None;
         loop {
@@ -269,10 +270,19 @@ impl ConfiguredExecution {
                 // (both fail closed), then live host pressure. Live slots
                 // are never cut by these gates.
                 && super::deep_slot_gates::quota_allows()
-                && super::deep_slot_gates::egress_allows(match this.window.as_ref() {
-                    Some(window) => window.egress_left().await,
-                    None => None,
-                })
+                && match egress {
+                    // Cached like the quota gate: a waiting candidate never
+                    // polls the manager every pass.
+                    Some((at, allows)) if at.elapsed() < super::deep_slot_gates::EGRESS_READ => allows,
+                    _ => {
+                        let allows = super::deep_slot_gates::egress_allows(match this.window.as_ref() {
+                            Some(window) => window.egress_left().await,
+                            None => None,
+                        });
+                        egress = Some((Instant::now(), allows));
+                        allows
+                    }
+                }
                 && pressure.admit_one_deep(slots.active().max(HOST_SLOTS.load(Ordering::Acquire)))
             {
                 if let Some(backstop) = HostSlot::acquire() {
@@ -524,6 +534,8 @@ impl ConfiguredExecution {
         let mut budget = self.config.execution_budget.start(Instant::now());
         let mut peak = 0;
         let mut drain_since: Option<Instant> = None;
+        let mut withdraw_attempts = 0_u32;
+        let mut withdraw_next: Option<Instant> = None;
         let result = loop {
             self.maintain(heartbeat).await?;
             if let Some(bytes) = pump.tree_peak_rss_bytes() {
@@ -566,18 +578,50 @@ impl ConfiguredExecution {
                         break None;
                     }
                     // The window closes: wait a bounded time for the owner
-                    // decision, then release the native. The proposal stays
-                    // unaccepted, so the window settles through stranded
-                    // reconciliation, which hands the input back to the writer.
+                    // decision, then withdraw the proposal in Core (abandoned,
+                    // session released, input back to the writer) and release
+                    // the native.
                     if slots.retiring() {
                         let since = *drain_since.get_or_insert_with(Instant::now);
-                        if since.elapsed() >= ACCEPT_DRAIN {
-                            eprintln!("parallel Deep slot proposal unaccepted at window close; released for reconciliation");
-                            let retiring = pump
-                                .retire_broker()
-                                .map_err(|_| "parallel Deep proposal cleanup refused")?;
-                            drop(authority);
-                            break Some(self.reaped(retiring, &run, heartbeat).await?);
+                        let due = withdraw_next.is_none_or(|next| Instant::now() >= next);
+                        if since.elapsed() >= ACCEPT_DRAIN && due {
+                            let release = match self
+                                .store
+                                .withdraw_parallel_deep_proposal(&self.token, &run)
+                                .await
+                            {
+                                Ok(()) => {
+                                    eprintln!("parallel Deep slot proposal unaccepted at window close; withdrawn, input back to the writer");
+                                    true
+                                }
+                                Err(error) => {
+                                    withdraw_attempts += 1;
+                                    match super::deep_slot_gates::withdraw_retry(
+                                        &error,
+                                        withdraw_attempts,
+                                    ) {
+                                        super::deep_slot_gates::WithdrawRetry::After(wait) => {
+                                            withdraw_next = Some(Instant::now() + wait);
+                                            false
+                                        }
+                                        // Refused for good (for example accepted
+                                        // meanwhile): release as the accepted
+                                        // path does; an unaccepted proposal is
+                                        // left to stranded reconciliation.
+                                        super::deep_slot_gates::WithdrawRetry::Release => {
+                                            eprintln!("parallel Deep slot proposal withdrawal refused ({error:?}); releasing the native");
+                                            true
+                                        }
+                                    }
+                                }
+                            };
+                            if release {
+                                let retiring = pump
+                                    .retire_broker()
+                                    .map_err(|_| "parallel Deep proposal cleanup refused")?;
+                                drop(authority);
+                                break Some(self.reaped(retiring, &run, heartbeat).await?);
+                            }
                         }
                     }
                     tokio::select! {

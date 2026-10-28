@@ -18,6 +18,8 @@ pub(super) const QUOTA_FRESH: Duration = Duration::from_secs(30 * 60);
 pub(super) const EGRESS_LEFT_MIN: f64 = 0.25;
 const MAX_QUOTA_BYTES: u64 = 16 * 1024;
 const QUOTA_READ: Duration = Duration::from_secs(10);
+/// How long one manager reading of the window's egress budget stays current.
+pub(super) const EGRESS_READ: Duration = Duration::from_secs(10);
 
 static QUOTA_FILE: OnceLock<PathBuf> = OnceLock::new();
 static QUOTA_CACHE: Mutex<Option<(Instant, bool)>> = Mutex::new(None);
@@ -113,6 +115,40 @@ pub(super) fn quota_window_allows(value: &serde_json::Value, now_ms: i64) -> boo
 /// Whether the window's remaining egress share admits one more slot.
 pub(super) fn egress_allows(left: Option<f64>) -> bool {
     left.is_some_and(|left| left.is_finite() && left >= EGRESS_LEFT_MIN)
+}
+
+/// What the drain deadline does after Core refused a withdrawal.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum WithdrawRetry {
+    /// Transient (`Busy`/`Unavailable`): try again after this backoff.
+    After(Duration),
+    /// Anything else, or retries exhausted: release the native as the
+    /// accepted path does. Safe when the refusal came from an acceptance
+    /// (the run is settled) and otherwise leaves the proposal to stranded
+    /// reconciliation, which applies the defer rule.
+    Release,
+}
+/// Transient withdrawal refusals retried at most this many times.
+pub(super) const WITHDRAW_RETRIES: u32 = 8;
+const WITHDRAW_BACKOFF_FIRST: Duration = Duration::from_millis(100);
+const WITHDRAW_BACKOFF_MAX: Duration = Duration::from_secs(2);
+
+/// Retry policy of a refused drain-deadline withdrawal; `attempts` counts
+/// the refusals so far, this one included.
+pub(super) fn withdraw_retry(
+    error: &orkestr_v2_application::runtime::RuntimeStoreError,
+    attempts: u32,
+) -> WithdrawRetry {
+    use orkestr_v2_application::runtime::RuntimeStoreError::{Busy, Unavailable};
+    if !matches!(error, Busy | Unavailable) || attempts > WITHDRAW_RETRIES {
+        return WithdrawRetry::Release;
+    }
+    let shift = attempts.saturating_sub(1).min(16);
+    WithdrawRetry::After(
+        WITHDRAW_BACKOFF_FIRST
+            .saturating_mul(1 << shift)
+            .min(WITHDRAW_BACKOFF_MAX),
+    )
 }
 
 #[cfg(test)]
@@ -217,5 +253,48 @@ mod tests {
     #[test]
     fn an_unreadable_file_fails_closed() {
         assert!(read(Path::new("/nonexistent/orkestr-quota/codex.json")).is_none());
+    }
+
+    #[test]
+    fn a_refused_withdrawal_retries_only_transient_errors_with_capped_backoff() {
+        use orkestr_v2_application::runtime::RuntimeStoreError as E;
+        assert_eq!(
+            withdraw_retry(&E::Busy, 1),
+            WithdrawRetry::After(Duration::from_millis(100))
+        );
+        assert_eq!(
+            withdraw_retry(&E::Unavailable, 2),
+            WithdrawRetry::After(Duration::from_millis(200))
+        );
+        assert_eq!(
+            withdraw_retry(&E::Busy, 6),
+            WithdrawRetry::After(Duration::from_secs(2))
+        );
+        assert_eq!(
+            withdraw_retry(&E::Busy, WITHDRAW_RETRIES),
+            WithdrawRetry::After(Duration::from_secs(2))
+        );
+        // Retries exhausted: release.
+        assert_eq!(
+            withdraw_retry(&E::Unavailable, WITHDRAW_RETRIES + 1),
+            WithdrawRetry::Release
+        );
+        // Non-retryable refusals (accepted meanwhile, not a slot proposal,
+        // bad credential): release the native on the first refusal.
+        for error in [
+            E::Fenced,
+            E::Conflict,
+            E::NotFound,
+            E::Unauthorized,
+            E::InvalidInput,
+            E::StaleLease,
+            E::Expired,
+        ] {
+            assert_eq!(
+                withdraw_retry(&error, 1),
+                WithdrawRetry::Release,
+                "{error:?}"
+            );
+        }
     }
 }

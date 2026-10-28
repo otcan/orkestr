@@ -201,6 +201,12 @@ impl ConfiguredExecution {
                 ExecutionPhase::Starting | ExecutionPhase::Running => {}
                 ExecutionPhase::Queued => return Err("Fast exact run cannot be an inbox queue"),
             }
+            // Held from the retiring check through this step's fenced
+            // writes, so window retirement waits for it (see `Companion`).
+            let step = match &self.companion {
+                Some(companion) => Some(companion.step().await),
+                None => None,
+            };
             let cancellation = if self.fast_window_due() {
                 Some("execution-window-work-deadline")
             } else if *shutdown.borrow() {
@@ -209,6 +215,7 @@ impl ConfiguredExecution {
                 budget.cancellation_key(Instant::now())
             };
             if let Some(key) = cancellation {
+                drop(step);
                 let receipt = self
                     .store
                     .request_cancel(&self.owner, &run, key)
@@ -251,6 +258,7 @@ impl ConfiguredExecution {
                 renew_at = Instant::now() + Duration::from_secs(20);
             }
             control.set_available(phase == ExecutionPhase::Running && live.pending().is_none());
+            drop(step);
             drop(schedule);
             tokio::select! {
                 _ = tokio::time::sleep(Duration::from_millis(10)) => {},
