@@ -3,6 +3,7 @@ from unittest.mock import patch
 import unittest
 
 from v2.compat.v1_runtime.tests import test_worker as fixture
+from v2.compat.v1_runtime.outbound_text import PROGRESS_SETTLE_S
 from v2.compat.v1_runtime.worker import Worker
 
 
@@ -80,11 +81,12 @@ class FirstResponseTests(unittest.TestCase):
         self.step_at(5)
         self.step_at(64)
         self.assertEqual(len(self.replies()), 1)
-        self.step_at(65)
+        self.step_at(65)  # The complete snapshot is held until it settles.
+        self.step_at(65 + PROGRESS_SETTLE_S)
         self.assertEqual([r["text"] for r in self.replies()], ["Still checking.", self.state["fast"]])
         self.ack_fast()
         self.state["deep"] = "ready"
-        self.step_at(66)
+        self.step_at(66 + PROGRESS_SETTLE_S)
         self.assertEqual([r["text"] for r in self.replies()],
                          ["Still checking.", self.state["final"]])
 

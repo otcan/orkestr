@@ -8,7 +8,7 @@ import unittest
 import hashlib
 from unittest.mock import patch
 
-from v2.compat.v1_runtime import worker as worker_module
+from v2.compat.v1_runtime import outbound_text, worker as worker_module
 from v2.compat.v1_runtime.ledger import Ledger
 from v2.compat.v1_runtime.worker import Refused, Worker
 from v2.compat.v1_runtime.rust_client import ClientError
@@ -344,8 +344,10 @@ class ExtensionTests(unittest.TestCase):
                     return original(method, route, **kwargs)
                 peer.request = request
                 worker = Worker(peer, ledger, progress_updates=enabled)
-                with patch.object(worker_module, "PROGRESS_INTERVAL_S", 0):
-                    for step in ("running:p1", "running:p1", "running:p2", "running:p3", "done"):
+                with patch.object(worker_module, "PROGRESS_INTERVAL_S", 0), \
+                        patch.object(outbound_text, "PROGRESS_SETTLE_S", 0):
+                    # Each snapshot is seen twice: the first sighting only holds it.
+                    for step in ("running:p1", "running:p1", "running:p2", "running:p3", "running:p3", "done"):
                         phase[0] = step
                         worker.step(ledger.next_input() or data)
                 rows = ledger.messages()
@@ -353,6 +355,34 @@ class ExtensionTests(unittest.TestCase):
                 self.assertEqual(progress, ["working on p1.", "working on p3."] if enabled else [])
                 self.assertEqual(rows[-1]["text"], "deep result")
                 self.assertTrue(all(r["parentMessageId"] == data["remote_id"] for r in rows[1:]))
+
+    def test_last_item_snapshotted_just_before_completion_is_posted_once(self):
+        # biofuture 2026-10-27 14:03Z: Core stored the turn's final item as a
+        # progress snapshot 24 ms before the run completed with the same text.
+        # A poll in between exported it as progress and then again as final.
+        ledger = Ledger(Path(self.temp.name) / "settle.sqlite3", {"test_scope": "one"})
+        data = ledger.enqueue(dict(publicMessageId="public", publicThreadId="thread", chatId="chat",
+                                   accountId="account", text="request"))[0]
+        peer, phase = Peer(), ["running"]
+        original = peer.request
+        def request(method, route, **kwargs):
+            if route.split("?", 1)[0] == "/execution" and phase[0] == "running":
+                return 200, dict(run_id="deep-run", revision=1, phase="running",
+                                 progress=dict(payload_id="last-item"))
+            if route in ("/payloads/last-item", "/payloads/deep-payload"):
+                return 200, dict(run_id="deep-run", payload_id=route.rsplit("/", 1)[1],
+                                 text="Here is the latest schedule.")
+            return original(method, route, **kwargs)
+        peer.request = request
+        worker = Worker(peer, ledger, progress_updates=True)
+        with patch.object(worker_module, "PROGRESS_INTERVAL_S", 0):
+            for step in ("running", "running", "running", "done"):
+                phase[0] = step
+                worker.step(ledger.next_input() or data)
+        # Every export V1 may transport, whatever it listed in between.
+        with ledger.connect() as db:
+            exports = db.execute("SELECT kind FROM exports WHERE input_id=? ORDER BY seq", (data["remote_id"],)).fetchall()
+        self.assertEqual([kind for kind, in exports], ["final"])
 
     def test_async_questions_are_sent_at_once_as_their_own_messages_never_as_the_final(self):
         # PA gen 22: two `request_user_input_async` questions, then the final.

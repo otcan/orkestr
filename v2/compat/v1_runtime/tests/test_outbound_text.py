@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 from v2.compat.v1_runtime import worker as worker_module
 from v2.compat.v1_runtime.ledger import Ledger
-from v2.compat.v1_runtime.outbound_text import PROGRESS_HOLD_S, complete_progress, scrub_local_paths
+from v2.compat.v1_runtime.outbound_text import PROGRESS_HOLD_S, PROGRESS_SETTLE_S, complete_progress, scrub_local_paths
 from v2.compat.v1_runtime.questions import QUESTION_LABEL, QUESTION_PREFIX
 from v2.compat.v1_runtime.tests.test_worker import Peer
 from v2.compat.v1_runtime.worker import Worker
@@ -102,7 +102,22 @@ class WorkerOutboundTests(unittest.TestCase):
         self.texts.update(p1="There are two", p2="There are two options. I'll compare them.")
         self.assertEqual(self.progress("p1", 100), [])
         self.assertEqual(self.progress("p1", 105), [])
-        self.assertEqual(self.progress("p2", 110), ["There are two options. I'll compare them."])
+        self.assertEqual(self.progress("p2", 110), [])
+        self.assertEqual(self.progress("p2", 110 + PROGRESS_SETTLE_S), ["There are two options. I'll compare them."])
+
+    def test_complete_snapshot_settles_before_it_is_progress(self):
+        self.texts.update(p1="Here is the schedule.")
+        self.assertEqual(self.progress("p1", 100), [])
+        self.assertEqual(self.progress("p1", 100 + PROGRESS_SETTLE_S - 1), [])
+        self.assertEqual(self.progress("p1", 100 + PROGRESS_SETTLE_S), ["Here is the schedule."])
+        self.assertEqual(self.progress("p1", 200), ["Here is the schedule."])
+
+    def test_complete_snapshot_overtaken_by_the_final_is_never_progress(self):
+        self.texts.update(p1="Here is the schedule.")
+        self.assertEqual(self.progress("p1", 100), [])
+        self.assertEqual(self.final("Here is the schedule."), "Here is the schedule.")
+        self.assertEqual([m["text"] for m in self.ledger.messages() if m["role"] == "assistant"],
+                         ["Here is the schedule."])
 
     def test_fragment_that_stays_latest_is_exported_once_finished(self):
         self.texts.update(p1="Checking the CRM entries now")
@@ -117,7 +132,8 @@ class WorkerOutboundTests(unittest.TestCase):
         self.texts["p2"] = "Question: should I send the invoice to Anna?"
         self.progress(QUESTION, 100)
         self.assertEqual(self.progress("p2", 200), [])
-        self.assertEqual(self.progress("p1", 300), [self.texts["p1"]])
+        self.assertEqual(self.progress("p1", 300), [])
+        self.assertEqual(self.progress("p1", 300 + PROGRESS_SETTLE_S), [self.texts["p1"]])
 
     def test_question_post_has_one_header_and_is_not_repeated_as_progress(self):
         self.texts[QUESTION] = QUESTION_PREFIX + "Should I send the invoice to Anna or to the office address?"

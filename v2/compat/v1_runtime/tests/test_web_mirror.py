@@ -1,8 +1,9 @@
 """Owner messages typed in the V2 web UI are mirrored to the group with their answer."""
 from pathlib import Path
 import unittest
+from unittest.mock import patch
 
-from v2.compat.v1_runtime import worker as worker_module
+from v2.compat.v1_runtime import outbound_text, worker as worker_module
 from v2.compat.v1_runtime.ledger import Ledger
 from v2.compat.v1_runtime.worker import Worker
 from v2.compat.v1_runtime.tests.test_timer_relay import SCOPE, Base, TimerPeer, _Stop
@@ -214,9 +215,12 @@ class WebMirrorTests(Base):
         self.scan()
         self.assertNotIn("halfway.", [m["text"] for m in self.replies()])
         self.worker.progress_updates = True
-        self.scan()
-        self.assertIn("halfway.", [m["text"] for m in self.replies()])
-        self.scan()
+        with patch.object(outbound_text, "PROGRESS_SETTLE_S", 0):
+            self.scan()  # The first sighting only holds the snapshot.
+            self.assertNotIn("halfway.", [m["text"] for m in self.replies()])
+            self.scan()
+            self.assertIn("halfway.", [m["text"] for m in self.replies()])
+            self.scan()
         self.assertEqual([m["text"] for m in self.replies()].count("halfway."), 1)
 
     def test_app_attachment_notes_become_names_or_a_count(self):
