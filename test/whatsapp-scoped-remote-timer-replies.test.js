@@ -3,10 +3,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createScopedTimerNotifications} from '../packages/connectors/src/whatsapp-scoped-timer-notifications.js';
-import {createTimerNotificationProofStore} from '../packages/connectors/src/whatsapp-timer-notification-proof.js';
+import {createTimerNotificationProofStore, notificationKey} from '../packages/connectors/src/whatsapp-timer-notification-proof.js';
 import {createDeliveryRouteFence} from '../packages/connectors/src/whatsapp-delivery-route-fence.js';
 import {createScopedGroupTransport} from '../packages/connectors/src/whatsapp-scoped-group-transport.js';
-import {remoteTimerParentEvent} from '../packages/connectors/src/whatsapp-scoped-remote-timer-replies.js';
+import {remoteTimerParentEvent, QUICK_MAX_AGE_MS} from '../packages/connectors/src/whatsapp-scoped-remote-timer-replies.js';
 import * as formatter from '../packages/connectors/src/whatsapp-formatting.js';
 
 const epoch = Date.parse('2026-01-01T00:00:00Z'), iso = ms => new Date(epoch + ms).toISOString();
@@ -250,4 +250,82 @@ test('a long V2 timer reply is one message plus the full text as a Markdown docu
   assert.deepEqual(state.reports[0].body.connectorMessageIds, ['sent-1', 'sent-2']);
   const resumed = createScopedTimerNotifications({...options, env}); await resumed.tick(); resumed.close();
   assert.equal(state.sent.length, 2);
+});
+
+// A V2 Quick reply for an input whose Deep final V1 already has was withdrawn
+// by the V2 adapter's ordering fence: it must never go out late, neither on a
+// first pass nor when a prepared send resumes after a relay restart.
+function quickFixture(t) {
+  const f = fixture(t);
+  Object.assign(f.state.messages[0], {text: 'Quick reply', timerId: 'fast'});
+  Object.assign(f.state.messages[1], {remoteLayer: 'fast', remoteOriginalInputId: 'input-a', text: 'Checking the status now.'});
+  const input = {id: 'local-input-a', role: 'user', state: 'completed', remoteBackend: 'example-backend', remoteThreadId: 'remote-thread',
+    remoteMessageId: 'input-a', createdAt: iso(4000), text: 'Status?'};
+  const deep = {id: 'deep-a', role: 'assistant', state: 'completed', phase: 'final_answer', source: 'rust-v2-pilot', parentMessageId: input.id, chatId,
+    remoteBackend: 'example-backend', remoteThreadId: 'remote-thread', remoteMessageId: 'deep-export-a', remoteLayer: 'deep',
+    remoteOriginalInputId: 'input-a', deliveryState: 'delivered', createdAt: iso(9500), text: 'Registration confirmed.', cursor: 3};
+  f.state.messages.unshift(input);
+  return {...f, input, deep};
+}
+
+test('a Quick reply whose input already has its Deep final is dropped and reported not sent', async t => {
+  for (const mode of ['delivered', 'pending', 'parentOnly']) {
+    const {notifier, state, deep} = quickFixture(t);
+    if (mode === 'pending') delete deep.deliveryState;
+    if (mode === 'parentOnly') delete deep.remoteOriginalInputId;
+    state.messages.push(deep);
+    await notifier.tick();
+    assert.equal(state.sent.length, 0, mode);
+    assert.equal(state.reports.length, 1, mode);
+    assert.match(state.reports[0].url, /\/messages\/answer1\/scoped-relay-delivery$/);
+    assert.deepEqual(state.reports[0].body, {outcome: 'suppressed', reason: 'superseded_by_final'}, mode);
+    await notifier.tick();
+    assert.equal(state.sent.length, 0, mode);
+    assert.equal(state.reports.length, 1, mode);
+  }
+});
+
+test('a Deep final for another input, or a sibling Quick, does not drop a Quick reply', async t => {
+  const {notifier, state, deep} = quickFixture(t);
+  state.messages.push({...deep, remoteOriginalInputId: 'input-b', parentMessageId: 'local-input-b'},
+    {...deep, id: 'quick-sibling', remoteLayer: 'fast', parentMessageId: 'v2timer-other'});
+  assert.equal((await notifier.tick()).sent, 1);
+  assert.match(state.sent[0].text, /^⚡ Quick reply\nChecking the status now\./);
+  assert.equal(state.reports[0].body.requestIds.length, 1);
+});
+
+test('a prepared Quick reply resumed after a relay restart is revoked once its Deep final exists', async t => {
+  const {state, options, proofs, deep} = quickFixture(t);
+  const id = 'timer:' + notificationKey(['thread-1', 'v2timer-remote1']) + ':0';
+  proofs.prepareBatch([{id, threadId: 'thread-1', chatId, timerId: 'fast', parentId: 'v2timer-remote1', answerId: 'answer1',
+    text: '⚡ Quick reply\nChecking the status now.', createdAt: iso(9000), runAt: iso(5000), expiresAt: iso(909000)}]);
+  state.messages.push(deep);
+  const resumed = createScopedTimerNotifications(options);
+  t.after(() => resumed.close());
+  await resumed.tick();
+  assert.equal(state.sent.length, 0);
+  assert.equal(proofs.get(id).state, 'revoked');
+  assert.deepEqual(state.reports.map(r => r.body), [{outcome: 'suppressed', reason: 'superseded_by_final'}]);
+});
+
+test('a Deep final imported while a Quick reply is being prepared still stops the send', async t => {
+  const {notifier, state, deep} = quickFixture(t);
+  let reads = 0;
+  const base = [...state.messages];
+  Object.defineProperty(state, 'messages', {get: () => (++reads > 1 ? [...base, deep] : base)});
+  await notifier.tick();
+  assert.equal(state.sent.length, 0);
+  assert.deepEqual(state.reports.map(r => r.body), [{outcome: 'suppressed', reason: 'superseded_by_final'}]);
+});
+
+test('a Quick reply older than its staleness bound is never sent, even without a final', async t => {
+  const {notifier, state, advance} = quickFixture(t);
+  advance(QUICK_MAX_AGE_MS + 1);
+  await notifier.tick();
+  assert.equal(state.sent.length, 0);
+  assert.deepEqual(state.reports.map(r => r.body), [{outcome: 'suppressed', reason: 'quick_stale'}]);
+  // A timer reply of the same age is not a Quick reply and still goes out.
+  const other = fixture(t);
+  other.advance(QUICK_MAX_AGE_MS + 1);
+  assert.equal((await other.notifier.tick()).sent, 1);
 });
