@@ -6,7 +6,11 @@
 //! 2. a V1 thread (`POST /api/threads` with a fresh id) and a WhatsApp group
 //!    with the owner's numbers (`POST /api/connectors/whatsapp/thread-groups`);
 //! 3. an enabled adapter binding (`PUT /bindings/<route>` on the loopback
-//!    adapter) that routes the V1 thread to the conversation;
+//!    adapter) that routes the V1 thread to the conversation, with the full
+//!    onboarding template: Fast answers the owner only, 24 outstanding inputs,
+//!    no extra participants, `owner_only_verified: false` (an operator sets it
+//!    after a membership check) and, with `rules_dir`, a generated chat rules
+//!    file as `instructions_path`;
 //! 4. the V1 delegated binding (`PUT /api/threads/:id/binding` with
 //!    `remoteBackend`, `remoteThreadId`, runtime and mirror on, legacy mirror
 //!    off).
@@ -51,9 +55,27 @@ struct FileConfig {
     max_outstanding_inputs: u32,
     #[serde(default = "default_true")]
     attachments: bool,
+    /// Adapter Fast policy of a new binding (`owner_only`, `legacy`, `disabled`).
+    #[serde(default = "default_fast_reply_policy")]
+    fast_reply_policy: String,
+    /// Absolute directory for generated chat rules files (`chat-<conversation>.md`).
+    /// Without it a new binding has no `instructions_path`.
+    #[serde(default)]
+    rules_dir: Option<String>,
 }
 fn default_outstanding() -> u32 {
-    8
+    24
+}
+fn default_fast_reply_policy() -> String {
+    "owner_only".into()
+}
+/// The adapter refuses an `instructions_path` with control characters or brackets.
+fn rules_dir_valid(value: &str) -> bool {
+    value.starts_with('/')
+        && value.len() <= 900
+        && !value
+            .chars()
+            .any(|c| c.is_control() || c == '[' || c == ']')
 }
 fn default_true() -> bool {
     true
@@ -85,6 +107,8 @@ pub(crate) struct WhatsAppChats {
     reply_prefix: Option<String>,
     max_outstanding_inputs: u32,
     attachments: bool,
+    fast_reply_policy: String,
+    rules_dir: Option<String>,
     /// One provisioning run at a time (V1 group creation is not concurrent-safe).
     pub(crate) lock: tokio::sync::Mutex<()>,
 }
@@ -116,6 +140,14 @@ impl WhatsAppChats {
             || !config.allowed_principals.iter().all(|p| short_key(p, 128))
             || !short_key(&config.remote_backend, 64)
             || !(1..=64).contains(&config.max_outstanding_inputs)
+            || !matches!(
+                config.fast_reply_policy.as_str(),
+                "owner_only" | "legacy" | "disabled"
+            )
+            || config
+                .rules_dir
+                .as_deref()
+                .is_some_and(|d| !rules_dir_valid(d))
             || config
                 .receiving_account_id
                 .iter()
@@ -143,6 +175,8 @@ impl WhatsAppChats {
             reply_prefix: config.reply_prefix,
             max_outstanding_inputs: config.max_outstanding_inputs,
             attachments: config.attachments,
+            fast_reply_policy: config.fast_reply_policy,
+            rules_dir: config.rules_dir,
             lock: tokio::sync::Mutex::new(()),
         })
     }
@@ -209,7 +243,91 @@ pub(crate) fn group_body(chats: &WhatsAppChats, thread_id: &str, name: &str) -> 
     body
 }
 
-/// The adapter binding document for a fresh group thread.
+/// The generated chat rules for a new chat. The adapter puts a "read this
+/// file" line on every intake, so a new chat starts with the same onboarding
+/// rules as a hand-provisioned one. Operators extend it (desktop, desk-login,
+/// business rules); a retry never overwrites it.
+pub(crate) fn rules_text(name: &str, conversation: &str, thread_id: &str, chat_id: &str) -> String {
+    let name: String = name.chars().filter(|c| !c.is_control()).collect();
+    format!(
+        "Chat rules: {name}\n\
+\n\
+Generated when this WhatsApp chat was created (\"New WhatsApp chat\").\n\
+V2 conversation {conversation}, V1 thread {thread_id}, WhatsApp group {chat_id}.\n\
+Existing workspace AGENTS.md and business rules stay in force; report any\n\
+conflict to Root before acting.\n\
+\n\
+Group and replies\n\
+- Only the owner instructs this chat. Fast answers the owner only; other\n\
+  members are not authorized until Root lists them as participants.\n\
+- Never send test or probe messages into this or any other real chat.\n\
+- Never print secrets, tokens, grant files or server paths into the chat.\n\
+\n\
+Desktop and logins\n\
+- No managed desktop is granted to this chat yet. Never create desktops,\n\
+  aliases, shares or grants yourself and never use another chat's desktop or\n\
+  grant. If the owner asks for a desktop, tell them Root sets it up and report\n\
+  it to Root. Root then adds the managed desktop, its V1 grant, the V2\n\
+  desktop binding with a grant env file, and a desktop section to this file.\n\
+- Login pages: use desk-login only after Root has added it to this file for a\n\
+  granted desktop. Never type, print or ask for passwords.\n\
+\n\
+Timers\n\
+- This chat runs on V2. Do not create, pause, change or delete timers through\n\
+  the V1 API or CLI; ask Root for any timer change.\n"
+    )
+}
+
+/// Writes the chat's rules file once (`<rules_dir>/chat-<conversation>.md`,
+/// 0640) and returns its path; `None` without a configured `rules_dir`. An
+/// existing file (an earlier attempt, or an operator's edit) is kept.
+pub(crate) fn write_rules(
+    chats: &WhatsAppChats,
+    conversation: &str,
+    thread_id: &str,
+    chat_id: &str,
+    name: &str,
+) -> Result<Option<String>, StageError> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let Some(dir) = chats.rules_dir.as_deref() else {
+        return Ok(None);
+    };
+    let failed = StageError("chat_rules_failed");
+    if !conversation
+        .bytes()
+        .all(|b| b.is_ascii_hexdigit() || b == b'-')
+    {
+        return Err(failed);
+    }
+    let path = Path::new(dir).join(format!("chat-{conversation}.md"));
+    if path.is_file() {
+        return Ok(Some(path.to_string_lossy().into_owned()));
+    }
+    // Create-only and atomic: write a private temp file, then hard-link it.
+    let temp = Path::new(dir).join(format!(".chat-{conversation}.{}.tmp", uuid::Uuid::new_v4()));
+    let written = (|| -> std::io::Result<()> {
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o640)
+            .open(&temp)?;
+        file.write_all(rules_text(name, conversation, thread_id, chat_id).as_bytes())?;
+        file.sync_all()?;
+        match std::fs::hard_link(&temp, &path) {
+            Err(e) if e.kind() != std::io::ErrorKind::AlreadyExists => Err(e),
+            _ => Ok(()),
+        }
+    })();
+    let _ = std::fs::remove_file(&temp);
+    written.map_err(|_| failed)?;
+    Ok(Some(path.to_string_lossy().into_owned()))
+}
+
+/// The adapter binding document for a fresh group thread: the full onboarding
+/// template. `owner_only_verified` stays false and `participants` empty until
+/// an operator has checked the group's members.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn binding_document(
     chats: &WhatsAppChats,
     conversation: &str,
@@ -218,8 +336,9 @@ pub(crate) fn binding_document(
     account_id: &str,
     route: &str,
     excluded: Vec<String>,
+    instructions_path: Option<&str>,
 ) -> Value {
-    json!({
+    let mut document = json!({
         "conversation_id": conversation,
         "public_thread_id": thread_id,
         "chat_id": chat_id,
@@ -234,7 +353,14 @@ pub(crate) fn binding_document(
         "progress_updates": false,
         "attachments": chats.attachments,
         "max_outstanding_inputs": chats.max_outstanding_inputs,
-    })
+        "fast_reply_policy": chats.fast_reply_policy,
+        "participants": [],
+        "owner_only_verified": false,
+    });
+    if let Some(path) = instructions_path {
+        document["instructions_path"] = json!(path);
+    }
+    document
 }
 
 /// V1 `PUT /api/threads/:id/binding`: delegate the runtime to the adapter.
@@ -460,8 +586,62 @@ pub(crate) fn synthetic(adapter_url: &str, token: &str) -> WhatsAppChats {
         receiving_account_id: Some("synthetic-account".into()),
         reply_account_id: Some("synthetic-account".into()),
         reply_prefix: None,
-        max_outstanding_inputs: 8,
+        max_outstanding_inputs: 24,
         attachments: true,
+        fast_reply_policy: default_fast_reply_policy(),
+        rules_dir: None,
     })
     .unwrap()
+}
+
+#[cfg(test)]
+impl WhatsAppChats {
+    pub(crate) fn with_rules_dir(mut self, dir: &str) -> Self {
+        self.rules_dir = Some(dir.into());
+        self
+    }
+}
+
+#[cfg(test)]
+mod onboarding_tests {
+    use super::*;
+
+    fn config(policy: &str, rules_dir: Option<&str>) -> Result<WhatsAppChats, &'static str> {
+        let mut raw = json!({
+            "adapter_url": "http://127.0.0.1:1", "adapter_token": "a".repeat(32),
+            "remote_backend": "synthetic-v2", "participants": ["10000000001@c.us"],
+            "allowed_principals": ["synthetic-owner"], "fast_reply_policy": policy,
+        });
+        if let Some(dir) = rules_dir {
+            raw["rules_dir"] = json!(dir);
+        }
+        WhatsAppChats::new(serde_json::from_value(raw).unwrap())
+    }
+
+    #[test]
+    fn defaults_are_the_onboarding_template() {
+        let raw = json!({
+            "adapter_url": "http://127.0.0.1:1", "adapter_token": "a".repeat(32),
+            "remote_backend": "synthetic-v2", "participants": ["10000000001@c.us"],
+            "allowed_principals": ["synthetic-owner"],
+        });
+        let chats = WhatsAppChats::new(serde_json::from_value(raw).unwrap()).unwrap();
+        let document = binding_document(&chats, "c", "t", "g@g.us", "a", "r", vec![], None);
+        assert_eq!(document["fast_reply_policy"], "owner_only");
+        assert_eq!(document["max_outstanding_inputs"], 24);
+        assert_eq!(document["owner_only_verified"], false);
+        assert_eq!(document["participants"], json!([]));
+        assert!(document.get("instructions_path").is_none());
+        assert!(write_rules(&chats, "c", "t", "g@g.us", "n")
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn policy_and_rules_dir_are_validated() {
+        assert!(config("legacy", Some("/srv/rules")).is_ok());
+        assert!(config("everyone", None).is_err());
+        assert!(config("owner_only", Some("relative/rules")).is_err());
+        assert!(config("owner_only", Some("/srv/[rules]")).is_err());
+    }
 }

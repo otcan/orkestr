@@ -40,12 +40,38 @@ Each stage is idempotent and recorded in `whatsapp_chat_provisions`
 | `settings` | provider, model, effort (only while the settings are still defaults) |
 | `v1_thread` | V1 `POST /api/threads` with the provision's own fresh id. V1 returns an existing thread when the *name* matches, so a different id stops with `v1_thread_name_taken` instead of taking that thread over |
 | `group` | V1 `POST /api/connectors/whatsapp/thread-groups` with the owner numbers (admins) and `mirrorToWhatsApp: false`. V1 journals the operation and reuses the bound group on a retry |
-| `adapter_binding` | adapter `PUT /bindings/<route>` (create-only, `enabled: true`). `excluded_public_ids` lists the V1 thread's existing user inputs (none for a fresh thread) |
+| `adapter_binding` | with `rules_dir`, the generated rules file `<rules_dir>/chat-<conversation>.md` (create-only, 0640), then adapter `PUT /bindings/<route>` (create-only, `enabled: true`) with the onboarding template below. `excluded_public_ids` lists the V1 thread's existing user inputs (none for a fresh thread) |
 | `relay_pending` | V1 `PUT /api/threads/:id/binding` with `remoteBackend`, `remoteThreadId`, `remoteRuntimeEnabled: true`, `remoteMirrorEnabled: true`, `mirrorToWhatsApp: false`, read back and checked |
 | `ready` | the operator registered the group with the scoped relay (`POST /api/v2/whatsapp-chats/{id}/relay-registered`) |
 
 The sidebar links the new conversation to its V1 thread, so the group appears
 once, as the V2 chat. Old V1 deep links to the thread open the conversation.
+
+## Onboarding template
+
+Every new binding gets the same setup as a hand-onboarded chat:
+
+| Field | Value |
+| --- | --- |
+| `fast_reply_policy` | `owner_only` (config `fast_reply_policy`) |
+| `max_outstanding_inputs` | 24 (config `max_outstanding_inputs`) |
+| `participants` | `[]`: only the owner instructs the chat |
+| `owner_only_verified` | `false` |
+| `instructions_path` | the generated rules file, when `rules_dir` is configured |
+
+The generated rules file names the conversation, V1 thread and group. It says
+that no desktop is granted yet, that desktops, grants and shares come from
+Root, that desk-login needs Root's setup first, and that timers do not go
+through V1. A retry never overwrites it, so operators extend it in place: a
+desktop section after granting a desktop, desk-login, business rules.
+
+`owner_only_verified: true` is never set at creation. An operator sets it after
+a fresh membership read shows only the owner's accounts in the group. If the
+group has other members, the operator lists them in `participants` instead.
+
+Agents must not hand-roll these stages (V1 thread, group, adapter `PUT`) in
+scripts. A hand-written binding skips this template. Use
+`POST /api/v2/whatsapp-chats`, or ask Root.
 
 ## Relay registration (operator step)
 
@@ -72,6 +98,14 @@ in the ops repository) registers pending chats with these guards:
 The runbook then marks the chat `ready`. Registration without restarts is a
 follow-up V1 change.
 
+## Desktop (operator step)
+
+A chat that needs a browser desk gets a managed desktop with a V1 thread grant
+(discover/acquire/operate), a V2 desktop binding for that conversation, and a
+grant env file from `issue-desktop-grant.py` (root:<service group> 0640). The
+operator then adds the desktop section, with the hold template, to the chat's
+rules file.
+
 ## Archive
 
 `POST /api/v2/whatsapp-chats/{id}/archive` marks a provision archived. The row
@@ -90,8 +124,14 @@ The packager copies only the path. The V1 side uses the existing loopback client
  "remote_backend": "<V1 remote backend key>", "participants": ["<owner number>@c.us"],
  "allowed_principals": ["<adapter owner principal>"],
  "receiving_account_id": "<V1 account>", "reply_account_id": "<V1 account>",
- "reply_prefix": null, "max_outstanding_inputs": 8, "attachments": true}
+ "reply_prefix": null, "max_outstanding_inputs": 24, "attachments": true,
+ "fast_reply_policy": "owner_only", "rules_dir": "/absolute/rules/dir"}
 ```
+
+`fast_reply_policy` defaults to `owner_only` and `max_outstanding_inputs`
+defaults to 24. `rules_dir` is optional. When it is set, it must be an absolute
+directory that the service user can write, and that the adapter and the agents
+can read.
 
 Without this file, or without the V1 client, the UI says that new WhatsApp chats
 are not configured.

@@ -218,14 +218,24 @@ async fn create(
             let excluded = chats::existing_inputs(&v1, &provision.v1_thread_id)
                 .await
                 .map_err(|e| (S::Group, e))?;
+            let conversation = provision.conversation_id.to_string();
+            let rules = chats::write_rules(
+                &config,
+                &conversation,
+                &provision.v1_thread_id,
+                &group.chat_id,
+                &provision.name,
+            )
+            .map_err(|e| (S::Group, e))?;
             let document = chats::binding_document(
                 &config,
-                &provision.conversation_id.to_string(),
+                &conversation,
                 &provision.v1_thread_id,
                 &group.chat_id,
                 &group.account_id,
                 &provision.remote_thread_id,
                 excluded,
+                rules.as_deref(),
             );
             chats::bind_adapter(&config, &provision.remote_thread_id, document)
                 .await
