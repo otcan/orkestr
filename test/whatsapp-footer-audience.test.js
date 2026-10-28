@@ -68,12 +68,12 @@ test("a reply to a member-authored input never gets the footer, even in an owner
 
 // A notice has no run: owner-only chats get only the quota lines and the
 // q/load line, never a Quick/Deep/dbg layer line or "unknown".
-const compactNoticeFooter = /^(?:(?:codex|claude) [^\n]*\n){0,2}(?:q|queue):[^\n]*load:\d+% · api:\d+% · help:\/help$/;
+const compactNoticeFooter = /^(?:(?:codex|claude)[ :][^\n]*\n){2}(?:q|queue):[^\n]*load:\d+% · api:\d+% · help:\/help$/;
 function noticeFooter(text, body) {
   assert.ok(text.startsWith(`${body}\n\n`), text);
   const footer = text.slice(body.length + 2);
   assert.match(footer, compactNoticeFooter);
-  assert.doesNotMatch(footer, /dbg:|⚡|🧠|▶|unknown|no data|\?/);
+  assert.doesNotMatch(footer, /dbg:|⚡|🧠|▶|unknown|\?/);
   assert.equal(formatter.stripWhatsAppDebugFooter(text), body);
   return footer;
 }
@@ -91,10 +91,10 @@ test("V1 queue, mode and router notices in an owner-only chat get the compact fo
   }
 });
 
-test("a notice omits a provider without quota data instead of printing unknown", () => {
+test("a notice keeps both quota lines, as no data, instead of printing unknown", () => {
   const local = { role: "assistant", source: "orkestr_runtime" };
   const footer = noticeFooter(appendWhatsAppDebugFooter("⚙️ System:\nRestarted.", { env, thread: ownerOnly, message: local, deliveryType: "router_update" }), "⚙️ System:\nRestarted.");
-  assert.match(footer, /^q:0 · load:/);
+  assert.match(footer, /^codex: no data\nclaude: no data\nq:0 · load:/);
 });
 
 test("notices in a shared chat or answering a member never carry a footer", () => {
@@ -107,14 +107,14 @@ test("notices in a shared chat or answering a member never carry a footer", () =
   assert.equal(appendWhatsAppDebugFooter("🚨 Alert", { env, thread: ownerOnly, message: notice, messages: [memberInput] }), "🚨 Alert");
 });
 
-test("the local dbg line never prints unknown", () => {
+test("the local (V1-native) layer line never prints unknown", () => {
   const local = { role: "assistant", source: "codex-app-server", phase: "final_answer" };
   const text = appendWhatsAppDebugFooter("Done", { env, thread: ownerOnly, message: local });
-  assert.match(text, /\n\ndbg: [^\n]*msg:\*final\*/);
+  assert.match(text, /\n\n⚡ Quick: — · 🧠 Deep: codex [^\n]* · ▶ Deep\n/);
   assert.doesNotMatch(text, /unknown/);
   const claude = appendWhatsAppDebugFooter("Done", { env, thread: { ...ownerOnly, runtimeKind: "claude-code" }, message: { ...local, source: "claude-code" } });
   assert.doesNotMatch(claude, /unknown/);
-  assert.match(appendWhatsAppDebugFooter("Done", { env, thread: { ...ownerOnly, codexModel: "example-model", codexReasoningEffort: "high" }, message: local }), /\n\ndbg: [^/\n]+\/example-model\/h /);
+  assert.match(appendWhatsAppDebugFooter("Done", { env, thread: { ...ownerOnly, codexModel: "example-model", codexReasoningEffort: "high" }, message: local }), /\n\n⚡ Quick: — · 🧠 Deep: codex example-model\/h · ▶ Deep\n/);
 });
 
 test("remote notices and delivery failures get the compact footer in an owner-only chat", () => {
@@ -138,7 +138,7 @@ test("the scoped group relay applies the same audience rules", () => {
     assert.doesNotMatch(entry, footerPattern);
   }
   const [notice] = chunk(ownerOnly, { ...scope, remoteLayer: "notice" }, []);
-  assert.match(notice, /^Done\n\nq:0 · load:\d+% · api:\d+% · help:\/help$/);
+  assert.match(notice, /^Done\n\ncodex: no data\nclaude: no data\nq:0 · load:\d+% · api:\d+% · help:\/help$/);
 });
 
 test("a notice about a member's own input never carries a footer", () => {

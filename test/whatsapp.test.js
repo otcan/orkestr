@@ -273,7 +273,7 @@ function binaryResponse(body, headers = {}, status = 200) {
 }
 
 function stripDebugFooter(text) {
-  return String(text || "").replace(/\n\ndbg: .+$/s, "");
+  return String(text || "").replace(/\n\n(?:dbg: |⚡ Quick: ).+$/s, "");
 }
 
 function testNormalizedDeliveryText(value) {
@@ -330,10 +330,11 @@ async function writeTestDeliveryClaim(home, { accountId, chatId, textKey, claime
 function assertNoticeFooter(text, { queueReason = "" } = {}) {
   assert.doesNotMatch(text, /\n\ndbg:|msg:\*|unknown/);
   const load = queueReason ? `queue:\\d+ · reason:${queueReason}` : "q:\\d+";
-  assert.match(text, new RegExp(`\\n\\n(?:(?:codex|claude) [^\\n]*\\n){0,2}${load} · load:\\d+% · api:\\d+% · help:/help$`));
+  assert.doesNotMatch(text, /⚡ Quick:|🧠|▶/);
+  assert.match(text, new RegExp(`\\n\\ncodex[ :][^\\n]*\\nclaude[ :][^\\n]*\\n${load} · load:\\d+% · api:\\d+% · help:/help$`));
 }
 
-function assertDebugFooter(text, { mode = "", messageType = "final", model = "[^·\\n]+", queueReason = "", runtime = "", fiveHour = "", weekly = "" } = {}) {
+function assertDebugFooter(text, { mode = "", messageType = "final", model = "[^·\\n]+", queueReason = "", fiveHour = "", weekly = "" } = {}) {
   // Queue notices are not model replies: only the compact notice footer.
   if (queueReason) {
     assertNoticeFooter(text, { queueReason });
@@ -348,11 +349,11 @@ function assertDebugFooter(text, { mode = "", messageType = "final", model = "[^
     ? `queue:\\d+ · reason:${queueReason}`
     : "q:\\d+";
   const pattern = new RegExp(
-    `\\n\\ndbg: codex${model === "[^·\\n]+" ? "(?:/[^·\\n]+)?" : `/${escapedModel}`}` +
-      (runtime ? ` · rt:${runtime}` : "(?: · rt:[a-z-]+)?") +
+    // The unified layer line of a V1-native reply (runtime is no longer shown).
+    `\\n\\n⚡ Quick: — · 🧠 Deep: codex ${model === "[^·\\n]+" ? "[^·\\n]+" : escapedModel} · ▶ Deep` +
       (mode ? ` · mode:${mode}` : "") +
       "(?: · fast:on)?" +
-      ` · msg:\\*${messageType}\\*` +
+      (messageType === "update" ? "(?: · update)?" : "") +
       `\\n${codexLine}` +
       "\\nclaude(?:: no data| [^\\n]+)" +
       `\\n${queuePart} · load:\\d+% · api:\\d+% · help:/help$`,
@@ -13368,7 +13369,7 @@ test("whatsapp delivery appends compact debug footer for plan-mode Codex updates
   assert.equal(stripDebugFooter(calls[0].body.text), "Milestone: routing check started.");
   assert.match(
     calls[0].body.text,
-    /\n\ndbg: codex\/gpt-5\.5\/xh · mode:plan · msg:\*update\*\ncodex 5h: 88% wk: 66%\nclaude: no data\nq:0 · load:\d+% · api:\d+% · help:\/help$/,
+    /\n\n⚡ Quick: — · 🧠 Deep: codex gpt-5\.5\/xh · ▶ Deep · mode:plan · update\ncodex 5h: 88% wk: 66%\nclaude: no data\nq:0 · load:\d+% · api:\d+% · help:\/help$/,
   );
   assert.doesNotMatch(calls[0].body.text, /mode-switch:|switch:\/claude/);
 });
