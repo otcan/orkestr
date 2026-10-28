@@ -17,6 +17,7 @@ from . import recovery
 from . import thread_ask_relay
 from . import deep_group
 from . import parallel_watch
+from . import switch_command
 from .notices import TEMPLATES
 from .participants import compose
 from .rust_client import ClientError
@@ -1308,6 +1309,11 @@ class Worker:
 
     def run_once(self, stop):
         """One pass. Fast intake is independent; Deep finishes in ledger order."""
+        try:
+            # Owner /switch commands: answered here, never sent to Rust.
+            switch_command.drive(self)
+        except Exception:
+            pass  # Retried next pass; never blocks the binding.
         # Decide steering before independent Fast intake could admit the input.
         try:
             recovery.drive(self)  # Operator re-admission requests, on this thread.

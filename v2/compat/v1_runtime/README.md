@@ -404,6 +404,52 @@ with an immutable acceptance ID and its matching V1 parent. Other browser
 inputs, Worker output, old proposals and unrelated conversations are never
 mirrored.
 
+### Owner `/switch` (model switch without a model turn)
+
+A WhatsApp message that starts with `/switch` (after V1's `[WhatsApp: ...]`
+header, any case) is an adapter command. It is stored already completed in
+the same transaction as its intake, so Fast, Deep, bursts, steering and the
+queue head never see it, and nothing reaches Rust. The binding's worker
+answers it with one `kind: notice` final through the ordinary export and
+acknowledgement path; the reply text ends with a short footer saying no model
+turn was used. Text such as `please /switch ...` is an ordinary message.
+
+Only the verified WhatsApp owner of the binding may switch. Members, V1-local
+senders (agents, threads, CLI, the web UI) and timers or posts (which never
+pass intake) are answered with a refusal and nothing runs. Forms:
+
+| Command | Effect |
+| --- | --- |
+| `/switch status` | This chat's Deep and Fast model and effort, plus the totals of all live chats |
+| `/switch deep\|fast <model> [effort]` | This chat only (`--scope <conversation_id>`) |
+| `... all` | Every live Codex chat (`--scope codex`) |
+| `... from <old>` | Only chats currently on `<old>` (`--from`) |
+| `/switch deep <codex model> for claude` | Moves the Claude chats to Codex (`--scope claude --provider codex`) |
+| `/switch deep <claude model>` in a Codex chat (or the reverse) | Provider switch of this chat |
+| `/switch yes` | Confirms a waiting provider switch; it expires after 2 minutes |
+| `/switch back` | Undoes the newest switch of this chat that is still in effect: `--revert <record>` when that record changed only this chat, else a switch of this chat back to its recorded previous value |
+| `/switch back all` | `--revert latest` |
+| `/switch` or `/switch help` | Usage |
+
+`default` as model or effort clears the override. A model with "fable" in
+any position is refused before anything runs; other names must match the V2
+model contract (`[A-Za-z0-9._:-]{1,120}`), and the tool validates again.
+Every change is a dry run first, then the apply; a provider switch stops after
+the dry run and needs `/switch yes`. Any new change cancels a waiting
+confirmation. The reply names what changed and ends with "/switch back to
+undo". An input whose command was running when the adapter stopped is answered
+"may or may not have applied" and is never re-run.
+
+The adapter runs the operator's model switch tool directly with an argument
+list (no shell, a fixed environment, timeouts). Its path comes from the
+service environment, never from a message: `ORKESTR_V2_ADAPTER_MODEL_SWITCH`
+(an absolute, root-owned, executable file that group and others cannot
+write; anything else is refused) and `ORKESTR_V2_ADAPTER_MODEL_SWITCH_RECORDS`
+(the tool's record directory, read for `/switch back`). Without them `/switch`
+answers that switching is not configured. The tool keeps its own record and
+coordination log; the adapter also writes one `SWITCH orkestr-v2-wa-adapter
+conversation=... exit=... args=...` line to stderr per call and refusal.
+
 ## Delivery acknowledgement
 
 `GET /threads/<id>/messages` lists, oldest first, every **unsettled** input and

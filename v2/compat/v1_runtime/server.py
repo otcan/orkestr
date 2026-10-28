@@ -11,7 +11,7 @@ import signal
 import threading
 from urllib.parse import parse_qs, urlsplit
 
-from . import instructions, local_inputs, participants, provisioning
+from . import instructions, local_inputs, participants, provisioning, switch_command
 from .config import load
 from .ledger import MAX_ATTACHMENT_BYTES, OUTCOMES, Conflict
 from .registry import Registry
@@ -204,8 +204,13 @@ class Handler(BaseHTTPRequestHandler):
                 instructions.reserve(config.get("instructions_path")) >
                 (28672 if config["attachments"] else 32768)):  # Room for the attachment note.
             return self.answer(422, {"ok": False, "error": "text_only_pilot" if not config["attachments"] else "invalid_text"})
+        # `/switch ...` is answered by the adapter itself and never reaches a
+        # model (switch_command.py decides who may use it, at answer time).
+        command = switch_command.command_text(text) if not attachments else None
+        if command is not None:
+            command = {"kind": "switch", "text": command[:1000], "conversation": config["conversation_id"]}
         try:
-            data, duplicate = binding.ledger.enqueue(dict(body, attachments=attachments), author)
+            data, duplicate = binding.ledger.enqueue(dict(body, attachments=attachments), author, command)
         except Conflict as error:
             return self.answer(409 if str(error) != "attachment_reference_invalid" else 422, {"ok": False, "error": str(error)})
         if not duplicate:

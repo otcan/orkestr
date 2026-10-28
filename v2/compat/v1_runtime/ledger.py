@@ -133,6 +133,8 @@ class Ledger:
         # Set by the registry from `fast_reply_policy`: the verified owner of an
         # owner-only chat gets technical notices, everyone else plain ones.
         self.owner_only = False
+        # Stored adapter commands may wait (a restart re-checks them once).
+        self.commands_due = True
         # Set by the registry (`registry.scrubs_paths`) for every chat not marked
         # `owner_only_verified`: it never sees server-local paths. The owner
         # alone, in a verified owner-only chat, works with paths on this host.
@@ -251,10 +253,13 @@ class Ledger:
                   "is_own_reply": value.get("isOwnReply") is True, "unavailable": value.get("unavailable") is True}
         return result if result["message_id"] or result["text"] or result["unavailable"] else None
 
-    def enqueue(self, body, author=None):
+    def enqueue(self, body, author=None, command=None):
         """Record one verified input. `author` is the verified sender
         ({role, id, label, labelled, phone?}); it is kept with the input and
-        shown to Rust and V1 as the message's author."""
+        shown to Rust and V1 as the message's author. A `command` (an adapter
+        command such as /switch, see switch_command.py) is stored already
+        completed in the same transaction, so no Fast, Deep or burst path can
+        pick it up; the worker answers it through the ordinary export."""
         # Hash only immutable input identity/content; transport delivery metadata may vary.
         content = {k: body.get(k) for k in ("publicThreadId", "publicMessageId", "chatId", "accountId", "text", "externalId", "sourceEventId")}
         if body.get("attachments"):
@@ -300,6 +305,9 @@ class Ledger:
                 data["reply_to"] = quoted
             if author:
                 data["author"] = {k: author[k] for k in ("role", "id", "label", "labelled", "phone", "source") if author.get(k) is not None}
+            if command:
+                data.update(phase="completed", command=dict(command, state="queued"))
+                self.commands_due = True
             notices.remember(db, body.get("text"), (author or {}).get("role"))
             db.execute("INSERT INTO inputs VALUES (?,?,?,?)", (body["publicMessageId"], digest, remote_id, json.dumps(data)))
             return data, False
