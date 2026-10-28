@@ -3,13 +3,14 @@ import assert from 'node:assert/strict';
 import {DatabaseSync} from 'node:sqlite';
 import {createScopedAcknowledgements} from '../packages/connectors/src/scoped-group-acknowledgements.js';
 import {createKeyedSerial} from '../packages/connectors/src/scoped-relay-serial.js';
+import {ACKNOWLEDGEMENT_TEXTS, detectLanguage} from '../packages/connectors/src/acknowledgement-language.js';
 
 function fixture(t) {
   const inbox = new DatabaseSync(':memory:'), db = new DatabaseSync(':memory:');
   db.exec('CREATE TABLE replies(id PRIMARY KEY,state);CREATE TABLE reply_receipts(id PRIMARY KEY,provider_ids);CREATE TABLE reply_sent_text(provider_id PRIMARY KEY,request_id,text,sent_at);');
   const state = {at: 0, sends: [], allowed: true, active: true, ready: false, blocked: false, fail: false};
   const group = {threadId: 'thread', deterministicAcknowledgement: true};
-  const config = {acknowledgement: {text: 'Empfangen ✓, ich arbeite daran', since: new Date(0).toISOString()}};
+  const config = {acknowledgement: {text: 'Empfangen ✓, ich arbeite daran', language: 'de', since: new Date(0).toISOString()}};
   const input = {id: 'owner-input', chat_id: 'group', created_at: new Date(0).toISOString()};
   const options = {config, inbox, db, groups: new Map([['group', group]]), now: () => state.at, key: v => v,
     serial: createKeyedSerial(), blocked: () => state.blocked, inspect: async () => {
@@ -110,6 +111,7 @@ test('the scheduled twenty-second fallback is cancelled immediately by real outp
 
 test('queued input gets one truthful notice at twenty seconds, preserved through admission and restart',async t=>{
   const f=fixture(t);f.state.active=false;f.state.queued=true;f.state.at=19999;
+  f.input.body='Can you check the schedule for me please?';
   await f.ack.check(f.input);assert.equal(f.state.sends.length,0);
   f.state.at=20000;
   await Promise.all(Array.from({length:10},()=>f.ack.check(f.input)));
@@ -135,4 +137,52 @@ test('queued fallback is canceled by delivered output or Fast ready, including w
     if(mode==='during_send')f.state.onInspect=async count=>{if(count===2)f.state.ready=true;};
     await f.ack.check(f.input);assert.equal(f.state.sends.length,0,mode);
   }
+});
+
+test('acknowledgements follow the language of the message they answer, not one configured language',async t=>{
+  // biofuture 2026-10-27: an English chat got the German queue notice and ack.
+  const cases=[
+    ['active','Did you send the meeting request to John?',ACKNOWLEDGEMENT_TEXTS.en.text],
+    ['queued','Here is the calendar link, can you check it?',ACKNOWLEDGEMENT_TEXTS.en.queuedText],
+    ['queued','Bunu bir kontrol eder misin lütfen?',ACKNOWLEDGEMENT_TEXTS.tr.queuedText],
+    ['active','Kannst du das bitte noch prüfen?','Empfangen ✓, ich arbeite daran'],
+  ];
+  for(const [state,body,expected] of cases){
+    const f=fixture(t);f.state.at=20000;f.input.body=body;
+    f.config.acknowledgement.queuedText='Empfangen, die Nachricht wartet hinter der aktuellen Aufgabe in diesem Chat. Ich antworte, sobald diese abgeschlossen ist.';
+    if(state==='queued'){f.state.active=false;f.state.queued=true;}
+    f.restart();await f.ack.check(f.input);
+    assert.equal(f.state.sends[0].text,expected,body);
+  }
+});
+
+test('an ambiguous message uses the chat language, then the policy language, then English',async t=>{
+  for(const [groupLanguage,policyLanguage,expected] of [['en','de',ACKNOWLEDGEMENT_TEXTS.en.text],
+    [undefined,'de','Empfangen ✓, ich arbeite daran'],['tr',undefined,ACKNOWLEDGEMENT_TEXTS.tr.text],
+    [undefined,undefined,ACKNOWLEDGEMENT_TEXTS.en.text],['xx',undefined,ACKNOWLEDGEMENT_TEXTS.en.text]]){
+    const f=fixture(t);f.state.at=20000;f.input.body='Dev + live';
+    if(groupLanguage)f.group.language=groupLanguage;
+    if(policyLanguage)f.config.acknowledgement.language=policyLanguage;else delete f.config.acknowledgement.language;
+    f.restart();await f.ack.check(f.input);
+    assert.equal(f.state.sends[0].text,expected,`${groupLanguage}/${policyLanguage}`);
+  }
+});
+
+test('a configured text without a language never overrides another language',async t=>{
+  const f=fixture(t);f.state.at=20000;delete f.config.acknowledgement.language;f.input.body='Kannst du das bitte prüfen?';
+  f.config.acknowledgement.text='Custom wording';f.restart();await f.ack.check(f.input);
+  assert.equal(f.state.sends[0].text,ACKNOWLEDGEMENT_TEXTS.de.text);
+});
+
+test('an unknown policy language is refused at startup',t=>{
+  assert.throws(()=>fixture(t).config && createScopedAcknowledgements({config:{acknowledgement:{text:'x',since:new Date(0).toISOString(),language:'xx'}},
+    db:new DatabaseSync(':memory:')}),/group_acknowledgement_language_invalid/);
+});
+
+test('language detection is conservative',()=>{
+  assert.equal(detectLanguage('Dev + live please'),null);
+  assert.equal(detectLanguage('ok'),null);
+  assert.equal(detectLanguage('Did you deploy? Aysegul cannot login'),'en');
+  assert.equal(detectLanguage('Toplantı saatini değiştirebilir misin?'),'tr');
+  assert.equal(detectLanguage('Ich habe das noch nicht gesehen'),'de');
 });
