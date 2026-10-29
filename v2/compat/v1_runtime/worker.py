@@ -3,6 +3,7 @@ import grp
 import os
 from pathlib import Path
 import re
+import sqlite3
 import sys
 import threading
 import time
@@ -120,6 +121,16 @@ class Refused(RuntimeError):
 # A revoked owner session refuses every binding until the service restarts, so
 # it is not a property of the input.
 TRANSIENT_CODES = ("transport_failed", "transport_outcome_unknown", "session_revoked")
+
+
+# A ledger that cannot be opened is retried after 1, 2, 4, ... up to 30 s; the
+# operator is alerted once the outage lasts LEDGER_ALERT_AFTER passes.
+LEDGER_RETRY_MAX_S = 30
+LEDGER_ALERT_AFTER = 5
+
+
+def ledger_retry_s(attempt):
+    return min(LEDGER_RETRY_MAX_S, 2 ** max(0, attempt - 1))
 
 
 def transient(error):
@@ -1297,17 +1308,32 @@ class Worker:
         return value["text"]
 
     def run(self, stop, active=lambda: True):
-        pause = PASS_S
+        pause, unavailable = PASS_S, 0
         while not stop.wait(pause):
-            # Expiry only touches the ledger, so it also runs while the binding
-            # is paused: a re-enabled binding never runs stale input.
-            self.expire_stale()
-            if not active():
-                pause = IDLE_PASS_S
-            elif self.run_once(stop):
-                pause = self.busy_pause()
-            else:
-                pause = self.idle_pause()
+            try:
+                # Expiry only touches the ledger, so it also runs while the binding
+                # is paused: a re-enabled binding never runs stale input.
+                self.expire_stale()
+                if not active():
+                    pause = IDLE_PASS_S
+                elif self.run_once(stop):
+                    pause = self.busy_pause()
+                else:
+                    pause = self.idle_pause()
+            except sqlite3.OperationalError as error:
+                # The ledger could not be opened or was busy (a full fd table,
+                # a lock held past the timeout). The pass is retried with
+                # backoff; the worker never dies of it. Other errors reach the
+                # registry's supervisor, which alerts and restarts the worker.
+                unavailable += 1
+                pause = ledger_retry_s(unavailable)
+                if unavailable == 1 or unavailable == LEDGER_ALERT_AFTER:
+                    print("%s orkestr-v2-wa-adapter ledger_unavailable conversation=%s error=%s attempts=%d retry_s=%g"
+                          % ("ALERT" if unavailable >= LEDGER_ALERT_AFTER else "WARN",
+                             getattr(self.client, "conversation", "?"), type(error).__name__, unavailable, pause),
+                          file=sys.stderr, flush=True)
+                continue
+            unavailable = 0
 
     def busy_pause(self, now=None):
         """PASS_S, or less when a waiting burst head becomes due sooner. A new

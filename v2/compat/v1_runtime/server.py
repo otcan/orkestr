@@ -107,6 +107,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.answer(200, dict(ok=True, state=binding.state, error=binding.error, inputKinds=INPUT_KINDS,
                                          enabled=binding.state == "enabled", members=members,
                                          instructionsError=getattr(binding.worker, "instructions_error", None),
+                                         worker=binding.worker_status(),
                                          **binding.ledger.health()))
         if binding.state in ("revoked", "refused"):
             return self.answer(410 if binding.state == "revoked" else 503,

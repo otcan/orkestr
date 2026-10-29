@@ -235,8 +235,10 @@ class AutoSteerFlowTests(fixture.IntakeBase):
 
     def finals(self, parent=None):
         """Finals of WhatsApp inputs (not question posts or Fast replies)."""
-        inputs = {self.row(p)["remote_id"] for p in ("first", "answer", "second")
-                  if self.ledger.connect().execute("SELECT 1 FROM inputs WHERE public_id=?", (p,)).fetchone()}
+        with self.ledger.connect() as db:
+            present = [p for p in ("first", "answer", "second")
+                       if db.execute("SELECT 1 FROM inputs WHERE public_id=?", (p,)).fetchone()]
+        inputs = {self.row(p)["remote_id"] for p in present}
         return [m for m in self.ledger.messages(500) if m["role"] == "assistant" and m.get("phase") == "final_answer"
                 and m["parentMessageId"] in inputs and (parent is None or m["parentMessageId"] == parent)]
 

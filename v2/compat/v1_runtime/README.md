@@ -51,6 +51,31 @@ match its binding refuses only that binding. Every mutation (POST) first
 re-checks the server build identity and the session; a read reuses a check
 younger than 30 s, and any transport failure forces a new check.
 
+## Binding workers and liveness
+
+Each binding runs one worker thread (`binding-<id8>`) under a supervisor. A
+worker that raises is logged as
+`ALERT orkestr-v2-wa-adapter worker_crashed binding=<remote_thread_id> error=<class>`
+(plus one line of frame locations, never the exception message) and restarted
+after 1, 5 and 30 s, then every 60 s; a worker that ran 5 minutes before
+crashing starts that ladder again. A ledger that cannot be opened or stays
+locked (`sqlite3.OperationalError`, e.g. a full fd table) does not crash the
+worker: the pass is retried after 1, 2, 4 ... 30 s, with a `WARN ...
+ledger_unavailable` line on the first failure and an `ALERT ... ledger_unavailable`
+line after 5. Every ledger connection is closed when its `with` block ends.
+
+`GET /health` reports `workers`: `expected` (bindings with a worker thread,
+paused ones included), `alive`, `enabledAlive`, total `crashes` and `notAlive`
+(remote thread IDs that are dead or backing off). `GET /threads/<id>/health`
+reports `worker`: `alive`, `state` (`running`, `restarting`, `dead`, `stopped`
+or `absent`), `crashes` and `lastError` (class name). A deploy check should
+require `workers.alive == workers.expected` and `worker.alive` for every
+enabled binding.
+
+The service opens a few files per binding at once (ledger, journal, HTTP
+sockets): run it with `LimitNOFILE=65536:524288` (systemd's soft default of
+1024 was exhausted by 91 bindings starting together on 2026-10-29).
+
 ## Pacing
 
 A binding with an input in flight steps it every second. An idle binding

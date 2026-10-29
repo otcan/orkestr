@@ -8,7 +8,10 @@ refused and stopped; its ledger is never rewritten to fit the new file.
 import json
 import os
 from pathlib import Path
+import sys
 import threading
+import time
+import traceback
 
 from . import config as config_module
 from .export_changes import ExportChanges
@@ -17,6 +20,11 @@ from .auto_steer import default_mode as auto_steer_mode
 from .worker import DEFAULT_BURST_QUIET_S, Signal, Worker, attachment_export_settings
 
 UNIQUE_KEYS = ("remote_thread_id", "conversation_id", "public_thread_id", "chat_id")
+# A crashed binding worker is restarted after 1, 5 and 30 s, then every 60 s.
+# A worker that ran WORKER_HEALTHY_S before crashing starts the ladder again.
+WORKER_RESTART_S = (1, 5, 30, 60)
+WORKER_HEALTHY_S = 300
+
 MUTABLE_KEYS = ("enabled", "revoked", "progress_updates", "attachments", "max_outstanding_inputs", "max_input_age_seconds",
                 "participants", "owner_label", "instructions_path", "fast_reply_policy", "auto_steer",
                 "owner_only_verified", "deep_heartbeat")
@@ -29,6 +37,23 @@ class Binding:
         # Stops the worker; `stop.wake()` makes it step a new input at once.
         self.stop = Signal()
         self.thread = self.worker = None
+        # Supervisor view of the worker thread: "running", "restarting"
+        # (backing off after a crash) or "stopped"; see Registry._supervise.
+        self.worker_state = None
+        self.crashes = 0
+        self.last_crash = None
+
+    def worker_status(self):
+        """Liveness of this binding's worker; `alive` is what operators check."""
+        thread = self.thread
+        alive = bool(thread and thread.is_alive() and self.worker_state == "running")
+        if thread is None:
+            state = "absent"
+        elif not thread.is_alive():
+            state = "stopped" if self.stop.is_set() else "dead"
+        else:
+            state = self.worker_state or "starting"
+        return {"alive": alive, "state": state, "crashes": self.crashes, "lastError": self.last_crash}
 
     @property
     def remote_thread_id(self):
@@ -181,10 +206,52 @@ class Registry:
         binding.worker.max_input_age_s = binding.config["max_input_age_seconds"]
         binding.worker.instructions_path = binding.config["instructions_path"]
         if binding.thread is None and self.workers:
-            binding.thread = threading.Thread(target=binding.worker.run,
-                                              args=(binding.stop, lambda: binding.state == "enabled"),
+            binding.thread = threading.Thread(target=self._supervise, args=(binding,),
                                               daemon=True, name="binding-" + binding.remote_thread_id[:8])
             binding.thread.start()
+
+    def _supervise(self, binding):
+        """Run the binding's worker until the binding stops; never leave it dead.
+
+        A worker that raises is alerted and restarted with backoff. Before
+        this, one exception (an fd-exhausted ledger open at startup) ended the
+        thread for good and that chat silently got no replies (2026-10-29)."""
+        attempt = 0
+        try:
+            while not binding.stop.is_set():
+                started = time.monotonic()
+                binding.worker_state = "running"
+                try:
+                    binding.worker.run(binding.stop, lambda: binding.state == "enabled")
+                    if binding.stop.is_set():
+                        break
+                    error_name = "WorkerExited"
+                except Exception as error:
+                    error_name = type(error).__name__
+                    # Frame locations only: an exception message (or a source
+                    # line building one) may quote chat text.
+                    stack = " <- ".join("%s:%d:%s" % (os.path.basename(frame.filename), frame.lineno, frame.name)
+                                        for frame in reversed(traceback.extract_tb(error.__traceback__)))
+                else:
+                    stack = ""
+                binding.crashes += 1
+                binding.last_crash = error_name
+                if time.monotonic() - started >= WORKER_HEALTHY_S:
+                    attempt = 0
+                delay = WORKER_RESTART_S[min(attempt, len(WORKER_RESTART_S) - 1)]
+                attempt += 1
+                binding.worker_state = "restarting"
+                print("ALERT orkestr-v2-wa-adapter worker_crashed binding=%s error=%s crashes=%d restart_in_s=%g"
+                      % (binding.remote_thread_id, error_name, binding.crashes, delay), file=sys.stderr, flush=True)
+                if stack:
+                    print("orkestr-v2-wa-adapter worker_crashed binding=%s at %s" % (binding.remote_thread_id, stack),
+                          file=sys.stderr, flush=True)
+                # A new input wakes the stop signal; that must not cut the backoff short.
+                deadline = time.monotonic() + delay
+                while not binding.stop.is_set() and time.monotonic() < deadline:
+                    binding.stop.wait(deadline - time.monotonic())
+        finally:
+            binding.worker_state = "stopped"
 
     def _stop(self, binding, wait=False):
         binding.stop.set()
@@ -198,11 +265,23 @@ class Registry:
                 self._stop(binding, wait=True)
 
     def status(self):
+        with self._lock:
+            return self._status()
+
+    def _status(self):
         states = [b.state for b in self.bindings.values()]
         sources = {b.source for b in self.bindings.values()}
         unloaded = [source for source in self.file_errors if source not in sources]
+        workers = {b.remote_thread_id: b.worker_status() for b in self.bindings.values() if b.thread is not None}
+        enabled = [r for r, b in self.bindings.items() if b.state == "enabled" and r in workers]
         return {"bindings": len(states), "enabled": states.count("enabled"), "disabled": states.count("disabled"),
-                "revoked": states.count("revoked"), "refused": states.count("refused") + len(unloaded)}
+                "revoked": states.count("revoked"), "refused": states.count("refused") + len(unloaded),
+                # Worker liveness: `alive == expected` means every binding thread
+                # is stepping; `notAlive` names the rest (dead or backing off).
+                "workers": {"expected": len(workers), "alive": sum(w["alive"] for w in workers.values()),
+                            "enabledAlive": sum(workers[r]["alive"] for r in enabled),
+                            "crashes": sum(w["crashes"] for w in workers.values()),
+                            "notAlive": sorted(r for r, w in workers.items() if not w["alive"])}}
 
     def run(self, stop, wake, interval=5):
         while not stop.is_set():
