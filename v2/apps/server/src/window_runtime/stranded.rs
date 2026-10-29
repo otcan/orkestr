@@ -364,6 +364,8 @@ impl Controller {
             (None, None) => None,
             _ => return Err("stranded window plan is inconsistent"),
         };
+        self.retire_unretired_predecessor(browser, window, &plan, now_ms())
+            .await;
         if self.manager_never_admitted(window, &plan, now_ms()).await {
             // Nothing of the manager's exists to retire: commit Core's failed
             // open locally. Inputs are released exactly as on the manager

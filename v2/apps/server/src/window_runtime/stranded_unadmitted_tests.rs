@@ -37,7 +37,7 @@ fn plan(cause: Option<Cause>, run: bool) -> StrandedExecutionWindow {
         abandoned_run_ids: Vec::new(),
         failed_run_ids: Vec::new(),
         open_failure_cause: cause,
-        restored_window_id: None,
+        restored_window_id: Some(Uuid::from_u128(31)),
         hard_deadline_passed: false,
     })
 }
@@ -143,4 +143,61 @@ fn refused_reconcile_steps_are_logged_once_per_period() {
         rate_limited(window, "cause", start + LOG_PERIOD + Duration::from_secs(1)).as_deref(),
         Some(" suppressed=2")
     );
+}
+
+#[test]
+fn an_unretired_direct_predecessor_is_handed_its_core_retirement_first() {
+    // 2026-10-28: Core closed generation 1 (accepted) but the manager refused
+    // its retirement and holds it uncertain; generation 2 was refused at
+    // admission (`previous_window_unretired`) and has no credential.
+    let stuck = window(2, NOW - UNADMITTED_MIN_AGE_MS);
+    let unissued = plan(Some(Cause::CredentialUnissued), false);
+    let predecessor = Uuid::from_u128(31);
+    for state in [WindowState::Reconciliation, WindowState::Expired] {
+        let receipt = manager(predecessor, 1, state);
+        let replay = unretired_predecessor(&unissued, &stuck, NOW, Some(&receipt)).unwrap();
+        assert_eq!((replay.window_id, replay.generation), (predecessor, 1));
+        // Until the manager holds it retired, nothing commits locally.
+        assert!(!local_commit_allowed(
+            &unissued,
+            &stuck,
+            NOW,
+            Some(&receipt)
+        ));
+    }
+    // Once retired, the ordinary never-admitted proof holds.
+    assert!(local_commit_allowed(
+        &unissued,
+        &stuck,
+        NOW,
+        Some(&manager(predecessor, 1, WindowState::Retired))
+    ));
+}
+
+#[test]
+fn only_the_unretired_direct_predecessor_of_an_unissued_open_is_replayed() {
+    let stuck = window(2, NOW - UNADMITTED_MIN_AGE_MS);
+    let unissued = plan(Some(Cause::CredentialUnissued), false);
+    let uncertain = manager(Uuid::from_u128(31), 1, WindowState::Reconciliation);
+    assert!(unretired_predecessor(&unissued, &stuck, NOW, None).is_none());
+    // A young window: its own admission may still be in flight.
+    assert!(unretired_predecessor(&unissued, &window(2, NOW - 1), NOW, Some(&uncertain)).is_none());
+    for receipt in [
+        // Live, already retired, this very window, or not the restored predecessor.
+        manager(Uuid::from_u128(31), 1, WindowState::Active),
+        manager(Uuid::from_u128(31), 1, WindowState::Draining),
+        manager(Uuid::from_u128(31), 1, WindowState::Retired),
+        manager(stuck.window_id, 2, WindowState::Reconciliation),
+        manager(Uuid::from_u128(99), 1, WindowState::Reconciliation),
+    ] {
+        assert!(unretired_predecessor(&unissued, &stuck, NOW, Some(&receipt)).is_none());
+    }
+    for shape in [
+        plan(Some(Cause::CredentialUnbound), false),
+        plan(Some(Cause::SetupIncomplete), false),
+        plan(Some(Cause::CredentialUnissued), true),
+        plan(None, false),
+    ] {
+        assert!(unretired_predecessor(&shape, &stuck, NOW, Some(&uncertain)).is_none());
+    }
 }

@@ -672,6 +672,22 @@ async fn unissued_open_closes_without_touching_any_supervisor() {
         .unwrap();
     assert_eq!(receipt.open_failure_cause, Some(Cause::CredentialUnissued));
     assert_eq!(receipt.restored_window_id, Some(w.status.window_id));
+    // Neither an audited reconciliation nor a failed open is a canonical
+    // retirement the manager may be handed.
+    for (window, generation) in [(w.status.window_id, 1), (id, 2)] {
+        assert_eq!(
+            fresh
+                .closed_execution_window_retirement_authenticated(
+                    &w.browser_credential,
+                    &w.f.conversation,
+                    window,
+                    generation,
+                )
+                .await
+                .unwrap(),
+            None
+        );
+    }
     assert_eq!(
         count(&fresh, "SELECT sum(generation) FROM production_supervisors").await,
         supervisors

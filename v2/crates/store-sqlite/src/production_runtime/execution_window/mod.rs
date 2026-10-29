@@ -143,6 +143,8 @@ pub use retired_context::RetiredExecutionWindowContext;
 
 mod stranded;
 pub use stranded::{StrandedExecutionWindow, StrandedExecutionWindowPlan};
+mod closed_retirement;
+pub use closed_retirement::ClosedExecutionWindowRetirement;
 
 #[cfg(test)]
 mod retired_process_tests;

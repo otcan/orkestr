@@ -46,8 +46,8 @@ mod runtime;
 pub use production_runtime::{
     auto_accept_request_key, AutomaticReplyConsumption, AutomaticReplyDelivery,
     AutomaticReplyProducer, AutomaticReplyReservation, AutomaticReplyReservationResult,
-    BoundSessionMetadata, ClaudeProcessInitialization, CompletedToolDelivery,
-    ConsumedOfflinePython, ConsumedProviderDispatch, ExecutionConsumption,
+    BoundSessionMetadata, ClaudeProcessInitialization, ClosedExecutionWindowRetirement,
+    CompletedToolDelivery, ConsumedOfflinePython, ConsumedProviderDispatch, ExecutionConsumption,
     ExecutionWindowBootstrap, ExecutionWindowCredential, ExecutionWindowRetirement,
     FastAdmissionInput, FastSource, OfflinePythonAdmission, OfflinePythonConsumption,
     OfflinePythonDelegation, OfflinePythonNativeCall, OfflinePythonNativeRequestId,

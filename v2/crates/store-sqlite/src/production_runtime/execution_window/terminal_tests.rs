@@ -165,6 +165,35 @@ async fn expired_proposal_acceptance_closes_only_with_terminal_provenance_then_r
             .unwrap();
     assert_eq!(handoff.terminal_event_id().to_string(), canonical);
     assert_ne!(handoff.terminal_event_id(), &done.event_id);
+    // The manager replay reads exactly this committed decision back.
+    assert_eq!(
+        f.store
+            .closed_execution_window_retirement_authenticated(
+                &browser,
+                &f.conversation,
+                a.status.window_id,
+                1,
+            )
+            .await
+            .unwrap(),
+        Some(ClosedExecutionWindowRetirement {
+            outcome: orkestr_v2_contracts::ExecutionWindowTerminalOutcome::Accepted,
+            run_id: p.run.run_id.clone(),
+            terminal_event_id: handoff.terminal_event_id().clone(),
+        })
+    );
+    assert_eq!(
+        f.store
+            .closed_execution_window_retirement_authenticated(
+                &browser,
+                &f.conversation,
+                a.status.window_id,
+                2,
+            )
+            .await
+            .unwrap(),
+        None
+    );
 
     let mut next = input(&f, "second-window-source").await;
     next.expected_generation = 1;
