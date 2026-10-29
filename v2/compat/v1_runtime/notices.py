@@ -114,6 +114,16 @@ TEMPLATES = {
               "neuen Fortschritt.",
     },
     # Deep heartbeat: a Core template, never model text, no paths or reasons.
+    # A Deep run ended without an accepted answer after its latest output had
+    # already reached the chat as progress: that output may be the answer.
+    "stopped_after_answer": {
+        "en": "\u2139\ufe0f This task stopped early. If the answer above already covers your question, nothing "
+              "else is needed; otherwise just ask again.",
+        "tr": "\u2139\ufe0f Bu görev erken durdu. Yukarıdaki yanıt sorunu zaten karşılıyorsa başka bir şey "
+              "gerekmez; karşılamıyorsa tekrar sorman yeterli.",
+        "de": "\u2139\ufe0f Diese Aufgabe wurde vorzeitig beendet. Wenn die Antwort oben deine Frage schon "
+              "beantwortet, ist nichts weiter nötig; sonst frag einfach noch einmal.",
+    },
     "deep_heartbeat": {
         "en": "\U0001f9e0 Still working\u2026 %(minutes)d min so far, the full answer follows.",
         "tr": "\U0001f9e0 Hâlâ çalışıyorum\u2026 şu ana kadar %(minutes)d dk, tam yanıt gelecek.",

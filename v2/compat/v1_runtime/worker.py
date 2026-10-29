@@ -1152,7 +1152,34 @@ class Worker:
         else:
             return False  # refuse_orphaned owns an input without any run.
         self.settle_own_fast(data, statuses.get("fast"), ids)
+        if started and self.answered_by_progress(data, deep, reason):
+            return True
         return recovery.recover(self, data, reason, started=started)
+
+    def answered_by_progress(self, data, deep, reason):
+        """Close an ended Deep whose last output already reached the chat.
+
+        Its latest payload was exported as this input's progress and V1
+        reported it delivered: the owner may already have the answer, so the
+        usual "cancelled/interrupted" notice would contradict it (otcanClaw-PA
+        2026-10-29, run c66a3858: the answer went out as progress, then a
+        reconciliation cancelled the run and a cancel notice followed). The
+        input closes with a softened final notice instead (reason
+        answered_by_progress, the run's own reason in the log), logged at
+        INFO. While that progress is still being sent the input waits for V1's
+        report; an uncertain or missing delivery keeps the ordinary notice.
+        Returns True when handled."""
+        payload_id = (deep.get("progress") or {}).get("payload_id")
+        if not isinstance(payload_id, str) or not payload_id:
+            return False
+        outcome = self.ledger.progress_outcome(data, payload_id)
+        if outcome == "pending":
+            return True
+        if outcome != "delivered":
+            return False
+        recovery.log(self, "input_answered_by_progress", data, reason=reason, run=deep.get("run_id"))
+        self.ledger.refuse(data, "answered_by_progress", notice={"template": "stopped_after_answer"}, level="INFO")
+        return True
 
     def settle_own_fast(self, data, fast, ids):
         """Before refusing an input, accept its own pending Fast proposal so the

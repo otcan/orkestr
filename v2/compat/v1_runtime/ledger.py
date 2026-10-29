@@ -535,7 +535,7 @@ class Ledger:
             data["phase"] = "completed"
             self._settle(db, data, outcome)
 
-    def refuse(self, data, reason, alert=False, notice=None):
+    def refuse(self, data, reason, alert=False, notice=None, level="ALERT"):
         """Close an input that will not get a reply, with a visible owner notice.
 
         The notice is exported as the input's final reply, so V1 delivers it
@@ -587,8 +587,10 @@ class Ledger:
         # Every visible chat failure reaches the operator, not only the chat
         # (timer refusals keep their own `input_failed` alert in the worker).
         if data.get("origin") != "timer":
-            print("ALERT orkestr-v2-wa-adapter input_refused thread=%s input=%s reason=%s language=%s"
-                % (self.scope.get("remote_thread_id", "?"), data["remote_id"], reason, lang), file=sys.stderr, flush=True)
+            # `level` INFO: an expected close the owner already has an answer for.
+            print("%s orkestr-v2-wa-adapter input_refused thread=%s input=%s reason=%s language=%s"
+                % (level, self.scope.get("remote_thread_id", "?"), data["remote_id"], reason, lang),
+                file=sys.stderr, flush=True)
         return message
 
     def technical_audience(self, data):
@@ -795,6 +797,17 @@ class Ledger:
             message.update({k: v for k, v in (identity or {}).items() if k in IDENTITY_FIELDS and v})
             self._export(db, data, "progress", "progress:%s:%s" % (data["remote_id"], payload_id), message)
             return message
+
+    def progress_outcome(self, data, payload_id):
+        """V1's transport outcome for this input's progress export of
+        `payload_id`: None when it was never exported, "pending" while V1 has
+        not reported it, else the reported outcome."""
+        with self.connect() as db:
+            row = db.execute("SELECT outcome FROM exports WHERE source_key=? AND input_id=? AND kind='progress'",
+                             ("progress:%s:%s" % (data["remote_id"], payload_id), data["remote_id"])).fetchone()
+        if row is None:
+            return None
+        return row[0] or "pending"
 
     def add_first_response(self, data, payload_id, text, identity=None, quote=False):
         from .first_response_store import add
