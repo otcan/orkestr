@@ -286,3 +286,29 @@ async fn metrics_listener_is_loopback_only_and_serves_both_formats() {
         404
     );
 }
+
+#[test]
+fn quiet_access_log_drops_only_fast_successful_reads() {
+    assert_eq!(AccessLog::parse(Some("quiet")), AccessLog::Quiet);
+    assert_eq!(AccessLog::parse(Some(" all ")), AccessLog::All);
+    assert_eq!(AccessLog::parse(Some("off")), AccessLog::Off);
+    assert_eq!(AccessLog::parse(Some("loud")), AccessLog::Slow);
+    assert_eq!(AccessLog::parse(None), AccessLog::Slow);
+    let quiet = AccessLog::Quiet;
+    assert!(!quiet.shows("GET", 200, false));
+    assert!(!quiet.shows("GET", 204, false));
+    assert!(!quiet.shows("GET", 304, false));
+    assert!(!quiet.shows("HEAD", 200, false));
+    assert!(quiet.shows("GET", 200, true));
+    assert!(quiet.shows("GET", 404, false));
+    assert!(quiet.shows("GET", 409, false));
+    assert!(quiet.shows("GET", 502, false));
+    assert!(quiet.shows("POST", 200, false));
+    assert!(quiet.shows("PUT", 204, false));
+    assert!(quiet.shows("DELETE", 200, false));
+    assert!(AccessLog::All.shows("GET", 200, false));
+    assert!(!AccessLog::Slow.shows("GET", 404, false));
+    assert!(AccessLog::Slow.shows("GET", 500, false));
+    assert!(AccessLog::Slow.shows("GET", 200, true));
+    assert!(!AccessLog::Off.shows("GET", 500, true));
+}
