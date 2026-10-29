@@ -507,7 +507,12 @@ An input that waited longer than `max_input_age_seconds` without a Rust window
 (queued, admitted, or refused as `window_busy`) is refused as `input_expired`,
 also while the binding is paused, so a re-enabled binding never runs stale
 input. A window request whose outcome is unknown is never expired, and V2 timer
-occurrences follow Core's own dispatch queue. Inputs blocked by an earlier
+occurrences follow Core's own dispatch queue. An input queued behind an earlier
+input of the same binding whose own Deep run Core still reports running (the
+head's activity proof, refreshed every observe pass, is at most 120 s old) is
+waiting legitimately and does not age: the row is stamped `waiting_behind_at`
+(at most once a minute) and the full `max_input_age_seconds` counts from the
+last stamp, so a long Deep turn never expires the messages that arrived during it. Inputs blocked by an earlier
 adapter version are closed with a notice the same way.
 
 A V1 build without acknowledgements never settles anything, so the adapter
