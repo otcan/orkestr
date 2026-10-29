@@ -7,8 +7,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends python3 \
     && rm -rf /var/lib/apt/lists/*
 RUN rustup target add wasm32-unknown-unknown \
     && cargo install --locked wasm-bindgen-cli --version 0.2.129
-RUN test ${#SOURCE_COMMIT} -eq 40 \
-    && test -z "$(printf %s "$SOURCE_COMMIT" | tr -d '0-9a-f')" \
+RUN { test ${#SOURCE_COMMIT} -eq 40 \
+      && test -z "$(printf %s "$SOURCE_COMMIT" | tr -d '0-9a-f')"; } \
+    || { echo 'SOURCE_COMMIT must be the exact 40-character public commit; see v2/README.md (ORKESTR_SOURCE_COMMIT in v2/packaging/oss/.env).' >&2; exit 1; } \
     && git init /src && git -C /src fetch https://github.com/otcan/orkestr.git "$SOURCE_COMMIT" \
     && git -C /src checkout --detach FETCH_HEAD \
     && test "$(git -C /src rev-parse HEAD)" = "$SOURCE_COMMIT"

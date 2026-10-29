@@ -6,8 +6,11 @@ services:
     build:
       context: ../../..
       dockerfile: v2/packaging/oss/Dockerfile
+      # Only builds need the exact public commit. The quickstart writes it to
+      # v2/packaging/oss/.env, so everyday exec/logs/restart/down commands work
+      # in any terminal; a build without it is refused by the Dockerfile.
       args:
-        SOURCE_COMMIT: ${ORKESTR_SOURCE_COMMIT:?Set the exact public commit from git rev-parse HEAD}
+        SOURCE_COMMIT: ${ORKESTR_SOURCE_COMMIT:-}
     ports:
       - "127.0.0.1:19822:19823"
     volumes:

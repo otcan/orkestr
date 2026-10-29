@@ -377,9 +377,10 @@ jobs:
 
   image-arm64:
     # Same build and smoke test on a native arm64 runner (Apple Silicon Macs
-    # otherwise run the amd64 image under emulation). Only for published refs.
+    # otherwise run the amd64 image under emulation). Only for published refs
+    # (not V2 tags, which publish no root image).
     needs: dependency-policy
-    if: ${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) }}
+    if: ${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/main' || (startsWith(github.ref, 'refs/tags/v') && !startsWith(github.ref, 'refs/tags/v2.'))) }}
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 45
     steps:
@@ -414,10 +415,11 @@ jobs:
 
   image-publish:
     # Publishes the already-built, smoke-tested image to GHCR for trusted
-    # main/v* refs only. No checkout and no npm/npx/node: this job never
+    # main/v* refs only. V2 tags (v2.*) never publish this root V1 image and
+    # never move :latest; V2 betas ship their source tarball and checksums. No checkout and no npm/npx/node: this job never
     # executes candidate code; it only loads, tags and pushes the artifact.
     needs: [image, image-arm64, test, smoke, provenance, secret-policy, syntax]
-    if: ${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) }}
+    if: ${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/main' || (startsWith(github.ref, 'refs/tags/v') && !startsWith(github.ref, 'refs/tags/v2.'))) }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:

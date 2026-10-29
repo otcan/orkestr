@@ -33,6 +33,20 @@ jobs:
             --tag orkestr-v2:fresh --file v2/packaging/oss/Dockerfile .
           docker build --build-arg SOURCE_COMMIT="$SOURCE" --target bundle \
             --output "type=local,dest=$RUNNER_TEMP/bundle" --file v2/packaging/oss/Dockerfile .
+      - name: Everyday Compose commands need no exported commit
+        env:
+          SOURCE: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          compose="docker compose -f v2/packaging/oss/compose.yaml"
+          env -u ORKESTR_SOURCE_COMMIT $compose config --quiet
+          printf 'ORKESTR_SOURCE_COMMIT=%s\n' "$SOURCE" > v2/packaging/oss/.env
+          env -u ORKESTR_SOURCE_COMMIT $compose config | grep -q "SOURCE_COMMIT: $SOURCE"
+          rm v2/packaging/oss/.env
+          if env -u ORKESTR_SOURCE_COMMIT $compose build > "$RUNNER_TEMP/no-commit.log" 2>&1; then
+            echo 'a build without the exact commit was accepted' >&2; exit 1
+          fi
+          grep -q 'SOURCE_COMMIT must be the exact 40-character public commit' "$RUNNER_TEMP/no-commit.log"
       - name: Fresh install through provider login required
         env:
           SOURCE: ${{ github.event.pull_request.head.sha || github.sha }}
