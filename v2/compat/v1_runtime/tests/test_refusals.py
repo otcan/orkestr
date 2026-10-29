@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 import sqlite3
 import tempfile
+import time
 import unittest
 
 from v2.compat.v1_runtime import config as config_module
@@ -163,6 +164,49 @@ class ExpiryTests(unittest.TestCase):
         self.assertEqual(self.ledger.next_input()["remote_id"], unknown["remote_id"])
         self.assertNotIn("refused", json.dumps(self.ledger.next_input()))
         del running
+
+    def running_head(self, observed_s, deep_running=True):
+        return self.aged("head", 0, phase="running", window={"request_key": "kh"},
+                         transport_activity={"observed_at_ms": int(observed_s * 1000), "deep_running": deep_running,
+                                             "fast_ready": True, "final_ready": False})
+
+    def test_input_behind_a_running_head_does_not_age_until_the_head_stops(self):
+        now = time.time()
+        head = self.running_head(now - 5)
+        waiting = self.aged("waiting", 3 * 600)
+        self.assertEqual(self.ledger.expire_stale(600, now=now), [])
+        stamped = self.ledger.input(waiting["remote_id"])
+        self.assertEqual(stamped["waiting_behind_at"], now)
+        self.assertNotIn("refused", stamped)
+        # The head finishes: the waiting input gets the full age from then on.
+        head = self.ledger.input(head["remote_id"])
+        head["phase"] = "completed"
+        self.ledger.save(head)
+        self.assertEqual(self.ledger.expire_stale(600, now=now + 600), [])
+        self.assertEqual([d["remote_id"] for d in self.ledger.expire_stale(600, now=now + 601)], [waiting["remote_id"]])
+
+    def test_stamp_is_rate_limited_while_waiting(self):
+        now = time.time()
+        self.running_head(now)
+        waiting = self.aged("waiting", 3 * 600)
+        self.ledger.expire_stale(600, now=now)
+        self.ledger.expire_stale(600, now=now + 30)
+        self.assertEqual(self.ledger.input(waiting["remote_id"])["waiting_behind_at"], now)
+
+    def test_a_head_without_fresh_running_proof_does_not_hold_expiry(self):
+        now = time.time()
+        for observed, running in ((now - 121, True), (now, False)):
+            with self.subTest(observed=observed, running=running):
+                self.ledger = Ledger(Path(self.temp.name) / ("l%d.sqlite3" % int(running)), SCOPE)
+                self.running_head(observed, deep_running=running)
+                waiting = self.aged("waiting", 601)
+                self.assertEqual([d["remote_id"] for d in self.ledger.expire_stale(600, now=now)], [waiting["remote_id"]])
+
+    def test_a_running_row_behind_the_input_does_not_hold_it(self):
+        now = time.time()
+        stale = self.aged("stale", 601)
+        self.running_head(now)
+        self.assertEqual([d["remote_id"] for d in self.ledger.expire_stale(600, now=now)], [stale["remote_id"]])
 
     def test_timer_occurrences_follow_core_and_never_expire_here(self):
         self.ledger.set_timer_cursor(0)

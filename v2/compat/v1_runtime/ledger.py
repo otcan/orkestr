@@ -60,6 +60,13 @@ NOTICE_NAMESPACE = uuid.UUID("5d0c3f7e-8a41-4c2b-9e6d-1b7f2a9c4e83")
 # Phases in which no Rust execution window was opened for the input yet.
 NOT_STARTED = ("queued", "admitted", "waiting_for_window")
 DEFAULT_MAX_INPUT_AGE_S = 30 * 60
+# An input queued behind this binding's own head whose Deep run Core still
+# reports running is waiting legitimately: its expiry clock stays at zero while
+# that head's activity proof (refreshed on every observe pass) is this fresh,
+# and the full `max_input_age_seconds` starts only once the head stops running.
+LIVE_HEAD_ACTIVITY_S = 120
+# How often that waiting is stamped on the row (bounds ledger writes).
+WAITING_BEHIND_STAMP_S = 60
 # On owner-only bindings `max_outstanding_inputs` no longer refuses: an owner
 # burst above it is accepted and queued (each message is admitted at once and
 # still gets its own Fast reply; Deep runs in ledger order). Only this many
@@ -600,14 +607,17 @@ class Ledger:
         Only inputs with no window opened (or a definite busy refusal) qualify:
         a window request whose outcome is unknown may be running and is left
         alone. V2 timer occurrences follow Core's own dispatch queue and never
-        expire here. Returns the refused inputs.
+        expire here. An input queued behind an earlier input whose Deep run is
+        still observed running does not age; its clock restarts when that head
+        stops running. Returns the refused inputs.
         """
         now = time.time() if now is None else now
         expired = []
         with self.connect() as db:
-            rows = db.execute("SELECT data FROM inputs WHERE json_extract(data,'$.phase') IN (%s) ORDER BY rowid"
+            rows = db.execute("SELECT rowid, data FROM inputs WHERE json_extract(data,'$.phase') IN (%s) ORDER BY rowid"
                               % ",".join("?" * len(NOT_STARTED)), NOT_STARTED).fetchall()
-        for (raw,) in rows:
+            live_head = self._live_head_rowid(db, now)
+        for rowid, raw in rows:
             data = json.loads(raw)
             if data.get("origin") == "timer" or "window" in data or data.get("blocked"):
                 continue
@@ -619,9 +629,32 @@ class Ledger:
                 data["queued_at"] = now
                 self.save(data)
                 continue
+            if live_head is not None and live_head < rowid:
+                # Waiting behind a turn that is still running is not staleness.
+                if now - data.get("waiting_behind_at", 0) >= WAITING_BEHIND_STAMP_S:
+                    data["waiting_behind_at"] = now
+                    self.save(data)
+                continue
+            waited = data.get("waiting_behind_at")
+            if isinstance(waited, (int, float)):
+                since = max(since, waited)
             if now - since > max_age_s and self.refuse(data, "input_expired"):
                 expired.append(data)
         return expired
+
+    @staticmethod
+    def _live_head_rowid(db, now):
+        """Rowid of the earliest running input whose own Deep run was last
+        observed running within LIVE_HEAD_ACTIVITY_S, else None."""
+        for rowid, raw in db.execute("SELECT rowid, data FROM inputs WHERE json_extract(data,'$.phase')='running' "
+                                     "ORDER BY rowid LIMIT 8").fetchall():
+            data = json.loads(raw)
+            activity = data.get("transport_activity") or {}
+            observed = activity.get("observed_at_ms")
+            if (type(observed) is int and activity.get("deep_running") is True and not data.get("refused")
+                    and not data.get("absorbed_into") and 0 <= now * 1000 - observed <= LIVE_HEAD_ACTIVITY_S * 1000):
+                return rowid
+        return None
 
     def timer_cursor(self):
         with self.connect() as db:
