@@ -277,6 +277,9 @@ class AcknowledgementTests(Harness):
         self.assertEqual(health["refusedInputs"], 1)
         self.assertEqual(health["recentRefusals"][0]["reason"], "execution_requires_review")
         self.assertEqual(health["phase"], "idle")
+        # Worker liveness is reported per binding and summarized at the top.
+        self.assertEqual(health["worker"], {"alive": False, "state": "absent", "crashes": 0, "lastError": None})
+        self.assertEqual(self.request("GET", "/health")[1]["workers"]["expected"], 0)
         notice = self.listing(1)["messages"][-1]
         self.assertEqual((notice["kind"], notice["refusal"]), ("notice", "execution_requires_review"))
 

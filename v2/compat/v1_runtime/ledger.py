@@ -4,6 +4,7 @@ One SQLite file belongs to exactly one binding scope. Exported replies stay
 visible to V1 until V1 acknowledges their transport outcome; only then is the
 input settled and its text pruned. Nothing here sends or replays a message.
 """
+import contextlib
 import hashlib
 import json
 import os
@@ -186,11 +187,21 @@ class Ledger:
             elif version[0] != SCHEMA:
                 raise ValueError("ledger_schema_unsupported")
 
+    @contextlib.contextmanager
     def connect(self):
+        """`with ledger.connect() as db:` commits on success, rolls back on an
+        error and always closes the connection. A bare sqlite3 connection's
+        `with` only commits, so each pass would leak a file descriptor until
+        garbage collection; 91 bindings starting at once then exhausted the
+        soft RLIMIT_NOFILE and killed binding workers (2026-10-29)."""
         db = sqlite3.connect(self.path, timeout=5, factory=ExportConnection)
-        db.on_export = self.on_export
-        db.execute("PRAGMA synchronous=FULL")
-        return db
+        try:
+            db.on_export = self.on_export
+            db.execute("PRAGMA synchronous=FULL")
+            with db:
+                yield db
+        finally:
+            db.close()
 
     # Binding lifecycle -------------------------------------------------
     def revoke(self):
