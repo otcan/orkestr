@@ -26,7 +26,7 @@ from .policy_refusal import notice as policy_notice
 from .first_response import capture as capture_first_response, repeats_fast
 from .questions import QUESTION_PREFIX, QUESTION_LABEL, QUESTION_SCAN_LIMIT, export_question, repeats_question
 from .outbound_text import complete_progress, progress_hold_s
-from .activity import observe as observe_activity
+from .activity import observe as observe_activity, waiting as waiting_heartbeat
 from .input_activity import record as record_transport_activity
 from .intake import admit as admit_input, window as admit_window
 from .acceptance_retry import reconcile as reconcile_acceptance
@@ -1335,6 +1335,11 @@ class Worker:
             fast_pending = parallel_watch.drive(self) or fast_pending
         except Exception:
             pass  # Retried next pass; never blocks the binding.
+        try:
+            # A person's input queued behind a running turn keeps its heartbeat.
+            waiting_heartbeat(self)
+        except Exception:
+            pass  # Retried next check; never blocks the binding.
         if not fast_pending:
             self._fast_since = None
         elif self._fast_since is None:

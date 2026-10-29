@@ -148,7 +148,8 @@ class IntakeBase(unittest.TestCase):
     def enqueue(self, public="first", role="owner"):
         return self.ledger.enqueue(dict(publicMessageId=public, publicThreadId="thread", chatId="chat",
             accountId="account", text="Request " + public),
-            author=dict(role=role, id="synthetic-" + role, label=role))[0]
+            author=dict(role=role, id="synthetic-" + role, label=role,
+                        **({"source": "cli"} if role.startswith("v1_") else {})))[0]
 
     def row(self, public):
         with self.ledger.connect() as db:

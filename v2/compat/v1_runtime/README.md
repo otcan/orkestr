@@ -87,7 +87,7 @@ Each binding is `<bindings_dir>/<remote_thread_id>.json`:
 | `enabled` | `false` pauses intake and execution; exports and acknowledgements continue |
 | `revoked` | `true` permanently withdraws the route (intake and export answer 410) |
 | `progress_updates` | Export intermediate Deep progress for this binding |
-| `deep_heartbeat` | Optional, default `true`. A running Deep turn for a person's WhatsApp input (owner or member; never timer, post or web-mirror input) without a final gets one short status line from an adapter template (never model text): `🧠 Still working… N min so far, the full answer follows.` (English, Turkish or German). Lines come after a quiet spell with no delivered message for that input of 3, 5, 7, then 15 minutes (3, 8, 15, 30, 45, 60 minutes into an otherwise silent turn), at most 6 per input and at most one per chat every 5 minutes, and stop at the final. Set `false` for chats where no person waits (health probe, canary); it keeps the legacy 10-minute `activity_running` notice. Adapters before this field refuse a binding that contains it (`binding_fields`): deploy the adapter first. |
+| `deep_heartbeat` | Optional, default `true`. A running Deep turn for a person's WhatsApp input (owner or member; never timer, post or web-mirror input) without a final gets one short status line from an adapter template (never model text): `🧠 Still working… N min so far, the full answer follows.` (English, Turkish or German). Lines come after a quiet spell with no delivered message for that input of 3, 5, 7, then 15 minutes (3, 8, 15, 30, 45, 60 minutes into an otherwise silent turn), at most 6 per input and at most one per chat every 5 minutes, and stop at the final. A person's input still queued behind an earlier running turn (fresh proof, at most 120 s old, that the earlier input's own Deep run is running) gets the same lines on the same clock, counted from its arrival, with the template `🧠 Still on it… N min so far. An earlier task is finishing first, then the full answer follows.`; once its own turn is observed the clock continues there. Set `false` for chats where no person waits (health probe, canary); it keeps the legacy 10-minute `activity_running` notice. Adapters before this field refuse a binding that contains it (`binding_fields`): deploy the adapter first. |
 | `fast_reply_policy` | Optional: `legacy` (default) preserves the progress-dependent Fast policy. Explicit `owner_only` enables immediate Fast replies for a group the operator verified has only owner-visible recipients; participant grants do not establish that visibility. `disabled` suppresses Fast replies (for example a coordinator chat). |
 | `owner_only_verified` | Optional, default `false`. Replies in every chat have server-local paths scrubbed (see `outbound_text.py`) unless the operator checked the WhatsApp group holds only the owner and the bot and set this to `true`. `fast_reply_policy` alone does not keep paths. A binding that lists any `participants` (`member` or `none`) is scrubbed even when marked. Adapters before this field refuse a binding that contains it (`binding_fields`): deploy the adapter first. |
 | `auto_steer` | Optional: `off` (default), `question` or `running`; enable per binding. See "Auto-steer" below. Adapters before this field refuse a binding that contains it (`binding_fields`). |
@@ -239,9 +239,18 @@ Each pass admits every pending owner input in FIFO order (no per-pass
 throttle, no grouping, no quiet window), using the existing owner HTTP message
 and execution-window APIs. A deadline-continued or re-admitted owner row is
 admitted the same way instead of holding later owner messages until it is the
-ledger head. It does not pass an earlier unadmitted
-local-agent input or frozen legacy burst. Local-agent/V1-relayed inputs and
-other Fast policies keep their existing behavior.
+ledger head. It never passes an earlier unadmitted input. An earlier
+unadmitted plain V1-local input (local agent, watcher alert, V1 owner or
+external signal) with a person's input behind it is admitted in its place
+first, once, with its own burst and its window requested in the same order,
+exactly as the serial path would admit it later; its Fast and Deep stay on the
+serial path and it still gets no WhatsApp Quick. (Before, such a row waited
+for the running Deep turn and held every later owner message out of Core:
+otcanClaw-academic 2026-10-29, "Stats?" reached Core 10.5 minutes late behind
+two watcher alerts, its Quick came too late to send and no heartbeat ran.) A
+V1-local input with no person behind it, a frozen legacy burst and a timer
+keep the serial path and still hold later events. Other Fast policies keep
+their existing behavior.
 
 Fast results are observed, exported once, and accepted independently of Deep.
 The original message/event IDs select the exact producing run; a separate Fast
@@ -591,7 +600,7 @@ owner (any binding policy) and timers get the technical reason. Templates:
 `failure`, `failure_owner`, `interrupted_owner` (never retried),
 `timer_failure`, `timer_interrupted`, `steered`, `continue`,
 `steer_unknown`, `steer_queued`, `policy`, `deep_heartbeat`,
-`activity_running`, `activity_missing`. The missing-run status is not sent while this input's own
+`deep_heartbeat_waiting`, `activity_running`, `activity_missing`. The missing-run status is not sent while this input's own
 journal match lags Core's head (snapshot `last_sequence` past its cursor);
 after 20 minutes of lag the operator gets `ALERT … run_match_lagging`.
 
