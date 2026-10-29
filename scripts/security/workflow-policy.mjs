@@ -39,12 +39,12 @@ function attestationJob(job) {
   return true;
 }
 // Job-level registry publish permissions: exactly contents:read + packages:write,
-// only for trusted main/v* refs. The job may only download the image artifact
+// only for trusted main/v* refs, never V2 (v2.*) tags. The job may only download the image artifact
 // built by an unprivileged job (same run, fixed inputs) and run plain docker
 // load/login/tag/push: no checkout, no npm/npx/node, no custom shell, no command
 // substitution or redirection, so no candidate code ever runs with the token.
 const publishCondition = "${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && " +
-  "(github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) }}";
+  "(github.ref == 'refs/heads/main' || (startsWith(github.ref, 'refs/tags/v') && !startsWith(github.ref, 'refs/tags/v2.'))) }}";
 const publishJobActions = new Set(["actions/download-artifact"]);
 const publishDownloadInputs = new Set(["name", "path"]);
 const publishCommands = new Set(["docker", "echo", "set", "test", "[["]);

@@ -2,27 +2,29 @@
 
 Self-hosted conversations with Fast/Deep, Codex and Claude using your own CLI
 logins, timers/digests, result review, Stop and explicit provider handoff.
-The first public beta follows the existing version line: **2.0.0-beta.4**.
-It has not been published. See the [release checklist](../docs/v2/public-beta-checklist.md)
-for remaining acceptance gates; an image build does not prove a provider answer.
+The first public beta follows the existing version line: **2.0.0-beta.4**, a
+GitHub pre-release. See the [release checklist](../docs/v2/public-beta-checklist.md)
+for its acceptance gates; an image build does not prove a provider answer.
 
 ## Docker quickstart
 
 Requires Linux x86_64, Docker Engine with Compose v2, public registry access,
-and your own Codex and Claude logins. Allow at least 8 GiB RAM and 25 GiB free
-disk for the source build; allow roughly 10–30 minutes depending on the machine
-and registry speed. ARM, Windows, macOS and desktop packages are deferred.
-
-Before publication, use the reviewed candidate branch below. After publication,
-select the approved tag instead:
+and your own Codex and Claude logins. **No prebuilt image is published: the
+install builds Orkestr from source on your machine, which takes roughly 10–30
+minutes** depending on the machine and registry speed. Allow at least 8 GiB RAM
+and 25 GiB free disk. ARM, Windows, macOS and desktop packages are deferred.
 
 ```sh
-git clone --branch release/v2.0.0-beta.4 https://github.com/otcan/orkestr.git
+git clone --branch v2.0.0-beta.4 https://github.com/otcan/orkestr.git
 cd orkestr
-export ORKESTR_SOURCE_COMMIT=$(git rev-parse HEAD)
+printf 'ORKESTR_SOURCE_COMMIT=%s\n' "$(git rev-parse HEAD)" > v2/packaging/oss/.env
 docker compose -f v2/packaging/oss/compose.yaml up -d --build
 docker compose -f v2/packaging/oss/compose.yaml ps
 ```
+
+The `.env` line records the exact commit to build (Git ignores the file). Run
+the commands from the `orkestr` checkout; later `exec`, `logs`, `restart` and
+`down` commands work from any terminal without exporting anything.
 
 The image fetches the exact public commit anonymously; no host home, credentials
 or application state is copied. Open **http://127.0.0.1:19822**. Only loopback is
@@ -130,7 +132,7 @@ Export the existing #265 Linux server/UI tarball, its manifest, paired receipt
 and SHA256SUMS from the same source/build:
 
 ```sh
-docker build --build-arg SOURCE_COMMIT="$ORKESTR_SOURCE_COMMIT" \
+docker build --build-arg SOURCE_COMMIT="$(git rev-parse HEAD)" \
   --target bundle --output type=local,dest=./v2-dist \
   --file v2/packaging/oss/Dockerfile .
 cd v2-dist
@@ -157,12 +159,14 @@ acceptance gates. If startup refuses, retain the state and inspect the failure;
 do not clear a manager ledger to force startup.
 
 The job tracker is an **optional recipe**. It needs an explicitly selected
-read-only local source with Inbox and Sent bodies. Checks are bounded; unresolved
+read-only local source with Inbox and Sent bodies (synchronized Thunderbird
+folders on the computer running Orkestr); the Docker install cannot see host mail
+folders. **Gmail and LinkedIn job tracking are not part of this beta.** Checks are bounded; unresolved
 events can wait for earlier thread evidence, and `more_mail` is not proof of
 full catch-up for large mailboxes. Recurring scans require a separate owner action.
 
-Deferred: desktop/macOS/Windows/ARM, mobile apps, turnkey WhatsApp or mail account
-provisioning, multi-user hosting, optional integrations and full parity with
+Deferred: desktop/macOS/Windows/ARM, mobile apps, a published container image,
+Gmail/LinkedIn job tracking, turnkey WhatsApp or mail account provisioning, multi-user hosting, optional integrations and full parity with
 private operator deployments.
 
 ## Development and evidence

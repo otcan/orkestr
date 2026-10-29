@@ -88,6 +88,13 @@ class LocalOriginTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 settings(base[0], origin, 19822, 10001, base[1])
 
+    def test_compose_needs_commit_only_for_builds(self):
+        compose = (HERE / 'compose.yaml').read_text()
+        self.assertIn('SOURCE_COMMIT: ${ORKESTR_SOURCE_COMMIT:-}', compose)
+        self.assertNotIn(':?', compose)
+        dockerfile = (HERE / 'Dockerfile').read_text()
+        self.assertIn('SOURCE_COMMIT must be the exact 40-character public commit', dockerfile)
+
 
 if __name__ == '__main__':
     unittest.main()

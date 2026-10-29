@@ -74,7 +74,7 @@ for (const [name, before, after] of [
   ["unpinned attestation action", actionPins["actions/attest-build-provenance"], "v4"],
 ]) test(`rejects ${name}`, () => assert.throws(() => validateWorkflow(attestFixture.replace(before, after)), /workflow_/));
 
-const publishGate = "${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) }}";
+const publishGate = "${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/main' || (startsWith(github.ref, 'refs/tags/v') && !startsWith(github.ref, 'refs/tags/v2.'))) }}";
 const publishFixture = `on: [pull_request, push]
 permissions: {contents: read}
 jobs:
@@ -111,6 +111,7 @@ for (const [name, before, after] of [
   ["publish on pull requests", "github.event_name == 'push' || ", "github.event_name == 'pull_request' || "],
   ["publish without event gate", `    if: ${publishGate}\n`, ""],
   ["publish from any branch", "github.ref == 'refs/heads/main'", "startsWith(github.ref, 'refs/heads/')"],
+  ["publish on V2 tags", " && !startsWith(github.ref, 'refs/tags/v2.')", ""],
   ["publish with extra permissions", "      packages: write", "      packages: write\n      id-token: write"],
   ["publish with contents write", "      contents: read\n      packages", "      contents: write\n      packages"],
   ["publish job checking out candidate code", "    steps:\n", `    steps:\n      - uses: actions/checkout@${actionPins["actions/checkout"]}\n        with: {persist-credentials: false}\n`],
@@ -146,6 +147,9 @@ test("CI builds, smoke-tests and publishes the runtime image to GHCR only after 
   const publish = workflow.jobs["image-publish"];
   assert.deepEqual(publish.permissions, { contents: "read", packages: "write" });
   assert.equal(publish.if, publishGate);
+  // V2 tags ship the V2 tarball; they never publish the root V1 image or move :latest.
+  assert.equal(workflow.jobs["image-arm64"].if, publishGate);
+  assert.match(publish.if, /!startsWith\(github\.ref, 'refs\/tags\/v2\.'\)/);
   for (const job of ["image", "test", "smoke", "provenance", "secret-policy", "syntax"]) assert.ok(publish.needs.includes(job), job);
   assert.ok(publish.steps.every(step => !step.uses || step.uses.startsWith("actions/download-artifact@")));
   const runs = publish.steps.map(step => step.run || "").join("\n");
