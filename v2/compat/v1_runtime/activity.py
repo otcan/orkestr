@@ -67,6 +67,111 @@ def match_lagging(worker, data):
     return type(head) is int and type(cursor) is int and head > cursor
 
 
+def delivered_times(db, data, now):
+    """When the chat saw a message for this input: its own exports, its Fast
+    reply and its questions, never a status line."""
+    questions = set(data.get("question_payloads", []))
+    question_ids = [str(uuid.uuid5(POST_NAMESPACE, "post:" + value))
+                    for value in questions]
+    fast_id = (data.get("first_response") or {}).get("remote_id")
+    if fast_id:
+        question_ids.append(fast_id)
+    placeholders = ",".join("?" for _ in question_ids)
+    selection = "e.input_id=?" + (" OR e.input_id IN (" + placeholders + ")" if question_ids else "")
+    times = []
+    for row in db.execute("SELECT e.source_key,e.ack,e.input_id,i.data FROM exports e JOIN inputs i ON i.remote_id=e.input_id "
+                          "WHERE e.ack IS NOT NULL AND (" + selection + ")", [data["remote_id"], *question_ids]):
+        source, raw, remote, parent = row
+        if source.startswith(NOTICE_PREFIXES):
+            continue
+        if (remote not in (data["remote_id"], fast_id)
+                and (json.loads(parent).get("post") or {}).get("id") not in questions):
+            continue
+        at = delivered_at(raw)
+        if at is not None and at <= now:
+            times.append(at)
+    return times
+
+
+def status_slot_free(db, now, spacing):
+    """At most one status line per chat per `spacing`, and one unresolved
+    status message for the whole binding."""
+    prior = db.execute("SELECT value FROM ledger_meta WHERE key='activity_notice'").fetchone()
+    if prior and now - json.loads(prior[0])["at"] < spacing:
+        return False
+    pending = db.execute("SELECT 1 FROM exports e JOIN inputs i ON i.remote_id=e.input_id "
+                         "WHERE (e.source_key LIKE 'heartbeat:%' OR e.source_key LIKE 'stalled:%' "
+                         "OR json_extract(i.data,'$.activity_notice') IS NOT NULL) "
+                         "AND (e.outcome IS NULL OR e.outcome='uncertain') LIMIT 1").fetchone()
+    return not pending
+
+
+def post_status(ledger, db, data, text, now, **notice):
+    """One status line on its own pseudo-timer parent (see observe())."""
+    sequence = int(now * 1000)
+    source = "heartbeat:%s:%d" % (data["remote_id"], sequence)
+    remote = str(uuid.uuid5(NOTICE_NAMESPACE, "input:" + source))
+    message = dict(id=str(uuid.uuid5(NOTICE_NAMESPACE, "reply:" + source)), role="assistant", state="completed",
+                   phase="final_answer", source="rust-v2-adapter",
+                   parentMessageId=remote, text=text, activityNotice=True)
+    ledger._pseudo_timer(db, remote, "Status", sequence,
+        {"activity_notice": dict(input_id=data["remote_id"], **notice)}, message, source_id="status")
+
+
+# A person's input that waits behind this binding's own running turn (the
+# ledger head, a timer or a local-agent input) is not observed until its turn
+# comes, so observe() never sees it. While an earlier input carries fresh
+# proof that its own Deep run is running, the same heartbeat clock (3/8/15 then
+# every 15 minutes of silence, at most 6, one per chat every 5 minutes) runs
+# from the input's arrival with a waiting template. Checked this often.
+WAITING_CHECK_S = 15
+WAITING_ROWS = 64
+
+
+def waiting(worker, now=None):
+    """Deep heartbeat for a person's inputs queued behind a running turn."""
+    if not getattr(worker, "deep_heartbeat", True):
+        return
+    now = time.time() if now is None else now
+    checked = getattr(worker, "_waiting_checked", None)
+    if checked is not None and 0 <= now - checked < WAITING_CHECK_S:
+        return
+    worker._waiting_checked = now
+    ledger = worker.ledger
+    with ledger.connect() as db:
+        db.execute("BEGIN IMMEDIATE")
+        head = ledger._live_head_rowid(db, now)
+        if head is None:
+            return  # Nothing is proven running: no line may claim that.
+        rows = db.execute("SELECT data FROM inputs WHERE rowid > ? AND json_extract(data,'$.phase') != 'completed' "
+                          "ORDER BY rowid LIMIT ?", (head, WAITING_ROWS)).fetchall()
+        for (raw,) in rows:
+            data = json.loads(raw)
+            activity = data.get("activity") or {}
+            since = data.get("arrived_at", data.get("queued_at"))
+            if (not heartbeat_applies(worker, data) or not isinstance(since, (int, float))
+                    or any(data.get(key) for key in ("absorbed_into", "refused", "blocked", "steer"))
+                    or data.get("deep_final_ready_at")
+                    or now - activity.get("observed_at", -POLL_GAP_S - 1) <= POLL_GAP_S):
+                continue  # Not a person's, settled, steered, or observe() owns its clock.
+            times = [since, activity.get("heartbeat_at", since)] + delivered_times(db, data, now)
+            due = heartbeat_gap(activity.get("heartbeats", 0))
+            if due is None or now - max(times) < due:
+                continue
+            if not status_slot_free(db, now, HEARTBEAT_CHAT_SPACING_S):
+                return
+            minutes = max(1, int((now - since) // 60))
+            text = notices.render(notices.language_for(db, data), "deep_heartbeat_waiting", minutes=minutes)
+            post_status(ledger, db, data, text, now, running=True, heartbeat=True, waiting=True)
+            activity = data.setdefault("activity", {})
+            activity["heartbeat_at"] = now
+            activity["heartbeats"] = activity.get("heartbeats", 0) + 1
+            ledger.save(data, db)
+            db.execute("INSERT INTO ledger_meta VALUES('activity_notice',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                       (json.dumps(dict(at=now, input_id=data["remote_id"], running=True)),))
+            return  # One line per pass.
+
+
 def observe(worker, data, statuses, now=None):
     """Called only after a successful own-run status read, never during an outage.
 
@@ -124,25 +229,7 @@ def observe(worker, data, statuses, now=None):
                      activity.get("heartbeat_at", since)]
         else:
             times = [since + activity.get("paused_s", 0), activity.get("progress_at", since)]
-        questions = set(data.get("question_payloads", []))
-        question_ids = [str(uuid.uuid5(POST_NAMESPACE, "post:" + value))
-                        for value in questions]
-        fast_id = (data.get("first_response") or {}).get("remote_id")
-        if fast_id:
-            question_ids.append(fast_id)
-        placeholders = ",".join("?" for _ in question_ids)
-        selection = "e.input_id=?" + (" OR e.input_id IN (" + placeholders + ")" if question_ids else "")
-        for row in db.execute("SELECT e.source_key,e.ack,e.input_id,i.data FROM exports e JOIN inputs i ON i.remote_id=e.input_id "
-                              "WHERE e.ack IS NOT NULL AND (" + selection + ")", [data["remote_id"], *question_ids]):
-            source, raw, remote, parent = row
-            if source.startswith(NOTICE_PREFIXES):
-                continue
-            if (remote not in (data["remote_id"], fast_id)
-                    and (json.loads(parent).get("post") or {}).get("id") not in questions):
-                continue
-            at = delivered_at(raw)
-            if at is not None and at <= now:
-                times.append(at)
+        times += delivered_times(db, data, now)
         ledger.save(data, db)
         due = heartbeat_gap(activity.get("heartbeats", 0)) if heartbeat else INTERVAL_S
         if due is None or now - max(times) < due:
@@ -164,33 +251,19 @@ def observe(worker, data, statuses, now=None):
             ledger.save(data, db)
             if now - activity.get("missing_notice_at", -MISSING_RUN_INTERVAL_S) < MISSING_RUN_INTERVAL_S:
                 return
-        prior = db.execute("SELECT value FROM ledger_meta WHERE key='activity_notice'").fetchone()
         spacing = (HEARTBEAT_CHAT_SPACING_S if heartbeat else INTERVAL_S) if running else MISSING_RUN_INTERVAL_S
-        if prior and now - json.loads(prior[0])["at"] < spacing:
-            return  # At most one status line per chat per spacing.
-        pending = db.execute("SELECT 1 FROM exports e JOIN inputs i ON i.remote_id=e.input_id "
-                             "WHERE (e.source_key LIKE 'heartbeat:%' OR e.source_key LIKE 'stalled:%' "
-                             "OR json_extract(i.data,'$.activity_notice') IS NOT NULL) "
-                             "AND (e.outcome IS NULL OR e.outcome='uncertain') LIMIT 1").fetchone()
-        if pending:
-            return  # One unresolved status message for this whole binding.
+        if not status_slot_free(db, now, spacing):
+            return  # One status line per chat per spacing, one unresolved per binding.
         minutes = max(0, int((now - since - activity.get("paused_s", 0)) // 60))
         lang = notices.language_for(db, data)
         text = (notices.render(lang, "deep_heartbeat", minutes=max(1, minutes)) if heartbeat else
                 notices.render(lang, "activity_running", minutes=minutes) if running else
                 notices.render(lang, "activity_missing", state=phase or "no run observed", minutes=minutes))
-        sequence = int(now * 1000)
-        source = "heartbeat:%s:%d" % (data["remote_id"], sequence)
-        remote = str(uuid.uuid5(NOTICE_NAMESPACE, "input:" + source))
-        message = dict(id=str(uuid.uuid5(NOTICE_NAMESPACE, "reply:" + source)), role="assistant", state="completed",
-                       phase="final_answer", source="rust-v2-adapter",
-                       parentMessageId=remote, text=text, activityNotice=True)
         # A status has its own durable notification identity. The ordinary
         # progress path can be disabled or superseded by the task's final, and
         # cannot transport timer progress. This established pseudo-parent path
         # works for every origin without completing the original input.
-        ledger._pseudo_timer(db, remote, "Status", sequence,
-            {"activity_notice": dict(input_id=data["remote_id"], running=running, heartbeat=heartbeat)}, message, source_id="status")
+        post_status(ledger, db, data, text, now, running=running, heartbeat=heartbeat)
         if running:
             activity["healthy_notices"] = activity.get("healthy_notices", 0) + 1
             if heartbeat:

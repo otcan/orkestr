@@ -119,6 +119,16 @@ TEMPLATES = {
         "tr": "\U0001f9e0 Hâlâ çalışıyorum\u2026 şu ana kadar %(minutes)d dk, tam yanıt gelecek.",
         "de": "\U0001f9e0 Ich arbeite noch\u2026 bisher %(minutes)d Min., die vollständige Antwort folgt.",
     },
+    # The same heartbeat for a person's input still queued behind an earlier
+    # running turn (activity.waiting): truthful about the wait, no reasons.
+    "deep_heartbeat_waiting": {
+        "en": "\U0001f9e0 Still on it\u2026 %(minutes)d min so far. An earlier task is finishing first, "
+              "then the full answer follows.",
+        "tr": "\U0001f9e0 Hâlâ üzerindeyim\u2026 şu ana kadar %(minutes)d dk. Önce önceki bir görev bitiyor, "
+              "ardından tam yanıt gelecek.",
+        "de": "\U0001f9e0 Ich bin dran\u2026 bisher %(minutes)d Min. Zuerst wird eine frühere Aufgabe fertig, "
+              "dann folgt die vollständige Antwort.",
+    },
     "activity_missing": {
         "en": "I cannot confirm that this task is still running (%(state)s, %(minutes)d minutes so far). "
               "The result is still pending, and the operator was alerted.",

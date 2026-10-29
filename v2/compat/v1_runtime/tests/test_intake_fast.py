@@ -53,12 +53,18 @@ class IntakeFastTests(fixture.IntakeBase):
         drive(self.worker)
         self.assertEqual(len(self.fast()), 12)
 
-    def test_no_owner_or_consent_is_inferred_and_unadmitted_local_agent_keeps_fifo(self):
+    def test_no_owner_or_consent_is_inferred_and_unadmitted_local_agent_is_admitted_first_in_order(self):
         self.enqueue("first")
         self.enqueue("agent", role="v1_agent")
         self.enqueue("later")
         drive(self.worker)
-        self.assertEqual([body["text"] for body in self.mutations("/messages")], ["Request first"])
+        self.assertEqual([body["text"].startswith("[Orkestr V1:") for body in self.mutations("/messages")],
+                         [False, True, False], "the local row is admitted in its place, never passed")
+        self.assertEqual(self.mutations("/messages")[-1]["text"], "Request later")
+        self.assertTrue(self.row("agent")["fronted"])
+        self.assertEqual([body["input_message_id"] for body in self.mutations("/window")],
+                         [self.row(name)["intake"]["message_id"] for name in ("first", "agent", "later")],
+                         "windows follow arrival order too")
         for role in (None, "v1_owner", "v1_agent", "v1_external"):
             data = dict(phase="queued", author=dict(role=role))
             self.assertFalse(eligible(self.worker, data))
@@ -109,13 +115,76 @@ class IntakeFastTests(fixture.IntakeBase):
         self.assertEqual(self.mutations("/messages"), [body for path, body in before if path == "/messages"])
         self.assertEqual(len(self.fast()), 5)
 
-    def test_member_is_not_admitted_ahead_of_an_unadmitted_local_agent_input(self):
+    def test_member_is_never_admitted_ahead_of_an_unadmitted_local_agent_input(self):
         self.enqueue("first")
         self.enqueue("agent", role="v1_agent")
         self.enqueue("member", role="member")
         drive(self.worker)
-        self.assertEqual([body["text"] for body in self.mutations("/messages")], ["Request first"])
-        self.assertNotIn("intake", self.row("member"))
+        self.assertEqual([body["text"].startswith("[Orkestr V1:") for body in self.mutations("/messages")],
+                         [False, True, False])
+        self.assertLess(self.row("agent")["intake"]["sequence"], self.row("member")["intake"]["sequence"])
+
+    def test_local_agent_input_with_no_person_behind_it_stays_on_the_serial_path(self):
+        self.enqueue("head")
+        self.worker.run_once(fixture.Stop())
+        self.assertEqual(self.peer.runs[0, "deep"]["phase"], "running")
+        self.enqueue("agent", role="v1_agent")
+        for _ in range(2):
+            self.worker.run_once(fixture.Stop())
+        self.assertEqual(self.mutations("/messages"), [self.mutations("/messages")[0]])
+        self.assertNotIn("intake", self.row("agent"))
+        self.assertNotIn("fronted", self.row("agent"))
+
+    def test_owner_behind_queued_watcher_alerts_gets_fast_while_head_deep_runs(self):
+        # otcanClaw-academic 2026-10-29: two watcher alerts (V1 CLI) queued
+        # behind a 32-minute Deep turn held the owner's "Stats?" out of Core
+        # for 10.5 minutes, so its Quick came too late to send and no
+        # heartbeat ran. Now the alerts are admitted first (one burst, as the
+        # serial path would), then the owner, while the head Deep still runs.
+        head = self.enqueue("head")
+        self.worker.run_once(fixture.Stop())
+        alerts = [self.enqueue("alert1", role="v1_agent"), self.enqueue("alert2", role="v1_agent")]
+        for row in alerts:
+            row = self.row(row["public_id"])
+            row["queued_at"] -= 60  # Queued well before the owner wrote: the burst is quiet.
+            self.ledger.save(row)
+        owner = self.enqueue("owner")
+        self.worker.run_once(fixture.Stop())
+        texts = [body["text"] for body in self.mutations("/messages")]
+        self.assertEqual(len(texts), 3)
+        self.assertTrue(texts[1].startswith("[2 messages arrived together"), "the alerts keep their burst")
+        self.assertEqual(texts[2], "Request owner")
+        self.assertEqual(self.row("alert2")["absorbed_into"], alerts[0]["remote_id"])
+        self.assertEqual([body["input_message_id"] for body in self.mutations("/window")],
+                         [self.row(name)["intake"]["message_id"] for name in ("head", "alert1", "owner")])
+        self.assertEqual(self.peer.runs[0, "deep"]["phase"], "running")
+        # Core auto-accepts the alert's Fast; the owner's Fast follows at once.
+        alert_fast = self.peer.runs[1, "fast"]
+        self.peer.request("POST", "/accept", dict(run_id=alert_fast["run_id"], request_key="core-auto-accept",
+            completion_event_id=alert_fast["acceptance_candidate"]["completion_event_id"],
+            expected_revision=self.peer.revision))
+        self.peer.mutations.pop()  # Core's own acceptance, not an adapter mutation.
+        drive(self.worker)
+        self.assertEqual([message["sourceInputId"] for message in self.fast()],
+                         [head["remote_id"], owner["remote_id"]], "the local alert gets no WhatsApp Quick")
+        self.assertEqual(self.peer.runs[0, "deep"]["phase"], "running")
+        before = copy.deepcopy(self.peer.mutations)
+        self.worker = self.new_worker()  # Restart: nothing is admitted twice.
+        self.worker.run_once(fixture.Stop())
+        self.assertEqual(self.mutations("/messages"), [body for path, body in before if path == "/messages"])
+        for message in self.fast():  # Both Quick replies were sent.
+            parent = next(m for m in self.ledger.messages(500) if m["id"] == message["parentMessageId"])
+            self.ledger.acknowledge(message["id"], dict(outcome="delivered", outboxJobId="job-" + message["id"],
+                connectorMessageIds=["wa-" + message["id"]], parentPublicMessageId=parent["publicMessageId"],
+                deliveredAt="2026-01-01T00:00:00Z"))
+        # The serial path then finishes head, alert and owner in ledger order.
+        for index in range(3):
+            self.peer.runs[index, "deep"]["phase"] = "awaiting_acceptance"
+            for _ in range(4):
+                self.worker.run_once(fixture.Stop())
+        self.assertEqual([self.row(name)["phase"] for name in ("head", "alert1", "alert2", "owner")],
+                         ["completed"] * 4)
+        self.assertEqual(len(self.mutations("/messages")), 3)
 
     def test_member_message_during_a_timer_turn_is_admitted_after_the_timer(self):
         timer, _ = self.ledger.enqueue_timer(dict(message_id=identity(7), event_id=identity(8), sequence=1,

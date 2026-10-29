@@ -11,6 +11,7 @@ from .first_response import capture
 from .intake import admit, window
 from . import fast_watch, journal
 from .auto_steer import in_rust
+from .ledger import LOCAL_ROLES
 
 # No per-pass admission throttle: every pending owner message is admitted in
 # the same pass it is seen (the pending snapshot itself holds at most 64 rows,
@@ -54,6 +55,21 @@ def eligible(worker, data):
 # again: it is admitted here at once (its own continuation fence still
 # applies in intake.admit) instead of holding every later owner message's
 # admission, and so its Fast reply, until it reaches the ledger head.
+
+
+def local_ahead(worker, data):
+    """An unadmitted plain V1-local row (local agent, V1 owner or V1 external
+    input, e.g. a watcher alert) that drive() may admit ahead of a person's
+    later input, exactly as the serial head path would admit it: once, in
+    FIFO order, with its own burst. Before, such a row waited for the running
+    Deep turn on the serial path and held every later owner message, its Fast
+    reply and its Deep heartbeat (otcanClaw-academic 2026-10-29: "Stats?"
+    reached Core 10.5 min late behind two queued watcher alerts)."""
+    return (worker.fast_reply_policy == "owner_only" and not data.get("origin") and
+            (data.get("author") or {}).get("role") in LOCAL_ROLES and
+            data.get("phase") in ("queued", "admitted") and "intake" not in data and
+            not any(data.get(key) for key in
+                    ("blocked", "digest", "refused", "absorbed_into", "requeued", "continued", "steer")))
 
 
 def failed(worker, data, error):
@@ -145,17 +161,36 @@ def drive(worker):
     if worker.fast_reply_policy != "owner_only":
         return False
     rows = worker.ledger.pending_inputs()
-    admissions = 0
-    for data in rows:
-        if "intake" in data or in_rust(data):
+    waiting = [index for index, data in enumerate(rows)
+               if eligible(worker, data) and "intake" not in data and not in_rust(data)]
+    admissions, absorbed = 0, set()
+    for index, data in enumerate(rows):
+        if "intake" in data or in_rust(data) or data["remote_id"] in absorbed:
             # A steer Rust already holds never needs FIFO admission before a
             # later input: it either joins the running turn or comes back as
             # a fresh message after it. Do not hold later Fast replies on it.
             continue
-        # Do not admit a chat event ahead of an earlier, unadmitted local-agent
-        # input or frozen legacy burst. The serial path owns it.
-        if not eligible(worker, data) or admissions >= MAX_ADMISSIONS:
+        if admissions >= MAX_ADMISSIONS:
             break
+        if not eligible(worker, data):
+            # Never pass an earlier unadmitted input: Core keeps arrival order.
+            # A plain V1-local row with a person's input behind it is admitted
+            # here in its place, with its own burst (as the serial path would);
+            # anything else (a frozen legacy burst, a timer) holds later events.
+            if not (local_ahead(worker, data) and any(later > index for later in waiting)):
+                break
+            if not data.get("fronted"):
+                data["fronted"] = True  # Its window is then also requested here, in order.
+                worker.ledger.save(data)
+            admissions += 1
+            try:
+                if not admit(worker, data, merge_burst=True):
+                    break  # Its burst may still grow; the next pass decides.
+            except Exception as error:
+                failed(worker, data, error)
+                break
+            absorbed |= set(data.get("burst") or ())
+            continue
         admissions += 1
         try:
             admit(worker, data, merge_burst=False)
@@ -164,7 +199,9 @@ def drive(worker):
             break  # Unknown intake cannot be passed by a later source.
     attempts = 0
     for data in rows:
-        if not eligible(worker, data) or "intake" not in data or "window" in data:
+        if data["remote_id"] in absorbed or data.get("phase") == "completed":
+            continue
+        if not (eligible(worker, data) or data.get("fronted")) or "intake" not in data or "window" in data:
             continue
         if attempts >= MAX_WINDOW_ATTEMPTS:
             break

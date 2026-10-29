@@ -5,7 +5,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from v2.compat.v1_runtime.activity import observe
+from v2.compat.v1_runtime.activity import observe, waiting
 from v2.compat.v1_runtime.ledger import Ledger
 from v2.compat.v1_runtime.worker import Worker
 from v2.compat.v1_runtime.tests.test_worker import Peer
@@ -215,3 +215,77 @@ class DeepHeartbeatTests(ActivityCase):
         self.data['text']='bu işi bitir lütfen, çok acil değil ama bak';self.ledger.save(self.data)
         self.advance(1180)
         self.assertIn('Hâlâ çalışıyorum',self.heartbeats()[0]['text'])
+
+
+class WaitingHeartbeatTests(ActivityCase):
+    """A person's input queued behind a running turn (activity.waiting).
+
+    otcanClaw-academic 2026-10-29: the owner's "Stats?" waited 10.5 minutes
+    behind a watcher-alert Deep turn and got no heartbeat at all, because only
+    the observed head can run the heartbeat clock."""
+    heartbeat=True
+
+    def setUp(self):
+        super().setUp()
+        # The running head is a local watcher alert (never a heartbeat itself).
+        self.data['author']=dict(role='v1_agent',id='v1:cli:-',label='Orkestr CLI',source='cli')
+        self.ledger.save(self.data)
+        self.owner=self.ledger.enqueue(dict(publicMessageId='stats',publicThreadId='thread',chatId='chat',
+            accountId='account',text='Stats?'),author=dict(role='owner',id='owner@c.us',label='Owner'))[0]
+        self.owner.update(arrived_at=1000,queued_at=1000);self.ledger.save(self.owner)
+
+    def tick(self,now,running=True,fresh=True):
+        self.data['transport_activity']=dict(observed_at_ms=int((now if fresh else now-600)*1000),
+            deep_running=running,fast_ready=True,final_ready=False)
+        self.ledger.save(self.data)
+        waiting(self.worker,now=now)
+
+    def run_to(self,end,start=1000,**kw):
+        for now in range(start,end+1,15):self.tick(now,**kw)
+
+    def lines(self):
+        """Pending lines (an acknowledged one leaves the listing)."""
+        return [m for m in self.notices() if m['text'].startswith('\U0001f9e0')]
+
+    def posted(self):
+        with self.ledger.connect() as db:
+            return db.execute("SELECT count(*) FROM inputs WHERE json_extract(data,'$.activity_notice.heartbeat')=1").fetchone()[0]
+
+    def test_queued_owner_input_gets_a_truthful_line_after_three_quiet_minutes(self):
+        self.run_to(1170);self.assertEqual(self.notices(),[])
+        self.tick(1185);self.assertEqual(len(self.lines()),1)
+        self.assertEqual(self.lines()[0]['text'],'\U0001f9e0 Still on it\u2026 3 min so far. '
+                         'An earlier task is finishing first, then the full answer follows.')
+        self.assertEqual(self.ledger.next_input()['remote_id'],self.data['remote_id'],'nothing is admitted or completed')
+        self.assertNotIn('intake',self.row())
+        self.ack(self.lines()[0],1185)
+        self.run_to(1000+16*60,start=1200)
+        self.assertEqual(self.posted(),2,'the same 3/8/15 backoff: the next line at 8 minutes')
+        self.assertEqual(self.row()['activity']['heartbeats'],2)
+
+    def row(self):
+        with self.ledger.connect() as db:
+            return json.loads(db.execute("SELECT data FROM inputs WHERE remote_id=?",(self.owner['remote_id'],)).fetchone()[0])
+
+    def test_no_line_without_fresh_proof_that_the_earlier_turn_is_running(self):
+        self.run_to(1600,fresh=False);self.assertEqual(self.notices(),[])
+        self.run_to(1600,running=False);self.assertEqual(self.notices(),[])
+
+    def test_only_a_person_waiting_and_not_observed_elsewhere_gets_it(self):
+        for change in (dict(origin='timer'),dict(author=dict(role='v1_agent',id='a',label='A',source='cli')),
+                       dict(absorbed_into='x'),dict(activity=dict(observed_at=1590)),dict(deep_final_ready_at=1500.0)):
+            with self.subTest(change=change):
+                self.setUp();self.owner.update(change);self.ledger.save(self.owner)
+                self.run_to(1600);self.assertEqual(self.lines(),[])
+        self.setUp();self.worker.deep_heartbeat=False
+        self.run_to(1600);self.assertEqual(self.notices(),[])
+
+    def test_the_clock_continues_once_the_input_is_observed_itself(self):
+        self.run_to(1185);self.assertEqual(len(self.lines()),1);self.ack(self.lines()[0],1185)
+        # Its turn comes: observe() takes over without an immediate second line.
+        row=self.row();row.update(admitted_at=1190,phase='running',matched_runs=['own'])
+        self.ledger.save(row)
+        for now in range(1200,1480,10):observe(self.worker,row,self.status,now=now)
+        self.assertEqual(self.posted(),1)
+        observe(self.worker,row,self.status,now=1490);self.assertEqual(self.posted(),2)
+        self.assertTrue(self.lines()[0]['text'].startswith('\U0001f9e0 Still working\u2026 5 min so far'))
