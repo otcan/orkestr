@@ -13,8 +13,18 @@
 //! only when the manager's own status proves that: its latest window for the
 //! conversation is an earlier generation and retired (or it has none), and
 //! Core's plan is a failed open whose credential was never issued.
+//!
+//! The manager refuses such an admission also when its latest window is the
+//! direct predecessor that Core already closed but whose manager retirement
+//! was refused (2026-10-28: a Fast companion failed at the work deadline, the
+//! manager still owned its child and marked the window uncertain). No Core
+//! window is unfinished for that predecessor, so nothing reconciled it and the
+//! conversation stayed blocked. Before the never-admitted check, the server
+//! hands the manager exactly the retirement Core committed for that
+//! predecessor (`accepted`/`stopped`, its run and terminal event): the manager
+//! then holds it retired and the successor's failed open commits locally.
 use super::super::Controller;
-use crate::window_runtime::manager_client::{ManagerReceipt, WindowState};
+use crate::window_runtime::manager_client::{ManagerReceipt, TerminalOutcome, Window, WindowState};
 use orkestr_v2_contracts::{
     ExecutionWindowOpenFailureCause as Cause, ExecutionWindowStatus,
     ExecutionWindowTerminalOutcome as Outcome,
@@ -79,11 +89,131 @@ pub(super) fn local_commit_allowed(
         && manager.is_some_and(|receipt| never_admitted(receipt, window))
 }
 
+/// The manager's latest window is the retired Core window `window` continues
+/// from (its effective predecessor), still
+/// awaiting its manager retirement (uncertain or expired, never live). Only
+/// for the never-admitted plan shape; Core must still prove the predecessor's
+/// committed retirement before anything is sent.
+pub(super) fn unretired_predecessor(
+    plan: &StrandedExecutionWindow,
+    window: &ExecutionWindowStatus,
+    now_ms: i64,
+    manager: Option<&ManagerReceipt>,
+) -> Option<Window> {
+    if !candidate(plan, window, now_ms) {
+        return None;
+    }
+    match manager? {
+        ManagerReceipt::Window(r)
+            if r.window_id != window.window_id
+                && r.generation < window.generation
+                && restored(plan) == Some(r.window_id)
+                && matches!(r.state, WindowState::Reconciliation | WindowState::Expired) =>
+        {
+            Some(Window {
+                window_id: r.window_id,
+                generation: r.generation,
+            })
+        }
+        _ => None,
+    }
+}
+
+/// The retired window Core's failed-open plan continues from (the effective
+/// predecessor, skipping earlier failed opens).
+fn restored(plan: &StrandedExecutionWindow) -> Option<uuid::Uuid> {
+    match plan {
+        StrandedExecutionWindow::Pending(p) => p.restored_window_id,
+        StrandedExecutionWindow::Reconciled(r) => r.restored_window_id,
+    }
+}
+
 fn candidate(plan: &StrandedExecutionWindow, window: &ExecutionWindowStatus, now_ms: i64) -> bool {
     unadmitted_shape(plan) && window.opened_at_ms.saturating_add(UNADMITTED_MIN_AGE_MS) <= now_ms
 }
 
 impl Controller {
+    /// Replay Core's committed retirement of the direct predecessor to a
+    /// manager that never recorded it (see `unretired_predecessor`). Best
+    /// effort: any refusal leaves the manager-first path to refuse as before.
+    pub(super) async fn retire_unretired_predecessor(
+        &self,
+        browser: &str,
+        window: &ExecutionWindowStatus,
+        plan: &StrandedExecutionWindow,
+        now_ms: i64,
+    ) {
+        if !candidate(plan, window, now_ms) {
+            return;
+        }
+        let Ok(manager) = self
+            .manager
+            .for_conversation(window.conversation_id.clone())
+        else {
+            return;
+        };
+        let receipt = manager
+            .status(
+                &format!("predecessor:{}", uuid::Uuid::new_v4()),
+                Instant::now() + Duration::from_secs(5),
+            )
+            .await
+            .ok();
+        let Some(predecessor) = unretired_predecessor(plan, window, now_ms, receipt.as_ref())
+        else {
+            return;
+        };
+        let retirement = match self
+            .store
+            .closed_execution_window_retirement_authenticated(
+                browser,
+                &window.conversation_id,
+                predecessor.window_id,
+                predecessor.generation,
+            )
+            .await
+        {
+            Ok(Some(retirement)) => retirement,
+            Ok(None) => {
+                warn_refused(
+                    "predecessor",
+                    window,
+                    "predecessor has no committed retirement",
+                );
+                return;
+            }
+            Err(_) => {
+                warn_refused("predecessor", window, "predecessor retirement unavailable");
+                return;
+            }
+        };
+        let outcome = match retirement.outcome {
+            Outcome::Accepted => TerminalOutcome::Accepted,
+            Outcome::Stopped => TerminalOutcome::Stopped,
+            _ => return,
+        };
+        match manager
+            .reconcile(
+                &format!("predecessor:{}", uuid::Uuid::new_v4()),
+                &predecessor,
+                outcome,
+                Some((retirement.run_id.0, retirement.terminal_event_id)),
+                Instant::now() + Duration::from_secs(5),
+            )
+            .await
+        {
+            Ok(_) => eprintln!(
+                "ALERT orkestr-v2-server window_manager_predecessor_retired conversation={} window={} generation={} predecessor={} predecessor_generation={}",
+                window.conversation_id,
+                window.window_id,
+                window.generation,
+                predecessor.window_id,
+                predecessor.generation,
+            ),
+            Err(_) => warn_refused("predecessor", window, "manager predecessor retirement refused"),
+        }
+    }
+
     /// Ask the manager whether it ever admitted this window (see
     /// `local_commit_allowed`). Only the never-admitted shape asks at all.
     pub(super) async fn manager_never_admitted(

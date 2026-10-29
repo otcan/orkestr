@@ -8,9 +8,9 @@ mod execution_window;
 #[cfg(test)]
 mod historical_guard_fixture;
 pub use execution_window::{
-    ExecutionWindowBootstrap, ExecutionWindowCredential, ExecutionWindowRetirement,
-    RetiredExecutionWindowContext, StrandedExecutionWindow, StrandedExecutionWindowPlan,
-    EXECUTION_WINDOW_BASE_LIFETIME_MS, EXECUTION_WINDOW_CLEANUP_MS,
+    ClosedExecutionWindowRetirement, ExecutionWindowBootstrap, ExecutionWindowCredential,
+    ExecutionWindowRetirement, RetiredExecutionWindowContext, StrandedExecutionWindow,
+    StrandedExecutionWindowPlan, EXECUTION_WINDOW_BASE_LIFETIME_MS, EXECUTION_WINDOW_CLEANUP_MS,
     EXECUTION_WINDOW_MAX_LIFETIME_MS,
 };
 mod acceptance;
