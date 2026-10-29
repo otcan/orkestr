@@ -174,6 +174,78 @@ class Base(unittest.TestCase):
         return [r for r, _ in self.peer.mutations if r.endswith("/retire")]
 
 
+class AnsweredPeer(GulsahPeer):
+    """The cancelled Deep's latest payload is the answer already sent as progress."""
+
+    def request(self, method, route, body=None, allowed=(200,)):
+        status, value = super().request(method, route, body=body, allowed=allowed)
+        if route.split("?", 1)[0] == "/execution" and isinstance(value, dict):
+            value = dict(value, progress=dict(payload_id="answer-payload", observed_at_ms=1))
+        return status, value
+
+
+class AnsweredByProgressTests(Base):
+    """otcanClaw-PA 2026-10-29: the answer reached the chat as progress, then a
+    reconciliation cancelled the run; a softened notice, never a cancel notice."""
+    peer_class = AnsweredPeer
+
+    def progress(self, payload_id="answer-payload", outcome="delivered"):
+        message = self.ledger.add_progress(self.data, payload_id, "Two DocuSign mails arrived today.")
+        if outcome:
+            self.ledger.acknowledge(message["id"], dict(outcome=outcome, outboxJobId="job-1",
+                parentPublicMessageId=self.data["public_id"], connectorMessageIds=["synthetic"],
+                deliveredAt="2026-01-01T00:00:00Z"))
+        return message
+
+    def test_delivered_answer_progress_gets_a_softened_notice_not_a_cancel_notice(self):
+        self.progress()
+        log = self.passes(2)
+        data = self.ledger.input(self.data["remote_id"])
+        self.assertEqual(data["phase"], "completed")
+        self.assertEqual(data["refused"]["reason"], "answered_by_progress")
+        self.assertNotIn("stalled", data, "an expected close: no stall alert")
+        (notice,) = self.notices()
+        self.assertEqual(notice["phase"], "final_answer")
+        self.assertEqual(notice["text"], notices.TEMPLATES["stopped_after_answer"]["tr"])
+        self.assertIn("INFO orkestr-v2-wa-adapter input_refused", log)
+        self.assertIn("reason=answered_by_progress", log)
+        self.assertNotIn("ALERT orkestr-v2-wa-adapter input_refused", log)
+        self.assertIn("input_answered_by_progress", log)
+        self.assertIn("reason=deep_run_cancelled", log)
+        self.assertEqual(self.retires(), [])
+
+    def test_softened_notice_follows_the_chat_language(self):
+        for lang in notices.LANGUAGES:
+            text = notices.render(lang, "stopped_after_answer")
+            self.assertTrue(text.startswith("\u2139\ufe0f "))
+        self.assertEqual(len({notices.render(lang, "stopped_after_answer") for lang in notices.LANGUAGES}), 3)
+
+    def test_answer_progress_still_being_sent_waits_for_its_report(self):
+        message = self.progress(outcome=None)
+        self.passes(2)
+        self.assertNotEqual(self.ledger.input(self.data["remote_id"])["phase"], "completed")
+        self.assertEqual(self.notices(), [])
+        self.ledger.acknowledge(message["id"], dict(outcome="delivered", outboxJobId="job-1",
+            parentPublicMessageId=self.data["public_id"], connectorMessageIds=["synthetic"],
+            deliveredAt="2026-01-01T00:00:00Z"))
+        self.passes(1)
+        self.assertEqual(self.ledger.input(self.data["remote_id"])["refused"]["reason"], "answered_by_progress")
+        (notice,) = self.notices()
+        self.assertEqual(notice["text"], notices.TEMPLATES["stopped_after_answer"]["tr"])
+
+    def test_older_progress_or_uncertain_delivery_keeps_the_notice(self):
+        for payload_id, outcome in (("older-payload", "delivered"), ("answer-payload", "uncertain")):
+            with self.subTest(payload_id=payload_id, outcome=outcome):
+                self.setUp()
+                self.progress(payload_id, outcome)
+                log = self.passes(2)
+                data = self.ledger.input(self.data["remote_id"])
+                self.assertEqual(data["refused"]["reason"], "deep_run_cancelled")
+                (notice,) = self.notices()
+                self.assertEqual(notice["text"], notices.TEMPLATES["failure"]["tr"])
+                self.assertIn("ALERT orkestr-v2-wa-adapter input_refused", log)
+
+
 class StrandedInputTests(Base):
     def test_cancelled_fast_and_deep_in_a_closed_window_settle_with_one_localized_notice(self):
         log = self.passes(2)
