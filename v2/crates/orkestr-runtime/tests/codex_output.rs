@@ -268,9 +268,113 @@ fn snapshots_have_linear_storage_bound_even_for_single_byte_deltas() {
             _ => None,
         })
         .collect();
-    assert_eq!(texts.last().unwrap().len(), 8192);
-    assert!(texts.len() <= 15);
-    assert!(texts.iter().map(|text| text.len()).sum::<usize>() < 8192 * 4);
+    // Deltas are never snapshots: exactly one, the completed full text.
+    assert_eq!(texts.len(), 1);
+    assert_eq!(texts[0].len(), 8192);
+}
+
+#[test]
+fn streaming_deltas_are_never_progress_only_completed_items_are() {
+    let mut stream = active();
+    receive(
+        &mut stream,
+        item("item/started", "comment", "", json!("commentary")),
+    );
+    for fragment in ["Two Doc", "uSign mails", " arrived."] {
+        assert!(receive(&mut stream, delta(Some("comment"), fragment)).is_empty());
+    }
+    assert_eq!(
+        receive(
+            &mut stream,
+            item(
+                "item/completed",
+                "comment",
+                "Two DocuSign mails arrived.",
+                json!("commentary"),
+            ),
+        ),
+        vec![ProviderEvent::Progress(
+            "Two DocuSign mails arrived.".into()
+        )]
+    );
+}
+
+/// otcanClaw-PA 2026-10-29 (run c66a3858): the first response stream started
+/// the final answer, sent "Two Doc" and went idle; after its 300 s stream idle
+/// timeout Codex retried as a new response whose final answer completed with a
+/// new item id. The first item never completed, and the turn was refused
+/// although its answer was complete.
+#[test]
+fn stream_retry_abandons_the_unfinished_item_and_completes_with_the_retry() {
+    for view in [None, Some("full"), Some("summary")] {
+        let mut stream = active();
+        completed_item(&mut stream, "comment", "Checking.", json!("commentary"));
+        receive(
+            &mut stream,
+            item("item/started", "attempt-1", "", json!("final_answer")),
+        );
+        assert!(receive(&mut stream, delta(Some("attempt-1"), "Two Doc")).is_empty());
+        let answer = "Two DocuSign mails arrived today.";
+        let output = completed_item(&mut stream, "attempt-2", answer, json!("final_answer"));
+        assert_eq!(output, vec![ProviderEvent::Progress(answer.into())]);
+        let mut terminal = done();
+        if let Some(view) = view {
+            terminal["params"]["turn"]["itemsView"] = json!(view);
+            terminal["params"]["turn"]["items"] = json!([
+                {"type":"agentMessage","id":"comment","text":"Checking.","phase":"commentary"},
+                {"type":"agentMessage","id":"attempt-2","text":answer,"phase":"final_answer"}]);
+        }
+        // The answer was already the latest snapshot: completion only.
+        assert_eq!(
+            receive(&mut stream, terminal),
+            vec![ProviderEvent::CompletedProposal { synthetic: false }]
+        );
+        stream.finish().unwrap();
+    }
+    // An abandoned phase-less attempt is never selected as the reply.
+    let mut stream = active();
+    receive(
+        &mut stream,
+        item("item/started", "attempt-1", "", Value::Null),
+    );
+    receive(&mut stream, delta(Some("attempt-1"), "Half a sen"));
+    completed_item(
+        &mut stream,
+        "attempt-2",
+        "Checked the inbox.",
+        json!("commentary"),
+    );
+    let events = receive(&mut stream, done());
+    let ProviderEvent::Progress(text) = &events[0] else {
+        panic!("reply expected")
+    };
+    assert!(text.ends_with("Checked the inbox.") && !text.contains("Half a sen"));
+}
+
+#[test]
+fn an_item_still_open_at_the_end_of_the_turn_is_refused() {
+    // After a completed final answer, a later message that never completed
+    // is missing evidence, not an abandoned retry.
+    let mut stream = active();
+    completed_item(&mut stream, "answer", "The answer.", json!("final_answer"));
+    receive(
+        &mut stream,
+        item("item/started", "late", "", json!("commentary")),
+    );
+    receive(&mut stream, delta(Some("late"), "unfinished"));
+    refuse(&mut stream, done());
+    // A full terminal view must still list every completed item.
+    let mut stream = active();
+    receive(
+        &mut stream,
+        item("item/started", "attempt-1", "", json!("final_answer")),
+    );
+    receive(&mut stream, delta(Some("attempt-1"), "Two Doc"));
+    completed_item(&mut stream, "attempt-2", "Answer.", json!("final_answer"));
+    let mut terminal = done();
+    terminal["params"]["turn"]["itemsView"] = json!("full");
+    terminal["params"]["turn"]["items"] = json!([]);
+    refuse(&mut stream, terminal);
 }
 
 #[test]
