@@ -129,6 +129,10 @@ impl TurnText {
         }
     }
 
+    /// A snapshot of one item. `complete`: the exact full text of a completed
+    /// (or finally selected) item. Otherwise a live delta-only legacy stream
+    /// (no item lifecycle at all), at geometric byte thresholds that bound
+    /// snapshot storage linearly in the item size.
     fn snapshot(&mut self, index: usize, complete: bool) -> Option<String> {
         let item = &mut self.items[index];
         let size = item.text.len();
@@ -138,11 +142,20 @@ impl TurnText {
         if !complete && size < item.next_snapshot {
             return None;
         }
-        // Geometric byte thresholds bound live snapshot storage linearly in the
-        // item size. Completed/final selection always emits the exact full text.
         item.next_snapshot = size * 2;
         self.last_emitted = Some((index, size));
         Some(item.text.clone())
+    }
+
+    /// An item that never completed although a later item did: its stream was
+    /// abandoned. Codex retries a dropped or idle response stream (for example
+    /// its 300 s stream idle timeout) as a new response whose message has a new
+    /// item id; the first attempt's started item never gets `item/completed`.
+    /// Agent messages of one turn stream one after another, so a later
+    /// completed item proves the earlier stream ended. Its text was never
+    /// complete evidence and is never selected or delivered.
+    fn abandoned(&self, index: usize) -> bool {
+        !self.items[index].completed && self.items[index + 1..].iter().any(|item| item.completed)
     }
 
     pub(super) fn receive(
@@ -166,7 +179,11 @@ impl TurnText {
             }
             item.deltas = true;
             item.text.push_str(delta);
-            if item.question {
+            // With an item lifecycle only a completed item (or the turn's final
+            // selection) is progress: delivery layers export progress as owner
+            // messages, and a delta prefix ("Two Doc") is a half sentence that
+            // may never complete (a native stream retry abandons it).
+            if item.question || self.items.iter().any(|item| item.boundary) {
                 return Ok(None);
             }
             return Ok(self.snapshot(index, false));
@@ -239,10 +256,10 @@ impl TurnText {
             item.text = text.to_owned();
         }
         item.boundary = true;
-        if item.question {
+        if item.question || !completed {
             return Ok(None);
         }
-        Ok(self.snapshot(index, completed))
+        Ok(self.snapshot(index, true))
     }
 
     /// Whether this turn delivered (or began) an asynchronous question: owner
@@ -331,7 +348,10 @@ impl TurnText {
             }
             seen.push(id);
         }
-        if view == "full" && seen.len() != self.items.len() {
+        let expected = (0..self.items.len())
+            .filter(|index| !self.abandoned(*index))
+            .count();
+        if view == "full" && seen.len() != expected {
             return Err(refused(
                 "observed agent message missing from full terminal items",
             ));
@@ -348,22 +368,29 @@ impl TurnText {
         }
         let lifecycle = self.items.iter().any(|item| item.boundary);
         let index = if lifecycle {
-            if self.items.iter().any(|item| !item.completed) {
+            // An abandoned stream attempt is superseded by the later completed
+            // item(s); only an item still open at the end of the turn is
+            // missing evidence.
+            if (0..self.items.len())
+                .any(|index| !self.items[index].completed && !self.abandoned(index))
+            {
                 return Err(refused("agent message never completed"));
             }
             match self.final_item.or_else(|| {
                 self.items.iter().rposition(|item| {
-                    item.phase.is_none() && !item.question && !item.text.trim().is_empty()
+                    item.completed
+                        && item.phase.is_none()
+                        && !item.question
+                        && !item.text.trim().is_empty()
                 })
             }) {
                 Some(index) => index,
                 // A completed turn with commentary but no final answer (V1 shows
                 // the last message): use the last non-empty agent message, marked.
                 None => {
-                    let last = self
-                        .items
-                        .iter()
-                        .rposition(|item| !item.question && !item.text.trim().is_empty());
+                    let last = self.items.iter().rposition(|item| {
+                        item.completed && !item.question && !item.text.trim().is_empty()
+                    });
                     let reply = match last {
                         Some(last) => format!("{NO_FINAL_NOTE}\n\n{}", self.items[last].text),
                         // Only questions: they are the reply.
