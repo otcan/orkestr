@@ -49,15 +49,15 @@ class PublishTagTests(unittest.TestCase):
         self.assertNotRegex(text, r'(?m)^\s*(branches|pull_request|schedule|merge_group)\b')
         self.assertIn("tags: ['v2.0.0-beta.*']", text)
         self.assertNotRegex(text, r':main\b|\bsha-')
-        # Every push/tag-writing command is preceded by a publish_tags.py check.
-        for block in re.findall(r'run: \|\n((?:\s{10}.*\n)+)', text):
-            if '--push' in block or 'imagetools create' in block:
-                self.assertIn('publish_tags.py check', block)
-                self.assertLess(block.index('publish_tags.py check'),
-                                block.index('--push' if '--push' in block else 'imagetools create'))
-        self.assertEqual(text.count('--push'), 1)
+        self.assertRegex(text, r"(?m)^on:\n  push:\n    tags: \['v2\.0\.0-beta\.\*'\]\npermissions:")
+        # Every pushed/created tag is "$IMAGE:$GITHUB_REF_NAME[-arch]", after the V2 ref guard.
+        refs = re.findall(r'"\$IMAGE:[^"]*"', text)
+        self.assertTrue(refs)
+        self.assertTrue(all(re.fullmatch(r'"\$IMAGE:\$GITHUB_REF_NAME(-amd64|-arm64)?"', ref) for ref in refs), refs)
+        guard = r'[[ "$GITHUB_REF_NAME" =~ ^v2\.0\.0-beta\.[0-9]+(-rc\.[0-9]+)?$ ]]'
+        self.assertLess(text.index(guard), text.index('docker tag'))
         self.assertEqual(text.count('imagetools create'), 1)
-
+        self.assertEqual(text.count('publish_tags.py "$GITHUB_REF_NAME"'), 2)
 
 if __name__ == '__main__':
     unittest.main()

@@ -124,6 +124,48 @@ for (const [name, before, after] of [
   assert.notEqual(source, publishFixture, `fixture replacement for ${name} did not apply`);
   assert.throws(() => validateWorkflow(source), /^Error: workflow_(?!yaml)/);
 });
+const v2PublishGate = "${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v2.0.0-beta.') }}";
+const v2PublishFixture = `on:
+  push:
+    tags: ['v2.0.0-beta.*']
+permissions: {contents: read}
+jobs:
+  image-publish:
+    if: ${v2PublishGate}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/download-artifact@${actionPins["actions/download-artifact"]}
+        with: {name: v2-image-amd64, path: amd64}
+      - run: docker load --input amd64/orkestr-v2-amd64.tar.gz
+      - run: |
+          set -euo pipefail
+          [[ "$GITHUB_REF_NAME" =~ ^v2\\.0\\.0-beta\\.[0-9]+(-rc\\.[0-9]+)?$ ]]
+          IMAGE="ghcr.io/\${GITHUB_REPOSITORY,,}"
+          docker tag orkestr-v2:amd64 "$IMAGE:$GITHUB_REF_NAME-amd64"
+          docker push "$IMAGE:$GITHUB_REF_NAME-amd64"
+          docker buildx imagetools create --tag "$IMAGE:$GITHUB_REF_NAME" "$IMAGE:$GITHUB_REF_NAME-amd64"
+`;
+test("V2 beta publish is accepted only from v2-publish.yml", () => {
+  assert.deepEqual(validateWorkflow(v2PublishFixture, "v2-publish.yml"), { jobs: 1, actions: 1 });
+  assert.throws(() => validateWorkflow(v2PublishFixture, "ci.yml"), /workflow_publish_event/);
+  assert.throws(() => validateWorkflow(publishFixture, "v2-publish.yml"), /workflow_publish_event/);
+});
+for (const [name, before, after] of [
+  ["V2 publish moving latest", '--tag "$IMAGE:$GITHUB_REF_NAME"', '--tag "$IMAGE:latest" --tag "$IMAGE:$GITHUB_REF_NAME"'],
+  ["V2 publish pushing main", 'docker push "$IMAGE:$GITHUB_REF_NAME-amd64"', 'docker push "$IMAGE:main"'],
+  ["V2 publish pushing a V1 tag", 'docker push "$IMAGE:$GITHUB_REF_NAME-amd64"', 'docker push "$IMAGE:v0.1.0-alpha.99"'],
+  ["V2 publish with a derived tag", 'docker push "$IMAGE:$GITHUB_REF_NAME-amd64"', 'docker push "$IMAGE:$TAG"'],
+  ["V2 publish without the ref guard", '          [[ "$GITHUB_REF_NAME" =~ ^v2\\.0\\.0-beta\\.[0-9]+(-rc\\.[0-9]+)?$ ]]\n', ""],
+  ["V2 publish from any tag", "startsWith(github.ref, 'refs/tags/v2.0.0-beta.')", "startsWith(github.ref, 'refs/tags/v')"],
+  ["V2 publish on dispatch", "github.event_name == 'push' && ", "github.event_name == 'workflow_dispatch' && "],
+]) test(`rejects ${name}`, () => {
+  const source = v2PublishFixture.replace(before, after);
+  assert.notEqual(source, v2PublishFixture, `fixture replacement for ${name} did not apply`);
+  assert.throws(() => validateWorkflow(source, "v2-publish.yml"), /^Error: workflow_(?!yaml)/);
+});
 test("packages write is rejected on a job that is not a publish job", () => assert.throws(() => validateWorkflow(fixture.replace("runs-on: ubuntu-latest", "runs-on: ubuntu-latest\n    permissions: {contents: read, packages: write}")), /workflow_/));
 test("publish run allowlist accepts docker/builtins only", () => {
   assert.equal(publishRunAllowed("set -euo pipefail\n[[ \"$GITHUB_REF_NAME\" =~ ^v[0-9A-Za-z._-]+$ ]]\ndocker tag a b"), true);
