@@ -2,7 +2,9 @@
 //!
 //! - `GET /api/v2/whatsapp-chats`: availability, providers, how many owner
 //!   numbers a group gets, and the owner's provisions.
-//! - `POST /api/v2/whatsapp-chats`: create, or continue the same request.
+//! - `POST /api/v2/whatsapp-chats`: create, or continue the same request
+//!   (with `agent_timers` configured it also issues the chat's agent-timer
+//!   grant, see `whatsapp_chats`).
 //! - `POST /api/v2/whatsapp-chats/{request}/relay-registered`: the operator
 //!   registered the group with the scoped relay; the chat is ready.
 //! - `POST /api/v2/whatsapp-chats/{request}/archive`: mark a provision
@@ -219,6 +221,25 @@ async fn create(
                 .await
                 .map_err(|e| (S::Group, e))?;
             let conversation = provision.conversation_id.to_string();
+            // The agent timer grant before the rules that name it. Issued
+            // once: a retry keeps an issued grant whose file is installed.
+            if let Some(path) = chats::timer_grant_path(&config, &conversation) {
+                let refused = |_| (S::Group, StageError("agent_timer_grant_failed"));
+                let issued = state
+                    .store
+                    .agent_timer_grant(&credential, &owner, &provision.conversation_id)
+                    .await
+                    .map_err(refused)?
+                    .issued;
+                if !(issued && chats::timer_grant_installed(&path)) {
+                    let grant = state
+                        .store
+                        .issue_agent_timer_grant(&credential, &owner, &provision.conversation_id)
+                        .await
+                        .map_err(refused)?;
+                    chats::install_timer_grant(&path, &grant.grant).map_err(|e| (S::Group, e))?;
+                }
+            }
             let rules = chats::write_rules(
                 &config,
                 &conversation,
