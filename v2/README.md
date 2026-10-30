@@ -9,7 +9,7 @@ for its acceptance gates; an image build does not prove a provider answer.
 ## Docker quickstart
 
 Requires Linux x86_64, Docker Engine with Compose v2, public registry access,
-and your own Codex and Claude logins. **No prebuilt image is published: the
+and your own ChatGPT/Codex login (a Claude login is optional). **No prebuilt image is published: the
 install builds Orkestr from source on your machine, which takes roughly 10–30
 minutes** depending on the machine and registry speed. Allow at least 8 GiB RAM
 and 25 GiB free disk. ARM, Windows, macOS and desktop packages are deferred.
@@ -47,7 +47,8 @@ work and container logs report `provider_login_required`.
 ### Connect your own providers
 
 Run each official CLI **inside the container** and complete its browser login
-yourself. Do not paste provider tokens into an Orkestr conversation:
+yourself. Codex is required; skip the `login claude` line if you have no Claude
+account. Do not paste provider tokens into an Orkestr conversation:
 
 ```sh
 docker compose -f v2/packaging/oss/compose.yaml exec orkestr orkestr-beta login codex
@@ -64,7 +65,13 @@ stores belong to container UID 10001. Codex uses `/credentials/codex`; Claude us
 data. Logins persist across container replacement and are absent from images
 and CI evidence.
 
-`configure` verifies both CLI login states, asks privately for your **Orkestr**
+Codex must use a ChatGPT sign-in (`--device-auth`); an OpenAI API-key login is
+refused when the first window opens. With Claude signed in, Fast replies use
+Claude; without it, Fast uses Codex. Sign in to Claude **before** `configure` if
+you want it: the choice is recorded once and a configured install refuses
+reconfiguration.
+
+`configure` verifies the CLI login states, asks privately for your **Orkestr**
 username/password, then binds your owner and global conversation through the
 authenticated API. It generates a closed manager/role/timer configuration using
 fixed container paths. No API keys or host paths need to be pasted into JSON.

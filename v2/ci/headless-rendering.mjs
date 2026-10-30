@@ -70,7 +70,7 @@ try {
     if (expected) assert.deepEqual(mode, expected, 'Discovery changed across authentication/reload');
     if (mode.kind === 'configured') await page.waitForSelector('#composer');
     else {
-      await page.waitForFunction(() => document.body.textContent.includes('Deep is unavailable. Reload to check the server again.'));
+      await page.waitForFunction(() => document.body.textContent.includes('Models are not connected yet. Sign in to Codex inside the container'));
       assert.equal(await page.$('#composer'), null, 'Unconfigured beta exposed composer');
       assert.equal(await page.$('nav[aria-label="Main"]'), null, 'Unconfigured beta exposed scoped navigation');
     }
