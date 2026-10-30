@@ -48,7 +48,7 @@ def entry(root, mode):
 def pair_bytes(plan):
     path=Path(plan['pair']);require(pin(path)['sha256']==plan['pair_sha256'],'pair receipt digest mismatch')
     pair=json.loads(path.read_bytes());source=pair['source_commit']
-    require(pair['version'] in ('2.0.0-beta.1','2.0.0-beta.2','2.0.0-beta.3','2.0.0-beta.4') and re.fullmatch('[0-9a-f]{40}',source),'beta source/version required')
+    require(pair['version'] in ('2.0.0-beta.1','2.0.0-beta.2','2.0.0-beta.3','2.0.0-beta.4','2.0.0-beta.5') and re.fullmatch('[0-9a-f]{40}',source),'beta source/version required')
     require(pair['server']['profile']=='release' and pair['server']['default_features'] is True and
             pair['server']['features']==[] and pair['web']['profile']=='release' and
             pair['web']['features']==['web','execution-controls'] and

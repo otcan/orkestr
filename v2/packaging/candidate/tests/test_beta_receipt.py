@@ -56,7 +56,7 @@ class BetaReceiptTests(unittest.TestCase):
                                 'python@sha256:' + 'c' * 64, 19842)
 
     def test_beta_and_existing_rc_versions_seal_without_relabeling(self):
-        for version in ('2.0.0-beta.1', '2.0.0-beta.2', '2.0.0-beta.3', '2.0.0-beta.4', '2.0.0-rc.1', '2.0.0-rc.42'):
+        for version in ('2.0.0-beta.1', '2.0.0-beta.2', '2.0.0-beta.3', '2.0.0-beta.4', '2.0.0-beta.5', '2.0.0-rc.1', '2.0.0-rc.42'):
             with self.subTest(version=version):
                 value = self.seal(version)
                 self.assertEqual(receipt.verify(value, self.binary, self.ui)['version'], version)
@@ -66,7 +66,7 @@ class BetaReceiptTests(unittest.TestCase):
                 self.assertEqual(value['server']['features'], [])
 
     def test_only_explicit_betas_and_existing_positive_rc_numbers_are_supported(self):
-        for version in ('2.0.0-beta.0', '2.0.0-beta.5', '2.0.0-beta.01', '2.0.0-beta',
+        for version in ('2.0.0-beta.0', '2.0.0-beta.6', '2.0.0-beta.01', '2.0.0-beta',
                         '2.0.0-rc.0', '2.0.0-rc.01', '2.0.0', '2.0.1-beta.1',
                         'v2.0.0-beta.1', '2.0.0-beta.1+build', '2.0.0-rc.1+build',
                         '2.0.0-beta.1\n', '', None, 1, True):
@@ -89,7 +89,7 @@ class BetaReceiptTests(unittest.TestCase):
 
     def test_unsupported_receipt_relabel_is_refused_before_assembly(self):
         value = self.seal('2.0.0-rc.1')
-        for version in ('2.0.0-beta.5', '2.0.0', None):
+        for version in ('2.0.0-beta.6', '2.0.0', None):
             with self.subTest(version=version):
                 value['version'] = version
                 with self.assertRaisesRegex(RuntimeError, 'version required'):
