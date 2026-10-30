@@ -11,6 +11,7 @@ import uuid
 
 from .ledger import (DEFAULT_MAX_INPUT_AGE_S, DIGEST_NAMESPACE as DIGEST_REPLY_NAMESPACE, PROGRESS_LIMIT, WEB_TEXT_LIMIT,
                      no_reply)
+from . import failure_cause
 from . import instructions
 from . import continuation_guard
 from . import auto_steer
@@ -1154,6 +1155,7 @@ class Worker:
             failure = (deep.get("failure") or {}).get("class")
             if isinstance(failure, str) and re.fullmatch("[a-z_]{1,32}", failure):
                 reason += ":" + failure  # The provider's closed failure class.
+            failure_cause.note(data, deep)  # Kept if the run later reads cancelled.
             started = True
         elif data.get("origin") == "timer":
             return False  # timer_without_deep owns a timer without its Deep.
@@ -1475,9 +1477,10 @@ class Worker:
             # refusal (a failed, lost or never started run) also alerts the operator.
             timer = data.get("origin") == "timer"
             if self.ledger.refuse(data, str(error), alert=timer) and timer:
-                print("ALERT orkestr-v2-wa-adapter input_failed conversation=%s input=%s phase=%s reason=%s"
+                cause = failure_cause.cause(data, data["refused"]["reason"])
+                print("ALERT orkestr-v2-wa-adapter input_failed conversation=%s input=%s phase=%s reason=%s%s"
                       % (getattr(self.client, "conversation", "?"), data["remote_id"],
-                         data["refused"].get("phase"), data["refused"]["reason"]),
+                         data["refused"].get("phase"), data["refused"]["reason"], " cause=" + cause if cause else ""),
                       file=sys.stderr, flush=True)
         except Exception as error:
             # Transient failures retry the same frozen request (bounded by the
