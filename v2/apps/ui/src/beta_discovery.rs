@@ -8,6 +8,8 @@ use serde_json::json;
 struct Reply {
     status: u16,
     text: String,
+    #[serde(default)]
+    code: Option<String>,
 }
 
 #[component]
@@ -63,9 +65,47 @@ pub fn BetaDiscoveryGate(
                     ),
                 }
                 }
-                _ => notice.set("Deep is unavailable. Reload to check the server again.".into()),
+                Ok(reply) => {
+                    notice.set(unavailable_notice(reply.status, reply.code.as_deref()).into())
+                }
+                Err(_) => notice.set(unavailable_notice(0, None).into()),
             }
         }
     });
     rsx! { p { role: "status", "{notice}" } }
+}
+
+/// Signed-in first screen before any model is connected: tell the owner what to do.
+pub(crate) const MODELS_NOT_CONNECTED: &str = "Models are not connected yet. Sign in to Codex inside the container (Claude is optional), run configure, restart Orkestr, then reload this page. The V2 quickstart lists the exact commands.";
+const DEEP_UNAVAILABLE: &str = "Deep is unavailable. Reload to check the server again.";
+
+fn unavailable_notice(status: u16, code: Option<&str>) -> &'static str {
+    // beta_request.js surfaces only this fixed code from a refusal body.
+    match (status, code) {
+        (404, Some("beta_unconfigured")) => MODELS_NOT_CONNECTED,
+        _ => DEEP_UNAVAILABLE,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unconfigured_install_points_to_connecting_models() {
+        assert_eq!(
+            unavailable_notice(404, Some("beta_unconfigured")),
+            MODELS_NOT_CONNECTED
+        );
+    }
+
+    #[test]
+    fn other_failures_keep_the_retry_notice() {
+        assert_eq!(unavailable_notice(0, None), DEEP_UNAVAILABLE);
+        assert_eq!(unavailable_notice(404, None), DEEP_UNAVAILABLE);
+        assert_eq!(
+            unavailable_notice(503, Some("beta_unconfigured")),
+            DEEP_UNAVAILABLE
+        );
+    }
 }

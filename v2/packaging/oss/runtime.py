@@ -124,7 +124,10 @@ def configure():
     initialize()
     drop_child_capabilities()
     require(not (STATE / 'owner.json').exists(), 'already configured; automatic reconfiguration refused')
-    require(logged_in('codex') and logged_in('claude'), 'provider_login_required: run login codex and login claude')
+    # Codex runs the Deep/Worker roles and is required. Claude is optional: when
+    # its login is present it also serves Fast; otherwise Fast runs on Codex.
+    require(logged_in('codex'), 'provider_login_required: run login codex (login claude is optional)')
+    claude = logged_in('claude')
     credentials = {'username': input('Orkestr owner username: '), 'password': getpass.getpass('Orkestr owner password: ')}
     # The browser login supplies the authenticated owner UUID. No direct DB access.
     browser = request('/api/v2/browser/session', credentials, {'Origin': ORIGIN})
@@ -134,12 +137,18 @@ def configure():
     write_private(STATE / 'timer.token', machine['token'])
     write_private(STATE / 'timer.json', json.dumps({'schema_version': 1, 'machine_token_file': str(STATE / 'timer.token')}))
     write_private(STATE / 'owner.json', json.dumps({'owner_id': browser['owner_id'],
-                  'conversation_id': browser['global_conversation_id']}), 0)
-    print('Owner scope verified. Restart this Compose service to activate the generated provider configuration.')
+                  'conversation_id': browser['global_conversation_id'], 'claude': claude}), 0)
+    print('Owner scope verified. Providers: Codex' + (' and Claude.' if claude else
+          ' only (Claude not signed in; Fast uses Codex).'))
+    print('Restart this Compose service to activate the generated provider configuration.')
 
 
 def prepare(owner):
     import hashlib
+    owner = dict(owner)
+    # Configurations written before Claude became optional always included it.
+    claude = owner.pop('claude', True)
+    require(type(claude) is bool and set(owner) == {'owner_id', 'conversation_id'}, 'owner scope refused')
     pair = json.loads((ROOT / 'paired-artifacts.json').read_text())
     output = STATE / 'releases' / pair['source_commit']
     if output.exists():
@@ -168,6 +177,8 @@ def prepare(owner):
                        'workspace': str(STATE / 'workspaces/claude'), 'home': str(STATE / 'claude-home'),
                        'temporary': str(STATE / 'claude-tmp'), 'fast': True, 'default': False},
             'timer_config': str(STATE / 'timer.json')}
+    if not claude:
+        del plan['claude']
     # Root-generated closed plan, no operator executable/path/env selectors.
     plan_file = STATE / ('plan-' + pair['source_commit'] + '.json')
     write_private(plan_file, json.dumps(plan), 0)

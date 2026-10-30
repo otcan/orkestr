@@ -55,3 +55,9 @@ test('a window refusal of a restricted thread surfaces only its fixed code',asyn
  assert.deepEqual(await betaRequest(post,async()=>new Response('{"code":"restricted_conversation","message":"<unsafe>"}',{status:409})),{status:409,text:'',code:'restricted_conversation'});
  assert.deepEqual(await betaRequest(post,async()=>new Response('{"code":"window_conflict","message":"<unsafe>"}',{status:409})),{status:409,text:''});
 });
+test('unconfigured discovery surfaces only its fixed code',async()=>{
+ const read={route:'beta',method:'GET',body:null};
+ assert.deepEqual(await betaRequest(read,async()=>new Response('{"code":"beta_unconfigured","message":"<unsafe>"}',{status:404})),{status:404,text:'',code:'beta_unconfigured'});
+ assert.deepEqual(await betaRequest(read,async()=>new Response('{"code":"other","message":"<unsafe>"}',{status:404})),{status:404,text:''});
+ assert.deepEqual(await betaRequest(read,async()=>new Response('not json',{status:404})),{status:404,text:''});
+});

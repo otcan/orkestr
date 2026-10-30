@@ -59,15 +59,71 @@ class BootstrapTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'custody'):
                 runtime.private_directory(root / 'alias', uid=__import__('os').getuid())
 
-    def test_no_owner_authentication_before_both_provider_logins(self):
+    def test_no_owner_authentication_without_codex_login(self):
         runtime = load('runtime')
-        with tempfile.TemporaryDirectory() as scratch, patch.object(runtime, 'STATE', Path(scratch)), \
-                patch.object(runtime, 'initialize'), patch.object(runtime, 'drop_child_capabilities'), \
-                patch.object(runtime, 'logged_in', return_value=False), \
-                patch.object(runtime, 'request') as request:
-            with self.assertRaisesRegex(RuntimeError, 'provider_login_required'):
-                runtime.configure()
-            request.assert_not_called()
+        for claude in (False, True):
+            with tempfile.TemporaryDirectory() as scratch, patch.object(runtime, 'STATE', Path(scratch)), \
+                    patch.object(runtime, 'initialize'), patch.object(runtime, 'drop_child_capabilities'), \
+                    patch.object(runtime, 'logged_in', side_effect=lambda p, c=claude: p == 'claude' and c), \
+                    patch.object(runtime, 'request') as request:
+                with self.assertRaisesRegex(RuntimeError, 'provider_login_required'):
+                    runtime.configure()
+                request.assert_not_called()
+
+    def configure_with(self, runtime, scratch, claude):
+        owner = '7c0b5a59-58b2-4f0e-9d55-3a6b0a8c2f11'
+        session = {'owner_id': owner, 'global_conversation_id': 'c-1', 'token': 'synthetic'}
+        written = {}
+        with patch.object(runtime, 'STATE', Path(scratch)), patch.object(runtime, 'initialize'), \
+                patch.object(runtime, 'drop_child_capabilities'), \
+                patch.object(runtime, 'logged_in', side_effect=lambda p: p == 'codex' or claude), \
+                patch.object(runtime, 'request', return_value=session), \
+                patch('builtins.input', return_value='synthetic-owner'), \
+                patch('getpass.getpass', return_value='synthetic-password'), \
+                patch.object(runtime, 'write_private', side_effect=lambda path, value, uid=0: written.update({path.name: value})), \
+                patch('sys.stdout', new=io.StringIO()) as out:
+            runtime.configure()
+        return __import__('json').loads(written['owner.json']), out.getvalue()
+
+    def test_codex_alone_is_enough_and_claude_is_recorded(self):
+        runtime = load('runtime')
+        with tempfile.TemporaryDirectory() as scratch:
+            owner, output = self.configure_with(runtime, scratch, claude=False)
+            self.assertIs(owner['claude'], False)
+            self.assertIn('Codex only', output)
+            owner, output = self.configure_with(runtime, scratch, claude=True)
+            self.assertIs(owner['claude'], True)
+            self.assertIn('Codex and Claude', output)
+
+    def prepared_plan(self, runtime, owner):
+        import json
+        with tempfile.TemporaryDirectory() as scratch:
+            root, state = Path(scratch) / 'opt', Path(scratch) / 'state'
+            (root / 'providers').mkdir(parents=True)
+            (state / 'releases').mkdir(parents=True)
+            (root / 'paired-artifacts.json').write_text(json.dumps({'source_commit': 'a' * 40}))
+            for name in ('codex', 'codex-code-mode-host'):
+                (root / 'providers' / name).write_bytes(b'synthetic')
+            plans = {}
+            def capture(path, value, uid=0):
+                plans['plan'] = json.loads(value)
+            with patch.object(runtime, 'ROOT', root), patch.object(runtime, 'STATE', state), \
+                    patch.object(runtime, 'write_private', side_effect=capture), \
+                    patch.object(runtime.subprocess, 'run'):
+                runtime.prepare(owner)
+            return plans['plan']
+
+    def test_plan_includes_claude_only_when_configured(self):
+        runtime = load('runtime')
+        scope = {'owner_id': 'o', 'conversation_id': 'c'}
+        self.assertNotIn('claude', self.prepared_plan(runtime, {**scope, 'claude': False}))
+        self.assertIn('claude', self.prepared_plan(runtime, {**scope, 'claude': True}))
+        # owner.json written before Claude became optional keeps its Claude plan.
+        legacy = self.prepared_plan(runtime, dict(scope))
+        self.assertIn('claude', legacy)
+        self.assertEqual((legacy['owner_id'], legacy['conversation_id']), ('o', 'c'))
+        with self.assertRaisesRegex(RuntimeError, 'owner scope refused'):
+            self.prepared_plan(runtime, {**scope, 'claude': 'yes'})
 
     def test_inherited_credentials_never_reach_native(self):
         runtime = load('runtime')
