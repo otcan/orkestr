@@ -61,6 +61,10 @@ def schema(root, source):
     return result
 
 
+# ELF e_machine (64-bit little-endian) -> receipt target.
+TARGETS = {b'\x3e\x00': 'linux-x86_64', b'\xb7\x00': 'linux-aarch64'}
+
+
 def seal(checkout, binary, ui, source, version, profile, features, required_glibc, execution_controls=False):
     require(re.fullmatch(r'[0-9a-f]{40}', source), 'exact full source required')
     validate_version(version)
@@ -70,10 +74,10 @@ def seal(checkout, binary, ui, source, version, profile, features, required_glib
     require(not git(checkout, 'status', '--porcelain', '--untracked-files=normal'), 'clean tracked producer checkout required')
     require(binary.is_file() and not binary.is_symlink(), 'regular built server required')
     header = binary.read_bytes()[:20]
-    require(header[:6] == b'\x7fELF\x02\x01' and header[18:20] == b'\x3e\x00', 'Linux x86_64 ELF required')
+    require(header[:6] == b'\x7fELF\x02\x01' and header[18:20] in TARGETS, 'Linux x86_64 or aarch64 ELF required')
     web = inventory(ui)
     require(all(re.fullmatch(r'[a-zA-Z0-9_-]+', f) for f in features), 'explicit feature names required')
-    value = {'format': FORMAT, 'version': version, 'source_commit': source, 'target': 'linux-x86_64',
+    value = {'format': FORMAT, 'version': version, 'source_commit': source, 'target': TARGETS[header[18:20]],
             'server': {'sha256': sha(binary), 'bytes': binary.stat().st_size, 'profile': profile,
                        'features': sorted(set(features)), 'default_features': True},
             'web': {'files': web, 'inventory_sha256': digest(web), 'profile': 'release',
@@ -94,7 +98,7 @@ def seal(checkout, binary, ui, source, version, profile, features, required_glib
 
 
 def verify(receipt, binary, ui):
-    require(receipt['format'] == FORMAT and receipt['target'] == 'linux-x86_64', 'supported paired receipt required')
+    require(receipt['format'] == FORMAT and receipt['target'] in TARGETS.values(), 'supported paired receipt required')
     validate_version(receipt.get('version'))
     require(re.fullmatch(r'[0-9a-f]{40}', receipt['source_commit']), 'full paired source required')
     require(not binary.is_symlink() and sha(binary) == receipt['server']['sha256'] and

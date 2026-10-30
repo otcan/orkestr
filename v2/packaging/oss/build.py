@@ -2,12 +2,15 @@
 import hashlib
 import json
 import os
+import platform
 from pathlib import Path
 import subprocess
 import sys
 import tomllib
 
 ROOT = Path('/src')
+# Native build only: the container's machine selects the server/bundle target.
+TARGETS = {'x86_64': 'x86_64-unknown-linux-gnu', 'aarch64': 'aarch64-unknown-linux-gnu'}
 OUT = Path('/artifacts')
 
 
@@ -16,6 +19,9 @@ def run(argv, **kwargs):
 
 
 def main():
+    target = TARGETS.get(platform.machine())
+    if target is None:
+        raise SystemExit('unsupported build architecture: Linux x86_64 or aarch64 required')
     OUT.mkdir()
     source = subprocess.check_output(['git', '-C', str(ROOT), 'rev-parse', 'HEAD'], text=True).strip()
     version = tomllib.loads((ROOT / 'v2/Cargo.toml').read_text())['workspace']['package']['version']
@@ -36,7 +42,7 @@ def main():
                         '2.36', execution_controls=True)
     (OUT / 'paired-artifacts.json').write_text(json.dumps(pair, indent=2) + '\n')
     run([sys.executable, '-B', str(ROOT / 'v2/packaging/desktop/build_bundle.py'),
-         '--out', str(OUT / 'distribution'), '--target', 'x86_64-unknown-linux-gnu',
+         '--out', str(OUT / 'distribution'), '--target', target,
          '--server-bin', str(OUT / 'server'), '--ui-dist', str(OUT / 'ui')])
     shutil.copy2(OUT / 'paired-artifacts.json', OUT / 'distribution/paired-artifacts.json')
     archives = sorted((OUT / 'distribution').glob('*.tar.gz'))

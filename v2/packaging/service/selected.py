@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 from pathlib import Path
+import platform
 import re
 import shlex
 import shutil
@@ -31,6 +32,13 @@ def write(path, data, gid, executable=False, mode=None):
     with os.fdopen(fd,'wb') as stream:
         os.fchown(stream.fileno(),0,gid);os.fchmod(stream.fileno(),mode if mode is not None else (0o550 if executable else 0o440))
         stream.write(data);stream.flush();os.fsync(stream.fileno())
+
+
+def host_machine():
+    """ELF e_machine every selected artifact must carry: exactly this host's."""
+    machines={'x86_64':b'\x3e\x00','aarch64':b'\xb7\x00'}
+    require(platform.machine() in machines,'Linux x86_64 or aarch64 host required')
+    return machines[platform.machine()]
 
 
 def directory(path, gid, mode=0o750):
@@ -71,7 +79,7 @@ def pair_bytes(plan):
         artifacts.append(host)
     for path in artifacts:
         blob=path.read_bytes()[:20]
-        require(blob[:6]==b'\x7fELF\x02\x01' and blob[18:20]==b'\x3e\x00','Linux x86_64 ELF required')
+        require(blob[:6]==b'\x7fELF\x02\x01' and blob[18:20]==host_machine(),'native Linux ELF for this host required')
     return pair
 
 

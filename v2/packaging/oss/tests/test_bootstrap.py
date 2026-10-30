@@ -152,5 +152,33 @@ class LocalOriginTests(unittest.TestCase):
         self.assertIn('SOURCE_COMMIT must be the exact 40-character public commit', dockerfile)
 
 
+    def test_each_architecture_has_its_own_complete_pins(self):
+        fetch = load('fetch_providers')
+        names = lambda machine: [entry[0] for entry in fetch.assets(machine)]
+        self.assertEqual(names('x86_64'), names('aarch64'))
+        for machine, marker in (('x86_64', 'x86_64'), ('aarch64', 'aarch64')):
+            for name, url, algorithm, expected in fetch.assets(machine):
+                self.assertTrue(url.startswith('https://'))
+                self.assertIn(marker if 'codex' in url else ('x64' if machine == 'x86_64' else 'arm64'), url)
+                self.assertEqual(len(expected), {'sha256': 64, 'sha512': 128}[algorithm])
+        self.assertFalse({e[3] for e in fetch.assets('x86_64')} & {e[3] for e in fetch.assets('aarch64')})
+        with self.assertRaises(ValueError):
+            fetch.assets('armv7l')
+
+    def test_wrong_architecture_cli_refused(self):
+        fetch = load('fetch_providers')
+        raw = io.BytesIO()
+        with tarfile.open(fileobj=raw, mode='w:gz') as archive:
+            data = b'\x7fELF\x02\x01' + bytes(12) + b'\x3e\x00'
+            entry = tarfile.TarInfo('codex')
+            entry.size = len(data)
+            archive.addfile(entry, io.BytesIO(data))
+        self.assertEqual(fetch.extract(raw.getvalue(), 'codex', 'x86_64')[18:20], b'\x3e\x00')
+        with self.assertRaises(ValueError):
+            fetch.extract(raw.getvalue(), 'codex', 'aarch64')
+
+    def test_compose_builds_for_the_native_host_platform(self):
+        self.assertNotRegex((HERE / 'compose.yaml').read_text(), r'(?m)^\s*platform:')
+
 if __name__ == '__main__':
     unittest.main()

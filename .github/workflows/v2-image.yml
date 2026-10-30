@@ -14,13 +14,26 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   linux-image:
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # Native builds only (no QEMU): amd64 and arm64 GitHub-hosted runners.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    name: linux-image (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
+      - name: Runner architecture matches the matrix
+        run: |
+          test "$(docker info --format '{{.Architecture}}')" = "$([ '${{ matrix.arch }}' = arm64 ] && echo aarch64 || echo x86_64)"
       - name: Failure-oriented bootstrap checks
         run: python3 -I -S -B -m unittest discover -s v2/packaging/oss/tests -v
       - name: Build only from anonymous public source (no push)
@@ -57,7 +70,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: v2-linux-candidate-${{ github.run_id }}
+          name: v2-linux-${{ matrix.arch }}-candidate-${{ github.run_id }}
           path: |
             ${{ runner.temp }}/fresh-install.json
             ${{ runner.temp }}/bundle/*.tar.gz
