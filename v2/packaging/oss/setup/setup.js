@@ -16,7 +16,13 @@ async function call(method, path, body) {
   return { status: response.status, value };
 }
 
-function notice(text) { $('notice').textContent = text; }
+// A refusal stays visible for a few seconds instead of being replaced by the next poll.
+let sticky = null;
+function notice(text) {
+  if (sticky && Date.now() < sticky.until) return;
+  $('notice').textContent = text;
+}
+function flash(text) { sticky = null; notice(text); sticky = { until: Date.now() + 8000 }; }
 function minutes(seconds) { return Math.max(1, Math.round(seconds / 60)) + ' min'; }
 const ERRORS = {
   rate_limited: 'Please wait 30 seconds before starting another sign-in.',
@@ -33,8 +39,9 @@ function explain(result) { return ERRORS[result.value.error] || 'Setup request r
 function provider(name, data) {
   const login = data.login;
   const active = login && (login.state === 'waiting' || login.state === 'verifying');
+  const failed = login && ['failed', 'expired'].includes(login.state);
   $(name + '-state').textContent = data.signed_in ? 'signed in' : active ? 'waiting for you' :
-    login && login.state === 'starting' ? 'starting…' : 'not signed in';
+    login && login.state === 'starting' ? 'starting…' : failed ? 'sign-in did not finish; try again' : 'not signed in';
   $(name + '-start').hidden = data.signed_in || active;
   $(name + '-device').hidden = data.signed_in || !active;
   if (active) {
@@ -89,7 +96,7 @@ async function start(name) {
   $(name + '-button').disabled = true;
   const result = await call('POST', '/api/v2/oss-setup/login/' + name + '/start', {});
   $(name + '-button').disabled = false;
-  if (result.status !== 202) notice(explain(result));
+  if (result.status !== 202) flash(explain(result));
   refresh();
 }
 
@@ -109,7 +116,7 @@ async function init() {
     event.preventDefault();
     const result = await call('POST', '/api/v2/oss-setup/login/claude/code', { code: $('claude-code').value.trim() });
     $('claude-code').value = '';
-    if (result.status !== 202) notice(explain(result));
+    if (result.status !== 202) flash(explain(result));
     refresh();
   });
   $('finish-form').addEventListener('submit', async (event) => {
@@ -120,7 +127,7 @@ async function init() {
     $('password').value = '';
     $('finish-button').disabled = false;
     if (result.status === 202) { finishing = true; return waitForRestart(); }
-    notice(explain(result));
+    flash(explain(result));
   });
   await refresh();
   setInterval(refresh, 3000);

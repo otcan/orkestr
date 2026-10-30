@@ -220,7 +220,8 @@ try:
         if not candidate.name.isdigit():continue
         try:status=dict(line.split(':',1) for line in (candidate/'status').read_text().splitlines())
         except OSError:continue
-        if set(status['Uid'].split())=={'10001'}:
+        # The probe's own sleep is a docker-exec descendant, not one of PID1's.
+        if set(status['Uid'].split())=={'10001'} and candidate.name!=str(p.pid):
             dropped+=1
             assert all(int(status[key].strip(),16)==0 for key in ('CapInh','CapPrm','CapEff','CapBnd','CapAmb'))
             assert status['NoNewPrivs'].strip()=='1'
