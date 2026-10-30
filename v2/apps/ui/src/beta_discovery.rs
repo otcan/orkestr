@@ -8,6 +8,8 @@ use serde_json::json;
 struct Reply {
     status: u16,
     text: String,
+    #[serde(default)]
+    code: Option<String>,
 }
 
 #[component]
@@ -63,8 +65,10 @@ pub fn BetaDiscoveryGate(
                     ),
                 }
                 }
-                Ok(reply) => notice.set(unavailable_notice(reply.status, &reply.text).into()),
-                Err(_) => notice.set(unavailable_notice(0, "").into()),
+                Ok(reply) => {
+                    notice.set(unavailable_notice(reply.status, reply.code.as_deref()).into())
+                }
+                Err(_) => notice.set(unavailable_notice(0, None).into()),
             }
         }
     });
@@ -75,13 +79,10 @@ pub fn BetaDiscoveryGate(
 pub(crate) const MODELS_NOT_CONNECTED: &str = "Models are not connected yet. Sign in to Codex inside the container (Claude is optional), run configure, restart Orkestr, then reload this page. The V2 quickstart lists the exact commands.";
 const DEEP_UNAVAILABLE: &str = "Deep is unavailable. Reload to check the server again.";
 
-fn unavailable_notice(status: u16, text: &str) -> &'static str {
-    #[derive(Deserialize)]
-    struct Refusal {
-        code: String,
-    }
-    match serde_json::from_str::<Refusal>(text) {
-        Ok(refusal) if status == 404 && refusal.code == "beta_unconfigured" => MODELS_NOT_CONNECTED,
+fn unavailable_notice(status: u16, code: Option<&str>) -> &'static str {
+    // beta_request.js surfaces only this fixed code from a refusal body.
+    match (status, code) {
+        (404, Some("beta_unconfigured")) => MODELS_NOT_CONNECTED,
         _ => DEEP_UNAVAILABLE,
     }
 }
@@ -92,19 +93,18 @@ mod tests {
 
     #[test]
     fn unconfigured_install_points_to_connecting_models() {
-        let body = r#"{"code":"beta_unconfigured","message":"Beta execution is not configured","request_id":"r","retryable":false}"#;
-        assert_eq!(unavailable_notice(404, body), MODELS_NOT_CONNECTED);
+        assert_eq!(
+            unavailable_notice(404, Some("beta_unconfigured")),
+            MODELS_NOT_CONNECTED
+        );
     }
 
     #[test]
     fn other_failures_keep_the_retry_notice() {
-        assert_eq!(unavailable_notice(0, ""), DEEP_UNAVAILABLE);
+        assert_eq!(unavailable_notice(0, None), DEEP_UNAVAILABLE);
+        assert_eq!(unavailable_notice(404, None), DEEP_UNAVAILABLE);
         assert_eq!(
-            unavailable_notice(503, r#"{"code":"unavailable"}"#),
-            DEEP_UNAVAILABLE
-        );
-        assert_eq!(
-            unavailable_notice(404, r#"{"code":"not_found"}"#),
+            unavailable_notice(503, Some("beta_unconfigured")),
             DEEP_UNAVAILABLE
         );
     }
