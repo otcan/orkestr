@@ -135,6 +135,29 @@ Per-run broker injection is the follow-up, as for thread asks.
 Nothing is enabled live by this change: no grant exists until the operator
 provisions one.
 
+### New WhatsApp chats
+
+A chat made with "New WhatsApp chat" (`whatsapp_chats.rs`) gets the tool
+from its first message when the server's private `whatsapp-chats.json` has
+
+```json
+"agent_timers": {"grant_dir": "/var/lib/orkestr-v2-pilot/agent-timer-grants",
+                 "tool": "/usr/local/libexec/orkestr-agent-timer/agent_timer.py",
+                 "v2_url": "http://127.0.0.1:19822"}
+```
+
+(it needs `rules_dir`). Before the adapter binding is written, the server
+issues the conversation's grant once (a retry keeps an issued grant whose file
+is installed) and installs it as `<grant_dir>/<conversation>.grant`, 0600 and
+owned by the service user, in a directory of that user that is neither group-
+nor world-writable (created 0700 if missing). The generated chat rules then
+carry "Timers of this chat (agent timer tool)" with this conversation's
+command instead of "ask Root". The group is created with the owner's numbers
+only, so the chat is owner-only when the grant is issued; revoke the grant
+if other members are added later. Without `agent_timers` nothing changes.
+Older servers refuse the key (`deny_unknown_fields`): add it only after the
+release with this change is live.
+
 ## Deployment and rollback
 
 Migration 79 adds three tables and nothing else. It needs migration 78 (#341,

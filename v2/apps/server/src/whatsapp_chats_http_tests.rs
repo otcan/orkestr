@@ -460,6 +460,104 @@ async fn new_chat_is_wired_to_v2_once_and_resumes_after_a_refusal() {
 }
 
 #[tokio::test]
+async fn a_new_chat_gets_its_own_agent_timer_grant_once() {
+    let (root, mut state, headers) = fixture().await;
+    let v1_peer: Shared = Default::default();
+    let adapter_peer: Shared = Default::default();
+    let v1_url = serve(v1_peer.clone(), V1_TOKEN, false).await;
+    let adapter_url = serve(adapter_peer.clone(), ADAPTER_TOKEN, true).await;
+    state.desktop_broker = Some(Arc::new(
+        desktop_broker::Broker::new(&v1_url, V1_TOKEN.into()).unwrap(),
+    ));
+    let rules_dir = root.join("rules");
+    std::fs::create_dir(&rules_dir).unwrap();
+    let grant_dir = root.join("grants");
+    state.whatsapp_chats = Some(Arc::new(
+        chats::synthetic(&adapter_url, ADAPTER_TOKEN)
+            .with_rules_dir(rules_dir.to_str().unwrap())
+            .with_agent_timers(grant_dir.to_str().unwrap()),
+    ));
+    let credential = browser::credential(&headers).unwrap_or_else(|e| panic!("{}", e.1));
+    let owner = browser::owner(&state, &headers)
+        .await
+        .unwrap_or_else(|e| panic!("{}", e.1));
+
+    // The adapter refuses first: the grant is issued, the retry keeps it.
+    adapter_peer.lock().unwrap().adapter_refuses = true;
+    let (status, chat) = post(&state, &headers, request(7, "Synthetic timers")).await;
+    assert_eq!(
+        (status, chat.error.as_deref()),
+        (StatusCode::ACCEPTED, Some("adapter_binding_conflict"))
+    );
+    let grant_path = grant_dir.join(format!("{}.grant", chat.conversation_id));
+    let first = std::fs::read_to_string(&grant_path).unwrap();
+    let (status, chat) = post(&state, &headers, request(7, "Synthetic timers")).await;
+    assert_eq!(status, StatusCode::CREATED, "{chat:?}");
+    assert_eq!(std::fs::read_to_string(&grant_path).unwrap(), first);
+    let grant = state
+        .store
+        .agent_timer_grant(&credential, &owner, &chat.conversation_id)
+        .await
+        .unwrap();
+    assert_eq!((grant.issued, grant.generation), (true, 1), "issued once");
+    assert!(chats::timer_grant_installed(&grant_path));
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&grant_path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
+    // The installed grant is the conversation's: the agent route accepts it
+    // (no running Deep turn here, so the answer is that refusal, not 401).
+    assert!(matches!(
+        state
+            .store
+            .agent_timers(first.trim(), &chat.conversation_id)
+            .await,
+        Err(ResourceError::Conflict("agent_timer_no_running_turn"))
+    ));
+    assert!(matches!(
+        state
+            .store
+            .agent_timers(&"0".repeat(64), &chat.conversation_id)
+            .await,
+        Err(ResourceError::Unauthorized)
+    ));
+    // The rules name this conversation's timer command.
+    let rules =
+        std::fs::read_to_string(rules_dir.join(format!("chat-{}.md", chat.conversation_id)))
+            .unwrap();
+    assert!(rules.contains("Timers of this chat (agent timer tool)"));
+    assert!(rules.contains(&format!("--conversation {} \\\n", chat.conversation_id)));
+    assert!(rules.contains(&format!(
+        "ORKESTR_V2_AGENT_TIMER_GRANT_DIR={} \\\n",
+        grant_dir.to_str().unwrap()
+    )));
+    assert!(
+        !rules.contains(&first.trim().to_owned()),
+        "never the grant value"
+    );
+    // The binding is still unverified with no participants.
+    let binding = adapter_peer.lock().unwrap().bindings[&chat.remote_thread_id].clone();
+    assert_eq!(binding["owner_only_verified"], false);
+    // A grant directory another chat could write to is refused at the stage.
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&grant_dir, std::fs::Permissions::from_mode(0o777)).unwrap();
+    }
+    let (status, refused) = post(&state, &headers, request(8, "Synthetic open dir")).await;
+    assert_eq!(
+        (status, refused.stage, refused.error.as_deref()),
+        (
+            StatusCode::ACCEPTED,
+            WhatsAppChatStage::Group,
+            Some("agent_timer_grant_failed")
+        )
+    );
+    state.store.close().await;
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
 async fn creation_is_browser_only_and_bounded() {
     let (root, state, headers) = fixture().await;
     let mut bearer = HeaderMap::new();

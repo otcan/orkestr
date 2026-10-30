@@ -11,6 +11,12 @@
 //!    no extra participants, `owner_only_verified: false` (an operator sets it
 //!    after a membership check) and, with `rules_dir`, a generated chat rules
 //!    file as `instructions_path`;
+//!    with `agent_timers`, the conversation's agent-timer grant (TASK-52) is
+//!    issued once first and installed as `<grant_dir>/<conversation>.grant`
+//!    (0600), and the rules carry this chat's `agent_timer.py` command, so the
+//!    chat's Deep can list, pause, resume, skip and cancel its own timers from
+//!    the first message (the group holds only the owner's numbers, so the
+//!    chat is owner-only when the grant is issued);
 //! 4. the V1 delegated binding (`PUT /api/threads/:id/binding` with
 //!    `remoteBackend`, `remoteThreadId`, runtime and mirror on, legacy mirror
 //!    off).
@@ -24,7 +30,7 @@ use crate::desktop_broker::{Broker, BrokerError};
 use orkestr_v2_contracts::valid_v1_thread_id;
 use serde::Deserialize;
 use serde_json::{json, Value};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Environment variable naming the private configuration file.
 pub const CONFIG_ENV: &str = "ORKESTR_V2_WHATSAPP_CHATS_CONFIG";
@@ -62,6 +68,47 @@ struct FileConfig {
     /// Without it a new binding has no `instructions_path`.
     #[serde(default)]
     rules_dir: Option<String>,
+    /// The agent timer tool for new chats (needs `rules_dir`).
+    #[serde(default)]
+    agent_timers: Option<AgentTimers>,
+}
+
+/// Agent timer tool of a new chat (TASK-52, `docs/v2/agent-timers.md`).
+#[derive(Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct AgentTimers {
+    /// Private directory of the service user (created 0700 if missing) for
+    /// `<conversation>.grant`; `agent_timer.py` reads it as
+    /// `ORKESTR_V2_AGENT_TIMER_GRANT_DIR`.
+    pub grant_dir: String,
+    /// The installed `agent_timer.py`.
+    pub tool: String,
+    /// Loopback V2 URL the tool calls (`http://127.0.0.1:<port>`).
+    pub v2_url: String,
+}
+
+/// Paths and the URL go into a shell command of the rules file: plain
+/// absolute paths only.
+fn shell_path(value: &str) -> bool {
+    value.starts_with('/')
+        && value.len() <= 512
+        && !value.contains("..")
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"/._-".contains(&b))
+}
+fn loopback_url(value: &str) -> bool {
+    ["http://127.0.0.1:", "http://localhost:"]
+        .iter()
+        .find_map(|prefix| value.strip_prefix(prefix))
+        .is_some_and(|port| {
+            (1..=5).contains(&port.len()) && port.bytes().all(|b| b.is_ascii_digit())
+        })
+}
+impl AgentTimers {
+    fn valid(&self) -> bool {
+        shell_path(&self.grant_dir) && shell_path(&self.tool) && loopback_url(&self.v2_url)
+    }
 }
 fn default_outstanding() -> u32 {
     24
@@ -109,6 +156,7 @@ pub(crate) struct WhatsAppChats {
     attachments: bool,
     fast_reply_policy: String,
     rules_dir: Option<String>,
+    agent_timers: Option<AgentTimers>,
     /// One provisioning run at a time (V1 group creation is not concurrent-safe).
     pub(crate) lock: tokio::sync::Mutex<()>,
 }
@@ -149,6 +197,10 @@ impl WhatsAppChats {
                 .as_deref()
                 .is_some_and(|d| !rules_dir_valid(d))
             || config
+                .agent_timers
+                .as_ref()
+                .is_some_and(|t| !t.valid() || config.rules_dir.is_none())
+            || config
                 .receiving_account_id
                 .iter()
                 .chain(config.reply_account_id.iter())
@@ -177,6 +229,7 @@ impl WhatsAppChats {
             attachments: config.attachments,
             fast_reply_policy: config.fast_reply_policy,
             rules_dir: config.rules_dir,
+            agent_timers: config.agent_timers,
             lock: tokio::sync::Mutex::new(()),
         })
     }
@@ -246,9 +299,24 @@ pub(crate) fn group_body(chats: &WhatsAppChats, thread_id: &str, name: &str) -> 
 /// The generated chat rules for a new chat. The adapter puts a "read this
 /// file" line on every intake, so a new chat starts with the same onboarding
 /// rules as a hand-provisioned one. Operators extend it (desktop, desk-login,
-/// business rules); a retry never overwrites it.
-pub(crate) fn rules_text(name: &str, conversation: &str, thread_id: &str, chat_id: &str) -> String {
+/// business rules); a retry never overwrites it. With `timers` the Timers
+/// section is the agent timer tool of this conversation, otherwise Root
+/// changes timers.
+pub(crate) fn rules_text(
+    name: &str,
+    conversation: &str,
+    thread_id: &str,
+    chat_id: &str,
+    timers: Option<&AgentTimers>,
+) -> String {
     let name: String = name.chars().filter(|c| !c.is_control()).collect();
+    let timers = match timers {
+        Some(timers) => timer_rules(conversation, timers),
+        None => "Timers\n\
+- This chat runs on V2. Do not create, pause, change or delete timers through\n\
+  the V1 API or CLI; ask Root for any timer change.\n"
+            .to_owned(),
+    };
     format!(
         "Chat rules: {name}\n\
 \n\
@@ -272,10 +340,134 @@ Desktop and logins\n\
 - Login pages: use desk-login only after Root has added it to this file for a\n\
   granted desktop. Never type, print or ask for passwords.\n\
 \n\
-Timers\n\
-- This chat runs on V2. Do not create, pause, change or delete timers through\n\
-  the V1 API or CLI; ask Root for any timer change.\n"
+{timers}"
     )
+}
+
+/// The Timers section with this conversation's agent timer command. The
+/// heading is the marker host provisioning looks for.
+pub(crate) fn timer_rules(conversation: &str, timers: &AgentTimers) -> String {
+    let AgentTimers {
+        grant_dir,
+        tool,
+        v2_url,
+    } = timers;
+    format!(
+        r#"Timers of this chat (agent timer tool)
+
+A Deep turn of this chat may list, create, cancel, pause, resume and
+skip-next THIS chat's own timers (V2 conversation {conversation}) with the
+agent timer tool below, when the owner asks for it or this file says so. It
+reaches only this chat's timers: never name, read or use another chat's
+conversation or grant. Stop, rollback and deleting timers stay with the
+owner. Fast never runs this tool (Fast says Deep handles it). Never use the
+V1 timer API or CLI (/api/threads/.../timers, api-client.js, `orkestr
+timers`, deltimers.mjs): V1 refuses changes to V2 timers.
+
+Timer command (put the subcommand on the `set --` line):
+
+```bash
+(
+  set -e
+  set -- list   # or: create --label "<label>" --at <ISO with offset> --text "<what the run must do>"
+                # or: create --label "<label>" --daily HH:MM --timezone Europe/Berlin --text "..."
+                # or: cancel "<label or id>" | pause "<label>" --until <ISO> | resume "<label>" | skip-next "<label>"
+  ORKESTR_V2_AGENT_TIMER_GRANT_DIR={grant_dir} \
+  PYTHONDONTWRITEBYTECODE=1 python3 -I -S -B \
+    {tool} \
+    --v2-url {v2_url} \
+    --conversation {conversation} \
+    "$@"
+)
+```
+
+The tool works only during a running Deep turn of this chat. The grant file
+is private: never print, copy or cat it, never list its directory, enable
+shell tracing or dump the environment. The tool prints JSON on stdout and one
+summary line on stderr; relay the summary line. Times need an explicit
+offset (`+01:00`, or `Z`).
+
+Turns started by a timer may list, cancel, pause, resume and skip timers and
+create one-shot timers (`--at`), never a recurring one (`--daily`; refused
+with `agent_timer_timer_turn`).
+
+Retries: every change prints its request_key (stderr) before it is sent. After
+a failure or a lost answer, rerun the SAME command with `--request-key <that
+key>`, never with a new key (for skip-next a new key would skip a second run).
+
+Limits: one-shot at least 2 minutes ahead, recurring at most every 30
+minutes, pauses at most 60 days, 12 creates per hour and 24 per 24 hours, 32
+live agent-created timers. If the tool refuses, tell the owner the code in
+one line, do not retry in a loop, and never fall back to V1.
+"#
+    )
+}
+
+/// `<grant_dir>/<conversation>.grant` when new chats get the timer tool.
+pub(crate) fn timer_grant_path(chats: &WhatsAppChats, conversation: &str) -> Option<PathBuf> {
+    let timers = chats.agent_timers.as_ref()?;
+    conversation
+        .bytes()
+        .all(|b| b.is_ascii_hexdigit() || b == b'-')
+        .then(|| Path::new(&timers.grant_dir).join(format!("{conversation}.grant")))
+}
+
+fn service_uid() -> u32 {
+    use std::os::unix::fs::MetadataExt;
+    std::fs::metadata("/proc/self")
+        .map(|m| m.uid())
+        .unwrap_or(u32::MAX)
+}
+
+/// A grant file `agent_timer.py` accepts: a private regular file of the
+/// service user holding 64 lowercase hex digits.
+pub(crate) fn timer_grant_installed(path: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    let Ok(meta) = std::fs::symlink_metadata(path) else {
+        return false;
+    };
+    meta.file_type().is_file()
+        && meta.mode() & 0o077 == 0
+        && meta.uid() == service_uid()
+        && std::fs::read_to_string(path).is_ok_and(|v| {
+            let v = v.trim();
+            v.len() == 64 && v.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+        })
+}
+
+/// Installs the grant atomically (0600, replacing an unusable file). The
+/// directory is created 0700 when missing; an existing one must be the
+/// service user's and neither group- nor world-writable.
+pub(crate) fn install_timer_grant(path: &Path, grant: &str) -> Result<(), StageError> {
+    use std::io::Write;
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt};
+    let failed = StageError("agent_timer_grant_failed");
+    let dir = path.parent().ok_or(failed)?;
+    if !dir.exists() {
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(dir)
+            .map_err(|_| failed)?;
+    }
+    let meta = std::fs::symlink_metadata(dir).map_err(|_| failed)?;
+    if !meta.file_type().is_dir() || meta.uid() != service_uid() || meta.mode() & 0o022 != 0 {
+        return Err(failed);
+    }
+    let temp = dir.join(format!(".grant-{}.tmp", uuid::Uuid::new_v4()));
+    let written = (|| -> std::io::Result<()> {
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&temp)?;
+        file.write_all(grant.as_bytes())?;
+        file.sync_all()?;
+        std::fs::rename(&temp, path)
+    })();
+    if written.is_err() {
+        let _ = std::fs::remove_file(&temp);
+    }
+    written.map_err(|_| failed)
 }
 
 /// Writes the chat's rules file once (`<rules_dir>/chat-<conversation>.md`,
@@ -312,7 +504,16 @@ pub(crate) fn write_rules(
             .create_new(true)
             .mode(0o640)
             .open(&temp)?;
-        file.write_all(rules_text(name, conversation, thread_id, chat_id).as_bytes())?;
+        file.write_all(
+            rules_text(
+                name,
+                conversation,
+                thread_id,
+                chat_id,
+                chats.agent_timers.as_ref(),
+            )
+            .as_bytes(),
+        )?;
         file.sync_all()?;
         match std::fs::hard_link(&temp, &path) {
             Err(e) if e.kind() != std::io::ErrorKind::AlreadyExists => Err(e),
@@ -590,6 +791,7 @@ pub(crate) fn synthetic(adapter_url: &str, token: &str) -> WhatsAppChats {
         attachments: true,
         fast_reply_policy: default_fast_reply_policy(),
         rules_dir: None,
+        agent_timers: None,
     })
     .unwrap()
 }
@@ -598,6 +800,14 @@ pub(crate) fn synthetic(adapter_url: &str, token: &str) -> WhatsAppChats {
 impl WhatsAppChats {
     pub(crate) fn with_rules_dir(mut self, dir: &str) -> Self {
         self.rules_dir = Some(dir.into());
+        self
+    }
+    pub(crate) fn with_agent_timers(mut self, grant_dir: &str) -> Self {
+        self.agent_timers = Some(AgentTimers {
+            grant_dir: grant_dir.into(),
+            tool: "/usr/local/libexec/orkestr-agent-timer/agent_timer.py".into(),
+            v2_url: "http://127.0.0.1:19822".into(),
+        });
         self
     }
 }
@@ -635,6 +845,112 @@ mod onboarding_tests {
         assert!(write_rules(&chats, "c", "t", "g@g.us", "n")
             .unwrap()
             .is_none());
+    }
+
+    #[test]
+    fn agent_timers_are_validated_and_need_a_rules_dir() {
+        let timers = |grant_dir: &str, url: &str| json!({"grant_dir": grant_dir, "tool": "/usr/local/libexec/t/agent_timer.py", "v2_url": url});
+        let with = |rules: Option<&str>, timers: Value| {
+            let mut raw = json!({
+                "adapter_url": "http://127.0.0.1:1", "adapter_token": "a".repeat(32),
+                "remote_backend": "synthetic-v2", "participants": ["10000000001@c.us"],
+                "allowed_principals": ["synthetic-owner"], "agent_timers": timers,
+            });
+            if let Some(dir) = rules {
+                raw["rules_dir"] = json!(dir);
+            }
+            serde_json::from_value::<FileConfig>(raw)
+                .map_err(|_| "parse")
+                .and_then(WhatsAppChats::new)
+                .is_ok()
+        };
+        assert!(with(
+            Some("/srv/rules"),
+            timers("/srv/grants", "http://127.0.0.1:19822")
+        ));
+        assert!(!with(None, timers("/srv/grants", "http://127.0.0.1:19822")));
+        for bad in [
+            "relative",
+            "/srv/a b",
+            "/srv/$(id)",
+            "/srv/../etc",
+            "/srv/a\"b",
+        ] {
+            assert!(
+                !with(Some("/srv/rules"), timers(bad, "http://127.0.0.1:19822")),
+                "{bad}"
+            );
+        }
+        for bad in [
+            "https://example.com",
+            "http://127.0.0.1:",
+            "http://127.0.0.1:1/x",
+            "http://10.0.0.1:1",
+        ] {
+            assert!(
+                !with(Some("/srv/rules"), timers("/srv/grants", bad)),
+                "{bad}"
+            );
+        }
+        let mut unknown = timers("/srv/grants", "http://127.0.0.1:1");
+        unknown["scope"] = json!("all");
+        assert!(!with(Some("/srv/rules"), unknown));
+    }
+
+    #[test]
+    fn rules_name_the_timer_tool_of_this_conversation_only_when_configured() {
+        let plain = rules_text("n", "conv-1", "t", "g@g.us", None);
+        assert!(plain.contains("ask Root for any timer change"));
+        assert!(!plain.contains("agent_timer"));
+        let timers = AgentTimers {
+            grant_dir: "/srv/grants".into(),
+            tool: "/opt/agent_timer.py".into(),
+            v2_url: "http://127.0.0.1:19822".into(),
+        };
+        let rules = rules_text("n", "conv-1", "t", "g@g.us", Some(&timers));
+        assert!(rules.contains("Timers of this chat (agent timer tool)"));
+        assert!(rules.contains("ORKESTR_V2_AGENT_TIMER_GRANT_DIR=/srv/grants \\\n"));
+        assert!(rules.contains("    /opt/agent_timer.py \\\n"));
+        assert!(rules.contains("--conversation conv-1 \\\n"));
+        assert!(!rules.contains("ask Root for any timer change"));
+        assert!(
+            rules.len() < 8 * 1024,
+            "well inside the adapter's 32 KiB rules cap"
+        );
+    }
+
+    #[test]
+    fn grant_files_are_private_and_replace_an_unusable_one() {
+        use std::os::unix::fs::PermissionsExt;
+        let root =
+            std::env::temp_dir().join(format!("agent-timer-grants-{}", uuid::Uuid::new_v4()));
+        let path = root.join("c.grant");
+        assert!(!timer_grant_installed(&path));
+        install_timer_grant(&path, &"a".repeat(64)).unwrap();
+        assert!(timer_grant_installed(&path));
+        let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        assert_eq!((mode(&root), mode(&path)), (0o700, 0o600));
+        std::fs::write(&path, "short").unwrap();
+        assert!(!timer_grant_installed(&path));
+        install_timer_grant(&path, &"b".repeat(64)).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "b".repeat(64));
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o640)).unwrap();
+        assert!(
+            !timer_grant_installed(&path),
+            "a readable grant is not used"
+        );
+        // A group-writable directory is refused.
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o770)).unwrap();
+        assert_eq!(
+            install_timer_grant(&path, &"c".repeat(64)),
+            Err(StageError("agent_timer_grant_failed"))
+        );
+        assert_eq!(
+            std::fs::read_dir(&root).unwrap().count(),
+            1,
+            "no temp file left"
+        );
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
