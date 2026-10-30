@@ -31,12 +31,12 @@ jobs:
         env:
           SOURCE: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
-          mkdir "$ubuntu-latest_TEMP/empty-docker-config"
-          export DOCKER_CONFIG="$ubuntu-latest_TEMP/empty-docker-config"
+          mkdir "$RUNNER_TEMP/empty-docker-config"
+          export DOCKER_CONFIG="$RUNNER_TEMP/empty-docker-config"
           docker build --progress=plain --build-arg SOURCE_COMMIT="$SOURCE" \
             --tag orkestr-v2:fresh --file v2/packaging/oss/Dockerfile .
           docker build --build-arg SOURCE_COMMIT="$SOURCE" --target bundle \
-            --output "type=local,dest=$ubuntu-latest_TEMP/bundle" --file v2/packaging/oss/Dockerfile .
+            --output "type=local,dest=$RUNNER_TEMP/bundle" --file v2/packaging/oss/Dockerfile .
       - name: Everyday Compose commands need no exported commit
         env:
           SOURCE: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -47,16 +47,16 @@ jobs:
           printf 'ORKESTR_SOURCE_COMMIT=%s\n' "$SOURCE" > v2/packaging/oss/.env
           env -u ORKESTR_SOURCE_COMMIT $compose config | grep -q "SOURCE_COMMIT: $SOURCE"
           rm v2/packaging/oss/.env
-          if env -u ORKESTR_SOURCE_COMMIT $compose build > "$ubuntu-latest_TEMP/no-commit.log" 2>&1; then
+          if env -u ORKESTR_SOURCE_COMMIT $compose build > "$RUNNER_TEMP/no-commit.log" 2>&1; then
             echo 'a build without the exact commit was accepted' >&2; exit 1
           fi
-          grep -q 'SOURCE_COMMIT must be the exact 40-character public commit' "$ubuntu-latest_TEMP/no-commit.log"
+          grep -q 'SOURCE_COMMIT must be the exact 40-character public commit' "$RUNNER_TEMP/no-commit.log"
       - name: Fresh install through provider login required
         env:
           SOURCE: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           python3 -I -S -B v2/packaging/oss/fresh_install.py \
-            --image orkestr-v2:fresh --source "$SOURCE" --report "$ubuntu-latest_TEMP/fresh-install.json"
+            --image orkestr-v2:fresh --source "$SOURCE" --report "$RUNNER_TEMP/fresh-install.json"
       - name: Retain synthetic acceptance evidence and candidate bundle
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -87,12 +87,12 @@ jobs:
         env:
           SOURCE: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
-          mkdir "$ubuntu-24.04-arm_TEMP/empty-docker-config"
-          export DOCKER_CONFIG="$ubuntu-24.04-arm_TEMP/empty-docker-config"
+          mkdir "$RUNNER_TEMP/empty-docker-config"
+          export DOCKER_CONFIG="$RUNNER_TEMP/empty-docker-config"
           docker build --progress=plain --build-arg SOURCE_COMMIT="$SOURCE" \
             --tag orkestr-v2:fresh --file v2/packaging/oss/Dockerfile .
           docker build --build-arg SOURCE_COMMIT="$SOURCE" --target bundle \
-            --output "type=local,dest=$ubuntu-24.04-arm_TEMP/bundle" --file v2/packaging/oss/Dockerfile .
+            --output "type=local,dest=$RUNNER_TEMP/bundle" --file v2/packaging/oss/Dockerfile .
       - name: Everyday Compose commands need no exported commit
         env:
           SOURCE: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -103,16 +103,16 @@ jobs:
           printf 'ORKESTR_SOURCE_COMMIT=%s\n' "$SOURCE" > v2/packaging/oss/.env
           env -u ORKESTR_SOURCE_COMMIT $compose config | grep -q "SOURCE_COMMIT: $SOURCE"
           rm v2/packaging/oss/.env
-          if env -u ORKESTR_SOURCE_COMMIT $compose build > "$ubuntu-24.04-arm_TEMP/no-commit.log" 2>&1; then
+          if env -u ORKESTR_SOURCE_COMMIT $compose build > "$RUNNER_TEMP/no-commit.log" 2>&1; then
             echo 'a build without the exact commit was accepted' >&2; exit 1
           fi
-          grep -q 'SOURCE_COMMIT must be the exact 40-character public commit' "$ubuntu-24.04-arm_TEMP/no-commit.log"
+          grep -q 'SOURCE_COMMIT must be the exact 40-character public commit' "$RUNNER_TEMP/no-commit.log"
       - name: Fresh install through provider login required
         env:
           SOURCE: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           python3 -I -S -B v2/packaging/oss/fresh_install.py \
-            --image orkestr-v2:fresh --source "$SOURCE" --report "$ubuntu-24.04-arm_TEMP/fresh-install.json"
+            --image orkestr-v2:fresh --source "$SOURCE" --report "$RUNNER_TEMP/fresh-install.json"
       - name: Retain synthetic acceptance evidence and candidate bundle
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
