@@ -224,6 +224,19 @@ impl BrokerChannel {
             && !self.cancellation_pending
     }
 
+    /// Runtime-side evidence for a capacity continuation: the turn's tool
+    /// calls (if any) have all settled and nothing is pending or cancelling.
+    /// Unlike `turn_side_effect_free`, completed tool calls and steers are fine.
+    pub(crate) fn turn_settled(&self) -> bool {
+        !self.poisoned
+            && self.execution_claimed
+            && self.terminal_observed
+            && self.steering.is_none()
+            && self.offline.pending.is_none()
+            && self.workspace_tool.pending.is_none()
+            && !self.cancellation_pending
+    }
+
     /// Whether Runtime's stall watchdog may interrupt the current turn: the
     /// same preconditions as `cancellation`, and no tool call or steer yet.
     pub(crate) fn stall_interruptible(&self) -> bool {

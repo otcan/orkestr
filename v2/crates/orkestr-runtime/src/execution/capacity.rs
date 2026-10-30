@@ -6,7 +6,11 @@
 //! steer, the very same turn is submitted once more on the same native thread
 //! with the configured fallback model. Every byte still passes the original
 //! run's durable dispatch fence, so a cancelled or fenced run cannot retry.
-//! Anything else delivers the closed `provider` failure; nothing else retries.
+//! A Deep turn that already made tool calls is never replayed: when every
+//! call has settled, ONE continuation turn (the note alone, not the input)
+//! asks the fallback model to inspect state and finish without repeating any
+//! external action; the failed turn's calls and outputs stay in the native
+//! thread's history. Anything else delivers the closed `provider` failure.
 use super::pump::{native_model_evidence, CodexOutput};
 use crate::{
     capacity_fallback::{self, CapacityFallback},
@@ -26,6 +30,20 @@ pub(crate) fn retry_note(from: &str, to: &str, stalled: bool) -> String {
     };
     format!(
         "[Orkestr retry on {to}: {from} was {cause} before any work. Answer the message below.]"
+    )
+}
+
+/// The whole input of a continuation turn after a capacity failure with
+/// side effects. The interrupted attempt's tool calls and outputs are in the
+/// native thread's history right above this note.
+pub(crate) fn continuation_note(from: &str, to: &str) -> String {
+    format!(
+        "[Orkestr continuation on {to}: the previous attempt on {from} was interrupted \
+by a provider capacity error after it had already run tool calls. Those calls and \
+their outputs are above in this thread. Do not start over: inspect the current state \
+before redoing anything, never repeat an external send, post, purchase or other \
+irreversible action that may already have happened, then finish the original task \
+and give the answer it asked for.]"
     )
 }
 
@@ -114,6 +132,7 @@ pub(super) fn retry_frame(
     from: &str,
     to: &str,
     stalled: bool,
+    continuation: bool,
 ) -> Result<Value, Blocker> {
     let mut frame = original.clone();
     if frame.get("method").and_then(Value::as_str) != Some("turn/start") {
@@ -139,10 +158,15 @@ pub(super) fn retry_frame(
         .and_then(|item| item.get_mut("text"))
         .ok_or(Blocker::Protocol)?;
     let original_text = text.as_str().ok_or(Blocker::Protocol)?;
-    *text = json!(format!(
-        "{}\n\n{original_text}",
-        retry_note(from, to, stalled)
-    ));
+    *text = if continuation {
+        // Never replay the input after side effects: the note is the turn.
+        json!(continuation_note(from, to))
+    } else {
+        json!(format!(
+            "{}\n\n{original_text}",
+            retry_note(from, to, stalled)
+        ))
+    };
     frame["id"] = json!(request);
     Ok(frame)
 }
@@ -161,18 +185,27 @@ impl CodexOutput {
         let role = self.admission.role;
         let policy = self.capacity.policy.clone().unwrap_or_default();
         let (from, to) = self.fallback_pair(&policy);
-        let side_effect_free = clean
-            && self.steering.is_none()
+        let quiet = self.steering.is_none()
             && self.tool_write.is_none()
             && self.workspace_write.is_none()
-            && self.writing.is_none()
+            && self.writing.is_none();
+        let side_effect_free = clean
+            && quiet
             && self
                 .broker
                 .as_ref()
                 .is_none_or(|channel| channel.turn_side_effect_free());
+        // Side effects happened but every call settled: continue, never replay.
+        let continuation = !side_effect_free
+            && quiet
+            && policy.continues_after_side_effects(role)
+            && self
+                .broker
+                .as_ref()
+                .is_none_or(|channel| channel.turn_settled());
         let outcome = if !policy.enabled_for(role) {
             "not_retried_disabled"
-        } else if !side_effect_free {
+        } else if !side_effect_free && !continuation {
             "not_retried_side_effects"
         } else if self.capacity.attempted {
             "not_retried_fallback_exhausted"
@@ -184,13 +217,14 @@ impl CodexOutput {
             "not_retried_no_retained_turn"
         } else {
             let (from, to) = (from.clone().unwrap(), to.clone().unwrap());
-            match self.start_fallback(&from, &to) {
+            match self.start_fallback(&from, &to, continuation) {
+                Ok(()) if continuation => "continued_on_fallback",
                 Ok(()) => "retried_on_fallback",
                 Err(_) => "retry_submission_refused",
             }
         };
         self.log_capacity(outcome, from.as_deref(), to.as_deref());
-        if outcome == "retried_on_fallback" {
+        if matches!(outcome, "retried_on_fallback" | "continued_on_fallback") {
             return Ok(());
         }
         self.stream.release_capacity_hold()
@@ -281,7 +315,7 @@ impl CodexOutput {
         Ok(())
     }
 
-    fn start_fallback(&mut self, from: &str, to: &str) -> Result<(), Blocker> {
+    fn start_fallback(&mut self, from: &str, to: &str, continuation: bool) -> Result<(), Blocker> {
         let stalled = self.stream.stall_interrupt().is_some();
         let original = self.capacity.frame.as_ref().ok_or(Blocker::Protocol)?;
         let request = self
@@ -289,8 +323,8 @@ impl CodexOutput {
             .request()
             .checked_add(1)
             .ok_or(Blocker::Protocol)?;
-        let mut next = self.stream.fallback_retry(request)?;
-        let frame = retry_frame(original, request, from, to, stalled)?;
+        let mut next = self.stream.fallback_retry(request, continuation)?;
+        let frame = retry_frame(original, request, from, to, stalled, continuation)?;
         let writing = if self.capacity.actual_fd {
             Some(super::provider_write::PendingWrite::new(&frame)?)
         } else {
@@ -350,7 +384,7 @@ mod tests {
 
     #[test]
     fn retry_frame_keeps_thread_and_input_with_a_new_id_model_and_note() {
-        let retry = retry_frame(&frame(), 5, "gpt-6.1-sol", "gpt-6-sol", false).unwrap();
+        let retry = retry_frame(&frame(), 5, "gpt-6.1-sol", "gpt-6-sol", false, false).unwrap();
         assert_eq!(retry["id"], 5);
         assert_eq!(retry["params"]["threadId"], "native");
         assert_eq!(retry["params"]["model"], "gpt-6-sol");
@@ -371,14 +405,44 @@ mod tests {
     }
 
     #[test]
+    fn a_continuation_frame_carries_only_the_note_never_the_input() {
+        let mut original = frame();
+        original["params"]["effort"] = json!("high");
+        let next = retry_frame(&original, 5, "gpt-6.1-sol", "gpt-6-sol", false, true).unwrap();
+        assert_eq!(next["id"], 5);
+        assert_eq!(next["params"]["threadId"], "native");
+        assert_eq!(next["params"]["model"], "gpt-6-sol");
+        assert_eq!(next["params"]["effort"], "high");
+        assert_ne!(
+            next["params"]["clientUserMessageId"],
+            original["params"]["clientUserMessageId"]
+        );
+        let text = next["params"]["input"][0]["text"].as_str().unwrap();
+        assert_eq!(text, continuation_note("gpt-6.1-sol", "gpt-6-sol"));
+        assert!(!text.contains("original input"));
+        assert!(text.starts_with(
+            "[Orkestr continuation on gpt-6-sol: the previous attempt on gpt-6.1-sol"
+        ));
+        for phrase in [
+            "inspect the current state",
+            "never repeat an external send",
+            "finish the original task",
+        ] {
+            assert!(text.contains(phrase), "{phrase}");
+        }
+        assert_eq!(next["params"]["input"][0]["text_elements"], json!([]));
+        assert_eq!(next["params"]["input"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
     fn retry_frame_replaces_an_explicit_override_and_refuses_other_methods() {
         let mut original = frame();
         original["params"]["model"] = json!("gpt-6.1-sol");
         original["params"]["effort"] = json!("high");
-        let retry = retry_frame(&original, 5, "gpt-6.1-sol", "gpt-6-sol", false).unwrap();
+        let retry = retry_frame(&original, 5, "gpt-6.1-sol", "gpt-6-sol", false, false).unwrap();
         assert_eq!(retry["params"]["model"], "gpt-6-sol");
         assert_eq!(retry["params"]["effort"], "high");
         original["method"] = json!("turn/steer");
-        assert!(retry_frame(&original, 5, "a", "b", true).is_err());
+        assert!(retry_frame(&original, 5, "a", "b", true, false).is_err());
     }
 }

@@ -21,6 +21,10 @@ pub(crate) struct CapacityFallbackConfig {
     pub stall_deep_secs: u64,
     #[serde(default = "fast_stall")]
     pub stall_fast_secs: u64,
+    /// Deep only: after a capacity failure with settled tool calls, one
+    /// continuation turn on the fallback (never a replay of the input).
+    #[serde(default = "continue_deep")]
+    pub continue_deep_after_side_effects: bool,
 }
 
 fn enabled() -> bool {
@@ -31,6 +35,9 @@ fn deep_stall() -> u64 {
 }
 fn fast_stall() -> u64 {
     orkestr_runtime::capacity_fallback::DEFAULT_STALL_FAST_SECS
+}
+fn continue_deep() -> bool {
+    orkestr_runtime::capacity_fallback::DEFAULT_CONTINUE_DEEP
 }
 
 impl CapacityFallbackConfig {
@@ -44,6 +51,7 @@ impl CapacityFallbackConfig {
             self.models.clone(),
         )?
         .with_stall(self.stall_deep_secs, self.stall_fast_secs)
+        .map(|policy| policy.with_continuation(self.continue_deep_after_side_effects))
     }
 }
 
@@ -60,6 +68,14 @@ mod tests {
             policy.fallback_for(Role::Deep, "gpt-6.1-sol"),
             Some("gpt-6-sol")
         );
+        assert!(policy.continues_after_side_effects(Role::Deep));
+        let no_continue: CapacityFallbackConfig =
+            serde_json::from_value(serde_json::json!({"continue_deep_after_side_effects": false}))
+                .unwrap();
+        assert!(!no_continue
+            .policy()
+            .unwrap()
+            .continues_after_side_effects(Role::Deep));
         // The stall watchdog is off unless the operator sets it.
         assert_eq!(policy.stall_after(Role::Fast), None);
         assert_eq!(policy.stall_after(Role::Deep), None);

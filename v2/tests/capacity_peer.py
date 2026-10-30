@@ -3,7 +3,8 @@
 
 `capacity-mode` in the working directory selects what each turn does:
 clean   - turn 1 is overloaded before any tool call; later turns answer.
-tool    - turn 1 runs a command, then is overloaded.
+tool    - turn 1 runs a command, then is overloaded; later turns answer.
+tool-persist - every turn runs a command, then is overloaded.
 persist - every turn is overloaded.
 stall   - turn 1 stays silent (as in a long 429 Retry-After sleep) until
           Runtime interrupts it; later turns answer.
@@ -67,7 +68,8 @@ for line in sys.stdin:
         notify("item/started", turnId=tid, item={"type": "userMessage", "id": f"u{turn}"})
         if mode not in ("stall", "stall-stop", "busy") or turn > 1:
             notify("item/started", turnId=tid, item={"type": "reasoning", "id": f"r{turn}"})
-        overloaded = mode in ("clean", "tool", "persist") and (mode == "persist" or turn == 1)
+        overloaded = mode in ("clean", "tool", "persist", "tool-persist") and (
+            mode in ("persist", "tool-persist") or turn == 1)
         if mode in ("stall", "stall-stop") and turn == 1:
             interrupt = json.loads(sys.stdin.readline())
             assert interrupt["method"] == "turn/interrupt", interrupt
@@ -87,7 +89,7 @@ for line in sys.stdin:
                 "phase": "final_answer"})
             notify("turn/completed", turn={"id": tid, "status": "completed"})
         elif overloaded:
-            if mode == "tool":
+            if mode in ("tool", "tool-persist"):
                 notify("item/started", turnId=tid, item={"type": "commandExecution", "id": "c1"})
                 notify("item/completed", turnId=tid, item={"type": "commandExecution", "id": "c1"})
             notify("error", turnId=tid, willRetry=False, error=OVERLOADED)
