@@ -150,3 +150,52 @@ jobs:
       - name: Log out of GHCR
         if: ${{ always() }}
         run: docker logout ghcr.io
+  pulled-amd64:
+    # Self-check of the published tag: anonymous pull, then the fresh install.
+    needs: image-publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - name: Anonymous pull of the published multi-arch tag, then fresh install
+        run: |
+          set -euo pipefail
+          mkdir "$RUNNER_TEMP/empty-docker-config"
+          export DOCKER_CONFIG="$RUNNER_TEMP/empty-docker-config"
+          docker pull "ghcr.io/otcan/orkestr:$GITHUB_REF_NAME"
+          test "$(docker image inspect --format '{{.Architecture}}' "ghcr.io/otcan/orkestr:$GITHUB_REF_NAME")" = amd64
+          python3 -I -S -B v2/packaging/oss/fresh_install.py --image "ghcr.io/otcan/orkestr:$GITHUB_REF_NAME" \
+            --source "$GITHUB_SHA" --report "$RUNNER_TEMP/pulled/fresh-install-amd64.json"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: v2-pulled-amd64
+          path: ${{ runner.temp }}/pulled/
+          if-no-files-found: ignore
+          retention-days: 30
+  pulled-arm64:
+    needs: image-publish
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - name: Anonymous pull of the published multi-arch tag, then fresh install
+        run: |
+          set -euo pipefail
+          mkdir "$RUNNER_TEMP/empty-docker-config"
+          export DOCKER_CONFIG="$RUNNER_TEMP/empty-docker-config"
+          docker pull "ghcr.io/otcan/orkestr:$GITHUB_REF_NAME"
+          test "$(docker image inspect --format '{{.Architecture}}' "ghcr.io/otcan/orkestr:$GITHUB_REF_NAME")" = arm64
+          python3 -I -S -B v2/packaging/oss/fresh_install.py --image "ghcr.io/otcan/orkestr:$GITHUB_REF_NAME" \
+            --source "$GITHUB_SHA" --report "$RUNNER_TEMP/pulled/fresh-install-arm64.json"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: v2-pulled-arm64
+          path: ${{ runner.temp }}/pulled/
+          if-no-files-found: ignore
+          retention-days: 30
