@@ -68,6 +68,13 @@ TEMPLATES = {
         "de": "\u23f0 %(label)s ist fehlgeschlagen (%(reason)s) und hat diesmal kein Ergebnis geliefert. Spätere "
               "geplante Läufe sind nicht betroffen; der Betreiber wurde benachrichtigt.",
     },
+    # Shown in place of a raw `deep_run_*` reason when the provider's model
+    # was at capacity (failure_cause.py); the code stays in the logs.
+    "reason_model_capacity": {
+        "en": "stopped by a model-capacity error",
+        "tr": "model kapasite hatası nedeniyle durdu",
+        "de": "durch einen Modell-Kapazitätsfehler gestoppt",
+    },
     # Appended when owner messages had been steered into the failed turn.
     "steered": {
         "en": "\n\nThis also covers the %(count)d message(s) you sent while it was running.",

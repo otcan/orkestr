@@ -93,6 +93,60 @@ def delivered_times(db, data, now):
     return times
 
 
+# Recent answer finals of the chat looked at for a heartbeat decision.
+CHAT_FINAL_ROWS = 16
+
+
+def has_final(db, data):
+    """This input's final is exported (pending or delivered) or about to be:
+    a heartbeat for it could only arrive after, or race, the answer."""
+    if data.get("phase") == "completed" or any(data.get(key) for key in (
+            "deep_final_ready_at", "substantive_deep_final_prepared", "deep_final_completion", "settled")):
+        return True
+    return db.execute("SELECT 1 FROM exports WHERE input_id=? AND kind='final' LIMIT 1",
+                      (data["remote_id"],)).fetchone() is not None
+
+
+def chat_answers(db, since, now):
+    """The chat's own answers (any person's input final, never a status line)
+    since `since`: their delivery times, and whether one is still in transit.
+
+    A heartbeat right after (or racing) an answer reads as "still working" on
+    the question just answered (KDP-bookwriting 2026-10-30: the ISBN reply was
+    delivered at 12:24:11, then "Still working... 12 min" for the owner's
+    follow-up message at 12:24:52, the moment the chat spacing reopened)."""
+    times, pending = [], False
+    for outcome, raw in db.execute(
+            "SELECT e.outcome,e.ack FROM exports e JOIN inputs i ON i.remote_id=e.input_id "
+            "WHERE e.kind='final' AND json_extract(i.data,'$.origin') IS NULL "
+            "AND json_extract(i.data,'$.activity_notice') IS NULL ORDER BY e.seq DESC LIMIT ?", (CHAT_FINAL_ROWS,)):
+        if outcome is None:
+            pending = True
+            continue
+        at = delivered_at(raw)
+        if at is not None and since <= at <= now:
+            times.append(at)
+    return times, pending
+
+
+def withdraw_heartbeats(ledger, db, answered):
+    """An answer final was just exported: retire every heartbeat line V1 has
+    not reported yet, so none is sent after the answer. A line V1 already
+    imported can no longer be recalled; a late ACK of it is still recorded."""
+    rows = db.execute(
+        "SELECT e.export_id,i.data FROM exports e JOIN inputs i ON i.remote_id=e.input_id "
+        "WHERE json_extract(i.data,'$.activity_notice.heartbeat')=1 AND json_extract(i.data,'$.settled') IS NULL "
+        "AND e.kind='final' AND e.outcome IS NULL AND e.ack IS NULL").fetchall()
+    for export_id, raw in rows:
+        notice = json.loads(raw)
+        db.execute("UPDATE exports SET outcome='superseded' WHERE export_id=? AND outcome IS NULL AND ack IS NULL",
+                   (export_id,))
+        ledger._settle(db, notice, "superseded")
+        print("orkestr-v2-wa-adapter heartbeat_withdrawn thread=%s input=%s answered=%s"
+              % (ledger.scope.get("remote_thread_id", "?"), (notice.get("activity_notice") or {}).get("input_id"),
+                 answered), file=sys.stderr, flush=True)
+
+
 def status_slot_free(db, now, spacing):
     """At most one status line per chat per `spacing`, and one unresolved
     status message for the whole binding."""
@@ -154,7 +208,12 @@ def waiting(worker, now=None):
                     or data.get("deep_final_ready_at")
                     or now - activity.get("observed_at", -POLL_GAP_S - 1) <= POLL_GAP_S):
                 continue  # Not a person's, settled, steered, or observe() owns its clock.
-            times = [since, activity.get("heartbeat_at", since)] + delivered_times(db, data, now)
+            if has_final(db, data):
+                continue
+            answers, in_transit = chat_answers(db, since, now)
+            if in_transit:
+                return  # Never a status line racing an answer.
+            times = [since, activity.get("heartbeat_at", since)] + delivered_times(db, data, now) + answers
             due = heartbeat_gap(activity.get("heartbeats", 0))
             if due is None or now - max(times) < due:
                 continue
@@ -230,7 +289,13 @@ def observe(worker, data, statuses, now=None):
         else:
             times = [since + activity.get("paused_s", 0), activity.get("progress_at", since)]
         times += delivered_times(db, data, now)
+        if heartbeat:
+            # The chat just saw an answer, or one is on its way: not quiet.
+            answers, in_transit = chat_answers(db, since, now)
+            times += answers
         ledger.save(data, db)
+        if has_final(db, data) or (heartbeat and in_transit):
+            return  # No status line after (or racing) a final.
         due = heartbeat_gap(activity.get("heartbeats", 0)) if heartbeat else INTERVAL_S
         if due is None or now - max(times) < due:
             return  # Not due yet, or this input's heartbeats are spent.

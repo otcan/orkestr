@@ -17,7 +17,7 @@ import uuid
 
 from .export_changes import ExportConnection
 from .outbound_text import scrub_local_paths
-from . import notices
+from . import failure_cause, notices
 
 SCHEMA = "2"
 # Terminal outcomes settle an export. "uncertain" is recorded but keeps it listed.
@@ -567,12 +567,14 @@ class Ledger:
             # native session.
             withheld = (bool(data.get("retry_withheld")) or bool(data.get("continued")) or
                         reason in WITHHELD_REASONS)
+            # The raw code is for logs and the `refusal` field; the chat gets its cause.
+            shown = failure_cause.owner_reason(data, reason, lang)
             message = {"id": str(uuid.uuid5(NOTICE_NAMESPACE, data["remote_id"])), "role": "assistant", "state": "completed",
                        "phase": "final_answer", "kind": "notice", "source": "rust-v2-adapter",
                        "parentMessageId": data["remote_id"], "refusal": reason,
-                       "text": (notices.render(lang, "interrupted_owner", reason=reason)
+                       "text": (notices.render(lang, "interrupted_owner", reason=shown)
                                 if withheld and self.technical_audience(data) else
-                                refusal_notice(reason, lang, self.technical_audience(data)))}
+                                refusal_notice(shown, lang, self.technical_audience(data)))}
             if notice is not None:
                 message.update({k: v for k, v in notice.items() if k in ("text", "provider", "model")})
                 if notice.get("template") in notices.TEMPLATES:
@@ -583,7 +585,7 @@ class Ledger:
                 # Nobody resends a timer: say what failed and what happens next.
                 message["text"] = notices.render(lang, "timer_interrupted" if withheld else
                                                  "timer_failure", label=(data.get("timer") or {}).get("label")
-                                                 or "Scheduled task", reason=reason)
+                                                 or "Scheduled task", reason=shown)
             if data.get("steered"):
                 # Messages steered into this turn settle with this notice; say so.
                 message["text"] += notices.render(lang, "steered", count=len(data["steered"]))
@@ -599,8 +601,9 @@ class Ledger:
         # (timer refusals keep their own `input_failed` alert in the worker).
         if data.get("origin") != "timer":
             # `level` INFO: an expected close the owner already has an answer for.
-            print("%s orkestr-v2-wa-adapter input_refused thread=%s input=%s reason=%s language=%s"
-                % (level, self.scope.get("remote_thread_id", "?"), data["remote_id"], reason, lang),
+            print("%s orkestr-v2-wa-adapter input_refused thread=%s input=%s reason=%s language=%s%s"
+                % (level, self.scope.get("remote_thread_id", "?"), data["remote_id"], reason, lang,
+                   " cause=" + failure_cause.cause(data, reason) if failure_cause.cause(data, reason) else ""),
                 file=sys.stderr, flush=True)
         return message
 
@@ -763,6 +766,9 @@ class Ledger:
                               (message["id"], data["remote_id"], kind, source_key, json.dumps(message)))
         if inserted.rowcount:
             db.exported = True
+            if kind == "final" and data.get("origin") is None and not data.get("activity_notice"):
+                from .activity import withdraw_heartbeats
+                withdraw_heartbeats(self, db, data["remote_id"])
 
     def complete(self, data, reply):
         """Atomically record the accepted final reply and make it visible to V1."""

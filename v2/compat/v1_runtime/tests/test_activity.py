@@ -217,6 +217,78 @@ class DeepHeartbeatTests(ActivityCase):
         self.assertIn('Hâlâ çalışıyorum',self.heartbeats()[0]['text'])
 
 
+class HeartbeatAfterFinalTests(ActivityCase):
+    """No heartbeat after, or racing, an answer final.
+
+    KDP-bookwriting 2026-10-30: the owner sent two messages 16 s apart. The
+    ISBN answer (first input) was delivered at 12:24:11; the follow-up's own
+    Deep then read running, its quiet clock counted from its 12:12 admission,
+    and the moment the 5-minute chat spacing reopened (12:24:49) it posted
+    "Still working... 12 min so far", 41 s after the answer."""
+
+    heartbeat=True
+    heartbeats=DeepHeartbeatTests.heartbeats
+
+    def setUp(self):
+        super().setUp()
+        self.data['author']=dict(role='owner',id='owner@c.us',label='Owner');self.ledger.save(self.data)
+
+    def answer(self,data,at=None):
+        reply=dict(id='reply-'+data['remote_id'],role='assistant',state='completed',phase='final_answer',
+                   source='rust-v2-pilot',parentMessageId=data['remote_id'],text='Answer')
+        self.assertTrue(self.ledger.complete(data,reply))
+        if at is not None:
+            message=next(m for m in self.ledger.messages() if m['id']==reply['id'])
+            self.ack(message,at)
+
+    def follower(self):
+        other=self.ledger.enqueue(dict(publicMessageId='second',publicThreadId='thread',chatId='chat',
+            accountId='account',text='and also this'),author=dict(role='owner',id='owner@c.us',label='Owner'))[0]
+        other.update(queued_at=1016,admitted_at=1016,phase='running',matched_runs=['next'])
+        self.ledger.save(other)
+        return other
+
+    def test_follow_up_gets_no_line_right_after_the_earlier_answer(self):
+        other=self.follower()
+        self.answer(self.data,at=1750)
+        status=dict(deep=dict(run_id='next',phase='running'))
+        for now in range(1760,1750+180,10):
+            observe(self.worker,other,status,now=now)
+        self.assertEqual(self.heartbeats(),[],'the chat just saw an answer')
+        observe(self.worker,other,status,now=1750+180)
+        self.assertEqual(len(self.heartbeats()),1,'three quiet minutes after the answer it is due again')
+
+    def test_no_line_while_an_answer_is_still_in_transit(self):
+        other=self.follower()
+        self.answer(self.data)  # Exported, V1 has not reported it yet.
+        for now in range(1200,1800,10):
+            observe(self.worker,other,dict(deep=dict(run_id='next',phase='running')),now=now)
+        self.assertEqual(self.heartbeats(),[])
+
+    def test_no_line_once_its_own_final_is_exported_even_if_the_run_still_reads_running(self):
+        self.answer(self.data)
+        self.advance(1600);self.assertEqual(self.heartbeats(),[])
+
+    def test_a_line_not_yet_taken_by_v1_is_withdrawn_when_the_final_comes_first(self):
+        self.advance(1180);line=self.heartbeats()[0]
+        self.answer(self.data)
+        self.assertEqual(self.heartbeats(),[],'withdrawn from the listing')
+        with self.ledger.connect() as db:
+            self.assertEqual(db.execute("SELECT outcome FROM exports WHERE export_id=?",(line['id'],)).fetchone()[0],'superseded')
+        # A late real ACK of a line V1 had already taken is recorded, never refused.
+        with self.ledger.connect() as db:
+            parent=json.loads(db.execute("SELECT data FROM inputs WHERE remote_id=?",(line['parentMessageId'],)).fetchone()[0])
+        result=self.ledger.acknowledge(line['id'],dict(outcome='delivered',parentPublicMessageId=parent['public_id'],
+            outboxJobId='fake-outbox',connectorMessageIds=['fake-receipt'],deliveredAt='1970-01-01T00:20:00+00:00'))
+        self.assertFalse(result['settled'])
+
+    def test_an_already_delivered_line_is_kept(self):
+        self.advance(1180);line=self.heartbeats()[0];self.ack(line,1180)
+        self.answer(self.data)
+        with self.ledger.connect() as db:
+            self.assertEqual(db.execute("SELECT outcome FROM exports WHERE export_id=?",(line['id'],)).fetchone()[0],'delivered')
+
+
 class WaitingHeartbeatTests(ActivityCase):
     """A person's input queued behind a running turn (activity.waiting).
 
