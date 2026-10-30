@@ -6,14 +6,55 @@ The current public beta is **2.0.0-beta.5**, a GitHub pre-release
 ([release notes](../docs/releases/v2.0.0-beta.5.md)). See the [release checklist](../docs/v2/public-beta-checklist.md)
 for its acceptance gates; an image build does not prove a provider answer.
 
-## Docker quickstart
+## Quick start: one docker run
+
+Needs Docker Engine on Linux (x86_64 or arm64) or Docker Desktop on an Apple
+Silicon Mac. Both architectures are built and smoke-tested natively in CI.
+Docker Desktop on Intel Macs and Windows runs the amd64 image but is untested.
+Allow about 2 GB of memory for the container. The prebuilt multi-arch image is
+`ghcr.io/otcan/orkestr:v2.0.0-beta.6`. V2 images use only `v2.0.0-beta.*` tags;
+`:latest` and `v0.*` belong to the V1 image.
+
+```sh
+docker run -d --name orkestr --cap-add SYS_PTRACE -p 127.0.0.1:19822:19823 \
+  -v orkestr-state:/state -v orkestr-credentials:/credentials \
+  ghcr.io/otcan/orkestr:v2.0.0-beta.6
+```
+
+Then:
+
+1. Open **http://127.0.0.1:19822** (use `127.0.0.1`, not `localhost`) and choose
+   **First-time setup**. The setup token is in the container log; keep it private:
+   `docker logs orkestr 2>&1 | grep 'First-time setup token'`
+2. Create your Orkestr username and password (at least 12 characters), then sign in.
+3. Choose **Connect models**. **Sign in to Codex** shows the official OpenAI
+   link and a one-time code; open the link, sign in with your ChatGPT account and
+   enter the code. Claude is optional: **Sign in to Claude**, approve it, then paste the code
+   Claude shows you back into the page.
+4. Enter your Orkestr username and password again and choose **Activate models**.
+   Orkestr activates the models in about a minute without a container restart, and the page
+   reloads into your conversation.
+
+Data and logins live in the two named volumes, so they survive
+`docker restart orkestr`, `docker stop`/`docker start` and replacing the
+container with a newer image (`docker rm -f orkestr`, then the same `docker run`).
+`docker rm -f orkestr && docker volume rm orkestr-state orkestr-credentials`
+deletes everything.
+
+`--cap-add SYS_PTRACE` is the only extra permission. Orkestr's root manager uses it
+inside the container's own PID namespace to verify the exact server binary
+it started, which runs as UID 10001 with no capabilities. The runtime sets
+no-new-privileges itself. Nothing else from the host is mounted, and the port is bound
+to loopback only. On a remote server, use an SSH port forward to the same URL.
+
+## Build from source with Docker Compose
 
 Requires Docker Engine with Compose v2 on Linux x86_64 or arm64 (aarch64), or
 Docker Desktop on an Apple Silicon Mac (see below), public registry access,
 and your own ChatGPT/Codex login (a Claude login is optional). **No prebuilt image is published: the
 install builds Orkestr from source on your machine, which takes roughly 10–30
 minutes** depending on the machine and registry speed. Allow at least 8 GiB RAM
-and 25 GiB free disk. Windows, Intel Macs and desktop packages are deferred.
+and 25 GiB free disk. Source builds are tested on Linux x86_64/arm64 and Apple Silicon.
 
 ```sh
 git clone --branch v2.0.0-beta.5 https://github.com/otcan/orkestr.git
@@ -64,7 +105,8 @@ across architectures: rebuild it on each machine.
 ### Create your Orkestr account
 
 Choose **First-time setup**. Retrieve the local bootstrap token in your own
-terminal, enter it in the form, then choose a username and a password of at least
+terminal (it is also printed in `docker compose -f v2/packaging/oss/compose.yaml logs orkestr`),
+enter it in the form, then choose a username and a password of at least
 12 characters. Keep the token private:
 
 ```sh
@@ -77,16 +119,18 @@ work and container logs report `provider_login_required`.
 
 ### Connect your own providers
 
-Run each official CLI **inside the container** and complete its browser login
-yourself. Codex is required; skip the `login claude` line if you have no Claude
-account. Do not paste provider tokens into an Orkestr conversation:
+Use **Connect models** in the browser, as in the quick start above. Alternatively, run each
+official CLI **inside the container** and complete its browser login yourself.
+Codex is required; skip the `login claude` line if you have no Claude account.
+Do not paste provider tokens into an Orkestr conversation:
 
 ```sh
 docker compose -f v2/packaging/oss/compose.yaml exec orkestr orkestr-beta login codex
 docker compose -f v2/packaging/oss/compose.yaml exec orkestr orkestr-beta login claude
 docker compose -f v2/packaging/oss/compose.yaml exec orkestr orkestr-beta configure
-docker compose -f v2/packaging/oss/compose.yaml restart orkestr
 ```
+
+Orkestr activates the configuration by itself a few seconds after `configure`.
 
 Codex uses `codex login --device-auth` ([official OpenAI documentation](https://learn.chatgpt.com/docs/auth));
 Claude uses `claude auth login` ([official Claude documentation](https://code.claude.com/docs/en/authentication)).
@@ -203,7 +247,7 @@ folders. **Gmail and LinkedIn job tracking are not part of this beta.** Checks a
 events can wait for earlier thread evidence, and `more_mail` is not proof of
 full catch-up for large mailboxes. Recurring scans require a separate owner action.
 
-Deferred: desktop/Windows/Intel Mac packages, mobile apps, a published container image,
+Deferred: desktop/Windows/Intel Mac native packages, mobile apps,
 Gmail/LinkedIn job tracking, turnkey WhatsApp or mail account provisioning, multi-user hosting, optional integrations and full parity with
 private operator deployments.
 
