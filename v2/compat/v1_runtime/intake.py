@@ -32,6 +32,25 @@ def verified_author(data):
     return AUTHORS.get((data.get("author") or {}).get("role"))
 
 
+def with_quoted_id(text, reply_to):
+    """Add the quoted message's id to the visible `[Replying to …]` line, so the
+    model can look up a quoted message by id (e.g. `orkestr-provenance <id>`
+    when the owner asks where a system message came from). Same line, so the
+    UI still hides it with the quote; nothing changes without a reply line."""
+    message_id = (reply_to or {}).get("message_id")
+    if not message_id or not isinstance(text, str):
+        return text
+    marker = "[quoted message id: %s]" % message_id
+    if marker in text:
+        return text
+    lines = text.split("\n")
+    for index, line in enumerate(lines):
+        if line.startswith("[Replying to ") and line.endswith("]"):
+            lines[index] = line + " " + marker
+            return "\n".join(lines)
+    return text
+
+
 def admit(worker, data, merge_burst=True):
     """Freeze and admit one source through the existing owner HTTP surface."""
     from .worker import Refused
@@ -45,7 +64,7 @@ def admit(worker, data, merge_burst=True):
     if data.get("attachments") and "attachment_receipt" not in data:
         worker.import_attachments(data)
     if "intake" not in data:
-        text = data.get("intake_text") or compose(data)
+        text = with_quoted_id(data.get("intake_text") or compose(data), data.get("reply_to"))
         if data.get("origin") != "timer":
             text = worker.with_rules(data, text)
         request = {"client_message_id": data["keys"]["message"], "text": text}
