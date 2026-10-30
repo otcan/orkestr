@@ -4078,7 +4078,7 @@ checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
 name = "orkestr-runtime"
-version = "2.0.0-beta.4"
+version = "2.0.0-beta.5"
 dependencies = [
  "orkestr-v2-application",
  "orkestr-v2-contracts",
@@ -4089,7 +4089,7 @@ dependencies = [
 
 [[package]]
 name = "orkestr-v2-application"
-version = "2.0.0-beta.4"
+version = "2.0.0-beta.5"
 dependencies = [
  "async-trait",
  "orkestr-v2-contracts",
@@ -4097,7 +4097,7 @@ dependencies = [
 
 [[package]]
 name = "orkestr-v2-contracts"
-version = "2.0.0-beta.4"
+version = "2.0.0-beta.5"
 dependencies = [
  "serde",
  "serde_json",
@@ -4106,14 +4106,14 @@ dependencies = [
 
 [[package]]
 name = "orkestr-v2-demo"
-version = "2.0.0-beta.4"
+version = "2.0.0-beta.5"
 dependencies = [
  "orkestr-v2-domain",
 ]
 
 [[package]]
 name = "orkestr-v2-domain"
-version = "2.0.0-beta.4"
+version = "2.0.0-beta.5"
 dependencies = [
  "serde",
  "serde_json",
@@ -4121,7 +4121,7 @@ dependencies = [
 
 [[package]]
 name = "orkestr-v2-mail-reader"
-version = "2.0.0-beta.4"
+version = "2.0.0-beta.5"
 dependencies = [
  "orkestr-v2-contracts",
  "rustix",
@@ -4132,7 +4132,7 @@ dependencies = [
 
 [[package]]
 name = "orkestr-v2-restricted"
-version = "2.0.0-beta.4"
+version = "2.0.0-beta.5"
 dependencies = [
  "async-trait",
  "orkestr-v2-application",
@@ -4146,7 +4146,7 @@ dependencies = [
 
 [[package]]
 name = "orkestr-v2-server"
-version = "2.0.0-beta.4"
+version = "2.0.0-beta.5"
 dependencies = [
  "age",
  "argon2",
@@ -4170,7 +4170,7 @@ dependencies = [
 
 [[package]]
 name = "orkestr-v2-store-sqlite"
-version = "2.0.0-beta.4"
+version = "2.0.0-beta.5"
 dependencies = [
  "age",
  "jiff",
@@ -4187,7 +4187,7 @@ dependencies = [
 
 [[package]]
 name = "orkestr-v2-ui"
-version = "2.0.0-beta.4"
+version = "2.0.0-beta.5"
 dependencies = [
  "dioxus",
  "orkestr-v2-contracts",

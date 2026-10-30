@@ -1,11 +1,11 @@
 # Orkestr
 
-**V2 Linux beta candidate:** the first public V2 prerelease is being prepared as
-`v2.0.0-beta.4`. Follow the [V2 Docker quickstart](v2/README.md) for the web UI,
-your own Codex/Claude CLI logins, Fast/Deep and timers. See the
-[candidate release notes](docs/releases/v2.0.0-beta.4.md) and
-[release checklist](docs/v2/public-beta-checklist.md). Publication awaits manual
-provider acceptance and owner approval. The V1 setup below remains separate.
+**V2 Linux beta:** the current V2 pre-release is `v2.0.0-beta.5`. Follow the
+[V2 Docker quickstart](v2/README.md) for the web UI, your own Codex CLI login
+(Claude optional), Fast/Deep and timers. See the
+[release notes](docs/releases/v2.0.0-beta.5.md) and
+[release checklist](docs/v2/public-beta-checklist.md). It stays a pre-release
+until the automated provider acceptance passes. The V1 setup below remains separate.
 
 [![CI](https://github.com/otcan/orkestr/actions/workflows/ci.yml/badge.svg)](https://github.com/otcan/orkestr/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)

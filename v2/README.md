@@ -2,8 +2,8 @@
 
 Self-hosted conversations with Fast/Deep, Codex and Claude using your own CLI
 logins, timers/digests, result review, Stop and explicit provider handoff.
-The first public beta follows the existing version line: **2.0.0-beta.4**, a
-GitHub pre-release. See the [release checklist](../docs/v2/public-beta-checklist.md)
+The current public beta is **2.0.0-beta.5**, a GitHub pre-release
+([release notes](../docs/releases/v2.0.0-beta.5.md)). See the [release checklist](../docs/v2/public-beta-checklist.md)
 for its acceptance gates; an image build does not prove a provider answer.
 
 ## Docker quickstart
@@ -15,7 +15,7 @@ minutes** depending on the machine and registry speed. Allow at least 8 GiB RAM
 and 25 GiB free disk. ARM, Windows, macOS and desktop packages are deferred.
 
 ```sh
-git clone --branch v2.0.0-beta.4 https://github.com/otcan/orkestr.git
+git clone --branch v2.0.0-beta.5 https://github.com/otcan/orkestr.git
 cd orkestr
 printf 'ORKESTR_SOURCE_COMMIT=%s\n' "$(git rev-parse HEAD)" > v2/packaging/oss/.env
 docker compose -f v2/packaging/oss/compose.yaml up -d --build
