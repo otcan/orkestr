@@ -71,7 +71,10 @@ deploying twice. The guards that do exist are:
 
 - one turn per native connection (`codex_rpc.rs` `claim_turn_request`);
 - the capacity retry only when the broker proves the turn made no tool call
-  (`capacity_fallback.rs`, broker `side_effects`);
+  (`capacity_fallback.rs`, broker `side_effects`); after settled tool calls a
+  Deep turn is never replayed, only continued once on the fallback with a
+  note to inspect state and never repeat an external send (operator switch
+  `capacity_fallback.continue_deep_after_side_effects`, default on);
 - idempotent timers by `request_key` (`agent_timers.rs`);
 - V1 `clientMessageId` dedupe of owner input (`sidebar_http.rs`);
 - desktop leases, which give mutual exclusion but no send dedupe;

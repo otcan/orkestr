@@ -4,8 +4,13 @@
 //! proves that the turn made no tool call and no side-effecting item, Runtime
 //! retries the very same turn once, in the same native thread and the same
 //! durable run, with the configured fallback model. Any tool call or other
-//! side effect before the error means no retry: the run fails with the
-//! closed `provider` class. The policy never selects a Claude model.
+//! side effect before the error is never replayed. For a Deep turn whose
+//! tool calls have all settled, Runtime instead submits ONE continuation turn
+//! on the fallback model in the same native thread and durable run: the
+//! original input is not repeated, and a note tells the model that its
+//! earlier calls and outputs are above, to inspect state first and never to
+//! repeat an external send. Otherwise the run fails with the closed
+//! `provider` class. The policy never selects a Claude model.
 use orkestr_v2_contracts::runtime::Role;
 use std::collections::BTreeMap;
 use std::sync::RwLock;
@@ -29,6 +34,9 @@ pub struct CapacityFallback {
     /// reports an error. Zero disables the watchdog for that role.
     stall_deep_secs: u64,
     stall_fast_secs: u64,
+    /// Deep only: continue (never replay) a turn that hit capacity after
+    /// settled tool calls, once, on the fallback model.
+    continue_deep: bool,
 }
 
 impl Default for CapacityFallback {
@@ -44,6 +52,7 @@ impl Default for CapacityFallback {
                 .collect(),
             stall_deep_secs: DEFAULT_STALL_DEEP_SECS,
             stall_fast_secs: DEFAULT_STALL_FAST_SECS,
+            continue_deep: DEFAULT_CONTINUE_DEEP,
         }
     }
 }
@@ -52,6 +61,9 @@ impl Default for CapacityFallback {
 /// (compaction, xhigh reasoning); the capacity-class retry stays on.
 pub const DEFAULT_STALL_DEEP_SECS: u64 = 0;
 pub const DEFAULT_STALL_FAST_SECS: u64 = 0;
+/// A Deep turn interrupted by capacity after settled tool calls continues
+/// once on the fallback instead of failing the run (operator may disable).
+pub const DEFAULT_CONTINUE_DEEP: bool = true;
 const MAX_STALL_SECS: u64 = 3600;
 
 /// A fallback target must be a Codex launch model, never Claude (Fable).
@@ -107,6 +119,18 @@ impl CapacityFallback {
         self.stall_deep_secs = deep;
         self.stall_fast_secs = fast;
         Ok(self)
+    }
+
+    /// Operator switch for the Deep continuation after side effects.
+    pub fn with_continuation(mut self, deep: bool) -> Self {
+        self.continue_deep = deep;
+        self
+    }
+
+    /// Whether a capacity failure after settled side effects may continue
+    /// once on the fallback (Deep only; Fast and Workers never).
+    pub fn continues_after_side_effects(&self, role: Role) -> bool {
+        self.enabled_for(role) && role == Role::Deep && self.continue_deep
     }
 
     /// The stall watchdog deadline for a role, if enabled.
@@ -205,6 +229,14 @@ mod tests {
             assert_eq!(policy.fallback_for(role, "unmapped"), None);
         }
         assert_eq!(policy.fallback_for(Role::Worker, "gpt-6.1-sol"), None);
+        assert!(policy.continues_after_side_effects(Role::Deep));
+        assert!(!policy.continues_after_side_effects(Role::Fast));
+        assert!(!policy.continues_after_side_effects(Role::Worker));
+        assert!(!policy
+            .clone()
+            .with_continuation(false)
+            .continues_after_side_effects(Role::Deep));
+        assert!(!CapacityFallback::disabled().continues_after_side_effects(Role::Deep));
         assert_eq!(
             CapacityFallback::disabled().fallback_for(Role::Deep, "gpt-6.1-sol"),
             None

@@ -270,14 +270,65 @@ async fn capacity_before_any_tool_call_retries_once_on_the_fallback_and_records_
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn capacity_after_a_tool_call_is_never_retried_and_is_a_provider_failure() {
-    let (case, status) = Case::run("tool", "tool", CapacityFallback::default()).await;
+async fn capacity_after_a_tool_call_is_never_retried_when_continuation_is_off() {
+    let policy = CapacityFallback::default().with_continuation(false);
+    let (case, status) = Case::run("tool", "tool", policy).await;
     assert_eq!(status.phase, ExecutionPhase::Failed);
     assert_eq!(
         status.failure.map(|failure| failure.class),
         Some(ExecutionFailureClass::Provider)
     );
     assert_eq!(case.turns().len(), 1);
+    case.cleanup();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn capacity_after_settled_tool_calls_continues_once_without_replaying_the_input() {
+    let (case, status) = Case::run("tool-continue", "tool", CapacityFallback::default()).await;
+    assert_eq!(status.phase, ExecutionPhase::AwaitingAcceptance);
+    let turns = case.turns();
+    assert_eq!(turns.len(), 2, "exactly one continuation");
+    assert_eq!(turns[0]["text"], INPUT);
+    assert_eq!(turns[1]["model"], "gpt-6-sol");
+    let note = turns[1]["text"].as_str().unwrap();
+    assert!(note.starts_with("[Orkestr continuation on gpt-6-sol"));
+    assert!(note.contains("never repeat an external send"));
+    assert!(
+        !note.contains(INPUT),
+        "the original input is never replayed"
+    );
+    assert_ne!(turns[0]["message"], turns[1]["message"]);
+    let payload = status.progress.as_ref().unwrap().payload_id.clone();
+    assert_eq!(
+        case.store
+            .provider_payload(&case.owner, &case.conversation, &payload)
+            .await
+            .unwrap()
+            .text
+            .as_deref(),
+        Some("synthetic fallback answer")
+    );
+    let models = status.models.expect("native model evidence");
+    assert_eq!(models.actual_model.as_deref(), Some("gpt-6-sol"));
+    assert!(status.failure.is_none());
+    case.cleanup();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_continuation_that_is_also_at_capacity_fails_after_exactly_one_attempt() {
+    let (case, status) =
+        Case::run("tool-persist", "tool-persist", CapacityFallback::default()).await;
+    assert_eq!(status.phase, ExecutionPhase::Failed);
+    assert_eq!(
+        status.failure.map(|failure| failure.class),
+        Some(ExecutionFailureClass::Provider)
+    );
+    let turns = case.turns();
+    assert_eq!(turns.len(), 2);
+    assert!(turns[1]["text"]
+        .as_str()
+        .unwrap()
+        .starts_with("[Orkestr continuation on gpt-6-sol"));
     case.cleanup();
 }
 

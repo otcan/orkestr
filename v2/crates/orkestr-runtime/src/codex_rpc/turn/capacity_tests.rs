@@ -53,7 +53,9 @@ fn side_effects_missing_evidence_or_a_question_make_the_hold_unclean() {
         let mut stream = active(4);
         fail(&mut stream, turn).unwrap();
         assert_eq!(stream.capacity_held(), Some(false));
-        assert!(stream.fallback_retry(5).is_err());
+        assert!(stream.fallback_retry(5, false).is_err());
+        // A continuation never replays the input: settled side effects permit it.
+        assert!(stream.fallback_retry(5, true).is_ok());
     }
     let mut stream = active(4);
     stream.receive(&json!({"method":"item/completed","params":{"threadId":"thread-owned","turnId":"turn-owned",
@@ -65,6 +67,10 @@ fn side_effects_missing_evidence_or_a_question_make_the_hold_unclean() {
     )
     .unwrap();
     assert_eq!(stream.capacity_held(), Some(false));
+    assert!(
+        stream.fallback_retry(5, true).is_err(),
+        "a turn that asked the owner a question never continues"
+    );
 }
 
 #[test]
@@ -104,8 +110,11 @@ fn fallback_stream_is_the_same_thread_and_never_repeats_started() {
         "error":{"class":"capacity"},"sideEffects":false}),
     )
     .unwrap();
-    assert!(stream.fallback_retry(4).is_err(), "request must advance");
-    let mut retry = stream.fallback_retry(5).unwrap();
+    assert!(
+        stream.fallback_retry(4, false).is_err(),
+        "request must advance"
+    );
+    let mut retry = stream.fallback_retry(5, false).unwrap();
     assert_eq!(retry.request(), 5);
     retry
         .receive(
@@ -125,7 +134,7 @@ fn fallback_stream_is_the_same_thread_and_never_repeats_started() {
         ]
     );
     // A second capacity failure of the retry is held again; Runtime releases it.
-    let mut again = stream.fallback_retry(5).unwrap();
+    let mut again = stream.fallback_retry(5, false).unwrap();
     again
         .receive(
             &json!({"id":5,"result":{"turn":{"id":"turn-retry","status":"inProgress"}}})
@@ -165,7 +174,7 @@ fn stall_interrupt_only_for_a_silent_turn_and_its_interrupted_terminal_is_held()
     .unwrap();
     assert_eq!(stream.capacity_held(), Some(true));
     assert!(drain(&mut stream).is_empty(), "never a Core Stopped");
-    assert!(stream.fallback_retry(5).is_ok());
+    assert!(stream.fallback_retry(5, false).is_ok());
     stream.release_capacity_hold().unwrap();
     assert_eq!(
         drain(&mut stream),

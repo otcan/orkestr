@@ -121,12 +121,19 @@ impl TurnStream {
         self.watchdog.is_some() && !self.watchdog_acked
     }
     /// The same run's one capacity fallback turn on the same native thread.
-    /// Only a held, side-effect-free capacity terminal permits it.
-    pub(crate) fn fallback_retry(&self, request: u64) -> Result<Self, Blocker> {
+    /// A held, side-effect-free capacity terminal permits a retry; a
+    /// `continuation` (which never repeats the input) also permits a held
+    /// terminal with side effects, unless the turn asked the owner a question.
+    pub(crate) fn fallback_retry(&self, request: u64, continuation: bool) -> Result<Self, Blocker> {
+        let permitted = match self.capacity_hold {
+            Some(true) => true,
+            Some(false) => continuation && !self.text.asked_question(),
+            None => false,
+        };
         if self.poisoned
             || (self.interrupt_claimed && self.watchdog.is_none())
             || self.stall_reply_pending()
-            || self.capacity_hold != Some(true)
+            || !permitted
             || request <= self.request
             || request >= (1_u64 << 53)
         {
