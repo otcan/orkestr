@@ -65,6 +65,19 @@ class BetaReceiptTests(unittest.TestCase):
                 self.assertEqual(value['web']['features'], ['web', 'execution-controls'])
                 self.assertEqual(value['server']['features'], [])
 
+    def test_receipt_target_follows_the_server_elf_machine(self):
+        self.assertEqual(self.seal()['target'], 'linux-x86_64')
+        self.binary.write_bytes(b'\x7fELF\x02\x01' + b'\0' * 12 + b'\xb7\0never executed')
+        value = self.seal()
+        self.assertEqual(value['target'], 'linux-aarch64')
+        self.assertEqual(receipt.verify(value, self.binary, self.ui)['target'], 'linux-aarch64')
+        self.binary.write_bytes(b'\x7fELF\x02\x01' + b'\0' * 12 + b'\x28\0never executed')
+        with self.assertRaises(Exception):
+            self.seal()
+        value['target'] = 'linux-armv7'
+        with self.assertRaises(Exception):
+            receipt.verify(value, self.binary, self.ui)
+
     def test_only_explicit_betas_and_existing_positive_rc_numbers_are_supported(self):
         for version in ('2.0.0-beta.0', '2.0.0-beta.6', '2.0.0-beta.01', '2.0.0-beta',
                         '2.0.0-rc.0', '2.0.0-rc.01', '2.0.0', '2.0.1-beta.1',

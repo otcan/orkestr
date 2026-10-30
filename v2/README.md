@@ -8,11 +8,12 @@ for its acceptance gates; an image build does not prove a provider answer.
 
 ## Docker quickstart
 
-Requires Linux x86_64, Docker Engine with Compose v2, public registry access,
+Requires Docker Engine with Compose v2 on Linux x86_64 or arm64 (aarch64), or
+Docker Desktop on an Apple Silicon Mac (see below), public registry access,
 and your own ChatGPT/Codex login (a Claude login is optional). **No prebuilt image is published: the
 install builds Orkestr from source on your machine, which takes roughly 10–30
 minutes** depending on the machine and registry speed. Allow at least 8 GiB RAM
-and 25 GiB free disk. ARM, Windows, macOS and desktop packages are deferred.
+and 25 GiB free disk. Windows, Intel Macs and desktop packages are deferred.
 
 ```sh
 git clone --branch v2.0.0-beta.5 https://github.com/otcan/orkestr.git
@@ -29,6 +30,36 @@ the commands from the `orkestr` checkout; later `exec`, `logs`, `restart` and
 The image fetches the exact public commit anonymously; no host home, credentials
 or application state is copied. Open **http://127.0.0.1:19822**. Only loopback is
 published. On a remote Linux server, use an SSH port forward and the same URL.
+
+### macOS (Apple Silicon) with Docker Desktop
+
+Docker Desktop on an M-series Mac runs a Linux arm64 VM, and the image builds
+natively for `linux/arm64` (Codex and Claude CLIs use their official
+arm64 Linux releases, pinned by checksum per architecture). Do not add
+`--platform linux/amd64`: emulating x86 would make the Rust build take hours.
+
+1. Install Docker Desktop 4.x and start it. In **Settings → Resources**, give the
+   VM at least **8 GB memory** (a 2-job Rust release build peaks around 4–6 GB;
+   less memory fails with a killed `rustc`), 4+ CPUs, and a **disk limit with
+   25 GB free**. Keep the default Apple Virtualization framework and VirtioFS.
+2. Run the same three commands as above in Terminal, from the `orkestr` checkout:
+
+   ```sh
+   printf 'ORKESTR_SOURCE_COMMIT=%s\n' "$(git rev-parse HEAD)" > v2/packaging/oss/.env
+   docker compose -f v2/packaging/oss/compose.yaml up -d --build
+   docker compose -f v2/packaging/oss/compose.yaml ps
+   ```
+
+3. Expect the first build to take roughly **15–40 minutes** on an M1–M4 (about
+   the same as an x86 laptop; the build uses 2 compiler jobs to bound memory).
+   Later `up -d` runs reuse the built image.
+
+Known caveats on arm64: the bounded provider sandbox and workspace command/job
+sandbox (seccomp + bubblewrap profiles) are Linux x86_64 only and refuse to run
+elsewhere; the Docker beta does not use them (it runs providers in the
+container's full-access profile), so they do not affect this install. Port
+19822 is published on the Mac's loopback only. The image is not interchangeable
+across architectures: rebuild it on each machine.
 
 ### Create your Orkestr account
 
@@ -172,7 +203,7 @@ folders. **Gmail and LinkedIn job tracking are not part of this beta.** Checks a
 events can wait for earlier thread evidence, and `more_mail` is not proof of
 full catch-up for large mailboxes. Recurring scans require a separate owner action.
 
-Deferred: desktop/macOS/Windows/ARM, mobile apps, a published container image,
+Deferred: desktop/Windows/Intel Mac packages, mobile apps, a published container image,
 Gmail/LinkedIn job tracking, turnkey WhatsApp or mail account provisioning, multi-user hosting, optional integrations and full parity with
 private operator deployments.
 

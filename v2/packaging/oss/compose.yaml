@@ -2,7 +2,8 @@ name: orkestr-v2-beta
 services:
   orkestr:
     image: orkestr-v2-beta:local
-    platform: linux/amd64
+    # No fixed platform: Docker builds natively for the host (linux/amd64 on
+    # x86_64 Linux, linux/arm64 on Apple Silicon Docker Desktop or ARM Linux).
     build:
       context: ../../..
       dockerfile: v2/packaging/oss/Dockerfile

@@ -16,6 +16,8 @@ from prepare import inventory
 
 REPO=Path(__file__).resolve().parents[4]
 sha=lambda p:hashlib.sha256(p.read_bytes()).hexdigest()
+HEADER=b'\x7fELF\x02\x01'+b'\0'*12+selected.host_machine()
+FOREIGN=b'\x7fELF\x02\x01'+b'\0'*12+(b'\xb7\0' if selected.host_machine()==b'\x3e\0' else b'\x3e\0')
 
 @unittest.skipUnless(os.geteuid()==0,'explicit root synthetic custody test')
 class Selected(unittest.TestCase):
@@ -27,7 +29,7 @@ class Selected(unittest.TestCase):
             p=r/name;p.mkdir();p.chmod(0o700);os.chown(p,995,986)
         for name in ('bootstrap','authdir/auth.json'):
             p=r/name;p.write_bytes(b'synthetic-only');p.chmod(0o600);os.chown(p,995,986)
-        header=b'\x7fELF\x02\x01'+b'\0'*12+b'\x3e\0'
+        header=HEADER
         (r/'server').write_bytes(header+f'ORKESTR_V2_BUILD_IDENTITY_V1|server|2.0.0-beta.1|{MANAGER_BASE}|END'.encode())
         (r/'native').write_bytes(header+b'not-executable-fixture')
         (r/'ui').mkdir();(r/'ui/index.html').write_text('synthetic')
@@ -46,6 +48,11 @@ class Selected(unittest.TestCase):
     def validate(self):
         with authority(REPO,MANAGER_BASE) as (_,manager,_):
             return manager.Package(self.root/'release/package',sha(self.root/'release/package/manifest.json'))
+    def test_foreign_architecture_artifact_refused(self):
+        native=self.root/'native';native.write_bytes(FOREIGN+b'not-executable-fixture')
+        self.plan['native_sha256']=sha(native)
+        with self.assertRaisesRegex(RuntimeError,'native Linux ELF for this host required'):selected.prepare(self.plan)
+        self.assertFalse((self.root/'release').exists())
     def test_full_package_credentials_metadata_only(self):
         original=Path.open
         def guarded(path,*a,**kw):
@@ -155,7 +162,7 @@ class Selected(unittest.TestCase):
         pair['server']['sha256']=sha(r/'server');pair['web']['files']=inventory(r/'ui')
         pair['web']['server_candidate']=source
         (r/'pair').write_text(json.dumps(pair));self.plan['pair_sha256']=sha(r/'pair')
-        header=b'\x7fELF\x02\x01'+b'\0'*12+b'\x3e\0'
+        header=HEADER
         (r/'code-mode-host').write_bytes(header+b'synthetic-code-mode-host')
         self.plan['host_full_access']={'providers':True,'environment':{'HOME':'/home/service','PATH':'/usr/bin:/bin'}}
         with self.assertRaisesRegex(RuntimeError,'code_mode_host'):selected.prepare(self.plan)
@@ -184,7 +191,7 @@ class Selected(unittest.TestCase):
         pair['server']['sha256']=sha(r/'server');pair['web']['files']=inventory(r/'ui')
         pair['web']['server_candidate']=source
         (r/'pair').write_text(json.dumps(pair));self.plan['pair_sha256']=sha(r/'pair')
-        header=b'\x7fELF\x02\x01'+b'\0'*12+b'\x3e\0'
+        header=HEADER
         (r/'code-mode-host').write_bytes(header+b'synthetic-code-mode-host')
         self.plan.update(code_mode_host=str(r/'code-mode-host'),code_mode_host_sha256=sha(r/'code-mode-host'))
         environment={'HOME':'/home/service','PATH':'/usr/bin:/bin'}
