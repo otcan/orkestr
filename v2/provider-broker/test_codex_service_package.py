@@ -29,7 +29,7 @@ class LiveMapPathTests(unittest.TestCase):
         stub.live_map = None
         self.assertNotIn(LIVE_MAP_ENV, Package.environment(stub))
         self.assertEqual(Package.environment(stub)[METRICS_BIND_ENV], "127.0.0.1:19843")
-        self.assertEqual(Package.environment(stub)[ACCESS_LOG_ENV], "all")
+        self.assertEqual(Package.environment(stub)[ACCESS_LOG_ENV], "quiet")
         stub.live_map = "/var/lib/synthetic/map.json"
         self.assertEqual(Package.environment(stub)[LIVE_MAP_ENV], "/var/lib/synthetic/map.json")
         self.assertNotIn(DESKTOP_BROKER_ENV, Package.environment(stub))

@@ -30,9 +30,10 @@ pub(crate) static REQUEST_ID: HeaderName = HeaderName::from_static("x-request-id
 /// Environment key: requests at or above this many milliseconds are logged
 /// as `slow_request` warnings (default 500).
 pub const SLOW_MS_ENV: &str = "ORKESTR_V2_SLOW_MS";
-/// Environment key: `all` logs every request, `slow` (default) only slow and
+/// Environment key: `all` logs every request, `quiet` all but successful fast
+/// reads (the polling that dominates the log), `slow` (default) only slow and
 /// failed ones, `off` none. Metrics are recorded in every mode. The service
-/// package selects `all`; the default stays quiet for embedders and tests
+/// package selects `quiet`; the default stays quiet for embedders and tests
 /// that pipe stderr without reading it (a full pipe would block every other
 /// stderr writer in the process).
 pub const ACCESS_LOG_ENV: &str = "ORKESTR_V2_ACCESS_LOG";
@@ -40,8 +41,33 @@ pub const ACCESS_LOG_ENV: &str = "ORKESTR_V2_ACCESS_LOG";
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AccessLog {
     All,
+    Quiet,
     Slow,
     Off,
+}
+
+impl AccessLog {
+    pub fn parse(value: Option<&str>) -> Self {
+        match value.map(str::trim) {
+            Some("off") => AccessLog::Off,
+            Some("all") => AccessLog::All,
+            Some("quiet") => AccessLog::Quiet,
+            _ => AccessLog::Slow,
+        }
+    }
+    /// Whether one finished request gets a log line. `Quiet` drops only fast
+    /// GET/HEAD responses with a 2xx/3xx status: writes, client and server
+    /// errors and slow requests are always kept.
+    pub fn shows(self, method: &str, status: u16, slow: bool) -> bool {
+        match self {
+            AccessLog::All => true,
+            AccessLog::Quiet => {
+                slow || !(200..400).contains(&status) || !matches!(method, "GET" | "HEAD")
+            }
+            AccessLog::Slow => slow || status >= 500,
+            AccessLog::Off => false,
+        }
+    }
 }
 
 pub struct Observer {
@@ -64,11 +90,7 @@ impl Observer {
             .and_then(|v| v.trim().parse::<u64>().ok())
             .filter(|ms| (1..=600_000).contains(ms))
             .unwrap_or(500);
-        let access = match std::env::var(ACCESS_LOG_ENV).ok().as_deref().map(str::trim) {
-            Some("off") => AccessLog::Off,
-            Some("all") => AccessLog::All,
-            _ => AccessLog::Slow,
-        };
+        let access = AccessLog::parse(std::env::var(ACCESS_LOG_ENV).ok().as_deref());
         Self::new(Duration::from_millis(slow), access)
     }
     /// The process-wide observer the HTTP layer and upstream clients report to.
@@ -161,12 +183,7 @@ pub(crate) async fn observe(mut request: Request, next: Next) -> Response {
         headers.insert(HeaderName::from_static("server-timing"), value);
     }
     let slow = !streaming && elapsed >= observer.slow;
-    let show = match observer.access {
-        AccessLog::All => true,
-        AccessLog::Slow => slow || status >= 500,
-        AccessLog::Off => false,
-    };
-    if show {
+    if observer.access.shows(method.as_str(), status, slow) {
         log::request(&log::RequestLine {
             id: &id,
             method: method.as_str(),

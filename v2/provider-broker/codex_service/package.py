@@ -307,7 +307,7 @@ class Package:
                 "ORKESTR_V2_BETA_CONFIG": str(self.root / "beta.json"),
                 "ORKESTR_V2_UI_DIST": str(self.root / "ui"),
                 "ORKESTR_V2_ORIGIN": self.runtime["trusted_origin"],
-                ACCESS_LOG_ENV: "all",
+                ACCESS_LOG_ENV: "quiet",
                 **({METRICS_BIND_ENV: f"127.0.0.1:{self.runtime['port'] + 1}"}
                    if self.runtime["port"] < 65535 else {}),
                 **({LIVE_MAP_ENV: self.live_map} if self.live_map else {}),
