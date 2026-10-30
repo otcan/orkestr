@@ -753,12 +753,15 @@ the conversation snapshot (`GET /api/v2/conversations/<id>?after=<cursor>`)
 and adopts each row with `origin: "web"` and `actor_kind: "owner"` that this
 adapter did not admit itself:
 
-- **Only web input.** The server marks a row `origin: "web"` only for a
-  message the web composer sent (its `client_message_id` starts with `web:`).
-  Timer occurrences, steering, conversation posts and every message this
-  adapter admitted (WhatsApp and V1-local input; their Core message IDs are
-  kept in the ledger) are never mirrored, so nothing echoes back. A server
-  without the field mirrors nothing.
+- **Only owner web and API input.** The snapshot's `origin` is derived from
+  the message's `client_message_id`: `web` for the web composer's bare UUID,
+  `api` for any other owner-API key (helpers and relays that post owner
+  commands), and `timer`, `steering` or `thread_ask` for the system prefixes.
+  Rows marked `web` or `api` are mirrored. Timer occurrences, steering,
+  thread asks, conversation posts and every message this adapter admitted
+  (WhatsApp and V1-local input; their Core message IDs are kept in the
+  ledger) are never mirrored, so nothing echoes back. A server without the
+  field mirrors nothing.
 - **The message at once.** One pseudo timer input labelled `🖥️ (web)` (the
   same parent shape as conversation posts) whose final reply is the owner's
   text, so V1 sends `[Timer: 🖥️ (web)]` and the text. App attachment notes

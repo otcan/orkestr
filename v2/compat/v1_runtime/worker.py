@@ -58,8 +58,10 @@ DIGEST_POLL_S = 30
 POST_POLL_S = 5
 POST_PAGE = 20
 POST_AUTHORS = ("coordinator", "operator")
-# Web-UI owner messages (snapshot `origin: "web"`) are mirrored to the group and
-# their accepted Deep answer follows. Interactive, so looked for every 3 s.
+# Owner messages typed in the web UI or posted through the owner messages API
+# (snapshot `origin: "web"` / `"api"`) are mirrored to the group and their
+# accepted Deep answer follows. Interactive, so looked for every 3 s.
+WEB_ORIGINS = ("web", "api")
 WEB_POLL_S = 3
 WEB_PAGE = 50
 WEB_PAGES = 4
@@ -534,7 +536,8 @@ class Worker:
     def discover_web(self):
         """Mirror owner messages typed in the V2 web UI to the group.
 
-        Only snapshot rows the server marks `origin: "web"` qualify, and never a
+        Only snapshot rows the server marks `origin: "web"` or `"api"` qualify
+        (timer, steering and thread-ask rows never do), and never a
         message this adapter admitted itself (no echo of WhatsApp input). The
         first scan of a ledger only records the current position."""
         cursor = self.ledger.web_cursor()
@@ -554,7 +557,7 @@ class Worker:
                 if (not isinstance(row, dict) or type(row.get("sequence")) is not int or row["sequence"] <= cursor or
                         not isinstance(row.get("message_id"), str) or not isinstance(row.get("text"), str)):
                     raise Refused("snapshot_shape")
-                if row.get("origin") == "web" and row.get("actor_kind") == "owner" and row["text"].strip():
+                if row.get("origin") in WEB_ORIGINS and row.get("actor_kind") == "owner" and row["text"].strip():
                     if own is None:
                         own = self.ledger.own_message_ids()
                     if row["message_id"] not in own:

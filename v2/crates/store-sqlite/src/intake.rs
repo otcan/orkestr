@@ -231,7 +231,7 @@ impl IntakeStore for Store {
             return Err(StoreError::Invalid);
         }
         let limit = limit.clamp(1, 100);
-        let mut rows = sqlx::query("SELECT m.id,m.sequence,m.actor_kind,m.text,r.reply_to FROM messages m LEFT JOIN message_reply_to r ON r.message_id=m.id WHERE m.conversation_id=? AND m.owner_id=? AND m.sequence>? AND m.sequence<=? ORDER BY m.sequence LIMIT ?")
+        let mut rows = sqlx::query("SELECT m.id,m.sequence,m.actor_kind,m.text,m.request_key,r.reply_to FROM messages m LEFT JOIN message_reply_to r ON r.message_id=m.id WHERE m.conversation_id=? AND m.owner_id=? AND m.sequence>? AND m.sequence<=? ORDER BY m.sequence LIMIT ?")
             .bind(conversation.to_string()).bind(owner.to_string()).bind(after).bind(last_sequence).bind(limit+1).fetch_all(&self.pool).await.map_err(db)?;
         let more = rows.len() > limit as usize;
         rows.truncate(limit as usize);
@@ -246,6 +246,7 @@ impl IntakeStore for Store {
                     reply_to: r
                         .get::<Option<String>, _>("reply_to")
                         .and_then(|json| serde_json::from_str(&json).ok()),
+                    origin: Some(message_origin(r.get("request_key")).into()),
                 })
             })
             .collect::<Result<Vec<_>>>()?;
@@ -344,3 +345,53 @@ pub(crate) async fn admit_in_transaction(
 #[cfg(test)]
 #[path = "reply_to_tests.rs"]
 mod reply_to_tests;
+
+/// The snapshot `origin` of an owner message, from its idempotency key. System
+/// admissions use fixed prefixes; the web composer sends a bare UUID; anything
+/// else came through the owner messages API (helpers, relays, scripts).
+pub(crate) fn message_origin(request_key: &str) -> &'static str {
+    const SYSTEM: [(&str, &str); 5] = [
+        ("timer:", "timer"),
+        ("timer-window:", "timer"),
+        ("steering:", "steering"),
+        ("thread-ask:", "thread_ask"),
+        ("thread-ask-reply:", "thread_ask"),
+    ];
+    if let Some((_, origin)) = SYSTEM
+        .iter()
+        .find(|(prefix, _)| request_key.starts_with(prefix))
+    {
+        return origin;
+    }
+    if Uuid::parse_str(request_key).is_ok_and(|id| id.to_string() == request_key) {
+        "web"
+    } else {
+        "api"
+    }
+}
+
+#[cfg(test)]
+mod message_origin_tests {
+    use super::message_origin;
+
+    #[test]
+    fn origin_follows_the_request_key() {
+        assert_eq!(
+            message_origin("6f1c2d3e-4b5a-4c6d-8e7f-0a1b2c3d4e5f"),
+            "web"
+        );
+        assert_eq!(
+            message_origin("owner-relay-kdp-isbn-file-all-20261030T0922Z"),
+            "api"
+        );
+        assert_eq!(
+            message_origin("6F1C2D3E-4B5A-4C6D-8E7F-0A1B2C3D4E5F"),
+            "api"
+        );
+        assert_eq!(message_origin("timer:claim"), "timer");
+        assert_eq!(message_origin("timer-window:event:retry2"), "timer");
+        assert_eq!(message_origin("steering:id"), "steering");
+        assert_eq!(message_origin("thread-ask:ask"), "thread_ask");
+        assert_eq!(message_origin("thread-ask-reply:id"), "thread_ask");
+    }
+}
