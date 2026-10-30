@@ -177,6 +177,7 @@ impl Store {
                     actor_kind: row.get("actor_kind"),
                     text: row.get("text"),
                     reply_to: None,
+                    origin: None,
                 });
             }
             let snapshot = ConversationSnapshot {

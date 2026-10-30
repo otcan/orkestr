@@ -129,6 +129,21 @@ class WebMirrorTests(Base):
             self.assertTrue(done["settled"])
         self.assertEqual(self.ledger.messages(), [])
 
+    def test_owner_api_message_is_mirrored_with_its_answer(self):
+        # An owner command posted through the owner messages API (a relay or
+        # helper, not the composer) reaches the group like a web message.
+        self.ledger.set_web_cursor(10)
+        self.peer.snapshot = [row(origin="api", text="file all 10 applications")]
+        self.peer.runs[WEB] = ["api-deep"]
+        self.peer.deep["api-deep"] = "running"
+        self.scan()
+        mirror, = self.replies()
+        self.assertEqual(mirror["text"], "file all 10 applications")
+        self.peer.answer("api-deep", "Open the desk and enter the code.")
+        self.scan()
+        self.assertEqual(self.replies()[-1]["text"], "Open the desk and enter the code.")
+        self.assertEqual(self.ledger.health()["webAnswersAwaited"], 0)
+
     def test_replay_and_restart_adopt_nothing_new(self):
         self.ledger.set_web_cursor(10)
         self.peer.snapshot = [row()]
@@ -149,12 +164,14 @@ class WebMirrorTests(Base):
         self.worker.step(self.ledger.next_input())
         self.ledger.set_web_cursor(10)
         own = row(message_id="message", sequence=11, text="from WhatsApp")
-        self.peer.snapshot = [own, row(message_id=WEB2, sequence=12, origin=None, text="timer or API"),
-                              row(message_id=WEB2, sequence=13, origin="timer", text="timer")]
+        self.peer.snapshot = [own, row(message_id=WEB2, sequence=12, origin=None, text="unmarked"),
+                              row(message_id=WEB2, sequence=13, origin="timer", text="timer"),
+                              row(message_id=WEB2, sequence=14, origin="steering", text="steer"),
+                              row(message_id=WEB2, sequence=15, origin="thread_ask", text="ask")]
         before = self.ledger.messages()
         self.scan()
         self.assertEqual(self.ledger.messages(), before)
-        self.assertEqual(self.ledger.web_cursor(), 13)
+        self.assertEqual(self.ledger.web_cursor(), 15)
 
     def test_no_reply_answer_and_failed_run_settle_silently(self):
         self.ledger.set_web_cursor(10)

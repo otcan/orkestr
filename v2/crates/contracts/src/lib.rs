@@ -253,6 +253,12 @@ pub struct Message {
     pub text: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reply_to: Option<ReplyTo>,
+    /// Where an owner message came from, derived from its idempotency key:
+    /// `web` (the web composer's bare UUID), `api` (any other owner-API key),
+    /// or the system path (`timer`, `steering`, `thread_ask`). Absent in
+    /// exports and history imports, so their canonical bytes are unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<String>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConversationSnapshot {
