@@ -14,6 +14,7 @@ from unittest.mock import patch
 
 from v2.compat.v1_runtime import ledger as ledger_module
 from v2.compat.v1_runtime import notices, recovery
+from v2.compat.v1_runtime import worker as worker_module
 from v2.compat.v1_runtime.first_response import repeats_fast
 from v2.compat.v1_runtime.ledger import Conflict, Ledger
 from v2.compat.v1_runtime.worker import Refused, Worker
@@ -232,6 +233,30 @@ class AnsweredByProgressTests(Base):
         self.assertEqual(self.ledger.input(self.data["remote_id"])["refused"]["reason"], "answered_by_progress")
         (notice,) = self.notices()
         self.assertEqual(notice["text"], notices.TEMPLATES["stopped_after_answer"]["tr"])
+
+    def test_unreported_progress_waits_only_a_bounded_time_then_the_notice_goes_out(self):
+        # otcanClaw-LinkedIn 2026-10-30: V1 never reported the progress, the
+        # input waited forever, the chat got no notice and later inputs queued.
+        self.progress(outcome=None)
+        with patch.object(worker_module, "PROGRESS_REPORT_WAIT_S", 0):
+            log = self.passes(2)
+        data = self.ledger.input(self.data["remote_id"])
+        self.assertEqual(data["phase"], "completed")
+        self.assertEqual(data["refused"]["reason"], "deep_run_cancelled")
+        (notice,) = self.notices()
+        self.assertEqual(notice["text"], notices.TEMPLATES["failure"]["tr"])
+        self.assertIn("ALERT orkestr-v2-wa-adapter input_refused", log)
+
+    def test_timer_input_never_waits_for_progress_v1_does_not_send(self):
+        # V1 does not transport a timer input's progress; its export stays
+        # unreported until a final supersedes it.
+        self.progress(outcome=None)
+        timer = dict(self.ledger.input(self.data["remote_id"]), origin="timer")
+        deep = dict(run_id="deep-run", phase="failed", progress=dict(payload_id="answer-payload"))
+        self.assertFalse(self.worker.answered_by_progress(timer, deep, "deep_run_failed:provider"))
+        self.assertNotIn("progress_report_wait_since", timer)
+        member = self.ledger.input(self.data["remote_id"])
+        self.assertTrue(self.worker.answered_by_progress(member, deep, "deep_run_failed:provider"))
 
     def test_older_progress_or_uncertain_delivery_keeps_the_notice(self):
         for payload_id, outcome in (("older-payload", "delivered"), ("answer-payload", "uncertain")):
