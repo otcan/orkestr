@@ -90,7 +90,7 @@ BURST_NOTE = ("[%d messages arrived together and are delivered as one turn. Read
 RESET_KEYS = ("intake", "cursor", "fast_cursor", "window", "window_request", "previous_window", "matched_runs", "accepted",
               "fast_accept_request", "deep_accept_request", "fast_payload", "deep_payload", "admitted_at",
               "progress_at", "fast_unusable_since", "intake_rules", "questions_scanned", "question_payloads", "question_texts", "progress_hold", "activity", "deep_final_ready_at", "transport_activity",
-              "deep_stop_seen_ms")
+              "deep_stop_seen_ms", "progress_report_wait_since")
 # An admitted input whose window ended without starting any run of it.
 ORPHAN_GRACE_S = 60
 # A pass reads the journal page by page until it reaches the end, at most
@@ -106,6 +106,9 @@ DEADLINE_STOP_PHASES = ("cancelled", "stopped", "interrupted")
 # status has no terminal cause, so a closed window alone (for example after a
 # failed reconciliation) is not deadline evidence.
 DEADLINE_SLACK_MS = 30_000
+# An ended Deep waits at most this long for V1's report on its latest progress
+# export before the ordinary notice goes out (answered_by_progress).
+PROGRESS_REPORT_WAIT_S = 120
 # English rendering; `Ledger.continue_notice` sends it in the chat's language.
 CONTINUE_NOTICE = TEMPLATES["continue"]["en"]
 CONTINUE_PREFIX = ("[The previous turn for this message reached its time limit and was stopped "
@@ -1178,14 +1181,29 @@ class Worker:
         input closes with a softened final notice instead (reason
         answered_by_progress, the run's own reason in the log), logged at
         INFO. While that progress is still being sent the input waits for V1's
-        report; an uncertain or missing delivery keeps the ordinary notice.
+        report, at most PROGRESS_REPORT_WAIT_S; an uncertain, missing or late
+        delivery keeps the ordinary notice.
+
+        A timer input never qualifies: V1 does not transport a timer input's
+        progress (it stays unreported until the final supersedes it), so the
+        wait would never end and the input would hold every later input of
+        the binding with no notice (otcanClaw-LinkedIn 2026-10-30, run
+        58ef4a53: capacity failure after side effects, the chat stayed silent).
         Returns True when handled."""
+        if data.get("origin") == "timer":
+            return False
         payload_id = (deep.get("progress") or {}).get("payload_id")
         if not isinstance(payload_id, str) or not payload_id:
             return False
         outcome = self.ledger.progress_outcome(data, payload_id)
         if outcome == "pending":
-            return True
+            now = time.time()
+            since = data.setdefault("progress_report_wait_since", now)
+            if since == now:
+                self.ledger.save(data)
+            if now - since < PROGRESS_REPORT_WAIT_S:
+                return True
+            return False
         if outcome != "delivered":
             return False
         recovery.log(self, "input_answered_by_progress", data, reason=reason, run=deep.get("run_id"))
