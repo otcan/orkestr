@@ -43,6 +43,8 @@ LINKS = {
     'claude': re.compile(r'https://claude\.com/cai/oauth/authorize\?[A-Za-z0-9%&=_.+~-]{1,4000}'),
 }
 DEVICE_CODE = re.compile(r'(?<![A-Z0-9-])[A-Z0-9]{4,8}-[A-Z0-9]{4,8}(?![A-Z0-9-])')
+# A refused sign-in is reported as one fixed reason word, never as CLI output.
+UPSTREAM_RATE_LIMITED = re.compile(r'\b429\b|too many requests|rate[ -]?limit', re.IGNORECASE)
 CLAUDE_CODE = re.compile(r'[A-Za-z0-9#_.~-]{8,1024}')
 
 
@@ -82,6 +84,7 @@ class Login:
         self.link = None
         self.code = None
         self.terminal = None
+        self.reason = None
         argv = [str(PROVIDERS / provider)] + (['login', '--device-auth'] if provider == 'codex' else ['auth', 'login'])
         if provider == 'claude':
             # Claude asks for the browser's code at a prompt: give it a private pty.
@@ -114,6 +117,8 @@ class Login:
         self.process.wait()
         if self.state not in ('expired', 'cancelled'):
             self.state = 'finished' if self.process.returncode == 0 else 'failed'
+            if self.state == 'failed' and UPSTREAM_RATE_LIMITED.search(ANSI.sub(' ', self.output)):
+                self.reason = 'upstream_rate_limited'
 
     def parse(self):
         text = ANSI.sub(' ', self.output)
@@ -156,6 +161,8 @@ class Login:
     def public(self):
         self.expire()
         value = {'state': self.state}
+        if self.state == 'failed' and self.reason:
+            value['reason'] = self.reason
         if self.state in ('waiting', 'verifying'):
             value['link'] = self.link
             if self.code is not None:

@@ -78,6 +78,24 @@ class LoginParsingTests(unittest.TestCase):
         self.assertNotIn('sk-abc', json.dumps(login.public()))
 
 
+    def finished(self, output, returncode):
+        login = parsed('codex', '')
+        login.started, login.reason = service.time.monotonic(), None
+        login.process = FakeProcess()
+        login.process.wait = lambda timeout=None: setattr(login.process, 'returncode', returncode)
+        read, write = os.pipe()
+        os.write(write, output.encode())
+        os.close(write)
+        login.read(read)
+        os.close(read)
+        return login.public()
+
+    def test_upstream_rate_limit_is_a_fixed_reason_only(self):
+        value = self.finished('Error: request failed: 429 Too Many Requests (req-id abc123)\n', 1)
+        self.assertEqual(value, {'state': 'failed', 'reason': 'upstream_rate_limited'})
+        self.assertEqual(self.finished('Error: network unreachable\n', 1), {'state': 'failed'})
+        self.assertEqual(self.finished('Successfully logged in\n', 0), {'state': 'finished'})
+
 class SetupTests(unittest.TestCase):
     def setUp(self):
         self.setup = service.Setup()

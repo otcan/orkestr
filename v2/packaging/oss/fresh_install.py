@@ -147,29 +147,45 @@ print('root_observation_requires_added_capability')
             raise AssertionError('configure accepted without a Codex login')
         except urllib.error.HTTPError as error:
             assert error.code == 409
-        started = request('/api/v2/oss-setup/login/codex/start', {}, headers)
-        assert started['login']['state'] in ('starting', 'waiting')
-        deadline = time.monotonic() + 60
-        while True:
-            login = request('/api/v2/oss-setup/status', headers={'Cookie': headers['Cookie']})['providers']['codex']['login']
+        # The device code comes from OpenAI. Retry a failed start with backoff
+        # (our own limit is one start per 30 s); if OpenAI keeps answering 429,
+        # record the skip instead of failing CI on an upstream rate limit.
+        login = None
+        for attempt, delay in enumerate((0, 31, 62)):
+            time.sleep(delay)
+            started = request('/api/v2/oss-setup/login/codex/start', {}, headers)
+            assert started['login']['state'] in ('starting', 'waiting')
+            deadline = time.monotonic() + 60
+            while True:
+                login = request('/api/v2/oss-setup/status', headers={'Cookie': headers['Cookie']})['providers']['codex']['login']
+                if login['state'] in ('waiting', 'failed'):
+                    break
+                assert login['state'] == 'starting' and time.monotonic() < deadline, 'device code not shown: ' + login['state']
+                time.sleep(1)
             if login['state'] == 'waiting':
                 break
-            assert login['state'] == 'starting' and time.monotonic() < deadline, 'device code not shown: ' + login['state']
-            time.sleep(1)
-        assert login['link'].startswith('https://auth.openai.com/') and re.fullmatch(r'[A-Z0-9]{4,8}-[A-Z0-9]{4,8}', login['code'])
-        assert set(login) == {'state', 'link', 'code', 'expires_in'}
-        try:
-            request('/api/v2/oss-setup/login/codex/start', {}, headers)
-            raise AssertionError('second concurrent login accepted')
-        except urllib.error.HTTPError as error:
-            assert error.code == 409
-        request('/api/v2/oss-setup/login/codex/cancel', {}, headers)
-        try:
-            request('/api/v2/oss-setup/login/codex/start', {}, headers)
-            raise AssertionError('device login start not rate limited')
-        except urllib.error.HTTPError as error:
-            assert error.code == 429
-        passed('browser setup: session+CSRF required, Codex device link+code shown, one login at a time, rate limited')
+            assert set(login) <= {'state', 'reason'}, 'failed login exposed more than a reason'
+        report['device_flow_attempts'] = attempt + 1
+        if login['state'] == 'failed':
+            assert login.get('reason') == 'upstream_rate_limited', 'Codex device sign-in failed without an upstream rate limit'
+            report['device_flow'] = 'skipped_upstream_429'
+            passed('browser setup: session+CSRF required; Codex device flow skipped (OpenAI 429 after retries)')
+        else:
+            report['device_flow'] = 'device_code_shown'
+            assert login['link'].startswith('https://auth.openai.com/') and re.fullmatch(r'[A-Z0-9]{4,8}-[A-Z0-9]{4,8}', login['code'])
+            assert set(login) == {'state', 'link', 'code', 'expires_in'}
+            try:
+                request('/api/v2/oss-setup/login/codex/start', {}, headers)
+                raise AssertionError('second concurrent login accepted')
+            except urllib.error.HTTPError as error:
+                assert error.code == 409
+            request('/api/v2/oss-setup/login/codex/cancel', {}, headers)
+            try:
+                request('/api/v2/oss-setup/login/codex/start', {}, headers)
+                raise AssertionError('device login start not rate limited')
+            except urllib.error.HTTPError as error:
+                assert error.code == 429
+            passed('browser setup: session+CSRF required, Codex device link+code shown, one login at a time, rate limited')
         native = docker('exec', name, '/opt/orkestr/providers/codex', '--version')
         assert '0.163.0' in native
         native = docker('exec', name, '/opt/orkestr/providers/claude', '--version')

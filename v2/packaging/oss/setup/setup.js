@@ -41,7 +41,8 @@ function provider(name, data) {
   const active = login && (login.state === 'waiting' || login.state === 'verifying');
   const failed = login && ['failed', 'expired'].includes(login.state);
   $(name + '-state').textContent = data.signed_in ? 'signed in' : active ? 'waiting for you' :
-    login && login.state === 'starting' ? 'starting…' : failed ? 'sign-in did not finish; try again' : 'not signed in';
+    login && login.state === 'starting' ? 'starting…' : failed && login.reason === 'upstream_rate_limited' ? 'the provider is limiting sign-ins; try again in a few minutes' :
+    failed ? 'sign-in did not finish; try again' : 'not signed in';
   $(name + '-start').hidden = data.signed_in || active;
   $(name + '-device').hidden = data.signed_in || !active;
   if (active) {
