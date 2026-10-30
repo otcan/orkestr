@@ -226,7 +226,7 @@ beta `f6fb00a461d792af22ec15c80d089c266081ca3b`, including the reviewed
 paused-launch and retirement corrections. Source is exported from Git blobs;
 mutable checkout modules are never imported. Its authoritative `FILES` and
 `MODULES_SERVICE` define the closed inner package. Pair version must be
-`2.0.0-beta.1` through `2.0.0-beta.5`, with matching embedded native/web identities and release profiles.
+`2.0.0-beta.1` through `2.0.0-beta.6`, with matching embedded native/web identities and release profiles.
 Synthetic ELF fixtures only exercise packaging; they are never launched.
 
 Output is final-path-bound `start-service`, `release.json`, and `package/`.

@@ -1,6 +1,6 @@
 # First public V2 Linux beta release checklist
 
-Planned tag: **v2.0.0-beta.5**, following the published v2.0.0-beta.4. The earlier informal
+Planned tag: **v2.0.0-beta.6**, following the published v2.0.0-beta.5. The earlier informal
 “beta 1” meant the first public beta; never relabel beta.3 artifacts as beta.1.
 This checklist does not authorize tagging, publication or deployment.
 
@@ -59,7 +59,7 @@ contains only counts/status and fake or redacted identifiers.
 
 - [ ] Present remaining fresh-install gaps and exact candidate evidence to the
   owner. Obtain explicit GO for the source, tag and artifacts.
-- [ ] Verify `v2.0.0-beta.5` is unused and embedded version agrees. Never move
+- [ ] Verify `v2.0.0-beta.6` is unused and embedded version agrees. Never move
   an existing tag or relabel previous artifacts.
 - [ ] Tag/release via the release train; publish the approved image digest and
   attach the exact tarball/checksums/receipt. Build CI has no registry write

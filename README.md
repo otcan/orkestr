@@ -1,9 +1,10 @@
 # Orkestr
 
-**V2 Linux beta:** the current V2 pre-release is `v2.0.0-beta.5`. Follow the
-[V2 Docker quickstart](v2/README.md) for the web UI, your own Codex CLI login
+**V2 Linux beta:** the current V2 pre-release is `v2.0.0-beta.6`. Start it with one
+`docker run` of the prebuilt image (Linux x86_64/arm64, Apple Silicon Docker Desktop):
+follow the [V2 quick start](v2/README.md) for the web UI, your own Codex CLI login
 (Claude optional), Fast/Deep and timers. See the
-[release notes](docs/releases/v2.0.0-beta.5.md) and
+[release notes](docs/releases/v2.0.0-beta.6.md) and
 [release checklist](docs/v2/public-beta-checklist.md). It stays a pre-release
 until the automated provider acceptance passes. The V1 setup below remains separate.
 
