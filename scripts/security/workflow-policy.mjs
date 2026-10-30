@@ -45,6 +45,21 @@ function attestationJob(job) {
 // substitution or redirection, so no candidate code ever runs with the token.
 const publishCondition = "${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && " +
   "(github.ref == 'refs/heads/main' || (startsWith(github.ref, 'refs/tags/v') && !startsWith(github.ref, 'refs/tags/v2.'))) }}";
+// V2 beta images publish from v2-publish.yml only, only for pushed
+// v2.0.0-beta.* tags, and only under "$IMAGE:$GITHUB_REF_NAME[-amd64|-arm64]"
+// so they can never move :latest, :main or any V1 tag. That file may not use
+// the V1 condition, and no other file may use the V2 one.
+const v2PublishFile = "v2-publish.yml";
+const v2PublishCondition = "${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v2.0.0-beta.') }}";
+const v2ImageRef = /"\$IMAGE:[^"]*"/g;
+const v2AllowedRef = /^"\$IMAGE:\$GITHUB_REF_NAME(?:-amd64|-arm64)?"$/;
+const v2RefGuard = '[[ "$GITHUB_REF_NAME" =~ ^v2\\.0\\.0-beta\\.[0-9]+(-rc\\.[0-9]+)?$ ]]';
+export function v2PublishRunAllowed(run) {
+  if (typeof run !== "string" || /latest/i.test(run)) return false;
+  if (!(run.match(v2ImageRef) || []).every(ref => v2AllowedRef.test(ref))) return false;
+  const writes = run.search(/docker (?:push|tag|buildx)/);
+  return writes < 0 || (run.includes(v2RefGuard) && run.indexOf(v2RefGuard) < writes);
+}
 const publishJobActions = new Set(["actions/download-artifact"]);
 const publishDownloadInputs = new Set(["name", "path"]);
 const publishCommands = new Set(["docker", "echo", "set", "test", "[["]);
@@ -82,19 +97,23 @@ export function publishRunAllowed(run) {
     return publishDockerCommands.has(words[1]);
   });
 }
-function publishJob(job) {
+function publishJob(job, filename = "") {
   const value = job.permissions;
   if (!record(value) || !("packages" in value)) return false;
   requirePolicy(Object.keys(value).sort().join(",") === "contents,packages" && value.contents === "read" &&
     value.packages === "write", "workflow_permissions");
-  requirePolicy(job.if === publishCondition, "workflow_publish_event");
+  const v2 = filename === v2PublishFile;
+  requirePolicy(job.if === (v2 ? v2PublishCondition : publishCondition), "workflow_publish_event");
   requirePolicy(!("defaults" in job), "workflow_publish_shell");
   for (const step of job.steps || []) {
     requirePolicy(record(step) && !("shell" in step), "workflow_publish_shell");
     if (typeof step.uses === "string") {
       requirePolicy(publishJobActions.has(step.uses.split("@")[0]), "workflow_publish_actions");
       requirePolicy(Object.keys(step.with || {}).every(key => publishDownloadInputs.has(key)), "workflow_publish_actions");
-    } else requirePolicy(publishRunAllowed(step.run), "workflow_publish_candidate_code");
+    } else {
+      requirePolicy(publishRunAllowed(step.run), "workflow_publish_candidate_code");
+      requirePolicy(!v2 || v2PublishRunAllowed(step.run), "workflow_publish_v2_tag");
+    }
   }
   return true;
 }
@@ -123,7 +142,7 @@ export function validateWorkflow(source, filename = "") {
   for (const job of Object.values(workflow.jobs)) {
     requirePolicy(record(job) && (githubHostedRunners.has(job["runs-on"]) || (iosSimulator && job["runs-on"] === "macos-15")), "workflow_runner");
     requirePolicy(!["uses", "secrets", "container", "services", "environment"].some(key => key in job), "workflow_privileged_job");
-    if ("permissions" in job && (iosSimulator || (!attestationJob(job) && !publishJob(job)))) permissions(job.permissions);
+    if ("permissions" in job && (iosSimulator || (!attestationJob(job) && !publishJob(job, filename)))) permissions(job.permissions);
     requirePolicy(!job["continue-on-error"], "workflow_ignored_failure");
     requirePolicy(Array.isArray(job.steps) && job.steps.length > 0, "workflow_steps");
     for (const step of job.steps) {

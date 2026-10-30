@@ -63,11 +63,14 @@ print('root_observation_requires_added_capability')
                "from pathlib import Path; assert not list(Path('/state').iterdir()); "
                "assert not list(Path('/credentials').iterdir())")
         passed('new named volumes are empty before initialization')
-        docker('run', '--detach', '--name', name, '--memory', '2g', '--cpus', '2', '--pids-limit', '256',
-               '--security-opt', 'no-new-privileges:true', '--cap-add', 'SYS_PTRACE',
-               '--tmpfs', '/tmp:rw,nosuid,nodev,size=256m',
+        # Exactly the documented one-command `docker run` flags (README quick
+        # start): only SYS_PTRACE is added; no-new-privileges, tmpfs and pid
+        # limits are optional hardening, so the runtime must not rely on them.
+        docker('run', '--detach', '--name', name, '--memory', '2g', '--cpus', '2',
+               '--cap-add', 'SYS_PTRACE',
                '--publish', '127.0.0.1::19823', '--mount', f'type=volume,src={volumes[0]},dst=/state',
                '--mount', f'type=volume,src={volumes[1]},dst=/credentials', a.image)
+        assert json.loads(docker('inspect', '--format', '{{json .HostConfig.SecurityOpt}}', name)) in (None, [])
         inspected = json.loads(docker('inspect', '--format', '{{json .Mounts}}', name))
         assert all(m['Type'] == 'volume' for m in inspected), 'host bind mount refused'
         passed('only fresh named volumes; no host mounts/accounts')

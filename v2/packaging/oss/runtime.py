@@ -11,7 +11,7 @@ import time
 import urllib.request
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from capabilities import drop_child_capabilities
+from capabilities import drop_child_capabilities, set_no_new_privileges
 
 ROOT = Path('/opt/orkestr')
 SOURCE = ROOT / 'source'
@@ -243,6 +243,7 @@ def main():
     p.add_argument('action', choices=('serve', 'login', 'configure', 'health'), nargs='?', default='serve')
     p.add_argument('provider', choices=('codex', 'claude'), nargs='?')
     a = p.parse_args()
+    set_no_new_privileges()
     if a.action == 'health':
         require(request('/api/v2/health')['status'] == 'ok', 'health refused')
     elif a.action == 'login':
