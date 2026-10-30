@@ -1,0 +1,132 @@
+name: V2 beta image publish
+# Publishes the prebuilt multi-arch V2 beta image to GHCR. Only V2 beta tags
+# (v2.0.0-beta.N, or v2.0.0-beta.N-rc.M candidates) or a manual dispatch naming
+# such a tag. Never main, never V1 v0.* tags, never a floating tag: the root
+# ci.yml V1 image owns those in the same package. publish_tags.py computes and
+# re-checks every tag before each push.
+on:
+  push:
+    tags: ['v2.0.0-beta.*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing V2 beta git tag to publish, e.g. v2.0.0-beta.6'
+        required: true
+permissions:
+  contents: read
+concurrency:
+  group: v2-publish-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+env:
+  REF_NAME: ${{ inputs.tag || github.ref_name }}
+jobs:
+  image:
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    name: image (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      tags: ${{ steps.tags.outputs.json }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: refs/tags/${{ env.REF_NAME }}
+          persist-credentials: false
+      - name: Compute the exact V2 tags (refuses floating, main and V1 tags)
+        id: tags
+        run: |
+          set -euo pipefail
+          test "$(docker info --format '{{.Architecture}}')" = "$([ '${{ matrix.arch }}' = arm64 ] && echo aarch64 || echo x86_64)"
+          version=$(python3 -I -S -B -c "import tomllib;print(tomllib.load(open('v2/Cargo.toml','rb'))['workspace']['package']['version'])")
+          json=$(python3 -I -S -B v2/packaging/oss/publish_tags.py "$REF_NAME" "$version")
+          echo "json=$json" >> "$GITHUB_OUTPUT"
+          echo "source=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "$json"
+      - name: Failure-oriented bootstrap checks
+        run: python3 -I -S -B -m unittest discover -s v2/packaging/oss/tests -v
+      - name: Build from the anonymous public tag commit
+        env:
+          SOURCE: ${{ steps.tags.outputs.source }}
+        run: |
+          set -euo pipefail
+          mkdir "$RUNNER_TEMP/empty-docker-config"
+          export DOCKER_CONFIG="$RUNNER_TEMP/empty-docker-config"
+          docker buildx create --name v2-publish --driver docker-container --use
+          docker buildx build --progress=plain --build-arg SOURCE_COMMIT="$SOURCE" \
+            --load --tag orkestr-v2:candidate --file v2/packaging/oss/Dockerfile .
+      - name: Fresh install with the one-command docker run flags
+        env:
+          SOURCE: ${{ steps.tags.outputs.source }}
+        run: |
+          python3 -I -S -B v2/packaging/oss/fresh_install.py \
+            --image orkestr-v2:candidate --source "$SOURCE" --report "$RUNNER_TEMP/fresh-install.json"
+      - name: Push the per-architecture tag with provenance and SBOM
+        env:
+          SOURCE: ${{ steps.tags.outputs.source }}
+          TAGS: ${{ steps.tags.outputs.json }}
+          GHCR_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          export DOCKER_CONFIG="$RUNNER_TEMP/empty-docker-config"
+          image=$(jq -r .image <<<"$TAGS")
+          tag=$(jq -r '.arch_tags["${{ matrix.arch }}"]' <<<"$TAGS")
+          python3 -I -S -B v2/packaging/oss/publish_tags.py check "$tag" "$(jq -c '[.arch_tags[]]' <<<"$TAGS")"
+          echo "$GHCR_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          # Same builder cache as the tested build: no source change, no new inputs.
+          docker buildx build --build-arg SOURCE_COMMIT="$SOURCE" \
+            --provenance=mode=max --sbom=true --push --tag "$image:$tag" \
+            --label org.opencontainers.image.source=https://github.com/otcan/orkestr \
+            --label org.opencontainers.image.revision="$SOURCE" \
+            --label org.opencontainers.image.version="$REF_NAME" \
+            --file v2/packaging/oss/Dockerfile .
+          docker logout ghcr.io
+      - name: Retain synthetic acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: v2-publish-${{ matrix.arch }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/fresh-install.json
+          if-no-files-found: ignore
+          retention-days: 30
+  manifest:
+    needs: image
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: refs/tags/${{ env.REF_NAME }}
+          persist-credentials: false
+      - name: One multi-arch tag for both architectures
+        env:
+          TAGS: ${{ needs.image.outputs.tags }}
+          GHCR_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir "$RUNNER_TEMP/docker-config"
+          export DOCKER_CONFIG="$RUNNER_TEMP/docker-config"
+          image=$(jq -r .image <<<"$TAGS")
+          tag=$(jq -r .tag <<<"$TAGS")
+          python3 -I -S -B v2/packaging/oss/publish_tags.py check "$tag" "$(jq -c '[.tag]' <<<"$TAGS")"
+          echo "$GHCR_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          docker buildx imagetools create --tag "$image:$tag" \
+            "$image:$(jq -r .arch_tags.amd64 <<<"$TAGS")" "$image:$(jq -r .arch_tags.arm64 <<<"$TAGS")"
+          docker buildx imagetools inspect "$image:$tag" --format '{{json .Manifest}}' > "$RUNNER_TEMP/index.json"
+          for platform in linux/amd64 linux/arm64; do
+            jq -e --arg p "$platform" '[.manifests[] | select(.platform != null) | "\(.platform.os)/\(.platform.architecture)"] | index($p)' "$RUNNER_TEMP/index.json" >/dev/null
+          done
+          docker logout ghcr.io
+          echo "Published $image:$tag (linux/amd64, linux/arm64)" >> "$GITHUB_STEP_SUMMARY"

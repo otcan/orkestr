@@ -19,6 +19,16 @@ def masks():
             if line.startswith('Cap') for key, value in [line.split(':', 1)]}
 
 
+def set_no_new_privileges():
+    """Same as `--security-opt no-new-privileges`, so a plain `docker run`
+    without that flag keeps the model: no exec in this tree can gain privileges."""
+    libc = ctypes.CDLL(None, use_errno=True)
+    if libc.prctl(38, 1, 0, 0, 0) != 0:  # PR_SET_NO_NEW_PRIVS
+        raise RuntimeError('no_new_privs refused')
+    if libc.prctl(39, 0, 0, 0, 0) != 1:  # PR_GET_NO_NEW_PRIVS
+        raise RuntimeError('no_new_privs verification failed')
+
+
 def drop_child_capabilities():
     if os.geteuid() != 0:
         raise RuntimeError('capability setup requires container root')

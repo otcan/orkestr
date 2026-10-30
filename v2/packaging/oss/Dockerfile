@@ -35,5 +35,8 @@ RUN ln -s /opt/orkestr/providers/codex /usr/local/bin/codex \
     && ln -s /opt/orkestr/providers/claude /usr/local/bin/claude \
     && install -m 0555 /opt/orkestr/source/v2/packaging/oss/orkestr-beta /usr/local/bin/orkestr-beta
 EXPOSE 19823
+# Same probe as compose.yaml, so a plain `docker run` reports health too.
+HEALTHCHECK --interval=5s --timeout=3s --retries=30 \
+    CMD ["/usr/bin/python3", "-I", "-S", "-B", "/opt/orkestr/source/v2/packaging/oss/runtime.py", "health"]
 STOPSIGNAL SIGTERM
 ENTRYPOINT ["/usr/bin/python3", "-I", "-S", "-B", "/opt/orkestr/source/v2/packaging/oss/runtime.py"]
