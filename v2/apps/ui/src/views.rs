@@ -64,7 +64,7 @@ pub fn Auth(onlogin: EventHandler<transport::BrowserSession>) -> Element {
             if setup() && !local() {
                 label { r#for: "bootstrap", "Local operator bootstrap token" }
                 input { id: "bootstrap", r#type: "password", autocomplete: "off", required: true, value: "{bootstrap}", oninput: move |e| bootstrap.set(e.value()) }
-                p { "Use the setup token provided by your operator. Keep it private. Setup creates the first owner account once." }
+                p { "Use the setup token from the Orkestr logs (Docker: run docker logs orkestr) or from your operator. Keep it private. Setup creates the first owner account once." }
             }
             button { r#type: "submit", disabled: busy(), if busy() { "Connecting…" } else { "Continue" } }
             button { r#type: "button", disabled: busy(), onclick: move |_| setup.set(!setup()), if setup() { "Use existing owner account" } else { "First-time setup" } }

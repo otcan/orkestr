@@ -1,6 +1,7 @@
 """Opt-in isolated Docker acceptance. Synthetic owner only; no provider login."""
 import argparse
 import json
+import re
 from pathlib import Path
 import secrets
 import subprocess
@@ -123,7 +124,68 @@ print('root_observation_requires_added_capability')
                                 'name': 'Synthetic fresh thread'}, headers)['conversation_id']
         assert conversation != setup['global_conversation_id']
         passed('owner login and new conversation via supported API')
-        assert 'provider_login_required' in docker('logs', name)
+        logs = docker('logs', name)
+        assert 'provider_login_required' in logs
+        assert 'First-time setup token: ' + bootstrap in logs
+        passed('bootstrap token is printed in the local container log for browser setup')
+        assert b'Connect models' in request('/setup/', raw=True)
+        try:
+            request('/api/v2/oss-setup/status')
+            raise AssertionError('setup status without a session')
+        except urllib.error.HTTPError as error:
+            assert error.code == 401
+        status = request('/api/v2/oss-setup/status', headers={'Cookie': headers['Cookie']})
+        assert status['configured'] is False and status['providers']['codex']['signed_in'] is False
+        try:
+            request('/api/v2/oss-setup/login/codex/start', {}, {'Cookie': headers['Cookie'], 'Origin': headers['Origin']})
+            raise AssertionError('setup start without CSRF')
+        except urllib.error.HTTPError as error:
+            assert error.code == 403
+        try:
+            request('/api/v2/oss-setup/configure', {'username': credentials['username'],
+                    'password': credentials['password']}, headers)
+            raise AssertionError('configure accepted without a Codex login')
+        except urllib.error.HTTPError as error:
+            assert error.code == 409
+        # The device code comes from OpenAI. Retry a failed start with backoff
+        # (our own limit is one start per 30 s); if OpenAI keeps answering 429,
+        # record the skip instead of failing CI on an upstream rate limit.
+        login = None
+        for attempt, delay in enumerate((0, 31, 62)):
+            time.sleep(delay)
+            started = request('/api/v2/oss-setup/login/codex/start', {}, headers)
+            assert started['login']['state'] in ('starting', 'waiting')
+            deadline = time.monotonic() + 60
+            while True:
+                login = request('/api/v2/oss-setup/status', headers={'Cookie': headers['Cookie']})['providers']['codex']['login']
+                if login['state'] in ('waiting', 'failed'):
+                    break
+                assert login['state'] == 'starting' and time.monotonic() < deadline, 'device code not shown: ' + login['state']
+                time.sleep(1)
+            if login['state'] == 'waiting':
+                break
+            assert set(login) <= {'state', 'reason'}, 'failed login exposed more than a reason'
+        report['device_flow_attempts'] = attempt + 1
+        if login['state'] == 'failed':
+            assert login.get('reason') == 'upstream_rate_limited', 'Codex device sign-in failed without an upstream rate limit'
+            report['device_flow'] = 'skipped_upstream_429'
+            passed('browser setup: session+CSRF required; Codex device flow skipped (OpenAI 429 after retries)')
+        else:
+            report['device_flow'] = 'device_code_shown'
+            assert login['link'].startswith('https://auth.openai.com/') and re.fullmatch(r'[A-Z0-9]{4,8}-[A-Z0-9]{4,8}', login['code'])
+            assert set(login) == {'state', 'link', 'code', 'expires_in'}
+            try:
+                request('/api/v2/oss-setup/login/codex/start', {}, headers)
+                raise AssertionError('second concurrent login accepted')
+            except urllib.error.HTTPError as error:
+                assert error.code == 409
+            request('/api/v2/oss-setup/login/codex/cancel', {}, headers)
+            try:
+                request('/api/v2/oss-setup/login/codex/start', {}, headers)
+                raise AssertionError('device login start not rate limited')
+            except urllib.error.HTTPError as error:
+                assert error.code == 429
+            passed('browser setup: session+CSRF required, Codex device link+code shown, one login at a time, rate limited')
         native = docker('exec', name, '/opt/orkestr/providers/codex', '--version')
         assert '0.163.0' in native
         native = docker('exec', name, '/opt/orkestr/providers/claude', '--version')
@@ -169,6 +231,17 @@ try:
     assert set(servers[0]['Uid'].split())=={'10001'}
     assert all(int(servers[0][key].strip(),16)==0 for key in ('CapInh','CapPrm','CapEff','CapBnd','CapAmb'))
     assert servers[0]['NoNewPrivs'].strip()=='1'
+    dropped=0
+    for candidate in Path('/proc').iterdir():
+        if not candidate.name.isdigit():continue
+        try:status=dict(line.split(':',1) for line in (candidate/'status').read_text().splitlines())
+        except OSError:continue
+        # The probe's own sleep is a docker-exec descendant, not one of PID1's.
+        if set(status['Uid'].split())=={'10001'} and candidate.name!=str(p.pid):
+            dropped+=1
+            assert all(int(status[key].strip(),16)==0 for key in ('CapInh','CapPrm','CapEff','CapBnd','CapAmb'))
+            assert status['NoNewPrivs'].strip()=='1'
+    assert dropped>=3
 finally:
     p.terminate();p.wait(timeout=5)
 print('root_peer_proof_passed')

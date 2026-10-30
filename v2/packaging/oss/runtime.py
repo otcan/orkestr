@@ -19,6 +19,13 @@ STATE = Path('/state')
 UID = GID = 10001
 PORT = 19822
 ORIGIN = 'http://127.0.0.1:19822'
+SETUP = STATE / 'setup'
+# Unconfigured-mode children are exec'd through util-linux setpriv: UID/GID
+# 10001, no groups, empty inheritable/ambient/bounding sets (NNP is already
+# set on PID1). PID1 itself keeps its capabilities so that, once configured,
+# it can re-exec into the ordinary root manager without a container restart.
+SETPRIV = ['/usr/bin/setpriv', '--reuid=10001', '--regid=10001', '--clear-groups',
+           '--inh-caps=-all', '--ambient-caps=-all', '--bounding-set=-all', '--']
 
 
 def require(condition, message):
@@ -59,6 +66,7 @@ def initialize():
             private_directory(parent / name)
     for name in ('data', 'provider-home'):
         private_directory(STATE / 'home' / name)
+    private_directory(SETUP)
     for role in ('deep', 'fast', 'worker-0', 'worker-1', 'worker-2', 'worker-3', 'claude'):
         private_directory(STATE / 'native' / role)
         private_directory(STATE / 'workspaces' / role)
@@ -106,8 +114,8 @@ def logged_in(provider):
     else:
         argv += ['auth', 'status']
         env['CLAUDE_CONFIG_DIR'] = '/credentials/claude'
-    result = subprocess.run(argv, env=env, user=UID, group=GID, extra_groups=[],
-                            cwd='/credentials/home', capture_output=True, timeout=30)
+    result = subprocess.run(SETPRIV + argv, env=env, cwd='/credentials/home',
+                            capture_output=True, timeout=30)
     if result.returncode != 0:
         return False
     if provider == 'claude':
@@ -118,9 +126,30 @@ def logged_in(provider):
     return True
 
 
+def record_configuration(owner_id, conversation_id, machine_token, claude):
+    """Write the owner scope and timer token; shared by the CLI and browser setup."""
+    import uuid
+    require(not (STATE / 'owner.json').exists() and not (STATE / 'owner.json').is_symlink(),
+            'already configured; automatic reconfiguration refused')
+    require(type(owner_id) is str and str(uuid.UUID(owner_id)) == owner_id, 'owner identity refused')
+    require(type(conversation_id) is str and 0 < len(conversation_id) <= 128
+            and conversation_id.isprintable() and not conversation_id.isspace(), 'conversation identity refused')
+    require(type(machine_token) is str and 16 <= len(machine_token) <= 512 and machine_token.isascii()
+            and machine_token.isprintable() and ' ' not in machine_token, 'machine token refused')
+    require(type(claude) is bool, 'provider selection refused')
+    # A previous attempt may have stopped between files; owner.json is last.
+    for name in ('timer.token', 'timer.json'):
+        stale = STATE / name
+        if stale.is_symlink() or stale.exists():
+            stale.unlink()
+    write_private(STATE / 'timer.token', machine_token)
+    write_private(STATE / 'timer.json', json.dumps({'schema_version': 1, 'machine_token_file': str(STATE / 'timer.token')}))
+    write_private(STATE / 'owner.json', json.dumps({'owner_id': owner_id,
+                  'conversation_id': conversation_id, 'claude': claude}), 0)
+
+
 def configure():
     import getpass
-    import uuid
     initialize()
     drop_child_capabilities()
     require(not (STATE / 'owner.json').exists(), 'already configured; automatic reconfiguration refused')
@@ -132,15 +161,45 @@ def configure():
     # The browser login supplies the authenticated owner UUID. No direct DB access.
     browser = request('/api/v2/browser/session', credentials, {'Origin': ORIGIN})
     machine = request('/api/v2/machine/session', credentials)
-    require(str(uuid.UUID(browser['owner_id'])) == browser['owner_id'], 'owner identity refused')
     require(browser['global_conversation_id'] == machine['global_conversation_id'], 'conversation identity mismatch')
-    write_private(STATE / 'timer.token', machine['token'])
-    write_private(STATE / 'timer.json', json.dumps({'schema_version': 1, 'machine_token_file': str(STATE / 'timer.token')}))
-    write_private(STATE / 'owner.json', json.dumps({'owner_id': browser['owner_id'],
-                  'conversation_id': browser['global_conversation_id'], 'claude': claude}), 0)
+    record_configuration(browser['owner_id'], browser['global_conversation_id'], machine['token'], claude)
     print('Owner scope verified. Providers: Codex' + (' and Claude.' if claude else
           ' only (Claude not signed in; Fast uses Codex).'))
-    print('Restart this Compose service to activate the generated provider configuration.')
+    print('Orkestr activates the provider configuration automatically within a few seconds.')
+
+
+def browser_configuration():
+    """Apply the browser setup's request: verified owner scope from setup_service.py.
+
+    The unprivileged setup service authenticated the owner (cookie + CSRF, then
+    credentials for the machine token). PID1 accepts only this exact closed
+    shape from a regular, single-link, provider-UID file, re-checks the Codex
+    login itself and decides Claude itself.
+    """
+    path = SETUP / 'configure.json'
+    if not path.exists() and not path.is_symlink():
+        return False
+    try:
+        info = path.lstat()
+        require(stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and info.st_uid == UID
+                and info.st_size <= 4096, 'setup request custody refused')
+        value = json.loads(path.read_text())
+        require(type(value) is dict and set(value) == {'owner_id', 'conversation_id', 'machine_token'},
+                'setup request refused')
+        require(logged_in('codex'), 'provider_login_required')
+        record_configuration(value['owner_id'], value['conversation_id'], value['machine_token'],
+                             logged_in('claude'))
+        print('Owner scope verified from browser setup; activating providers.', flush=True)
+    except (RuntimeError, ValueError, OSError, subprocess.SubprocessError) as error:
+        message = str(error) if isinstance(error, RuntimeError) else 'setup request refused'
+        print('Browser setup refused: ' + message, file=sys.stderr, flush=True)
+        try:
+            write_private(SETUP / 'configure-error', message)
+        except OSError:
+            pass
+    finally:
+        path.unlink(missing_ok=True)
+    return True
 
 
 def prepare(owner):
@@ -194,48 +253,96 @@ def stop(child):
         child.wait(timeout=35)
 
 
-def serve():
-    initialize()
-    owner_file = STATE / 'owner.json'
-    if owner_file.exists() or owner_file.is_symlink():
-        info = owner_file.lstat()
-        require(stat.S_ISREG(info.st_mode) and info.st_uid == 0 and info.st_nlink == 1
-                and stat.S_IMODE(info.st_mode) == 0o600, 'owner scope custody refused')
-        release = prepare(json.loads(owner_file.read_text()))
-        argv, kwargs = ['/usr/bin/python3', '-I', '-S', '-B',
-                        str(SOURCE / 'v2/packaging/oss/capabilities.py'), str(release)], {}
-    else:
-        print('provider_login_required: create the Orkestr owner, then login codex, login claude, configure', flush=True)
-        argv = [str(ROOT / 'server')]
-        kwargs = {'user': UID, 'group': GID, 'extra_groups': [], 'env': {
-            **dropped_environment(), 'ORKESTR_V2_HOME': str(STATE / 'home/data'),
-            'ORKESTR_V2_BIND': '127.0.0.1:19822', 'ORKESTR_V2_ORIGIN': ORIGIN,
-            'ORKESTR_V2_UI_DIST': str(ROOT / 'ui'),
-            'ORKESTR_V2_BOOTSTRAP_TOKEN': (STATE / 'bootstrap.token').read_text()}}
-    proxy = child = None
+def stop_all(children):
+    for child in reversed(children):
+        try:
+            stop(child)
+        except (OSError, subprocess.SubprocessError):
+            child.kill()
+
+
+def serve_configured(owner_file):
+    info = owner_file.lstat()
+    require(stat.S_ISREG(info.st_mode) and info.st_uid == 0 and info.st_nlink == 1
+            and stat.S_IMODE(info.st_mode) == 0o600, 'owner scope custody refused')
+    release = prepare(json.loads(owner_file.read_text()))
     ending = False
     def finish(*_):
         nonlocal ending
         ending = True
     signal.signal(signal.SIGTERM, finish)
     signal.signal(signal.SIGINT, finish)
+    children = []
     try:
-        if kwargs:
-            drop_child_capabilities()
-        child = subprocess.Popen(argv, cwd='/', **kwargs)
-        if not kwargs:
-            # The dedicated root manager got its own copy before PID1 drops Bnd.
-            drop_child_capabilities()
-        proxy = subprocess.Popen(['/usr/sbin/nginx', '-c', str(SOURCE / 'v2/packaging/oss/nginx.conf')],
-                                 user=UID, group=GID, extra_groups=[])
+        children.append(subprocess.Popen(['/usr/bin/python3', '-I', '-S', '-B',
+                        str(SOURCE / 'v2/packaging/oss/capabilities.py'), str(release)], cwd='/'))
+        # The dedicated root manager got its own copy before PID1 drops Bnd.
+        drop_child_capabilities()
+        # Configured mode: the setup page and /api/v2/oss-setup are not routed.
+        children.append(subprocess.Popen(['/usr/sbin/nginx', '-c', str(SOURCE / 'v2/packaging/oss/nginx.conf')],
+                                         user=UID, group=GID, extra_groups=[]))
         while not ending:
-            require(child.poll() is None and proxy.poll() is None, 'owned service exited; inspect container logs')
+            require(all(child.poll() is None for child in children), 'owned service exited; inspect container logs')
             time.sleep(0.2)
     finally:
-        try:
-            stop(child)
-        finally:
-            stop(proxy)
+        stop_all(children)
+
+
+def setup_banner():
+    token = (STATE / 'bootstrap.token').read_text()
+    print('provider_login_required: open http://127.0.0.1:19822, choose First-time setup, then Connect models', flush=True)
+    # Local container log only (docker logs); valid until the first owner exists.
+    print('First-time setup token: ' + token, flush=True)
+
+
+def serve_unconfigured(owner_file):
+    """Until configured: plain server, browser setup service and setup proxy.
+
+    Returns True when the owner scope was written and PID1 should re-exec
+    into configured mode (no container restart)."""
+    for stale in (SETUP / 'setup.sock', SETUP / 'configure.json', SETUP / 'configure-error'):
+        if stale.is_symlink() or stale.exists():
+            stale.unlink()
+    setup_banner()
+    ending = False
+    def finish(*_):
+        nonlocal ending
+        ending = True
+    signal.signal(signal.SIGTERM, finish)
+    signal.signal(signal.SIGINT, finish)
+    children = []
+    try:
+        children.append(subprocess.Popen(SETPRIV + [str(ROOT / 'server')], cwd='/', env={
+            **dropped_environment(), 'ORKESTR_V2_HOME': str(STATE / 'home/data'),
+            'ORKESTR_V2_BIND': '127.0.0.1:19822', 'ORKESTR_V2_ORIGIN': ORIGIN,
+            'ORKESTR_V2_UI_DIST': str(ROOT / 'ui'),
+            'ORKESTR_V2_BOOTSTRAP_TOKEN': (STATE / 'bootstrap.token').read_text()}))
+        children.append(subprocess.Popen(SETPRIV + ['/usr/bin/python3', '-I', '-S', '-B',
+                        str(SOURCE / 'v2/packaging/oss/setup_service.py')], cwd='/credentials/home',
+                        env=dropped_environment()))
+        children.append(subprocess.Popen(SETPRIV + ['/usr/sbin/nginx', '-c',
+                        str(SOURCE / 'v2/packaging/oss/nginx-setup.conf')], cwd='/', env={'PATH': '/usr/bin:/bin'}))
+        while not ending:
+            require(all(child.poll() is None for child in children), 'owned service exited; inspect container logs')
+            browser_configuration()
+            if owner_file.exists() or owner_file.is_symlink():
+                return True
+            time.sleep(0.2)
+        return False
+    finally:
+        stop_all(children)
+
+
+def serve():
+    initialize()
+    owner_file = STATE / 'owner.json'
+    if owner_file.exists() or owner_file.is_symlink():
+        return serve_configured(owner_file)
+    if serve_unconfigured(owner_file):
+        # Same PID 1, fresh interpreter, full original capabilities: the
+        # ordinary configured start (prepare + root manager), no restart.
+        os.execv('/usr/bin/python3', ['/usr/bin/python3', '-I', '-S', '-B',
+                 str(SOURCE / 'v2/packaging/oss/runtime.py'), 'serve'])
 
 
 def main():

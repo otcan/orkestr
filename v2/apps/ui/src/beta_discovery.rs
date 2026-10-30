@@ -72,11 +72,16 @@ pub fn BetaDiscoveryGate(
             }
         }
     });
-    rsx! { p { role: "status", "{notice}" } }
+    rsx! {
+        p { role: "status", "{notice}" }
+        if notice() == MODELS_NOT_CONNECTED {
+            p { a { id: "connect-models", href: "/setup/", "Connect models" } }
+        }
+    }
 }
 
 /// Signed-in first screen before any model is connected: tell the owner what to do.
-pub(crate) const MODELS_NOT_CONNECTED: &str = "Models are not connected yet. Sign in to Codex inside the container (Claude is optional), run configure, restart Orkestr, then reload this page. The V2 quickstart lists the exact commands.";
+pub(crate) const MODELS_NOT_CONNECTED: &str = "Models are not connected yet. Open Connect models to sign in to Codex from this browser (Claude is optional); Orkestr then activates them and reloads.";
 const DEEP_UNAVAILABLE: &str = "Deep is unavailable. Reload to check the server again.";
 
 fn unavailable_notice(status: u16, code: Option<&str>) -> &'static str {

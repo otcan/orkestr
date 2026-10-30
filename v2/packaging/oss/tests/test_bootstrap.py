@@ -72,7 +72,7 @@ class BootstrapTests(unittest.TestCase):
 
     def configure_with(self, runtime, scratch, claude):
         owner = '7c0b5a59-58b2-4f0e-9d55-3a6b0a8c2f11'
-        session = {'owner_id': owner, 'global_conversation_id': 'c-1', 'token': 'synthetic'}
+        session = {'owner_id': owner, 'global_conversation_id': 'c-1', 'token': 'synthetic-machine-token'}
         written = {}
         with patch.object(runtime, 'STATE', Path(scratch)), patch.object(runtime, 'initialize'), \
                 patch.object(runtime, 'drop_child_capabilities'), \
