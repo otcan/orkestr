@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Connect models · Orkestr</title>
+<link rel="stylesheet" href="setup.css">
+<script src="setup.js" defer></script>
+</head>
+<body>
+<main>
+  <h1>Connect models</h1>
+  <p id="intro">Orkestr uses your own Codex sign-in (required) and, optionally, Claude. You sign in on the provider's own website; Orkestr never sees your provider password.</p>
+  <p id="notice" role="status">Checking setup…</p>
+
+  <section id="signin" hidden>
+    <p>Sign in to Orkestr first, then come back to this page.</p>
+    <p><a href="/">Open Orkestr</a></p>
+  </section>
+
+  <section id="codex" hidden>
+    <h2>Codex <span class="badge" id="codex-state"></span></h2>
+    <div id="codex-start">
+      <p>Required. Uses the official Codex device sign-in for your ChatGPT account.</p>
+      <button type="button" id="codex-button">Sign in to Codex</button>
+    </div>
+    <div id="codex-device" hidden>
+      <p>1. Open <a id="codex-link" target="_blank" rel="noopener noreferrer"></a> and sign in.</p>
+      <p>2. Enter this one-time code: <code id="codex-code"></code></p>
+      <p class="muted">Only enter the code if you started this sign-in here. It expires in <span id="codex-expires"></span>.</p>
+      <button type="button" id="codex-cancel" class="secondary">Cancel</button>
+    </div>
+  </section>
+
+  <section id="claude" hidden>
+    <h2>Claude <span class="badge" id="claude-state"></span></h2>
+    <div id="claude-start">
+      <p>Optional. When signed in, Claude also serves Fast replies.</p>
+      <button type="button" id="claude-button" class="secondary">Sign in to Claude</button>
+    </div>
+    <div id="claude-device" hidden>
+      <p>1. Open <a id="claude-link" target="_blank" rel="noopener noreferrer">the Claude sign-in page</a> and approve.</p>
+      <p>2. Paste the code it shows you:</p>
+      <form id="claude-form">
+        <input id="claude-code" autocomplete="off" spellcheck="false" aria-label="Claude code">
+        <button type="submit">Submit code</button>
+        <button type="button" id="claude-cancel" class="secondary">Cancel</button>
+      </form>
+    </div>
+  </section>
+
+  <section id="finish" hidden>
+    <h2>Finish</h2>
+    <p>Confirm your Orkestr username and password. Orkestr then activates the models and reloads (about a minute).</p>
+    <form id="finish-form">
+      <label for="username">Orkestr username</label>
+      <input id="username" autocomplete="username" required>
+      <label for="password">Orkestr password</label>
+      <input id="password" type="password" autocomplete="current-password" required>
+      <button type="submit" id="finish-button">Activate models</button>
+    </form>
+  </section>
+</main>
+</body>
+</html>

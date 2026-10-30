@@ -1,0 +1,15 @@
+:root { color-scheme: light dark; --fg: #1d1f23; --bg: #fafafa; --muted: #5d6470; --accent: #2457c5; --card: #ffffff; --line: #d9dce1; }
+@media (prefers-color-scheme: dark) { :root { --fg: #e7e9ec; --bg: #16181c; --muted: #9aa2ad; --accent: #7aa2ff; --card: #1f2227; --line: #343840; } }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+main { max-width: 640px; margin: 0 auto; padding: 24px 16px 48px; }
+section { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 4px 16px 16px; margin: 16px 0; }
+h1 { font-size: 1.6rem; } h2 { font-size: 1.15rem; display: flex; gap: 8px; align-items: center; }
+a { color: var(--accent); word-break: break-all; }
+code { font-size: 1.4rem; letter-spacing: .08em; padding: 2px 8px; border: 1px solid var(--line); border-radius: 6px; }
+.badge { font-size: .8rem; font-weight: 500; color: var(--muted); }
+.muted { color: var(--muted); font-size: .9rem; }
+label { display: block; margin-top: 10px; }
+input { box-sizing: border-box; width: 100%; padding: 8px; margin: 4px 0 8px; font: inherit; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); }
+button { font: inherit; padding: 8px 14px; margin: 8px 8px 0 0; border-radius: 6px; border: 1px solid var(--accent); background: var(--accent); color: #fff; cursor: pointer; }
+button.secondary { background: transparent; color: var(--accent); }
+button:disabled { opacity: .5; cursor: default; }
