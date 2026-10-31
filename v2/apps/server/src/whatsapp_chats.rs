@@ -371,6 +371,7 @@ Timer command (put the subcommand on the `set --` line):
   set -e
   set -- list   # or: create --label "<label>" --at <ISO with offset> --text "<what the run must do>"
                 # or: create --label "<label>" --daily HH:MM --timezone Europe/Berlin --text "..."
+                # or: upsert --label "<same label>" --at <ISO with offset> --text "..."   (moves that timer)
                 # or: cancel "<label or id>" | pause "<label>" --until <ISO> | resume "<label>" | skip-next "<label>"
   ORKESTR_V2_AGENT_TIMER_GRANT_DIR={grant_dir} \
   PYTHONDONTWRITEBYTECODE=1 python3 -I -S -B \
@@ -391,13 +392,19 @@ Turns started by a timer may list, cancel, pause, resume and skip timers and
 create one-shot timers (`--at`), never a recurring one (`--daily`; refused
 with `agent_timer_timer_turn`).
 
+For recurring checks, keep ONE watcher: use `upsert --label <same label>` to
+move it instead of creating a new one-shot each time. An upsert moves this
+chat's enabled (or already fired) timer with that label and is not a new
+create; only without one does it create a timer.
+
 Retries: every change prints its request_key (stderr) before it is sent. After
 a failure or a lost answer, rerun the SAME command with `--request-key <that
 key>`, never with a new key (for skip-next a new key would skip a second run).
 
 Limits: one-shot at least 2 minutes ahead, recurring at most every 30
-minutes, pauses at most 60 days, 12 creates per hour and 24 per 24 hours, 32
-live agent-created timers. If the tool refuses, tell the owner the code in
+minutes, pauses at most 60 days, 12 creates or upserts per hour, a daily
+create cap the owner sets (24 per 24 hours by default, 200 in an owner-only
+chat), 32 live agent-created timers. If the tool refuses, tell the owner the code in
 one line, do not retry in a loop, and never fall back to V1.
 "#
     )

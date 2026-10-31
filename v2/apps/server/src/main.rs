@@ -41,6 +41,38 @@ fn deep_burst_quiet_ms(value: Option<&str>) -> i64 {
     }
 }
 
+/// Agent timers' rolling 24-hour create cap: the server default (chats with
+/// other people and chats without an owner setting, default 24) and the
+/// default of chats the owner marked owner-only (default 200). Each is
+/// `off` or 1..=10000; the hourly and live-timer caps are not configurable.
+const AGENT_TIMER_DAILY_ENV: &str = "ORKESTR_V2_AGENT_TIMER_DAILY_CREATES_MAX";
+const AGENT_TIMER_OWNER_ONLY_DAILY_ENV: &str =
+    "ORKESTR_V2_AGENT_TIMER_OWNER_ONLY_DAILY_CREATES_MAX";
+
+fn agent_timer_daily_caps(
+    default: Option<&str>,
+    owner_only: Option<&str>,
+) -> orkestr_v2_contracts::AgentTimerDailyCaps {
+    use orkestr_v2_contracts::parse_agent_timer_daily_cap;
+    let mut caps = orkestr_v2_contracts::AgentTimerDailyCaps::default();
+    for (name, value, slot) in [
+        (AGENT_TIMER_DAILY_ENV, default, &mut caps.default),
+        (
+            AGENT_TIMER_OWNER_ONLY_DAILY_ENV,
+            owner_only,
+            &mut caps.owner_only,
+        ),
+    ] {
+        let Some(value) = value else { continue };
+        match parse_agent_timer_daily_cap(value) {
+            Some(cap) => *slot = cap,
+            // A typo never stops the server: keep the default and say so.
+            None => eprintln!("{name} must be off or 1..=10000; using the default"),
+        }
+    }
+    caps
+}
+
 async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     let home =
         PathBuf::from(std::env::var("ORKESTR_V2_HOME").map_err(|_| "ORKESTR_V2_HOME is required")?);
@@ -68,6 +100,12 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         .map_err(|_| "store startup failed")?
         .with_deep_burst_quiet_ms(deep_burst_quiet_ms(
             std::env::var(DEEP_BURST_QUIET_ENV).ok().as_deref(),
+        ))
+        .with_agent_timer_daily_caps(agent_timer_daily_caps(
+            std::env::var(AGENT_TIMER_DAILY_ENV).ok().as_deref(),
+            std::env::var(AGENT_TIMER_OWNER_ONLY_DAILY_ENV)
+                .ok()
+                .as_deref(),
         ));
     // Import operator-supplied V1 browser recipients and seal plaintext residue.
     orkestr_v2_server::attachment_keys_http::startup(&store, &home).await;
@@ -245,7 +283,17 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
 
 #[cfg(test)]
 mod tests {
-    use super::deep_burst_quiet_ms;
+    use super::{agent_timer_daily_caps, deep_burst_quiet_ms};
+
+    #[test]
+    fn agent_timer_daily_caps_from_env() {
+        let caps = agent_timer_daily_caps(None, None);
+        assert_eq!((caps.default, caps.owner_only), (Some(24), Some(200)));
+        let caps = agent_timer_daily_caps(Some("48"), Some("off"));
+        assert_eq!((caps.default, caps.owner_only), (Some(48), None));
+        let caps = agent_timer_daily_caps(Some("0"), Some("lots"));
+        assert_eq!((caps.default, caps.owner_only), (Some(24), Some(200)));
+    }
 
     #[test]
     fn the_deep_burst_window_defaults_to_two_and_a_half_seconds_and_is_bounded() {

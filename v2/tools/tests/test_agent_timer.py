@@ -66,6 +66,11 @@ class FakeV2(http.server.BaseHTTPRequestHandler):
             if body['schedule'].get('due_ms', 10**13) < 1_700_000_000_000:
                 return self._reply(422, {'code': 'agent_timer_too_soon'})
             return self._reply(201, {'changed': True, 'timer': timer('n', body['label'])})
+        if path == '/agent-timers/upsert' and self.command == 'POST':
+            if body['label'] == 'Busy':
+                return self._reply(409, {'code': 'agent_timer_busy'})
+            # The server moves the timer with this label: always the same one.
+            return self._reply(200, {'changed': True, 'timer': timer(CHECK, body['label'])})
         if path == f'/agent-timers/{CHECK}/control':
             state = 'disabled' if body['operation'] == 'cancel' else 'enabled'
             return self._reply(200, {'changed': True, 'timer': timer(state=state)})
@@ -114,6 +119,32 @@ class AgentTimerClient(unittest.TestCase):
         self.assertEqual(FakeV2.calls[-1][2]['schedule'], {
             'kind': 'calendar', 'timezone': 'Europe/Berlin', 'weekdays': [1, 2, 3, 4, 5],
             'start_minute': 480, 'end_minute': 480, 'every_hours': 1, 'minutes': [0]})
+
+    def test_upsert_moves_one_watcher_by_label(self):
+        code, out, err = self.run_cli('upsert', '--label', 'Watcher',
+                                      '--at', '2026-10-27T15:00:00+01:00', '--text', 'Check X.')
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out)['timer']['namespace'], CHECK)
+        self.assertIn('Timer "Watcher" set (upsert)', err)
+        self.assertIn('"request_key": "upsert-', err.splitlines()[0])
+        self.run_cli('upsert', '--label', 'Watcher', '--at', '2026-10-27T16:00:00+01:00',
+                     '--text', 'Check X.')
+        upserts = [c for c in FakeV2.calls if c[1] == '/agent-timers/upsert']
+        self.assertEqual(len(upserts), 2)
+        self.assertEqual({c[2]['label'] for c in upserts}, {'Watcher'})
+        self.assertEqual(upserts[1][2]['schedule'], {'kind': 'once', 'due_ms': 1_793_113_200_000})
+        self.assertFalse([c for c in FakeV2.calls if c[1] == '/agent-timers' and c[0] == 'POST'],
+                         'an upsert never posts a create')
+        self.assertNotIn('conversation_id', upserts[0][2])
+        # A refusal prints its key for a rerun; the rerun reuses it.
+        code, _, err = self.run_cli('upsert', '--label', 'Busy', '--at', '2026-10-27T16:00:00Z',
+                                    '--text', 'x')
+        line = json.loads(err.splitlines()[-1])
+        self.assertEqual((code, line['code']), (TIMER.ERROR_EXIT, 'agent_timer_busy'))
+        self.run_cli('upsert', '--label', 'Busy', '--at', '2026-10-27T16:00:00Z', '--text', 'x',
+                     '--request-key', line['request_key'])
+        self.assertEqual(FakeV2.calls[-1][2]['request_key'], line['request_key'])
+        self.assertIn('upsert --label', TIMER.AGENT_INSTRUCTIONS)
 
     def test_control_by_label_and_deterministic_skip(self):
         code, _, err = self.run_cli('pause', 'check 08:00', '--until', '2026-11-03T08:00:00+01:00')
@@ -236,6 +267,39 @@ class Provision(unittest.TestCase):
             self.assertEqual(PROV.plan(self.rows({A}), only={A}, rotate=True, grant_dir=root),
                              [(A, 'rotate')])
             self.assertEqual(PROV.plan(self.rows({A}), revoke=True, grant_dir=root), [(A, 'revoke')])
+
+    def test_create_cap_sets_limits_of_the_selected_conversations(self):
+        self.assertEqual(PROV.create_cap('owner_only'), {'mode': 'owner_only'})
+        self.assertEqual(PROV.create_cap('150'), {'mode': 'fixed', 'daily_creates_max': 150})
+        for bad in ('0', '10001', 'lots'):
+            with self.assertRaises(PROV.argparse.ArgumentTypeError):
+                PROV.create_cap(bad)
+
+        class Api:
+            calls = []
+
+            def directory(self):
+                return [{'conversation_id': CONVERSATION, 'name': 'Synthetic', 'eligible': True,
+                         'grant': {'issued': True, 'generation': 1}}]
+
+            def set_limits(self, conversation, body):
+                Api.calls.append((conversation, body))
+                return {'mode': body['mode'], 'daily_creates_max': 200}
+
+        with tempfile.TemporaryDirectory() as root:
+            grant_dir = Path(root) / 'grants'
+            grant_dir.mkdir(mode=0o700)
+            (grant_dir / f'{CONVERSATION}.grant').write_text(GRANT)
+            os.chmod(grant_dir / f'{CONVERSATION}.grant', 0o600)
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                code = PROV.main(['--v2-url', 'http://127.0.0.1:1', '--credentials', '/dev/null',
+                                  '--grant-dir', str(grant_dir), '--only', CONVERSATION,
+                                  '--create-cap', 'owner_only'], api=Api())
+        self.assertEqual(code, 0)
+        self.assertEqual(Api.calls, [(CONVERSATION, {'mode': 'owner_only'})])
+        line = json.loads(out.getvalue())
+        self.assertEqual((line['action'], line['create_cap']['daily_creates_max']), ('unchanged', 200))
 
     def test_all_conversations_needs_the_shared_dir_acknowledgement(self):
         err = io.StringIO()

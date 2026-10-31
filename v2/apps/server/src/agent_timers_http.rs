@@ -5,12 +5,18 @@
 //!   state (never a grant value), for provisioning.
 //! - `GET|PUT|DELETE /api/v2/conversations/{id}/agent-timer-grant`: read,
 //!   issue/rotate (shown once) or revoke the conversation's grant.
+//! - `GET|PUT /api/v2/conversations/{id}/agent-timer-limits`: the
+//!   conversation's rolling 24-hour create cap (`{"mode":"owner_only"}`,
+//!   `"off"`, `"default"`, or `{"mode":"fixed","daily_creates_max":N}`).
 //!
 //! Grant holder (header `x-orkestr-agent-timer-grant`, machine requests only,
 //! never with a cookie, bearer or Origin), only while the conversation has a
 //! running Deep turn:
 //! - `GET  .../agent-timers`: every timer of this conversation.
 //! - `POST .../agent-timers`: create and enable one (201, or 200 for a replay).
+//! - `POST .../agent-timers/upsert`: same body; move this conversation's
+//!   timer with the same label instead of creating another, or create one
+//!   when there is none (200; `changed` false for a replay or no-op).
 //! - `POST .../agent-timers/{namespace}/control`: cancel, pause, resume or
 //!   skip_next one timer of this conversation.
 //!
@@ -31,7 +37,12 @@ pub(crate) fn router() -> Router<AppState> {
             &format!("{base}/agent-timer-grant"),
             get(grant_read).put(grant_issue).delete(grant_revoke),
         )
+        .route(
+            &format!("{base}/agent-timer-limits"),
+            get(limits_read).put(limits_set),
+        )
         .route(&format!("{base}/agent-timers"), get(list).post(create))
+        .route(&format!("{base}/agent-timers/upsert"), post(upsert))
         .route(
             &format!("{base}/agent-timers/{{namespace}}/control"),
             post(control),
@@ -66,7 +77,11 @@ pub(crate) fn failure(error: ResourceError) -> Error {
                 ),
                 "agent_timer_daily_limit" => (
                     StatusCode::TOO_MANY_REQUESTS,
-                    "This conversation created the most agent timers allowed in 24 hours",
+                    "This conversation created the most agent timers allowed in 24 hours; move an existing timer with upsert, or ask the owner to raise the cap",
+                ),
+                "agent_timer_busy" => (
+                    StatusCode::CONFLICT,
+                    "That timer's run is in progress: keep the same text to move it, or try again after this run",
                 ),
                 "agent_timer_timer_turn" => (
                     StatusCode::FORBIDDEN,
@@ -240,6 +255,49 @@ async fn create(
         Json(receipt),
     )
         .into_response())
+}
+async fn upsert(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    request: Result<Json<AgentTimerCreate>, JsonRejection>,
+) -> Result<Response, Error> {
+    let grant = grant(&headers)?;
+    let request = body(request)?;
+    let receipt = state
+        .store
+        .upsert_agent_timer(&grant, &conversation(&id)?, &request)
+        .await
+        .map_err(failure)?;
+    Ok(Json(receipt).into_response())
+}
+async fn limits_read(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Response, Error> {
+    let (owner, credential) = owner_credential(&state, &headers).await?;
+    let value = state
+        .store
+        .agent_timer_limits(&credential, &owner, &conversation(&id)?)
+        .await
+        .map_err(failure)?;
+    Ok(Json(value).into_response())
+}
+async fn limits_set(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    request: Result<Json<AgentTimerLimitsUpdate>, JsonRejection>,
+) -> Result<Response, Error> {
+    let (owner, credential) = owner_credential(&state, &headers).await?;
+    let request = body(request)?;
+    let value = state
+        .store
+        .set_agent_timer_limits(&credential, &owner, &conversation(&id)?, &request)
+        .await
+        .map_err(failure)?;
+    Ok(Json(value).into_response())
 }
 async fn control(
     State(state): State<AppState>,

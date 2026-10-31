@@ -94,6 +94,8 @@ pub struct Store {
     /// input waits this long for the rest of its split message before its
     /// Deep turn is claimed (see `deep_groups`). Copied into every handle.
     deep_burst_quiet_ms: i64,
+    /// Server defaults of the agent timers' rolling 24-hour create cap.
+    agent_timer_daily: orkestr_v2_contracts::AgentTimerDailyCaps,
 }
 fn db(_: impl std::fmt::Display) -> StoreError {
     StoreError::Unavailable
@@ -136,6 +138,7 @@ impl Store {
             #[cfg(feature = "fixture-test-controls")]
             production_checkpoint: None,
             deep_burst_quiet_ms: 0,
+            agent_timer_daily: Default::default(),
         })
     }
     /// Set the Deep burst quiet window (ms, clamped to
@@ -147,6 +150,15 @@ impl Store {
     }
     pub fn deep_burst_quiet_ms(&self) -> i64 {
         self.deep_burst_quiet_ms
+    }
+    /// Set the server defaults of the agent timers' daily create cap (a plain
+    /// `open` keeps 24 for other chats and 200 for owner-only ones).
+    pub fn with_agent_timer_daily_caps(
+        mut self,
+        caps: orkestr_v2_contracts::AgentTimerDailyCaps,
+    ) -> Self {
+        self.agent_timer_daily = caps;
+        self
     }
     pub async fn close(&self) {
         self.pool.close().await;
