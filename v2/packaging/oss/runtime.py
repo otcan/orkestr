@@ -18,6 +18,7 @@ SOURCE = ROOT / 'source'
 STATE = Path('/state')
 UID = GID = 10001
 PORT = 19822
+METRICS_PORT = 19824  # loopback only; 19823 is the published nginx port
 ORIGIN = 'http://127.0.0.1:19822'
 SETUP = STATE / 'setup'
 # Unconfigured-mode children are exec'd through util-linux setpriv: UID/GID
@@ -228,6 +229,8 @@ def prepare(owner):
             'ledger_directory': str(STATE / 'ledger'), 'endpoint_directory': str(STATE / 'ipc'),
             **owner, 'namespace': 'oss-beta', 'supervisor_key': 'oss-beta-manager',
             'origin': ORIGIN, 'port': PORT, 'preserve_state': True,
+            # The proxy listens on PORT + 1 (19823), the server's default metrics port.
+            'metrics_port': METRICS_PORT,
             'roles': {'fast': roles['fast'], 'workers': [roles[f'worker-{i}'] for i in range(4)]},
             'host_full_access': {'providers': True, 'environment': dropped_environment()},
             'code_mode_host': str(ROOT / 'providers/codex-code-mode-host'),

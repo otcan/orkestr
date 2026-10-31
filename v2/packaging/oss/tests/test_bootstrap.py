@@ -113,6 +113,13 @@ class BootstrapTests(unittest.TestCase):
                 runtime.prepare(owner)
             return plans['plan']
 
+    def test_metrics_port_never_collides_with_the_published_proxy_port(self):
+        runtime = load('runtime')
+        plan = self.prepared_plan(runtime, {'owner_id': 'o', 'conversation_id': 'c', 'claude': False})
+        listen = __import__('re').findall(r'listen [0-9.]+:([0-9]+);', (HERE / 'nginx.conf').read_text())
+        self.assertEqual(listen, ['19823'])
+        self.assertNotIn(plan['metrics_port'], (plan['port'], 19823))
+
     def test_plan_includes_claude_only_when_configured(self):
         runtime = load('runtime')
         scope = {'owner_id': 'o', 'conversation_id': 'c'}

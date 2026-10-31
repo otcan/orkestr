@@ -53,6 +53,30 @@ class Selected(unittest.TestCase):
         self.plan['native_sha256']=sha(native)
         with self.assertRaisesRegex(RuntimeError,'native Linux ELF for this host required'):selected.prepare(self.plan)
         self.assertFalse((self.root/'release').exists())
+    def current_source(self):
+        source=subprocess.check_output(['/usr/bin/git','-c','safe.directory='+str(REPO),
+            '-C',str(REPO),'rev-parse','HEAD'],text=True).strip()
+        r=self.root
+        for name in ('server','ui/app.wasm'):
+            p=r/name;p.write_bytes(p.read_bytes().replace(MANAGER_BASE.encode(),source.encode())
+                                   .replace(b'2.0.0-beta.1',b'2.0.0-beta.3'))
+        pair=json.loads((r/'pair').read_bytes());pair['source_commit']=source;pair['version']='2.0.0-beta.3'
+        pair['server']['sha256']=sha(r/'server');pair['web']['files']=inventory(r/'ui')
+        pair['web']['server_candidate']=source
+        (r/'pair').write_text(json.dumps(pair));self.plan['pair_sha256']=sha(r/'pair')
+        return source
+    def test_explicit_metrics_port_reaches_service_metadata(self):
+        source=self.current_source()
+        for bad in (self.plan['port'], 80, 70000, '19850', True):
+            with self.subTest(bad=bad):
+                self.plan['metrics_port']=bad
+                with self.assertRaisesRegex(RuntimeError,'metrics port refused'):selected.prepare(self.plan)
+        self.plan['metrics_port']=19850
+        selected.prepare(self.plan)
+        self.assertEqual(json.loads((self.root/'release/package/service.json').read_bytes())['metrics_port'],19850)
+        with authority(REPO,source) as (_,manager,_):
+            package=manager.Package(self.root/'release/package',sha(self.root/'release/package/manifest.json'))
+            self.assertEqual(package.environment()['ORKESTR_V2_METRICS_BIND'],'127.0.0.1:19850')
     def test_full_package_credentials_metadata_only(self):
         original=Path.open
         def guarded(path,*a,**kw):
