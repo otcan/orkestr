@@ -31,6 +31,7 @@ async fn populated_31_upgrade_preserves_legacy_output_without_inventing_native_c
         workspace_handles: Default::default(),
         #[cfg(feature = "fixture-test-controls")]
         production_checkpoint: None,
+        deep_burst_quiet_ms: 0,
     };
     let historical_guard =
         crate::production_runtime::historical_guard_fixture::HistoricalGuardFixture::install(

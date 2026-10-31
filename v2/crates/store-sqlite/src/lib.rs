@@ -57,11 +57,11 @@ pub use production_runtime::{
     RetiredExecutionWindowContext, RunLeaseTransition, RunRenewalAuthority,
     StrandedExecutionWindow, StrandedExecutionWindowPlan, ThreadAskCursor, ThreadAskTick,
     TimerSchedulerIssuer, WorkerAdmissionInput, WorkerDelegation, WorkerDelegationReceipt,
-    WorkerDelegationResult, WorkerDelegationState, WorkerTaskClaim,
+    WorkerDelegationResult, WorkerDelegationState, WorkerTaskClaim, DEFAULT_DEEP_BURST_QUIET_MS,
     EXECUTION_WINDOW_BASE_LIFETIME_MS, EXECUTION_WINDOW_CLEANUP_MS,
     EXECUTION_WINDOW_MAX_LIFETIME_MS, FAST_INPUT_BUDGET, FAST_NOTE_RESERVE,
-    MAX_AUXILIARY_FAST_SLOTS, MAX_PARALLEL_DEEP_SLOTS, PARALLEL_DEEP_DEFAULT_EFFORT,
-    PARALLEL_DEEP_DEFAULT_MODEL, PARALLEL_DEFER,
+    MAX_AUXILIARY_FAST_SLOTS, MAX_DEEP_BURST_QUIET_MS, MAX_PARALLEL_DEEP_SLOTS,
+    PARALLEL_DEEP_DEFAULT_EFFORT, PARALLEL_DEEP_DEFAULT_MODEL, PARALLEL_DEFER,
 };
 
 pub use production_runtime::inspection::{
@@ -90,6 +90,10 @@ pub struct Store {
     #[cfg(feature = "fixture-test-controls")]
     production_checkpoint:
         Option<std::sync::Arc<production_runtime::test_controls::ArmedCheckpoint>>,
+    /// Deep burst quiet window in ms (0 = off): a fresh verified owner chat
+    /// input waits this long for the rest of its split message before its
+    /// Deep turn is claimed (see `deep_groups`). Copied into every handle.
+    deep_burst_quiet_ms: i64,
 }
 fn db(_: impl std::fmt::Display) -> StoreError {
     StoreError::Unavailable
@@ -131,7 +135,18 @@ impl Store {
             workspace_handles: Default::default(),
             #[cfg(feature = "fixture-test-controls")]
             production_checkpoint: None,
+            deep_burst_quiet_ms: 0,
         })
+    }
+    /// Set the Deep burst quiet window (ms, clamped to
+    /// `0..=MAX_DEEP_BURST_QUIET_MS`; 0 turns burst waiting off). The server
+    /// sets it once at startup; a plain `open` leaves it off.
+    pub fn with_deep_burst_quiet_ms(mut self, ms: i64) -> Self {
+        self.deep_burst_quiet_ms = ms.clamp(0, MAX_DEEP_BURST_QUIET_MS);
+        self
+    }
+    pub fn deep_burst_quiet_ms(&self) -> i64 {
+        self.deep_burst_quiet_ms
     }
     pub async fn close(&self) {
         self.pool.close().await;

@@ -31,7 +31,8 @@ mod claude_identity;
 pub use claude_identity::ClaudeProcessInitialization;
 mod capability;
 pub use capability::{ConsumedProviderDispatch, ExecutionConsumption};
-mod deep_groups;
+pub(crate) mod deep_groups;
+pub use deep_groups::{DEFAULT_DEEP_BURST_QUIET_MS, MAX_DEEP_BURST_QUIET_MS};
 #[cfg(test)]
 mod deep_groups_tests;
 mod dispatch;
@@ -228,6 +229,7 @@ impl Store {
         Ok(Store {
             #[cfg(feature = "fixture-test-controls")]
             production_checkpoint: None,
+            deep_burst_quiet_ms: self.deep_burst_quiet_ms,
             pool: self.pool.clone(),
             #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
             workspace_handles: self.workspace_handles.clone(),
@@ -251,6 +253,7 @@ impl Store {
         let result = Store {
             #[cfg(feature = "fixture-test-controls")]
             production_checkpoint: None,
+            deep_burst_quiet_ms: self.deep_burst_quiet_ms,
             pool: store.pool.clone(),
             #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
             workspace_handles: store.workspace_handles.clone(),

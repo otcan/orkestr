@@ -447,10 +447,18 @@ class AutoSteerFlowTests(fixture.IntakeBase):
         self.assertTrue(self.row("answer")["settled"])
         self.assertEqual(self.texts(), ["Request first"])
 
+    def sent_earlier(self, public, seconds=10):
+        """`public` was sent this long ago: a later message is a follow-up,
+        not the next part of the same split message (auto_steer.burst_part)."""
+        data = self.row(public)
+        data["queued_at"] -= seconds
+        self.ledger.save(data)
+
     def test_question_mode_reads_no_status_without_a_question(self):
         self.worker.fast_reply_policy = "legacy"
         self.enqueue("first")
         self.run_passes(2)
+        self.sent_earlier("first")
         self.enqueue("second")
         self.peer.reads.clear()
         auto_steer.drive(self.worker)
@@ -489,6 +497,7 @@ class AutoSteerFlowTests(fixture.IntakeBase):
     def test_no_question_means_ordinary_queue_in_question_mode(self):
         self.enqueue("first")
         self.run_passes(2)
+        self.sent_earlier("first")
         self.enqueue("second")
         self.run_passes(2)
         self.assertEqual(self.mutations("/steer"), [])

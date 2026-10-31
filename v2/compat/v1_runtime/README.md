@@ -208,7 +208,8 @@ can go into that same native turn through Rust's supported
 `POST /steer` route instead of waiting as a separate turn. `question` mode
 does so only after that run asked an asynchronous question (the case where a
 queued answer arrives too late); `running` mode does so for any owner message;
-`off` keeps the ordinary queue. Only verified owner chat input directly behind
+`off` keeps the ordinary queue. In `question` mode the next part of a split
+message (below) is steered without an open question. Only verified owner chat input directly behind
 the head is considered, never timer, post, digest, web, member or local-agent
 input, attachments, or a message longer than Rust's 16 KiB steer bound, and
 only while Rust reports the exact run `running` with the `steer` capability.
@@ -380,6 +381,42 @@ numbered. The owner switch `deep_grouping` in the conversation settings
 (`PUT /api/v2/conversations/{id}/settings`, default `true`, an omitted value
 keeps the current one) is read at every Deep admission; `false` restores one
 Deep turn per input without a restart.
+
+### Split messages: one Deep turn for a burst
+
+WhatsApp often delivers one owner thought as several messages within a second
+or two (an owner chat on 2026-10-31: "Say :", "Field
+notes.", ":)" about 0.5 s apart). Before, Deep was idle when the first part
+arrived, so Core started a Deep turn for "Say :" alone at once and a second
+turn answered the rest. Core now holds the Deep claim of a fresh verified
+owner chat message until its burst is quiet: no further owner part of it for
+`ORKESTR_V2_DEEP_BURST_QUIET_MS` (server environment, default 2500 ms, `0`
+turns it off, at most 10000), and never longer than four windows after the
+first part. The parts then form one grouped Deep turn as above, even with
+Deep idle: each part arrived at most the window after the previous one. A
+group whose parts each followed the previous one within 2.5 s is headed as
+one split message to read together and answer once (`[Split message: …]`);
+other groups keep the numbered "answer every item" list.
+
+* Fast is not delayed: Core's Fast never reads the Deep inbox, so every part
+  still gets its own Fast reply at once.
+* The adapter admits every part on its own, exactly as before: each keeps its
+  ledger row, Core message, verified author, attachment import and Fast watch;
+  only the Deep turn is shared, and the parts settle with its one final,
+  which quotes the last part.
+* Only verified owner chat inputs form a burst. A member message, timer,
+  steer or thread ask ends it, so a participant's message is never merged
+  into the owner's turn (nor the other way round).
+* The owner switch `deep_grouping: false` turns burst waiting off too.
+* A part that arrives once the burst's Deep turn already runs (a stream longer
+  than four windows, or a Core without the burst rule) is steered into that
+  turn (`auto_steer.burst_part`, sent at most 2.5 s after the previous part
+  of the same owner) in `question` and `running` modes. A steered part has no
+  Fast reply of its own (Core never gives a steer one). With `auto_steer`
+  off it queues and Core groups it with what waited behind the turn.
+
+Deploy: the quiet window is a server change (store-sqlite); the adapter part
+only adds the burst steer. No binding field changes.
 
 ### Read-only parallel Deep finals (owner-only Fast intake)
 
