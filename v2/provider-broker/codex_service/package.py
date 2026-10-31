@@ -144,7 +144,7 @@ class Package:
 
     def _bind(self):
         value = self.runtime
-        require(set(value) - {"live_map", "desktop_broker", "timer_config", "v1_chat_icons_dir", "whatsapp_chats", "claude_quota_projection", "codex_quota_projection"} == {"format", "uid", "gid", "owner_id", "conversation_id", "home",
+        require(set(value) - {"live_map", "desktop_broker", "timer_config", "v1_chat_icons_dir", "whatsapp_chats", "claude_quota_projection", "codex_quota_projection", "metrics_port"} == {"format", "uid", "gid", "owner_id", "conversation_id", "home",
                 "bootstrap_file", "ledger_directory", "endpoint_directory", "port", "trusted_origin"}
                 and value["format"] == "orkestr-v2-codex-service-v1", "service_format")
         self.live_map = live_map_path(value["live_map"]) if "live_map" in value else None
@@ -165,6 +165,11 @@ class Package:
         require(all(type(value[k]) is int and 0 < value[k] < 2**31 for k in ("uid", "gid")),
                 "service_identity")
         require(type(value["port"]) is int and 1024 <= value["port"] <= 65535, "service_port")
+        # Optional explicit loopback metrics port (default: port + 1). The OSS
+        # container needs it: its proxy already listens on port + 1.
+        require("metrics_port" not in value or (type(value["metrics_port"]) is int
+                and 1024 <= value["metrics_port"] <= 65535 and value["metrics_port"] != value["port"]),
+                "service_metrics_port")
         self.owner, self.conversation = identifier(value["owner_id"]), identifier(value["conversation_id"])
         self.uid, self.gid = value["uid"], value["gid"]
         self.home = private(value["home"], self.uid, True)
@@ -301,6 +306,11 @@ class Package:
                 require(a != b and a not in b.parents and b not in a.parents, "claude_scope_overlap")
         self.claude = selected
 
+    def metrics_port(self):
+        if "metrics_port" in self.runtime:
+            return self.runtime["metrics_port"]
+        return self.runtime["port"] + 1 if self.runtime["port"] < 65535 else None
+
     def environment(self):
         return {"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8", "HOME": str(self.provider_home),
                 "ORKESTR_V2_HOME": str(self.data), "ORKESTR_V2_BIND": f"127.0.0.1:{self.runtime['port']}",
@@ -308,8 +318,8 @@ class Package:
                 "ORKESTR_V2_UI_DIST": str(self.root / "ui"),
                 "ORKESTR_V2_ORIGIN": self.runtime["trusted_origin"],
                 ACCESS_LOG_ENV: "quiet",
-                **({METRICS_BIND_ENV: f"127.0.0.1:{self.runtime['port'] + 1}"}
-                   if self.runtime["port"] < 65535 else {}),
+                **({METRICS_BIND_ENV: f"127.0.0.1:{self.metrics_port()}"}
+                   if self.metrics_port() is not None else {}),
                 **({LIVE_MAP_ENV: self.live_map} if self.live_map else {}),
                 **({DESKTOP_BROKER_ENV: self.desktop_broker}
                    if getattr(self, "desktop_broker", None) else {}),
