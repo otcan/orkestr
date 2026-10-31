@@ -64,6 +64,24 @@ pub(super) async fn next(
     {
         return Err(RuntimeStoreError::Busy);
     }
+    let sequence: i64 = row.get("sequence");
+    // A fresh owner message may be the first part of one thought WhatsApp
+    // split into several: its Deep turn waits until the burst is quiet, then
+    // takes all of it (deep_groups). Nothing is claimed meanwhile; the
+    // session polls again. Fast never reads the inbox and is not delayed.
+    if row.get::<&str, _>("state") == "queued"
+        && crate::production_runtime::deep_groups::settling(
+            &mut tx,
+            conversation,
+            sequence,
+            window.as_deref(),
+            store.deep_burst_quiet_ms,
+            now,
+        )
+        .await?
+    {
+        return Ok(None);
+    }
     let generation = row
         .get::<i64, _>("claim_generation")
         .checked_add(1)
@@ -71,7 +89,6 @@ pub(super) async fn next(
     let deadline = now
         .checked_add(i64::try_from(duration.as_millis()).map_err(db)?)
         .ok_or(RuntimeStoreError::InvalidInput)?;
-    let sequence: i64 = row.get("sequence");
     sqlx::query("UPDATE reasoning_inbox SET state='claimed',claimant_session_id=?,claim_generation=?,claim_deadline_ms=? WHERE conversation_id=? AND sequence=?")
         .bind(consumer.to_string()).bind(generation).bind(deadline).bind(conversation.to_string()).bind(sequence)
         .execute(&mut *tx).await.map_err(db)?;

@@ -22,6 +22,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     result
 }
 
+/// Deep burst quiet window in ms (default 2500, 0 = off, at most 10000):
+/// owner messages split by WhatsApp within this window get one Deep turn.
+const DEEP_BURST_QUIET_ENV: &str = "ORKESTR_V2_DEEP_BURST_QUIET_MS";
+
+fn deep_burst_quiet_ms(value: Option<&str>) -> i64 {
+    use orkestr_v2_store_sqlite::{DEFAULT_DEEP_BURST_QUIET_MS, MAX_DEEP_BURST_QUIET_MS};
+    match value.map(|v| v.trim().parse::<i64>()) {
+        None => DEFAULT_DEEP_BURST_QUIET_MS,
+        Some(Ok(ms)) if (0..=MAX_DEEP_BURST_QUIET_MS).contains(&ms) => ms,
+        Some(_) => {
+            // A typo never stops the server: keep the default and say so.
+            eprintln!(
+                "{DEEP_BURST_QUIET_ENV} must be 0..={MAX_DEEP_BURST_QUIET_MS}; using {DEFAULT_DEEP_BURST_QUIET_MS}"
+            );
+            DEFAULT_DEEP_BURST_QUIET_MS
+        }
+    }
+}
+
 async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     let home =
         PathBuf::from(std::env::var("ORKESTR_V2_HOME").map_err(|_| "ORKESTR_V2_HOME is required")?);
@@ -46,7 +65,10 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         .map_err(|_| "ORKESTR_V2_BOOTSTRAP_TOKEN is required")?;
     let store = Store::open(&home.join("core.sqlite3"))
         .await
-        .map_err(|_| "store startup failed")?;
+        .map_err(|_| "store startup failed")?
+        .with_deep_burst_quiet_ms(deep_burst_quiet_ms(
+            std::env::var(DEEP_BURST_QUIET_ENV).ok().as_deref(),
+        ));
     // Import operator-supplied V1 browser recipients and seal plaintext residue.
     orkestr_v2_server::attachment_keys_http::startup(&store, &home).await;
     let origin = config.origin;
@@ -219,4 +241,23 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     tracker_cleanup?;
     cleanup?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::deep_burst_quiet_ms;
+
+    #[test]
+    fn the_deep_burst_window_defaults_to_two_and_a_half_seconds_and_is_bounded() {
+        assert_eq!(deep_burst_quiet_ms(None), 2_500);
+        assert_eq!(
+            deep_burst_quiet_ms(Some("0")),
+            0,
+            "0 turns burst waiting off"
+        );
+        assert_eq!(deep_burst_quiet_ms(Some(" 4000 ")), 4_000);
+        for bad in ["-1", "10001", "2.5", "soon", ""] {
+            assert_eq!(deep_burst_quiet_ms(Some(bad)), 2_500, "{bad}");
+        }
+    }
 }

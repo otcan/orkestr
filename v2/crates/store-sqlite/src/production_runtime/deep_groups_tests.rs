@@ -184,8 +184,10 @@ async fn grouping(f: &Case, revision: i64, on: Option<bool>) {
 async fn a_burst_queued_while_deep_was_busy_is_one_numbered_turn() {
     let f = setup().await;
     let first = busy(&f).await;
-    for key in ["a", "b", "c"] {
-        owner(&f, key).await;
+    // Three separate messages, 3 s apart (not one split message).
+    for (key, ago) in [("a", 9_000), ("b", 6_000), ("c", 3_000)] {
+        let receipt = owner(&f, key).await;
+        arrived_ago(&f, &receipt, ago).await;
     }
     finish(&f, &first, "accept-first").await;
     let run = admit(&f, "grouped").await.unwrap();
@@ -463,10 +465,13 @@ fn a_shared_chat_rules_line_is_given_once_at_the_top() {
         "a".repeat(12)
     );
     let item = |body: &str| format!("{line}\n\n[WhatsApp: synthetic]\n{body}");
-    let text = super::deep_groups::render(&[
-        (7, "m-1".into(), item("first")),
-        (9, "m-2".into(), item("second")),
-    ]);
+    let text = super::deep_groups::render(
+        &[
+            (7, "m-1".into(), item("first")),
+            (9, "m-2".into(), item("second")),
+        ],
+        false,
+    );
     assert!(text.starts_with(&format!("{line}\n\n[Grouped turn: 2 owner messages")));
     assert_eq!(text.matches("[Chat rules v").count(), 1);
     assert!(text.contains("\n\n1. [source: message m-1, sequence 7]\n[WhatsApp: synthetic]\nfirst"));
@@ -495,4 +500,192 @@ async fn an_input_that_arrived_after_deep_went_idle_keeps_its_own_turn() {
     let lone = admit(&f, "lone").await.unwrap();
     assert!(group(&f, &lone).await.is_empty());
     assert_eq!(dispatch(&f, &lone, "lone-reserve").await, "owner says late");
+}
+
+// Split messages (bursts): WhatsApp delivers one thought typed as several
+// messages within a second or two. an owner chat on 2026-10-31:
+// "Say :", "Field      notes." and ":)" arrived 0.5 s apart while
+// Deep was idle; Deep answered "Say :" alone, then a second turn the rest.
+
+const QUIET_MS: i64 = super::deep_groups::DEFAULT_DEEP_BURST_QUIET_MS;
+
+/// A case whose supervisor handle uses the server's default quiet window.
+async fn burst_case() -> Case {
+    let mut f = setup().await;
+    f.handle = f.handle.clone().with_deep_burst_quiet_ms(QUIET_MS);
+    assert_eq!(f.handle.deep_burst_quiet_ms(), QUIET_MS);
+    f
+}
+
+/// Core recorded the input as arriving `ms` milliseconds ago.
+async fn arrived_ago(f: &Case, receipt: &Receipt, ms: i64) {
+    sqlx::query("UPDATE events SET occurred_at=strftime('%Y-%m-%dT%H:%M:%fZ','now',printf('-%.3f seconds',?1/1000.0)) WHERE id=?2")
+        .bind(ms)
+        .bind(receipt.event_id.to_string())
+        .execute(&f.store.pool)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn a_split_owner_message_waits_for_its_burst_and_is_one_deep_turn() {
+    let f = burst_case().await;
+    ready(&f).await;
+    // The exact PA burst, Deep idle: 15:03:44.03, 44.52 and 45.07.
+    let parts = [
+        ("say", "Say :", 1_040),
+        ("field", "Field      notes.", 550),
+        ("smile", ":)", 10),
+    ];
+    let mut receipts = Vec::new();
+    for (key, text, ago) in parts {
+        let receipt = say(&f, key, text, Some(InputAuthor::Owner)).await;
+        arrived_ago(&f, &receipt, ago).await;
+        receipts.push(receipt);
+    }
+    // The last part is 10 ms old: Deep waits, nothing is claimed or consumed.
+    assert!(admit(&f, "too-early").await.is_none());
+    assert_eq!(queued(&f).await, 3);
+    // Quiet for the window: one Deep turn takes the whole burst, in order.
+    for (receipt, (_, _, ago)) in receipts.iter().zip(parts) {
+        arrived_ago(&f, receipt, ago + QUIET_MS).await;
+    }
+    let run = admit(&f, "burst").await.unwrap();
+    assert_eq!(group(&f, &run).await, ["say", "field", "smile"]);
+    assert_eq!(queued(&f).await, 0, "every part consumed by the one run");
+    let text = dispatch(&f, &run, "burst-reserve").await;
+    assert!(
+        text.starts_with("[Split message: the owner sent this as 3 WhatsApp messages"),
+        "{text}"
+    );
+    assert!(text.contains("answer it once") && !text.contains("Answer every item"));
+    let (one, two, three) = (
+        text.find("\n1. [source: message").unwrap(),
+        text.find("\n2. [source: message").unwrap(),
+        text.find("\n3. [source: message").unwrap(),
+    );
+    assert!(one < two && two < three);
+    assert!(text[one..two].contains("Say :"));
+    assert!(text[two..three].contains("Field      notes."));
+    assert!(text[three..].trim_end().ends_with(":)"));
+    start(&f, &run.provider).await;
+    finish(&f, &run.provider, "accept-burst").await;
+    assert!(admit(&f, "nothing-left").await.is_none());
+}
+
+#[tokio::test]
+async fn a_message_after_the_quiet_window_keeps_its_own_turn() {
+    let f = burst_case().await;
+    ready(&f).await;
+    let first = owner(&f, "first").await;
+    let later = owner(&f, "ten-seconds-later").await;
+    arrived_ago(&f, &first, 15_000).await;
+    arrived_ago(&f, &later, 5_000).await;
+    // Ten seconds apart: two thoughts, never one burst, and no wait.
+    let run = admit(&f, "first-run").await.unwrap();
+    assert!(group(&f, &run).await.is_empty());
+    assert_eq!(
+        dispatch(&f, &run, "first-reserve").await,
+        "owner says first"
+    );
+    assert_eq!(queued(&f).await, 1);
+    start(&f, &run.provider).await;
+    finish(&f, &run.provider, "accept-first").await;
+    let next = admit(&f, "later-run").await.unwrap();
+    assert!(group(&f, &next).await.is_empty());
+    assert_eq!(
+        dispatch(&f, &next, "later-reserve").await,
+        "owner says ten-seconds-later"
+    );
+}
+
+#[tokio::test]
+async fn a_member_message_inside_the_window_is_never_merged_with_the_owner() {
+    let f = burst_case().await;
+    ready(&f).await;
+    let a = owner(&f, "a").await;
+    let member = say(&f, "member", "member says hi", Some(InputAuthor::Member)).await;
+    let b = owner(&f, "b").await;
+    for receipt in [&a, &member, &b] {
+        arrived_ago(&f, receipt, QUIET_MS + 100).await;
+    }
+    // The burst stops at the member: the owner's turn is `a` alone, the
+    // member keeps its own turn, and `b` never joins `a` past it.
+    let run = admit(&f, "a-run").await.unwrap();
+    assert!(group(&f, &run).await.is_empty());
+    assert_eq!(dispatch(&f, &run, "a-reserve").await, "owner says a");
+    start(&f, &run.provider).await;
+    finish(&f, &run.provider, "accept-a").await;
+    // A member head never waits for a burst, even when fresh.
+    arrived_ago(&f, &member, 0).await;
+    let run = admit(&f, "member-run").await.unwrap();
+    assert!(group(&f, &run).await.is_empty());
+    assert_eq!(dispatch(&f, &run, "member-reserve").await, "member says hi");
+    start(&f, &run.provider).await;
+    finish(&f, &run.provider, "accept-member").await;
+    let run = admit(&f, "b-run").await.unwrap();
+    assert!(group(&f, &run).await.is_empty());
+    assert_eq!(dispatch(&f, &run, "b-reserve").await, "owner says b");
+}
+
+#[tokio::test]
+async fn a_continuous_stream_holds_its_head_at_most_four_windows() {
+    let f = burst_case().await;
+    ready(&f).await;
+    // One message a second for 11 s: the head stops waiting after 10 s.
+    let mut keys = Vec::new();
+    for n in 0..11 {
+        let key = format!("stream-{n:02}");
+        let receipt = owner(&f, &key).await;
+        arrived_ago(&f, &receipt, 10_500 - n * 1_000).await;
+        keys.push(key);
+    }
+    let run = admit(&f, "stream").await.unwrap();
+    assert_eq!(
+        group(&f, &run).await,
+        keys,
+        "every part so far joins the turn"
+    );
+    assert_eq!(queued(&f).await, 0);
+}
+
+#[tokio::test]
+async fn the_owner_switch_off_never_waits_or_groups_a_burst() {
+    let f = burst_case().await;
+    ready(&f).await;
+    grouping(&f, 0, Some(false)).await;
+    owner(&f, "x").await;
+    owner(&f, "y").await;
+    let run = admit(&f, "x-run").await.unwrap();
+    assert!(group(&f, &run).await.is_empty());
+    assert_eq!(dispatch(&f, &run, "x-reserve").await, "owner says x");
+    assert_eq!(queued(&f).await, 1);
+}
+
+#[tokio::test]
+async fn a_burst_that_straddles_the_end_of_a_busy_turn_stays_one_group() {
+    let f = burst_case().await;
+    ready(&f).await;
+    let earlier = owner(&f, "first").await;
+    arrived_ago(&f, &earlier, 60_000).await;
+    let first = admit(&f, "first-run").await.unwrap();
+    dispatch(&f, &first, "first-reserve").await;
+    start(&f, &first.provider).await;
+    let first = first.provider;
+    let a = owner(&f, "a").await;
+    let b = owner(&f, "b").await;
+    finish(&f, &first, "accept-first").await;
+    // `c` is the third part of the same split message, sent just after the
+    // turn ended: it still joins the burst that waited behind it.
+    let c = owner(&f, "c").await;
+    for (receipt, ago) in [(&a, 3_400), (&b, 3_000), (&c, 2_600)] {
+        arrived_ago(&f, receipt, ago).await;
+    }
+    let run = admit(&f, "grouped").await.unwrap();
+    assert_eq!(group(&f, &run).await, ["a", "b", "c"]);
+    let text = dispatch(&f, &run, "grouped-reserve").await;
+    assert!(
+        text.starts_with("[Split message: the owner sent this as 3"),
+        "{text}"
+    );
 }

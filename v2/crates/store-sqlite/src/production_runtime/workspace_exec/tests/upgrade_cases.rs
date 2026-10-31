@@ -58,6 +58,7 @@ async fn populated_schema44_copy_first_upgrade_preserves_every_old_row_and_has_n
         workspace_handles: Default::default(),
         #[cfg(feature = "fixture-test-controls")]
         production_checkpoint: None,
+        deep_burst_quiet_ms: 0,
     };
     let conversation = store
         .setup("synthetic-owner", "synthetic-hash")
