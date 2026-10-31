@@ -51,7 +51,9 @@ try {
     await page.type('#username', 'synthetic-owner');
     await page.type('#password', 'short');
     await click('Continue');
-    await page.waitForFunction(() => document.querySelector('[role="status"]')?.textContent.includes('12 characters'));
+    // The app's sign-in notice is also role=status. Observe this form's
+    // validation result rather than the first status element on the page.
+    await page.waitForFunction(() => document.querySelector('form [role="status"]')?.textContent.includes('12 characters'));
     assert.equal(creations, 0);
     assert.equal(await page.$('#bootstrap'), null, 'Validation retry must keep the password-only form');
     await page.type('#password', 'synthetic-password-000000');
