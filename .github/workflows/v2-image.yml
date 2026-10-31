@@ -57,6 +57,12 @@ jobs:
         run: |
           python3 -I -S -B v2/packaging/oss/fresh_install.py \
             --image orkestr-v2:fresh --source "$SOURCE" --report "$RUNNER_TEMP/fresh-install.json"
+      - name: Local first-run account needs only a username and password
+        env:
+          SOURCE: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          python3 -I -S -B v2/packaging/oss/fresh_install.py --local-setup \
+            --image orkestr-v2:fresh --source "$SOURCE" --report "$RUNNER_TEMP/local-fresh-install.json"
       - name: Retain synthetic acceptance evidence and candidate bundle
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -64,6 +70,7 @@ jobs:
           name: v2-linux-amd64-candidate-${{ github.run_id }}
           path: |
             ${{ runner.temp }}/fresh-install.json
+            ${{ runner.temp }}/local-fresh-install.json
             ${{ runner.temp }}/bundle/*.tar.gz
             ${{ runner.temp }}/bundle/SHA256SUMS
             ${{ runner.temp }}/bundle/paired-artifacts.json
@@ -113,6 +120,12 @@ jobs:
         run: |
           python3 -I -S -B v2/packaging/oss/fresh_install.py \
             --image orkestr-v2:fresh --source "$SOURCE" --report "$RUNNER_TEMP/fresh-install.json"
+      - name: Local first-run account needs only a username and password
+        env:
+          SOURCE: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          python3 -I -S -B v2/packaging/oss/fresh_install.py --local-setup \
+            --image orkestr-v2:fresh --source "$SOURCE" --report "$RUNNER_TEMP/local-fresh-install.json"
       - name: Retain synthetic acceptance evidence and candidate bundle
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -120,6 +133,7 @@ jobs:
           name: v2-linux-arm64-candidate-${{ github.run_id }}
           path: |
             ${{ runner.temp }}/fresh-install.json
+            ${{ runner.temp }}/local-fresh-install.json
             ${{ runner.temp }}/bundle/*.tar.gz
             ${{ runner.temp }}/bundle/SHA256SUMS
             ${{ runner.temp }}/bundle/paired-artifacts.json

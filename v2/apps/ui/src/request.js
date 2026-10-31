@@ -5,8 +5,10 @@ const route = /^\/api\/v2\/(?:setup|browser\/session|projects|conversations\/[0-
 const manage = /^\/api\/v2\/conversations\/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\/(?:settings|provider-handoffs(?:\/[A-Za-z0-9._:-]{1,128})?|timers|desktops|desktop-binding|message-times\?after=[0-9]{1,18}&limit=200|posts\?limit=50)$/;
 // Sidebar observation, read marks, linked V1 history and input, old V1 deep links.
 const sidebar = /^\/api\/v2\/(?:sidebar(?:\/read|\?include_hidden=true)?|v1-threads\/[A-Za-z0-9._:-]{1,200}\/(?:messages(?:\?before=[0-9]{1,18})?|uploads)|v1-links\/thr_[A-Za-z0-9_-]{22}\?instance=ins_[A-Za-z0-9_-]{22}|whatsapp-chats|v1-threads\/[A-Za-z0-9._:-]{1,200}\/(?:settings|whatsapp|desktops|timers(?:\/[A-Za-z0-9._:-]{1,200}(?:\/(?:pause|resume))?)?))$/;
-if (!route.test(input.path) && !(manage.test(input.path) && !input.path.includes("..")) && !(sidebar.test(input.path) && !input.path.includes(".."))) throw new Error("Invalid API path");
+const localAccount = input.path === "/api/v2/oss-setup/account" && ["GET", "POST"].includes(input.method);
+if (!localAccount && !route.test(input.path) && !(manage.test(input.path) && !input.path.includes("..")) && !(sidebar.test(input.path) && !input.path.includes(".."))) throw new Error("Invalid API path");
 const headers = {"Content-Type": "application/json"};
+if (localAccount) headers["x-orkestr-local-setup"] = "1";
 if (input.csrf && !["GET", "HEAD"].includes(input.method)) headers["x-orkestr-csrf"] = input.csrf;
 if (input.bootstrap) headers["x-orkestr-bootstrap"] = input.bootstrap;
 // Poll reads revalidate: the last body per GET path is kept in memory with
