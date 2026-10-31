@@ -57,6 +57,31 @@ jobs:
         run: |
           python3 -I -S -B v2/packaging/oss/fresh_install.py \
             --image orkestr-v2:fresh --source "$SOURCE" --report "$RUNNER_TEMP/fresh-install.json"
+      - name: Local first-run account needs only a username and password
+        env:
+          SOURCE: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          python3 -I -S -B v2/packaging/oss/fresh_install.py --local-setup \
+            --image orkestr-v2:fresh --source "$SOURCE" --report "$RUNNER_TEMP/local-fresh-install.json"
+      - name: Export the tested Docker image for local owner acceptance
+        env:
+          SOURCE: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          mkdir "$RUNNER_TEMP/test-image"
+          docker tag orkestr-v2:fresh "orkestr-oss-test:$SOURCE"
+          docker save "orkestr-oss-test:$SOURCE" | gzip -1 > "$RUNNER_TEMP/test-image/orkestr-oss-test-amd64.tar.gz"
+          cd "$RUNNER_TEMP/test-image"
+          sha256sum orkestr-oss-test-amd64.tar.gz > orkestr-oss-test-amd64.tar.gz.sha256
+          sha256sum -c orkestr-oss-test-amd64.tar.gz.sha256
+      - name: Retain the Docker image for download (no registry publish)
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: v2-test-image-amd64-${{ github.run_id }}
+          path: ${{ runner.temp }}/test-image/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
       - name: Retain synthetic acceptance evidence and candidate bundle
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -64,6 +89,7 @@ jobs:
           name: v2-linux-amd64-candidate-${{ github.run_id }}
           path: |
             ${{ runner.temp }}/fresh-install.json
+            ${{ runner.temp }}/local-fresh-install.json
             ${{ runner.temp }}/bundle/*.tar.gz
             ${{ runner.temp }}/bundle/SHA256SUMS
             ${{ runner.temp }}/bundle/paired-artifacts.json
@@ -113,6 +139,31 @@ jobs:
         run: |
           python3 -I -S -B v2/packaging/oss/fresh_install.py \
             --image orkestr-v2:fresh --source "$SOURCE" --report "$RUNNER_TEMP/fresh-install.json"
+      - name: Local first-run account needs only a username and password
+        env:
+          SOURCE: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          python3 -I -S -B v2/packaging/oss/fresh_install.py --local-setup \
+            --image orkestr-v2:fresh --source "$SOURCE" --report "$RUNNER_TEMP/local-fresh-install.json"
+      - name: Export the tested Docker image for local owner acceptance
+        env:
+          SOURCE: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          mkdir "$RUNNER_TEMP/test-image"
+          docker tag orkestr-v2:fresh "orkestr-oss-test:$SOURCE"
+          docker save "orkestr-oss-test:$SOURCE" | gzip -1 > "$RUNNER_TEMP/test-image/orkestr-oss-test-arm64.tar.gz"
+          cd "$RUNNER_TEMP/test-image"
+          sha256sum orkestr-oss-test-arm64.tar.gz > orkestr-oss-test-arm64.tar.gz.sha256
+          sha256sum -c orkestr-oss-test-arm64.tar.gz.sha256
+      - name: Retain the Docker image for download (no registry publish)
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: v2-test-image-arm64-${{ github.run_id }}
+          path: ${{ runner.temp }}/test-image/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
       - name: Retain synthetic acceptance evidence and candidate bundle
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -120,6 +171,7 @@ jobs:
           name: v2-linux-arm64-candidate-${{ github.run_id }}
           path: |
             ${{ runner.temp }}/fresh-install.json
+            ${{ runner.temp }}/local-fresh-install.json
             ${{ runner.temp }}/bundle/*.tar.gz
             ${{ runner.temp }}/bundle/SHA256SUMS
             ${{ runner.temp }}/bundle/paired-artifacts.json

@@ -49,6 +49,11 @@ to loopback only. On a remote server, use an SSH port forward to the same URL.
 
 ## Build from source with Docker Compose
 
+**Unreleased source changes:** checkouts containing the
+[local account setup change](../docs/v2/local-docker-account-setup.md) open
+directly at **Create your account**, with no setup token to copy. The published
+beta.6 instructions above still use a token.
+
 Requires Docker Engine with Compose v2 on Linux x86_64 or arm64 (aarch64), or
 Docker Desktop on an Apple Silicon Mac (see below), public registry access,
 and your own ChatGPT/Codex login (a Claude login is optional). **No prebuilt image is published: the

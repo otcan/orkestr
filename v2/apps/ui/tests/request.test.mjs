@@ -6,6 +6,23 @@ const AsyncFunction = Object.getPrototypeOf(async function() {}).constructor;
 const execute = new AsyncFunction('dioxus', 'fetch', code);
 const base = {method:'POST',path:'/api/v2/browser/session',body:{username:'synthetic-user',password:'synthetic-password'},csrf:'',bootstrap:''};
 
+test('local account setup uses a fixed same-origin path and preflight header without a bootstrap token', async () => {
+    const path = '/api/v2/oss-setup/account';
+    for (const method of ['GET', 'POST']) {
+        await execute({recv:async()=>({...base,method,path,body:method==='GET'?null:base.body})},async(actual,options)=>{
+            assert.equal(actual,path);
+            assert.equal(options.credentials,'same-origin');
+            assert.equal(options.headers['x-orkestr-local-setup'],'1');
+            assert.equal(options.headers['x-orkestr-bootstrap'],undefined);
+            assert.equal(options.headers.Authorization,undefined);
+            return Response.json({setup_required:true});
+        });
+    }
+    for (const [method, rejected] of [['DELETE',path],['POST',path+'/..'],['GET',path+'?token=synthetic'],['POST','/api/v2/oss-setup/configure']]) {
+        await assert.rejects(execute({recv:async()=>({...base,method,path:rejected})},()=>assert.fail('fetch must not run')),/Invalid API path/);
+    }
+});
+
 test('provider handoff and receipt keep scoped cookie paths and mutation CSRF', async () => {
     const root='/api/v2/conversations/00000000-0000-4000-8000-000000000001/provider-handoffs';
     for(const [method,path] of [['POST',root],['GET',root+'/synthetic:handoff']]) {

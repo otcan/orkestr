@@ -14,6 +14,10 @@ services:
         SOURCE_COMMIT: ${ORKESTR_SOURCE_COMMIT:-}
     ports:
       - "127.0.0.1:19822:19823"
+    # This compose service is published on loopback only. Remote/exposed
+    # deployments must leave local account setup disabled and use the token.
+    environment:
+      ORKESTR_OSS_LOCAL_SETUP: "1"
     volumes:
       - state:/state
       - credentials:/credentials
