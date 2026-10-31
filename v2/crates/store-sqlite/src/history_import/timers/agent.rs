@@ -35,6 +35,9 @@ pub enum AgentTimerRefusal {
     Ended,
     Dormant,
     OwnerPaused,
+    /// An upsert would replace the instruction of a timer whose run is
+    /// still in progress (a new generation would fence that run).
+    Busy,
     Unavailable,
 }
 impl AgentTimerRefusal {
@@ -52,6 +55,7 @@ impl AgentTimerRefusal {
             Self::Ended => "agent_timer_ended",
             Self::Dormant => "agent_timer_dormant",
             Self::OwnerPaused => "agent_timer_owner_paused",
+            Self::Busy => "agent_timer_busy",
             Self::Unavailable => "agent_timer_unavailable",
         }
     }
@@ -250,6 +254,161 @@ pub(crate) async fn agent_timer_create(
         .bind(owner.to_string()).bind(new.namespace.to_string()).bind(conversation.to_string())
         .bind(new.request_key).bind(new.request_digest).bind(new.run_id).bind(new.grant_generation).bind(now_ms)
         .execute(&mut **tx).await.map_err(|_| AgentTimerRefusal::Unavailable)?;
+    Ok(true)
+}
+
+/// The timer an upsert with `label` moves: the newest agent-created timer
+/// of this conversation with exactly that label (trimmed, case-insensitive)
+/// that is enabled or a fired one-shot (exhausted). Cancelled (disabled),
+/// stopped or rolled back timers are never revived; they stay the owner's.
+/// Returns the namespace, state and the timer's own (stored) label.
+pub(crate) async fn agent_timer_by_label(
+    tx: &mut Transaction<'_, Sqlite>,
+    owner: &OwnerId,
+    conversation: &ConversationId,
+    label: &str,
+) -> Step<Option<(Uuid, TimerState, String)>> {
+    let row: Option<(String, String, String)> = sqlx::query_as(
+        "SELECT a.namespace,t.state,g.label FROM agent_timers a JOIN dormant_timers t ON t.owner_id=a.owner_id AND t.namespace=a.namespace JOIN dormant_timer_targets g ON g.owner_id=a.owner_id AND g.namespace=a.namespace WHERE a.owner_id=? AND a.conversation_id=? AND t.conversation_id=a.conversation_id AND lower(trim(g.label))=lower(?) AND t.state IN ('enabled','exhausted') ORDER BY t.state='enabled' DESC,a.created_ms DESC,a.rowid DESC LIMIT 1",
+    )
+    .bind(owner.to_string())
+    .bind(conversation.to_string())
+    .bind(label.trim())
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(|_| AgentTimerRefusal::Unavailable)?;
+    match row {
+        None => Ok(None),
+        Some((namespace, state, label)) => Ok(Some((
+            Uuid::parse_str(&namespace).map_err(|_| AgentTimerRefusal::Unavailable)?,
+            TimerState::parse(&state).map_err(|_| AgentTimerRefusal::Unavailable)?,
+            label,
+        ))),
+    }
+}
+
+/// Move one agent timer of this conversation (found by
+/// `agent_timer_by_label`) to a new schedule and instruction. Returns whether
+/// anything changed. No new timer and no new provenance row: an upsert is
+/// not a create.
+///
+/// The instruction of a timer generation is immutable, and a new generation
+/// fences every unfinished input of the old one (`ordinary_input_holds`), so:
+/// - same instruction and no Stop since the timer was enabled: the schedule
+///   is edited in place in the same generation (a fired one-shot is armed
+///   again). This is safe from the timer's own running turn.
+/// - otherwise the timer is disabled, edited and enabled again under a new
+///   generation with the new instruction, which is refused (`Busy`) while
+///   one of its runs is still queued or running.
+pub(crate) async fn agent_timer_reschedule(
+    tx: &mut Transaction<'_, Sqlite>,
+    owner: &OwnerId,
+    conversation: &ConversationId,
+    namespace: Uuid,
+    schedule: &TimerSchedule,
+    instruction: &str,
+    request_key: &str,
+) -> Step<bool> {
+    let now_ms = store_clock(tx).await?;
+    let current = row(tx, owner, namespace).await?;
+    let state = TimerState::parse(current.get("state"))?;
+    if !matches!(state, TimerState::Enabled | TimerState::Exhausted)
+        || current.get::<String, _>("source_namespace") != CALENDAR_SOURCE
+        || current.get::<Option<String>, _>("dormant_reason").is_some()
+        || current.get::<String, _>("conversation_id") != conversation.to_string()
+    {
+        return Err(AgentTimerRefusal::Ended);
+    }
+    let generation: i64 = current.get("generation");
+    let encoded = schedule::encode(schedule)?;
+    let digest = super::timer_source_digest(&TimerImportRequest {
+        namespace,
+        source_namespace: CALENDAR_SOURCE.into(),
+        source_timer_id: namespace.to_string(),
+        source_enabled: false,
+        schedule: schedule.clone(),
+    })?;
+    let authority: Option<String> = sqlx::query_scalar(
+        "SELECT instruction FROM durable_timer_authorities WHERE owner_id=? AND namespace=? AND generation=?",
+    )
+    .bind(owner.to_string())
+    .bind(namespace.to_string())
+    .bind(generation)
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(|_| AgentTimerRefusal::Unavailable)?;
+    let guard: Option<i64> = sqlx::query_scalar("SELECT stop_sequence FROM dormant_timer_input_guards WHERE owner_id=? AND namespace=? AND generation=? AND conversation_id=?")
+        .bind(owner.to_string()).bind(namespace.to_string()).bind(generation).bind(conversation.to_string())
+        .fetch_optional(&mut **tx).await.map_err(|_| AgentTimerRefusal::Unavailable)?;
+    let stop: i64 = sqlx::query_scalar("SELECT COALESCE(max(e.sequence),0) FROM production_stop_boundaries b JOIN events e ON e.id=b.event_id WHERE b.owner_id=? AND b.conversation_id=?")
+        .bind(owner.to_string()).bind(conversation.to_string())
+        .fetch_one(&mut **tx).await.map_err(|_| AgentTimerRefusal::Unavailable)?;
+    let same_instruction = authority.as_deref() == Some(instruction);
+    if same_instruction && guard == Some(stop) {
+        if state == TimerState::Enabled && current.get::<String, _>("schedule_json") == encoded {
+            return Ok(false);
+        }
+        let fired = policy_pause::last_fired(tx, owner, namespace).await?;
+        let natural = schedule::next_for_after(schedule, namespace, now_ms, fired)?;
+        let next = policy_pause::adjust_next(
+            tx,
+            owner,
+            namespace,
+            schedule,
+            &conversation.to_string(),
+            fired,
+            natural,
+        )
+        .await?;
+        let revision = revision(current.get("revision"))?;
+        sqlx::query("UPDATE dormant_timers SET state='enabled',schedule_json=?,source_digest=?,revision=?,next_due_ms=? WHERE owner_id=? AND namespace=? AND generation=?")
+            .bind(&encoded).bind(&digest).bind(revision).bind(next)
+            .bind(owner.to_string()).bind(namespace.to_string()).bind(generation)
+            .execute(&mut **tx).await.map_err(|_| AgentTimerRefusal::Unavailable)?;
+        return Ok(true);
+    }
+    // A new generation: never while one of this timer's runs is unfinished.
+    let busy: i64 = sqlx::query_scalar("SELECT count(*) FROM dormant_timer_inputs i JOIN reasoning_inbox r ON r.event_id=i.event_id WHERE i.owner_id=? AND i.namespace=? AND r.state IN ('queued','claimed')")
+        .bind(owner.to_string()).bind(namespace.to_string())
+        .fetch_one(&mut **tx).await.map_err(|_| AgentTimerRefusal::Unavailable)?;
+    let running: i64 = sqlx::query_scalar("SELECT count(*) FROM dormant_timer_inputs i JOIN production_runs r ON r.message_id=i.message_id WHERE i.owner_id=? AND i.namespace=? AND r.state IN ('starting','running')")
+        .bind(owner.to_string()).bind(namespace.to_string())
+        .fetch_one(&mut **tx).await.map_err(|_| AgentTimerRefusal::Unavailable)?;
+    if busy != 0 || running != 0 {
+        return Err(AgentTimerRefusal::Busy);
+    }
+    let key = &hash(&format!("{namespace}:{request_key}"))[..40];
+    let disabled = super::control::control_in_transaction(
+        tx,
+        owner,
+        &TimerControlRequest {
+            namespace,
+            expected_revision: current.get("revision"),
+            request_key: format!("agent-upsert-off:{key}"),
+            action: TimerControl::Disable,
+        },
+    )
+    .await?;
+    let revision = revision(disabled.revision)?;
+    sqlx::query("UPDATE dormant_timers SET schedule_json=?,source_digest=?,revision=? WHERE owner_id=? AND namespace=? AND state='disabled'")
+        .bind(&encoded).bind(&digest).bind(revision)
+        .bind(owner.to_string()).bind(namespace.to_string())
+        .execute(&mut **tx).await.map_err(|_| AgentTimerRefusal::Unavailable)?;
+    enable_durable_in(
+        tx,
+        owner,
+        &DurableTimerEnable {
+            timer: TimerEnableRequest {
+                namespace,
+                expected_revision: revision,
+                request_key: format!("agent-upsert:{key}"),
+                conversation_id: conversation.clone(),
+            },
+            instruction: instruction.to_owned(),
+        },
+        now_ms,
+    )
+    .await?;
     Ok(true)
 }
 

@@ -216,6 +216,7 @@ impl Store {
             #[cfg(feature = "fixture-test-controls")]
             production_checkpoint: None,
             deep_burst_quiet_ms: self.deep_burst_quiet_ms,
+            agent_timer_daily: self.agent_timer_daily,
             pool: self.pool.clone(),
             #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
             workspace_handles: self.workspace_handles.clone(),

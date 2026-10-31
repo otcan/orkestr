@@ -501,6 +501,17 @@ async fn a_new_chat_gets_its_own_agent_timer_grant_once() {
         .unwrap();
     assert_eq!((grant.issued, grant.generation), (true, 1), "issued once");
     assert!(chats::timer_grant_installed(&grant_path));
+    // Its group holds only the owner's numbers: owner-only timer caps.
+    let limits = state
+        .store
+        .agent_timer_limits(&credential, &owner, &chat.conversation_id)
+        .await
+        .unwrap();
+    assert_eq!(limits.mode, AgentTimerCapMode::OwnerOnly);
+    assert_eq!(
+        limits.daily_creates_max,
+        Some(AGENT_TIMER_OWNER_ONLY_DAILY_CREATES_MAX)
+    );
     {
         use std::os::unix::fs::PermissionsExt;
         let mode = std::fs::metadata(&grant_path).unwrap().permissions().mode();
