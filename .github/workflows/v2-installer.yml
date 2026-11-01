@@ -1,0 +1,36 @@
+name: V2 Docker installer
+on:
+  pull_request:
+    branches: ['v2/**']
+    paths: ['v2/packaging/oss/**', '.github/workflows/v2-installer.yml']
+  push:
+    branches: [v2/rust-rewrite]
+    paths: ['v2/packaging/oss/**', '.github/workflows/v2-installer.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Default Bash syntax
+        run: bash -n v2/packaging/oss/install-test.sh
+      - name: Native installer tests with fake Docker processes
+        run: python -B -m unittest discover -s v2/packaging/oss/tests -p test_installer.py -v
+  macos:
+    runs-on: macos-15
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Default Bash syntax
+        run: bash -n v2/packaging/oss/install-test.sh
+      - name: Native installer tests with fake Docker processes
+        run: python3 -B -m unittest discover -s v2/packaging/oss/tests -p test_installer.py -v
