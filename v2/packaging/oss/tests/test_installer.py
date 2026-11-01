@@ -1,4 +1,4 @@
-"""Run both real installers against fake Docker/gh processes, on each host OS."""
+"""Run the terminal installer against fake Docker/gh processes on macOS and Linux."""
 import hashlib
 import json
 import os
@@ -13,7 +13,6 @@ import zipfile
 HERE = Path(__file__).resolve().parent
 INSTALLERS = HERE.parent
 IMAGE = 'orkestr-oss-test:e7c3e890b9f10bd2c327d0ecdff4c41d008206ef'
-POWERSHELL = os.environ.get('ORKESTR_TEST_POWERSHELL', 'pwsh')
 
 
 class InstallerCases:
@@ -27,17 +26,9 @@ class InstallerCases:
         self.bin.mkdir()
         self.state_file = self.root / 'fake-state.json'
         for tool in ('docker', 'gh'):
-            if os.name == 'nt':
-                # Batch forwarding interprets Go-template pipes as cmd pipes;
-                # a PowerShell shim preserves the original argument array.
-                python_path = str(sys.executable).replace("'", "''")
-                client_path = str(HERE / 'installer_client.py').replace("'", "''")
-                (self.bin / (tool + '.ps1')).write_text(
-                    f"& '{python_path}' '{client_path}' {tool} @args\nexit $LASTEXITCODE\n")
-            else:
-                executable = self.bin / tool
-                executable.write_text(f'#!{sys.executable}\nimport runpy,sys\nsys.argv=[{str(HERE / "installer_client.py")!r},{tool!r},*sys.argv[1:]]\nrunpy.run_path(sys.argv[0],run_name="__main__")\n')
-                executable.chmod(0o755)
+            executable = self.bin / tool
+            executable.write_text(f'#!{sys.executable}\nimport runpy,sys\nsys.argv=[{str(HERE / "installer_client.py")!r},{tool!r},*sys.argv[1:]]\nrunpy.run_path(sys.argv[0],run_name="__main__")\n')
+            executable.chmod(0o755)
 
     def archive(self, arch='amd64', invalid=False, zipped=False):
         folder = self.root / 'downloaded images'
@@ -61,15 +52,9 @@ class InstallerCases:
         env = dict(os.environ, PATH=str(self.bin) + os.pathsep + os.environ['PATH'],
                    INSTALLER_FAKE_STATE=str(self.state_file))
         env.pop('DOCKER_HOST', None)
-        if self.kind == 'powershell':
-            command = [POWERSHELL, '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', str(INSTALLERS / 'install-test.ps1'),
-                       '-NoOpen', '-ReadySeconds', str(timeout)]
-            if archive:
-                command += ['-Archive', str(archive)]
-        else:
-            command = ['bash', str(INSTALLERS / 'install-test.sh'), '--no-open', '--ready-seconds', str(timeout)]
-            if archive:
-                command += ['--archive', str(archive)]
+        command = ['bash', str(INSTALLERS / 'install-test.sh'), '--no-open', '--ready-seconds', str(timeout)]
+        if archive:
+            command += ['--archive', str(archive)]
         result = subprocess.run(command, cwd=self.root, env=env, text=True, capture_output=True, timeout=30)
         if os.environ.get('CI') == 'true':
             print(f'{self.kind}: exit={result.returncode}; stdout={result.stdout!r}; stderr={result.stderr!r}')
@@ -166,11 +151,6 @@ class InstallerCases:
 @unittest.skipUnless(os.name != 'nt' and shutil.which('bash'), 'POSIX installer requires Bash')
 class ShellInstallerTests(InstallerCases, unittest.TestCase):
     kind = 'shell'
-
-
-@unittest.skipUnless(shutil.which(POWERSHELL), 'PowerShell is tested on Windows, macOS and Linux CI')
-class PowerShellInstallerTests(InstallerCases, unittest.TestCase):
-    kind = 'powershell'
 
 
 if __name__ == '__main__':

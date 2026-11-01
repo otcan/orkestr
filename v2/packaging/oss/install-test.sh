@@ -49,9 +49,9 @@ fi
 
 if [[ -z "$existing" ]]; then
     bindings=$(docker ps --format '{{.Names}}|{{.Ports}}' 2>/dev/null) || fail 'Could not check Docker port usage.'
-    occupied=$(printf '%s\n' "$bindings" | while IFS='|' read -r other_name other_ports; do
-        case "$other_ports" in *':19822->'*) printf '%s\n' "$other_name" ;; esac
-    done)
+    # macOS ships Bash 3.2, whose command-substitution parser rejects the
+    # unbalanced case-pattern parentheses used by newer Bash versions.
+    occupied=$(printf '%s\n' "$bindings" | awk -F '|' 'index($2, ":19822->") {print $1}')
     [[ -z "$occupied" ]] || fail "Port 19822 is already used by $occupied. Stop that container, then run this installer again."
     image_platform=$(docker image inspect --format '{{.Os}}|{{.Architecture}}' "$candidate_image" 2>/dev/null || true)
     if [[ -z "$image_platform" ]]; then

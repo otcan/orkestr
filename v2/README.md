@@ -9,7 +9,7 @@ for its acceptance gates; an image build does not prove a provider answer.
 ## Quick start: one docker run
 
 For the unreleased local-account test candidate, a
-[Windows, macOS and Linux installer](packaging/oss/INSTALL-TEST.md) handles
+[macOS and Linux terminal installer](packaging/oss/INSTALL-TEST.md) handles
 image selection, checksum verification, loading and startup.
 
 Needs Docker Engine on Linux (x86_64 or arm64) or Docker Desktop on an Apple

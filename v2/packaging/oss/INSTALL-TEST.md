@@ -1,107 +1,85 @@
-# Orkestr local test installer
+# Orkestr terminal installer: macOS and Linux
 
-This installer starts the prebuilt local-account candidate from PR #419,
-commit `e7c3e890b9f10bd2c327d0ecdff4c41d008206ef`. It does not build source.
-The published beta.6 still uses its separate setup-token flow.
+The first installer delivery targets macOS Terminal (Intel and Apple Silicon)
+and Linux terminals (amd64 and ARM64). Native Windows installation remains
+planned for a follow-up; it is not part of this delivery.
 
-## Platforms
+This installs the prebuilt local-account candidate from PR #419, commit
+`e7c3e890b9f10bd2c327d0ecdff4c41d008206ef`, without building source. Start
+Docker Desktop on Mac or Docker Engine on Linux before running it. Installing
+Docker itself is a prerequisite, not an installer action.
 
-| Computer | Installer | Docker engine |
-| --- | --- | --- |
-| Windows | `Install-Orkestr.cmd` or `install-test.ps1` | Docker Desktop, Linux containers |
-| Apple Silicon Mac | `Install-Orkestr.command` or `install-test.sh` | Docker Desktop, arm64 |
-| Intel Mac | `Install-Orkestr.command` or `install-test.sh` | Docker Desktop, amd64 |
-| Linux Intel/AMD | `install-test.sh` | Docker Engine, amd64 |
-| Linux ARM64 | `install-test.sh` | Docker Engine, arm64 |
+## Run
 
-The scripts detect the Docker engine architecture, including Windows ARM
-engines, rather than assume it from the host CPU. Windows uses native
-PowerShell; Bash is not needed there. Start Docker before running the
-installer. Installing Docker itself is a prerequisite, not an installer action.
-
-Download the installer bundle and extract it into a folder. Keep all its
-files together. On Windows double-click **Install-Orkestr.cmd**; on Mac open
-**Install-Orkestr.command**. Alternatively, from that folder:
-
-Windows PowerShell:
-
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install-test.ps1
-```
-
-macOS or Linux:
+Download `install-test.sh` and run it in your terminal:
 
 ```sh
 bash install-test.sh
 ```
 
-The Windows launcher sets the execution policy for that process only.
-Enterprise policy may still require the administrator's approved script path.
+The script works with the default macOS Bash 3.2; installing a newer shell is
+not required. No root access is needed. Docker engine architecture selects
+the image automatically, including Apple Silicon.
 
-## Obtaining the prebuilt test image
-
-The installer reuses the candidate image if Docker already has it. Otherwise
-it looks for the matching image archive in the current folder, the installer
-folder and Downloads. It accepts either an extracted `.tar.gz` plus its
-`.sha256` receipt, or the original artifact ZIP. With an already signed-in
-GitHub CLI, it can download the candidate automatically.
-
-Without the CLI, it opens the matching artifact page. Download the ZIP into
-Downloads and run the installer again. GitHub requires sign-in to download
-Actions artifacts. No GitHub password or token is requested by the installer.
+The installer reuses a candidate image already loaded into Docker. Otherwise
+it looks for a matching ZIP or `.tar.gz` in the current folder, the installer
+folder and Downloads. With an already signed-in GitHub CLI it downloads the
+image automatically. Without that CLI it opens the matching download page:
+download the ZIP into Downloads and run the installer again. GitHub requires
+sign-in to download Actions artifacts; the installer never asks for a GitHub
+password or token.
 
 - [Apple Silicon / ARM64 ZIP](https://github.com/otcan/orkestr/actions/runs/41204535602/artifacts/13043852479)
 - [Intel / AMD64 ZIP](https://github.com/otcan/orkestr/actions/runs/41204535602/artifacts/13043533020)
 
 These candidate artifacts expire seven days after the October 31 CI run.
-This is a test delivery path. An anonymous one-command registry install
-requires a separately approved GHCR release of the new setup flow.
+An anonymous registry-based installer of the new account flow requires a
+separately approved public release.
 
-To choose an archive explicitly:
-
-```powershell
-.\install-test.ps1 -Archive .\candidate.zip
-```
+Select an archive explicitly if needed:
 
 ```sh
 bash install-test.sh --archive ./candidate.zip
 ```
 
-## What happens
+The ZIP's image and checksum are streamed into fixed temporary files;
+untrusted ZIP paths and symlink attributes do not control extraction.
+SHA256 is checked before Docker loads the archive.
 
-The installer checks Docker readiness, architecture and the local engine
-connection. It verifies the archive SHA256, loads the image, creates the
-loopback-only test container and waits for Docker's health check. It then
-opens **http://127.0.0.1:19822**. Create your username and password directly,
-then choose **Connect models** and sign in to Codex with ChatGPT.
+## Setup and repeat runs
 
-Re-running preserves the existing test container, account and named volumes.
-A stopped matching instance is started again. A different container with the
-same name or a port conflict produces a clear error; other containers are
-not stopped or removed. If an earlier manual test occupies port 19822, stop
-that test and rerun the installer.
+The installer starts the test at **http://127.0.0.1:19822**, waits for Docker's
+health check and opens the browser. Choose a username and password directly,
+then choose **Connect models** and sign in to Codex with ChatGPT. A setup token
+does not need to be copied from logs.
 
-Stop and start later:
+Re-running preserves the account, container and named volumes. It restarts a
+stopped matching test. A different installation with the same name or a port
+conflict produces a specific error; other containers are not stopped or
+removed. Stop an earlier manual test if it occupies port 19822, then rerun.
+The installer also rejects a remote Docker context because the local browser
+URL would point at the wrong computer.
 
 ```text
 docker stop orkestr-candidate-419
 docker start orkestr-candidate-419
 ```
 
-`--no-open` (Bash) or `-NoOpen` (PowerShell) prints the URL without launching
-a browser. The installer does not collect provider credentials, reset state,
-upgrade existing instances or delete Docker volumes.
+`--no-open` prints the URL without launching a browser. The installer does
+not collect provider credentials, reset state, upgrade an existing instance
+or delete Docker volumes. `Install-Orkestr.command` is an optional Mac launcher
+when the scripts are distributed together with executable permissions.
 
-## Validation scope
+## Validation and next platforms
 
-Subprocess tests run the actual scripts against fake Docker and GitHub CLI
-processes. They cover both CPU architectures, ZIP and loose archives, paths
-with spaces, checksum refusal, port conflicts, restart, repeat installation,
-unrelated-container protection and health failures. Dedicated CI runs them
-on Linux, macOS and Windows, including Windows PowerShell 5.1 and PowerShell 7.
+Native macOS and Linux CI execute the actual Bash script against fake Docker
+and GitHub CLI processes. Cases cover both CPU architectures, ZIP and loose
+archives, paths with spaces, checksum and architecture refusal, port conflicts,
+repeat installation, restart, unrelated-container protection and health failure.
+The default shell's syntax is checked separately before these tests.
 
-The image itself has separate native Linux amd64/arm64 installation and
-browser acceptance evidence in PR #419. Those image tests do not establish
-end-to-end qualification on every Docker Desktop/host combination. Upgrade,
-rollback, restore and machines without Docker remain outside this test
-installer's scope.
+The image has separate native Linux amd64/arm64 fresh-install and browser
+acceptance evidence in PR #419. This does not establish qualification of every
+Docker Desktop and host combination. Upgrade, rollback, restore, Windows
+installation and machines without Docker are outside this first delivery.
+Windows PowerShell work is preserved for the next platform step.
