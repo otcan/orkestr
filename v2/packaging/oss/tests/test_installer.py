@@ -28,8 +28,12 @@ class InstallerCases:
         self.state_file = self.root / 'fake-state.json'
         for tool in ('docker', 'gh'):
             if os.name == 'nt':
-                (self.bin / (tool + '.cmd')).write_text(
-                    f'@echo off\n"{sys.executable}" "{HERE / "installer_client.py"}" {tool} %*\n')
+                # Batch forwarding interprets Go-template pipes as cmd pipes;
+                # a PowerShell shim preserves the original argument array.
+                python_path = str(sys.executable).replace("'", "''")
+                client_path = str(HERE / 'installer_client.py').replace("'", "''")
+                (self.bin / (tool + '.ps1')).write_text(
+                    f"& '{python_path}' '{client_path}' {tool} @args\nexit $LASTEXITCODE\n")
             else:
                 executable = self.bin / tool
                 executable.write_text(f'#!{sys.executable}\nimport runpy,sys\nsys.argv=[{str(HERE / "installer_client.py")!r},{tool!r},*sys.argv[1:]]\nrunpy.run_path(sys.argv[0],run_name="__main__")\n')
@@ -58,7 +62,7 @@ class InstallerCases:
                    INSTALLER_FAKE_STATE=str(self.state_file))
         env.pop('DOCKER_HOST', None)
         if self.kind == 'powershell':
-            command = [POWERSHELL, '-NoProfile', '-NonInteractive', '-File', str(INSTALLERS / 'install-test.ps1'),
+            command = [POWERSHELL, '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', str(INSTALLERS / 'install-test.ps1'),
                        '-NoOpen', '-ReadySeconds', str(timeout)]
             if archive:
                 command += ['-Archive', str(archive)]
@@ -67,6 +71,8 @@ class InstallerCases:
             if archive:
                 command += ['--archive', str(archive)]
         result = subprocess.run(command, cwd=self.root, env=env, text=True, capture_output=True, timeout=30)
+        if os.environ.get('CI') == 'true':
+            print(f'{self.kind}: exit={result.returncode}; stdout={result.stdout!r}; stderr={result.stderr!r}')
         return result, json.loads(self.state_file.read_text())
 
     def mutation_calls(self, state):
