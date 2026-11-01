@@ -21,6 +21,18 @@ The script works with the default macOS Bash 3.2; installing a newer shell is
 not required. No root access is needed. Docker engine architecture selects
 the image automatically, including Apple Silicon.
 
+It prints progress before checking Docker. An engine that fails to answer is
+reported after ten seconds instead of leaving the terminal apparently idle.
+On Mac, open Docker Desktop and wait for the engine to run; if startup is
+stuck, use **Troubleshoot > Restart Docker Desktop**, then rerun the installer.
+Subsequent Docker checks are bounded too. Image loading and downloads have
+longer limits and named progress stages. Ctrl+C reaps the installer-owned CLI
+process without stopping or deleting existing containers or volumes.
+
+To download this script from its reviewed GitHub commit, use curl's
+`--connect-timeout 10 --max-time 60` options and leave its progress display
+enabled, so a stalled network download is visible and bounded too.
+
 The installer reuses a candidate image already loaded into Docker. Otherwise
 it looks for a matching ZIP or `.tar.gz` in the current folder, the installer
 folder and Downloads. With an already signed-in GitHub CLI it downloads the

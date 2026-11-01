@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import shutil
 import sys
+import time
 
 
 def main():
@@ -11,6 +12,10 @@ def main():
     state = json.loads(path.read_text())
     tool, arguments = sys.argv[1], sys.argv[2:]
     state.setdefault('calls', []).append([tool, *arguments])
+    if state.get('hang') == tool + ':' + arguments[0]:
+        state['hung_pid'] = os.getpid()
+        path.write_text(json.dumps(state))
+        time.sleep(60)
     result, code = '', 0
     if tool == 'gh':
         if arguments[:2] == ['auth', 'status']:

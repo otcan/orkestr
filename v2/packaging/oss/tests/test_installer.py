@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 import zipfile
 
@@ -47,12 +48,13 @@ class InstallerCases:
             return destination
         return archive
 
-    def execute(self, state, archive=None, timeout=0):
+    def execute(self, state, archive=None, timeout=0, command_timeout=10):
         self.state_file.write_text(json.dumps(state))
         env = dict(os.environ, PATH=str(self.bin) + os.pathsep + os.environ['PATH'],
                    INSTALLER_FAKE_STATE=str(self.state_file))
         env.pop('DOCKER_HOST', None)
-        command = ['bash', str(INSTALLERS / 'install-test.sh'), '--no-open', '--ready-seconds', str(timeout)]
+        command = ['bash', str(INSTALLERS / 'install-test.sh'), '--no-open', '--ready-seconds', str(timeout),
+                   '--command-timeout', str(command_timeout)]
         if archive:
             command += ['--archive', str(archive)]
         result = subprocess.run(command, cwd=self.root, env=env, text=True, capture_output=True, timeout=30)
@@ -128,6 +130,31 @@ class InstallerCases:
             result, after = self.execute(state)
             self.assertNotEqual(result.returncode, 0)
             self.assertEqual(self.mutation_calls(after), [])
+
+    def test_hung_engine_reports_progress_times_out_and_reaps_the_cli(self):
+        started = time.monotonic()
+        result, state = self.execute({'hang': 'docker:info'}, command_timeout=1)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertLess(time.monotonic() - started, 5)
+        self.assertIn('Checking Docker engine', result.stdout)
+        self.assertIn('not responding', result.stdout + result.stderr)
+        self.assertIn('Restart Docker Desktop', result.stdout + result.stderr)
+        self.assertEqual(self.mutation_calls(state), [])
+        with self.assertRaises(ProcessLookupError):
+            os.kill(state['hung_pid'], 0)
+
+    def test_hung_container_inspect_is_not_treated_as_a_fresh_install(self):
+        result, state = self.execute({'hang': 'docker:container'}, command_timeout=1)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('stopped responding', result.stdout + result.stderr)
+        self.assertEqual(self.mutation_calls(state), [])
+
+    def test_hung_image_inspect_does_not_trigger_a_download(self):
+        result, state = self.execute({'hang': 'docker:image'}, command_timeout=1)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('stopped responding', result.stdout + result.stderr)
+        self.assertEqual(self.mutation_calls(state), [])
+        self.assertFalse(any(call[0] == 'gh' for call in state['calls']))
 
     def test_wrong_image_architecture_does_not_create_a_container(self):
         result, state = self.execute({'image': True, 'platform': 'linux|arm64'})
