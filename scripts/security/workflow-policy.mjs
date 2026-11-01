@@ -130,6 +130,7 @@ export function validateWorkflow(source, filename = "") {
   requirePolicy(events.length > 0 && events.every(event => triggers.has(event)), "workflow_trigger");
   requirePolicy(record(workflow.jobs) && Object.keys(workflow.jobs).length > 0, "workflow_jobs");
   const iosSimulator = filename === "v2-ios.yml";
+  const installerRunner = filename === "v2-installer.yml";
   if (iosSimulator) {
     requirePolicy(record(workflow.on) && events.every(event => ["pull_request", "push"].includes(event)), "workflow_ios_trigger");
     for (const event of events) {
@@ -140,7 +141,8 @@ export function validateWorkflow(source, filename = "") {
   }
   let actions = 0;
   for (const job of Object.values(workflow.jobs)) {
-    requirePolicy(record(job) && (githubHostedRunners.has(job["runs-on"]) || (iosSimulator && job["runs-on"] === "macos-15")), "workflow_runner");
+    requirePolicy(record(job) && (githubHostedRunners.has(job["runs-on"]) || (iosSimulator && job["runs-on"] === "macos-15") ||
+      (installerRunner && ["macos-15", "windows-latest"].includes(job["runs-on"]))), "workflow_runner");
     requirePolicy(!["uses", "secrets", "container", "services", "environment"].some(key => key in job), "workflow_privileged_job");
     if ("permissions" in job && (iosSimulator || (!attestationJob(job) && !publishJob(job, filename)))) permissions(job.permissions);
     requirePolicy(!job["continue-on-error"], "workflow_ignored_failure");

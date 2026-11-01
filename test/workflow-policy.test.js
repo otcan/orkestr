@@ -16,6 +16,17 @@ jobs:
       - run: echo fixture
 `;
 test("ordinary read-only immutable workflow passes", () => assert.deepEqual(validateWorkflow(fixture), { jobs: 1, actions: 1 }));
+test("native installer workflow admits only its literal Windows and macOS runners", () => {
+  for (const runner of ["macos-15", "windows-latest"]) {
+    const native = fixture.replace("ubuntu-latest", runner);
+    assert.deepEqual(validateWorkflow(native, "v2-installer.yml"), { jobs: 1, actions: 1 });
+    for (const filename of ["", "ci.yml", "v2-image.yml", "other-installer.yml"])
+      assert.throws(() => validateWorkflow(native, filename), /workflow_runner/);
+    assert.throws(() => validateWorkflow(native.replace("contents: read", "contents: write"), "v2-installer.yml"), /workflow_permissions/);
+  }
+  for (const runner of ["macos-latest", "self-hosted", "${{ matrix.os }}"])
+    assert.throws(() => validateWorkflow(fixture.replace("ubuntu-latest", runner), "v2-installer.yml"), /workflow_runner/);
+});
 test("existing Rust cache workflows require the reviewed immutable upstream pin", () => {
   const cache = fixture.replace(`actions/checkout@${actionPins["actions/checkout"]}`, `Swatinem/rust-cache@${actionPins["Swatinem/rust-cache"]}`);
   assert.deepEqual(validateWorkflow(cache), { jobs: 1, actions: 1 });
