@@ -169,6 +169,20 @@ class HandlerTests(unittest.TestCase):
     def test_inert_once_configured(self):
         self.assertEqual(self.handle('GET', '/api/v2/oss-setup/status', {}, state=True, session=self.SESSION)[0], 410)
         self.assertEqual(self.handle('POST', '/api/v2/oss-setup/login/codex/start', {}, state=True, session=self.SESSION)[0], 410)
+        with patch.dict(service.os.environ, {'ORKESTR_OSS_LOCAL_BOOTSTRAP': 'synthetic-local-bootstrap'}):
+            self.assertEqual(self.handle('POST', '/api/v2/oss-setup/account', {}, state=True)[0], 410)
+
+    def test_local_account_is_disabled_by_default_before_session_check(self):
+        with patch.dict(service.os.environ, {'ORKESTR_OSS_LOCAL_BOOTSTRAP': ''}):
+            self.assertEqual(self.handle('GET', '/api/v2/oss-setup/account', {})[0], 404)
+
+    def test_local_account_without_session_forwards_only_to_first_owner_setup(self):
+        headers = {'Host': '127.0.0.1:19822', 'x-orkestr-local-setup': '1'}
+        with patch.dict(service.os.environ, {'ORKESTR_OSS_LOCAL_BOOTSTRAP': 'synthetic-local-bootstrap'}), \
+                patch.object(service, 'server', return_value={'setup_required': True}) as upstream:
+            self.assertEqual(self.handle('GET', '/api/v2/oss-setup/account', headers),
+                             (200, {'setup_required': True}))
+            self.assertEqual(upstream.call_args.args[:2], ('GET', '/api/v2/setup'))
 
     def test_session_required(self):
         self.assertEqual(self.handle('GET', '/api/v2/oss-setup/status', {})[0], 401)

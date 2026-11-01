@@ -1,12 +1,16 @@
 """Browser setup service for an unconfigured container. Runs as UID 10001.
 
 Started only by runtime.py while /state/owner.json is absent and reachable only
-through the setup proxy (nginx-setup.conf) at /api/v2/oss-setup/. Every request
+through the setup proxy (nginx-setup.conf) at /api/v2/oss-setup/. Provider requests
 must carry the signed-in owner's browser session; state-changing requests also
 need the exact Origin and the session's CSRF token, verified against the local
 server. Responses only ever contain booleans, a fixed state word, and for an
 active provider login its official sign-in link and one-time device code: never
 provider tokens, the bootstrap token or CLI output.
+
+The optional /account route creates the first local owner without a pasted
+token. Only the explicit loopback deployment opt-in enables it; local_account.py
+keeps the bootstrap credential private and checks the browser request boundary.
 
 The root side is a closed request file (/state/setup/configure.json) that PID1
 validates, re-checks and applies; this process has no capabilities.
@@ -25,6 +29,9 @@ import time
 import urllib.error
 import urllib.request
 import uuid
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from local_account import account
 
 STATE = Path('/state')
 SETUP = STATE / 'setup'
@@ -308,6 +315,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if not path.startswith(PREFIX):
             return self.reply(404, {'error': 'not_found'})
         route = path[len(PREFIX):]
+        if route == 'account':
+            return account(self, method, os.environ.get('ORKESTR_OSS_LOCAL_BOOTSTRAP'), server)
         session = self.session()
         if session is None:
             return self.reply(401, {'error': 'sign_in_required'})

@@ -20,18 +20,19 @@ def main():
     p.add_argument('--image', required=True)
     p.add_argument('--source', required=True)
     p.add_argument('--report', required=True, type=Path)
+    p.add_argument('--local-setup', action='store_true', help='test password-only loopback account setup')
     a = p.parse_args()
     name = 'orkestr-fresh-' + secrets.token_hex(6)
     volumes = [name + '-state', name + '-credentials']
     created = []
     report = {'source': a.source, 'image': a.image, 'passed': False, 'real_accounts': 0,
-              'provider_logins': 0, 'provider_inference': 0, 'checks': []}
+              'provider_logins': 0, 'provider_inference': 0, 'local_setup': a.local_setup, 'checks': []}
     def passed(name):
         report['checks'].append(name)
     try:
         image_environment = json.loads(docker('image', 'inspect', '--format', '{{json .Config.Env}}', a.image))
         forbidden = {'OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN',
-                     'CLAUDE_CODE_OAUTH_TOKEN', 'ORKESTR_V2_BOOTSTRAP_TOKEN'}
+                     'CLAUDE_CODE_OAUTH_TOKEN', 'ORKESTR_V2_BOOTSTRAP_TOKEN', 'ORKESTR_OSS_LOCAL_BOOTSTRAP'}
         assert not forbidden & {item.split('=', 1)[0] for item in image_environment}
         docker('run', '--rm', '--network', 'none', '--entrypoint', '/usr/bin/python3', a.image,
                '-I', '-S', '-B', '-c',
@@ -70,7 +71,8 @@ print('root_observation_requires_added_capability')
         docker('run', '--detach', '--name', name, '--memory', '2g', '--cpus', '2',
                '--cap-add', 'SYS_PTRACE',
                '--publish', '127.0.0.1::19823', '--mount', f'type=volume,src={volumes[0]},dst=/state',
-               '--mount', f'type=volume,src={volumes[1]},dst=/credentials', a.image)
+               '--mount', f'type=volume,src={volumes[1]},dst=/credentials',
+               *(['--env', 'ORKESTR_OSS_LOCAL_SETUP=1'] if a.local_setup else []), a.image)
         assert json.loads(docker('inspect', '--format', '{{json .HostConfig.SecurityOpt}}', name)) in (None, [])
         inspected = json.loads(docker('inspect', '--format', '{{json .Mounts}}', name))
         assert all(m['Type'] == 'volume' for m in inspected), 'host bind mount refused'
@@ -110,9 +112,36 @@ print('root_observation_requires_added_capability')
             raise AssertionError('setup accepted without bootstrap')
         except urllib.error.HTTPError as error:
             assert error.code == 401
-        setup = request('/api/v2/setup', credentials, {'x-orkestr-bootstrap': bootstrap})
-        passed('setup rejects unauthenticated callers; synthetic owner created')
+        account_path = '/api/v2/oss-setup/account'
+        local_headers = {'x-orkestr-local-setup': '1', 'Origin': 'http://127.0.0.1:19822',
+                         'Sec-Fetch-Site': 'same-origin'}
+        if a.local_setup:
+            assert request(account_path, headers=local_headers) == {'setup_required': True}
+            try:
+                request(account_path, credentials, {**local_headers, 'Origin': 'http://foreign.invalid'})
+                raise AssertionError('local setup accepted foreign origin')
+            except urllib.error.HTTPError as error:
+                assert error.code == 403
+            assert request(account_path, credentials, local_headers) == {'created': True}
+            assert request(account_path, headers=local_headers) == {'setup_required': False}
+            try:
+                request(account_path, {**credentials, 'password': 'synthetic-replacement-password'}, local_headers)
+                raise AssertionError('local setup replaced an existing owner')
+            except urllib.error.HTTPError as error:
+                assert error.code == 409
+            setup = None
+            passed('local setup creates the first owner without a browser bootstrap token; foreign origin and replacement refused')
+        else:
+            try:
+                request(account_path, credentials, local_headers)
+                raise AssertionError('remote/default mode allowed tokenless setup')
+            except urllib.error.HTTPError as error:
+                assert error.code == 404
+            setup = request('/api/v2/setup', credentials, {'x-orkestr-bootstrap': bootstrap})
+            passed('setup rejects unauthenticated callers; local account setup disabled; synthetic owner created')
         session = request('/api/v2/machine/session', credentials)
+        if setup is None:
+            setup = {'global_conversation_id': session['global_conversation_id']}
         assert session['global_conversation_id'] == setup['global_conversation_id']
         browser, browser_headers = request('/api/v2/browser/session', credentials,
                     {'Origin': 'http://127.0.0.1:19822'}, response_headers=True)
@@ -126,8 +155,12 @@ print('root_observation_requires_added_capability')
         passed('owner login and new conversation via supported API')
         logs = docker('logs', name)
         assert 'provider_login_required' in logs
-        assert 'First-time setup token: ' + bootstrap in logs
-        passed('bootstrap token is printed in the local container log for browser setup')
+        if a.local_setup:
+            assert bootstrap not in logs and 'First-time setup token:' not in logs
+            passed('local account setup does not print a bootstrap token')
+        else:
+            assert 'First-time setup token: ' + bootstrap in logs
+            passed('bootstrap token is printed in the local container log for browser setup')
         assert b'Connect models' in request('/setup/', raw=True)
         try:
             request('/api/v2/oss-setup/status')
@@ -303,6 +336,8 @@ finally:
                 assert time.monotonic() < deadline, 'restart did not become ready'
                 time.sleep(1)
         assert after['global_conversation_id'] == setup['global_conversation_id']
+        if a.local_setup:
+            assert request(account_path, headers=local_headers) == {'setup_required': False}
         passed('restart preserves owner and conversation in the fresh state volume')
         report['passed'] = True
         report['provider_acceptance'] = 'requires manual owner CLI login and first-answer acceptance'

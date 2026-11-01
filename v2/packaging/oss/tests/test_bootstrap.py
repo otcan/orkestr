@@ -19,6 +19,21 @@ def load(name):
 
 
 class BootstrapTests(unittest.TestCase):
+    def test_local_setup_credential_is_scoped_and_not_printed(self):
+        runtime = load('runtime')
+        token = 'synthetic-local-setup-credential'
+        with tempfile.TemporaryDirectory() as scratch, patch.object(runtime, 'STATE', Path(scratch)):
+            (Path(scratch) / 'bootstrap.token').write_text(token)
+            with patch.dict(runtime.os.environ, {'ORKESTR_OSS_LOCAL_SETUP': '1'}), \
+                    patch('sys.stdout', new=io.StringIO()) as output:
+                self.assertEqual(runtime.setup_environment()['ORKESTR_OSS_LOCAL_BOOTSTRAP'], token)
+                self.assertNotIn('ORKESTR_OSS_LOCAL_BOOTSTRAP', runtime.dropped_environment())
+                runtime.setup_banner()
+                self.assertNotIn(token, output.getvalue())
+                self.assertNotIn('First-time setup token:', output.getvalue())
+            with patch.dict(runtime.os.environ, {'ORKESTR_OSS_LOCAL_SETUP': '0'}):
+                self.assertNotIn('ORKESTR_OSS_LOCAL_BOOTSTRAP', runtime.setup_environment())
+
     def test_archive_cannot_write_arbitrary_members(self):
         fetch = load('fetch_providers')
         raw = io.BytesIO()
