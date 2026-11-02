@@ -6,7 +6,6 @@ import {
   ownerLoginStatus,
   verifyOwnerLogin,
 } from "../../../../../packages/core/src/owner-login.js";
-import { httpError } from "../../common/http.js";
 import { requestSourceKey } from "../../request-security.js";
 import { ownerSetupOpenToAnonymous, securityStatus } from "../../../../../packages/core/src/security.js";
 import { authProvider } from "../../../../../packages/core/src/auth-config.js";
@@ -88,11 +87,20 @@ export class OwnerLoginController {
     }
   }
 
+  // Only the signed-in owner may change the owner password, and only their own.
+  // On success the current password is re-verified inside changeOwnerPassword,
+  // the new hash is stored, and the bumped token version signs out every other
+  // session; we re-issue this browser's cookie so the current session stays
+  // usable without a re-login.
   @Post("password")
   @HttpCode(200)
-  async password(@Req() request: any, @Body() body: Record<string, unknown> = {}) {
-    if (request?.orkestrSecuritySession?.authProvider !== "owner-password") throw httpError("owner_session_required", 401);
-    await changeOwnerPassword({ currentPassword: String(body.currentPassword || ""), newPassword: String(body.newPassword || "") }, process.env);
-    return { ok: true, signInAgain: true };
+  async password(@Req() request: any, @Res() response: any, @Body() body: Record<string, unknown> = {}) {
+    try {
+      if (request?.orkestrSecuritySession?.authProvider !== "owner-password") throw Object.assign(new Error("owner_session_required"), { statusCode: 401 });
+      const { token } = await changeOwnerPassword({ currentPassword: String(body.currentPassword || ""), newPassword: String(body.newPassword || "") }, process.env);
+      sendJson(response, 200, { ok: true, signInAgain: false }, ownerCookieHeader(token, { secure: secureRequest(request) }));
+    } catch (error) {
+      fail(response, error);
+    }
   }
 }

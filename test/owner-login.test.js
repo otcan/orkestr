@@ -251,3 +251,104 @@ test("owner setup: an unused pairing challenge keeps first-visit setup open; app
   assert.match(controller, /authProvider\(process\.env\) !== "browser_pairing"\) return false/);
   assert.match(controller, /&& authProvider\(process\.env\) === "browser_pairing"/);
 });
+
+test("owner password change: re-issues the current session, signs out the rest, new password logs in, old fails", async () => {
+  const env = { ORKESTR_HOME: await home("orkestr-owner-change-") };
+  await createOwnerLogin({ username: "can", password: "first-password" }, env);
+  const first = await verifyOwnerLogin({ username: "can", password: "first-password", clientKey: "chg-a" }, env);
+  const other = await verifyOwnerLogin({ username: "can", password: "first-password", clientKey: "chg-b" }, env);
+
+  // Wrong current password is rejected and changes nothing.
+  await assert.rejects(changeOwnerPassword({ currentPassword: "nope", newPassword: "second-password" }, env), /owner_login_invalid/);
+  assert.ok(await verifyOwnerToken(first.token, env), "a rejected change leaves sessions valid");
+  // A too-short new password is rejected by the shared policy.
+  await assert.rejects(changeOwnerPassword({ currentPassword: "first-password", newPassword: "short" }, env), /owner_password_too_short/);
+
+  const reissued = await changeOwnerPassword({ currentPassword: "first-password", newPassword: "second-password" }, env);
+  assert.ok(reissued?.token, "the change returns a re-issued token");
+  assert.equal((await verifyOwnerToken(reissued.token, env)).sub, "can", "the current session stays usable");
+  assert.equal(await verifyOwnerToken(first.token, env), null, "the first old token is signed out");
+  assert.equal(await verifyOwnerToken(other.token, env), null, "every other session is signed out");
+
+  await assert.rejects(verifyOwnerLogin({ username: "can", password: "first-password", clientKey: "chg-c" }, env), /owner_login_invalid/);
+  const relogin = await verifyOwnerLogin({ username: "can", password: "second-password", clientKey: "chg-c" }, env);
+  assert.equal((await verifyOwnerToken(relogin.token, env)).sub, "can", "the new password logs in");
+});
+
+test("owner password: the new hash is persisted and survives a fresh read of the store", async () => {
+  const env = { ORKESTR_HOME: await home("orkestr-owner-persist-") };
+  await createOwnerLogin({ username: "can", password: "first-password" }, env);
+  await changeOwnerPassword({ currentPassword: "first-password", newPassword: "second-password" }, env);
+  const record = JSON.parse(await fs.readFile(path.join(env.ORKESTR_HOME, "owner-login.json"), "utf8"));
+  assert.equal(record.username, "can");
+  assert.ok(!JSON.stringify(record).includes("second-password"), "the password is never stored in clear");
+  // A brand new env pointed at the same home (no in-process cache) verifies only the new password.
+  const reread = { ORKESTR_HOME: env.ORKESTR_HOME };
+  await assert.rejects(verifyOwnerLogin({ username: "can", password: "first-password", clientKey: "x" }, reread), /owner_login_invalid/);
+  assert.ok((await verifyOwnerLogin({ username: "can", password: "second-password", clientKey: "x" }, reread)).token, "the new hash survives a reload");
+});
+
+test("owner password recovery: resets the hash without a current password, preserves data, signs out sessions; refuses when no owner", async () => {
+  const { resetOwnerPassword } = await import("../packages/core/src/owner-login.js");
+  const missing = { ORKESTR_HOME: await home("orkestr-owner-recover-missing-") };
+  await assert.rejects(resetOwnerPassword({ newPassword: "recovered-password" }, missing), /owner_login_missing/, "recovery never bootstraps a new owner");
+
+  const env = { ORKESTR_HOME: await home("orkestr-owner-recover-") };
+  await createOwnerLogin({ username: "can", password: "first-password" }, env);
+  const before = JSON.parse(await fs.readFile(path.join(env.ORKESTR_HOME, "owner-login.json"), "utf8"));
+  const session = await verifyOwnerLogin({ username: "can", password: "first-password", clientKey: "rec-a" }, env);
+
+  await assert.rejects(resetOwnerPassword({ newPassword: "short" }, env), /owner_password_too_short/);
+  await assert.rejects(resetOwnerPassword({ newPassword: "recovered-password", username: "someone-else" }, env), /owner_username_mismatch/);
+
+  const result = await resetOwnerPassword({ newPassword: "recovered-password", username: "can" }, env);
+  assert.equal(result.username, "can");
+  const after = JSON.parse(await fs.readFile(path.join(env.ORKESTR_HOME, "owner-login.json"), "utf8"));
+  assert.equal(after.username, before.username, "the username is preserved");
+  assert.equal(after.createdAt, before.createdAt, "existing data is preserved");
+  assert.notEqual(after.passwordHash, before.passwordHash, "the password hash is rotated");
+  assert.equal(await verifyOwnerToken(session.token, env), null, "existing sessions are signed out");
+  await assert.rejects(verifyOwnerLogin({ username: "can", password: "first-password", clientKey: "rec-b" }, env), /owner_login_invalid/);
+  assert.ok((await verifyOwnerLogin({ username: "can", password: "recovered-password", clientKey: "rec-b" }, env)).token, "the recovered password logs in");
+});
+
+test("owner password endpoint: owner session required, re-issues this cookie, signs out other sessions", async () => {
+  const keys = ["ORKESTR_HOME", "ORKESTR_AUTH_REQUIRED", "ORKESTR_OWNER_LOGIN_PROMPT", "ORKESTR_RECOVER_RUNNING_ON_START", "ORKESTR_UNSAFE_ALLOW_PUBLIC_UNAUTHENTICATED"];
+  const prior = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  for (const key of keys) delete process.env[key];
+  process.env.ORKESTR_HOME = await home("orkestr-owner-password-http-");
+  process.env.ORKESTR_AUTH_REQUIRED = "1";
+  process.env.ORKESTR_RECOVER_RUNNING_ON_START = "0";
+  const server = await startServer({ port: 0, host: "127.0.0.1" });
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const post = (url, body, cookie = "") => fetch(`${base}${url}`, { method: "POST", headers: { "content-type": "application/json", ...(cookie ? { cookie } : {}) }, body: JSON.stringify(body) });
+  const cookieOf = (res) => String(res.headers.get("set-cookie") || "").split(";")[0];
+  try {
+    const session = cookieOf(await post("/api/auth/owner/setup", { username: "can", password: "first-password" }));
+    const secondSession = cookieOf(await post("/api/auth/owner/login", { username: "can", password: "first-password" }));
+
+    // Unauthenticated / non-owner cannot change the password.
+    assert.equal((await post("/api/auth/owner/password", { currentPassword: "first-password", newPassword: "second-password" })).status, 401);
+    // Wrong current password is rejected with a clear error and nothing changes.
+    const wrong = await post("/api/auth/owner/password", { currentPassword: "nope", newPassword: "second-password" }, session);
+    assert.equal(wrong.status, 401);
+    assert.equal((await wrong.json()).error, "owner_login_invalid");
+    assert.equal((await fetch(`${base}/api/threads`, { headers: { cookie: session } })).status, 200);
+
+    const change = await post("/api/auth/owner/password", { currentPassword: "first-password", newPassword: "second-password" }, session);
+    assert.equal(change.status, 200);
+    const reissued = cookieOf(change);
+    assert.match(reissued, /^orkestr_owner=/);
+    assert.match(String(change.headers.get("set-cookie")), /HttpOnly; SameSite=Lax/);
+    assert.equal((await fetch(`${base}/api/threads`, { headers: { cookie: reissued } })).status, 200, "the current browser keeps access via the re-issued cookie");
+    assert.equal((await fetch(`${base}/api/threads`, { headers: { cookie: secondSession } })).status, 401, "other sessions are signed out");
+    assert.equal((await post("/api/auth/owner/login", { username: "can", password: "first-password" })).status, 401, "the old password no longer works");
+    assert.equal((await post("/api/auth/owner/login", { username: "can", password: "second-password" })).status, 200, "the new password logs in");
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    for (const [key, value] of Object.entries(prior)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});

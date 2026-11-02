@@ -124,14 +124,45 @@ export async function createOwnerLogin({ username = "", password = "" } = {}, en
   return { username: name };
 }
 
+// The signed-in owner changes their own password: the current password must
+// match before the new one is stored. The bumped tokenVersion signs out every
+// other session, so a fresh token is issued and returned for the caller to put
+// back in the current browser's cookie (that session stays usable).
 export async function changeOwnerPassword({ currentPassword = "", newPassword = "" } = {}, env = process.env) {
   if (!(await readOwner(env))) throw loginError("owner_login_missing", 404);
   if (String(newPassword || "").length < minPasswordLength) throw loginError("owner_password_too_short");
-  await updateOwner(async (owner) => {
+  const updated = await updateOwner(async (owner) => {
     if (!(await passwordMatches(owner, currentPassword))) throw loginError("owner_login_invalid", 401);
     const salt = crypto.randomBytes(16).toString("base64url");
     return { ...owner, salt, passwordHash: await hashPassword(newPassword, salt), tokenVersion: Number(owner.tokenVersion || 1) + 1, revoked: [], updatedAt: new Date().toISOString() };
   }, env);
+  if (!updated) throw loginError("owner_login_missing", 404);
+  return issueOwnerToken(updated, env);
+}
+
+// Local-operator recovery for a locked-out owner. This is NOT a web endpoint:
+// it runs from a trusted shell with filesystem access to ORKESTR_HOME (the same
+// trust boundary as `orkestr security approve`), reached from the CLI. It does
+// not verify a current password and does not bootstrap a new owner: an owner
+// record must already exist, and only its password hash is rotated. Every other
+// field (username, createdAt, ...) is preserved and no other data is touched.
+// The bumped tokenVersion signs out all existing sessions so the operator (or
+// owner) signs in fresh with the new password.
+export async function resetOwnerPassword({ newPassword = "", username = "" } = {}, env = process.env) {
+  if (String(newPassword || "").length < minPasswordLength) throw loginError("owner_password_too_short");
+  const record = await readOwnerRecord(env);
+  if (record.state === "missing") throw loginError("owner_login_missing", 404);
+  // A corrupt record cannot be recovered in place without risking loss of the
+  // username/identity it should preserve; fail loudly instead of guessing.
+  if (record.state !== "valid" || !record.owner) throw loginError("owner_login_unreadable", 409);
+  const desired = String(username || "").trim();
+  const updated = await updateOwner(async (owner) => {
+    if (desired && desired !== owner.username) throw loginError("owner_username_mismatch", 409);
+    const salt = crypto.randomBytes(16).toString("base64url");
+    return { ...owner, salt, passwordHash: await hashPassword(newPassword, salt), tokenVersion: Number(owner.tokenVersion || 1) + 1, revoked: [], recoveredAt: new Date().toISOString() };
+  }, env);
+  if (!updated) throw loginError("owner_login_missing", 404);
+  return { username: updated.username };
 }
 
 async function passwordMatches(owner, password) {

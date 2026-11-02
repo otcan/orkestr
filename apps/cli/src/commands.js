@@ -12,6 +12,7 @@ import {
   revokeAllSecuritySessions,
   revokeSecuritySession,
 } from "../../../packages/core/src/security.js";
+import { ownerLoginStatus, resetOwnerPassword } from "../../../packages/core/src/owner-login.js";
 import { readRuntimeSettings } from "../../../packages/core/src/runtime-settings.js";
 import { getThread } from "../../../packages/core/src/threads.js";
 import { adminPrincipal, userPrincipal } from "../../../packages/core/src/principal.js";
@@ -1537,7 +1538,29 @@ async function securityCommand(argv, ctx) {
   if (subcommand === "approve") return approveSecurityChallenge(rest, ctx);
   if (subcommand === "reject") return rejectSecurityChallenge(rest, ctx);
   if (subcommand === "revoke" || subcommand === "logout") return revokeSecuritySessionCommand(rest, ctx);
-  throw new Error("Usage: orkestr security [challenges|sessions|approve <challenge-id>|reject <challenge-id>|revoke <session-id|all>] [--json]");
+  if (subcommand === "reset-owner-password" || subcommand === "recover-owner") return resetOwnerPasswordCommand(rest, ctx);
+  throw new Error("Usage: orkestr security [challenges|sessions|approve <challenge-id>|reject <challenge-id>|revoke <session-id|all>|reset-owner-password [username] [--stdin]] [--json]");
+}
+
+// Local-operator recovery for a locked-out owner. Supported path, distinct from
+// the first-owner bootstrap token: it runs on the host with filesystem access to
+// ORKESTR_HOME (the same trust as `orkestr security approve`) and sets a new
+// owner password hash in place. It does not wipe data and does not bootstrap a
+// new owner; an owner record must already exist. The new password is read from a
+// hidden TTY prompt or --stdin, never from argv, and is never echoed or logged.
+async function resetOwnerPasswordCommand(argv, ctx) {
+  const json = argv.includes("--json");
+  const username = positional(argv)[0] || "";
+  const status = await ownerLoginStatus(ctx.env).catch(() => ({ configured: false }));
+  if (!status.configured) throw new Error("owner_login_missing: no owner login is configured; use first-run setup, not recovery");
+  const newPassword = argv.includes("--stdin")
+    ? await readStdin(ctx.stdin)
+    : await readHiddenSecretFromTty(ctx, "New owner password: ");
+  if (!newPassword) throw new Error("owner_password_required: pass --stdin or type a password at the prompt");
+  const result = await resetOwnerPassword({ newPassword, username }, ctx.env);
+  if (json) ctx.stdout.write(`${JSON.stringify({ ok: true, username: result.username }, null, 2)}\n`);
+  else ctx.stdout.write(`Owner password reset for ${result.username}. All existing sessions are signed out; sign in with the new password.\n`);
+  return 0;
 }
 
 async function connectCommand(argv, ctx) {
@@ -2351,6 +2374,7 @@ Advanced:
   orkestr mailboxes [list|status|create|verify|delete|rotate|ingest|messages|retry|relay-audits|dead-letters|replay] [--json]
   orkestr connect approve <code> [--json]
   orkestr security [challenges|sessions|approve <challenge-id>|reject <challenge-id>|revoke <session-id|all>] [--json]
+  orkestr security reset-owner-password [username] [--stdin] [--json]   (local operator recovery for a locked-out owner)
   orkestr desktop [share [slug]|approve <challenge-id>] [--json]
   orkestr jira draft <thread> [--max N] [--json]
   orkestr vm-slice create <owner-user-id> [--id slice-id] [--namespace ns] [--vm-name name] [--no-control-plane] [--execute] [--json]

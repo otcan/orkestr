@@ -2774,6 +2774,10 @@ export class ApiService {
     return this.http.post<{ ok: boolean; username: string }>(this.api("/auth/owner/login"), { username, password });
   }
 
+  ownerChangePassword(currentPassword: string, newPassword: string): Observable<{ ok: boolean; signInAgain: boolean }> {
+    return this.http.post<{ ok: boolean; signInAgain: boolean }>(this.api("/auth/owner/password"), { currentPassword, newPassword });
+  }
+
   startCodexDeviceAuth(): Observable<CodexDeviceAuthResponse> {
     return this.http.post<CodexDeviceAuthResponse>(this.api("/connectors/codex/device-auth"), {});
   }
