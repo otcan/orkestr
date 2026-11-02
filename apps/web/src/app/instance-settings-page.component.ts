@@ -6,11 +6,12 @@ import { ApiService, AttachmentEncryptionKey, AttachmentEncryptionStatus, Instan
 import { AttachmentDecryptionService } from "./attachment-decryption.service";
 import { AttachmentEncryptionBootstrapService } from "./attachment-encryption-bootstrap.service";
 import { HushDeviceManagementPanelComponent } from "./hush-device-management-panel.component";
+import { ProviderQuotaPanelComponent } from "./provider-quota-panel.component";
 import { SystemResourcesComponent } from "./system-resources.component";
 
 @Component({
   selector: "ork-instance-settings-page",
-  imports: [DatePipe, FormsModule, HushDeviceManagementPanelComponent, JsonPipe, KeyValuePipe, SystemResourcesComponent],
+  imports: [DatePipe, FormsModule, HushDeviceManagementPanelComponent, JsonPipe, KeyValuePipe, ProviderQuotaPanelComponent, SystemResourcesComponent],
   templateUrl: "./instance-settings-page.component.html",
 })
 export class InstanceSettingsPageComponent implements OnInit {
