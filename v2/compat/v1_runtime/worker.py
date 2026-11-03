@@ -1148,6 +1148,10 @@ class Worker:
         if isinstance(deep, dict) and deep.get("run_id") in ids:
             if deep.get("phase") not in DEEP_TERMINAL_PHASES:
                 data.pop("deep_missing_since", None)
+                if (data.get("deep_seen") or {}).get("run_id") != deep["run_id"]:
+                    # Proof the run was alive at this time (see note_restart).
+                    data["deep_seen"] = {"run_id": deep["run_id"], "at_ms": int(time.time() * 1000)}
+                    self.ledger.save(data)
                 return False
             if not caught_up:
                 return True  # Read the rest of the journal before deciding.
@@ -1156,6 +1160,7 @@ class Worker:
             if isinstance(failure, str) and re.fullmatch("[a-z_]{1,32}", failure):
                 reason += ":" + failure  # The provider's closed failure class.
             failure_cause.note(data, deep)  # Kept if the run later reads cancelled.
+            self.note_restart(data, deep)
             started = True
         elif data.get("origin") == "timer":
             return False  # timer_without_deep owns a timer without its Deep.
@@ -1174,6 +1179,28 @@ class Worker:
         if started and self.answered_by_progress(data, deep, reason):
             return True
         return recovery.recover(self, data, reason, started=started)
+
+    def note_restart(self, data, deep):
+        """Name a server restart as the cause of a cancelled/lost Deep run
+        that provably existed before the serving process started: its window
+        opened earlier, or this adapter saw the same run alive earlier. Best
+        effort: without such proof or a readable start time the plain reason
+        stays."""
+        if deep.get("phase") not in failure_cause.RESTART_PHASES:
+            return
+        window = data.get("window") or {}
+        opened = (window.get("status") or {}).get("opened_at_ms")
+        seen = data.get("deep_seen") or {}
+        if type(opened) is not int and seen.get("run_id") == deep.get("run_id"):
+            opened = seen.get("at_ms")
+        started_at = getattr(self.client, "server_started_at_ms", None)
+        if started_at is None or type(opened) is not int:
+            return
+        try:
+            started = started_at()
+        except Exception:
+            return
+        failure_cause.note_restart(data, deep, started, opened)
 
     def answered_by_progress(self, data, deep, reason):
         """Close an ended Deep whose last output already reached the chat.

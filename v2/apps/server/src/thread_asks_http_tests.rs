@@ -327,5 +327,7 @@ async fn message_authors_are_only_what_the_caller_states() {
         .unwrap()
         .iter()
         .any(|f| f == "message_author"));
+    // Adapters tell a restart-interrupted run from other cancellations by it.
+    assert!(health["started_at_ms"].as_i64().is_some_and(|ms| ms > 0));
     case.finish().await;
 }

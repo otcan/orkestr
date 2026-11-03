@@ -75,6 +75,13 @@ TEMPLATES = {
         "tr": "model kapasite hatası nedeniyle durdu",
         "de": "durch einen Modell-Kapazitätsfehler gestoppt",
     },
+    # Shown in place of a raw `deep_run_*` reason when the server restarted
+    # (crash or deploy) while the run's window was open (failure_cause.py).
+    "reason_server_restart": {
+        "en": "an Orkestr server restart; back up since %(at)s UTC",
+        "tr": "Orkestr sunucusu yeniden başlatıldı; %(at)s UTC itibarıyla tekrar çalışıyor",
+        "de": "Neustart des Orkestr-Servers; seit %(at)s UTC wieder verfügbar",
+    },
     # Appended when owner messages had been steered into the failed turn.
     "steered": {
         "en": "\n\nThis also covers the %(count)d message(s) you sent while it was running.",

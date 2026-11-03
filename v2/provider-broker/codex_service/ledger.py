@@ -122,7 +122,14 @@ class Ledger:
                 self.db.execute("ROLLBACK")
                 raise
             else:
-                self.db.execute("COMMIT")
+                try:
+                    self.db.execute("COMMIT")
+                except BaseException:
+                    # A failed COMMIT (busy, I/O) leaves the transaction open:
+                    # end it so the next BEGIN IMMEDIATE is not refused forever.
+                    if self.db.in_transaction:
+                        self.db.execute("ROLLBACK")
+                    raise
 
     def close(self):
         with self.lock:

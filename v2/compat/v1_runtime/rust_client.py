@@ -139,6 +139,7 @@ class RustSession:
         self.source, self.credentials_path = expected_source, credentials_path
         self._cookie = self._csrf = None
         self.features = frozenset()
+        self.started_at_ms = None
         self._revoked = False
         self.generation = 0
         self._verified_at = None
@@ -260,6 +261,15 @@ class RustSession:
         # unknown fields, so an unadvertised field is never sent).
         features = value.get("features")
         self.features = frozenset(f for f in features if isinstance(f, str)) if isinstance(features, list) else frozenset()
+        # When the serving process started (servers before this field: None).
+        started = value.get("started_at_ms")
+        self.started_at_ms = started if type(started) is int and started > 0 else None
+
+    def server_started_at_ms(self):
+        """A fresh read of when the serving process started, or None."""
+        with self._lock:
+            self._health()
+            return self.started_at_ms
 
     def _session(self, value):
         require(isinstance(value, dict) and value.get("owner_id") == self.owner and
@@ -357,6 +367,9 @@ class RustClient:
 
     def _wire(self, *args, **kwargs):
         return self.session._wire(*args, **kwargs)
+
+    def server_started_at_ms(self):
+        return self.session.server_started_at_ms()
 
     def ensure_login(self, mutation=True):
         with self._lock:

@@ -496,8 +496,15 @@ pub fn router_with_google_catalog(
     state: AppState,
     catalog: google_registry_metadata::RegistryCatalog,
 ) -> Router {
+    // When this server process started serving. An adapter compares it with
+    // a run's window open time to tell an owner "interrupted by a server
+    // restart at HH:MM" instead of a bare `deep_run_cancelled`.
+    let started_at_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
     Router::new()
-        .route("/api/v2/health",get(|| async { Json(serde_json::json!({"status":"ok","product":"orkestr-v2","contract_version":0,"fixture_mode":false,"features":["message_author","thread_asks","agent_timers"],"build":build_identity::identity()})) }))
+        .route("/api/v2/health",get(move || async move { Json(serde_json::json!({"status":"ok","product":"orkestr-v2","contract_version":0,"fixture_mode":false,"features":["message_author","thread_asks","agent_timers"],"build":build_identity::identity(),"started_at_ms":started_at_ms})) }))
         .route("/api/v2/setup",get(auth::setup_status).post(auth::setup))
         .route("/api/v2/session",post(auth::session))
         .route("/api/v2/machine/session",post(auth::session))
