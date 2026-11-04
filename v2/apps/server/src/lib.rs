@@ -461,7 +461,15 @@ async fn guard(
     // V1 desktop acquire (and a renewing heartbeat) can take 8-20 s while V1
     // prepares the desktop. Dropping it at 10 s would leave a V1 lease that
     // V2 never recorded, so these two get a longer, still bounded deadline.
-    let deadline = if desktop_slow_path(request.uri().path()) {
+    let deadline = if encrypted_attachment_slow_path(request.method(), request.uri().path()) {
+        // Only an authenticated native upload's bounded verification/export
+        // operation gets this allowance. Chunks and every other route retain
+        // their existing limits; cancellation drops the private temporary file.
+        if owner(&state, request.headers()).await.is_err() {
+            return unauthorized().into_response();
+        }
+        Duration::from_secs(15 * 60)
+    } else if desktop_slow_path(request.uri().path()) {
         Duration::from_secs(60)
     } else {
         Duration::from_secs(10)
@@ -484,6 +492,43 @@ async fn guard(
         .headers_mut()
         .insert(header::X_CONTENT_TYPE_OPTIONS, "nosniff".parse().unwrap());
     response
+}
+fn encrypted_attachment_slow_path(method: &axum::http::Method, path: &str) -> bool {
+    if *method != axum::http::Method::POST {
+        return false;
+    }
+    let parts: Vec<_> = path.trim_start_matches('/').split('/').collect();
+    match parts.as_slice() {
+        ["api", "v2", "conversations", conversation, "encrypted-uploads", upload, "attachment"] => {
+            [conversation, upload]
+                .iter()
+                .all(|v| uuid::Uuid::parse_str(v).is_ok_and(|id| !id.is_nil()))
+        }
+        _ => false,
+    }
+}
+
+#[test]
+fn encrypted_upload_attachment_deadline_is_exact_post_and_valid_scopes_only() {
+    use axum::http::Method;
+    let path="/api/v2/conversations/00000000-0000-4000-8000-000000000001/encrypted-uploads/00000000-0000-4000-8000-000000000002/attachment";
+    assert!(encrypted_attachment_slow_path(&Method::POST, path));
+    assert!(!encrypted_attachment_slow_path(&Method::GET, path));
+    assert!(!encrypted_attachment_slow_path(
+        &Method::POST,
+        &path.replace("/attachment", "/complete")
+    ));
+    assert!(!encrypted_attachment_slow_path(
+        &Method::POST,
+        &path.replace("00000000-0000-4000-8000-000000000001", "invalid")
+    ));
+    assert!(!encrypted_attachment_slow_path(
+        &Method::POST,
+        &path.replace(
+            "00000000-0000-4000-8000-000000000002",
+            "00000000-0000-0000-0000-000000000000"
+        )
+    ));
 }
 /// `/api/v2/conversations/{id}/desktops/{slug}/acquire` or `/heartbeat`.
 fn desktop_slow_path(path: &str) -> bool {

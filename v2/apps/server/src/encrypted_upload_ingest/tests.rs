@@ -4,9 +4,78 @@ use orkestr_v2_store_sqlite::{
     attachment_store::{keys::ImportedRecipient, seal},
     Store,
 };
+use std::os::unix::fs::MetadataExt;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::PathBuf;
 const TOKEN: &str = "synthetic-token";
+#[derive(Default)]
+pub(super) struct Pause {
+    pub entered: tokio::sync::Notify,
+    pub resume: tokio::sync::Notify,
+}
+
+#[tokio::test]
+async fn cancelling_private_preparation_removes_temporary_file_without_receipt_or_grant() {
+    let (root, state, mut status) = fixture(3).await;
+    let bytes = ciphertext(&status, 0, b"abc", false);
+    let chunk = state
+        .store
+        .encrypted_upload_put(
+            TOKEN,
+            &status.owner_id,
+            &status.conversation_id,
+            status.file.upload_id,
+            0,
+            &seal::sha256_hex(&bytes),
+            &bytes,
+        )
+        .await
+        .unwrap();
+    status = state
+        .store
+        .encrypted_upload_finish(
+            TOKEN,
+            &status.owner_id,
+            &status.conversation_id,
+            status.file.upload_id,
+            &[chunk],
+        )
+        .await
+        .unwrap();
+    let pause = std::sync::Arc::new(Pause::default());
+    *state
+        .attachment_ingest
+        .as_ref()
+        .unwrap()
+        .pause
+        .lock()
+        .unwrap() = Some(pause.clone());
+    let worker = state.clone();
+    let handle = tokio::spawn(async move { materialize(&worker, TOKEN, &status).await });
+    pause.entered.notified().await;
+    let folder = root.join("exports");
+    let conversation_folder = std::fs::read_dir(folder)
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    let temporary = std::fs::read_dir(&conversation_folder)
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    assert_eq!(
+        temporary.metadata().unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    handle.abort();
+    assert!(handle.await.unwrap_err().is_cancelled());
+    assert_eq!(std::fs::read_dir(conversation_folder).unwrap().count(), 0);
+    state.store.close().await;
+    let _ = std::fs::remove_dir_all(root);
+}
 
 #[test]
 fn publication_failure_restores_private_permissions_and_does_not_grant_a_file() {
@@ -188,7 +257,20 @@ async fn verified_chunked_ingest_materializes_atomic_provider_file_and_real_rece
     assert!(receipt.note.contains(paths[0].to_str().unwrap()));
     assert!(receipt.note.contains(&seal::sha256_hex(&chunks.concat())));
     // Retry republishes the same verified content and reference, not a new file.
+    let inode = paths[0].metadata().unwrap().ino();
     assert_eq!(materialize(&state, TOKEN, &status).await.unwrap(), receipt);
+    assert_eq!(
+        paths[0].metadata().unwrap().ino(),
+        inode,
+        "idempotent retry reuses the verified file"
+    );
+    std::fs::write(&paths[0], b"corrupt").unwrap();
+    assert_eq!(materialize(&state, TOKEN, &status).await.unwrap(), receipt);
+    assert_eq!(
+        std::fs::read(&paths[0]).unwrap(),
+        chunks.concat(),
+        "changed cached exports are fully reconstructed"
+    );
     state.store.revoke_session(TOKEN).await.unwrap();
     assert!(materialize(&state, TOKEN, &status).await.is_err());
     state.store.close().await;

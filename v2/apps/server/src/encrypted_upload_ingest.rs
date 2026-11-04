@@ -9,6 +9,7 @@ use std::{io::Read, path::Path, str::FromStr};
 use tokio::io::AsyncWriteExt;
 use uuid::Uuid;
 
+mod prepared;
 #[cfg(unix)]
 mod private_fs;
 #[cfg(all(test, unix))]
@@ -20,6 +21,9 @@ pub struct Ingest {
     /// Bound concurrent decrypt/export jobs independently of file size.
     exports: tokio::sync::Semaphore,
     pub(crate) lifecycle: tokio::sync::RwLock<()>,
+    prepared: prepared::Prepared,
+    #[cfg(all(test, unix))]
+    pause: std::sync::Mutex<Option<std::sync::Arc<tests::Pause>>>,
 }
 impl Ingest {
     #[cfg(unix)]
@@ -55,6 +59,9 @@ impl Ingest {
             identity,
             exports: tokio::sync::Semaphore::new(2),
             lifecycle: tokio::sync::RwLock::new(()),
+            prepared: Default::default(),
+            #[cfg(all(test, unix))]
+            pause: Default::default(),
         })
     }
     #[cfg(unix)]
@@ -174,11 +181,8 @@ pub(crate) async fn materialize(
         .attachment_ingest
         .as_ref()
         .ok_or("attachment ingest not configured")?;
+    let _job = ingest.prepared.acquire(status.file.upload_id).await;
     let _lifecycle = ingest.lifecycle.read().await;
-    let _permit = ingest
-        .exports
-        .try_acquire()
-        .map_err(|_| "attachment preparation busy")?;
     if !status.complete || status.ingest_recipient.as_deref() != Some(&ingest.recipient) {
         return Err("attachment ingest recipient changed or upload incomplete");
     }
@@ -189,6 +193,27 @@ pub(crate) async fn materialize(
     let folder = dir.join(status.conversation_id.to_string());
     let root_fd = private_fs::directory(dir, true)?;
     let folder_fd = private_fs::directory(&folder, true)?;
+    if let Some(receipt) = ingest
+        .prepared
+        .cached(status, &folder_fd, &export_name(status))
+    {
+        state
+            .store
+            .encrypted_upload_publish(
+                credential,
+                &status.owner_id,
+                &status.conversation_id,
+                status,
+                || Ok(()),
+            )
+            .await
+            .map_err(|_| "prepared attachment authorization expired")?;
+        return Ok(receipt);
+    }
+    let _permit = ingest
+        .exports
+        .try_acquire()
+        .map_err(|_| "attachment preparation busy")?;
     rustix::fs::fchmod(&root_fd, rustix::fs::Mode::from_raw_mode(0o750))
         .map_err(|_| "export permissions failed")?;
     rustix::fs::fchmod(&folder_fd, rustix::fs::Mode::from_raw_mode(0o750))
@@ -201,6 +226,13 @@ pub(crate) async fn materialize(
     };
     let file = private_fs::create(&folder_fd, &temporary.name, 0o600)?;
     let mut file = tokio::fs::File::from_std(file);
+    #[cfg(all(test, unix))]
+    let pause = ingest.pause.lock().unwrap().clone();
+    #[cfg(all(test, unix))]
+    if let Some(pause) = pause {
+        pause.entered.notify_one();
+        pause.resume.notified().await;
+    }
     let mut total = 0u64;
     let mut hash = Sha256::new();
     for chunk in &status.chunks {
@@ -276,7 +308,9 @@ pub(crate) async fn materialize(
         media_type: status.file.media_type.clone(),
         byte_length: total,
     };
-    Ok(MessageAttachmentReceipt{manifest_id:Some(status.file.upload_id),note:format!("[File attached in the Orkestr app, encrypted upload {}: {} ({}, {} bytes), SHA-256 {}, local file {}]",status.file.upload_id,status.file.filename,status.file.media_type,total,digest,path.display()),attachments:vec![summary]})
+    let receipt=MessageAttachmentReceipt{manifest_id:Some(status.file.upload_id),note:format!("[File attached in the Orkestr app, encrypted upload {}: {} ({}, {} bytes), SHA-256 {}, local file {}]",status.file.upload_id,status.file.filename,status.file.media_type,total,digest,path.display()),attachments:vec![summary]};
+    ingest.prepared.remember(status, &file, receipt.clone());
+    Ok(receipt)
 }
 
 fn publish_prepared(
@@ -333,5 +367,9 @@ pub(crate) fn remove_export(
         Err(_) => return Err("provider export removal failed"),
     }
     dir.sync_all()
-        .map_err(|_| "provider export removal sync failed")
+        .map_err(|_| "provider export removal sync failed")?;
+    if let Some(ingest) = state.attachment_ingest.as_ref() {
+        ingest.prepared.forget(status.file.upload_id);
+    }
+    Ok(())
 }

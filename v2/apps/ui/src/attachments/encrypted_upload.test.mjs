@@ -88,3 +88,11 @@ test('decimal1GB is per file and limit+1 rejected before any read or request',as
   const client=encryptedUploadClient({conversation,csrf:'synthetic',subtle,fetcher(){assert.fail('Request made for oversized file');}});
   await assert.rejects(client.upload(file,id),/1,000,000,000/);
 });
+
+test('cancelled upload/preparation does not issue a request or retry aborts',async()=>{
+  const controller=new AbortController();controller.abort();let requests=0;
+  const client=encryptedUploadClient({conversation,csrf:'synthetic',subtle,fetcher(){requests++;assert.fail('Cancelled request sent');}});
+  await assert.rejects(client.upload({name:'file',type:'text/plain',size:3},id,{signal:controller.signal}),{name:'AbortError'});
+  const f=await fixture(3);const status=await f.client.upload(f.file,id);
+  await assert.rejects(client.attach(status,{signal:controller.signal}),{name:'AbortError'});assert.equal(requests,0);
+});

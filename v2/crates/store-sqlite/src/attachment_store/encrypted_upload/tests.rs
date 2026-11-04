@@ -2,6 +2,17 @@ use super::*;
 use crate::attachment_store::{keys::ImportedRecipient, seal::testing::identity, tests::fixture};
 const TOKEN: &str = "synthetic-token";
 
+#[tokio::test]
+async fn metadata_receipts_use_the_small_covering_index_instead_of_blob_pages() {
+    use sqlx::Row;
+    let (s, _o, _c, _d, file, _key) = setup(3).await;
+    let rows=sqlx::query("EXPLAIN QUERY PLAN SELECT chunk_index,length(ciphertext) AS size,ciphertext_sha256 FROM encrypted_upload_chunks WHERE upload_id=? ORDER BY chunk_index")
+        .bind(file.upload_id.to_string()).fetch_all(&s.pool).await.unwrap();
+    assert!(rows.iter().any(|r| r
+        .get::<String, _>("detail")
+        .contains("encrypted_upload_receipt_cover")));
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn publication_lease_serializes_revocation_at_final_rename_boundary() {
     use std::sync::{Arc, Barrier};

@@ -69,18 +69,19 @@ async function openChunk(status,receipt,ciphertext,options) {
 export function encryptedUploadClient({conversation,csrf,fetcher=fetch,subtle=crypto.subtle,storage=globalThis.localStorage,random}={}) {
   if(!uuid(conversation)||!csrf)fail('Conversation and browser authorization required.');
   const root=`/api/v2/conversations/${conversation}/encrypted-uploads`;
-  const request=async(method,path,body,raw=false,digest='')=>{
-    const response=await fetcher(path,{method,credentials:'same-origin',cache:'no-store',redirect:'error',headers:{...(method==='GET'?{}:{'x-orkestr-csrf':csrf} ),...(body?{'Content-Type':raw?'application/octet-stream':'application/json'}:{}),...(digest?{'x-orkestr-ciphertext-sha256':digest}:{})},...(body?{body:raw?body:JSON.stringify(body)}:{})});
+  const request=async(method,path,body,raw=false,digest='',signal)=>{
+    signal?.throwIfAborted();
+    const response=await fetcher(path,{method,credentials:'same-origin',cache:'no-store',redirect:'error',...(signal?{signal}:{}),headers:{...(method==='GET'?{}:{'x-orkestr-csrf':csrf} ),...(body?{'Content-Type':raw?'application/octet-stream':'application/json'}:{}),...(digest?{'x-orkestr-ciphertext-sha256':digest}:{})},...(body?{body:raw?body:JSON.stringify(body)}:{})});
     if(!response.ok)fail(`Encrypted upload failed (${response.status}); reselect the file to resume.`);
     const binaryResponse=raw&&method==='GET',bytes=await readBounded(response,binaryResponse?UPLOAD_CIPHER_MAX:192*1024);
     return binaryResponse?bytes:JSON.parse(new TextDecoder().decode(bytes));
   };
-  const read=async(status,receipt)=>openChunk(status,receipt,await request('GET',`${root}/${status.file.upload_id}/chunks/${receipt.index}`,null,true),{subtle,storage});
+  const read=async(status,receipt,signal)=>openChunk(status,receipt,await request('GET',`${root}/${status.file.upload_id}/chunks/${receipt.index}`,null,true,'',signal),{subtle,storage});
   return {
-    async attach(status) {
+    async attach(status,{signal}={}) {
       validateStatus(status,status.file,conversation);
       if(!status.complete||!status.ingest_recipient||!status.recipients.includes(status.ingest_recipient))fail('This encrypted file cannot be prepared for the assistant on this server.');
-      const receipt=await request('POST',`${root}/${status.file.upload_id}/attachment`,{}),file=receipt?.attachments?.[0];
+      const receipt=await request('POST',`${root}/${status.file.upload_id}/attachment`,{},false,'',signal),file=receipt?.attachments?.[0];
       if(receipt?.manifest_id!==status.file.upload_id||receipt.attachments?.length!==1||file.attachment_id!==status.file.upload_id||file.filename!==status.file.filename||file.media_type!==status.file.media_type||file.byte_length!==status.file.plaintext_size||typeof receipt.note!=='string'||!receipt.note)fail('Attachment preparation receipt mismatch.');
       return receipt;
     },
@@ -89,7 +90,7 @@ export function encryptedUploadClient({conversation,csrf,fetcher=fetch,subtle=cr
     // to it before skipping. Uncertain PUTs can safely retry the same ciphertext.
     async upload(file,uploadId,{progress=()=>{},signal,requireIngest=false}={}) {
       const descriptor=validateUploadFile(file,uploadId);
-      let status=validateStatus(await request('POST',root,descriptor),descriptor,conversation);
+      let status=validateStatus(await request('POST',root,descriptor,false,'',signal),descriptor,conversation);
       if(requireIngest&&(!status.ingest_recipient||!status.recipients.includes(status.ingest_recipient)))fail('Encrypted attachment preparation is not configured on this server.');
       const pinned={owner:status.owner_id,recipients:[...status.recipients]};
       const receipts=[];
@@ -99,7 +100,7 @@ export function encryptedUploadClient({conversation,csrf,fetcher=fetch,subtle=cr
         if(bytes.length!==chunkSize(descriptor,index))fail('File changed while uploading.');
         let receipt=status.chunks.find(c=>c.index===index);
         if(receipt) {
-          const existing=await read(status,receipt);
+          const existing=await read(status,receipt,signal);
           if(await hash(bytes,subtle)!==await hash(existing,subtle))fail('Selected file differs from the interrupted upload.');
         } else {
           const encrypter=new Encrypter();for(const recipient of status.recipients)encrypter.addRecipient(recipient);
@@ -107,14 +108,14 @@ export function encryptedUploadClient({conversation,csrf,fetcher=fetch,subtle=cr
           if(ciphertext.length>UPLOAD_CIPHER_MAX)fail('Encrypted chunk exceeds transport limit.');
           let error;
           for(let attempt=0;attempt<3;attempt++) {
-            try {receipt=await request('PUT',`${root}/${uploadId}/chunks/${index}`,ciphertext,true,digest);break;}catch(e){error=e;}
+            try {receipt=await request('PUT',`${root}/${uploadId}/chunks/${index}`,ciphertext,true,digest,signal);break;}catch(e){if(signal?.aborted)throw e;error=e;}
           }
           if(!receipt)throw error;
           if(!same(receipt,{index,ciphertext_size:ciphertext.length,ciphertext_sha256:digest}))fail('Chunk receipt mismatch.');
         }
         receipts.push(receipt);progress(Math.min(file.size,offset+bytes.length),file.size);
       }
-      status=validateStatus(await request('POST',`${root}/${uploadId}/complete`,receipts),descriptor,conversation);
+      status=validateStatus(await request('POST',`${root}/${uploadId}/complete`,receipts,false,'',signal),descriptor,conversation);
       if(!status.complete||status.owner_id!==pinned.owner||!same(status.recipients,pinned.recipients)||!same(status.chunks,receipts))fail('Encrypted upload completion mismatch.');
       return status;
     },
@@ -123,7 +124,7 @@ export function encryptedUploadClient({conversation,csrf,fetcher=fetch,subtle=cr
     async download(status,sink,{signal}={}) {
       validateStatus(status,status.file,conversation);
       if(!status.complete)fail('File upload is not complete.');
-      try {for(const receipt of status.chunks){signal?.throwIfAborted();await sink.write(await read(status,receipt));}await sink.close();}
+      try {for(const receipt of status.chunks){signal?.throwIfAborted();await sink.write(await read(status,receipt,signal));}await sink.close();}
       catch(error){await sink.abort?.(error);throw error;}
     },
   };
