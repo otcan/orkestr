@@ -48,6 +48,10 @@ class Manager:
         require(not self.closed and self.child is None, "manager_already_started")
         require(ctypes.CDLL(None, use_errno=True).prctl(36, 1, 0, 0, 0) == 0, "root_subreaper")
         package = self.package
+        # The legacy direct-child launcher cannot cross UIDs. Until the narrow
+        # root-manager FD-transfer launcher is qualified, never start a split
+        # server and silently fall back to its privileged authority identity.
+        require(not getattr(package, "identity_split", False), "split_launch_unqualified")
         command = [str(Path("/usr/bin/python3").resolve()), "-I", "-S", "-B",
                    str(package.root / "codex_service/entry.py"), "server", str(os.getpid())]
         # Host full access (operator opt-in) keeps the service user's real
@@ -59,12 +63,12 @@ class Manager:
                       if g != package.gid]
         # Retain trusted server diagnostics; contained provider stderr remains closed.
         self.child = subprocess.Popen(command, env={"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8"},
-            cwd="/", user=package.uid, group=package.gid, extra_groups=groups, close_fds=True,
+            cwd="/", user=package.authority_uid, group=package.authority_gid, extra_groups=groups, close_fds=True,
             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=None,
             process_group=0)
         self.identity = process(self.child.pid)
         require(self.identity is not None and self.identity["ppid"] == os.getpid()
-                and self.identity["uid"] == package.uid, "owned_server_identity")
+                and self.identity["uid"] == package.authority_uid, "owned_server_identity")
         self.peer = ServerPeer(self.identity, package.root / "server")
 
     def _uncertain(self, window, generation, reason):

@@ -12,6 +12,7 @@ import signal
 import socket
 import sys
 from .contract import require
+from .identity import provider_privileges
 from .package import Package, conversation_workspace_paths
 
 
@@ -48,6 +49,7 @@ def main(root):
     pump = None
     try:
         package = Package(root)
+        provider_privileges(package)
         require(os.geteuid() == package.uid and package.claude is not None, "claude_broker_identity")
         sys.path.insert(0, str(package.root / "broker"))
         from protocol import PROTOCOL, Failure, Refused

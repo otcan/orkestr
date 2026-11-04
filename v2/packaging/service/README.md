@@ -331,3 +331,29 @@ and copied into the protected beta configuration. A trusted profile with
 must also pin `code_mode_host` and `code_mode_host_sha256` (the same Codex
 release's `codex-code-mode-host`), which is packaged beside `native`. No other
 package may carry it.
+
+## Optional authority/executor identity contract (launch still unqualified)
+
+A selected-service plan may provide all five fields `authority_uid`,
+`authority_gid`, `executor_uid`, `executor_gid`, and `provider_home`. Omission
+retains legacy single-UID behavior. Partial declarations, equal authority and
+executor UIDs, inconsistent legacy `uid`/`gid` executor aliases and provider-home
+paths inside the authority home are refused. This initial contract requires a
+shared package/IPC group; distinct groups require an explicit reviewed ACL
+contract and currently fail closed.
+
+The authority home/data/bootstrap belong to the authority UID under immutable
+parents. Provider home, credentials, profiles and workspaces remain executor
+owned. The descriptor and identity module are covered by the closed package
+manifest, preparation inventory and startup seal. Provider entry points enforce
+Linux `no_new_privs` for a configured split, inherited by native/code-mode
+children, without modifying the operator's root or sudo policy.
+
+The manager deliberately refuses configured split startup with
+`split_launch_unqualified`: the legacy server-child broker launcher cannot cross
+UIDs. A narrow authenticated rootmanager launch/FD-transfer path, parent/owned-tree
+proof changes and end-to-end closure qualification are required next. These fields
+must not be represented as completed authority separation or activated on a live
+service. Synthetic tests prove protected path ownership and that `no_new_privs`
+blocks a disposable setuid euid probe while preserving the parent root context;
+they do not qualify a real provider or deployment.

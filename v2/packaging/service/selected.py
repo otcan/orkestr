@@ -84,7 +84,7 @@ def pair_bytes(plan):
     return pair
 
 
-OPTIONAL = {'password_rotation_ready', 'roles', 'preserve_state', 'workspace_exec', 'additional_workspace_exec', 'max_active_windows', 'host_full_access',
+OPTIONAL = {'password_rotation_ready', 'authority_uid', 'authority_gid', 'executor_uid', 'executor_gid', 'provider_home', 'roles', 'preserve_state', 'workspace_exec', 'additional_workspace_exec', 'max_active_windows', 'host_full_access',
             'window_max_minutes', 'conversation_window_max_minutes', 'conversation_workspaces', 'provider_routing',
             'code_mode_host', 'code_mode_host_sha256', 'claude', 'claude_quota_projection', 'codex_quota_projection', 'live_map', 'desktop_broker', 'timer_config', 'whatsapp_chats', 'v1_chat_icons_dir', 'metrics_port'}
 CLAUDE_PATHS = ('executable', 'account', 'workspace', 'home', 'temporary')
@@ -213,15 +213,18 @@ def prepare(plan):
     pair=pair_bytes(plan);source=pair['source_commit'];gid=plan['gid'];uid=plan['uid']
     require(type(uid) is int and 0<uid<2**31 and type(gid) is int and 0<gid<2**31,'dropped identity required')
     output=Path(plan['output']);inner=output/'package'
-    settings(Path(plan['home']),plan['origin'],plan['port'],uid,output,gid)
+    settings(Path(plan['home']),plan['origin'],plan['port'],plan.get('authority_uid',uid),output,gid)
     require(not output.exists() and not output.is_symlink(),'fresh release required')
     with authority(Path(plan['source_repository']),source) as (src,manager,config):
         trust=sys.modules['codex_bounded.trust']
         trust.protected(output.parent,True)
         # Stat canonical credentials only. Never open, copy or hash these files.
-        home=trust.private(plan['home'],uid,True)
-        for name in ('data','provider-home'):trust.private(home/name,uid,True)
-        trust.private(plan['bootstrap_file'],uid)
+        from codex_service.identity import bind as bind_identity, FIELDS as IDENTITY_FIELDS
+        identity=bind_identity(plan)
+        home=trust.private(plan['home'],identity['authority_uid'],True)
+        trust.private(home/'data',identity['authority_uid'],True)
+        trust.private(identity['provider_home'],uid,True)
+        trust.private(plan['bootstrap_file'],identity['authority_uid'])
         auth=trust.private(plan['auth_file'],uid);require(auth.name=='auth.json','canonical auth reference required')
         workspace=trust.private(plan['workspace'],uid,True)
         account=trust.private(plan['state_root'],uid,True)
@@ -301,6 +304,7 @@ def prepare(plan):
                      'owner_id':plan['owner_id'],'conversation_id':plan['conversation_id'],'home':str(home),
                      'bootstrap_file':plan['bootstrap_file'],'ledger_directory':str(ledger),
                      'endpoint_directory':str(endpoint),'port':plan['port'],'trusted_origin':plan['origin']}
+            runtime.update({key:plan[key] for key in IDENTITY_FIELDS if key in plan})
             profile={'format':'orkestr-v2-codex-isolated-v2','native':str(inner/'native'),
                      'auth_file':str(auth),'state_root':str(account),'workspace':str(workspace),
                      'egress_socket':str(endpoint/'egress.sock'),'supervisor':str(inner/'isolation/supervisor.py'),

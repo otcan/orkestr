@@ -6,6 +6,7 @@ import socket
 import sys
 from codex_bounded.broker import modules, pump_type
 from .contract import require
+from .identity import provider_privileges
 from .package import Package, conversation_workspace_paths
 from .profile import Configuration
 
@@ -40,6 +41,7 @@ def main(root, role="deep"):
     pump = None
     try:
         package = Package(root)
+        provider_privileges(package)
         require(os.geteuid() == package.uid, "broker_executor_identity")
         Channel, protocol, Refused, subreaper, reaped_exit, Pump = modules(package.root)
         fresh = ["open-owned-session", "--protocol", protocol]

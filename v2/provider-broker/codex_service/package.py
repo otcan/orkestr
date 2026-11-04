@@ -6,6 +6,7 @@ import stat
 from codex_bounded.configuration import BROKER, ISOLATION, MODULES, HOSTS
 from codex_bounded.trust import digest, metadata, private, protected, system_dependency
 from .contract import identifier, require
+from .identity import FIELDS as IDENTITY_FIELDS, bind as bind_identity
 
 MAX_RUNTIME_WINDOWS = 12
 from .role_profiles import ROLE_FILES, bind as bind_roles
@@ -13,7 +14,7 @@ from .role_profiles import ROLE_FILES, bind as bind_roles
 MODULES_SERVICE = ("__init__.py", "contract.py", "ledger.py", "budget.py", "custody.py",
                    "channel.py", "package.py", "ownership.py", "egress.py", "manager.py",
                    "server_child.py", "broker.py", "profile.py", "entry.py", "role_profiles.py",
-                   "claude_broker.py")
+                   "claude_broker.py", "identity.py")
 # Shared with the server and packager: room for many per-conversation
 # command profiles.
 MAX_BETA_CONFIG_BYTES = 262144
@@ -144,7 +145,7 @@ class Package:
 
     def _bind(self):
         value = self.runtime
-        require(set(value) - {"password_rotation_ready", "live_map", "desktop_broker", "timer_config", "v1_chat_icons_dir", "whatsapp_chats", "claude_quota_projection", "codex_quota_projection", "metrics_port"} == {"format", "uid", "gid", "owner_id", "conversation_id", "home",
+        require(set(value) - IDENTITY_FIELDS - {"password_rotation_ready", "live_map", "desktop_broker", "timer_config", "v1_chat_icons_dir", "whatsapp_chats", "claude_quota_projection", "codex_quota_projection", "metrics_port"} == {"format", "uid", "gid", "owner_id", "conversation_id", "home",
                 "bootstrap_file", "ledger_directory", "endpoint_directory", "port", "trusted_origin"}
                 and value["format"] == "orkestr-v2-codex-service-v1", "service_format")
         require("password_rotation_ready" not in value or type(value["password_rotation_ready"]) is bool,
@@ -173,11 +174,16 @@ class Package:
                 and 1024 <= value["metrics_port"] <= 65535 and value["metrics_port"] != value["port"]),
                 "service_metrics_port")
         self.owner, self.conversation = identifier(value["owner_id"]), identifier(value["conversation_id"])
-        self.uid, self.gid = value["uid"], value["gid"]
-        self.home = private(value["home"], self.uid, True)
-        self.data = private(self.home / "data", self.uid, True)
-        self.provider_home = private(self.home / "provider-home", self.uid, True)
-        private(value["bootstrap_file"], self.uid)
+        identity = bind_identity(value)
+        self.identity_split = identity["split"]
+        self.authority_uid, self.authority_gid = identity["authority_uid"], identity["authority_gid"]
+        self.executor_uid, self.executor_gid = identity["executor_uid"], identity["executor_gid"]
+        # Existing broker/profile paths keep uid/gid as explicit executor aliases.
+        self.uid, self.gid = self.executor_uid, self.executor_gid
+        self.home = private(value["home"], self.authority_uid, True)
+        self.data = private(self.home / "data", self.authority_uid, True)
+        self.provider_home = private(identity["provider_home"], self.executor_uid, True)
+        private(value["bootstrap_file"], self.authority_uid)
         self.ledger_directory = protected(value["ledger_directory"], True)
         require(stat.S_IMODE(self.ledger_directory.stat().st_mode) == 0o700, "ledger_mode")
         endpoints = protected(value["endpoint_directory"], True)
@@ -314,7 +320,7 @@ class Package:
         return self.runtime["port"] + 1 if self.runtime["port"] < 65535 else None
 
     def environment(self):
-        return {"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8", "HOME": str(self.provider_home),
+        return {"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8", "HOME": str(self.home if getattr(self, "identity_split", False) else self.provider_home),
                 "ORKESTR_V2_HOME": str(self.data), "ORKESTR_V2_BIND": f"127.0.0.1:{self.runtime['port']}",
                 "ORKESTR_V2_BETA_CONFIG": str(self.root / "beta.json"),
                 "ORKESTR_V2_UI_DIST": str(self.root / "ui"),

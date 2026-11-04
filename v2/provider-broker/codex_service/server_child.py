@@ -18,7 +18,7 @@ def main(parent_text):
             libc.prctl(1, signal.SIGTERM, 0, 0, 0) == 0 and os.getppid() == parent,
             "server_parent_death")
     package = Package(root)
-    require(os.geteuid() == package.uid, "server_executor_identity")
+    require(os.geteuid() == package.authority_uid, "server_authority_identity")
     with open(package.runtime["bootstrap_file"], "rb") as stream:
         bootstrap = stream.read(257)
     require(32 <= len(bootstrap) <= 256 and all(c in
