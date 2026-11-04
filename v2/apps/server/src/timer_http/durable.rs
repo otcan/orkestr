@@ -75,6 +75,9 @@ pub struct DurableTimerController {
     pub(crate) test_scan_delay: Option<Duration>,
     #[cfg(test)]
     pub(crate) test_trigger_delay: Option<(Duration, Arc<std::sync::atomic::AtomicBool>)>,
+    /// Shortens SUPERVISOR_GRACE so the bound itself is testable in seconds.
+    #[cfg(test)]
+    pub(crate) test_grace: Option<Duration>,
 }
 const DIGEST_CHECK: Duration = Duration::from_secs(30);
 impl DurableTimerController {
@@ -97,6 +100,8 @@ impl DurableTimerController {
             test_scan_delay: None,
             #[cfg(test)]
             test_trigger_delay: None,
+            #[cfg(test)]
+            test_grace: None,
         }
     }
     pub(crate) fn with_tracker_mail(
@@ -377,6 +382,14 @@ impl DurableTimerController {
         }
         Ok(())
     }
+    /// How long a store may stay unavailable before the controller gives up.
+    fn grace(&self) -> Duration {
+        #[cfg(test)]
+        if let Some(grace) = self.test_grace {
+            return grace;
+        }
+        SUPERVISOR_GRACE
+    }
     /// No runtime registration here. Caller must join this future on shutdown.
     /// Auth/context failure terminates; trusted bootstrap must provide a fresh context.
     pub async fn run(
@@ -396,7 +409,7 @@ impl DurableTimerController {
                     return Err(HistoryError::Unauthorized);
                 }
                 Err(error) => {
-                    if *shutdown.borrow() || started.elapsed() >= SUPERVISOR_GRACE {
+                    if *shutdown.borrow() || started.elapsed() >= self.grace() {
                         eprintln!(
                             "timer supervisor credential unavailable for {}s at startup: {error:?}",
                             started.elapsed().as_secs()
@@ -429,7 +442,7 @@ impl DurableTimerController {
                             return Err(HistoryError::Unauthorized);
                         }
                         Err(error) => {
-                            if accepted.elapsed() >= SUPERVISOR_GRACE {
+                            if accepted.elapsed() >= self.grace() {
                                 eprintln!(
                                     "timer supervisor heartbeat unavailable for {}s: {error:?}",
                                     accepted.elapsed().as_secs()
@@ -451,7 +464,7 @@ impl DurableTimerController {
                                 return Err(HistoryError::Unauthorized);
                             }
                             Err(error) => {
-                                if accepted.elapsed() >= SUPERVISOR_GRACE {
+                                if accepted.elapsed() >= self.grace() {
                                     eprintln!(
                                         "timer supervisor credential unavailable for {}s: {error:?}",
                                         accepted.elapsed().as_secs()
@@ -464,12 +477,18 @@ impl DurableTimerController {
                         }
                     }
                     match self.tick().await {
-                        Ok(_) => accepted = tokio::time::Instant::now(),
+                        // NOT a lease renewal. tick() returns Ok without touching the
+                        // store when paused, while timeout_retry is pending, and after a
+                        // pass timeout, so resetting the window here would let the
+                        // controller outlive its real lease without ever renewing.
+                        // Only heartbeat_supervisor and renew_timer_supervisor_credential
+                        // extend lease_deadline_ms, so only they may move `accepted`.
+                        Ok(_) => {}
                         // Only an unavailable store is transient here: `fn db()` and
                         // `unavailable()` collapse every sqlx failure to this variant,
                         // so a locked database arrives as Unavailable and nothing else
                         // does. Authority errors keep terminating the controller.
-                        Err(HistoryError::Unavailable) if accepted.elapsed() < SUPERVISOR_GRACE => {
+                        Err(HistoryError::Unavailable) if accepted.elapsed() < self.grace() => {
                             eprintln!("timer controller pass deferred: store unavailable");
                         }
                         Err(error) => {
