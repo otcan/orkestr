@@ -84,7 +84,7 @@ def pair_bytes(plan):
     return pair
 
 
-OPTIONAL = {'roles', 'preserve_state', 'workspace_exec', 'additional_workspace_exec', 'max_active_windows', 'host_full_access',
+OPTIONAL = {'password_rotation_ready', 'roles', 'preserve_state', 'workspace_exec', 'additional_workspace_exec', 'max_active_windows', 'host_full_access',
             'window_max_minutes', 'conversation_window_max_minutes', 'conversation_workspaces', 'provider_routing',
             'code_mode_host', 'code_mode_host_sha256', 'claude', 'claude_quota_projection', 'codex_quota_projection', 'live_map', 'desktop_broker', 'timer_config', 'whatsapp_chats', 'v1_chat_icons_dir', 'metrics_port'}
 CLAUDE_PATHS = ('executable', 'account', 'workspace', 'home', 'temporary')
@@ -166,6 +166,8 @@ def optional(plan):
 
 
 def prepare(plan):
+    require('password_rotation_ready' not in plan or type(plan['password_rotation_ready']) is bool,
+            'password rotation readiness must be boolean')
     require(os.geteuid()==0,'root preparation required')
     require(sys.flags.isolated and sys.flags.no_site and sys.flags.dont_write_bytecode,'use -I -S -B')
     fields={'format','output','source_repository','pair','pair_sha256','server','ui','native','native_sha256',
@@ -303,6 +305,8 @@ def prepare(plan):
                      'auth_file':str(auth),'state_root':str(account),'workspace':str(workspace),
                      'egress_socket':str(endpoint/'egress.sock'),'supervisor':str(inner/'isolation/supervisor.py'),
                      'hosts':list(config.HOSTS)}
+            if 'password_rotation_ready' in plan:
+                runtime['password_rotation_ready']=plan['password_rotation_ready']
             if role_paths is not None:
                 beta['roles']=selected_roles.emit(inner,role_paths,profile,gid,entry,write,encoded)
             if 'workspace_exec' in plan:

@@ -144,9 +144,11 @@ class Package:
 
     def _bind(self):
         value = self.runtime
-        require(set(value) - {"live_map", "desktop_broker", "timer_config", "v1_chat_icons_dir", "whatsapp_chats", "claude_quota_projection", "codex_quota_projection", "metrics_port"} == {"format", "uid", "gid", "owner_id", "conversation_id", "home",
+        require(set(value) - {"password_rotation_ready", "live_map", "desktop_broker", "timer_config", "v1_chat_icons_dir", "whatsapp_chats", "claude_quota_projection", "codex_quota_projection", "metrics_port"} == {"format", "uid", "gid", "owner_id", "conversation_id", "home",
                 "bootstrap_file", "ledger_directory", "endpoint_directory", "port", "trusted_origin"}
                 and value["format"] == "orkestr-v2-codex-service-v1", "service_format")
+        require("password_rotation_ready" not in value or type(value["password_rotation_ready"]) is bool,
+                "password_rotation_readiness")
         self.live_map = live_map_path(value["live_map"]) if "live_map" in value else None
         self.desktop_broker = (live_map_path(value["desktop_broker"])
                                if "desktop_broker" in value else None)
@@ -317,6 +319,8 @@ class Package:
                 "ORKESTR_V2_BETA_CONFIG": str(self.root / "beta.json"),
                 "ORKESTR_V2_UI_DIST": str(self.root / "ui"),
                 "ORKESTR_V2_ORIGIN": self.runtime["trusted_origin"],
+                **({"ORKESTR_V2_PASSWORD_ROTATION_READY": "1" if self.runtime["password_rotation_ready"] else "0"}
+                   if "password_rotation_ready" in self.runtime else {}),
                 ACCESS_LOG_ENV: "quiet",
                 **({METRICS_BIND_ENV: f"127.0.0.1:{self.metrics_port()}"}
                    if self.metrics_port() is not None else {}),

@@ -19,6 +19,11 @@ inventorying and migrating every unattended consumer. Browser security status
 reports readiness and the password form remains disabled until then. This is a
 technical migration gate, not a second owner approval.
 
+For a sealed managed service, set the reviewed plan field
+`password_rotation_ready: true`. It is pinned into `service.json` and forwarded
+as the server flag; omitted plans remain disabled. An inherited shell or unit
+environment cannot enable the feature inside a selected package.
+
 Existing sessions are labelled `legacy` by migration 0086: their stored hashes
 cannot reveal whether the original token had the browser prefix. Rotation refuses
 while any unexpired legacy session remains, rather than guessing which sessions

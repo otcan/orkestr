@@ -77,6 +77,12 @@ class Selected(unittest.TestCase):
         with authority(REPO,source) as (_,manager,_):
             package=manager.Package(self.root/'release/package',sha(self.root/'release/package/manifest.json'))
             self.assertEqual(package.environment()['ORKESTR_V2_METRICS_BIND'],'127.0.0.1:19850')
+    def test_password_rotation_readiness_rejects_non_boolean_before_writes(self):
+        for bad in (1,0,'true',None,[]):
+            self.plan['password_rotation_ready']=bad
+            with self.subTest(bad=bad),self.assertRaisesRegex(RuntimeError,'readiness must be boolean'):
+                selected.prepare(self.plan)
+            self.assertFalse((self.root/'release').exists())
     def test_full_package_credentials_metadata_only(self):
         original=Path.open
         def guarded(path,*a,**kw):
@@ -142,11 +148,14 @@ class Selected(unittest.TestCase):
         self.plan['whatsapp_chats']='/var/lib/synthetic-private/whatsapp-chats.json'
         self.plan['provider_routing']={'rules':[{'id':'synthetic-category','threshold':3,
             'terms':[{'text':'cedar','weight':3}],'excluded':'claude','preferred':'codex'}]}
+        self.plan['password_rotation_ready']=True
         selected.prepare(self.plan)
         with authority(REPO,source) as (_,manager,_):
             package=manager.Package(r/'release/package',sha(r/'release/package/manifest.json'))
             self.assertEqual(set(package.role_profiles),{'deep','fast','worker-0','worker-1','worker-2','worker-3'})
             self.assertEqual(package.beta['provider_routing'],self.plan['provider_routing'])
+            self.assertEqual(package.runtime['password_rotation_ready'],True)
+            self.assertEqual(package.environment()['ORKESTR_V2_PASSWORD_ROTATION_READY'],'1')
             self.assertEqual(package.environment()['ORKESTR_V2_LIVE_MAP'],'/var/lib/synthetic-live-map/map.json')
             self.assertEqual(package.environment()['ORKESTR_V2_DESKTOP_BROKER_CONFIG'],
                              '/var/lib/synthetic-private/desktop-broker.json')
