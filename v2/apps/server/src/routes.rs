@@ -105,7 +105,7 @@ pub async fn message(
     Path(id): Path<String>,
     body: Result<Json<MessageRequest>, JsonRejection>,
 ) -> Result<impl IntoResponse, Error> {
-    let owner = owner(&s, &headers).await?;
+    let (owner, credential) = crate::archived_history_http::owner_credential(&s, &headers).await?;
     let request = json(body)?;
     let expected_provider_generation = request.expected_provider_generation;
     let continuation_source_run_id = request.continuation_source_run_id.clone();
@@ -114,12 +114,14 @@ pub async fn message(
     // bearer) proves only the owner's credential, never who wrote the text:
     // the adapter uses the owner's session for member messages too. Without
     // an explicit author the input is unattributed and never commands a
-    // thread ask.
+    // thread ask. Core records the authenticated request source separately;
+    // a claimed owner author is never proof of a human browser origin.
     let author = request.author;
     let (input, reply_to) = request.into_parts();
     let admitted = s
         .store
-        .admit_attributed(
+        .admit_authenticated_attributed(
+            &credential,
             &owner,
             &conversation(id)?,
             &input,

@@ -1,6 +1,9 @@
 use super::*;
 use orkestr_v2_application::{Admission, IntakeStore, ProjectAdmission};
 
+#[cfg(test)]
+mod source_tests;
+
 fn project(r: &sqlx::sqlite::SqliteRow) -> Result<Project> {
     Ok(Project {
         project_id: ProjectId(parse(r.get("id"))?),
@@ -84,6 +87,58 @@ impl Store {
         continuation_source_run_id: Option<&orkestr_v2_contracts::RunId>,
         author: Option<InputAuthor>,
     ) -> Result<Admission> {
+        self.admit_with_request_source(
+            owner,
+            conversation,
+            input,
+            reply_to,
+            expected_provider_generation,
+            continuation_source_run_id,
+            author,
+            None,
+        )
+        .await
+    }
+
+    /// Authentication origin is recorded by Core, separately from a bridge's
+    /// claimed author. A replay never acquires or upgrades its original origin.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn admit_authenticated_attributed(
+        &self,
+        credential: &str,
+        owner: &OwnerId,
+        conversation: &ConversationId,
+        input: &MessageInput,
+        reply_to: Option<&ReplyTo>,
+        expected_provider_generation: Option<i64>,
+        continuation_source_run_id: Option<&orkestr_v2_contracts::RunId>,
+        author: Option<InputAuthor>,
+    ) -> Result<Admission> {
+        self.admit_with_request_source(
+            owner,
+            conversation,
+            input,
+            reply_to,
+            expected_provider_generation,
+            continuation_source_run_id,
+            author,
+            Some(credential),
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn admit_with_request_source(
+        &self,
+        owner: &OwnerId,
+        conversation: &ConversationId,
+        input: &MessageInput,
+        reply_to: Option<&ReplyTo>,
+        expected_provider_generation: Option<i64>,
+        continuation_source_run_id: Option<&orkestr_v2_contracts::RunId>,
+        author: Option<InputAuthor>,
+        credential: Option<&str>,
+    ) -> Result<Admission> {
         if expected_provider_generation.is_some_and(|generation| generation < 0) {
             return Err(StoreError::Invalid);
         }
@@ -94,7 +149,25 @@ impl Store {
             return Err(StoreError::Invalid);
         }
         let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let source = if let Some(credential) = credential {
+            let hash = digest(credential);
+            let row = sqlx::query("SELECT kind,service_credential_id FROM auth_sessions WHERE token_hash=? AND owner_id=? AND expires_at>unixepoch()")
+                .bind(&hash).bind(owner.to_string()).fetch_optional(&mut *tx).await.map_err(db)?
+                .ok_or(StoreError::NotFound)?;
+            Some((
+                hash,
+                row.get::<String, _>("kind"),
+                row.get::<Option<String>, _>("service_credential_id"),
+            ))
+        } else {
+            None
+        };
         let admission = admit_in_transaction(&mut tx, owner, conversation, input).await?;
+        if let (Some((hash, kind, service)), false) = (source, admission.duplicate) {
+            sqlx::query("INSERT INTO message_request_sources(message_id,owner_id,session_kind,credential_hash,service_credential_id) VALUES(?,?,?,?,?)")
+                .bind(admission.receipt.message_id.to_string()).bind(owner.to_string())
+                .bind(kind).bind(hash).bind(service).execute(&mut *tx).await.map_err(db)?;
+        }
         if !admission.duplicate {
             if let Some(expected) = expected_provider_generation {
                 let current: Option<i64> = sqlx::query_scalar(
