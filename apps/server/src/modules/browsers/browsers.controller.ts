@@ -1,5 +1,6 @@
 import { Body, Controller, Get, HttpCode, Param, Post, Query, Req, Res } from "@nestjs/common";
 import { readyDesktopForShare } from "./desktop-share-readiness.js";
+import { prepareOwnerDesktopShare } from "./desktop-owner-share.js";
 import {
   cleanupVirtualBrowser,
   listBrowserSessions,
@@ -179,22 +180,7 @@ export class BrowsersController {
   @Post("desktops/:slug/share-if-absent")
   @HttpCode(201)
   async shareDesktopIfAbsent(@Req() request: any, @Res({ passthrough: true }) response: any, @Param("slug") slug: string, @Body() body: Record<string, unknown> = {}) {
-    const threadId = String(body.threadId || "").trim();
-    const acquired = await this.acquireDesktop(request, slug, {
-      threadId, mode: "exclusive", ttlMs: 60000,
-      purpose: "Owner desktop viewing", reuseExisting: true,
-    });
-    const fencingToken = acquired.lease.fencingToken;
-    try {
-      return await this.shareDesktop(request, response, slug, {
-        threadId, fencingToken, start: false, ifAbsent: true,
-      });
-    } finally {
-      // A borrowed worker lease is never renewed or released by viewing.
-      if (!acquired.borrowed) await this.releaseDesktop(request, slug, {
-        threadId, fencingToken, reason: "owner_share_prepared",
-      });
-    }
+    return prepareOwnerDesktopShare(this, request, response, slug, body);
   }
 
   @Post("desktops/:slug/share")
