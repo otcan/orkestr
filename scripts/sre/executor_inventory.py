@@ -46,28 +46,21 @@ def proc_inventory(root='/proc'):
             status = (path / 'status').read_text().splitlines()
             ppid = int(next(s.split()[1] for s in status if s.startswith('PPid:')))
             native = None
-            if 'resume' in args:
-                native = next((a for a in args[args.index('resume') + 1:] if UUID.fullmatch(a)), None)
+            resume = 'resume' if provider == 'codex' else '--resume'
+            if resume in args:
+                native = next((a for a in args[args.index(resume) + 1:] if UUID.fullmatch(a)), None)
             if not native:
                 # Read only supported identity keys, and do not retain other env values.
                 for item in (path / 'environ').read_bytes().split(b'\0'):
                     key, _, value = item.partition(b'=')
-                    if key in (b'CODEX_THREAD_ID', b'CLAUDE_SESSION_ID'):
+                    if key == {'codex': b'CODEX_THREAD_ID', 'claude': b'CLAUDE_SESSION_ID'}[provider]:
                         candidate = value.decode(errors='replace')
                         if UUID.fullmatch(candidate):
                             native = candidate
-            if not native:
-                for fd in (path / 'fd').iterdir():
-                    try:
-                        target = os.readlink(fd)
-                    except OSError:
-                        continue
-                    if '/sessions/' in target and target.endswith('.jsonl'):
-                        matches = UUID.findall(Path(target).name)
-                        if matches:
-                            native = matches[-1]
-                            break
-            infrastructure = any(a in ('app-server', 'daemon', 'code-mode') for a in args[1:])
+            # Reading another thread's rollout is ordinary agent work. An open
+            # transcript descriptor cannot establish this process's native ID.
+            infrastructure = ('code-mode-host' in base or 'code_mode_host' in base or
+                              any(a in ('app-server', 'daemon', 'code-mode') for a in args[1:]))
             start_ticks = (path / 'stat').read_text().rsplit(')', 1)[1].split()[19]
             rows.append({'start_ticks': start_ticks, 'pid': int(path.name), 'ppid': ppid, 'provider': provider,
                          'native_session_id': native,
@@ -166,6 +159,7 @@ def reconcile(processes, panes, transcripts, core, legacy, routes, proposals, ob
             'notes': ['Posting routes, Core runtime bindings and legacy attachments are distinct evidence.',
                       'Proposed linkage is not an actual Core binding or a dispatch change.',
                       'Transcript modification time does not prove a live process.',
+                      'Inherited identities from another provider and open transcript files do not establish native identity.',
                       'An absent legacy delegation is not proof that a V2 route is absent.']}
 
 
@@ -192,7 +186,8 @@ def markdown(report):
         views = [v for pane in row['panes'] for v in pane['views']]
         roles = [p.get('role') for p in row['proposed_linkage']]
         lines.append('| ' + ' | '.join(safe(v) for v in [row['provider'] + ' / ' + (row['native_session_id'] or 'unknown'),
-                      ', '.join(str(p['pid']) for p in row['processes']) or 'not established',
+                      ', '.join(str(p['pid']) + (' (infrastructure)' if p['kind'] == 'infrastructure' else '')
+                                for p in row['processes']) or 'not established',
                       ', '.join(views) or 'none observed', row['ownership'], ', '.join(roles) or 'none']) + ' |')
     lines += ['', 'Terminal views (shared pane IDs are one execution surface):', '', '| Socket / pane | Pane PID | Views |', '| --- | --- | --- |']
     for pane in report['panes']:

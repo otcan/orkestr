@@ -52,8 +52,9 @@ Task links are proposed associations, not Core mutations. Example private input:
 ]
 ```
 
-Some terminal clients expose neither their native ID in selected environment
-fields nor an open transcript descriptor. Explicit identity observations can join
+Some terminal clients expose no native ID in supported arguments or their own
+provider's selected environment field. Reading another provider's transcript or
+inheriting its environment variable does not establish identity. Explicit identity observations can join
 an independently audited identity to a process. Require the PID and its Linux
 `/proc/PID/stat` start-time ticks to prevent a stale PID assignment after reuse:
 

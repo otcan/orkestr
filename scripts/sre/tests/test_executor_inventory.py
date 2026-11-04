@@ -92,6 +92,36 @@ class InventoryTests(unittest.TestCase):
             self.assertEqual(report[0]['native_session_id'], NATIVE)
             self.assertNotIn('NEVER-EXPORT', json.dumps(report))
 
+    def test_inherited_other_provider_identity_and_open_transcript_do_not_bind(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            for pid, provider, variable in [(42, 'claude', 'CODEX_THREAD_ID'), (43, 'codex', 'CLAUDE_SESSION_ID')]:
+                proc = Path(tmp) / str(pid)
+                proc.mkdir()
+                (proc / 'cmdline').write_bytes(f'/bin/{provider}\0'.encode())
+                (proc / 'status').write_text('PPid:\t1\n')
+                (proc / 'stat').write_text(f'{pid} ({provider}) ' + ' '.join(['0'] * 22))
+                (proc / 'environ').write_bytes(f'{variable}={NATIVE}\0SECRET=NEVER-EXPORT\0'.encode())
+                (proc / 'fd').mkdir()
+                (proc / 'fd/3').symlink_to(f'/synthetic/sessions/rollout-{NATIVE}.jsonl')
+            report = inv.proc_inventory(tmp)
+            self.assertEqual(len(report), 2)
+            self.assertTrue(all(row['native_session_id'] is None for row in report))
+            self.assertNotIn('NEVER-EXPORT', json.dumps(report))
+
+    def test_provider_specific_resume_and_environment_identity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            for pid, args, environment in [(42, ['/bin/claude', '--resume', NATIVE], b''),
+                                            (43, ['/bin/codex', 'app-server'], f'CODEX_THREAD_ID={NATIVE}\0'.encode())]:
+                proc = Path(tmp) / str(pid)
+                proc.mkdir()
+                (proc / 'cmdline').write_bytes(('\0'.join(args) + '\0').encode())
+                (proc / 'status').write_text('PPid:\t1\n')
+                (proc / 'stat').write_text(f'{pid} (synthetic) ' + ' '.join(['0'] * 22))
+                (proc / 'environ').write_bytes(environment)
+            report = inv.proc_inventory(tmp)
+            self.assertTrue(all(row['native_session_id'] == NATIVE for row in report))
+            self.assertEqual(next(row for row in report if row['pid'] == 43)['kind'], 'infrastructure')
+
 
 if __name__ == '__main__':
     unittest.main()
