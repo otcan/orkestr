@@ -17,7 +17,11 @@ No real deployment values belong in this public repository. The authority root
 must not exist yet, and its ancestors must be protected. A protected root-owned
 qualification receipt binds these fields and the candidate descriptor SHA256 and
 attests successful separate-identity, agent read/write denial, provider/broker,
-startup-closure, direct-consumer and authenticated-provenance probes. These are
+startup-closure, direct-consumer and authenticated-provenance probes. The receipt must also set
+`executor_privilege_escalation_denied` only after probes in the actual executor
+context deny escalation through sudo/setuid/privileged helpers. Direct UID read
+denial alone is insufficient when executors can elevate; preserve the separate
+human/operator root path rather than changing host sudo policy implicitly. These are
 release qualification evidence, not booleans an executor may self-certify.
 
 ```sh

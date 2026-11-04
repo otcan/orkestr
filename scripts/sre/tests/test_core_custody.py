@@ -32,7 +32,7 @@ class CoreCustodyTests(unittest.TestCase):
                                   candidate_sha256=c.sha(self.descriptor))
         for key in ('separate_server_executor_identity', 'agent_core_read_denied', 'agent_core_write_denied',
                     'provider_broker_smoke', 'startup_closure_verified', 'direct_consumers_reconciled',
-                    'authenticated_provenance_verified'):
+                    'authenticated_provenance_verified', 'executor_privilege_escalation_denied'):
             self.qualification[key] = True
         self.receipt = self.root / 'receipt.json'
 
@@ -92,6 +92,14 @@ class CoreCustodyTests(unittest.TestCase):
         # The universally writable /tmp ancestor makes this unsuitable authority custody.
         with self.assertRaisesRegex(c.Refused,'target_ancestor_writable'):
             c.validate(self.config)
+
+    def test_direct_read_denial_without_escalation_denial_is_not_qualification(self):
+        del self.qualification['executor_privilege_escalation_denied']
+        with self.assertRaisesRegex(c.Refused,'probe_missing'):
+            c.qualifying(self.config,self.qualification)
+        self.qualification['executor_privilege_escalation_denied']=False
+        with self.assertRaisesRegex(c.Refused,'probe_missing'):
+            c.qualifying(self.config,self.qualification)
 
     def test_qualification_must_match_target_and_actor(self):
         self.qualification['agent_uid']=12345

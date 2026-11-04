@@ -95,7 +95,7 @@ def qualifying(config, qualification):
             raise Refused('qualification_scope_mismatch')
     required = ('separate_server_executor_identity', 'agent_core_read_denied', 'agent_core_write_denied',
                 'provider_broker_smoke', 'startup_closure_verified', 'direct_consumers_reconciled',
-                'authenticated_provenance_verified')
+                'authenticated_provenance_verified', 'executor_privilege_escalation_denied')
     if any(qualification.get(key) is not True for key in required):
         raise Refused('qualification_probe_missing')
     # Bind the protected attestation to the exact reviewed candidate descriptor.
