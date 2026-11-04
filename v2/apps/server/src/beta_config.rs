@@ -357,11 +357,9 @@ mod tests {
         );
         assert!(codex.window_provider(&launch, None).is_err());
         // A committed native identity of the other provider is never continued.
-        assert!(
-            claude
-                .window_provider(&launch, Some(ProviderKind::Codex))
-                .is_err()
-        );
+        assert!(claude
+            .window_provider(&launch, Some(ProviderKind::Codex))
+            .is_err());
         assert_eq!(
             claude.window_provider(&launch, Some(ProviderKind::Claude)),
             Ok(ProviderKind::Claude)
@@ -420,12 +418,10 @@ mod tests {
             .validate()
             .unwrap();
         shared["conversation_workspaces"][primary]["shared"] = serde_json::json!(false);
-        assert!(
-            serde_json::from_value::<BetaConfig>(shared.clone())
-                .unwrap()
-                .validate()
-                .is_err()
-        );
+        assert!(serde_json::from_value::<BetaConfig>(shared.clone())
+            .unwrap()
+            .validate()
+            .is_err());
         for bad in [
             serde_json::json!({"path":"/srv/x"}),
             serde_json::json!({"path":"/srv/x", "shared":true, "extra":true}),

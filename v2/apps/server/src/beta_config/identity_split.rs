@@ -31,25 +31,21 @@ mod tests {
         for (authority, executor, gid) in
             [(0, 20001, 20001), (20001, 20001, 20001), (20000, 20001, 0)]
         {
-            assert!(
-                IdentitySplit {
-                    authority_uid: authority,
-                    executor_uid: executor,
-                    shared_gid: gid
-                }
-                .validate()
-                .is_err()
-            );
-        }
-        assert!(
-            IdentitySplit {
-                authority_uid: 20000,
-                executor_uid: 20001,
-                shared_gid: 20001
+            assert!(IdentitySplit {
+                authority_uid: authority,
+                executor_uid: executor,
+                shared_gid: gid
             }
             .validate()
-            .is_ok()
-        );
+            .is_err());
+        }
+        assert!(IdentitySplit {
+            authority_uid: 20000,
+            executor_uid: 20001,
+            shared_gid: 20001
+        }
+        .validate()
+        .is_ok());
     }
     #[test]
     fn existing_privileged_host_mode_is_not_silently_downgraded_by_a_split() {

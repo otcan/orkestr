@@ -3,7 +3,7 @@
 use orkestr_runtime::containment::metadata::BrokerChildLocator;
 use orkestr_v2_contracts::{ConversationId, EventId, ExecutionWindowLimits, MessageId, OwnerId};
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{path::PathBuf, time::Instant};
 use tokio::net::UnixStream;

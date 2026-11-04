@@ -1,13 +1,13 @@
-pub(super) use super::reaper::{Reaper, start_reaper, start_reaper_retained};
+pub(super) use super::reaper::{start_reaper, start_reaper_retained, Reaper};
 use super::{
-    ConsumedTurn, Error, ExecutionScope, Executor, Flush, Output, TurnFailure, framing::Framing,
-    scope::Shared, sys,
+    framing::Framing, scope::Shared, sys, ConsumedTurn, Error, ExecutionScope, Executor, Flush,
+    Output, TurnFailure,
 };
 use serde_json::Value;
 use std::process::{Child, Command, Stdio};
 use std::sync::{
-    Arc, Mutex,
     atomic::{AtomicBool, AtomicUsize},
+    Arc, Mutex,
 };
 
 #[derive(Clone, Copy)]
