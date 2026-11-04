@@ -65,6 +65,8 @@ class Peer(BaseHTTPRequestHandler):
             headers["Set-Cookie"] = (f"orkestr_v2_session={token}; Path=/api/v2; HttpOnly; SameSite=Strict; Secure")
             if service and self.server.reject_service:
                 status = 401
+            if self.command == "GET" and getattr(self.server, "reject_cookie", False):
+                status = 401
         else:
             status = 404
         body = b"" if status == 204 else json.dumps(value).encode()

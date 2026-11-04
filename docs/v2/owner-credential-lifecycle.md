@@ -86,5 +86,16 @@ Provisioning does not activate the file, restart a consumer or enable rotation.
 Change each consumer's reference through its normal deployment process and
 verify it independently. Renew service credentials before the thirty-day expiry.
 
+Short-lived helpers can opt in to `ServiceSessionCache` from
+`v2.compat.v1_runtime.service_session_cache`. Its caller-owned 0700 directory
+contains a 0600 secret cookie cache and lock. Keep it in private runtime state,
+outside source and sealed release directories. The helper holds the lock through
+one operation, rechecks source/owner/session and persists login state before
+yielding the client. Repeated invocations reuse the cookie rather than consuming
+the login rate/session caps. Observed revocation remains refused across processes
+until the protected key file changes. Corrupt or linked cache files fail closed.
+No successful mutation is followed by a cache write, and no uncertain operation
+is replayed. Long-running adapters continue to keep their sessions in memory.
+
 The implementation does not by itself migrate live consumers or provide a
 forgotten-password recovery CLI. Those remain release acceptance requirements.
