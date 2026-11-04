@@ -162,7 +162,7 @@ async function assertCurrentShareGrant(share, env = process.env) {
   return decision;
 }
 
-export async function createDesktopShare({ desktopSlug = "", slug = "", ownerUserId = "", principal = null, threadId = "", desktopAccess = null, breakGlass = false, breakGlassReason = "", breakGlassChangeRef = "", recentAuthAt = "", label = "", env = process.env } = {}) {
+export async function createDesktopShare({ desktopSlug = "", slug = "", ownerUserId = "", principal = null, threadId = "", desktopAccess = null, breakGlass = false, breakGlassReason = "", breakGlassChangeRef = "", recentAuthAt = "", label = "", ifAbsent = false, env = process.env } = {}) {
   const normalizedSlug = cleanSlug(desktopSlug || slug);
   if (!normalizedSlug) throw desktopShareError("desktop_slug_required", 400);
   const resolvedOwnerUserId = ownerUserIdForPrincipal(principal, ownerUserId, env);
@@ -189,6 +189,10 @@ export async function createDesktopShare({ desktopSlug = "", slug = "", ownerUse
     const lineageId = lineageIdFor(base);
     const lineage = state.desktopShareLineages.find((item) => item.id === lineageId) || null;
     const previous = state.desktopShares.find((item) => item.id === lineage?.currentShareId) || null;
+    if (ifAbsent && previous && !["expired", "revoked", "superseded"].includes(previous.status)
+      && Date.parse(previous.expiresAt) > Date.now()) {
+      throw desktopShareError("desktop_share_already_exists", 409);
+    }
     const generation = Math.max(lineage?.generation || 0, ...state.desktopShares.filter((item) => item.lineageId === lineageId).map((item) => item.shareGeneration || 0)) + 1;
     const share = normalizeShare({
       ...base,
