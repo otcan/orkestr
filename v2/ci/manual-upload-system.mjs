@@ -1,11 +1,11 @@
 // Numeric identities and root operations are confined to a fresh test directory
 // and uniquely named transient units. Never changes passwd, groups or sudoers.
 import {execFileSync,spawn,spawnSync} from 'node:child_process';
-import {mkdtemp,chmod,writeFile} from 'node:fs/promises';
+import {mkdtemp,chmod,writeFile,unlink} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 export const SERVICE=62001,WORKER=62002,GROUP=62003;
-export function root(command,args=[]){return execFileSync('sudo',['-n',command,...args],{encoding:'utf8',env:{PATH:process.env.PATH,PYTHONDONTWRITEBYTECODE:'1'},maxBuffer:64*1024});}
+export function root(command,args=[]){return execFileSync('sudo',['-n',command,...args],{encoding:'utf8',env:{PATH:process.env.PATH,PYTHONDONTWRITEBYTECODE:'1'},maxBuffer:64*1024,stdio:['ignore','pipe','pipe']});}
 export async function scratch(){
   for(const[database,id]of[['passwd',SERVICE],['passwd',WORKER],['group',GROUP]]){if(spawnSync('getent',[database,String(id)]).status!==2)throw Error('Acceptance identity is registered');}
   for(const id of[SERVICE,WORKER]){const check=spawn('pgrep',['-u',String(id)]);const code=await new Promise(resolve=>check.once('exit',resolve));if(code!==1)throw Error('Acceptance identity already in use');}
@@ -17,9 +17,19 @@ export async function scratch(){
   root('/usr/bin/chmod',['750',join(dir,'exports')]);root('/usr/bin/chmod',['755',join(dir,'bin')]);
   return dir;
 }
-export function startBackend({binary,dir,unit,bind,origin,bootstrap}){
-  const env=['PATH=/usr/bin:/bin','LANG=C.UTF-8',`ORKESTR_V2_HOME=${join(dir,'home')}`,`ORKESTR_V2_BIND=${bind}`,`ORKESTR_V2_ORIGIN=${origin}`,`ORKESTR_V2_BOOTSTRAP_TOKEN=${bootstrap}`,`ORKESTR_V2_ATTACHMENT_EXPORT_DIR=${join(dir,'exports')}`];
-  const args=['--quiet','--pipe','--wait','--collect',`--unit=${unit}`,'--property=MemoryMax=3G','--property=CPUQuota=200%','--property=TasksMax=128','--property=NoNewPrivileges=yes','/usr/bin/setpriv',`--reuid=${SERVICE}`,`--regid=${GROUP}`,'--clear-groups','--bounding-set=-all','--inh-caps=-all','--ambient-caps=-all','/usr/bin/env','-i',...env,binary];
+export async function provisionBootstrap(dir,bootstrap){
+  const source=join(dir,'source/bootstrap-token');await writeFile(source,bootstrap,{mode:0o600});
+  root('/usr/bin/install',['-o',String(SERVICE),'-g',String(GROUP),'-m','600',source,join(dir,'home/bootstrap-token')]);await unlink(source);
+}
+export function startBackend({binary,dir,unit,bind,origin}){
+  // The launch command contains paths only. The service reads its private
+  // bootstrap file after dropping UID; no token is exposed via systemd argv.
+  const script=`import os,sys
+from pathlib import Path
+binary,home,bind,origin,exports=sys.argv[1:]
+env={'PATH':'/usr/bin:/bin','LANG':'C.UTF-8','PYTHONDONTWRITEBYTECODE':'1','ORKESTR_V2_HOME':home,'ORKESTR_V2_BIND':bind,'ORKESTR_V2_ORIGIN':origin,'ORKESTR_V2_ATTACHMENT_EXPORT_DIR':exports,'ORKESTR_V2_BOOTSTRAP_TOKEN':Path(home,'bootstrap-token').read_text()}
+os.execve(binary,[binary],env)`;
+  const args=['--quiet','--pipe','--wait','--collect',`--unit=${unit}`,'--property=MemoryMax=3G','--property=CPUQuota=200%','--property=TasksMax=128','--property=NoNewPrivileges=yes','/usr/bin/setpriv',`--reuid=${SERVICE}`,`--regid=${GROUP}`,'--clear-groups','--bounding-set=-all','--inh-caps=-all','--ambient-caps=-all','/usr/bin/python3','-I','-S','-B','-c',script,binary,join(dir,'home'),bind,origin,join(dir,'exports')];
   const process=spawn('sudo',['-n','/usr/bin/systemd-run',...args],{stdio:['ignore','ignore','pipe']});process.stderr.resume();return process;
 }
 export async function chromeLauncher(dir,unit,chrome){
@@ -46,7 +56,7 @@ for p in sys.argv[2:]:
   with open(p,'rb') as f:f.read(1)
  except PermissionError:denied.append(True)
  else:denied.append(False)
-print(json.dumps({'uid':os.getuid(),'gid':os.getgid(),'bytes':n,'sha256':h.hexdigest(),'core_and_ingest_key_denied':denied}))`,path,join(dir,'home/core.sqlite3'),join(dir,'home/keys/attachment-ingest.age')]));
+print(json.dumps({'uid':os.getuid(),'gid':os.getgid(),'bytes':n,'sha256':h.hexdigest(),'core_bootstrap_ingest_denied':denied}))`,path,join(dir,'home/core.sqlite3'),join(dir,'home/bootstrap-token'),join(dir,'home/keys/attachment-ingest.age')]));
 }
 export function cleanup(dir){root('/usr/bin/python3',['-I','-S','-B','-c',`from pathlib import Path
 import shutil,sys

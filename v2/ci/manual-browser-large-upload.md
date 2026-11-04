@@ -27,5 +27,21 @@ use the supported external export directory and group-readable 0640 files.
 Receipts record the candidate binary/module hashes, actual data size/checksum,
 proxy byte counts, resource limits, cross-UID read/deny results and cleanup.
 They contain no real credentials. Keep results outside source control. The
-baseline fixture does not qualify bootstrap-file isolation or automatic crash
-orphan cleanup; those remain separately stated checks.
+historical frozen baseline did not qualify bootstrap-file isolation or automatic
+crash orphan cleanup. The current harness provisions a random synthetic 0600
+bootstrap file in the private service home and reads it after dropping UID;
+the token is never a transient-unit command argument. Worker checks deny reads
+of Core, bootstrap and ingest identity.
+
+Set `ORKESTR_ACCEPTANCE_CRASH=1` to kill only the disposable backend unit while
+it is writing a private incomplete export, verify worker denial, restart using
+the same Core/key and verify startup cleanup plus full file reconstruction.
+`ORKESTR_ACCEPTANCE_BYTES=67108864` selects a bounded 64 MiB crash rehearsal;
+that run explicitly does not exercise or claim the 1 GB limit acceptance.
+The default still uses the real 1,000,000,000-byte disk file. Failed checks
+retain a failure receipt, and the harness removes all disposable scratch.
+
+Cross-UID host reads do not by themselves qualify a bounded provider namespace:
+its sealed read-only mount or scoped file-descriptor transport must also make
+the published file visible. Neither the private Core nor ingest-key directory
+may be mounted to achieve that.

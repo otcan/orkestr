@@ -3,21 +3,22 @@
 import assert from 'node:assert/strict';
 import puppeteer from 'puppeteer';
 import {build} from 'esbuild';
-import {createHash,randomUUID} from 'node:crypto';
+import {createHash,randomUUID,randomBytes} from 'node:crypto';
 import {execFileSync} from 'node:child_process';
 import {createReadStream,createWriteStream} from 'node:fs';
 import {stat,truncate,writeFile} from 'node:fs/promises';
 import {once} from 'node:events';
 import {createServer} from 'node:net';
 import {join,resolve} from 'node:path';
+import {crashRecovery} from './manual-upload-crash.mjs';
 import {uploadProxy} from './manual-upload-proxy.mjs';
-import {scratch,startBackend,chromeLauncher,unitStats,stop,workerEvidence,root,cleanup,SERVICE,WORKER,GROUP} from './manual-upload-system.mjs';
+import {scratch,startBackend,provisionBootstrap,chromeLauncher,unitStats,stop,workerEvidence,root,cleanup,SERVICE,WORKER,GROUP} from './manual-upload-system.mjs';
 
 assert.equal(process.env.CI,'true','Headless acceptance only');
 assert.equal(process.env.ORKESTR_RUN_BROWSER_1GB,'1','Explicit opt-in required');
 const binary=resolve(process.env.V2_SERVER||''),chrome=process.env.CHROME_BIN||'/usr/bin/google-chrome';
 const expectedCommit=process.env.EXPECTED_CANDIDATE_COMMIT;assert.match(expectedCommit||'',/^[0-9a-f]{40}$/,'Exact candidate commit required');
-const BYTES=1_000_000_000,CHUNK=1024*1024;
+const BYTES=Number(process.env.ORKESTR_ACCEPTANCE_BYTES||1_000_000_000),CHUNK=1024*1024;assert.ok([64*CHUNK,1_000_000_000].includes(BYTES),'Only64MiB crash or actual1GB acceptance supported');
 const suffix=randomUUID().slice(0,8),backendUnit=`orkestr-upload-test-${suffix}-backend`,browserUnit=`orkestr-upload-test-${suffix}-browser`;
 let dir,proxy,browser,backend,stage='initialization';
 const report={scope:'real production composer JS helper + Chromium File API + representative loopback reverse proxy + real candidate Rust backend; full WASM composer/production proxy not claimed',service_uid:SERVICE,worker_uid:WORKER,shared_export_gid:GROUP};
@@ -31,7 +32,7 @@ try{
   proxy=await uploadProxy(bundled.outputFiles[0].contents);
   report.production_js_bundle_sha256=createHash('sha256').update(bundled.outputFiles[0].contents).digest('hex');
   const portProbe=createServer();await new Promise(resolve=>portProbe.listen(0,'127.0.0.1',resolve));const backendPort=portProbe.address().port;await new Promise(resolve=>portProbe.close(resolve));proxy.setBackend(backendPort);
-  const bootstrap='synthetic-browser-upload-bootstrap-000000000000';
+  const bootstrap=randomBytes(32).toString('hex');await provisionBootstrap(dir,bootstrap);
   backend=startBackend({binary:candidate,dir,unit:backendUnit,bind:`127.0.0.1:${backendPort}`,origin:proxy.origin,bootstrap});
   for(let n=0;;n++){try{if((await fetch(`${proxy.origin}/api/v2/health`)).ok)break;}catch{}assert.ok(n<150&&backend.exitCode===null,'Candidate startup failed');await new Promise(resolve=>setTimeout(resolve,100));}
   stage='disk-file';const file=join(dir,'source/actual-1gb.bin'),out=createWriteStream(file,{mode:0o600,highWaterMark:CHUNK});
@@ -53,19 +54,27 @@ try{
   },bootstrap);
   const cookie=(await browser.cookies()).find(cookie=>cookie.name==='orkestr_v2_session');assert.ok(cookie?.httpOnly);assert.equal(cookie.sameSite,'Strict');report.http_only_strict_cookie=true;
   const input=await page.$('#file');stage='actual-limit-plus-one';await input.uploadFile(file);
+  if(BYTES===1_000_000_000){
   const before=proxy.stats.chunk_requests;
   const refused=await page.evaluate(async()=>window.describe(document.querySelector('#file').files));assert.match(refused.error,/1,000,000,000/);assert.equal(proxy.stats.chunk_requests,before);report.actual_disk_limit_plus_one_rejected=true;
+  }else report.actual_disk_limit_plus_one_rejected='not exercised by64MiB crash fixture';
   await truncate(file,BYTES);await page.$eval('#file',el=>el.value='');await input.uploadFile(file);
   stage='browser-upload';const started=Date.now();
   const uploaded=await page.evaluate(async()=>window.describe(document.querySelector('#file').files));assert.equal(uploaded.error,undefined);assert.equal(uploaded.receipts.length,1);report.browser_upload_and_prepare_seconds=(Date.now()-started)/1000;
   const receipt=uploaded.receipts[0];assert.equal(receipt.attachments[0].byte_length,BYTES);assert.ok(receipt.note.includes(report.expected_sha256));
   const match=/local file ([^\]]+)/.exec(receipt.note);assert.ok(match);const provider=match[1];
-  stage='cross-uid';report.worker_evidence=workerEvidence(dir,provider);assert.equal(report.worker_evidence.bytes,BYTES);assert.equal(report.worker_evidence.sha256,report.expected_sha256);assert.deepEqual(report.worker_evidence.core_and_ingest_key_denied,[true,true]);
-  report.proxy={...proxy.stats};assert.equal(proxy.stats.chunk_requests,954);assert.ok(proxy.stats.largest_chunk<=proxy.stats.max_body_bytes);
+  stage='cross-uid';report.worker_evidence=workerEvidence(dir,provider);assert.equal(report.worker_evidence.bytes,BYTES);assert.equal(report.worker_evidence.sha256,report.expected_sha256);assert.deepEqual(report.worker_evidence.core_bootstrap_ingest_denied,[true,true,true]);
+  report.proxy={...proxy.stats};assert.equal(proxy.stats.chunk_requests,Math.ceil(BYTES/CHUNK));assert.ok(proxy.stats.largest_chunk<=proxy.stats.max_body_bytes);
   stage='proxy-body-limit';const rejected=await fetch(`${proxy.origin}/api/v2/conversations/00000000-0000-4000-8000-000000000001/encrypted-uploads/00000000-0000-4000-8000-000000000002/chunks/0`,{method:'PUT',body:new Uint8Array(proxy.stats.max_body_bytes+1)});assert.equal(rejected.status,413);report.proxy_rejects_oversized_chunk=true;
-  report.backend_resources=unitStats(backendUnit);report.browser_resources=unitStats(browserUnit);report.node_rss_bytes=process.memoryUsage().rss;
+  report.backend_resources=unitStats(backendUnit);
+  if(process.env.ORKESTR_ACCEPTANCE_CRASH==='1'){
+    stage='sigkill-recovery';report.crash_recovery=await crashRecovery({dir,page,unit:backendUnit,backend,provider,receipt,expected:report.expected_sha256,restart:async()=>{
+      await new Promise(resolve=>setTimeout(resolve,500));backend=startBackend({binary:candidate,dir,unit:backendUnit,bind:`127.0.0.1:${backendPort}`,origin:proxy.origin});
+      for(let n=0;;n++){try{if((await fetch(`${proxy.origin}/api/v2/health`)).ok)break;}catch{}assert.ok(n<150&&backend.exitCode===null,'Candidate restart failed');await new Promise(resolve=>setTimeout(resolve,100));}
+    }});
+  }report.browser_resources=unitStats(browserUnit);report.node_rss_bytes=process.memoryUsage().rss;
   assert.equal(report.browser_sent_bearer,false);
-  report.pass=true;report.browser_file_bytes=BYTES;report.full_wasm_composer='pending';report.production_reverse_proxy='pending';report.crash_orphan_automatic_cleanup='not tested by this harness';
+  report.pass=true;report.browser_file_bytes=BYTES;report.full_wasm_composer='pending';report.production_reverse_proxy='pending';report.crash_orphan_automatic_cleanup=report.crash_recovery?'SIGKILL + startup recovery + reconstruction passed':'not exercised';
 }catch(error){report.pass=false;report.failed_stage=stage;report.error=error.message;throw error;}
 finally{
   await browser?.close().catch(()=>{});stop(browserUnit);stop(backendUnit);await proxy?.close().catch(()=>{});
