@@ -100,6 +100,6 @@ def receive_launch_context(package, descriptor=6):
     server = process(value['server_pid'])
     require(server and server['start'] == value['server_start'] and server['uid'] == value['server_uid'],
             'launch_capsule_server_changed')
-    require(value['role'] in ('deep', 'fast', 'worker-0', 'worker-1', 'worker-2', 'worker-3'), 'launch_capsule_role')
+    require(value['role'] in ('deep', 'fast', 'claude', 'worker-0', 'worker-1', 'worker-2', 'worker-3'), 'launch_capsule_role')
     _CONTEXT = value
     return value

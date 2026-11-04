@@ -20,7 +20,7 @@ def main(package, arguments):
     provider, capsule, role, parent, start = arguments
     require(all(v.isdigit() for v in (provider, capsule, parent, start)), 'launch_descriptor_fields')
     provider, capsule, parent, start = map(int, (provider, capsule, parent, start))
-    require(provider > 6 and capsule > 6 and provider != capsule and role in package.role_profiles,
+    require(provider > 6 and capsule > 6 and provider != capsule and (role in package.role_profiles or role=='claude' and package.claude is not None),
             'launch_descriptor_scope')
     identity = process(parent)
     require(parent == os.getppid() and identity and identity['start'] == start and identity['uid'] == 0,

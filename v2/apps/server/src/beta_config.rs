@@ -144,7 +144,6 @@ impl BetaConfig {
             // private FD/bootstrap contracts separately, never a fallback UID.
             if self.roles.is_some()
                 || self.host_full_access.is_some()
-                || self.claude.is_some()
                 || self.workspace_exec.is_some()
                 || !self.additional_workspace_exec.is_empty()
             {
@@ -189,6 +188,9 @@ impl BetaConfig {
             return Err("invalid conversation workspaces");
         }
         if let Some(claude) = &self.claude {
+            if self.identity_split.is_some() && claude.fast {
+                return Err("managed Claude Fast requires typed role separation");
+            }
             if !claude.launcher.is_absolute()
                 || !claude.workspace.is_absolute()
                 || claude.launcher == self.launcher

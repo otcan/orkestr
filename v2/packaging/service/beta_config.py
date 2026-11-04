@@ -170,7 +170,7 @@ def validate(raw):
         require(type(identity) is dict and set(identity)=={'authority_uid','executor_uid','shared_gid'}
                 and all(type(identity[k]) is int and 0<identity[k]<2**31 for k in identity)
                 and identity['authority_uid']!=identity['executor_uid'],'closed split service identity required')
-        require(not any(k in value for k in ('roles','host_full_access','claude','workspace_exec','additional_workspace_exec')),
+        require(not any(k in value for k in ('roles','host_full_access','workspace_exec','additional_workspace_exec')),
                 'unsupported split execution mode')
     if 'roles' in value:
         roles=value['roles']
@@ -197,11 +197,13 @@ def validate(raw):
         host_full_access(value['host_full_access'])
     if 'claude' in value:
         selected = value['claude']
+        require(type(selected) is dict and ('identity_split' not in value or not selected.get('fast',False)),
+                'managed Claude Fast requires typed role separation')
         require(type(selected) is dict and set(selected) - {'fast'} == {'launcher', 'launcher_sha256', 'workspace', 'default'}
                 and all(absolute(selected[k]) for k in ('launcher', 'workspace'))
                 and type(selected['launcher_sha256']) is str and re.fullmatch('[0-9a-f]{64}', selected['launcher_sha256'])
                 and type(selected['default']) is bool and type(selected.get('fast', False)) is bool
-                and selected['launcher'] != value['launcher'] and 'host_full_access' in value,
+                and selected['launcher'] != value['launcher'] and ('host_full_access' in value or 'identity_split' in value),
                 'closed Claude window configuration requires host_full_access')
     if 'workspace_exec' in value:
         require('roles' in value, 'workspace execution requires configured Worker roles')

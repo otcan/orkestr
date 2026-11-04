@@ -64,19 +64,30 @@ class ClaudeConfiguration:
     # Operator instance opt-in (V1-equivalent YOLO): no namespace wrapper,
     # --dangerously-skip-permissions and the full default tool set.
     host_full_access: dict = None
+    # Direct executor host tools under enforced no_new_privs, with a separate
+    # protected authority UID. This makes no sudo/root or legacy parity claim.
+    managed_host: dict = None
 
     @classmethod
     def load(cls, path):
         value = json.loads(Path(path).read_text())
-        if not isinstance(value, dict) or set(value) - {"host_full_access"} != set(PATHS):
+        if not isinstance(value, dict) or set(value) - {"host_full_access", "managed_host"} != set(PATHS):
             raise ValueError("invalid private Claude configuration")
         access = value.pop("host_full_access", None)
+        managed = value.pop("managed_host", None)
+        if access is not None and managed is not None:
+            raise ValueError("conflicting Claude host profiles")
         config = cls(**{key: Path(item) for key, item in value.items()},
-                     host_full_access=None if access is None else host_environment(access))
+                     host_full_access=None if access is None else host_environment(access),
+                     managed_host=None if managed is None else host_environment(managed))
         config.validate()
         return config
 
     def validate(self):
+        if self.managed_host is not None and (self.host_full_access is not None or
+                self.managed_host.get('HOME')!=str(self.home) or
+                self.managed_host.get('TMPDIR',str(self.temporary))!=str(self.temporary)):
+            raise ValueError("managed Claude environment scope")
         for name in PATHS:
             path = getattr(self, name)
             if not isinstance(path, Path) or not path.is_absolute():
@@ -129,6 +140,13 @@ class ClaudeOwnedSession:
             raise ValueError("owned Claude process already issued")
         self._owned_child = child
 
+    def validate_execution(self):
+        if self._config.managed_host is not None:
+            import ctypes
+            import os
+            if os.geteuid()==0 or ctypes.CDLL(None).prctl(39,0,0,0,0)!=1:
+                raise ValueError('managed Claude requires unprivileged no_new_privs execution')
+
     @property
     def max_provider_frame(self):
         # Full-access init/tool-result frames carry real settings and outputs.
@@ -137,7 +155,7 @@ class ClaudeOwnedSession:
     @property
     def uncontained(self):
         """Host full access launches the native directly, like V1 executors."""
-        return self._config.host_full_access is not None
+        return self._config.host_full_access is not None or self._config.managed_host is not None
 
     def command(self):
         session = ["--resume" if self.resumed else "--session-id", str(self.native)]
@@ -174,7 +192,7 @@ class ClaudeOwnedSession:
             # The real executor environment; the account reference still wins.
             # Each turn is a new process, so detached background tasks would be
             # killed while the turn reports completion (same reason as V1).
-            environment = dict(self._config.host_full_access,
+            environment = dict(self._config.host_full_access or self._config.managed_host,
                                CLAUDE_CONFIG_DIR=str(self._config.account),
                                CLAUDE_CODE_DISABLE_BACKGROUND_TASKS="1")
 

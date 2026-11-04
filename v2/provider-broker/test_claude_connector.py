@@ -8,6 +8,29 @@ from claude_connector import ClaudeConfiguration
 
 
 class ClaudeLauncherTests(unittest.TestCase):
+    def test_managed_host_is_explicit_distinct_and_account_environment_stays_fixed(self):
+        import json
+        with tempfile.TemporaryDirectory(prefix="claude-managed-synthetic-") as directory:
+            root=Path(directory).resolve();native=root/'native';native.write_text('synthetic')
+            value={key:str(native if key=='executable' else root) for key in
+                   ('executable','account','workspace','home','temporary')}
+            value['managed_host']={'environment':{'HOME':str(root),'PATH':'/usr/bin:/bin'}}
+            path=root/'profile.json';path.write_text(json.dumps(value))
+            config=ClaudeConfiguration.load(path)
+            self.assertIsNone(config.host_full_access)
+            session=config.new_session()
+            self.assertTrue(session.uncontained)
+            self.assertEqual(session.environment()['CLAUDE_CONFIG_DIR'],str(root))
+            self.assertNotIn('sudo',session.command())
+            import ctypes
+            if os.geteuid()==0 or ctypes.CDLL(None).prctl(39,0,0,0,0)!=1:
+                with self.assertRaises(ValueError):session.validate_execution()
+            value['host_full_access']=value['managed_host'];path.write_text(json.dumps(value))
+            with self.assertRaises(ValueError):ClaudeConfiguration.load(path)
+            value.pop('host_full_access');value['managed_host']['environment']['HOME']='/other'
+            path.write_text(json.dumps(value))
+            with self.assertRaises(ValueError):ClaudeConfiguration.load(path)
+
     def test_fresh_session_fixed_options_and_clean_environment(self):
         with tempfile.TemporaryDirectory(prefix="claude-launcher-synthetic-") as root:
             root = Path(root).resolve()

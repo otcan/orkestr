@@ -54,6 +54,12 @@ impl ChildDirectories {
         &self.workspace
     }
 
+    pub(super) fn has_claude_preferences(&self) -> bool {
+        self.claude_launch
+            .as_ref()
+            .is_some_and(|(model, effort)| model.is_some() || effort.is_some())
+    }
+
     pub(super) fn configure(&self, command: &mut Command) {
         // No parent environment lookup and no generic environment override API.
         command.current_dir(&self.workspace);

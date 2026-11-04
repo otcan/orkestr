@@ -393,3 +393,21 @@ Standalone privileged operator terminals remain outside managed executor
 isolation. Source provenance cannot defend against a trusted privileged operator
 editing authority state. No live service, account, terminal, sudoers or deployment
 is changed by these tests.
+
+### Staged managed Claude Deep
+
+An optional `claude.managed_host` plan object contains exactly `environment` with
+fixed `HOME`, `PATH` and optional `TMPDIR` matching the pinned Claude home/temp.
+It requires the explicit identity split and excludes `host_full_access`. Account
+selecting credential environment keys are refused. The protected private Claude
+profile retains this distinct name; it never aliases legacy full root access.
+The managed broker and native require non-root execution with inherited NNP;
+there is no shell command, path or environment override in the launch request.
+
+`--provider claude` selects the same disposable HTTP rehearsal using fixed native
+stream JSON. It asserts actual executor UID, NNP, authority Core read denial,
+accepted completion and successful actual-tree reap. This qualifies fresh default
+Deep only. Claude Fast and explicit model/effort preferences are currently refused
+until separately typed and qualified; resume stays refused. Existing provider
+policy refusal handling is preserved. Privileged helpers and full workflow parity
+remain outstanding, so production split startup remains gated.

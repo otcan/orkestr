@@ -74,7 +74,7 @@ class Launcher:
 
     def launch(self,request,descriptors,register,deadline):
         require(exists(self.server) and self.server['uid']==self.package.authority_uid,'launch_server_changed')
-        require(request['role'] in self.package.role_profiles and request['mode']=='fresh' and request['role'] in ('deep','fast'),
+        require((request['role'] in self.package.role_profiles or request['role']=='claude' and self.package.claude is not None) and request['mode']=='fresh' and request['role'] in ('deep','fast','claude'),
                 'split_launch_mode_unsupported')
         self.source_fds(descriptors)
         proxy=process(request['proxy_pid'])
@@ -82,7 +82,7 @@ class Launcher:
                 and proxy['uid']==self.package.authority_uid,'launch_proxy_incarnation')
         expected=[str(Path('/usr/bin/python3').resolve()).encode(),b'-I',b'-S',b'-B',
                   bytes(self.package.root/'codex_service/entry.py'),
-                  b'broker' if request['role']=='deep' else b'broker-fast',
+                  ('broker' if request['role']=='deep' else 'broker-'+request['role']).encode(),
                   b'open-owned-session',b'--protocol',b'orkestr-v2-provider-broker-v1']
         proc=Path('/proc',str(proxy['pid']))
         # The source retains its original Child immediately after spawn. Its

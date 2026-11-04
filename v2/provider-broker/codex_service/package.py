@@ -206,7 +206,7 @@ class Package:
                 and type(beta["schema_version"]) is int and beta["schema_version"] == 1,
                 "beta_format")
         if self.identity_split:
-            require(not any(key in beta for key in ("roles", "host_full_access", "claude", "workspace_exec", "additional_workspace_exec")),
+            require(not any(key in beta for key in ("roles", "host_full_access", "workspace_exec", "additional_workspace_exec")),
                     "split_privileged_or_advanced_mode_unsupported")
             require(beta.get("identity_split") == {"authority_uid": self.authority_uid,
                     "executor_uid": self.executor_uid, "shared_gid": self.gid}, "beta_identity_binding")
@@ -310,14 +310,31 @@ class Package:
                 and type(selected["default"]) is bool
                 and launcher.stat().st_mode & 0o111, "claude_launcher_binding")
         private_config = metadata(self.root / "claude-private.json")
+        access_key="managed_host" if self.identity_split else "host_full_access"
         require(type(private_config) is dict and set(private_config) == {"executable", "account",
-                "workspace", "home", "temporary", "host_full_access"}
+                "workspace", "home", "temporary", access_key}
                 and private_config["workspace"] == selected["workspace"]
-                and type(private_config["host_full_access"]) is dict, "claude_profile")
+                and type(private_config[access_key]) is dict, "claude_profile")
         paths = {key: Path(private_config[key]) for key in ("executable", "account", "workspace",
                                                             "home", "temporary")}
-        require(all(p.is_absolute() and p.resolve(strict=True) == p for p in paths.values()),
-                "claude_profile_paths")
+        if self.identity_split:
+            require(not selected.get('fast',False),'managed_claude_fast_unqualified')
+            access=private_config[access_key]
+            environment=access.get('environment')
+            require(set(access)=={'environment'} and type(environment) is dict and
+                    {'HOME','PATH'}<=set(environment) and len(environment)<=256 and
+                    environment['HOME']==str(paths['home']) and
+                    environment.get('TMPDIR',str(paths['temporary']))==str(paths['temporary']) and
+                    all(type(k) is str and type(v) is str and k and '=' not in k and
+                        '\0' not in k+v and len(v)<=16384 for k,v in environment.items()) and
+                    not {'ANTHROPIC_API_KEY','ANTHROPIC_AUTH_TOKEN','CLAUDE_CODE_OAUTH_TOKEN',
+                         'CLAUDE_CONFIG_DIR'}&set(environment),'managed_claude_environment')
+        require(all(p.is_absolute() and '..' not in p.parts for p in paths.values()),"claude_profile_paths")
+        if not self.identity_split or os.geteuid() in (0,self.executor_uid):
+            require(all(p.resolve(strict=True)==p for p in paths.values()),"claude_profile_paths")
+        if self.identity_split:
+            for key,p in paths.items():
+                if key!='executable':self.private(p,self.uid,True)
         workspace = self.private(paths["workspace"], self.uid, True)
         state = [self.private(paths[key], self.uid, True) for key in ("home", "temporary")]
         for a in [workspace, *state]:

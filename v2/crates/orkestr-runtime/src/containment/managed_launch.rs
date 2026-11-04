@@ -82,6 +82,7 @@ pub(super) fn configuration(program: &Path) -> Result<Option<Configuration>, Err
     let role = match program.file_name().and_then(|v| v.to_str()) {
         Some("launcher.py") => "deep",
         Some("launcher-fast.py") => "fast",
+        Some("launcher-claude.py") => "claude",
         _ => return Err(Error::Unsupported),
     };
     Ok(Some(Configuration { role: role.into() }))

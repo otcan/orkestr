@@ -129,6 +129,8 @@ class Pump:
 
     def launch(self):
         # A private native group can be killed without killing this subreaper.
+        if hasattr(self.config, "validate_execution"):
+            self.config.validate_execution()
         become_subreaper()
         command = self.config.command()
         if getattr(self.config, "uncontained", False) is not True:

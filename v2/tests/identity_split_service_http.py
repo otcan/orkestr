@@ -29,7 +29,7 @@ from test_codex_service_identity import SplitPackageTests
 from codex_bounded.trust import digest,process,exists
 from codex_service.manager import Manager
 from codex_service.channel import ServerPeer
-from codex_service.package import Package
+from codex_service.package import Package,CLAUDE_BROKER
 from codex_service.entry import verified,write_seal
 
 
@@ -43,7 +43,8 @@ def wait(operation,label,seconds=15):
 
 
 class Rehearsal:
-    def __init__(self,binary):
+    def __init__(self,binary,provider='codex'):
+        self.provider=provider
         self.fixture=ServiceFixture();self.uid=UID;self.gid=GID;self.digest=digest
         with socket.socket() as listener:
             listener.bind(('127.0.0.1',0));self.port=listener.getsockname()[1]
@@ -73,7 +74,42 @@ class Rehearsal:
                         str(ROOT/'v2/tests/selected_codex_roles_native.c'),'-o',str(self.package.root/'native')],
                        check=True,capture_output=True,env={'PATH':'/usr/bin:/bin'})
         os.chown(self.package.root/'native',0,GID);(self.package.root/'native').chmod(0o550)
+        if provider=='claude':self.configure_claude()
         self.refresh_manifest()
+
+    def configure_claude(self):
+        """Fixed synthetic Claude with executor NNP and real Core-read denial."""
+        directories={}
+        for key in ('account','workspace','home','temporary'):
+            path=self.fixture.root/('claude-'+key);path.mkdir(mode=0o700);os.chown(path,UID,GID)
+            directories[key]=str(path)
+        executable=self.fixture.root/'synthetic-claude'
+        proof=("import ctypes,os\nassert os.geteuid()==%d\nassert ctypes.CDLL(None).prctl(39,0,0,0,0)==1\n"
+               "try:\n open(%r,'rb')\nexcept PermissionError:pass\nelse:raise AssertionError('Core exposed')\n"%
+               (UID,str(self.package.data/'core.sqlite3')))
+        native=(ROOT/'v2/tests/service_claude_native.py').read_text()
+        executable.write_text(native.replace('import json',proof+'\nimport json',1));executable.chmod(0o555)
+        package=self.package.root
+        interpreter=str(Path('/usr/bin/python3').resolve())
+        launcher=package/'launcher-claude.py'
+        launcher.write_text('#!/bin/sh\nexec '+interpreter+' -I -S -B "$(dirname -- "$0")/codex_service/entry.py" broker-claude "$@"\n')
+        launcher.chmod(0o550);os.chown(launcher,0,GID)
+        private={**directories,'executable':str(executable),
+                 'managed_host':{'environment':{'HOME':directories['home'],'PATH':'/usr/bin:/bin',
+                                               'TMPDIR':directories['temporary']}}}
+        profile=package/'claude-private.json';profile.write_text(json.dumps(private));profile.chmod(0o440);os.chown(profile,0,GID)
+        beta_path=package/'beta.json';beta=json.loads(beta_path.read_text())
+        beta['claude']={'launcher':str(launcher),'launcher_sha256':digest(launcher),
+                        'workspace':directories['workspace'],'default':True,'fast':False}
+        beta_path.write_text(json.dumps(beta))
+        manifest_path=package/'manifest.json';manifest=json.loads(manifest_path.read_text())
+        for name in CLAUDE_BROKER:
+            destination=package/'broker'/name
+            if not destination.exists():
+                shutil.copyfile(ROOT/'v2/provider-broker'/name,destination);destination.chmod(0o440);os.chown(destination,0,GID)
+            manifest['files']['broker/'+name]=digest(destination)
+        for name in ('launcher-claude.py','claude-private.json'):manifest['files'][name]=digest(package/name)
+        manifest_path.write_text(json.dumps(manifest))
 
     def refresh_manifest(self):
         path=self.fixture.package/'manifest.json';value=json.loads(path.read_text())
@@ -189,7 +225,8 @@ class Rehearsal:
                 db.execute('PRAGMA query_only=ON')
                 return db.execute("SELECT id,state,native_session_id FROM production_runs WHERE message_id=? AND role='deep' AND state='succeeded'",(admitted['message_id'],)).fetchone()
         row=wait(accepted,'Core accepted synthetic Codex completion',seconds=30)
-        trace=self.fixture.account/'sessions/synthetic-role.jsonl'
+        trace=(self.fixture.account/'sessions/synthetic-role.jsonl' if self.provider=='codex' else
+               self.fixture.root/'claude-workspace/claude-peer.jsonl')
         records=[json.loads(line) for line in trace.read_text().splitlines()]
         assert any(r['kind']=='turn' for r in records)
         children=[record.identity for window in self.manager.windows.values() for record in window.children.records.values()]
@@ -200,26 +237,28 @@ class Rehearsal:
         return dict(core_run_id=row[0],core_run_state=row[1],native_session_id=row[2],
                     authority_uid=self.package.authority_uid,executor_uid=UID,managed_children=children,
                     synthetic_native_turns=sum(r['kind']=='turn' for r in records),
-                    actual_provider=False,live_activation=False,production_startup_gate_bypassed_only_in_test=True)
+                    provider=self.provider,actual_provider=False,live_activation=False,production_startup_gate_bypassed_only_in_test=True)
 
     def close(self):
         self.pump_stop.set()
         if self.pump:self.pump.join(timeout=3)
-        if self.manager:
-            clean=self.manager.close()
-            if self.process and self.process.stderr:self.process.stderr.close()
-            self.process=None
-            assert clean,'managed shutdown failed custody/reap proof'
-        else:self.stop_raw()
-        self.fixture.close()
+        try:
+            if self.manager:
+                clean=self.manager.close()
+                if self.process and self.process.stderr:self.process.stderr.close()
+                self.process=None
+                assert clean,'managed shutdown failed custody/reap proof'
+            else:self.stop_raw()
+        finally:self.fixture.close()
 
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('binary');parser.add_argument('--report',required=True)
+    parser.add_argument('--provider',choices=('codex','claude'),default='codex')
     args=parser.parse_args();assert os.geteuid()==0,'root-only synthetic test'
     os.umask(0o077)
-    case=Rehearsal(args.binary);report={'passed':False,'actual_provider':False,'live_activation':False}
+    case=Rehearsal(args.binary,args.provider);report={'passed':False,'actual_provider':False,'live_activation':False}
     try:report.update(case.run(),passed=True)
     except BaseException as error:
         report['error_type']=type(error).__name__;report['fixture']=str(case.fixture.root)

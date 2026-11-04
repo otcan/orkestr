@@ -122,7 +122,7 @@ def decode(raw):
     if operation == "launch_child":
         require(type(value["proxy_pid"]) is int and 1 < value["proxy_pid"] < 2**31 and
                 type(value["proxy_start"]) is int and 0 < value["proxy_start"] < 2**53, "proxy_locator")
-        require(value["role"] in ("deep", "fast", "worker-0", "worker-1", "worker-2", "worker-3")
+        require(value["role"] in ("deep", "fast", "claude", "worker-0", "worker-1", "worker-2", "worker-3")
                 and value["mode"] == "fresh", "launch_mode")
         require(type(value["bind_deadline_ms"]) is int and 0 < value["bind_deadline_ms"] < 2**53,
                 "bind_deadline")

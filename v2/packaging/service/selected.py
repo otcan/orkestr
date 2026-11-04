@@ -108,13 +108,23 @@ def claude_inventory(manager):
 def claude(plan):
     """Optional Claude Deep/Fast window runtime; requires host full access."""
     value = plan['claude']
-    require(type(value) is dict and set(value) - {'default', 'fast'} == set(CLAUDE_PATHS)
+    require(type(value) is dict and set(value) - {'default', 'fast', 'managed_host'} == set(CLAUDE_PATHS)
             and all(type(value.get(k, False)) is bool for k in ('default', 'fast')),
             'closed Claude plan required')
     require(all(type(value[k]) is str and value[k].startswith('/') and '\x00' not in value[k]
                 and '..' not in Path(value[k]).parts for k in CLAUDE_PATHS), 'absolute Claude paths required')
     access = plan.get('host_full_access')
-    require(type(access) is dict, 'Claude windows require host_full_access')
+    managed=value.get('managed_host')
+    require((type(access) is dict) != (type(managed) is dict), 'Claude windows require one explicit host profile')
+    if managed is not None:
+        require('authority_uid' in plan and type(managed) is dict and set(managed)=={'environment'},
+                'managed Claude requires identity split')
+        require(not value.get('fast',False),'managed Claude Fast requires typed role separation')
+        validate_host_full_access(dict(providers=False,environment=managed['environment']))
+        require(managed['environment']['HOME']==value['home'] and
+                managed['environment'].get('TMPDIR',value['temporary'])==value['temporary'],
+                'managed Claude environment scope')
+        access=managed
     require(not CLAUDE_FORBIDDEN_ENV & set(access['environment']),
             'host environment must not select a Claude account')
     return value
@@ -231,7 +241,7 @@ def prepare(plan):
             identity={'split':False, 'authority_uid':uid,
                       'provider_home':str(Path(plan['home'])/'provider-home')}
         if identity['split']:
-            require(not any(key in plan for key in ('roles','host_full_access','claude','workspace_exec','additional_workspace_exec')),
+            require(not any(key in plan for key in ('roles','host_full_access','workspace_exec','additional_workspace_exec')),
                     'split privileged/advanced mode requires a separately qualified scoped broker')
         home=trust.private(plan['home'],identity['authority_uid'],True)
         trust.private(home/'data',identity['authority_uid'],True)
@@ -356,8 +366,11 @@ def prepare(plan):
             if claude_plan:
                 launcher=inner/'launcher-claude.py'
                 write(launcher,entry(inner,'broker-claude'),gid,True)
-                private={**{k:claude_plan[k] for k in CLAUDE_PATHS},
-                         'host_full_access':{'environment':plan['host_full_access']['environment']}}
+                private={k:claude_plan[k] for k in CLAUDE_PATHS}
+                if 'managed_host' in claude_plan:
+                    private['managed_host']=claude_plan['managed_host']
+                else:
+                    private['host_full_access']={'environment':plan['host_full_access']['environment']}
                 write(inner/'claude-private.json',encoded(private),gid)
                 beta['claude']={'launcher':str(launcher),'launcher_sha256':pin(launcher)['sha256'],
                                 'workspace':claude_plan['workspace'],'default':claude_plan.get('default',False),

@@ -187,7 +187,8 @@ class Children:
                 and identity["uid"] == self.package.executor_uid and exists(identity),
                 "managed_launch_scope")
         key = (identity["pid"], identity["start"])
-        require(key not in self.brokers and receipt.role in self.package.role_profiles,
+        require(key not in self.brokers and (receipt.role in self.package.role_profiles or
+                receipt.role=='claude' and self.package.claude is not None),
                 "managed_launch_reused")
         record = self.remember(identity)
         self.brokers.add(key)

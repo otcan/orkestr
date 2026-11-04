@@ -72,8 +72,10 @@ def main(root):
         require(parent > 1 and libc.prctl(1, signal.SIGKILL, 0, 0, 0) == 0
                 and os.getppid() == parent, "broker_parent_death")
         config = ClaudeConfiguration.load(package.root / "claude-private.json")
-        require(config.host_full_access is not None, "claude_full_access_required")
-        config = conversation_workspace(config, package.beta, os.getcwd())
+        require((config.managed_host is not None and package.identity_split) or
+                (config.host_full_access is not None and not package.identity_split), "claude_host_profile_required")
+        if not package.identity_split:
+            config = conversation_workspace(config, package.beta, os.getcwd())
         with socket.socket(fileno=3) as handoff:
             require(handoff.family == socket.AF_UNIX and handoff.type == socket.SOCK_STREAM,
                     "private_writer_endpoint")
