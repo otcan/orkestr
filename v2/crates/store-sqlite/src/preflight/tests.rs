@@ -525,7 +525,11 @@ async fn populated_payload_prefix_upgrade_preserves_all_rows_and_foreign_links()
             .fetch_one(&mut conn)
             .await
             .unwrap(),
-        sqlx::migrate!("./migrations").iter().last().unwrap().version
+        sqlx::migrate!("./migrations")
+            .iter()
+            .last()
+            .unwrap()
+            .version
     );
     for table in [
         "history_imports",
