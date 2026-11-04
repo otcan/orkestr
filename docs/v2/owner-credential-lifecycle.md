@@ -59,5 +59,32 @@ client stays refused for unchanged credentials; an operator's replacement of
 the protected file permits a new authenticated login on the next attempt. It
 does not replay the failed mutation or turn an uncertain outcome into success.
 
+### Provision a consumer's private credential
+
+From the pinned source checkout, run the helper as the account that will own the
+consumer's file. Supply the reviewed origin, loopback address, owner UUID and full
+deployed source commit. The output directory must already be private (0700) with
+trusted parents; the output file must not exist.
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 python3 -B -m v2.compat.v1_runtime.provision_service_credential \
+  --origin https://example.test --loopback-url http://127.0.0.1:19822 \
+  --expected-owner OWNER_UUID --expected-source FULL_DEPLOYED_COMMIT \
+  --credentials-path /private/operator/owner.json \
+  --output /private/operator/adapter-service.json --label whatsapp-adapter
+```
+
+The helper checks the exact server build before sending credentials, issues one
+key, verifies a service exchange using the consumer's actual client, and publishes
+only `{service_token}` in a new 0600 file. It preserves the human credential file
+and never prints secrets. Failed verification revokes a known issued key. An
+unknown creation outcome requires checking the credential metadata before any
+retry. The helper logs out its temporary cookies and reports the credential ID
+and thirty-day lifetime; keep that metadata for explicit renewal/revocation.
+
+Provisioning does not activate the file, restart a consumer or enable rotation.
+Change each consumer's reference through its normal deployment process and
+verify it independently. Renew service credentials before the thirty-day expiry.
+
 The implementation does not by itself migrate live consumers or provide a
 forgotten-password recovery CLI. Those remain release acceptance requirements.

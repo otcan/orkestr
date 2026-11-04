@@ -174,11 +174,11 @@ class RustSession:
                    "Connection": "close"}
         if cookie and path != "/api/v2/health":
             headers["Cookie"] = cookie
-        if method == "POST":
+        if method in ("POST", "PUT", "PATCH", "DELETE"):
             headers["Content-Type"] = "application/json"
             if path != SERVICE_SESSION:
                 headers["Origin"] = self.origin
-            if path not in (SESSION, SERVICE_SESSION):
+            if method != "POST" or path not in (SESSION, SERVICE_SESSION):
                 headers["X-Orkestr-CSRF"] = csrf
         connection = http.client.HTTPConnection(self.host, self.port, timeout=timeout_s)
         started, timer = time.monotonic(), None

@@ -11,13 +11,13 @@ needed.
 Run tests from the repository root:
 
 ```sh
-python3 -m unittest discover -s v2/compat/v1_runtime/tests -v
+PYTHONDONTWRITEBYTECODE=1 python3 -B -m unittest discover -s v2/compat/v1_runtime/tests -v
 ```
 
 Run the loopback-only service from a pinned checkout:
 
 ```sh
-python3 -m v2.compat.v1_runtime.server --config /private/operator/service.json
+PYTHONDONTWRITEBYTECODE=1 python3 -B -m v2.compat.v1_runtime.server --config /private/operator/service.json
 ```
 
 `SIGHUP` rescans the binding directory immediately; it is also rescanned every
@@ -37,7 +37,7 @@ private deployment state, never in this repository.
 | --- | --- |
 | `origin` | Canonical HTTPS Rust origin |
 | `loopback_url` | Rust API at HTTP IPv4 loopback with an explicit port |
-| `credentials_path` | Existing owner username/password JSON reference |
+| `credentials_path` | Private `{service_token}` JSON reference; legacy owner username/password remains compatible |
 | `expected_owner` | Exact Rust owner UUID |
 | `expected_source` | Pinned deployed Rust source commit |
 | `token_path` | Private JSON containing a random alphanumeric `token` of at least 32 characters |
@@ -46,7 +46,9 @@ private deployment state, never in this repository.
 | `ledger_dir` | Private directory; each binding gets `<remote_thread_id>.sqlite3` |
 
 One owner session is shared by all bindings. A 401 revokes it for every
-binding (operator review, restart required); a conversation that does not
+binding (operator review required); replacing the protected credential file
+with different credentials permits a fresh login without restarting or replaying
+an uncertain mutation. An unchanged revoked credential is never retried. A conversation that does not
 match its binding refuses only that binding. Every mutation (POST) first
 re-checks the server build identity and the session; a read reuses a check
 younger than 30 s, and any transport failure forces a new check.
