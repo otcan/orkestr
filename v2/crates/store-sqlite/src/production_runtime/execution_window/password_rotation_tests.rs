@@ -1,8 +1,9 @@
 use super::*;
 use crate::owner_password::PasswordChange;
 use crate::production_runtime::tests as fixtures;
-use orkestr_v2_application::IntakeStore;
 use orkestr_v2_application::runtime::ProductionTakeover;
+use orkestr_v2_application::IntakeStore;
+use orkestr_v2_contracts::MessageInput;
 
 #[tokio::test]
 async fn password_rotation_preserves_actual_window_bootstrap_and_issued_credentials() {
