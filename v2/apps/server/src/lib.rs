@@ -39,6 +39,8 @@ mod conversations_http;
 pub mod deploy_drain;
 mod desktop_broker;
 mod desktop_http;
+mod encrypted_upload_http;
+pub mod encrypted_upload_ingest;
 mod execution;
 mod execution_accept;
 mod execution_registry;
@@ -114,6 +116,7 @@ pub struct AppState {
     sidebar_v1: sidebar_v1::V1Cache,
     v1_uploads: message_attachments::V1Uploads,
     attachment_export: Option<Arc<message_attachments::ExportDir>>,
+    attachment_ingest: Option<Arc<encrypted_upload_ingest::Ingest>>,
     v1_chat_icons: Option<Arc<std::path::PathBuf>>,
     /// "New WhatsApp chat": owner numbers, accounts and the adapter client.
     whatsapp_chats: Option<Arc<whatsapp_chats::WhatsAppChats>>,
@@ -234,6 +237,22 @@ impl AppState {
         self.attachment_export = Some(Arc::new(export));
         self
     }
+    pub fn with_attachment_ingest_file(
+        mut self,
+        path: &std::path::Path,
+    ) -> Result<Self, &'static str> {
+        self.attachment_ingest = Some(Arc::new(encrypted_upload_ingest::Ingest::load(path)?));
+        Ok(self)
+    }
+    pub fn with_attachment_ingest_home(
+        mut self,
+        home: &std::path::Path,
+    ) -> Result<Self, &'static str> {
+        self.attachment_ingest = Some(Arc::new(encrypted_upload_ingest::Ingest::provision(
+            &home.join("keys/attachment-ingest.age"),
+        )?));
+        Ok(self)
+    }
     /// Trusted startup only: the private V1 desktop broker client configuration.
     pub fn with_desktop_broker_file(
         mut self,
@@ -318,6 +337,7 @@ impl AppState {
             sidebar_v1: sidebar_v1::V1Cache::default(),
             v1_uploads: Default::default(),
             attachment_export: None,
+            attachment_ingest: None,
             v1_chat_icons: None,
             whatsapp_chats: None,
             password_rotation_ready: false,
@@ -559,6 +579,7 @@ pub fn router_with_google_catalog(
         .merge(desktop_http::router())
         .merge(sidebar_http::router())
         .merge(message_attachments::router())
+        .merge(encrypted_upload_http::router())
         .merge(attachment_keys_http::router())
         .merge(message_times_http::router())
         .merge(conversation_posts_http::router())

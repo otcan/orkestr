@@ -44,12 +44,40 @@ impl AttachTarget {
 struct Picked {
     #[serde(default)]
     files: Vec<Value>,
+    #[serde(default)]
+    receipts: Vec<MessageAttachmentReceipt>,
     error: Option<String>,
 }
 
 fn helper(call: &str) -> String {
     let source = include_str!("attach_files.mjs").replace("export ", "");
-    format!("{source}\n{call}")
+    format!("{source}\nconst describeFiles=describe;\n{call}")
+}
+
+fn file_helper(call: &str, target: &AttachTarget, csrf: &str) -> String {
+    match target {
+        AttachTarget::V1(_) => helper(call),
+        AttachTarget::Native(conversation) => {
+            let source = include_str!("attach_files.mjs").replace("export ", "");
+            let context = json!({"conversation":conversation,"csrf":csrf});
+            format!("{source}\nconst module=await import('/encrypted_upload.js'); const describeFiles=module.nativeDescribe({context});\n{call}")
+        }
+    }
+}
+
+fn accept_receipts(
+    receipts: Vec<MessageAttachmentReceipt>,
+    mut attached: Signal<Vec<Attached>>,
+) -> bool {
+    if receipts.iter().any(|r| !r.is_valid()) {
+        return false;
+    }
+    for receipt in receipts {
+        attached
+            .write()
+            .extend(composer_attachments::from_receipt(receipt));
+    }
+    true
 }
 
 /// Attach (file picker) and Paste text (long text as a `.txt` file). Files
@@ -105,6 +133,8 @@ pub fn AttachTools(
         }
     };
     let pick_upload = upload.clone();
+    let pick_target = target.clone();
+    let pick_csrf = csrf.clone();
     let paste_upload = upload.clone();
     // Files dropped onto the conversation or images pasted into the composer
     // upload like Attach. The listener lives as long as this component.
@@ -128,11 +158,19 @@ pub fn AttachTools(
         let id = tools_id.clone();
         let gate = gate.clone();
         let upload = upload.clone();
+        let target = target.clone();
+        let csrf = csrf.clone();
         use_future(move || {
-            let (id, gate, upload) = (id.clone(), gate.clone(), upload.clone());
+            let (id, gate, upload, target, csrf) = (
+                id.clone(),
+                gate.clone(),
+                upload.clone(),
+                target.clone(),
+                csrf.clone(),
+            );
             async move {
-                let mut eval = document::eval(&helper(
-                    "return await watchDrops(document, await dioxus.recv(), dioxus);",
+                let mut eval = document::eval(&file_helper(
+                    "return await watchDrops(document, await dioxus.recv(), dioxus, describeFiles);",&target,&csrf,
                 ));
                 if eval.send(json!(id)).is_err() {
                     return;
@@ -141,6 +179,10 @@ pub fn AttachTools(
                 while let Ok(picked) = eval.recv::<Picked>().await {
                     if !mounted() {
                         return;
+                    }
+                    if !accept_receipts(picked.receipts.clone(), attached) {
+                        status.set("Upload reply could not be verified.".into());
+                        continue;
                     }
                     match picked {
                         Picked {
@@ -161,8 +203,12 @@ pub fn AttachTools(
             button { r#type: "button", class: "tool-button", disabled: disabled || busy(), "aria-label": "Attach a file or image",
                 onclick: move |_| {
                     let upload = pick_upload.clone();
+                    let target=pick_target.clone();let csrf=pick_csrf.clone();
                     spawn(async move {
-                        let picked = document::eval(&helper("return await pick(document);")).join::<Picked>().await;
+                        busy.set(true);status.set("Uploading…".into());
+                        let picked = document::eval(&file_helper("return await pick(document, describeFiles);",&target,&csrf)).join::<Picked>().await;
+                        busy.set(false);status.set(String::new());
+                        if let Ok(picked)=&picked {if !accept_receipts(picked.receipts.clone(),attached){status.set("Upload reply could not be verified.".into());return;}}
                         match picked {
                             Ok(Picked { error: Some(error), .. }) => status.set(error),
                             Ok(Picked { files, .. }) if !files.is_empty() => upload(files),

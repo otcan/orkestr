@@ -62,6 +62,8 @@ jobs:
           bash apps/ui/scripts/bundle.sh
       - name: Browser tracker recovery and request boundary unit tests
         run: node --test v2/apps/ui/tests/tracker_client.test.mjs v2/apps/ui/tests/selected_conversation.test.mjs
+      - name: Bounded encrypted upload and composer tests
+        run: node --test v2/apps/ui/src/attachments/encrypted_upload.test.mjs v2/apps/ui/src/attachments/encrypted_composer.test.mjs v2/apps/ui/tests/composer_tools.test.mjs
       - name: CI headless rendering with synthetic data
         run: node v2/ci/headless-rendering.mjs
       - name: CI configured workspace rendering against a synthetic API

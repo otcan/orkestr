@@ -143,7 +143,7 @@ fn derived(key: &str, label: &str) -> Uuid {
     uuid::Builder::from_random_bytes(bytes).into_uuid()
 }
 
-fn extension(media_type: &str, filename: &str) -> String {
+pub(crate) fn extension(media_type: &str, filename: &str) -> String {
     match media_type {
         "image/jpeg" => ".jpg".into(),
         "image/png" => ".png".into(),

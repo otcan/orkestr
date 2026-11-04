@@ -148,6 +148,11 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     state = state.with_attachment_export(
         orkestr_v2_server::message_attachments::ExportDir::from_env(&home),
     );
+    if let Some(path) = std::env::var_os("ORKESTR_V2_ATTACHMENT_INGEST_IDENTITY_FILE") {
+        state = state.with_attachment_ingest_file(&PathBuf::from(path))?;
+    } else {
+        state = state.with_attachment_ingest_home(&home)?;
+    }
     if let Some(dir) = std::env::var_os(orkestr_v2_server::thread_icons::V1_ICONS_ENV)
         .map(PathBuf::from)
         .filter(|p| p.is_absolute())

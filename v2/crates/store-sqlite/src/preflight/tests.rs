@@ -425,6 +425,8 @@ async fn populated_payload_prefix_upgrade_preserves_all_rows_and_foreign_links()
         "production_parallel_deep_withdrawals",
         "agent_timer_limits",
         "service_credentials",
+        "encrypted_uploads",
+        "encrypted_upload_chunks",
     ] {
         expected.insert(table.into(), Vec::new());
     }

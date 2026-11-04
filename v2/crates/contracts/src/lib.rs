@@ -342,6 +342,9 @@ pub use steering::*;
 mod attachments;
 pub use attachments::*;
 
+mod encrypted_upload;
+pub use encrypted_upload::*;
+
 mod attachment_transfer;
 pub use attachment_transfer::*;
 
