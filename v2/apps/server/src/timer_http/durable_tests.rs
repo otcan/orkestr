@@ -425,36 +425,71 @@ async fn expired_session_still_refuses_startup() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
-// ORK: the regression itself. A writer holding the database longer than the pool's
-// five-second busy_timeout makes the supervisor call fail with Unavailable. Before
-// the fix that ended the controller and took the whole server with it; now the
-// lease is still valid, so the controller waits and continues once the lock clears.
-//
-// IGNORED BY DEFAULT: this test is timing-based (it depends on busy_timeout being
-// exceeded) and was authored on a host where the workspace could not be built, so
-// it has never been executed. Run it explicitly on a build host, confirm it fails
-// against the unpatched controller, then remove the ignore.
+// ORK: the regression itself. A writer holding the database past the pool's
+// five-second busy_timeout makes the supervisor call fail with Unavailable.
+// Before the fix that ended the controller and took the whole server with it.
+// The lock is taken AFTER the controller is established, so this exercises the
+// per-second heartbeat and the pass() candidates query - the paths that failed
+// in production - rather than the startup renewal.
 #[tokio::test]
-#[ignore = "timing-based; never executed - validate on a build host before trusting"]
 async fn transient_store_lock_does_not_end_the_controller() {
-    let (store, _other, _, _, _, dir) = fixture().await;
-    let bound = store.authorize_timer_supervisor(MACHINE).await.unwrap();
-    // Hold an exclusive write lock for longer than busy_timeout, then release it.
+    let (store, bound, _, _, _, dir) = fixture().await;
+    let (shutdown, receiver) = tokio::sync::watch::channel(false);
+    let controller = tokio::spawn(DurableTimerController::new(bound).run(receiver));
+    // Let several heartbeats be accepted before contention starts.
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    assert!(
+        !controller.is_finished(),
+        "controller died before any contention"
+    );
     let mut holder = std::process::Command::new("python3")
         .arg("-c")
-        .arg("import sqlite3,sys,time; c=sqlite3.connect(sys.argv[1], isolation_level=None); \
-              c.execute('BEGIN EXCLUSIVE'); time.sleep(8); c.execute('COMMIT'); c.close()")
+        .arg(
+            "import sqlite3,sys,time; c=sqlite3.connect(sys.argv[1], isolation_level=None); \
+              c.execute('BEGIN EXCLUSIVE'); time.sleep(8); c.execute('COMMIT'); c.close()",
+        )
         .arg(dir.join("core.sqlite3"))
         .spawn()
         .unwrap();
-    let (shutdown, receiver) = tokio::sync::watch::channel(false);
-    let controller = tokio::spawn(DurableTimerController::new(bound).run(receiver));
-    // Well past the lock's lifetime: an unpatched controller has already exited.
-    tokio::time::sleep(Duration::from_secs(14)).await;
-    assert!(!controller.is_finished(), "a transient lock ended the controller");
-    let _ = shutdown.send(true);
-    controller.await.unwrap().unwrap();
+    // Past busy_timeout (5 s) and past the lock's lifetime (8 s): an unpatched
+    // controller has already returned Unauthorized and stopped the server.
+    tokio::time::sleep(Duration::from_secs(12)).await;
+    assert!(
+        !controller.is_finished(),
+        "a transient store lock ended the controller"
+    );
     let _ = holder.wait();
+    let _ = shutdown.send(true);
+    tokio::time::timeout(Duration::from_secs(10), controller)
+        .await
+        .expect("controller did not observe shutdown")
+        .unwrap()
+        .unwrap();
+    store.close().await;
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+// ORK: the other half of the contract. A revoked session is real authority loss
+// and must still terminate the controller mid-run - the grace window must not
+// swallow it. Covers heartbeat_supervisor; expired_session_still_refuses_startup
+// covers renew_timer_supervisor_credential.
+#[tokio::test]
+async fn revoked_session_terminates_the_running_controller() {
+    let (store, bound, _, _, _, dir) = fixture().await;
+    let (_shutdown, receiver) = tokio::sync::watch::channel(false);
+    let controller = tokio::spawn(DurableTimerController::new(bound).run(receiver));
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    assert!(
+        !controller.is_finished(),
+        "controller died before revocation"
+    );
+    store.revoke_session(MACHINE).await.unwrap();
+    // Fatal on the next tick; emphatically NOT retried for SUPERVISOR_GRACE.
+    let outcome = tokio::time::timeout(Duration::from_secs(10), controller)
+        .await
+        .expect("revocation did not stop the controller")
+        .unwrap();
+    assert!(matches!(outcome, Err(HistoryError::Unauthorized)));
     store.close().await;
     std::fs::remove_dir_all(dir).unwrap();
 }

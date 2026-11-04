@@ -1,7 +1,7 @@
 //! Restart-safe controller with authenticated supervisor lifecycle.
 //! No browser credentials, instruction cache, caller clock or HTTP dispatch port.
-use orkestr_v2_store_sqlite::history_import::timers::scan_action::TimerWorkKind;
 use orkestr_v2_application::runtime::RuntimeStoreError;
+use orkestr_v2_store_sqlite::history_import::timers::scan_action::TimerWorkKind;
 use orkestr_v2_store_sqlite::{history_import::HistoryError, Store};
 use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::time::Instant;
@@ -463,7 +463,23 @@ impl DurableTimerController {
                             }
                         }
                     }
-                    self.tick().await?;
+                    match self.tick().await {
+                        Ok(_) => accepted = tokio::time::Instant::now(),
+                        // Only an unavailable store is transient here: `fn db()` and
+                        // `unavailable()` collapse every sqlx failure to this variant,
+                        // so a locked database arrives as Unavailable and nothing else
+                        // does. Authority errors keep terminating the controller.
+                        Err(HistoryError::Unavailable) if accepted.elapsed() < SUPERVISOR_GRACE => {
+                            eprintln!("timer controller pass deferred: store unavailable");
+                        }
+                        Err(error) => {
+                            eprintln!(
+                                "timer controller pass refused after {}s: {error:?}",
+                                accepted.elapsed().as_secs()
+                            );
+                            return Err(error);
+                        }
+                    }
                 }
             }
         }
