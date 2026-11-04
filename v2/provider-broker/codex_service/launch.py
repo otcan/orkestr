@@ -17,7 +17,7 @@ import tempfile
 import time
 
 from codex_bounded.trust import process, exists, protected, digest
-from .contract import require
+from .contract import require,setup_scope
 
 
 def atomic(path,value):
@@ -42,10 +42,11 @@ class ManagedSpawn:
 
 
 class Handle:
-    def __init__(self,child,path,lifecycle,proxy,window,generation):
+    def __init__(self,child,path,lifecycle,proxy,window,generation,broker):
         self.child,self.path,self.lifecycle,self.proxy=child,path,lifecycle,proxy
         self.window,self.generation=window,generation
         self.cancelled=False
+        self.broker=dict(broker)
 
 
 class Launcher:
@@ -73,8 +74,9 @@ class Launcher:
                         'launch_provider_source')
 
     def launch(self,request,descriptors,register,deadline):
+        setup_scope(request['setup'],request['role'],request['owner_id'],request['conversation_id'])
         require(exists(self.server) and self.server['uid']==self.package.authority_uid,'launch_server_changed')
-        require((request['role'] in self.package.role_profiles or request['role']=='claude' and self.package.claude is not None) and request['mode']=='fresh' and request['role'] in ('deep','fast','claude'),
+        require((request['role'] in self.package.role_profiles or request['role']=='claude' and self.package.claude is not None) and request['mode']=='fresh',
                 'split_launch_mode_unsupported')
         self.source_fds(descriptors)
         proxy=process(request['proxy_pid'])
@@ -99,19 +101,22 @@ class Launcher:
                 break
             time.sleep(.002)
         from .ownership import Process
-        frozen={key:request[key] for key in ('request_id','window_id','generation','conversation_id','role','mode')}
+        frozen={key:request[key] for key in ('request_id','window_id','generation','conversation_id','role','mode','setup')}
         frozen['server']={key:self.server[key] for key in ('pid','start','uid')}
-        # One semantic fresh launch per role/window, even if a retry invents a
-        # new request id after losing the response. More worker attempts require
-        # an additional typed Core attempt fence, not a new arbitrary UUID.
+        # One semantic launch per exact Core-issued setup in this slot/window.
+        # The opaque Runtime metadata locator attests the original setup fence;
+        # changing only request UUID can never retry a lost/unknown outcome.
         identity=hashlib.sha256(json.dumps({k:v for k,v in frozen.items() if k!='request_id'},sort_keys=True).encode()).hexdigest()
         path=self.directory/(identity+'.json')
         require(not path.exists(),'launch_outcome_already_claimed')
+        records=[json.loads(p.read_text()) for p in self.directory.glob('*.json')]
+        require(not any(record.get('proxy_pid')==proxy['pid'] and record.get('proxy_start')==proxy['start']
+                        for record in records),'launch_proxy_already_claimed')
         # Bound claims per window even when launch outcomes are unknown.
-        count=sum(1 for p in self.directory.glob('*.json') if
-                  json.loads(p.read_text()).get('window_id')==request['window_id'])
+        count=sum(1 for record in records if record.get('window_id')==request['window_id'])
         require(count<32,'launch_window_bound')
-        record={**frozen,'state':'claimed','manager_pid':os.getpid()}
+        record={**frozen,'state':'claimed','manager_pid':os.getpid(),
+                'proxy_pid':proxy['pid'],'proxy_start':proxy['start']}
         atomic(path,record)  # a crash/lost reply never authorizes another spawn
         proxy_proof=Process(proxy)
         lifecycle=socket.socket(fileno=os.dup(descriptors[3]));lifecycle.setblocking(False)
@@ -120,7 +125,7 @@ class Launcher:
         parent,capsule=socket.socketpair()
         inherited=[]
         try:
-            payload={key:request[key] for key in ('request_id','window_id','generation','role')}
+            payload={key:request[key] for key in ('request_id','window_id','generation','role','setup')}
             payload.update(server_pid=self.server['pid'],server_start=self.server['start'],
                            server_uid=self.server['uid'],manager_pid=os.getpid(),
                            manager_start=self.manager['start'],owner_id=self.package.owner,
@@ -157,7 +162,7 @@ class Launcher:
             receipt=ManagedSpawn(current,self.server,self.manager['pid'],request['window_id'],
                                  request['generation'],request['role'],proxy)
             # Register original pidfd/window/role ownership before continuation.
-            self.children[identity]=Handle(child,path,lifecycle,proxy_proof,request["window_id"],request["generation"])
+            self.children[identity]=Handle(child,path,lifecycle,proxy_proof,request["window_id"],request["generation"],current)
             register(receipt)
             require(receipt.consumed,'launch_registration_missing')
             record.update(state='spawned',broker_pid=current['pid'],broker_start=current['start'])
@@ -184,7 +189,7 @@ class Launcher:
             parent.close();capsule.close()
             for fd in inherited:os.close(fd)
 
-    def poll(self,released=lambda _window,_generation:False):
+    def poll(self,released=lambda _window,_generation,_broker:False):
         cancelled=[]
         for key,handle in list(self.children.items()):
             child,path=handle.child,handle.path
@@ -200,7 +205,7 @@ class Launcher:
             if handle.proxy.exited() and not handle.cancelled:
                 cancelled.append((handle.window,handle.generation));handle.cancelled=True
             code=child.poll()
-            if code is not None and released(handle.window,handle.generation):
+            if code is not None and released(handle.window,handle.generation,handle.broker):
                 record=json.loads(path.read_text());record['exit_code']=code
                 if handle.cancelled:record['state']='quarantined'
                 elif record['state']!='unknown':record['state']='exited'

@@ -107,6 +107,7 @@ class Children:
         self.bound = HOST_MAX_CHILDREN if self.host else MAX_CHILDREN
         self.records = {}
         self.brokers = set()
+        self.families = {}
         self.forced = self.uncertain = False
         self.uncertainty_reason = None
         self.lock = threading.RLock()
@@ -127,6 +128,7 @@ class Children:
         for key in [key for key, record in self.records.items()
                     if key not in self.brokers and record.gone()]:
             self.records.pop(key).close()
+            self.families.pop(key,None)
 
     @serialized
     def bind(self, pid, start, deadline):
@@ -172,6 +174,7 @@ class Children:
         require(exists(identity) and belongs(pid, self.server), "broker_owner_changed")
         require(time.monotonic() < deadline, "broker_pause_deadline")
         self.brokers.add(key)  # Retain original ownership BEFORE releasing launch.
+        self.families[key]={key}
         record.send(signal.SIGCONT)
         return True
 
@@ -192,6 +195,7 @@ class Children:
                 "managed_launch_reused")
         record = self.remember(identity)
         self.brokers.add(key)
+        self.families[key]={key}
         receipt.consumed = True
         record.send(signal.SIGCONT)
 
@@ -205,15 +209,19 @@ class Children:
 
     @serialized
     def observe(self):
-        pending = [self.records[key].identity for key in self.brokers]
+        for key in self.brokers:self.families.setdefault(key,{key})
+        # Retain each observed descendant's original broker assignment even
+        # when its parent exits and the root subreaper adopts it.
+        pending = [(record.identity,root) for key,record in self.records.items()
+                   for root in self.families.get(key,())]
         visited = set()
         try:
             while pending:
-                parent = pending.pop()
+                parent,root = pending.pop()
                 key = (parent["pid"], parent["start"])
-                if key in visited or not same(parent, self.allow_uid_change):
+                if (key,root) in visited or not same(parent, self.allow_uid_change):
                     continue
-                visited.add(key)
+                visited.add((key,root))
                 require(len(visited) <= self.bound, "owned_child_bound")
                 path = Path(f"/proc/{parent['pid']}/task/{parent['pid']}/children")
                 try:
@@ -236,7 +244,11 @@ class Children:
                         # A short-lived descendant (CLI helper, shell probe)
                         # exited and was reaped mid-walk. Not uncertainty.
                         continue
-                    pending.append(child)
+                    child_key=(child['pid'],child['start'])
+                    roots=self.families.setdefault(child_key,set())
+                    require(not roots or roots=={root},'owned_child_family_changed')
+                    roots.add(root)
+                    pending.append((child,root))
         except BaseException as error:
             self._observation_failed(error)
             raise
@@ -248,7 +260,7 @@ class Children:
             return
         reason = error.args[0] if error.args else None
         allowed = {"owned_child_bound", "owned_child_identity", "owned_child_metadata",
-                   "owned_process_missing", "owned_process_changed"}
+                   "owned_process_missing", "owned_process_changed","owned_child_family_changed"}
         if isinstance(reason, str) and reason in allowed:
             self.uncertainty_reason = reason
         elif isinstance(error, OSError) and error.errno in (errno.ENOENT, errno.ESRCH):
@@ -270,6 +282,15 @@ class Children:
         self.observe()
         live = self._log_live()
         return not self.uncertain and not live
+
+    @serialized
+    def released_broker(self,identity):
+        """Release one original broker tree while other window roles stay live."""
+        self.observe()
+        root=(identity['pid'],identity['start'])
+        require(root in self.brokers,'original_cleanup_proof_missing')
+        return not self.uncertain and all(record.gone() for key,record in self.records.items()
+                if root in self.families.get(key,()) or not self.families.get(key))
 
     def _log_live(self):
         """Owned identities still alive. Operator diagnostic on stderr: pid and

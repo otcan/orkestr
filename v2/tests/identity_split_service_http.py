@@ -71,11 +71,75 @@ class Rehearsal:
             path=self.fixture.workspace/name;path.write_text(value);path.chmod(0o600);os.chown(path,UID,GID)
         subprocess.run(['/usr/bin/cc','-std=c11','-O2','-Wall','-Wextra','-Werror',
                         '-DORKESTR_TEST_AUTHORITY_CORE='+json.dumps(str(self.package.data/'core.sqlite3')),
-                        str(ROOT/'v2/tests/selected_codex_roles_native.c'),'-o',str(self.package.root/'native')],
+                        str(ROOT/('v2/tests/service_roles_native.c' if provider=='workers' else
+                                  'v2/tests/selected_codex_roles_native.c')),'-o',str(self.package.root/'native')],
                        check=True,capture_output=True,env={'PATH':'/usr/bin:/bin'})
         os.chown(self.package.root/'native',0,GID);(self.package.root/'native').chmod(0o550)
         if provider=='claude':self.configure_claude()
+        if provider=='workers':self.configure_roles()
         self.refresh_manifest()
+
+    def configure_roles(self):
+        package=self.package.root
+        base=json.loads((package/'profile.json').read_text())
+        beta_path=package/'beta.json';beta=json.loads(beta_path.read_text())
+        manifest_path=package/'manifest.json';manifest=json.loads(manifest_path.read_text())
+        roles={};self.role_workspaces={'deep':self.fixture.workspace};self.role_accounts={'deep':self.fixture.account}
+        for role in ('fast','worker-0','worker-1','worker-2','worker-3'):
+            paths={}
+            for key in ('workspace','state_root'):
+                path=self.fixture.root/(role+'-'+key);path.mkdir(mode=0o700);os.chown(path,UID,GID)
+                paths[key]=str(path)
+            for name,value in [('role',role),('mode','complete')]:
+                path=Path(paths['workspace'])/name;path.write_text(value);path.chmod(0o600);os.chown(path,UID,GID)
+            self.role_workspaces[role]=Path(paths['workspace']);self.role_accounts[role]=Path(paths['state_root'])
+            profile=package/('profile-'+role+'.json');profile.write_text(json.dumps({**base,**paths}))
+            profile.chmod(0o440);os.chown(profile,0,GID)
+            launcher=package/('launcher-'+role+'.py')
+            launcher.write_text('#!/bin/sh\nexec '+str(Path('/usr/bin/python3').resolve())+
+                ' -I -S -B "$(dirname -- "$0")/codex_service/entry.py" broker-'+role+' "$@"\n')
+            launcher.chmod(0o550);os.chown(launcher,0,GID)
+            roles[role]={'launcher':str(launcher),'launcher_sha256':digest(launcher),'workspace':paths['workspace']}
+            for path in (profile,launcher):manifest['files'][path.name]=digest(path)
+        beta['roles']={'fast':roles['fast'],'workers':[roles['worker-'+str(i)] for i in range(4)]}
+        beta_path.write_text(json.dumps(beta));manifest_path.write_text(json.dumps(manifest))
+        (self.fixture.workspace/'mode').write_text('hold')
+
+    def exercise_worker_reuse(self,path):
+        def launches():
+            return [value for p in (self.package.ledger_directory/'launches').glob('*.json')
+                    if (value:=json.loads(p.read_text()))['role']=='worker-0']
+        def running():
+            code,value=self.request(path+'/execution')
+            return value if code==200 and value['phase']=='running' else None
+        parent=wait(running,'live parent Deep for workers')
+        tasks=path+'/worker-tasks?parent_run_id='+parent['run_id']
+        wait(lambda:self.request(tasks)[1]['can_create'],'Core worker scheduler')
+        completed=[]
+        for number in (41,42):
+            parent=wait(running,'exact parent control revision')
+            code,task=self.request(path+'/worker-tasks','POST',{'parent_run_id':parent['run_id'],
+                'expected_control_revision':parent['control_revision'],'request_key':'split-worker:'+str(number),
+                'title':'Synthetic split Worker','instructions':'synthetic ordinary HTTP input '+str(number),
+                'lifetime_ms':30000})
+            assert code==200,(code,task)
+            def done():
+                assert not self.pump_errors,self.pump_errors
+                code,value=self.request(tasks);assert code==200,(code,value)
+                row=next(row for row in value['tasks'] if row['task']['task_id']==task['task_id'])
+                return row if row['phase']=='completed' else None
+            completed.append(wait(done,'accepted fresh worker slot reuse',seconds=30))
+            def reaped():
+                rows=launches()
+                return rows if len(rows)==number-40 and all(row['state']=='exited' and
+                    not exists({'pid':row['proxy_pid'],'start':row['proxy_start'],'uid':self.package.authority_uid})
+                    for row in rows) else None
+            wait(reaped,'exact worker-0 proxy and real tree reap',seconds=15)
+        rows=launches()
+        assert len({row['setup']['session_id'] for row in rows})==2
+        self.worker_setups=[row['setup'] for row in rows]
+        (self.fixture.workspace/'release-1').touch()
+        return completed
 
     def configure_claude(self):
         """Fixed synthetic Claude with executor NNP and real Core-read denial."""
@@ -218,6 +282,7 @@ class Rehearsal:
             'expected_generation':0,'window_id':None,'predecessor_window_id':None},
             {})
         assert status==201,(status,window)
+        workers=self.exercise_worker_reuse(path) if self.provider=='workers' else []
         core=self.package.data/'core.sqlite3'
         def accepted():
             assert not self.pump_errors,self.pump_errors
@@ -225,7 +290,7 @@ class Rehearsal:
                 db.execute('PRAGMA query_only=ON')
                 return db.execute("SELECT id,state,native_session_id FROM production_runs WHERE message_id=? AND role='deep' AND state='succeeded'",(admitted['message_id'],)).fetchone()
         row=wait(accepted,'Core accepted synthetic Codex completion',seconds=30)
-        trace=(self.fixture.account/'sessions/synthetic-role.jsonl' if self.provider=='codex' else
+        trace=(self.fixture.account/'sessions/synthetic-role.jsonl' if self.provider!='claude' else
                self.fixture.root/'claude-workspace/claude-peer.jsonl')
         records=[json.loads(line) for line in trace.read_text().splitlines()]
         assert any(r['kind']=='turn' for r in records)
@@ -237,6 +302,7 @@ class Rehearsal:
         return dict(core_run_id=row[0],core_run_state=row[1],native_session_id=row[2],
                     authority_uid=self.package.authority_uid,executor_uid=UID,managed_children=children,
                     synthetic_native_turns=sum(r['kind']=='turn' for r in records),
+                    worker_reuse_count=len(workers),worker_setups=getattr(self,'worker_setups',[]),
                     provider=self.provider,actual_provider=False,live_activation=False,production_startup_gate_bypassed_only_in_test=True)
 
     def close(self):
@@ -255,7 +321,7 @@ class Rehearsal:
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('binary');parser.add_argument('--report',required=True)
-    parser.add_argument('--provider',choices=('codex','claude'),default='codex')
+    parser.add_argument('--provider',choices=('codex','claude','workers'),default='codex')
     args=parser.parse_args();assert os.geteuid()==0,'root-only synthetic test'
     os.umask(0o077)
     case=Rehearsal(args.binary,args.provider);report={'passed':False,'actual_provider':False,'live_activation':False}
@@ -274,6 +340,9 @@ def main():
         raise
     finally:
         try:case.close();report['cleanup_completed']=True
+        except BaseException as error:
+            report['passed']=False;report['cleanup_error']=type(error).__name__+': '+str(error)
+            raise
         finally:
             fd=os.open(args.report,os.O_CREAT|os.O_WRONLY|os.O_TRUNC,0o600)
             with os.fdopen(fd,'w') as stream:json.dump(report,stream,indent=2)

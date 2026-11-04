@@ -272,9 +272,9 @@ class Manager:
 
     def tick(self):
         if getattr(self, "launcher", None) is not None:
-            def released(window_id, generation):
+            def released(window_id, generation, broker):
                 window=self.windows.get(window_id)
-                return bool(window and window.generation==generation and window.children.released())
+                return bool(window and window.generation==generation and window.children.released_broker(broker))
             for window_id,generation in self.launcher.poll(released):
                 window=self.windows.get(window_id)
                 if window and window.generation==generation:
@@ -386,8 +386,8 @@ class Manager:
             errors.append("window_cleanup")
         if getattr(self, "launcher", None) is not None:
             try:
-                self.launcher.poll(lambda window_id,generation:bool(self.windows.get(window_id) and
-                    self.windows[window_id].generation==generation and self.windows[window_id].children.released()))
+                self.launcher.poll(lambda window_id,generation,broker:bool(self.windows.get(window_id) and
+                    self.windows[window_id].generation==generation and self.windows[window_id].children.released_broker(broker)))
                 self.launcher.close()
             except Exception:
                 errors.append("managed_launch_cleanup")

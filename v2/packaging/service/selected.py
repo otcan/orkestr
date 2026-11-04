@@ -255,7 +255,7 @@ def prepare(plan):
             identity={'split':False, 'authority_uid':uid,
                       'provider_home':str(Path(plan['home'])/'provider-home')}
         if identity['split']:
-            require(not any(key in plan for key in ('roles','host_full_access','workspace_exec','additional_workspace_exec')),
+            require(not any(key in plan for key in ('host_full_access','workspace_exec','additional_workspace_exec')),
                     'split privileged/advanced mode requires a separately qualified scoped broker')
         home=trust.private(plan['home'],identity['authority_uid'],True)
         trust.private(home/'data',identity['authority_uid'],True)

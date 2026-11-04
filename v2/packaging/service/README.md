@@ -360,7 +360,7 @@ The next staged primitive adds a closed `launch_child` control operation to the
 existing exact-server peer channel. Four explicit one-use descriptors carry
 read-only child stdin pipe, write-only child stdout pipe, a provider socket and a
 private proxy lifecycle socket created by that authoritative server incarnation. The manager journals a semantic
-window/role claim before spawning; changing a retry UUID cannot obtain a second
+window/role/setup claim before spawning; changing a retry UUID cannot obtain a second
 fresh broker. An immutable root-manager child remaps descriptors, drops all
 supplementary groups/UID/capabilities, enforces NNP and enters the fixed role.
 The executor consumes a kernel-authenticated root-parent capsule before treating
@@ -411,3 +411,21 @@ Deep only. Claude Fast and explicit model/effort preferences are currently refus
 until separately typed and qualified; resume stays refused. Existing provider
 policy refusal handling is preserved. Privileged helpers and full workflow parity
 remain outstanding, so production split startup remains gated.
+
+### Staged Core setup fence and Worker slots
+
+Managed descriptor locators privately attest the Core-issued Starting binding's
+owner, conversation, session, generation and issuer incarnation/provider/role.
+Pre-native bindings remain `unconfigured`; provider selection comes from their
+protected issuer context. No public JSON constructor can mint this attestation.
+The root manager claims each exact setup once and also consumes the original
+proxy incarnation once. Inventing a request ID or reusing a proxy with another
+claimed setup never replays an unknown launch. A new Core-issued setup may reuse
+a sealed Worker slot, within the existing 32-launch window bound. This is metadata
+launch only; existing parent grants, native readiness and consumed business
+execution fences still authorize every actual inference.
+
+`--provider workers` exercises two fresh Worker tasks under a held Deep parent
+in one disposable window, then completes Deep and reaps the actual owned tree.
+It uses fixed read-only Codex fixture natives. Workspace, privileged host and
+resume paths remain refused, and production split startup remains disabled.

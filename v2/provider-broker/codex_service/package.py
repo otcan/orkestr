@@ -207,7 +207,7 @@ class Package:
                 and type(beta["schema_version"]) is int and beta["schema_version"] == 1,
                 "beta_format")
         if self.identity_split:
-            require(not any(key in beta for key in ("roles", "host_full_access", "workspace_exec", "additional_workspace_exec")),
+            require(not any(key in beta for key in ("host_full_access", "workspace_exec", "additional_workspace_exec")),
                     "split_privileged_or_advanced_mode_unsupported")
             require(beta.get("identity_split") == {"authority_uid": self.authority_uid,
                     "executor_uid": self.executor_uid, "shared_gid": self.gid}, "beta_identity_binding")

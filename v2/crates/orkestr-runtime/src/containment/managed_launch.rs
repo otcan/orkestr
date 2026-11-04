@@ -11,6 +11,7 @@ use std::path::Path;
 pub struct ManagedLaunchDescriptors {
     role: String,
     descriptors: Vec<OwnedFd>,
+    setup: Option<serde_json::Value>,
 }
 impl ManagedLaunchDescriptors {
     pub fn role(&self) -> &str {
@@ -18,6 +19,56 @@ impl ManagedLaunchDescriptors {
     }
     pub fn descriptors(&self) -> &[OwnedFd] {
         &self.descriptors
+    }
+    pub fn setup(&self) -> Result<&serde_json::Value, Error> {
+        self.setup.as_ref().ok_or(Error::AuthorityProtocol)
+    }
+    /// Only MetadataChild's live issuer scope may attest a setup. This method
+    /// is private to containment, has no HTTP/JSON constructor and is one-use.
+    pub(super) fn attest_setup(
+        &mut self,
+        binding: &orkestr_v2_application::runtime::Binding,
+        incarnation: &str,
+        provider: orkestr_v2_application::runtime::ProviderKind,
+    ) -> Result<(), Error> {
+        use orkestr_v2_application::runtime::{ProviderKind, Role, SessionState};
+        // A pre-run Starting binding is deliberately still Unconfigured;
+        // provider selection belongs to the issuer context until native init.
+        if binding.provider_kind != ProviderKind::Unconfigured
+            || binding.state != SessionState::Starting
+            || binding.native_session_id.is_some()
+        {
+            return Err(Error::AuthorityProtocol);
+        }
+        let role = match binding.role {
+            Role::Deep => "deep",
+            Role::Fast => "fast",
+            Role::Worker => "worker",
+        };
+        let provider = match provider {
+            ProviderKind::Codex => "codex",
+            ProviderKind::Claude => "claude",
+            _ => return Err(Error::Unsupported),
+        };
+        let expected = if self.role == "claude" {
+            provider == "claude" && matches!(binding.role, Role::Deep | Role::Fast)
+        } else {
+            provider == "codex"
+                && if self.role.starts_with("worker-") {
+                    role == "worker"
+                } else {
+                    self.role == role
+                }
+        };
+        if !expected || self.setup.is_some() || incarnation.is_empty() || incarnation.len() > 128 {
+            return Err(Error::AuthorityProtocol);
+        }
+        self.setup = Some(
+            serde_json::json!({"session_id":binding.session_id.to_string(),
+            "owner_id":binding.owner_id.to_string(),"conversation_id":binding.conversation_id.to_string(),
+            "generation":binding.generation,"incarnation":incarnation,"role":role,"provider":provider}),
+        );
+        Ok(())
     }
 }
 
@@ -83,6 +134,10 @@ pub(super) fn configuration(program: &Path) -> Result<Option<Configuration>, Err
         Some("launcher.py") => "deep",
         Some("launcher-fast.py") => "fast",
         Some("launcher-claude.py") => "claude",
+        Some("launcher-worker-0.py") => "worker-0",
+        Some("launcher-worker-1.py") => "worker-1",
+        Some("launcher-worker-2.py") => "worker-2",
+        Some("launcher-worker-3.py") => "worker-3",
         _ => return Err(Error::Unsupported),
     };
     Ok(Some(Configuration { role: role.into() }))
@@ -121,6 +176,7 @@ pub(super) fn prepare(config: Configuration, provider: &UnixStream) -> Result<Pr
     let (manager, lifecycle) = UnixStream::pair().map_err(|_| Error::Io)?;
     let transfer = ManagedLaunchDescriptors {
         role: config.role,
+        setup: None,
         descriptors: vec![
             child_input.try_clone().map_err(|_| Error::Io)?,
             child_output.try_clone().map_err(|_| Error::Io)?,
@@ -143,6 +199,49 @@ mod tests {
     use super::*;
     use std::io::{Read, Write};
     use std::os::fd::AsRawFd;
+    #[test]
+    fn setup_fence_comes_from_bound_metadata_and_cannot_change_provider_role_or_repeat() {
+        use orkestr_v2_application::runtime::{Binding, ProviderKind, Role, SessionState};
+        use orkestr_v2_contracts::{ConversationId, OwnerId, SessionId};
+        let id = "\"11111111-1111-4111-8111-111111111111\"";
+        let mut binding = Binding {
+            owner_id: serde_json::from_str::<OwnerId>(id).unwrap(),
+            conversation_id: serde_json::from_str::<ConversationId>(id).unwrap(),
+            session_id: serde_json::from_str::<SessionId>(id).unwrap(),
+            role: Role::Worker,
+            provider_kind: ProviderKind::Unconfigured,
+            native_session_id: None,
+            parent_session_id: None,
+            generation: 7,
+            state: SessionState::Starting,
+        };
+        let (provider, _) = UnixStream::pair().unwrap();
+        let mut transfer = prepare(
+            Configuration {
+                role: "worker-0".into(),
+            },
+            &provider,
+        )
+        .unwrap()
+        .transfer;
+        assert!(transfer.setup().is_err());
+        binding.role = Role::Deep;
+        assert!(transfer
+            .attest_setup(&binding, "synthetic-core-incarnation", ProviderKind::Codex)
+            .is_err());
+        binding.role = Role::Worker;
+        transfer
+            .attest_setup(&binding, "synthetic-core-incarnation", ProviderKind::Codex)
+            .unwrap();
+        assert_eq!(transfer.setup().unwrap()["generation"], 7);
+        assert_eq!(
+            transfer.setup().unwrap()["session_id"],
+            "11111111-1111-4111-8111-111111111111"
+        );
+        assert!(transfer
+            .attest_setup(&binding, "invented-retry", ProviderKind::Codex)
+            .is_err());
+    }
     #[test]
     fn prepared_transfer_has_distinct_one_way_pipes_and_private_lifecycle_socket() {
         let (provider, _peer) = UnixStream::pair().unwrap();

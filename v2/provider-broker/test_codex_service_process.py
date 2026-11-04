@@ -75,6 +75,21 @@ class ProcessTests(unittest.TestCase):
             self.children.bind(child.pid, identity["start"], time.monotonic() + 1)
         self.assertFalse(self.children.brokers)
 
+    def test_completed_broker_tree_releases_without_waiting_for_another_live_role(self):
+        delay=self.root/'delay';delay.write_text('0.02')
+        self.entry.write_text('import os,signal,time\nfrom pathlib import Path\n'
+            f'delay=float(Path({str(delay)!r}).read_text())\n'
+            'os.kill(os.getpid(),signal.SIGSTOP)\ntime.sleep(delay)\n')
+        first=self.spawn();one=process(first.pid)
+        self.children.bind(first.pid,one['start'],time.monotonic()+2)
+        delay.write_text('30')
+        second=self.spawn();two=process(second.pid)
+        self.children.bind(second.pid,two['start'],time.monotonic()+2)
+        first.wait(3)
+        self.assertTrue(self.children.released_broker(one))
+        self.assertFalse(self.children.released_broker(two))
+        self.assertFalse(self.children.released())
+
     def test_forced_cleanup_is_permanently_uncertain_for_retirement(self):
         self.entry.write_text("import os,signal,time\nos.kill(os.getpid(),signal.SIGSTOP)\ntime.sleep(30)\n")
         child = self.spawn()

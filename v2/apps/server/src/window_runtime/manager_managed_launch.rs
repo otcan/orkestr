@@ -16,6 +16,10 @@ impl ManagerClient {
             let mut request = self.request("launch_child", request_id, Some(window))?;
             request["role"] = json!(descriptors.role());
             request["mode"] = json!("fresh");
+            request["setup"] = descriptors
+                .setup()
+                .map_err(|_| ManagerError::Protocol)?
+                .clone();
             request["proxy_pid"] = json!(child.pid());
             request["proxy_start"] = json!(child.start());
             request

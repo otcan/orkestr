@@ -101,6 +101,11 @@ static int failure(int code) {
 }
 
 int main(int argc, char **argv) {
+#ifdef ORKESTR_TEST_AUTHORITY_CORE
+    int authority = open(ORKESTR_TEST_AUTHORITY_CORE, O_RDONLY);
+    if (authority >= 0) { close(authority); return 60; }
+    if (errno != EACCES && errno != ENOENT) return 61;
+#endif
     alarm(180); umask(0077);
     setvbuf(stdin, NULL, _IONBF, 0);
     if (argc != 6 || strcmp(argv[1], "-c") || strcmp(argv[2], "features.plugins=false") ||

@@ -13,7 +13,8 @@ from .identity import enforce_no_new_privs
 
 
 def main(package,role,arguments):
-    require(package.identity_split and os.geteuid()==package.authority_uid and role in ('deep','fast','claude')
+    require(package.identity_split and os.geteuid()==package.authority_uid and
+            (role in package.role_profiles or role=='claude' and package.claude is not None)
             and arguments==['open-owned-session','--protocol','orkestr-v2-provider-broker-v1'],
             'split_proxy_mode')
     enforce_no_new_privs()

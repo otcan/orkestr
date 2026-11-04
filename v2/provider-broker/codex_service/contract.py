@@ -82,7 +82,7 @@ def decode(raw):
                   "input_event_id", "input_request_key", "predecessor_window_id",
                   "opened_at_ms", "work_deadline_ms", "expires_at_ms"},
         "drain": {"window_id", "generation"},
-        "launch_child": {"window_id", "generation", "role", "mode", "proxy_pid", "proxy_start", "bind_deadline_ms"},
+        "launch_child": {"window_id", "generation", "role", "mode", "setup", "proxy_pid", "proxy_start", "bind_deadline_ms"},
         "bind_child": {"window_id", "generation", "broker_pid", "broker_start", "bind_deadline_ms"},
         "retire": {"window_id", "generation", "outcome", "run_id", "terminal_event_id"},
         "reconcile": {"window_id", "generation", "outcome", "run_id", "terminal_event_id"},
@@ -120,6 +120,7 @@ def decode(raw):
     if operation == "reconcile":
         require(value["outcome"] in RECONCILED_OUTCOMES, "terminal_outcome")
     if operation == "launch_child":
+        setup_scope(value['setup'],value['role'],value['owner_id'],value['conversation_id'])
         require(type(value["proxy_pid"]) is int and 1 < value["proxy_pid"] < 2**31 and
                 type(value["proxy_start"]) is int and 0 < value["proxy_start"] < 2**53, "proxy_locator")
         require(value["role"] in ("deep", "fast", "claude", "worker-0", "worker-1", "worker-2", "worker-3")
@@ -139,6 +140,18 @@ def decode(raw):
         require(value["reason"] in ("runtime_refused", "auth_revoked", "cleanup_unknown", "server_lost"),
                 "uncertainty_reason")
     return value
+
+
+def setup_scope(value,launcher,owner,conversation):
+    require(type(launcher) is str and launcher in ('deep','fast','claude','worker-0','worker-1','worker-2','worker-3'),
+            'setup_launcher')
+    require(type(value) is dict and set(value)=={'owner_id','conversation_id','session_id','generation','incarnation','provider','role'},
+            'setup_fields')
+    require(value['owner_id']==owner and value['conversation_id']==conversation,'setup_owner_scope')
+    identifier(value['session_id']);generation(value['generation']);key(value['incarnation'])
+    expected=(value['provider']=='claude' and value['role'] in ('deep','fast')) if launcher=='claude' else (
+        value['provider']=='codex' and value['role']==('worker' if launcher.startswith('worker-') else launcher))
+    require(expected,'setup_role')
 
 
 def canonical(value):

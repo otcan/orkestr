@@ -37,9 +37,16 @@ impl MetadataChild {
         // a locator; the root manager authenticates ancestry/source independently.
         let mut locator = locator(pid)?;
         locator.managed_required = self.process.managed_required;
-        let managed = live.managed_launch.take();
+        let mut managed = live.managed_launch.take();
         if locator.managed_required && managed.is_none() {
             return Err(Error::AuthorityProtocol);
+        }
+        if let Some(descriptors) = managed.as_mut() {
+            descriptors.attest_setup(
+                &self.shared.scope.binding,
+                &self.shared.scope.incarnation,
+                self.shared.scope.provider,
+            )?;
         }
         locator.managed = std::sync::Mutex::new(managed);
         Ok(locator)

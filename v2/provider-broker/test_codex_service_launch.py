@@ -24,10 +24,21 @@ def request():
                 owner_id='aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
                 conversation_id='11111111-1111-4111-8111-111111111111',
                 window_id='22222222-2222-4222-8222-222222222222',generation=1,
-                role='deep',mode='fresh',proxy_pid=123,proxy_start=456,bind_deadline_ms=int(time.time()*1000)+4000)
+                role='deep',mode='fresh',setup=dict(session_id='33333333-3333-4333-8333-333333333333',
+                    owner_id='aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',conversation_id='11111111-1111-4111-8111-111111111111',
+                    generation=1,incarnation='synthetic-setup',role='deep',provider='codex'),
+                proxy_pid=123,proxy_start=456,bind_deadline_ms=int(time.time()*1000)+4000)
 
 
 class LaunchTransportTests(unittest.TestCase):
+    def test_setup_fence_rejects_cross_owner_conversation_and_launcher_role(self):
+        from codex_service.contract import decode,HEADER
+        for field,value in [('owner_id','bbbbbbbb-bbbb-4ccc-8ddd-eeeeeeeeeeee'),
+                            ('conversation_id','44444444-4444-4444-8444-444444444444'),
+                            ('role','worker'),('provider','claude')]:
+            item=request();item['setup'][field]=value
+            with self.assertRaises(Refused):decode(encode(item)[HEADER.size:])
+
     def test_rights_are_explicit_and_nonlaunch_cannot_smuggle_descriptors(self):
         for launch in (True,False):
             a,b=socket.socketpair();read,write=os.pipe()
@@ -36,7 +47,7 @@ class LaunchTransportTests(unittest.TestCase):
             try:
                 value=request()
                 if not launch:
-                    value={k:v for k,v in value.items() if k not in ('window_id','generation','role','mode','proxy_pid','proxy_start','bind_deadline_ms')}
+                    value={k:v for k,v in value.items() if k not in ('window_id','generation','role','mode','setup','proxy_pid','proxy_start','bind_deadline_ms')}
                     value['operation']='status'
                 rights=array.array('i',[read,write,read,write])
                 a.sendmsg([encode(value)],[(socket.SOL_SOCKET,socket.SCM_RIGHTS,rights)])
@@ -140,6 +151,9 @@ p.wait()
         self.assertTrue(all(int(line.split()[1],16)==0 for line in status.splitlines() if line.split(':',1)[0] in ('CapInh','CapPrm','CapEff','CapAmb')))
         value['request_id']='invented-retry-id'
         with self.assertRaisesRegex(Refused,'already_claimed'):
+            self.launcher.launch(value,self.fds,lambda _:self.fail(),time.monotonic()+4)
+        value['setup']['generation']+=1
+        with self.assertRaisesRegex(Refused,'proxy_already_claimed'):
             self.launcher.launch(value,self.fds,lambda _:self.fail(),time.monotonic()+4)
         children.cleanup(seconds=1)
         self.launcher.poll(lambda *_:True)

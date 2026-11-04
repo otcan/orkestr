@@ -142,8 +142,7 @@ impl BetaConfig {
             // Only the fresh Deep path is qualified by this contract stage.
             // Resume, role workers, Claude and workspace execution need their
             // private FD/bootstrap contracts separately, never a fallback UID.
-            if self.roles.is_some()
-                || self.host_full_access.is_some()
+            if self.host_full_access.is_some()
                 || self.workspace_exec.is_some()
                 || !self.additional_workspace_exec.is_empty()
             {

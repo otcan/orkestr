@@ -170,7 +170,7 @@ def validate(raw):
         require(type(identity) is dict and set(identity)=={'authority_uid','executor_uid','shared_gid'}
                 and all(type(identity[k]) is int and 0<identity[k]<2**31 for k in identity)
                 and identity['authority_uid']!=identity['executor_uid'],'closed split service identity required')
-        require(not any(k in value for k in ('roles','host_full_access','workspace_exec','additional_workspace_exec')),
+        require(not any(k in value for k in ('host_full_access','workspace_exec','additional_workspace_exec')),
                 'unsupported split execution mode')
     if 'roles' in value:
         roles=value['roles']
