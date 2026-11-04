@@ -125,6 +125,8 @@ class Launcher:
         parent,capsule=socket.socketpair()
         inherited=[]
         try:
+            from .attachment_exports import initialize_conversation
+            initialize_conversation(self.package,request['conversation_id'])
             payload={key:request[key] for key in ('request_id','window_id','generation','role','setup')}
             payload.update(server_pid=self.server['pid'],server_start=self.server['start'],
                            server_uid=self.server['uid'],manager_pid=os.getpid(),

@@ -43,8 +43,10 @@ def wait(operation,label,seconds=15):
 
 
 class Rehearsal:
-    def __init__(self,binary,provider='codex'):
+    def __init__(self,binary,provider='codex',attachment_export=False):
         self.provider=provider
+        self.attachment_export=attachment_export
+        assert not attachment_export or provider=='codex','scoped attachment fixture uses bounded Codex'
         self.fixture=ServiceFixture();self.uid=UID;self.gid=GID;self.digest=digest
         with socket.socket() as listener:
             listener.bind(('127.0.0.1',0));self.port=listener.getsockname()[1]
@@ -57,6 +59,16 @@ class Rehearsal:
         self.fixture.endpoint.chmod(0o750)
         (self.fixture.package/'beta.json').chmod(0o640)
         self.package=SplitPackageTests.select_split(self)
+        if attachment_export:
+            self.exports=self.fixture.root/'exports';self.exports.mkdir(mode=0o700)
+            os.chown(self.exports,self.package.authority_uid,GID)
+            service=self.package.root/'service.json';value=json.loads(service.read_text())
+            value['attachment_export_dir']=str(self.exports);service.write_text(json.dumps(value))
+            self.other_export=self.exports/'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
+            self.other_export.mkdir(mode=0o750);os.chown(self.other_export,self.package.authority_uid,GID)
+            self.other_export.chmod(0o750)
+            foreign=self.other_export/'fixture.txt';foreign.write_text('other conversation')
+            foreign.chmod(0o640);os.chown(foreign,self.package.authority_uid,GID)
         self.process=None;self.manager=None
         self.pump=None;self.pump_stop=threading.Event();self.pump_errors=[]
         self.binary=Path(binary).resolve(strict=True)
@@ -71,6 +83,8 @@ class Rehearsal:
             path=self.fixture.workspace/name;path.write_text(value);path.chmod(0o600);os.chown(path,UID,GID)
         subprocess.run(['/usr/bin/cc','-std=c11','-O2','-Wall','-Wextra','-Werror',
                         '-DORKESTR_TEST_AUTHORITY_CORE='+json.dumps(str(self.package.data/'core.sqlite3')),
+                        *(['-DORKESTR_TEST_ATTACHMENT=1','-DORKESTR_TEST_OTHER_ATTACHMENT='+
+                           json.dumps(str(self.other_export/'fixture.txt'))] if attachment_export else []),
                         str(ROOT/('v2/tests/service_roles_native.c' if provider=='workers' else
                                   'v2/tests/selected_codex_roles_native.c')),'-o',str(self.package.root/'native')],
                        check=True,capture_output=True,env={'PATH':'/usr/bin:/bin'})
@@ -231,6 +245,17 @@ class Rehearsal:
             path=self.package.root/name;value=json.loads(path.read_text())
             value.update(owner_id=self.owner,conversation_id=self.conversation);path.write_text(json.dumps(value))
         self.refresh_manifest()
+        if self.attachment_export:
+            export=self.exports/self.conversation;export.mkdir(mode=0o700)
+            os.chown(export,self.package.authority_uid,GID)
+            file=export/'fixture.txt';file.write_text('synthetic authorized attachment\n')
+            file.chmod(0o640);os.chown(file,self.package.authority_uid,GID)
+            # This disposable owner-writable canary distinguishes RO mounting
+            # from the published attachment's independent DAC write denial.
+            canary=export/'writable-canary';canary.write_text('unchanged')
+            canary.chmod(0o600);os.chown(canary,UID,GID)
+            reference=self.fixture.workspace/'attachment-path';reference.write_text(str(file))
+            reference.chmod(0o600);os.chown(reference,UID,GID)
 
     def stop_raw(self):
         if self.process and self.process.poll() is None:
@@ -303,6 +328,7 @@ class Rehearsal:
                     authority_uid=self.package.authority_uid,executor_uid=UID,managed_children=children,
                     synthetic_native_turns=sum(r['kind']=='turn' for r in records),
                     worker_reuse_count=len(workers),worker_setups=getattr(self,'worker_setups',[]),
+                    scoped_attachment_read_only=self.attachment_export,
                     provider=self.provider,actual_provider=False,live_activation=False,production_startup_gate_bypassed_only_in_test=True)
 
     def close(self):
@@ -322,13 +348,18 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('binary');parser.add_argument('--report',required=True)
     parser.add_argument('--provider',choices=('codex','claude','workers'),default='codex')
+    parser.add_argument('--attachment-export',action='store_true')
     args=parser.parse_args();assert os.geteuid()==0,'root-only synthetic test'
     os.umask(0o077)
-    case=Rehearsal(args.binary,args.provider);report={'passed':False,'actual_provider':False,'live_activation':False}
+    case=Rehearsal(args.binary,args.provider,args.attachment_export);report={'passed':False,'actual_provider':False,'live_activation':False}
     try:report.update(case.run(),passed=True)
     except BaseException as error:
         report['error_type']=type(error).__name__;report['fixture']=str(case.fixture.root)
         report['error']=str(error);report['manager_errors']=case.pump_errors
+        proof=case.fixture.account/'sessions/synthetic-attachment-proof'
+        if proof.exists():report['synthetic_attachment_proof']=proof.read_text()
+        report['launches']=[{k:value.get(k) for k in ('state','role','exit_code')} for p in
+            (case.package.ledger_directory/'launches').glob('*.json') if (value:=json.loads(p.read_text()))]
         core=case.package.data/'core.sqlite3'
         if core.exists():
             with sqlite3.connect(core.as_uri()+'?mode=ro',uri=True) as db:

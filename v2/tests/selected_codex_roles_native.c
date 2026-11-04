@@ -122,6 +122,32 @@ int main(int argc, char **argv) {
     strcpy(native, !strcmp(role, "fast") ? "22222222-2222-4333-8444-555555555555"
                                         : "11111111-2222-4333-8444-555555555555");
     if (mkdir("/account/sessions", 0700) && errno != EEXIST) return 28;
+#ifdef ORKESTR_TEST_ATTACHMENT
+    FILE *proof = fopen("/account/sessions/synthetic-attachment-proof", "a");
+    if (!proof) return 67;
+    fputs("begin\n",proof);fflush(proof);
+    char attachment[4096], text[128];
+    read_fixed("attachment-path", attachment, sizeof(attachment));
+    fputs("reference\n",proof);fflush(proof);
+    read_fixed(attachment, text, sizeof(text));
+    fputs("read\n",proof);fflush(proof);
+    if (strcmp(text, "synthetic authorized attachment")) return 62;
+    fputs("matched\n",proof);fflush(proof);
+    int writable = open(attachment, O_WRONLY);
+    fprintf(proof,"write=%d errno=%d\n",writable,errno);fflush(proof);
+    if (writable >= 0) { close(writable); return 63; }
+    if (errno != EROFS && errno != EACCES) return 64;
+    char canary[4096];
+    snprintf(canary,sizeof(canary),"%.*s/writable-canary",(int)(strrchr(attachment,'/')-attachment),attachment);
+    writable=open(canary,O_WRONLY);
+    if (writable>=0) {close(writable);return 68;}
+    if (errno!=EROFS) return 69;
+    fputs("readonly\n",proof);fflush(proof);
+    int foreign = open(ORKESTR_TEST_OTHER_ATTACHMENT, O_RDONLY);
+    if (foreign >= 0) { close(foreign); return 65; }
+    if (errno != ENOENT) return 66;
+    fputs("scoped\n",proof);fclose(proof);
+#endif
     FILE *state = fopen("/account/sessions/synthetic-role-state", "r");
     if (state) {
         if (fscanf(state, "%d %d", &instance, &turns) != 2) return 29;

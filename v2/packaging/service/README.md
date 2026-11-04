@@ -429,3 +429,11 @@ execution fences still authorize every actual inference.
 in one disposable window, then completes Deep and reaps the actual owned tree.
 It uses fixed read-only Codex fixture natives. Workspace, privileged host and
 resume paths remain refused, and production split startup remains disabled.
+
+The root launch path initializes the exact attested conversation export directory
+before any executor metadata/native startup. `--attachment-export` adds a bounded
+Codex HTTP rehearsal: Core remains private, a synthetic authority-owned 0640
+attachment is read through the conversation mount, a separate owner-writable
+canary proves the mount itself rejects writes, and another group-readable
+conversation's file is absent. This uses a small fixed fixture; large encrypted
+upload, publication and revocation acceptance remain separate checks.
