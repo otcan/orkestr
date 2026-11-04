@@ -203,7 +203,7 @@ def main():
     root = Path(__file__).resolve().parents[1]
     mode, *arguments = sys.argv[1:]
     if mode not in ("manager", "broker", "broker-fast", "broker-worker-0", "broker-claude",
-                    "broker-worker-1", "broker-worker-2", "broker-worker-3", "server"):
+                    "broker-worker-1", "broker-worker-2", "broker-worker-3", "server", "launch-child"):
         raise ValueError("fixed entry mode")
     expected = arguments[0] if mode == "manager" and len(arguments) == 1 else None
     # The pinned root manager always hashes everything; children reuse its seal.
@@ -216,6 +216,9 @@ def main():
     package = Package(root, expected)
     if mode == "manager" and expected is not None and os.geteuid() == 0:
         write_seal(package.control.parent, package.gid, root, manifest_digest, records)
+    if mode == "launch-child":
+        from codex_service.launch_child import main as launch_child
+        return launch_child(package, arguments)
     if mode == "broker" or mode.startswith("broker-"):
         from codex_service.broker import main as selected
         role = "deep" if mode == "broker" else mode.removeprefix("broker-")

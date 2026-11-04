@@ -82,6 +82,7 @@ def decode(raw):
                   "input_event_id", "input_request_key", "predecessor_window_id",
                   "opened_at_ms", "work_deadline_ms", "expires_at_ms"},
         "drain": {"window_id", "generation"},
+        "launch_child": {"window_id", "generation", "role", "mode", "bind_deadline_ms"},
         "bind_child": {"window_id", "generation", "broker_pid", "broker_start", "bind_deadline_ms"},
         "retire": {"window_id", "generation", "outcome", "run_id", "terminal_event_id"},
         "reconcile": {"window_id", "generation", "outcome", "run_id", "terminal_event_id"},
@@ -118,6 +119,11 @@ def decode(raw):
         require(value["outcome"] in ("accepted", "stopped"), "terminal_outcome")
     if operation == "reconcile":
         require(value["outcome"] in RECONCILED_OUTCOMES, "terminal_outcome")
+    if operation == "launch_child":
+        require(value["role"] in ("deep", "fast", "worker-0", "worker-1", "worker-2", "worker-3")
+                and value["mode"] == "fresh", "launch_mode")
+        require(type(value["bind_deadline_ms"]) is int and 0 < value["bind_deadline_ms"] < 2**53,
+                "bind_deadline")
     if operation == "bind_child":
         require(type(value["broker_pid"]) is int and 1 < value["broker_pid"] < 2**31,
                 "broker_pid")

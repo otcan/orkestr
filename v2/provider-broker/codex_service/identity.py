@@ -48,3 +48,46 @@ def provider_privileges(package):
     if getattr(package, 'identity_split', False):
         require(os.geteuid() == package.executor_uid, 'split_executor_uid')
         enforce_no_new_privs()
+
+
+_CONTEXT = None
+
+def launch_context():
+    return _CONTEXT
+
+
+def receive_launch_context(package, descriptor=6):
+    """One-use root-manager capsule; JSON alone is never accepted authority."""
+    global _CONTEXT
+    if _CONTEXT is not None:
+        return _CONTEXT
+    import json
+    import socket
+    import struct
+    from codex_bounded.trust import process
+    require(package.identity_split and os.geteuid() == package.executor_uid, 'split_executor_uid')
+    enforce_no_new_privs()
+    with socket.socket(fileno=descriptor) as channel:
+        require(channel.family == socket.AF_UNIX and channel.type == socket.SOCK_STREAM,
+                'launch_capsule_socket')
+        pid, uid, _ = struct.unpack('3i', channel.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
+        require(uid == 0 and pid == os.getppid(), 'launch_capsule_parent')
+        channel.settimeout(1)
+        raw = bytearray()
+        while True:
+            chunk = channel.recv(4097 - len(raw))
+            if not chunk:
+                break
+            raw.extend(chunk)
+            require(len(raw) <= 4096, 'launch_capsule_bound')
+    value = json.loads(bytes(raw))
+    require(type(value) is dict and set(value) == {'server_pid', 'server_start', 'server_uid',
+            'manager_pid', 'window_id', 'generation', 'role', 'request_id'}, 'launch_capsule_fields')
+    require(value['manager_pid'] == pid and value['server_uid'] == package.authority_uid,
+            'launch_capsule_identity')
+    server = process(value['server_pid'])
+    require(server and server['start'] == value['server_start'] and server['uid'] == value['server_uid'],
+            'launch_capsule_server_changed')
+    require(value['role'] in ('deep', 'fast', 'worker-0', 'worker-1', 'worker-2', 'worker-3'), 'launch_capsule_role')
+    _CONTEXT = value
+    return value

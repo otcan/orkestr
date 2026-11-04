@@ -103,6 +103,7 @@ class Children:
         # directly on the host. Descendants may legitimately run as another
         # uid (sudo), and a long window may start many short-lived commands.
         self.host = host_full_access(package)
+        self.allow_uid_change = self.host and not getattr(package, "identity_split", False)
         self.bound = HOST_MAX_CHILDREN if self.host else MAX_CHILDREN
         self.records = {}
         self.brokers = set()
@@ -117,7 +118,7 @@ class Children:
             if len(self.records) >= self.bound:
                 self._forget_reaped()
             require(len(self.records) < self.bound, "owned_child_bound")
-            self.records[key] = Process(identity, any_uid=self.host)
+            self.records[key] = Process(identity, any_uid=self.allow_uid_change)
         return self.records[key]
 
     def _forget_reaped(self):
@@ -175,6 +176,25 @@ class Children:
         return True
 
     @serialized
+    def bind_managed(self, receipt, window, generation):
+        from .launch import ManagedSpawn
+        require(isinstance(receipt, ManagedSpawn) and not receipt.consumed
+                and getattr(self.package, "identity_split", False), "managed_launch_proof")
+        identity = receipt.identity
+        require(receipt.window == window and receipt.generation == generation
+                and receipt.server == self.server and exists(self.server)
+                and receipt.manager == os.getpid() and identity["ppid"] == os.getpid()
+                and identity["uid"] == self.package.executor_uid and exists(identity),
+                "managed_launch_scope")
+        key = (identity["pid"], identity["start"])
+        require(key not in self.brokers and receipt.role in self.package.role_profiles,
+                "managed_launch_reused")
+        record = self.remember(identity)
+        self.brokers.add(key)
+        receipt.consumed = True
+        record.send(signal.SIGCONT)
+
+    @serialized
     def broker_for(self, pid):
         for key in self.brokers:
             owner = self.records[key].identity
@@ -190,7 +210,7 @@ class Children:
             while pending:
                 parent = pending.pop()
                 key = (parent["pid"], parent["start"])
-                if key in visited or not same(parent, self.host):
+                if key in visited or not same(parent, self.allow_uid_change):
                     continue
                 visited.add(key)
                 require(len(visited) <= self.bound, "owned_child_bound")
@@ -208,7 +228,7 @@ class Children:
                     child = process(int(token))
                     if child is None or child["ppid"] != parent["pid"]:
                         continue
-                    require(self.host or child["uid"] == self.package.uid, "owned_child_identity")
+                    require(self.allow_uid_change or child["uid"] == self.package.uid, "owned_child_identity")
                     try:
                         self.remember(child)
                     except Vanished:

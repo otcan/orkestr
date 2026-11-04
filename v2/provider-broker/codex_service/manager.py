@@ -11,7 +11,7 @@ import threading
 import time
 
 from codex_bounded.trust import exists, process
-from .channel import ServerPeer, bind_deadline, receive, respond
+from .channel import ServerPeer, bind_deadline, receive, receive_control, respond
 from .contract import BIND_REPLY_SECONDS, DRAIN_SECONDS, Refused, require
 from .custody import OwnedSocket, StateLock
 from .egress import Endpoint, Window
@@ -36,6 +36,7 @@ class Manager:
         self.windows = {}
         self.guard = threading.RLock()
         self.failed = self.closed = False
+        self.launcher = None
         try:
             self.lock = StateLock(self.package.ledger_directory)
             self.ledger = Ledger(self.lock.path, self.package.owner, self.package.conversation)
@@ -150,7 +151,7 @@ class Manager:
             raise Refused("package_inventory") from None
         self.inventory_alerted = False
 
-    def dispatch(self, request, deadline=None):
+    def dispatch(self, request, deadline=None, descriptors=()):
         self.ledger._scope(request)
         operation = request["operation"]
         if operation == "status":
@@ -165,6 +166,24 @@ class Manager:
         row = self.ledger.details(request["window_id"], request["generation"])
         require(row["conversation"] == request["conversation_id"], "scope")
         window = self.windows.get(request["window_id"])
+        if operation == "launch_child":
+            require(self.package.identity_split and window is not None and not window.egress_closed
+                    and self.ledger.tick(request["window_id"], request["generation"])["state"] == "active",
+                    "split_launch_window")
+            self._package_preflight()
+            if self.launcher is None:
+                from .launch import Launcher
+                self.launcher = Launcher(self.package, self.identity)
+            try:
+                if deadline is None:
+                    deadline = self._bind_deadline(request, time.monotonic())
+                receipt = self.launcher.launch(request, descriptors,
+                    lambda proof: window.children.bind_managed(proof, window.window, window.generation), deadline)
+            except BaseException:
+                self._uncertain(window.window, window.generation, "cleanup_unknown")
+                self._terminate(window, wait=0.25)
+                raise
+            return {"ok": True, "receipt": self.ledger.status(request["conversation_id"]), "launch": receipt}
         if operation == "bind_child":
             status = self.ledger.tick(request["window_id"], request["generation"])
             require(status["state"] == "active" and window is not None and not window.egress_closed
@@ -252,6 +271,8 @@ class Manager:
             sys.stderr.flush()
 
     def tick(self):
+        if getattr(self, "launcher", None) is not None:
+            self.launcher.poll()
         require(self.child is not None, "server_not_started")
         if self.child.poll() is not None and not self.closed:
             self.failed = True  # Even exit0 is unexpected outside close().
@@ -303,11 +324,12 @@ class Manager:
             accepted = time.monotonic()
             deadline = accepted + 1
             request = None
+            descriptors = []
             try:
-                request = receive(connection, deadline)
-                if request["operation"] == "bind_child":
+                request, descriptors = receive_control(connection, deadline)
+                if request["operation"] in ("bind_child", "launch_child"):
                     deadline = self._bind_deadline(request, accepted)
-                answer = self.dispatch(request, deadline)
+                answer = self.dispatch(request, deadline, descriptors)
             except Refused as error:
                 # Static refusal codes only (never request values): the operator
                 # needs the reason a retirement or custody check refused.
@@ -318,6 +340,9 @@ class Manager:
                 answer = {"ok": False, "code": "control_refused", "receipt": self.ledger.status()}
             except (OSError, ValueError):
                 answer = {"ok": False, "code": "control_unavailable"}
+            finally:
+                for fd in descriptors:
+                    os.close(fd)
             try:
                 respond(connection, answer, deadline)
             except (OSError, Refused):
@@ -352,6 +377,11 @@ class Manager:
                 errors.append("window_cleanup")
         except Exception:
             errors.append("window_cleanup")
+        if getattr(self, "launcher", None) is not None:
+            try:
+                self.launcher.close()
+            except Exception:
+                errors.append("managed_launch_cleanup")
         if self.egress is not None:
             try:
                 endpoint, self.egress = self.egress, None

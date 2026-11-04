@@ -1,5 +1,6 @@
 """Closed immutable always-on package. Never inspect account credential bytes."""
 from pathlib import Path
+import os
 import re
 import stat
 
@@ -14,7 +15,7 @@ from .role_profiles import ROLE_FILES, bind as bind_roles
 MODULES_SERVICE = ("__init__.py", "contract.py", "ledger.py", "budget.py", "custody.py",
                    "channel.py", "package.py", "ownership.py", "egress.py", "manager.py",
                    "server_child.py", "broker.py", "profile.py", "entry.py", "role_profiles.py",
-                   "claude_broker.py", "identity.py")
+                   "claude_broker.py", "identity.py", "launch.py", "launch_child.py")
 # Shared with the server and packager: room for many per-conversation
 # command profiles.
 MAX_BETA_CONFIG_BYTES = 262144
@@ -180,10 +181,13 @@ class Package:
         self.executor_uid, self.executor_gid = identity["executor_uid"], identity["executor_gid"]
         # Existing broker/profile paths keep uid/gid as explicit executor aliases.
         self.uid, self.gid = self.executor_uid, self.executor_gid
-        self.home = private(value["home"], self.authority_uid, True)
-        self.data = private(self.home / "data", self.authority_uid, True)
-        self.provider_home = private(identity["provider_home"], self.executor_uid, True)
-        private(value["bootstrap_file"], self.authority_uid)
+        if self.identity_split and os.geteuid() == self.executor_uid:
+            from .identity import receive_launch_context
+            receive_launch_context(self)
+        self.home = self.private(value["home"], self.authority_uid, True)
+        self.data = self.private(self.home / "data", self.authority_uid, True)
+        self.provider_home = self.private(identity["provider_home"], self.executor_uid, True)
+        self.private(value["bootstrap_file"], self.authority_uid)
         self.ledger_directory = protected(value["ledger_directory"], True)
         require(stat.S_IMODE(self.ledger_directory.stat().st_mode) == 0o700, "ledger_mode")
         endpoints = protected(value["endpoint_directory"], True)
@@ -264,9 +268,9 @@ class Package:
                 profile["supervisor"] == str(self.root / "isolation/supervisor.py") and
                 profile["hosts"] == list(HOSTS) and profile["egress_socket"] == str(self.endpoint)
                 and profile["workspace"] == beta["workspace"], "profile_binding")
-        workspace = private(profile["workspace"], self.uid, True)
-        account = private(profile["state_root"], self.uid, True)
-        auth = private(profile["auth_file"], self.uid)  # Metadata only; NEVER digest/read.
+        workspace = self.private(profile["workspace"], self.uid, True)
+        account = self.private(profile["state_root"], self.uid, True)
+        auth = self.private(profile["auth_file"], self.uid)  # Metadata only; NEVER digest/read.
         require(auth.name == "auth.json", "canonical_auth_reference")
         for a, b in ((workspace, self.home), (account, self.home), (workspace, account),
                      (auth, workspace), (auth, account), (auth, self.home),
@@ -307,12 +311,27 @@ class Package:
                                                             "home", "temporary")}
         require(all(p.is_absolute() and p.resolve(strict=True) == p for p in paths.values()),
                 "claude_profile_paths")
-        workspace = private(paths["workspace"], self.uid, True)
-        state = [private(paths[key], self.uid, True) for key in ("home", "temporary")]
+        workspace = self.private(paths["workspace"], self.uid, True)
+        state = [self.private(paths[key], self.uid, True) for key in ("home", "temporary")]
         for a in [workspace, *state]:
             for b in [self.home, self.root, self.ledger_directory, codex_account, codex_auth]:
                 require(a != b and a not in b.parents and b not in a.parents, "claude_scope_overlap")
         self.claude = selected
+
+    def private(self, value, uid, directory=False):
+        if not self.identity_split or os.geteuid() in (0, uid):
+            return private(value, uid, directory)
+        # The root manager has checked all external custody before starting the
+        # authoritative server or issuing a one-use executor launch capsule.
+        # Foreign private credentials must remain unreadable from this role.
+        from .identity import launch_context
+        require(os.geteuid() == self.authority_uid or
+                (os.geteuid() == self.executor_uid and launch_context() is not None),
+                "split_role_view")
+        path = Path(value)
+        require(path.is_absolute() and not any(p in ("..", ".") for p in path.parts),
+                "split_private_path")
+        return path
 
     def metrics_port(self):
         if "metrics_port" in self.runtime:

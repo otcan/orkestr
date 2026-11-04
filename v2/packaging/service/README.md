@@ -357,3 +357,23 @@ must not be represented as completed authority separation or activated on a live
 service. Synthetic tests prove protected path ownership and that `no_new_privs`
 blocks a disposable setuid euid probe while preserving the parent root context;
 they do not qualify a real provider or deployment.
+
+The next staged primitive adds a closed `launch_child` control operation to the
+existing exact-server peer channel. Three explicit one-use descriptors carry
+read-only child stdin pipe, write-only child stdout pipe and a provider socket
+created by that authoritative server incarnation. The manager journals a semantic
+window/role claim before spawning; changing a retry UUID cannot obtain a second
+fresh broker. An immutable root-manager child remaps descriptors, drops all
+supplementary groups/UID/capabilities, enforces NNP and enters the fixed role.
+The executor consumes a kernel-authenticated root-parent capsule before treating
+foreign Core paths as descriptor references; it never gains Core traversal rights.
+Original broker pidfd/window/role registration precedes continuation, and cleanup
+observes the owned tree before killing/reaping its broker. Failed registration
+stays unknown and cannot replay.
+
+This primitive is tested with an actual stopped synthetic broker. It still does
+not enable split startup: the Rust-side owned proxy/lifecycle descriptor adapter
+and basic Core/Codex end-to-end FD flow are pending. Only fresh Deep/Fast modes are
+implemented by the primitive. Resume, workspace and Claude launch modes refuse;
+they require separately qualified peer/bootstrap semantics. No live service or
+account is exercised by these tests.
