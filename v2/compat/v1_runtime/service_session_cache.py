@@ -71,6 +71,7 @@ class ServiceSessionCache:
         self.client = RustSession(**session_options)
         self.timeout = lock_timeout_s
         self.parent = self.lock = None
+        self.locked = False
         self.boot = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
 
     def _restore(self, value, current):
@@ -100,6 +101,7 @@ class ServiceSessionCache:
         client.generation = 1
 
     def _save(self):
+        require(self.locked, "session_cache_lock_required")
         client = self.client
         require(client._credential_digest is not None and (client._cookie or client._revoked),
                 "session_cache_not_authenticated")
@@ -125,6 +127,7 @@ class ServiceSessionCache:
                 pass
 
     def __enter__(self):
+        require(self.parent is None and self.lock is None, "session_cache_already_entered")
         try:
             self.parent = directory(self.path)
             self.lock = os.open(self.path.name + ".lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK,
@@ -134,6 +137,7 @@ class ServiceSessionCache:
             while True:
                 try:
                     fcntl.flock(self.lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    self.locked = True
                     break
                 except BlockingIOError:
                     require(time.monotonic() < deadline, "session_cache_busy")
@@ -164,12 +168,13 @@ class ServiceSessionCache:
 
     def __exit__(self, *_):
         try:
-            if self.parent is not None and self.client._revoked:
+            if self.locked and self.client._revoked:
                 self._save()
         finally:
             if self.lock is not None:
                 os.close(self.lock)
                 self.lock = None
+            self.locked = False
             if self.parent is not None:
                 os.close(self.parent)
                 self.parent = None

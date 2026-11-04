@@ -1,6 +1,8 @@
 """Private cached service cookies, actual loopback protocol, no real secrets."""
 from http.server import ThreadingHTTPServer
+import fcntl
 import json
+import os
 from pathlib import Path
 import tempfile
 import threading
@@ -134,6 +136,27 @@ class CacheTests(unittest.TestCase):
                 with self.context(lock_timeout_s=0.03):
                     pass
         self.assertEqual(len(self.exchanges()), 1)
+
+    def test_reused_revoked_context_never_writes_without_acquiring_lock(self):
+        context = self.context(lock_timeout_s=0.03)
+        with context:
+            pass
+        self.server.reject_cookie = True
+        with self.assertRaisesRegex(ClientError, "session_revoked"):
+            with context:
+                pass
+        fd = os.open(str(self.cache) + ".lock", os.O_RDWR)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            self.cache.write_text("another operator's in-progress cache")
+            before = self.cache.read_bytes()
+            with self.assertRaisesRegex(ClientError, "session_cache_busy"):
+                with context:
+                    pass
+            self.assertEqual(self.cache.read_bytes(), before)
+            self.assertEqual(len(self.exchanges()), 1)
+        finally:
+            os.close(fd)
 
 
 if __name__ == "__main__":
