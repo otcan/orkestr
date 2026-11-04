@@ -79,3 +79,20 @@ Validation:
 PYTHONDONTWRITEBYTECODE=1 python3 -I -S -B -m unittest discover \
   -s scripts/sre/tests -p test_executor_inventory.py -v
 ```
+
+## Approval handoff extension
+
+`scripts/sre/source_handoff.py` is a transport-injected durable decision handoff.
+It freezes request/decision identity, original conversation/run/native executor,
+provider generation, action and resource before calling transport. The injected
+transport must authenticate the source endpoint and return an admission receipt.
+The body uses agent attribution and original-run/provider fences. A scoped
+approval record changes no runtime privilege and leaves task ownership at source.
+
+A protected private adapter must authenticate intake, validate module/state
+custody, provide the authenticated client and enable delivery explicitly. The
+extension itself does not install services or send messages. Unknown outcomes
+and crash-after-claim records never automatically replay; changed scope/target
+under the same decision ID is refused. An admission receipt does not prove work
+completion. Operator receipt reconciliation is required after an unknown outcome;
+automatic reconciliation and business-result ingestion are outside this extension.
