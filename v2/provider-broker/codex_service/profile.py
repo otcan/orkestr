@@ -51,6 +51,12 @@ class Configuration:
             for name in HELPERS:
                 path = protected(self.package.root / "isolation" / name)
                 mounts += ["--ro-bind", str(path), "/opt/provider/" + name]
+            from .attachment_exports import conversation_mount
+            export = conversation_mount(self.package, self.role)
+            if export is not None:
+                # Root's verified launch capsule selects this conversation.
+                # A directory mount also exposes later atomic publications.
+                mounts += ["--ro-bind", str(export), str(export)]
             command[command.index("--chdir"):command.index("--chdir")] = mounts
             return command, (descriptor,)
         except BaseException:
