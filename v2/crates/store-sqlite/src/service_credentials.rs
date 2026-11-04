@@ -9,7 +9,6 @@ pub struct ServiceCredential {
     pub revoked: bool,
 }
 
-
 impl Store {
     pub async fn create_service_credential(
         &self,

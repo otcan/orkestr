@@ -25,7 +25,6 @@ pub async fn status(
     ))
 }
 
-
 pub async fn change(
     State(state): State<AppState>,
     headers: HeaderMap,

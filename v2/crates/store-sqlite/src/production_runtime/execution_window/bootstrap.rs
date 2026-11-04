@@ -89,7 +89,7 @@ impl Store {
             window_bootstrap_only: true,
         };
         let clock = now(&mut tx).await?;
-        sqlx::query("INSERT INTO auth_sessions(token_hash,owner_id,expires_at) VALUES(?,?,unixepoch()+43200)")
+        sqlx::query("INSERT INTO auth_sessions(token_hash,owner_id,expires_at,kind) VALUES(?,?,unixepoch()+43200,'machine')")
             .bind(hash).bind(owner.to_string()).execute(&mut *tx).await.map_err(db)?;
         sqlx::query("INSERT INTO production_supervisors(context_id,owner_id,provider_kind,namespace,supervisor_key,incarnation_id,generation,lease_deadline_ms) VALUES(?,?,?,?,?,?,1,?)")
             .bind(&context.id).bind(owner.to_string()).bind(provider_name(context.provider)?).bind(&context.namespace).bind(&context.key)
@@ -257,7 +257,7 @@ impl Store {
             .execute(&mut *tx).await.map_err(db)?;
         let secret = format!("window-bootstrap:{}", crate::runtime::ledger::secret());
         let hash = crate::digest(&secret);
-        sqlx::query("INSERT INTO auth_sessions(token_hash,owner_id,expires_at) VALUES(?,?,unixepoch()+43200)")
+        sqlx::query("INSERT INTO auth_sessions(token_hash,owner_id,expires_at,kind) VALUES(?,?,unixepoch()+43200,'machine')")
             .bind(&hash).bind(owner.to_string()).execute(&mut *tx).await.map_err(db)?;
         let mut deep = None;
         for role in ["fast", "deep"] {
