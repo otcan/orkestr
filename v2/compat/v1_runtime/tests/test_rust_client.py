@@ -74,6 +74,29 @@ class Peer(BaseHTTPRequestHandler):
 
 
 class ClientTests(unittest.TestCase):
+    def test_service_credential_login_has_no_origin_and_preserves_scope_checks(self):
+        self.secret.write_text(json.dumps({"service_token":"c"*64}))
+        original = self.server.respond
+        def respond(method, path):
+            return original(method, client_module.SESSION if path == client_module.SERVICE_SESSION else path)
+        self.server.respond = respond
+        self.client.session.login()
+        request = next(r for r in self.server.observed if r[1] == client_module.SERVICE_SESSION)
+        self.assertNotIn("Origin", request[2])
+        self.assertEqual(request[3], {"service_token":"c"*64})
+        self.assertEqual(self.client.session.owner, OWNER)
+
+    def test_revocation_recovers_only_after_explicit_credential_replacement(self):
+        self.client.session.login()
+        self.client.session._revoked = True
+        with self.assertRaisesRegex(ClientError,"session_revoked"):
+            self.client.session.login()
+        generation = self.client.session.generation
+        self.secret.write_text(json.dumps({"username":"synthetic-owner","password":"synthetic-replacement-password"}))
+        self.client.session.login()
+        self.assertGreater(self.client.session.generation,generation)
+        self.assertFalse(self.client.session._revoked)
+
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="rust-client-synthetic-")
         self.root = Path(self.temporary.name)

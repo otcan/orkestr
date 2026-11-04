@@ -18,6 +18,7 @@ MAX_BODY = 1024 * 1024
 LIMITS = dict(duration_ms=900000, attempts=32, bytes=67108864,
               cleanup_ms=30000, cleanup_attempts=4, cleanup_bytes=1048576)
 SESSION = "/api/v2/browser/session"
+SERVICE_SESSION = "/api/v2/machine/service-session"
 # Matches the server JSON limit for raw-octet attachment bundles.
 ATTACHMENT_MAX_JSON = 68 * 1024 * 1024
 # Reads reuse a server identity + session check this recent. Every mutation
@@ -103,6 +104,10 @@ def credentials(path):
     finally:
         os.close(directory)
     value = decode(raw)
+    if isinstance(value, dict) and set(value) == {"service_token"}:
+        token = value["service_token"]
+        require(isinstance(token, str) and re.fullmatch("[0-9a-f]{64}", token), "credential_shape_refused")
+        return {"service_token": token}
     require(isinstance(value, dict) and isinstance(value.get("username"), str) and
             isinstance(value.get("password"), str), "credential_shape_refused")
     require(0 < len(value["username"].encode()) <= 128 and
@@ -140,6 +145,7 @@ class RustSession:
         self._cookie = self._csrf = None
         self.features = frozenset()
         self._revoked = False
+        self._credential_digest = None
         self.generation = 0
         self._verified_at = None
         self._logged_in_at = 0.0
@@ -158,7 +164,7 @@ class RustSession:
         # event wait never stalls every other binding's requests.
         with self._lock:
             cookie, csrf, revoked = self._cookie, self._csrf, self._revoked
-        if not cookie and path not in ("/api/v2/health", SESSION):
+        if not cookie and path not in ("/api/v2/health", SESSION, SERVICE_SESSION):
             # Another binding's renewal failed or its 401 revoked the session
             # after this binding's login check. Never send it unauthenticated:
             # the server's 401 would then look like a revocation of the
@@ -169,8 +175,10 @@ class RustSession:
         if cookie and path != "/api/v2/health":
             headers["Cookie"] = cookie
         if method == "POST":
-            headers.update({"Origin": self.origin, "Content-Type": "application/json"})
-            if path != SESSION:
+            headers["Content-Type"] = "application/json"
+            if path != SERVICE_SESSION:
+                headers["Origin"] = self.origin
+            if path not in (SESSION, SERVICE_SESSION):
                 headers["X-Orkestr-CSRF"] = csrf
         connection = http.client.HTTPConnection(self.host, self.port, timeout=timeout_s)
         started, timer = time.monotonic(), None
@@ -271,7 +279,16 @@ class RustSession:
         A read may reuse a verification younger than READ_RECHECK_S; a mutation
         always verifies the server identity and session first."""
         with self._lock:
-            require(not self._revoked, "session_revoked")
+            if self._revoked:
+                # A privileged operator may replace the protected credential file.
+                # Re-read only to detect that explicit recovery; unchanged revoked
+                # credentials never cause automatic re-login or replay of a mutation.
+                replacement = credentials(self.credentials_path)
+                fingerprint = hashlib.sha256(json.dumps(replacement, sort_keys=True).encode()).digest()
+                require(self._credential_digest is not None and fingerprint != self._credential_digest,
+                        "session_revoked")
+                self._revoked = False
+                self._cookie = self._csrf = self._verified_at = None
             if self._cookie and time.monotonic() - self._logged_in_at >= SESSION_RENEW_S:
                 # Log in again while the current session is still valid.
                 self._cookie = self._csrf = None
@@ -286,7 +303,10 @@ class RustSession:
                 self._session(value)
                 self._verified_at = time.monotonic()
                 return self.generation
-            _, value, headers = self._wire("POST", SESSION, credentials(self.credentials_path))
+            secret = credentials(self.credentials_path)
+            self._credential_digest = hashlib.sha256(json.dumps(secret, sort_keys=True).encode()).digest()
+            endpoint = SERVICE_SESSION if "service_token" in secret else SESSION
+            _, value, headers = self._wire("POST", endpoint, secret)
             cookies = [v for k, v in headers if k.lower() == "set-cookie"]
             require(len(cookies) == 1, "session_cookie_refused")
             parsed = SimpleCookie()

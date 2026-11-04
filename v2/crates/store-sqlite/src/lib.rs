@@ -38,11 +38,13 @@ pub use conversation_export::{
 pub mod history_import;
 pub use history_import::{history_source_digest, HistoryError};
 mod intake;
+pub mod owner_password;
 mod paths;
 mod preflight;
 mod production_runtime;
 mod replay;
 mod runtime;
+pub mod service_credentials;
 pub use production_runtime::{
     auto_accept_request_key, AutomaticReplyConsumption, AutomaticReplyDelivery,
     AutomaticReplyProducer, AutomaticReplyReservation, AutomaticReplyReservationResult,
@@ -223,8 +225,13 @@ impl Store {
             .execute(&mut *tx)
             .await
             .map_err(db)?;
-        sqlx::query("INSERT INTO auth_sessions(token_hash,owner_id,expires_at) VALUES (?,?,unixepoch()+43200)")
-            .bind(digest(token)).bind(owner.to_string()).execute(&mut *tx).await.map_err(db)?;
+        let kind = if token.starts_with("browser:") {
+            "browser"
+        } else {
+            "machine"
+        };
+        sqlx::query("INSERT INTO auth_sessions(token_hash,owner_id,expires_at,kind) VALUES (?,?,unixepoch()+43200,?)")
+            .bind(digest(token)).bind(owner.to_string()).bind(kind).execute(&mut *tx).await.map_err(db)?;
         tx.commit().await.map_err(db)?;
         Ok(())
     }

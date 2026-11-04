@@ -111,6 +111,11 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     orkestr_v2_server::attachment_keys_http::startup(&store, &home).await;
     let origin = config.origin;
     let mut state = AppState::new(store.clone(), token, origin)?;
+    match std::env::var("ORKESTR_V2_PASSWORD_ROTATION_READY").as_deref() {
+        Ok("1") => state = state.with_password_rotation_ready(),
+        Ok("0") | Err(_) => {}
+        Ok(_) => return Err("ORKESTR_V2_PASSWORD_ROTATION_READY must be 0 or 1".into()),
+    }
     // Operator deploy drain: `<home>/deploy-drain.request` pauses admission.
     let deploy_drain = state.deploy_drain();
     deploy_drain.bind(&home);

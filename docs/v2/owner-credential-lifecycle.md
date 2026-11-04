@@ -1,0 +1,58 @@
+# Owner and automation credential lifecycle
+
+Owner password management uses the V2 Argon2 credential store. It does not use
+the V1 owner-login JSON file or its password-change implementation.
+
+`POST /api/v2/browser/password` requires the current browser cookie, same-origin
+CSRF protection and `{username,current_password,new_password}`. A write-locked
+transaction rechecks the authenticated browser and verified old password hash,
+replaces the hash, and revokes human browser sessions. Login session issuance
+also rechecks the verified hash under its write lock, fencing a login that
+verified the old password concurrently. The response requires a fresh sign-in.
+
+## Automation migration before enabling rotation
+
+Some compatibility consumers historically used the human browser-login endpoint.
+These consumers must migrate before rotation is enabled. The new API is disabled
+by default; the operator sets `ORKESTR_V2_PASSWORD_ROTATION_READY=1` only after
+inventorying and migrating every unattended consumer. Browser security status
+reports readiness and the password form remains disabled until then. This is a
+technical migration gate, not a second owner approval.
+
+Existing sessions are labelled `legacy` by migration 0086: their stored hashes
+cannot reveal whether the original token had the browser prefix. Rotation refuses
+while any unexpired legacy session remains, rather than guessing which sessions
+to retain. Existing sessions expire within their original twelve-hour lifetime.
+Never relabel a session from its hash or revoke all sessions as a migration shortcut.
+
+Use one independently revocable service credential per consumer:
+
+1. An authenticated human browser calls `POST /api/v2/browser/service-credentials`
+   with `{username,current_password,label}` and its normal CSRF header. The secret
+   `service_token` is returned once, with `Cache-Control: no-store`; Core stores
+   only its hash. It expires after thirty days. Store it through the operator's
+   protected secret-file process, never in chat, logs or a source checkout.
+2. A loopback automation client with no Origin header exchanges
+   `{service_token}` at `POST /api/v2/machine/service-session`. The returned cookie
+   and CSRF projection have the existing browser-shaped API protocol, with a
+   distinct service session kind. The client must still verify expected owner
+   and exact server source identity. Sessions last at most twelve hours and never
+   outlive the service credential.
+3. Compatibility clients accept a protected 0600 credential JSON file containing
+   only `{service_token}`. The legacy `{username,password}` format remains
+   compatible during migration, but is not independent of the human password.
+4. `GET /api/v2/browser/service-credentials` lists metadata only.
+   `DELETE /api/v2/browser/service-credentials/{id}` atomically revokes that key
+   and every session it issued. Service sessions cannot manage credentials or
+   change the human password. A maximum of sixteen active credentials per owner
+   and sixty-four active sessions per key bounds issuance without evicting other
+   consumers during overlapping starts.
+
+Password changes preserve service sessions and service credentials. Service-key
+rotation and revocation remain explicit operations. On a 401 the compatibility
+client stays refused for unchanged credentials; an operator's replacement of
+the protected file permits a new authenticated login on the next attempt. It
+does not replay the failed mutation or turn an uncertain outcome into success.
+
+The implementation does not by itself migrate live consumers or provide a
+forgotten-password recovery CLI. Those remain release acceptance requirements.

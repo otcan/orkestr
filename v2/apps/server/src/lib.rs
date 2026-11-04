@@ -56,6 +56,7 @@ pub mod observability;
 pub mod offline_python;
 pub mod owned_children;
 pub mod owned_execution;
+mod owner_password;
 #[cfg(test)]
 mod provider_handoff_http_tests;
 mod provider_payload;
@@ -64,6 +65,7 @@ mod response_shaping;
 pub mod restricted_http;
 mod retired_inputs;
 mod routes;
+mod service_credentials;
 mod sidebar_http;
 mod sidebar_v1;
 mod steering_http;
@@ -123,8 +125,14 @@ pub struct AppState {
     restricted: Option<Arc<restricted_http::RestrictedRuntime>>,
     /// Operator deploy drain shared by window admission and timer fires.
     deploy_drain: Arc<deploy_drain::DeployDrain>,
+    password_rotation_ready: bool,
 }
 impl AppState {
+    /// Trusted operator assertion after all unattended consumers use service credentials.
+    pub fn with_password_rotation_ready(mut self) -> Self {
+        self.password_rotation_ready = true;
+        self
+    }
     /// The process-wide deploy drain (inert until bound to a home directory).
     pub fn deploy_drain(&self) -> Arc<deploy_drain::DeployDrain> {
         self.deploy_drain.clone()
@@ -312,6 +320,7 @@ impl AppState {
             attachment_export: None,
             v1_chat_icons: None,
             whatsapp_chats: None,
+            password_rotation_ready: false,
             v1_timers: Default::default(),
             claude_turns: false,
             restricted: None,
@@ -502,6 +511,11 @@ pub fn router_with_google_catalog(
         .route("/api/v2/session",post(auth::session))
         .route("/api/v2/machine/session",post(auth::session))
         .route("/api/v2/browser/session",post(browser::login).get(browser::session).delete(browser::logout))
+        .route("/api/v2/browser/password",post(owner_password::change))
+        .route("/api/v2/browser/security",get(owner_password::status))
+        .route("/api/v2/browser/service-credentials",get(service_credentials::list).post(service_credentials::create))
+        .route("/api/v2/browser/service-credentials/{id}",delete(service_credentials::revoke))
+        .route("/api/v2/machine/service-session",post(service_credentials::exchange))
         .route("/api/v2/projects",get(routes::projects).post(routes::create_project))
         .route("/api/v2/resources",get(resource_health::resources))
         .route("/api/v2/live-map",get(live_map::read))
