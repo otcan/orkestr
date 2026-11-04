@@ -26,9 +26,9 @@ import v2_rollback  # noqa: E402
 
 
 def _client(args):
-    username, password = v2_client.read_credentials(args.credentials_file)
     client = v2_client.Client(args.v2_url, origin=args.origin)
-    client.login(username, password)
+    client.login_file(args.credentials_file, expected_owner=args.expected_owner,
+                      expected_source=args.expected_source)
     return client
 
 
@@ -92,7 +92,9 @@ def parser():
         command.add_argument('--v2-url', required=True)
         command.add_argument('--origin', help='server origin when it differs from --v2-url')
         command.add_argument('--credentials-file', required=True,
-                             help='private 0600 JSON {"username","password"}')
+                             help='private 0600 JSON {"service_token"} or legacy {"username","password"}')
+        command.add_argument('--expected-owner', help='required owner UUID for service credentials')
+        command.add_argument('--expected-source', help='required deployed source commit for service credentials')
 
     export = commands.add_parser('v1-export')
     export.add_argument('--v1-home', required=True)

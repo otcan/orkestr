@@ -4,6 +4,7 @@ Credentials come from an explicit private JSON file; the session cookie and
 CSRF token stay in memory and are revoked on close. Nothing is logged.
 """
 import json
+import importlib.util
 import os
 from pathlib import Path
 import stat
@@ -38,9 +39,19 @@ class Client:
         self.timeout = timeout
         self.cookie = None
         self.csrf = None
+        self.service = None
         self.opener = request.build_opener(request.HTTPHandler, request.HTTPSHandler)
 
     def _send(self, method, path, body=None, auth=True):
+        if self.service is not None:
+            try:
+                self.service.login(mutation=method not in {'GET', 'HEAD'})
+                return self.service._wire(method, path, body, allowed=(200, 201, 202, 204),
+                                          max_request=68 * 1024 * 1024)
+            except Exception as failure:
+                # ClientError exposes only a bounded code/status, never response data.
+                raise ApiError(getattr(failure, 'status', None) or 0,
+                               getattr(failure, 'code', 'service_request_failed')) from None
         headers = {'Accept': 'application/json', 'Origin': self.origin}
         data = None
         if body is not None:
@@ -76,7 +87,42 @@ class Client:
         self.csrf = body['csrf_token']
         return body
 
+    def login_file(self, path, *, expected_owner=None, expected_source=None):
+        """Service mode requires loopback plus exact source/owner pins.
+
+        Load the sibling standard-library client by its reviewed source location
+        so the standalone migration entrypoints also work with python -I -S -B.
+        """
+        module_path = Path(__file__).resolve().parents[1] / 'compat/v1_runtime/rust_client.py'
+        spec = importlib.util.spec_from_file_location('orkestr_migration_service_client', module_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        try:
+            secret = module.credentials(path)
+            if set(secret) != {'service_token'}:
+                return self.login(secret['username'], secret['password'])
+            if expected_owner is None or expected_source is None:
+                raise ApiError(0, 'service_identity_pins_required')
+            session = module.RustSession(origin=self.origin, loopback_url=self.base,
+                                         credentials_path=path, expected_owner=expected_owner,
+                                         expected_source=expected_source, timeout_s=min(self.timeout, 20))
+            session.login()
+            self.service = session
+            return {'owner_id': session.owner}
+        except ApiError:
+            raise
+        except Exception as failure:
+            raise ApiError(getattr(failure, 'status', None) or 0,
+                           getattr(failure, 'code', 'service_login_failed')) from None
+
     def close(self):
+        if self.service is not None:
+            try:
+                self.service._wire('DELETE', '/api/v2/browser/session', allowed=(204,))
+            except Exception:
+                pass
+            self.service = None
+            return
         if self.cookie:
             try:
                 self._send('DELETE', '/api/v2/browser/session')

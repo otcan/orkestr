@@ -30,6 +30,9 @@ class Peer(BaseHTTPRequestHandler):
     def do_DELETE(self):
         self.dispatch()
 
+    def do_PUT(self):
+        self.dispatch()
+
     def dispatch(self):
         raw = self.rfile.read(int(self.headers.get("Content-Length", "0")))
         self.server.requests.append((self.command, self.path, dict(self.headers),
@@ -55,7 +58,8 @@ class Peer(BaseHTTPRequestHandler):
             service = self.path.endswith("service-session")
             if service and self.server.on_exchange:
                 self.server.on_exchange()
-            token = ("d" if service else "b") * 64
+            token = (self.headers.get("Cookie", "").split("=")[-1] if self.command == "GET"
+                     else ("d" if service else "b") * 64)
             value = {"owner_id": OWNER,
                      "csrf_token": hashlib.sha256(f"orkestr-v2-browser-csrf-v1:{token}".encode()).hexdigest()}
             headers["Set-Cookie"] = (f"orkestr_v2_session={token}; Path=/api/v2; HttpOnly; SameSite=Strict; Secure")

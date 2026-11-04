@@ -45,3 +45,19 @@ python3 -B v2/acceptance/thread_history_e2e.py PATH/TO/orkestr-v2-server
 parent's V2 conversation (archived history, finish in V1 or recreate in V2,
 single-writer worktree transfer). Dry-run by default; see
 `docs/v2/conversation-resources.md`.
+
+## Unattended credentials
+
+Remote commands in `thread_history.py`, `thread_timers.py` (including calendar
+commands) and `thread_workers.py` accept a private 0600 `{service_token}` file
+through `--credentials-file`. Service mode additionally requires
+`--expected-owner OWNER_UUID --expected-source FULL_DEPLOYED_COMMIT`, an HTTP
+loopback `--v2-url`, and the correct public `--origin`. Run the pinned scripts
+with `PYTHONDONTWRITEBYTECODE=1 python3 -I -S -B`.
+
+The shared service client verifies the exact server build before exchanging the
+key, checks the owner, rechecks session/build before mutations, sends CSRF headers
+for writes, and logs out on close. It never falls back to human credentials on a
+service failure or retries an uncertain write. Legacy `{username,password}`
+files remain accepted. Provisioning and live migration are separate steps; see
+[credential lifecycle](../../docs/v2/owner-credential-lifecycle.md).
