@@ -52,6 +52,23 @@ pub(super) fn create(dir: &File, name: &str, mode: u32) -> Result<File, &'static
     .map(Into::into)
     .map_err(|_| "private file creation failed")
 }
+
+/// Lock before exposing the eligible .UUID.UUID.tmp name. A concurrent reaper
+/// cannot win the create/flock gap; the unexposed allocating file is empty.
+pub(super) fn create_locked_temporary(dir: &File, name: &str) -> Result<File, &'static str> {
+    let allocating = Temporary {
+        dir: dir
+            .try_clone()
+            .map_err(|_| "temporary directory unavailable")?,
+        name: format!("{name}.allocating"),
+    };
+    let file = create(dir, &allocating.name, 0o600)?;
+    fs::flock(&file, fs::FlockOperation::NonBlockingLockExclusive)
+        .map_err(|_| "temporary file lock failed")?;
+    fs::renameat_with(dir, &allocating.name, dir, name, fs::RenameFlags::NOREPLACE)
+        .map_err(|_| "temporary namespace publication failed")?;
+    Ok(file)
+}
 pub(super) struct Temporary {
     pub dir: File,
     pub name: String,

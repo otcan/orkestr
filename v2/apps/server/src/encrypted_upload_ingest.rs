@@ -12,6 +12,8 @@ use uuid::Uuid;
 mod prepared;
 #[cfg(unix)]
 mod private_fs;
+mod recovery;
+pub use recovery::{recover as recover_export_temporaries, Recovery};
 #[cfg(all(test, unix))]
 mod tests;
 
@@ -224,7 +226,7 @@ pub(crate) async fn materialize(
             .map_err(|_| "export directory unavailable")?,
         name: format!(".{}.{}.tmp", status.file.upload_id, Uuid::new_v4()),
     };
-    let file = private_fs::create(&folder_fd, &temporary.name, 0o600)?;
+    let file = private_fs::create_locked_temporary(&folder_fd, &temporary.name)?;
     let mut file = tokio::fs::File::from_std(file);
     #[cfg(all(test, unix))]
     let pause = ingest.pause.lock().unwrap().clone();

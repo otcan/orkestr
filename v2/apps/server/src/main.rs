@@ -145,9 +145,16 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         // Opt-in: absent means the live map endpoint reports "not configured".
         state = state.with_live_map_file(&PathBuf::from(path))?;
     }
-    state = state.with_attachment_export(
-        orkestr_v2_server::message_attachments::ExportDir::from_env(&home),
-    );
+    let attachment_export = orkestr_v2_server::message_attachments::ExportDir::from_env(&home);
+    let recovered =
+        orkestr_v2_server::encrypted_upload_ingest::recover_export_temporaries(&attachment_export)?;
+    if recovered.removed > 0 {
+        eprintln!(
+            "attachment recovery: removed {} abandoned private temporary files",
+            recovered.removed
+        );
+    }
+    state = state.with_attachment_export(attachment_export);
     if let Some(path) = std::env::var_os("ORKESTR_V2_ATTACHMENT_INGEST_IDENTITY_FILE") {
         state = state.with_attachment_ingest_file(&PathBuf::from(path))?;
     } else {
