@@ -3,6 +3,7 @@ pub(crate) mod capacity_fallback;
 mod conversation_workspaces;
 pub(crate) mod host_full_access;
 pub(crate) mod loading;
+pub(crate) mod provider_routing;
 pub(crate) mod roles;
 pub(crate) mod workspace_exec;
 pub(crate) mod workspace_exec_trusted;
@@ -41,6 +42,9 @@ pub(crate) struct BetaConfig {
     /// absent means the enabled built-in default.
     #[serde(default)]
     pub capacity_fallback: Option<capacity_fallback::CapacityFallbackConfig>,
+    /// Operator-pinned domain policy, applied before any window admission.
+    #[serde(default)]
+    pub provider_routing: Option<provider_routing::ProviderRouting>,
     /// Total window lifetime (minutes) an active window may be extended to
     /// while its Deep or Worker runs are still working. Default 60, at most 240.
     #[serde(default)]
@@ -144,6 +148,9 @@ impl BetaConfig {
         }
         if let Some(fallback) = &self.capacity_fallback {
             fallback.policy()?;
+        }
+        if let Some(routing) = &self.provider_routing {
+            routing.validate()?;
         }
         if self
             .window_max_minutes

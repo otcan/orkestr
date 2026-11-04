@@ -17,6 +17,44 @@ FIELDS = {'schema_version', 'owner_id', 'conversation_id', 'manager_socket',
 # own workspace); the server, packager and manager share these bounds.
 MAX_BETA_CONFIG_BYTES = 262144
 MAX_ADDITIONAL_WORKSPACE_EXEC = 128
+
+
+def provider_routing(value):
+    """Generic operator vocabulary; never a model-supplied runtime setting."""
+    if 'provider_routing' not in value:
+        return
+    policy = value['provider_routing']
+    require(type(policy) is dict and set(policy) == {'rules'}, 'closed provider routing policy required')
+    rules = policy['rules']
+    require(type(rules) is list and 1 <= len(rules) <= 32, 'bounded provider routing rules required')
+    ids = set()
+    for rule in rules:
+        require(type(rule) is dict and set(rule) - {'conversations', 'terms'} ==
+                {'id', 'threshold', 'excluded', 'preferred'}, 'closed provider routing rule required')
+        key = rule['id']
+        require(type(key) is str and re.fullmatch(r'[A-Za-z0-9_.-]{1,64}', key)
+                and key not in ids, 'unique routing rule identifier required')
+        ids.add(key)
+        require(rule['excluded'] in ('codex', 'claude') and rule['preferred'] in ('codex', 'claude')
+                and rule['excluded'] != rule['preferred'], 'distinct routing providers required')
+        require(type(rule['threshold']) is int and 1 <= rule['threshold'] <= 1024, 'bounded routing threshold required')
+        conversations, terms = rule.get('conversations', []), rule.get('terms', [])
+        require(type(conversations) is list and len(conversations) <= 128
+                and type(terms) is list and len(terms) <= 256 and (conversations or terms),
+                'bounded routing scope required')
+        for conversation in conversations:
+            try:
+                parsed = uuid.UUID(conversation)
+            except (ValueError, TypeError, AttributeError):
+                require(False, 'canonical routing conversation required')
+            require(str(parsed) == conversation and parsed.int != 0, 'canonical routing conversation required')
+        for term in terms:
+            require(type(term) is dict and set(term) == {'text', 'weight'}, 'closed routing term required')
+            text = term['text']
+            require(type(text) is str and text.strip() and len(text.encode()) <= 128
+                    and not any(ord(c) < 32 or ord(c) == 127 for c in text), 'bounded routing term required')
+            require(type(term['weight']) is int and 1 <= term['weight'] <= 1024, 'bounded routing weight required')
+
 TRUSTED_FLAGS = {'network', 'host_toolchain', 'host_privileged'}
 TRUSTED_PATHS = {'workspace_target', 'home'}
 TRUSTED_PATH_LISTS = {'path', 'toolchain_mounts', 'cache_mounts', 'credential_mounts',
@@ -111,7 +149,7 @@ def validate(raw):
     require(type(raw) is bytes and len(raw) <= MAX_BETA_CONFIG_BYTES, 'bounded beta config required')
     value = json.loads(raw.decode('utf-8'), object_pairs_hook=unique,
                        parse_constant=lambda _: (_ for _ in ()).throw(RuntimeError('invalid beta number')))
-    require(type(value) is dict and set(value) - {'roles', 'workspace_exec', 'additional_workspace_exec', 'max_active_windows', 'host_full_access', 'claude', 'window_max_minutes', 'conversation_window_max_minutes', 'conversation_workspaces'} == FIELDS, 'closed beta config fields required')
+    require(type(value) is dict and set(value) - {'roles', 'workspace_exec', 'additional_workspace_exec', 'max_active_windows', 'host_full_access', 'claude', 'window_max_minutes', 'conversation_window_max_minutes', 'conversation_workspaces', 'provider_routing'} == FIELDS, 'closed beta config fields required')
     require(type(value['schema_version']) is int and value['schema_version'] == 1, 'beta schema version')
     for name in ('owner_id', 'conversation_id'):
         text = value[name]
@@ -147,6 +185,7 @@ def validate(raw):
         require(type(capacity) is int and 1 <= capacity <= 12, 'bounded beta window capacity required')
     window_lifetimes(value)
     conversation_workspaces(value)
+    provider_routing(value)
     if 'host_full_access' in value:
         host_full_access(value['host_full_access'])
     if 'claude' in value:

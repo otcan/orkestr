@@ -1,6 +1,7 @@
 //! Serialized private admission-to-task handoff; receipts alone never launch.
 #[path = "conversation_drain.rs"]
 mod drain;
+mod provider_routing;
 use super::{
     context::Context,
     handles::Handles,
@@ -97,6 +98,8 @@ impl ConversationController {
         let _operation = self.operation.lock().await;
         self.refresh().await?;
         super::integers::generation(input.expected_generation)?;
+        self.apply_provider_routing(browser, owner, conversation, input)
+            .await?;
         let admission = self
             .initial
             .admit(&self.store, browser, owner, conversation, input)

@@ -15,6 +15,7 @@ from artifact_boundary import separate
 from beta_config import (validate as validate_beta, workspace_exec as validate_workspace_exec,
                          additional_workspace_exec as validate_additional_workspace_exec, window_lifetimes,
                          conversation_workspaces as validate_conversation_workspaces,
+                         provider_routing as validate_provider_routing,
                          host_full_access as validate_host_full_access)
 from closure import pin, require, trusted
 from manager_source import authority
@@ -84,7 +85,7 @@ def pair_bytes(plan):
 
 
 OPTIONAL = {'roles', 'preserve_state', 'workspace_exec', 'additional_workspace_exec', 'max_active_windows', 'host_full_access',
-            'window_max_minutes', 'conversation_window_max_minutes', 'conversation_workspaces',
+            'window_max_minutes', 'conversation_window_max_minutes', 'conversation_workspaces', 'provider_routing',
             'code_mode_host', 'code_mode_host_sha256', 'claude', 'claude_quota_projection', 'codex_quota_projection', 'live_map', 'desktop_broker', 'timer_config', 'whatsapp_chats', 'v1_chat_icons_dir', 'metrics_port'}
 CLAUDE_PATHS = ('executable', 'account', 'workspace', 'home', 'temporary')
 # Account selection stays with the Claude account reference, never the env.
@@ -158,6 +159,7 @@ def optional(plan):
             'host-privileged commands require host_full_access')
     window_lifetimes(plan)
     validate_conversation_workspaces(plan)
+    validate_provider_routing(plan)
     if 'additional_workspace_exec' in plan:
         require('roles' in plan, 'workspace execution requires configured Worker roles')
         validate_additional_workspace_exec(plan)
@@ -309,7 +311,7 @@ def prepare(plan):
                 beta['additional_workspace_exec']=plan['additional_workspace_exec']
             if 'max_active_windows' in plan:
                 beta['max_active_windows']=plan['max_active_windows']
-            for key in ('window_max_minutes', 'conversation_window_max_minutes', 'conversation_workspaces'):
+            for key in ('window_max_minutes', 'conversation_window_max_minutes', 'conversation_workspaces', 'provider_routing'):
                 if key in plan:
                     beta[key]=plan[key]
             if 'host_full_access' in plan:

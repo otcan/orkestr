@@ -211,6 +211,9 @@ impl Fixture {
     }
 }
 
+#[path = "provider_routing_admission_tests.rs"]
+mod provider_routing_admission_tests;
+
 #[tokio::test]
 async fn saturated_capacity_queues_durably_then_dispatches_exactly_once() {
     let f = fixture().await;

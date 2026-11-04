@@ -140,10 +140,13 @@ class Selected(unittest.TestCase):
         self.plan['timer_config']='/var/lib/synthetic-private/timers.json'
         self.plan['v1_chat_icons_dir']='/var/lib/synthetic-v1/chat-icons'
         self.plan['whatsapp_chats']='/var/lib/synthetic-private/whatsapp-chats.json'
+        self.plan['provider_routing']={'rules':[{'id':'synthetic-category','threshold':3,
+            'terms':[{'text':'cedar','weight':3}],'excluded':'claude','preferred':'codex'}]}
         selected.prepare(self.plan)
         with authority(REPO,source) as (_,manager,_):
             package=manager.Package(r/'release/package',sha(r/'release/package/manifest.json'))
             self.assertEqual(set(package.role_profiles),{'deep','fast','worker-0','worker-1','worker-2','worker-3'})
+            self.assertEqual(package.beta['provider_routing'],self.plan['provider_routing'])
             self.assertEqual(package.environment()['ORKESTR_V2_LIVE_MAP'],'/var/lib/synthetic-live-map/map.json')
             self.assertEqual(package.environment()['ORKESTR_V2_DESKTOP_BROKER_CONFIG'],
                              '/var/lib/synthetic-private/desktop-broker.json')

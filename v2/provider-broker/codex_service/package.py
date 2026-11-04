@@ -189,7 +189,7 @@ class Package:
         beta = self.beta
         require(set(beta) - {"roles", "workspace_exec", "additional_workspace_exec", "max_active_windows",
                              "window_max_minutes", "conversation_window_max_minutes",
-                             "host_full_access", "claude", "conversation_workspaces"} == {"schema_version", "owner_id", "conversation_id", "manager_socket",
+                             "host_full_access", "claude", "conversation_workspaces", "provider_routing"} == {"schema_version", "owner_id", "conversation_id", "manager_socket",
                 "launcher", "launcher_sha256", "workspace", "namespace", "supervisor_key"}
                 and type(beta["schema_version"]) is int and beta["schema_version"] == 1,
                 "beta_format")
