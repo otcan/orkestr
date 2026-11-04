@@ -217,7 +217,7 @@ fn Desktops(
             ul { class: "lease-list", "aria-label": "Available desktops",
                 for slug in bound_slugs {
                     crate::desktop_open_view::DesktopOpen {
-                        key: "{conversation}:{slug}", conversation: conversation.clone(), slug,
+                        key: "{conversation}:{revision}:{slug}", conversation: conversation.clone(), slug,
                         csrf: csrf.clone(), session_scope, onexpired,
                     }
                 }
