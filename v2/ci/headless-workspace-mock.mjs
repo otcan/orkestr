@@ -54,7 +54,7 @@ export function createState() {
     // Chat settings, desktops and timers of conversation A.
     settings: { schema_version: 1, conversation_id: A, revision: 2, provider: 'codex', model: 'synthetic-model', reasoning_effort: 'medium',
       honor_no_reply: true, reply_prefix: 'synthetic:', reply_footer: null, provider_generation: 0, updated_at_ms: 1 },
-    settingsPuts: [], bindingPuts: [], timerCalls: [], timerPause: null, chatTimerPause: null,
+    settingsPuts: [], bindingPuts: [], desktopBindings: {}, timerCalls: [], timerPause: null, chatTimerPause: null,
     // Linked V1 chat management (synthetic V1 state behind the server).
     v1Model: { model: 'synthetic-model', effort: 'low' }, v1Calls: [],
     v1Timers: [{ id: 'timer-1', label: 'Synthetic digest', cadence: 'daily', time: '08:00', every: null, timezone: 'Europe/Berlin',
@@ -423,13 +423,14 @@ async function api(state, req, res, url) {
     return json(res, 200, {url:'https://desktop.example.test/desktop-share/synthetic?key=fixture',challenge_required:true});
   }
   if (rest === '/desktops' && req.method === 'GET') return json(res, 200, { schema_version: 1, conversation_id: id,
-    binding: { schema_version: 1, conversation_id: id, revision: 1, v1_thread_id: 'synthetic-thread', desktop_slugs: ['synthetic-desk'], grant_issued: false, grant_generation: 0 },
+    binding: state.desktopBindings[id] ?? { schema_version: 1, conversation_id: id, revision: 1, v1_thread_id: 'synthetic-thread', desktop_slugs: ['synthetic-desk'], grant_issued: false, grant_generation: 0 },
     leases: [{ conversation_id: id, desktop_slug: 'synthetic-desk', v1_thread_id: 'synthetic-thread', v1_lease_id: 'lease-1', fencing_version: 1,
       state: 'active', expires_at: '2026-01-01T00:10:00Z', acquired_at_ms: 1, heartbeat_at_ms: 2, ended_at_ms: null, end_reason: null }] });
   if (rest === '/desktop-binding' && req.method === 'PUT') {
     const request = JSON.parse(await body(req)); state.bindingPuts.push(request);
-    return json(res, 200, { schema_version: 1, conversation_id: id, revision: request.expected_revision + 1, v1_thread_id: request.v1_thread_id,
-      desktop_slugs: request.desktop_slugs, grant_issued: false, grant_generation: 0 });
+    state.desktopBindings[id] = { schema_version: 1, conversation_id: id, revision: request.expected_revision + 1, v1_thread_id: request.v1_thread_id,
+      desktop_slugs: request.desktop_slugs, grant_issued: false, grant_generation: 0 };
+    return json(res, 200, state.desktopBindings[id]);
   }
   if (rest === '/timers' && req.method === 'GET') return json(res, 200, { conversation_id: id, pause_until_ms: id === A ? state.chatTimerPause : null,
     pause_until_local: state.chatTimerPause ? 'Thu 22 Oct 09:00 CEST' : null, digests: id !== A ? [] : [

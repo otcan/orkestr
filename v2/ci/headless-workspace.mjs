@@ -517,6 +517,8 @@ export const scenarios = [
     await clickText('Save desktops');
     await waitText('Desktops saved (revision 2)');
     assert.deepEqual(state.bindingPuts.at(-1).desktop_slugs, ['synthetic-desk', 'other-desk']);
+    await page.waitForFunction(() => document.querySelectorAll('[aria-label="Available desktops"] a').length === 0);
+    await waitText('other-desk');
     await screenshot(label, 'chat-settings');
     await noHorizontalScroll();
     // Timers of the chat are listed; selecting one opens its controls.
