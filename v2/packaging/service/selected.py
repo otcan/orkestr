@@ -219,8 +219,17 @@ def prepare(plan):
         trust=sys.modules['codex_bounded.trust']
         trust.protected(output.parent,True)
         # Stat canonical credentials only. Never open, copy or hash these files.
-        from codex_service.identity import bind as bind_identity, FIELDS as IDENTITY_FIELDS
-        identity=bind_identity(plan)
+        IDENTITY_FIELDS = {'authority_uid', 'authority_gid', 'executor_uid', 'executor_gid', 'provider_home'}
+        if IDENTITY_FIELDS.intersection(plan):
+            require('codex_service/identity.py' in manager.FILES,
+                    'selected source does not support the identity split')
+            from codex_service.identity import bind as bind_identity
+            identity=bind_identity(plan)
+        else:
+            # Historical exact-source packages predate identity.py. Preserve
+            # their qualified single-UID plan without mixing newer source in.
+            identity={'split':False, 'authority_uid':uid,
+                      'provider_home':str(Path(plan['home'])/'provider-home')}
         if identity['split']:
             require(not any(key in plan for key in ('roles','host_full_access','claude','workspace_exec','additional_workspace_exec')),
                     'split privileged/advanced mode requires a separately qualified scoped broker')

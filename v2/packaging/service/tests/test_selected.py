@@ -96,6 +96,12 @@ class Selected(unittest.TestCase):
         self.assertFalse(receipt['credential_contents_read'])
         self.assertEqual((self.root/'release').stat().st_mode&0o777,0o750)
         self.assertIn('-I -S -B',(self.root/'release/package/launcher.py').read_text())
+    def test_split_plan_refuses_historical_source_before_writes(self):
+        self.plan.update(authority_uid=65533,authority_gid=986,executor_uid=995,
+                         executor_gid=986,provider_home=str(self.root/'external-provider'))
+        with self.assertRaisesRegex(RuntimeError,'source does not support the identity split'):
+            selected.prepare(self.plan)
+        self.assertFalse((self.root/'release').exists())
     def test_beta2_embedded_version_must_match_pair(self):
         r=self.root
         for name in ('server','ui/app.wasm'):
