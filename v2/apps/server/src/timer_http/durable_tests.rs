@@ -425,84 +425,95 @@ async fn expired_session_still_refuses_startup() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
-// Reads the supervisor lease the heartbeat writes. In WAL mode a reader is not
-// blocked by a writer's exclusive lock, so this is observable DURING contention.
-fn lease_deadline_ms(db: &std::path::Path) -> i64 {
-    let out = std::process::Command::new("python3")
-        .arg("-c")
-        .arg(
-            "import sqlite3,sys; c=sqlite3.connect('file:'+sys.argv[1]+'?mode=ro',uri=True); \
-             print(c.execute('SELECT coalesce(max(lease_deadline_ms),0) FROM production_supervisors').fetchone()[0]); \
-             c.close()",
-        )
-        .arg(db)
-        .output()
-        .unwrap();
-    assert!(out.status.success(), "lease read failed");
-    String::from_utf8(out.stdout)
+// Reads the supervisor lease that the heartbeat writes. WAL lets a reader observe
+// it while a writer holds the write lock. Runs on a blocking pool and is bounded,
+// so it can never stall an executor thread or wait forever.
+async fn lease_deadline_ms(db: &std::path::Path) -> i64 {
+    let path = db.to_path_buf();
+    let joined = tokio::time::timeout(
+        Duration::from_secs(20),
+        tokio::task::spawn_blocking(move || {
+            std::process::Command::new("python3")
+                .arg("-c")
+                .arg(
+                    "import sqlite3,sys; c=sqlite3.connect('file:'+sys.argv[1]+'?mode=ro',uri=True,timeout=5); \
+                     print(c.execute('SELECT coalesce(max(lease_deadline_ms),0) FROM production_supervisors').fetchone()[0]); \
+                     c.close()",
+                )
+                .arg(path)
+                .output()
+        }),
+    )
+    .await
+    .expect("lease read did not return within 20s")
+    .expect("lease reader panicked")
+    .expect("could not spawn python3");
+    assert!(
+        joined.status.success(),
+        "lease read failed: {}",
+        String::from_utf8_lossy(&joined.stderr)
+    );
+    String::from_utf8(joined.stdout)
         .unwrap()
         .trim()
         .parse()
         .unwrap()
 }
 
-// Blocks until the helper confirms it holds the write lock, so contention is a
-// fact rather than a hope. Returns the child to be reaped after release.
-fn hold_write_lock(
-    db: &std::path::Path,
-    held: &std::path::Path,
-    seconds: f64,
-) -> std::process::Child {
+// Takes the write lock and holds it until killed, so release is immediate and
+// deterministic rather than a race between a sleep and the test's own clock.
+// Returns once the helper has CONFIRMED the lock is held, so contention is a fact.
+async fn hold_write_lock(db: &std::path::Path, held: &std::path::Path) -> std::process::Child {
     let child = std::process::Command::new("python3")
         .arg("-c")
         .arg(
-            "import sqlite3,sys,time,os; c=sqlite3.connect(sys.argv[1], isolation_level=None); \
-             c.execute('BEGIN EXCLUSIVE'); \
-             open(sys.argv[2],'w').write('held'); \
-             time.sleep(float(sys.argv[3])); c.execute('COMMIT'); c.close()",
+            "import sqlite3,sys,time; c=sqlite3.connect(sys.argv[1], isolation_level=None, timeout=5); \
+             c.execute('BEGIN EXCLUSIVE'); open(sys.argv[2],'w').write('held'); time.sleep(600)",
         )
         .arg(db)
         .arg(held)
-        .arg(seconds.to_string())
         .spawn()
-        .unwrap();
-    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        .expect("could not spawn python3");
+    let deadline = Instant::now() + Duration::from_secs(15);
     while !held.exists() {
         assert!(
-            std::time::Instant::now() < deadline,
-            "helper never acquired the write lock"
+            Instant::now() < deadline,
+            "helper never confirmed the write lock"
         );
-        std::thread::sleep(Duration::from_millis(50));
+        tokio::time::sleep(Duration::from_millis(50)).await;
     }
     child
 }
 
-// ORK: the regression itself, made deterministic.
+// SIGKILL drops the connection, so the OS releases the lock at once.
+fn release_write_lock(mut child: std::process::Child) {
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+// ORK: the regression itself, bounded and deterministic.
 //
-// Proves, by the lease the heartbeat actually writes: the controller is live and
-// heartbeating; the lock is confirmed held and spans several scheduled renewals;
-// the heartbeat is genuinely blocked (lease stops advancing); the controller does
-// NOT die; and it resumes heartbeating once the lock clears.
+// Proves, via the lease the heartbeat actually writes: the controller is live and
+// heartbeating; the lock is confirmed held; the heartbeat is genuinely blocked
+// (lease stops advancing); the controller does NOT die; and it resumes once the
+// lock clears. multi_thread so a blocking helper can never starve the controller
+// or tokio's timers.
 //
-// Against the unpatched controller this fails at the first survival assertion:
-// `heartbeat_supervisor` returns Unavailable, which the old
+// Against the deployed controller this fails at the survival assertion:
+// heartbeat_supervisor returns Unavailable, which the old
 // `.map_err(|_| HistoryError::Unauthorized)?` turned into a fatal exit.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn transient_store_lock_does_not_end_the_controller() {
     let (store, _unbound, _, _, _, dir) = fixture().await;
-    // fixture()'s bound Store carries a different namespace/key, so
-    // renew_timer_supervisor_credential returns Fenced and the controller dies at
-    // startup before reaching any heartbeat. Authorize the supervisor explicitly,
-    // as the other controller tests do.
     let bound = store.authorize_timer_supervisor(MACHINE).await.unwrap();
     let db = dir.join("core.sqlite3");
     let (shutdown, receiver) = tokio::sync::watch::channel(false);
     let controller = tokio::spawn(DurableTimerController::new(bound).run(receiver));
 
-    // 1. Actually heartbeating: the lease advances on its own.
-    let first = lease_deadline_ms(&db);
+    // 1. Really heartbeating: the lease advances unaided.
+    let first = lease_deadline_ms(&db).await;
     tokio::time::sleep(Duration::from_secs(3)).await;
-    let before = lease_deadline_ms(&db);
+    let before = lease_deadline_ms(&db).await;
     assert!(
         before > first,
         "controller is not heartbeating: lease stuck at {first}"
@@ -510,30 +521,30 @@ async fn transient_store_lock_does_not_end_the_controller() {
 
     // 2. Contention, confirmed held, spanning several one-second renewals.
     let held = dir.join("lock-held");
-    let mut holder = hold_write_lock(&db, &held, 9.0);
-    let during = lease_deadline_ms(&db);
-    tokio::time::sleep(Duration::from_secs(7)).await;
+    let holder = hold_write_lock(&db, &held).await;
+    let during = lease_deadline_ms(&db).await;
+    tokio::time::sleep(Duration::from_secs(8)).await;
     assert_eq!(
-        lease_deadline_ms(&db),
+        lease_deadline_ms(&db).await,
         during,
         "the write lock did not actually block the heartbeat"
     );
-    // 3. Past busy_timeout (5 s) and several missed renewals: still alive.
+    // 3. Past busy_timeout and several missed renewals: still alive.
     assert!(
         !controller.is_finished(),
         "a transient store lock ended the controller"
     );
 
-    // 4. Recovery: once the lock clears the lease advances again.
-    let _ = holder.wait();
-    tokio::time::sleep(Duration::from_secs(3)).await;
+    // 4. Recovery: the lease advances again once the lock clears.
+    release_write_lock(holder);
+    tokio::time::sleep(Duration::from_secs(4)).await;
     assert!(
-        lease_deadline_ms(&db) > during,
+        lease_deadline_ms(&db).await > during,
         "controller did not resume heartbeating after the lock cleared"
     );
 
     let _ = shutdown.send(true);
-    tokio::time::timeout(Duration::from_secs(10), controller)
+    tokio::time::timeout(Duration::from_secs(15), controller)
         .await
         .expect("controller did not observe shutdown")
         .unwrap()
@@ -543,19 +554,15 @@ async fn transient_store_lock_does_not_end_the_controller() {
 }
 
 // ORK: the grace is a bound, not an amnesty. An outage longer than the window
-// must still end the controller, and as Unavailable rather than Unauthorized so
-// the cause is not misreported. Uses the test-only short grace.
-#[tokio::test]
+// must still end the controller, and as Unavailable so the cause is not
+// misreported as lost authority.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn outage_past_the_grace_window_still_ends_the_controller() {
     let (store, _unbound, _, _, _, dir) = fixture().await;
-    // fixture()'s bound Store carries a different namespace/key, so
-    // renew_timer_supervisor_credential returns Fenced and the controller dies at
-    // startup before reaching any heartbeat. Authorize the supervisor explicitly,
-    // as the other controller tests do.
     let bound = store.authorize_timer_supervisor(MACHINE).await.unwrap();
     let db = dir.join("core.sqlite3");
     let mut controller = DurableTimerController::new(bound);
-    // Longer than one busy_timeout (5 s) so this measures the WINDOW elapsing
+    // Longer than one busy_timeout (5s) so this measures the WINDOW elapsing
     // across repeated failures rather than a single blocked call.
     controller.test_grace = Some(Duration::from_secs(8));
     let (_shutdown, receiver) = tokio::sync::watch::channel(false);
@@ -564,31 +571,27 @@ async fn outage_past_the_grace_window_still_ends_the_controller() {
     assert!(!handle.is_finished(), "controller died before contention");
 
     let held = dir.join("lock-held-long");
-    let mut holder = hold_write_lock(&db, &held, 40.0);
-    let outcome = tokio::time::timeout(Duration::from_secs(30), handle)
+    let holder = hold_write_lock(&db, &held).await;
+    let outcome = tokio::time::timeout(Duration::from_secs(40), handle)
         .await
         .expect("grace window did not terminate the controller")
         .unwrap();
+    release_write_lock(holder);
     assert!(
         matches!(outcome, Err(HistoryError::Unavailable)),
         "a store outage must end as Unavailable, got {outcome:?}"
     );
-    let _ = holder.wait();
     store.close().await;
     std::fs::remove_dir_all(dir).unwrap();
 }
 
-// ORK: the other half of the contract. A revoked session is real authority loss
-// and must still terminate the controller mid-run - the grace window must not
-// swallow it. Covers heartbeat_supervisor; expired_session_still_refuses_startup
-// covers renew_timer_supervisor_credential.
-#[tokio::test]
+// ORK: a revoked session is real authority loss and must still terminate the
+// controller mid-run - the grace window must not swallow it. Covers
+// heartbeat_supervisor; expired_session_still_refuses_startup covers
+// renew_timer_supervisor_credential.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn revoked_session_terminates_the_running_controller() {
     let (store, _unbound, _, _, _, dir) = fixture().await;
-    // fixture()'s bound Store carries a different namespace/key, so
-    // renew_timer_supervisor_credential returns Fenced and the controller dies at
-    // startup before reaching any heartbeat. Authorize the supervisor explicitly,
-    // as the other controller tests do.
     let bound = store.authorize_timer_supervisor(MACHINE).await.unwrap();
     let (_shutdown, receiver) = tokio::sync::watch::channel(false);
     let controller = tokio::spawn(DurableTimerController::new(bound).run(receiver));
@@ -599,7 +602,7 @@ async fn revoked_session_terminates_the_running_controller() {
     );
     store.revoke_session(MACHINE).await.unwrap();
     // Fatal on the next tick; emphatically NOT retried for the grace window.
-    let outcome = tokio::time::timeout(Duration::from_secs(10), controller)
+    let outcome = tokio::time::timeout(Duration::from_secs(20), controller)
         .await
         .expect("revocation did not stop the controller")
         .unwrap();
@@ -609,49 +612,43 @@ async fn revoked_session_terminates_the_running_controller() {
 }
 
 // ORK: the inverse failure. tick() returns Ok WITHOUT any store call when paused
-// (also while timeout_retry is pending, and after a 5 s pass timeout). If a bare
+// (also while timeout_retry is pending, and after a 5s pass timeout). If a bare
 // tick()==Ok reset the grace window, a controller whose heartbeat kept failing
 // would run indefinitely on an unrenewed lease - free to act while a successor
 // could legitimately take over. Only heartbeat_supervisor and
 // renew_timer_supervisor_credential extend lease_deadline_ms, so only they may
 // move the window. Pause makes every tick an Ok that must NOT count.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn paused_ticks_do_not_extend_the_grace_window() {
     let (store, _unbound, _, _, _, dir) = fixture().await;
-    // fixture()'s bound Store carries a different namespace/key, so
-    // renew_timer_supervisor_credential returns Fenced and the controller dies at
-    // startup before reaching any heartbeat. Authorize the supervisor explicitly,
-    // as the other controller tests do.
     let bound = store.authorize_timer_supervisor(MACHINE).await.unwrap();
     let db = dir.join("core.sqlite3");
     let mut controller = DurableTimerController::new(bound).with_pause(Arc::new(|| true));
-    // The grace MUST outlast one failed heartbeat. A blocked `BEGIN IMMEDIATE`
-    // returns only after busy_timeout (5 s), so a 2 s window ended the controller
-    // on the very first failure and no paused tick ever ran - the test passed
-    // whether or not a bare tick()==Ok reset the window, proving nothing. 12 s
-    // leaves room to reach failed-heartbeat -> paused-Ok -> retry twice while the
-    // window is still unspent, which is what makes this discriminating.
+    // The grace MUST outlast one failed heartbeat. A blocked BEGIN IMMEDIATE
+    // returns only after busy_timeout (5s), so a 2s window ended the controller on
+    // the first failure and no paused tick ever ran - the test passed whether or
+    // not a bare tick()==Ok reset the window, proving nothing. 12s reaches
+    // failed-heartbeat -> paused-Ok -> retry twice while the window is unspent.
     controller.test_grace = Some(Duration::from_secs(12));
     let (_shutdown, receiver) = tokio::sync::watch::channel(false);
     let handle = tokio::spawn(controller.run(receiver));
     tokio::time::sleep(Duration::from_secs(2)).await;
     assert!(!handle.is_finished(), "controller died before contention");
 
-    // Heartbeat blocked; every subsequent tick is a store-free paused Ok.
-    // Corrected: failures accumulate and it ends at ~15 s (third failure, past 12 s).
-    // With a tick()==Ok reset restored: the window resets every ~5 s, the controller
-    // NEVER ends, and this timeout expires - so the test fails, as it must.
+    // Corrected: failures accumulate and it ends at ~15s (third failure, past 12s).
+    // With a tick()==Ok reset restored the window clears every ~5s, the controller
+    // never ends, and this bounded wait FAILS instead of hanging CI.
     let held = dir.join("lock-held-paused");
-    let mut holder = hold_write_lock(&db, &held, 40.0);
-    let outcome = tokio::time::timeout(Duration::from_secs(30), handle)
+    let holder = hold_write_lock(&db, &held).await;
+    let outcome = tokio::time::timeout(Duration::from_secs(45), handle)
         .await
         .expect("paused Ok ticks extended the grace window past the real lease")
         .unwrap();
+    release_write_lock(holder);
     assert!(
         matches!(outcome, Err(HistoryError::Unavailable)),
         "expected Unavailable once the window elapsed, got {outcome:?}"
     );
-    let _ = holder.wait();
     store.close().await;
     std::fs::remove_dir_all(dir).unwrap();
 }
