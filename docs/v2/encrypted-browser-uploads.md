@@ -78,10 +78,30 @@ session and pins the completed receipts while performing the already-prepared
 file rename. Revocation/deletion writers cannot commit in that interval.
 Materialization and export deletion also share a lifecycle lock. Two concurrent
 decrypt/export jobs are permitted; crypto and large writes run outside the
-publication transaction. A rejected or cancelled task drops its temporary file
+publication transaction. A rejected or dropped server preparation drops its temporary file
 and issues no attachment receipt. Process death can leave private temporary
-exports; recovery must inspect and remove stale `.upload-uuid.*.tmp` files
+exports; recovery must inspect and remove stale `.<upload UUID>.<nonce>.tmp` files
 before reclaiming disk, without touching a running export.
+
+The provider-preparation route has a 15-minute server deadline only for an
+authenticated POST with valid conversation/upload UUIDs. Authentication occurs
+before granting that deadline or extracting a body. Chunk requests, other
+methods and other routes retain their original request deadlines. This is a
+bounded allowance for at most one supported-size file, not a global timeout
+increase. The browser's encrypted client has no short per-fetch timer and
+propagates explicit AbortSignals rather than retrying cancellation.
+Aborting a browser wait does not promise deletion of an already verified export;
+retry the same upload ID to resolve an uncertain outcome, or use authenticated
+DELETE to remove the completed file. Neither operation implicitly sends a message.
+
+Concurrent retries for one upload serialize. A bounded 128-entry in-memory
+receipt cache reuses only an unchanged service-owned provider file with the
+same completed descriptor and a fresh Core publication-authority check. A
+missing/changed file is reconstructed from authenticated ciphertext. Cache
+state is deliberately lost on process death; after restart the retained ingest
+key and ciphertext provide the reconstruction path, not a cached success
+claim. Receipt queries use a covering metadata index so they do not traverse
+large ciphertext overflow pages on each chunk/status request.
 
 ## Storage and retention
 
@@ -123,3 +143,22 @@ backup, restore, rollback size and latency against actual disk headroom. An
 external object store/file representation may be warranted later; do not infer
 backup performance from constant-memory chunk tests. No production deployment
 or live configuration change is implied by these source tests.
+
+The ignored manual test
+`encrypted_upload_http::tests::large_acceptance::actual_1gb_http_backup_restore_and_provider_reconstruction`
+performs an actual 1,000,000,000-byte transfer through the registered HTTP
+router, provider-file verification, SQLite online backup, restore from only
+ciphertext plus the retained ingest key, and provider reconstruction. It uses
+bounded generated chunks and streams both complete-file checksums. Explicitly
+enable it using the optimized `--release` test profile and
+`--ignored --exact --nocapture --test-threads=1`,
+`ORKESTR_V2_RUN_LARGE_UPLOAD_ACCEPTANCE=1`, and
+`ORKESTR_V2_LARGE_UPLOAD_SCRATCH` pointing to disposable absolute scratch.
+Its execution environment must also provide a disposable `ORKESTR_V2_HOME`;
+off-host wrappers must forward these test-only variables explicitly. Run under
+the authorized off-host build runner and measure warm execution with
+`/usr/bin/time -v`. The test prints a JSON receipt with process peak RSS,
+timings, actual provider size/checksum, backup size, and cleanup confirmation;
+retain execution receipts privately. It is excluded from ordinary CI because
+it writes several GiB. It proves HTTP/store acceptance, not a browser or reverse
+proxy transfer. Keep the latter release gates explicit even after it passes.

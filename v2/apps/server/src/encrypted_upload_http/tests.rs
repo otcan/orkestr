@@ -14,6 +14,27 @@ async fn call(
     body: &[u8],
     digest: Option<&str>,
 ) -> (u16, Vec<u8>) {
+    call_with_timeout(
+        socket,
+        token,
+        method,
+        path,
+        body,
+        digest,
+        std::time::Duration::from_secs(10),
+    )
+    .await
+}
+
+async fn call_with_timeout(
+    socket: &std::path::Path,
+    token: &str,
+    method: &str,
+    path: &str,
+    body: &[u8],
+    digest: Option<&str>,
+    timeout: std::time::Duration,
+) -> (u16, Vec<u8>) {
     let mut stream = tokio::net::UnixStream::connect(socket).await.unwrap();
     let content = if digest.is_some() {
         "application/octet-stream"
@@ -28,13 +49,10 @@ async fn call(
     // A body rejection can close early; sending the rest is immaterial.
     let _ = stream.write_all(body).await;
     let mut response = Vec::new();
-    tokio::time::timeout(
-        std::time::Duration::from_secs(10),
-        stream.read_to_end(&mut response),
-    )
-    .await
-    .unwrap()
-    .unwrap();
+    tokio::time::timeout(timeout, stream.read_to_end(&mut response))
+        .await
+        .unwrap()
+        .unwrap();
     let split = response.windows(4).position(|v| v == b"\r\n\r\n").unwrap();
     let status = std::str::from_utf8(&response[..split])
         .unwrap()
@@ -45,6 +63,8 @@ async fn call(
         .unwrap();
     (status, response[split + 4..].to_vec())
 }
+
+mod large_acceptance;
 
 #[tokio::test]
 async fn encrypted_upload_real_http_registration_limits_replay_and_auth() {
@@ -101,6 +121,20 @@ async fn encrypted_upload_real_http_registration_limits_replay_and_auth() {
         media_type: "application/octet-stream".into(),
         plaintext_size: 3,
     };
+    // An unauthenticated caller must not receive the long operation budget
+    // while withholding its body. Authenticate before body extraction.
+    let mut unauth = tokio::net::UnixStream::connect(&socket).await.unwrap();
+    let head=format!("POST {root}/{}/attachment HTTP/1.1\r\nHost: localhost:43123\r\nContent-Type: application/json\r\nContent-Length: 1000000\r\nConnection: close\r\n\r\n",file.upload_id);
+    unauth.write_all(head.as_bytes()).await.unwrap();
+    let mut answer = [0u8; 1024];
+    let read = tokio::time::timeout(std::time::Duration::from_secs(2), unauth.read(&mut answer))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(std::str::from_utf8(&answer[..read])
+        .unwrap()
+        .starts_with("HTTP/1.1 401"));
+    drop(unauth);
     let body = serde_json::to_vec(&file).unwrap();
     assert_eq!(
         call(&socket, &"cd".repeat(32), "POST", &root, &body, None)
