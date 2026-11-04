@@ -128,7 +128,7 @@ export class BrowsersController {
     const attemptId = desktopAttemptId(request, body);
     const threadId = String(body.threadId || body.ownerThreadId || "").trim();
     const recoveryOptions = await desktopStoppedLeaseRecoveryOptions({ slug, threadId, principal });
-    const result = await acquireDesktopLease(slug, { ...body, ownerUserId, attemptId }, process.env, { principal, ...breakGlassOptions, ...recoveryOptions });
+    const result = await acquireDesktopLease(slug, { ...body, ownerUserId, attemptId }, process.env, { principal, ...breakGlassOptions, ...recoveryOptions, reuseExisting: body.reuseExisting === true });
     if (!result.ok) throw httpError("desktop_leased", 409, { attemptId, warnings: result.warnings, lease: result.lease });
     return result;
   }
@@ -176,6 +176,27 @@ export class BrowsersController {
     return { ok: true, lease: result.lease };
   }
 
+  @Post("desktops/:slug/share-if-absent")
+  @HttpCode(201)
+  async shareDesktopIfAbsent(@Req() request: any, @Res({ passthrough: true }) response: any, @Param("slug") slug: string, @Body() body: Record<string, unknown> = {}) {
+    const threadId = String(body.threadId || "").trim();
+    const acquired = await this.acquireDesktop(request, slug, {
+      threadId, mode: "exclusive", ttlMs: 60000,
+      purpose: "Owner desktop viewing", reuseExisting: true,
+    });
+    const fencingToken = acquired.lease.fencingToken;
+    try {
+      return await this.shareDesktop(request, response, slug, {
+        threadId, fencingToken, start: false, ifAbsent: true,
+      });
+    } finally {
+      // A borrowed worker lease is never renewed or released by viewing.
+      if (!acquired.borrowed) await this.releaseDesktop(request, slug, {
+        threadId, fencingToken, reason: "owner_share_prepared",
+      });
+    }
+  }
+
   @Post("desktops/:slug/share")
   @HttpCode(201)
   async shareDesktop(@Req() request: any, @Res({ passthrough: true }) response: any, @Param("slug") slug: string, @Body() body: Record<string, unknown> = {}) {
@@ -213,6 +234,7 @@ export class BrowsersController {
       ownerUserId,
       ...breakGlassOptions,
       label: String(browser?.label || body.label || "").trim(),
+      ifAbsent: body.ifAbsent === true,
       env: process.env,
     });
     if (body.openForCurrentSession === true) {

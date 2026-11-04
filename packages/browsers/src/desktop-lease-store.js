@@ -157,7 +157,7 @@ export class DesktopLeaseStore {
       .sort((left, right) => Date.parse(right.acquiredAt || "") - Date.parse(left.acquiredAt || ""))[0] || null;
   }
 
-  async acquire(lease, { force = false, releaseReason = "superseded", recoveryCandidate = null } = {}) {
+  async acquire(lease, { force = false, releaseReason = "superseded", recoveryCandidate = null, reuseExisting = false } = {}) {
     const normalized = normalizeLease(lease);
     if (!normalized) {
       const error = new Error("invalid_desktop_lease");
@@ -174,6 +174,8 @@ export class DesktopLeaseStore {
         String(active.expiresAt || "") === String(recoveryCandidate.expiresAt || "");
       if (active && active.threadId !== normalized.threadId && !force && !recoveryMatches) return { ok: false, conflict: active, lease: null };
       if (active && active.threadId === normalized.threadId) {
+        // Owner viewing may borrow a worker's lease without changing its fence or TTL.
+        if (reuseExisting) return { ok: true, borrowed: true, lease: active };
         Object.assign(active, {
           ...active,
           ...normalized,
