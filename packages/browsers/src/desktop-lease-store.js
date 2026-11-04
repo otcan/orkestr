@@ -7,6 +7,7 @@ import { readLeaseState, validateLeaseState, MAX_LEASE_STATE_BYTES } from "./des
 import { validateActionBinding, currentActionLease, synchronousCallback, synchronousResult } from "./desktop-lease-action.js";
 import { normalizeLegacyAdoption } from "./desktop-lease-legacy.js";
 import { legacyAdoptionFileConfig, readLegacyAdoptionFile } from "./desktop-lease-adoption-file.js";
+import { normalizeLeaseHistoryRetention, retainLeaseHistory } from "./desktop-lease-history.js";
 
 const VALID_MODES = new Set(["exclusive", "viewOnly", "sharedRead"]);
 
@@ -56,14 +57,16 @@ export class DesktopLeaseStore {
   #adoption;
   #adoptionFile;
   #adoptionRead;
+  #historyRetention;
 
   constructor(filePath, { lockTimeoutMs = 5000, staleAfterMs = 15 * 60_000,
-    legacyAdoption, legacyAdoptionPath, legacyAdoptionSha256 } = {}) {
+    legacyAdoption, legacyAdoptionPath, legacyAdoptionSha256, historyRetention } = {}) {
     this.filePath = filePath;
     this.lockTimeoutMs = lockTimeoutMs;
     this.staleAfterMs = Number.isSafeInteger(staleAfterMs) && staleAfterMs > 0 ? staleAfterMs : 15 * 60_000;
     this.queue = Promise.resolve();
     this.#adoptionFile = legacyAdoptionFileConfig(legacyAdoptionPath, legacyAdoptionSha256);
+    this.#historyRetention = normalizeLeaseHistoryRetention(historyRetention);
     if (legacyAdoption !== undefined && this.#adoptionFile) throw leaseStoreError("desktop_lease_legacy_adoption_config_invalid");
     this.#adoption = legacyAdoption === undefined ? null : normalizeLegacyAdoption(legacyAdoption);
   }
@@ -119,6 +122,7 @@ export class DesktopLeaseStore {
     synchronousCallback(mutator);
     return this.#locked(async (gate, adoption) => {
       const state = await readLeaseState(gate, adoption) || { fencingCounter: 0, desktopLeases: [] };
+      await retainLeaseHistory(state, this.#historyRetention);
       const counter = state.fencingCounter;
       const result = synchronousResult(mutator(state));
       if (state.fencingCounter < counter) throw leaseStoreError("desktop_lease_generation_regressed");
@@ -242,5 +246,10 @@ export function desktopLeaseStore(env = process.env) {
     staleAfterMs: Number(env.ORKESTR_DESKTOP_LEASE_STALE_MS),
     legacyAdoptionPath: env.ORKESTR_DESKTOP_LEASE_LEGACY_ADOPTION_PATH,
     legacyAdoptionSha256: env.ORKESTR_DESKTOP_LEASE_LEGACY_ADOPTION_SHA256,
+    historyRetention: env.ORKESTR_DESKTOP_LEASE_HISTORY_ARCHIVE_DIR ? {
+      archiveDir: env.ORKESTR_DESKTOP_LEASE_HISTORY_ARCHIVE_DIR,
+      keepReleased: Number(env.ORKESTR_DESKTOP_LEASE_HISTORY_KEEP_RELEASED || 500),
+      threshold: Number(env.ORKESTR_DESKTOP_LEASE_HISTORY_THRESHOLD || 1800),
+    } : undefined,
   });
 }
