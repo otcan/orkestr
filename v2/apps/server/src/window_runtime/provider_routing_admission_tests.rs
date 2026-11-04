@@ -109,12 +109,20 @@ async fn provider_routing_cannot_switch_an_existing_window_or_consume_its_follow
         default: false,
         fast: false,
     });
-    assert!(matches!(
-        controller
-            .process(BROWSER, &f.owner, &conversation, &request)
-            .await,
-        Err("provider routing requires an explicit provider handoff")
-    ));
+    // Exercise the shared admission boundary directly: the outer controller
+    // may durably queue a follow-up whose predecessor is near its deadline.
+    let entry = controller.entry(&conversation).unwrap();
+    let result = entry
+        .process(BROWSER, &f.owner, &conversation, &request)
+        .await;
+    assert!(
+        matches!(
+            result,
+            Err("provider routing requires an explicit provider handoff")
+        ),
+        "unexpected refusal: {}",
+        result.err().unwrap_or("admitted")
+    );
     let settings = f
         .store
         .conversation_settings(BROWSER, &f.owner, &conversation)
