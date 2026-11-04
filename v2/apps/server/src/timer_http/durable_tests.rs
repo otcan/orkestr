@@ -545,15 +545,17 @@ async fn outage_past_the_grace_window_still_ends_the_controller() {
     let (store, bound, _, _, _, dir) = fixture().await;
     let db = dir.join("core.sqlite3");
     let mut controller = DurableTimerController::new(bound);
-    controller.test_grace = Some(Duration::from_secs(2));
+    // Longer than one busy_timeout (5 s) so this measures the WINDOW elapsing
+    // across repeated failures rather than a single blocked call.
+    controller.test_grace = Some(Duration::from_secs(8));
     let (_shutdown, receiver) = tokio::sync::watch::channel(false);
     let handle = tokio::spawn(controller.run(receiver));
     tokio::time::sleep(Duration::from_secs(2)).await;
     assert!(!handle.is_finished(), "controller died before contention");
 
     let held = dir.join("lock-held-long");
-    let mut holder = hold_write_lock(&db, &held, 20.0);
-    let outcome = tokio::time::timeout(Duration::from_secs(25), handle)
+    let mut holder = hold_write_lock(&db, &held, 40.0);
+    let outcome = tokio::time::timeout(Duration::from_secs(30), handle)
         .await
         .expect("grace window did not terminate the controller")
         .unwrap();
@@ -603,16 +605,25 @@ async fn paused_ticks_do_not_extend_the_grace_window() {
     let (store, bound, _, _, _, dir) = fixture().await;
     let db = dir.join("core.sqlite3");
     let mut controller = DurableTimerController::new(bound).with_pause(Arc::new(|| true));
-    controller.test_grace = Some(Duration::from_secs(2));
+    // The grace MUST outlast one failed heartbeat. A blocked `BEGIN IMMEDIATE`
+    // returns only after busy_timeout (5 s), so a 2 s window ended the controller
+    // on the very first failure and no paused tick ever ran - the test passed
+    // whether or not a bare tick()==Ok reset the window, proving nothing. 12 s
+    // leaves room to reach failed-heartbeat -> paused-Ok -> retry twice while the
+    // window is still unspent, which is what makes this discriminating.
+    controller.test_grace = Some(Duration::from_secs(12));
     let (_shutdown, receiver) = tokio::sync::watch::channel(false);
     let handle = tokio::spawn(controller.run(receiver));
     tokio::time::sleep(Duration::from_secs(2)).await;
     assert!(!handle.is_finished(), "controller died before contention");
 
-    // Heartbeat blocked; every subsequent tick is a paused Ok.
+    // Heartbeat blocked; every subsequent tick is a store-free paused Ok.
+    // Corrected: failures accumulate and it ends at ~15 s (third failure, past 12 s).
+    // With a tick()==Ok reset restored: the window resets every ~5 s, the controller
+    // NEVER ends, and this timeout expires - so the test fails, as it must.
     let held = dir.join("lock-held-paused");
-    let mut holder = hold_write_lock(&db, &held, 20.0);
-    let outcome = tokio::time::timeout(Duration::from_secs(25), handle)
+    let mut holder = hold_write_lock(&db, &held, 40.0);
+    let outcome = tokio::time::timeout(Duration::from_secs(30), handle)
         .await
         .expect("paused Ok ticks extended the grace window past the real lease")
         .unwrap();
