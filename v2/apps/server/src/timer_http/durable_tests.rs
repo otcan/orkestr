@@ -373,3 +373,88 @@ async fn deploy_drain_defers_a_due_fire_until_resume() {
     store.close().await;
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+// ORK: a locked store must not read as a revoked credential.
+#[test]
+fn only_authority_loss_stops_the_supervisor() {
+    // Transient infrastructure: the lease is still valid, so the controller holds.
+    for transient in [RuntimeStoreError::Busy, RuntimeStoreError::Unavailable] {
+        assert!(
+            !supervisor_authority_lost(&transient),
+            "{transient:?} is a locked or unavailable store, not lost authority"
+        );
+    }
+    // Authority actually gone, or a context that no longer matches: still fatal.
+    for fatal in [
+        RuntimeStoreError::Unauthorized,
+        RuntimeStoreError::Fenced,
+        RuntimeStoreError::Expired,
+        RuntimeStoreError::StaleLease,
+        RuntimeStoreError::Conflict,
+        RuntimeStoreError::NotFound,
+        RuntimeStoreError::InvalidInput,
+    ] {
+        assert!(
+            supervisor_authority_lost(&fatal),
+            "{fatal:?} must still stop the controller"
+        );
+    }
+    // Spending at most half the 60 s lease keeps a margin against the Store's own deadline.
+    assert!(SUPERVISOR_GRACE < Duration::from_secs(60));
+}
+
+// ORK: a genuinely expired session must still terminate the controller, with the
+// real cause surfaced rather than every failure collapsed to Unauthorized.
+#[tokio::test]
+async fn expired_session_still_refuses_startup() {
+    let (store, _other, _, _, _, dir) = fixture().await;
+    let bound = store.authorize_timer_supervisor(MACHINE).await.unwrap();
+    let expired = std::process::Command::new("python3")
+        .arg("-c")
+        .arg("import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.execute('UPDATE auth_sessions SET expires_at=unixepoch()-1'); c.commit(); c.close()")
+        .arg(dir.join("core.sqlite3"))
+        .status()
+        .unwrap();
+    assert!(expired.success());
+    let (_shutdown, receiver) = tokio::sync::watch::channel(false);
+    assert!(matches!(
+        DurableTimerController::new(bound).run(receiver).await,
+        Err(HistoryError::Unauthorized)
+    ));
+    store.close().await;
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+// ORK: the regression itself. A writer holding the database longer than the pool's
+// five-second busy_timeout makes the supervisor call fail with Unavailable. Before
+// the fix that ended the controller and took the whole server with it; now the
+// lease is still valid, so the controller waits and continues once the lock clears.
+//
+// IGNORED BY DEFAULT: this test is timing-based (it depends on busy_timeout being
+// exceeded) and was authored on a host where the workspace could not be built, so
+// it has never been executed. Run it explicitly on a build host, confirm it fails
+// against the unpatched controller, then remove the ignore.
+#[tokio::test]
+#[ignore = "timing-based; never executed - validate on a build host before trusting"]
+async fn transient_store_lock_does_not_end_the_controller() {
+    let (store, _other, _, _, _, dir) = fixture().await;
+    let bound = store.authorize_timer_supervisor(MACHINE).await.unwrap();
+    // Hold an exclusive write lock for longer than busy_timeout, then release it.
+    let mut holder = std::process::Command::new("python3")
+        .arg("-c")
+        .arg("import sqlite3,sys,time; c=sqlite3.connect(sys.argv[1], isolation_level=None); \
+              c.execute('BEGIN EXCLUSIVE'); time.sleep(8); c.execute('COMMIT'); c.close()")
+        .arg(dir.join("core.sqlite3"))
+        .spawn()
+        .unwrap();
+    let (shutdown, receiver) = tokio::sync::watch::channel(false);
+    let controller = tokio::spawn(DurableTimerController::new(bound).run(receiver));
+    // Well past the lock's lifetime: an unpatched controller has already exited.
+    tokio::time::sleep(Duration::from_secs(14)).await;
+    assert!(!controller.is_finished(), "a transient lock ended the controller");
+    let _ = shutdown.send(true);
+    controller.await.unwrap().unwrap();
+    let _ = holder.wait();
+    store.close().await;
+    std::fs::remove_dir_all(dir).unwrap();
+}
