@@ -76,6 +76,29 @@ mod linux {
         Ok(())
     }
 
+    pub fn inherit_lifecycle(
+        command: &mut std::process::Command,
+        source: i32,
+    ) -> Result<(), Error> {
+        use std::os::fd::{FromRawFd, OwnedFd};
+        use std::os::unix::process::CommandExt;
+        // SAFETY: duplicate a borrowed live socket above every fixed destination.
+        let copied = unsafe { fcntl(source, 1030, 10) };
+        if copied < 0 {
+            return Err(Error::Io);
+        }
+        let descriptor = unsafe { OwnedFd::from_raw_fd(copied) };
+        unsafe {
+            command.pre_exec(move || {
+                if dup2(descriptor.as_raw_fd(), 6) < 0 || fcntl(6, 2, 0) < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        Ok(())
+    }
+
     pub fn nonblocking(pipe: &impl AsRawFd) -> Result<(), Error> {
         // SAFETY: a borrowed live pipe fd; F_GETFL/F_SETFL use integer flags.
         let flags = unsafe { fcntl(pipe.as_raw_fd(), 3) };
@@ -142,7 +165,7 @@ mod linux {
 
 #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
 pub(super) use linux::{
-    configure_command, inherit_handoff, nonblocking, observe_exit, signal_group,
+    configure_command, inherit_handoff, inherit_lifecycle, nonblocking, observe_exit, signal_group,
 };
 
 pub(super) fn supported() -> Result<(), Error> {
@@ -191,4 +214,9 @@ mod bootstrap_tests {
         inherit_handoff(&mut command, child3.as_raw_fd(), Some(child4.as_raw_fd())).unwrap();
         assert!(command.status().unwrap().success());
     }
+}
+
+#[cfg(not(all(target_os = "linux", target_pointer_width = "64")))]
+pub(super) fn inherit_lifecycle(_: &mut std::process::Command, _: i32) -> Result<(), Error> {
+    Err(Error::Unsupported)
 }

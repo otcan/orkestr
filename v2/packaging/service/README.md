@@ -350,18 +350,16 @@ Linux `no_new_privs` for a configured split, inherited by native/code-mode
 children, without modifying the operator's root or sudo policy.
 
 The manager deliberately refuses configured split startup with
-`split_launch_unqualified`: the legacy server-child broker launcher cannot cross
-UIDs. A narrow authenticated rootmanager launch/FD-transfer path, parent/owned-tree
-proof changes and end-to-end closure qualification are required next. These fields
+`split_launch_unqualified`: workflow parity and installed-service qualification remain incomplete. These fields
 must not be represented as completed authority separation or activated on a live
 service. Synthetic tests prove protected path ownership and that `no_new_privs`
 blocks a disposable setuid euid probe while preserving the parent root context;
 they do not qualify a real provider or deployment.
 
 The next staged primitive adds a closed `launch_child` control operation to the
-existing exact-server peer channel. Three explicit one-use descriptors carry
-read-only child stdin pipe, write-only child stdout pipe and a provider socket
-created by that authoritative server incarnation. The manager journals a semantic
+existing exact-server peer channel. Four explicit one-use descriptors carry
+read-only child stdin pipe, write-only child stdout pipe, a provider socket and a
+private proxy lifecycle socket created by that authoritative server incarnation. The manager journals a semantic
 window/role claim before spawning; changing a retry UUID cannot obtain a second
 fresh broker. An immutable root-manager child remaps descriptors, drops all
 supplementary groups/UID/capabilities, enforces NNP and enters the fixed role.
@@ -371,9 +369,27 @@ Original broker pidfd/window/role registration precedes continuation, and cleanu
 observes the owned tree before killing/reaping its broker. Failed registration
 stays unknown and cannot replay.
 
-This primitive is tested with an actual stopped synthetic broker. It still does
-not enable split startup: the Rust-side owned proxy/lifecycle descriptor adapter
-and basic Core/Codex end-to-end FD flow are pending. Only fresh Deep/Fast modes are
-implemented by the primitive. Resume, workspace and Claude launch modes refuse;
-they require separately qualified peer/bootstrap semantics. No live service or
-account is exercised by these tests.
+The Rust runtime retains a real authority-UID proxy Child while the root manager
+owns the actual executor broker. Both source incarnation and original stopped
+proxy are authenticated independently of socketpair creator credentials. The
+proxy cannot cause a second launch. Its exit, lifecycle EOF or cancellation
+quarantines the window, and release waits for actual broker and owned-tree reap
+proof. Lost delivery remains unknown. No caller-supplied executable, environment
+or path crosses the launch protocol.
+
+The root-only `v2/tests/identity_split_service_http.py <ordinary-server-binary>
+--report <private-report-path>` rehearsal exercises actual ordinary HTTP setup,
+Core/window admission, four-FD transfer, namespace/native startup, one synthetic
+completion accepted into Core and successful manager shutdown. All accounts,
+credentials and native executables are fixed disposable fixtures. The harness
+explicitly reproduces the proposed root startup path; production startup stays
+gated. This proves fresh base Deep flow only. Fast has transport role support
+but lacks end-to-end qualification. Multi-role plans, resume, workspace, Worker,
+Claude and host-full-access split plans fail closed. Privileged approved helper
+mediation and attachment-group integration still need qualification before used
+workflow parity can be claimed.
+
+Standalone privileged operator terminals remain outside managed executor
+isolation. Source provenance cannot defend against a trusted privileged operator
+editing authority state. No live service, account, terminal, sudoers or deployment
+is changed by these tests.

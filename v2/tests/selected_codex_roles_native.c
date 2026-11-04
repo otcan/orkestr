@@ -101,6 +101,13 @@ int main(int argc, char **argv) {
     if (!getenv("CODEX_HOME") || strcmp(getenv("CODEX_HOME"), "/account") ||
         !getenv("HOME") || strcmp(getenv("HOME"), "/home/provider") ||
         getenv("OPENAI_API_KEY") || getenv("ORKESTR_V2_EXECUTION_SET")) return 21;
+#ifdef ORKESTR_TEST_AUTHORITY_CORE
+    /* Split-identity oracle: this is a disposable authority DB path supplied by
+       the explicit root-only test harness, never a production location. */
+    int authority = open(ORKESTR_TEST_AUTHORITY_CORE, O_RDONLY);
+    if (authority >= 0) { close(authority); return 60; }
+    if (errno != EACCES && errno != ENOENT) return 61;
+#endif
     char auth[128];
     read_fixed("/account/auth.json", auth, sizeof(auth));
     if (strcmp(auth, "{\"fixture\":\"synthetic-roles-only\"}")) return 22;

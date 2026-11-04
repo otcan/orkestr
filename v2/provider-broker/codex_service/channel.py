@@ -89,7 +89,7 @@ def receive_control(connection, deadline):
         connection.setblocking(False)
         remaining=deadline-time.monotonic()
         require(remaining>0 and select.select([connection],[],[],remaining)[0], 'control_deadline')
-        head,ancillary,flags,_=connection.recvmsg(HEADER.size,socket.CMSG_SPACE(3*4),socket.MSG_CMSG_CLOEXEC)
+        head,ancillary,flags,_=connection.recvmsg(HEADER.size,socket.CMSG_SPACE(4*4),socket.MSG_CMSG_CLOEXEC)
         valid=True
         for level,kind,data in ancillary:
             if level==socket.SOL_SOCKET and kind==socket.SCM_RIGHTS and len(data)%4==0:
@@ -102,7 +102,7 @@ def receive_control(connection, deadline):
         size=HEADER.unpack(head)[0]
         require(0<size<=MAX_FRAME,'frame_bound')
         request=decode(read_exact(connection,size,deadline))
-        require((request['operation']=='launch_child' and len(descriptors)==3) or
+        require((request['operation']=='launch_child' and len(descriptors)==4) or
                 (request['operation']!='launch_child' and not descriptors), 'control_descriptor_count')
         readable,_,_=select.select([connection],[],[],0)
         if readable:require(not connection.recv(1,socket.MSG_PEEK),'control_trailing_bytes')

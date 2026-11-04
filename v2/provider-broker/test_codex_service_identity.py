@@ -70,7 +70,11 @@ class SplitPackageTests(unittest.TestCase):
                      executor_gid=self.gid,provider_home=str(self.fixture.home/'provider-home'),
                      home=str(authority),bootstrap_file=str(bootstrap))
         service.write_text(json.dumps(value))
+        beta_path=self.fixture.package/'beta.json';beta=json.loads(beta_path.read_text())
+        beta['identity_split']=dict(authority_uid=authority_uid,executor_uid=self.uid,shared_gid=self.gid)
+        beta_path.write_text(json.dumps(beta))
         manifest=self.fixture.package/'manifest.json';meta=json.loads(manifest.read_text())
+        meta['files']['beta.json']=self.digest(beta_path)
         meta['files']['service.json']=self.digest(service)
         manifest.write_text(json.dumps(meta))
         return Package(self.fixture.package,self.digest(manifest))

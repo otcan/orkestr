@@ -17,11 +17,11 @@
 //! overrides, live-session adoption, or canonical credential access is provided.
 //! Runtime must supply a separately authorized canonical subscription route;
 //! an executable or disposable HOME is not subscription authorization.
-use super::process::{start_reaper_retained, validate_metadata, Process, Reaper};
+use super::process::{Process, Reaper, start_reaper_retained, validate_metadata};
 use super::scope::{Shared, State};
 use super::{
-    sys, Authority, ChildDirectories, ConsumedTurn, DispatchFence, Error, ExecutionScope, Exit,
-    Flush, Output, OwnedChild, TransportBounds, TurnFailure,
+    Authority, ChildDirectories, ConsumedTurn, DispatchFence, Error, ExecutionScope, Exit, Flush,
+    Output, OwnedChild, TransportBounds, TurnFailure, sys,
 };
 use orkestr_v2_application::runtime::{Binding, NativeSessionConfirmation, ProviderKind};
 use orkestr_v2_store_sqlite::{
@@ -518,3 +518,5 @@ mod workspace;
 
 mod broker_locator;
 pub use broker_locator::BrokerChildLocator;
+
+pub use super::managed_launch::ManagedLaunchDescriptors;

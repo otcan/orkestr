@@ -220,6 +220,10 @@ def main():
         from codex_service.launch_child import main as launch_child
         return launch_child(package, arguments)
     if mode == "broker" or mode.startswith("broker-"):
+        if package.identity_split and os.geteuid() == package.authority_uid:
+            from codex_service.proxy import main as proxy
+            role = "deep" if mode == "broker" else mode.removeprefix("broker-")
+            return proxy(package, role, arguments)
         from codex_service.broker import main as selected
         role = "deep" if mode == "broker" else mode.removeprefix("broker-")
         sys.argv = [str(root / ("launcher.py" if role == "deep" else f"launcher-{role}.py")), *arguments]

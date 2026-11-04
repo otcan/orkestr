@@ -2,6 +2,7 @@
 pub(crate) mod capacity_fallback;
 mod conversation_workspaces;
 pub(crate) mod host_full_access;
+mod identity_split;
 pub(crate) mod loading;
 pub(crate) mod provider_routing;
 pub(crate) mod roles;
@@ -15,6 +16,8 @@ use std::path::PathBuf;
 #[serde(deny_unknown_fields)]
 pub(crate) struct BetaConfig {
     pub schema_version: u32,
+    #[serde(default)]
+    pub identity_split: Option<identity_split::IdentitySplit>,
     pub owner_id: OwnerId,
     pub conversation_id: ConversationId,
     pub manager_socket: PathBuf,
@@ -133,6 +136,20 @@ impl BetaConfig {
                 .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
         {
             return Err("invalid beta configuration");
+        }
+        if let Some(identity) = &self.identity_split {
+            identity.validate()?;
+            // Only the fresh Deep path is qualified by this contract stage.
+            // Resume, role workers, Claude and workspace execution need their
+            // private FD/bootstrap contracts separately, never a fallback UID.
+            if self.roles.is_some()
+                || self.host_full_access.is_some()
+                || self.claude.is_some()
+                || self.workspace_exec.is_some()
+                || !self.additional_workspace_exec.is_empty()
+            {
+                return Err("unsupported split execution mode");
+            }
         }
         if let Some(roles) = &self.roles {
             roles.validate(&self.launcher)?;
@@ -340,9 +357,11 @@ mod tests {
         );
         assert!(codex.window_provider(&launch, None).is_err());
         // A committed native identity of the other provider is never continued.
-        assert!(claude
-            .window_provider(&launch, Some(ProviderKind::Codex))
-            .is_err());
+        assert!(
+            claude
+                .window_provider(&launch, Some(ProviderKind::Codex))
+                .is_err()
+        );
         assert_eq!(
             claude.window_provider(&launch, Some(ProviderKind::Claude)),
             Ok(ProviderKind::Claude)
@@ -401,10 +420,12 @@ mod tests {
             .validate()
             .unwrap();
         shared["conversation_workspaces"][primary]["shared"] = serde_json::json!(false);
-        assert!(serde_json::from_value::<BetaConfig>(shared.clone())
-            .unwrap()
-            .validate()
-            .is_err());
+        assert!(
+            serde_json::from_value::<BetaConfig>(shared.clone())
+                .unwrap()
+                .validate()
+                .is_err()
+        );
         for bad in [
             serde_json::json!({"path":"/srv/x"}),
             serde_json::json!({"path":"/srv/x", "shared":true, "extra":true}),

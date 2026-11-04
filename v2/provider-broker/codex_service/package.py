@@ -15,7 +15,7 @@ from .role_profiles import ROLE_FILES, bind as bind_roles
 MODULES_SERVICE = ("__init__.py", "contract.py", "ledger.py", "budget.py", "custody.py",
                    "channel.py", "package.py", "ownership.py", "egress.py", "manager.py",
                    "server_child.py", "broker.py", "profile.py", "entry.py", "role_profiles.py",
-                   "claude_broker.py", "identity.py", "launch.py", "launch_child.py")
+                   "claude_broker.py", "identity.py", "launch.py", "launch_child.py", "proxy.py")
 # Shared with the server and packager: room for many per-conversation
 # command profiles.
 MAX_BETA_CONFIG_BYTES = 262144
@@ -201,10 +201,17 @@ class Package:
         beta = self.beta
         require(set(beta) - {"roles", "workspace_exec", "additional_workspace_exec", "max_active_windows",
                              "window_max_minutes", "conversation_window_max_minutes",
-                             "host_full_access", "claude", "conversation_workspaces", "provider_routing"} == {"schema_version", "owner_id", "conversation_id", "manager_socket",
+                             "host_full_access", "claude", "conversation_workspaces", "provider_routing", "identity_split"} == {"schema_version", "owner_id", "conversation_id", "manager_socket",
                 "launcher", "launcher_sha256", "workspace", "namespace", "supervisor_key"}
                 and type(beta["schema_version"]) is int and beta["schema_version"] == 1,
                 "beta_format")
+        if self.identity_split:
+            require(not any(key in beta for key in ("roles", "host_full_access", "claude", "workspace_exec", "additional_workspace_exec")),
+                    "split_privileged_or_advanced_mode_unsupported")
+            require(beta.get("identity_split") == {"authority_uid": self.authority_uid,
+                    "executor_uid": self.executor_uid, "shared_gid": self.gid}, "beta_identity_binding")
+        else:
+            require("identity_split" not in beta, "beta_identity_binding")
         require(beta["owner_id"] == self.owner and beta["conversation_id"] == self.conversation
                 and beta["manager_socket"] == str(self.control)
                 and beta["launcher"] == str(self.root / "launcher.py")

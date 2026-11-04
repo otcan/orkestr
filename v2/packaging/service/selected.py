@@ -221,6 +221,9 @@ def prepare(plan):
         # Stat canonical credentials only. Never open, copy or hash these files.
         from codex_service.identity import bind as bind_identity, FIELDS as IDENTITY_FIELDS
         identity=bind_identity(plan)
+        if identity['split']:
+            require(not any(key in plan for key in ('roles','host_full_access','claude','workspace_exec','additional_workspace_exec')),
+                    'split privileged/advanced mode requires a separately qualified scoped broker')
         home=trust.private(plan['home'],identity['authority_uid'],True)
         trust.private(home/'data',identity['authority_uid'],True)
         trust.private(identity['provider_home'],uid,True)
@@ -305,6 +308,8 @@ def prepare(plan):
                      'bootstrap_file':plan['bootstrap_file'],'ledger_directory':str(ledger),
                      'endpoint_directory':str(endpoint),'port':plan['port'],'trusted_origin':plan['origin']}
             runtime.update({key:plan[key] for key in IDENTITY_FIELDS if key in plan})
+            if identity['split']:
+                beta['identity_split']={'authority_uid':identity['authority_uid'],'executor_uid':uid,'shared_gid':gid}
             profile={'format':'orkestr-v2-codex-isolated-v2','native':str(inner/'native'),
                      'auth_file':str(auth),'state_root':str(account),'workspace':str(workspace),
                      'egress_socket':str(endpoint/'egress.sock'),'supervisor':str(inner/'isolation/supervisor.py'),

@@ -59,7 +59,10 @@ def launch_context():
 def receive_launch_context(package, descriptor=6):
     """One-use root-manager capsule; JSON alone is never accepted authority."""
     global _CONTEXT
+    from codex_bounded.trust import digest
     if _CONTEXT is not None:
+        require(_CONTEXT['manifest_sha256']==digest(package.root/'manifest.json') and
+                _CONTEXT['owner_id']==package.owner,'launch_capsule_package_changed')
         return _CONTEXT
     import json
     import socket
@@ -82,9 +85,18 @@ def receive_launch_context(package, descriptor=6):
             require(len(raw) <= 4096, 'launch_capsule_bound')
     value = json.loads(bytes(raw))
     require(type(value) is dict and set(value) == {'server_pid', 'server_start', 'server_uid',
-            'manager_pid', 'window_id', 'generation', 'role', 'request_id'}, 'launch_capsule_fields')
+            'manager_pid', 'manager_start', 'owner_id', 'conversation_id', 'manifest_sha256',
+            'window_id', 'generation', 'role', 'request_id'}, 'launch_capsule_fields')
     require(value['manager_pid'] == pid and value['server_uid'] == package.authority_uid,
             'launch_capsule_identity')
+    manager=process(pid)
+    require(manager and manager['uid']==0 and manager['start']==value['manager_start'],
+            'launch_capsule_manager_changed')
+    require(value['manifest_sha256']==digest(package.root/'manifest.json') and value['owner_id']==package.owner,
+            'launch_capsule_package_changed')
+    from .contract import identifier, generation
+    for key in ('owner_id','conversation_id','window_id'):identifier(value[key])
+    generation(value['generation'])
     server = process(value['server_pid'])
     require(server and server['start'] == value['server_start'] and server['uid'] == value['server_uid'],
             'launch_capsule_server_changed')

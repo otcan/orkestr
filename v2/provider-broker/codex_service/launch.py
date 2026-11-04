@@ -16,7 +16,7 @@ import subprocess
 import tempfile
 import time
 
-from codex_bounded.trust import process, exists, protected
+from codex_bounded.trust import process, exists, protected, digest
 from .contract import require
 
 
@@ -36,9 +36,16 @@ def atomic(path,value):
 
 class ManagedSpawn:
     """Manager-local consumed launch proof; never reconstructed from JSON."""
-    def __init__(self,identity,server,manager,window,generation,role):
+    def __init__(self,identity,server,manager,window,generation,role,proxy):
         self.identity=dict(identity);self.server=dict(server);self.manager=manager
-        self.window=window;self.generation=generation;self.role=role;self.consumed=False
+        self.window=window;self.generation=generation;self.role=role;self.proxy=dict(proxy);self.consumed=False
+
+
+class Handle:
+    def __init__(self,child,path,lifecycle,proxy,window,generation):
+        self.child,self.path,self.lifecycle,self.proxy=child,path,lifecycle,proxy
+        self.window,self.generation=window,generation
+        self.cancelled=False
 
 
 class Launcher:
@@ -53,21 +60,45 @@ class Launcher:
         require(self.directory.stat().st_mode&0o777==0o700,'launch_journal_custody')
 
     def source_fds(self,descriptors):
-        require(len(descriptors)==3 and len(set(descriptors))==3,'launch_descriptor_count')
+        require(len(descriptors)==4 and len(set(descriptors))==4,'launch_descriptor_count')
+        require(len({(os.fstat(fd).st_dev,os.fstat(fd).st_ino) for fd in descriptors})==4,'launch_descriptor_alias')
         for fd,mode in zip(descriptors[:2],(os.O_RDONLY,os.O_WRONLY)):
             require(stat.S_ISFIFO(os.fstat(fd).st_mode) and
                     fcntl.fcntl(fd,fcntl.F_GETFL)&os.O_ACCMODE==mode,'launch_stdio_type')
-        with socket.socket(fileno=os.dup(descriptors[2])) as provider:
-            require(provider.family==socket.AF_UNIX and provider.type==socket.SOCK_STREAM,'launch_provider_type')
-            pid,uid,_=struct.unpack('3i',provider.getsockopt(socket.SOL_SOCKET,socket.SO_PEERCRED,12))
-            require(pid==self.server['pid'] and uid==self.server['uid'] and exists(self.server),
-                    'launch_provider_source')
+        for fd in descriptors[2:]:
+            with socket.socket(fileno=os.dup(fd)) as provider:
+                require(provider.family==socket.AF_UNIX and provider.type==socket.SOCK_STREAM,'launch_provider_type')
+                pid,uid,_=struct.unpack('3i',provider.getsockopt(socket.SOL_SOCKET,socket.SO_PEERCRED,12))
+                require(pid==self.server['pid'] and uid==self.server['uid'] and exists(self.server),
+                        'launch_provider_source')
 
     def launch(self,request,descriptors,register,deadline):
         require(exists(self.server) and self.server['uid']==self.package.authority_uid,'launch_server_changed')
         require(request['role'] in self.package.role_profiles and request['mode']=='fresh' and request['role'] in ('deep','fast'),
                 'split_launch_mode_unsupported')
         self.source_fds(descriptors)
+        proxy=process(request['proxy_pid'])
+        require(proxy and proxy['start']==request['proxy_start'] and proxy['ppid']==self.server['pid']
+                and proxy['uid']==self.package.authority_uid,'launch_proxy_incarnation')
+        expected=[str(Path('/usr/bin/python3').resolve()).encode(),b'-I',b'-S',b'-B',
+                  bytes(self.package.root/'codex_service/entry.py'),
+                  b'broker' if request['role']=='deep' else b'broker-fast',
+                  b'open-owned-session',b'--protocol',b'orkestr-v2-provider-broker-v1']
+        proc=Path('/proc',str(proxy['pid']))
+        # The source retains its original Child immediately after spawn. Its
+        # immutable entry still needs time to validate the package and stop;
+        # no launch is claimed and no broker starts before that exact stop.
+        while True:
+            require(exists(proxy) and time.monotonic()<deadline,'launch_proxy_source')
+            status=(proc/'status').read_text()
+            stopped=any(l.startswith('State:') and 'T' in l for l in status.splitlines())
+            if stopped:
+                require((proc/'cmdline').read_bytes().split(b'\0')[:-1]==expected and
+                        any(l.startswith('NoNewPrivs:') and l.split()[1]=='1' for l in status.splitlines()),
+                        'launch_proxy_source')
+                break
+            time.sleep(.002)
+        from .ownership import Process
         frozen={key:request[key] for key in ('request_id','window_id','generation','conversation_id','role','mode')}
         frozen['server']={key:self.server[key] for key in ('pid','start','uid')}
         # One semantic fresh launch per role/window, even if a retry invents a
@@ -82,6 +113,8 @@ class Launcher:
         require(count<32,'launch_window_bound')
         record={**frozen,'state':'claimed','manager_pid':os.getpid()}
         atomic(path,record)  # a crash/lost reply never authorizes another spawn
+        proxy_proof=Process(proxy)
+        lifecycle=socket.socket(fileno=os.dup(descriptors[3]));lifecycle.setblocking(False)
         child=None
         receipt=None
         parent,capsule=socket.socketpair()
@@ -89,7 +122,10 @@ class Launcher:
         try:
             payload={key:request[key] for key in ('request_id','window_id','generation','role')}
             payload.update(server_pid=self.server['pid'],server_start=self.server['start'],
-                           server_uid=self.server['uid'],manager_pid=os.getpid())
+                           server_uid=self.server['uid'],manager_pid=os.getpid(),
+                           manager_start=self.manager['start'],owner_id=self.package.owner,
+                           conversation_id=request['conversation_id'],
+                           manifest_sha256=digest(self.package.root/'manifest.json'))
             parent.sendall(json.dumps(payload).encode());parent.shutdown(socket.SHUT_WR)
             # No preexec callback in the multithreaded manager. The immutable,
             # fixed root child remaps FDs and drops privilege before broker exec.
@@ -112,19 +148,25 @@ class Launcher:
                 stopped=any(l.startswith('State:') and 'T' in l for l in status.splitlines())
                 if stopped:
                     require(current['ppid']==os.getpid() and current['uid']==self.package.executor_uid and
+                            (Path('/proc',str(child.pid),'cmdline').read_bytes().split(b'\0')[:-1])==expected and
+                            Path('/proc',str(child.pid),'exe').resolve()==Path('/usr/bin/python3').resolve() and
                             any(l.startswith('NoNewPrivs:') and l.split()[1]=='1' for l in status.splitlines()),
                             'launch_executor_boundary')
                     break
                 time.sleep(.002)
             receipt=ManagedSpawn(current,self.server,self.manager['pid'],request['window_id'],
-                                 request['generation'],request['role'])
+                                 request['generation'],request['role'],proxy)
             # Register original pidfd/window/role ownership before continuation.
-            self.children[identity]=(child,path)
+            self.children[identity]=Handle(child,path,lifecycle,proxy_proof,request["window_id"],request["generation"])
             register(receipt)
             require(receipt.consumed,'launch_registration_missing')
             record.update(state='spawned',broker_pid=current['pid'],broker_start=current['start'])
             atomic(path,record)
-            return {'broker_pid':current['pid'],'broker_start':current['start'],'state':'spawned'}
+            require(exists(proxy),'launch_proxy_changed')
+            proxy_proof.send(signal.SIGCONT)
+            return {'broker_pid':current['pid'],'broker_start':current['start'],'state':'spawned',
+                    'proxy_pid':proxy['pid'],'proxy_start':proxy['start'],'role':request['role'],
+                    'window_id':request['window_id'],'generation':request['generation']}
         except BaseException:
             record['state']='unknown'
             try:
@@ -136,21 +178,39 @@ class Launcher:
                 if child is not None and not (receipt and receipt.consumed):
                     child.kill();child.wait(timeout=2)
                     self.children.pop(identity,None)
+                    lifecycle.close();proxy_proof.close()
             raise
         finally:
             parent.close();capsule.close()
             for fd in inherited:os.close(fd)
 
-    def poll(self):
-        for key,(child,path) in list(self.children.items()):
+    def poll(self,released=lambda _window,_generation:False):
+        cancelled=[]
+        for key,handle in list(self.children.items()):
+            child,path=handle.child,handle.path
+            try:
+                command=handle.lifecycle.recv(16)
+                if command==b'' or command:
+                    if not handle.cancelled:cancelled.append((handle.window,handle.generation))
+                    handle.cancelled=True
+            except BlockingIOError:pass
+            except OSError:
+                if not handle.cancelled:cancelled.append((handle.window,handle.generation))
+                handle.cancelled=True
+            if handle.proxy.exited() and not handle.cancelled:
+                cancelled.append((handle.window,handle.generation));handle.cancelled=True
             code=child.poll()
-            if code is not None:
+            if code is not None and released(handle.window,handle.generation):
                 record=json.loads(path.read_text());record['exit_code']=code
-                if record['state']!='unknown':record['state']='exited'
-                atomic(path,record);del self.children[key]
+                if handle.cancelled:record['state']='quarantined'
+                elif record['state']!='unknown':record['state']='exited'
+                atomic(path,record)
+                status=125 if handle.cancelled else code if code>=0 else min(255,128-code)
+                try:handle.lifecycle.sendall(('exit:%d\n'%status).encode())
+                except OSError:pass
+                handle.lifecycle.close();handle.proxy.close();del self.children[key]
+        return cancelled
 
     def close(self):
-        self.poll()
-        # The manager must first observe/terminate/reap each window's full owned
-        # tree. Killing a broker here first could hide newly reparented natives.
+        # A caller supplies actual owned-tree release proof via poll first.
         require(not self.children, 'managed_launch_children_not_reaped')

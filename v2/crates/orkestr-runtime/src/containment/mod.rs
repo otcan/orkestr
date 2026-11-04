@@ -8,6 +8,7 @@ mod environment;
 mod framing;
 mod lease_refresh;
 mod memory;
+mod managed_launch;
 pub mod metadata;
 mod process;
 mod provider_fd;

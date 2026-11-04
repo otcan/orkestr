@@ -272,7 +272,14 @@ class Manager:
 
     def tick(self):
         if getattr(self, "launcher", None) is not None:
-            self.launcher.poll()
+            def released(window_id, generation):
+                window=self.windows.get(window_id)
+                return bool(window and window.generation==generation and window.children.released())
+            for window_id,generation in self.launcher.poll(released):
+                window=self.windows.get(window_id)
+                if window and window.generation==generation:
+                    self._uncertain(window_id,generation,"runtime_refused")
+                    self._terminate(window,wait=.25)
         require(self.child is not None, "server_not_started")
         if self.child.poll() is not None and not self.closed:
             self.failed = True  # Even exit0 is unexpected outside close().
@@ -379,6 +386,8 @@ class Manager:
             errors.append("window_cleanup")
         if getattr(self, "launcher", None) is not None:
             try:
+                self.launcher.poll(lambda window_id,generation:bool(self.windows.get(window_id) and
+                    self.windows[window_id].generation==generation and self.windows[window_id].children.released()))
                 self.launcher.close()
             except Exception:
                 errors.append("managed_launch_cleanup")
