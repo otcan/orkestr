@@ -15,6 +15,7 @@ struct FakeV1 {
     lease: Option<(String, String, String, i64)>,
     counter: i64,
     calls: Vec<String>,
+    owner_open_status: u16,
 }
 fn reply(status: u16, body: Value) -> (u16, Value) {
     (status, body)
@@ -31,6 +32,20 @@ fn handle(v1: &mut FakeV1, method: &str, path: &str, auth: bool, body: Value) ->
             .map(|s| json!({"desktopSlug": s, "permissions": ["discover","acquire"]}))
             .collect();
         return reply(200, json!({"grants": grants}));
+    }
+    if method == "POST" && path.ends_with("/share-if-absent") {
+        if body["threadId"] != "v1-parent" {
+            return reply(403, json!({"error":"wrong_thread"}));
+        }
+        let status = if v1.owner_open_status == 0 {
+            201
+        } else {
+            v1.owner_open_status
+        };
+        return reply(
+            status,
+            json!({"url":"https://desktop.example.test/desktop-share/example?key=synthetic"}),
+        );
     }
     let slug = path.split('/').nth(3).unwrap_or_default().to_owned();
     let thread = body["threadId"].as_str().unwrap_or_default().to_owned();
@@ -69,6 +84,81 @@ fn handle(v1: &mut FakeV1, method: &str, path: &str, auth: bool, body: Value) ->
         },
         _ => reply(404, json!({"error":"not_found"})),
     }
+}
+
+#[tokio::test]
+async fn owner_open_is_bound_owner_only_and_old_bridge_fails_closed() {
+    let mut case = case().await;
+    let v1 = StdArc::new(StdMutex::new(FakeV1 {
+        grants: vec!["sales-nav".into()],
+        ..Default::default()
+    }));
+    let url = fake_v1(v1.clone()).await;
+    case.state.desktop_broker = Some(Arc::new(
+        desktop_broker::Broker::new(&url, V1_TOKEN.into()).unwrap(),
+    ));
+    let auth = case.auth();
+    let (status, _) = send(
+        &case.state,
+        "PUT",
+        &case.path("/desktop-binding"),
+        &[&auth],
+        r#"{"expected_revision":0,"v1_thread_id":"v1-parent","desktop_slugs":["sales-nav"]}"#,
+    )
+    .await;
+    assert_eq!(status, 200);
+    let calls_before = v1.lock().unwrap().calls.len();
+    let (status, _) = send(
+        &case.state,
+        "POST",
+        &case.path("/desktops/sales-nav/open"),
+        &[],
+        "{}",
+    )
+    .await;
+    assert_eq!(status, 401);
+    let (status, _) = send(
+        &case.state,
+        "POST",
+        &case.path("/desktops/unbound/open"),
+        &[&auth],
+        "{}",
+    )
+    .await;
+    assert!(!matches!(status, 200 | 201));
+    assert_eq!(v1.lock().unwrap().calls.len(), calls_before);
+    let (status, opened) = send(
+        &case.state,
+        "POST",
+        &case.path("/desktops/sales-nav/open"),
+        &[&auth],
+        "{}",
+    )
+    .await;
+    assert_eq!(status, 200);
+    assert_eq!(opened["challenge_required"], true);
+    assert!(opened.get("fencing_token").is_none());
+    v1.lock().unwrap().owner_open_status = 404;
+    let (status, value) = send(
+        &case.state,
+        "POST",
+        &case.path("/desktops/sales-nav/open"),
+        &[&auth],
+        "{}",
+    )
+    .await;
+    assert_eq!(status, 503);
+    assert_eq!(value["code"], "desktop_owner_open_unsupported");
+    v1.lock().unwrap().owner_open_status = 409;
+    let (status, _) = send(
+        &case.state,
+        "POST",
+        &case.path("/desktops/sales-nav/open"),
+        &[&auth],
+        "{}",
+    )
+    .await;
+    assert_eq!(status, 409);
 }
 async fn fake_v1(v1: StdArc<StdMutex<FakeV1>>) -> String {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

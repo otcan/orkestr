@@ -39,6 +39,7 @@ mod conversations_http;
 pub mod deploy_drain;
 mod desktop_broker;
 mod desktop_http;
+mod desktop_open_http;
 mod encrypted_upload_http;
 pub mod encrypted_upload_ingest;
 mod execution;
@@ -622,6 +623,7 @@ pub fn router_with_google_catalog(
         .merge(conversation_status_http::router())
         .merge(host_metrics::router())
         .merge(desktop_http::router())
+        .merge(desktop_open_http::router())
         .merge(sidebar_http::router())
         .merge(message_attachments::router())
         .merge(encrypted_upload_http::router())
