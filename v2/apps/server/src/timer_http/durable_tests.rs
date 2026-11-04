@@ -489,7 +489,12 @@ fn hold_write_lock(
 // `.map_err(|_| HistoryError::Unauthorized)?` turned into a fatal exit.
 #[tokio::test]
 async fn transient_store_lock_does_not_end_the_controller() {
-    let (store, bound, _, _, _, dir) = fixture().await;
+    let (store, _unbound, _, _, _, dir) = fixture().await;
+    // fixture()'s bound Store carries a different namespace/key, so
+    // renew_timer_supervisor_credential returns Fenced and the controller dies at
+    // startup before reaching any heartbeat. Authorize the supervisor explicitly,
+    // as the other controller tests do.
+    let bound = store.authorize_timer_supervisor(MACHINE).await.unwrap();
     let db = dir.join("core.sqlite3");
     let (shutdown, receiver) = tokio::sync::watch::channel(false);
     let controller = tokio::spawn(DurableTimerController::new(bound).run(receiver));
@@ -542,7 +547,12 @@ async fn transient_store_lock_does_not_end_the_controller() {
 // the cause is not misreported. Uses the test-only short grace.
 #[tokio::test]
 async fn outage_past_the_grace_window_still_ends_the_controller() {
-    let (store, bound, _, _, _, dir) = fixture().await;
+    let (store, _unbound, _, _, _, dir) = fixture().await;
+    // fixture()'s bound Store carries a different namespace/key, so
+    // renew_timer_supervisor_credential returns Fenced and the controller dies at
+    // startup before reaching any heartbeat. Authorize the supervisor explicitly,
+    // as the other controller tests do.
+    let bound = store.authorize_timer_supervisor(MACHINE).await.unwrap();
     let db = dir.join("core.sqlite3");
     let mut controller = DurableTimerController::new(bound);
     // Longer than one busy_timeout (5 s) so this measures the WINDOW elapsing
@@ -574,7 +584,12 @@ async fn outage_past_the_grace_window_still_ends_the_controller() {
 // covers renew_timer_supervisor_credential.
 #[tokio::test]
 async fn revoked_session_terminates_the_running_controller() {
-    let (store, bound, _, _, _, dir) = fixture().await;
+    let (store, _unbound, _, _, _, dir) = fixture().await;
+    // fixture()'s bound Store carries a different namespace/key, so
+    // renew_timer_supervisor_credential returns Fenced and the controller dies at
+    // startup before reaching any heartbeat. Authorize the supervisor explicitly,
+    // as the other controller tests do.
+    let bound = store.authorize_timer_supervisor(MACHINE).await.unwrap();
     let (_shutdown, receiver) = tokio::sync::watch::channel(false);
     let controller = tokio::spawn(DurableTimerController::new(bound).run(receiver));
     tokio::time::sleep(Duration::from_secs(2)).await;
@@ -602,7 +617,12 @@ async fn revoked_session_terminates_the_running_controller() {
 // move the window. Pause makes every tick an Ok that must NOT count.
 #[tokio::test]
 async fn paused_ticks_do_not_extend_the_grace_window() {
-    let (store, bound, _, _, _, dir) = fixture().await;
+    let (store, _unbound, _, _, _, dir) = fixture().await;
+    // fixture()'s bound Store carries a different namespace/key, so
+    // renew_timer_supervisor_credential returns Fenced and the controller dies at
+    // startup before reaching any heartbeat. Authorize the supervisor explicitly,
+    // as the other controller tests do.
+    let bound = store.authorize_timer_supervisor(MACHINE).await.unwrap();
     let db = dir.join("core.sqlite3");
     let mut controller = DurableTimerController::new(bound).with_pause(Arc::new(|| true));
     // The grace MUST outlast one failed heartbeat. A blocked `BEGIN IMMEDIATE`
