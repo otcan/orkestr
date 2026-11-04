@@ -433,7 +433,19 @@ async fn guard(
     // V1 desktop acquire (and a renewing heartbeat) can take 8-20 s while V1
     // prepares the desktop. Dropping it at 10 s would leave a V1 lease that
     // V2 never recorded, so these two get a longer, still bounded deadline.
-    let deadline = if desktop_slow_path(request.uri().path()) {
+    let deadline = if match desktop_open_http::authenticated_slow_path(
+        &state,
+        request.method(),
+        request.uri().path(),
+        request.headers(),
+    )
+    .await
+    {
+        Ok(value) => value,
+        Err(error) => return error.into_response(),
+    } {
+        Duration::from_secs(50)
+    } else if desktop_slow_path(request.uri().path()) {
         Duration::from_secs(60)
     } else {
         Duration::from_secs(10)

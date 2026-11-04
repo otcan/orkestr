@@ -16,6 +16,7 @@ struct FakeV1 {
     counter: i64,
     calls: Vec<String>,
     owner_open_status: u16,
+    owner_open_delay_ms: u64,
 }
 fn reply(status: u16, body: Value) -> (u16, Value) {
     (status, body)
@@ -127,6 +128,8 @@ async fn owner_open_is_bound_owner_only_and_old_bridge_fails_closed() {
     .await;
     assert!(!matches!(status, 200 | 201));
     assert_eq!(v1.lock().unwrap().calls.len(), calls_before);
+    // A scoped authenticated owner operation survives the ordinary ten-second deadline.
+    v1.lock().unwrap().owner_open_delay_ms = 11_000;
     let (status, opened) = send(
         &case.state,
         "POST",
@@ -138,6 +141,7 @@ async fn owner_open_is_bound_owner_only_and_old_bridge_fails_closed() {
     assert_eq!(status, 200);
     assert_eq!(opened["challenge_required"], true);
     assert!(opened.get("fencing_token").is_none());
+    v1.lock().unwrap().owner_open_delay_ms = 0;
     v1.lock().unwrap().owner_open_status = 404;
     let (status, value) = send(
         &case.state,
@@ -187,6 +191,14 @@ async fn fake_v1(v1: StdArc<StdMutex<FakeV1>>) -> String {
                             .lines()
                             .any(|l| l == format!("Authorization: Bearer {V1_TOKEN}"));
                         let body = serde_json::from_slice(&raw[end + 4..]).unwrap_or(Value::Null);
+                        let delay = if path.ends_with("/share-if-absent") {
+                            v1.lock().unwrap().owner_open_delay_ms
+                        } else {
+                            0
+                        };
+                        if delay > 0 {
+                            tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+                        }
                         let (status, value) =
                             handle(&mut v1.lock().unwrap(), &method, &path, auth, body);
                         let text = value.to_string();

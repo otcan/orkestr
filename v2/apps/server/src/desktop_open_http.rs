@@ -9,6 +9,40 @@ use orkestr_v2_store_sqlite::DesktopCaller;
 use serde_json::json;
 use std::time::Duration;
 
+pub(crate) async fn authenticated_slow_path(
+    state: &AppState,
+    method: &axum::http::Method,
+    path: &str,
+    headers: &HeaderMap,
+) -> Result<bool, Error> {
+    let parts: Vec<_> = path.split('/').collect();
+    if method != axum::http::Method::POST
+        || parts.len() != 8
+        || parts[1..4] != ["api", "v2", "conversations"]
+        || parts[5] != "desktops"
+        || parts[7] != "open"
+    {
+        return Ok(false);
+    }
+    let (owner, credential) = owner_credential(state, headers).await?;
+    if !desktop_slug_valid(parts[6]) {
+        return Err(invalid());
+    }
+    state
+        .store
+        .prepare_desktop_acquire(
+            DesktopCaller::Owner {
+                credential: &credential,
+                owner: &owner,
+            },
+            &conversation(parts[4])?,
+            parts[6],
+        )
+        .await
+        .map_err(failure)?;
+    Ok(true)
+}
+
 pub(crate) fn router() -> Router<AppState> {
     Router::new().route(
         "/api/v2/conversations/{id}/desktops/{slug}/open",
@@ -57,6 +91,11 @@ async fn open(
             &conversation(&id)?,
             &slug,
         )
+        .await
+        .map_err(failure)?;
+    let binding_before = state
+        .store
+        .desktop_binding(&credential, &owner, &conversation(&id)?)
         .await
         .map_err(failure)?;
     let broker = state.desktop_broker.as_ref().ok_or(Error(
@@ -111,6 +150,20 @@ async fn open(
         .and_then(serde_json::Value::as_str)
         .filter(|url| safe_share_url(url))
         .ok_or_else(unavailable)?;
+    // The remote action may have outlived a password/session or binding change.
+    // Never publish a newly minted link using stale Core authorization.
+    let binding_after = state
+        .store
+        .desktop_binding(&credential, &owner, &conversation(&id)?)
+        .await
+        .map_err(failure)?;
+    if binding_after != binding_before {
+        return Err(Error(
+            StatusCode::CONFLICT,
+            "desktop_binding_changed",
+            "Desktop access changed while preparing its link; do not retry automatically",
+        ));
+    }
     let mut response = Json(json!({"url":url,"challenge_required":true})).into_response();
     response
         .headers_mut()
