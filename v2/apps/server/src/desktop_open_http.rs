@@ -81,6 +81,11 @@ async fn open(
     if !desktop_slug_valid(&slug) {
         return Err(invalid());
     }
+    let binding_before = state
+        .store
+        .desktop_binding(&credential, &owner, &conversation(&id)?)
+        .await
+        .map_err(failure)?;
     let prepared = state
         .store
         .prepare_desktop_acquire(
@@ -91,11 +96,6 @@ async fn open(
             &conversation(&id)?,
             &slug,
         )
-        .await
-        .map_err(failure)?;
-    let binding_before = state
-        .store
-        .desktop_binding(&credential, &owner, &conversation(&id)?)
         .await
         .map_err(failure)?;
     let broker = state.desktop_broker.as_ref().ok_or(Error(
