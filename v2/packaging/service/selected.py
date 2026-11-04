@@ -84,7 +84,7 @@ def pair_bytes(plan):
     return pair
 
 
-OPTIONAL = {'password_rotation_ready', 'authority_uid', 'authority_gid', 'executor_uid', 'executor_gid', 'provider_home', 'roles', 'preserve_state', 'workspace_exec', 'additional_workspace_exec', 'max_active_windows', 'host_full_access',
+OPTIONAL = {'attachment_export_dir', 'password_rotation_ready', 'authority_uid', 'authority_gid', 'executor_uid', 'executor_gid', 'provider_home', 'roles', 'preserve_state', 'workspace_exec', 'additional_workspace_exec', 'max_active_windows', 'host_full_access',
             'window_max_minutes', 'conversation_window_max_minutes', 'conversation_workspaces', 'provider_routing',
             'code_mode_host', 'code_mode_host_sha256', 'claude', 'claude_quota_projection', 'codex_quota_projection', 'live_map', 'desktop_broker', 'timer_config', 'whatsapp_chats', 'v1_chat_icons_dir', 'metrics_port'}
 CLAUDE_PATHS = ('executable', 'account', 'workspace', 'home', 'temporary')
@@ -132,6 +132,20 @@ def claude(plan):
 
 def optional(plan):
     """Shape of the optional plan extensions copied into the protected beta config."""
+    if 'attachment_export_dir' in plan:
+        value=plan['attachment_export_dir']
+        require(type(value) is str and value.startswith('/') and 1<len(value)<=4096
+                and '\0' not in value and not any(ord(c)<32 for c in value)
+                and all(part not in ('','.','..') for part in value.split('/')[1:]),
+                'attachment export path required')
+        path=Path(value)
+        # Metadata-free overlap refusals precede artifact reads and staging.
+        for key in ('home','provider_home','workspace','state_root','auth_file','bootstrap_file',
+                    'ledger_directory','endpoint_directory','output','source_repository'):
+            if type(plan.get(key)) is str:
+                other=Path(plan[key])
+                require(path!=other and path not in other.parents and other not in path.parents,
+                        'attachment export scope overlap')
     if 'workspace_exec' in plan:
         require('roles' in plan, 'workspace execution requires configured Worker roles')
         validate_workspace_exec(plan['workspace_exec'])
@@ -288,6 +302,16 @@ def prepare(plan):
             for index,a in enumerate(claude_dirs):
                 for b in [*roots,*claude_dirs[index+1:]]:
                     require(a!=b and a not in b.parents and b not in a.parents,'isolated Claude path overlap')
+        if 'attachment_export_dir' in plan:
+            require('codex_service/attachment_exports.py' in manager.FILES,
+                    'selected source does not support attachment exports')
+            from codex_service.attachment_exports import bind as bind_exports
+            scopes=[*roots,Path(identity['provider_home'])]
+            if role_paths:scopes.extend(p for pair in role_paths.values() for p in pair)
+            if claude_plan:scopes.extend(claude_dirs)
+            scopes.extend(Path(c['workspace']) for c in ([plan['workspace_exec']] if 'workspace_exec' in plan else [])+plan.get('additional_workspace_exec',[]))
+            scopes.extend(Path(v['path'] if type(v) is dict else v) for v in plan.get('conversation_workspaces',{}).values())
+            bind_exports(plan['attachment_export_dir'],identity['authority_uid'],gid,scopes)
         package_files = manager.FILES | role_files | host_files | claude_files
         modules={}
         for folder,names in (('broker',config.BROKER),('isolation',config.ISOLATION),
@@ -335,6 +359,8 @@ def prepare(plan):
                      'hosts':list(config.HOSTS)}
             if 'password_rotation_ready' in plan:
                 runtime['password_rotation_ready']=plan['password_rotation_ready']
+            if 'attachment_export_dir' in plan:
+                runtime['attachment_export_dir']=plan['attachment_export_dir']
             if role_paths is not None:
                 beta['roles']=selected_roles.emit(inner,role_paths,profile,gid,entry,write,encoded)
             if 'workspace_exec' in plan:

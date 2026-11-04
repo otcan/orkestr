@@ -77,6 +77,25 @@ class Selected(unittest.TestCase):
         with authority(REPO,source) as (_,manager,_):
             package=manager.Package(self.root/'release/package',sha(self.root/'release/package/manifest.json'))
             self.assertEqual(package.environment()['ORKESTR_V2_METRICS_BIND'],'127.0.0.1:19850')
+    def test_attachment_export_bad_shape_or_scope_refused_before_output(self):
+        for value in (True, None, '/', 'relative', '/a//b', '/a/../b',
+                      self.plan['home'], self.plan['workspace']+'/export',
+                      self.plan['state_root'], self.plan['output']):
+            self.plan['attachment_export_dir']=value
+            with self.subTest(value=value), self.assertRaises(RuntimeError):
+                selected.prepare(self.plan)
+            self.assertFalse((self.root/'release').exists())
+    def test_external_attachment_export_roundtrips_closed_current_package(self):
+        source=self.current_source()
+        export=self.root/'exports';export.mkdir(mode=0o700);os.chown(export,995,986)
+        self.plan['attachment_export_dir']=str(export)
+        selected.prepare(self.plan)
+        descriptor=json.loads((self.root/'release/package/service.json').read_bytes())
+        self.assertEqual(descriptor['attachment_export_dir'],str(export))
+        with authority(REPO,source) as (_,manager,_):
+            package=manager.Package(self.root/'release/package',sha(self.root/'release/package/manifest.json'))
+            self.assertEqual(package.environment()['ORKESTR_V2_ATTACHMENT_EXPORT_DIR'],str(export))
+        self.assertEqual(export.stat().st_mode & 0o777,0o700)
     def test_password_rotation_readiness_rejects_non_boolean_before_writes(self):
         for bad in (1,0,'true',None,[]):
             self.plan['password_rotation_ready']=bad

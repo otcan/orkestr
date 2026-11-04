@@ -15,7 +15,7 @@ from .role_profiles import ROLE_FILES, bind as bind_roles
 MODULES_SERVICE = ("__init__.py", "contract.py", "ledger.py", "budget.py", "custody.py",
                    "channel.py", "package.py", "ownership.py", "egress.py", "manager.py",
                    "server_child.py", "broker.py", "profile.py", "entry.py", "role_profiles.py",
-                   "claude_broker.py", "identity.py", "launch.py", "launch_child.py", "proxy.py")
+                   "claude_broker.py", "identity.py", "launch.py", "launch_child.py", "proxy.py", "attachment_exports.py")
 # Shared with the server and packager: room for many per-conversation
 # command profiles.
 MAX_BETA_CONFIG_BYTES = 262144
@@ -133,6 +133,7 @@ class Package:
         self.beta = metadata(self.root / "beta.json", MAX_BETA_CONFIG_BYTES)
         self._bind()
         bind_roles(self)
+        self._bind_attachment_export()
 
     def verify_inventory(self):
         """Recheck closed inventory and custody; never import or repair files."""
@@ -146,7 +147,7 @@ class Package:
 
     def _bind(self):
         value = self.runtime
-        require(set(value) - IDENTITY_FIELDS - {"password_rotation_ready", "live_map", "desktop_broker", "timer_config", "v1_chat_icons_dir", "whatsapp_chats", "claude_quota_projection", "codex_quota_projection", "metrics_port"} == {"format", "uid", "gid", "owner_id", "conversation_id", "home",
+        require(set(value) - IDENTITY_FIELDS - {"password_rotation_ready", "attachment_export_dir", "live_map", "desktop_broker", "timer_config", "v1_chat_icons_dir", "whatsapp_chats", "claude_quota_projection", "codex_quota_projection", "metrics_port"} == {"format", "uid", "gid", "owner_id", "conversation_id", "home",
                 "bootstrap_file", "ledger_directory", "endpoint_directory", "port", "trusted_origin"}
                 and value["format"] == "orkestr-v2-codex-service-v1", "service_format")
         require("password_rotation_ready" not in value or type(value["password_rotation_ready"]) is bool,
@@ -342,6 +343,25 @@ class Package:
                 require(a != b and a not in b.parents and b not in a.parents, "claude_scope_overlap")
         self.claude = selected
 
+    def _bind_attachment_export(self):
+        self.attachment_export_dir = None
+        if 'attachment_export_dir' not in self.runtime:
+            return
+        from .attachment_exports import bind
+        forbidden = [self.root, self.home, self.provider_home, self.ledger_directory,
+                     self.control.parent, Path(self.runtime['bootstrap_file'])]
+        for profile in self.role_profiles.values():
+            value = metadata(profile)
+            forbidden.extend(Path(value[k]) for k in ('workspace', 'state_root', 'auth_file'))
+        forbidden.extend(Path(value) for value in conversation_workspace_paths(self.beta))
+        for command in ([self.beta['workspace_exec']] if 'workspace_exec' in self.beta else []) + self.beta.get('additional_workspace_exec', []):
+            forbidden.append(Path(command['workspace']))
+        if self.claude:
+            value = metadata(self.root / 'claude-private.json')
+            forbidden.extend(Path(value[k]) for k in ('account', 'workspace', 'home', 'temporary'))
+        self.attachment_export_dir = bind(self.runtime['attachment_export_dir'],
+                                         self.authority_uid, self.gid, forbidden)
+
     def private(self, value, uid, directory=False):
         if not self.identity_split or os.geteuid() in (0, uid):
             return private(value, uid, directory)
@@ -371,6 +391,8 @@ class Package:
                 **({"ORKESTR_V2_PASSWORD_ROTATION_READY": "1" if self.runtime["password_rotation_ready"] else "0"}
                    if "password_rotation_ready" in self.runtime else {}),
                 ACCESS_LOG_ENV: "quiet",
+                **({"ORKESTR_V2_ATTACHMENT_EXPORT_DIR": str(self.attachment_export_dir)}
+                   if getattr(self, "attachment_export_dir", None) is not None else {}),
                 **({METRICS_BIND_ENV: f"127.0.0.1:{self.metrics_port()}"}
                    if self.metrics_port() is not None else {}),
                 **({LIVE_MAP_ENV: self.live_map} if self.live_map else {}),
