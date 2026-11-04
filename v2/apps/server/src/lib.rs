@@ -470,6 +470,18 @@ async fn guard(
             return unauthorized().into_response();
         }
         Duration::from_secs(15 * 60)
+    } else if match desktop_open_http::authenticated_slow_path(
+        &state,
+        request.method(),
+        request.uri().path(),
+        request.headers(),
+    )
+    .await
+    {
+        Ok(value) => value,
+        Err(error) => return error.into_response(),
+    } {
+        Duration::from_secs(50)
     } else if desktop_slow_path(request.uri().path()) {
         Duration::from_secs(60)
     } else {
