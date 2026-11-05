@@ -4,10 +4,13 @@ Credentials come from an explicit private JSON file; the session cookie and
 CSRF token stay in memory and are revoked on close. Nothing is logged.
 """
 import json
+import hashlib
+import importlib
 import importlib.util
 import os
 from pathlib import Path
 import stat
+import sys
 from urllib import error, parse, request
 
 
@@ -108,25 +111,34 @@ class Client:
             self.service_config=None
             raise ApiError(0,'service_endpoint_mismatch')
 
-    def login_file(self, path, *, expected_owner=None, expected_source=None):
+    def login_file(self, path, *, expected_owner=None, expected_source=None,
+                   peer_descriptor_path=None):
         """Service mode requires loopback plus exact source/owner pins.
 
         Load the sibling standard-library client by its reviewed source location
         so the standalone migration entrypoints also work with python -I -S -B.
         """
-        module_path = Path(__file__).resolve().parents[1] / 'compat/v1_runtime/rust_client.py'
-        spec = importlib.util.spec_from_file_location('orkestr_migration_service_client', module_path)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
+        directory = Path(__file__).resolve().parents[1] / 'compat/v1_runtime'
+        name = 'orkestr_migration_runtime_' + hashlib.sha256(str(directory).encode()).hexdigest()[:16]
+        if name not in sys.modules:
+            spec = importlib.util.spec_from_file_location(name, directory / '__init__.py',
+                                                         submodule_search_locations=[str(directory)])
+            package = importlib.util.module_from_spec(spec)
+            sys.modules[name] = package
+            spec.loader.exec_module(package)
+        module = importlib.import_module(name + '.rust_client')
         try:
             secret = module.credentials(path)
             if set(secret) != {'service_token'}:
                 return self.login(secret['username'], secret['password'])
             if expected_owner is None or expected_source is None:
                 raise ApiError(0, 'service_identity_pins_required')
+            if peer_descriptor_path is None:
+                raise ApiError(0, 'service_peer_descriptor_required')
             session = module.RustSession(origin=self.origin, loopback_url=self.base,
                                          credentials_path=path, expected_owner=expected_owner,
-                                         expected_source=expected_source, timeout_s=min(self.timeout, 20))
+                                         expected_source=expected_source, timeout_s=min(self.timeout, 20),
+                                         peer_descriptor_path=peer_descriptor_path)
             session.login()
             self.service = session
             return {'owner_id': session.owner}

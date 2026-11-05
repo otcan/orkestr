@@ -31,7 +31,7 @@ def _with_client(args, action):
         client.login_service_config(args.service_config)
     else:
         client.login_file(args.credentials_file, expected_owner=args.expected_owner,
-                          expected_source=args.expected_source)
+                          expected_source=args.expected_source, peer_descriptor_path=args.peer_descriptor)
     try:
         return action(client)
     finally:
@@ -135,6 +135,7 @@ def parser():
                              help='private 0600 JSON {"service_token"} or legacy {"username","password"}')
         command.add_argument('--expected-owner', help='required owner UUID for service credentials')
         command.add_argument('--expected-source', help='required deployed source commit for service credentials')
+        command.add_argument('--peer-descriptor', help='Root-published Core descriptor for service credentials')
         command.add_argument('--v1-cli', default='orkestr', help='V1 CLI executable (uses its own auth)')
 
     export = commands.add_parser('v1-export')
@@ -190,6 +191,7 @@ def parser():
         auth.add_argument('--credentials-file')
         cal.add_argument('--expected-owner', help='required owner UUID for service credentials')
         cal.add_argument('--expected-source', help='required deployed source commit for service credentials')
+        cal.add_argument('--peer-descriptor', help='Root-published Core descriptor for service credentials')
         cal.add_argument('--v1-cli', default='orkestr')
         cal.add_argument('--v1-timers-json', help='saved `orkestr timers list --json` instead of the CLI')
         cal.add_argument('--no-inline-prompt-file', action='store_true',
