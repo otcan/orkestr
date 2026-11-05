@@ -5,7 +5,7 @@ const NOW: i64 = 1_767_225_600_000; // 2026-01-01T00:00Z
 async fn fixture() -> (Store, OwnerId, ConversationId, std::path::PathBuf) {
     let directory = std::env::temp_dir().join(format!("timer-leaf-{}", Uuid::new_v4()));
     std::fs::create_dir(&directory).unwrap();
-    let store = Store::open(&directory.join("store.sqlite3")).await.unwrap();
+    let store = crate::test_template::open(&directory.join("store.sqlite3")).await;
     let conversation = store
         .setup("synthetic-timer-owner", "synthetic-password-hash")
         .await

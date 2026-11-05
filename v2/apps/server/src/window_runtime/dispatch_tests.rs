@@ -447,3 +447,6 @@ fn queued_intent_is_rebuilt_against_current_window_state() {
         Plan::Withdraw(QueuedWindowWithdrawal::ReconciliationRequired)
     ));
 }
+
+#[path = "expired_join_http_tests.rs"]
+mod expired_join_http_tests;

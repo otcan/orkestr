@@ -10,7 +10,7 @@ pub(super) async fn fixture() -> Fixture {
     let dir = std::env::temp_dir().join(format!("memory-service-{}", Uuid::new_v4()));
     std::fs::create_dir(&dir).unwrap();
     let path = dir.join("core.sqlite3");
-    let store = Store::open(&path).await.unwrap();
+    let store = crate::test_template::open(&path).await;
     store
         .setup("synthetic-memory-owner", "synthetic-hash")
         .await

@@ -10,7 +10,7 @@ async fn password_rotation_preserves_actual_window_bootstrap_and_issued_credenti
     let home = std::path::PathBuf::from(std::env::var_os("ORKESTR_V2_HOME").unwrap());
     std::fs::create_dir_all(&home).unwrap();
     let path = home.join(format!("password-window-{}.sqlite3", Uuid::new_v4()));
-    let store = Store::open(&path).await.unwrap();
+    let store = crate::test_template::open(&path).await;
     let conversation = store.setup("synthetic-owner", "old-hash").await.unwrap();
     let owner = store
         .credentials("synthetic-owner")

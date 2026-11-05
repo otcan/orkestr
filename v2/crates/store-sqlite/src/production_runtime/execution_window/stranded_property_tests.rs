@@ -354,6 +354,7 @@ async fn every_stranded_shape_becomes_terminal_within_the_grace_once_the_owner_a
 /// conversation opens its next window.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn schema54_fitness_window_becomes_terminal_after_upgrade() {
+    let _real = crate::test_template::real_migrations();
     let w = Window::open().await;
     let fast_binding = w.ready_fast().await;
     w.activate().await;

@@ -15,7 +15,7 @@ impl Case {
         let root = PathBuf::from(std::env::var_os("ORKESTR_V2_HOME").expect("isolated test home"))
             .join(Uuid::new_v4().to_string());
         std::fs::create_dir_all(&root).unwrap();
-        let store = Store::open(&root.join("core.sqlite3")).await.unwrap();
+        let store = crate::test_template::open(&root.join("core.sqlite3")).await;
         let conversation = store
             .setup("synthetic-owner", "synthetic-hash")
             .await

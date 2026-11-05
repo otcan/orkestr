@@ -8,7 +8,7 @@ async fn fresh() -> (Store, OwnerId, ConversationId, String) {
         .join(format!("beta-first-owner-{}", Uuid::new_v4()))
         .join("core.sqlite3");
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    let store = Store::open(&path).await.unwrap();
+    let store = crate::test_template::open(&path).await;
     let conversation = store
         .setup("synthetic-first-owner", "synthetic-password-hash")
         .await

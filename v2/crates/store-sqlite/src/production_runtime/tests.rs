@@ -25,7 +25,7 @@ pub(super) async fn setup() -> Case {
 }
 pub(super) async fn setup_at(root: PathBuf) -> Case {
     std::fs::create_dir_all(&root).unwrap();
-    let store = Store::open(&root.join("core.sqlite3")).await.unwrap();
+    let store = crate::test_template::open(&root.join("core.sqlite3")).await;
     let conversation = store
         .setup("synthetic-owner", "synthetic-hash")
         .await

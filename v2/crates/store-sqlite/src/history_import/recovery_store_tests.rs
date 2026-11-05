@@ -5,7 +5,7 @@ use super::*;
 async fn fixture() -> (Store, OwnerId, std::path::PathBuf) {
     let directory = std::env::temp_dir().join(format!("recovery-test-{}", Uuid::new_v4()));
     std::fs::create_dir(&directory).unwrap();
-    let store = Store::open(&directory.join("store.sqlite3")).await.unwrap();
+    let store = crate::test_template::open(&directory.join("store.sqlite3")).await;
     store
         .setup("synthetic-owner", "synthetic-password-hash")
         .await
