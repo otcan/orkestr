@@ -355,6 +355,18 @@ class ClientTests(unittest.TestCase):
         with self.assertRaisesRegex(ClientError, "credential_file_refused"):
             client_module.credentials(self.secret)
 
+    def test_rejected_response_is_closed_before_returning_error(self):
+        closed=[]
+        original=client_module.http.client.HTTPResponse.close
+        def close(response):
+            closed.append(response)
+            return original(response)
+        with patch.object(client_module.http.client.HTTPResponse,'close',close):
+            with self.assertRaisesRegex(ClientError,'unexpected_status'):
+                self.client.session._wire('GET','/api/v2/health',allowed=(201,))
+            self.assertTrue(closed)
+            self.assertTrue(all(response.isclosed() for response in closed))
+
     def test_failed_login_does_not_include_body_or_secret_in_error(self):
         original = self.respond
         self.server.respond = lambda method, path: ((403, {"error": self.secret.read_text()}, {})

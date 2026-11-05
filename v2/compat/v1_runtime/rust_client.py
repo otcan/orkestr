@@ -181,7 +181,7 @@ class RustSession:
             if method != "POST" or path not in (SESSION, SERVICE_SESSION):
                 headers["X-Orkestr-CSRF"] = csrf
         connection = http.client.HTTPConnection(self.host, self.port, timeout=timeout_s)
-        started, timer = time.monotonic(), None
+        started, timer, response = time.monotonic(), None, None
         raw = bytearray()
         try:
             connection.connect()
@@ -251,6 +251,10 @@ class RustSession:
             self._verified_at = None
             raise ClientError("transport_outcome_unknown" if method == "POST" else "transport_failed") from None
         finally:
+            # HTTP/1.0/Connection:close detaches the response from the connection.
+            # Rejected statuses must close its unread body/socket explicitly.
+            if response is not None:
+                response.close()
             connection.close()
             if timer:
                 timer.cancel()
