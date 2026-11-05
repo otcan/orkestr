@@ -124,7 +124,7 @@ class ResumeRehearsal(Rehearsal):
         assert len(setup_ids)==len(set(setup_ids))
         trace = (self.fixture.root / 'claude-workspace/claude-peer.jsonl' if self.provider == 'claude'
                  else self.fixture.account / 'sessions/synthetic-role.jsonl')
-        events = [json.loads(line) for line in trace.read_text().splitlines()]
+        events = [json.loads(line) for line in getattr(self, 'trace_path', trace).read_text().splitlines()]
         assert any(r['resumed'] for r in events if r['kind'] in ('spawn', 'ready'))
         assert len(self.rows('SELECT id FROM messages')) == 3
         assert len(self.rows('SELECT id FROM production_runs')) == len(first) + len(second)+len(third)

@@ -349,7 +349,8 @@ impl ConfiguredExecution {
             .authorize_parallel_deep_metadata(&self.token, &binding)
             .await
             .map_err(|_| "parallel Deep setup authority refused")?;
-        let directories = orkestr_runtime::containment::ChildDirectories::new(
+        let directories = orkestr_runtime::containment::ChildDirectories::for_launcher(
+            &self.config.launcher,
             &self.config.workspace,
             &directory.join("home"),
             &directory.join("tmp"),
