@@ -32,6 +32,7 @@ from codex_service.channel import ServerPeer
 from codex_service.package import Package,CLAUDE_BROKER
 from codex_service.entry import verified,write_seal
 from codex_service.contract import Refused
+from codex_service.qualification import code_subject
 
 
 def wait(operation,label,seconds=15):
@@ -388,7 +389,7 @@ while True:time.sleep(1)
         assert core.stat().st_uid==self.package.authority_uid!=UID
         for child in children:
             if exists(child):assert 'NoNewPrivs:\t1' in Path('/proc',str(child['pid']),'status').read_text()
-        return dict(core_run_id=row[0],core_run_state=row[1],native_session_id=row[2],
+        return dict(code_subject=code_subject(self.package),core_run_id=row[0],core_run_state=row[1],native_session_id=row[2],
                     authority_uid=self.package.authority_uid,executor_uid=UID,managed_children=children,
                     synthetic_native_turns=sum(r['kind']=='turn' for r in records),
                     worker_reuse_count=len(workers),worker_setups=getattr(self,'worker_setups',[]),
@@ -417,7 +418,7 @@ while True:time.sleep(1)
             except Refused as error:assert str(error)=='manager_custody_fault'
             else:raise AssertionError('faulted manager admitted authority transition')
         self.fault_qualified=True
-        return dict(fault_injected=True,unobserved_orphans=len(self.manager.adopted.records),
+        return dict(code_subject=code_subject(self.package),fault_injected=True,unobserved_orphans=len(self.manager.adopted.records),
             global_reaped=True,authority_transitions_fenced=True,window_states=[state['state'] for state in states],
             launch_states=[claim['state'] for claim in claims],broker_exit=-9,business_runs=0,
             manager_recovered=False,physical_cleanup_only=True,
