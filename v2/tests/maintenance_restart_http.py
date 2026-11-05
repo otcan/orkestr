@@ -56,7 +56,7 @@ class MaintenanceRehearsal(Rehearsal):
         first_pid=self.process.pid
         path=f'/api/v2/conversations/{self.conversation}'
         status,receipt=self.request(path+'/messages','POST',{
-            'client_message_id':'synthetic-maintenance-input','text':'Synthetic held input','author':'owner'})
+            'client_message_id':'synthetic-maintenance-input','text':'synthetic ordinary HTTP input 1','author':'owner'})
         assert status==202,(status,receipt)
         intent={'request_key':'synthetic-maintenance-window','input_message_id':receipt['message_id'],
                 'input_event_id':receipt['event_id'],'input_request_key':'synthetic-maintenance-input',
@@ -72,7 +72,7 @@ class MaintenanceRehearsal(Rehearsal):
         assert status==200,(status,imported)
         status,enabled=self.request('/api/v2/timers/'+namespace+'/enable','POST',{
             'expected_revision':1,'request_key':'synthetic-maintenance-enable',
-            'conversation_id':self.conversation,'text':'Synthetic scheduled held input'})
+            'conversation_id':self.conversation,'text':'synthetic ordinary HTTP input 2'})
         assert status==200,(status,enabled)
         def held():
             time.sleep(2)
@@ -100,9 +100,13 @@ class MaintenanceRehearsal(Rehearsal):
         run=wait(accepted,'held HTTP input executes only after Root publication',seconds=35)
         wait(lambda:self.read('SELECT count(*) FROM dormant_timer_inputs')==[(1,)],
              'due timer fires exactly once after Root publication',seconds=15)
+        timer_run=wait(lambda:self.read("SELECT r.id FROM production_runs r JOIN dormant_timer_inputs i ON i.message_id=r.message_id WHERE r.role='deep' AND r.state='succeeded'"),
+                       'deferred timer provider result accepted before cleanup',seconds=35)
+        source=self.request('/api/v2/health')[1]['build']['source_commit']
+        assert source and len(source)==40, 'source-stamped server required'
         return {'passed':True,'actual_http_restart':True,'root_hold_survived_restart':True,
-                'queued_input_run':run[0],'natural_due_timer_fires':1,'actual_provider':False,
-                'live_activation':False,'source':self.request('/api/v2/health')[1]['build']['source_commit']}
+                'queued_input_run':run[0],'natural_due_timer_fires':1,'timer_run':timer_run[0][0],'actual_provider':False,
+                'live_activation':False,'source':source}
 
 
 def main():
@@ -121,9 +125,13 @@ def main():
             'inbox':'SELECT state,claim_generation FROM reasoning_inbox',
             'queue':'SELECT state,withdrawal FROM execution_window_queue',
             'timers':'SELECT count(*) FROM dormant_timer_inputs',
+            'observations':'SELECT kind,receipt_state FROM production_observations',
         }.items():
             try:report[key]=case.read(query)
             except sqlite3.Error:pass
+        report['native_claims']=[json.loads(p.read_text()) for p in (case.package.ledger_directory/'launches').glob('*.json')]
+        trace=case.fixture.account/'sessions/synthetic-role.jsonl'
+        if trace.exists():report['native_trace']=trace.read_text()[-8192:]
         status=case.package.data/'deploy-drain.status.json'
         if status.exists():report['drain']=json.loads(status.read_text())
         if case.process and case.process.stderr:
@@ -132,7 +140,13 @@ def main():
             except BlockingIOError:pass
         raise
     finally:
-        try:case.close()
+        try:
+            case.close()
+            report['cleanup_completed']=True
+        except BaseException as error:
+            report['passed']=False
+            report['cleanup_error']=type(error).__name__+': '+str(error)
+            raise
         finally:
             fd=os.open(args.report,os.O_CREAT|os.O_WRONLY|os.O_TRUNC,0o600)
             with os.fdopen(fd,'w') as stream:json.dump(report,stream,indent=2)
