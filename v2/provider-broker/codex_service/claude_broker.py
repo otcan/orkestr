@@ -96,6 +96,8 @@ def main(root):
                 session = config.resumed_session(receive(config),launch_preferences=preferences)  # One-use FD4.
             else:
                 session = config.new_session(launch_preferences=preferences)
+            from .native_io import capture as capture_native_io
+            session.native_io = capture_native_io(package)
             pump = Pump(session, ClaudeChannel(session, catalog_warning=catalog_warning,
                         quota_observer=QuotaSink.optional(package, config)),
                         handoff=handoff, diagnostics=True, stderr_capture=StderrCapture())

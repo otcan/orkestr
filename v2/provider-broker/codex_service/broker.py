@@ -66,6 +66,8 @@ def main(root, role="deep"):
                     "private_writer_endpoint")
             handoff.getpeername()
             config = Configuration(package, role)
+            from .native_io import capture as capture_native_io
+            config.native_io = capture_native_io(package)
             # The exact owned root manager captures our original pidfd and only
             # then continues us. Runtime calls bind_child before waiting for FD3.
             os.kill(os.getpid(), signal.SIGSTOP)
