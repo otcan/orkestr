@@ -90,7 +90,7 @@ class PolicyRehearsal(Rehearsal):
         initial=super().run()
         status,health=self.request('/api/v2/health')
         source=health.get('build',{}).get('source_commit')
-        assert status==200 and isinstance(source,str) and len(source)==40,'qualified source required'
+        assert status==200 and source==self.expected_source,'qualified source changed'
         path=f'/api/v2/conversations/{self.conversation}'
         before=self.read("SELECT id,generation FROM execution_windows WHERE conversation_id=? ORDER BY generation DESC LIMIT 1",(self.conversation,))[0]
         initial_epoch=self.read('SELECT provider_generation FROM conversation_settings WHERE conversation_id=?',(self.conversation,))[0][0]
@@ -148,15 +148,21 @@ class PolicyRehearsal(Rehearsal):
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('binary');parser.add_argument('--report',required=True)
+    parser.add_argument('--expected-source',required=True,help='reviewed full Git commit embedded in this server artifact')
     parser.add_argument('--minimal-profile',action='store_true')
     parser.add_argument('--idle-handoff',action='store_true',help='policy retires the already accepted window without deploy drain')
     parser.add_argument('--debug-broker',action='store_true',help='diagnostic fixture only; never qualification')
     args=parser.parse_args();assert os.geteuid()==0,'root-only synthetic fixture'
-    import resource
+    import resource,re,subprocess
+    assert re.fullmatch('[0-9a-f]{40}',args.expected_source),'invalid expected source'
+    version=subprocess.run([args.binary,'--version','--json'],check=True,capture_output=True,text=True,env={'PATH':'/usr/bin:/bin'})
+    version=json.loads(version.stdout)
+    assert version.get('component')=='server' and version.get('source_commit')==args.expected_source,'binary source mismatch'
     hard=resource.getrlimit(resource.RLIMIT_AS)[1]
     bound=3*1024**3 if hard==resource.RLIM_INFINITY else min(hard,3*1024**3)
     resource.setrlimit(resource.RLIMIT_AS,(bound,bound))
     case=PolicyRehearsal(args.binary,args.minimal_profile,args.debug_broker,args.idle_handoff)
+    case.expected_source=args.expected_source
     try:result=case.run()
     except BaseException:
         Path(args.report).write_text(json.dumps(dict(ok=False,snapshot=case.failure_snapshot()),indent=2)+"\n")
