@@ -69,6 +69,8 @@ def check_source(row,lookups=(),creator=None,homes=()):
         info=os.fstat(fd)
         require((info.st_dev,info.st_ino,info.st_uid,info.st_gid)==
                 (row['device'],row['inode'],row['uid'],row['gid']),'resource_source_changed')
+        from .resource_timers import private_mode
+        private_mode(row,info)
         if row['kind'] not in READONLY:
             require(stat.S_IMODE(info.st_mode)==(0o700 if row['kind'] in DIRECTORIES else 0o600),
                     'resource_source_private_mode')
