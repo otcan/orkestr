@@ -85,7 +85,10 @@ def main(root):
             # The owned root manager captures our original pidfd, then continues us.
             os.kill(os.getpid(), signal.SIGSTOP)
             if sys.argv[1:] == resumed:
-                from claude_bootstrap import receive
+                if package.identity_split:
+                    from .managed_resume import receive
+                else:
+                    from claude_bootstrap import receive
                 session = config.resumed_session(receive(config),launch_preferences=preferences)  # One-use FD4.
             else:
                 session = config.new_session(launch_preferences=preferences)

@@ -148,11 +148,14 @@ impl Process {
             None
         };
         if managed_config.is_some()
-            && (resuming
-                || workspace.is_some()
+            && (workspace.is_some()
                 || args
                     != [
-                        "open-owned-session",
+                        if resuming {
+                            "resume-owned-session"
+                        } else {
+                            "open-owned-session"
+                        },
                         "--protocol",
                         "orkestr-v2-provider-broker-v1",
                     ]
@@ -168,6 +171,9 @@ impl Process {
             _ => return Err(Error::AuthorityProtocol),
         };
         if let Some(prepared) = managed.as_mut() {
+            if let Some(bootstrap) = &bootstrap {
+                prepared.transfer.attach_resume(bootstrap)?;
+            }
             prepared
                 .transfer
                 .set_preferences(directories.claude_preferences())?;

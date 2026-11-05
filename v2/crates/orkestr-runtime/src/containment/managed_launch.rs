@@ -18,6 +18,21 @@ impl ManagedLaunchDescriptors {
     pub fn role(&self) -> &str {
         &self.role
     }
+    pub fn mode(&self) -> &'static str {
+        if self.descriptors.len() == 5 {
+            "resume"
+        } else {
+            "fresh"
+        }
+    }
+    pub(super) fn attach_resume(&mut self, bootstrap: &UnixStream) -> Result<(), Error> {
+        if self.descriptors.len() != 4 || self.setup.is_some() || self.role.starts_with("worker-") {
+            return Err(Error::AuthorityProtocol);
+        }
+        self.descriptors
+            .push(bootstrap.try_clone().map_err(|_| Error::Io)?.into());
+        Ok(())
+    }
     pub fn descriptors(&self) -> &[OwnedFd] {
         &self.descriptors
     }
@@ -59,10 +74,18 @@ impl ManagedLaunchDescriptors {
         use orkestr_v2_application::runtime::{ProviderKind, Role, SessionState};
         // A pre-run Starting binding is deliberately still Unconfigured;
         // provider selection belongs to the issuer context until native init.
-        if binding.provider_kind != ProviderKind::Unconfigured
-            || binding.state != SessionState::Starting
-            || binding.native_session_id.is_some()
-        {
+        let resuming = self.mode() == "resume";
+        let valid = if resuming {
+            binding.provider_kind == provider
+                && binding.state == SessionState::Ready
+                && binding.native_session_id.is_some()
+                && matches!(binding.role, Role::Deep | Role::Fast)
+        } else {
+            binding.provider_kind == ProviderKind::Unconfigured
+                && binding.state == SessionState::Starting
+                && binding.native_session_id.is_none()
+        };
+        if !valid {
             return Err(Error::AuthorityProtocol);
         }
         let role = match binding.role {
@@ -93,6 +116,10 @@ impl ManagedLaunchDescriptors {
             "owner_id":binding.owner_id.to_string(),"conversation_id":binding.conversation_id.to_string(),
             "generation":binding.generation,"incarnation":incarnation,"role":role,"provider":provider}),
         );
+        if resuming {
+            self.setup.as_mut().ok_or(Error::AuthorityProtocol)?["native_session_id"] =
+                serde_json::json!(binding.native_session_id);
+        }
         Ok(())
     }
 }
@@ -342,5 +369,68 @@ mod tests {
             .map(AsRawFd::as_raw_fd)
             .collect();
         assert_eq!(unique.len(), 4);
+    }
+
+    #[test]
+    fn resume_attests_only_exact_ready_role_native_and_provider_with_fifth_descriptor() {
+        use orkestr_v2_application::runtime::{Binding, ProviderKind, Role, SessionState};
+        use orkestr_v2_contracts::{ConversationId, OwnerId, SessionId};
+        let id = "\"11111111-1111-4111-8111-111111111111\"";
+        let mut binding = Binding {
+            owner_id: serde_json::from_str::<OwnerId>(id).unwrap(),
+            conversation_id: serde_json::from_str::<ConversationId>(id).unwrap(),
+            session_id: serde_json::from_str::<SessionId>(id).unwrap(),
+            role: Role::Deep,
+            provider_kind: ProviderKind::Codex,
+            native_session_id: Some("synthetic-resumed-native".into()),
+            parent_session_id: None,
+            generation: 7,
+            state: SessionState::Ready,
+        };
+        let (provider, _) = UnixStream::pair().unwrap();
+        let (bootstrap, _) = UnixStream::pair().unwrap();
+        let mut transfer = prepare(
+            Configuration {
+                role: "deep".into(),
+            },
+            &provider,
+        )
+        .unwrap()
+        .transfer;
+        assert!(transfer
+            .attest_setup(&binding, "synthetic-incarnation", ProviderKind::Codex)
+            .is_err());
+        transfer.attach_resume(&bootstrap).unwrap();
+        assert_eq!(transfer.mode(), "resume");
+        assert_eq!(transfer.descriptors().len(), 5);
+        assert!(transfer.attach_resume(&bootstrap).is_err());
+        assert!(transfer
+            .attest_setup(&binding, "synthetic-incarnation", ProviderKind::Claude)
+            .is_err());
+        binding.state = SessionState::Starting;
+        assert!(transfer
+            .attest_setup(&binding, "synthetic-incarnation", ProviderKind::Codex)
+            .is_err());
+        binding.state = SessionState::Ready;
+        transfer
+            .attest_setup(&binding, "synthetic-incarnation", ProviderKind::Codex)
+            .unwrap();
+        assert_eq!(
+            transfer.setup().unwrap()["native_session_id"],
+            "synthetic-resumed-native"
+        );
+        assert_eq!(transfer.setup().unwrap()["generation"], 7);
+        assert!(transfer
+            .attest_setup(&binding, "synthetic-incarnation", ProviderKind::Codex)
+            .is_err());
+        let mut worker = prepare(
+            Configuration {
+                role: "worker-0".into(),
+            },
+            &provider,
+        )
+        .unwrap()
+        .transfer;
+        assert!(worker.attach_resume(&bootstrap).is_err());
     }
 }

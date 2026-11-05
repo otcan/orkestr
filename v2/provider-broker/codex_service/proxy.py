@@ -15,7 +15,9 @@ from .identity import enforce_no_new_privs
 def main(package,role,arguments):
     require(package.identity_split and os.geteuid()==package.authority_uid and
             (role in package.role_profiles or role=='claude' and package.claude is not None)
-            and arguments==['open-owned-session','--protocol','orkestr-v2-provider-broker-v1'],
+            and arguments in [['open-owned-session','--protocol','orkestr-v2-provider-broker-v1'],
+                              ['resume-owned-session','--protocol','orkestr-v2-provider-broker-v1']]
+            and (arguments[0]!='resume-owned-session' or not role.startswith('worker-')),
             'split_proxy_mode')
     enforce_no_new_privs()
     with socket.socket(fileno=6) as lifecycle:
@@ -34,7 +36,7 @@ def main(package,role,arguments):
         # The root manager validates this original stopped proxy before it
         # duplicates its source-created FDs into a different-UID real broker.
         os.kill(os.getpid(),signal.SIGSTOP)
-        for fd in (0,1,3):
+        for fd in (0,1,3,4):
             try:os.close(fd)
             except OSError:pass
         lifecycle.settimeout(1)

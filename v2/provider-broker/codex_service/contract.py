@@ -125,7 +125,8 @@ def decode(raw):
         require(type(value["proxy_pid"]) is int and 1 < value["proxy_pid"] < 2**31 and
                 type(value["proxy_start"]) is int and 0 < value["proxy_start"] < 2**53, "proxy_locator")
         require(value["role"] in ("deep", "fast", "claude", "worker-0", "worker-1", "worker-2", "worker-3")
-                and value["mode"] == "fresh", "launch_mode")
+                and value["mode"] in ("fresh", "resume")
+                and (value["mode"] == "resume") == ('native_session_id' in value['setup']), "launch_mode")
         require(type(value["bind_deadline_ms"]) is int and 0 < value["bind_deadline_ms"] < 2**53,
                 "bind_deadline")
     if operation == "bind_child":
@@ -146,13 +147,20 @@ def decode(raw):
 def setup_scope(value,launcher,owner,conversation):
     require(type(launcher) is str and launcher in ('deep','fast','claude','worker-0','worker-1','worker-2','worker-3'),
             'setup_launcher')
-    require(type(value) is dict and set(value)=={'owner_id','conversation_id','session_id','generation','incarnation','provider','role'},
+    fields={'owner_id','conversation_id','session_id','generation','incarnation','provider','role'}
+    require(type(value) is dict and set(value) in (fields, fields|{'native_session_id'}),
             'setup_fields')
     require(value['owner_id']==owner and value['conversation_id']==conversation,'setup_owner_scope')
     identifier(value['session_id']);generation(value['generation']);key(value['incarnation'])
     expected=(value['provider']=='claude' and value['role'] in ('deep','fast')) if launcher=='claude' else (
         value['provider']=='codex' and value['role']==('worker' if launcher.startswith('worker-') else launcher))
     require(expected,'setup_role')
+    if 'native_session_id' in value:
+        native=value['native_session_id']
+        require(value['role'] in ('deep','fast') and type(native) is str and
+                0<len(native.encode())<=512 and not any(unicodedata.category(c)=='Cc' for c in native),
+                'setup_resume_scope')
+        if value['provider']=='claude':identifier(native)
 
 
 def preferences(value,launcher):
