@@ -54,11 +54,13 @@ class Peer:
         self.buffer=bytearray();self.call=None;self.metadata_done=False
 
     def authenticate(self):
-        if self.proof is not None:return
         try:identity=socket_owner(self.ingress,self.connection)
         except Exception:
-            if time.monotonic()<self.registration_deadline:raise BlockingIOError()
+            if self.proof is None and time.monotonic()<self.registration_deadline:raise BlockingIOError()
             raise
+        if self.proof is not None:
+            require(identity==self.proof.identity,'managed_http_actor_changed')
+            return  # Rechecks do not consume the per-native request budget.
         self.source,self.proof=source(self.ingress.manager,identity['pid'],identity['uid'])
         record=self.ingress.natives.actor(identity['pid'])
         count=record.get('http_requests',0)+1
@@ -89,6 +91,7 @@ class Peer:
         if len(self.buffer)<total:raise BlockingIOError()
         require(len(self.buffer)==total and headers.get('content-type','').split(';')[0].strip()=='application/json',
                 'managed_http_body')
+        self.authenticate()  # Full body must retain its original kernel actor.
         value=json.loads(bytes(self.buffer[end+4:]).decode('utf-8','strict'),object_pairs_hook=unique)
         require(type(value) is dict and set(value)<={'jsonrpc','id','method','params'} and value.get('jsonrpc')=='2.0'
                 and type(value.get('method')) is str and type(value.get('params',{})) is dict,'managed_mcp_request')
@@ -127,6 +130,7 @@ class Peer:
         return packet(canonical({'version':1,'request_key':request_key,'operation':operation,'arguments':arguments}))
 
     def send_http(self,status,body):
+        self.authenticate()  # No cached identity across a helper/owner wait.
         names={200:'OK',202:'Accepted',405:'Method Not Allowed'}
         headers=('HTTP/1.1 '+str(status)+' '+names[status]+'\r\nContent-Type: application/json\r\nContent-Length: '+
             str(len(body))+'\r\nConnection: close\r\n\r\n').encode()

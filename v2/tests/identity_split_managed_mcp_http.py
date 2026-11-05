@@ -17,6 +17,11 @@ from identity_split_service_http import ROOT,GID,process,digest
 
 
 class ManagedRehearsal(HostRehearsal):
+    def build_evidence(self):
+        return dict(server_identity=self.server_identity,server_sha256=self.server_sha256,
+            root_package_manifest_sha256=self.manifest,root_module_sha256={name:sha
+                for name,sha in self.package.manifest['files'].items() if name.startswith('codex_service/')})
+
     def __init__(self,binary,provider='codex',wait_seconds=120):
         self.wait_seconds=wait_seconds;self.completion_wait_seconds=wait_seconds+45
         super().__init__(binary,provider)
@@ -96,7 +101,7 @@ if first:time.sleep(%r)
         with sqlite3.connect((self.package.data/'core.sqlite3').as_uri()+'?mode=ro',uri=True) as db:
             rows=db.execute('SELECT state,count(*) FROM managed_operations GROUP BY state').fetchall()
         assert sorted(rows)==[('helper_completed',3),('submitted',3)],rows
-        report.update(managed_http_capabilities=True,owner_wait_seconds=self.wait_seconds,
+        report.update(**self.build_evidence(),managed_http_capabilities=True,owner_wait_seconds=self.wait_seconds,
             exact_original_helper_renewed=True,one_helper_per_turn=True,protected_root_intake_count=3,
             core_fenced_result_delivery=True,native_resume_tools_preserved=True,owner_review_delivered=False,
             real_desktop=False,real_vault=False)
