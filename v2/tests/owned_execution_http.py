@@ -139,6 +139,7 @@ class Case:
     def stop(self):
         if self.process is not None:
             process = self.process
+            already_exited = process.poll() is not None
             try:
                 try:
                     if process.poll() is None:
@@ -154,6 +155,24 @@ class Case:
                             process.kill()
                             process.wait(timeout=3)
             finally:
+                if getattr(self, 'retain_server_diagnostics', False):
+                    # A dead Core can leave a descendant holding its stderr
+                    # pipe. Read only currently available bytes, never wait on
+                    # the orphan or conceal the original failure with a read.
+                    descriptor = process.stderr.fileno()
+                    os.set_blocking(descriptor, False)
+                    tail = bytearray()
+                    while len(tail) < 65536:
+                        try:
+                            block = os.read(descriptor, min(8192, 65536-len(tail)))
+                        except BlockingIOError:
+                            break
+                        if not block:
+                            break
+                        tail.extend(block)
+                    self.server_diagnostic = {'returncode': process.poll(),
+                                              'already_exited_before_stop': already_exited,
+                                              'stderr': tail.decode('utf-8', 'replace')}
                 process.stderr.close()
                 self.process = None
 
