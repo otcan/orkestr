@@ -37,12 +37,16 @@ class Manager:
         self.guard = threading.RLock()
         self.failed = self.closed = False
         self.launcher = None
+        self.desk = None
         self.adopted = None
         self.custody_fault = False
         try:
             self.lock = StateLock(self.package.ledger_directory)
             self.ledger = Ledger(self.lock.path, self.package.owner, self.package.conversation)
             self.control = OwnedSocket(self.package.control, self.package.gid, self.ledger, "control", TICK_S)
+            if self.package.runtime.get('desk_login'):
+                from .desk_operations import Operations
+                self.desk=Operations(self.package)
         except BaseException:
             self.close()
             raise
@@ -99,6 +103,9 @@ class Manager:
     def _terminate(self, window, wait=2):
         """Emergency cleanup of one window; others keep their custody."""
         errors = []
+        if getattr(self,'desk',None):
+            for operation,handle in self.desk.active.items():
+                if handle['window']==window.window:self.desk.cancel(operation)
         try:
             self._close_egress(window)
         except Exception:
@@ -157,7 +164,7 @@ class Manager:
         self.ledger._scope(request)
         operation = request["operation"]
         self._capture_orphans()
-        require(not getattr(self,'custody_fault',False) or operation in ('status','drain','uncertain'),
+        require(not getattr(self,'custody_fault',False) or operation in ('status','drain','uncertain','desk_login_poll','desk_login_cancel'),
                 'manager_custody_fault')
         if operation == "status":
             return {"ok": True, "receipt": self.ledger.status(request["conversation_id"])}
@@ -171,6 +178,9 @@ class Manager:
         row = self.ledger.details(request["window_id"], request["generation"])
         require(row["conversation"] == request["conversation_id"], "scope")
         window = self.windows.get(request["window_id"])
+        if operation in ('desk_login','desk_login_poll','desk_login_cancel'):
+            from .desk_operations import dispatch
+            return dispatch(self,request,window)
         if operation == "launch_child":
             require(self.package.identity_split and window is not None and not window.egress_closed
                     and self.ledger.tick(request["window_id"], request["generation"])["state"] == "active",
@@ -218,6 +228,7 @@ class Manager:
                 self._terminate(window)
             return {"ok": True, "receipt": self.ledger.status(request["conversation_id"])}
         if operation == "reconcile":
+            require(not getattr(self,'desk',None) or self.desk.window_clean(request['window_id']),'desk_cleanup_unknown')
             if row["state"] != "retired" and window is not None:
                 # This window still has custody in this manager (same manager
                 # life). Runtime reconciles only a window its own task no
@@ -251,6 +262,7 @@ class Manager:
                 window.children.close()
             return {"ok": True, "receipt": receipt}
         require(operation == "retire", "operation")
+        require(not getattr(self,'desk',None) or self.desk.window_clean(request['window_id']),'desk_cleanup_unknown')
         if row["state"] != "retired":
             require(window is not None, "original_cleanup_proof_missing")
             window.children.proven_gone()
@@ -285,7 +297,13 @@ class Manager:
         if self.launcher:
             known.update(self.launcher.proxies)
             known.update((h.broker['pid'],h.broker['start']) for h in self.launcher.children.values())
+        if getattr(self,'desk',None):known.update((h['identity']['pid'],h['identity']['start']) for h in self.desk.active.values() if h['identity'])
         return known
+
+    def _desk_window_active(self,window_id,generation):
+        window=self.windows.get(window_id)
+        return bool(not self.closed and window and not window.egress_closed and
+                    self.ledger.tick(window_id,generation)['state']=='active' and exists(self.identity))
 
     def _capture_orphans(self):
         if not getattr(getattr(self,'package',None),'identity_split',False) or not self.identity:return
@@ -296,6 +314,7 @@ class Manager:
         if self.adopted.capture(known):
             self.failed=self.custody_fault=True
             if self.launcher:self.launcher.fault()
+            if getattr(self,'desk',None):self.desk.fault()
             self._uncertain_all('cleanup_unknown')
             for window in self.windows.values():
                 window.children._observation_failed(Refused('owned_child_association_unknown'))
@@ -304,6 +323,7 @@ class Manager:
             require(self.adopted.drain(known),'adopted_children_not_reaped')
 
     def tick(self):
+        if getattr(self,'desk',None):self.desk.tick(self._desk_window_active)
         self._capture_orphans()
         if getattr(self, "launcher", None) is not None:
             def released(window_id, generation, broker):
@@ -414,6 +434,7 @@ class Manager:
                 errors.append("server_cleanup")
         try:
             self._uncertain_all("manager_stopped")
+            if getattr(self,'desk',None) and not self.desk.close():errors.append('desk_cleanup')
             if not self._terminate_all():
                 errors.append("window_cleanup")
         except Exception:

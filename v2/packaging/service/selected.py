@@ -84,7 +84,7 @@ def pair_bytes(plan):
     return pair
 
 
-OPTIONAL = {'operator_recovery', 'attachment_export_dir', 'password_rotation_ready', 'authority_uid', 'authority_gid', 'executor_uid', 'executor_gid', 'provider_home', 'roles', 'preserve_state', 'workspace_exec', 'additional_workspace_exec', 'max_active_windows', 'host_full_access',
+OPTIONAL = {'operator_recovery', 'desk_login', 'attachment_export_dir', 'password_rotation_ready', 'authority_uid', 'authority_gid', 'executor_uid', 'executor_gid', 'provider_home', 'roles', 'preserve_state', 'workspace_exec', 'additional_workspace_exec', 'max_active_windows', 'host_full_access',
             'window_max_minutes', 'conversation_window_max_minutes', 'conversation_workspaces', 'provider_routing',
             'code_mode_host', 'code_mode_host_sha256', 'claude', 'claude_quota_projection', 'codex_quota_projection', 'live_map', 'desktop_broker', 'timer_config', 'whatsapp_chats', 'v1_chat_icons_dir', 'metrics_port'}
 CLAUDE_PATHS = ('executable', 'account', 'workspace', 'home', 'temporary')
@@ -199,6 +199,12 @@ def prepare(plan):
     require(set(plan) - OPTIONAL == fields and
             plan['format']=='orkestr-v2-selected-service-plan-v1','closed plan required')
     optional(plan)
+    if 'desk_login' in plan:
+        desk=plan['desk_login']
+        require('authority_uid' in plan and type(desk) is dict and set(desk)=={'path','sha256'} and
+                type(desk['path']) is str and Path(desk['path']).is_absolute() and '..' not in Path(desk['path']).parts and
+                type(desk['sha256']) is str and re.fullmatch('[0-9a-f]{64}',desk['sha256']),
+                'closed split desk configuration required')
     if 'live_map' in plan:
         # Opt-in read-only live map file; the server reads it, the packager never does.
         live=plan['live_map']
@@ -384,6 +390,8 @@ def prepare(plan):
                 runtime['live_map']=plan['live_map']
             if 'desktop_broker' in plan:
                 runtime['desktop_broker']=plan['desktop_broker']
+            if 'desk_login' in plan:
+                runtime['desk_login']=plan['desk_login']
             if 'timer_config' in plan:
                 runtime['timer_config']=plan['timer_config']
             if 'metrics_port' in plan:

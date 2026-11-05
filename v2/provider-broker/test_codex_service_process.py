@@ -166,7 +166,7 @@ class ProcessTests(unittest.TestCase):
             def setuid_view(pid):
                 identity = real(pid)
                 if identity is not None and pid == grandchild:
-                    identity["uid"] = 0  # As /proc reports a running sudo.
+                    identity["uid"] = 65534 if os.getuid()==0 else 0  # A different effective identity.
                 return identity
             with unittest.mock.patch.object(ownership, "process", setuid_view):
                 if not host:
@@ -278,7 +278,7 @@ class ProcessTests(unittest.TestCase):
         def view(pid):
             identity = real_process(pid)
             if identity is not None and pid == grandchild and pinned:
-                identity["uid"] = 0  # Alive, same start, another uid: not reaped.
+                identity["uid"] = 65534 if os.getuid()==0 else 0  # Alive, same start, another uid.
             return identity
 
         def pin(pid, flags):
@@ -302,6 +302,21 @@ class ProcessTests(unittest.TestCase):
         done.wait(3)
         with self.assertRaisesRegex(Refused, "owned_process_missing"):
             self.children.remember(identity)
+
+    def test_invalid_pidfd_during_actual_reap_is_vanished_but_live_original_refuses(self):
+        import errno
+        from codex_service import ownership
+        child=self.spawn();identity=process(child.pid)
+        def disappeared(*_):
+            child.kill();child.wait(3)
+            raise OSError(errno.EINVAL,'synthetic pin/reap race')
+        with unittest.mock.patch.object(ownership.os,'pidfd_open',side_effect=disappeared):
+            with self.assertRaises(ownership.Vanished):ownership.Process(identity)
+        live=self.spawn();identity=process(live.pid)
+        with unittest.mock.patch.object(ownership.os,'pidfd_open',side_effect=OSError(errno.EINVAL,'synthetic live refusal')):
+            with self.assertRaises(Refused) as error:ownership.Process(identity)
+        self.assertNotIsInstance(error.exception,ownership.Vanished)
+        self.assertIsNone(live.poll())
 
     def test_frame_deadline_truncation_and_extra_bytes_are_bounded(self):
         request = {"version": 1, "operation": "status", "request_id": "synthetic",

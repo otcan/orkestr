@@ -7,6 +7,8 @@ pub(super) async fn downgrade_empty(store: &Store) {
     for table in [
         "operator_provider_handoffs",
         "conversation_provider_policy_matches",
+        "deep_desk_results",
+        "deep_desk_operations",
         "source_admission_fences",
         "message_request_sources",
         "encrypted_upload_chunks",
@@ -35,6 +37,9 @@ pub(super) async fn downgrade_empty(store: &Store) {
         "DROP TABLE operator_provider_handoffs;
          DROP TABLE conversation_provider_policy_matches;
          DELETE FROM _sqlx_migrations WHERE version=92;
+         DROP TABLE deep_desk_results;
+         DROP TABLE deep_desk_operations;
+         DELETE FROM _sqlx_migrations WHERE version=91;
          DROP TABLE source_admission_fences;
          DROP TABLE message_request_sources;
          DROP INDEX encrypted_upload_receipt_cover;

@@ -60,9 +60,10 @@ class Launcher:
         protected(self.directory,True)
         require(self.directory.stat().st_mode&0o777==0o700,'launch_journal_custody')
 
-    def source_fds(self,descriptors):
-        require(len(descriptors)==4 and len(set(descriptors))==4,'launch_descriptor_count')
-        require(len({(os.fstat(fd).st_dev,os.fstat(fd).st_ino) for fd in descriptors})==4,'launch_descriptor_alias')
+    def source_fds(self,descriptors,mode='fresh'):
+        count=5 if mode=='resume' else 4
+        require(len(descriptors)==count and len(set(descriptors))==count,'launch_descriptor_count')
+        require(len({(os.fstat(fd).st_dev,os.fstat(fd).st_ino) for fd in descriptors})==count,'launch_descriptor_alias')
         for fd,mode in zip(descriptors[:2],(os.O_RDONLY,os.O_WRONLY)):
             require(stat.S_ISFIFO(os.fstat(fd).st_mode) and
                     fcntl.fcntl(fd,fcntl.F_GETFL)&os.O_ACCMODE==mode,'launch_stdio_type')
@@ -77,16 +78,18 @@ class Launcher:
         setup_scope(request['setup'],request['role'],request['owner_id'],request['conversation_id'])
         preferences(request['preferences'],request['role'])
         require(exists(self.server) and self.server['uid']==self.package.authority_uid,'launch_server_changed')
-        require((request['role'] in self.package.role_profiles or request['role']=='claude' and self.package.claude is not None) and request['mode']=='fresh',
+        require((request['role'] in self.package.role_profiles or request['role']=='claude' and self.package.claude is not None) and request['mode'] in ('fresh','resume')
+                and (request['mode']=='resume')==('native_session_id' in request['setup']),
                 'split_launch_mode_unsupported')
-        self.source_fds(descriptors)
+        self.source_fds(descriptors,request['mode'])
         proxy=process(request['proxy_pid'])
         require(proxy and proxy['start']==request['proxy_start'] and proxy['ppid']==self.server['pid']
                 and proxy['uid']==self.package.authority_uid,'launch_proxy_incarnation')
         expected=[str(Path('/usr/bin/python3').resolve()).encode(),b'-I',b'-S',b'-B',
                   bytes(self.package.root/'codex_service/entry.py'),
                   ('broker' if request['role']=='deep' else 'broker-'+request['role']).encode(),
-                  b'open-owned-session',b'--protocol',b'orkestr-v2-provider-broker-v1']
+                  b'resume-owned-session' if request['mode']=='resume' else b'open-owned-session',
+                  b'--protocol',b'orkestr-v2-provider-broker-v1']
         proc=Path('/proc',str(proxy['pid']))
         # The source retains its original Child immediately after spawn. Its
         # immutable entry still needs time to validate the package and stop;
@@ -143,9 +146,13 @@ class Launcher:
             inherited.append(provider_fd)
             capsule_fd=fcntl.fcntl(capsule.fileno(),fcntl.F_DUPFD_CLOEXEC,10)
             inherited.append(capsule_fd)
+            resume_fd=0
+            if request['mode']=='resume':
+                resume_fd=fcntl.fcntl(descriptors[4],fcntl.F_DUPFD_CLOEXEC,10)
+                inherited.append(resume_fd)
             interpreter=str(Path('/usr/bin/python3').resolve())
             command=[interpreter,'-I','-S','-B',str(self.package.root/'codex_service/entry.py'),
-                     'launch-child',str(provider_fd),str(capsule_fd),request['role'],
+                     'launch-child',str(provider_fd),str(capsule_fd),str(resume_fd),request['role'],request['mode'],
                      str(os.getpid()),str(self.manager['start'])]
             child=subprocess.Popen(command,stdin=descriptors[0],stdout=descriptors[1],stderr=subprocess.DEVNULL,
                                    cwd='/',env={'PATH':'/usr/bin:/bin','LANG':'C.UTF-8','PYTHONDONTWRITEBYTECODE':'1'},

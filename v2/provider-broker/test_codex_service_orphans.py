@@ -10,6 +10,12 @@ import unittest
 @unittest.skipUnless(os.geteuid()==0,'explicit root synthetic orphan actor')
 class AdoptedKernelTests(unittest.TestCase):
     def test_unobserved_escaped_descendants_reap_globally_without_touching_known_peer(self):
+        self.kernel_actor(65534)
+
+    def test_orphaned_authority_family_reaps_without_reconstructing_setup(self):
+        self.kernel_actor(65533)
+
+    def kernel_actor(self,actor_uid):
         script=r'''
 import ctypes,json,os,subprocess,sys,tempfile,time
 from pathlib import Path
@@ -18,8 +24,9 @@ sys.path.insert(0,sys.argv[1])
 from codex_service.ownership import Adopted
 from codex_bounded.trust import process,exists
 assert ctypes.CDLL(None).prctl(36,1,0,0,0)==0
+actor_uid=int(sys.argv[2])
 with tempfile.TemporaryDirectory(prefix='synthetic-orphan-actor-') as directory:
- root=Path(directory);root.chmod(0o755);marker=root/'markers';marker.mkdir(mode=0o700);os.chown(marker,65534,65534)
+ root=Path(directory);root.chmod(0o755);marker=root/'markers';marker.mkdir(mode=0o700);os.chown(marker,actor_uid,65534)
  code="""import ctypes,os,sys,time
 from pathlib import Path
 assert ctypes.CDLL(None).prctl(38,1,0,0,0)==0
@@ -30,9 +37,9 @@ if child==0:
 time.sleep(60)
 """
  env={'PATH':'/usr/bin:/bin','PYTHONDONTWRITEBYTECODE':'1'}
- broker=subprocess.Popen([sys.executable,'-I','-S','-B','-c',code,str(marker)],user=65534,group=65534,extra_groups=[],env=env)
+ broker=subprocess.Popen([sys.executable,'-I','-S','-B','-c',code,str(marker)],user=actor_uid,group=65534,extra_groups=[],env=env)
  peer=subprocess.Popen(['/usr/bin/sleep','60'],user=65534,group=65534,extra_groups=[],env=env)
- pool=Adopted(SimpleNamespace(identity_split=True,executor_uid=65534))
+ pool=Adopted(SimpleNamespace(identity_split=True,executor_uid=65534,authority_uid=65533))
  try:
   deadline=time.monotonic()+5
   while not all((marker/name).exists() for name in ('child','grandchild')):
@@ -53,7 +60,7 @@ time.sleep(60)
    if child.poll() is None:child.kill()
    child.wait(timeout=3)
 '''
-        result=subprocess.run([sys.executable,'-I','-S','-B','-c',script,str(Path(__file__).parent)],
+        result=subprocess.run([sys.executable,'-I','-S','-B','-c',script,str(Path(__file__).parent),str(actor_uid)],
             capture_output=True,text=True,timeout=20,
             env={'PATH':'/usr/bin:/bin','PYTHONDONTWRITEBYTECODE':'1'})
         self.assertEqual(result.returncode,0,result.stderr)

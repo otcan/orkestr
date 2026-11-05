@@ -31,11 +31,18 @@ mod claude_identity;
 pub use claude_identity::ClaudeProcessInitialization;
 mod capability;
 pub use capability::{ConsumedProviderDispatch, ExecutionConsumption};
+mod desk_login;
+pub use desk_login::DeskLoginSetup;
+pub use desk_login::{CompletedDeskLogin, DeskLoginOutcome};
+pub use desk_login::{
+    ConsumedDeskLogin, DeskLoginConsumption, DeskLoginNativeCall, DeskLoginParent,
+};
 pub(crate) mod deep_groups;
 pub use deep_groups::{DEFAULT_DEEP_BURST_QUIET_MS, MAX_DEEP_BURST_QUIET_MS};
 #[cfg(test)]
 mod deep_groups_tests;
 mod dispatch;
+mod failed_fast_setup;
 mod fast;
 mod fast_continuity;
 mod fast_digest;

@@ -9,6 +9,8 @@ use std::{path::PathBuf, time::Instant};
 use tokio::net::UnixStream;
 use uuid::Uuid;
 
+#[path = "manager_desk.rs"]
+mod desk;
 #[path = "manager_launch_wire.rs"]
 mod launch_wire;
 #[path = "manager_managed_launch.rs"]

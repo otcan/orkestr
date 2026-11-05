@@ -19,6 +19,14 @@ impl ConfiguredExecution {
         if !self.provider_input_allowed(None).await? {
             return Ok(None);
         }
+        if self.desk_enabled() {
+            let source = orkestr_v2_store_sqlite::DeskLoginSetup::from_metadata(&grant)
+                .map_err(|_| "desk source setup refused")?;
+            *self
+                .desk_setup
+                .lock()
+                .map_err(|_| "desk source unavailable")? = Some(source);
+        }
         if *shutdown.borrow() {
             return Ok(None);
         }
@@ -43,7 +51,19 @@ impl ConfiguredExecution {
             let workspace = self.config.workspace.clone();
             let resources = self.children.retain();
             let context = context.clone();
+            let desk = self.desk_enabled();
             tokio::task::spawn_blocking(move || {
+                if desk {
+                    return PreparingCodex::open_window_desk_retained(
+                        store,
+                        grant,
+                        &launcher,
+                        &workspace,
+                        directories,
+                        resources,
+                        move |child| context.bind(&child),
+                    );
+                }
                 PreparingCodex::open_window_retained(
                     store,
                     grant,

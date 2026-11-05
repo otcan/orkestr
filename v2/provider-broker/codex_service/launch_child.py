@@ -15,11 +15,13 @@ from .identity import enforce_no_new_privs
 
 def main(package, arguments):
     from codex_bounded.trust import process
-    require(os.geteuid() == 0 and package.identity_split and len(arguments) == 5,
+    require(os.geteuid() == 0 and package.identity_split and len(arguments) == 7,
             'manager_launch_bootstrap')
-    provider, capsule, role, parent, start = arguments
-    require(all(v.isdigit() for v in (provider, capsule, parent, start)), 'launch_descriptor_fields')
-    provider, capsule, parent, start = map(int, (provider, capsule, parent, start))
+    provider, capsule, resume, role, mode, parent, start = arguments
+    require(all(v.isdigit() for v in (provider, capsule, resume, parent, start)), 'launch_descriptor_fields')
+    provider, capsule, resume, parent, start = map(int, (provider, capsule, resume, parent, start))
+    require(mode in ('fresh','resume') and ((resume==0) if mode=='fresh' else
+            resume>6 and resume not in (provider,capsule) and not role.startswith('worker-')),'launch_resume_descriptor')
     require(provider > 6 and capsule > 6 and provider != capsule and (role in package.role_profiles or role=='claude' and package.claude is not None),
             'launch_descriptor_scope')
     identity = process(parent)
@@ -33,10 +35,13 @@ def main(package, arguments):
     import fcntl
     a=fcntl.fcntl(provider,fcntl.F_DUPFD_CLOEXEC,10)
     b=fcntl.fcntl(capsule,fcntl.F_DUPFD_CLOEXEC,10)
+    c=fcntl.fcntl(resume,fcntl.F_DUPFD_CLOEXEC,10) if resume else None
     os.dup2(a,3,inheritable=True);os.dup2(b,6,inheritable=True)
+    if c is not None:os.dup2(c,4,inheritable=True)
     os.close(a);os.close(b)
     os.closerange(7,1048576)
-    os.closerange(4,6)
+    os.closerange(5,6)
+    if c is None:os.closerange(4,5)
     os.setgroups([])
     os.setgid(package.executor_gid)
     os.setuid(package.executor_uid)
@@ -49,7 +54,8 @@ def main(package, arguments):
     require(libc.prctl(1,signal.SIGKILL,0,0,0)==0 and os.getppid()==parent,
             'launch_parent_death')
     interpreter=str(Path('/usr/bin/python3').resolve())
+    operation='resume-owned-session' if mode=='resume' else 'open-owned-session'
     mode='broker' if role=='deep' else 'broker-'+role
     os.execve(interpreter,[interpreter,'-I','-S','-B',str(package.root/'codex_service/entry.py'),
-                          mode,'open-owned-session','--protocol','orkestr-v2-provider-broker-v1'],
+                          mode,operation,'--protocol','orkestr-v2-provider-broker-v1'],
               {'PATH':'/usr/bin:/bin','LANG':'C.UTF-8','PYTHONDONTWRITEBYTECODE':'1'})

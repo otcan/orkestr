@@ -38,6 +38,7 @@ pub(super) struct Process {
     pub(super) broker_launcher: AtomicBool,
     pub(super) offline_python: AtomicBool,
     pub(super) workspace_exec: AtomicBool,
+    pub(super) desk_login: AtomicBool,
     pub(super) workspace_exec_trusted: AtomicBool,
     pub(super) broker_lineage: Arc<()>,
     pub(super) managed_required: bool,
@@ -148,11 +149,14 @@ impl Process {
             None
         };
         if managed_config.is_some()
-            && (resuming
-                || workspace.is_some()
+            && (workspace.is_some()
                 || args
                     != [
-                        "open-owned-session",
+                        if resuming {
+                            "resume-owned-session"
+                        } else {
+                            "open-owned-session"
+                        },
                         "--protocol",
                         "orkestr-v2-provider-broker-v1",
                     ]
@@ -168,6 +172,9 @@ impl Process {
             _ => return Err(Error::AuthorityProtocol),
         };
         if let Some(prepared) = managed.as_mut() {
+            if let Some(bootstrap) = &bootstrap {
+                prepared.transfer.attach_resume(bootstrap)?;
+            }
             prepared
                 .transfer
                 .set_preferences(directories.claude_preferences())?;
@@ -255,6 +262,7 @@ impl Process {
             broker_launcher: AtomicBool::new(false),
             offline_python: AtomicBool::new(false),
             workspace_exec: AtomicBool::new(false),
+            desk_login: AtomicBool::new(false),
             workspace_exec_trusted: AtomicBool::new(false),
             broker_lineage: Arc::new(()),
             managed_required,

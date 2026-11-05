@@ -18,6 +18,21 @@ impl ManagedLaunchDescriptors {
     pub fn role(&self) -> &str {
         &self.role
     }
+    pub fn mode(&self) -> &'static str {
+        if self.descriptors.len() == 5 {
+            "resume"
+        } else {
+            "fresh"
+        }
+    }
+    pub(super) fn attach_resume(&mut self, bootstrap: &UnixStream) -> Result<(), Error> {
+        if self.descriptors.len() != 4 || self.setup.is_some() || self.role.starts_with("worker-") {
+            return Err(Error::AuthorityProtocol);
+        }
+        self.descriptors
+            .push(bootstrap.try_clone().map_err(|_| Error::Io)?.into());
+        Ok(())
+    }
     pub fn descriptors(&self) -> &[OwnedFd] {
         &self.descriptors
     }
@@ -55,14 +70,23 @@ impl ManagedLaunchDescriptors {
         binding: &orkestr_v2_application::runtime::Binding,
         incarnation: &str,
         provider: orkestr_v2_application::runtime::ProviderKind,
+        resume_setup_id: Option<&str>,
     ) -> Result<(), Error> {
         use orkestr_v2_application::runtime::{ProviderKind, Role, SessionState};
         // A pre-run Starting binding is deliberately still Unconfigured;
         // provider selection belongs to the issuer context until native init.
-        if binding.provider_kind != ProviderKind::Unconfigured
-            || binding.state != SessionState::Starting
-            || binding.native_session_id.is_some()
-        {
+        let resuming = self.mode() == "resume";
+        let valid = if resuming {
+            binding.provider_kind == provider
+                && binding.state == SessionState::Ready
+                && binding.native_session_id.is_some()
+                && matches!(binding.role, Role::Deep | Role::Fast)
+        } else {
+            binding.provider_kind == ProviderKind::Unconfigured
+                && binding.state == SessionState::Starting
+                && binding.native_session_id.is_none()
+        };
+        if !valid || resuming != resume_setup_id.is_some() {
             return Err(Error::AuthorityProtocol);
         }
         let role = match binding.role {
@@ -93,6 +117,12 @@ impl ManagedLaunchDescriptors {
             "owner_id":binding.owner_id.to_string(),"conversation_id":binding.conversation_id.to_string(),
             "generation":binding.generation,"incarnation":incarnation,"role":role,"provider":provider}),
         );
+        if resuming {
+            self.setup.as_mut().ok_or(Error::AuthorityProtocol)?["native_session_id"] =
+                serde_json::json!(binding.native_session_id);
+            self.setup.as_mut().ok_or(Error::AuthorityProtocol)?["resume_setup_id"] =
+                serde_json::json!(resume_setup_id);
+        }
         Ok(())
     }
 }
@@ -221,126 +251,4 @@ pub(super) fn prepare(config: Configuration, provider: &UnixStream) -> Result<Pr
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::io::{Read, Write};
-    use std::os::fd::AsRawFd;
-    #[test]
-    fn preferences_are_typed_provider_scoped_data() {
-        let (provider, _) = UnixStream::pair().unwrap();
-        let mut transfer = prepare(
-            Configuration {
-                role: "claude".into(),
-            },
-            &provider,
-        )
-        .unwrap()
-        .transfer;
-        transfer
-            .set_preferences((Some("synthetic-model".into()), Some("low".into())))
-            .unwrap();
-        assert_eq!(
-            transfer.preferences(),
-            serde_json::json!({"model":"synthetic-model","effort":"low"})
-        );
-        assert!(transfer
-            .set_preferences((Some("--config=/other".into()), None))
-            .is_err());
-        assert!(transfer
-            .set_preferences((None, Some("unbounded".into())))
-            .is_err());
-        let mut other = prepare(
-            Configuration {
-                role: "deep".into(),
-            },
-            &provider,
-        )
-        .unwrap()
-        .transfer;
-        assert!(other
-            .set_preferences((Some("synthetic-model".into()), None))
-            .is_err());
-        other.set_preferences((None, None)).unwrap();
-    }
-    #[test]
-    fn setup_fence_comes_from_bound_metadata_and_cannot_change_provider_role_or_repeat() {
-        use orkestr_v2_application::runtime::{Binding, ProviderKind, Role, SessionState};
-        use orkestr_v2_contracts::{ConversationId, OwnerId, SessionId};
-        let id = "\"11111111-1111-4111-8111-111111111111\"";
-        let mut binding = Binding {
-            owner_id: serde_json::from_str::<OwnerId>(id).unwrap(),
-            conversation_id: serde_json::from_str::<ConversationId>(id).unwrap(),
-            session_id: serde_json::from_str::<SessionId>(id).unwrap(),
-            role: Role::Worker,
-            provider_kind: ProviderKind::Unconfigured,
-            native_session_id: None,
-            parent_session_id: None,
-            generation: 7,
-            state: SessionState::Starting,
-        };
-        let (provider, _) = UnixStream::pair().unwrap();
-        let mut transfer = prepare(
-            Configuration {
-                role: "worker-0".into(),
-            },
-            &provider,
-        )
-        .unwrap()
-        .transfer;
-        assert!(transfer.setup().is_err());
-        binding.role = Role::Deep;
-        assert!(transfer
-            .attest_setup(&binding, "synthetic-core-incarnation", ProviderKind::Codex)
-            .is_err());
-        binding.role = Role::Worker;
-        transfer
-            .attest_setup(&binding, "synthetic-core-incarnation", ProviderKind::Codex)
-            .unwrap();
-        assert_eq!(transfer.setup().unwrap()["generation"], 7);
-        assert_eq!(
-            transfer.setup().unwrap()["session_id"],
-            "11111111-1111-4111-8111-111111111111"
-        );
-        assert!(transfer
-            .attest_setup(&binding, "invented-retry", ProviderKind::Codex)
-            .is_err());
-    }
-    #[test]
-    fn prepared_transfer_has_distinct_one_way_pipes_and_private_lifecycle_socket() {
-        let (provider, _peer) = UnixStream::pair().unwrap();
-        let prepared = prepare(
-            Configuration {
-                role: "deep".into(),
-            },
-            &provider,
-        )
-        .unwrap();
-        assert_eq!(prepared.transfer.role(), "deep");
-        assert_eq!(prepared.transfer.descriptors().len(), 4);
-        let mut input = File::from(prepared.input);
-        let mut child_input = File::from(prepared.child_input);
-        input.write_all(b"input").unwrap();
-        let mut bytes = [0; 5];
-        child_input.read_exact(&mut bytes).unwrap();
-        assert_eq!(&bytes, b"input");
-        let mut output = File::from(prepared.output);
-        let mut child_output = File::from(prepared.child_output);
-        child_output.write_all(b"output").unwrap();
-        let mut bytes = [0; 6];
-        output.read_exact(&mut bytes).unwrap();
-        assert_eq!(&bytes, b"output");
-        let mut manager = UnixStream::from(prepared.transfer.descriptors[3].try_clone().unwrap());
-        let mut lifecycle = prepared.lifecycle;
-        manager.write_all(b"exit:0\n").unwrap();
-        let mut bytes = [0; 7];
-        lifecycle.read_exact(&mut bytes).unwrap();
-        assert_eq!(&bytes, b"exit:0\n");
-        let unique: std::collections::HashSet<_> = prepared
-            .transfer
-            .descriptors
-            .iter()
-            .map(AsRawFd::as_raw_fd)
-            .collect();
-        assert_eq!(unique.len(), 4);
-    }
-}
+mod tests;

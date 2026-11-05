@@ -5,6 +5,7 @@ mod capacity;
 mod claude_lifecycle;
 mod claude_pump;
 mod claude_session;
+mod desk_result;
 mod fence;
 mod lease_refresh;
 mod model_evidence;

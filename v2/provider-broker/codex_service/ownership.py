@@ -67,6 +67,13 @@ class Process:
             self.fd = os.pidfd_open(identity["pid"], 0)
         except ProcessLookupError:
             raise Vanished("owned_process_missing") from None
+        except OSError as error:
+            if error.errno == errno.EINVAL:
+                # A /proc child locator can disappear while the kernel pins
+                # it. Only a fresh original-identity check may classify this
+                # as gone; a live/unpinnable original remains uncertain.
+                _refuse(identity,"owned_process_missing")
+            raise
         try:
             if not same(identity, any_uid):
                 _refuse(identity, "owned_process_changed")
@@ -368,14 +375,22 @@ class Adopted:
         selected=ctypes.c_int()
         require(ctypes.CDLL(None).prctl(37,ctypes.byref(selected),0,0,0)==0 and selected.value==1,
                 'adopted_subreaper_required')
-        self.parent=process(os.getpid());self.uid=package.executor_uid;self.records={}
+        self.parent=process(os.getpid());self.records={}
+        self.allowed_uids={package.executor_uid,package.authority_uid}
+        require(len(self.allowed_uids)==2 and all(type(uid) is int and uid>0 for uid in self.allowed_uids),
+                'adopted_identity_split')
+        # Fixed Root helpers have their own per-operation subreaper. If one
+        # dies, this manager inherits its actual kernel children. This expands
+        # cleanup custody only; unknown association still quarantines all work.
+        self.allow_uid_change=bool(getattr(package,'runtime',{}).get('desk_login'))
+        if self.allow_uid_change:self.allowed_uids.add(0)
 
     def _remember(self,identity):
         key=(identity['pid'],identity['start'])
-        require(identity['uid']==self.uid,'adopted_executor_identity')
+        require(identity['uid'] in self.allowed_uids,'adopted_executor_identity')
         if key not in self.records:
             require(len(self.records)<MAX_CHILDREN,'adopted_child_bound')
-            try:self.records[key]=Process(identity)
+            try:self.records[key]=Process(identity,any_uid=self.allow_uid_change)
             except Vanished:return False
             return True
         return False

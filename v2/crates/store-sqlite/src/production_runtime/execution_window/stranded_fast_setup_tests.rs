@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "stranded_fast_retirement_tests.rs"]
+mod retirement;
+
 async fn admitted_fast(w: &Window) -> RunAdmissionResult {
     let fast = w.ready_fast().await;
     w.activate().await;

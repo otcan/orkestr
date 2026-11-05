@@ -1,4 +1,5 @@
 //! Trusted owned-broker setup. No run or inference authority is invented here.
+mod desk;
 mod tool_profile;
 mod window;
 use super::*;
@@ -216,6 +217,9 @@ impl PreparingCodex {
         if tool_profile == ToolProfile::OfflinePython {
             child.enable_offline_python()?;
         }
+        if tool_profile == ToolProfile::DeskLogin {
+            child.enable_desk_login()?;
+        }
         if let Some(bind) = before_open {
             bind(&child)?;
         }
@@ -238,6 +242,9 @@ impl PreparingCodex {
         })
     }
     fn queue(&mut self, mut frame: serde_json::Value) -> Result<(), SetupFailure> {
+        if self.tool_profile == ToolProfile::DeskLogin {
+            crate::broker::desk_tool::enable(&mut frame);
+        }
         if let Some(trusted) = self.tool_profile.workspace() {
             crate::broker::workspace_setup::enable(&mut frame, trusted);
         }
@@ -307,6 +314,9 @@ impl PreparingCodex {
                 .receive(&bytes)?;
             self.open = None;
             let mut channel = handle.into_channel();
+            if self.tool_profile == ToolProfile::DeskLogin {
+                channel.enable_desk_login()?;
+            }
             if self.tool_profile == ToolProfile::OfflinePython {
                 channel.enable_offline_python()?;
             }

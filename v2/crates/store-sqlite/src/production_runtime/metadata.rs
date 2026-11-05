@@ -28,6 +28,11 @@ impl BoundSessionMetadata {
     pub fn binding(&self) -> &Binding {
         &self.binding
     }
+    /// Non-authorizing locator of this exact one-use resume metadata issuance.
+    /// Reading it cannot issue metadata, dispatch a turn or retry failed setup.
+    pub fn resume_setup_id(&self) -> Option<&str> {
+        self.resume.as_ref().map(|resume| resume.setup_id())
+    }
     pub fn namespace(&self) -> &str {
         &self.context.namespace
     }

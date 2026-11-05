@@ -15,7 +15,8 @@ from .role_profiles import ROLE_FILES, bind as bind_roles
 MODULES_SERVICE = ("__init__.py", "contract.py", "ledger.py", "budget.py", "custody.py",
                    "channel.py", "package.py", "ownership.py", "egress.py", "manager.py",
                    "server_child.py", "broker.py", "profile.py", "entry.py", "role_profiles.py",
-                   "claude_broker.py", "identity.py", "launch.py", "launch_child.py", "proxy.py", "attachment_exports.py", "password_recovery.py")
+                   "claude_broker.py", "identity.py", "launch.py", "launch_child.py", "proxy.py", "attachment_exports.py",
+                   "password_recovery.py", "managed_resume.py", "desk_operations.py", "desk_anchor.py")
 # Shared with the server and packager: room for many per-conversation
 # command profiles.
 MAX_BETA_CONFIG_BYTES = 262144
@@ -147,7 +148,7 @@ class Package:
 
     def _bind(self):
         value = self.runtime
-        require(set(value) - IDENTITY_FIELDS - {"operator_recovery", "password_rotation_ready", "attachment_export_dir", "live_map", "desktop_broker", "timer_config", "v1_chat_icons_dir", "whatsapp_chats", "claude_quota_projection", "codex_quota_projection", "metrics_port"} == {"format", "uid", "gid", "owner_id", "conversation_id", "home",
+        require(set(value) - IDENTITY_FIELDS - {"operator_recovery", "desk_login", "password_rotation_ready", "attachment_export_dir", "live_map", "desktop_broker", "timer_config", "v1_chat_icons_dir", "whatsapp_chats", "claude_quota_projection", "codex_quota_projection", "metrics_port"} == {"format", "uid", "gid", "owner_id", "conversation_id", "home",
                 "bootstrap_file", "ledger_directory", "endpoint_directory", "port", "trusted_origin"}
                 and value["format"] == "orkestr-v2-codex-service-v1", "service_format")
         require("password_rotation_ready" not in value or type(value["password_rotation_ready"]) is bool,
@@ -183,6 +184,13 @@ class Package:
         self.identity_split = identity["split"]
         self.authority_uid, self.authority_gid = identity["authority_uid"], identity["authority_gid"]
         self.executor_uid, self.executor_gid = identity["executor_uid"], identity["executor_gid"]
+        if 'desk_login' in value:
+            selected=value['desk_login']
+            require(self.identity_split and type(selected) is dict and set(selected)=={'path','sha256'} and
+                    type(selected['sha256']) is str and re.fullmatch('[0-9a-f]{64}',selected['sha256']),
+                    'desk_operator_configuration')
+            live_map_path(selected['path'])
+            if os.geteuid()==0:protected(selected['path'])
         # Existing broker/profile paths keep uid/gid as explicit executor aliases.
         self.uid, self.gid = self.executor_uid, self.executor_gid
         if self.identity_split and os.geteuid() == self.executor_uid:
@@ -398,6 +406,7 @@ class Package:
                 "ORKESTR_V2_BETA_CONFIG": str(self.root / "beta.json"),
                 "ORKESTR_V2_UI_DIST": str(self.root / "ui"),
                 "ORKESTR_V2_ORIGIN": self.runtime["trusted_origin"],
+                **({'ORKESTR_V2_DESK_LOGIN_ENABLED':'1'} if 'desk_login' in self.runtime else {}),
                 **({"ORKESTR_V2_PASSWORD_ROTATION_READY": "1" if self.runtime["password_rotation_ready"] else "0"}
                    if "password_rotation_ready" in self.runtime else {}),
                 ACCESS_LOG_ENV: "quiet",

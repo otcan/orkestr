@@ -45,6 +45,8 @@ mod production_runtime;
 mod replay;
 mod runtime;
 pub mod service_credentials;
+pub use production_runtime::DeskLoginSetup;
+pub use production_runtime::{CompletedDeskLogin, DeskLoginOutcome};
 mod source_context;
 mod source_receipts;
 pub use production_runtime::{
@@ -66,6 +68,9 @@ pub use production_runtime::{
     EXECUTION_WINDOW_MAX_LIFETIME_MS, FAST_INPUT_BUDGET, FAST_NOTE_RESERVE,
     MAX_AUXILIARY_FAST_SLOTS, MAX_DEEP_BURST_QUIET_MS, MAX_PARALLEL_DEEP_SLOTS,
     PARALLEL_DEEP_DEFAULT_EFFORT, PARALLEL_DEEP_DEFAULT_MODEL, PARALLEL_DEFER,
+};
+pub use production_runtime::{
+    ConsumedDeskLogin, DeskLoginConsumption, DeskLoginNativeCall, DeskLoginParent,
 };
 
 pub use production_runtime::inspection::{

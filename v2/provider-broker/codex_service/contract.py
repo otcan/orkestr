@@ -78,6 +78,9 @@ def decode(raw):
     operation = value.get("operation")
     fields = {
         "status": set(),
+        "desk_login": {"window_id","generation","capability"},
+        "desk_login_poll": {"window_id","generation","operation_id"},
+        "desk_login_cancel": {"window_id","generation","operation_id"},
         "admit": {"window_id", "generation", "expected_generation", "input_message_id",
                   "input_event_id", "input_request_key", "predecessor_window_id",
                   "opened_at_ms", "work_deadline_ms", "expires_at_ms"},
@@ -125,9 +128,14 @@ def decode(raw):
         require(type(value["proxy_pid"]) is int and 1 < value["proxy_pid"] < 2**31 and
                 type(value["proxy_start"]) is int and 0 < value["proxy_start"] < 2**53, "proxy_locator")
         require(value["role"] in ("deep", "fast", "claude", "worker-0", "worker-1", "worker-2", "worker-3")
-                and value["mode"] == "fresh", "launch_mode")
+                and value["mode"] in ("fresh", "resume")
+                and (value["mode"] == "resume") == ('native_session_id' in value['setup']), "launch_mode")
         require(type(value["bind_deadline_ms"]) is int and 0 < value["bind_deadline_ms"] < 2**53,
                 "bind_deadline")
+    if operation=='desk_login':
+        from .desk_operations import capability
+        capability(value['capability'])
+    if operation in ('desk_login_poll','desk_login_cancel'):identifier(value['operation_id'])
     if operation == "bind_child":
         require(type(value["broker_pid"]) is int and 1 < value["broker_pid"] < 2**31,
                 "broker_pid")
@@ -146,13 +154,21 @@ def decode(raw):
 def setup_scope(value,launcher,owner,conversation):
     require(type(launcher) is str and launcher in ('deep','fast','claude','worker-0','worker-1','worker-2','worker-3'),
             'setup_launcher')
-    require(type(value) is dict and set(value)=={'owner_id','conversation_id','session_id','generation','incarnation','provider','role'},
+    fields={'owner_id','conversation_id','session_id','generation','incarnation','provider','role'}
+    require(type(value) is dict and set(value) in (fields, fields|{'native_session_id','resume_setup_id'}),
             'setup_fields')
     require(value['owner_id']==owner and value['conversation_id']==conversation,'setup_owner_scope')
     identifier(value['session_id']);generation(value['generation']);key(value['incarnation'])
     expected=(value['provider']=='claude' and value['role'] in ('deep','fast')) if launcher=='claude' else (
         value['provider']=='codex' and value['role']==('worker' if launcher.startswith('worker-') else launcher))
     require(expected,'setup_role')
+    if 'native_session_id' in value:
+        identifier(value['resume_setup_id'])
+        native=value['native_session_id']
+        require(value['role'] in ('deep','fast') and type(native) is str and
+                0<len(native.encode())<=512 and not any(unicodedata.category(c)=='Cc' for c in native),
+                'setup_resume_scope')
+        if value['provider']=='claude':identifier(native)
 
 
 def preferences(value,launcher):

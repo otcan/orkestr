@@ -473,3 +473,8 @@ and fenced admit/extend/launch/retire/reconcile operations. Its manager remains
 faulted: passing this check proves physical cleanup, not automatic recovery or
 production activation. A separate kernel test preserves another known same-UID
 peer and never scans or kills processes merely by UID.
+
+The staged [Deep desk capability](../../docs/managed-desk-capability.md) adds a
+fixed Root helper bridge with one-use Core grants and separate cleanup proof.
+Fresh HTTP, owner Stop and Root-anchor fault rehearsals remain disposable;
+existing-session/Claude/helper parity and production split startup stay gated.

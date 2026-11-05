@@ -70,15 +70,24 @@ async fn continuation_wins_blocks_handoff_and_exact_retired_receipt_never_requeu
         .unwrap();
     retire_old(&fresh, w).await;
     let input = continuation();
+    // Abandoning the prior turn rotates its binding generation. That source
+    // may no longer assert native continuation. A new input fenced to the
+    // current provider generation still serializes against a handoff.
+    assert!(matches!(
+        fresh
+            .admit_with_provider_generation(
+                &w.f.owner,
+                &w.f.conversation,
+                &input,
+                None,
+                Some(0),
+                Some(&p.deep.run.run_id),
+            )
+            .await,
+        Err(orkestr_v2_application::StoreError::ProviderGenerationMismatch)
+    ));
     let admitted = fresh
-        .admit_with_provider_generation(
-            &w.f.owner,
-            &w.f.conversation,
-            &input,
-            None,
-            Some(0),
-            Some(&p.deep.run.run_id),
-        )
+        .admit_with_provider_generation(&w.f.owner, &w.f.conversation, &input, None, Some(0), None)
         .await
         .unwrap();
     assert!(fresh

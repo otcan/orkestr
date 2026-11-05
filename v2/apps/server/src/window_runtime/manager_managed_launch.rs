@@ -15,7 +15,7 @@ impl ManagerClient {
         let mut request = if let Some(descriptors) = &managed {
             let mut request = self.request("launch_child", request_id, Some(window))?;
             request["role"] = json!(descriptors.role());
-            request["mode"] = json!("fresh");
+            request["mode"] = json!(descriptors.mode());
             request["preferences"] = descriptors.preferences();
             request["setup"] = descriptors
                 .setup()
