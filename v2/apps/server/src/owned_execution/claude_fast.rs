@@ -64,6 +64,7 @@ impl ConfiguredExecution {
             workspace_exec: None,
             initial_grant: None,
             desk_setup: std::sync::Mutex::new(None),
+            managed_setup: std::sync::Mutex::new(None),
             workspace_grant: None,
             window: Some(context),
             window_workers: None,

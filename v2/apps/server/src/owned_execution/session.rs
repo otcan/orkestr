@@ -115,6 +115,7 @@ impl ConfiguredExecution {
             .map_err(|_| "execution steering issuer refused")?;
         let mut worker = self.prepare_worker(&capability)?;
         let mut desk = self.prepare_desk(&capability).await?;
+        let mut managed = self.prepare_managed(&capability).await?;
         let (mut authority, mut pump) = ready
             .attach(self.store.clone(), capability)
             .map_err(|_| "execution attachment is uncertain; automatic replay refused")?;
@@ -144,6 +145,9 @@ impl ConfiguredExecution {
                 steering.retire();
                 run_control.disable();
                 drop(schedule);
+                if let Some(managed) = managed.as_mut() {
+                    managed.cancel().await?;
+                }
                 if let Some(desk) = desk.as_mut() {
                     desk.cancel().await?;
                 }
@@ -155,6 +159,9 @@ impl ConfiguredExecution {
                 return Ok(SessionExit::Stopped { run, proof });
             }
             if status.phase == ExecutionPhase::Completed {
+                if let Some(managed) = managed.as_mut() {
+                    managed.cancel().await?;
+                }
                 steering.retire();
                 drop(schedule);
                 // The previous parent's scheduler cannot survive into a new
@@ -202,6 +209,7 @@ impl ConfiguredExecution {
                     .map_err(|_| "execution steering issuer refused")?;
                 worker = self.prepare_worker(&capability)?;
                 desk = self.prepare_desk(&capability).await?;
+                managed = self.prepare_managed(&capability).await?;
                 let (next_authority, next_pump) = pump
                     .attach_next(self.store.clone(), capability)
                     .map_err(|_| "execution continuation is uncertain; automatic replay refused")?;
@@ -219,6 +227,9 @@ impl ConfiguredExecution {
                 continue;
             }
             if status.phase == ExecutionPhase::AwaitingAcceptance {
+                if let Some(managed) = managed.as_mut() {
+                    managed.cancel().await?;
+                }
                 steering.retire();
                 pump.check_broker_liveness()
                     .map_err(|_| "execution proposal broker exited; reconciliation required")?;
@@ -274,6 +285,9 @@ impl ConfiguredExecution {
                 status.phase,
                 ExecutionPhase::Failed | ExecutionPhase::Blocked | ExecutionPhase::Cancelled
             ) {
+                if let Some(managed) = managed.as_mut() {
+                    managed.cancel().await?;
+                }
                 if let Some(desk) = desk.as_mut() {
                     desk.cancel().await?;
                 }
@@ -304,6 +318,9 @@ impl ConfiguredExecution {
                     .publish(receipt)
                     .map_err(|_| "execution shutdown handoff requires reconciliation")?;
                 drop(schedule);
+                if let Some(managed) = managed.as_mut() {
+                    managed.cancel().await?;
+                }
                 if let Some(desk) = desk.as_mut() {
                     desk.cancel().await?;
                 }
@@ -315,6 +332,9 @@ impl ConfiguredExecution {
                 return Ok(SessionExit::Stopped { run, proof });
             }
             Self::poll_worker(&mut worker).await;
+            if let Some(managed) = managed.as_mut() {
+                managed.poll().await?;
+            }
             if let Some(desk) = desk.as_mut() {
                 desk.poll(&mut pump).await?;
             }

@@ -19,6 +19,7 @@ impl ConfiguredExecution {
         if !self.provider_input_allowed(None).await? {
             return Ok(None);
         }
+        self.capture_managed_setup(&grant)?;
         if self.desk_enabled() {
             let source = orkestr_v2_store_sqlite::DeskLoginSetup::from_metadata(&grant)
                 .map_err(|_| "desk source setup refused")?;

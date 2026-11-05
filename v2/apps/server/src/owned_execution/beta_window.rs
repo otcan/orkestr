@@ -125,6 +125,7 @@ impl ConfiguredExecution {
             workspace_exec,
             initial_grant: Some(grant),
             desk_setup: std::sync::Mutex::new(None),
+            managed_setup: std::sync::Mutex::new(None),
             workspace_grant,
             window_workers: config
                 .roles

@@ -32,10 +32,16 @@ pub use claude_identity::ClaudeProcessInitialization;
 mod capability;
 pub use capability::{ConsumedProviderDispatch, ExecutionConsumption};
 mod desk_login;
+mod managed_operation;
 pub use desk_login::DeskLoginSetup;
 pub use desk_login::{CompletedDeskLogin, DeskLoginOutcome};
 pub use desk_login::{
     ConsumedDeskLogin, DeskLoginConsumption, DeskLoginNativeCall, DeskLoginParent,
+};
+pub use managed_operation::{
+    ConsumedManagedOperation, ManagedCallerEvidence, ManagedOperationConsumption,
+    ManagedOperationOutcome, ManagedOperationParent, ManagedOperationRequest,
+    ManagedOperationSetup,
 };
 pub(crate) mod deep_groups;
 pub use deep_groups::{DEFAULT_DEEP_BURST_QUIET_MS, MAX_DEEP_BURST_QUIET_MS};

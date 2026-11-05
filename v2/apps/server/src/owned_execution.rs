@@ -25,6 +25,7 @@ mod fast_pool;
 mod fast_session;
 mod group;
 mod host_pressure;
+mod managed_tools;
 pub use group::{ConfiguredExecutions, ExecutionTasks};
 mod claude_fast;
 mod liveness;
@@ -76,6 +77,7 @@ pub struct ConfiguredExecution {
     workspace_exec: Option<std::sync::Arc<crate::workspace_exec::WorkspaceExecDispatcher>>,
     initial_grant: Option<BoundSessionMetadata>,
     desk_setup: std::sync::Mutex<Option<orkestr_v2_store_sqlite::DeskLoginSetup>>,
+    managed_setup: std::sync::Mutex<Option<orkestr_v2_store_sqlite::ManagedOperationSetup>>,
     workspace_grant: Option<std::sync::Arc<orkestr_v2_store_sqlite::WorkspaceGrant>>,
     window: Option<std::sync::Arc<crate::window_runtime::context::Context>>,
     window_workers: Option<crate::worker_execution::WindowWorkers>,
@@ -231,6 +233,7 @@ impl ConfiguredExecution {
             worker_reaps,
             initial_grant,
             desk_setup: std::sync::Mutex::new(None),
+            managed_setup: std::sync::Mutex::new(None),
             workspace_grant,
             window: None,
             window_workers: None,
