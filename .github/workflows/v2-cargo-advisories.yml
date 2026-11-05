@@ -1,0 +1,40 @@
+name: Orkestr 2.0 daily Cargo advisory scan
+
+# Scheduled workflows run only from the default branch, so the daily scan of the
+# Rust branch's lockfile is defined here. It runs that branch's own scanner and
+# exception policy: on a schedule there is no pull-request content to distrust.
+on:
+  schedule:
+    - cron: '41 5 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cargo-advisories:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: v2/rust-rewrite
+          path: rust
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: '22'
+      - name: Exact Cargo.lock advisory scan of the Rust branch head (no cargo, no install)
+        run: |
+          commit=$(git -C "$GITHUB_WORKSPACE/rust" rev-parse HEAD)
+          node "$GITHUB_WORKSPACE/rust/scripts/security/cargo-advisories.mjs" \
+            --root "$GITHUB_WORKSPACE/rust" --commit "$commit" \
+            --policy-commit "$commit" --report "$RUNNER_TEMP/cargo-advisory-evidence.json"
+      - name: Publish minimized aggregate evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: cargo-advisory-evidence
+          path: ${{ runner.temp }}/cargo-advisory-evidence.json
+          if-no-files-found: error
+          retention-days: 14
