@@ -86,6 +86,8 @@ class Rehearsal:
         # this value before sending any cookie/key to its original process.
         copied_identity=json.loads(subprocess.check_output([str(self.package.root/'server'),'--version','--json'],
             env={'PATH':'/usr/bin:/bin','PYTHONDONTWRITEBYTECODE':'1'},cwd='/'))
+        self.server_identity=copied_identity
+        self.server_sha256=hashlib.sha256((self.package.root/'server').read_bytes()).hexdigest()
         copied_source=copied_identity.get('source_commit')
         if copied_source is not None:
             assert type(copied_source) is str and len(copied_source)==40 and all(c in '0123456789abcdef' for c in copied_source)
