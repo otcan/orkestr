@@ -51,7 +51,7 @@ impl Controller {
         if target == selected {
             return Ok(Some(input.clone()));
         }
-        let Some(window) = self
+        let Some(mut window) = self
             .store
             .execution_window_status_authenticated(browser, conversation)
             .await
@@ -67,6 +67,20 @@ impl Controller {
         }
         if proof.source_commit == "unknown" {
             return Err("provider policy handoff requires qualified source");
+        }
+        // Reuse ordinary idle retirement, including all original native reap
+        // witnesses. The new triggering message has not joined the old window.
+        if window.state != ExecutionWindowState::Closed {
+            if let Some(entry) = self.existing(conversation) {
+                if entry.retire_if_idle(browser).await.unwrap_or(false) {
+                    window = self
+                        .store
+                        .execution_window_status_authenticated(browser, conversation)
+                        .await
+                        .map_err(|_| "provider policy predecessor unavailable")?
+                        .ok_or("provider policy predecessor missing")?;
+                }
+            }
         }
         if self.live_owner(conversation).await
             || window.state != ExecutionWindowState::Closed
@@ -94,16 +108,21 @@ impl Controller {
             acknowledge_new_native_session: true,
             history_summary: summary,
         };
+        // Preserve the caller's ORIGINAL intent/digest before changing its
+        // window tuple. Durable queue dispatch reconstructs the new tuple;
+        // retries (including a lost handoff reply) can only observe this row.
+        self.store
+            .enqueue_execution_window_authenticated(browser, conversation, input)
+            .await
+            .map_err(|_| "provider policy original intent preservation refused")?;
         self.store
             .handoff_provider_for_operator_policy(browser, conversation, &request, &proof)
             .await
             .map_err(|_| "provider policy handoff refused")?;
         self.forget(conversation)?;
-        let mut routed = input.clone();
-        routed.window_id = None;
-        routed.predecessor_window_id = Some(window.window_id);
-        routed.expected_generation = window.generation;
-        Ok(Some(routed))
+        self.queue.remember(browser);
+        self.queue.wake();
+        Ok(None)
     }
 }
 

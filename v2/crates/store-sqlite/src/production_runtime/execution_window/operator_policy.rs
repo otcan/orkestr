@@ -310,3 +310,21 @@ impl Store {
         Ok(result)
     }
 }
+
+impl Store {
+    /// Select the fresh-bootstrap port from a committed handoff, never from a
+    /// failed native recovery. Common to explicit-owner and operator policy.
+    pub async fn execution_window_provider_handoff_pending_authenticated(
+        &self,
+        credential: &str,
+        conversation: &ConversationId,
+    ) -> Result<bool> {
+        let mut tx = self.pool.begin().await.map_err(db)?;
+        let owner = browser_owner(self, &mut tx, credential).await?;
+        crate::runtime::scope(&mut tx, &owner, conversation).await?;
+        let found:i64=sqlx::query_scalar("SELECT count(*) FROM conversation_provider_handoffs h JOIN conversation_settings s ON s.owner_id=h.owner_id AND s.conversation_id=h.conversation_id AND s.provider_generation=h.provider_generation AND s.provider=h.to_provider JOIN execution_windows w ON w.id=h.window_id AND w.owner_id=h.owner_id AND w.conversation_id=h.conversation_id AND w.generation=h.window_generation AND w.state='closed' WHERE h.owner_id=? AND h.conversation_id=? AND w.generation=(SELECT max(generation) FROM execution_windows WHERE owner_id=h.owner_id AND conversation_id=h.conversation_id)")
+            .bind(owner.to_string()).bind(conversation.to_string()).fetch_one(&mut *tx).await.map_err(db)?;
+        tx.commit().await.map_err(db)?;
+        Ok(found == 1)
+    }
+}

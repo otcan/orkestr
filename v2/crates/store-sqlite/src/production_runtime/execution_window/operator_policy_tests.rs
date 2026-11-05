@@ -52,6 +52,20 @@ async fn operator_policy_handoff_keeps_exact_new_input_queued_and_attests_separa
         .await
         .unwrap();
     assert_eq!(receipt.to_provider, ConversationProvider::Codex);
+    assert!(store
+        .execution_window_provider_handoff_pending_authenticated(
+            &w.browser_credential,
+            &w.f.conversation
+        )
+        .await
+        .unwrap());
+    assert!(store
+        .execution_window_provider_handoff_pending_authenticated(
+            "foreign-browser",
+            &w.f.conversation
+        )
+        .await
+        .is_err());
     assert_eq!(
         store
             .handoff_provider_for_operator_policy(

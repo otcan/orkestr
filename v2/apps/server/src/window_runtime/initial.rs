@@ -101,10 +101,13 @@ impl InitialAuthority {
             } else if store
                 .execution_window_failed_first_open_authenticated(browser, conversation)
                 .await?
+                || store
+                    .execution_window_provider_handoff_pending_authenticated(browser, conversation)
+                    .await?
             {
-                // Every earlier opening was reconciled as failed before it ran
-                // anything: there is no retired turn to resume, so bootstrap
-                // again. Durable state selects the port, never a refusal.
+                // A failed first open has no native to resume. A committed
+                // provider handoff explicitly authorizes fresh native bindings.
+                // Durable state selects this port, never a recovery refusal.
                 WindowAuthority::Initial(
                     store
                         .rebootstrap_execution_window_authenticated(browser, conversation, config)

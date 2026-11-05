@@ -30,6 +30,25 @@ class PolicyRehearsal(Rehearsal):
             db.execute('PRAGMA query_only=ON')
             return db.execute(query,bindings).fetchall()
 
+    def failure_snapshot(self):
+        result={}
+        queries={
+            'windows':'SELECT generation,state FROM execution_windows LIMIT 16',
+            'runs':'SELECT role,state,dispatch_state FROM production_runs LIMIT 16',
+            'bindings':'SELECT role,state,provider_kind,generation FROM session_bindings LIMIT 16',
+            'inbox':'SELECT state,claim_generation,admitted_run_id IS NOT NULL FROM reasoning_inbox LIMIT 16',
+            'queue':'SELECT state,withdrawal FROM execution_window_queue LIMIT 16',
+            'handoffs':'SELECT from_provider,to_provider,provider_generation FROM conversation_provider_handoffs LIMIT 16',
+        }
+        for key,query in queries.items():
+            try:result[key]=self.read(query)
+            except sqlite3.Error as error:result[key]=type(error).__name__
+        if self.process and self.process.stderr:
+            os.set_blocking(self.process.stderr.fileno(),False)
+            try:result['diagnostic_stderr']=os.read(self.process.stderr.fileno(),16384).decode(errors='replace')
+            except BlockingIOError:pass
+        return result
+
     def run(self):
         initial=super().run()
         status,health=self.request('/api/v2/health')
@@ -89,6 +108,9 @@ def main():
     args=parser.parse_args();assert os.geteuid()==0,'root-only synthetic fixture'
     case=PolicyRehearsal(args.binary)
     try:result=case.run()
+    except BaseException:
+        Path(args.report).write_text(json.dumps(dict(ok=False,snapshot=case.failure_snapshot()),indent=2)+"\n")
+        raise
     finally:case.close()
     Path(args.report).write_text(json.dumps(result,indent=2)+'\n')
     print('Synthetic Root/Core provider policy handoff passed; no provider API or live activation')
