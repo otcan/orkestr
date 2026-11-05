@@ -91,7 +91,8 @@ def main(root, role="deep"):
                         conversation_workspaces=conversation_workspace_paths(getattr(package, "beta", {}))
                         if not worker and getattr(config, "host_full_access", False) is True else (),
                         fast_only=role == "fast",
-                        desk_login=role=='deep' and getattr(package,'identity_split',False) and 'desk_login' in getattr(package,'runtime',{})),
+                        desk_login=role=='deep' and getattr(package,'identity_split',False) and 'desk_login' in getattr(package,'runtime',{})
+                        and not getattr(package,'runtime',{}).get('managed_operations')),
                 handoff=handoff,
                 diagnostics=True)
             pump.run()

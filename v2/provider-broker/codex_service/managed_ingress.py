@@ -104,6 +104,9 @@ class Peer:
     def close(self):
         self.connection.close();self.proof.close()
 
+    def reply(self,value):
+        raw=canonical(value);require(self.connection.send(raw)==len(raw),'managed_reply_unknown')
+
 
 class Ingress:
     def __init__(self,manager):
@@ -125,6 +128,11 @@ class Ingress:
         self.natives=NativeRegistry(self)
         from .managed_runs import Runs
         self.runs=Runs(self)
+        self.http=None
+        if (getattr(manager.package,'runtime',{}).get('managed_operations') and
+                type(getattr(manager.package,'beta',{}).get('managed_host')) is dict):
+            from .managed_http import Listener
+            self.http=Listener(self);manager.package.managed_mcp_url=self.http.url
 
     def _record(self,peer,value):
         self.runs.attach(peer)
@@ -155,12 +163,16 @@ class Ingress:
             except Exception:connection.close()
         for peer in list(self.peers):
             try:
-                require(time.monotonic()<peer.deadline and exists(peer.proof.identity) and not peer.proof.exited(),'managed_caller_gone')
-                require(self.manager._desk_window_active(peer.source['window_id'],peer.source['window_generation']),
-                        'managed_window_closed')
+                require(time.monotonic()<peer.deadline,'managed_caller_gone')
+                if peer.proof is not None:
+                    require(exists(peer.proof.identity) and not peer.proof.exited(),'managed_caller_gone')
+                    require(self.manager._desk_window_active(peer.source['window_id'],peer.source['window_generation']),
+                            'managed_window_closed')
                 if peer.path is None:
                     try:value=peer.receive()
                     except BlockingIOError:continue
+                    if getattr(peer,'metadata_done',False):
+                        peer.close();self.peers.remove(peer);continue
                     if value['operation']=='native_register':
                         identifier=self.natives.register(peer,value)
                         peer.connection.send(canonical({'version':1,'request_key':value['request_key'],'request_id':identifier,
@@ -169,20 +181,34 @@ class Ingress:
                     self._record(peer,value)
                 record=metadata(peer.path,32768)
                 if record['state'] in ('completed','unknown','cancelled'):
+                    if record['state']=='completed' and not record.get('delivery_cancelled'):
+                        if not record.get('result_authorization'):continue
+                        require(record['result_expires_at_ms']>int(time.time()*1000),'managed_result_expired')
                     reply={'version':1,'request_key':record['request']['request_key'],'request_id':record['request_id'],
                            'state':record['state'],'result':record.get('result')}
-                    peer.connection.send(canonical(reply));peer.close();self.peers.remove(peer)
+                    if record.get('delivery_cancelled'):
+                        reply.update(state='cancelled',result={'kind':'source_run_closed'})
+                    peer.reply(reply)
+                    record['result_sent']=True;atomic(peer.path,record)
+                    peer.close();self.peers.remove(peer)
             except BlockingIOError:continue
             except Exception:
                 if peer.path and peer.path.exists():
                     record=metadata(peer.path,32768)
                     if record['state'] not in ('completed','unknown','cancelled'):record['state']='unknown';atomic(peer.path,record)
                 peer.close();self.peers.remove(peer)
+        # Process metadata-only original-broker registrations before accepting
+        # native HTTP connections created during that same startup interval.
+        if self.http is not None:
+            while len(self.peers)<MAX_CONNECTIONS:
+                try:peer=self.http.accept()
+                except BlockingIOError:break
+                self.peers.append(peer)
 
     def pending(self,window,generation):
         if not self.manager._desk_window_active(window,generation):return []
         # Disk contains durable claims, never reconstructed caller authority.
-        live={p.request:p.source for p in self.peers if p.request and time.monotonic()<p.deadline
+        live={p.request:p.source for p in self.peers if p.request and p.proof is not None and time.monotonic()<p.deadline
               and exists(p.proof.identity) and not p.proof.exited()}
         result=[]
         for path in self.directory.glob('*.json'):
@@ -199,3 +225,4 @@ class Ingress:
                     record['state']='unknown';atomic(peer.path,record)
             peer.close()
         self.peers=[];self.socket.close();self.natives.close()
+        if self.http is not None:self.http.close()

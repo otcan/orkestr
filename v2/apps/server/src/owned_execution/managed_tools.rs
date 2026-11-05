@@ -166,7 +166,8 @@ impl ManagedTools {
             .await
             .map_err(|_| "managed Root result unknown")?;
         if let Some(outcome) = receipt.terminal {
-            self.store
+            let result = self
+                .store
                 .complete_managed_operation(
                     &self.credential,
                     self.operation.take().ok_or("managed operation lost")?,
@@ -174,6 +175,17 @@ impl ManagedTools {
                 )
                 .await
                 .map_err(|_| "managed result persistence uncertain")?;
+            self.context
+                .manager
+                .release_managed_result(
+                    &self.store,
+                    &self.credential,
+                    &self.context.window,
+                    &result,
+                    Instant::now() + Duration::from_secs(1),
+                )
+                .await
+                .map_err(|_| "managed result release unknown; replay refused")?;
         }
         Ok(())
     }

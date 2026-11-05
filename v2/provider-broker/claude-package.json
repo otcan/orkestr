@@ -3,7 +3,7 @@
   "entry": "claude_server.py",
   "files": {
     "claude_server.py": "e66ed5ce8f13d9b4e589783c2bc3144973c6c2c8db634a8bb3a7d63130cf37f0",
-    "claude_connector.py": "48caa632479ba69da94e17b3efa65f3bdd556c6847d26f33a92913e9f76ee6d1",
+    "claude_connector.py": "56a873b65bf945cf69f30463c5929e0320acd97de2f746f97e47c67096749698",
     "claude_protocol.py": "79af21ae0e64b77eb9c68f140d15de9943651e7f22730a509d8e92e23f4ea04d",
     "protocol.py": "acfe04b015610c7f5d97ea9f3d8dcc2c1b0d3bd708a84e805de33621741457c6",
     "transport.py": "dd6fad5ae56c07b8c8d1d679adb44a515b029fed09f6432de9647106e119e7fa",

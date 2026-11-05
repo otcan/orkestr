@@ -118,7 +118,7 @@ impl ConfiguredExecution {
                 )
             {
                 if let Some(managed) = managed.as_mut() {
-                    managed.cancel().await?;
+                    Box::pin(managed.cancel()).await?;
                 }
                 run_control.disable();
                 self.store
@@ -132,7 +132,7 @@ impl ConfiguredExecution {
             match status.phase {
                 ExecutionPhase::Completed => {
                     if let Some(managed) = managed.as_mut() {
-                        managed.cancel().await?;
+                        Box::pin(managed.cancel()).await?;
                     }
                     // Consume the exact completed pump before opening a new
                     // child. Neither a projection nor local exit proves reap.
@@ -144,7 +144,7 @@ impl ConfiguredExecution {
                 }
                 ExecutionPhase::AwaitingAcceptance => {
                     if let Some(managed) = managed.as_mut() {
-                        managed.cancel().await?;
+                        Box::pin(managed.cancel()).await?;
                     }
                     // Preserve the proposal and child while the owner decides;
                     // never read late provider frames or claim a queued input.
@@ -181,7 +181,7 @@ impl ConfiguredExecution {
                 }
                 ExecutionPhase::CancelRequested => {
                     if let Some(managed) = managed.as_mut() {
-                        managed.cancel().await?;
+                        Box::pin(managed.cancel()).await?;
                     }
                     run_control.disable();
                     drop(schedule);
@@ -209,7 +209,7 @@ impl ConfiguredExecution {
                             .map_err(|_| "Claude shutdown fence requires reconciliation")?;
                         run_control.disable();
                         if let Some(managed) = managed.as_mut() {
-                            managed.cancel().await?;
+                            Box::pin(managed.cancel()).await?;
                         }
                         run_control
                             .publish(receipt)
@@ -237,11 +237,11 @@ impl ConfiguredExecution {
                             return Err(reason);
                         }
                         if let Some(managed) = managed.as_mut() {
-                            managed.refresh_lease(liveness.authority()).await?;
+                            Box::pin(managed.refresh_lease(liveness.authority())).await?;
                         }
                     }
                     if let Some(managed) = managed.as_mut() {
-                        managed.poll().await?;
+                        Box::pin(managed.poll()).await?;
                     }
                     match live.tick().await {
                         Ok(true) => budget.observed(Instant::now()),

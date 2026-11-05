@@ -182,7 +182,7 @@ class Manager:
         row = self.ledger.details(request["window_id"], request["generation"])
         require(row["conversation"] == request["conversation_id"], "scope")
         window = self.windows.get(request["window_id"])
-        if operation in ('managed_pending','managed_consume','managed_poll','managed_cancel','managed_run_open','managed_run_close','managed_renew'):
+        if operation in ('managed_pending','managed_consume','managed_poll','managed_cancel','managed_run_open','managed_run_close','managed_renew','managed_result'):
             from .managed_control import dispatch
             return dispatch(self,request,window)
         if operation in ('desk_login','desk_login_poll','desk_login_cancel'):

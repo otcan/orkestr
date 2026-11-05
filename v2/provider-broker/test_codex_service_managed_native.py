@@ -24,6 +24,7 @@ class ManagedNativeTests(ingress_tests.RootCallerTests):
     test_publication_receipt_failure_preserves_unknown_claim_and_cannot_republish=None
     test_actual_separate_uid_nnp_cli_roundtrip_to_protected_intake=None
     test_no_pre_run_queue_or_cross_turn_promotion=None
+    test_result_release_requires_exact_fixed_receipt_and_still_open_run=None
 
     def setUp(self):
         super().setUp()
@@ -31,21 +32,25 @@ class ManagedNativeTests(ingress_tests.RootCallerTests):
         native=self.root/'native';shutil.copyfile(sys.executable,native);native.chmod(0o755)
         self.native=native
 
-    def start_native(self):
+    def start_native(self,code='import time;time.sleep(30)'):
         descriptors=create();self.addCleanup(lambda:[os.close(fd) for fd in descriptors])
+        self.native_descriptors=descriptors
         script='''import ctypes,os,subprocess,sys
 assert ctypes.CDLL(None).prctl(38,1,0,0,0)==0
-native=subprocess.Popen([sys.argv[1],'-I','-S','-B','-c','import time;time.sleep(30)'],
+native=subprocess.Popen([sys.argv[1],'-I','-S','-B','-c',sys.argv[4]],
     stdin=int(sys.argv[2]),stdout=int(sys.argv[3]),stderr=subprocess.DEVNULL,close_fds=True)
 print(native.pid,flush=True)
 try:sys.stdin.read()
 finally:native.kill();native.wait()
 '''
-        broker=subprocess.Popen([sys.executable,'-I','-S','-B','-c',script,str(self.native),str(descriptors[0]),str(descriptors[3])],
+        broker=subprocess.Popen([sys.executable,'-I','-S','-B','-c',script,str(self.native),str(descriptors[0]),str(descriptors[3]),code],
             stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,user=65534,group=65534,extra_groups=[],
             pass_fds=(descriptors[0],descriptors[3]),env={'PATH':'/usr/bin:/bin','PYTHONDONTWRITEBYTECODE':'1'})
         self.children.append(broker);native=int(broker.stdout.readline());self.bind(broker)
         self.addCleanup(self.close_broker,broker)
+        native_identity=process(native);native_key=(native,native_identity['start']);broker_key=(broker.pid,process(broker.pid)['start'])
+        window=self.manager.windows['synthetic-window'];window.children.records[native_key]=True
+        window.children.families[native_key]={broker_key}
         handle=next(iter(self.manager.launcher.children.values()))
         handle.native_io={name:{'device':os.fstat(fd).st_dev,'inode':os.fstat(fd).st_ino}
                           for name,fd in zip(('input','output'),(descriptors[0],descriptors[2]))}

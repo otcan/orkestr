@@ -107,6 +107,7 @@ class RootCallerTests(unittest.TestCase):
             control=self.root/'control.sock',ledger_directory=self.directory),ledger=SimpleNamespace(
                 endpoint=lambda _:None,set_endpoint=lambda *_:None,clear_endpoint=lambda *_:None),
             _desk_window_active=lambda *_:True)
+        self.manager.desk=None
         self.children=[];self.addCleanup(self.stop_children)
 
     def stop_children(self):
@@ -139,6 +140,16 @@ class RootCallerTests(unittest.TestCase):
     def open_run(self,ingress,scope):
         from codex_service.managed_runs import key
         ingress.runs.contexts[key(scope)]={'run_id':'44444444-4444-4444-8444-444444444444'}
+
+    def release_result(self,ingress,record):
+        import hashlib
+        from codex_service.managed_control import authorize_result
+        previous=record.get('latest_capability',record['capability']);scope=record['source']
+        cap={k:previous[k] for k in ('operation_id','run_id','lease_generation','dispatch_fence','expires_at_ms')}
+        cap['result_sha256']=hashlib.sha256(canonical({'state':record['state'],'result':record['result']})).hexdigest()
+        request={'owner_id':scope['owner_id'],'conversation_id':scope['conversation_id'],
+            'window_id':scope['window_id'],'generation':scope['window_generation']}
+        return authorize_result(ingress,cap,request)
 
     def test_original_live_nnp_deep_caller_retains_root_source_including_resume(self):
         child=self.caller();self.bind(child)
@@ -228,6 +239,20 @@ class RootCallerTests(unittest.TestCase):
         with patch('codex_service.managed_control.publish',side_effect=AssertionError('cannot republish')):
             self.assertEqual(managed_control.consume(ingress,cap)['state'],'unknown')
 
+    def test_result_release_requires_exact_fixed_receipt_and_still_open_run(self):
+        from codex_service import managed_control
+        from codex_service.managed_runs import key
+        ingress,peer,cap=self.pending_request();record=managed_control.consume(ingress,cap)
+        request={'owner_id':record['source']['owner_id'],'conversation_id':record['source']['conversation_id'],
+                 'window_id':record['source']['window_id'],'generation':record['source']['window_generation']}
+        result={k:cap[k] for k in ('operation_id','run_id','lease_generation','dispatch_fence','expires_at_ms')}
+        result['result_sha256']='0'*64
+        with self.assertRaisesRegex(Refused,'managed_result_changed'):managed_control.authorize_result(ingress,result,request)
+        saved=ingress.runs.contexts.pop(key(record['source']))
+        with self.assertRaisesRegex(Refused,'managed_result_run_closed'):self.release_result(ingress,record)
+        ingress.runs.contexts[key(record['source'])]=saved
+        self.assertTrue(self.release_result(ingress,record)['result_authorization'])
+
     def test_actual_separate_uid_nnp_cli_roundtrip_to_protected_intake(self):
         from codex_service import managed_client,managed_control
         client=self.root/'client.py';client.write_bytes(Path(managed_client.__file__).read_bytes());client.chmod(0o644)
@@ -254,7 +279,7 @@ path,endpoint=sys.argv[1:];sys.argv=[path,endpoint];runpy.run_path(path,run_name
             'evidence':{'source':managed_control.normalize_source(record['source']),'request':REQUEST}}
         # This unit test supplies the trusted authority port's grant. Real Core
         # issuance/fences have separate tests; no owner decision is synthesized.
-        managed_control.consume(ingress,cap);ingress.tick();child.wait(timeout=3)
+        result=managed_control.consume(ingress,cap);self.release_result(ingress,result);ingress.tick();child.wait(timeout=3)
         self.assertEqual(child.returncode,0,child.stderr.read().decode())
         reply=json.loads(child.stdout.readline());self.assertEqual(reply['state'],'completed')
         self.assertFalse(reply['result']['owner_approval']);self.assertEqual(reply['result']['owner_delivery'],'unconfirmed')

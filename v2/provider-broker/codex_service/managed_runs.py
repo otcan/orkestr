@@ -57,3 +57,5 @@ class Runs:
             record=metadata(pending,32768)
             if record['source'].get('run_id')==run and record['state']=='pending':
                 record['state']='cancelled';atomic(pending,record)
+            elif record['source'].get('run_id')==run and record['state']=='completed' and not record.get('result_sent'):
+                record['delivery_cancelled']=True;atomic(pending,record)
