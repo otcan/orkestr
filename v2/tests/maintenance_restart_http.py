@@ -15,6 +15,10 @@ from identity_split_service_http import Rehearsal, wait
 
 
 class MaintenanceRehearsal(Rehearsal):
+    def __init__(self, binary, expected_source):
+        super().__init__(binary)
+        self.expected_source=expected_source
+
     def read(self, query, parameters=()):
         with sqlite3.connect((self.package.data/'core.sqlite3').as_uri()+'?mode=ro',uri=True) as db:
             db.execute('PRAGMA query_only=ON')
@@ -103,7 +107,7 @@ class MaintenanceRehearsal(Rehearsal):
         timer_run=wait(lambda:self.read("SELECT r.id FROM production_runs r JOIN dormant_timer_inputs i ON i.message_id=r.message_id WHERE r.role='deep' AND r.state='succeeded'"),
                        'deferred timer provider result accepted before cleanup',seconds=35)
         source=self.request('/api/v2/health')[1]['build']['source_commit']
-        assert source and len(source)==40, 'source-stamped server required'
+        assert source==self.expected_source, 'exact source-stamped server required'
         return {'passed':True,'actual_http_restart':True,'root_hold_survived_restart':True,
                 'queued_input_run':run[0],'natural_due_timer_fires':1,'timer_run':timer_run[0][0],'actual_provider':False,
                 'live_activation':False,'source':source}
@@ -112,8 +116,10 @@ class MaintenanceRehearsal(Rehearsal):
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('binary');parser.add_argument('--report',required=True)
+    parser.add_argument('--source-commit',required=True)
     args=parser.parse_args()
-    case=MaintenanceRehearsal(args.binary)
+    assert len(args.source_commit)==40 and all(c in "0123456789abcdef" for c in args.source_commit)
+    case=MaintenanceRehearsal(args.binary,args.source_commit)
     report={'passed':False}
     try:
         report=case.run_maintenance()

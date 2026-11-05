@@ -151,7 +151,7 @@ jobs:
           PY
       - name: Persistent Root maintenance over actual HTTP and restart
         run: |
-          sudo env PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -I -S -B tests/maintenance_restart_http.py "$CARGO_TARGET_DIR/debug/orkestr-v2-server" --report "$RUNNER_TEMP/v2-maintenance-restart.json"
+          sudo env PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -I -S -B tests/maintenance_restart_http.py "$CARGO_TARGET_DIR/debug/orkestr-v2-server" --source-commit "$(git rev-parse HEAD)" --report "$RUNNER_TEMP/v2-maintenance-restart.json"
       - name: Shared Fast, Deep and Worker windows over real HTTP
         run: |
           sudo /usr/bin/python3 -B tests/service_roles_http.py "$CARGO_TARGET_DIR/debug/orkestr-v2-server" --source "$(git rev-parse HEAD)" --report "$RUNNER_TEMP/v2-service-roles.json"
@@ -181,6 +181,9 @@ jobs:
           if [ -f "$RUNNER_TEMP/v2-service-roles.json" ]; then
             sudo chown --no-dereference -- "$(id -u):$(id -g)" "$RUNNER_TEMP/v2-service-roles.json"
           fi
+          if [ -f "$RUNNER_TEMP/v2-maintenance-restart.json" ]; then
+            sudo chown --no-dereference -- "$(id -u):$(id -g)" "$RUNNER_TEMP/v2-maintenance-restart.json"
+          fi
           if [ -f "$RUNNER_TEMP/v2-password-recovery.json" ]; then
             sudo chown --no-dereference -- "$(id -u):$(id -g)" "$RUNNER_TEMP/v2-password-recovery.json"
           fi
@@ -193,6 +196,7 @@ jobs:
           path: |
             ${{ runner.temp }}/v2-service-roles.json
             ${{ runner.temp }}/v2-password-recovery.json
+            ${{ runner.temp }}/v2-maintenance-restart.json
             ${{ runner.temp }}/orkestr-v2-intake/worker-retirement-*.json
             ${{ runner.temp }}/orkestr-v2-intake/worker-continuation-*.json
           if-no-files-found: ignore
