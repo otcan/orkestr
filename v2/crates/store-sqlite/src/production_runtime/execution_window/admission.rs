@@ -195,6 +195,6 @@ pub(super) async fn source_in(
     }
     crate::source_continuation::validate(tx, owner, conversation, &input.input_message_id)
         .await
-        .map_err(|_| RuntimeStoreError::Fenced)?;
+        .map_err(crate::source_continuation::runtime_error)?;
     Ok(())
 }

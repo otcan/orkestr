@@ -67,9 +67,11 @@ async fn populated_31_upgrade_preserves_legacy_output_without_inventing_native_c
         token,
     };
     let (_, parent) = worker(&f).await;
+    // The grant must outlive the upgrade below: once expired, the store answers
+    // Expired before it ever reaches the fence this test asserts.
     let OfflinePythonAdmission::Fresh(g) = f
         .handle
-        .delegate_offline_python_from_parent(&f.token, &parent, "legacy", "print(1)", 5000)
+        .delegate_offline_python_from_parent(&f.token, &parent, "legacy", "print(1)", 30000)
         .await
         .unwrap()
     else {

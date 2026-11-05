@@ -3,6 +3,19 @@
 //! SQLx inventory restoration checked. Never compiled into the application.
 use crate::Store;
 
+/// Admission re-checks an input's source continuation, reading two tables the
+/// historical schema lacks. CHECK(0) forbids every insert: none can exist.
+const SOURCE_GUARDS: [(&str, &str); 2] = [
+    (
+        "source_admission_fences",
+        "CREATE TABLE source_admission_fences (message_id TEXT CHECK(0), source_run_id TEXT, expected_provider_generation INTEGER, source_native_session_id TEXT, source_provider TEXT, source_binding_generation INTEGER)",
+    ),
+    (
+        "conversation_settings",
+        "CREATE TABLE conversation_settings (owner_id TEXT CHECK(0), conversation_id TEXT, provider_generation INTEGER)",
+    ),
+];
+
 pub(super) struct HistoricalGuardFixture {
     schema: Vec<(String, String, String, Option<String>)>,
     migrations: Vec<(i64, String, String, i64, String, i64)>,
@@ -32,9 +45,11 @@ impl HistoricalGuardFixture {
             "SELECT version,description,checksum FROM _sqlx_migrations WHERE success=1 ORDER BY version")
             .fetch_all(&store.pool).await.unwrap();
         assert_eq!(actual, expected, "exact historical SQLx prefix required");
-        assert!(schema.iter().all(
-            |(_, name, _, _)| name != "execution_windows" && name != "execution_window_inputs"
-        ));
+        assert!(schema
+            .iter()
+            .all(|(_, name, _, _)| name != "execution_windows"
+                && name != "execution_window_inputs"
+                && !SOURCE_GUARDS.iter().any(|(guard, _)| name == guard)));
         // CHECK(0) forbids every insert: no window/credential authority can exist.
         sqlx::query("CREATE TABLE execution_windows (credential_hash TEXT CHECK(0))")
             .execute(&store.pool)
@@ -46,9 +61,23 @@ impl HistoricalGuardFixture {
         .execute(&store.pool)
         .await
         .unwrap();
+        for (_, create) in SOURCE_GUARDS {
+            sqlx::query(create).execute(&store.pool).await.unwrap();
+        }
         Self { schema, migrations }
     }
     pub(super) async fn remove(self, store: &Store) {
+        for (guard, _) in SOURCE_GUARDS {
+            let rows: i64 = sqlx::query_scalar(&format!("SELECT count(*) FROM {guard}"))
+                .fetch_one(&store.pool)
+                .await
+                .unwrap();
+            assert_eq!(rows, 0, "{guard}");
+            sqlx::query(&format!("DROP TABLE {guard}"))
+                .execute(&store.pool)
+                .await
+                .unwrap();
+        }
         let count: i64 = sqlx::query_scalar("SELECT count(*) FROM execution_windows")
             .fetch_one(&store.pool)
             .await
