@@ -53,6 +53,7 @@ class StopRehearsal(ManagedRehearsal):
         rows=self.rows('SELECT state FROM managed_operations WHERE id=?',(operation['request_id'],))
         assert rows==[{'state':'delivery_unknown'}],rows
         return dict(provider=self.provider,owner_http_stop=True,stop_elapsed_ms=int((time.monotonic()-before)*1000),
+            server_identity=self.server_identity,server_sha256=self.server_sha256,
             exact_original_helper_renewed=True,one_helper_only=True,root_helper_cancelled_and_reaped=True,
             native_exact_interrupt=True,native_tool_success=False,unknown_core_effect_not_replayed=True,
             actual_provider=False,real_desktop=False,real_vault=False,live_activation=False)

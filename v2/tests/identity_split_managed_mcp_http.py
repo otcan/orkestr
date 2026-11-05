@@ -20,6 +20,8 @@ class ManagedRehearsal(HostRehearsal):
     def __init__(self,binary,provider='codex',wait_seconds=120):
         self.wait_seconds=wait_seconds;self.completion_wait_seconds=wait_seconds+45
         super().__init__(binary,provider)
+        source=self.server_identity.get('source_commit')
+        assert type(source) is str and len(source)==40 and all(c in '0123456789abcdef' for c in source), 'source-stamped server required'
         if provider=='claude':
             executable=self.fixture.root/'synthetic-claude'
             subprocess.run(['/usr/bin/cc','-std=c11','-O2','-Wall','-Wextra','-Werror',
