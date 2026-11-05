@@ -68,6 +68,30 @@ impl Controller {
         if proof.source_commit == "unknown" {
             return Err("provider policy handoff requires qualified source");
         }
+        // Persist original caller semantics BEFORE any potentially slow native
+        // retirement. A cancelled HTTP wait cannot lose the current intent.
+        // Dispatcher input may have a rebuilt window tuple: compare its exact
+        // immutable source with the already preserved row, never rewrite it.
+        let rows = self
+            .store
+            .execution_window_queue_authenticated(browser, Some(conversation))
+            .await
+            .map_err(|_| "provider policy intent lookup refused")?;
+        if let Some(row) = rows.iter().find(|row| row.request_key == input.request_key) {
+            if row.input_message_id != input.input_message_id
+                || row.input_event_id != input.input_event_id
+                || row.input_request_key != input.input_request_key
+            {
+                return Err("provider policy preserved source changed");
+            }
+        } else {
+            self.store
+                .enqueue_execution_window_authenticated(browser, conversation, input)
+                .await
+                .map_err(|_| "provider policy original intent preservation refused")?;
+        }
+        self.queue.remember(browser);
+        self.queue.wake();
         // Reuse ordinary idle retirement, including all original native reap
         // witnesses. The new triggering message has not joined the old window.
         if window.state != ExecutionWindowState::Closed {
@@ -108,13 +132,6 @@ impl Controller {
             acknowledge_new_native_session: true,
             history_summary: summary,
         };
-        // Preserve the caller's ORIGINAL intent/digest before changing its
-        // window tuple. Durable queue dispatch reconstructs the new tuple;
-        // retries (including a lost handoff reply) can only observe this row.
-        self.store
-            .enqueue_execution_window_authenticated(browser, conversation, input)
-            .await
-            .map_err(|_| "provider policy original intent preservation refused")?;
         self.store
             .handoff_provider_for_operator_policy(browser, conversation, &request, &proof)
             .await

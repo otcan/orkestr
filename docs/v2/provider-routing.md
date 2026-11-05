@@ -23,7 +23,7 @@ Immediate, durable queued and timer window requests share this boundary. A
 fresh conversation records a revision-checked provider setting, clears the old
 provider's model/effort and preserves reply/review/grouping controls. Deep and
 Fast also check canonical input before native setup and before the next claim;
-the actual Deep lease is checked again before admission and can be returned
+the prospective read uses the bound window’s eligible inputs; the actual Deep lease is checked again before admission and can be returned
 without creating a run or consuming a dispatch. Worker setup inherits the same
 conversation policy. Managed Workers currently launch Codex only. Steering
 which would use an excluded provider remains ordered ordinary queued input,
@@ -41,8 +41,10 @@ never clears consumed/retired inputs or replays a previous run. Other older
 queued/claimed work blocks automatic handoff for explicit reconciliation.
 An input carrying an immutable original-source continuation fence also blocks
 this automatic handoff; the policy cannot silently rewrite its source identity.
-A live prior window queues intent until supported retirement/reconciliation
-establishes custody release. No running native turn is transplanted.
+The original request/digest is queued before potentially slow native retirement,
+so cancellation cannot lose its intent. An already accepted idle window uses
+ordinary custody-proven retirement; a live working window queues intent until
+supported retirement/reconciliation establishes custody release. No running native turn is transplanted.
 
 Core records immutable matched-rule scope, policy digest and server source.
 Operator handoff provenance is separate from an ad-hoc explicit owner handoff.

@@ -17,13 +17,32 @@ from identity_split_service_http import Rehearsal,wait
 
 
 class PolicyRehearsal(Rehearsal):
-    def __init__(self,binary):
+    def __init__(self,binary,minimal=False,debug_broker=False,idle=False):
         super().__init__(binary,provider='claude')
-        path=self.fixture.package/'beta.json';beta=json.loads(path.read_text())
-        beta['provider_routing']={'allow_native_handoff':True,'rules':[{
-            'id':'synthetic-category','terms':[{'text':'cedar','weight':3}],
-            'threshold':3,'excluded':'claude','preferred':'codex'}]}
-        path.write_text(json.dumps(beta));self.refresh_manifest()
+        try:
+            if not minimal:
+                self.configure_roles()
+                (self.fixture.workspace/'mode').write_text('complete')
+            if debug_broker:
+                path=self.package.root/'codex_service/broker.py';source=path.read_text()
+                diagnostic='\n'.join(['    except Exception as diagnostic:', '        import re', '        reason=str(diagnostic)', "        reason=reason if re.fullmatch('[a-z_]{1,80}',reason) else 'nonliteral_refusal'", '        frames=[];trace=diagnostic.__traceback__', '        while trace and len(frames)<10:', "            frames.append((trace.tb_frame.f_code.co_filename.rsplit('/',1)[-1],trace.tb_lineno));trace=trace.tb_next", "        sys.stderr.write('SYNTHETIC ONLY diagnostic: '+type(diagnostic).__name__+':'+reason+':'+str(getattr(diagnostic,'errno',0))+':'+str(frames)+'\\n')"])+'\n'
+                anchor='    except Exception:\n        sys.stderr.write(\"selected Codex service broker refused'
+                assert source.count(anchor)==1
+                changed=source.replace(anchor,diagnostic+'        sys.stderr.write(\"selected Codex service broker refused')
+                compile(changed,'synthetic_diagnostic_broker','exec')
+                path.write_text(changed)
+            self.debug_broker=debug_broker
+            self.idle=idle
+            self.broker_diagnostics=self.fixture.root/'synthetic-broker-diagnostics'
+            self.broker_log=self.broker_diagnostics.open('ab')
+            path=self.fixture.package/'beta.json';beta=json.loads(path.read_text())
+            beta['provider_routing']={'allow_native_handoff':True,'rules':[{
+                'id':'synthetic-category','terms':[{'text':'cedar','weight':3}],
+                'threshold':3,'excluded':'claude','preferred':'codex'}]}
+            path.write_text(json.dumps(beta));self.refresh_manifest()
+        except BaseException:
+            self.fixture.close()
+            raise
 
     def read(self,query,bindings=()):
         with sqlite3.connect((self.package.data/'core.sqlite3').as_uri()+'?mode=ro',uri=True) as db:
@@ -47,9 +66,27 @@ class PolicyRehearsal(Rehearsal):
             os.set_blocking(self.process.stderr.fileno(),False)
             try:result['diagnostic_stderr']=os.read(self.process.stderr.fileno(),16384).decode(errors='replace')
             except BlockingIOError:pass
+        result['managed_broker_exit_codes']=[handle.child.poll() for handle in self.manager.launcher.children.values()] if self.manager and self.manager.launcher else []
+        for label,path in [('codex',self.fixture.account/'sessions/synthetic-role.jsonl'),('broker',self.broker_diagnostics)]:
+            if path.exists():
+                if label=='codex':result['codex_events']=[json.loads(line).get('kind') for line in path.read_text().splitlines()]
+                else:result['synthetic_broker_stderr']=path.read_text()[-8192:]
         return result
 
     def run(self):
+        import subprocess
+        from unittest.mock import patch
+        original=subprocess.Popen
+        def observed(command,*args,**kwargs):
+            if type(command) is list and len(command)>5 and command[5]=='launch-child':
+                kwargs['stderr']=self.broker_log
+            return original(command,*args,**kwargs)
+        # Only the closed synthetic child stderr changes; every custody/FD,
+        # executable, argv, privilege and package fence is unchanged.
+        with patch('codex_service.launch.subprocess.Popen',side_effect=observed):
+            return self.run_policy()
+
+    def run_policy(self):
         initial=super().run()
         status,health=self.request('/api/v2/health')
         source=health.get('build',{}).get('source_commit')
@@ -59,28 +96,31 @@ class PolicyRehearsal(Rehearsal):
         initial_epoch=self.read('SELECT provider_generation FROM conversation_settings WHERE conversation_id=?',(self.conversation,))[0][0]
         trace=self.fixture.root/'claude-workspace/claude-peer.jsonl'
         old_turns=sum(json.loads(line)['kind']=='turn' for line in trace.read_text().splitlines())
-        drain=self.package.data/'deploy-drain.request';drain.write_text('synthetic fixture drain\n')
-        def closed():
-            assert not self.pump_errors,self.pump_errors
-            rows=self.read('SELECT state FROM execution_windows WHERE id=?',(before[0],))
-            return rows and rows[0][0]=='closed'
-        wait(closed,'old accepted window custody closes',seconds=35)
-        drain.unlink()
-        def resumed():
-            value=json.loads((self.package.data/'deploy-drain.status.json').read_text())
-            return not value['draining']
-        wait(resumed,'supported admission resume',seconds=5)
+        if not self.idle:
+            drain=self.package.data/'deploy-drain.request';drain.write_text('synthetic fixture drain\n')
+            def closed():
+                assert not self.pump_errors,self.pump_errors
+                rows=self.read('SELECT state FROM execution_windows WHERE id=?',(before[0],))
+                return rows and rows[0][0]=='closed'
+            wait(closed,'old accepted window custody closes',seconds=35)
+            drain.unlink()
+            def resumed():
+                value=json.loads((self.package.data/'deploy-drain.status.json').read_text())
+                return not value['draining']
+            wait(resumed,'supported admission resume',seconds=5)
         message='Synthetic cedar continuation after a retired Claude window'
         status,receipt=self.request(path+'/messages','POST',{'client_message_id':'synthetic-policy-current','text':message,'author':'owner'})
         assert status==202,(status,receipt)
         body={'request_key':'window:synthetic-policy-current','input_message_id':receipt['message_id'],
               'input_event_id':receipt['event_id'],'input_request_key':'synthetic-policy-current',
-              'expected_generation':before[1],'window_id':None,'predecessor_window_id':before[0]}
+              'expected_generation':before[1],'window_id':before[0] if self.idle else None,'predecessor_window_id':None if self.idle else before[0]}
         status,window=self.request(path+'/window','POST',body)
         assert status in (201,202),(status,window)
         def accepted():
             assert not self.pump_errors,self.pump_errors
             rows=self.read("SELECT r.id,r.native_session_id,b.provider_kind,b.id FROM production_runs r JOIN session_bindings b ON b.id=r.session_id WHERE r.message_id=? AND r.role='deep' AND r.state='succeeded'",(receipt['message_id'],))
+            state=self.read('SELECT state FROM execution_windows ORDER BY generation DESC LIMIT 1')
+            assert not (not rows and state==[('reconciliation_required',)]),'fresh native setup requires reconciliation'
             return rows[0] if rows else None
         result=wait(accepted,'new current input completes on fresh Codex lineage',seconds=35)
         assert result[2]=='codex' and result[1]!=initial['native_session_id']
@@ -103,18 +143,27 @@ class PolicyRehearsal(Rehearsal):
                     harness_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),manifest_sha256=self.manifest,authority_uid=self.package.authority_uid,executor_uid=self.uid,
                     old_claude_turns=old_turns,new_current_deep_runs=1,provider_generation=initial_epoch+1,
                     original_input_replayed=False,forbidden_claude_turns=0,operator_handoff_receipts=1,
-                    quoted_history_delivered=True,scoped_root_launch=True,actual_http=True,actual_provider=False,live_activation=False)
+                    automatic_idle_retirement=self.idle,diagnostic_broker=self.debug_broker,quoted_history_delivered=True,scoped_root_launch=True,actual_http=True,actual_provider=False,live_activation=False)
 
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('binary');parser.add_argument('--report',required=True)
+    parser.add_argument('--minimal-profile',action='store_true')
+    parser.add_argument('--idle-handoff',action='store_true',help='policy retires the already accepted window without deploy drain')
+    parser.add_argument('--debug-broker',action='store_true',help='diagnostic fixture only; never qualification')
     args=parser.parse_args();assert os.geteuid()==0,'root-only synthetic fixture'
-    case=PolicyRehearsal(args.binary)
+    import resource
+    hard=resource.getrlimit(resource.RLIMIT_AS)[1]
+    bound=3*1024**3 if hard==resource.RLIM_INFINITY else min(hard,3*1024**3)
+    resource.setrlimit(resource.RLIMIT_AS,(bound,bound))
+    case=PolicyRehearsal(args.binary,args.minimal_profile,args.debug_broker,args.idle_handoff)
     try:result=case.run()
     except BaseException:
         Path(args.report).write_text(json.dumps(dict(ok=False,snapshot=case.failure_snapshot()),indent=2)+"\n")
         raise
-    finally:case.close()
+    finally:
+        try:case.close()
+        finally:case.broker_log.close()
     Path(args.report).write_text(json.dumps(result,indent=2)+'\n')
     print('Synthetic Root/Core provider policy handoff passed; no provider API or live activation')
 

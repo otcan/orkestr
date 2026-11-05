@@ -128,8 +128,25 @@ impl Store {
     ) -> Result<Option<(MessageId, String)>> {
         let mut tx = self.pool.begin().await.map_err(db)?;
         crate::runtime::scope(&mut tx, owner, conversation).await?;
-        let value:Option<(String,String,i64)>=sqlx::query_as("SELECT m.id,CASE WHEN length(CAST(m.text AS BLOB))<=262144 THEN m.text ELSE '' END,length(CAST(m.text AS BLOB)) FROM reasoning_inbox i JOIN messages m ON m.id=i.message_id WHERE m.owner_id=? AND i.conversation_id=? AND i.state='queued' ORDER BY i.sequence LIMIT 1")
-            .bind(owner.to_string()).bind(conversation.to_string()).fetch_optional(&mut *tx).await.map_err(db)?;
+        // Match the bound window's eligible input scope. A new message not
+        // admitted to this window must not prematurely end its idle factory
+        // before the controller can perform ordinary custody-proven retirement.
+        let window = if let Some(context) = &self.authority {
+            if &context.owner != owner {
+                return Err(RuntimeStoreError::Unauthorized);
+            }
+            let row = context.window_scope(&mut tx).await?;
+            if row.as_ref().is_some_and(|row| {
+                row.get::<String, _>("conversation_id") != conversation.to_string()
+            }) {
+                return Err(RuntimeStoreError::Fenced);
+            }
+            row.map(|row| row.get::<String, _>("id"))
+        } else {
+            None
+        };
+        let value:Option<(String,String,i64)>=sqlx::query_as("SELECT m.id,CASE WHEN length(CAST(m.text AS BLOB))<=262144 THEN m.text ELSE '' END,length(CAST(m.text AS BLOB)) FROM reasoning_inbox i JOIN messages m ON m.id=i.message_id WHERE m.owner_id=? AND i.conversation_id=? AND i.state='queued' AND NOT EXISTS(SELECT 1 FROM ordinary_input_holds h WHERE h.event_id=i.event_id) AND (? IS NULL OR EXISTS(SELECT 1 FROM execution_window_inputs wi WHERE wi.window_id=? AND wi.event_id=i.event_id)) ORDER BY i.sequence LIMIT 1")
+            .bind(owner.to_string()).bind(conversation.to_string()).bind(&window).bind(&window).fetch_optional(&mut *tx).await.map_err(db)?;
         tx.commit().await.map_err(db)?;
         value
             .map(|(id, text, size)| {
