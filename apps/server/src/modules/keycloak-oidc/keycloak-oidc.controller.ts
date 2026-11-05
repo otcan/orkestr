@@ -8,6 +8,7 @@ import {
 import { oidcSecurityCookieName, sessionCookieHeader } from "../../../../../packages/core/src/security.js";
 import { httpError } from "../../common/http.js";
 import { effectiveRequestOrigin } from "../../host-boundaries.js";
+import { requestSourceKey } from "../../request-security.js";
 import { publicUrlConfig } from "../../../../../packages/core/src/public-url-config.js";
 
 function assertEnabled(): void {
@@ -37,11 +38,22 @@ export class KeycloakOidcController {
   @Get("login")
   async login(@Req() request: any, @Query("return") returnTo = "", @Query("idp") idp = "", @Res() response: any) {
     assertEnabled();
-    const result = await beginKeycloakLogin({
-      returnTo,
-      loginHint: idp,
-      requestOrigin: oidcRequestOrigin(request),
-    });
+    let result;
+    try {
+      result = await beginKeycloakLogin({
+        returnTo,
+        loginHint: idp,
+        requestOrigin: oidcRequestOrigin(request),
+        // Without a per-caller key every anonymous visitor shares one burst
+        // budget, so a single client could block sign-in for everyone.
+        clientKey: requestSourceKey(request, process.env),
+      });
+    } catch (error: any) {
+      if (Number(error?.statusCode) === 429 && Number(error?.retryAfterSeconds) > 0) {
+        response.setHeader("retry-after", String(Math.ceil(error.retryAfterSeconds)));
+      }
+      throw error;
+    }
     return response
       .status(302)
       .header("cache-control", "no-store")
