@@ -46,7 +46,7 @@ test("footer reset respects existing suppression and replaces rather than duplic
   const once = appendWhatsAppDebugFooter("Reply.", options);
   assert.match(once, /\ncodex 5h: 80% wk: 60% \(\d+d\d+h\)\n/);
   const twice = appendWhatsAppDebugFooter(once, options);
-  assert.equal((twice.match(/^dbg: /gm) || []).length, 1);
+  assert.equal((twice.match(/^⚡ Quick: /gm) || []).length, 1);
   assert.equal((twice.match(/^codex /gm) || []).length, 1);
   assert.equal((twice.match(/\(\d+d\d+h\)/g) || []).length, 1);
   assert.equal(appendWhatsAppDebugFooter(once, { ...options, appendDebugFooter: false }), "Reply.");

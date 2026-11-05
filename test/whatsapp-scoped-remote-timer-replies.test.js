@@ -3,19 +3,19 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createScopedTimerNotifications} from '../packages/connectors/src/whatsapp-scoped-timer-notifications.js';
-import {createTimerNotificationProofStore} from '../packages/connectors/src/whatsapp-timer-notification-proof.js';
+import {createTimerNotificationProofStore, notificationKey} from '../packages/connectors/src/whatsapp-timer-notification-proof.js';
 import {createDeliveryRouteFence} from '../packages/connectors/src/whatsapp-delivery-route-fence.js';
 import {createScopedGroupTransport} from '../packages/connectors/src/whatsapp-scoped-group-transport.js';
-import {remoteTimerParentEvent} from '../packages/connectors/src/whatsapp-scoped-remote-timer-replies.js';
+import {remoteTimerParentEvent, QUICK_MAX_AGE_MS} from '../packages/connectors/src/whatsapp-scoped-remote-timer-replies.js';
 import * as formatter from '../packages/connectors/src/whatsapp-formatting.js';
 
 const epoch = Date.parse('2026-01-01T00:00:00Z'), iso = ms => new Date(epoch + ms).toISOString();
 const chatId = '120000000001@g.us';
 
-function fixture(t) {
+function fixture(t, {footer = false} = {}) {
   let clock = epoch + 10000; const now = () => clock;
   const config = {ownChatId: '15550000001@c.us', ownerUserId: 'admin', activatedAt: iso(0),
-    groups: [{chatId, threadId: 'thread-1', name: 'Example'}], appendDebugFooter: false,
+    groups: [{chatId, threadId: 'thread-1', name: 'Example'}], appendDebugFooter: footer,
     timerNotifications: {enabled: true, threadId: 'thread-1', since: iso(0), proofDbPath: ':memory:'},
     routeControl: {threadId: 'thread-1', routeId: 'temporary', dbPath: ':memory:'}};
   const fence = createDeliveryRouteFence({dbPath: ':memory:', now});
@@ -28,7 +28,11 @@ function fixture(t) {
   const answer = {id: 'answer1', role: 'assistant', state: 'completed', phase: 'final_answer', source: 'rust-v2-pilot',
     parentMessageId: parent.id, chatId, remoteBackend: 'example-backend', remoteThreadId: 'remote-thread', remoteMessageId: 'acceptance1',
     createdAt: iso(9000), text: 'Good morning.', cursor: 2};
-  const binding = {chatId, enabled: true, mirrorToWhatsApp: false, remoteBackend: 'example-backend', remoteThreadId: 'remote-thread', remoteRuntimeEnabled: true};
+  // Owner-only relay binding as in a real owner group: the owner's two
+  // accounts are both owner and authorized; no additional participants.
+  const binding = {chatId, enabled: true, mirrorToWhatsApp: false, remoteBackend: 'example-backend', remoteThreadId: 'remote-thread', remoteRuntimeEnabled: true,
+    allowOtherPeople: true, ownerContactIds: ['15550000001@c.us', '5550001@lid'], authorizedContactIds: ['15550000001@c.us', '5550001@lid'],
+    additionalParticipantsEnabled: false, additionalParticipantIds: [], suppressWhatsAppDebugFooter: false, inboundSecurity: {}};
   const state = {events: [event], timers: [], messages: [parent, answer], binding, sent: [], reports: [], fail: false, reportFail: false};
   const api = async (url, options = {}) => {
     if (url === '/api/timers') return {timers: state.timers};
@@ -52,6 +56,55 @@ function fixture(t) {
   t.after(() => { notifier.close(); transport.close(); proofs.close(); fence.close(); });
   return {notifier, state, options, proofs, fence, advance: ms => clock += ms};
 }
+
+test('V2 Quick replies are marked with the Quick bolt, real timers keep the clock', async t => {
+  for (const [parent, header] of [
+    [{text: 'Quick reply', timerId: 'fast'}, '⚡ Quick reply'],
+    [{text: 'Daily inbox check', timerId: 'timer-1'}, '⏰ Daily inbox check'],
+  ]) {
+    const {notifier, state} = fixture(t);
+    Object.assign(state.messages[0], parent);
+    assert.equal((await notifier.tick()).sent, 1);
+    assert.equal(state.sent[0].text, `${header}\nGood morning.`);
+  }
+});
+
+test('V2 Quick, coordinator and timer replies keep the owner footer; system posts do not', async t => {
+  for (const [parent, layer, footer] of [
+    [{text: 'Quick reply', timerId: 'fast'}, {remoteLayer: 'fast', remoteProvider: 'codex', remoteModel: 'example-luna'}, /\n\n⚡ Quick: codex example-luna · 🧠 Deep: pending · ▶ Quick\n/],
+    [{text: 'Coordinator', timerId: 'post', postAuthor: 'coordinator'}, {remoteLayer: 'coordinator', remoteProvider: 'claude-code', remoteModel: 'opus-example', remoteIdentitySource: 'post'}, /\n\n⚡ Quick: — · 🧠 Coordinator: claude-code opus-example · ▶ Coordinator\n/],
+    [{text: 'Daily inbox check', timerId: 'timer-1'}, {remoteLayer: 'deep', remoteProvider: 'codex'}, /\n\n⚡ Quick: — · 🧠 Deep: codex \? · ▶ Deep\n/],
+  ]) {
+    const {notifier, state} = fixture(t, {footer: true});
+    Object.assign(state.messages[0], parent);
+    Object.assign(state.messages[1], layer);
+    assert.equal((await notifier.tick()).sent, 1);
+    assert.match(state.sent[0].text, footer);
+    assert.match(state.sent[0].text, /help:\/help$/);
+  }
+  // A system post is a notice: in this owner-only chat it carries only the
+  // compact quota/load footer, with no Quick/Deep layer line.
+  const {notifier, state} = fixture(t, {footer: true});
+  Object.assign(state.messages[0], {text: 'Operator', timerId: 'post', postAuthor: 'operator'});
+  assert.equal((await notifier.tick()).sent, 1);
+  assert.match(state.sent[0].text, /^⚙️ System:\nGood morning\.\n\ncodex: no data\nclaude: no data\nq:0 · load:\d+% · api:\d+% · help:\/help$/, 'a system notice carries the compact footer');
+  assert.doesNotMatch(state.sent[0].text, /⚡|🧠|▶|unknown/);
+});
+
+test('a system notice in a shared group carries the compact footer; footer-off still removes it', async t => {
+  {
+    const {notifier, state} = fixture(t, {footer: true});
+    Object.assign(state.binding, {additionalParticipantsEnabled: true, additionalParticipantIds: ['15550000099@c.us']});
+    Object.assign(state.messages[0], {text: 'Operator', timerId: 'post', postAuthor: 'operator'});
+    assert.equal((await notifier.tick()).sent, 1);
+    assert.match(state.sent[0].text, /^⚙️ System:\nGood morning\.\n\ncodex: no data\nclaude: no data\nq:0 · load:\d+% · api:\d+% · help:\/help$/);
+  }
+  const {notifier, state} = fixture(t, {footer: true});
+  Object.assign(state.binding, {additionalParticipantsEnabled: true, additionalParticipantIds: ['15550000099@c.us'], suppressWhatsAppDebugFooter: true});
+  Object.assign(state.messages[0], {text: 'Operator', timerId: 'post', postAuthor: 'operator'});
+  assert.equal((await notifier.tick()).sent, 1);
+  assert.equal(state.sent[0].text, '⚙️ System:\nGood morning.');
+});
 
 test('V2 conversation posts are labelled by author, never as timers', async t => {
   for (const [parent, header] of [
@@ -197,4 +250,82 @@ test('a long V2 timer reply is one message plus the full text as a Markdown docu
   assert.deepEqual(state.reports[0].body.connectorMessageIds, ['sent-1', 'sent-2']);
   const resumed = createScopedTimerNotifications({...options, env}); await resumed.tick(); resumed.close();
   assert.equal(state.sent.length, 2);
+});
+
+// A V2 Quick reply for an input whose Deep final V1 already has was withdrawn
+// by the V2 adapter's ordering fence: it must never go out late, neither on a
+// first pass nor when a prepared send resumes after a relay restart.
+function quickFixture(t) {
+  const f = fixture(t);
+  Object.assign(f.state.messages[0], {text: 'Quick reply', timerId: 'fast'});
+  Object.assign(f.state.messages[1], {remoteLayer: 'fast', remoteOriginalInputId: 'input-a', text: 'Checking the status now.'});
+  const input = {id: 'local-input-a', role: 'user', state: 'completed', remoteBackend: 'example-backend', remoteThreadId: 'remote-thread',
+    remoteMessageId: 'input-a', createdAt: iso(4000), text: 'Status?'};
+  const deep = {id: 'deep-a', role: 'assistant', state: 'completed', phase: 'final_answer', source: 'rust-v2-pilot', parentMessageId: input.id, chatId,
+    remoteBackend: 'example-backend', remoteThreadId: 'remote-thread', remoteMessageId: 'deep-export-a', remoteLayer: 'deep',
+    remoteOriginalInputId: 'input-a', deliveryState: 'delivered', createdAt: iso(9500), text: 'Registration confirmed.', cursor: 3};
+  f.state.messages.unshift(input);
+  return {...f, input, deep};
+}
+
+test('a Quick reply whose input already has its Deep final is dropped and reported not sent', async t => {
+  for (const mode of ['delivered', 'pending', 'parentOnly']) {
+    const {notifier, state, deep} = quickFixture(t);
+    if (mode === 'pending') delete deep.deliveryState;
+    if (mode === 'parentOnly') delete deep.remoteOriginalInputId;
+    state.messages.push(deep);
+    await notifier.tick();
+    assert.equal(state.sent.length, 0, mode);
+    assert.equal(state.reports.length, 1, mode);
+    assert.match(state.reports[0].url, /\/messages\/answer1\/scoped-relay-delivery$/);
+    assert.deepEqual(state.reports[0].body, {outcome: 'suppressed', reason: 'superseded_by_final'}, mode);
+    await notifier.tick();
+    assert.equal(state.sent.length, 0, mode);
+    assert.equal(state.reports.length, 1, mode);
+  }
+});
+
+test('a Deep final for another input, or a sibling Quick, does not drop a Quick reply', async t => {
+  const {notifier, state, deep} = quickFixture(t);
+  state.messages.push({...deep, remoteOriginalInputId: 'input-b', parentMessageId: 'local-input-b'},
+    {...deep, id: 'quick-sibling', remoteLayer: 'fast', parentMessageId: 'v2timer-other'});
+  assert.equal((await notifier.tick()).sent, 1);
+  assert.match(state.sent[0].text, /^⚡ Quick reply\nChecking the status now\./);
+  assert.equal(state.reports[0].body.requestIds.length, 1);
+});
+
+test('a prepared Quick reply resumed after a relay restart is revoked once its Deep final exists', async t => {
+  const {state, options, proofs, deep} = quickFixture(t);
+  const id = 'timer:' + notificationKey(['thread-1', 'v2timer-remote1']) + ':0';
+  proofs.prepareBatch([{id, threadId: 'thread-1', chatId, timerId: 'fast', parentId: 'v2timer-remote1', answerId: 'answer1',
+    text: '⚡ Quick reply\nChecking the status now.', createdAt: iso(9000), runAt: iso(5000), expiresAt: iso(909000)}]);
+  state.messages.push(deep);
+  const resumed = createScopedTimerNotifications(options);
+  t.after(() => resumed.close());
+  await resumed.tick();
+  assert.equal(state.sent.length, 0);
+  assert.equal(proofs.get(id).state, 'revoked');
+  assert.deepEqual(state.reports.map(r => r.body), [{outcome: 'suppressed', reason: 'superseded_by_final'}]);
+});
+
+test('a Deep final imported while a Quick reply is being prepared still stops the send', async t => {
+  const {notifier, state, deep} = quickFixture(t);
+  let reads = 0;
+  const base = [...state.messages];
+  Object.defineProperty(state, 'messages', {get: () => (++reads > 1 ? [...base, deep] : base)});
+  await notifier.tick();
+  assert.equal(state.sent.length, 0);
+  assert.deepEqual(state.reports.map(r => r.body), [{outcome: 'suppressed', reason: 'superseded_by_final'}]);
+});
+
+test('a Quick reply older than its staleness bound is never sent, even without a final', async t => {
+  const {notifier, state, advance} = quickFixture(t);
+  advance(QUICK_MAX_AGE_MS + 1);
+  await notifier.tick();
+  assert.equal(state.sent.length, 0);
+  assert.deepEqual(state.reports.map(r => r.body), [{outcome: 'suppressed', reason: 'quick_stale'}]);
+  // A timer reply of the same age is not a Quick reply and still goes out.
+  const other = fixture(t);
+  other.advance(QUICK_MAX_AGE_MS + 1);
+  assert.equal((await other.notifier.tick()).sent, 1);
 });

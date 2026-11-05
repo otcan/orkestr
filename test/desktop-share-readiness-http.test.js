@@ -4,11 +4,11 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { startServer } from "../apps/server/src/server.js";
-import { listDesktopShares } from "../packages/core/src/desktop-shares.js";
+import { listDesktopShares, openDesktopShare } from "../packages/core/src/desktop-shares.js";
 import { createThread } from "../packages/core/src/threads.js";
 import { adminPrincipal } from "../packages/core/src/principal.js";
 import { advanceDesktopResourceGeneration, setThreadDesktopGrants } from "../packages/core/src/desktop-access.js";
-import { acquireDesktopLease, releaseDesktopLease } from "../packages/browsers/src/desktop-leases.js";
+import { acquireDesktopLease, releaseDesktopLease, activeDesktopLeaseStatus } from "../packages/browsers/src/desktop-leases.js";
 import { listBrowserSessions } from "../packages/browsers/src/browsers.js";
 
 async function fixture(t) {
@@ -52,6 +52,12 @@ setTimeout(() => console.log(JSON.stringify({ok:true, sessions:[session], sessio
     },
     async calls() { return (await fs.readFile(calls, "utf8").catch(() => "")).trim().split("\n").filter(Boolean).map(JSON.parse); },
     async shares() { return (await listDesktopShares({env:process.env})).shares; },
+    async postIfAbsent(body) {
+      const response = await fetch(`http://127.0.0.1:${server.address().port}/api/desktops/desktop/share-if-absent`, {
+        method:"POST", headers:{"content-type":"application/json"}, body:JSON.stringify(body),
+      });
+      return {status:response.status, body:await response.json()};
+    },
     async post(body) {
       const response = await fetch(`http://127.0.0.1:${server.address().port}/api/desktops/desktop/share`, {
         method:"POST", headers:{"content-type":"application/json"}, body:JSON.stringify(body),
@@ -71,6 +77,33 @@ test("share start:false rejects an unhealthy framebuffer without lifecycle comma
 });
 
 const ready = {status:"running", visual_ok:true, readiness:{ok:true,status:"ready",visualOk:true}};
+
+test("owner viewing preserves a borrowed lease and refuses to replace its current viewing link", async t => {
+  const f = await fixture(t); await f.set(ready); const principal = await f.enforce();
+  await acquireDesktopLease("desktop", {threadId:"share-thread", ttlMs:3600000}, process.env, {principal});
+  const before = await activeDesktopLeaseStatus("desktop", process.env, {principal});
+  const opened = await f.postIfAbsent({threadId:"share-thread"});
+  assert.equal(opened.status, 201, JSON.stringify(opened.body));
+  assert.equal(opened.body.desktopStart.requested, false);
+  const after = await activeDesktopLeaseStatus("desktop", process.env, {principal});
+  for (const field of ["id", "fencingToken", "fencingVersion", "expiresAt", "heartbeatAt"])
+    assert.equal(after[field], before[field]);
+  assert.equal((await f.postIfAbsent({threadId:"share-thread"})).status, 409);
+  assert.equal((await f.shares()).length, 1);
+  assert.equal((await activeDesktopLeaseStatus("desktop", process.env, {principal})).id, before.id);
+});
+
+test("new viewing lease is released and the minted link remains usable afterwards", async t => {
+  const f = await fixture(t); await f.set(ready); const principal = await f.enforce();
+  const opened = await f.postIfAbsent({threadId:"share-thread"});
+  assert.equal(opened.status, 201, JSON.stringify(opened.body));
+  assert.equal(await activeDesktopLeaseStatus("desktop", process.env, {principal}), null);
+  const view = await openDesktopShare({shareId:opened.body.share.id, key:opened.body.key,
+    subdomain:opened.body.subdomain, env:process.env, request:{headers:{"user-agent":"synthetic-owner"}}});
+  assert.equal(view.share.desktopSlug, "desktop");
+  assert.match(view.attempt.challenge, /^desk-/);
+  assert.ok((await f.calls()).every(args => args[0] === "list"));
+});
 
 test("start:false mints only from fresh positive visual evidence, never a cached success", async t => {
   const f = await fixture(t);

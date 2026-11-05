@@ -12,7 +12,7 @@
 //
 // Kept free of core imports: the standalone bridge's import graph stays closed.
 import {notificationKey} from './whatsapp-timer-notification-proof.js';
-import {encodeReplyEntry, replyEntrySendFields, scopedGroupReplyChunks, scopedReplyHeader} from './whatsapp-scoped-group-formatting.js';
+import {FAST_TIMER_SOURCE_ID, encodeReplyEntry, validQuotedMessageId, replyEntrySendFields, scopedGroupReplyChunks, scopedReplyDeliveryType, scopedReplyHeader} from './whatsapp-scoped-group-formatting.js';
 
 export const remoteTimerParentEvent = 'whatsapp_remote_timer_parent_materialized';
 const remoteTimerParentSource = 'orkestr-v2-timer';
@@ -27,6 +27,51 @@ export function remoteTimerEventEligible(event, config, scope, since, now) {
     && Number.isFinite(at) && at >= since && at <= now;
 }
 
+// The WhatsApp input a burst Quick reply quotes, or ''. V2 marks such a reply
+// (`quoteSource`, imported as remoteQuoteSource) and names the adapter id of the
+// input it answers (`sourceInputId` -> remoteOriginalInputId). That id is the
+// remoteMessageId V1 recorded when it forwarded exactly one local relay input;
+// `routedInput` maps that local message to the relay-routed WhatsApp message.
+// Any missing link yields '' and the reply goes out unquoted.
+export function quotedSourceInput({threadId, parent, answer, messages, remoteThreadId, routedInput}) {
+  if (answer?.remoteQuoteSource !== true || answer.remoteLayer !== 'fast' || parent?.timerId !== FAST_TIMER_SOURCE_ID
+      || typeof routedInput !== 'function') return '';
+  const source = pick(answer.remoteOriginalInputId);
+  if (!source) return '';
+  const inputs = messages.filter(m => m.role === 'user' && m.remoteMessageId === source && m.remoteThreadId === remoteThreadId);
+  if (inputs.length !== 1) return '';
+  let id = '';
+  try { id = pick(routedInput(threadId, inputs[0].id)); } catch { return ''; }
+  return validQuotedMessageId(id) ? id : '';
+}
+
+// A Quick reply is only worth sending ahead of its Deep final. V2 exports a
+// final only once that input's Quick has a definite transport decision: sent,
+// or withdrawn after its short ordering wait (the V2 adapter then marks it
+// superseded and never replays it). A Quick still unsent here when the final
+// for the same input is in V1 was withdrawn, so it is dropped, never sent late
+// (e.g. backlog flushed after a relay restart). Independently, a Quick older
+// than QUICK_MAX_AGE_MS after its input no longer reads as a quick answer.
+export const QUICK_MAX_AGE_MS = 120_000;
+export function isQuickReply(parent, answer) {
+  return parent?.timerId === FAST_TIMER_SOURCE_ID || answer?.remoteLayer === 'fast';
+}
+export function quickDropReason({parent, answer, messages, remoteThreadId, now}) {
+  if (!isQuickReply(parent, answer)) return '';
+  const source = pick(answer.remoteOriginalInputId);
+  const inputs = source ? messages.filter(m => m?.role === 'user' && m.remoteMessageId === source && m.remoteThreadId === remoteThreadId) : [];
+  if (source) {
+    const inputIds = new Set(inputs.map(m => m.id));
+    const final = messages.some(m => m && m.id !== answer.id && m.role === 'assistant' && m.state === 'completed' && finalPhases.has(m.phase)
+      && m.remoteThreadId === remoteThreadId && m.remoteLayer !== 'fast' && m.parentMessageId !== parent.id
+      && (m.remoteOriginalInputId === source || inputIds.has(m.parentMessageId)));
+    if (final) return 'superseded_by_final';
+  }
+  const times = [answer.createdAt, parent?.createdAt, ...inputs.map(m => m.createdAt)].map(Date.parse).filter(Number.isFinite);
+  if (times.length && now - Math.min(...times) > QUICK_MAX_AGE_MS) return 'quick_stale';
+  return '';
+}
+
 // The thread is still delegated to the same remote thread the parent came from.
 export function delegatedTo(thread, remoteThreadId) {
   const b = thread?.binding || {};
@@ -35,7 +80,7 @@ export function delegatedTo(thread, remoteThreadId) {
   return Boolean(remoteThreadId) && pick(b.remoteThreadId, b.remoteRuntimeThreadId, b.delegatedThreadId) === remoteThreadId;
 }
 
-export function createRemoteTimerReplies({config, api, send, formatter, env, now, proofs, fence, scope, thread, runTtlMs}) {
+export function createRemoteTimerReplies({config, api, send, formatter, env, now, proofs, fence, scope, thread, runTtlMs, routedInput}) {
   const at = () => new Date(now()).toISOString();
   const report = (threadId, answer, body) => api(
     `/api/threads/${encodeURIComponent(threadId)}/messages/${encodeURIComponent(answer.id)}/scoped-relay-delivery`,
@@ -44,6 +89,31 @@ export function createRemoteTimerReplies({config, api, send, formatter, env, now
   async function close(threadId, event, answer, outcome, reason, state) {
     await report(threadId, answer, {outcome, reason});
     proofs.finish(event.messageId, state, at());
+  }
+
+  const chunkRows = baseId => { const rows = []; for (let i = 0; ; i++) { const row = proofs.get(baseId + ':' + i); if (!row) break; rows.push(row); } return rows; };
+  // The thread's newest page merged over what this pass already read.
+  async function latest(threadId, messages) {
+    const page = await api(`/api/threads/${encodeURIComponent(threadId)}/messages?limit=200`);
+    const all = new Map(messages.map(m => [m.id, m]));
+    for (const m of page?.messages || []) all.set(m.id, m);
+    return [...all.values()];
+  }
+  // Withdraws a superseded or stale Quick: unsent chunks are revoked (the
+  // transport refuses a revoked proof) and V1 is told it was not sent. An
+  // uncertain chunk stays unresolved; chunks already sent are still reported.
+  async function dropQuick(threadId, event, parent, answer, messages, baseId) {
+    const reason = quickDropReason({parent, answer, messages, remoteThreadId: event.remoteThreadId, now: now()});
+    if (!reason) return false;
+    const rows = chunkRows(baseId);
+    if (rows.some(row => row.state === 'uncertain')) throw new Error('timer_notification_delivery_unresolved');
+    for (const row of rows) if (row.state !== 'sent' && row.state !== 'revoked') proofs.mark(row.id, 'revoked');
+    const sentIds = rows.filter(row => row.state === 'sent').map(row => row.id);
+    if (sentIds.length) {
+      await report(threadId, answer, {requestIds: sentIds, connectorMessageIds: proofs.receipts(sentIds), deliveredAt: at()});
+      proofs.finish(event.messageId, 'delivered', at());
+    } else await close(threadId, event, answer, 'suppressed', reason, 'superseded');
+    return true;
   }
 
   async function deliver(threadId, t, event, messages, since) {
@@ -67,6 +137,9 @@ export function createRemoteTimerReplies({config, api, send, formatter, env, now
     if (answer.deliveryState === 'delivered') { proofs.finish(event.messageId, 'delivered', at()); return 0; }
     const baseId = 'timer:' + notificationKey([threadId, event.messageId]);
     const prior = proofs.get(baseId + ':0');
+    const quick = isQuickReply(parent, answer);
+    // Checked on every pass, so also for a Quick prepared before a restart.
+    if (quick && await dropQuick(threadId, event, parent, answer, messages, baseId)) return 0;
     let chunks;
     if (prior) {
       if (prior.state === 'uncertain') throw new Error('timer_notification_delivery_unresolved');
@@ -80,12 +153,17 @@ export function createRemoteTimerReplies({config, api, send, formatter, env, now
         { await close(threadId, event, answer, 'suppressed', 'expired', 'expired'); return 0; }
       let current = t;
       try { const {quota} = await api(`/api/quota/providers?ownerUserId=${encodeURIComponent(config.ownerUserId)}`, {timeoutMs: 1000}); if (quota) current = {...current, whatsAppDebugProviderQuota: quota}; } catch {}
-      const header = scopedReplyHeader({label: String(parent.text || '').replace(/^Scheduled timer:\s*/, ''), timerId: parent.timerId, postAuthor: parent.postAuthor});
-      chunks = scopedGroupReplyChunks({text: `${header}\n${answer.text}`, message: {...answer, chatId}, thread: current, messages, config, formatter, env, deliveryType: 'router_update'});
+      const label = {label: String(parent.text || '').replace(/^Scheduled timer:\s*/, ''), timerId: parent.timerId, postAuthor: parent.postAuthor};
+      const header = scopedReplyHeader(label);
+      // Quick, coordinator and timer answers get the full footer; a system notice the compact one.
+      chunks = scopedGroupReplyChunks({text: `${header}\n${answer.text}`, message: {...answer, chatId}, thread: current, messages, config, formatter, env, deliveryType: scopedReplyDeliveryType(label)});
       proofs.prepareBatch(chunks.map((entry, i) => ({id: baseId + ':' + i, threadId, chatId, timerId: pick(parent.timerId, event.timerSourceId, 'v2-timer'),
         parentId: parent.id, answerId: answer.id, text: encodeReplyEntry(entry), createdAt: answer.createdAt, runAt: event.ts,
         expiresAt: new Date(answerAt + scope.maxAgeMs).toISOString()})));
     }
+    // Presentation only: the proof and journal authorize text and parent, never
+    // the quote, and the transport drops a quote outside this chat.
+    const quotedMessageId = quotedSourceInput({threadId, parent, answer, messages, remoteThreadId: event.remoteThreadId, routedInput});
     let sent = 0;
     for (let i = 0; i < chunks.length; i++) {
       const id = baseId + ':' + i, row = proofs.get(id);
@@ -93,8 +171,13 @@ export function createRemoteTimerReplies({config, api, send, formatter, env, now
       if (Date.parse(row.expires_at) < now()) { proofs.mark(id, 'revoked'); continue; }
       if (!delegatedTo(await thread(threadId), event.remoteThreadId)) { proofs.mark(id, 'revoked'); continue; }
       fence.assertActive(config.routeControl.routeId);
+      // Send time: the newest messages, so a final imported since this pass
+      // began still withdraws the Quick.
+      if (quick && await dropQuick(threadId, event, parent, answer, await latest(threadId, messages), baseId)) return sent;
       try {
-        const r = await send({chatId, requestId: id, notificationId: id, parentId: parent.id, ...replyEntrySendFields(row.text)});
+        const fields = replyEntrySendFields(row.text);
+        const r = await send({chatId, requestId: id, notificationId: id, parentId: parent.id, ...fields,
+          ...(i === 0 && quotedMessageId && fields.text !== undefined ? {quotedMessageId} : {})});
         if (r.ok !== true || !r.ids?.length) throw new Error('unconfirmed');
         proofs.mark(id, 'sent'); proofs.receipt(id, r.ids); sent++;
       } catch (error) {

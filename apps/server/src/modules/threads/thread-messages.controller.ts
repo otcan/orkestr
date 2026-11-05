@@ -21,7 +21,13 @@ import { publicEncryptedAttachment } from "../../../../../packages/core/src/encr
 import { storedThreadMessagePage } from "./thread-message-store-page.js";
 import { recordScopedRelayRemoteDelivery } from "../../../../../packages/connectors/src/whatsapp-scoped-relay-remote.js";
 import { ThreadActionSanitizerService } from "./thread-application.services.js";
-import { scheduleNativeCodexHistorySync, syncNativeCodexHistory, threadHistoryPayload, threadMessagePage } from "./thread-message-page.js";
+import {
+  scheduleNativeCodexHistorySync,
+  syncNativeCodexHistory,
+  threadHistoryPayload,
+  threadMessagePage,
+  threadMessagePageOptions,
+} from "./thread-message-page.js";
 
 function safeUploadName(name: unknown): string {
   const base = path.basename(String(name || "upload.bin")).replace(/[^a-zA-Z0-9_.-]/g, "_");
@@ -46,13 +52,14 @@ export class ThreadMessagesController {
   ) {}
 
   @Get(":threadId/messages")
-  async messages(@Param("threadId") threadId: string, @Query() query: Record<string, unknown>) {
+  async messages(@Req() request: any, @Param("threadId") threadId: string, @Query() query: Record<string, unknown>) {
     validateRequestSchema(threadMessagesQuerySchema, { params: { threadId }, querystring: query || {} });
     const thread = await getThread(threadId);
     if (!thread) throw httpError("thread_not_found", 404);
     scheduleNativeCodexHistorySync(thread);
-    return await storedThreadMessagePage(thread, query, null) ||
-      threadMessagePage(thread, await listThreadMessages(thread.id), query, null);
+    const options = threadMessagePageOptions(request, query || {});
+    return await storedThreadMessagePage(thread, query, null, options) ||
+      threadMessagePage(thread, await listThreadMessages(thread.id), query, null, options);
   }
 
   // The scoped group relay reports a confirmed provider send of a mirrored

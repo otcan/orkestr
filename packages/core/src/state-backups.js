@@ -1,7 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
+import { randomUUID } from "node:crypto";
 import { appHome } from "../../storage/src/paths.js";
 
 const execFileAsync = promisify(execFile);
@@ -47,7 +48,7 @@ function backupRetentionKeep(env = process.env) {
   const raw = clean(env.ORKESTR_DEPLOY_BACKUP_KEEP) || "3";
   const parsed = Number(raw);
   if (!Number.isInteger(parsed) || parsed < 1) throw backupError("backup_retention_invalid", 400);
-  return Math.min(parsed, 3);
+  return Math.max(2, Math.min(parsed, 3));
 }
 
 function assertSafeHome(home) {
@@ -58,7 +59,7 @@ function assertSafeHome(home) {
 
 function backupName(target = "orkestr") {
   const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z");
-  return `${stamp}-${safeSegment(target)}-state.tar.gz`;
+  return `${stamp}-${safeSegment(target)}-${randomUUID()}-state.tar.gz`;
 }
 
 function inside(parent, child) {
@@ -86,10 +87,10 @@ export async function listStateBackups(env = process.env) {
   });
   const backups = [];
   for (const entry of entries) {
-    if (!entry.endsWith(".tar.gz")) continue;
+    if (!entry.endsWith("-state.tar.gz")) continue;
     const filePath = path.join(dir, entry);
-    const stats = await fs.stat(filePath).catch(() => null);
-    if (!stats?.isFile()) continue;
+    const stats = await fs.lstat(filePath).catch(() => null);
+    if (!stats?.isFile() || stats.size === 0) continue;
     backups.push(publicBackup(filePath, stats));
   }
   backups.sort((left, right) => Date.parse(right.modifiedAt || right.createdAt || "") - Date.parse(left.modifiedAt || left.createdAt || ""));
@@ -111,6 +112,7 @@ export async function stateBackupStatus(env = process.env) {
     excludes: backupExcludes(env),
     retention: {
       keep,
+      min: 2,
       max: 3,
     },
     restoreSupported: "plan-only",
@@ -128,8 +130,9 @@ export async function stateBackupStatus(env = process.env) {
 
 export async function pruneStateBackups({ keep = null } = {}, env = process.env) {
   const dir = stateBackupDir(env);
-  const limit = keep === null || keep === undefined ? backupRetentionKeep(env) : Number(keep);
-  if (!Number.isInteger(limit) || limit < 0) throw backupError("backup_retention_invalid", 400);
+  const requested = keep === null || keep === undefined ? backupRetentionKeep(env) : Number(keep);
+  if (!Number.isInteger(requested) || requested < 1) throw backupError("backup_retention_invalid", 400);
+  const limit = Math.max(2, Math.min(requested, 3));
   const backups = await listStateBackups(env);
   const removed = [];
   for (const backup of backups.slice(limit)) {
@@ -150,11 +153,13 @@ export async function createStateBackup({ label = "" } = {}, env = process.env) 
   const dir = stateBackupDir(env);
   await fs.mkdir(dir, { recursive: true });
   const keep = backupRetentionKeep(env);
-  await pruneStateBackups({ keep: keep - 1 }, env);
   const target = path.join(dir, backupName(label || path.basename(home)));
+  const partial = path.join(dir, `.state-backup.${randomUUID()}.part`);
+  const handle = await fs.open(partial, "wx", 0o600);
+  await handle.close();
   const parent = path.dirname(home);
   const base = path.basename(home);
-  const args = ["-C", parent, "-czf", target];
+  const args = ["-C", parent, "-czf", partial];
   for (const exclude of backupExcludes(env)) args.push(`--exclude=${base}/${exclude}`);
   args.push(base);
   let warning = "";
@@ -162,14 +167,27 @@ export async function createStateBackup({ label = "" } = {}, env = process.env) 
     await execFileAsync("tar", args, { timeout: 120_000, maxBuffer: 4 * 1024 * 1024 });
   } catch (error) {
     const stderr = clean(error?.stderr || error?.message);
-    const stats = await fs.stat(target).catch(() => null);
+    const stats = await fs.stat(partial).catch(() => null);
     if (/file changed as we read it/i.test(stderr) && stats?.isFile() && stats.size > 0) {
       warning = stderr;
     } else {
-      await fs.rm(target, { force: true }).catch(() => {});
+      await fs.rm(partial, { force: true }).catch(() => {});
       throw backupError(stderr || "state_backup_failed", 500);
     }
   }
+  try {
+    await new Promise((resolve, reject) => {
+      const child = spawn("tar", ["-tzf", partial], { stdio: "ignore", timeout: 120_000 });
+      child.once("error", reject);
+      child.once("close", (code) => code === 0 ? resolve() : reject(new Error("invalid_archive")));
+    });
+    // Exclusive atomic publication: never replace another completed backup.
+    await fs.link(partial, target);
+  } catch (error) {
+    await fs.rm(partial, { force: true }).catch(() => {});
+    throw backupError("state_backup_verification_or_publication_failed", 500);
+  }
+  await fs.unlink(partial);
   const stats = await fs.stat(target);
   await pruneStateBackups({ keep }, env);
   return {

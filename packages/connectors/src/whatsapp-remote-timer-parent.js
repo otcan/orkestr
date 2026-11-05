@@ -12,8 +12,7 @@
 // remote runtime, or mirrored to WhatsApp.
 import { appendThreadMessage } from "../../core/src/threads.js";
 import { appendEvent } from "../../storage/src/store.js";
-import { resourceOwnerUserId } from "../../core/src/policy.js";
-import { whatsappAccountLookupKeys } from "./whatsapp-account-identity.js";
+import { sameOwnedWhatsAppAccount } from "./whatsapp-account-scope.js";
 import { createTimerAccountLookup } from "./whatsapp-remote-timer-accounts.js";
 
 export const remoteTimerParentSource = "orkestr-v2-timer";
@@ -26,21 +25,6 @@ const postAuthors = new Set(["coordinator", "operator", "assistant_question"]);
 
 function clean(value) {
   return typeof value === "string" ? value.trim() : "";
-}
-
-function sameTimerAccount(thread, expected, received, accounts, env) {
-  expected = clean(expected);
-  received = clean(received);
-  if (!expected || !received) return false;
-  if (expected === received) return true;
-  // Both selectors must identify the same unique, active registry record.
-  // Never infer an alias from a role name or select the first matching account.
-  const matches = selector => accounts.filter(account => !account.deletedAt &&
-    !["disabled", "revoked"].includes(account.status) &&
-    whatsappAccountLookupKeys(account, env).some(key => key.toLowerCase() === selector.toLowerCase()));
-  const left = matches(expected), right = matches(received);
-  return left.length === 1 && right.length === 1 && left[0] === right[0] &&
-    resourceOwnerUserId(left[0], env) === resourceOwnerUserId(thread, env);
 }
 
 // Returns the local id to materialize, or "" when the row is not an exact,
@@ -67,7 +51,7 @@ export function remoteTimerParentId(thread, remote, remoteMessage, remoteMessage
   const publicId = timerParentShape(thread, remote, remoteMessage, remoteMessages);
   const binding = remote?.binding || {};
   const accountId = binding.responderAccountId || binding.outboundAccountId || binding.accountId;
-  return publicId && sameTimerAccount(thread, accountId, remoteMessage.accountId, accounts, env) ? publicId : "";
+  return publicId && sameOwnedWhatsAppAccount(thread, accountId, remoteMessage.accountId, accounts, env) ? publicId : "";
 }
 
 function compatibleTimerParent(local, remote, remoteMessageId) {

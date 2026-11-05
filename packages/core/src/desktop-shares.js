@@ -5,6 +5,7 @@ import { isAdminPrincipal } from "./policy.js";
 import { defaultAdminUser, normalizeUserId } from "./users.js";
 import { assertDesktopAccess, authorizeDesktopAccess, desktopAccessMode, desktopBoundaryId } from "./desktop-access.js";
 import { emitDesktopShareLifecycle } from "./desktop-share-lifecycle.js";
+import { desktopShareError, assertVacantDesktopShare } from "./desktop-share-preconditions.js";
 import { recordThreadResourceInvalidationMetric } from "./observability.js";
 import {
   cleanDesktopSlug as cleanSlug,
@@ -54,11 +55,6 @@ function requestIp(request) {
   return String(request?.ip || request?.socket?.remoteAddress || request?.connection?.remoteAddress || "").replace(/^::ffff:/, "");
 }
 
-function desktopShareError(message, statusCode = 400) {
-  const error = new Error(message);
-  error.statusCode = statusCode;
-  return error;
-}
 
 function ownerUserIdForPrincipal(principal = null, fallback = "", env = process.env) {
   if (principal?.userId && !isAdminPrincipal(principal)) return normalizeUserId(principal.userId);
@@ -162,7 +158,7 @@ async function assertCurrentShareGrant(share, env = process.env) {
   return decision;
 }
 
-export async function createDesktopShare({ desktopSlug = "", slug = "", ownerUserId = "", principal = null, threadId = "", desktopAccess = null, breakGlass = false, breakGlassReason = "", breakGlassChangeRef = "", recentAuthAt = "", label = "", env = process.env } = {}) {
+export async function createDesktopShare({ desktopSlug = "", slug = "", ownerUserId = "", principal = null, threadId = "", desktopAccess = null, breakGlass = false, breakGlassReason = "", breakGlassChangeRef = "", recentAuthAt = "", label = "", ifAbsent = false, env = process.env } = {}) {
   const normalizedSlug = cleanSlug(desktopSlug || slug);
   if (!normalizedSlug) throw desktopShareError("desktop_slug_required", 400);
   const resolvedOwnerUserId = ownerUserIdForPrincipal(principal, ownerUserId, env);
@@ -189,6 +185,7 @@ export async function createDesktopShare({ desktopSlug = "", slug = "", ownerUse
     const lineageId = lineageIdFor(base);
     const lineage = state.desktopShareLineages.find((item) => item.id === lineageId) || null;
     const previous = state.desktopShares.find((item) => item.id === lineage?.currentShareId) || null;
+    assertVacantDesktopShare(previous, ifAbsent);
     const generation = Math.max(lineage?.generation || 0, ...state.desktopShares.filter((item) => item.lineageId === lineageId).map((item) => item.shareGeneration || 0)) + 1;
     const share = normalizeShare({
       ...base,

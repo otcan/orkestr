@@ -36,7 +36,7 @@ Environment:
   ORKESTR_DEPLOY_BACKUP_EXCLUDES Space-separated paths under ORKESTR_HOME to omit from backups. Defaults to live runtime/session dirs.
   ORKESTR_DEPLOY_BACKUP_COMPRESSOR Backup compressor: auto, pigz, gzip, zstd, or none. Defaults to auto.
   ORKESTR_DEPLOY_BACKUP_GZIP_LEVEL gzip/pigz compression level. Defaults to 1 for faster deploys.
-  ORKESTR_DEPLOY_BACKUP_KEEP    Completed state backups to keep per device. Defaults to 3 and is capped at 3.
+  ORKESTR_DEPLOY_BACKUP_KEEP    Completed state backups to keep per device. Defaults to 3, minimum 2, maximum 3.
   ORKESTR_DEPLOY_RELEASE_KEEP   Completed release directories to keep per device. Defaults to 3 and is capped at 3.
   ORKESTR_DEPLOY_SYNC_WORKERS   Fast-forward and push safe stale worker branches after deploy. Defaults to 1.
   ORKESTR_RELEASE_TRAIN_FANOUT  Deploy eligible broker-listed instances after local deploy. Defaults to 1.
@@ -470,7 +470,8 @@ backup_state() (
   fi
   mkdir -p "$backup_dir"
   # Never delete the last completed recovery point before its replacement exists.
-  prune_state_backups "$((backup_keep > 1 ? backup_keep - 1 : 1))"
+  # Preserve every completed recovery point until its replacement is verified
+  # and published. Capacity admission must refuse rather than delete recovery.
   stamp="$(date -u +%Y%m%dT%H%M%S%NZ)"
   target="$(sanitize_id "$release_id")"
   compressor="$(resolve_backup_compressor)"
@@ -584,7 +585,7 @@ prune_state_backups() {
     if rm -f -- "$file"; then
       removed=$((removed + 1))
     fi
-  done < <(find "$backup_dir" -maxdepth 1 -type f \( -name '*.tar.gz' -o -name '*.tar.zst' -o -name '*.tar' \) -printf '%T@\t%p\n' | sort -rn | cut -f2-)
+  done < <(find "$backup_dir" -maxdepth 1 -type f -size +0c \( -name '*-state.tar.gz' -o -name '*-state.tar.zst' -o -name '*-state.tar' \) -printf '%T@\t%p\n' | sort -rn | cut -f2-)
   if [ "$removed" -gt 0 ]; then
     echo "Pruned $removed old state backup(s), keeping max $keep in $backup_dir." >&2
   fi
@@ -2070,6 +2071,9 @@ if [ "$backup_keep" -lt 1 ]; then
 fi
 if [ "$backup_keep" -gt 3 ]; then
   backup_keep=3
+fi
+if [ "$backup_keep" -lt 2 ]; then
+  backup_keep=2
 fi
 case "$release_keep" in
   ''|*[!0-9]*) echo "ORKESTR_DEPLOY_RELEASE_KEEP must be an integer from 1 to 3." >&2; exit 2 ;;

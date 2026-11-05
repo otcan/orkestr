@@ -45,22 +45,27 @@ test("WhatsApp debug footer covers replies mirrored from a remote runtime", () =
   const base = { role: "assistant", source: "rust-v2-pilot", phase: "final_answer", remoteBackend: "rust-v2", remoteMessageId: "remote-1" };
 
   const plain = appendWhatsAppDebugFooter("Done", { env, thread, message: base });
-  assert.match(plain, /^Done\n\ndbg: rust · rt:rust-v2 · msg:\*final\*\n/);
+  // No observed layer identity: the layer line keeps its shape with "—", never "unknown".
+  assert.match(plain, /^Done\n\n⚡ Quick: — · 🧠 Deep: — · ▶ Deep\n(?:codex|claude)\b/);
+  assert.doesNotMatch(plain, /unknown/);
   assert.match(plain, /\nq:0 · load:\d+% · api:\d+% · help:\/help$/);
   assert.doesNotMatch(plain, /local-model|mode:plan|fast:on|rt:api/);
   assert.equal(stripWhatsAppDebugFooter(plain), "Done");
 
   const withModel = appendWhatsAppDebugFooter("Done", {
-    env, thread, message: { ...base, remoteProvider: "codex", remoteModel: "example-model" },
+    env, thread, message: { ...base, remoteLayer: "deep", remoteProvider: "codex", remoteModel: "example-model" },
   });
-  assert.match(withModel, /\ndbg: rust\/codex\/example-model · rt:rust-v2 · msg:\*final\*\n/);
+  assert.match(withModel, /\n\n⚡ Quick: — · 🧠 Deep: codex example-model · ▶ Deep\n/);
+  assert.equal(stripWhatsAppDebugFooter(withModel), "Done");
 
   // A configured backend source without remote ids still gets the footer.
   const bySource = appendWhatsAppDebugFooter("Done", {
     env: { ...env, ORKESTR_REMOTE_RUNTIME_BACKENDS_JSON: JSON.stringify({ "rust-v2": { baseUrl: "http://127.0.0.1:1" } }) },
     message: { role: "assistant", source: "rust-v2-pilot", phase: "final_answer" },
   });
-  assert.match(bySource, /\ndbg: rust · rt:rust-v2 · msg:\*final\*\n/);
+  assert.match(bySource, /\nq:0 · load:\d+% · api:\d+% · help:\/help$/);
+  assert.doesNotMatch(bySource, /unknown/);
+  assert.equal(stripWhatsAppDebugFooter(bySource), "Done");
 
   assert.equal(appendWhatsAppDebugFooter("Done", { env, message: { role: "assistant", source: "rust-v2-pilot" } }), "Done");
   assert.equal(appendWhatsAppDebugFooter("Hi", { env, message: { ...base, role: "user" } }), "Hi");
@@ -83,13 +88,13 @@ test("WhatsApp debug footer is gated and marks progress as update", () => {
     env: { WA_DEBUG_FOOTER: "1" },
     message: { source: "codex-app-server", phase: "final_answer" },
   });
-  assert.match(aliasEnabled, /^Done\n\ndbg: /);
+  assert.match(aliasEnabled, /^Done\n\n⚡ Quick: — · 🧠 Deep: /);
 
   const appendAliasEnabled = appendWhatsAppDebugFooter("Done", {
     env: { WA_APPEND_DEBUG_FOOTER: "1" },
     message: { source: "codex-app-server", phase: "final_answer" },
   });
-  assert.match(appendAliasEnabled, /^Done\n\ndbg: /);
+  assert.match(appendAliasEnabled, /^Done\n\n⚡ Quick: — · 🧠 Deep: /);
 
   const callerDisabled = appendWhatsAppDebugFooter("Done", {
     env: { WA_DEBUG_FOOTER: "1" },
@@ -105,7 +110,7 @@ test("WhatsApp debug footer is gated and marks progress as update", () => {
     thread: { codexModeLive: "plan", runtimeKind: "codex-tmux", paneId: "%42" },
     messages: [{ id: "u1", role: "user", state: "queued" }],
   });
-  assert.match(enabled, /^Working\n\ndbg: codex\/gpt-test · rt:tmux · mode:plan · msg:\*update\*\n/);
+  assert.match(enabled, /^Working\n\n⚡ Quick: — · 🧠 Deep: codex gpt-test · ▶ Deep · mode:plan · update\n/);
   assert.match(enabled, /\nq:1 · load:\d+% · api:\d+% · help:\/help$/);
   assert.doesNotMatch(enabled, /mode-switch:|rt-switch:|model:\/model|effort:\/effort|fast:\/fast|switch:\/claude/);
 
@@ -114,14 +119,16 @@ test("WhatsApp debug footer is gated and marks progress as update", () => {
     message: { source: "codex-app-server", phase: "final_answer" },
     thread: { runtimeKind: "codex-app-server", codexServiceTier: "priority", codexModeLive: "plan" },
   });
-  assert.match(fast, /\ndbg: codex\/gpt-test · rt:api · mode:plan · fast:on · msg:\*final\*\n/);
+  assert.match(fast, /\n⚡ Quick: — · 🧠 Deep: codex gpt-test · ▶ Deep · mode:plan · fast:on\n/);
 
   const apiRuntime = appendWhatsAppDebugFooter("Done", {
     env: { ORKESTR_WHATSAPP_DEBUG_FOOTER: "1" },
     message: { source: "codex-app-server", phase: "final_answer" },
     thread: { runtimeKind: "codex-app-server" },
   });
-  assert.match(apiRuntime, /\ndbg: codex\/[^\n]* · rt:api · msg:\*final\*\n/);
+  // No configured model: "codex ?", never "unknown".
+  assert.match(apiRuntime, /\n⚡ Quick: — · 🧠 Deep: codex (?:\?|[^\n·]+) · ▶ Deep\n/);
+  assert.doesNotMatch(apiRuntime, /unknown/);
   assert.doesNotMatch(apiRuntime, /mode:plan|fast:on|mode-switch:|rt-switch:/);
   assert.equal(stripWhatsAppDebugFooter(apiRuntime), "Done");
 });
@@ -144,7 +151,7 @@ test("WhatsApp debug footer reports Claude Code model, runtime, and usage withou
     thread,
   });
 
-  assert.match(final, /^Done\n\ndbg: claude\/sonnet\/h · rt:claude · msg:\*final\*\ncodex: no data\nclaude 5h: 80% wk: 65%\nq:0 · load:\d+% · api:\d+% · help:\/help$/);
+  assert.match(final, /^Done\n\n⚡ Quick: — · 🧠 Deep: claude sonnet\/h · ▶ Deep\ncodex: no data\nclaude 5h: 80% wk: 65%\nq:0 · load:\d+% · api:\d+% · help:\/help$/);
   assert.doesNotMatch(final, /fast:|mode:|model:\/model|mode-switch:|rt-switch:|switch:\//);
   assert.equal(stripWhatsAppDebugFooter(final), "Done");
 
@@ -155,7 +162,9 @@ test("WhatsApp debug footer reports Claude Code model, runtime, and usage withou
     thread,
     messages: [],
   });
-  assert.match(waking, /^Waking this thread\.\n\ndbg: claude\/sonnet\/h · rt:claude · msg:\*update\*\ncodex: no data\nclaude 5h: 80% wk: 65%\nqueue:1 · reason:waking · load:\d+% · api:\d+% · help:\/help$/);
+  // A queue notice is not a model reply: only the compact quota/queue footer.
+  assert.match(waking, /^Waking this thread\.\n\ncodex: no data\nclaude 5h: 80% wk: 65%\nqueue:1 · reason:waking · load:\d+% · api:\d+% · help:\/help$/);
+  assert.doesNotMatch(waking, /dbg:|msg:|⚡|🧠|▶/);
   assert.doesNotMatch(waking, /mode-switch:|rt-switch:|switch:\//);
   assert.equal(stripWhatsAppDebugFooter(waking), "Waking this thread.");
 });

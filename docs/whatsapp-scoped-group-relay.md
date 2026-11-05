@@ -40,7 +40,7 @@ Config fields:
 | `groups` | Array of `{chatId, threadId, name, forwardProgressUpdates?}`; each group's optional boolean overrides the global progress flag |
 | `heldInputIds` | Optional array of exact transport input IDs excluded before any API call or send; malformed values fail startup |
 | `replyPrefix` | Deployment's configured reply identity |
-| `appendDebugFooter` | Enable the shared WhatsApp model/quota/queue footer; per-thread suppression and tenant isolation still apply |
+| `appendDebugFooter` | Enable the shared WhatsApp model/quota/queue footer in every configured group, shared groups included, and on operator notices; per-thread/chat suppression and tenant isolation still apply |
 | `maxReplyChars` | Optional single-message budget for new replies, 1000 to 60000 characters (default 20000, or `ORKESTR_WHATSAPP_MAX_REPLY_CHARS`) |
 | `forwardProgressUpdates` | Boolean for completed assistant commentary and approval updates; defaults on for the validated owner groups, independently of the legacy mirror |
 | `forwardProgressSince` | ISO activation cutoff; required for explicit global `forwardProgressUpdates: true`. When omitted with default-on or group-only activation, process startup is the cutoff |
@@ -188,7 +188,7 @@ the same parent or timer-proof authorization, deduplication and uncertainty
 rules as a text; it needs a scoped native worker (`/send-document`). Timer
 notifications behave the same way. Payloads frozen by an older build keep their
 stored chunks on retry. The footer stays on the message and is not counted
-against the budget; a `dbg:` footer already embedded at the end of a long reply
+against the budget; a footer (`⚡ Quick:` or older `dbg:`) already embedded at the end of a long reply
 stays on the message as well. When WhatsApp Web delivers a message but
 `sendMessage` returns no usable model (or throws), the transport confirms the
 send only by exactly one own, server-acked, not yet journaled message in that
@@ -215,7 +215,7 @@ With progress enabled, only completed commentary/approval messages from known
 agent sources and matching the exact inbound parent are forwarded. Streaming
 fragments, analysis, tools and context-compaction events are excluded. Updates
 keep the turn open, use the same durable payload/receipt journal and label their
-footer `msg:*update*`. A final supersedes any unsent progress already in history.
+footer `· update` after the writer. A final supersedes any unsent progress already in history.
 Enabling updates does not reopen completed turns or change legacy group bindings.
 
 Local V1 commentary, including Claude Code's started-working acknowledgement,
@@ -401,20 +401,28 @@ transport send blocks delivery. Binding, parent, participant and route-fence
 checks apply to the immediate path too. Confirmed remote receipts are reported
 to the adapter immediately. None of these events prove recipient reads.
 
-### Optional five-second acknowledgement
+### Optional twenty-second fallback acknowledgement
 
 An operator may configure a literal acknowledgement and opt in individual groups:
 
 ```json
 {
-  "acknowledgement": {"text":"Received — working on it.","since":"2026-01-01T00:00:00Z"},
+  "acknowledgement": {"text":"Received — working on it.","queuedText":"Received, queued behind the current task in this chat; I'll answer when it finishes.","since":"2026-01-01T00:00:00Z"},
   "groups": [{"chatId":"example-group","threadId":"example-thread","name":"Example","deterministicAcknowledgement":true}]
 }
 ```
 
-The acknowledgement is eligible at intake plus five seconds, only for new
+The acknowledgement is eligible at intake plus twenty seconds, only for new
 interactive owner inputs in those groups. Thread update suppression, route
 holds and binding checks still apply. Timer and participant inputs are excluded.
+Fresh exact-input running evidence (no older than five seconds) is required for
+the working acknowledgement. An adapter input whose current phase is `queued`
+gets the truthful `queuedText` instead, without claiming execution started.
+`queuedText` defaults to the English sentence above; set it in the same language
+as `text`. Both share one durable per-input notice slot, so admission does not
+produce a second acknowledgement. Unknown, stale or unsupported runtime activity
+stays silent. Ready native Fast or final output cancels both notices even before
+V1 imports it; state is checked again inside the send queue.
 A real reply attempt or known `NO_REPLY` suppresses the acknowledgement; the
 sender cannot predict a `NO_REPLY` produced later. An uncertain real send also
 suppresses extra traffic. Frozen text, a stable provider request ID and durable

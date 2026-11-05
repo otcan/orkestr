@@ -12,6 +12,7 @@ import { remoteParentExpectedFields, remoteParentRecoveryCandidate } from "./wha
 import { acknowledgeRemoteMirrorDeliveries, remoteMirrorAckSupported } from "./whatsapp-remote-mirror-ack.js";
 import { uploadRemoteInputAttachments } from "./whatsapp-remote-attachment-upload.js";
 import { materializeRemoteTimerParent, remoteTimerParentSource } from "./whatsapp-remote-timer-parent.js";
+import { remoteLayerMetadata } from "./whatsapp-remote-footer.js";
 import { createTimerAccountLookup } from "./whatsapp-remote-timer-accounts.js";
 
 export { remoteWhatsAppRuntimeBinding };
@@ -341,6 +342,7 @@ async function appendRemoteAssistantMessage({ thread, remote, remoteMessage, par
     // Optional remote provider/model, shown in the WhatsApp debug footer.
     ...(pickString(remoteMessage.provider) ? { remoteProvider: pickString(remoteMessage.provider).slice(0, 64) } : {}),
     ...(pickString(remoteMessage.model) ? { remoteModel: pickString(remoteMessage.model).slice(0, 64) } : {}),
+    ...remoteLayerMetadata(remoteMessage, parent),
     ...(Number.isSafeInteger(remoteMessage.exportSequence) ? { remoteExportSequence: String(remoteMessage.exportSequence) } : {}),
     ...(pickString(remoteMessage.kind).toLowerCase() === "progress" ? { remoteKind: "progress" } : {}),
     remoteSyncedAt: new Date().toISOString(),
@@ -421,7 +423,8 @@ export async function syncRemoteWhatsAppThreadMessages(env = process.env, fetchI
         if (local || !completedAssistantMessage(remoteMessage)) continue;
         const parentMessageId = publicParentIdForRemoteMessage(remoteMessage, localByRemoteId);
         if (!parentMessageId && remote.binding.remoteMirrorOrphanReplies !== true) { unmapped += 1; continue; }
-        const parent = parentMessageId ? localMessages.find((message) => message.id === parentMessageId) || null : null;
+        const parent = parentMessageId ? localMessages.find((message) => message.id === parentMessageId) ||
+          localByRemoteId.get(pickString(remoteMessage.parentMessageId, remoteMessage.parentId)) || null : null;
         const appended = await appendRemoteAssistantMessage({ thread, remote, remoteMessage, parentMessageId, parent, env });
         localByRemoteId.set(remoteMessageId, appended);
         imported += 1;

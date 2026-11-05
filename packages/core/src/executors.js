@@ -6,6 +6,7 @@ import { appendEvent, readJson, writeJson } from "../../storage/src/store.js";
 import { appendAgentMessage, listAgentMessages, updateAgentMessage } from "./messages.js";
 import { readOverlay } from "./overlay.js";
 import { simulatedExecutorAdapter } from "./simulated-provider.js";
+import { refuseV1ExecutionIfRetired } from "./v1-execution-retired.js";
 import {
   appendThreadMessage,
   assertThreadOperational,
@@ -225,6 +226,11 @@ export async function runNextThreadMessage(threadId, options = {}, env = process
       throw error;
     }
     assertThreadOperational(current);
+    if (await refuseV1ExecutionIfRetired(current, env, { entryPoint: "executor_run_next" })) {
+      const error = new Error("v1_execution_retired");
+      error.statusCode = 409;
+      throw error;
+    }
     const executorId = options.executorId || thread.executor?.id || (await defaultExecutorId(env));
     const adapter = getExecutorAdapter(executorId);
     if (!adapter) {

@@ -71,11 +71,11 @@ test('emoji, surrogate pairs and joined emoji sequences are never split by the p
 test('the footer stays on the message, for short and for attached replies', () => {
   const short = chunk(words(500).slice(0, 2500), {appendDebugFooter: true}, {}, true);
   assert.equal(short.length, 1);
-  assert.match(short[0], /^word0 [\s\S]*\n\ndbg: codex\/example-model/);
+  assert.match(short[0], /^word0 [\s\S]*\n\n⚡ Quick: — · 🧠 Deep: codex example-model/);
   const full = words(5000);
   const long = chunk(full, {appendDebugFooter: true}, {}, true);
   assert.equal(long.length, 2);
-  assert.ok(long[0].includes(`${SCOPED_ATTACHED_MARKER}\n\ndbg: codex/example-model`));
+  assert.ok(long[0].includes(`${SCOPED_ATTACHED_MARKER}\n\n⚡ Quick: — · 🧠 Deep: codex example-model`));
   assert.ok(long[0].length <= SCOPED_SEND_MAX_TEXT_LENGTH);
   assert.equal(long[1].document.text, full, 'the document holds the full text without the footer');
 });
@@ -115,7 +115,9 @@ test('a reply mirrored from a remote runtime carries the remote debug footer', (
     message: {id: 'm2', chatId: 'group-1', role: 'assistant', source: 'rust-v2-pilot', phase: 'final_answer', remoteBackend: 'rust-v2', remoteMessageId: 'r1'},
     thread: {codexModel: 'example-model', binding: {remoteBackend: 'rust-v2'}}, messages: [], config: {appendDebugFooter: true}, formatter, env: {}});
   assert.equal(entries.length, 1);
-  assert.match(entries[0], /^Done\n\ndbg: rust · rt:rust-v2 · msg:\*final\*\n/);
+  // No observed layer: the layer line keeps its shape with "—", never "unknown".
+  assert.match(entries[0], /^Done\n\n⚡ Quick: — · 🧠 Deep: — · ▶ Deep\n(?:codex|claude)\b[^\n]*\n(?:[^\n]*\n)?q:0 · load:\d+% · api:\d+% · help:\/help$/);
+  assert.doesNotMatch(entries[0], /unknown/);
 });
 
 test('a footer embedded at the end of a long reply stays on the message', () => {
@@ -126,4 +128,10 @@ test('a footer embedded at the end of a long reply stays on the message', () => 
   assert.equal(entries[1].document.text, text);
   const short = chunk(`hello\n\n${footer}`);
   assert.deepEqual(short, [`hello\n\n${footer}`]);
+});
+
+test('a two-layer footer stays on the preview of a long remote reply', () => {
+  const footer = '⚡ Quick: codex example/low · 🧠 Deep: pending · ▶ Quick\nq:0 · load:1%';
+  const entries = chunk(`${words(5000)}\n\n${footer}`);
+  assert.ok(entries[0].endsWith(`${SCOPED_ATTACHED_MARKER}\n\n${footer}`));
 });

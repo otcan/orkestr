@@ -87,7 +87,8 @@ with tempfile.TemporaryDirectory(prefix='sqlite-backup-test-') as temporary:
     excluded_archive = Path(excluded.stdout.strip())
     names = subprocess.check_output(['tar', '-tf', excluded_archive], text=True).splitlines()
     assert not any(n.startswith('state/threads.sqlite') for n in names)
-    # Retain only the last successful archive for subsequent cleanup assertions.
+    # Minimum retention keeps both verified recovery points, even with KEEP=1.
+    expected_backups = sorted([archive, excluded_archive])
     archive = excluded_archive
     # Hold an exclusive lock in rollback mode so the backup API waits; terminate
     # the supervisor and require its trap to remove both private staging/partial.
@@ -97,7 +98,7 @@ with tempfile.TemporaryDirectory(prefix='sqlite-backup-test-') as temporary:
     locked.execute('BEGIN EXCLUSIVE')
     timed = backup({'ORKESTR_DEPLOY_SQLITE_TIMEOUT_SECONDS': '1'})
     assert timed.returncode != 0 and 'deadline' in timed.stderr
-    assert sorted(backups.iterdir()) == [archive]
+    assert sorted(backups.iterdir()) == expected_backups
     process = subprocess.Popen(['bash', 'scripts/deploy-git-release.sh', 'backup'], env=env,
                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
     try:
@@ -110,7 +111,7 @@ with tempfile.TemporaryDirectory(prefix='sqlite-backup-test-') as temporary:
         locked.rollback()
         process.communicate(timeout=5)
         assert process.returncode != 0
-        assert sorted(backups.iterdir()) == [archive]
+        assert sorted(backups.iterdir()) == expected_backups
     finally:
         locked.close()
         if process.poll() is None:
