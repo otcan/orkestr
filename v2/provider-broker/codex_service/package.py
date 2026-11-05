@@ -358,6 +358,12 @@ class Package:
         if not self.identity_split or os.geteuid() in (0,self.executor_uid):
             require(all(p.resolve(strict=True)==p for p in paths.values()),"claude_profile_paths")
         if self.identity_split:
+            if os.geteuid()==0:
+                # Root validates the native before any provider input. The
+                # executor validates only its scoped profile/state; it must
+                # never probe the authority's private home or bootstrap.
+                require(protected(paths['executable']).stat().st_mode&0o111,
+                        'claude_executable_required')
             for key,p in paths.items():
                 if key!='executable':self.private(p,self.uid,True)
         workspace = self.private(paths["workspace"], self.uid, True)
