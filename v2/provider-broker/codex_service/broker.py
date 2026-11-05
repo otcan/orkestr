@@ -49,6 +49,11 @@ def main(root, role="deep"):
         workspace = ["open-owned-workspace-worker-session", "--protocol", protocol]
         worker = role.startswith("worker-")
         workspace_enabled = worker and package.beta.get("workspace_exec") is not None
+        if package.identity_split:
+            from .identity import launch_context
+            context = launch_context()
+            require(context is not None and (sys.argv[1:]==workspace)==context.get('workspace_worker',False),
+                    'workspace_worker_capsule')
         allowed = (fresh, workspace) if workspace_enabled else ((fresh,) if worker else (fresh, resumed))
         require(role in package.role_profiles and sys.argv[1:] in allowed, "broker_operation")
         def stop(_number, _frame):

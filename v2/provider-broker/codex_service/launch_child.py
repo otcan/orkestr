@@ -15,9 +15,12 @@ from .identity import enforce_no_new_privs
 
 def main(package, arguments):
     from codex_bounded.trust import process
-    require(os.geteuid() == 0 and package.identity_split and len(arguments) == 8,
+    require(os.geteuid() == 0 and package.identity_split and len(arguments) in (8,9),
             'manager_launch_bootstrap')
-    provider, capsule, resume, role, mode, parent, start, native_io = arguments
+    provider, capsule, resume, role, mode, parent, start, native_io = arguments[:8]
+    workspace_worker = len(arguments)==9
+    require(not workspace_worker or arguments[8]=='workspace' and role.startswith('worker-') and mode=='fresh',
+            'workspace_worker_launch')
     require(len(native_io.split(",")) == 4 and all(v.isdigit() for v in native_io.split(",")), "native_io_fields")
     native_io = list(map(int, native_io.split(",")))
     from .native_io import validate as validate_native_io, SLOTS
@@ -62,7 +65,7 @@ def main(package, arguments):
     require(libc.prctl(1,signal.SIGKILL,0,0,0)==0 and os.getppid()==parent,
             'launch_parent_death')
     interpreter=str(Path('/usr/bin/python3').resolve())
-    operation='resume-owned-session' if mode=='resume' else 'open-owned-session'
+    operation='open-owned-workspace-worker-session' if workspace_worker else 'resume-owned-session' if mode=='resume' else 'open-owned-session'
     mode='broker' if role=='deep' else 'broker-'+role
     os.execve(interpreter,[interpreter,'-I','-S','-B',str(package.root/'codex_service/entry.py'),
                           mode,operation,'--protocol','orkestr-v2-provider-broker-v1'],

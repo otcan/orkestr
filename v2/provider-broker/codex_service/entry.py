@@ -203,7 +203,7 @@ def main():
     root = Path(__file__).resolve().parents[1]
     mode, *arguments = sys.argv[1:]
     if mode not in ("manager", "broker", "broker-fast", "broker-worker-0", "broker-claude",
-                    "broker-worker-1", "broker-worker-2", "broker-worker-3", "server", "launch-child", "recover-owner-password", "desk-anchor"):
+                    "broker-worker-1", "broker-worker-2", "broker-worker-3", "server", "launch-child", "recover-owner-password", "desk-anchor", "workspace-anchor"):
         raise ValueError("fixed entry mode")
     expected = arguments[0] if (mode == "manager" and len(arguments) == 1) or (mode == "recover-owner-password" and arguments) else None
     if mode == "recover-owner-password" and (os.geteuid() != 0 or expected is None):
@@ -227,6 +227,9 @@ def main():
     if mode == "desk-anchor":
         from codex_service.desk_anchor import main as desk_anchor
         return desk_anchor(package,arguments)
+    if mode == "workspace-anchor":
+        from codex_service.workspace_anchor import main as workspace_anchor
+        return workspace_anchor(package,arguments)
     if mode == "broker" or mode.startswith("broker-"):
         if package.identity_split and os.geteuid() == package.authority_uid:
             from codex_service.proxy import main as proxy

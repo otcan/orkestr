@@ -25,7 +25,7 @@ unsafe extern "C" {
 }
 
 pub(super) async fn write(stream: &UnixStream, bytes: &[u8], fds: &[OwnedFd]) -> Result<()> {
-    if !matches!(fds.len(), 4 | 5) || bytes.is_empty() {
+    if !matches!(fds.len(), 1 | 4 | 5) || bytes.is_empty() {
         return Err(ManagerError::InvalidRequest);
     }
     loop {
@@ -83,8 +83,8 @@ mod tests {
     use super::*;
     use std::os::fd::FromRawFd;
     #[tokio::test]
-    async fn one_transfer_carries_four_or_five_owned_descriptors_and_exact_frame() {
-        for descriptor_count in [4, 5] {
+    async fn one_transfer_carries_supported_owned_descriptors_and_exact_frame() {
+        for descriptor_count in [1, 4, 5] {
             let (sender, receiver) = std::os::unix::net::UnixStream::pair().unwrap();
             sender.set_nonblocking(true).unwrap();
             let stream = UnixStream::from_std(sender).unwrap();

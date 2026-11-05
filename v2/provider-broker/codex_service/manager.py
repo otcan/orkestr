@@ -38,6 +38,8 @@ class Manager:
         self.failed = self.closed = False
         self.launcher = None
         self.desk = None
+        self.workspace_projects = None
+        self.workspace_commands = None
         self.managed = None
         self.adopted = None
         self.custody_fault = False
@@ -107,6 +109,7 @@ class Manager:
     def _terminate(self, window, wait=2):
         """Emergency cleanup of one window; others keep their custody."""
         errors = []
+        if getattr(self,'workspace_commands',None):self.workspace_commands.cancel_window(window.window)
         if getattr(self,'desk',None):
             for operation,handle in self.desk.active.items():
                 if handle['window']==window.window:self.desk.cancel(operation)
@@ -168,10 +171,14 @@ class Manager:
         self.ledger._scope(request)
         operation = request["operation"]
         self._capture_orphans()
-        require(not getattr(self,'custody_fault',False) or operation in ('status','drain','uncertain','desk_login_poll','desk_login_cancel','managed_poll','managed_cancel','managed_run_close'),
+        require(not getattr(self,'custody_fault',False) or operation in ('status','drain','uncertain','desk_login_poll','desk_login_cancel','managed_poll','managed_cancel','managed_run_close',
+                    'workspace_command_receipt','workspace_command_cancel'),
                 'manager_custody_fault')
         if operation == "status":
             return {"ok": True, "receipt": self.ledger.status(request["conversation_id"])}
+        if operation == 'workspace_attest':
+            from .workspace_setup import dispatch
+            return dispatch(self,request,descriptors)
         if operation == "admit":
             self._package_preflight()
             receipt, fresh = self.ledger.admit(request)
@@ -182,6 +189,9 @@ class Manager:
         row = self.ledger.details(request["window_id"], request["generation"])
         require(row["conversation"] == request["conversation_id"], "scope")
         window = self.windows.get(request["window_id"])
+        if operation in ('workspace_command','workspace_command_receipt','workspace_command_cancel'):
+            from .workspace_ops import dispatch
+            return dispatch(self,request,window,descriptors)
         if operation in ('managed_pending','managed_consume','managed_poll','managed_cancel','managed_run_open','managed_run_close','managed_renew','managed_result'):
             from .managed_control import dispatch
             return dispatch(self,request,window)
@@ -235,6 +245,7 @@ class Manager:
                 self._terminate(window)
             return {"ok": True, "receipt": self.ledger.status(request["conversation_id"])}
         if operation == "reconcile":
+            require(not getattr(self,'workspace_commands',None) or self.workspace_commands.window_clean(request['window_id']),'workspace_cleanup_unknown')
             require(not getattr(self,'desk',None) or self.desk.window_clean(request['window_id']),'desk_cleanup_unknown')
             if row["state"] != "retired" and window is not None:
                 # This window still has custody in this manager (same manager
@@ -269,6 +280,7 @@ class Manager:
                 window.children.close()
             return {"ok": True, "receipt": receipt}
         require(operation == "retire", "operation")
+        require(not getattr(self,'workspace_commands',None) or self.workspace_commands.window_clean(request['window_id']),'workspace_cleanup_unknown')
         require(not getattr(self,'desk',None) or self.desk.window_clean(request['window_id']),'desk_cleanup_unknown')
         if row["state"] != "retired":
             require(window is not None, "original_cleanup_proof_missing")
@@ -305,6 +317,7 @@ class Manager:
             known.update(self.launcher.proxies)
             known.update((h.broker['pid'],h.broker['start']) for h in self.launcher.children.values())
         if getattr(self,'desk',None):known.update((h['identity']['pid'],h['identity']['start']) for h in self.desk.active.values() if h['identity'])
+        if getattr(self,'workspace_commands',None):known.update((h['identity']['pid'],h['identity']['start']) for h in self.workspace_commands.active.values() if h['identity'])
         return known
 
     def _desk_window_active(self,window_id,generation):
@@ -322,6 +335,7 @@ class Manager:
             self.failed=self.custody_fault=True
             if self.launcher:self.launcher.fault()
             if getattr(self,'desk',None):self.desk.fault()
+            if getattr(self,'workspace_commands',None):self.workspace_commands.fault()
             self._uncertain_all('cleanup_unknown')
             for window in self.windows.values():
                 window.children._observation_failed(Refused('owned_child_association_unknown'))
@@ -330,6 +344,7 @@ class Manager:
             require(self.adopted.drain(known),'adopted_children_not_reaped')
 
     def tick(self):
+        if getattr(self,'workspace_commands',None):self.workspace_commands.tick(self._desk_window_active)
         if getattr(self,'desk',None):self.desk.tick(self._desk_window_active)
         if getattr(self,'managed',None):
             from .managed_control import tick
@@ -446,6 +461,7 @@ class Manager:
             self._uncertain_all("manager_stopped")
             if getattr(self,'managed',None):self.managed.close()
             if getattr(self,'desk',None) and not self.desk.close():errors.append('desk_cleanup')
+            if getattr(self,'workspace_commands',None) and not self.workspace_commands.close():errors.append('workspace_cleanup')
             if not self._terminate_all():
                 errors.append("window_cleanup")
         except Exception:
@@ -468,6 +484,7 @@ class Manager:
         for window in list(self.windows.values()):
             window.children.close()
         if getattr(self,'adopted',None) is not None:self.adopted.close()
+        if getattr(self,'workspace_projects',None) is not None:self.workspace_projects.close()
         for item in (self.control, self.ledger, self.lock):
             if item is not None:
                 try:

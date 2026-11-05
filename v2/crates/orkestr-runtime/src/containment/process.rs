@@ -151,19 +151,31 @@ impl Process {
         if directories.managed_workspace() && managed_config.is_none() {
             return Err(Error::AuthorityProtocol);
         }
-        if managed_config.is_some()
-            && (workspace.is_some()
-                || args
-                    != [
-                        if resuming {
-                            "resume-owned-session"
-                        } else {
-                            "open-owned-session"
-                        },
+        let workspace_worker = managed_config.as_ref().is_some_and(|config| {
+            config.role.starts_with("worker-")
+                && !resuming
+                && args
+                    == [
+                        "open-owned-workspace-worker-session",
                         "--protocol",
                         "orkestr-v2-provider-broker-v1",
                     ]
-                    .map(std::ffi::OsString::from))
+                    .map(std::ffi::OsString::from)
+        });
+        if managed_config.is_some()
+            && (workspace.is_some()
+                || !workspace_worker
+                    && args
+                        != [
+                            if resuming {
+                                "resume-owned-session"
+                            } else {
+                                "open-owned-session"
+                            },
+                            "--protocol",
+                            "orkestr-v2-provider-broker-v1",
+                        ]
+                        .map(std::ffi::OsString::from))
         {
             return Err(Error::Unsupported);
         }
@@ -175,6 +187,7 @@ impl Process {
             _ => return Err(Error::AuthorityProtocol),
         };
         if let Some(prepared) = managed.as_mut() {
+            prepared.transfer.set_workspace_worker(workspace_worker)?;
             if let Some(bootstrap) = &bootstrap {
                 prepared.transfer.attach_resume(bootstrap)?;
             }

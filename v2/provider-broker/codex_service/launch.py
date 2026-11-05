@@ -78,6 +78,12 @@ class Launcher:
     def launch(self,request,descriptors,register,deadline):
         setup_scope(request['setup'],request['role'],request['owner_id'],request['conversation_id'])
         preferences(request['preferences'],request['role'])
+        workspace_worker = request.get('workspace_worker', False)
+        require(type(workspace_worker) is bool and (not workspace_worker or
+                request['role'].startswith('worker-') and request['mode']=='fresh'), 'workspace_worker_launch')
+        if workspace_worker:
+            from .workspace_setup import selected_profile
+            selected_profile(self.package,request['conversation_id'])
         require(exists(self.server) and self.server['uid']==self.package.authority_uid,'launch_server_changed')
         require((request['role'] in self.package.role_profiles or request['role']=='claude' and self.package.claude is not None) and request['mode'] in ('fresh','resume')
                 and (request['mode']=='resume')==('native_session_id' in request['setup']),
@@ -89,6 +95,7 @@ class Launcher:
         expected=[str(Path('/usr/bin/python3').resolve()).encode(),b'-I',b'-S',b'-B',
                   bytes(self.package.root/'codex_service/entry.py'),
                   ('broker' if request['role']=='deep' else 'broker-'+request['role']).encode(),
+                  b'open-owned-workspace-worker-session' if workspace_worker else
                   b'resume-owned-session' if request['mode']=='resume' else b'open-owned-session',
                   b'--protocol',b'orkestr-v2-provider-broker-v1']
         proc=Path('/proc',str(proxy['pid']))
@@ -107,6 +114,7 @@ class Launcher:
             time.sleep(.002)
         from .ownership import Process
         frozen={key:request[key] for key in ('request_id','window_id','generation','conversation_id','role','mode','setup')}
+        if workspace_worker: frozen['workspace_worker']=True
         frozen['server']={key:self.server[key] for key in ('pid','start','uid')}
         # One semantic launch per exact Core-issued setup in this slot/window.
         # The opaque Runtime metadata locator attests the original setup fence;
@@ -135,6 +143,7 @@ class Launcher:
             from .attachment_exports import initialize_conversation
             initialize_conversation(self.package,request['conversation_id'])
             payload={key:request[key] for key in ('request_id','window_id','generation','role','setup','preferences')}
+            if workspace_worker: payload['workspace_worker']=True
             payload.update(server_pid=self.server['pid'],server_start=self.server['start'],
                            server_uid=self.server['uid'],manager_pid=os.getpid(),
                            manager_start=self.manager['start'],owner_id=self.package.owner,
@@ -166,6 +175,7 @@ class Launcher:
             command=[interpreter,'-I','-S','-B',str(self.package.root/'codex_service/entry.py'),
                      'launch-child',str(provider_fd),str(capsule_fd),str(resume_fd),request['role'],request['mode'],
                      str(os.getpid()),str(self.manager['start']),','.join(map(str,native_io))]
+            if workspace_worker: command.append('workspace')
             child=subprocess.Popen(command,stdin=descriptors[0],stdout=descriptors[1],stderr=subprocess.DEVNULL,
                                    cwd='/',env={'PATH':'/usr/bin:/bin','LANG':'C.UTF-8','PYTHONDONTWRITEBYTECODE':'1'},
                                    pass_fds=tuple(inherited),start_new_session=True)

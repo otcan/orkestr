@@ -10,7 +10,7 @@ use orkestr_runtime::{
 use orkestr_v2_store_sqlite::{Store, WorkspaceDescriptors, WorkspaceExecProfile};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -19,6 +19,9 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use uuid::Uuid;
+#[path = "managed_jobs.rs"]
+mod managed;
+pub(super) use managed::ManagedReservation;
 
 const TAIL: usize = 4096;
 const RETAINED_RECORDS: usize = 64;
@@ -68,6 +71,7 @@ struct Authority {
 pub(crate) struct Jobs {
     directory: PathBuf,
     live: Mutex<HashMap<Uuid, Arc<Job>>>,
+    reservations: Mutex<HashSet<Uuid>>,
     authority: Mutex<Option<Authority>>,
     monitoring: AtomicBool,
 }
@@ -101,6 +105,7 @@ impl Jobs {
         let jobs = Arc::new(Self {
             directory: directory.to_owned(),
             live: Mutex::default(),
+            reservations: Mutex::default(),
             authority: Mutex::default(),
             monitoring: AtomicBool::new(false),
         });
@@ -134,15 +139,10 @@ impl Jobs {
     }
 
     pub(super) fn running(&self) -> usize {
-        self.live.lock().map_or(usize::MAX, |live| {
-            live.values()
-                .filter(|job| {
-                    job.record
-                        .lock()
-                        .is_ok_and(|r| r.state == JobState::Running)
-                })
-                .count()
-        })
+        let Ok(live) = self.live.lock() else {
+            return usize::MAX;
+        };
+        active_count(&live).unwrap_or(usize::MAX)
     }
 
     /// Called inside Core's consumed spawn fence with its exact descriptors.
@@ -412,6 +412,16 @@ fn private_directory(directory: &Path) -> Result<(), &'static str> {
         return Err("workspace job directory must be private");
     }
     Ok(())
+}
+
+fn active_count(live: &HashMap<Uuid, Arc<Job>>) -> Result<usize, &'static str> {
+    live.values().try_fold(0, |count, job| {
+        let record = job
+            .record
+            .lock()
+            .map_err(|_| "workspace job state unavailable")?;
+        Ok(count + usize::from(record.state == JobState::Running))
+    })
 }
 
 #[cfg(test)]

@@ -64,6 +64,8 @@ fn setup_fence_comes_from_bound_metadata_and_cannot_change_provider_role_or_repe
     .unwrap()
     .transfer;
     assert!(transfer.setup().is_err());
+    transfer.set_workspace_worker(true).unwrap();
+    assert!(transfer.workspace_worker());
     binding.role = Role::Deep;
     assert!(transfer
         .attest_setup(
@@ -82,6 +84,7 @@ fn setup_fence_comes_from_bound_metadata_and_cannot_change_provider_role_or_repe
             None,
         )
         .unwrap();
+    assert!(transfer.set_workspace_worker(false).is_err());
     assert_eq!(transfer.setup().unwrap()["generation"], 7);
     assert_eq!(
         transfer.setup().unwrap()["session_id"],
@@ -90,6 +93,18 @@ fn setup_fence_comes_from_bound_metadata_and_cannot_change_provider_role_or_repe
     assert!(transfer
         .attest_setup(&binding, "invented-retry", ProviderKind::Codex, None)
         .is_err());
+}
+
+#[test]
+fn managed_workspace_worker_marker_cannot_enable_other_native_roles() {
+    let (provider, _) = UnixStream::pair().unwrap();
+    for role in ["deep", "fast", "claude"] {
+        let mut transfer = prepare(Configuration { role: role.into() }, &provider)
+            .unwrap()
+            .transfer;
+        assert!(!transfer.workspace_worker());
+        assert!(transfer.set_workspace_worker(true).is_err());
+    }
 }
 #[test]
 fn prepared_transfer_has_distinct_one_way_pipes_and_private_lifecycle_socket() {

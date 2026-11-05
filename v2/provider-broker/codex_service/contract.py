@@ -78,6 +78,10 @@ def decode(raw):
     operation = value.get("operation")
     fields = {
         "status": set(),
+        "workspace_attest": {"project_id"},
+        "workspace_command": {"window_id","generation","capability"},
+        "workspace_command_receipt": {"window_id","generation","operation_id","source_sha256"},
+        "workspace_command_cancel": {"window_id","generation","operation_id","source_sha256"},
         "managed_pending": {"window_id","generation"},
         "managed_run_open": {"window_id","generation","run"},
         "managed_run_close": {"window_id","generation","run_id"},
@@ -101,7 +105,8 @@ def decode(raw):
         "extend": {"window_id", "generation", "expires_at_ms"},
     }
     require(type(operation) is str and operation in fields, "operation")
-    require(set(value) == common | fields[operation], "fields")
+    optional = {'workspace_worker'} if operation == 'launch_child' else set()
+    require(common | fields[operation] <= set(value) <= common | fields[operation] | optional, "fields")
     require(type(value["version"]) is int and value["version"] == VERSION, "version")
     key(value["request_id"])
     # A failed open has no run of its own: both run fields are exactly null.
@@ -110,7 +115,7 @@ def decode(raw):
                and value.get("run_id") is None)
     if runless:
         require(value["terminal_event_id"] is None, "terminal_run")
-    for field in ("owner_id", "conversation_id", "window_id", "input_message_id", "input_event_id", "run_id", "terminal_event_id"):
+    for field in ("owner_id", "conversation_id", "project_id", "window_id", "input_message_id", "input_event_id", "run_id", "terminal_event_id"):
         if field in value and not (runless and field in ("run_id", "terminal_event_id")):
             identifier(value[field])
     for field in ("generation", "expected_generation"):
@@ -131,6 +136,8 @@ def decode(raw):
     if operation == "reconcile":
         require(value["outcome"] in RECONCILED_OUTCOMES, "terminal_outcome")
     if operation == "launch_child":
+        require(type(value.get('workspace_worker', False)) is bool and (not value.get('workspace_worker', False) or
+                type(value['role']) is str and value['role'].startswith('worker-') and value['mode']=='fresh'), 'workspace_worker_launch')
         setup_scope(value['setup'],value['role'],value['owner_id'],value['conversation_id'])
         preferences(value['preferences'],value['role'])
         require(type(value["proxy_pid"]) is int and 1 < value["proxy_pid"] < 2**31 and
@@ -143,6 +150,13 @@ def decode(raw):
     if operation=='desk_login':
         from .desk_operations import capability
         capability(value['capability'])
+    if operation=='workspace_command':
+        from .workspace_command import capability
+        capability(value['capability'])
+    if operation in ('workspace_command_receipt','workspace_command_cancel'):
+        identifier(value['operation_id'])
+        require(type(value['source_sha256']) is str and len(value['source_sha256'])==64 and
+                all(c in '0123456789abcdef' for c in value['source_sha256']), 'workspace_command_digest')
     if operation in ('managed_consume','managed_renew'):
         from .managed_control import capability
         capability(value['capability'])

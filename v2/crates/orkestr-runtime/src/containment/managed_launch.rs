@@ -13,10 +13,23 @@ pub struct ManagedLaunchDescriptors {
     descriptors: Vec<OwnedFd>,
     setup: Option<serde_json::Value>,
     preferences: (Option<String>, Option<String>),
+    workspace_worker: bool,
 }
 impl ManagedLaunchDescriptors {
     pub fn role(&self) -> &str {
         &self.role
+    }
+    pub fn workspace_worker(&self) -> bool {
+        self.workspace_worker
+    }
+    pub(super) fn set_workspace_worker(&mut self, enabled: bool) -> Result<(), Error> {
+        if self.setup.is_some()
+            || enabled && (!self.role.starts_with("worker-") || self.mode() != "fresh")
+        {
+            return Err(Error::AuthorityProtocol);
+        }
+        self.workspace_worker = enabled;
+        Ok(())
     }
     pub fn mode(&self) -> &'static str {
         if self.descriptors.len() == 5 {
@@ -233,6 +246,7 @@ pub(super) fn prepare(config: Configuration, provider: &UnixStream) -> Result<Pr
         role: config.role,
         setup: None,
         preferences: (None, None),
+        workspace_worker: false,
         descriptors: vec![
             child_input.try_clone().map_err(|_| Error::Io)?,
             child_output.try_clone().map_err(|_| Error::Io)?,

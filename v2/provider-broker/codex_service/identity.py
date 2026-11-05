@@ -86,9 +86,14 @@ def receive_launch_context(package, descriptor=6):
     value = json.loads(bytes(raw))
     mcp=(getattr(package,'runtime',{}).get('managed_operations') and type(value) is dict and value.get('role') in ('deep','claude')
          and type(value.get('setup')) is dict and value['setup'].get('role')=='deep')
-    require(type(value) is dict and set(value)-({'managed_mcp_url'} if mcp else set()) == {'server_pid', 'server_start', 'server_uid',
+    required = {'server_pid', 'server_start', 'server_uid',
             'manager_pid', 'manager_start', 'owner_id', 'conversation_id', 'manifest_sha256',
-            'window_id', 'generation', 'role', 'request_id','setup','preferences'}, 'launch_capsule_fields')
+            'window_id', 'generation', 'role', 'request_id','setup','preferences'}
+    if mcp:required.add('managed_mcp_url')
+    require(type(value) is dict and required <= set(value) <= required|{'workspace_worker'}, 'launch_capsule_fields')
+    require(type(value.get('workspace_worker',False)) is bool and (not value.get('workspace_worker',False) or
+            type(value['role']) is str and value['role'].startswith('worker-') and
+            type(value['setup']) is dict and value['setup'].get('role')=='worker'), 'workspace_worker_capsule')
     if mcp:
         from .managed_advertisement import valid_url
         valid_url(value.get('managed_mcp_url'))

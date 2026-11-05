@@ -19,7 +19,13 @@ mod managed_launch;
 mod managed_operations;
 #[path = "manager_client_wire.rs"]
 mod wire;
+#[path = "manager_workspace.rs"]
+mod workspace;
+#[path = "manager_workspace_command.rs"]
+#[allow(dead_code)] // Profile gate remains closed until dispatcher qualification.
+mod workspace_command;
 use wire::*;
+pub(crate) use workspace_command::{RootCommand, RootCommandReceipt};
 
 const MAX_FRAME: usize = 8192;
 const INTEGER_LIMIT: u64 = 1 << 53;

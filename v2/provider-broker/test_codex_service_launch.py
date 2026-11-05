@@ -31,6 +31,16 @@ def request():
 
 
 class LaunchTransportTests(unittest.TestCase):
+    def test_workspace_marker_is_optional_closed_and_worker_fresh_only(self):
+        from codex_service.contract import decode, HEADER
+        value=request();value['workspace_worker']=True
+        with self.assertRaisesRegex(Refused,'workspace_worker_launch'):decode(encode(value)[HEADER.size:])
+        value['role']='worker-0';value['setup']['role']='worker'
+        self.assertTrue(decode(encode(value)[HEADER.size:])['workspace_worker'])
+        for invalid in (1,'true',None):
+            value['workspace_worker']=invalid
+            with self.assertRaisesRegex(Refused,'workspace_worker_launch'):decode(encode(value)[HEADER.size:])
+
     def test_preferences_are_closed_provider_scoped_and_never_an_environment(self):
         from codex_service.contract import decode,HEADER
         value=request();value['role']='claude';value['setup']['provider']='claude'

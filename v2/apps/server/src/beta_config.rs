@@ -7,6 +7,7 @@ pub(crate) mod loading;
 pub(crate) mod provider_routing;
 pub(crate) mod roles;
 pub(crate) mod workspace_exec;
+mod workspace_exec_managed;
 pub(crate) mod workspace_exec_trusted;
 use orkestr_v2_contracts::{ConversationId, OwnerId};
 use serde::Deserialize;
@@ -152,15 +153,25 @@ impl BetaConfig {
         }
         if let Some(identity) = &self.identity_split {
             identity.validate()?;
-            // Only the fresh Deep path is qualified by this contract stage.
-            // Resume, role workers, Claude and workspace execution need their
-            // private FD/bootstrap contracts separately, never a fallback UID.
-            if self.host_full_access.is_some()
-                || self.workspace_exec.is_some()
-                || !self.additional_workspace_exec.is_empty()
-            {
+            // Advanced paths require their own closed Root FD contracts,
+            // never a fallback to the legacy privileged service identity.
+            if self.host_full_access.is_some() {
                 return Err("unsupported split execution mode");
             }
+            for profile in self.workspace_profiles() {
+                profile
+                    .trusted
+                    .as_ref()
+                    .ok_or("split workspace requires managed commands")?
+                    .validate_managed_runtime()?;
+            }
+        } else if self.workspace_profiles().any(|profile| {
+            profile
+                .trusted
+                .as_ref()
+                .is_some_and(|trusted| trusted.managed_executor.is_some())
+        }) {
+            return Err("managed workspace commands require the identity split");
         }
         if self.managed_host.is_some()
             && (self.identity_split.is_none() || self.host_full_access.is_some())

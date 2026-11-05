@@ -17,6 +17,9 @@ impl ManagerClient {
             request["role"] = json!(descriptors.role());
             request["mode"] = json!(descriptors.mode());
             request["preferences"] = descriptors.preferences();
+            if descriptors.workspace_worker() {
+                request["workspace_worker"] = json!(true);
+            }
             request["setup"] = descriptors
                 .setup()
                 .map_err(|_| ManagerError::Protocol)?

@@ -83,6 +83,16 @@ pub(crate) fn load(path: &Path, home: &Path) -> Result<BetaConfig, &'static str>
         }
     }
     for profile in config.workspace_profiles() {
+        if config.identity_split.is_some() {
+            profile
+                .trusted
+                .as_ref()
+                .ok_or(REFUSED)?
+                .validate_managed_runtime()?;
+            // Core receives the exact Root-retained project descriptors later,
+            // before registration. Loading never widens private traversal.
+            continue;
+        }
         // Readiness only: no Core project registration, command, or cgroup is
         // created by loading the trusted operator profile.
         profile.installation(
