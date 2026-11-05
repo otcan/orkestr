@@ -105,12 +105,15 @@ class Activation:
                 targets.append({'target':row['target'],'mount_id':mount_id(mounted)})
             finally:
                 os.close(parentfd);os.close(placeholder)
-        checks=[{'path':str(self.ctx['home']),'operation':'read'},*doc['denials']]
+        checks=[{'path':str(self.ctx['home']),'operation':'read'},*doc['denials'],
+                *[{'path':row['source'],'operation':'read'} for row in doc['resources']
+                  if row['kind']=='agent_timer_grants']]
         denied(self.ctx['executor_uid'],self.ctx['executor_gid'],checks)
         denied(self.ctx['authority_uid'],self.ctx['authority_gid'],[
             {'path':row['target'],'operation':'read'} for row in doc['resources'] if row['kind'] not in READONLY])
         denied(self.ctx['authority_uid'],self.ctx['authority_gid'],[
-            {'path':row['path'],'operation':'read'} for row in projected])
+            {'path':row['path'],'operation':'read'} for row in projected]+
+            [{'path':row['workspace'],'operation':'read'} for row in self.ctx.get('native_workspaces',[])])
         value=dict(format=FORMAT,contract=doc,creator=process(os.getpid()),namespace=ns('mnt'),
                    parent_namespace=parent,user_namespace=ns('user'),targets=targets,home_lookups=self.homes,projects=projected)
         self.receipt=receipt_path(self.selected)

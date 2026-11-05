@@ -11,9 +11,9 @@ from .contract import identifier, require
 from .identity import bind
 
 FORMAT='orkestr-resource-namespace-v1'
-KINDS={'codex_auth','codex_lock','gog_store','claude_account','skill','toolchain'}
+KINDS={'codex_auth','codex_lock','gog_store','claude_account','skill','toolchain','agent_timer_grants'}
 DIRECTORIES=KINDS-{'codex_auth','codex_lock'}
-READONLY={'skill','toolchain'}
+READONLY={'skill','toolchain','agent_timer_grants'}
 
 
 def encoded(value):return json.dumps(value,sort_keys=True,separators=(',',':'),allow_nan=False).encode()
@@ -71,6 +71,16 @@ def context(runtime,beta,profile,claude=None,package_root=None):
         artifacts=[path(runtime[k]) for k in ('server','ui','native','pair','code_mode_host') if k in runtime],
         projects=([beta['workspace_exec']] if 'workspace_exec' in beta else [])+beta.get('additional_workspace_exec',[]),
         beta=beta)
+    native=beta.get('conversation_workspaces',{})
+    require(type(native) is dict and len(native)<=128,'resource_native_workspaces')
+    result['native_workspaces']=[]
+    for conversation,entry in native.items():
+        identifier(conversation)
+        shared=type(entry) is dict
+        require(not shared or set(entry)=={'path','shared'} and entry['shared'] is True,
+                'resource_native_workspace_fields')
+        result['native_workspaces'].append(dict(conversation_id=conversation,
+            workspace=str(path(entry['path'] if shared else entry)),shared=shared))
     result['protected']=[path(runtime[k]) for k in ('home','bootstrap_file','ledger_directory','endpoint_directory')]
     if package_root is not None:result['protected'].append(path(str(package_root)))
     environments=[]
@@ -81,6 +91,8 @@ def context(runtime,beta,profile,claude=None,package_root=None):
     if claude and type(claude.get('managed_host')) is dict:
         environments.append(claude['managed_host']['environment'])
     result['environments']=environments
+    from .resource_timers import selected
+    result['agent_timer_grants']=selected(runtime,result)
     return result
 
 
@@ -107,13 +119,15 @@ def validate(doc,ctx):
         require(not any(overlap(p,q) for q in [*private,*ctx['protected'],ctx['provider_home']]),
                 'resource_home_overlap')
         private.append(p)
-    auth=0;lock=0;claudes=0;targets=[];sources=[]
+    auth=0;lock=0;claudes=0;timers=0;targets=[];sources=[]
     for item in rows:
         require(type(item) is dict and set(item)-{'project_id'}=={'kind','source','target','uid','gid','device','inode'}
                 and item['kind'] in KINDS and all(integer(item[k],k in ('uid','gid','device'))
                 for k in ('uid','gid','device','inode')),'resource_row_fields')
         kind=item['kind'];src=path(item['source']);dst=path(item['target'])
-        require(item['uid'] in (old,0) and (item['uid']!=0 or kind in READONLY),
+        require((kind=='agent_timer_grants' and item['uid']==ctx['authority_uid']) or
+                (kind!='agent_timer_grants' and item['uid'] in (old,0)
+                 and (item['uid']!=0 or kind in READONLY)),
                 'resource_source_owner')
         require(not any(overlap(src,q) or overlap(dst,q) for q in ctx['protected']),
                 'resource_authority_overlap')
@@ -141,7 +155,11 @@ def validate(doc,ctx):
             require(src.name==dst.name=='gogcli' and dst in allowed,'resource_gog_binding')
         elif kind=='claude_account':
             require(ctx['claude'] is not None and dst==ctx['claude'],'resource_claude_binding');claudes+=1
+        elif kind=='agent_timer_grants':
+            from .resource_timers import bind
+            bind(item,ctx,private);timers+=1
     require(auth==1 and lock<=1 and claudes==int(ctx['claude'] is not None),'resource_account_set')
+    require(timers==int(ctx.get('agent_timer_grants') is not None),'resource_timer_set')
     for item in denials:
         require(type(item) is dict and set(item)=={'path','operation'} and
                 item['operation'] in ('read','write','connect_unix'),'resource_denial_fields')

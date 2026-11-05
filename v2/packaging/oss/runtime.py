@@ -55,6 +55,8 @@ def write_private(path, value, uid=UID):
 
 def initialize():
     import secrets
+    require(os.environ.get('ORKESTR_OSS_LOCAL_SETUP') in (None, '0', '1'),
+            'ORKESTR_OSS_LOCAL_SETUP must be 0 or 1')
     require(os.geteuid() == 0, 'container manager must initialize as root')
     for root in (STATE, Path('/credentials')):
         require(root.resolve() == root and root.is_dir() and root.stat().st_uid == 0
@@ -92,6 +94,13 @@ def dropped_environment():
     return {'PATH': '/usr/local/bin:/usr/bin:/bin', 'LANG': 'C.UTF-8',
             'HOME': '/credentials/home', 'CODEX_HOME': '/credentials/codex',
             'PYTHONDONTWRITEBYTECODE': '1'}
+
+
+def setup_environment():
+    env = dropped_environment()
+    if os.environ.get('ORKESTR_OSS_LOCAL_SETUP') == '1':
+        env['ORKESTR_OSS_LOCAL_BOOTSTRAP'] = (STATE / 'bootstrap.token').read_text()
+    return env
 
 
 def login(provider):
@@ -292,6 +301,10 @@ def serve_configured(owner_file):
 
 
 def setup_banner():
+    if os.environ.get('ORKESTR_OSS_LOCAL_SETUP') == '1':
+        print('provider_login_required: open http://127.0.0.1:19822 and create your account, then Connect models', flush=True)
+        print('Local account setup enabled: publish this container on 127.0.0.1 only.', flush=True)
+        return
     token = (STATE / 'bootstrap.token').read_text()
     print('provider_login_required: open http://127.0.0.1:19822, choose First-time setup, then Connect models', flush=True)
     # Local container log only (docker logs); valid until the first owner exists.
@@ -322,7 +335,7 @@ def serve_unconfigured(owner_file):
             'ORKESTR_V2_BOOTSTRAP_TOKEN': (STATE / 'bootstrap.token').read_text()}))
         children.append(subprocess.Popen(SETPRIV + ['/usr/bin/python3', '-I', '-S', '-B',
                         str(SOURCE / 'v2/packaging/oss/setup_service.py')], cwd='/credentials/home',
-                        env=dropped_environment()))
+                        env=setup_environment()))
         children.append(subprocess.Popen(SETPRIV + ['/usr/sbin/nginx', '-c',
                         str(SOURCE / 'v2/packaging/oss/nginx-setup.conf')], cwd='/', env={'PATH': '/usr/bin:/bin'}))
         while not ending:
