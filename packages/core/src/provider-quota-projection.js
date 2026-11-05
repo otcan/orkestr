@@ -23,9 +23,17 @@ async function privateJson(filename, owners, limit) {
   } finally { await file.close(); }
 }
 
+export const quotaProjectionProviders = Object.freeze(["claude", "codex"]);
+const sourceKeys = ["ownerUserId", "coreOwnerId", "accountRef", "producerUid", "path"];
+// A source without `provider` is the original Claude enrollment.
+export const quotaSourceProvider = source => exact(source, sourceKeys) ? "claude"
+  : exact(source, [...sourceKeys, "provider"]) && quotaProjectionProviders.includes(source.provider) ? source.provider : null;
+
 export function quotaProjectionWindows(value, source, now) {
+  const provider = source?.provider ?? "claude";
+  if (!quotaProjectionProviders.includes(provider)) return [];
   if (!exact(value, ["format", "provider", "owner_id", "account_ref", "windows"])
-      || value.format !== "orkestr-provider-quota-v1" || value.provider !== "claude"
+      || value.format !== "orkestr-provider-quota-v1" || value.provider !== provider
       || value.owner_id !== source.coreOwnerId || value.account_ref !== source.accountRef
       || !value.windows || typeof value.windows !== "object" || Array.isArray(value.windows)
       || Object.keys(value.windows).some(key => !["five_hour", "seven_day"].includes(key))) return [];
@@ -36,7 +44,7 @@ export function quotaProjectionWindows(value, source, now) {
         || !(window.resets_at === null || finite(window.resets_at) && window.resets_at > 0)
         || !statuses.has(window.status) || !Number.isSafeInteger(window.observed_at)
         || window.observed_at <= 0 || window.observed_at > now + 60_000) return [];
-    result.push({ period: period === "five_hour" ? "fiveHour" : "weekly", observedAt: new Date(window.observed_at).toISOString(),
+    result.push({ provider, period: period === "five_hour" ? "fiveHour" : "weekly", observedAt: new Date(window.observed_at).toISOString(),
       record: { used_percent: window.used_percent, resets_at: window.resets_at, status: window.status } });
   }
   return result;
@@ -49,17 +57,20 @@ export async function loadProviderQuotaProjections(ownerUserId, env = process.en
     const config = await privateJson(filename, [0, process.getuid?.()].filter(Number.isInteger), 16_384);
     if (!exact(config, ["format", "sources"]) || config.format !== "orkestr-provider-quota-sources-v1"
         || !Array.isArray(config.sources) || config.sources.length > 16) return [];
-    // One enrolled Claude account per owner; never blend different accounts'
-    // periods or silently choose one ambiguous operator entry.
-    if (config.sources.filter(source => source?.ownerUserId === ownerUserId).length !== 1) return [];
+    const owned = config.sources.filter(source => source?.ownerUserId === ownerUserId);
+    // One enrolled account per owner and provider; never blend different
+    // accounts' periods or silently choose one ambiguous operator entry.
+    // An unrecognized entry for this owner makes every provider ambiguous.
+    if (owned.some(source => !quotaSourceProvider(source))) return [];
     const results = [];
-    for (const source of config.sources) {
-      if (!exact(source, ["ownerUserId", "coreOwnerId", "accountRef", "producerUid", "path"])
-          || source.ownerUserId !== ownerUserId || !identified(source.coreOwnerId) || !identified(source.accountRef)
+    for (const source of owned) {
+      const provider = quotaSourceProvider(source);
+      if (owned.filter(other => quotaSourceProvider(other) === provider).length !== 1
+          || !identified(source.coreOwnerId) || !identified(source.accountRef)
           || !Number.isInteger(source.producerUid) || source.producerUid < 0) continue;
       try {
         const value = await privateJson(source.path, [source.producerUid], 8192);
-        results.push(...quotaProjectionWindows(value, source, now));
+        results.push(...quotaProjectionWindows(value, { ...source, provider }, now));
       } catch { /* Missing, changing or unavailable metadata leaves quota unknown/stale. */ }
     }
     return results;

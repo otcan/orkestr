@@ -13,7 +13,10 @@ import {scopedRouteMembership} from './whatsapp-scoped-route-membership.js';
 import {DatabaseSync} from 'node:sqlite';
 import {isReplyDocument, scopedGroupReplyChunks} from './whatsapp-scoped-group-formatting.js';
 import {createRelayReplyFiles} from './whatsapp-scoped-relay-reply-files.js';
+import {quotedGroupInput, relayQuoteLookups, sendQuotedOnce} from './whatsapp-scoped-deep-quote.js'; // Grouped V2 Deep finals.
 import {createProgressBudget, progressPhases, progressPolicy} from './scoped-group-progress.js';
+import {createRouteAge} from './scoped-group-route-age.js';
+import {createMessagePageReader, isSilentNoReply} from './scoped-group-message-pages.js';
 import {createDynamicGroupRegistry, createDynamicGroupView, eligibleGroups, validateDynamicGroups} from './whatsapp-scoped-dynamic-groups.js';
 
 const key = value => crypto.createHash('sha256').update(value).digest('hex');
@@ -39,7 +42,6 @@ const threadSuppressesUpdates = (thread = {}) => {
 const errorCode = error => /^[a-z_]+$/.test(error.message) ? error.message : 'operation_failed';
 const GROUP_IMAGE_MIMES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp']);
 const GROUP_MEDIA_MAX_BYTES = 10 * 1024 * 1024;
-
 export {buildReplyTo} from './scoped-group-reply-quote.js';
 
 export function createScopedGroupRelay({config, api, send, log = () => {}, inboxDb, relayDb, formatter, env = process.env, readMediaFile = fs.readFile, now = Date.now,
@@ -92,7 +94,7 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
       if (threadSuppressesUpdates(thread)) return false;
       if (!route) return {active:false};
       const {messages} = await answersFor(group, route, false);
-      if (messages.some(m => m.parentMessageId === route.message_id && String(m.text || '').trim() === 'NO_REPLY')) {
+      if (messages.some(m => m.parentMessageId === route.message_id && isSilentNoReply(m))) {
         acknowledgements.mark(input.id, 'no_reply'); return false;
       }
       return acknowledgementActivity({api,group,thread,route,messages,now});
@@ -181,7 +183,7 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
     return {thread, metadata};
   }
 
-  const progressBudget = createProgressBudget(db, now);
+  const progressBudget = createProgressBudget(db, now), routeAge = createRouteAge(db, now), readPage = createMessagePageReader({api, now, log});
   async function answersFor(group, route, suppressUpdates = false) {
     // Walk older pages until the parent is found, so a long-running turn cannot
     // lose its final answer merely because another turn produced many messages.
@@ -189,7 +191,7 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
     const answers = new Map();
     const context = new Map();
     for (let pageNumber = 0; pageNumber < 100; pageNumber++) {
-      const page = await api(`/api/threads/${encodeURIComponent(group.threadId)}/messages?limit=200${before ? `&before=${before}` : ''}`);
+      const page = await readPage(group.threadId, {limit: 200, before});
       const messages = page.messages || [];
       for (const message of messages) {
         context.set(message.id, message);
@@ -219,8 +221,7 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
   });
   async function deliverAnswerOnce(input, group, answer, messages) {
     const text = String(answer.text || '').trim();
-    if (text === 'NO_REPLY') acknowledgements.mark(input.id, 'no_reply');
-    if (!text || text === 'NO_REPLY') return;
+    if (!text || isSilentNoReply(answer)) return void (text && acknowledgements.mark(input.id, 'no_reply')); // Silent: never sent.
     const payloadId = key(`${input.id}:${answer.id}`);
     let saved = db.prepare('SELECT chunks FROM reply_payloads WHERE id=?').get(payloadId);
     if (!saved) {
@@ -247,8 +248,8 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
       const entry = chunks[index];
       if (deliveryBlocked()) throw new Error('group_delivery_requires_review');
       acknowledgements.mark(input.id, 'real_send_attempt');
-      const result = await send({chatId: input.chat_id, requestId, parentId: input.id,
-        ...(isReplyDocument(entry) ? {document: entry.document} : {text: entry})});
+      const result = await sendQuotedOnce(send, {chatId: input.chat_id, requestId, parentId: input.id, ...(isReplyDocument(entry) ? {document: entry.document} : {text: entry})},
+        index === 0 && !isReplyDocument(entry) ? quotedGroupInput({answer, messages, input, group, ...relayQuoteLookups(db, inbox)}) : '', () => log({event: 'reply_quote_fallback', threadId: group.threadId, messageId: answer.id}));
       if (result.ok !== true || !result.ids?.length) throw new Error('group_reply_unconfirmed');
       db.prepare("INSERT OR REPLACE INTO replies VALUES(?,'sent')").run(requestId);
       db.prepare('INSERT OR REPLACE INTO reply_receipts VALUES(?,?)').run(requestId, JSON.stringify(result.ids.map(String)));
@@ -298,7 +299,7 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
       if (active?.route !== config.routeControl.routeId || !Number.isFinite(Date.parse(input.created_at)) || Date.parse(input.created_at) < Date.parse(active.since)) return;
     }
     let route = db.prepare('SELECT * FROM routed WHERE id=?').get(input.id);
-    if (route?.completed || (admissionOnly && route)) return;
+    if (route?.completed || (admissionOnly && route) || (route && routeAge.expired(input))) return;
     const {metadata, thread: routeThread} = await inputThread(input, group);
     if (!route) {
       let attachments = [];
@@ -389,6 +390,7 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
       const messageId = response.message?.id || response.messageId;
       if (!messageId) throw new Error('group_input_unacknowledged');
       db.prepare('INSERT OR IGNORE INTO routed(id,thread_id,message_id) VALUES(?,?,?)').run(input.id, group.threadId, messageId);
+      routeAge.routed(input.id);
       route = db.prepare('SELECT * FROM routed WHERE id=?').get(input.id);
       log({event: 'input_routed', threadId: group.threadId, messageId});
     }
@@ -401,7 +403,7 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
       if (localCommentary.includes(answer) && answer !== progress) continue;
       await deliverAnswer(input, group, answer, messages);
       if (answer === progress) progressBudget.delivered(input.id, answer, localCommentary);
-      if (['final_answer', 'final'].includes(answer.phase)) db.prepare('UPDATE routed SET completed=1 WHERE id=?').run(input.id);
+      routeAge.answered(input.id, answer);
     }
   }
 

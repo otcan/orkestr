@@ -10,6 +10,9 @@ export const SCOPED_ATTACHED_MARKER = '… (full reply attached)';
 // Largest single WhatsApp text the scoped send path accepts (String#length):
 // the reply budget plus the attachment marker and the footer.
 export const SCOPED_SEND_MAX_TEXT_LENGTH = 65000;
+// Shape of a serialized WhatsApp message id a text may quote (reply-to).
+// Only the shape: the transport checks it names an input of the same group.
+export const validQuotedMessageId = value => typeof value === 'string' && /^[\w@.:-]{1,256}$/.test(value);
 export const SCOPED_DOCUMENT_MIMETYPE = 'text/markdown';
 export const SCOPED_DOCUMENT_MAX_CHARS = 2_000_000;
 export const SCOPED_DOCUMENT_NAME = /^reply-[0-9a-f]{10}\.md$/;
@@ -51,12 +54,28 @@ export function validReplyDocument(document) {
 // and whose parent text is the post label; the V2 adapter also exports the
 // post author. Only real timers are labelled as timers.
 export const POST_TIMER_SOURCE_ID = 'post';
+export const FAST_TIMER_SOURCE_ID = 'fast';
 const oneLine = value => String(value || '').replace(/[\r\n]/g, ' ').trim().slice(0, 120);
+
+function postAuthorKind(name, postAuthor) {
+  return String(postAuthor || '').trim().toLowerCase() || ({operator: 'operator', system: 'operator', question: 'assistant_question'})[name.toLowerCase()] || 'coordinator';
+}
+
+// Delivery type for a V2 pseudo-timer reply: Quick answers, coordinator posts,
+// questions and scheduled timers are replies ("timer_reply", footer allowed);
+// an operator/system post is a notice ("router_update", compact footer only).
+export function scopedReplyDeliveryType({label, timerId, postAuthor} = {}) {
+  const source = String(timerId || '').trim();
+  return source === POST_TIMER_SOURCE_ID && postAuthorKind(oneLine(label), postAuthor) === 'operator' ? 'router_update' : 'timer_reply';
+}
 
 export function scopedReplyHeader({label, timerId, postAuthor} = {}) {
   const name = oneLine(label);
-  if (String(timerId || '').trim() !== POST_TIMER_SOURCE_ID) return `⏰ ${name || 'Scheduled task'}`;
-  const author = String(postAuthor || '').trim().toLowerCase() || ({operator: 'operator', system: 'operator', question: 'assistant_question'})[name.toLowerCase()] || 'coordinator';
+  const source = String(timerId || '').trim();
+  // V2 Quick (Fast) replies are pseudo timers with source timer id "fast"; mark them like the footer's Quick layer.
+  if (source === FAST_TIMER_SOURCE_ID) return `⚡ ${name || 'Quick reply'}`;
+  if (source !== POST_TIMER_SOURCE_ID) return `⏰ ${name || 'Scheduled task'}`;
+  const author = postAuthorKind(name, postAuthor);
   if (author === 'operator') return '⚙️ System:';
   if (author === 'assistant_question') return `❓ ${name || 'Question'}:`;
   return `🤖 ${name || 'Coordinator'}:`;
@@ -145,7 +164,7 @@ export function scopedGroupReplyChunks({text, message, thread, messages, config,
   const limit = scopedGroupReplyLimit(config, env);
   const footerEnv = config.appendDebugFooter === true ? {...env, ORKESTR_WHATSAPP_DEBUG_FOOTER: '1'} : env;
   let suffix = '';
-  if (formatter && config.appendDebugFooter !== false && formatter.shouldAppendWhatsAppDebugFooter(message, footerEnv, deliveryType, thread)) {
+  if (formatter && config.appendDebugFooter !== false && formatter.shouldAppendWhatsAppDebugFooter(message, footerEnv, deliveryType, thread, messages)) {
     const footer = formatter.whatsappDebugFooter({message, thread, messages, deliveryType, env: footerEnv});
     if (footer.length > SCOPED_FOOTER_MAX_CHARS) throw new Error('group_footer_too_large');
     suffix = `\n\n${footer}`;
@@ -158,7 +177,7 @@ export function scopedGroupReplyChunks({text, message, thread, messages, config,
   const marker = `\n\n${SCOPED_ATTACHED_MARKER}`;
   // A footer already embedded at the end of the reply text (a final "dbg:"
   // block of up to five lines) stays on the message too, not only in the file.
-  const embedded = suffix ? null : body.match(/\n\n((?:dbg: |⚡ Quick:)[^\n]*(?:\n[^\n]+){0,4})$/);
+  const embedded = suffix ? null : body.match(/\n\n((?:dbg: |⚡ Quick:|🧠 (?:Deep|Coordinator):)[^\n]*(?:\n[^\n]+){0,4}|(?:(?:codex|claude)\b[^\n]*\n){0,2}(?:q|queue):[^\n]*help:\/help)$/);
   if (embedded && embedded[1].length <= SCOPED_FOOTER_MAX_CHARS) suffix = `\n\n${embedded[1]}`;
   const lead = embedded && suffix ? body.slice(0, embedded.index).trimEnd() : body;
   const preview = scopedReplyPreview(lead, limit - marker.length);

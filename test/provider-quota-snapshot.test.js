@@ -186,7 +186,7 @@ test("Codex footer always shows both providers with reset countdowns and leaves 
     whatsAppDebugProviderQuota: providerQuotaFromThreads([claudeThread({ claudeRateLimitsObservedAt: iso(Date.now() - 60_000) })]),
   };
   const text = appendWhatsAppDebugFooter("Done", { env: footerEnv, message: { source: "codex-app-server" }, thread });
-  assert.match(text, /\n\ndbg: codex\/gpt-test\/h · rt:api · msg:\*final\*\ncodex 5h: 62% \(\d+d\d+h\) wk: 80% \(\d+d\d+h\)\nclaude 5h: 41% \(\d+d\d+h\) wk: 77% \(\d+d\d+h\)\nq:0 · load:\d+% · api:\d+% · help:\/help$/);
+  assert.match(text, /\n\n⚡ Quick: — · 🧠 Deep: codex gpt-test\/h · ▶ Deep\ncodex 5h: 62% \(\d+d\d+h\) wk: 80% \(\d+d\d+h\)\nclaude 5h: 41% \(\d+d\d+h\) wk: 77% \(\d+d\d+h\)\nq:0 · load:\d+% · api:\d+% · help:\/help$/);
   assert.doesNotMatch(text, /mode-switch:|rt-switch:|switch:\/claude|model:\/model|effort:\/effort|fast:\/fast/);
   assert.equal(stripWhatsAppDebugFooter(text), "Done");
 });
@@ -195,7 +195,7 @@ test("Claude footer always shows both providers, hides Codex controls and marks 
   const staleCodex = codexThread({ codexRateLimitsObservedAt: iso(Date.now() - 7 * hour) });
   const thread = { ...claudeThread({ claudeRateLimitsObservedAt: undefined }), whatsAppDebugProviderQuota: providerQuotaFromThreads([staleCodex]) };
   const text = appendWhatsAppDebugFooter("Done", { env: footerEnv, message: { source: "claude-code" }, thread });
-  assert.match(text, /\n\ndbg: claude\/sonnet\/m · rt:claude · msg:\*final\*\ncodex 5h: \d+% \(\d+d\d+h\) wk: \d+% \(\d+d\d+h\) \(stale\)\nclaude 5h: 41% \(\d+d\d+h\) wk: 77% \(\d+d\d+h\)\nq:0 · /);
+  assert.match(text, /\n\n⚡ Quick: — · 🧠 Deep: claude sonnet\/m · ▶ Deep\ncodex 5h: \d+% \(\d+d\d+h\) wk: \d+% \(\d+d\d+h\) \(stale\)\nclaude 5h: 41% \(\d+d\d+h\) wk: 77% \(\d+d\d+h\)\nq:0 · /);
   assert.match(text, / · help:\/help$/);
   assert.doesNotMatch(text, /fast:|mode:|mode-switch:|rt-switch:|switch:\/codex|model:\/model/);
   assert.equal(stripWhatsAppDebugFooter(text), "Done");

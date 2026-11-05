@@ -208,7 +208,7 @@ export function mergeThreadIntoProviderQuota(snapshot = null, thread = null, { n
     const own = providerQuotaFromThread(thread, provider, { now, staleMs });
     if (!own) continue;
     const current = base[provider];
-    if (provider === "claude" && current && quotaWindowDetails.has(current)) {
+    if (current && quotaWindowDetails.has(current)) {
       // Legacy thread telemetry has no enrolled account reference. It cannot
       // backfill unknown periods or override this verified account projection.
       continue;
@@ -232,7 +232,8 @@ async function defaultLoadClaudeProfiles(ownerUserId, env) {
 
 // Pick each period independently. A fresh five-hour observation must not stamp
 // an older weekly percentage fresh. The public aggregate age is conservative.
-export function mergeProjectedClaudeQuota(base, observations, { now = Date.now(), staleMs = defaultStaleMs } = {}) {
+// Provider-neutral: the base entry names the provider.
+export function mergeProjectedProviderQuota(base, observations, { now = Date.now(), staleMs = defaultStaleMs } = {}) {
   const periods = ["fiveHour", "weekly"];
   const selected = { ...(quotaWindowDetails.get(base) || {}) };
   for (const period of periods) {
@@ -271,6 +272,8 @@ export function mergeProjectedClaudeQuota(base, observations, { now = Date.now()
   return result;
 }
 
+export const mergeProjectedClaudeQuota = mergeProjectedProviderQuota;
+
 export async function providerQuotaSnapshot({ ownerUserId = "", now = Date.now(), loadThreads = defaultLoadThreads, loadClaudeProfiles = defaultLoadClaudeProfiles, loadProjections = loadProviderQuotaProjections, useCache = true } = {}, env = process.env) {
   const owner = resourceOwnerUserId({ ownerUserId }, env);
   const staleMs = providerQuotaStaleMs(env);
@@ -282,9 +285,14 @@ export async function providerQuotaSnapshot({ ownerUserId = "", now = Date.now()
   const claudeProfiles = await loadClaudeProfiles(owner, env).catch(() => []);
   const value = providerQuotaFromThreads(threads, { now, staleMs, claudeProfiles });
   const projections = await loadProjections(owner, env, now).catch(() => []);
-  if (projections.length) {
-    value.claude = mergeProjectedClaudeQuota({ ...emptyProviderQuota("claude"), limited: value.claude.limited }, projections, { now, staleMs });
-    if (!quotaWindowDetails.has(value.claude)) quotaWindowDetails.set(value.claude, {});
+  for (const provider of providerQuotaProviders) {
+    // Entries from a provider-less (older) loader are Claude's.
+    const observed = projections.filter((entry) => (entry?.provider ?? "claude") === provider);
+    if (!observed.length) continue;
+    // An enrolled account projection replaces legacy thread telemetry for its
+    // provider, e.g. Codex work that moved off V1 threads to the V2 broker.
+    value[provider] = mergeProjectedProviderQuota({ ...emptyProviderQuota(provider), limited: value[provider].limited }, observed, { now, staleMs });
+    if (!quotaWindowDetails.has(value[provider])) quotaWindowDetails.set(value[provider], {});
   }
   if (useCache) snapshotCache.set(cacheKey, { at: now, value });
   return value;

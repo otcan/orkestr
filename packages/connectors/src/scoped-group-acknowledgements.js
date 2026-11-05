@@ -1,5 +1,8 @@
 // Explicit per-group consent; this sender observes actual transport attempts.
 // The durable request ID and frozen text survive a retry or process restart.
+// The text follows the language of the message it answers (or the chat's or
+// policy's configured `language`), never one fixed language for every chat.
+import {acknowledgementLanguage, acknowledgementText, validLanguage} from './acknowledgement-language.js';
 export const ACKNOWLEDGEMENT_FALLBACK_MS = 20_000;
 export function createScopedAcknowledgements({config, inbox, db, groups, now, key, serial, blocked, inspect, send, log}) {
   db.exec(`CREATE TABLE IF NOT EXISTS scoped_real_reply_activity(input_id TEXT PRIMARY KEY,reason TEXT NOT NULL);
@@ -9,7 +12,7 @@ export function createScopedAcknowledgements({config, inbox, db, groups, now, ke
     throw new Error('group_acknowledgement_configuration_invalid');
   if (policy?.queuedText !== undefined && (typeof policy.queuedText !== 'string' || !policy.queuedText.trim() || policy.queuedText.length > 500))
     throw new Error('group_queued_acknowledgement_configuration_invalid');
-  const queuedText=policy?.queuedText ?? "Received, queued behind the current task in this chat; I'll answer when it finishes.";
+  if (policy && !validLanguage(policy.language)) throw new Error('group_acknowledgement_language_invalid');
   const timers = new Map();
   const lastChecked = new Map();
   let closed = false;
@@ -45,8 +48,9 @@ export function createScopedAcknowledgements({config, inbox, db, groups, now, ke
       // Native output or run state can change while this send waits its turn.
       const state=await inspectState(input,group);
       if (!state || closed || !eligible(input) || blocked()) return;
+      const text = acknowledgementText(policy, acknowledgementLanguage(input, group, policy), state);
       db.prepare("INSERT OR IGNORE INTO scoped_acknowledgements VALUES(?,?,?,'prepared',NULL)")
-        .run(input.id, `reply:${key(`${input.id}:acknowledgement:v1`)}`, state==='queued' ? queuedText : policy.text);
+        .run(input.id, `reply:${key(`${input.id}:acknowledgement:v1`)}`, text);
       const row = db.prepare('SELECT * FROM scoped_acknowledgements WHERE input_id=?').get(input.id);
       const result = await send({chatId: input.chat_id, requestId: row.request_id, parentId: input.id, text: row.text});
       if (result?.ok !== true || !result.ids?.length) throw new Error('group_acknowledgement_unconfirmed');
