@@ -17,6 +17,8 @@ from unittest.mock import patch
 from codex_service.channel import receive_control
 from codex_service.contract import Refused,encode
 from codex_bounded.trust import process
+# The CI Root step names this module explicitly; include the closed diagnostic cases.
+from test_launch_diagnostics import Tests as FailureMetadataTests
 
 
 def request():
