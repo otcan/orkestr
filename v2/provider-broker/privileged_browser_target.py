@@ -100,9 +100,11 @@ def process_identity(root):
 def executable_digest(root):
     executable=(root/'exe').resolve(strict=True)
     protected(executable)
+    expected=executable.stat()
     fd=os.open(root/'exe',os.O_RDONLY|os.O_CLOEXEC)
     try:
         info=os.fstat(fd)
+        require((info.st_dev,info.st_ino)==(expected.st_dev,expected.st_ino), 'target_executable_namespace_mismatch')
         require(stat.S_ISREG(info.st_mode) and info.st_uid==0 and not info.st_mode&0o022 and
                 info.st_size<=MAX_EXECUTABLE, 'target_executable_custody')
         checksum=hashlib.sha256()
@@ -133,7 +135,40 @@ def owned_listener(root, inode, port):
                 for line in raw.decode('ascii').splitlines()[1:]), 'target_listener_mismatch')
 
 
-def verify(path, slug):
+def connection(root, client_pid, local_port, port):
+    require(type(client_pid) is int and client_pid==os.getppid() and
+            type(local_port) is int and 1<=local_port<=65535, 'target_client_identity')
+    client=Path('/proc',str(client_pid))
+    client_before=process_identity(client)
+    require(client_before[1]==0,'target_client_not_root')
+    expected_local=f'0100007F:{local_port:04X}'
+    expected_remote=f'0100007F:{port:04X}'
+    def owned_inodes(proc):
+        result=set()
+        for index,fd in enumerate((proc/'fd').iterdir()):
+            require(index<4096,'target_descriptor_count')
+            try:link=os.readlink(fd)
+            except FileNotFoundError:continue
+            if link.startswith('socket:[') and link.endswith(']'):result.add(link[8:-1])
+        return result
+    def tcp(proc,local,remote):
+        with (proc/'net/tcp').open('rb') as stream:raw=stream.read(MAX_TCP_TABLE+1)
+        require(len(raw)<=MAX_TCP_TABLE,'target_socket_table_bound')
+        owned=owned_inodes(proc)
+        return [fields[9] for line in raw.decode('ascii').splitlines()[1:]
+                if len(fields:=line.split())>9 and fields[1]==local and fields[2]==remote
+                and fields[3]=='01' and fields[9] in owned]
+    client_inodes=tcp(client,expected_local,expected_remote)
+    server_inodes=tcp(root,expected_remote,expected_local)
+    require(len(client_inodes)==len(server_inodes)==1,'target_connection_not_owned')
+    require(process_identity(client)==client_before and
+            client_inodes==tcp(client,expected_local,expected_remote) and
+            server_inodes==tcp(root,expected_remote,expected_local), 'target_connection_changed')
+    return {'client_pid':client_pid,'client_port':local_port,
+            'client_inode':client_inodes[0],'server_inode':server_inodes[0]}
+
+
+def verify(path, slug, client_pid=None, client_port=None):
     require(os.geteuid()==0 and hasattr(os,'pidfd_open'), 'target_root_kernel_proof_required')
     target,port=descriptor(path,slug)
     root=Path('/proc',str(target['pid']))
@@ -145,9 +180,14 @@ def verify(path, slug):
         require(process_identity(root)==expected,'target_process_changed')
         require(executable_digest(root)==target['executable_sha256'],'target_executable_changed')
         owned_listener(root,target['listener_inode'],port)
+        connected=None
+        if client_pid is not None or client_port is not None:
+            connected=connection(root,client_pid,client_port,port)
         require(process_identity(root)==expected and not poll.poll(0),'target_process_changed')
-        return {'desk':slug,'endpoint':target['endpoint'],'pid':target['pid'],
+        result={'desk':slug,'endpoint':target['endpoint'],'pid':target['pid'],
                 'start_ticks':target['start_ticks'],'listener_inode':target['listener_inode']}
+        if connected is not None:result['connection']=connected
+        return result
     finally:os.close(pidfd)
 
 
@@ -155,8 +195,10 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--descriptor',required=True)
     parser.add_argument('--desk',required=True)
+    parser.add_argument('--client-pid',type=int)
+    parser.add_argument('--client-port',type=int)
     args=parser.parse_args()
-    try:result=verify(args.descriptor,args.desk)
+    try:result=verify(args.descriptor,args.desk,args.client_pid,args.client_port)
     except (OSError,ValueError,StopIteration,IndexError):
         raise SystemExit('privileged browser target refused') from None
     print(json.dumps(result,sort_keys=True))

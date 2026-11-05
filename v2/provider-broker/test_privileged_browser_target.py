@@ -5,6 +5,9 @@ import os
 from pathlib import Path
 import shutil
 import socket
+import subprocess
+import sys
+from unittest.mock import patch
 import unittest
 import uuid
 import privileged_browser_target as proof
@@ -69,6 +72,48 @@ class TargetProofTests(unittest.TestCase):
             with self.subTest(endpoint=endpoint):
                 with self.assertRaisesRegex(proof.Refused,'target_endpoint'):
                     proof.verify(self.path,'synthetic-desk')
+
+    def connection_check(self, client):
+        return subprocess.run([sys.executable,'-I','-S','-B',proof.__file__,
+            '--descriptor',str(self.path),'--desk','synthetic-desk',
+            '--client-pid',str(os.getpid()),'--client-port',str(client.getsockname()[1])],
+            capture_output=True,text=True,timeout=5)
+
+    def test_actual_open_connection_is_bound_to_both_process_socket_inodes(self):
+        with socket.create_connection(self.listener.getsockname()) as client:
+            accepted,_=self.listener.accept()
+            with accepted:
+                result=self.connection_check(client)
+                self.assertEqual(result.returncode,0,result.stderr)
+                value=json.loads(result.stdout)
+                inode=os.readlink('/proc/self/fd/'+str(accepted.fileno()))[8:-1]
+                self.assertEqual(value['connection']['server_inode'],inode)
+                self.assertEqual(value['connection']['client_port'],client.getsockname()[1])
+
+    def test_live_original_listener_cannot_attest_a_connection_owned_by_another_process(self):
+        with socket.create_connection(self.listener.getsockname()) as client:
+            accepted,_=self.listener.accept()
+            child=subprocess.Popen([sys.executable,'-I','-S','-B','-c',
+                'import time;time.sleep(10)'],pass_fds=(accepted.fileno(),))
+            accepted.close()
+            try:
+                # Listener-only proof still passes. The actual peer socket was
+                # transferred to another PID, so credential delivery must refuse.
+                proof.verify(self.path,'synthetic-desk')
+                result=self.connection_check(client)
+                self.assertNotEqual(result.returncode,0)
+                self.assertIn('privileged browser target refused',result.stderr)
+            finally:
+                child.terminate();child.wait(timeout=3)
+
+    def test_resolved_host_executable_inode_must_match_actual_process_executable(self):
+        original=os.open
+        def replaced(path,*args,**kwargs):
+            if str(path)=='/proc/'+str(os.getpid())+'/exe':path='/usr/bin/true'
+            return original(path,*args,**kwargs)
+        with patch.object(proof.os,'open',side_effect=replaced):
+            with self.assertRaisesRegex(proof.Refused,'target_executable_namespace_mismatch'):
+                proof.executable_digest(Path('/proc',str(os.getpid())))
 
     def test_duplicate_fields_or_extra_authority_fields_are_refused(self):
         self.path.write_text('{"schema_version":1,"schema_version":1,"desk_targets":{}}')
