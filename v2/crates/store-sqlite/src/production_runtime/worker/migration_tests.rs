@@ -109,5 +109,12 @@ async fn proposal_migration_preserves_old_blocked_children_and_every_prior_row()
         .fetch_one(&reopened.pool)
         .await
         .unwrap();
-    assert_eq!(latest, 85);
+    assert_eq!(
+        latest,
+        sqlx::migrate!("./migrations")
+            .iter()
+            .last()
+            .unwrap()
+            .version
+    );
 }

@@ -1,7 +1,11 @@
 //! Historical fixtures may remove only empty scan-action data.
 use crate::Store;
 
+#[path = "credential_migration_fixture.rs"]
+mod credentials;
+
 pub(crate) async fn downgrade_empty(store: &Store) {
+    credentials::downgrade_empty(store).await;
     let mut tx = store.pool.begin().await.unwrap();
     // Migration 85 down: only with no per-conversation agent timer limit.
     let limits: i64 = sqlx::query_scalar("SELECT count(*) FROM agent_timer_limits")
