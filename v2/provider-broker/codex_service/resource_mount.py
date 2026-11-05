@@ -5,6 +5,7 @@ from pathlib import Path
 import platform
 import select
 import signal
+import struct
 
 from .contract import require
 
@@ -69,16 +70,25 @@ def attach(source,target,uid,gid,target_uid,target_gid,readonly=False,noexec=Tru
         if userns is not None:os.close(userns)
 
 
-def empty_home(target):
+def empty_home(target,executor):
     """Attach a new sparse tmpfs over a pinned home, without changing its inode."""
     fs=LIBC.syscall(430,b'tmpfs',1);mount=None
     try:
         require(fs>=0,'resource_home_fsopen')
-        for key,value in ((b'mode',b'0711'),(b'size',b'4m')):
+        for key,value in ((b'mode',b'0700'),(b'size',b'4m')):
             require(LIBC.syscall(431,fs,1,key,value,0)==0,'resource_home_fsconfig')
         require(LIBC.syscall(431,fs,6,None,None,0)==0,'resource_home_create')
         mount=LIBC.syscall(432,fs,1,2|4)  # Project scripts remain executable.
         require(mount>=0,'resource_home_fsmount')
+        # Apply private traversal rights while detached. Core shares the IPC
+        # group but receives no path access to original world-readable projects.
+        root=os.open('.',os.O_RDONLY|os.O_DIRECTORY|os.O_CLOEXEC,dir_fd=mount)
+        try:
+            missing=0xffffffff
+            entries=((1,7,missing),(2,1,executor),(4,0,missing),(16,1,missing),(32,0,missing))
+            acl=struct.pack('<I',2)+b''.join(struct.pack('<HHI',*entry) for entry in entries)
+            os.setxattr(root,'system.posix_acl_access',acl)
+        finally:os.close(root)
         require(LIBC.syscall(429,mount,b'',target,b'',0x4|0x40)==0,'resource_home_attach')
     finally:
         if mount is not None and mount>=0:os.close(mount)
