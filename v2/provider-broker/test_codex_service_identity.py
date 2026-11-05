@@ -91,6 +91,38 @@ class SplitPackageTests(unittest.TestCase):
             self.assertIsNone(manager.child)
         finally:manager.close()
 
+    def test_external_server_configurations_require_authority_private_custody(self):
+        from codex_service.package import Package
+        from codex_bounded.trust import Refused as CustodyRefused
+        package=self.select_split()
+        service=package.root/'service.json';value=json.loads(service.read_text())
+        files=[]
+        for key in ('desktop_broker','timer_config','whatsapp_chats'):
+            path=self.fixture.root/(key+'.json');path.write_text('{}')
+            os.chown(path,package.authority_uid,self.gid);path.chmod(0o600)
+            value[key]=str(path);files.append(path)
+        service.write_text(json.dumps(value))
+        manifest=package.root/'manifest.json';meta=json.loads(manifest.read_text())
+        meta['files']['service.json']=self.digest(service);manifest.write_text(json.dumps(meta))
+        load=lambda:Package(package.root,self.digest(manifest))
+        load()
+        for path in files:
+            # Same provider group cannot read authority-only bridge tokens.
+            result=subprocess.run([sys.executable,'-I','-S','-B','-c',
+                'import sys;open(sys.argv[1],"rb")',str(path)],
+                user=self.uid,group=self.gid,extra_groups=[],capture_output=True,
+                env={'PATH':'/usr/bin:/bin','PYTHONDONTWRITEBYTECODE':'1'})
+            self.assertNotEqual(result.returncode,0)
+            os.chown(path,self.uid,self.gid)
+            with self.assertRaises(CustodyRefused):load()
+            os.chown(path,package.authority_uid,self.gid);path.chmod(0o640)
+            with self.assertRaises(CustodyRefused):load()
+            path.chmod(0o600)
+            alias=path.with_suffix('.link');os.link(path,alias)
+            with self.assertRaises(CustodyRefused):load()
+            alias.unlink()
+        load()
+
     def test_executor_cannot_read_replace_authority_or_gain_setuid_with_nnp(self):
         package=self.select_split()
         core=package.data/'core.sqlite3';core.write_bytes(b'synthetic-authority-only')

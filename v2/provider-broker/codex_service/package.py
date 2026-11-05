@@ -192,6 +192,14 @@ class Package:
         self.data = self.private(self.home / "data", self.authority_uid, True)
         self.provider_home = self.private(identity["provider_home"], self.executor_uid, True)
         self.private(value["bootstrap_file"], self.authority_uid)
+        if self.identity_split:
+            # These external server configurations contain broad bridge tokens
+            # or name private credential files. Their bytes are not package
+            # inputs and must never be read/hashed by an executor or packager.
+            # Root verifies custody before any authority or native launch;
+            # the server then validates its configuration/credential schema.
+            for path in (self.desktop_broker,self.timer_config,self.whatsapp_chats):
+                if path is not None:self.private(path,self.authority_uid)
         self.ledger_directory = protected(value["ledger_directory"], True)
         require(stat.S_IMODE(self.ledger_directory.stat().st_mode) == 0o700, "ledger_mode")
         endpoints = protected(value["endpoint_directory"], True)

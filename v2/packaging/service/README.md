@@ -404,6 +404,14 @@ profile retains this distinct name; it never aliases legacy full root access.
 The managed broker and native require non-root execution with inherited NNP;
 there is no shell command, path or environment override in the launch request.
 
+For a split package, external `desktop_broker`, `timer_config` and
+`whatsapp_chats` files must also be single-link regular files owned by the
+authority UID with mode 0600 and protected root/authority ancestry. Root checks
+their metadata before launch; it does not hash or copy secret bytes into the
+package. Referenced credentials still require the server consumer's private-file
+checks. Legacy desktop grants and Vault access require separate scoped mediation;
+passing this custody check does not qualify those helper workflows.
+
 `--provider claude` selects the same disposable HTTP rehearsal using fixed native
 stream JSON. It asserts actual executor UID, NNP, authority Core read denial,
 accepted Deep and Fast completion and successful actual-tree reap. The owner
