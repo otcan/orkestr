@@ -4,6 +4,18 @@ use orkestr_v2_store_sqlite::{
     OfflinePythonResultConsumption, WorkerAdmissionInput, WorkerDelegationResult,
 };
 
+/// Names a sandbox run's result for a failed assertion, never its output.
+fn outcome(result: &OfflinePythonResult) -> String {
+    match result {
+        OfflinePythonResult::Prepared(_) => "Prepared".into(),
+        OfflinePythonResult::Finished { receipt, .. } => format!("Finished({:?})", receipt.state),
+        OfflinePythonResult::Unknown { reason, .. } => format!("Unknown({reason:?})"),
+        OfflinePythonResult::NotDispatched { reason, .. } => format!("NotDispatched({reason:?})"),
+        OfflinePythonResult::Refused { error, .. } => format!("Refused({error:?})"),
+        OfflinePythonResult::ReconciliationRequired { .. } => "ReconciliationRequired".into(),
+    }
+}
+
 async fn started(f: &Case, p: &ProviderAdmission) {
     f.handle
         .append_provider_event(
@@ -136,10 +148,9 @@ async fn actual_worker_sandbox_output_issues_one_correlated_native_result() {
         let g = grant(&f, &parent, number, source).await;
         let id = g.id();
         let (_, signals) = offline_python_controls();
-        let OfflinePythonResult::Prepared(r) =
-            dispatcher.run_native(g, signals, children.retain()).await
-        else {
-            panic!("native prepared result")
+        let r = match dispatcher.run_native(g, signals, children.retain()).await {
+            OfflinePythonResult::Prepared(r) => r,
+            other => panic!("native prepared result, got {}", outcome(&other)),
         };
         let OfflinePythonResultConsumption::Deliver(d) = f
             .handle
@@ -208,9 +219,9 @@ async fn native_result_stop_before_write_exposes_no_sandbox_output_to_provider()
     let dispatcher = f.dispatcher();
     let g = grant(&f, &parent, 1, "print('must-stay-private-after-stop')").await;
     let (_, signals) = offline_python_controls();
-    let OfflinePythonResult::Prepared(r) = dispatcher.run_native(g, signals, Box::new(())).await
-    else {
-        panic!("result")
+    let r = match dispatcher.run_native(g, signals, Box::new(())).await {
+        OfflinePythonResult::Prepared(r) => r,
+        other => panic!("result, got {}", outcome(&other)),
     };
     let OfflinePythonResultConsumption::Deliver(mut d) = f
         .handle
