@@ -20,6 +20,17 @@ class ProviderRouting(unittest.TestCase):
         provider_routing({})
         provider_routing(self.config())
 
+    def test_native_handoff_requires_an_explicit_boolean_operator_choice(self):
+        for value in (False, True):
+            config = self.config()
+            config['provider_routing']['allow_native_handoff'] = value
+            provider_routing(config)
+        for value in (None, 'true', 1, [], {}):
+            config = self.config()
+            config['provider_routing']['allow_native_handoff'] = value
+            with self.subTest(value=value), self.assertRaises(RuntimeError):
+                provider_routing(config)
+
     def test_invalid_policy_never_reaches_runtime(self):
         cases = [[], {"rules": []}, {"rules": [], "command": "synthetic"}]
         for value in cases:

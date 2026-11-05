@@ -24,7 +24,9 @@ def provider_routing(value):
     if 'provider_routing' not in value:
         return
     policy = value['provider_routing']
-    require(type(policy) is dict and set(policy) == {'rules'}, 'closed provider routing policy required')
+    require(type(policy) is dict and set(policy) - {'allow_native_handoff'} == {'rules'}
+            and type(policy.get('allow_native_handoff', False)) is bool,
+            'closed provider routing policy required')
     rules = policy['rules']
     require(type(rules) is list and 1 <= len(rules) <= 32, 'bounded provider routing rules required')
     ids = set()
