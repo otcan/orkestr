@@ -14,6 +14,8 @@ import time
 from urllib.parse import parse_qsl, urlsplit
 import uuid
 
+from .service_peer import Connection as PeerConnection, PeerError
+
 MAX_BODY = 1024 * 1024
 LIMITS = dict(duration_ms=900000, attempts=32, bytes=67108864,
               cleanup_ms=30000, cleanup_attempts=4, cleanup_bytes=1048576)
@@ -37,8 +39,8 @@ EVENT_IDLE_GAP_S = 0.05
 
 
 class ClientError(RuntimeError):
-    def __init__(self, code, status=None):
-        self.code, self.status = code, status
+    def __init__(self, code, status=None, outcome=None):
+        self.code, self.status, self.outcome = code, status, outcome
         super().__init__(code if status is None else f"{code}:{status}")
 
 
@@ -119,7 +121,7 @@ class RustSession:
     """One owner login shared by every binding. Never pinned to a conversation."""
 
     def __init__(self, *, origin, loopback_url, credentials_path, expected_owner,
-                 expected_source, timeout_s=5):
+                 expected_source, timeout_s=5, peer_descriptor_path=None):
         try:
             public, local = urlsplit(origin), urlsplit(loopback_url)
             require(public.scheme in ("http", "https") and public.hostname and
@@ -142,6 +144,11 @@ class RustSession:
         self.host, self.port, self.timeout_s = local.hostname, local.port, timeout_s
         self.owner = identity(expected_owner)
         self.source, self.credentials_path = expected_source, credentials_path
+        require(peer_descriptor_path is None or type(peer_descriptor_path) is str and
+                Path(peer_descriptor_path).is_absolute() and '..' not in Path(peer_descriptor_path).parts,
+                'peer_descriptor_path_refused')
+        self.peer_descriptor_path = peer_descriptor_path
+        self._service_credentials = False
         self._cookie = self._csrf = None
         self.features = frozenset()
         self._revoked = False
@@ -180,10 +187,16 @@ class RustSession:
                 headers["Origin"] = self.origin
             if method != "POST" or path not in (SESSION, SERVICE_SESSION):
                 headers["X-Orkestr-CSRF"] = csrf
-        connection = http.client.HTTPConnection(self.host, self.port, timeout=timeout_s)
+        require(not (self._service_credentials or path == SERVICE_SESSION) or self.peer_descriptor_path is not None,
+                'service_peer_descriptor_required')
+        connection = None
         started, timer, response = time.monotonic(), None, None
         raw = bytearray()
         try:
+            connection = (PeerConnection(self.host,self.port,descriptor_path=self.peer_descriptor_path,
+                          owner=self.owner,source=self.source,timeout=timeout_s)
+                          if self.peer_descriptor_path is not None else
+                          http.client.HTTPConnection(self.host,self.port,timeout=timeout_s))
             connection.connect()
             retained_socket = connection.sock
             def expire():
@@ -244,18 +257,25 @@ class RustSession:
                 return response.status, bytes(raw), response.getheaders()
             require(response.length in (None, 0), "response_incomplete")
             return response.status, decode(raw), response.getheaders()
+        except PeerError:
+            self._verified_at = None
+            offered = bool(connection is not None and getattr(connection,'offered_bytes',False))
+            raise ClientError('peer_changed_outcome_unknown' if offered else 'peer_identity_refused',
+                              outcome='unknown' if offered else 'refused') from None
         except ClientError:
             raise
         except (OSError, http.client.HTTPException, ValueError, TypeError):
             # A lost or restarted server is checked again before the next read.
             self._verified_at = None
+            if self.peer_descriptor_path is not None and not (connection is not None and getattr(connection,'offered_bytes',False)):
+                raise ClientError('peer_connection_refused',outcome='refused') from None
             raise ClientError("transport_outcome_unknown" if method == "POST" else "transport_failed") from None
         finally:
             # HTTP/1.0/Connection:close detaches the response from the connection.
             # Rejected statuses must close its unread body/socket explicitly.
             if response is not None:
                 response.close()
-            connection.close()
+            if connection is not None:connection.close()
             if timer:
                 timer.cancel()
                 timer.join()
@@ -309,7 +329,9 @@ class RustSession:
                 return self.generation
             secret = credentials(self.credentials_path)
             self._credential_digest = hashlib.sha256(json.dumps(secret, sort_keys=True).encode()).digest()
-            endpoint = SERVICE_SESSION if "service_token" in secret else SESSION
+            self._service_credentials = "service_token" in secret
+            require(not self._service_credentials or self.peer_descriptor_path is not None, "service_peer_descriptor_required")
+            endpoint = SERVICE_SESSION if self._service_credentials else SESSION
             _, value, headers = self._wire("POST", endpoint, secret)
             cookies = [v for k, v in headers if k.lower() == "set-cookie"]
             require(len(cookies) == 1, "session_cookie_refused")

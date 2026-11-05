@@ -69,6 +69,7 @@ class ServiceSessionCache:
                 "session_cache_timeout_refused")
         self.path = Path(cache_path)
         self.client = RustSession(**session_options)
+        require(self.client.peer_descriptor_path is not None,"service_peer_descriptor_required")
         self.timeout = lock_timeout_s
         self.parent = self.lock = None
         self.locked = False

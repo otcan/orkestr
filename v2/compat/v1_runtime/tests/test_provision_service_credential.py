@@ -7,6 +7,8 @@ from pathlib import Path
 import tempfile
 import threading
 import unittest
+import uuid
+import shutil
 
 from v2.compat.v1_runtime.provision_service_credential import provision
 from v2.compat.v1_runtime.rust_client import ClientError, credentials
@@ -82,33 +84,27 @@ class Peer(BaseHTTPRequestHandler):
             pass
 
 
+@unittest.skipUnless(os.geteuid()==0,"Root-published provision peer fixture")
 class ProvisionTests(unittest.TestCase):
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory(prefix="service-key-synthetic-")
-        self.root = Path(self.temporary.name)
+        self.root=Path('/orkestr-provision-test-'+str(uuid.uuid4()));self.root.mkdir(mode=0o755)
+        self.private=self.root/'private';self.private.mkdir(mode=0o700)
         self.owner = self.root / "owner.json"
         self.owner_raw = json.dumps({"username": "synthetic-owner", "password": "synthetic-password-000000"})
         self.owner.write_text(self.owner_raw)
         self.owner.chmod(0o600)
-        self.output = self.root / "adapter.json"
-        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Peer)
-        self.server.requests = []
-        self.server.source = SOURCE
-        self.server.reject_service = self.server.unknown_create = False
-        self.server.on_exchange = None
-        self.thread = threading.Thread(target=self.server.serve_forever, kwargs={"poll_interval": 0.01})
-        self.thread.start()
+        self.output = self.private / "adapter.json"
+        from v2.compat.tests.peer_test_fixture import CorePeer
+        self.server=CorePeer(self.root,Peer)
+        descriptor=self.server.publish()
         self.options = dict(origin="https://example.test",
                             loopback_url=f"http://127.0.0.1:{self.server.server_port}",
                             credentials_path=str(self.owner), expected_owner=OWNER,
                             expected_source=SOURCE, output=str(self.output), label="synthetic-adapter",
-                            timeout_s=0.5)
+                            timeout_s=1,peer_descriptor_path=str(descriptor))
 
     def tearDown(self):
-        self.server.shutdown()
-        self.server.server_close()
-        self.thread.join()
-        self.temporary.cleanup()
+        self.server.close();shutil.rmtree(self.root)
 
     def created(self):
         return [r for r in self.server.requests if r[:2] == ("POST", "/api/v2/browser/service-credentials")]
@@ -128,7 +124,7 @@ class ProvisionTests(unittest.TestCase):
         deletes = [r for r in self.server.requests if r[0] == "DELETE"]
         self.assertEqual(len(deletes), 2)  # Verify + human cookies both logged out.
         self.assertTrue(all("X-Orkestr-CSRF" in r[2] for r in deletes))
-        self.assertFalse(list(self.root.glob("*.tmp")))
+        self.assertFalse(list(self.private.glob("*.tmp")))
 
     def test_existing_output_or_symlink_refused_before_network(self):
         self.output.symlink_to(self.owner)
@@ -152,7 +148,7 @@ class ProvisionTests(unittest.TestCase):
         self.assertEqual(len(self.created()), 1)
         self.assertTrue(any(r[:2] == ("DELETE", f"/api/v2/browser/service-credentials/{KEY}")
                             for r in self.server.requests))
-        self.assertFalse(list(self.root.glob("*.tmp")))
+        self.assertFalse(list(self.private.glob("*.tmp")))
 
     def test_concurrent_output_creator_is_preserved_and_new_key_revoked(self):
         self.server.on_exchange = lambda: self.output.write_text("other operator's file")
@@ -161,7 +157,7 @@ class ProvisionTests(unittest.TestCase):
         self.assertEqual(self.output.read_text(), "other operator's file")
         self.assertTrue(any(r[:2] == ("DELETE", f"/api/v2/browser/service-credentials/{KEY}")
                             for r in self.server.requests))
-        self.assertFalse(list(self.root.glob("*.tmp")))
+        self.assertFalse(list(self.private.glob("*.tmp")))
 
     def test_unknown_create_is_not_retried_or_reported_success(self):
         self.server.unknown_create = True
@@ -171,7 +167,7 @@ class ProvisionTests(unittest.TestCase):
         self.assertFalse(self.output.exists())
 
     def test_non_private_output_directory_refused_before_network(self):
-        self.root.chmod(0o750)
+        self.private.chmod(0o750)
         with self.assertRaisesRegex(ClientError, "output_directory_not_private"):
             provision(**self.options)
         self.assertEqual(self.server.requests, [])
