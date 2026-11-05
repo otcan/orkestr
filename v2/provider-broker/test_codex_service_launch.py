@@ -17,6 +17,8 @@ from unittest.mock import patch
 from codex_service.channel import receive_control
 from codex_service.contract import Refused,encode
 from codex_bounded.trust import process
+# The CI Root step names this module explicitly; include the closed diagnostic cases.
+from test_launch_diagnostics import Tests as FailureMetadataTests
 
 
 def request():
@@ -188,6 +190,26 @@ p.wait()
         self.launcher.close()
         self.assertIsNone(process(identity['pid']))
 
+    def test_child_refusal_retains_original_exit_and_static_report_before_cleanup(self):
+        import codex_service.launch as launch
+        value=request();value.update(self.proxy)
+        popen=subprocess.Popen
+        def refused(command,*args,**kwargs):
+            command=list(command);command[9]='not-a-configured-role'
+            return popen(command,*args,**kwargs)
+        with patch.object(launch.subprocess,'Popen',side_effect=refused):
+            with self.assertRaisesRegex(Refused,'launch_child_lost'):
+                self.launcher.launch(value,self.fds,lambda _:self.fail('must not register'),time.monotonic()+4)
+        records=[json.loads(p.read_text()) for p in self.launcher.directory.glob('*.json')]
+        self.assertEqual(len(records),1)
+        record=records[0];self.assertEqual(record['state'],'unknown')
+        self.assertGreater(record['original_child']['pid'],0)
+        self.assertEqual(record['original_child']['wait_status'],2)
+        self.assertEqual(record['child_failure']['exception_class'],'Refused')
+        self.assertEqual(record['child_failure']['module'],'codex_service/contract.py')
+        self.assertEqual(record['cleanup_wait_status'],2)
+        self.assertNotIn('not-a-configured-role',json.dumps(record))
+
     def test_registration_failure_is_unknown_durable_and_reaped_without_replay(self):
         value=request();value.update(self.proxy)
         def failed(_):raise ValueError('synthetic registration loss')
@@ -195,6 +217,11 @@ p.wait()
             self.launcher.launch(value,self.fds,failed,time.monotonic()+4)
         records=[json.loads(p.read_text()) for p in self.launcher.directory.glob('*.json')]
         self.assertEqual(len(records),1);self.assertEqual(records[0]['state'],'unknown')
+        self.assertGreater(records[0]['original_child']['start'],0)
+        self.assertEqual(records[0]['failure']['exception_class'],'ValueError')
+        self.assertIsNone(records[0]['original_child']['wait_status'])
+        self.assertEqual(records[0]['cleanup_wait_status'],-9)
+        self.assertNotIn('synthetic registration loss',json.dumps(records[0]))
         value['request_id']='different-id-same-launch'
         with self.assertRaisesRegex(Refused,'already_claimed'):
             self.launcher.launch(value,self.fds,lambda _:self.fail(),time.monotonic()+4)
