@@ -97,5 +97,44 @@ until the protected key file changes. Corrupt or linked cache files fail closed.
 No successful mutation is followed by a cache write, and no uncertain operation
 is replayed. Long-running adapters continue to keep their sessions in memory.
 
-The implementation does not by itself migrate live consumers or provide a
-forgotten-password recovery CLI. Those remain release acceptance requirements.
+## Privileged forgotten-password recovery
+
+For a managed Linux systemd service, the reviewed sealed plan may include
+`operator_recovery: {unit: "example.service", cgroup: "/system.slice/example.service"}`.
+The two values identify the existing service; the caller cannot substitute an
+unrelated stopped unit. Consumer migration and password-rotation readiness must
+already be complete.
+
+Drain and stop the service through its normal release/operator process. Invoke
+its verified packaged entry with the externally retained manifest digest:
+
+```sh
+sudo env PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -I -S -B \
+  /private/release/package/codex_service/entry.py \
+  recover-owner-password MANIFEST_SHA256 --username OWNER_USERNAME
+```
+
+The terminal prompts twice without echo. For noninteractive use,
+`--password-fd N` reads one UTF-8 password from an inherited private root-owned
+0600 file or anonymous pipe (one final newline is removed). Never put the password
+in arguments, environment, chat or logs. `--revoke-legacy` explicitly permits
+revoking any remaining ambiguous legacy sessions; otherwise recovery refuses
+while they are active.
+
+`--password-fd 0` supports a secret piped to the root entry's standard input;
+the authority child receives a separate authenticated socket, never that pipe.
+
+The root entry verifies the immutable package, stopped service/empty cgroup and
+exact existing exclusive manager-lock inode. It holds that lock throughout the
+operation, drops to the Core authority UID, and sends a bounded request over a
+root-created private socket. The Rust port verifies the real root parent peer,
+parent-death fence, inherited lock identity and private existing Core custody,
+then uses the store's transactional recovery method. Human browser sessions are
+revoked; service, machine and execution-window credentials are preserved. This
+port is unavailable over HTTP and never writes database rows from Python.
+
+Restart through the normal operator process after a confirmed receipt. The
+helper does not change a stored human-password file or automatically restart a
+service. An unknown recovery outcome requires checking the new password before
+any retry. Implementation alone does not migrate consumers or qualify live
+recovery; disposable end-to-end acceptance remains required before deployment.

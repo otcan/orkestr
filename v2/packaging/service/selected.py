@@ -84,7 +84,7 @@ def pair_bytes(plan):
     return pair
 
 
-OPTIONAL = {'attachment_export_dir', 'password_rotation_ready', 'authority_uid', 'authority_gid', 'executor_uid', 'executor_gid', 'provider_home', 'roles', 'preserve_state', 'workspace_exec', 'additional_workspace_exec', 'max_active_windows', 'host_full_access',
+OPTIONAL = {'operator_recovery', 'attachment_export_dir', 'password_rotation_ready', 'authority_uid', 'authority_gid', 'executor_uid', 'executor_gid', 'provider_home', 'roles', 'preserve_state', 'workspace_exec', 'additional_workspace_exec', 'max_active_windows', 'host_full_access',
             'window_max_minutes', 'conversation_window_max_minutes', 'conversation_workspaces', 'provider_routing',
             'code_mode_host', 'code_mode_host_sha256', 'claude', 'claude_quota_projection', 'codex_quota_projection', 'live_map', 'desktop_broker', 'timer_config', 'whatsapp_chats', 'v1_chat_icons_dir', 'metrics_port'}
 CLAUDE_PATHS = ('executable', 'account', 'workspace', 'home', 'temporary')
@@ -242,6 +242,11 @@ def prepare(plan):
     with authority(Path(plan['source_repository']),source) as (src,manager,config):
         trust=sys.modules['codex_bounded.trust']
         trust.protected(output.parent,True)
+        if 'operator_recovery' in plan:
+            require('codex_service/password_recovery.py' in manager.FILES,
+                    'selected source does not support operator recovery')
+            from codex_service.password_recovery import configuration as recovery_configuration
+            recovery_configuration(plan['operator_recovery'])
         # Stat canonical credentials only. Never open, copy or hash these files.
         IDENTITY_FIELDS = {'authority_uid', 'authority_gid', 'executor_uid', 'executor_gid', 'provider_home'}
         if IDENTITY_FIELDS.intersection(plan):
@@ -359,6 +364,8 @@ def prepare(plan):
                      'hosts':list(config.HOSTS)}
             if 'password_rotation_ready' in plan:
                 runtime['password_rotation_ready']=plan['password_rotation_ready']
+            if 'operator_recovery' in plan:
+                runtime['operator_recovery']=plan['operator_recovery']
             if 'attachment_export_dir' in plan:
                 runtime['attachment_export_dir']=plan['attachment_export_dir']
             if role_paths is not None:

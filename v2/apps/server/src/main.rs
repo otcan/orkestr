@@ -6,9 +6,24 @@ use orkestr_v2_server::{
 use orkestr_v2_store_sqlite::Store;
 use std::path::PathBuf;
 mod bind_config;
+#[cfg(target_os = "linux")]
+mod password_recovery;
 mod shutdown_signal;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let arguments = std::env::args().skip(1).collect::<Vec<_>>();
+    if arguments == ["--recover-owner-password"] {
+        #[cfg(target_os = "linux")]
+        {
+            let runtime = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()?;
+            let result = runtime.block_on(password_recovery::run());
+            runtime.shutdown_timeout(std::time::Duration::from_secs(2));
+            return result;
+        }
+        #[cfg(not(target_os = "linux"))]
+        return Err("operator recovery requires Linux".into());
+    }
     if let Some(output) = build_identity::version_output(&arguments)? {
         println!("{output}");
         return Ok(());

@@ -102,6 +102,18 @@ class Selected(unittest.TestCase):
             with self.subTest(bad=bad),self.assertRaisesRegex(RuntimeError,'readiness must be boolean'):
                 selected.prepare(self.plan)
             self.assertFalse((self.root/'release').exists())
+    def test_operator_recovery_is_closed_and_bound_to_the_selected_service(self):
+        source=self.current_source()
+        config={'unit':'synthetic.service','cgroup':'/system.slice/synthetic.service'}
+        for invalid in (None,{},config|{'extra':True},config|{'cgroup':'/system.slice/other.service'}):
+            self.plan['operator_recovery']=invalid
+            with self.subTest(value=invalid),self.assertRaises(Exception):selected.prepare(self.plan)
+            self.assertFalse((self.root/'release').exists())
+        self.plan['operator_recovery']=config
+        selected.prepare(self.plan)
+        with authority(REPO,source) as (_,manager,_):
+            package=manager.Package(self.root/'release/package',sha(self.root/'release/package/manifest.json'))
+            self.assertEqual(package.runtime['operator_recovery'],config)
     def test_full_package_credentials_metadata_only(self):
         original=Path.open
         def guarded(path,*a,**kw):

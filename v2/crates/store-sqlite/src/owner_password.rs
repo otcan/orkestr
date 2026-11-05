@@ -18,6 +18,34 @@ impl Store {
         replacement_hash: &str,
         revoke_legacy: bool,
     ) -> Result<PasswordChange> {
+        self.recover_password(None, username, replacement_hash, revoke_legacy)
+            .await
+    }
+
+    /// The managed operator also pins the configured owner inside the write lock.
+    pub async fn recover_owner_password_bound(
+        &self,
+        expected_owner: &OwnerId,
+        username: &str,
+        replacement_hash: &str,
+        revoke_legacy: bool,
+    ) -> Result<PasswordChange> {
+        self.recover_password(
+            Some(expected_owner),
+            username,
+            replacement_hash,
+            revoke_legacy,
+        )
+        .await
+    }
+
+    async fn recover_password(
+        &self,
+        expected_owner: Option<&OwnerId>,
+        username: &str,
+        replacement_hash: &str,
+        revoke_legacy: bool,
+    ) -> Result<PasswordChange> {
         let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
         let owner: Option<String> = sqlx::query_scalar("SELECT id FROM owners WHERE username=?")
             .bind(username)
@@ -25,6 +53,9 @@ impl Store {
             .await
             .map_err(db)?;
         let owner = owner.ok_or(StoreError::NotFound)?;
+        if expected_owner.is_some_and(|expected| expected.to_string() != owner) {
+            return Ok(PasswordChange::Unauthorized);
+        }
         let legacy: i64 = sqlx::query_scalar("SELECT count(*) FROM auth_sessions WHERE owner_id=? AND kind='legacy' AND expires_at>unixepoch()")
             .bind(&owner).fetch_one(&mut *tx).await.map_err(db)?;
         if legacy != 0 && !revoke_legacy {
@@ -147,6 +178,32 @@ mod tests {
         store.save_session("browser:current", &owner).await.unwrap();
         store.save_session("browser:other", &owner).await.unwrap();
         store.save_session("machine", &owner).await.unwrap();
+        assert_eq!(
+            store
+                .recover_owner_password_bound(
+                    &OwnerId(Uuid::new_v4()),
+                    "synthetic-owner",
+                    "must-not-change",
+                    false
+                )
+                .await
+                .unwrap(),
+            PasswordChange::Unauthorized
+        );
+        assert_eq!(
+            store
+                .credentials("synthetic-owner")
+                .await
+                .unwrap()
+                .unwrap()
+                .1,
+            "old-hash"
+        );
+        assert!(store
+            .authenticate("browser:current")
+            .await
+            .unwrap()
+            .is_some());
         assert_eq!(
             store
                 .change_owner_password("machine", "old-hash", "new-hash")

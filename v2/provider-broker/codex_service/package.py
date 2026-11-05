@@ -15,7 +15,7 @@ from .role_profiles import ROLE_FILES, bind as bind_roles
 MODULES_SERVICE = ("__init__.py", "contract.py", "ledger.py", "budget.py", "custody.py",
                    "channel.py", "package.py", "ownership.py", "egress.py", "manager.py",
                    "server_child.py", "broker.py", "profile.py", "entry.py", "role_profiles.py",
-                   "claude_broker.py", "identity.py", "launch.py", "launch_child.py", "proxy.py", "attachment_exports.py")
+                   "claude_broker.py", "identity.py", "launch.py", "launch_child.py", "proxy.py", "attachment_exports.py", "password_recovery.py")
 # Shared with the server and packager: room for many per-conversation
 # command profiles.
 MAX_BETA_CONFIG_BYTES = 262144
@@ -147,11 +147,14 @@ class Package:
 
     def _bind(self):
         value = self.runtime
-        require(set(value) - IDENTITY_FIELDS - {"password_rotation_ready", "attachment_export_dir", "live_map", "desktop_broker", "timer_config", "v1_chat_icons_dir", "whatsapp_chats", "claude_quota_projection", "codex_quota_projection", "metrics_port"} == {"format", "uid", "gid", "owner_id", "conversation_id", "home",
+        require(set(value) - IDENTITY_FIELDS - {"operator_recovery", "password_rotation_ready", "attachment_export_dir", "live_map", "desktop_broker", "timer_config", "v1_chat_icons_dir", "whatsapp_chats", "claude_quota_projection", "codex_quota_projection", "metrics_port"} == {"format", "uid", "gid", "owner_id", "conversation_id", "home",
                 "bootstrap_file", "ledger_directory", "endpoint_directory", "port", "trusted_origin"}
                 and value["format"] == "orkestr-v2-codex-service-v1", "service_format")
         require("password_rotation_ready" not in value or type(value["password_rotation_ready"]) is bool,
                 "password_rotation_readiness")
+        if "operator_recovery" in value:
+            from .password_recovery import configuration as recovery_configuration
+            recovery_configuration(value["operator_recovery"])
         self.live_map = live_map_path(value["live_map"]) if "live_map" in value else None
         self.desktop_broker = (live_map_path(value["desktop_broker"])
                                if "desktop_broker" in value else None)

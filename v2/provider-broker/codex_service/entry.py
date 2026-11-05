@@ -203,17 +203,22 @@ def main():
     root = Path(__file__).resolve().parents[1]
     mode, *arguments = sys.argv[1:]
     if mode not in ("manager", "broker", "broker-fast", "broker-worker-0", "broker-claude",
-                    "broker-worker-1", "broker-worker-2", "broker-worker-3", "server", "launch-child"):
+                    "broker-worker-1", "broker-worker-2", "broker-worker-3", "server", "launch-child", "recover-owner-password"):
         raise ValueError("fixed entry mode")
-    expected = arguments[0] if mode == "manager" and len(arguments) == 1 else None
+    expected = arguments[0] if (mode == "manager" and len(arguments) == 1) or (mode == "recover-owner-password" and arguments) else None
+    if mode == "recover-owner-password" and (os.geteuid() != 0 or expected is None):
+        raise ValueError("operator root required")
     # The pinned root manager always hashes everything; children reuse its seal.
-    manifest_digest, records = verified(root, expected, sealed=mode != "manager")
+    manifest_digest, records = verified(root, expected, sealed=mode not in ("manager", "recover-owner-password"))
     sys.path.insert(0, str(root))
     from codex_bounded import trust
     for key, value in records.items():
         trust.remember(key, value)  # Package re-checks these without rehashing.
     from codex_service.package import Package
     package = Package(root, expected)
+    if mode == "recover-owner-password":
+        from codex_service.password_recovery import main as recovery
+        return recovery(package, arguments[1:])
     if mode == "manager" and expected is not None and os.geteuid() == 0:
         write_seal(package.control.parent, package.gid, root, manifest_digest, records)
     if mode == "launch-child":
