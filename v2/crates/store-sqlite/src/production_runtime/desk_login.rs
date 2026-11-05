@@ -83,7 +83,7 @@ fn valid(value: &str) -> bool {
             .bytes()
             .all(|c| c.is_ascii_alphanumeric() || b"._:-".contains(&c))
 }
-async fn live(
+pub(super) async fn live(
     store: &Store,
     conn: &mut SqliteConnection,
     credential: &str,

@@ -479,6 +479,7 @@ async fn populated_payload_prefix_upgrade_preserves_all_rows_and_foreign_links()
         "encrypted_uploads",
         "encrypted_upload_chunks",
         "deep_desk_operations",
+        "managed_operations",
         "deep_desk_results",
     ] {
         expected.insert(table.into(), Vec::new());
