@@ -73,7 +73,7 @@ def absolute(path):
 
 def trusted(value):
     """Shape only. Runtime owns overlap, ceiling and credential-default checks."""
-    fields = TRUSTED_FLAGS | TRUSTED_PATHS | TRUSTED_PATH_LISTS | TRUSTED_NUMBERS | {'environment'}
+    fields = TRUSTED_FLAGS | TRUSTED_PATHS | TRUSTED_PATH_LISTS | TRUSTED_NUMBERS | {'environment', 'managed_executor'}
     require(type(value) is dict and set(value) <= fields, 'closed trusted command profile required')
     for key in TRUSTED_FLAGS & set(value):
         require(type(value[key]) is bool, 'trusted profile flag required')
@@ -88,6 +88,9 @@ def trusted(value):
     require(type(environment) is dict and len(environment) <= 64 and all(
         type(k) is str and re.fullmatch(r'[A-Z_][A-Z0-9_]{0,127}', k) and type(v) is str
         and '\x00' not in v for k, v in environment.items()), 'trusted profile environment required')
+    if 'managed_executor' in value:
+        from selected_managed import shape
+        shape(value['managed_executor'])
     return value
 
 
@@ -114,8 +117,11 @@ def host_full_access(value):
 def workspace_exec(value):
     fields = {'conversation_id', 'project_id', 'workspace', 'allowed_roots',
               'protected_roots', 'cgroup_root', 'toolchain_root'}
-    require(type(value) is dict and set(value) - {'trusted'} == fields,
+    require(type(value) is dict and set(value) - {'trusted', 'project_owner_uid'} == fields,
             'closed workspace execution profile required')
+    if 'project_owner_uid' in value:
+        require(type(value['project_owner_uid']) is int and 0 < value['project_owner_uid'] < 2**31,
+                'project owner UID required')
     if 'trusted' in value:
         trusted(value['trusted'])
     for key in ('conversation_id', 'project_id'):
@@ -177,8 +183,6 @@ def validate(raw):
         require(type(identity) is dict and set(identity)=={'authority_uid','executor_uid','shared_gid'}
                 and all(type(identity[k]) is int and 0<identity[k]<2**31 for k in identity)
                 and identity['authority_uid']!=identity['executor_uid'],'closed split service identity required')
-        require(not any(k in value for k in ('host_full_access','workspace_exec','additional_workspace_exec')),
-                'unsupported split execution mode')
     if 'roles' in value:
         roles=value['roles']
         require(type(roles) is dict and set(roles)=={'fast','workers'},'closed beta roles required')
@@ -222,6 +226,8 @@ def validate(raw):
                 or 'host_full_access' in value, 'host-privileged commands require host_full_access')
     if 'additional_workspace_exec' in value:
         additional_workspace_exec(value)
+    from selected_managed import modes
+    modes(value, 'identity_split' in value)
     return value
 
 
