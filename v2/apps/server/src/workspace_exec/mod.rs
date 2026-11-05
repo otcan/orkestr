@@ -278,7 +278,11 @@ impl WorkspaceExecDispatcher {
 
     async fn authorized(&self, launch: &ConsumedWorkspaceExec) -> bool {
         let result = tokio::time::timeout(
-            Duration::from_millis(50),
+            if self.managed.is_some() {
+                Duration::from_secs(2)
+            } else {
+                Duration::from_millis(50)
+            },
             self.store.check_workspace_exec(&self.credential, launch),
         )
         .await;

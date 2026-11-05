@@ -12,6 +12,7 @@ from pathlib import Path
 import sqlite3
 import subprocess
 import sys
+import time
 
 sys.path.insert(0,str(Path(__file__).resolve().parent))
 from identity_split_service_http import Rehearsal, ROOT, UID, GID, wait
@@ -114,7 +115,11 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('binary');parser.add_argument('--report',required=True)
     parser.add_argument('--project-owner-uid',type=int)
     args=parser.parse_args();os.umask(0o077)
+    started=time.monotonic()
     base,jobs=scope();rehearsal=None;report={'passed':False,'live_activation':False,'actual_provider':False}
+    binary=Path(args.binary).resolve(strict=True)
+    report['backend_identity']=json.loads(subprocess.check_output([str(binary),'--version','--json'],env={'PATH':'/usr/bin:/bin'}))
+    with binary.open('rb') as stream:report['backend_sha256']=hashlib.file_digest(stream,'sha256').hexdigest()
     try:
         rehearsal=WorkspaceRehearsal(args.binary,jobs,args.project_owner_uid)
         report.update(rehearsal.run());report['passed']=True
@@ -129,6 +134,7 @@ def main():
         except BaseException as cleanup:
             report['cleanup_error']=type(cleanup).__name__+': '+str(cleanup);report['passed']=False
         report['scope_memory_peak_bytes']=int((base/'memory.peak').read_text())
+        report['elapsed_seconds']=round(time.monotonic()-started,3)
         report['harness_sha256']=hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
         Path(args.report).write_text(json.dumps(report,indent=2)+'\n');Path(args.report).chmod(0o600)
     assert report['passed'],report

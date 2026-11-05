@@ -249,8 +249,7 @@ impl WorkspaceExecDispatcher {
                     // A fresh Root custody check can include bounded IPC. Do
                     // not race it against the still-held activation writer or
                     // apply the legacy local-filesystem 50ms timeout here.
-                    let allowed=tokio::time::timeout(Duration::from_secs(2),self.store.check_workspace_exec(&self.credential,&cap)).await;
-                    if !matches!(allowed,Ok(Ok(()))) {refused=true;cleanup.0.cancel();}
+                    if !self.authorized(&cap).await {refused=true;cleanup.0.cancel();}
                 }
             }
         };
