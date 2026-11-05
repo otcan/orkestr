@@ -55,6 +55,8 @@ class FastSamplerObservations:
             assert result['status']=='observed',result
             accepted=verify(result['receipt_path'],fact,package=self.package)
             assert accepted['status']=='accepted',accepted
+            if fact['run_id'] in self.pending_samples:
+                (self.mapped/(fact['native_session_id']+'.sampled')).unlink()
             snapshot=json.loads(Path(result['receipt_path']).read_text())
             assert snapshot['launch']['identity']['setup']['role']=='fast'
             assert accepted['native_pid_claim'] is None and not accepted['original_native_pid_registered']
