@@ -62,7 +62,7 @@ def main(package,arguments):
         value=json.loads(payload)
         require(type(value) is dict and set(value)=={'helper','sha256','conversation_id','desk','site','duration_ms','hard_deadline_ns','lease_deadline_ns'},'desk_anchor_fields')
         hard=value.pop('hard_deadline_ns');deadline=value.pop('lease_deadline_ns')
-        require(type(hard) is int and type(deadline) is int and time.monotonic_ns()<deadline<=hard
+        require(type(hard) is int and type(deadline) is int and 0<deadline<=hard
                 and deadline<=time.monotonic_ns()+30000000000,'desk_anchor_lease_bound')
         from .desk_operations import mapping
         value=mapping(value)
@@ -78,7 +78,16 @@ def main(package,arguments):
             cancelled=True
         signal.signal(signal.SIGTERM,stop);signal.signal(signal.SIGINT,stop)
         try:
-            require(time.monotonic_ns()<deadline,'desk_anchor_expired_before_spawn')
+            if time.monotonic_ns()>=deadline:
+                # No helper Popen has been attempted in this fixed anchor.
+                # A cold package preflight may exhaust a short grant. Only
+                # actual kernel ECHILD permits a clean negative receipt.
+                try:os.waitpid(-1,os.WNOHANG)
+                except ChildProcessError:clean=True
+                require(clean,'desk_anchor_expired_custody_unknown')
+                payload=json.dumps({'cleanup':True,'cancelled':True,'helper_exit':125,'helper_started':False}).encode()
+                channel.settimeout(1);channel.sendall(struct.pack('!I',len(payload))+payload)
+                return 0
             child=subprocess.Popen([str(helper),'--conversation',value['conversation_id'],'--desk',value['desk'],value['site']],
                 cwd='/',env={'PATH':'/usr/bin:/bin','LANG':'C.UTF-8','PYTHONDONTWRITEBYTECODE':'1'},
                 stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,close_fds=True,process_group=0)
@@ -123,7 +132,7 @@ def main(package,arguments):
                     clean=True;break
                 if pid==0:time.sleep(.01)
             require(clean and all(p.gone() for p in tree.records.values()),'desk_cleanup_unknown')
-            payload=json.dumps({'cleanup':True,'cancelled':cancelled,'helper_exit':code}).encode()
+            payload=json.dumps({'cleanup':True,'cancelled':cancelled,'helper_exit':code,'helper_started':True}).encode()
             channel.settimeout(1);channel.sendall(struct.pack('!I',len(payload))+payload)
             return 0
         finally:
