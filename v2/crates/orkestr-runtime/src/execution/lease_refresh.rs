@@ -72,7 +72,10 @@ impl CodexPump {
             self.source.child.quarantine();
             return Err(RuntimeStoreError::Busy);
         }
-        let transition = match store.renew_running(authority).await {
+        // This SQL future is large in debug builds. Keeping it out of the
+        // owned-pump transfer state also bounds every enclosing steering/run
+        // poll frame; the exact same typed renewal and failure path apply.
+        let transition = match Box::pin(store.renew_running(authority)).await {
             Ok(transition) => transition,
             Err(error) => {
                 self.source.child.quarantine();
