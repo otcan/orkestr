@@ -78,6 +78,10 @@ def decode(raw):
     operation = value.get("operation")
     fields = {
         "status": set(),
+        "managed_pending": {"window_id","generation"},
+        "managed_consume": {"window_id","generation","capability"},
+        "managed_poll": {"window_id","generation","operation_id"},
+        "managed_cancel": {"window_id","generation","operation_id"},
         "desk_login": {"window_id","generation","capability"},
         "desk_login_poll": {"window_id","generation","operation_id"},
         "desk_login_cancel": {"window_id","generation","operation_id"},
@@ -135,6 +139,10 @@ def decode(raw):
     if operation=='desk_login':
         from .desk_operations import capability
         capability(value['capability'])
+    if operation=='managed_consume':
+        from .managed_control import capability
+        capability(value['capability'])
+    if operation in ('managed_poll','managed_cancel'):identifier(value['operation_id'])
     if operation in ('desk_login_poll','desk_login_cancel'):identifier(value['operation_id'])
     if operation == "bind_child":
         require(type(value["broker_pid"]) is int and 1 < value["broker_pid"] < 2**31,

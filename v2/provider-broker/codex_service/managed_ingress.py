@@ -78,7 +78,9 @@ class Peer:
         pid,uid,_=struct.unpack('3i',connection.getsockopt(socket.SOL_SOCKET,socket.SO_PEERCRED,12))
         self.source,self.proof=source(manager,pid,uid)
         connection.setsockopt(socket.SOL_SOCKET,socket.SO_PASSCRED,1);connection.setblocking(False)
-        self.deadline=time.monotonic()+30
+        # The operation itself is capped at 30s; retain enough time for the
+        # Root anchor's bounded cancellation/reap receipt, never extra work.
+        self.deadline=time.monotonic()+35
 
     def receive(self):
         raw,ancillary,flags,_=self.connection.recvmsg(MAX_PACKET+1,socket.CMSG_SPACE(12),socket.MSG_CMSG_CLOEXEC)
@@ -126,6 +128,7 @@ class Ingress:
         payload=hashlib.sha256(canonical(value)).hexdigest()
         if path.exists():
             record=metadata(path,32768);require(record['payload_sha256']==payload,'managed_replay_conflict')
+            require(record['state']!='pending' or record['source']==peer.source,'managed_original_caller_required')
         else:
             count=sum(1 for p in self.directory.glob('*.json')
                       if metadata(p,32768)['source']['window_id']==peer.source['window_id'])
@@ -165,12 +168,12 @@ class Ingress:
     def pending(self,window,generation):
         if not self.manager._desk_window_active(window,generation):return []
         # Disk contains durable claims, never reconstructed caller authority.
-        live={p.request for p in self.peers if p.request and time.monotonic()<p.deadline
+        live={p.request:p.source for p in self.peers if p.request and time.monotonic()<p.deadline
               and exists(p.proof.identity) and not p.proof.exited()}
         result=[]
         for path in self.directory.glob('*.json'):
             record=metadata(path,32768);scope=record['source']
-            if (record['request_id'] in live and scope['window_id']==window and scope['window_generation']==generation
+            if (live.get(record['request_id'])==scope and scope['window_id']==window and scope['window_generation']==generation
                     and record['state']=='pending'):result.append(record)
         return sorted(result,key=lambda r:(r['created_at_ms'],r['request_id']))[:1]
 

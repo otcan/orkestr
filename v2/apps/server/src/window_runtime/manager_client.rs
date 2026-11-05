@@ -15,6 +15,8 @@ mod desk;
 mod launch_wire;
 #[path = "manager_managed_launch.rs"]
 mod managed_launch;
+#[path = "manager_operations.rs"]
+mod managed_operations;
 #[path = "manager_client_wire.rs"]
 mod wire;
 use wire::*;

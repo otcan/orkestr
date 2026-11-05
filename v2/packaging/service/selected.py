@@ -84,7 +84,7 @@ def pair_bytes(plan):
     return pair
 
 
-OPTIONAL = {'operator_recovery', 'desk_login', 'attachment_export_dir', 'password_rotation_ready', 'authority_uid', 'authority_gid', 'executor_uid', 'executor_gid', 'provider_home', 'roles', 'preserve_state', 'workspace_exec', 'additional_workspace_exec', 'max_active_windows', 'host_full_access',
+OPTIONAL = {'operator_recovery', 'desk_login', 'managed_operations', 'attachment_export_dir', 'password_rotation_ready', 'authority_uid', 'authority_gid', 'executor_uid', 'executor_gid', 'provider_home', 'roles', 'preserve_state', 'workspace_exec', 'additional_workspace_exec', 'max_active_windows', 'host_full_access',
             'window_max_minutes', 'conversation_window_max_minutes', 'conversation_workspaces', 'provider_routing',
             'code_mode_host', 'code_mode_host_sha256', 'claude', 'claude_quota_projection', 'codex_quota_projection', 'live_map', 'desktop_broker', 'timer_config', 'whatsapp_chats', 'v1_chat_icons_dir', 'metrics_port'}
 CLAUDE_PATHS = ('executable', 'account', 'workspace', 'home', 'temporary')
@@ -199,6 +199,8 @@ def prepare(plan):
     require(set(plan) - OPTIONAL == fields and
             plan['format']=='orkestr-v2-selected-service-plan-v1','closed plan required')
     optional(plan)
+    if 'managed_operations' in plan:
+        require('authority_uid' in plan and plan['managed_operations'] is True,'closed split managed operations required')
     if 'desk_login' in plan:
         desk=plan['desk_login']
         require('authority_uid' in plan and type(desk) is dict and set(desk)=={'path','sha256'} and
@@ -392,6 +394,8 @@ def prepare(plan):
                 runtime['desktop_broker']=plan['desktop_broker']
             if 'desk_login' in plan:
                 runtime['desk_login']=plan['desk_login']
+            if 'managed_operations' in plan:
+                runtime['managed_operations']=True
             if 'timer_config' in plan:
                 runtime['timer_config']=plan['timer_config']
             if 'metrics_port' in plan:

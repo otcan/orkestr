@@ -16,9 +16,35 @@ from codex_bounded.trust import process
 from codex_service.contract import Refused,canonical
 from codex_service.managed_ingress import Ingress,Peer,packet,source
 from codex_service.ownership import Process
+import test_codex_service_identity as identity_tests
 
 REQUEST={'version':1,'request_key':'synthetic-1','operation':'root_request_submit',
          'arguments':{'action':'read','resource':'example.invalid','summary':'Agent-requested summary'}}
+
+
+@unittest.skipUnless(os.geteuid()==0,'Root-owned split package configuration')
+class ManagedPackageTests(identity_tests.SplitPackageTests):
+    test_split_loader_binds_authority_paths_but_refuses_unqualified_legacy_launch=None
+    test_executor_cannot_read_replace_authority_or_gain_setuid_with_nnp=None
+    test_external_server_configurations_require_authority_private_custody=None
+
+    def test_only_explicit_true_split_option_opens_root_owned_observer(self):
+        from codex_service.manager import Manager
+        from codex_service.package import Package
+        self.select_split();service=self.fixture.package/'service.json';manifest=self.fixture.package/'manifest.json'
+        def select(flag):
+            value=json.loads(service.read_text());value['managed_operations']=flag;service.write_text(json.dumps(value))
+            value=json.loads(manifest.read_text());value['files']['service.json']=self.digest(service);manifest.write_text(json.dumps(value))
+            return self.digest(manifest)
+        expected=select(True);manager=Manager(self.fixture.package,expected)
+        try:
+            self.assertEqual(manager.managed.socket.socket.type,socket.SOCK_SEQPACKET)
+            self.assertEqual(manager.managed.directory.stat().st_mode&0o777,0o700)
+            with self.assertRaisesRegex(Refused,'split_launch_unqualified'):manager.start()
+        finally:manager.close()
+        for flag in (False,1,'true',{}):
+            expected=select(flag)
+            with self.assertRaisesRegex(Refused,'managed_split_configuration'):Package(self.fixture.package,expected)
 
 
 class PacketTests(unittest.TestCase):
@@ -135,6 +161,8 @@ class RootCallerTests(unittest.TestCase):
             peer=SimpleNamespace(source=value,path=None,request=None)
             ingress._record(peer,REQUEST);path=peer.path
             ingress._record(peer,REQUEST);self.assertEqual(peer.path,path)
+            borrowed=SimpleNamespace(source={**value,'caller_pid':value['caller_pid']+1},path=None,request=None)
+            with self.assertRaisesRegex(Refused,'managed_original_caller_required'):ingress._record(borrowed,REQUEST)
             with self.assertRaisesRegex(Refused,'managed_replay_conflict'):
                 ingress._record(peer,{**REQUEST,'arguments':{**REQUEST['arguments'],'summary':'changed'}})
             with patch('codex_service.managed_ingress.MAX_WINDOW_REQUESTS',1):
@@ -142,11 +170,83 @@ class RootCallerTests(unittest.TestCase):
                     ingress._record(peer,{**REQUEST,'request_key':'synthetic-2'})
             proof.close()
         finally:ingress.close()
+
         ingress=Ingress(self.manager)
         try:
             self.assertEqual(json.loads(path.read_text())['state'],'unknown')
             self.assertEqual(ingress.pending('synthetic-window',1),[])
         finally:ingress.close()
+
+    def pending_request(self):
+        child=self.caller();self.bind(child);ingress=Ingress(self.manager)
+        self.addCleanup(ingress.close)
+        value,proof=source(self.manager,child.pid,65534)
+        peer=SimpleNamespace(source=value,path=None,request=None,proof=proof,
+            deadline=time.monotonic()+30,close=proof.close)
+        ingress._record(peer,REQUEST);ingress.peers.append(peer)
+        from codex_service.managed_control import normalize_source
+        cap={'operation_id':peer.request,'run_id':'44444444-4444-4444-8444-444444444444',
+            'source_message_id':'55555555-5555-4555-8555-555555555555','source_event_id':'66666666-6666-4666-8666-666666666666',
+            'binding_generation':2,'lease_generation':1,'dispatch_fence':1,'expires_at_ms':int(time.time()*1000)+25000,
+            'evidence':{'source':normalize_source(value),'request':REQUEST}}
+        return ingress,peer,cap
+
+    def test_fixed_protected_submit_is_agent_summary_without_owner_approval_or_replay(self):
+        from codex_service.managed_control import consume
+        ingress,peer,cap=self.pending_request()
+        result=consume(ingress,cap)
+        self.assertEqual(result['state'],'completed')
+        directory=self.directory/'root-request-submissions';path=directory/(peer.request+'.json')
+        value=json.loads(path.read_text())
+        self.assertEqual(value['agent_requested_summary'],REQUEST['arguments']['summary'])
+        self.assertFalse(value['owner_approved']);self.assertIsNone(value['owner_instruction_reference'])
+        self.assertEqual(directory.stat().st_mode&0o777,0o700);self.assertEqual(path.stat().st_mode&0o777,0o600)
+        with patch('codex_service.managed_control.publish',side_effect=AssertionError('cannot republish')):
+            self.assertEqual(consume(ingress,cap),result)
+        changed=json.loads(json.dumps(cap));changed['evidence']['source']['conversation_id']='99999999-9999-4999-8999-999999999999'
+        with self.assertRaisesRegex(Refused,'managed_evidence_changed'):consume(ingress,changed)
+
+    def test_publication_receipt_failure_preserves_unknown_claim_and_cannot_republish(self):
+        from codex_service import managed_control
+        ingress,peer,cap=self.pending_request();original=managed_control.atomic
+        def fail_final(path,value):
+            if value.get('state')=='completed':raise OSError('synthetic receipt failure')
+            original(path,value)
+        with patch('codex_service.managed_control.atomic',side_effect=fail_final):
+            with self.assertRaises(OSError):managed_control.consume(ingress,cap)
+        self.assertEqual(json.loads(peer.path.read_text())['state'],'unknown')
+        published=self.directory/'root-request-submissions'/(peer.request+'.json');self.assertTrue(published.exists())
+        with patch('codex_service.managed_control.publish',side_effect=AssertionError('cannot republish')):
+            self.assertEqual(managed_control.consume(ingress,cap)['state'],'unknown')
+
+    def test_actual_separate_uid_nnp_cli_roundtrip_to_protected_intake(self):
+        from codex_service import managed_client,managed_control
+        client=self.root/'client.py';client.write_bytes(Path(managed_client.__file__).read_bytes());client.chmod(0o644)
+        ingress=Ingress(self.manager);self.addCleanup(ingress.close)
+        script='''import ctypes,runpy,sys
+assert ctypes.CDLL(None).prctl(38,1,0,0,0)==0
+print('ready',flush=True)
+assert sys.stdin.buffer.read(1)==b'!'
+path,endpoint=sys.argv[1:];sys.argv=[path,endpoint];runpy.run_path(path,run_name='__main__')
+'''
+        child=subprocess.Popen([sys.executable,'-I','-S','-B','-c',script,str(client),str(ingress.socket.path)],
+            stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,user=65534,group=65534,extra_groups=[],
+            env={'PATH':'/usr/bin:/bin','PYTHONDONTWRITEBYTECODE':'1'})
+        self.children.append(child);self.assertEqual(child.stdout.readline(),b'ready\n');self.bind(child)
+        child.stdin.write(b'!'+canonical(REQUEST));child.stdin.close();deadline=time.monotonic()+4
+        while not ingress.pending('synthetic-window',1):
+            self.assertLess(time.monotonic(),deadline);ingress.tick();time.sleep(.005)
+        record=ingress.pending('synthetic-window',1)[0]
+        cap={'operation_id':record['request_id'],'run_id':'44444444-4444-4444-8444-444444444444',
+            'source_message_id':'55555555-5555-4555-8555-555555555555','source_event_id':'66666666-6666-4666-8666-666666666666',
+            'binding_generation':2,'lease_generation':1,'dispatch_fence':1,'expires_at_ms':int(time.time()*1000)+25000,
+            'evidence':{'source':managed_control.normalize_source(record['source']),'request':REQUEST}}
+        # This unit test supplies the trusted authority port's grant. Real Core
+        # issuance/fences have separate tests; no owner decision is synthesized.
+        managed_control.consume(ingress,cap);ingress.tick();child.wait(timeout=3)
+        self.assertEqual(child.returncode,0,child.stderr.read().decode())
+        reply=json.loads(child.stdout.readline());self.assertEqual(reply['state'],'completed')
+        self.assertFalse(reply['result']['owner_approval']);self.assertEqual(reply['result']['owner_delivery'],'unconfirmed')
 
 
 if __name__=='__main__':unittest.main()

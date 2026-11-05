@@ -1,9 +1,9 @@
 # Managed capability ingress preparation
 
-`codex_service/managed_ingress.py` is an inert, tested Root-side observer. It is
-not enabled by package configuration or the manager, does not issue Core
-authorization, and cannot execute a helper or publish a Root request. The split
-startup gate remains closed.
+The explicit split-only selected-plan option `managed_operations: true` prepares
+a Root-side observer and authority control ports. It remains off by default.
+The production split startup gate remains closed; no existing session or
+operator terminal is changed by installing this source.
 
 The optional future channel uses a Root-owned Unix SEQPACKET socket. Socket
 creation peer credentials and fresh SCM_CREDENTIALS on the packet must name
@@ -22,11 +22,29 @@ are bounded; every window has a durable claim bound. An exact retry finds the
 same claim; changed content conflicts. Loss of the caller or manager produces
 an unknown outcome. Journal files alone never reconstruct live caller proof.
 
-Before activation this observer still requires Core-issued, durable, one-use
-authorization derived from the currently consumed Deep dispatch, authenticated
-Core-to-Root consumption/result ports, protected Root-request publication,
-cancellation and end-to-end used-mode acceptance. Migration 0093 is reserved
-for that separate Core implementation; this preparation adds no migration.
+Migration 0093 records a durable one-use operation only after Core verifies the
+currently consumed canonical Deep dispatch, original metadata setup (including
+the exact resume setup locator), and active execution window, context,
+incarnation and credential. A lost write or reply remains consumed. Stop,
+revocation, lease loss and closing windows fence subsequent transport. Core's
+bounded nonblocking Root write occurs inside its writer transaction; connection
+and response waits occur outside it.
+
+The authenticated authority server polls Root's protected observer, issues the
+grant, and monitors/cancels the exact Root operation. Root checks the grant's
+evidence against its original live caller record before persisting consumption.
+Desk operations reuse the protected fixed helper map and Root cleanup anchor.
+Root submissions enter `root-request-submissions` under the Root-private ledger
+with mode 0700/0600. They preserve the actual Core message/event reference and
+agent-requested summary, leave owner approval false, and explicitly report owner
+delivery unconfirmed. The existing writable/shared-group inbox and sudo fallback
+are never used. A private protected watcher adapter is still required before
+claiming that this queue reaches owner review.
+
+Before activation this path still requires a protected provider-facing client
+and native advertisement, full separate-UID Core/Root end-to-end acceptance,
+used Claude/native resume acceptance, watcher delivery, and failure injection.
+The old fresh-only dynamic-tool desk path is not yet replaced for resume.
 
 Standard provider-created MCP stdin pipes are not an authenticated origin
 channel between processes sharing an executor UID. A fixed stdio forwarder must

@@ -16,6 +16,7 @@ impl ConfiguredExecution {
     ) -> Result<Option<ReadyCodex>, &'static str> {
         self.maintain(heartbeat).await?;
         self.config.verify_launcher()?;
+        self.capture_managed_setup(&grant)?;
         if self.desk_enabled() {
             let source = orkestr_v2_store_sqlite::DeskLoginSetup::from_metadata(&grant)
                 .map_err(|_| "desk source setup refused")?;
