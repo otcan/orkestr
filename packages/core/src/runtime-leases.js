@@ -4693,6 +4693,10 @@ function shouldSyncDetachedRollout(thread = {}, activeLeaseThreadIds = new Set()
   if (!threadUsesNativeCodexRuntime(thread)) return false;
   if (threadUsesContainedUserPolicy(thread)) return false;
   if (String(thread?.binding?.connector || "").trim().toLowerCase() !== "whatsapp") return false;
+  // A delegated thread never runs a turn here (deliverPendingThreadInputs
+  // forwards its input), so its local Codex rollout cannot grow, while asking
+  // Codex for its state costs two sqlite3 spawns per thread on every pass.
+  if (remoteWhatsAppRuntimeBinding(thread, env)) return false;
   return Boolean(codexThreadId(thread) || codexRolloutPathForThread(thread, env));
 }
 

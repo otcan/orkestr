@@ -851,3 +851,89 @@ test("detached rollout sync ignores contained app-server WhatsApp threads", asyn
   assert.equal(stored.runtime.operatorRolloutPath, undefined);
   assert.equal(stored.runtime.operatorRolloutOffset, undefined);
 });
+
+test("detached rollout sync does not ask Codex about a thread delegated to a remote runtime", async (t) => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-detached-delegated-"));
+  const env = {
+    ORKESTR_HOME: path.join(home, "orkestr"),
+    ORKESTR_ROLLOUT_SYNC_LOOKBACK_BYTES: "8192",
+  };
+  // Stand-in for the sqlite3 CLI: records each spawn and answers with no rows.
+  const bin = path.join(home, "bin");
+  const spawnLog = path.join(home, "sqlite3-spawns.log");
+  await fs.mkdir(bin, { recursive: true });
+  await fs.writeFile(path.join(bin, "sqlite3"), `#!/bin/sh\necho spawn >> "${spawnLog}"\n`, { mode: 0o755 });
+  const previousPath = process.env.PATH;
+  process.env.PATH = `${bin}${path.delimiter}${previousPath}`;
+  t.after(() => { process.env.PATH = previousPath; });
+  const spawns = async () => (await fs.readFile(spawnLog, "utf8").catch(() => "")).split("\n").filter(Boolean).length;
+  const delegatedBinding = {
+    connector: "whatsapp",
+    chatId: "delegated-chat",
+    responderAccountId: "responder",
+    outboundAccountId: "responder",
+    remoteBackend: "rust-v2",
+    remoteThreadId: "22222222-2222-4222-8222-222222222222",
+    remoteRuntimeEnabled: true,
+  };
+  const detachedThread = async (id, codexThreadId, binding) => {
+    const rolloutPath = path.join(home, `${id}.jsonl`);
+    await createThread({
+      id,
+      name: id,
+      state: "ready",
+      executorId: "codex",
+      executor: {
+        type: "codex",
+        transport: "app-server",
+        codexThreadId,
+        metadata: { runtimeKind: "codex-app-server", codexRolloutPath: rolloutPath },
+      },
+      runtime: { runtimeKind: "codex-app-server", state: "ready" },
+      binding,
+    }, env);
+    await appendThreadMessage(id, {
+      role: "user",
+      source: "whatsapp_inbound",
+      connector: "whatsapp",
+      chatId: binding.chatId,
+      accountId: "responder",
+      text: "What changed?",
+      timestamp: "2026-05-26T14:00:00.000Z",
+      state: "completed",
+    }, env);
+    await fs.writeFile(rolloutPath, `${JSON.stringify({
+      timestamp: "2026-05-26T14:00:03.000Z",
+      type: "response_item",
+      payload: { type: "message", role: "assistant", phase: "final_answer", content: [{ type: "output_text", text: `${id} reply` }] },
+    })}\n`, "utf8");
+  };
+  const projected = async (id) => (await listThreadMessages(id, env)).some((message) => message.text === `${id} reply`);
+
+  await detachedThread("delegated-thread", "33333333-3333-4333-8333-333333333333", delegatedBinding);
+  const delegatedOnly = await syncRuntimeLeases(env);
+  assert.equal(await spawns(), 0);
+  assert.equal(delegatedOnly.appended, 0);
+  assert.equal(await projected("delegated-thread"), false);
+  assert.equal((await getThread("delegated-thread", env)).runtime.operatorRolloutPath, undefined);
+
+  await detachedThread("local-thread", "44444444-4444-4444-8444-444444444444", {
+    connector: "whatsapp",
+    chatId: "local-chat",
+    responderAccountId: "responder",
+    outboundAccountId: "responder",
+  });
+  const withLocal = await syncRuntimeLeases(env);
+  const perLocalThread = await spawns();
+  assert.equal(withLocal.appended, 1);
+  assert.equal(await projected("local-thread"), true);
+  assert.equal(await projected("delegated-thread"), false);
+  assert.ok(perLocalThread >= 2, `a local thread still asks Codex for its state (${perLocalThread} spawns)`);
+
+  // Handing the thread back makes it local again; nothing written meanwhile is lost.
+  await updateThread("delegated-thread", { binding: { ...delegatedBinding, remoteRuntimeEnabled: false } }, env);
+  const afterHandback = await syncRuntimeLeases(env);
+  assert.equal(afterHandback.appended, 1);
+  assert.equal(await projected("delegated-thread"), true);
+  assert.equal(await spawns(), perLocalThread * 3);
+});
