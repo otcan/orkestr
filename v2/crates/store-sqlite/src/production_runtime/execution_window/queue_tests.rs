@@ -19,7 +19,7 @@ async fn owner() -> Owner {
         .join(format!("window-queue-{}", Uuid::new_v4()))
         .join("core.sqlite3");
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    let store = Store::open(&path).await.unwrap();
+    let store = crate::test_template::open(&path).await;
     let home = store
         .setup("synthetic-owner", "synthetic-hash")
         .await

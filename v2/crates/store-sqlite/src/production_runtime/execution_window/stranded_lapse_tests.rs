@@ -238,6 +238,7 @@ async fn lapsed_deep_and_lost_fast_close_the_window_failed_and_resume_it() {
 /// no row, then the lapsed Worker settles and the proposal is accepted.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn schema53_lapsed_worker_settles_after_upgrade() {
+    let _real = crate::test_template::real_migrations();
     let b = workbench_with(WorkerEnd::Running).await;
     let w = &b.p.w;
     let window = w.status.window_id;

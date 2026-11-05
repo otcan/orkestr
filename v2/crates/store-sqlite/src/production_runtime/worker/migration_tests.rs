@@ -4,6 +4,7 @@ use crate::production_runtime::{observation_tests::input as event, tests::setup}
 
 #[tokio::test]
 async fn proposal_migration_preserves_old_blocked_children_and_every_prior_row() {
+    let _real = crate::test_template::real_migrations();
     let f = setup().await;
     let (parent, worker, _) = super::completed_tests::completed_worker(&f).await;
     let old = include_str!(concat!(

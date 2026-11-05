@@ -20,7 +20,7 @@ pub(super) async fn fixture_with_claim_duration(duration: Duration) -> Fixture {
     let root = PathBuf::from(std::env::var_os("ORKESTR_V2_HOME").expect("isolated home"))
         .join(format!("fixture-dispatch-{}", Uuid::new_v4()));
     std::fs::create_dir_all(&root).unwrap();
-    let a = Store::open(&root.join("core.sqlite3")).await.unwrap();
+    let a = crate::test_template::open(&root.join("core.sqlite3")).await;
     let conversation = a.setup("synthetic-owner", "synthetic-hash").await.unwrap();
     let (owner, _) = a.credentials("synthetic-owner").await.unwrap().unwrap();
     let b = Store::open(&root.join("core.sqlite3")).await.unwrap();

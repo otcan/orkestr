@@ -4,7 +4,7 @@ const TOKEN: &str = "synthetic-durable-owner-session";
 async fn fixture() -> (Store, OwnerId, DurableTimerEnable, std::path::PathBuf) {
     let dir = std::env::temp_dir().join(format!("durable-timer-{}", Uuid::new_v4()));
     std::fs::create_dir(&dir).unwrap();
-    let store = Store::open(&dir.join("store.sqlite3")).await.unwrap();
+    let store = crate::test_template::open(&dir.join("store.sqlite3")).await;
     let conversation = store
         .setup("synthetic-owner", "synthetic-hash")
         .await
