@@ -15,7 +15,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from identity_split_host_http import HostRehearsal
-from identity_split_service_http import GID, wait
+from identity_split_service_http import GID, Rehearsal, wait
 from codex_service.profile import fast_home, fast_host_options
 
 
@@ -68,6 +68,14 @@ class FastHostRehearsal(HostRehearsal):
         source = source.replace('\\"type\\":\\"dangerFullAccess\\"', '\\"type\\":\\"%s\\"')
         source = source.replace('request, cwd, native, cwd);',
             'request, cwd, !strcmp(role,"fast") ? "readOnly" : "dangerFullAccess", native, cwd);')
+        source = source.replace('resumed != (instance > 1)',
+            'resumed != (!strcmp(role,"deep") && instance > 1)')
+        source = source.replace('++instance; save(); record("spawn", 0, 0);',
+            '++instance; if (!strcmp(role,"fast")) snprintf(native,sizeof(native),'
+            '"22222222-2222-4333-8444-%012d",instance); save(); record("spawn", 0, 0);')
+        source = source.replace('const char *text = strstr(line, "synthetic ordinary HTTP input");',
+            'const char *text = NULL, *cursor = line;\n'
+            '            while ((cursor=strstr(cursor,"synthetic ordinary HTTP input"))) {text=cursor; ++cursor;}')
         account = str(self.fixture.account)
         source = re.sub('"' + re.escape(account) + r'/([^"\n]+)"',
                         lambda m: 'account_path(' + json.dumps(m[1]) + ')', source)
@@ -109,18 +117,61 @@ static const char *account_path(const char *relative) {
         return response
 
     def run(self):
-        report = super().run()
+        # Fast is fresh after window retirement; within a window its accepted
+        # bounded native can stay warm. It never resumes accumulated history.
+        report = Rehearsal.run(self)
+        first = self.rows('SELECT role,native_session_id FROM production_runs')
+        old_deep = next(row['native_session_id'] for row in first if row['role'] == 'deep')
+        path = '/api/v2/conversations/' + self.conversation
+        drain = self.package.data / 'deploy-drain.request'
+        def retired():
+            assert not self.pump_errors, self.pump_errors
+            code, window = self.request(path + '/window')
+            return code == 200 and window['state'] == 'closed' and all(
+                row['state'] == 'exited' for row in self.claims())
+        def drain_window():
+            drain.touch(mode=0o600); os.chown(drain, self.package.authority_uid, GID)
+            wait(retired, 'both actual managed roles retired', seconds=20)
+            drain.unlink()
+            wait(lambda: json.loads((self.package.data / 'deploy-drain.status.json').read_text())['draining'] is False,
+                'operator drain released', seconds=5)
+        drain_window()
+        for number in (2, 3):
+            code, window = self.request(path + '/window'); assert code == 200
+            key = 'synthetic-split-' + str(number)
+            code, receipt = self.request(path + '/messages', 'POST', {'client_message_id': key,
+                'text': 'synthetic ordinary HTTP input ' + str(number), 'author': 'owner'})
+            assert code == 202, (code, receipt)
+            closed = window['state'] == 'closed'
+            code, opened = self.request(path + '/window', 'POST', {'request_key': 'window:' + key,
+                'input_message_id': receipt['message_id'], 'input_event_id': receipt['event_id'],
+                'input_request_key': key, 'expected_generation': window['generation'],
+                'window_id': None if closed else window['window_id'],
+                'predecessor_window_id': window['window_id'] if closed else None})
+            assert code == 201, (code, opened)
+        drain_window()
+        rows = self.rows('SELECT role,native_session_id,state FROM production_runs')
+        assert len(rows) == 6 and all(row['state'] == 'succeeded' for row in rows), rows
+        assert {row['native_session_id'] for row in rows if row['role'] == 'deep'} == {old_deep}
+        assert len({row['native_session_id'] for row in rows if row['role'] == 'fast'}) == 2
+        assert len(self.rows('SELECT id FROM messages')) == 3
         traces = {}
         for role, home in [('deep', self.fixture.account), ('fast', self.fast_home)]:
             events = [json.loads(line) for line in (home / 'sessions/synthetic-role.jsonl').read_text().splitlines()]
             assert all(row['role'] == role for row in events)
             assert sum(row['kind'] == 'turn' for row in events) == 3
-            assert any(row['kind'] == 'ready' and row['resumed'] for row in events)
-            traces[role] = {'turns': 3, 'resumed': True}
+            assert [row['input_index'] for row in events if row['kind'] == 'turn'] == [1, 2, 3]
+            ready = [row for row in events if row['kind'] == 'ready']
+            assert any(row['resumed'] for row in ready) if role == 'deep' else not any(row['resumed'] for row in ready)
+            traces[role] = {'turns': 3, 'resumed': role == 'deep',
+                'fresh_after_window_retirement': role == 'fast', 'warm_within_window': role == 'fast'}
         assert (self.fast_home / 'auth.json').is_symlink()
         assert (self.fast_home / 'auth.json').resolve() == self.fixture.auth
         report.update(codex_deep_and_fast=traces, roles_selected_by_fixed_argv=True,
-            shared_mapped_cwd=True, fast_separate_codex_home=True, fast_pinned_options=list(fast_host_options()))
+            shared_mapped_cwd=True, fast_separate_codex_home=True, fast_pinned_options=list(fast_host_options()),
+            server_identity=self.server_identity, server_sha256=self.server_sha256, original_inputs_replayed=False,
+            synthetic_native_source_sha256=self.synthetic_sha256, managed_host=True,
+            core_project_permissions_changed=False)
         return report
 
 
