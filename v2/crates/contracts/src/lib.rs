@@ -3,6 +3,8 @@ mod accepted_results;
 pub use accepted_results::*;
 mod source_receipts;
 pub use source_receipts::*;
+mod source_intake;
+pub use source_intake::*;
 mod archived_history;
 pub use archived_history::*;
 mod conversations;

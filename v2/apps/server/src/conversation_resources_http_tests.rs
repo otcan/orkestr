@@ -1,6 +1,8 @@
 use super::*;
 #[path = "message_provider_generation_http_tests.rs"]
 mod message_provider_generation_tests;
+#[path = "source_intake_http_tests.rs"]
+mod source_intake_tests;
 #[path = "source_receipts_http_tests.rs"]
 mod source_receipt_tests;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
