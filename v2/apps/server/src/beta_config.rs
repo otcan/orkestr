@@ -7,6 +7,7 @@ pub(crate) mod loading;
 pub(crate) mod provider_routing;
 pub(crate) mod roles;
 pub(crate) mod workspace_exec;
+mod workspace_exec_managed;
 pub(crate) mod workspace_exec_trusted;
 use orkestr_v2_contracts::{ConversationId, OwnerId};
 use serde::Deserialize;

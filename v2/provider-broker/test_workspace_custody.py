@@ -24,7 +24,8 @@ class WorkspaceCustodyTests(unittest.TestCase):
         self.profile = dict(conversation_id=str(uuid.uuid4()), project_id=str(uuid.uuid4()),
             workspace=str(self.workspace), allowed_roots=[str(self.workspace)],
             protected_roots=[str(root / 'protected')], cgroup_root=str(root / 'cgroups'),
-            toolchain_root=str(root / 'image'), trusted={'managed_executor': True})
+            toolchain_root=str(root / 'image'), trusted={'managed_executor': {
+                'environment': {'HOME': '/home/example', 'PATH': '/usr/bin:/bin'}}})
 
     def installation(self):
         value = Installation(self.package, self.profile); self.addCleanup(value.close)

@@ -14,6 +14,7 @@ import struct
 from codex_bounded.trust import exists
 from .contract import canonical, identifier, require
 from .workspace_custody import Installation
+from .workspace_environment import definition
 
 
 class Projects:
@@ -29,8 +30,11 @@ class Projects:
             scope = (profile['conversation_id'], profile['project_id'])
             identifier(scope[0]); identifier(scope[1])
             require(scope not in self.profiles and type(profile.get('trusted')) is dict and
-                    profile['trusted'].get('managed_executor') is True and
-                    profile['trusted'].get('host_privileged', False) is False, 'workspace_explicit_profile')
+                    type(profile['trusted'].get('managed_executor')) is dict and
+                    profile['trusted'].get('host_privileged', False) is False and
+                    profile['trusted'].get('environment', {}) == {} and
+                    profile['trusted'].get('credential_env_files', []) == [], 'workspace_explicit_profile')
+            definition(profile['trusted']['managed_executor'])
             self.profiles[scope] = profile
 
     def attest(self, source, request, endpoint):

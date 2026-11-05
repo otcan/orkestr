@@ -10,6 +10,7 @@ import stat
 
 from .contract import require, identifier
 from codex_bounded.trust import metadata
+from .workspace_environment import definition
 
 
 def canonical(raw):
@@ -85,16 +86,19 @@ class Installation:
     def __init__(self, package, profile):
         require(os.geteuid() == 0 and package.identity_split, 'workspace_root_split')
         require(type(profile) is dict and type(profile.get('trusted')) is dict and
-                profile['trusted'].get('managed_executor') is True and
-                profile['trusted'].get('host_privileged', False) is False, 'workspace_explicit_managed_executor')
+                type(profile['trusted'].get('managed_executor')) is dict and
+                profile['trusted'].get('host_privileged', False) is False and
+                profile['trusted'].get('environment', {}) == {} and
+                profile['trusted'].get('credential_env_files', []) == [], 'workspace_explicit_managed_executor')
+        definition(profile['trusted']['managed_executor'])
         identifier(profile['conversation_id']); identifier(profile['project_id'])
         self.executor = package.executor_uid
         self.workspace = canonical(profile['workspace'])
         require(profile['allowed_roots'] == [str(self.workspace)], 'workspace_exact_root')
         self.protected = [canonical(str(package.home)), canonical(str(package.ledger_directory)),
-                          canonical(str(package.provider_home)), canonical(str(package.root)),
-                          *[canonical(p) for p in profile['protected_roots']],
-                          canonical(profile['cgroup_root']), canonical(profile['toolchain_root'])]
+                          canonical(str(package.provider_home)), canonical(str(package.root))]
+        bootstrap = getattr(package, 'runtime', {}).get('bootstrap_file')
+        if bootstrap is not None: self.protected.append(canonical(bootstrap))
         # Account/native-state roots may be outside provider_home. A project
         # cannot redirect its mutable Git pointer into any such installation.
         for selected in getattr(package, 'role_profiles', {}).values():
@@ -109,6 +113,9 @@ class Installation:
         if getattr(package, 'claude', None) is not None:
             claude = metadata(package.root / 'claude-private.json', 32768)
             self.protected.extend(canonical(claude[k]) for k in ('account', 'home', 'temporary', 'workspace'))
+        self.credential_protected = tuple(self.protected)
+        self.protected.extend([*[canonical(p) for p in profile['protected_roots']],
+                               canonical(profile['cgroup_root']), canonical(profile['toolchain_root'])])
         self.paths = (self.workspace, *association(self.workspace, self.executor))
         for path in self.paths:
             require(all(path != other and path not in other.parents and other not in path.parents
