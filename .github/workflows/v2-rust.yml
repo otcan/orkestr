@@ -103,12 +103,20 @@ jobs:
           sudo env PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -I -S -B -m unittest discover -s "$PWD/provider-broker" -p test_codex_service_claude_custody.py -v
           sudo env PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -I -S -B -m unittest discover -s "$PWD/provider-broker" -p test_codex_service_fast_sampler.py -v
           sudo env PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -I -S -B -m unittest discover -s "$PWD/provider-broker" -p 'test_workspace_*.py' -v
+          sudo env PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -I -S -B -m unittest discover -s "$PWD/provider-broker" -p test_split_qualification.py -v
       - name: Service packager and passive quota inventory
         run: |
           python3 -I -S -B -m unittest discover -s packaging/service/tests -v
           sudo /usr/bin/python3 -I -S -B -m unittest discover -s "$PWD/packaging/service/tests" -p test_selected.py -v
           sudo /usr/bin/python3 -I -S -B -m unittest discover -s "$PWD/packaging/service/tests" -p test_artifact_boundary.py -v
           sudo /usr/bin/python3 -I -S -B -m unittest discover -s "$PWD/packaging/service/tests" -p test_release.py -v
+      - name: Kernel-bound service credentials and cache
+        working-directory: ${{ github.workspace }}
+        run: |
+          sudo env PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -I -S -B -m unittest discover -s "$PWD/v2/compat/tests" -p test_service_peer.py -v
+          sudo env PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -I -S -B -m unittest discover -s "$PWD/v2/compat/tests" -p test_service_client.py -v
+          sudo env PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -B -m unittest discover -s v2/compat/v1_runtime/tests -p test_service_session_cache.py -v
+          sudo env PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -B -m unittest discover -s v2/compat/v1_runtime/tests -p test_provision_service_credential.py -v
       - name: Scoped V1 runtime compatibility regressions
         working-directory: ${{ github.workspace }}
         run: |
