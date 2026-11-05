@@ -489,11 +489,12 @@ impl DurableTimerController {
                     }
                     let pass_started = tokio::time::Instant::now();
                     let pass = self.tick().await;
-                    // A pass ends within its five-second deadline. Longer means this
-                    // task was not polled, which no store error below can show.
+                    // A pass ends within its five-second deadline. Longer means it was
+                    // delayed (not polled, or blocked inside a poll), which no store
+                    // error below can show.
                     if pass_started.elapsed() >= Duration::from_secs(10) {
                         eprintln!(
-                            "timer controller was not scheduled for {}s during a pass",
+                            "timer controller pass stalled for {}s",
                             pass_started.elapsed().as_secs()
                         );
                     }
@@ -512,8 +513,8 @@ impl DurableTimerController {
                         Err(HistoryError::Unavailable) if accepted.elapsed() < self.grace() => {
                             eprintln!("timer controller pass deferred: store unavailable");
                         }
-                        // The window can also lapse because this task was not
-                        // scheduled while the store answered everyone else. The
+                        // The window can also lapse because this task was delayed
+                        // while the store answered everyone else. The
                         // stamp cannot tell that from an outage; the heartbeat can,
                         // and it alone knows whether the lease survived.
                         Err(HistoryError::Unavailable) => {
