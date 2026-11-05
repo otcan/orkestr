@@ -273,17 +273,31 @@ four `test (N)` shards, all from one workflow run whose `head_sha` matches.
 | Setting | Values | Default | Effect |
 | --- | --- | --- | --- |
 | `ORKESTR_DEPLOY_REQUIRE_CHECKS` | `enforce`, `warn`, `off` | `enforce` | Missing, failed, pending checks, head-sha mismatch, a non-GitHub source, or an unreadable API stop the deploy with exit `77`; `warn` logs and continues. |
-| `ORKESTR_DEPLOY_ARTIFACT_PROVENANCE` | `off`, `warn`, `enforce` | `warn` | Reads the run's `runtime-dist` artifact metadata (id, digest, expiry) and attestation presence; with a token, downloads it, checks the archive digest, and compares its content manifest (`server`, `launcher` subtrees) with the locally built `dist`. `enforce` requires a token and fails closed; it never silently falls back to an unverified local build. |
+| `ORKESTR_DEPLOY_ARTIFACT_PROVENANCE` | `off`, `warn`, `enforce` | `warn` | Reads the run's `runtime-dist` artifact metadata (id, digest, expiry) and attestation presence; with a token, downloads it, checks the archive digest, and compares its content manifest (`server`, `launcher` subtrees) with the locally built `dist`. `enforce` requires a token and a verified attestation and fails closed; it never silently falls back to an unverified local build. |
 | `ORKESTR_GITHUB_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN` | read-only token | unset | Optional for public repositories (unauthenticated API, 60 requests/hour); required for artifact download. Put it in the env file, never on the command line. It is never logged or recorded. |
 | `ORKESTR_DEPLOY_PROVENANCE_REPO` | `owner/repo` | derived from `ORKESTR_REPO_URL` | For mirrors. `git@github.com:owner/repo.git`, `ssh://` and `https://` remotes are parsed automatically. |
 
-Attestation signatures are verified with `gh attestation verify` only when the
-GitHub CLI is installed and the artifact was downloaded; otherwise the record
-says `attestation_unverified` (or `attestation_present_unverified` when the API
-lists an attestation for the digest). CI creates the attestation in the
-`provenance` job, only for `push`/`workflow_dispatch` builds, with
+Attestation signatures are verified with `gh attestation verify` on the
+downloaded artifact. A verified attestation must also be bound to this deploy:
+the source commit in its signing certificate has to be the commit being
+deployed, and its source ref has to be listed under `attestation.sourceRefs` in
+`release-policy.json` (`refs/heads/main`). Otherwise the result is
+`attestation_failed` with `attestation_commit_mismatch` or
+`attestation_ref_not_allowed`. CI creates the attestation in the `provenance`
+job, only for `push`/`workflow_dispatch` builds, with
 `actions/attest-build-provenance` over the `runtime-dist` archive digest and the
 `runtime-dist-manifest` content manifest.
+
+With `enforce`, only `attestation_verified` passes. The deploy is rejected, and
+the reason says what was missing, when the attestation lookup could not be made
+(`attestation_lookup_failed`), the GitHub CLI is not installed
+(`attestation_verifier_unavailable`) or is switched off with
+`ORKESTR_DEPLOY_ATTESTATION_GH=0` (`attestation_verifier_disabled`), or
+verification did not run for any other reason (`attestation_not_verified`).
+With `warn`, the same cases continue as before: the record says
+`attestation_unverified` (or `attestation_present_unverified` when the API lists
+an attestation for the digest) and carries that reason. A host should switch to
+`enforce` only once its deploys wait for the commit's push run to finish.
 
 A `pull_request` run is never attested. When a commit has both a pull-request
 run and a push run (it reached `main` without a new commit id), the gate takes
