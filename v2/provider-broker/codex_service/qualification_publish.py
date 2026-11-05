@@ -35,7 +35,7 @@ def publish(package, phase, evidence):
             os.close(fd)
         candidate = copy.copy(package)
         candidate.runtime = {**package.runtime, 'qualification_record': str(temporary)}
-        gate = Gate(candidate)  # Exact evidence, custody, production and Root hold.
+        gate = Gate(candidate, allow_boot_hold=False)  # Exact evidence, custody, production and Root hold.
         os.replace(temporary.name, path.name, src_dir_fd=directory, dst_dir_fd=directory)
         os.fsync(directory)
         return gate.record_hash

@@ -347,7 +347,7 @@ class Manager:
             require(self.adopted.drain(known),'adopted_children_not_reaped')
 
     def tick(self):
-        if getattr(self, "qualification", None) is not None:
+        if not self.closed and getattr(self, "qualification", None) is not None:
             self.qualification.observe(self.identity)
         if getattr(self,'workspace_commands',None):self.workspace_commands.tick(self._desk_window_active)
         if getattr(self,'desk',None):self.desk.tick(self._desk_window_active)

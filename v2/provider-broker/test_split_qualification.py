@@ -224,6 +224,62 @@ int main(void) {
             env={'PATH': '/usr/bin:/bin', 'PYTHONDONTWRITEBYTECODE': '1'})
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_qualified_routine_restart_owns_only_its_new_nonce_hold(self):
+        package = self.provision('qualified_runtime')
+        self.marker.unlink()
+        previous = None
+        for _ in range(2):
+            manager = Manager(package.root, self.digest(package.root / 'manifest.json'))
+            try:
+                manager.start()
+                self.assertTrue(self.marker.exists())
+                self.assertIsNotNone(manager.qualification.boot_nonce)
+                deadline = time.monotonic() + 5
+                while not manager.qualification.acknowledged and time.monotonic() < deadline:
+                    manager.qualification.observe(manager.identity)
+                    time.sleep(.01)
+                self.assertTrue(manager.qualification.acknowledged)
+                self.assertFalse(self.marker.exists())
+                manager.qualification.positive(manager.identity)
+                self.assertNotEqual(previous, manager.identity['pid'])
+                previous = manager.identity['pid']
+            finally:
+                manager.close()
+                self.assertIsNotNone(manager.child.returncode)
+
+    def test_boot_nonce_never_clears_replaced_or_inplace_operator_hold(self):
+        package = self.provision('qualified_runtime')
+        for replace in (False, True):
+            self.marker.unlink()
+            gate = Gate(package)
+            with self.assertRaisesRegex(Refused, 'qualification_boot_ack_required'):
+                gate.release_boot_hold()
+            self.assertTrue(self.marker.exists())
+            if replace:
+                # Retain the prior inode so filesystem allocation cannot reuse it.
+                old = self.marker.with_suffix('.previous')
+                self.marker.rename(old)
+                self.marker.write_bytes(b'operator hold')
+                self.marker.chmod(0o400)
+            else:
+                self.marker.write_bytes(b'operator hold')
+            # Unit-level CAS seam only; actual child ACK is exercised above.
+            gate.acknowledged = True
+            with self.assertRaises(Refused):gate.release_boot_hold()
+            self.assertEqual(self.marker.read_bytes(), b'operator hold')
+            if replace:old.unlink()
+        self.marker.unlink()
+        # A publication validation does not create a boot hold as a side effect.
+        from codex_service.qualification_publish import publish
+        with self.assertRaises(Refused):publish(package, 'qualified_runtime', self.document['evidence'])
+        self.assertFalse(self.marker.exists())
+
+    def test_bootstrap_without_operator_hold_remains_unqualified(self):
+        package = self.provision()
+        self.marker.unlink()
+        with self.assertRaisesRegex(Refused, 'split_launch_unqualified'):start(package)
+        self.assertFalse(self.marker.exists())
+
     def test_authority_uid_and_matching_pid_alone_cannot_forge_selected_core_ack(self):
         from codex_bounded.trust import process
         package = self.provision('qualified_runtime')

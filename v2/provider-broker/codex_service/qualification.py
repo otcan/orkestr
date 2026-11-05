@@ -11,6 +11,7 @@ from pathlib import Path
 import re
 import stat
 import time
+import uuid
 
 from codex_bounded.trust import digest, process, protected
 from .contract import Refused, require
@@ -22,7 +23,7 @@ BOUNDARY = frozenset(('core_private', 'executor_no_authority', 'ipc_denied', 'ma
 INSTANCE = frozenset(('provider_accounts', 'business_resources', 'profile_parity', 'ipc_preflight'))
 CONSUMERS = frozenset(('root-posts', 'v2-canary', 'claude-canary', 'timer-handoff',
     'new-chat', 'root-source', 'agent-timer-grants', 'wa-adapter'))
-NEGATIVE = frozenset(('status', 'drain', 'uncertain', 'desk_login_poll', 'desk_login_cancel',
+NEGATIVE = frozenset(('status', 'drain', 'uncertain', 'retire', 'reconcile', 'desk_login_poll', 'desk_login_cancel',
     'managed_poll', 'managed_cancel', 'managed_run_close', 'workspace_command_receipt',
     'workspace_command_cancel', 'workspace_attest'))
 
@@ -97,7 +98,7 @@ def check_path(value, home=None, root=None):
 
 
 class Gate:
-    def __init__(self, package):
+    def __init__(self, package, allow_boot_hold=True):
         self.package = package
         self.path = check_path(package.runtime.get('qualification_record'), package.home, package.root)
         self.started_ms = time.time_ns() // 1_000_000
@@ -106,7 +107,11 @@ class Gate:
         self.record, self.record_hash = self.load()
         self.phase = self.record['phase']  # Ceiling never follows a later record.
         self.marker = check_path(package.beta.get('deploy_maintenance_marker'), package.home)
+        self.boot_nonce = None
         self.marker_identity = self.hold_identity()
+        if self.marker_identity is None and self.phase == 'qualified_runtime' and allow_boot_hold:
+            self.create_boot_hold()
+            self.marker_identity = self.hold_identity()
         require(self.marker_identity is not None, 'qualification_initial_hold_required')
 
     def evidence(self, name, wanted_subject, keys):
@@ -164,6 +169,56 @@ class Gate:
                 and stat.S_IMODE(info.st_mode) in (0o400, 0o600), 'qualification_hold_custody')
         return (info.st_dev, info.st_ino)
 
+    def create_boot_hold(self):
+        # Only an already-qualified routine restart can create this temporary
+        # hold. Never adopt or remove a preexisting operator/previous boot hold.
+        nonce = ('orkestr-qualified-boot:' + str(uuid.uuid4()) + '\n').encode()
+        folder = os.open(self.marker.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        try:
+            try:
+                fd = os.open(self.marker.name, os.O_WRONLY | os.O_CREAT | os.O_EXCL
+                             | os.O_NOFOLLOW | os.O_CLOEXEC, 0o400, dir_fd=folder)
+            except FileExistsError:
+                return
+            try:
+                require(os.write(fd, nonce) == len(nonce), 'qualification_boot_hold_write')
+                os.fsync(fd)
+                self.boot_stat = os.fstat(fd)
+                info = os.fstat(folder)
+                self.boot_parent = (info.st_dev, info.st_ino)
+                self.boot_nonce = nonce
+            finally:
+                os.close(fd)
+            os.fsync(folder)
+        finally:
+            os.close(folder)
+
+    def release_boot_hold(self):
+        if self.boot_nonce is None:
+            return False
+        require(self.acknowledged and self.phase == 'qualified_runtime', 'qualification_boot_ack_required')
+        folder = os.open(protected(self.marker.parent, True),
+                         os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        try:
+            info = os.fstat(folder)
+            require((info.st_dev, info.st_ino) == self.boot_parent, 'qualification_boot_parent')
+            fd = os.open(self.marker.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=folder)
+            try:
+                info = os.fstat(fd)
+                require(unchanged(self.boot_stat, info) and info.st_nlink == 1
+                        and info.st_uid == 0 and stat.S_IMODE(info.st_mode) == 0o400
+                        and os.read(fd, 256) == self.boot_nonce, 'qualification_boot_hold_changed')
+                current = os.stat(self.marker.name, dir_fd=folder, follow_symlinks=False)
+                require(unchanged(info, current), 'qualification_boot_hold_changed')
+                os.unlink(self.marker.name, dir_fd=folder)
+                os.fsync(folder)
+                self.boot_nonce = None
+                return True
+            finally:
+                os.close(fd)
+        finally:
+            os.close(folder)
+
     def observe(self, identity):
         _, current = read(self.path, 65536)
         require(current == self.record_hash, 'qualification_record_replaced')
@@ -212,7 +267,7 @@ class Gate:
                 'qualification_hold_ack')
         self.executable(identity)
         self.acknowledged = True
-        return True
+        return not self.release_boot_hold()
 
     def executable(self, identity):
         require(identity is not None, 'qualification_core_required')

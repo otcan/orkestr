@@ -25,11 +25,15 @@ but cannot admit windows, launch providers, run commands, or release egress.
 Changing its record cannot promote that manager. Losing its hold stops it.
 
 `qualified_runtime` additionally requires exact production profile/business
-resource proofs and all eight consumer migration proofs. A fresh manager still
-requires the persistent Root hold at startup. Before any positive operation it
+resource proofs and all eight consumer migration proofs. A fresh manager starts Core under a persistent Root hold. If an already
+qualified runtime restarts with no operator hold, it creates its own Root-owned
+nonce hold using exclusive creation. After the actual child ACK it removes only
+that exact nonce/inode, then permits normal progress. It never adopts or clears
+a preexisting operator/previous boot hold. Interrupted startup leaves a hold for
+explicit Root recovery; bootstrap phase never auto-releases. Before any positive operation it
 must observe the actual authority child's fresh `deploy-drain.status.json` ACK,
 bound to original PID/start/UID, selected executable inode and held marker inode.
-The manager refuses positive operations while the marker exists. A reviewed
+The manager refuses positive operations while any marker exists. A reviewed
 operator finalizer may clear the hold only after the credential transaction and
 runtime restart are complete. Existing Core/window/operation fences still apply.
 
