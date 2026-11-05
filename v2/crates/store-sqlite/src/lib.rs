@@ -38,8 +38,6 @@ pub use conversation_export::{
 pub mod history_import;
 pub use history_import::{history_source_digest, HistoryError};
 mod intake;
-mod source_receipts;
-mod source_context;
 pub mod owner_password;
 mod paths;
 mod preflight;
@@ -47,6 +45,8 @@ mod production_runtime;
 mod replay;
 mod runtime;
 pub mod service_credentials;
+mod source_context;
+mod source_receipts;
 pub use production_runtime::{
     auto_accept_request_key, AutomaticReplyConsumption, AutomaticReplyDelivery,
     AutomaticReplyProducer, AutomaticReplyReservation, AutomaticReplyReservationResult,

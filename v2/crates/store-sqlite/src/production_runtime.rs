@@ -117,14 +117,14 @@ mod workspace_exec;
 #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
 pub use workspace_exec::*;
 #[cfg(test)]
+#[path = "source_receipts/tests.rs"]
+mod source_receipt_tests;
+#[cfg(test)]
 mod stop_tests;
 #[cfg(feature = "fixture-test-controls")]
 pub(crate) mod test_controls;
 #[cfg(test)]
 mod tests;
-#[cfg(test)]
-#[path = "source_receipts/tests.rs"]
-mod source_receipt_tests;
 
 pub type ProductionSupervisorStore = Store;
 mod automatic_reply;
