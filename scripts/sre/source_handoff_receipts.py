@@ -211,6 +211,7 @@ def ingest_report(root, key, lookup, report):
                           report_matches_core_payload=(source_matches and run['run_id'] == report['reported_run_id']
                                                        and sha(report['text']) == run.get('payload_sha256')))
         record = dict(report=dict(report), report_digest=report_digest, attribution='source_agent_report',
+                      attribution_verified_by_core=bool(result and result['report_matches_core_payload']),
                       admission={k: proof[k] for k in ('message_id', 'event_id', 'sequence')},
                       core_result=result, verified_business_receipt=None, business_state='unverified', work_completed=False)
         reports.append(record); state['source_reports'] = reports; state['work_completed'] = False

@@ -101,12 +101,14 @@ class Receipts(unittest.TestCase):
     def test_agent_success_without_core_result_is_only_an_attributed_report(self):
         self.accepted();record=r.ingest_report(self.root,self.key,self.projection,self.report())
         self.assertEqual(record['attribution'],'source_agent_report');self.assertIsNone(record['core_result'])
+        self.assertFalse(record['attribution_verified_by_core'])
         self.assertIsNone(record['verified_business_receipt']);self.assertFalse(record['work_completed'])
         self.assertEqual(record['business_state'],'unverified')
 
     def test_accepted_actual_core_output_still_does_not_verify_business_effects(self):
         self.accepted();record=r.ingest_report(self.root,self.key,self.result,self.report())
         self.assertTrue(record['core_result']['report_matches_core_payload'])
+        self.assertTrue(record['attribution_verified_by_core'])
         self.assertIsNotNone(record['core_result']['acceptance_event_id'])
         self.assertIsNone(record['verified_business_receipt']);self.assertFalse(record['work_completed'])
         self.assertFalse(json.loads(self.path.read_text())['work_completed'])
