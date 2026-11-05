@@ -1,4 +1,6 @@
 use super::*;
+#[path = "fast_run_receipt_http_tests.rs"]
+mod fast_run_receipt_tests;
 #[path = "message_provider_generation_http_tests.rs"]
 mod message_provider_generation_tests;
 #[path = "source_intake_http_tests.rs"]

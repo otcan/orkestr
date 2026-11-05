@@ -52,6 +52,7 @@ pub use production_runtime::{
     ManagedOperationConsumption, ManagedOperationOutcome, ManagedOperationParent,
     ManagedOperationRenewal, ManagedOperationRequest, ManagedOperationSetup,
 };
+mod fast_run_receipt;
 mod source_context;
 mod source_intake;
 mod source_receipts;
