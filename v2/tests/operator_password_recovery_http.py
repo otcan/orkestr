@@ -40,8 +40,14 @@ def stopped_runner(*_args, **_kwargs):
 class Rehearsal:
     def __init__(self, binary, commit):
         assert os.geteuid() == 0, 'explicit root fixture required'
-        assert not any(p.stat().st_uid == UID for p in Path('/proc').iterdir()
-                       if p.name.isdigit() and p.exists()), 'fixture UID already active'
+        for process in Path('/proc').iterdir():
+            if not process.name.isdigit():
+                continue
+            try:
+                occupied = process.stat().st_uid == UID
+            except FileNotFoundError:
+                continue
+            assert not occupied, 'fixture UID already active'
         self.directory = Path(tempfile.mkdtemp(prefix='orkestr-recovery-', dir='/'))
         self.directory.chmod(0o755)
         self.home = self.directory / 'data'

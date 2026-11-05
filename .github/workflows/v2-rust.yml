@@ -176,6 +176,9 @@ jobs:
           if [ -f "$RUNNER_TEMP/v2-service-roles.json" ]; then
             sudo chown --no-dereference -- "$(id -u):$(id -g)" "$RUNNER_TEMP/v2-service-roles.json"
           fi
+          if [ -f "$RUNNER_TEMP/v2-password-recovery.json" ]; then
+            sudo chown --no-dereference -- "$(id -u):$(id -g)" "$RUNNER_TEMP/v2-password-recovery.json"
+          fi
       - name: Retain synthetic worker lifecycle evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -184,6 +187,7 @@ jobs:
           # Explicit report files only: never upload the candidate home or databases.
           path: |
             ${{ runner.temp }}/v2-service-roles.json
+            ${{ runner.temp }}/v2-password-recovery.json
             ${{ runner.temp }}/orkestr-v2-intake/worker-retirement-*.json
             ${{ runner.temp }}/orkestr-v2-intake/worker-continuation-*.json
           if-no-files-found: ignore
