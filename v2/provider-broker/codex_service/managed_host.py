@@ -22,7 +22,7 @@ def validate(package):
     require(package.identity_split and 'host_full_access' not in package.beta,
             'managed_host_identity')
     require(type(value) is dict and set(value) <= {'providers', 'environment', 'environment_files'}
-            and type(value.get('providers', True)) is bool and type(value.get('environment')) is dict,
+            and value.get('providers', True) is True and type(value.get('environment')) is dict,
             'managed_host_fields')
     environment = value['environment']
     require({'HOME', 'PATH'} <= set(environment) and len(environment) <= 256

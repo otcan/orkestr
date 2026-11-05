@@ -197,6 +197,7 @@ def validate(raw):
         require('identity_split' in value and 'host_full_access' not in value,
                 'managed host requires identity split and excludes legacy full access')
         host_full_access(value['managed_host'])
+        require(value['managed_host'].get('providers', True) is True, 'managed host requires host providers')
     if 'host_full_access' in value:
         host_full_access(value['host_full_access'])
     if 'claude' in value:

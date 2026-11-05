@@ -152,6 +152,7 @@ def optional(plan):
         require('authority_uid' in plan and 'host_full_access' not in plan,
                 'managed host requires explicit split identity and excludes legacy full access')
         validate_host_full_access(plan['managed_host'])
+        require(plan['managed_host'].get('providers', True) is True, 'managed host requires host providers')
     if 'host_full_access' in plan:
         # Operator opt-in equivalent to host root; never derived from HTTP or model input.
         validate_host_full_access(plan['host_full_access'])

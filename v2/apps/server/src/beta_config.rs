@@ -159,6 +159,9 @@ impl BetaConfig {
         }
         if let Some(access) = &self.managed_host {
             access.validate()?;
+            if !access.providers {
+                return Err("managed host requires host providers");
+            }
         }
         if let Some(roles) = &self.roles {
             roles.validate(&self.launcher)?;
