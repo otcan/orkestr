@@ -158,21 +158,27 @@ mod tests {
             .execute(&f.store.pool)
             .await
             .unwrap();
-        let expiry = scheduler.renew_timer_supervisor_credential().await.unwrap();
-        let clock: i64 = sqlx::query_scalar("SELECT unixepoch()")
+        let before: i64 = sqlx::query_scalar("SELECT unixepoch()")
             .fetch_one(&f.store.pool)
             .await
             .unwrap();
-        assert!((43199..=43200).contains(&(expiry - clock)));
+        let expiry = scheduler.renew_timer_supervisor_credential().await.unwrap();
+        let after: i64 = sqlx::query_scalar("SELECT unixepoch()")
+            .fetch_one(&f.store.pool)
+            .await
+            .unwrap();
+        assert!((before + 43200..=after + 43200).contains(&expiry));
         assert!(matches!(
             f.handle.renew_timer_supervisor_credential().await,
             Err(RuntimeStoreError::Fenced)
         ));
-        sqlx::query("UPDATE auth_sessions SET expires_at=unixepoch()-1 WHERE token_hash=?")
-            .bind(crate::digest(&f.token))
-            .execute(&f.store.pool)
-            .await
-            .unwrap();
+        let expired: i64 = sqlx::query_scalar(
+            "UPDATE auth_sessions SET expires_at=unixepoch()-1 WHERE token_hash=? RETURNING expires_at",
+        )
+        .bind(crate::digest(&f.token))
+        .fetch_one(&f.store.pool)
+        .await
+        .unwrap();
         assert!(matches!(
             scheduler.renew_timer_supervisor_credential().await,
             Err(RuntimeStoreError::Unauthorized)
@@ -183,7 +189,7 @@ mod tests {
                 .fetch_one(&f.store.pool)
                 .await
                 .unwrap();
-        assert!(stored < clock);
+        assert_eq!(stored, expired);
         f.store.revoke_session(&f.token).await.unwrap();
         assert!(matches!(
             scheduler.renew_timer_supervisor_credential().await,
