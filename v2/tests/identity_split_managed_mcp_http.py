@@ -14,11 +14,13 @@ import sys
 sys.path.insert(0,str(Path(__file__).resolve().parent))
 from identity_split_host_http import HostRehearsal
 from identity_split_service_http import ROOT,GID,process,digest
+from codex_service.qualification import code_subject
 
 
 class ManagedRehearsal(HostRehearsal):
     def build_evidence(self):
         return dict(server_identity=self.server_identity,server_sha256=self.server_sha256,
+            code_subject=code_subject(self.package),
             root_package_manifest_sha256=self.manifest,root_module_sha256={name:sha
                 for name,sha in self.package.manifest['files'].items() if name.startswith('codex_service/')})
 
