@@ -34,6 +34,9 @@ def packet(raw):
     require(type(arguments) is dict,'managed_arguments')
     if value['operation']=='desk_login':
         require(set(arguments)=={'operation_id'},'managed_desk_fields');key(arguments['operation_id'])
+    elif value['operation']=='native_register':
+        require(set(arguments)=={'pid','start'} and type(arguments['pid']) is int and 1<arguments['pid']<2**31
+                and type(arguments['start']) is int and 0<arguments['start']<2**53,'managed_native_fields')
     elif value['operation']=='root_request_submit':
         require(set(arguments)=={'action','resource','summary'},'managed_submit_fields')
         for field,cap in (('action',256),('resource',512),('summary',4096)):
@@ -118,6 +121,8 @@ class Ingress:
         self.socket=OwnedSocket(manager.package.control.parent/'managed.sock',manager.package.gid,manager.ledger,'managed',0)
         self.socket.socket.setsockopt(socket.SOL_SOCKET,socket.SO_PASSCRED,1)
         self.socket.socket.setblocking(False)
+        from .managed_native import NativeRegistry
+        self.natives=NativeRegistry(self)
 
     def _record(self,peer,value):
         # The logical source, not caller-provided conversation/PID/role, scopes
@@ -139,6 +144,7 @@ class Ingress:
         peer.path=path;peer.request=request
 
     def tick(self):
+        self.natives.prune()
         while len(self.peers)<MAX_CONNECTIONS:
             try:connection,_=self.socket.socket.accept()
             except BlockingIOError:break
@@ -152,6 +158,11 @@ class Ingress:
                 if peer.path is None:
                     try:value=peer.receive()
                     except BlockingIOError:continue
+                    if value['operation']=='native_register':
+                        identifier=self.natives.register(peer,value)
+                        peer.connection.send(canonical({'version':1,'request_key':value['request_key'],'request_id':identifier,
+                            'state':'completed','result':{'kind':'native_registration'}}))
+                        peer.close();self.peers.remove(peer);continue
                     self._record(peer,value)
                 record=metadata(peer.path,32768)
                 if record['state'] in ('completed','unknown','cancelled'):
@@ -184,4 +195,4 @@ class Ingress:
                 if record['state'] not in ('completed','unknown','cancelled'):
                     record['state']='unknown';atomic(peer.path,record)
             peer.close()
-        self.peers=[];self.socket.close()
+        self.peers=[];self.socket.close();self.natives.close()

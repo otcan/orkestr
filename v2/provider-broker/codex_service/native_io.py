@@ -53,6 +53,7 @@ class NativeIO:
                 and launch_context() is not None and ctypes.CDLL(None).prctl(39, 0, 0, 0, 0) == 1,
                 'native_io_managed_launch')
         validate(SLOTS)
+        self.package=package
         self.descriptors = []
         try:
             for fd in SLOTS:
@@ -85,6 +86,20 @@ class NativeIO:
     def close(self):
         for fd in self.descriptors: os.close(fd)
         self.descriptors = []
+
+    def attest(self,child):
+        if not self.package.runtime.get('managed_operations'):return
+        from .identity import launch_context
+        context=launch_context()
+        if context['role'] not in ('deep','claude') or context['setup']['role']!='deep':return
+        from codex_bounded.trust import process
+        from .contract import canonical
+        from .managed_client import exchange
+        identity=process(child.pid)
+        require(identity and child.poll() is None,'native_io_owned_child_lost')
+        reply=exchange(self.package.control.parent/'managed.sock',canonical({'version':1,'request_key':'native-register',
+            'operation':'native_register','arguments':{'pid':child.pid,'start':identity['start']}}))
+        require(reply['state']=='completed' and reply['result']=={'kind':'native_registration'},'native_io_registration_unknown')
 
 
 def capture(package):

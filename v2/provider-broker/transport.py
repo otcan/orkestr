@@ -144,6 +144,7 @@ class Pump:
                                       close_fds=True, process_group=0)
         if hasattr(self.config, "owned_spawned"):
             self.config.owned_spawned(self.child)
+        if native_io is not None:native_io.attest(self.child)
         for pipe in (self.child.stdin, self.child.stdout):
             os.set_blocking(pipe.fileno(), False)
         if self.stderr_capture is not None:

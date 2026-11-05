@@ -113,6 +113,8 @@ class RootCallerTests(unittest.TestCase):
         for child in self.children:
             if child.poll() is None:child.kill()
             child.wait(timeout=3)
+            for stream in (child.stdin,child.stdout,child.stderr):
+                if stream is not None:stream.close()
 
     def caller(self,nnp=True):
         code='import ctypes,sys;ctypes.CDLL(None).prctl(38,1,0,0,0);print("ready",flush=True);sys.stdin.read()'
