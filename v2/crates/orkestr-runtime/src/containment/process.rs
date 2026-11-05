@@ -148,6 +148,9 @@ impl Process {
         } else {
             None
         };
+        if directories.managed_workspace() && managed_config.is_none() {
+            return Err(Error::AuthorityProtocol);
+        }
         if managed_config.is_some()
             && (workspace.is_some()
                 || args

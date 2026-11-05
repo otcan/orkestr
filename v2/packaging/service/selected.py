@@ -84,7 +84,7 @@ def pair_bytes(plan):
     return pair
 
 
-OPTIONAL = {'operator_recovery', 'desk_login', 'attachment_export_dir', 'password_rotation_ready', 'authority_uid', 'authority_gid', 'executor_uid', 'executor_gid', 'provider_home', 'roles', 'preserve_state', 'workspace_exec', 'additional_workspace_exec', 'max_active_windows', 'host_full_access',
+OPTIONAL = {'managed_host', 'operator_recovery', 'desk_login', 'attachment_export_dir', 'password_rotation_ready', 'authority_uid', 'authority_gid', 'executor_uid', 'executor_gid', 'provider_home', 'roles', 'preserve_state', 'workspace_exec', 'additional_workspace_exec', 'max_active_windows', 'host_full_access',
             'window_max_minutes', 'conversation_window_max_minutes', 'conversation_workspaces', 'provider_routing',
             'code_mode_host', 'code_mode_host_sha256', 'claude', 'claude_quota_projection', 'codex_quota_projection', 'live_map', 'desktop_broker', 'timer_config', 'whatsapp_chats', 'v1_chat_icons_dir', 'metrics_port'}
 CLAUDE_PATHS = ('executable', 'account', 'workspace', 'home', 'temporary')
@@ -148,13 +148,17 @@ def optional(plan):
     if 'workspace_exec' in plan:
         require('roles' in plan, 'workspace execution requires configured Worker roles')
         validate_workspace_exec(plan['workspace_exec'])
+    if 'managed_host' in plan:
+        require('authority_uid' in plan and 'host_full_access' not in plan,
+                'managed host requires explicit split identity and excludes legacy full access')
+        validate_host_full_access(plan['managed_host'])
     if 'host_full_access' in plan:
         # Operator opt-in equivalent to host root; never derived from HTTP or model input.
         validate_host_full_access(plan['host_full_access'])
     # Host natives start Codex's code-mode host (dynamic tools) from their own
     # directory: the same-release binary is pinned beside the native.
-    host_providers = plan.get('host_full_access', {}).get('providers', True) is True \
-        if 'host_full_access' in plan else False
+    access = plan.get('managed_host', plan.get('host_full_access'))
+    host_providers = type(access) is dict and access.get('providers', True) is True
     require(('code_mode_host' in plan) == ('code_mode_host_sha256' in plan) == host_providers,
             'host_full_access providers require exactly one pinned code_mode_host')
     if 'code_mode_host' in plan:
@@ -384,8 +388,8 @@ def prepare(plan):
             for key in ('window_max_minutes', 'conversation_window_max_minutes', 'conversation_workspaces', 'provider_routing'):
                 if key in plan:
                     beta[key]=plan[key]
-            if 'host_full_access' in plan:
-                beta['host_full_access']=plan['host_full_access']
+            for access_key in ('host_full_access', 'managed_host'):
+                if access_key in plan: beta[access_key]=plan[access_key]
             if 'live_map' in plan:
                 runtime['live_map']=plan['live_map']
             if 'desktop_broker' in plan:

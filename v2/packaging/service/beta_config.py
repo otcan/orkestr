@@ -149,7 +149,7 @@ def validate(raw):
     require(type(raw) is bytes and len(raw) <= MAX_BETA_CONFIG_BYTES, 'bounded beta config required')
     value = json.loads(raw.decode('utf-8'), object_pairs_hook=unique,
                        parse_constant=lambda _: (_ for _ in ()).throw(RuntimeError('invalid beta number')))
-    require(type(value) is dict and set(value) - {'roles', 'workspace_exec', 'additional_workspace_exec', 'max_active_windows', 'host_full_access', 'claude', 'window_max_minutes', 'conversation_window_max_minutes', 'conversation_workspaces', 'provider_routing', 'identity_split'} == FIELDS, 'closed beta config fields required')
+    require(type(value) is dict and set(value) - {'roles', 'workspace_exec', 'additional_workspace_exec', 'max_active_windows', 'host_full_access', 'claude', 'window_max_minutes', 'conversation_window_max_minutes', 'conversation_workspaces', 'provider_routing', 'identity_split', 'managed_host'} == FIELDS, 'closed beta config fields required')
     require(type(value['schema_version']) is int and value['schema_version'] == 1, 'beta schema version')
     for name in ('owner_id', 'conversation_id'):
         text = value[name]
@@ -193,6 +193,10 @@ def validate(raw):
     window_lifetimes(value)
     conversation_workspaces(value)
     provider_routing(value)
+    if 'managed_host' in value:
+        require('identity_split' in value and 'host_full_access' not in value,
+                'managed host requires identity split and excludes legacy full access')
+        host_full_access(value['managed_host'])
     if 'host_full_access' in value:
         host_full_access(value['host_full_access'])
     if 'claude' in value:
@@ -238,8 +242,8 @@ def conversation_workspaces(value):
     if 'conversation_workspaces' not in value:
         return value
     table = value['conversation_workspaces']
-    require(type(table) is dict and 0 < len(table) <= 128 and 'host_full_access' in value,
-            'conversation workspaces require host_full_access')
+    require(type(table) is dict and 0 < len(table) <= 128 and ('host_full_access' in value or 'managed_host' in value),
+            'conversation workspaces require an explicit host profile')
     for conversation, path in table.items():
         try:
             identifier = uuid.UUID(conversation)

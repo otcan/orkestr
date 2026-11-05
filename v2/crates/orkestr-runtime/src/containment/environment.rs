@@ -9,6 +9,7 @@ pub struct ChildDirectories {
     workspace: PathBuf,
     home: PathBuf,
     temporary: PathBuf,
+    managed_workspace: bool,
     /// Owner turn preference for a Claude launcher (model, effort); closed
     /// values only, never a path, account or credential.
     claude_launch: Option<(Option<String>, Option<String>)>,
@@ -31,7 +32,39 @@ impl ChildDirectories {
             home: canonical(home)?,
             temporary: canonical(temporary)?,
             claude_launch: None,
+            managed_workspace: false,
         })
+    }
+
+    /// A protected split launcher delegates project custody to its original
+    /// Root manager. Preserve the logical cwd without opening an executor's
+    /// private project tree from Core; the proxy always starts at `/`.
+    pub fn for_launcher(
+        program: &Path,
+        workspace: &Path,
+        home: &Path,
+        temporary: &Path,
+    ) -> Result<Self, Error> {
+        if super::managed_launch::configuration(program)?.is_none() {
+            return Self::new(workspace, home, temporary);
+        }
+        use std::path::Component;
+        if !workspace.is_absolute()
+            || workspace.as_os_str().len() > 4096
+            || workspace
+                .components()
+                .any(|p| !matches!(p, Component::RootDir | Component::Normal(_)))
+        {
+            return Err(Error::InvalidPath);
+        }
+        let mut result = Self::new(Path::new("/"), home, temporary)?;
+        result.workspace = workspace.to_owned();
+        result.managed_workspace = true;
+        Ok(result)
+    }
+
+    pub(super) fn managed_workspace(&self) -> bool {
+        self.managed_workspace
     }
 
     /// Pass the conversation's Claude model/effort to the trusted launcher.

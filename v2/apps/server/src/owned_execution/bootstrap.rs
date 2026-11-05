@@ -27,7 +27,8 @@ impl ConfiguredExecution {
         if *shutdown.borrow() {
             return Ok(None);
         }
-        let directories = ChildDirectories::new(
+        let directories = ChildDirectories::for_launcher(
+            &self.config.launcher,
             &self.config.workspace,
             &self.directory.join("home"),
             &self.directory.join("tmp"),

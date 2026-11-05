@@ -67,4 +67,23 @@ mod tests {
             Err("unsupported split execution mode")
         ));
     }
+
+    #[test]
+    fn managed_host_and_mapped_workspace_require_an_explicit_split() {
+        let conversation = uuid::Uuid::new_v4();
+        let mut value = serde_json::json!({"schema_version":1,"owner_id":uuid::Uuid::new_v4(),
+            "conversation_id":conversation,"manager_socket":"/run/example/control.sock",
+            "launcher":"/opt/example/launcher.py","launcher_sha256":"a".repeat(64),
+            "workspace":"/srv/example/workspace","namespace":"example","supervisor_key":"example",
+            "managed_host":{"environment":{"HOME":"/srv/example/provider","PATH":"/usr/bin:/bin"}},
+            "conversation_workspaces":{conversation.to_string():"/srv/example/private/project"}});
+        let parse =
+            |value| serde_json::from_value::<crate::beta_config::BetaConfig>(value).unwrap();
+        assert!(parse(value.clone()).validate().is_err());
+        value["identity_split"] =
+            serde_json::json!({"authority_uid":20000,"executor_uid":20001,"shared_gid":20001});
+        assert!(parse(value.clone()).validate().is_ok());
+        value["host_full_access"] = value["managed_host"].clone();
+        assert!(parse(value).validate().is_err());
+    }
 }
