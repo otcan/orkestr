@@ -179,6 +179,12 @@ class Launcher:
             child=subprocess.Popen(command,stdin=descriptors[0],stdout=descriptors[1],stderr=subprocess.DEVNULL,
                                    cwd='/',env={'PATH':'/usr/bin:/bin','LANG':'C.UTF-8','PYTHONDONTWRITEBYTECODE':'1'},
                                    pass_fds=tuple(inherited),start_new_session=True)
+            # Retain the original Popen identity before any validation/cleanup.
+            # This is the broker bootstrap child, never a native provider claim.
+            observed=process(child.pid)
+            record['original_child']={'pid':child.pid,'start':observed['start'] if observed and observed['ppid']==os.getpid() else None,
+                                      'wait_status':child.poll()}
+            atomic(path,record)
             while True:
                 require(time.monotonic()<deadline,'launch_pause_deadline')
                 current=process(child.pid)
@@ -206,8 +212,15 @@ class Launcher:
             return {'broker_pid':current['pid'],'broker_start':current['start'],'state':'spawned',
                     'proxy_pid':proxy['pid'],'proxy_start':proxy['start'],'role':request['role'],
                     'window_id':request['window_id'],'generation':request['generation']}
-        except BaseException:
+        except BaseException as failure:
+            from .entry import failure_metadata,receive_failure
             record['state']='unknown'
+            record['failure']=failure_metadata(failure,self.package.root)
+            if child is not None:
+                original=record.setdefault('original_child',{'pid':child.pid,'start':None})
+                original['wait_status']=child.poll()
+                report=receive_failure(parent,self.package.root)
+                if report is not None:record['child_failure']=report
             try:
                 atomic(path,record)
             finally:
@@ -215,7 +228,8 @@ class Launcher:
                 # cannot have a native child. After continuation, the window's
                 # pidfd tree must be observed before any broker is killed.
                 if child is not None and not (receipt and receipt.consumed):
-                    child.kill();child.wait(timeout=2)
+                    child.kill();record['cleanup_wait_status']=child.wait(timeout=2)
+                    atomic(path,record)
                     self.children.pop(identity,None)
                     lifecycle.close()
             raise

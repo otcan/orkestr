@@ -195,6 +195,11 @@ p.wait()
             self.launcher.launch(value,self.fds,failed,time.monotonic()+4)
         records=[json.loads(p.read_text()) for p in self.launcher.directory.glob('*.json')]
         self.assertEqual(len(records),1);self.assertEqual(records[0]['state'],'unknown')
+        self.assertGreater(records[0]['original_child']['start'],0)
+        self.assertEqual(records[0]['failure']['exception_class'],'ValueError')
+        self.assertIsNone(records[0]['original_child']['wait_status'])
+        self.assertEqual(records[0]['cleanup_wait_status'],-9)
+        self.assertNotIn('synthetic registration loss',json.dumps(records[0]))
         value['request_id']='different-id-same-launch'
         with self.assertRaisesRegex(Refused,'already_claimed'):
             self.launcher.launch(value,self.fds,lambda _:self.fail(),time.monotonic()+4)

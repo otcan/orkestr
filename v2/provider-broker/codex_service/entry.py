@@ -197,6 +197,77 @@ def verified(root, expected, sealed=False):
     return manifest_digest, records
 
 
+
+FAILURE_CLASSES = frozenset(('ValueError','OSError','PermissionError','FileNotFoundError',
+    'ProcessLookupError','TimeoutError','TypeError','KeyError','RuntimeError',
+    'AssertionError','BrokenPipeError','Refused','Exception'))
+FAILURE_FORMAT = 'orkestr-v2-launch-failure-v1'
+
+
+def failure_metadata(error, root):
+    """Bounded static location only: never exception messages, locals or argv."""
+    name=type(error).__name__
+    value={'format':FAILURE_FORMAT,'exception_class':name if name in FAILURE_CLASSES else 'Exception',
+           'errno':error.errno if isinstance(error,OSError) and type(error.errno) is int and 0<error.errno<4096 else None,
+           'module':None,'module_sha256':None,'line':None}
+    frame=error.__traceback__
+    while frame is not None:
+        try:
+            path=Path(frame.tb_frame.f_code.co_filename)
+            relative=path.relative_to(root).as_posix()
+            if relative.startswith(('codex_service/','codex_bounded/')) and path.suffix=='.py':
+                protected(path)
+                if path.stat().st_size<=1024*1024:
+                    value.update(module=relative,module_sha256=digest(path),line=frame.tb_lineno)
+        except (OSError,ValueError):pass
+        frame=frame.tb_next
+    return value
+
+
+def report_failure(error):
+    # Return metadata on the existing Root-created capsule, never stderr. The
+    # original Root parent authenticates this channel; a report grants no work.
+    try:
+        import socket,struct
+        mode=sys.argv[1]
+        fd=int(sys.argv[3]) if mode=='launch-child' else 6
+        if mode!='launch-child' and mode!='broker' and not mode.startswith('broker-'):return
+        with socket.socket(fileno=os.dup(fd)) as channel:
+            pid,uid,_=struct.unpack('3i',channel.getsockopt(socket.SOL_SOCKET,socket.SO_PEERCRED,12))
+            if uid!=0 or pid!=os.getppid():return
+            raw=json.dumps(failure_metadata(error,Path(__file__).resolve().parents[1]),
+                           sort_keys=True,separators=(',',':')).encode()+b'\n'
+            if len(raw)>2048:return
+            channel.settimeout(.01);channel.sendall(raw)
+    except Exception:pass  # Observability never replaces the original refusal.
+
+
+def receive_failure(channel, root):
+    """Untrusted child diagnostic, checked against the immutable module map."""
+    previous=channel.gettimeout();raw=b''
+    try:
+        channel.settimeout(.01)
+        while len(raw)<=2048 and not raw.endswith(b'\n'):
+            chunk=channel.recv(2049-len(raw))
+            if not chunk:break
+            raw+=chunk
+        if len(raw)>2048 or not raw.endswith(b'\n'):return None
+        value=json.loads(raw.decode('utf-8','strict'),object_pairs_hook=unique)
+        if type(value) is not dict or set(value)!={'format','exception_class','errno','module','module_sha256','line'}:return None
+        if value['format']!=FAILURE_FORMAT or value['exception_class'] not in FAILURE_CLASSES:return None
+        if value['errno'] is not None and (type(value['errno']) is not int or not 0<value['errno']<4096):return None
+        module=value['module']
+        if module is None:
+            return value if value['module_sha256'] is None and value['line'] is None else None
+        if type(module) is not str or not module.startswith(('codex_service/','codex_bounded/')) or any(x in ('','.','..') for x in module.split('/')):return None
+        expected=document(root/'manifest.json',1024*1024)['files'].get(module)
+        path=root/module;protected(path)
+        if expected!=value['module_sha256'] or digest(path)!=expected:return None
+        if type(value['line']) is not int or not 1<=value['line']<=len(path.read_bytes().splitlines()):return None
+        return value
+    except (OSError,ValueError,TypeError,KeyError):return None
+    finally:channel.settimeout(previous)
+
 def main():
     if not sys.flags.isolated or not sys.flags.no_site or not sys.dont_write_bytecode:
         raise ValueError("no-site invocation required")
@@ -273,6 +344,7 @@ def dispatch(root, mode, arguments, expected, manifest_digest, records):
 if __name__ == "__main__":
     try:
         raise SystemExit(main())
-    except Exception:
+    except Exception as failure:
+        report_failure(failure)
         sys.stderr.write("selected Codex service entry refused\n")
         raise SystemExit(2)
