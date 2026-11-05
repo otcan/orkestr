@@ -3,10 +3,10 @@ name: Orkestr 2.0 intake checks
 on:
   push:
     branches: [v2/rust-rewrite]
-    paths: ['v2/**', '.github/workflows/v2-rust.yml']
+    paths: ['v2/**', '.github/workflows/v2-rust.yml', 'scripts/security/cargo-*', 'scripts/security/dependency-*']
   pull_request:
     branches: ['v2/**']
-    paths: ['v2/**', '.github/workflows/v2-rust.yml']
+    paths: ['v2/**', '.github/workflows/v2-rust.yml', 'scripts/security/cargo-*', 'scripts/security/dependency-*']
   workflow_dispatch:
 
 permissions:
@@ -224,3 +224,66 @@ jobs:
             ${{ runner.temp }}/orkestr-v2-intake/worker-continuation-*.json
           if-no-files-found: ignore
           retention-days: 7
+
+  cargo-advisories:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      # PR content cannot supply its own scanner or exception policy.
+      POLICY_REF: ${{ github.event.pull_request.base.sha || github.sha }}
+      TARGET_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+    outputs:
+      evidence-id: ${{ steps.evidence.outputs.artifact-id }}
+      evidence-digest: ${{ steps.evidence.outputs.artifact-digest }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ env.TARGET_COMMIT }}
+          path: candidate
+          persist-credentials: false
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ env.POLICY_REF }}
+          path: policy
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: '22'
+      - name: Exact Cargo.lock advisory scan (no cargo, no install)
+        run: |
+          scanner="$GITHUB_WORKSPACE/policy"
+          policy_commit="$POLICY_REF"
+          # A base that predates this gate has no scanner to offer; only then does the candidate's own copy run.
+          if [ ! -f "$scanner/scripts/security/cargo-advisories.mjs" ]; then
+            echo "::notice::The base commit has no Cargo advisory scanner yet; using the candidate's copy."
+            scanner="$GITHUB_WORKSPACE/candidate"
+            policy_commit="$TARGET_COMMIT"
+          fi
+          node "$scanner/scripts/security/cargo-advisories.mjs" \
+            --root "$GITHUB_WORKSPACE/candidate" --commit "$TARGET_COMMIT" \
+            --policy-commit "$policy_commit" --report "$RUNNER_TEMP/cargo-advisory-evidence.json"
+      - name: Publish minimized aggregate evidence
+        if: ${{ always() }}
+        id: evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: cargo-advisory-evidence
+          path: ${{ runner.temp }}/cargo-advisory-evidence.json
+          if-no-files-found: error
+          retention-days: 14
+
+  cargo-policy:
+    # Stable required-check name for the ORK-478 ruleset; skipped is not success.
+    if: ${{ always() && !cancelled() }}
+    needs: cargo-advisories
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require complete scan and published evidence
+        env:
+          RESULT: ${{ needs.cargo-advisories.result }}
+          EVIDENCE_ID: ${{ needs.cargo-advisories.outputs.evidence-id }}
+          EVIDENCE_DIGEST: ${{ needs.cargo-advisories.outputs.evidence-digest }}
+        run: |
+          test "$RESULT" = success
+          test -n "$EVIDENCE_ID"
+          test -n "$EVIDENCE_DIGEST"
