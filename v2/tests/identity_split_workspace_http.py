@@ -5,6 +5,7 @@ Run in the same explicitly delegated bounded scope as the anchor component
 oracle. No real provider, business connector, live configuration or ACL writes.
 """
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -12,13 +13,16 @@ import sqlite3
 import subprocess
 import sys
 
+sys.path.insert(0,str(Path(__file__).resolve().parent))
 from identity_split_service_http import Rehearsal, ROOT, UID, GID, wait
 from managed_workspace_anchor_linux import scope
 
 
 class WorkspaceRehearsal(Rehearsal):
-    def __init__(self,binary,jobs):
+    def __init__(self,binary,jobs,project_owner=None):
         super().__init__(binary,'workers')
+        self.project_owner=UID if project_owner is None else project_owner
+        assert self.project_owner in (UID,UID+1),'only disposable fixture identities'
         self.jobs_root=jobs
         self.project=self.fixture.directory('managed-business-project')
         git=self.project/'.git';git.mkdir(mode=0o700);os.chown(git,UID,GID)
@@ -36,6 +40,11 @@ class WorkspaceRehearsal(Rehearsal):
             'Path("command-proof").write_text(json.dumps({"uid":os.geteuid(),"nnp":True,"core_denied":True,"selected_only":True}))\n'
             'print("managed workspace proof")\n')
         self.probe.chmod(0o600);os.chown(self.probe,UID,GID)
+        if self.project_owner!=UID:
+            for path in (self.project,git,self.probe):os.chown(path,self.project_owner,GID)
+            for path in (self.project,git):
+                subprocess.run(['/usr/bin/setfacl','-m',f'u:{UID}:rwx,g::---,o::---',str(path)],check=True)
+            subprocess.run(['/usr/bin/setfacl','-m',f'u:{UID}:r--,g::---,o::---',str(self.probe)],check=True)
         for role,path in self.role_workspaces.items():
             if not role.startswith('worker-'):continue
             command=path/'workspace-command';command.write_text('/usr/bin/python3 -I -S -B '+str(self.probe)+'\n')
@@ -53,6 +62,7 @@ class WorkspaceRehearsal(Rehearsal):
         path=self.package.root/'beta.json';value=json.loads(path.read_text())
         import uuid
         value['workspace_exec']={'conversation_id':self.conversation,'project_id':str(uuid.uuid4()),
+            'project_owner_uid':self.project_owner,
             'workspace':str(self.project),'allowed_roots':[str(self.project)],
             'protected_roots':[str(self.package.home)],'cgroup_root':str(self.jobs_root),
             'toolchain_root':str(self.fixture.root/'unused-legacy-command-image'),
@@ -68,6 +78,7 @@ class WorkspaceRehearsal(Rehearsal):
         report=super().run()
         proof=json.loads((self.project/'command-proof').read_text())
         assert proof=={'uid':UID,'nnp':True,'core_denied':True,'selected_only':True}
+        assert self.project.stat().st_uid==self.project_owner
         claims=[json.loads(path.read_text()) for path in (self.package.ledger_directory/'workspace-commands').glob('*.json')]
         assert len(claims)==4 and all(row['cleanup'] for row in claims),claims
         assert sorted((row['kind'],row['state']) for row in claims)==[('command','complete')]*2+[('start','cancelled')]*2
@@ -81,24 +92,46 @@ class WorkspaceRehearsal(Rehearsal):
         report.update(actual_consumed_workspace_commands=8,durable_root_claims=4,
             foreground_commands=2,background_starts=2,status_controls=2,cancel_controls=2,
             core_result_rows=count,core_delegation_states=rows,original_root_anchor_cleanup=True,
+            project_owner_uid=self.project_owner,project_owner_preserved=True,named_executor_acl=self.project_owner!=UID,
             selected_business_environment=True,core_read_denied=True,nn_privileges=True)
         return report
+
+    def diagnostics(self):
+        value={'pump_errors':self.pump_errors,'native_failures':{},'root_commands':[]}
+        for role,account in self.role_accounts.items():
+            failure=account/'sessions/synthetic-failure'
+            if failure.exists():value['native_failures'][role]=failure.read_text()[:1024]
+        for path in (self.package.ledger_directory/'workspace-commands').glob('*.json'):
+            row=json.loads(path.read_text())
+            value['root_commands'].append({key:row.get(key) for key in ('kind','state','cleanup','exit_code','cancelled','cancellation')})
+        with sqlite3.connect((self.package.data/'core.sqlite3').as_uri()+'?mode=ro',uri=True) as db:
+            value['delegations']=db.execute('SELECT state,count(*) FROM workspace_exec_delegations GROUP BY state').fetchall()
+            value['results']=db.execute('SELECT state,success,count(*) FROM workspace_exec_results GROUP BY state,success').fetchall()
+        return value
 
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('binary');parser.add_argument('--report',required=True)
+    parser.add_argument('--project-owner-uid',type=int)
     args=parser.parse_args();os.umask(0o077)
     base,jobs=scope();rehearsal=None;report={'passed':False,'live_activation':False,'actual_provider':False}
     try:
-        rehearsal=WorkspaceRehearsal(args.binary,jobs)
+        rehearsal=WorkspaceRehearsal(args.binary,jobs,args.project_owner_uid)
         report.update(rehearsal.run());report['passed']=True
     except BaseException as error:
-        report.update(error_type=type(error).__name__,error=str(error));raise
+        report.update(error_type=type(error).__name__,error=str(error))
+        if rehearsal is not None:report['diagnostics']=rehearsal.diagnostics()
+        raise
     finally:
-        if rehearsal is not None:rehearsal.close()
-        jobs.rmdir();report['scope_memory_peak_bytes']=int((base/'memory.peak').read_text())
-        report['disposable_data_removed']=True
+        try:
+            if rehearsal is not None:rehearsal.close()
+            jobs.rmdir();report['disposable_data_removed']=True
+        except BaseException as cleanup:
+            report['cleanup_error']=type(cleanup).__name__+': '+str(cleanup);report['passed']=False
+        report['scope_memory_peak_bytes']=int((base/'memory.peak').read_text())
+        report['harness_sha256']=hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
         Path(args.report).write_text(json.dumps(report,indent=2)+'\n');Path(args.report).chmod(0o600)
+    assert report['passed'],report
     print(json.dumps({'passed':True,'actual_core':True,'actual_provider':False,'workspace_operations':8}))
 
 

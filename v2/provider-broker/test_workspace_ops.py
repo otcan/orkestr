@@ -17,6 +17,24 @@ from test_workspace_command import cap
 
 
 class WorkspaceClaimTests(unittest.TestCase):
+    def test_background_survives_source_worker_exit_but_not_window_loss(self):
+        operation=Operations.__new__(Operations)
+        operation.manager=SimpleNamespace(identity={'kind':'core'})
+        operation.poll_handle=Mock()
+        def handle(kind):
+            return dict(kind=kind,deadline=time.monotonic()+10,worker={'kind':'worker'},
+                window='synthetic-window',generation=1,cancelled=False,
+                channel=SimpleNamespace(send=Mock()),job=SimpleNamespace(kill=Mock()),
+                child=SimpleNamespace(poll=lambda:None))
+        short=handle('command');background=handle('start')
+        operation.active={'short':short,'background':background}
+        with patch('codex_service.workspace_ops.exists',side_effect=lambda value:value['kind']=='core'):
+            operation.tick(lambda *_:True)
+            self.assertTrue(short['cancelled']);self.assertFalse(background['cancelled'])
+            operation.tick(lambda *_:False)
+            self.assertTrue(background['cancelled'])
+        background['job'].kill.assert_called_once()
+
     def test_claim_is_durable_before_fork_and_unknown_receipt_never_forks_again(self):
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary); conversation = str(uuid.uuid4()); owner = str(uuid.uuid4())

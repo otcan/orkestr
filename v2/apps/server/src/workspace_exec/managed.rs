@@ -172,6 +172,8 @@ impl WorkspaceExecDispatcher {
         let child_cancel = cancellation.clone();
         let cleanup = CancelOnDrop(cancellation);
         let command_output = managed.command_output;
+        let activated_signal = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let child_activated = activated_signal.clone();
         let spawn_cap = cap.clone();
         let mut task = tokio::task::spawn_blocking(move || {
             let cap = spawn_cap;
@@ -187,6 +189,7 @@ impl WorkspaceExecDispatcher {
                 let _ = observer.wait(&child_cancel, |_, _| {});
                 return Err("managed workspace activation refused");
             }
+            child_activated.store(true, std::sync::atomic::Ordering::Release);
             if let Some(source) = background {
                 if child_cancel.is_cancelled() {
                     observer.command.cancel();
@@ -242,8 +245,12 @@ impl WorkspaceExecDispatcher {
         let result = loop {
             tokio::select! {
                 result=&mut task=>break result.map_err(|_|"managed workspace observer failed")??,
-                _=interval.tick(),if !refused=>if !self.authorized(&cap).await {
-                    refused=true;cleanup.0.cancel();
+                _=interval.tick(),if !refused && activated_signal.load(std::sync::atomic::Ordering::Acquire)=>{
+                    // A fresh Root custody check can include bounded IPC. Do
+                    // not race it against the still-held activation writer or
+                    // apply the legacy local-filesystem 50ms timeout here.
+                    let allowed=tokio::time::timeout(Duration::from_secs(2),self.store.check_workspace_exec(&self.credential,&cap)).await;
+                    if !matches!(allowed,Ok(Ok(()))) {refused=true;cleanup.0.cancel();}
                 }
             }
         };
