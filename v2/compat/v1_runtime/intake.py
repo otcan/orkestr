@@ -1,5 +1,6 @@
 """Authenticated immutable intake and ordinary execution-window admission."""
 import time
+import sys
 
 from . import continuation_guard
 from .participants import compose
@@ -110,6 +111,7 @@ def window(worker, data):
                     data["phase"] = "waiting_for_window"
                     worker.ledger.save(data)
                 return False
+            data.pop("window_refusal", None)
             data["previous_window"] = current
             data["window_request"] = worker.client.window_request(data["intake"], data["keys"]["message"], data["keys"]["window"], current)
             worker.ledger.save(data)
@@ -127,6 +129,17 @@ def window(worker, data):
             code = reply.get("error", reply.get("code"))
             if isinstance(code, dict):
                 code = code.get("code")
+            if code == "window_fenced":
+                # A definite request refusal does not prove that its admitted
+                # Core source input is retired. Hold this exact frozen tuple
+                # until Core proves safe settlement; never expose an orphan
+                # to a later window or mint a replacement request.
+                if "window_refusal" not in data:
+                    data["window_refusal"] = {"code": code, "observed_at": time.time()}
+                    worker.ledger.save(data)
+                    print("ALERT orkestr-v2-wa-adapter window_input_requires_review conversation=%s input=%s" %
+                          (worker.client.conversation, data["remote_id"]), file=sys.stderr, flush=True)
+                return False
             if code == "window_busy":
                 data["phase"] = "waiting_for_window"
                 worker.ledger.save(data)

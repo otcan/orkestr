@@ -107,6 +107,17 @@ pub(crate) async fn admit(
             .into_response(),
         // Durably queued behind live capacity or earlier intents; never started yet.
         WindowOutcome::Queued(queued) => (StatusCode::ACCEPTED, Json(queued)).into_response(),
+        WindowOutcome::Fenced { input_retired } => {
+            return Err(Error(
+                StatusCode::CONFLICT,
+                if input_retired {
+                    "window_input_retired"
+                } else {
+                    "window_fenced"
+                },
+                "Exact window intent is no longer admissible; review its source input",
+            ))
+        }
     })
 }
 

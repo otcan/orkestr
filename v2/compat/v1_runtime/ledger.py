@@ -637,6 +637,8 @@ class Ledger:
             data = json.loads(raw)
             if data.get("origin") == "timer" or "window" in data or data.get("blocked"):
                 continue
+            if data.get("window_refusal") and "window_request" in data:
+                continue  # The already-admitted Core source must not become an orphan.
             if "window_request" in data and data.get("phase") != "waiting_for_window":
                 continue
             since = data.get("queued_at", data.get("admitted_at"))

@@ -30,3 +30,15 @@ Claude initialization records also retain their incarnation. A resumed process
 needs its own matching native observation for the newly consumed run. Observing
 that run updates only the current incarnation; an older unobserved initialization
 remains unobserved. Missing current initialization evidence fails closed.
+
+A definite fence during read-only window-intent inspection returns `409
+window_fenced`; storage or uncertain transport failures remain `503`. This
+refusal does not retire the admitted source message. The adapter keeps the
+original frozen request and holds later window admissions for owner review.
+It never replaces keys or opens a successor from that refusal.
+
+Only `409 window_input_retired` permits terminal settlement: Core authenticates
+the exact owner, conversation, message, event and original input request key,
+and checks immutable retirement plus absence of run/window admission effects.
+Retire an obsolete input through the existing owner input-retirement API before
+releasing its adapter head. No automatic retirement or replay is introduced.

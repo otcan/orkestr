@@ -30,6 +30,7 @@ const MAX_CONVERSATIONS: usize = 1024;
 pub(crate) enum WindowOutcome {
     Admitted(ExecutionWindowAdmission),
     Queued(ExecutionWindowQueued),
+    Fenced { input_retired: bool },
 }
 
 pub(crate) struct Controller {
@@ -213,13 +214,24 @@ impl Controller {
             self.queue.remember(browser);
             return Ok(WindowOutcome::Queued(queued));
         }
-        if let Some(replay) = self
+        match self
             .store
             .inspect_execution_window_request_authenticated(browser, conversation, input)
             .await
-            .map_err(unavailable)?
         {
-            return Ok(WindowOutcome::Admitted(replay));
+            Ok(Some(replay)) => return Ok(WindowOutcome::Admitted(replay)),
+            Ok(None) => {}
+            // This read-only boundary proves that this exact request acquired
+            // no window authority. Storage/transport uncertainty remains 503.
+            Err(RuntimeStoreError::Fenced) => {
+                let input_retired = self
+                    .store
+                    .execution_window_input_retired_authenticated(browser, conversation, input)
+                    .await
+                    .map_err(unavailable)?;
+                return Ok(WindowOutcome::Fenced { input_retired });
+            }
+            Err(error) => return Err(unavailable(error)),
         }
         let _opening = self.opening.lock().await;
         if self.drain.is_draining() {

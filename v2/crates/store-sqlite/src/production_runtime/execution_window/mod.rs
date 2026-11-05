@@ -28,6 +28,7 @@ pub(crate) use queue::enqueue_trusted_intent;
 pub(super) mod operator_policy;
 mod provider_choice;
 pub use operator_policy::OperatorProviderPolicy;
+mod refused_input;
 mod switching;
 pub use credential::{ExecutionWindowCredential, ExecutionWindowRetirement};
 use provider_choice::window_provider;
