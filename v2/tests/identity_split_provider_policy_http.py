@@ -140,7 +140,9 @@ class PolicyRehearsal(Rehearsal):
         status,replay=self.request(path+'/window','POST',body)
         assert status in (200,201,202),(status,replay)
         assert self.read("SELECT count(*) FROM production_runs WHERE message_id=? AND role='deep'",(receipt['message_id'],))==[(1,)]
-        return dict(code_subject=code_subject(self.package),server_identity=self.server_identity,
+        from workflow_measured_evidence import routing
+        measured=routing(self,source,receipt,initial_epoch,old_turns,initial,result[0],message)
+        return dict(routing_evidence=measured,code_subject=code_subject(self.package),server_identity=self.server_identity,
                     server_sha256=self.server_sha256,source_commit=source,binary_sha256=hashlib.sha256(self.binary.read_bytes()).hexdigest(),
                     harness_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),manifest_sha256=self.manifest,authority_uid=self.package.authority_uid,executor_uid=self.uid,
                     old_claude_turns=old_turns,new_current_deep_runs=1,provider_generation=initial_epoch+1,

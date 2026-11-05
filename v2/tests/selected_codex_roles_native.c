@@ -134,18 +134,23 @@ int main(int argc, char **argv) {
     if (strcmp(text, "synthetic authorized attachment")) return 62;
     fputs("matched\n",proof);fflush(proof);
     int writable = open(attachment, O_WRONLY);
-    fprintf(proof,"write=%d errno=%d\n",writable,errno);fflush(proof);
+    int write_error=errno;
+    fprintf(proof,"write=%d errno=%d\n",writable,write_error);fflush(proof);
     if (writable >= 0) { close(writable); return 63; }
-    if (errno != EROFS && errno != EACCES) return 64;
+    if (write_error != EROFS && write_error != EACCES) return 64;
     char canary[4096];
     snprintf(canary,sizeof(canary),"%.*s/writable-canary",(int)(strrchr(attachment,'/')-attachment),attachment);
     writable=open(canary,O_WRONLY);
+    int canary_error=errno;
+    fprintf(proof,"canary_write=%d errno=%d\n",writable,canary_error);fflush(proof);
     if (writable>=0) {close(writable);return 68;}
-    if (errno!=EROFS) return 69;
+    if (canary_error!=EROFS) return 69;
     fputs("readonly\n",proof);fflush(proof);
     int foreign = open(ORKESTR_TEST_OTHER_ATTACHMENT, O_RDONLY);
+    int foreign_error=errno;
+    fprintf(proof,"foreign_read=%d errno=%d\n",foreign,foreign_error);fflush(proof);
     if (foreign >= 0) { close(foreign); return 65; }
-    if (errno != ENOENT) return 66;
+    if (foreign_error != ENOENT) return 66;
     fputs("scoped\n",proof);fclose(proof);
 #endif
     FILE *state = fopen("/account/sessions/synthetic-role-state", "r");
