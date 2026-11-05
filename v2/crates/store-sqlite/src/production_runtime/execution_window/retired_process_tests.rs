@@ -14,7 +14,7 @@ pub(super) async fn seed_closed_provider(
     provider: ProviderKind,
 ) {
     std::fs::create_dir_all(&root).unwrap();
-    let store = Store::open(&root.join("core.sqlite3")).await.unwrap();
+    let store = crate::test_template::open(&root.join("core.sqlite3")).await;
     let conversation = store
         .setup("synthetic-owner", "synthetic-hash")
         .await

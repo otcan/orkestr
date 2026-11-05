@@ -36,14 +36,14 @@ export async function osvJson(route, body, { fetchImpl = fetch, timeoutMs = 2000
   return JSON.parse(Buffer.concat(chunks).toString("utf8"));
 }
 
-export async function queryAdvisories(packages, policy, request = osvJson) {
+export async function queryAdvisories(packages, policy, request = osvJson, { ecosystem = "npm", minimize = minimizeAdvisory } = {}) {
   const findings = [], details = new Map();
   for (let offset = 0; offset < packages.length; offset += 100) {
     let pending = packages.slice(offset, offset + 100).map(pkg => ({ pkg, token: "", seen: new Set() }));
     for (let page = 0; pending.length; page++) {
       if (page >= 10) throw new Error("advisory_pagination_incomplete");
       const response = await request("/querybatch", { queries: pending.map(({ pkg, token }) => ({
-        package: { ecosystem: "npm", name: pkg.package }, version: pkg.version, ...(token ? { page_token: token } : {}),
+        package: { ecosystem, name: pkg.package }, version: pkg.version, ...(token ? { page_token: token } : {}),
       })) });
       if (!Array.isArray(response?.results) || response.results.length !== pending.length) throw new Error("advisory_coverage_incomplete");
       const next = [];
@@ -59,7 +59,7 @@ export async function queryAdvisories(packages, policy, request = osvJson) {
             if (detail?.id !== vuln.id) throw new Error("advisory_identity_mismatch");
             details.set(vuln.id, detail);
           }
-          findings.push(minimizeAdvisory(item.pkg, details.get(vuln.id), policy));
+          findings.push(minimize(item.pkg, details.get(vuln.id), policy));
         }
         if (row.next_page_token !== undefined) {
           const token = row.next_page_token;

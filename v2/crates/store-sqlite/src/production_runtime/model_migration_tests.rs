@@ -28,6 +28,7 @@ pub(super) async fn downgrade(store: &Store) {
 
 #[tokio::test]
 async fn schema71_upgrade_preserves_existing_failure_class_and_observations() {
+    let _real = crate::test_template::real_migrations();
     use super::{
         observation_tests::{consumed, input},
         tests::setup,

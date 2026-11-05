@@ -5,7 +5,7 @@ use orkestr_v2_contracts::{MessageInput, OwnerId, ReplyTo};
 async fn fixture() -> (std::path::PathBuf, Store, OwnerId, ConversationId) {
     let root = std::env::temp_dir().join(format!("reply-to-{}", Uuid::new_v4()));
     std::fs::create_dir(&root).unwrap();
-    let store = Store::open(&root.join("core.sqlite3")).await.unwrap();
+    let store = crate::test_template::open(&root.join("core.sqlite3")).await;
     let home = store
         .setup("synthetic-owner", "synthetic-hash")
         .await

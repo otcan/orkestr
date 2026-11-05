@@ -4,7 +4,7 @@ use crate::ConversationExportLimits;
 use orkestr_v2_application::IntakeStore;
 
 async fn seeded(path: &std::path::Path) -> (Store, OwnerId, ConversationId) {
-    let store = Store::open(path).await.unwrap();
+    let store = crate::test_template::open(path).await;
     let conversation = store
         .setup("synthetic-owner", "synthetic-hash")
         .await

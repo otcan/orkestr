@@ -17,7 +17,7 @@ async fn fixture() -> (Store, Store, PathBuf, OwnerId) {
         .join(format!("fixture-context-{}", Uuid::new_v4()));
     std::fs::create_dir_all(&root).unwrap();
     let path = root.join("core.sqlite3");
-    let a = Store::open(&path).await.unwrap();
+    let a = crate::test_template::open(&path).await;
     a.setup("synthetic-owner", "synthetic-hash").await.unwrap();
     let (owner, _) = a.credentials("synthetic-owner").await.unwrap().unwrap();
     let b = Store::open(&path).await.unwrap();

@@ -212,7 +212,7 @@ mod tests {
         let directory = std::env::temp_dir().join(format!("recovery-json-{}", Uuid::new_v4()));
         std::fs::create_dir(&directory).unwrap();
         let path = directory.join("store.sqlite");
-        let store = Store::open(&path).await.unwrap();
+        let store = crate::test_template::open(&path).await;
         store
             .setup("synthetic-owner", "synthetic-hash")
             .await

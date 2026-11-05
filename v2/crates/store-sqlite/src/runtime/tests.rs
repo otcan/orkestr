@@ -8,7 +8,7 @@ async fn fixture() -> (Store, PathBuf, OwnerId, ConversationId) {
         .join(format!("runtime-store-test-{}", Uuid::new_v4()));
     std::fs::create_dir_all(&root).unwrap();
     let root = root.canonicalize().unwrap();
-    let store = Store::open(&root.join("test.sqlite3")).await.unwrap();
+    let store = crate::test_template::open(&root.join("test.sqlite3")).await;
     let conversation = store
         .setup("synthetic-owner", "synthetic-hash")
         .await

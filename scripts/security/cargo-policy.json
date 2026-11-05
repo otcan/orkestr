@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "exceptions": [
+    {
+      "package": "glib",
+      "version": "0.18.5",
+      "advisoryId": "RUSTSEC-2024-0429",
+      "approvedBy": "owner",
+      "reviewRef": "ORK-615",
+      "approvedAt": "2026-11-05T13:23:27Z",
+      "expiresAt": "2026-11-12T11:00:00Z",
+      "rationale": "Locked only through dioxus-desktop (gtk 0.18 via muda), which the workspace does not enable: glib is not in the build graph of any workspace target. The fix is in glib 0.20, which gtk 0.18 cannot use."
+    },
+    {
+      "package": "rand",
+      "version": "0.7.3",
+      "advisoryId": "RUSTSEC-2026-0097",
+      "approvedBy": "owner",
+      "reviewRef": "ORK-615",
+      "approvedAt": "2026-11-05T13:23:27Z",
+      "expiresAt": "2026-11-12T11:00:00Z",
+      "rationale": "Locked only as a build-time dependency of phf_generator 0.8 under dioxus-desktop (wry, kuchikiki, selectors), which the workspace does not enable: rand 0.7.3 is not in the build graph. The 0.7 line has no fixed release."
+    },
+    {
+      "package": "rsa",
+      "version": "0.9.10",
+      "advisoryId": "RUSTSEC-2023-0071",
+      "approvedBy": "owner",
+      "reviewRef": "ORK-615",
+      "approvedAt": "2026-11-05T13:23:27Z",
+      "expiresAt": "2026-11-12T11:00:00Z",
+      "rationale": "No fixed release exists. Locked only through the optional MySQL backend of sqlx 0.8.6; the workspace enables only the sqlite feature, so rsa is not compiled into any workspace target."
+    }
+  ]
+}

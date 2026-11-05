@@ -3,7 +3,7 @@ use sha2::{Digest, Sha256};
 pub(super) async fn fixture() -> (Store, OwnerId, ConversationId, std::path::PathBuf) {
     let dir = std::env::temp_dir().join(format!("attachment-test-{}", Uuid::new_v4()));
     std::fs::create_dir(&dir).unwrap();
-    let store = Store::open(&dir.join("store.sqlite3")).await.unwrap();
+    let store = crate::test_template::open(&dir.join("store.sqlite3")).await;
     store
         .setup("synthetic-owner", "synthetic-hash")
         .await
