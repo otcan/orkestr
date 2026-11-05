@@ -48,7 +48,11 @@ impl WorkerConfiguration {
         {
             return Err("Worker tool profile differs from its validated private policy");
         }
-        for directory in [&self.workspace, &self.directory] {
+        let workspaces: Vec<_> = match &self.window {
+            Some(window) => window.workspaces().collect(),
+            None => vec![&self.workspace],
+        };
+        for directory in workspaces.iter().copied().chain([&self.directory]) {
             if !directory.is_absolute()
                 || !directory.is_dir()
                 || directory.canonicalize().ok().as_ref() != Some(directory)
@@ -56,9 +60,9 @@ impl WorkerConfiguration {
                 return Err("Worker configuration requires canonical directories");
             }
         }
-        if self.workspace.starts_with(&self.directory)
-            || self.directory.starts_with(&self.workspace)
-        {
+        if workspaces.iter().any(|workspace| {
+            workspace.starts_with(&self.directory) || self.directory.starts_with(workspace)
+        }) {
             return Err("Worker scratch and provider workspace must be separate");
         }
         self.verify_launcher()
