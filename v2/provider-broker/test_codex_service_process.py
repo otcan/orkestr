@@ -166,7 +166,7 @@ class ProcessTests(unittest.TestCase):
             def setuid_view(pid):
                 identity = real(pid)
                 if identity is not None and pid == grandchild:
-                    identity["uid"] = 0  # As /proc reports a running sudo.
+                    identity["uid"] = 65534 if os.getuid()==0 else 0  # A different effective identity.
                 return identity
             with unittest.mock.patch.object(ownership, "process", setuid_view):
                 if not host:
@@ -278,7 +278,7 @@ class ProcessTests(unittest.TestCase):
         def view(pid):
             identity = real_process(pid)
             if identity is not None and pid == grandchild and pinned:
-                identity["uid"] = 0  # Alive, same start, another uid: not reaped.
+                identity["uid"] = 65534 if os.getuid()==0 else 0  # Alive, same start, another uid.
             return identity
 
         def pin(pid, flags):
