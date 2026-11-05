@@ -36,6 +36,7 @@ pub use deep_groups::{DEFAULT_DEEP_BURST_QUIET_MS, MAX_DEEP_BURST_QUIET_MS};
 #[cfg(test)]
 mod deep_groups_tests;
 mod dispatch;
+mod failed_fast_setup;
 mod fast;
 mod fast_continuity;
 mod fast_digest;

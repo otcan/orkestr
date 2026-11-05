@@ -16,9 +16,6 @@
 //! and the next opening bootstraps again (`bootstrap.rs`).
 use super::*;
 
-#[path = "stranded_fast_setup.rs"]
-mod fast_setup;
-
 pub(super) struct OpenPlan {
     context: Option<String>,
     incarnation: Option<String>,
@@ -150,8 +147,13 @@ pub(super) async fn plan(
                 .await
                 .map_err(db)?;
                 if own != 0
-                    && !fast_setup::only_lapsed_reservation(tx, context, incarnation, window)
-                        .await?
+                    && !crate::production_runtime::failed_fast_setup::only_lapsed_reservation(
+                        tx,
+                        context,
+                        incarnation,
+                        window,
+                    )
+                    .await?
                 {
                     return Ok(None);
                 }
