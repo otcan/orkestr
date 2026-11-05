@@ -137,3 +137,88 @@ async fn queue_failure_rolls_back_message_and_source_fence() {
     assert_eq!(count, 0);
     close(f).await;
 }
+
+#[tokio::test]
+async fn source_storage_failure_keeps_window_intent_available_for_retry() {
+    let (f, _, message, query) = fixture().await;
+    let admitted = admit(&f, &message, &query).await.unwrap();
+    let input = request(&admitted.receipt, &message);
+    sqlx::query("ALTER TABLE source_admission_fences RENAME TO unavailable_source_fences")
+        .execute(&f.store.pool)
+        .await
+        .unwrap();
+    assert!(matches!(
+        f.store
+            .admit_execution_window_authenticated(&f.token, &f.conversation, &input)
+            .await,
+        Err(RuntimeStoreError::Unavailable)
+    ));
+    let windows: i64 = sqlx::query_scalar("SELECT count(*) FROM execution_windows")
+        .fetch_one(&f.store.pool)
+        .await
+        .unwrap();
+    assert_eq!(windows, 0);
+    let queue = f
+        .store
+        .execution_window_queue_authenticated(&f.token, Some(&f.conversation))
+        .await
+        .unwrap();
+    assert_eq!(queue.len(), 1);
+    assert_eq!(queue[0].input_message_id, admitted.receipt.message_id);
+    sqlx::query("ALTER TABLE unavailable_source_fences RENAME TO source_admission_fences")
+        .execute(&f.store.pool)
+        .await
+        .unwrap();
+    assert!(
+        !f.store
+            .admit_execution_window_authenticated(&f.token, &f.conversation, &input)
+            .await
+            .unwrap()
+            .duplicate
+    );
+    close(f).await;
+}
+
+#[tokio::test]
+async fn source_storage_failure_keeps_run_claim_unconsumed_for_retry() {
+    use crate::production_runtime::tests::{claim, ready, snapshot};
+    let root = std::env::temp_dir().join(format!("source-admission-retry-{}", Uuid::new_v4()));
+    let f = setup_at(root).await;
+    let binding = ready(&f).await;
+    let claim = claim(&f, &binding).await;
+    let before = snapshot(&f.store).await;
+    sqlx::query("ALTER TABLE source_admission_fences RENAME TO unavailable_source_fences")
+        .execute(&f.store.pool)
+        .await
+        .unwrap();
+    assert!(matches!(
+        f.handle
+            .admit_run(
+                &claim,
+                &binding.session_id,
+                binding.generation,
+                "retry-source"
+            )
+            .await,
+        Err(RuntimeStoreError::Unavailable)
+    ));
+    sqlx::query("ALTER TABLE unavailable_source_fences RENAME TO source_admission_fences")
+        .execute(&f.store.pool)
+        .await
+        .unwrap();
+    assert_eq!(snapshot(&f.store).await, before);
+    assert_eq!(
+        f.handle
+            .admit_run(
+                &claim,
+                &binding.session_id,
+                binding.generation,
+                "retry-source"
+            )
+            .await
+            .unwrap()
+            .disposition,
+        AdmissionDisposition::FreshCandidate
+    );
+    close(f).await;
+}

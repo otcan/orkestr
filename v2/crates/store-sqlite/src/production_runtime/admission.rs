@@ -121,7 +121,7 @@ impl Store {
             &claim.message_id,
         )
         .await
-        .map_err(|_| RuntimeStoreError::Fenced)?;
+        .map_err(crate::source_continuation::runtime_error)?;
         let window = self
             .execution_window_input_in(&mut tx, &claim.conversation_id, Some(&claim.event_id))
             .await?;

@@ -3,6 +3,18 @@
 use super::*;
 use sqlx::SqliteConnection;
 
+/// Only an actual source mismatch revokes dispatch authority. Storage failures
+/// remain unavailable so admission can retry without withdrawing queued input.
+pub(crate) fn runtime_error(
+    error: StoreError,
+) -> orkestr_v2_application::runtime::RuntimeStoreError {
+    use orkestr_v2_application::runtime::RuntimeStoreError;
+    match error {
+        StoreError::ProviderGenerationMismatch => RuntimeStoreError::Fenced,
+        _ => RuntimeStoreError::Unavailable,
+    }
+}
+
 pub(super) async fn enqueue(
     tx: &mut SqliteConnection,
     owner: &OwnerId,
