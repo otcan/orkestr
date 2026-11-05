@@ -175,14 +175,17 @@ class Operations:
                     if len(handle['buffer'])<length+4:continue
                     require(len(handle['buffer'])==length+4,'desk_anchor_proof_trailing')
                     proof=json.loads(handle['buffer'][4:])
-                    require(type(proof) is dict and set(proof)=={'cleanup','cancelled','helper_exit'} and
-                            proof['cleanup'] is True and type(proof['cancelled']) is bool and type(proof['helper_exit']) is int,
+                    require(type(proof) is dict and set(proof)=={'cleanup','cancelled','helper_exit','helper_started'} and
+                            proof['cleanup'] is True and type(proof['cancelled']) is bool and type(proof['helper_exit']) is int
+                            and type(proof['helper_started']) is bool and (proof['helper_started'] or
+                                proof['cancelled'] and proof['helper_exit']==125),
                             'desk_anchor_proof')
                     handle['proof']=proof
                 except Exception:handle['proof']=False
             if handle['child'].poll() is None:continue
             record=metadata(handle['path'],16384);proof=handle['proof']
             if proof and handle['child'].returncode==0:
+                record['anchor_proof']=proof
                 record.update(cleanup=True,state='unknown' if handle['uncertain'] else 'cancelled' if proof['cancelled'] or handle['cancelled'] else
                               ('helper_completed' if proof['helper_exit']==0 else 'failed'))
             else:record['state']='unknown'

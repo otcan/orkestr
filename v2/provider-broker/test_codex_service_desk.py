@@ -106,6 +106,20 @@ p=Path(%r);p.write_text(json.dumps({'helper':os.getpid(),'escaped':first.pid}));
             self.operations.renew(cap['operation_id'],2,int(time.time()*1000)+1500,cap['hard_deadline_ms'])
         result=self.finish();self.assertEqual(result['state'],'cancelled');self.assertTrue(result['cleanup'])
 
+    def test_expiry_before_payload_delivery_proves_no_helper_spawn_with_echild(self):
+        self.prepare('wait',duration_ms=4000)
+        cap=self.request['capability'];cap['expires_at_ms']=int(time.time()*1000)+100
+        cap['hard_deadline_ms']=int(time.time()*1000)+5000
+        original=subprocess.Popen
+        def delay(*args,**kwargs):
+            child=original(*args,**kwargs);time.sleep(.2);return child
+        with patch('codex_service.desk_operations.subprocess.Popen',side_effect=delay):
+            self.operations.start(self.request,self.launcher)
+        result=self.finish();self.assertEqual(result['state'],'cancelled');self.assertTrue(result['cleanup'])
+        record=json.loads((self.operations.directory/(cap['operation_id']+'.json')).read_text())
+        self.assertEqual(record['anchor_proof'],{'cleanup':True,'cancelled':True,'helper_exit':125,'helper_started':False})
+        self.assertFalse(self.marker.exists())
+
     def test_cancellation_reaps_actual_root_and_detached_children(self):
         self.prepare('wait');self.operations.start(self.request,self.launcher)
         until=time.monotonic()+4
