@@ -31,11 +31,13 @@ def configuration(value):
 def stopped(value, runner=subprocess.run, cgroup_root=Path('/sys/fs/cgroup')):
     selected = configuration(value)
     result = runner(['/usr/bin/systemctl', 'show', selected['unit'],
-                     '--property=ActiveState,MainPID,ControlGroup'],
+                     '--property=LoadState,ActiveState,MainPID,ControlGroup'],
                     env={'PATH':'/usr/bin:/bin', 'LANG':'C'}, capture_output=True,
                     text=True, timeout=5)
     require(result.returncode == 0, 'operator_recovery_unit_unknown')
     metadata = dict(line.split('=', 1) for line in result.stdout.splitlines() if '=' in line)
+    require(metadata.get('LoadState') == 'loaded' and 'ControlGroup' in metadata,
+            'operator_recovery_unit_unknown')
     require(metadata.get('ActiveState') in ('inactive', 'failed') and metadata.get('MainPID') == '0'
             and metadata.get('ControlGroup', '') in ('', selected['cgroup']), 'operator_recovery_service_active')
     path = cgroup_root / selected['cgroup'].lstrip('/')

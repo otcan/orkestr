@@ -156,6 +156,13 @@ async fn supported_earlier_migration_prefix_is_identified_then_upgraded() {
         .bind(first.version).bind(first.description.as_ref()).bind(first.checksum.as_ref())
         .execute(&mut conn).await.unwrap();
     conn.close().await.unwrap();
+    let before_recovery = dir.files();
+    assert!(Store::open_current(&dir.db()).await.is_err());
+    assert_eq!(
+        before_recovery,
+        dir.files(),
+        "recovery must not upgrade an older Core"
+    );
     let store = Store::open(&dir.db()).await.unwrap();
     let count: i64 = sqlx::query_scalar("SELECT count(*) FROM _sqlx_migrations")
         .fetch_one(&store.pool)
@@ -165,6 +172,28 @@ async fn supported_earlier_migration_prefix_is_identified_then_upgraded() {
     store.close().await;
     let reopened = Store::open(&dir.db()).await.unwrap();
     reopened.close().await;
+}
+
+#[tokio::test]
+async fn current_only_open_never_initializes_and_preserves_current_schema() {
+    let dir = Directory::new();
+    assert!(Store::open_current(&dir.db()).await.is_err());
+    assert!(dir.files().is_empty());
+    let store = Store::open(&dir.db()).await.unwrap();
+    store
+        .setup("synthetic-owner", "synthetic-hash")
+        .await
+        .unwrap();
+    store.close().await;
+    let before = dir.files();
+    let current = Store::open_current(&dir.db()).await.unwrap();
+    assert!(current
+        .credentials("synthetic-owner")
+        .await
+        .unwrap()
+        .is_some());
+    current.close().await;
+    assert_eq!(before, dir.files());
 }
 
 async fn populated_dispatch_prefix(dir: &Directory) -> SqliteConnection {

@@ -30,8 +30,10 @@ class RecoveryConfigurationTests(unittest.TestCase):
             (group/'cgroup.events').write_text('populated 0\nfrozen 0\n')
             def runner(text):
                 return lambda *_args,**_kwargs: subprocess.CompletedProcess([],0,text,'')
-            good = 'ActiveState=inactive\nMainPID=0\nControlGroup=/system.slice/synthetic.service\n'
+            good = 'LoadState=loaded\nActiveState=inactive\nMainPID=0\nControlGroup=/system.slice/synthetic.service\n'
             stopped(CONFIG,runner(good),base)
+            with self.assertRaisesRegex(Exception,'unit_unknown'):
+                stopped(CONFIG,runner('LoadState=not-found\nActiveState=inactive\nMainPID=0\nControlGroup=\n'),base)
             for bad in (good.replace('inactive','active'),good.replace('MainPID=0','MainPID=123'),
                         good.replace('/system.slice/synthetic.service','/system.slice/other.service')):
                 with self.assertRaises(Exception):
@@ -45,7 +47,7 @@ class RecoveryConfigurationTests(unittest.TestCase):
             base=Path(root);(base/'system.slice').mkdir();(base/'target').mkdir()
             (base/'target/cgroup.events').write_text('populated 0\n')
             (base/'system.slice/synthetic.service').symlink_to(base/'target')
-            runner=lambda *_args,**_kwargs: subprocess.CompletedProcess([],0,'ActiveState=inactive\nMainPID=0\nControlGroup=\n','')
+            runner=lambda *_args,**_kwargs: subprocess.CompletedProcess([],0,'LoadState=loaded\nActiveState=inactive\nMainPID=0\nControlGroup=\n','')
             with self.assertRaisesRegex(Exception,'cgroup_alias'):
                 stopped(CONFIG,runner,base)
 

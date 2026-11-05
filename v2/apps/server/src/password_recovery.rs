@@ -126,7 +126,7 @@ async fn change(home: &Path, request: Request) -> Result<(), &'static str> {
     }
     private_core(home)?;
     let _lock = locked_descriptor(&request)?;
-    let store = Store::open(&home.join("core.sqlite3"))
+    let store = Store::open_current(&home.join("core.sqlite3"))
         .await
         .map_err(|_| "recovery_core_unavailable")?;
     let owner = store

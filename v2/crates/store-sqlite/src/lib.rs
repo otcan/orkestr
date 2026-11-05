@@ -112,6 +112,16 @@ impl Store {
     pub async fn open(path: &Path) -> Result<Self> {
         paths::validate(path)?;
         let created = preflight::prepare(path).await?;
+        Self::connect_validated(path, created, true).await
+    }
+    /// Open an existing exact-current Core without running any migration.
+    /// The caller controls the stopped namespace and excludes other writers.
+    pub async fn open_current(path: &Path) -> Result<Self> {
+        paths::validate(path)?;
+        preflight::current(path).await?;
+        Self::connect_validated(path, false, false).await
+    }
+    async fn connect_validated(path: &Path, created: bool, migrate: bool) -> Result<Self> {
         let options = SqliteConnectOptions::new()
             .filename(path)
             .create_if_missing(false)
@@ -128,10 +138,12 @@ impl Store {
             .connect_with(options)
             .await
             .map_err(db)?;
-        sqlx::migrate!("./migrations")
-            .run(&pool)
-            .await
-            .map_err(db)?;
+        if migrate {
+            sqlx::migrate!("./migrations")
+                .run(&pool)
+                .await
+                .map_err(db)?;
+        }
         Ok(Self {
             pool,
             authority: None,
