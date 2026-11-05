@@ -5,6 +5,14 @@ use crate::Store;
 mod credentials;
 
 pub(crate) async fn downgrade_empty(store: &Store) {
+    // Migration 94 down: the enable floor is a derived bound, safe to drop.
+    sqlx::raw_sql(
+        "ALTER TABLE dormant_timers DROP COLUMN enable_floor_ms;
+         DELETE FROM _sqlx_migrations WHERE version=94;",
+    )
+    .execute(&store.pool)
+    .await
+    .unwrap();
     credentials::downgrade_empty(store).await;
     let mut tx = store.pool.begin().await.unwrap();
     // Migration 85 down: only with no per-conversation agent timer limit.
