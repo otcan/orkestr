@@ -27,8 +27,11 @@ import v2_client  # noqa: E402
 
 def _with_client(args, action):
     client = v2_client.Client(args.v2_url, origin=args.origin)
-    client.login_file(args.credentials_file, expected_owner=args.expected_owner,
-                      expected_source=args.expected_source)
+    if args.service_config:
+        client.login_service_config(args.service_config)
+    else:
+        client.login_file(args.credentials_file, expected_owner=args.expected_owner,
+                          expected_source=args.expected_source)
     try:
         return action(client)
     finally:
@@ -126,7 +129,9 @@ def parser():
             command.add_argument('--conversation', required=True, help='target V2 conversation UUID')
         command.add_argument('--v2-url', required=True)
         command.add_argument('--origin', help='server origin when it differs from --v2-url')
-        command.add_argument('--credentials-file', required=True,
+        auth=command.add_mutually_exclusive_group(required=True)
+        auth.add_argument('--service-config',help='pinned service-only unattended configuration')
+        auth.add_argument('--credentials-file',
                              help='private 0600 JSON {"service_token"} or legacy {"username","password"}')
         command.add_argument('--expected-owner', help='required owner UUID for service credentials')
         command.add_argument('--expected-source', help='required deployed source commit for service credentials')
@@ -180,7 +185,9 @@ def parser():
         cal.add_argument('--conversation', required=(name != 'plan'), help='target V2 conversation UUID')
         cal.add_argument('--v2-url', required=(name != 'plan'))
         cal.add_argument('--origin')
-        cal.add_argument('--credentials-file', required=(name != 'plan'))
+        auth=cal.add_mutually_exclusive_group(required=(name != 'plan'))
+        auth.add_argument('--service-config',help='pinned service-only unattended configuration')
+        auth.add_argument('--credentials-file')
         cal.add_argument('--expected-owner', help='required owner UUID for service credentials')
         cal.add_argument('--expected-source', help='required deployed source commit for service credentials')
         cal.add_argument('--v1-cli', default='orkestr')

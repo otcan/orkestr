@@ -40,9 +40,16 @@ class Client:
         self.cookie = None
         self.csrf = None
         self.service = None
+        self.service_config = None
         self.opener = request.build_opener(request.HTTPHandler, request.HTTPSHandler)
 
     def _send(self, method, path, body=None, auth=True):
+        if self.service_config is not None:
+            try:
+                status,value=self.service_config.request(method,path,body,allowed=(200,201,202,204))
+                return status,value,[]
+            except RuntimeError as failure:
+                raise ApiError(getattr(failure,"status",None) or 0,getattr(failure,"code","service_request_refused")) from None
         if self.service is not None:
             try:
                 self.service.login(mutation=method not in {'GET', 'HEAD'})
@@ -87,6 +94,20 @@ class Client:
         self.csrf = body['csrf_token']
         return body
 
+    def login_service_config(self,path):
+        """Explicit service-only unattended mode; never reads owner credentials."""
+        module_path=Path(__file__).resolve().parents[1]/'compat/service_client.py'
+        spec=importlib.util.spec_from_file_location('orkestr_migration_service_config',module_path)
+        module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+        conv=r'/api/v2/conversations/[0-9a-f-]{36}/timers'
+        timer=r'/api/v2/timers/[A-Za-z0-9_.:%-]+'
+        routes=(('GET',conv),('GET',timer),('POST',r'/api/v2/timers/(?:import|calendar)'),
+                ('POST',timer+r'/(?:enable|control)'))
+        self.service_config=module.ServiceClient(path,routes=routes)
+        if self.service_config.config['loopback_url'].rstrip('/')!=self.base or self.service_config.config['origin'].rstrip('/')!=self.origin.rstrip('/'):
+            self.service_config=None
+            raise ApiError(0,'service_endpoint_mismatch')
+
     def login_file(self, path, *, expected_owner=None, expected_source=None):
         """Service mode requires loopback plus exact source/owner pins.
 
@@ -116,6 +137,9 @@ class Client:
                            getattr(failure, 'code', 'service_login_failed')) from None
 
     def close(self):
+        if self.service_config is not None:
+            self.service_config=None
+            return  # Persistent service session is not revoked at tool exit.
         if self.service is not None:
             try:
                 self.service._wire('DELETE', '/api/v2/browser/session', allowed=(204,))
