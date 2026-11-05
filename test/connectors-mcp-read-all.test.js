@@ -63,6 +63,21 @@ test("read-all pages every chat and any history; plain read stays on the allowli
   assert.equal(worker.calls.length, calls);
 });
 
+test("read-all names its list after the requested source when the runtime is not ready", async (t) => {
+  const server = http.createServer((_req, res) => {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ ok: true, ready: false }));
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => server.close());
+  const env = { ...process.env, ORKESTR_WA_WORKER_URL: `http://127.0.0.1:${server.address().port}`, ORKESTR_WA_WORKER_SOCKET: "", ORKESTR_WA_WORKER_TOKEN: "worker-token" };
+  const readAll = auth(["whatsapp:read", "whatsapp:read-all"]);
+  const contacts = await run({ action: "list_all", source: "contacts" }, readAll, env);
+  assert.deepEqual([contacts.data.ready, contacts.data.source, contacts.data.contacts, "chats" in contacts.data], [false, "contacts", [], false]);
+  const chats = await run({ action: "list_all" }, readAll, env);
+  assert.deepEqual([chats.data.ready, chats.data.chats, "contacts" in chats.data], [false, [], false]);
+});
+
 test("read-all never widens sending: send to a non-approved chat stays denied", () => {
   const readAll = auth(["whatsapp:read", "whatsapp:send", "whatsapp:read-all"]);
   assert.throws(() => assertConnectorMcpScope(readAll, "orkestr_messaging", { service: "whatsapp", action: "send", conversation_id: "19990000000@c.us" }), /conversation_scope_denied/);
