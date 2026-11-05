@@ -1,5 +1,34 @@
 # Trusted owner workspace commands
 
+## Gated managed executor preparation
+
+Split Core/executor workspace commands remain refused by the selected-package
+and beta-config gates. The managed command modules currently provide inert
+Root preparation, durable unknown/no-replay claims, an immutable consumed
+source FD, and a private activation socket. Activation must occur inside the
+actual Core consumed spawn fence and wait for the actual dropped shell's ACK.
+Root retains the original anchor child, cgroup and descendant cleanup proof.
+Dispatcher integration, background/control parity and actual Core HTTP
+qualification are required before enabling this path. Component tests do not
+establish those acceptance claims.
+
+The closed `trusted.managed_executor` object supplies `environment` and optional
+`credentials: [{path, keys}]`. It cannot inherit `host_privileged`, legacy
+credential env files or the old trusted environment. Root opens only protected
+credential sources and exports only selected business keys to the dropped
+process environment. Core, bootstrap and provider-account roots stay excluded.
+
+Optional `project_owner_uid` defaults to the executor UID. A separate executor
+does not change project ownership. Root requires an explicit named executor
+ACL for project/Git access and owner-private ancestor traversal, rejects other
+ACL writers, and rechecks each retained inode and ACL at every Store fence.
+Core can retain these exact descriptors without receiving traversal permission.
+
+No-new-privileges constrains the command process tree; it does not constrain
+work requested from an already-running same-UID daemon. Shared-UID host access
+therefore does not establish Core authority isolation. Identity migration or
+stronger confinement and its actual control-channel tests remain release gates.
+
 The restricted profile in `workspace-exec.md` cannot build, fetch or publish.
 An operator may add an optional `trusted` object to the same
 `workspace_exec` profile. It is still bound to exactly one owner, conversation

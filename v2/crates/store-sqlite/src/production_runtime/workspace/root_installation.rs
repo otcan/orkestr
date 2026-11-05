@@ -8,6 +8,12 @@ use super::*;
 /// anchored path/Git association check and refuse unknown/lost replies. A
 /// cached fingerprint, filesystem path or model-supplied JSON is insufficient.
 pub trait RootWorkspaceCustody: Send + Sync {
+    /// Explicit contract: the authenticated Root checks each retained inode's
+    /// named executor ACL and rejects every unselected effective writer on
+    /// every check. Default false preserves strict Unix mode-only custody.
+    fn verifies_named_executor_acl(&self) -> bool {
+        false
+    }
     fn check(
         &self,
         paths: &[PathBuf; 3],
@@ -38,7 +44,12 @@ impl WorkspaceOperatorAllowlist {
         for (path, descriptor) in paths.into_iter().zip(descriptors) {
             let file = File::from(descriptor);
             let meta = file.metadata().map_err(db)?;
-            if !meta.is_dir() || meta.uid() != self.uid || meta.mode() & 0o022 != 0 {
+            let forbidden = if custody.verifies_named_executor_acl() {
+                0o002
+            } else {
+                0o022
+            };
+            if !meta.is_dir() || meta.uid() != self.uid || meta.mode() & forbidden != 0 {
                 return Err(RuntimeStoreError::Fenced);
             }
             directories.push(Directory {

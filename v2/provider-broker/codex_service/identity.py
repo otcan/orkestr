@@ -84,9 +84,13 @@ def receive_launch_context(package, descriptor=6):
             raw.extend(chunk)
             require(len(raw) <= 4096, 'launch_capsule_bound')
     value = json.loads(bytes(raw))
-    require(type(value) is dict and set(value) == {'server_pid', 'server_start', 'server_uid',
+    required = {'server_pid', 'server_start', 'server_uid',
             'manager_pid', 'manager_start', 'owner_id', 'conversation_id', 'manifest_sha256',
-            'window_id', 'generation', 'role', 'request_id','setup','preferences'}, 'launch_capsule_fields')
+            'window_id', 'generation', 'role', 'request_id','setup','preferences'}
+    require(type(value) is dict and required <= set(value) <= required|{'workspace_worker'}, 'launch_capsule_fields')
+    require(type(value.get('workspace_worker',False)) is bool and (not value.get('workspace_worker',False) or
+            type(value['role']) is str and value['role'].startswith('worker-') and
+            type(value['setup']) is dict and value['setup'].get('role')=='worker'), 'workspace_worker_capsule')
     require(value['manager_pid'] == pid and value['server_uid'] == package.authority_uid,
             'launch_capsule_identity')
     manager=process(pid)

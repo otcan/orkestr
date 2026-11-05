@@ -5,6 +5,7 @@ Run as Root with systemd-run --scope --unit=orkestr-workspace-fixture-<uuid>
 not Core HTTP/provider/claim-journal qualification or production activation.
 """
 import argparse
+import array
 import hashlib
 import json
 import os
@@ -68,7 +69,7 @@ def prepare(fixture, jobs):
     profile = dict(conversation_id=str(uuid.uuid4()), project_id=str(uuid.uuid4()), workspace=str(project),
         allowed_roots=[str(project)], protected_roots=[str(home)], cgroup_root=str(jobs),
         toolchain_root=str(fixture.root / 'unused-legacy-image'), trusted=trusted)
-    package = dict(identity_split=True, executor_uid=UID, executor_gid=GID, owner=str(uuid.uuid4()),
+    package = dict(identity_split=True, executor_uid=UID, executor_gid=GID, authority_uid=UID-1, owner=str(uuid.uuid4()),
         home=str(home), ledger_directory=str(fixture.ledger_directory), provider_home=str(fixture.home / 'provider-home'),
         root=str(fixture.package), beta={'workspace_exec': profile})
     return package, profile, core, project
@@ -114,16 +115,51 @@ def run_case(fixture, package, profile, project, core, root, kind):
         operation_id=operation, source=command, source_sha256=source_sha, expires_at_ms=int(time.time()*1000)+25000,
         paths=[str(p) for p in installation.paths], identities=[list(v) for v in installation.identities])
     parent, endpoint = socket.socketpair(); stdout, out = os.pipe2(os.O_CLOEXEC); stderr, err = os.pipe2(os.O_CLOEXEC)
+    control = fake = source_fd = None
+    if kind in ('activate','no_activation'):
+        control, peer = socket.socketpair()
+        program='''import array,os,socket,sys
+c=socket.socket(fileno=int(sys.argv[1]));own,other=socket.socketpair()
+c.sendmsg([b'E'],[(socket.SOL_SOCKET,socket.SCM_RIGHTS,array.array('i',[other.fileno()]))]);other.close()
+command=c.recv(32)
+if command==b'activate':
+ own.sendall(b'activate\\n');answer=bytearray()
+ while len(answer)<8:
+  part=own.recv(8-len(answer))
+  if not part:raise SystemExit(5)
+  answer.extend(part)
+ c.sendall(answer);c.recv(32)
+elif command==b'drop':own.close();c.sendall(b'dropped')
+else:raise SystemExit(6)
+'''
+        fake=subprocess.Popen([sys.executable,'-I','-S','-B','-c',program,str(peer.fileno())],
+            pass_fds=(peer.fileno(),),user=UID-1,group=GID,extra_groups=[],env={'PATH':'/usr/bin:/bin'},
+            stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
+        peer.close();control.settimeout(3)
+        _,ancillary,flags,_=control.recvmsg(1,socket.CMSG_SPACE(4),socket.MSG_CMSG_CLOEXEC)
+        assert not flags&(socket.MSG_CTRUNC|socket.MSG_TRUNC) and len(ancillary)==1
+        level,message,raw=ancillary[0];assert(level,message)==(socket.SOL_SOCKET,socket.SCM_RIGHTS)
+        received=array.array('i');received.frombytes(raw);assert len(received)==1;source_fd=received[0]
+        payload.update(server_pid=fake.pid,server_start=process(fake.pid)['start'])
     child = None
     try:
         identity = process(os.getpid())
         child = subprocess.Popen([sys.executable, '-I', '-S', '-B', str(bootstrap), str(config),
-            *map(str, (endpoint.fileno(), os.getpid(), identity['start'], installation.fds[0], job.fd, out, err))],
-            pass_fds=(endpoint.fileno(), installation.fds[0], job.fd, out, err), env={'PATH':'/usr/bin:/bin','PYTHONDONTWRITEBYTECODE':'1'},
+            *map(str, (endpoint.fileno(), os.getpid(), identity['start'], installation.fds[0], job.fd, out, err)),
+            *([str(source_fd)] if source_fd is not None else [])],
+            pass_fds=(endpoint.fileno(), installation.fds[0], job.fd, out, err,*([source_fd] if source_fd is not None else [])), env={'PATH':'/usr/bin:/bin','PYTHONDONTWRITEBYTECODE':'1'},
             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
         endpoint.close(); os.close(out); os.close(err); out = err = None
+        if source_fd is not None:os.close(source_fd);source_fd=None
         raw = json.dumps(payload).encode(); parent.sendall(struct.pack('!I',len(raw))+raw); parent.settimeout(5)
-        ready = read(parent); assert ready == {'operation_id':operation, 'source_sha256':source_sha, 'kind':'ready'}
+        ready = read(parent)
+        if fake is not None:
+            assert ready=={'operation_id':operation,'source_sha256':source_sha,'kind':'prepared'}
+            time.sleep(.1);assert not (project/('proof-'+kind)).exists() and not job.populated()
+            control.sendall(b'activate' if kind=='activate' else b'drop')
+            assert control.recv(32)==(b'started\n' if kind=='activate' else b'dropped')
+            if kind=='activate':ready=read(parent)
+        if kind!='no_activation':assert ready == {'operation_id':operation, 'source_sha256':source_sha, 'kind':'ready'}
         if kind == 'cancel':
             until = time.monotonic() + .8
             while not (project / 'proof-cancel').exists():
@@ -133,18 +169,21 @@ def run_case(fixture, package, profile, project, core, root, kind):
         complete = read(parent)
         assert complete['operation_id'] == operation and complete['source_sha256'] == source_sha
         assert complete['kind'] == 'complete' and complete['cleanup'] is True
-        assert complete['cancelled'] == (kind != 'normal')
-        assert complete['cancellation'] == ('deadline' if kind == 'timeout' else 'cancelled' if kind == 'cancel' else None)
+        assert complete['cancelled'] == (kind in ('timeout','cancel','no_activation'))
+        assert complete['cancellation'] == ('deadline' if kind == 'timeout' else 'cancelled' if kind == 'cancel' else 'core_closed' if kind=='no_activation' else None)
         assert child.wait(timeout=3) == 0, child.stderr.read().decode()
         output = os.read(stdout, 4096); error_output = os.read(stderr, 4096)
         assert not error_output and not job.populated()
-        proof = json.loads(output); assert proof['uid'] == UID and proof['nnp'] and proof['core_denied'] and proof['selected_key_only']
-        assert (project / ('proof-' + kind)).stat().st_uid == UID
+        if kind=='no_activation':assert not output and complete['started'] is False and not (project/('proof-'+kind)).exists()
+        else:
+            proof = json.loads(output); assert proof['uid'] == UID and proof['nnp'] and proof['core_denied'] and proof['selected_key_only']
+            assert (project / ('proof-' + kind)).stat().st_uid == UID
         if kind == 'normal': assert (project / 'detached-ready').exists()
         job.close_empty()
         return dict(kind=kind, original_root_anchor_waited=True, cgroup_empty=True, executor_uid=UID,
-            core_uid=UID-1, nonprivileged_project_write=True, no_new_privileges=True,
-            core_read_denied=True, business_keys_selected=True, detached_descendant_created=kind=='normal',
+            core_uid=UID-1, nonprivileged_project_write=kind!='no_activation', no_new_privileges=kind!='no_activation',
+            core_read_denied=kind!='no_activation', business_keys_selected=kind!='no_activation', detached_descendant_created=kind=='normal',
+            no_business_before_activation=fake is not None, business_started=complete['started'],
             cancelled=complete['cancelled'], cancellation=complete['cancellation'], exit_code=complete['exit_code'])
     finally:
         parent.close(); endpoint.close(); installation.close()
@@ -159,6 +198,14 @@ def run_case(fixture, package, profile, project, core, root, kind):
             child.stderr.close()
         if job.fd is not None:
             job.kill(); assert job.empty(3); job.close_empty()
+        if source_fd is not None:os.close(source_fd)
+        if control is not None:
+            try:control.sendall(b'finish')
+            except OSError:pass
+            control.close()
+        if fake is not None:
+            if fake.poll() is None:fake.terminate()
+            fake.wait(timeout=3);fake.stderr.close()
 
 
 def main():
@@ -169,7 +216,7 @@ def main():
                   live_activation=False, scope_memory_limit_bytes=int((base/'memory.max').read_text()))
     try:
         package, profile, core, project = prepare(fixture, jobs); root = Root(jobs)
-        report['cases'] = [run_case(fixture, package, profile, project, core, root, kind) for kind in ('normal','timeout','cancel')]
+        report['cases'] = [run_case(fixture, package, profile, project, core, root, kind) for kind in ('normal','timeout','cancel','activate','no_activation')]
         report['source_files_sha256'] = {name: hashlib.sha256((ROOT/'v2/provider-broker/codex_service'/name).read_bytes()).hexdigest()
             for name in ('workspace_anchor.py','workspace_cgroup.py','workspace_custody.py','workspace_environment.py')}
         report['scope_memory_peak_bytes'] = int((base/'memory.peak').read_text()); report['passed'] = True
@@ -179,7 +226,7 @@ def main():
         if root is not None: root.close()
         fixture.close(); jobs.rmdir(); report['disposable_data_removed'] = True
         Path(args.report).write_text(json.dumps(report,indent=2)+'\n'); Path(args.report).chmod(0o600)
-    print(json.dumps({'passed':True,'kernel_component_only':True,'cases':3}))
+    print(json.dumps({'passed':True,'kernel_component_only':True,'cases':5}))
 
 
 if __name__ == '__main__': main()

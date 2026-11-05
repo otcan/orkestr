@@ -53,6 +53,7 @@ class Projects:
             value = {'format': 'orkestr-root-project-v1',
                      **{key: request[key] for key in ('request_id', 'owner_id', 'conversation_id', 'project_id')},
                      'paths': [str(path) for path in installation.paths],
+                     'project_owner_uid':installation.owner,'executor_uid':installation.executor,
                      'identities': [list(identity) for identity in installation.identities]}
             raw = canonical(value); require(len(raw) <= 16384, 'workspace_attestation_bound')
             packet = struct.pack('!I', len(raw)) + raw
@@ -75,3 +76,9 @@ def dispatch(manager, request, descriptors):
     if manager.workspace_projects is None: manager.workspace_projects = Projects(manager.package)
     proof = manager.workspace_projects.attest(manager.identity, request, descriptors[0])
     return {'ok': True, 'receipt': manager.ledger.status(request['conversation_id']), 'workspace': proof}
+
+
+def selected_profile(package, conversation):
+    selected = [profile for (scope, _), profile in Projects(package).profiles.items() if scope == conversation]
+    require(len(selected) == 1, 'workspace_worker_profile_scope')
+    return selected[0]

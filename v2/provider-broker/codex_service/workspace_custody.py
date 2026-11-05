@@ -11,6 +11,7 @@ import stat
 from .contract import require, identifier
 from codex_bounded.trust import metadata
 from .workspace_environment import definition
+from .workspace_acl import check as check_acl, owner as project_owner
 
 
 def canonical(raw):
@@ -33,7 +34,8 @@ def identity(fd):
     return (meta.st_dev, meta.st_ino, meta.st_uid)
 
 
-def open_checked(path, executor, directory=True):
+def open_checked(path, owner, directory=True, executor=None, executor_gid=None):
+    if executor is None:executor=owner
     path = canonical(str(path))
     fd = os.open('/', os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
     try:
@@ -44,18 +46,18 @@ def open_checked(path, executor, directory=True):
                             (os.O_DIRECTORY if is_directory else 0), dir_fd=fd)
             os.close(fd); fd = child
             meta = os.fstat(fd)
-            require(meta.st_uid in (0, executor) and meta.st_mode & 0o022 == 0 and
-                    (stat.S_ISDIR(meta.st_mode) if is_directory else
+            require((stat.S_ISDIR(meta.st_mode) if is_directory else
                      stat.S_ISREG(meta.st_mode) and meta.st_nlink == 1), 'workspace_managed_custody')
-        require(not directory or os.fstat(fd).st_uid == executor, 'workspace_managed_owner')
+            check_acl(fd,owner,executor,7 if index+1==len(parts) and directory else 1 if is_directory else 4,
+                      owner_leaf=index+1==len(parts) and directory,executor_gid=executor_gid)
         result = fd; fd = None
         return result
     finally:
         if fd is not None: os.close(fd)
 
 
-def small(path, executor):
-    fd = open_checked(path, executor, False)
+def small(path, owner, executor=None,executor_gid=None):
+    fd = open_checked(path, owner, False,executor,executor_gid)
     try:
         raw = os.read(fd, 8193)
         require(len(raw) <= 8192, 'workspace_git_pointer_bound')
@@ -63,20 +65,20 @@ def small(path, executor):
     finally: os.close(fd)
 
 
-def association(workspace, executor):
+def association(workspace, owner, executor=None,executor_gid=None):
     dot = workspace / '.git'
     # Even the preliminary kind check is relative to a checked retained FD;
     # open_checked below independently refuses replacement/ancestor aliases.
-    fd = open_checked(workspace, executor)
+    fd = open_checked(workspace, owner,executor=executor,executor_gid=executor_gid)
     try: meta = os.stat('.git', dir_fd=fd, follow_symlinks=False)
     finally: os.close(fd)
     require(not stat.S_ISLNK(meta.st_mode), 'workspace_git_alias')
     if stat.S_ISDIR(meta.st_mode): git = dot
     else:
-        text = small(dot, executor)
+        text = small(dot, owner,executor,executor_gid)
         require(text.startswith('gitdir: '), 'workspace_git_pointer')
         git = normalized(workspace, text[8:])
-    try: common = normalized(git, small(git / 'commondir', executor))
+    try: common = normalized(git, small(git / 'commondir', owner,executor,executor_gid))
     except FileNotFoundError: common = git
     return git, common
 
@@ -93,6 +95,9 @@ class Installation:
         definition(profile['trusted']['managed_executor'])
         identifier(profile['conversation_id']); identifier(profile['project_id'])
         self.executor = package.executor_uid
+        self.executor_gid=getattr(package,'executor_gid',self.executor)
+        self.owner = project_owner(profile,self.executor)
+        require(self.owner != getattr(package,'authority_uid',None),'workspace_project_authority_owner')
         self.workspace = canonical(profile['workspace'])
         require(profile['allowed_roots'] == [str(self.workspace)], 'workspace_exact_root')
         self.protected = [canonical(str(package.home)), canonical(str(package.ledger_directory)),
@@ -116,13 +121,13 @@ class Installation:
         self.credential_protected = tuple(self.protected)
         self.protected.extend([*[canonical(p) for p in profile['protected_roots']],
                                canonical(profile['cgroup_root']), canonical(profile['toolchain_root'])])
-        self.paths = (self.workspace, *association(self.workspace, self.executor))
+        self.paths = (self.workspace, *association(self.workspace, self.owner,self.executor,self.executor_gid))
         for path in self.paths:
             require(all(path != other and path not in other.parents and other not in path.parents
                         for other in self.protected), 'workspace_managed_overlap')
         self.fds = []
         try:
-            for path in self.paths: self.fds.append(open_checked(path, self.executor))
+            for path in self.paths:self.fds.append(open_checked(path,self.owner,executor=self.executor,executor_gid=self.executor_gid))
             self.identities = tuple(identity(fd) for fd in self.fds)
             self.check()
         except BaseException:
@@ -130,10 +135,10 @@ class Installation:
 
     def check(self):
         require(len(self.fds) == 3, 'workspace_installation_closed')
-        require((self.workspace, *association(self.workspace, self.executor)) == self.paths,
+        require((self.workspace, *association(self.workspace, self.owner,self.executor,self.executor_gid)) == self.paths,
                 'workspace_git_association_changed')
         for index, path in enumerate(self.paths):
-            fd = open_checked(path, self.executor)
+            fd = open_checked(path,self.owner,executor=self.executor,executor_gid=self.executor_gid)
             try:
                 require(identity(fd) == self.identities[index] == identity(self.fds[index]),
                         'workspace_managed_replaced')

@@ -13,10 +13,12 @@ from .identity import enforce_no_new_privs
 
 
 def main(package,role,arguments):
+    workspace = ['open-owned-workspace-worker-session','--protocol','orkestr-v2-provider-broker-v1']
     require(package.identity_split and os.geteuid()==package.authority_uid and
             (role in package.role_profiles or role=='claude' and package.claude is not None)
             and arguments in [['open-owned-session','--protocol','orkestr-v2-provider-broker-v1'],
-                              ['resume-owned-session','--protocol','orkestr-v2-provider-broker-v1']]
+                              ['resume-owned-session','--protocol','orkestr-v2-provider-broker-v1'],
+                              *([workspace] if role.startswith('worker-') else [])]
             and (arguments[0]!='resume-owned-session' or not role.startswith('worker-')),
             'split_proxy_mode')
     enforce_no_new_privs()

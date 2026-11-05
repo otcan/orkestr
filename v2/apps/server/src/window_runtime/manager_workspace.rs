@@ -27,12 +27,15 @@ struct Snapshot {
     project_id: Uuid,
     paths: [PathBuf; 3],
     identities: [(u64, u64, u32); 3],
+    project_owner_uid: u32,
+    executor_uid: u32,
 }
 
 #[derive(Clone)]
 struct Custody {
     manager: ManagerClient,
     project: Uuid,
+    executor: u32,
 }
 
 impl Custody {
@@ -55,6 +58,9 @@ impl Custody {
 }
 
 impl RootWorkspaceCustody for Custody {
+    fn verifies_named_executor_acl(&self) -> bool {
+        true
+    }
     fn check(
         &self,
         paths: &[PathBuf; 3],
@@ -62,6 +68,8 @@ impl RootWorkspaceCustody for Custody {
     ) -> std::result::Result<(), RuntimeStoreError> {
         let (snapshot, _new_handles) = self.fetch().map_err(|_| RuntimeStoreError::Fenced)?;
         if &snapshot.paths != paths
+            || snapshot.executor_uid != self.executor
+            || snapshot.project_owner_uid != identities[0].uid()
             || snapshot.identities
                 != identities.map(|value| (value.device(), value.inode(), value.uid()))
         {
@@ -78,10 +86,12 @@ impl ManagerClient {
         &self,
         project: Uuid,
         allowlist: WorkspaceOperatorAllowlist,
+        executor: u32,
     ) -> Result<WorkspaceInstallation> {
         let custody = Arc::new(Custody {
             manager: self.clone(),
             project,
+            executor,
         });
         tokio::task::spawn_blocking(move || {
             let (snapshot, descriptors) = custody.fetch()?;

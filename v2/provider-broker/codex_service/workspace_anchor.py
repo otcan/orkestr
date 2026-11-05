@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import resource
+import select
 import signal
 import socket
 import stat
@@ -35,8 +36,9 @@ def message(channel):
     size = struct.unpack('!I', read(4))[0]
     require(0 < size <= 131072, 'managed_anchor_frame_bound')
     value = json.loads(read(size))
-    require(type(value) is dict and set(value) == {'owner_id', 'conversation_id', 'project_id', 'operation_id',
-        'source', 'source_sha256', 'expires_at_ms', 'paths', 'identities'}, 'managed_anchor_fields')
+    required = {'owner_id', 'conversation_id', 'project_id', 'operation_id',
+        'source', 'source_sha256', 'expires_at_ms', 'paths', 'identities'}
+    require(type(value) is dict and required <= set(value) <= required|{'server_pid','server_start'}, 'managed_anchor_fields')
     return value
 
 
@@ -45,8 +47,9 @@ def send(channel, value):
 
 
 def main(package, arguments):
-    require(os.geteuid() == 0 and package.identity_split and len(arguments) == 7, 'managed_anchor_root')
-    endpoint, parent, start, workspace, cgroup, out, err = map(int, arguments)
+    require(os.geteuid() == 0 and package.identity_split and len(arguments) in (7,8), 'managed_anchor_root')
+    endpoint, parent, start, workspace, cgroup, out, err = map(int, arguments[:7])
+    core = socket.socket(fileno=int(arguments[7])) if len(arguments)==8 else None
     require(len({endpoint, workspace, cgroup, out, err}) == 5 and min(endpoint, workspace, cgroup, out, err) > 2,
             'managed_anchor_descriptors')
     original_parent = process(parent)
@@ -57,6 +60,12 @@ def main(package, arguments):
         require(channel.family == socket.AF_UNIX and channel.type == socket.SOCK_STREAM and
                 peer == parent and uid == 0, 'managed_anchor_peer')
         channel.settimeout(1); value = message(channel)
+        if core is not None:
+            server = process(value['server_pid'])
+            peer_pid, peer_uid, _ = struct.unpack('3i',core.getsockopt(socket.SOL_SOCKET,socket.SO_PEERCRED,12))
+            require(core.family==socket.AF_UNIX and core.type==socket.SOCK_STREAM and server and
+                    peer_pid==server['pid'] and peer_uid==package.authority_uid==server['uid'] and
+                    server['start']==value['server_start'], 'managed_anchor_core_source')
         require(value['owner_id'] == package.owner, 'managed_anchor_owner')
         for name in ('conversation_id', 'project_id', 'operation_id'): identifier(value[name])
         source = value['source']
@@ -100,6 +109,34 @@ def main(package, arguments):
             require(libc.prctl(1, signal.SIGTERM, 0, 0, 0) == 0 and os.getppid() == parent,
                     'managed_anchor_parent_death')
             anchor_pid = os.getpid()
+            common = {key:value[key] for key in ('operation_id','source_sha256')}
+            if core is not None:
+                # No business child exists at preparation. Only the exact
+                # Core-created socket can activate while its Store fence holds.
+                send(channel,{**common,'kind':'prepared'})
+                activation = bytearray(); channel.setblocking(False)
+                while bytes(activation)!=b'activate\n' and not cancelled:
+                    if not exists(original_parent): cancel('parent_lost')
+                    if not exists(server): cancel('core_lost')
+                    if int(time.time()*1000)>=expires: cancel('deadline')
+                    ready,_,_=select.select([core,channel],[],[],.05)
+                    if channel in ready:
+                        received=channel.recv(16);cancel('cancelled' if received else 'parent_closed')
+                    if core in ready:
+                        received=core.recv(10-len(activation))
+                        if not received: cancel('core_closed')
+                        else:
+                            activation.extend(received)
+                            if not b'activate\n'.startswith(bytes(activation)): cancel('cancelled')
+                if cancelled:
+                    require(job.empty(1),'managed_anchor_cleanup_unknown'); clean=True
+                    send(channel,{**common,'kind':'complete','cleanup':True,'cancelled':True,
+                        'cancellation':cancellation,'exit_code':None,'started':False})
+                    return 0
+                remaining=expires-int(time.time()*1000)
+                require(remaining>0,'managed_anchor_launch_expired')
+                if not background: timeout=min(timeout,remaining)
+                deadline=time.monotonic()+timeout/1000
             def dropped():
                 # This anchor is single-threaded. Only this original shell
                 # attaches to the fixed job while Root, before UID/cap drop.
@@ -126,7 +163,7 @@ def main(package, arguments):
                 cwd='/', env=execution_environment, close_fds=True, pass_fds=(workspace, cgroup), preexec_fn=dropped)
             execution_environment = None
             os.close(out); os.close(err)
-            common = {key: value[key] for key in ('operation_id', 'source_sha256')}
+            if core is not None: core.sendall(b'started\n');core.setblocking(False)
             send(channel, {**common, 'kind': 'ready'})
             channel.setblocking(False)
             original = process(child.pid)
@@ -138,6 +175,11 @@ def main(package, arguments):
                     received = channel.recv(16)
                     cancel('cancelled' if received == b'cancel' else 'parent_closed' if not received else 'invalid_control')
                 except BlockingIOError: pass
+                if core is not None:
+                    try:
+                        received=core.recv(16)
+                        cancel('cancelled' if received else 'core_closed')
+                    except BlockingIOError: pass
                 tree.capture(known); tree.observe()
                 if cancelled: job.kill()
                 time.sleep(.005)
@@ -150,7 +192,7 @@ def main(package, arguments):
                 if pid == 0: time.sleep(.005)
             require(clean and job.empty(2) and all(p.gone() for p in tree.records.values()), 'managed_anchor_cleanup_unknown')
             channel.settimeout(1); send(channel, {**common, 'kind': 'complete', 'cleanup': True,
-                                                'cancelled': cancelled, 'cancellation': cancellation, 'exit_code': code})
+                                                'cancelled': cancelled, 'cancellation': cancellation, 'exit_code': code,'started':True})
             return 0
         finally:
             if job is not None:
@@ -163,3 +205,4 @@ def main(package, arguments):
             installation.close()
             if job is not None and job.fd is not None: os.close(job.fd)
             if root is not None: root.close()
+            if core is not None: core.close()

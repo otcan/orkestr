@@ -17,7 +17,7 @@ MODULES_SERVICE = ("__init__.py", "contract.py", "ledger.py", "budget.py", "cust
                    "server_child.py", "broker.py", "profile.py", "entry.py", "role_profiles.py",
                    "claude_broker.py", "identity.py", "launch.py", "launch_child.py", "proxy.py", "attachment_exports.py",
                    "password_recovery.py", "managed_resume.py", "managed_host.py", "native_io.py", "desk_operations.py", "desk_anchor.py",
-                   "workspace_custody.py", "workspace_setup.py", "workspace_environment.py", "workspace_cgroup.py", "workspace_anchor.py",
+    "workspace_custody.py", "workspace_setup.py", "workspace_environment.py", "workspace_cgroup.py", "workspace_anchor.py", "workspace_command.py", "workspace_ops.py", "workspace_acl.py",
                    "managed_ingress.py", "managed_control.py", "managed_client.py", "managed_native.py", "managed_runs.py")
 # Shared with the server and packager: room for many per-conversation
 # command profiles.
@@ -279,7 +279,7 @@ class Package:
         require(type(additional) is list and len(additional) <= MAX_ADDITIONAL_WORKSPACE_EXEC
                 and (not additional or "workspace_exec" in beta), "workspace_exec_config")
         for command in ([beta["workspace_exec"]] if "workspace_exec" in beta else []) + additional:
-            require(type(command) is dict and set(command) - {"trusted"} == {"conversation_id",
+            require(type(command) is dict and set(command) - {"trusted","project_owner_uid"} == {"conversation_id",
                     "project_id", "workspace", "allowed_roots", "protected_roots", "cgroup_root",
                     "toolchain_root"} and "roles" in beta, "workspace_exec_config")
             # Runtime validates the trusted profile's fields, limits and overlaps.

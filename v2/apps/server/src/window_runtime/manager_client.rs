@@ -21,6 +21,9 @@ mod managed_operations;
 mod wire;
 #[path = "manager_workspace.rs"]
 mod workspace;
+#[path = "manager_workspace_command.rs"]
+#[allow(dead_code)] // Profile gate remains closed until dispatcher qualification.
+mod workspace_command;
 use wire::*;
 
 const MAX_FRAME: usize = 8192;

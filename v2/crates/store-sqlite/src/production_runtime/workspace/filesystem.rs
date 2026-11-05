@@ -157,7 +157,13 @@ impl Installation {
                     || meta.dev() != expected.device
                     || meta.ino() != expected.inode
                     || meta.uid() != expected.uid
-                    || meta.mode() & 0o022 != 0
+                    || meta.mode()
+                        & if custody.verifies_named_executor_acl() {
+                            0o002
+                        } else {
+                            0o022
+                        }
+                        != 0
                 {
                     return Err(RuntimeStoreError::Fenced);
                 }
