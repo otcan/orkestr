@@ -21,6 +21,8 @@ class ManagedClaudePlanTests(unittest.TestCase):
         plan=self.plan();plan['host_full_access']={'environment':plan['claude']['managed_host']['environment']}
         with self.assertRaises(RuntimeError):claude(plan)
         plan=self.plan();plan['claude']['fast']=True
+        self.assertTrue(claude(plan)['fast'])
+        plan['claude']['fast']='true'
         with self.assertRaises(RuntimeError):claude(plan)
 
     def test_fixed_environment_cannot_change_home_or_select_an_account(self):

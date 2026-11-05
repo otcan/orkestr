@@ -86,7 +86,7 @@ def receive_launch_context(package, descriptor=6):
     value = json.loads(bytes(raw))
     require(type(value) is dict and set(value) == {'server_pid', 'server_start', 'server_uid',
             'manager_pid', 'manager_start', 'owner_id', 'conversation_id', 'manifest_sha256',
-            'window_id', 'generation', 'role', 'request_id','setup'}, 'launch_capsule_fields')
+            'window_id', 'generation', 'role', 'request_id','setup','preferences'}, 'launch_capsule_fields')
     require(value['manager_pid'] == pid and value['server_uid'] == package.authority_uid,
             'launch_capsule_identity')
     manager=process(pid)
@@ -101,7 +101,8 @@ def receive_launch_context(package, descriptor=6):
     require(server and server['start'] == value['server_start'] and server['uid'] == value['server_uid'],
             'launch_capsule_server_changed')
     require(value['role'] in ('deep', 'fast', 'claude', 'worker-0', 'worker-1', 'worker-2', 'worker-3'), 'launch_capsule_role')
-    from .contract import setup_scope
+    from .contract import setup_scope,preferences
     setup_scope(value['setup'],value['role'],value['owner_id'],value['conversation_id'])
+    preferences(value['preferences'],value['role'])
     _CONTEXT = value
     return value

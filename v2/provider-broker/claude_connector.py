@@ -24,7 +24,7 @@ def turn_preferences(source):
     selected = {}
     model, effort = source.get("ORKESTR_CLAUDE_MODEL"), source.get("ORKESTR_CLAUDE_EFFORT")
     if model is not None:
-        if not (0 < len(model) <= 120 and all(c.isascii() and (c.isalnum() or c in "._:-") for c in model)
+        if not (type(model) is str and 0 < len(model) <= 120 and all(c.isascii() and (c.isalnum() or c in "._:-") for c in model)
                 and not model.isdigit()):
             raise ValueError("invalid Claude model preference")
         selected["ANTHROPIC_MODEL"] = model
@@ -52,6 +52,15 @@ def host_environment(value):
             "CLAUDE_CONFIG_DIR"} & set(environment):
         raise ValueError("host full access environment cannot select an account")
     return dict(environment)
+
+
+def preference_environment(value):
+    if value is None:return {}
+    if not isinstance(value,dict) or set(value)!={'model','effort'}:
+        raise ValueError('invalid closed Claude launch preferences')
+    source={key:item for key,item in [('ORKESTR_CLAUDE_MODEL',value['model']),
+                                    ('ORKESTR_CLAUDE_EFFORT',value['effort'])] if item is not None}
+    return turn_preferences(source)
 
 
 @dataclass(frozen=True)
@@ -97,19 +106,19 @@ class ClaudeConfiguration:
             if not (path.is_file() if name == "executable" else path.is_dir()):
                 raise ValueError("invalid trusted Claude path")
 
-    def resumed_session(self, specification, account_environment=None):
+    def resumed_session(self, specification, account_environment=None, *, launch_preferences=None):
         # Private lifecycle spec only; caller additionally needs Core resume authority.
         from claude_resume import ResumeSpec
         if type(specification) is not ResumeSpec:
             raise ValueError("invalid private resume specification")
         native = specification._take(self)
         self.validate()
-        return ClaudeOwnedSession(self, native, account_environment, resumed=True)
+        return ClaudeOwnedSession(self, native, account_environment, resumed=True,launch_preferences=launch_preferences)
 
-    def new_session(self, account_environment=None):
+    def new_session(self, account_environment=None, *, launch_preferences=None):
         self.validate()
         # Server-generated identity only; no resume/adoption or client UUID.
-        return ClaudeOwnedSession(self, uuid.uuid4(), account_environment)
+        return ClaudeOwnedSession(self, uuid.uuid4(), account_environment,launch_preferences=launch_preferences)
 
 
 class ClaudeOwnedSession:
@@ -120,7 +129,7 @@ class ClaudeOwnedSession:
     exact UUID and terminal/result before any persistent follow-up. This object
     grants neither inference nor cancellation authority.
     """
-    def __init__(self, config, native, account_environment=None, resumed=False):
+    def __init__(self, config, native, account_environment=None, resumed=False,launch_preferences=None):
         self._config, self.native = config, native
         self.workspace = config.workspace
         self._account_environment = account_environment
@@ -128,6 +137,7 @@ class ClaudeOwnedSession:
         self.read_only = False
         self._owned_child = None
         self._retired = False
+        self._launch_preferences=preference_environment(launch_preferences)
 
     def restrict_to_read_only(self):
         """Fast identity: one-way, and only before the native is launched."""
@@ -198,6 +208,7 @@ class ClaudeOwnedSession:
 
         import os
         environment.update(turn_preferences(os.environ))
+        environment.update(self._launch_preferences)
         if self._account_environment is not None:
             # Trusted launcher-side callback only, never protocol/config JSON.
             # Root resolves the existing selected account at acceptance/runtime.

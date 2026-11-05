@@ -12,6 +12,7 @@ pub struct ManagedLaunchDescriptors {
     role: String,
     descriptors: Vec<OwnedFd>,
     setup: Option<serde_json::Value>,
+    preferences: (Option<String>, Option<String>),
 }
 impl ManagedLaunchDescriptors {
     pub fn role(&self) -> &str {
@@ -22,6 +23,30 @@ impl ManagedLaunchDescriptors {
     }
     pub fn setup(&self) -> Result<&serde_json::Value, Error> {
         self.setup.as_ref().ok_or(Error::AuthorityProtocol)
+    }
+    pub fn preferences(&self) -> serde_json::Value {
+        serde_json::json!({"model":self.preferences.0,"effort":self.preferences.1})
+    }
+    pub(super) fn set_preferences(
+        &mut self,
+        value: (Option<String>, Option<String>),
+    ) -> Result<(), Error> {
+        if self.role != "claude" && (value.0.is_some() || value.1.is_some()) {
+            return Err(Error::Unsupported);
+        }
+        if value
+            .0
+            .as_ref()
+            .is_some_and(|v| !orkestr_v2_contracts::launch_model_valid(v))
+            || value
+                .1
+                .as_ref()
+                .is_some_and(|v| !orkestr_v2_contracts::CLAUDE_EFFORTS.contains(&v.as_str()))
+        {
+            return Err(Error::InvalidScope);
+        }
+        self.preferences = value;
+        Ok(())
     }
     /// Only MetadataChild's live issuer scope may attest a setup. This method
     /// is private to containment, has no HTTP/JSON constructor and is one-use.
@@ -177,6 +202,7 @@ pub(super) fn prepare(config: Configuration, provider: &UnixStream) -> Result<Pr
     let transfer = ManagedLaunchDescriptors {
         role: config.role,
         setup: None,
+        preferences: (None, None),
         descriptors: vec![
             child_input.try_clone().map_err(|_| Error::Io)?,
             child_output.try_clone().map_err(|_| Error::Io)?,
@@ -199,6 +225,43 @@ mod tests {
     use super::*;
     use std::io::{Read, Write};
     use std::os::fd::AsRawFd;
+    #[test]
+    fn preferences_are_typed_provider_scoped_data() {
+        let (provider, _) = UnixStream::pair().unwrap();
+        let mut transfer = prepare(
+            Configuration {
+                role: "claude".into(),
+            },
+            &provider,
+        )
+        .unwrap()
+        .transfer;
+        transfer
+            .set_preferences((Some("synthetic-model".into()), Some("low".into())))
+            .unwrap();
+        assert_eq!(
+            transfer.preferences(),
+            serde_json::json!({"model":"synthetic-model","effort":"low"})
+        );
+        assert!(transfer
+            .set_preferences((Some("--config=/other".into()), None))
+            .is_err());
+        assert!(transfer
+            .set_preferences((None, Some("unbounded".into())))
+            .is_err());
+        let mut other = prepare(
+            Configuration {
+                role: "deep".into(),
+            },
+            &provider,
+        )
+        .unwrap()
+        .transfer;
+        assert!(other
+            .set_preferences((Some("synthetic-model".into()), None))
+            .is_err());
+        other.set_preferences((None, None)).unwrap();
+    }
     #[test]
     fn setup_fence_comes_from_bound_metadata_and_cannot_change_provider_role_or_repeat() {
         use orkestr_v2_application::runtime::{Binding, ProviderKind, Role, SessionState};

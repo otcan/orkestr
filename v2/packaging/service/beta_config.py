@@ -197,8 +197,6 @@ def validate(raw):
         host_full_access(value['host_full_access'])
     if 'claude' in value:
         selected = value['claude']
-        require(type(selected) is dict and ('identity_split' not in value or not selected.get('fast',False)),
-                'managed Claude Fast requires typed role separation')
         require(type(selected) is dict and set(selected) - {'fast'} == {'launcher', 'launcher_sha256', 'workspace', 'default'}
                 and all(absolute(selected[k]) for k in ('launcher', 'workspace'))
                 and type(selected['launcher_sha256']) is str and re.fullmatch('[0-9a-f]{64}', selected['launcher_sha256'])

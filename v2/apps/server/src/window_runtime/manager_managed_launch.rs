@@ -16,6 +16,7 @@ impl ManagerClient {
             let mut request = self.request("launch_child", request_id, Some(window))?;
             request["role"] = json!(descriptors.role());
             request["mode"] = json!("fresh");
+            request["preferences"] = descriptors.preferences();
             request["setup"] = descriptors
                 .setup()
                 .map_err(|_| ManagerError::Protocol)?

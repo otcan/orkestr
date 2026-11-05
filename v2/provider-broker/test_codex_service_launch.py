@@ -24,13 +24,27 @@ def request():
                 owner_id='aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
                 conversation_id='11111111-1111-4111-8111-111111111111',
                 window_id='22222222-2222-4222-8222-222222222222',generation=1,
-                role='deep',mode='fresh',setup=dict(session_id='33333333-3333-4333-8333-333333333333',
+                role='deep',mode='fresh',preferences=dict(model=None,effort=None),setup=dict(session_id='33333333-3333-4333-8333-333333333333',
                     owner_id='aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',conversation_id='11111111-1111-4111-8111-111111111111',
                     generation=1,incarnation='synthetic-setup',role='deep',provider='codex'),
                 proxy_pid=123,proxy_start=456,bind_deadline_ms=int(time.time()*1000)+4000)
 
 
 class LaunchTransportTests(unittest.TestCase):
+    def test_preferences_are_closed_provider_scoped_and_never_an_environment(self):
+        from codex_service.contract import decode,HEADER
+        value=request();value['role']='claude';value['setup']['provider']='claude'
+        value['preferences']={'model':'synthetic-model','effort':'low'}
+        self.assertEqual(decode(encode(value)[HEADER.size:])['preferences'],value['preferences'])
+        for preferences in ({'HOME':'/other'}, {'model':True,'effort':None},
+                            {'model':'--config=/other','effort':None},
+                            {'model':'123','effort':None}, {'model':None,'effort':'unbounded'},
+                            {'model':None,'effort':None,'ANTHROPIC_API_KEY':'synthetic'}):
+            value['preferences']=preferences
+            with self.assertRaises(Refused):decode(encode(value)[HEADER.size:])
+        value=request();value['preferences']['model']='synthetic-model'
+        with self.assertRaises(Refused):decode(encode(value)[HEADER.size:])
+
     def test_setup_fence_rejects_cross_owner_conversation_and_launcher_role(self):
         from codex_service.contract import decode,HEADER
         for field,value in [('owner_id','bbbbbbbb-bbbb-4ccc-8ddd-eeeeeeeeeeee'),
@@ -47,7 +61,7 @@ class LaunchTransportTests(unittest.TestCase):
             try:
                 value=request()
                 if not launch:
-                    value={k:v for k,v in value.items() if k not in ('window_id','generation','role','mode','setup','proxy_pid','proxy_start','bind_deadline_ms')}
+                    value={k:v for k,v in value.items() if k not in ('window_id','generation','role','mode','setup','preferences','proxy_pid','proxy_start','bind_deadline_ms')}
                     value['operation']='status'
                 rights=array.array('i',[read,write,read,write])
                 a.sendmsg([encode(value)],[(socket.SOL_SOCKET,socket.SCM_RIGHTS,rights)])

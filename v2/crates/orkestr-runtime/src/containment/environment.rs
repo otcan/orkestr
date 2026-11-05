@@ -54,10 +54,8 @@ impl ChildDirectories {
         &self.workspace
     }
 
-    pub(super) fn has_claude_preferences(&self) -> bool {
-        self.claude_launch
-            .as_ref()
-            .is_some_and(|(model, effort)| model.is_some() || effort.is_some())
+    pub(super) fn claude_preferences(&self) -> (Option<String>, Option<String>) {
+        self.claude_launch.clone().unwrap_or_default()
     }
 
     pub(super) fn configure(&self, command: &mut Command) {

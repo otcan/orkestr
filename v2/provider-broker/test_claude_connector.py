@@ -8,6 +8,21 @@ from claude_connector import ClaudeConfiguration
 
 
 class ClaudeLauncherTests(unittest.TestCase):
+    def test_closed_managed_preferences_override_only_model_and_effort(self):
+        from claude_connector import preference_environment
+        self.assertEqual(preference_environment({'model':'synthetic-model','effort':'low'}),
+                         {'ANTHROPIC_MODEL':'synthetic-model','CLAUDE_CODE_EFFORT_LEVEL':'low'})
+        for value in ({'model':True,'effort':None}, {'model':'123','effort':None},
+                      {'model':None,'effort':'unbounded'}, {'HOME':'/other'}):
+            with self.assertRaises(ValueError):preference_environment(value)
+        with tempfile.TemporaryDirectory(prefix='claude-preferences-synthetic-') as root:
+            root=Path(root).resolve();native=root/'native';native.write_text('synthetic')
+            config=ClaudeConfiguration(native,root,root,root,root)
+            session=config.new_session(launch_preferences={'model':'synthetic-model','effort':'low'})
+            with patch.dict(os.environ,{'ORKESTR_CLAUDE_MODEL':'inherited-model'}):
+                self.assertEqual(session.environment()['ANTHROPIC_MODEL'],'synthetic-model')
+            self.assertEqual(session.environment()['CLAUDE_CODE_EFFORT_LEVEL'],'low')
+
     def test_managed_host_is_explicit_distinct_and_account_environment_stays_fixed(self):
         import json
         with tempfile.TemporaryDirectory(prefix="claude-managed-synthetic-") as directory:

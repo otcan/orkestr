@@ -150,9 +150,6 @@ impl Process {
         if managed_config.is_some()
             && (resuming
                 || workspace.is_some()
-                || managed_config.as_ref().is_some_and(|config| {
-                    config.role == "claude" && directories.has_claude_preferences()
-                })
                 || args
                     != [
                         "open-owned-session",
@@ -170,6 +167,11 @@ impl Process {
             (None, _) => None,
             _ => return Err(Error::AuthorityProtocol),
         };
+        if let Some(prepared) = managed.as_mut() {
+            prepared
+                .transfer
+                .set_preferences(directories.claude_preferences())?;
+        }
         let mut command = Command::new(program);
         command
             .args(args)

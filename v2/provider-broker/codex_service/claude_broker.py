@@ -72,6 +72,8 @@ def main(root):
         require(parent > 1 and libc.prctl(1, signal.SIGKILL, 0, 0, 0) == 0
                 and os.getppid() == parent, "broker_parent_death")
         config = ClaudeConfiguration.load(package.root / "claude-private.json")
+        from .identity import launch_context
+        preferences=launch_context()['preferences'] if package.identity_split else None
         require((config.managed_host is not None and package.identity_split) or
                 (config.host_full_access is not None and not package.identity_split), "claude_host_profile_required")
         if not package.identity_split:
@@ -84,9 +86,9 @@ def main(root):
             os.kill(os.getpid(), signal.SIGSTOP)
             if sys.argv[1:] == resumed:
                 from claude_bootstrap import receive
-                session = config.resumed_session(receive(config))  # One-use FD4.
+                session = config.resumed_session(receive(config),launch_preferences=preferences)  # One-use FD4.
             else:
-                session = config.new_session()
+                session = config.new_session(launch_preferences=preferences)
             pump = Pump(session, ClaudeChannel(session, catalog_warning=catalog_warning,
                         quota_observer=QuotaSink.optional(package, config)),
                         handoff=handoff, diagnostics=True, stderr_capture=StderrCapture())

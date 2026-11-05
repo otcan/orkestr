@@ -17,7 +17,7 @@ import tempfile
 import time
 
 from codex_bounded.trust import process, exists, protected, digest
-from .contract import require,setup_scope
+from .contract import require,setup_scope,preferences
 
 
 def atomic(path,value):
@@ -75,6 +75,7 @@ class Launcher:
 
     def launch(self,request,descriptors,register,deadline):
         setup_scope(request['setup'],request['role'],request['owner_id'],request['conversation_id'])
+        preferences(request['preferences'],request['role'])
         require(exists(self.server) and self.server['uid']==self.package.authority_uid,'launch_server_changed')
         require((request['role'] in self.package.role_profiles or request['role']=='claude' and self.package.claude is not None) and request['mode']=='fresh',
                 'split_launch_mode_unsupported')
@@ -116,6 +117,7 @@ class Launcher:
         count=sum(1 for record in records if record.get('window_id')==request['window_id'])
         require(count<32,'launch_window_bound')
         record={**frozen,'state':'claimed','manager_pid':os.getpid(),
+                'preferences':request['preferences'],
                 'proxy_pid':proxy['pid'],'proxy_start':proxy['start']}
         atomic(path,record)  # a crash/lost reply never authorizes another spawn
         proxy_proof=Process(proxy)
@@ -128,7 +130,7 @@ class Launcher:
         try:
             from .attachment_exports import initialize_conversation
             initialize_conversation(self.package,request['conversation_id'])
-            payload={key:request[key] for key in ('request_id','window_id','generation','role','setup')}
+            payload={key:request[key] for key in ('request_id','window_id','generation','role','setup','preferences')}
             payload.update(server_pid=self.server['pid'],server_start=self.server['start'],
                            server_uid=self.server['uid'],manager_pid=os.getpid(),
                            manager_start=self.manager['start'],owner_id=self.package.owner,

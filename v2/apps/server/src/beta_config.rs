@@ -187,9 +187,6 @@ impl BetaConfig {
             return Err("invalid conversation workspaces");
         }
         if let Some(claude) = &self.claude {
-            if self.identity_split.is_some() && claude.fast {
-                return Err("managed Claude Fast requires typed role separation");
-            }
             if !claude.launcher.is_absolute()
                 || !claude.workspace.is_absolute()
                 || claude.launcher == self.launcher

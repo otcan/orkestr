@@ -322,7 +322,6 @@ class Package:
         paths = {key: Path(private_config[key]) for key in ("executable", "account", "workspace",
                                                             "home", "temporary")}
         if self.identity_split:
-            require(not selected.get('fast',False),'managed_claude_fast_unqualified')
             access=private_config[access_key]
             environment=access.get('environment')
             require(set(access)=={'environment'} and type(environment) is dict and

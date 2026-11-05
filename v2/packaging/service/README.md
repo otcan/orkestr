@@ -406,9 +406,13 @@ there is no shell command, path or environment override in the launch request.
 
 `--provider claude` selects the same disposable HTTP rehearsal using fixed native
 stream JSON. It asserts actual executor UID, NNP, authority Core read denial,
-accepted completion and successful actual-tree reap. This qualifies fresh default
-Deep only. Claude Fast and explicit model/effort preferences are currently refused
-until separately typed and qualified; resume stays refused. Existing provider
+accepted Deep and Fast completion and successful actual-tree reap. The owner
+selects an explicit model/effort through the settings API; Root forwards only
+these closed values in the authenticated launch capsule. The fixture checks Deep
+receives them and Fast retains its fixed model/effort and read-only native flags.
+Preferences cannot select an account, environment, executable or retry an
+already claimed setup. This qualifies fresh synthetic Claude Deep/Fast only;
+native resume stays refused. Existing provider
 policy refusal handling is preserved. Privileged helpers and full workflow parity
 remain outstanding, so production split startup remains gated.
 

@@ -193,7 +193,7 @@ while True:time.sleep(1)
         profile=package/'claude-private.json';profile.write_text(json.dumps(private));profile.chmod(0o440);os.chown(profile,0,GID)
         beta_path=package/'beta.json';beta=json.loads(beta_path.read_text())
         beta['claude']={'launcher':str(launcher),'launcher_sha256':digest(launcher),
-                        'workspace':directories['workspace'],'default':True,'fast':False}
+                        'workspace':directories['workspace'],'default':True,'fast':not self.fault_orphan}
         beta_path.write_text(json.dumps(beta))
         manifest_path=package/'manifest.json';manifest=json.loads(manifest_path.read_text())
         for name in CLAUDE_BROKER:
@@ -333,6 +333,11 @@ while True:time.sleep(1)
     def run(self):
         self.initialize_core();self.start_rehearsal()
         path=f'/api/v2/conversations/{self.conversation}'
+        if self.provider=='claude':
+            status,selected=self.request(path+'/settings','PUT',
+                dict(expected_revision=0,provider='claude',model='synthetic-claude-model',
+                     reasoning_effort='low',honor_no_reply=True,review_before_accepting=False))
+            assert status==200 and selected['provider']=='claude',(status,selected)
         status,admitted=self.request(path+'/messages','POST',
             {'client_message_id':'synthetic-split-first','text':'synthetic ordinary HTTP input 1','author':'owner'},
             {})
@@ -352,10 +357,20 @@ while True:time.sleep(1)
                 db.execute('PRAGMA query_only=ON')
                 return db.execute("SELECT id,state,native_session_id FROM production_runs WHERE message_id=? AND role='deep' AND state='succeeded'",(admitted['message_id'],)).fetchone()
         row=wait(accepted,'Core accepted synthetic Codex completion',seconds=30)
+        if self.provider=='claude':
+            def fast_accepted():
+                assert not self.pump_errors,self.pump_errors
+                with sqlite3.connect(core.as_uri()+'?mode=ro',uri=True) as db:
+                    return db.execute("SELECT id FROM production_runs WHERE message_id=? AND role='fast' AND state='succeeded'",(admitted['message_id'],)).fetchone()
+            wait(fast_accepted,'Core accepted read-only Claude Fast',seconds=30)
         trace=(self.fixture.account/'sessions/synthetic-role.jsonl' if self.provider!='claude' else
                self.fixture.root/'claude-workspace/claude-peer.jsonl')
         records=[json.loads(line) for line in trace.read_text().splitlines()]
         assert any(r['kind']=='turn' for r in records)
+        if self.provider=='claude':
+            spawns=[r for r in records if r['kind']=='spawn']
+            assert any(not r['read_only'] and r['model']=='synthetic-claude-model' and r['effort']=='low' for r in spawns),spawns
+            assert any(r['read_only'] and r['model']=='sonnet' and r['effort']=='low' for r in spawns),spawns
         children=[record.identity for window in self.manager.windows.values() for record in window.children.records.values()]
         assert children and all(r['uid']==UID for r in children)
         assert core.stat().st_uid==self.package.authority_uid!=UID
@@ -366,6 +381,7 @@ while True:time.sleep(1)
                     synthetic_native_turns=sum(r['kind']=='turn' for r in records),
                     worker_reuse_count=len(workers),worker_setups=getattr(self,'worker_setups',[]),
                     scoped_attachment_read_only=self.attachment_export,
+                    claude_preferences_and_read_only_fast=self.provider=='claude',
                     provider=self.provider,actual_provider=False,live_activation=False,production_startup_gate_bypassed_only_in_test=True)
 
     def fault_result(self):

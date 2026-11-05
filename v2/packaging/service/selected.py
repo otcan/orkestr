@@ -119,7 +119,6 @@ def claude(plan):
     if managed is not None:
         require('authority_uid' in plan and type(managed) is dict and set(managed)=={'environment'},
                 'managed Claude requires identity split')
-        require(not value.get('fast',False),'managed Claude Fast requires typed role separation')
         validate_host_full_access(dict(providers=False,environment=managed['environment']))
         require(managed['environment']['HOME']==value['home'] and
                 managed['environment'].get('TMPDIR',value['temporary'])==value['temporary'],
