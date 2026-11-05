@@ -190,6 +190,32 @@ later. Without `agent_timers` nothing changes.
 Older servers refuse the key (`deny_unknown_fields`): add it only after the
 release with this change is live.
 
+### Separate Core and native users
+
+Core keeps `grant_dir` private and owns every grant file. A split-UID runtime
+can set the optional `native_grant_dir` to a read-only view beneath the native
+provider home. The generated rules use that reader path; Core still installs
+and checks grants in `grant_dir`. Without the new field, rules keep using
+`grant_dir`.
+
+The Root-selected service plan and runtime descriptor bind
+`agent_timer_grants: {"source": "/srv/core-agent-grants", "target":
+"/srv/provider/agent-timer-grants"}`. The resource contract selects exactly
+that pair with kind `agent_timer_grants`, the Core UID/GID and the original
+directory device/inode. The source must be private, outside Core's home and
+other protected roots; the target must be inside the executor's private
+provider home. A read-only idmapped directory mount preserves original Core
+ownership while native readers see their own UID and the original 0600 files.
+Core's atomic grant replacements are visible immediately. Native processes
+cannot create, edit or unlink grants, and the original Core directory remains
+inaccessible to them. The timer client and server grant authentication do not
+change, and no credential copies or relaxed file permissions are needed.
+
+The selected directory may contain multiple conversation grants, matching the
+existing shared-directory deployment model. This view does not establish
+filesystem confidentiality between conversations. Existing chat rules also
+need regeneration or a scoped update when their reader path changes.
+
 ## Deployment and rollback
 
 Migration 85 adds `agent_timer_limits` only (additive). An older binary

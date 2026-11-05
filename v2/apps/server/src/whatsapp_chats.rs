@@ -78,9 +78,12 @@ struct FileConfig {
 #[serde(deny_unknown_fields)]
 pub(crate) struct AgentTimers {
     /// Private directory of the service user (created 0700 if missing) for
-    /// `<conversation>.grant`; `agent_timer.py` reads it as
-    /// `ORKESTR_V2_AGENT_TIMER_GRANT_DIR`.
+    /// `<conversation>.grant`. Core always writes to this directory.
     pub grant_dir: String,
+    /// Optional read-only native view of `grant_dir` for a split-UID runtime.
+    /// Defaults to `grant_dir`; only generated timer instructions use this path.
+    #[serde(default)]
+    pub native_grant_dir: Option<String>,
     /// The installed `agent_timer.py`.
     pub tool: String,
     /// Loopback V2 URL the tool calls (`http://127.0.0.1:<port>`).
@@ -107,7 +110,10 @@ fn loopback_url(value: &str) -> bool {
 }
 impl AgentTimers {
     fn valid(&self) -> bool {
-        shell_path(&self.grant_dir) && shell_path(&self.tool) && loopback_url(&self.v2_url)
+        shell_path(&self.grant_dir)
+            && self.native_grant_dir.as_deref().is_none_or(shell_path)
+            && shell_path(&self.tool)
+            && loopback_url(&self.v2_url)
     }
 }
 fn default_outstanding() -> u32 {
@@ -349,9 +355,11 @@ Desktop and logins\n\
 pub(crate) fn timer_rules(conversation: &str, timers: &AgentTimers) -> String {
     let AgentTimers {
         grant_dir,
+        native_grant_dir,
         tool,
         v2_url,
     } = timers;
+    let grant_dir = native_grant_dir.as_ref().unwrap_or(grant_dir);
     format!(
         r#"Timers of this chat (agent timer tool)
 
@@ -812,6 +820,7 @@ impl WhatsAppChats {
     pub(crate) fn with_agent_timers(mut self, grant_dir: &str) -> Self {
         self.agent_timers = Some(AgentTimers {
             grant_dir: grant_dir.into(),
+            native_grant_dir: None,
             tool: "/usr/local/libexec/orkestr-agent-timer/agent_timer.py".into(),
             v2_url: "http://127.0.0.1:19822".into(),
         });
@@ -911,6 +920,7 @@ mod onboarding_tests {
         assert!(!plain.contains("agent_timer"));
         let timers = AgentTimers {
             grant_dir: "/srv/grants".into(),
+            native_grant_dir: None,
             tool: "/opt/agent_timer.py".into(),
             v2_url: "http://127.0.0.1:19822".into(),
         };
@@ -968,3 +978,7 @@ mod onboarding_tests {
         assert!(config("owner_only", Some("/srv/[rules]")).is_err());
     }
 }
+
+#[cfg(test)]
+#[path = "whatsapp_timer_reader_tests.rs"]
+mod timer_reader_tests;

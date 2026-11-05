@@ -13,7 +13,7 @@ MAX_RUNTIME_WINDOWS = 12
 from .role_profiles import ROLE_FILES, bind as bind_roles
 
 MODULES_SERVICE = ("__init__.py", "contract.py", "ledger.py", "budget.py", "custody.py",
-                   "channel.py", "package.py", "ownership.py", "egress.py", "manager.py", "manager_shutdown.py", "resource_contract.py", "resource_namespace.py", "resource_receipt.py", "resource_probe.py", "resource_mount.py", "resource_projects.py",
+                   "channel.py", "package.py", "ownership.py", "egress.py", "manager.py", "manager_shutdown.py", "resource_contract.py", "resource_namespace.py", "resource_receipt.py", "resource_probe.py", "resource_mount.py", "resource_projects.py", "resource_timers.py",
                    "server_child.py", "manager_service_peer.py", "broker.py", "profile.py", "entry.py", "role_profiles.py",
                    "claude_broker.py", "identity.py", "launch.py", "launch_child.py", "proxy.py", "attachment_exports.py",
                    "password_recovery.py", "managed_resume.py", "managed_host.py", "native_io.py", "desk_operations.py", "desk_anchor.py",
@@ -155,7 +155,7 @@ class Package:
 
     def _bind(self):
         value = self.runtime
-        require(set(value) - IDENTITY_FIELDS - {"resource_namespace", "qualification_record", "operator_recovery", "desk_login", "managed_operations", "password_rotation_ready", "attachment_export_dir", "live_map", "desktop_broker", "timer_config", "v1_chat_icons_dir", "whatsapp_chats", "claude_quota_projection", "codex_quota_projection", "metrics_port"} == {"format", "uid", "gid", "owner_id", "conversation_id", "home",
+        require(set(value) - IDENTITY_FIELDS - {"resource_namespace", "agent_timer_grants", "qualification_record", "operator_recovery", "desk_login", "managed_operations", "password_rotation_ready", "attachment_export_dir", "live_map", "desktop_broker", "timer_config", "v1_chat_icons_dir", "whatsapp_chats", "claude_quota_projection", "codex_quota_projection", "metrics_port"} == {"format", "uid", "gid", "owner_id", "conversation_id", "home",
                 "bootstrap_file", "ledger_directory", "endpoint_directory", "port", "trusted_origin"}
                 and value["format"] == "orkestr-v2-codex-service-v1", "service_format")
         require("password_rotation_ready" not in value or type(value["password_rotation_ready"]) is bool,
@@ -192,6 +192,9 @@ class Package:
         self.owner, self.conversation = identifier(value["owner_id"]), identifier(value["conversation_id"])
         identity = bind_identity(value)
         self.identity_split = identity["split"]
+        require('agent_timer_grants' not in value or
+                self.identity_split and 'resource_namespace' in value,
+                'resource_timer_namespace_required')
         self.authority_uid, self.authority_gid = identity["authority_uid"], identity["authority_gid"]
         self.executor_uid, self.executor_gid = identity["executor_uid"], identity["executor_gid"]
         if 'managed_operations' in value:
