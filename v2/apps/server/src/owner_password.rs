@@ -21,7 +21,9 @@ pub async fn status(
     browser::owner(&state, &headers).await?;
     Ok((
         [(header::CACHE_CONTROL, "no-store")],
-        Json(serde_json::json!({"password_rotation_ready":state.password_rotation_ready})),
+        Json(
+            serde_json::json!({"password_rotation_ready":state.password_rotation_ready && !state.deploy_drain.is_draining()}),
+        ),
     ))
 }
 
@@ -38,7 +40,7 @@ pub async fn change(
     )
     .await?;
     let authenticated = browser::owner(&state, &headers).await?;
-    if !state.password_rotation_ready {
+    if !state.password_rotation_ready || state.deploy_drain.is_draining() {
         return Err(Error(
             StatusCode::CONFLICT,
             "automation_credential_migration_required",

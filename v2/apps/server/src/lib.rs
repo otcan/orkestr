@@ -37,6 +37,7 @@ mod conversation_resources_http;
 mod conversation_status_http;
 mod conversations_http;
 pub mod deploy_drain;
+mod deploy_maintenance;
 mod desktop_broker;
 mod desktop_http;
 mod desktop_open_http;
@@ -199,6 +200,9 @@ impl AppState {
         if self.initial_window.is_some() || self.window_handles.is_some() {
             return Err("beta configuration already installed");
         }
+        // Root maintenance is installed before any dispatcher, timer or listener.
+        self.deploy_drain
+            .bind_maintenance(config.deploy_maintenance_marker.as_deref(), home)?;
         self.provider_policy = config.provider_routing.clone();
         let initial = window_runtime::initial::InitialAuthority::new(config)?;
         let handles = window_runtime::handles::Handles::new(

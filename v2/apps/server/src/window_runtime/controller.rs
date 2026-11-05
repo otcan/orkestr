@@ -222,6 +222,11 @@ impl Controller {
             return Ok(WindowOutcome::Admitted(replay));
         }
         let _opening = self.opening.lock().await;
+        if self.drain.is_draining() {
+            // Hold before policy handoff or any new execution authority.
+            self.queue.remember(browser);
+            return self.enqueue(browser, conversation, input).await;
+        }
         let Some(routed) = self
             .route_operator_policy(browser, owner, conversation, input)
             .await?
