@@ -4,6 +4,7 @@ from contextlib import closing
 import json
 import os
 from pathlib import Path
+import random
 import signal
 import socket
 import sqlite3
@@ -15,8 +16,29 @@ import unittest
 import urllib.error
 import urllib.request
 
+
+def free_port():
+    """A loopback port that is free now and below the kernel's ephemeral range.
+
+    The server restarts on this one port for every test. A port inside the
+    ephemeral range can meanwhile become the local end of any closed outbound
+    connection, whose TIME_WAIT then refuses the next bind for a minute.
+    """
+    low = int(Path("/proc/sys/net/ipv4/ip_local_port_range").read_text().split()[0])
+    candidates = list(range(max(1024, low - 16384), low))
+    random.shuffle(candidates)
+    for port in candidates[:256]:
+        with socket.socket() as probe:
+            try:
+                probe.bind(("127.0.0.1", port))
+            except OSError:
+                continue
+            return port
+    raise RuntimeError("no free loopback port below the ephemeral range")
+
+
 BINARY = sys.argv.pop(1)
-PORT = int(os.environ.get("ORKESTR_V2_TEST_PORT", "47110"))
+PORT = int(os.environ.get("ORKESTR_V2_TEST_PORT") or free_port())
 BASE = f"http://127.0.0.1:{PORT}"
 BOOTSTRAP = "synthetic-bootstrap-for-offline-tests-only"
 CREDENTIALS = {"username": "fixture-owner", "password": "synthetic-password-for-tests"}
