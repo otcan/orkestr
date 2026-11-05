@@ -6,6 +6,8 @@ all effective writer entries must name only Root, the owner or the executor.
 """
 import errno
 import os
+import grp
+import pwd
 import struct
 
 from .contract import require
@@ -17,8 +19,30 @@ def owner(profile, executor):
     return value
 
 
-def check(fd, project_owner, executor, permissions, owner_leaf=False, executor_gid=None):
+def source_group(gid, selected_writers):
+    """Resolve every current NSS member; an unknown/unselected writer is fatal.
+
+    Used only for Root traversal of sealed native source ancestry. This grants
+    no directory access and never authorizes a Worker or a projected leaf.
+    """
+    require(selected_writers, 'workspace_unselected_group_writer')
+    try:
+        group=grp.getgrgid(gid)
+        members={pwd.getpwnam(name).pw_uid for name in group.gr_mem}
+        members.update(row.pw_uid for row in pwd.getpwall() if row.pw_gid==gid)
+    except (KeyError,OSError):
+        require(False,'workspace_source_group_unknown')
+    require(members and members <= {0,*selected_writers}, 'workspace_unselected_group_writer')
+
+
+def check(fd, project_owner, executor, permissions, owner_leaf=False, executor_gid=None, selected_writers=(), source_ancestry=False):
     if executor_gid is None:executor_gid=executor
+    require(type(selected_writers) in (tuple,list,set,frozenset) and len(selected_writers)<=9
+            and all(type(uid) is int and 0<uid<2**31 for uid in selected_writers), 'workspace_selected_writers')
+    require(type(source_ancestry) is bool and (not source_ancestry or
+            os.geteuid()==0 and permissions==0 and not owner_leaf and selected_writers),
+            'workspace_source_ancestry')
+    writers={0,project_owner,executor,*selected_writers}
     meta=os.fstat(fd)
     require(meta.st_uid in (0,project_owner) and meta.st_mode&0o002==0,
             'workspace_managed_custody')
@@ -29,10 +53,12 @@ def check(fd, project_owner, executor, permissions, owner_leaf=False, executor_g
         if error.errno not in (errno.ENODATA,errno.ENOTSUP):raise
         raw=None
     if permissions==0 and raw is None:
-        require(meta.st_mode&0o022==0,'workspace_managed_custody')
+        if source_ancestry and meta.st_mode&0o020:
+            source_group(meta.st_gid,selected_writers)
+        else:require(meta.st_mode&0o022==0,'workspace_managed_custody')
         return  # Root needs custody, not executor traversal of private ancestors.
     if not separate:
-        require(meta.st_mode&0o022==0,'workspace_managed_custody')
+        require(meta.st_mode&0o022==0 or source_ancestry,'workspace_managed_custody')
         # No unadvertised ACL writer may hide behind a restrictive mask now
         # and become writable after a subsequent chmod/mask change.
         if raw is None:
@@ -57,5 +83,7 @@ def check(fd, project_owner, executor, permissions, owner_leaf=False, executor_g
     require(effective&permissions==permissions,'workspace_executor_access')
     for tag,bits,uid in entries:
         require(tag in (1,2,4,8,0x10,0x20),'workspace_named_executor_acl')
-        if tag in (4,8,0x20) or tag==2 and uid not in (0,project_owner,executor):
+        if source_ancestry and tag in (4,8) and bits&2:
+            source_group(meta.st_gid if tag==4 else uid,selected_writers)
+        elif tag in (4,8,0x20) or tag==2 and uid not in writers:
             require(bits&2==0,'workspace_unselected_acl_writer')

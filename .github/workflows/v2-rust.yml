@@ -143,6 +143,10 @@ jobs:
           sudo env PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -I -S -B -m unittest discover -s "$PWD/provider-broker" -p 'test_workspace_*.py' -v
           sudo env PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -I -S -B -m unittest discover -s "$PWD/provider-broker" -p test_split_qualification.py -v
           sudo env PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -I -S -B -m unittest discover -s "$PWD/provider-broker" -p test_resource_namespace.py -v
+          sudo env PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -I -S -B -m unittest discover -s "$PWD/provider-broker" -p test_resource_timers.py -v
+      - name: Native conversation workspace projection kernel regressions
+        run: |
+          sudo env PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -I -S -B -m unittest discover -s "$PWD/provider-broker" -p test_resource_native_workspaces.py -v
       - name: Service packager and passive quota inventory
         run: |
           python3 -I -S -B -m unittest discover -s packaging/service/tests -v
