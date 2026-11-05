@@ -129,7 +129,10 @@ impl Store {
             }
         }
         if p.run.role == Role::Worker {
-            self.worker_lineage_in(conn, &row).await?;
+            // Worker authorization also validates its canonical Deep parent.
+            // Keep that nested SQL state machine off every caller's stack,
+            // including the Deep branch that never polls Worker lineage.
+            Box::pin(self.worker_lineage_in(conn, &row)).await?;
             let task_key: String = sqlx::query_scalar(
                 "SELECT request_key FROM worker_provider_delegations WHERE id=?",
             )
