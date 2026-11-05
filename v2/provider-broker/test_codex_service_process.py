@@ -303,6 +303,21 @@ class ProcessTests(unittest.TestCase):
         with self.assertRaisesRegex(Refused, "owned_process_missing"):
             self.children.remember(identity)
 
+    def test_invalid_pidfd_during_actual_reap_is_vanished_but_live_original_refuses(self):
+        import errno
+        from codex_service import ownership
+        child=self.spawn();identity=process(child.pid)
+        def disappeared(*_):
+            child.kill();child.wait(3)
+            raise OSError(errno.EINVAL,'synthetic pin/reap race')
+        with unittest.mock.patch.object(ownership.os,'pidfd_open',side_effect=disappeared):
+            with self.assertRaises(ownership.Vanished):ownership.Process(identity)
+        live=self.spawn();identity=process(live.pid)
+        with unittest.mock.patch.object(ownership.os,'pidfd_open',side_effect=OSError(errno.EINVAL,'synthetic live refusal')):
+            with self.assertRaises(Refused) as error:ownership.Process(identity)
+        self.assertNotIsInstance(error.exception,ownership.Vanished)
+        self.assertIsNone(live.poll())
+
     def test_frame_deadline_truncation_and_extra_bytes_are_bounded(self):
         request = {"version": 1, "operation": "status", "request_id": "synthetic",
                    "owner_id": uid(), "conversation_id": uid()}

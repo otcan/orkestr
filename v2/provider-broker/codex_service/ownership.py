@@ -67,6 +67,13 @@ class Process:
             self.fd = os.pidfd_open(identity["pid"], 0)
         except ProcessLookupError:
             raise Vanished("owned_process_missing") from None
+        except OSError as error:
+            if error.errno == errno.EINVAL:
+                # A /proc child locator can disappear while the kernel pins
+                # it. Only a fresh original-identity check may classify this
+                # as gone; a live/unpinnable original remains uncertain.
+                _refuse(identity,"owned_process_missing")
+            raise
         try:
             if not same(identity, any_uid):
                 _refuse(identity, "owned_process_changed")
