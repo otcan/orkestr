@@ -5,6 +5,8 @@ mod source_receipts;
 pub use source_receipts::*;
 mod source_intake;
 pub use source_intake::*;
+mod fast_run_receipt;
+pub use fast_run_receipt::*;
 mod archived_history;
 pub use archived_history::*;
 mod conversations;
