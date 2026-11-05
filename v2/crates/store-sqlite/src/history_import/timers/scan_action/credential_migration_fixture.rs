@@ -5,6 +5,8 @@ use crate::Store;
 pub(super) async fn downgrade_empty(store: &Store) {
     let mut tx = store.pool.begin().await.unwrap();
     for table in [
+        "operator_provider_handoffs",
+        "conversation_provider_policy_matches",
         "source_admission_fences",
         "message_request_sources",
         "encrypted_upload_chunks",
@@ -30,7 +32,10 @@ pub(super) async fn downgrade_empty(store: &Store) {
     // Historical sessions have no distinguishable transport; the 86 upgrade
     // must faithfully reclassify these synthetic hashes as legacy.
     sqlx::raw_sql(
-        "DROP TABLE source_admission_fences;
+        "DROP TABLE operator_provider_handoffs;
+         DROP TABLE conversation_provider_policy_matches;
+         DELETE FROM _sqlx_migrations WHERE version=92;
+         DROP TABLE source_admission_fences;
          DROP TABLE message_request_sources;
          DROP INDEX encrypted_upload_receipt_cover;
          DROP TABLE encrypted_upload_chunks;

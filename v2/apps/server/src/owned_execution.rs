@@ -1,6 +1,7 @@
 //! Explicit isolated acceptance composition. No HTTP configuration.
 mod admission;
 mod beta_window;
+mod provider_policy;
 pub(crate) use beta_window::WindowSetup;
 mod bootstrap;
 mod budget;

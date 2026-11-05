@@ -39,7 +39,23 @@ impl ConversationController {
         } else {
             settings.provider
         };
-        let target = policy.route(conversation, &text, selected)?;
+        let (target, rules) = crate::provider_policy::select(
+            &self.store,
+            policy,
+            owner,
+            conversation,
+            &text,
+            selected,
+        )
+        .await?;
+        if !rules.is_empty() {
+            let proof =
+                crate::provider_policy::proof(policy, input.input_message_id.clone(), rules)?;
+            self.store
+                .remember_provider_policy_authenticated(browser, owner, conversation, &proof)
+                .await
+                .map_err(|_| "provider policy scope recording refused")?;
+        }
         if target == selected {
             return Ok(());
         }

@@ -63,6 +63,9 @@ mod owner_password;
 #[cfg(test)]
 mod provider_handoff_http_tests;
 mod provider_payload;
+mod provider_policy;
+#[cfg(test)]
+mod provider_policy_http_tests;
 mod resource_health;
 mod response_shaping;
 pub mod restricted_http;
@@ -131,6 +134,7 @@ pub struct AppState {
     /// Operator deploy drain shared by window admission and timer fires.
     deploy_drain: Arc<deploy_drain::DeployDrain>,
     password_rotation_ready: bool,
+    provider_policy: Option<beta_config::provider_routing::ProviderRouting>,
 }
 impl AppState {
     /// Trusted operator assertion after all unattended consumers use service credentials.
@@ -194,6 +198,7 @@ impl AppState {
         if self.initial_window.is_some() || self.window_handles.is_some() {
             return Err("beta configuration already installed");
         }
+        self.provider_policy = config.provider_routing.clone();
         let initial = window_runtime::initial::InitialAuthority::new(config)?;
         let handles = window_runtime::handles::Handles::new(
             config.owner_id.clone(),
@@ -343,6 +348,7 @@ impl AppState {
             v1_chat_icons: None,
             whatsapp_chats: None,
             password_rotation_ready: false,
+            provider_policy: None,
             v1_timers: Default::default(),
             claude_turns: false,
             restricted: None,

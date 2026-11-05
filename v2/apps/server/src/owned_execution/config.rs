@@ -56,6 +56,8 @@ pub(super) struct Config {
     pub execution_budget: super::budget::ExecutionBudget,
     #[serde(default)]
     pub worker: Option<crate::worker_execution::WorkerPolicy>,
+    #[serde(default)]
+    pub provider_routing: Option<crate::beta_config::provider_routing::ProviderRouting>,
 }
 
 fn canonical(path: &Path) -> Result<(), &'static str> {
@@ -134,6 +136,9 @@ impl Config {
             return Err("unsupported execution configuration");
         }
         if let Some(policy) = &config.worker {
+            policy.validate()?;
+        }
+        if let Some(policy) = &config.provider_routing {
             policy.validate()?;
         }
         config.execution_budget.validate()?;

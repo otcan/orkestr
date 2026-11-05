@@ -377,7 +377,17 @@ impl ConfiguredExecution {
                 {
                     after = source.sequence;
                 }
-                (source, _) => return Ok(source),
+                (Some(source), _) => {
+                    if !self
+                        .provider_input_allowed(Some(&source.message_id))
+                        .await
+                        .map_err(|_| orkestr_v2_application::runtime::RuntimeStoreError::Fenced)?
+                    {
+                        return Ok(None);
+                    }
+                    return Ok(Some(source));
+                }
+                (None, _) => return Ok(None),
             }
         }
     }

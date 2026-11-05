@@ -220,6 +220,14 @@ impl Controller {
         {
             return Ok(WindowOutcome::Admitted(replay));
         }
+        let _opening = self.opening.lock().await;
+        let Some(routed) = self
+            .route_operator_policy(browser, owner, conversation, input)
+            .await?
+        else {
+            return self.enqueue(browser, conversation, input).await;
+        };
+        let input = &routed;
         self.queue.remember(browser);
         if self.drain.is_draining() {
             // Deploy drain: neither open nor join; the next process (or this
@@ -240,7 +248,6 @@ impl Controller {
             // resumes the same native session, once this one closes.
             return self.enqueue(browser, conversation, input).await;
         }
-        let _opening = self.opening.lock().await;
         self.sweep(browser).await;
         // Windows stranded by a previous process past their hard deadline are
         // abandoned (audited) so their conversations can open again, and
@@ -474,6 +481,8 @@ pub(super) fn selected_config(
     Ok(config)
 }
 
+#[path = "operator_provider_policy.rs"]
+mod operator_provider_policy;
 #[path = "provider_handoff.rs"]
 mod provider_handoff;
 pub(crate) use provider_handoff::HandoffError;
