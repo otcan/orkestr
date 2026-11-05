@@ -84,7 +84,7 @@ def pair_bytes(plan):
     return pair
 
 
-OPTIONAL = {'deploy_maintenance_marker', 'managed_host', 'operator_recovery', 'desk_login', 'managed_operations', 'attachment_export_dir', 'password_rotation_ready', 'authority_uid', 'authority_gid', 'executor_uid', 'executor_gid', 'provider_home', 'roles', 'preserve_state', 'workspace_exec', 'additional_workspace_exec', 'max_active_windows', 'host_full_access',
+OPTIONAL = {'qualification_record', 'deploy_maintenance_marker', 'managed_host', 'operator_recovery', 'desk_login', 'managed_operations', 'attachment_export_dir', 'password_rotation_ready', 'authority_uid', 'authority_gid', 'executor_uid', 'executor_gid', 'provider_home', 'roles', 'preserve_state', 'workspace_exec', 'additional_workspace_exec', 'max_active_windows', 'host_full_access',
             'window_max_minutes', 'conversation_window_max_minutes', 'conversation_workspaces', 'provider_routing',
             'code_mode_host', 'code_mode_host_sha256', 'claude', 'claude_quota_projection', 'codex_quota_projection', 'live_map', 'desktop_broker', 'timer_config', 'whatsapp_chats', 'v1_chat_icons_dir', 'metrics_port'}
 CLAUDE_PATHS = ('executable', 'account', 'workspace', 'home', 'temporary')
@@ -131,6 +131,13 @@ def claude(plan):
 
 def optional(plan):
     """Shape of the optional plan extensions copied into the protected beta config."""
+    if 'qualification_record' in plan:
+        value = plan['qualification_record']
+        require(type(value) is str and value.startswith('/') and value != '/'
+                and len(value)<=4096 and not any(ord(c)<32 for c in value)
+                and all(p not in ('','.','..') for p in value.split('/')[1:])
+                and Path(plan['home']) not in (Path(value), *Path(value).parents),
+                'external normalized qualification record required')
     if 'deploy_maintenance_marker' in plan:
         marker = plan['deploy_maintenance_marker']
         require(type(marker) is str and marker.startswith('/') and marker != '/'
@@ -383,6 +390,8 @@ def prepare(plan):
                      'auth_file':str(auth),'state_root':str(account),'workspace':str(workspace),
                      'egress_socket':str(endpoint/'egress.sock'),'supervisor':str(inner/'isolation/supervisor.py'),
                      'hosts':list(config.HOSTS)}
+            if 'qualification_record' in plan:
+                runtime['qualification_record']=plan['qualification_record']
             if 'password_rotation_ready' in plan:
                 runtime['password_rotation_ready']=plan['password_rotation_ready']
             if 'operator_recovery' in plan:

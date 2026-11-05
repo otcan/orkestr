@@ -61,10 +61,8 @@ class Manager:
         require(not self.closed and self.child is None, "manager_already_started")
         require(ctypes.CDLL(None, use_errno=True).prctl(36, 1, 0, 0, 0) == 0, "root_subreaper")
         package = self.package
-        # Fresh transport has disposable rehearsal coverage, but the required
-        # privileged helpers, resume and full used-workflow parity are not yet
-        # qualified. Keep production split startup closed until that cutover.
-        require(not getattr(package, "identity_split", False), "split_launch_unqualified")
+        from .qualification import start
+        self.qualification = start(package)
         command = [str(Path("/usr/bin/python3").resolve()), "-I", "-S", "-B",
                    str(package.root / "codex_service/entry.py"), "server", str(os.getpid())]
         # Host full access (operator opt-in) keeps the service user's real
@@ -83,6 +81,9 @@ class Manager:
         require(self.identity is not None and self.identity["ppid"] == os.getpid()
                 and self.identity["uid"] == package.authority_uid, "owned_server_identity")
         self.peer = ServerPeer(self.identity, package.root / "server")
+        if self.qualification is not None:
+            self.qualification.core_identity = self.identity
+            package.qualification = self.qualification
 
     def _uncertain(self, window, generation, reason):
         try:
@@ -170,6 +171,8 @@ class Manager:
     def dispatch(self, request, deadline=None, descriptors=()):
         self.ledger._scope(request)
         operation = request["operation"]
+        from .qualification import guard
+        guard(self, operation)
         self._capture_orphans()
         require(not getattr(self,'custody_fault',False) or operation in ('status','drain','uncertain','desk_login_poll','desk_login_cancel','managed_poll','managed_cancel','managed_run_close',
                     'workspace_command_receipt','workspace_command_cancel'),
@@ -344,6 +347,8 @@ class Manager:
             require(self.adopted.drain(known),'adopted_children_not_reaped')
 
     def tick(self):
+        if getattr(self, "qualification", None) is not None:
+            self.qualification.observe(self.identity)
         if getattr(self,'workspace_commands',None):self.workspace_commands.tick(self._desk_window_active)
         if getattr(self,'desk',None):self.desk.tick(self._desk_window_active)
         if getattr(self,'managed',None):
