@@ -17,6 +17,8 @@ mod launch_wire;
 mod managed_launch;
 #[path = "manager_client_wire.rs"]
 mod wire;
+#[path = "manager_workspace.rs"]
+mod workspace;
 use wire::*;
 
 const MAX_FRAME: usize = 8192;

@@ -46,6 +46,35 @@ pub(crate) fn validate_set(
 }
 
 impl WorkspaceExecConfig {
+    /// Split bootstrap retains Root's exact handles; Core never acquires
+    /// traversal permission or substitutes an executor-private path check.
+    pub(crate) async fn installation_for_window(
+        &self,
+        home: &Path,
+        native_workspaces: Vec<PathBuf>,
+        executor: Option<u32>,
+        manager: &crate::window_runtime::manager_client::ManagerClient,
+    ) -> Result<WorkspaceInstallation, &'static str> {
+        let Some(executor) = executor else {
+            return self.installation(home, native_workspaces.into_iter());
+        };
+        self.validate()?;
+        let mut protected = self.protected_roots.clone();
+        protected.extend([
+            home.to_owned(),
+            self.toolchain_root.clone(),
+            self.cgroup_root.clone(),
+        ]);
+        protected.extend(native_workspaces);
+        let allowlist =
+            WorkspaceOperatorAllowlist::new(self.allowed_roots.clone(), protected, executor)
+                .map_err(|_| "managed workspace allowlist refused")?;
+        manager
+            .workspace_installation(self.project_id, allowlist)
+            .await
+            .map_err(|_| "Root workspace installation refused")
+    }
+
     /// Scope plus trusted profile; `host` is the instance-level opt-in that a
     /// `host_privileged` trusted profile requires.
     pub(crate) fn validate_with(&self, host: Option<&HostAccess>) -> Result<(), &'static str> {

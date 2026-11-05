@@ -25,7 +25,7 @@ async-stream = "=0.3.6"
 # gzip for API JSON and precompressed static UI assets (already in Cargo.lock).
 flate2 = "=1.1.10"
 # statvfs("/") for the host metrics panel (already in Cargo.lock).
-rustix = { version = "=1.1.5", features = ["fs", "process", "param"] }
+rustix = { version = "=1.1.5", features = ["fs", "process", "param", "net"] }
 
 [dev-dependencies]
 # Synthetic browser identities for the sealed-attachment HTTP tests.

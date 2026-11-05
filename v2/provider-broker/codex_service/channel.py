@@ -103,7 +103,8 @@ def receive_control(connection, deadline):
         require(0<size<=MAX_FRAME,'frame_bound')
         request=decode(read_exact(connection,size,deadline))
         require((request['operation']=='launch_child' and len(descriptors)==(5 if request['mode']=='resume' else 4)) or
-                (request['operation']!='launch_child' and not descriptors), 'control_descriptor_count')
+                (request['operation']=='workspace_attest' and len(descriptors)==1) or
+                (request['operation'] not in ('launch_child','workspace_attest') and not descriptors), 'control_descriptor_count')
         readable,_,_=select.select([connection],[],[],0)
         if readable:require(not connection.recv(1,socket.MSG_PEEK),'control_trailing_bytes')
         return request,descriptors

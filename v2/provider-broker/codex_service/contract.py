@@ -78,6 +78,7 @@ def decode(raw):
     operation = value.get("operation")
     fields = {
         "status": set(),
+        "workspace_attest": {"project_id"},
         "desk_login": {"window_id","generation","capability"},
         "desk_login_poll": {"window_id","generation","operation_id"},
         "desk_login_cancel": {"window_id","generation","operation_id"},
@@ -102,7 +103,7 @@ def decode(raw):
                and value.get("run_id") is None)
     if runless:
         require(value["terminal_event_id"] is None, "terminal_run")
-    for field in ("owner_id", "conversation_id", "window_id", "input_message_id", "input_event_id", "run_id", "terminal_event_id"):
+    for field in ("owner_id", "conversation_id", "project_id", "window_id", "input_message_id", "input_event_id", "run_id", "terminal_event_id"):
         if field in value and not (runless and field in ("run_id", "terminal_event_id")):
             identifier(value[field])
     for field in ("generation", "expected_generation"):

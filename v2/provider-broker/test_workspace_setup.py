@@ -5,20 +5,24 @@ import json
 import os
 import socket
 import struct
+import subprocess
+import time
 import unittest
 import uuid
 
 from codex_bounded.trust import process
 from codex_service.contract import Refused
+from codex_service.contract import encode, decode, canonical
+from codex_service.channel import receive_control
 from codex_service.workspace_setup import Projects
-from test_workspace_custody import WorkspaceCustodyTests
+import test_workspace_custody as custody
 from codex_service_fixture import UID, GID
 
 
 @unittest.skipUnless(os.geteuid() == 0, 'root-only disposable FD fixture')
 class WorkspaceSetupTests(unittest.TestCase):
     def setUp(self):
-        WorkspaceCustodyTests.setUp(self)
+        custody.WorkspaceCustodyTests.setUp(self)
         self.package.authority_uid = os.geteuid()  # Unit peer, not split Core qualification.
         self.package.owner = str(uuid.uuid4())
         self.package.beta = {'workspace_exec': self.profile}
@@ -62,6 +66,37 @@ class WorkspaceSetupTests(unittest.TestCase):
             with self.assertRaisesRegex(Refused, 'workspace_owner_scope|workspace_profile_scope'):
                 self.transfer(changed)
         self.assertFalse(self.projects.installations)
+
+    def test_closed_control_port_accepts_exactly_one_transfer_endpoint(self):
+        request = {**self.request, 'version': 1, 'operation': 'workspace_attest'}
+        for count in (0, 1, 2):
+            sender, receiver = socket.socketpair()
+            endpoint, other = socket.socketpair()
+            with sender, receiver, endpoint, other:
+                sender.sendmsg([encode(request)], [(socket.SOL_SOCKET, socket.SCM_RIGHTS,
+                    array.array('i', [endpoint.fileno()] * count))] if count else [])
+                if count == 1:
+                    decoded, descriptors = receive_control(receiver, time.monotonic() + 1)
+                    try: self.assertEqual(decoded, request); self.assertEqual(len(descriptors), 1)
+                    finally:
+                        for fd in descriptors: os.close(fd)
+                else:
+                    with self.assertRaisesRegex(Refused, 'control_descriptor_count'):
+                        receive_control(receiver, time.monotonic() + 1)
+        for key in ('paths', 'command', 'uid', 'environment', 'capability'):
+            with self.assertRaisesRegex(Refused, 'fields'):
+                decode(canonical({**request, key: 'untrusted'}))
+
+    def test_transfer_socket_must_come_from_the_original_source_process(self):
+        child = subprocess.Popen(['/usr/bin/sleep', '2'], env={}, stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        sender, receiver = socket.socketpair()
+        try:
+            with sender, receiver:
+                with self.assertRaisesRegex(Refused, 'workspace_transfer_source'):
+                    self.projects.attest(process(child.pid), self.request, sender.fileno())
+            self.assertFalse(self.projects.installations)
+        finally: child.terminate(); child.wait(timeout=2)
 
 
 if __name__ == '__main__': unittest.main()

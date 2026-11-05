@@ -38,6 +38,7 @@ class Manager:
         self.failed = self.closed = False
         self.launcher = None
         self.desk = None
+        self.workspace_projects = None
         self.adopted = None
         self.custody_fault = False
         try:
@@ -168,6 +169,15 @@ class Manager:
                 'manager_custody_fault')
         if operation == "status":
             return {"ok": True, "receipt": self.ledger.status(request["conversation_id"])}
+        if operation == 'workspace_attest':
+            require(self.package.identity_split and self.identity is not None and len(descriptors)==1,
+                    'workspace_source_required')
+            self._package_preflight()
+            if self.workspace_projects is None:
+                from .workspace_setup import Projects
+                self.workspace_projects = Projects(self.package)
+            proof = self.workspace_projects.attest(self.identity, request, descriptors[0])
+            return {'ok': True, 'receipt': self.ledger.status(request['conversation_id']), 'workspace': proof}
         if operation == "admit":
             self._package_preflight()
             receipt, fresh = self.ledger.admit(request)
@@ -457,6 +467,7 @@ class Manager:
         for window in list(self.windows.values()):
             window.children.close()
         if getattr(self,'adopted',None) is not None:self.adopted.close()
+        if getattr(self,'workspace_projects',None) is not None:self.workspace_projects.close()
         for item in (self.control, self.ledger, self.lock):
             if item is not None:
                 try:
