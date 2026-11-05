@@ -6,7 +6,7 @@ import test from "node:test";
 import { buildContentManifest } from "../scripts/release-provenance/content-manifest.mjs";
 import { GATE_REJECTED_EXIT_CODE, gateModes, main, runPostGate, runPreGate } from "../scripts/release-provenance/deploy-gate.mjs";
 import { loadReleasePolicy } from "../scripts/release-provenance/verify.mjs";
-import { API, REPO_URL, SHA, artifact, digestOf, fakeFetch, githubRoutes, makeZip, passingRuns } from "./helpers/release-provenance-fixtures.mjs";
+import { API, REPO_URL, REQUIRED, SHA, artifact, checkRun, digestOf, fakeFetch, githubRoutes, makeZip, passingRuns } from "./helpers/release-provenance-fixtures.mjs";
 
 const policy = await loadReleasePolicy();
 const env = (extra = {}) => ({ ORKESTR_GITHUB_API_URL: API, ...extra });
@@ -82,6 +82,39 @@ test("pre gate artifact enforce rejects a missing attestation", async () => {
   const record = await runPreGate({ repoUrl: REPO_URL, sha: SHA, env: env({ ORKESTR_DEPLOY_ARTIFACT_PROVENANCE: "enforce", GITHUB_TOKEN: "t" }), fetchImpl: fakeFetch(routes).fetchImpl, policy });
   assert.equal(record.attestation.status, "attestation_missing");
   assert.equal(record.gate.result, "rejected");
+});
+
+// A commit that reached main without a new SHA has two CI runs: the pull_request
+// run, which never attests, and the push run, which does.
+const BASE = "/repos/example-org/example-repo";
+const unattested = artifact("runtime-dist", { id: 11, digest: `sha256:${"c".repeat(64)}` });
+const attested = artifact("runtime-dist", { id: 21, digest: `sha256:${"d".repeat(64)}` });
+const secondRun = (overrides) => REQUIRED.map((name) => checkRun(name, { runId: 901, ...overrides }));
+
+test("pre gate names a still-running CI run when the passed run has no attestation", async () => {
+  const routes = githubRoutes({ checkRuns: [...passingRuns(), ...secondRun({ status: "in_progress" })], artifacts: [unattested], attestations: [] });
+  const enforce = await runPreGate({ repoUrl: REPO_URL, sha: SHA, env: env({ ORKESTR_DEPLOY_ARTIFACT_PROVENANCE: "enforce", GITHUB_TOKEN: "t" }), fetchImpl: fakeFetch(routes).fetchImpl, policy });
+  assert.equal(enforce.ci.runId, "900");
+  assert.equal(enforce.gate.result, "rejected");
+  assert.deepEqual(enforce.gate.reasons, ["attestation_missing", "attestation_run_pending"]);
+  const warn = await runPreGate({ repoUrl: REPO_URL, sha: SHA, env: env(), fetchImpl: fakeFetch(routes).fetchImpl, policy });
+  assert.equal(warn.gate.result, "warned");
+  const alone = await runPreGate({ repoUrl: REPO_URL, sha: SHA, env: env(), fetchImpl: fakeFetch(githubRoutes({ artifacts: [unattested], attestations: [] })).fetchImpl, policy });
+  assert.deepEqual(alone.gate.reasons, ["attestation_missing"]);
+});
+
+test("pre gate takes the artifact from the passed run that is attested, not the newest one", async () => {
+  const routes = {
+    ...githubRoutes({ checkRuns: [...passingRuns(), ...secondRun({})], artifacts: [attested] }),
+    [`${BASE}/actions/runs/901/artifacts`]: { total_count: 1, artifacts: [unattested] },
+    [`${BASE}/attestations/${unattested.digest}`]: { attestations: [] },
+  };
+  const record = await runPreGate({ repoUrl: REPO_URL, sha: SHA, env: env({ ORKESTR_DEPLOY_ARTIFACT_PROVENANCE: "enforce", GITHUB_TOKEN: "t" }), fetchImpl: fakeFetch(routes).fetchImpl, policy });
+  assert.equal(record.ci.runId, "901");
+  assert.equal(record.artifact.runId, "900");
+  assert.equal(record.artifact.runtime.digest, attested.digest);
+  assert.equal(record.attestation.status, "attestation_present_unverified");
+  assert.equal(record.gate.result, "passed");
 });
 
 async function releaseDir(dist) {

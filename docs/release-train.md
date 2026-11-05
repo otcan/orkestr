@@ -285,6 +285,12 @@ lists an attestation for the digest). CI creates the attestation in the
 `actions/attest-build-provenance` over the `runtime-dist` archive digest and the
 `runtime-dist-manifest` content manifest.
 
+A `pull_request` run is never attested. When a commit has both a pull-request
+run and a push run (it reached `main` without a new commit id), the gate takes
+the artifact from the passed run that has an attestation. If none has one and
+another run for the commit is still in progress, the reasons include
+`attestation_run_pending`: retry the deploy when that run has finished.
+
 After the build, the gate computes the installed-tree digest (`dist` and the
 release directory without `node_modules`) with the same
 `scripts/release-provenance/content-manifest.mjs` used in CI, and records the
