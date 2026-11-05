@@ -38,6 +38,8 @@ pub use conversation_export::{
 pub mod history_import;
 pub use history_import::{history_source_digest, HistoryError};
 mod intake;
+mod source_receipts;
+mod source_context;
 pub mod owner_password;
 mod paths;
 mod preflight;

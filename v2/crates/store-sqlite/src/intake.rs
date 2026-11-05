@@ -188,12 +188,18 @@ impl Store {
                 // Every provider handoff retires prior Fast/Deep bindings. This
                 // also fences an away-and-back handoff before the adapter froze
                 // the current generation: provider names alone cannot prove it.
-                let valid: i64 = sqlx::query_scalar("SELECT count(*) FROM production_runs r JOIN session_bindings b ON b.id=r.session_id AND b.owner_id=r.owner_id AND b.conversation_id=r.conversation_id LEFT JOIN conversation_settings s ON s.owner_id=r.owner_id AND s.conversation_id=r.conversation_id WHERE r.id=? AND r.owner_id=? AND r.conversation_id=? AND b.role='deep' AND b.state!='retired' AND r.provider_kind=COALESCE(s.provider,'codex')")
+                let valid: i64 = sqlx::query_scalar("SELECT count(*) FROM production_runs r JOIN session_bindings b ON b.id=r.session_id AND b.owner_id=r.owner_id AND b.conversation_id=r.conversation_id LEFT JOIN conversation_settings s ON s.owner_id=r.owner_id AND s.conversation_id=r.conversation_id WHERE r.id=? AND r.owner_id=? AND r.conversation_id=? AND b.role='deep' AND b.state!='retired' AND b.generation=r.binding_generation AND b.native_session_id=r.native_session_id AND r.provider_kind=COALESCE(s.provider,'codex')")
                     .bind(run.to_string()).bind(owner.to_string()).bind(conversation.to_string())
                     .fetch_one(&mut *tx).await.map_err(db)?;
                 if valid != 1 {
                     return Err(StoreError::ProviderGenerationMismatch);
                 }
+                // This is original-transaction evidence, not a later adapter's
+                // claim. A duplicate POST must never acquire missing fences.
+                sqlx::query("INSERT INTO source_admission_fences(message_id,expected_provider_generation,source_run_id,source_native_session_id,source_provider,source_binding_generation) SELECT ?,?,r.id,r.native_session_id,r.provider_kind,r.binding_generation FROM production_runs r WHERE r.id=? AND r.owner_id=? AND r.conversation_id=?")
+                    .bind(admission.receipt.message_id.to_string()).bind(expected_provider_generation)
+                    .bind(run.to_string()).bind(owner.to_string()).bind(conversation.to_string())
+                    .execute(&mut *tx).await.map_err(db)?;
             }
         }
         if let (Some(author), false) = (author, admission.duplicate) {

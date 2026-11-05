@@ -455,6 +455,7 @@ async fn populated_payload_prefix_upgrade_preserves_all_rows_and_foreign_links()
         "agent_timer_limits",
         "service_credentials",
         "message_request_sources",
+        "source_admission_fences",
         "encrypted_uploads",
         "encrypted_upload_chunks",
     ] {

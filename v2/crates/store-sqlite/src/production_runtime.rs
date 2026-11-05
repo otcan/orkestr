@@ -122,6 +122,9 @@ mod stop_tests;
 pub(crate) mod test_controls;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+#[path = "source_receipts/tests.rs"]
+mod source_receipt_tests;
 
 pub type ProductionSupervisorStore = Store;
 mod automatic_reply;

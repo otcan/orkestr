@@ -1,6 +1,8 @@
 use super::*;
 #[path = "message_provider_generation_http_tests.rs"]
 mod message_provider_generation_tests;
+#[path = "source_receipts_http_tests.rs"]
+mod source_receipt_tests;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 const HOST: &str = "127.0.0.1:19882";
