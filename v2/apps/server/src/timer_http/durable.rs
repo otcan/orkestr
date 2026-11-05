@@ -78,6 +78,10 @@ pub struct DurableTimerController {
     /// Shortens SUPERVISOR_GRACE so the bound itself is testable in seconds.
     #[cfg(test)]
     pub(crate) test_grace: Option<Duration>,
+    /// Stands in for a pass that was not polled for this long and then resumed
+    /// into a store call whose own deadline had lapsed meanwhile.
+    #[cfg(test)]
+    pub(crate) test_unscheduled_pass: Option<Duration>,
 }
 const DIGEST_CHECK: Duration = Duration::from_secs(30);
 impl DurableTimerController {
@@ -102,6 +106,8 @@ impl DurableTimerController {
             test_trigger_delay: None,
             #[cfg(test)]
             test_grace: None,
+            #[cfg(test)]
+            test_unscheduled_pass: None,
         }
     }
     pub(crate) fn with_tracker_mail(
@@ -138,6 +144,11 @@ impl DurableTimerController {
                 deferred: 1,
                 ..Default::default()
             });
+        }
+        #[cfg(test)]
+        if let Some(unscheduled) = self.test_unscheduled_pass.take() {
+            tokio::time::sleep(unscheduled).await;
+            return Err(HistoryError::Unavailable);
         }
         match tokio::time::timeout(Duration::from_secs(5), self.pass()).await {
             Ok(result) => result,
@@ -476,7 +487,17 @@ impl DurableTimerController {
                             }
                         }
                     }
-                    match self.tick().await {
+                    let pass_started = tokio::time::Instant::now();
+                    let pass = self.tick().await;
+                    // A pass ends within its five-second deadline. Longer means this
+                    // task was not polled, which no store error below can show.
+                    if pass_started.elapsed() >= Duration::from_secs(10) {
+                        eprintln!(
+                            "timer controller was not scheduled for {}s during a pass",
+                            pass_started.elapsed().as_secs()
+                        );
+                    }
+                    match pass {
                         // NOT a lease renewal. tick() returns Ok without touching the
                         // store when paused, while timeout_retry is pending, and after a
                         // pass timeout, so resetting the window here would let the
@@ -490,6 +511,33 @@ impl DurableTimerController {
                         // does. Authority errors keep terminating the controller.
                         Err(HistoryError::Unavailable) if accepted.elapsed() < self.grace() => {
                             eprintln!("timer controller pass deferred: store unavailable");
+                        }
+                        // The window can also lapse because this task was not
+                        // scheduled while the store answered everyone else. The
+                        // stamp cannot tell that from an outage; the heartbeat can,
+                        // and it alone knows whether the lease survived.
+                        Err(HistoryError::Unavailable) => {
+                            let unrenewed = accepted.elapsed().as_secs();
+                            match self.supervisor.heartbeat_supervisor().await {
+                                Ok(_) => {
+                                    eprintln!(
+                                        "timer controller pass deferred after {unrenewed}s without a heartbeat: lease renewed"
+                                    );
+                                    accepted = tokio::time::Instant::now();
+                                }
+                                Err(error) if supervisor_authority_lost(&error) => {
+                                    eprintln!(
+                                        "timer supervisor lease lost after {unrenewed}s without a heartbeat: {error:?}"
+                                    );
+                                    return Err(HistoryError::Unauthorized);
+                                }
+                                Err(error) => {
+                                    eprintln!(
+                                        "timer controller pass refused after {unrenewed}s: {error:?}"
+                                    );
+                                    return Err(HistoryError::Unavailable);
+                                }
+                            }
                         }
                         Err(error) => {
                             eprintln!(

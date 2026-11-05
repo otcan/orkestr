@@ -652,3 +652,72 @@ async fn paused_ticks_do_not_extend_the_grace_window() {
     store.close().await;
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+// The pilot exit of 2026-11-05: the controller task was not polled for 102s, then
+// resumed into a store call whose own deadline had lapsed and returned
+// Unavailable. The store had answered everyone else throughout. Judged by the
+// stale stamp alone that ended the controller as a store outage. With the lease
+// still valid the heartbeat renews it and the controller carries on.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unscheduled_pass_with_a_live_lease_does_not_end_the_controller() {
+    let (store, _unbound, _, _, _, dir) = fixture().await;
+    let bound = store.authorize_timer_supervisor(MACHINE).await.unwrap();
+    let db = dir.join("core.sqlite3");
+    let mut controller = DurableTimerController::new(bound);
+    controller.test_grace = Some(Duration::from_secs(2));
+    // Longer than the grace, far shorter than the 60s lease.
+    controller.test_unscheduled_pass = Some(Duration::from_secs(5));
+    let (shutdown, receiver) = tokio::sync::watch::channel(false);
+    let handle = tokio::spawn(controller.run(receiver));
+
+    tokio::time::sleep(Duration::from_secs(8)).await;
+    assert!(
+        !handle.is_finished(),
+        "a pass that was merely not scheduled ended the controller"
+    );
+    let resumed = lease_deadline_ms(&db).await;
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    assert!(
+        lease_deadline_ms(&db).await > resumed,
+        "controller did not resume heartbeating after the stall"
+    );
+
+    let _ = shutdown.send(true);
+    tokio::time::timeout(Duration::from_secs(15), handle)
+        .await
+        .expect("controller did not observe shutdown")
+        .unwrap()
+        .unwrap();
+    store.close().await;
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+// The same stall, but authority really was lost while the task did not run. The
+// heartbeat says so, and the controller ends as lost authority, not as an outage.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unscheduled_pass_that_lost_authority_ends_as_unauthorized() {
+    let (store, _unbound, _, _, _, dir) = fixture().await;
+    let bound = store.authorize_timer_supervisor(MACHINE).await.unwrap();
+    let mut controller = DurableTimerController::new(bound);
+    controller.test_grace = Some(Duration::from_secs(2));
+    controller.test_unscheduled_pass = Some(Duration::from_secs(5));
+    let (_shutdown, receiver) = tokio::sync::watch::channel(false);
+    let handle = tokio::spawn(controller.run(receiver));
+
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    assert!(
+        !handle.is_finished(),
+        "controller died before the stall ended"
+    );
+    store.revoke_session(MACHINE).await.unwrap();
+    let outcome = tokio::time::timeout(Duration::from_secs(20), handle)
+        .await
+        .expect("lost authority did not stop the controller")
+        .unwrap();
+    assert!(
+        matches!(outcome, Err(HistoryError::Unauthorized)),
+        "authority lost during a stall must end as Unauthorized, got {outcome:?}"
+    );
+    store.close().await;
+    std::fs::remove_dir_all(dir).unwrap();
+}
