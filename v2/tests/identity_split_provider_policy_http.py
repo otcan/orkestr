@@ -84,6 +84,9 @@ class PolicyRehearsal(Rehearsal):
             return rows[0] if rows else None
         result=wait(accepted,'new current input completes on fresh Codex lineage',seconds=35)
         assert result[2]=='codex' and result[1]!=initial['native_session_id']
+        history=self.read("SELECT d.turn_text FROM conversation_handoff_context_delivery d JOIN production_runs r ON r.id=d.run_id WHERE r.message_id=? AND r.role='deep'",(receipt['message_id'],))
+        assert len(history)==1 and 'a standing operator provider policy' in history[0][0]
+        assert '<historical_context>' in history[0][0] and 'Current input:\n'+message in history[0][0]
         assert self.read("SELECT count(*) FROM production_runs WHERE message_id=? AND role='deep'",(receipt['message_id'],))==[(1,)]
         assert self.read("SELECT count(*) FROM production_runs r JOIN messages m ON m.id=r.message_id WHERE m.request_key='synthetic-split-first' AND r.role='deep'")==[(1,)],'old input replayed'
         assert self.read("SELECT count(*) FROM operator_provider_handoffs WHERE source_message_id=? AND source_commit=?",(receipt['message_id'],source))==[(1,)]
@@ -100,7 +103,7 @@ class PolicyRehearsal(Rehearsal):
                     harness_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),manifest_sha256=self.manifest,authority_uid=self.package.authority_uid,executor_uid=self.uid,
                     old_claude_turns=old_turns,new_current_deep_runs=1,provider_generation=initial_epoch+1,
                     original_input_replayed=False,forbidden_claude_turns=0,operator_handoff_receipts=1,
-                    scoped_root_launch=True,actual_http=True,actual_provider=False,live_activation=False)
+                    quoted_history_delivered=True,scoped_root_launch=True,actual_http=True,actual_provider=False,live_activation=False)
 
 
 def main():
