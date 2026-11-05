@@ -14,6 +14,7 @@ import time
 
 sys.path.insert(0,str(Path(__file__).resolve().parent))
 from identity_split_service_http import Rehearsal,wait
+from codex_service.qualification import code_subject
 
 
 class PolicyRehearsal(Rehearsal):
@@ -139,7 +140,8 @@ class PolicyRehearsal(Rehearsal):
         status,replay=self.request(path+'/window','POST',body)
         assert status in (200,201,202),(status,replay)
         assert self.read("SELECT count(*) FROM production_runs WHERE message_id=? AND role='deep'",(receipt['message_id'],))==[(1,)]
-        return dict(source_commit=source,binary_sha256=hashlib.sha256(self.binary.read_bytes()).hexdigest(),
+        return dict(code_subject=code_subject(self.package),server_identity=self.server_identity,
+                    server_sha256=self.server_sha256,source_commit=source,binary_sha256=hashlib.sha256(self.binary.read_bytes()).hexdigest(),
                     harness_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),manifest_sha256=self.manifest,authority_uid=self.package.authority_uid,executor_uid=self.uid,
                     old_claude_turns=old_turns,new_current_deep_runs=1,provider_generation=initial_epoch+1,
                     original_input_replayed=False,forbidden_claude_turns=0,operator_handoff_receipts=1,

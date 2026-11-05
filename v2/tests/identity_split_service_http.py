@@ -86,6 +86,8 @@ class Rehearsal:
         # this value before sending any cookie/key to its original process.
         copied_identity=json.loads(subprocess.check_output([str(self.package.root/'server'),'--version','--json'],
             env={'PATH':'/usr/bin:/bin','PYTHONDONTWRITEBYTECODE':'1'},cwd='/'))
+        self.server_identity=copied_identity
+        self.server_sha256=hashlib.sha256((self.package.root/'server').read_bytes()).hexdigest()
         copied_source=copied_identity.get('source_commit')
         if copied_source is not None:
             assert type(copied_source) is str and len(copied_source)==40 and all(c in '0123456789abcdef' for c in copied_source)
@@ -389,7 +391,8 @@ while True:time.sleep(1)
         assert core.stat().st_uid==self.package.authority_uid!=UID
         for child in children:
             if exists(child):assert 'NoNewPrivs:\t1' in Path('/proc',str(child['pid']),'status').read_text()
-        return dict(code_subject=code_subject(self.package),core_run_id=row[0],core_run_state=row[1],native_session_id=row[2],
+        return dict(code_subject=code_subject(self.package),server_identity=self.server_identity,
+                    server_sha256=self.server_sha256,core_run_id=row[0],core_run_state=row[1],native_session_id=row[2],
                     authority_uid=self.package.authority_uid,executor_uid=UID,managed_children=children,
                     synthetic_native_turns=sum(r['kind']=='turn' for r in records),
                     worker_reuse_count=len(workers),worker_setups=getattr(self,'worker_setups',[]),
@@ -418,7 +421,8 @@ while True:time.sleep(1)
             except Refused as error:assert str(error)=='manager_custody_fault'
             else:raise AssertionError('faulted manager admitted authority transition')
         self.fault_qualified=True
-        return dict(code_subject=code_subject(self.package),fault_injected=True,unobserved_orphans=len(self.manager.adopted.records),
+        return dict(code_subject=code_subject(self.package),server_identity=self.server_identity,
+                    server_sha256=self.server_sha256,fault_injected=True,unobserved_orphans=len(self.manager.adopted.records),
             global_reaped=True,authority_transitions_fenced=True,window_states=[state['state'] for state in states],
             launch_states=[claim['state'] for claim in claims],broker_exit=-9,business_runs=0,
             manager_recovered=False,physical_cleanup_only=True,
