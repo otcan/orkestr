@@ -97,6 +97,16 @@ fn status(receipt: &RootCommandReceipt) -> Result<(Option<i32>, Option<i32>), Wo
     }
 }
 
+fn captured(stdout: Capture, stderr: Capture, budget: usize) -> (Vec<u8>, Vec<u8>) {
+    let mut stdout = stdout.finish();
+    let mut stderr = stderr.finish();
+    if stdout.len().saturating_add(stderr.len()) > budget {
+        stdout.truncate(budget / 2);
+        stderr.truncate(budget.saturating_sub(stdout.len()));
+    }
+    (stdout, stderr)
+}
+
 impl WorkspaceExecDispatcher {
     pub(crate) fn configured_managed(
         store: Store,
@@ -216,8 +226,11 @@ impl WorkspaceExecDispatcher {
                 return Ok(Err(started));
             }
             let _retained = (permit, retained);
-            let mut stdout = Capture::new(command_output);
-            let mut stderr = Capture::new(command_output);
+            // Core's bound applies to both streams together. Reserve space
+            // for each Capture's explicit omission marker as well.
+            let capture_budget = command_output.saturating_sub(128);
+            let mut stdout = Capture::new(capture_budget / 2);
+            let mut stderr = Capture::new(capture_budget - capture_budget / 2);
             let receipt = observer
                 .wait(&child_cancel, |err, bytes| {
                     if err {
@@ -233,9 +246,10 @@ impl WorkspaceExecDispatcher {
                 Err(WorkerSandboxError::Cancelled) => (Some(130), None),
                 Err(_) => return Err("managed workspace result unknown"),
             };
+            let (stdout, stderr) = captured(stdout, stderr, command_output);
             Ok(Ok(WorkspaceExecOutput {
-                stdout: stdout.finish(),
-                stderr: stderr.finish(),
+                stdout,
+                stderr,
                 exit_code,
                 signal,
             }))
@@ -260,5 +274,30 @@ impl WorkspaceExecDispatcher {
             Ok(output) => Ok(output),
             Err(started) => Ok(render::started(&started, managed.job_timeout)),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn noisy_both_streams_keep_heads_tails_and_fit_the_single_core_output_bound() {
+        let budget = 128 * 1024;
+        let mut out = Capture::new((budget - 128) / 2);
+        let mut err = Capture::new((budget - 128) / 2);
+        out.push(b"stdout head");
+        out.push(&vec![b'o'; 200000]);
+        out.push(b"stdout tail");
+        err.push(b"stderr head");
+        err.push(&vec![b'e'; 200000]);
+        err.push(b"stderr tail");
+        let (out, err) = captured(out, err, budget);
+        assert!(out.len() + err.len() <= budget);
+        assert!(out.starts_with(b"stdout head") && out.ends_with(b"stdout tail"));
+        assert!(err.starts_with(b"stderr head") && err.ends_with(b"stderr tail"));
+        let mut out = Capture::new(0);
+        out.push(b"noisy");
+        let (out, err) = captured(out, Capture::new(0), 1);
+        assert!(out.len() + err.len() <= 1);
     }
 }

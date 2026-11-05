@@ -6,7 +6,7 @@ static void workspace_tools(void) {
         if (!strchr("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789/_-. ", *p)) exit(70);
     for (int action = 0; action < 4; ++action) {
         if (action == 0) snprintf(arguments, sizeof(arguments), "{\"command\":\"%s\"}", command);
-        else if (action == 1) strcpy(arguments, "{\"command\":\"/usr/bin/sleep 10\",\"background\":true}");
+        else if (action == 1) strcpy(arguments, "{\"command\":\"/usr/bin/sleep 120\",\"background\":true}");
         else snprintf(arguments, sizeof(arguments), "{\"job\":\"%s\",\"action\":\"%s\"}", job, action==2?"status":"cancel");
         printf("{\"id\":\"workspace:%d\",\"method\":\"item/tool/call\",\"params\":{"
             "\"threadId\":\"%s\",\"turnId\":\"%s\",\"callId\":\"workspace:%d\","

@@ -70,7 +70,7 @@ class WorkspaceRehearsal(Rehearsal):
             'trusted':{'network':True,'host_toolchain':True,'memory_bytes':256*1024**2,
                 'pids':16,'cpus':1,'file_bytes':1024**2,'open_files':256,
                 'command_timeout_ms':5000,'command_output_bytes':8192,'max_jobs':1,
-                'job_timeout_ms':20000,'job_output_bytes':8192,'worker_run_ms':30000,
+                'job_timeout_ms':120000,'job_output_bytes':8192,'worker_run_ms':120000,
                 'managed_executor':{'environment':{'HOME':str(self.fixture.home),'PATH':'/usr/bin:/bin'},
                     'credentials':[{'path':str(self.secret),'keys':['BUSINESS_ACCOUNT_KEY']}]}}}
         path.write_text(json.dumps(value));self.refresh_manifest()
@@ -94,11 +94,14 @@ class WorkspaceRehearsal(Rehearsal):
             foreground_commands=2,background_starts=2,status_controls=2,cancel_controls=2,
             core_result_rows=count,core_delegation_states=rows,original_root_anchor_cleanup=True,
             project_owner_uid=self.project_owner,project_owner_preserved=True,named_executor_acl=self.project_owner!=UID,
-            selected_business_environment=True,core_read_denied=True,nn_privileges=True)
+            selected_business_environment=True,core_read_denied=True,no_new_privileges=True)
         return report
 
     def diagnostics(self):
-        value={'pump_errors':self.pump_errors,'native_failures':{},'root_commands':[]}
+        value={'pump_errors':self.pump_errors,'native_failures':{},'root_commands':[],
+            'project_owner_uid':self.project.stat().st_uid,'executor_uid':UID}
+        proof=self.project/'command-proof'
+        if proof.exists():value['command_proof']={**json.loads(proof.read_text()),'file_uid':proof.stat().st_uid}
         for role,account in self.role_accounts.items():
             failure=account/'sessions/synthetic-failure'
             if failure.exists():value['native_failures'][role]=failure.read_text()[:1024]
@@ -136,6 +139,8 @@ def main():
         report['scope_memory_peak_bytes']=int((base/'memory.peak').read_text())
         report['elapsed_seconds']=round(time.monotonic()-started,3)
         report['harness_sha256']=hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+        report['native_fixture_sha256']={name:hashlib.sha256((ROOT/'v2/tests'/name).read_bytes()).hexdigest()
+            for name in ('service_roles_native.c','service_workspace_tools.c')}
         Path(args.report).write_text(json.dumps(report,indent=2)+'\n');Path(args.report).chmod(0o600)
     assert report['passed'],report
     print(json.dumps({'passed':True,'actual_core':True,'actual_provider':False,'workspace_operations':8}))
