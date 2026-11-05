@@ -80,6 +80,16 @@ class Rehearsal:
         self.bootstrap='synthetic-owner-bootstrap-token-long-enough'
         self.browser_headers={}
         shutil.copyfile(self.binary,self.package.root/'server');(self.package.root/'server').chmod(0o550)
+        # The disposable package must describe the copied Core, not the
+        # fixture's placeholder source. Peer-bound clients independently pin
+        # this value before sending any cookie/key to its original process.
+        copied_identity=json.loads(subprocess.check_output([str(self.package.root/'server'),'--version','--json'],
+            env={'PATH':'/usr/bin:/bin','PYTHONDONTWRITEBYTECODE':'1'},cwd='/'))
+        copied_source=copied_identity.get('source_commit')
+        if copied_source is not None:
+            assert type(copied_source) is str and len(copied_source)==40 and all(c in '0123456789abcdef' for c in copied_source)
+            manifest_path=self.package.root/'manifest.json';manifest=json.loads(manifest_path.read_text())
+            manifest['source_commit']=copied_source;manifest_path.write_text(json.dumps(manifest))
         # All account content is a disposable dummy, not a real login.
         self.fixture.auth.write_bytes(b'{"fixture":"synthetic-roles-only"}\n')
         for name,value in [('role','deep'),('mode','complete')]:
@@ -307,6 +317,8 @@ while True:time.sleep(1)
             stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,process_group=0)
         self.manager.child=self.process;self.manager.identity=process(self.process.pid)
         self.manager.peer=ServerPeer(self.manager.identity,self.package.root/'server')
+        if hasattr(self.manager,'publish_service_peer'):
+            self.manager.publish_service_peer()
         def ready():self.manager.once();return self.owns_listener()
         wait(ready,'authority server and manager ready')
         def pump():
