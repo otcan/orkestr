@@ -168,7 +168,7 @@ class Manager:
         self.ledger._scope(request)
         operation = request["operation"]
         self._capture_orphans()
-        require(not getattr(self,'custody_fault',False) or operation in ('status','drain','uncertain','desk_login_poll','desk_login_cancel','managed_poll','managed_cancel'),
+        require(not getattr(self,'custody_fault',False) or operation in ('status','drain','uncertain','desk_login_poll','desk_login_cancel','managed_poll','managed_cancel','managed_run_close'),
                 'manager_custody_fault')
         if operation == "status":
             return {"ok": True, "receipt": self.ledger.status(request["conversation_id"])}
@@ -182,7 +182,7 @@ class Manager:
         row = self.ledger.details(request["window_id"], request["generation"])
         require(row["conversation"] == request["conversation_id"], "scope")
         window = self.windows.get(request["window_id"])
-        if operation in ('managed_pending','managed_consume','managed_poll','managed_cancel'):
+        if operation in ('managed_pending','managed_consume','managed_poll','managed_cancel','managed_run_open','managed_run_close','managed_renew'):
             from .managed_control import dispatch
             return dispatch(self,request,window)
         if operation in ('desk_login','desk_login_poll','desk_login_cancel'):

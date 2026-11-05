@@ -17,7 +17,7 @@ MODULES_SERVICE = ("__init__.py", "contract.py", "ledger.py", "budget.py", "cust
                    "server_child.py", "broker.py", "profile.py", "entry.py", "role_profiles.py",
                    "claude_broker.py", "identity.py", "launch.py", "launch_child.py", "proxy.py", "attachment_exports.py",
                    "password_recovery.py", "managed_resume.py", "desk_operations.py", "desk_anchor.py",
-                   "managed_ingress.py", "managed_control.py", "managed_client.py", "managed_native.py", "native_io.py", "managed_host.py")
+                   "managed_ingress.py", "managed_control.py", "managed_client.py", "managed_native.py", "managed_runs.py", "native_io.py", "managed_host.py")
 # Shared with the server and packager: room for many per-conversation
 # command profiles.
 MAX_BETA_CONFIG_BYTES = 262144

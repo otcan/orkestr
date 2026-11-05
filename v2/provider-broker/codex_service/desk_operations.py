@@ -23,12 +23,12 @@ def mapping(value):
     require(type(value['helper']) is str and value['helper'].startswith('/') and
             type(value['sha256']) is str and re.fullmatch('[0-9a-f]{64}',value['sha256']) and
             type(value['site']) is str and re.fullmatch('[a-z0-9][a-z0-9.-]{1,251}[a-z0-9]',value['site']) and
-            type(value['duration_ms']) is int and 1<=value['duration_ms']<=30000,'desk_mapping')
+            type(value['duration_ms']) is int and 1<=value['duration_ms']<=300000,'desk_mapping')
     return value
 
 
 def capability(value):
-    require(type(value) is dict and set(value)=={'operation_id','resource_id','run_id','session_id',
+    require(type(value) is dict and set(value)-{'hard_deadline_ms'}=={'operation_id','resource_id','run_id','session_id',
         'binding_generation','setup_generation','lease_generation','dispatch_fence','incarnation','correlation_sha256','expires_at_ms'},'desk_capability_fields')
     for field in ('operation_id','run_id','session_id'):identifier(value[field])
     key(value['resource_id']);key(value['incarnation'])
@@ -36,6 +36,9 @@ def capability(value):
     require(value['binding_generation']>=value['setup_generation'],'desk_binding_lineage')
     require(type(value['correlation_sha256']) is str and re.fullmatch('[0-9a-f]{64}',value['correlation_sha256']) and
             type(value['expires_at_ms']) is int and 0<value['expires_at_ms']<2**53,'desk_capability')
+    if 'hard_deadline_ms' in value:
+        require(type(value['hard_deadline_ms']) is int and value['expires_at_ms']<=value['hard_deadline_ms']
+                and value['hard_deadline_ms']-int(time.time()*1000)<=300000,'desk_hard_deadline')
     return value
 
 
@@ -87,7 +90,12 @@ class Operations:
         records=[metadata(p,16384) for p in self.directory.glob('*.json')]
         require(not any(r['run_id']==cap['run_id'] and r['correlation_sha256']==cap['correlation_sha256'] for r in records),'desk_call_already_consumed')
         require(sum(r['window_id']==request['window_id'] for r in records)<8,'desk_window_bound')
-        record={**frozen,**{k:cap[k] for k in ('operation_id','run_id','correlation_sha256')},'sha256':fingerprint,'state':'claimed','cleanup':False}
+        hard=min(cap.get('hard_deadline_ms',cap['expires_at_ms']),int(time.time()*1000)+operation['duration_ms'])
+        now_ns=time.monotonic_ns();wall_ms=int(time.time()*1000)
+        hard_ns=now_ns+max(0,hard-wall_ms)*1000000
+        lease_ns=min(hard_ns,now_ns+max(0,cap['expires_at_ms']-wall_ms)*1000000)
+        record={**frozen,**{k:cap[k] for k in ('operation_id','run_id','correlation_sha256')},'sha256':fingerprint,
+                'state':'claimed','cleanup':False,'hard_deadline_ms':hard,'lease_generation':cap['lease_generation']}
         atomic(path,record)  # Persist before Popen. Unknown outcome is consumed.
         parent,child=socket.socketpair();process_handle=None
         try:
@@ -97,12 +105,13 @@ class Operations:
                 pass_fds=(child.fileno(),),cwd='/',env={'PATH':'/usr/bin:/bin','PYTHONDONTWRITEBYTECODE':'1'},
                 stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
             child.close()
-            payload={**operation,'duration_ms':min(remaining,operation['duration_ms'])}
+            payload={**operation,'hard_deadline_ns':hard_ns,'lease_deadline_ns':lease_ns}
             payload=canonical(payload);parent.sendall(struct.pack('!I',len(payload))+payload);parent.setblocking(False)
             identity=process(process_handle.pid);require(identity and identity['ppid']==os.getpid() and identity['uid']==0,'desk_anchor_identity')
             self.active[cap['operation_id']]={'child':process_handle,'identity':identity,'socket':parent,'path':path,'proof':None,
                 'broker':dict(matches[0].broker),'window':request['window_id'],'generation':request['generation'],
-                'deadline':time.monotonic()+remaining/1000,'cancelled':False,'uncertain':False,'buffer':b''}
+                'deadline':lease_ns/1000000000,'deadline_ns':lease_ns,'hard_deadline_ns':hard_ns,
+                'cancelled':False,'uncertain':False,'buffer':b''}
             record.update(state='running',anchor=identity);atomic(path,record)
             return self.receipt(path)
         except BaseException:
@@ -121,8 +130,27 @@ class Operations:
         handle=self.active.get(operation)
         if handle and not handle['cancelled']:
             handle['cancelled']=True
-            try:handle['socket'].send(b'cancel')
+            try:handle['socket'].send(b'C')
             except OSError:pass
+
+    def renew(self,operation,lease,expires,hard_deadline):
+        handle=self.active.get(operation);path=self.directory/(operation+'.json');record=metadata(path,16384)
+        if handle is None:
+            require(record['state'] in ('helper_completed','failed','cancelled') and record['cleanup'],'desk_renewal_unknown')
+            return
+        require(not handle['cancelled'] and not handle['uncertain'] and lease==record['lease_generation']+1
+                and int(time.time()*1000)<expires<=hard_deadline and hard_deadline==record['capability'].get('hard_deadline_ms')
+                and 0<expires-int(time.time()*1000)<=30000,'desk_renewal_scope')
+        deadline=min(handle['hard_deadline_ns'],time.monotonic_ns()+max(0,expires-int(time.time()*1000))*1000000)
+        require(time.monotonic_ns()<handle['deadline_ns'] and deadline>=handle['deadline_ns'],'desk_renewal_expired')
+        record['lease_generation']=lease;record['renewed_expires_at_ms']=expires;atomic(path,record)
+        if deadline==handle['deadline_ns']:return  # Sealed shorter mapping already caps this helper.
+        command=b'R'+struct.pack('!Q',deadline)
+        try:
+            require(handle['socket'].send(command)==len(command),'desk_renewal_delivery_unknown')
+            handle['deadline_ns']=deadline;handle['deadline']=deadline/1000000000
+        except BaseException:
+            handle['uncertain']=True;record['state']='unknown';atomic(path,record);self.cancel(operation);raise
 
     def fault(self):
         self.faulted=True

@@ -51,8 +51,8 @@ pub(super) async fn checked(
         serde_json::from_value(operation.evidence["source"].clone()).map_err(db)?;
     current(store, tx, credential, &operation.parent, &source).await?;
     let c = store.context()?;
-    let found:i64=sqlx::query_scalar("SELECT count(*) FROM managed_operations WHERE id=? AND context_id=? AND incarnation_id=? AND state='delivery_unknown' AND expires_at_ms=? AND expires_at_ms>CAST(unixepoch('subsec')*1000 AS INTEGER)")
-        .bind(operation.id.to_string()).bind(&operation.context).bind(&operation.incarnation).bind(operation.expires)
+    let found:i64=sqlx::query_scalar("SELECT count(*) FROM managed_operations WHERE id=? AND context_id=? AND incarnation_id=? AND state='delivery_unknown' AND expires_at_ms=? AND json_extract(request_json,'$.hard_deadline_ms')=? AND expires_at_ms>CAST(unixepoch('subsec')*1000 AS INTEGER)")
+        .bind(operation.id.to_string()).bind(&operation.context).bind(&operation.incarnation).bind(operation.expires).bind(operation.hard_deadline)
         .fetch_one(&mut *tx).await.map_err(db)?;
     if found != 1 || c.id != operation.context || c.incarnation != operation.incarnation {
         return Err(RuntimeStoreError::Fenced);

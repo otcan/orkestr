@@ -79,7 +79,10 @@ def decode(raw):
     fields = {
         "status": set(),
         "managed_pending": {"window_id","generation"},
+        "managed_run_open": {"window_id","generation","run"},
+        "managed_run_close": {"window_id","generation","run_id"},
         "managed_consume": {"window_id","generation","capability"},
+        "managed_renew": {"window_id","generation","capability"},
         "managed_poll": {"window_id","generation","operation_id"},
         "managed_cancel": {"window_id","generation","operation_id"},
         "desk_login": {"window_id","generation","capability"},
@@ -139,7 +142,7 @@ def decode(raw):
     if operation=='desk_login':
         from .desk_operations import capability
         capability(value['capability'])
-    if operation=='managed_consume':
+    if operation in ('managed_consume','managed_renew'):
         from .managed_control import capability
         capability(value['capability'])
     if operation in ('managed_poll','managed_cancel'):identifier(value['operation_id'])

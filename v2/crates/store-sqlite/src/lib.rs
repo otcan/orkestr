@@ -49,8 +49,8 @@ pub use production_runtime::DeskLoginSetup;
 pub use production_runtime::{CompletedDeskLogin, DeskLoginOutcome};
 pub use production_runtime::{
     ConsumedManagedOperation, ManagedCallerEvidence, ManagedOperationConsumption,
-    ManagedOperationOutcome, ManagedOperationParent, ManagedOperationRequest,
-    ManagedOperationSetup,
+    ManagedOperationOutcome, ManagedOperationParent, ManagedOperationRenewal,
+    ManagedOperationRequest, ManagedOperationSetup,
 };
 mod source_context;
 mod source_receipts;

@@ -2,7 +2,7 @@
 use super::*;
 use orkestr_v2_store_sqlite::{
     ConsumedManagedOperation, ManagedCallerEvidence, ManagedOperationOutcome,
-    ManagedOperationRequest, Store,
+    ManagedOperationParent, ManagedOperationRenewal, ManagedOperationRequest, Store,
 };
 
 #[derive(Deserialize)]
@@ -19,6 +19,151 @@ pub(crate) struct ManagedReceipt {
     pub terminal: Option<ManagedOperationOutcome>,
 }
 impl ManagerClient {
+    pub(crate) async fn renew_managed(
+        &self,
+        store: &Store,
+        credential: &str,
+        window: &Window,
+        operation: &ConsumedManagedOperation,
+        renewal: &ManagedOperationRenewal,
+        deadline: Instant,
+    ) -> Result<ManagedReceipt> {
+        let mut request = self.request(
+            "managed_renew",
+            &format!("managed-renew:{}", renewal.id()),
+            Some(window),
+        )?;
+        request["capability"] = renewal.root_request();
+        let value = self
+            .managed_fenced_exchange(request, deadline, |stream, frame| {
+                store
+                    .with_managed_renewal_fence(credential, renewal, || {
+                        if Instant::now() >= deadline {
+                            return Err(ManagerError::Deadline);
+                        }
+                        self.parent()?;
+                        stream
+                            .try_write(frame)
+                            .map_err(|_| ManagerError::Unavailable)
+                    })
+                    .map_err(|_| ManagerError::Refused)?
+            })
+            .await?;
+        self.managed_receipt(value, window, operation)
+    }
+    pub(crate) async fn open_managed_run(
+        &self,
+        store: &Store,
+        credential: &str,
+        window: &Window,
+        parent: &ManagedOperationParent,
+        deadline: Instant,
+    ) -> Result<()> {
+        let run = parent.root_run_request();
+        let mut request = self.request(
+            "managed_run_open",
+            &format!(
+                "managed-run:{}",
+                run["run_id"].as_str().ok_or(ManagerError::Protocol)?
+            ),
+            Some(window),
+        )?;
+        request["run"] = run.clone();
+        let value = self
+            .managed_fenced_exchange(request, deadline, |stream, frame| {
+                store
+                    .with_managed_run_fence(credential, parent, || {
+                        if Instant::now() >= deadline {
+                            return Err(ManagerError::Deadline);
+                        }
+                        self.parent()?;
+                        stream
+                            .try_write(frame)
+                            .map_err(|_| ManagerError::Unavailable)
+                    })
+                    .map_err(|_| ManagerError::Refused)?
+            })
+            .await?;
+        success_fields(&value, Some("managed_run"))?;
+        self.window_receipt(&value["receipt"], window)?;
+        if !fields(&value["managed_run"], &["run_id"])
+            || value["managed_run"]["run_id"] != run["run_id"]
+        {
+            return Err(ManagerError::Protocol);
+        }
+        Ok(())
+    }
+    pub(crate) async fn close_managed_run(
+        &self,
+        window: &Window,
+        parent: &ManagedOperationParent,
+        deadline: Instant,
+    ) -> Result<()> {
+        let run = parent.root_run_request()["run_id"].clone();
+        let mut request = self.request(
+            "managed_run_close",
+            &format!(
+                "managed-close:{}",
+                run.as_str().ok_or(ManagerError::Protocol)?
+            ),
+            Some(window),
+        )?;
+        request["run_id"] = run.clone();
+        let (value, _) = self.exchange(request, deadline).await?;
+        success_fields(&value, Some("managed_run"))?;
+        self.window_receipt(&value["receipt"], window)?;
+        if !fields(&value["managed_run"], &["run_id"]) || value["managed_run"]["run_id"] != run {
+            return Err(ManagerError::Protocol);
+        }
+        Ok(())
+    }
+    async fn managed_fenced_exchange(
+        &self,
+        request: Value,
+        deadline: Instant,
+        write: impl FnOnce(&UnixStream, &[u8]) -> Result<usize>,
+    ) -> Result<Value> {
+        let raw = canonical(request)?;
+        if raw.is_empty() || raw.len() > MAX_FRAME {
+            return Err(ManagerError::InvalidRequest);
+        }
+        let mut frame = (raw.len() as u32).to_be_bytes().to_vec();
+        frame.extend(raw);
+        tokio::time::timeout_at(deadline.into(), async {
+            self.parent()?;
+            let stream = UnixStream::connect(&self.socket)
+                .await
+                .map_err(|_| ManagerError::Unavailable)?;
+            let peer = stream.peer_cred().map_err(|_| ManagerError::Peer)?;
+            if peer.uid() != 0 || peer.pid() != Some(self.manager_pid as i32) {
+                return Err(ManagerError::Peer);
+            }
+            stream
+                .writable()
+                .await
+                .map_err(|_| ManagerError::Unavailable)?;
+            if write(&stream, &frame)? != frame.len() {
+                return Err(ManagerError::Protocol);
+            }
+            let size = u32::from_be_bytes(
+                read(&stream, 4)
+                    .await?
+                    .try_into()
+                    .map_err(|_| ManagerError::Protocol)?,
+            ) as usize;
+            if size == 0 || size > MAX_FRAME {
+                return Err(ManagerError::Protocol);
+            }
+            let raw = read(&stream, size).await?;
+            let value: Value = serde_json::from_slice(&raw).map_err(|_| ManagerError::Protocol)?;
+            if canonical(value.clone())? != raw {
+                return Err(ManagerError::Protocol);
+            }
+            Ok(value)
+        })
+        .await
+        .map_err(|_| ManagerError::Deadline)?
+    }
     pub(crate) async fn pending_managed(
         &self,
         window: &Window,

@@ -41,6 +41,24 @@ delivery unconfirmed. The existing writable/shared-group inbox and sudo fallback
 are never used. A private protected watcher adapter is still required before
 claiming that this queue reaches owner review.
 
+Before provider input, Core opens a run observation through its opaque Deep
+parent and a live writer fence. Root stamps business requests with that run;
+metadata/native registration alone cannot queue a future business request.
+Closing the run cancels its unconsumed requests. A later run on the same native
+cannot promote an old queued request.
+
+The initial helper lease remains at most 30 seconds. Long owner waits use a
+distinct, one-use renewal issued only from the actual same-run lease authority
+after Runtime transfers the owned native. Renewal preserves operation identity,
+source, resource and immutable hard deadline; it cannot enter the fresh-launch
+API. Root sends only an absolute monotonic deadline over the original anchor's
+private socket. It never launches another helper, asks for another owner code,
+or changes arguments. The protected map caps duration at five minutes; a shorter
+map remains shorter. The immutable Core hard deadline is additionally capped by
+the window work deadline. Expired leases cannot revive a helper. Stop cancels
+and reaps its original tree. Full 120-second owner-wait acceptance remains a
+qualification requirement; the short kernel tests do not establish that parity.
+
 Before activation this path still requires a protected provider-facing client
 and native advertisement, full separate-UID Core/Root end-to-end acceptance,
 used Claude/native resume acceptance, watcher delivery, and failure injection.

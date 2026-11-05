@@ -123,8 +123,11 @@ class Ingress:
         self.socket.socket.setblocking(False)
         from .managed_native import NativeRegistry
         self.natives=NativeRegistry(self)
+        from .managed_runs import Runs
+        self.runs=Runs(self)
 
     def _record(self,peer,value):
+        self.runs.attach(peer)
         # The logical source, not caller-provided conversation/PID/role, scopes
         # idempotence. A retry cannot create another Root/Core operation.
         stable={k:v for k,v in peer.source.items() if not k.startswith('caller_')}

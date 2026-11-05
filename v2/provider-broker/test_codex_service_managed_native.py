@@ -23,6 +23,7 @@ class ManagedNativeTests(ingress_tests.RootCallerTests):
     test_fixed_protected_submit_is_agent_summary_without_owner_approval_or_replay=None
     test_publication_receipt_failure_preserves_unknown_claim_and_cannot_republish=None
     test_actual_separate_uid_nnp_cli_roundtrip_to_protected_intake=None
+    test_no_pre_run_queue_or_cross_turn_promotion=None
 
     def setUp(self):
         super().setUp()

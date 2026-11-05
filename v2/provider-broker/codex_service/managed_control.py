@@ -13,12 +13,14 @@ from .launch import atomic
 
 def capability(value):
     require(type(value) is dict and set(value)=={'operation_id','run_id','binding_generation',
-        'lease_generation','dispatch_fence','expires_at_ms','evidence','source_message_id','source_event_id'},'managed_capability_fields')
+        'lease_generation','dispatch_fence','expires_at_ms','hard_deadline_ms','evidence','source_message_id','source_event_id'},'managed_capability_fields')
     identifier(value['operation_id']);identifier(value['run_id'])
     identifier(value['source_message_id']);identifier(value['source_event_id'])
     for field in ('binding_generation','lease_generation','dispatch_fence'):generation(value[field])
     require(type(value['expires_at_ms']) is int and 0<value['expires_at_ms']-int(time.time()*1000)<=30000,
             'managed_capability_expired')
+    require(type(value['hard_deadline_ms']) is int and value['expires_at_ms']<=value['hard_deadline_ms']
+            and value['hard_deadline_ms']-int(time.time()*1000)<=300000,'managed_hard_deadline')
     evidence=value['evidence']
     require(type(evidence) is dict and set(evidence)=={'source','request'},'managed_evidence')
     return value
@@ -38,10 +40,13 @@ def consume(ingress,cap):
         require(record.get('capability_sha256')==fingerprint,'managed_consumption_conflict')
         return record  # Lost delivery cannot authorize another effect.
     source=record['source'];manager=ingress.manager
+    require(source['run_id']==cap['run_id'],'managed_consumed_run_changed')
     pending=ingress.pending(source['window_id'],source['window_generation'])
     require(any(r['request_id']==operation for r in pending),'managed_caller_not_live')
     require(cap['binding_generation']>=source['generation'],'managed_binding_lineage')
     record.update(state='consumed',capability_sha256=fingerprint,run_id=cap['run_id'],capability=cap)
+    for peer in ingress.peers:
+        if peer.request==operation:peer.deadline=time.monotonic()+max(0,cap['hard_deadline_ms']-int(time.time()*1000))/1000+5
     atomic(path,record)  # Persist before queue publication/helper launch.
     try:
         request=record['request']
@@ -55,13 +60,34 @@ def consume(ingress,cap):
                 'session_id':source['session_id'],'binding_generation':cap['binding_generation'],
                 'setup_generation':source['generation'],'lease_generation':cap['lease_generation'],
                 'dispatch_fence':cap['dispatch_fence'],'incarnation':source['incarnation'],
-                'correlation_sha256':record['payload_sha256'],'expires_at_ms':cap['expires_at_ms']}
+                'correlation_sha256':record['payload_sha256'],'expires_at_ms':cap['expires_at_ms'],
+                'hard_deadline_ms':cap['hard_deadline_ms']}
             manager.desk.start({'owner_id':source['owner_id'],'conversation_id':source['conversation_id'],
                 'window_id':source['window_id'],'generation':source['window_generation'],'capability':desk},manager.launcher)
         atomic(path,record)
         return record
     except BaseException:
         record['state']='unknown';atomic(path,record);raise
+
+
+def renew(ingress,cap):
+    cap=capability(cap);path=ingress.directory/(cap['operation_id']+'.json');record=metadata(protected(path),32768)
+    require(record['state'] in ('consumed','completed') and record['request']['operation']=='desk_login','managed_renewal_not_active')
+    previous=record.get('latest_capability',record['capability'])
+    fixed=set(cap)-{'lease_generation','expires_at_ms'}
+    require(all(cap[field]==previous[field] for field in fixed) and cap['lease_generation']==previous['lease_generation']+1
+            and cap['expires_at_ms']>previous['expires_at_ms'],'managed_renewal_scope')
+    if record['state']=='completed':return record  # A terminal receipt is not a renewed effect.
+    source=record['source'];manager=ingress.manager
+    require(manager._desk_window_active(source['window_id'],source['window_generation'])
+            and any(peer.request==record['request_id'] and not peer.proof.exited() for peer in ingress.peers),
+            'managed_renewal_caller_gone')
+    record['latest_capability']=cap;atomic(path,record)
+    try:
+        manager.desk.renew(record['request_id'],cap['lease_generation'],cap['expires_at_ms'],cap['hard_deadline_ms'])
+    except BaseException:
+        record['state']='unknown';atomic(path,record);manager.desk.cancel(record['request_id']);raise
+    return record
 
 
 def publish(ingress,record):
@@ -115,15 +141,20 @@ def dispatch(manager,request,window):
     ingress=manager.managed
     require(ingress is not None,'managed_unconfigured')
     operation=request['operation'];window_id=request['window_id'];generation=request['generation']
+    if operation in ('managed_run_open','managed_run_close'):
+        if operation=='managed_run_open':run=ingress.runs.open(request)
+        else:
+            run=request['run_id'];ingress.runs.close(window_id,generation,run)
+        return {'ok':True,'receipt':manager.ledger.status(request['conversation_id']),'managed_run':{'run_id':run}}
     if operation=='managed_pending':
         return {'ok':True,'receipt':manager.ledger.status(request['conversation_id']),
                 'managed_pending':ingress.pending(window_id,generation)}
-    if operation=='managed_consume':
+    if operation in ('managed_consume','managed_renew'):
         cap=request['capability'];scope=cap['evidence']['source']
         require(scope['window_id']==window_id and scope['window_generation']==generation and
                 scope['owner_id']==request['owner_id'] and scope['conversation_id']==request['conversation_id'],
                 'managed_control_scope')
-        record=consume(ingress,cap)
+        record=consume(ingress,cap) if operation=='managed_consume' else renew(ingress,cap)
     else:
         path=ingress.directory/(identifier(request['operation_id'])+'.json');record=metadata(protected(path),32768)
         source=record['source']

@@ -12,6 +12,7 @@ pub(super) struct ManagedTools {
     parent: ManagedOperationParent,
     context: std::sync::Arc<crate::window_runtime::context::Context>,
     operation: Option<ConsumedManagedOperation>,
+    run_closed: bool,
 }
 impl ConfiguredExecution {
     fn managed_enabled(&self) -> bool {
@@ -51,16 +52,57 @@ impl ConfiguredExecution {
             .authorize_managed_operation_parent(&self.token, consumed, &setup)
             .await
             .map_err(|_| "managed parent refused")?;
+        let context = self.window.clone().ok_or("managed window missing")?;
+        context
+            .manager
+            .open_managed_run(
+                &self.store,
+                &self.token,
+                &context.window,
+                &parent,
+                Instant::now() + Duration::from_secs(1),
+            )
+            .await
+            .map_err(|_| "managed run observation uncertain")?;
         Ok(Some(ManagedTools {
             store: self.store.clone(),
             credential: self.token.clone(),
             parent,
-            context: self.window.clone().ok_or("managed window missing")?,
+            context,
             operation: None,
+            run_closed: false,
         }))
     }
 }
 impl ManagedTools {
+    pub(super) async fn refresh_lease(
+        &mut self,
+        authority: &orkestr_v2_store_sqlite::RunRenewalAuthority,
+    ) -> Result<(), &'static str> {
+        if let Some(operation) = self.operation.as_mut() {
+            let renewal = self
+                .store
+                .renew_managed_operation(&self.credential, operation, authority)
+                .await
+                .map_err(|_| "managed scope renewal refused")?;
+            self.context
+                .manager
+                .renew_managed(
+                    &self.store,
+                    &self.credential,
+                    &self.context.window,
+                    operation,
+                    &renewal,
+                    Instant::now() + Duration::from_secs(1),
+                )
+                .await
+                .map_err(|_| "managed renewal delivery unknown")?;
+        }
+        self.store
+            .refresh_managed_operation_parent(&self.credential, &mut self.parent, authority)
+            .await
+            .map_err(|_| "managed parent lease transfer refused")
+    }
     pub(super) async fn poll(&mut self) -> Result<(), &'static str> {
         if self.operation.is_none() {
             let Some(request) = self
@@ -136,6 +178,18 @@ impl ManagedTools {
         Ok(())
     }
     pub(super) async fn cancel(&mut self) -> Result<(), &'static str> {
+        if !self.run_closed {
+            self.context
+                .manager
+                .close_managed_run(
+                    &self.context.window,
+                    &self.parent,
+                    Instant::now() + Duration::from_secs(1),
+                )
+                .await
+                .map_err(|_| "managed run closure uncertain")?;
+            self.run_closed = true;
+        }
         let Some(operation) = self.operation.as_ref() else {
             return Ok(());
         };

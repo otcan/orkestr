@@ -39,7 +39,7 @@ def exchange(path,raw):
             type(request['version']) is int and request['version']==1 and type(request['request_key']) is str)
     identity=endpoint(path)
     with socket.socket(socket.AF_UNIX,socket.SOCK_SEQPACKET) as connection:
-        connection.settimeout(40);connection.connect(str(path))
+        connection.settimeout(310);connection.connect(str(path))
         pid,uid,_=struct.unpack('3i',connection.getsockopt(socket.SOL_SOCKET,socket.SO_PEERCRED,12))
         require(uid==0 and pid>1 and endpoint(path)==identity)
         require(connection.send(raw)==len(raw))
