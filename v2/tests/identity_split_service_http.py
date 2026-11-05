@@ -31,6 +31,7 @@ from codex_service.manager import Manager
 from codex_service.channel import ServerPeer
 from codex_service.package import Package,CLAUDE_BROKER
 from codex_service.entry import verified,write_seal
+from codex_service.contract import Refused
 
 
 def wait(operation,label,seconds=15):
@@ -43,9 +44,11 @@ def wait(operation,label,seconds=15):
 
 
 class Rehearsal:
-    def __init__(self,binary,provider='codex',attachment_export=False):
+    def __init__(self,binary,provider='codex',attachment_export=False,fault_orphan=False):
         self.provider=provider
         self.attachment_export=attachment_export
+        self.fault_orphan=fault_orphan;self.fault_injected=False;self.held_observers={}
+        assert not fault_orphan or provider=='claude','fault fixture uses managed host Claude'
         assert not attachment_export or provider=='codex','scoped attachment fixture uses bounded Codex'
         self.fixture=ServiceFixture();self.uid=UID;self.gid=GID;self.digest=digest
         with socket.socket() as listener:
@@ -165,6 +168,18 @@ class Rehearsal:
         proof=("import ctypes,os\nassert os.geteuid()==%d\nassert ctypes.CDLL(None).prctl(39,0,0,0,0)==1\n"
                "try:\n open(%r,'rb')\nexcept PermissionError:pass\nelse:raise AssertionError('Core exposed')\n"%
                (UID,str(self.package.data/'core.sqlite3')))
+        if self.fault_orphan:
+            proof+='''from pathlib import Path
+import time
+forked=os.fork()
+if forked==0:
+ os.setsid();grandchild=os.fork()
+ Path('fault-child' if grandchild else 'fault-grandchild').write_text(str(os.getpid()))
+ while True:time.sleep(1)
+while not (Path('fault-child').exists() and Path('fault-grandchild').exists()):time.sleep(.01)
+Path('fault-ready').write_text(str(os.getpid()))
+while True:time.sleep(1)
+'''
         native=(ROOT/'v2/tests/service_claude_native.py').read_text()
         executable.write_text(native.replace('import json',proof+'\nimport json',1));executable.chmod(0o555)
         package=self.package.root
@@ -275,7 +290,13 @@ class Rehearsal:
         self.manager=Manager(self.package.root,self.manifest)
         dispatch=self.manager.dispatch
         def observed_dispatch(*args,**kwargs):
-            try:return dispatch(*args,**kwargs)
+            try:
+                result=dispatch(*args,**kwargs)
+                if self.fault_orphan and args[0]['operation']=='admit':
+                    for key,window in self.manager.windows.items():
+                        self.held_observers[key]=window.children.observe
+                        window.children.observe=lambda:None
+                return result
             except BaseException as error:
                 self.pump_errors.append('dispatch: '+type(error).__name__+': '+str(error));raise
         self.manager.dispatch=observed_dispatch
@@ -290,7 +311,22 @@ class Rehearsal:
         wait(ready,'authority server and manager ready')
         def pump():
             try:
-                while not self.pump_stop.is_set():self.manager.once()
+                while not self.pump_stop.is_set():
+                    ready=self.fixture.root/'claude-workspace/fault-ready'
+                    if self.fault_orphan and not self.fault_injected and ready.exists():
+                        directory=ready.parent
+                        self.fault_originals=[process(int((directory/name).read_text())) for name in
+                            ('fault-ready','fault-child','fault-grandchild')]
+                        handle=next(iter(self.manager.launcher.children.values()))
+                        assert all(len(window.children.records)==1 for window in self.manager.windows.values())
+                        handle.child.kill()
+                        deadline=time.monotonic()+3
+                        while handle.child.poll() is None:
+                            assert time.monotonic()<deadline;time.sleep(.001)
+                        assert handle.child.returncode==-9
+                        self.fault_injected=True
+                        for key,observer in self.held_observers.items():self.manager.windows[key].children.observe=observer
+                    self.manager.once()
             except BaseException as error:self.pump_errors.append(type(error).__name__+': '+str(error))
         self.pump=threading.Thread(target=pump,daemon=True);self.pump.start()
 
@@ -307,6 +343,7 @@ class Rehearsal:
             'expected_generation':0,'window_id':None,'predecessor_window_id':None},
             {})
         assert status==201,(status,window)
+        if self.fault_orphan:return self.fault_result()
         workers=self.exercise_worker_reuse(path) if self.provider=='workers' else []
         core=self.package.data/'core.sqlite3'
         def accepted():
@@ -331,6 +368,33 @@ class Rehearsal:
                     scoped_attachment_read_only=self.attachment_export,
                     provider=self.provider,actual_provider=False,live_activation=False,production_startup_gate_bypassed_only_in_test=True)
 
+    def fault_result(self):
+        def quarantined():
+            assert not self.pump_errors,self.pump_errors
+            return (self.fault_injected and self.manager.custody_fault and self.manager.adopted and
+                self.manager.adopted.records and all(record.gone() for record in self.manager.adopted.records.values()))
+        wait(quarantined,'unobserved owned orphans globally reaped and manager quarantined')
+        self.pump_stop.set();self.pump.join(timeout=3)
+        assert not self.pump.is_alive()
+        assert all(not exists(identity) for identity in self.fault_originals)
+        states=[self.manager.ledger.details(window.window,window.generation)
+                for window in self.manager.windows.values()]
+        assert states and all(state['state']=='reconciliation' for state in states)
+        claims=[json.loads(path.read_text()) for path in (self.package.ledger_directory/'launches').glob('*.json')]
+        assert claims and all(claim['state']=='unknown' and claim['exit_code']==-9 for claim in claims)
+        with sqlite3.connect((self.package.data/'core.sqlite3').as_uri()+'?mode=ro',uri=True) as db:
+            assert db.execute('SELECT count(*) FROM production_runs').fetchone()[0]==0
+        for operation in ('admit','launch_child','retire','reconcile','extend'):
+            try:self.manager.dispatch({'operation':operation,'owner_id':self.package.owner,'conversation_id':self.conversation})
+            except Refused as error:assert str(error)=='manager_custody_fault'
+            else:raise AssertionError('faulted manager admitted authority transition')
+        self.fault_qualified=True
+        return dict(fault_injected=True,unobserved_orphans=len(self.manager.adopted.records),
+            global_reaped=True,authority_transitions_fenced=True,window_states=[state['state'] for state in states],
+            launch_states=[claim['state'] for claim in claims],broker_exit=-9,business_runs=0,
+            manager_recovered=False,physical_cleanup_only=True,
+            provider=self.provider,actual_provider=False,live_activation=False,production_startup_gate_bypassed_only_in_test=True)
+
     def close(self):
         self.pump_stop.set()
         if self.pump:self.pump.join(timeout=3)
@@ -339,7 +403,12 @@ class Rehearsal:
                 clean=self.manager.close()
                 if self.process and self.process.stderr:self.process.stderr.close()
                 self.process=None
-                assert clean,'managed shutdown failed custody/reap proof'
+                if self.fault_orphan:
+                    from codex_service.ownership import Adopted
+                    assert getattr(self,'fault_qualified',False) and not clean and self.manager.custody_fault
+                    assert all(not exists(identity) for identity in self.fault_originals)
+                    assert not Adopted.children(self.manager.adopted.parent),'root actor children remain'
+                else:assert clean,'managed shutdown failed custody/reap proof'
             else:self.stop_raw()
         finally:self.fixture.close()
 
@@ -349,13 +418,19 @@ def main():
     parser.add_argument('binary');parser.add_argument('--report',required=True)
     parser.add_argument('--provider',choices=('codex','claude','workers'),default='codex')
     parser.add_argument('--attachment-export',action='store_true')
+    parser.add_argument('--fault-orphan',action='store_true')
     args=parser.parse_args();assert os.geteuid()==0,'root-only synthetic test'
     os.umask(0o077)
-    case=Rehearsal(args.binary,args.provider,args.attachment_export);report={'passed':False,'actual_provider':False,'live_activation':False}
+    case=Rehearsal(args.binary,args.provider,args.attachment_export,args.fault_orphan);report={'passed':False,'actual_provider':False,'live_activation':False}
     try:report.update(case.run(),passed=True)
     except BaseException as error:
         report['error_type']=type(error).__name__;report['fixture']=str(case.fixture.root)
         report['error']=str(error);report['manager_errors']=case.pump_errors
+        if case.fault_orphan:
+            report['fault_injected']=case.fault_injected
+            report['custody_fault']=bool(case.manager and case.manager.custody_fault)
+            report['adopted_count']=len(case.manager.adopted.records) if case.manager and case.manager.adopted else 0
+            report['fault_originals']=[dict(identity,live=exists(identity)) for identity in getattr(case,'fault_originals',[])]
         proof=case.fixture.account/'sessions/synthetic-attachment-proof'
         if proof.exists():report['synthetic_attachment_proof']=proof.read_text()
         report['launches']=[{k:value.get(k) for k in ('state','role','exit_code')} for p in
@@ -377,6 +452,6 @@ def main():
         finally:
             fd=os.open(args.report,os.O_CREAT|os.O_WRONLY|os.O_TRUNC,0o600)
             with os.fdopen(fd,'w') as stream:json.dump(report,stream,indent=2)
-    print('synthetic managed Core/Codex FD flow passed')
+    print('synthetic managed Core/provider FD flow passed')
 
 if __name__=='__main__':main()

@@ -52,7 +52,7 @@ class Handle:
 class Launcher:
     def __init__(self,package,server):
         require(os.geteuid()==0 and package.identity_split,'split_root_launcher_required')
-        self.package=package;self.server=dict(server);self.children={}
+        self.package=package;self.server=dict(server);self.children={};self.proxies={}
         self.manager=process(os.getpid())
         require(self.manager and self.manager['uid']==0,'launch_manager_identity')
         self.directory=package.ledger_directory/'launches'
@@ -119,6 +119,7 @@ class Launcher:
                 'proxy_pid':proxy['pid'],'proxy_start':proxy['start']}
         atomic(path,record)  # a crash/lost reply never authorizes another spawn
         proxy_proof=Process(proxy)
+        self.proxies[(proxy['pid'],proxy['start'])]=proxy_proof
         lifecycle=socket.socket(fileno=os.dup(descriptors[3]));lifecycle.setblocking(False)
         child=None
         receipt=None
@@ -185,7 +186,7 @@ class Launcher:
                 if child is not None and not (receipt and receipt.consumed):
                     child.kill();child.wait(timeout=2)
                     self.children.pop(identity,None)
-                    lifecycle.close();proxy_proof.close()
+                    lifecycle.close()
             raise
         finally:
             parent.close();capsule.close()
@@ -204,9 +205,16 @@ class Launcher:
             except OSError:
                 if not handle.cancelled:cancelled.append((handle.window,handle.generation))
                 handle.cancelled=True
-            if handle.proxy.exited() and not handle.cancelled:
+            if not handle.cancelled and handle.proxy.exited():
                 cancelled.append((handle.window,handle.generation));handle.cancelled=True
             code=child.poll()
+            if code is not None:
+                record=json.loads(path.read_text())
+                if record['state']=='unknown' and 'exit_code' not in record:
+                    record['exit_code']=code;atomic(path,record)
+            if code is not None and code<0 and not handle.cancelled:
+                cancelled.append((handle.window,handle.generation));handle.cancelled=True
+                record=json.loads(path.read_text());record.update(state='unknown',exit_code=code);atomic(path,record)
             if code is not None and released(handle.window,handle.generation,handle.broker):
                 record=json.loads(path.read_text());record['exit_code']=code
                 if handle.cancelled:record['state']='quarantined'
@@ -215,9 +223,29 @@ class Launcher:
                 status=125 if handle.cancelled else code if code>=0 else min(255,128-code)
                 try:handle.lifecycle.sendall(('exit:%d\n'%status).encode())
                 except OSError:pass
-                handle.lifecycle.close();handle.proxy.close();del self.children[key]
+                handle.lifecycle.close();del self.children[key]
+        for key,proxy in list(self.proxies.items()):
+            if proxy.exited():
+                current=process(proxy.identity['pid'])
+                if current and current['start']==proxy.identity['start'] and current['ppid']==os.getpid():
+                    try:os.waitid(os.P_PIDFD,proxy.fd,os.WEXITED|os.WNOHANG)
+                    except ChildProcessError:pass
+            if proxy.gone():proxy.close();del self.proxies[key]
         return cancelled
+
+    def fault(self):
+        """Persist global association loss without inventing a role result."""
+        for handle in self.children.values():
+            handle.cancelled=True
+            record=json.loads(handle.path.read_text());record['state']='unknown'
+            code=handle.child.poll()
+            if code is not None:record['exit_code']=code
+            atomic(handle.path,record)
 
     def close(self):
         # A caller supplies actual owned-tree release proof via poll first.
         require(not self.children, 'managed_launch_children_not_reaped')
+        if not exists(self.server):
+            require(not self.proxies,'managed_proxy_not_reaped')
+        for proxy in self.proxies.values():proxy.close()
+        self.proxies.clear()

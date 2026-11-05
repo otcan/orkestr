@@ -437,3 +437,27 @@ attachment is read through the conversation mount, a separate owner-writable
 canary proves the mount itself rejects writes, and another group-readable
 conversation's file is absent. This uses a small fixed fixture; large encrypted
 upload, publication and revocation acceptance remain separate checks.
+
+### Faulted managed actors
+
+The root launcher remains the sole reaper of its actual broker `Popen` Child;
+window pidfd cleanup cannot consume that wait or replace a negative status with
+an apparent zero exit. Proxy pidfds stay pinned until actual reap. Negative or
+lost outcomes remain unknown/quarantined and cannot replay.
+
+If this exact root subreaper adopts previously unobserved executor descendants,
+original kernel parentage and pidfds provide global cleanup custody only. The
+manager freezes affected window associations and further authority transitions,
+then reaps that owned pool without assigning a conversation/role to its members.
+Checks before control operations and after original child reap protect terminal
+commits from incomplete descendant snapshots. A global cleanup never repairs
+lost semantic ownership or converts it into business completion.
+
+The explicit `--provider claude --fault-orphan` disposable HTTP fixture kills the
+real broker before window observation, after its synthetic host native forks an
+escaped child and grandchild. It requires all three original identities reaped,
+zero business runs, retained reconciliation/unknown states, preserved `-9` exit,
+and fenced admit/extend/launch/retire/reconcile operations. Its manager remains
+faulted: passing this check proves physical cleanup, not automatic recovery or
+production activation. A separate kernel test preserves another known same-UID
+peer and never scans or kills processes merely by UID.

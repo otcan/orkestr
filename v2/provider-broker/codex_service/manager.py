@@ -37,6 +37,8 @@ class Manager:
         self.guard = threading.RLock()
         self.failed = self.closed = False
         self.launcher = None
+        self.adopted = None
+        self.custody_fault = False
         try:
             self.lock = StateLock(self.package.ledger_directory)
             self.ledger = Ledger(self.lock.path, self.package.owner, self.package.conversation)
@@ -49,9 +51,9 @@ class Manager:
         require(not self.closed and self.child is None, "manager_already_started")
         require(ctypes.CDLL(None, use_errno=True).prctl(36, 1, 0, 0, 0) == 0, "root_subreaper")
         package = self.package
-        # The legacy direct-child launcher cannot cross UIDs. Until the narrow
-        # root-manager FD-transfer launcher is qualified, never start a split
-        # server and silently fall back to its privileged authority identity.
+        # Fresh transport has disposable rehearsal coverage, but the required
+        # privileged helpers, resume and full used-workflow parity are not yet
+        # qualified. Keep production split startup closed until that cutover.
         require(not getattr(package, "identity_split", False), "split_launch_unqualified")
         command = [str(Path("/usr/bin/python3").resolve()), "-I", "-S", "-B",
                    str(package.root / "codex_service/entry.py"), "server", str(os.getpid())]
@@ -154,6 +156,9 @@ class Manager:
     def dispatch(self, request, deadline=None, descriptors=()):
         self.ledger._scope(request)
         operation = request["operation"]
+        self._capture_orphans()
+        require(not getattr(self,'custody_fault',False) or operation in ('status','drain','uncertain'),
+                'manager_custody_fault')
         if operation == "status":
             return {"ok": True, "receipt": self.ledger.status(request["conversation_id"])}
         if operation == "admit":
@@ -237,6 +242,8 @@ class Manager:
                     self._cleanup_notice(window)
                     require(not window.children.uncertain, "owned_cleanup_uncertain")
                     require(False, "owned_child_not_reaped")
+            self._capture_orphans()
+            require(not getattr(self,'custody_fault',False),'manager_custody_fault')
             receipt = self.ledger.reconcile(request)
             if window is not None:
                 with self.guard:
@@ -250,6 +257,8 @@ class Manager:
             self._close_egress(window)
             # Metadata-only exact Core proof after original observed child reap.
             # This remains legal after normal expiry; uncertainty never recovers.
+        self._capture_orphans()
+        require(not getattr(self,'custody_fault',False),'manager_custody_fault')
         receipt = self.ledger.retire(request)
         if window is not None:
             with self.guard:
@@ -270,7 +279,32 @@ class Manager:
                              (window.window, window.generation, reason, bool(children.forced)))
             sys.stderr.flush()
 
+    def _known_children(self):
+        known={(self.identity['pid'],self.identity['start'])} if self.identity else set()
+        for window in self.windows.values():known.update(window.children.records)
+        if self.launcher:
+            known.update(self.launcher.proxies)
+            known.update((h.broker['pid'],h.broker['start']) for h in self.launcher.children.values())
+        return known
+
+    def _capture_orphans(self):
+        if not getattr(getattr(self,'package',None),'identity_split',False) or not self.identity:return
+        if self.adopted is None:
+            from .ownership import Adopted
+            self.adopted=Adopted(self.package)
+        known=self._known_children()
+        if self.adopted.capture(known):
+            self.failed=self.custody_fault=True
+            if self.launcher:self.launcher.fault()
+            self._uncertain_all('cleanup_unknown')
+            for window in self.windows.values():
+                window.children._observation_failed(Refused('owned_child_association_unknown'))
+                self._terminate(window,wait=0)
+        if self.adopted.records:
+            require(self.adopted.drain(known),'adopted_children_not_reaped')
+
     def tick(self):
+        self._capture_orphans()
         if getattr(self, "launcher", None) is not None:
             def released(window_id, generation, broker):
                 window=self.windows.get(window_id)
@@ -384,6 +418,8 @@ class Manager:
                 errors.append("window_cleanup")
         except Exception:
             errors.append("window_cleanup")
+        try:self._capture_orphans()
+        except Exception:errors.append('adopted_cleanup')
         if getattr(self, "launcher", None) is not None:
             try:
                 self.launcher.poll(lambda window_id,generation,broker:bool(self.windows.get(window_id) and
@@ -399,6 +435,7 @@ class Manager:
                 errors.append("window_cleanup")
         for window in list(self.windows.values()):
             window.children.close()
+        if getattr(self,'adopted',None) is not None:self.adopted.close()
         for item in (self.control, self.ledger, self.lock):
             if item is not None:
                 try:

@@ -155,8 +155,12 @@ p.wait()
         value['setup']['generation']+=1
         with self.assertRaisesRegex(Refused,'proxy_already_claimed'):
             self.launcher.launch(value,self.fds,lambda _:self.fail(),time.monotonic()+4)
-        children.cleanup(seconds=1)
+        handle=next(iter(self.launcher.children.values()))
+        children.cleanup(seconds=.05)
         self.launcher.poll(lambda *_:True)
+        record=json.loads(handle.path.read_text())
+        self.assertEqual(record['exit_code'],-9,'Launcher must retain the original Child exit status')
+        self.assertEqual(record['state'],'quarantined')
         self.launcher.close()
         self.assertIsNone(process(identity['pid']))
 

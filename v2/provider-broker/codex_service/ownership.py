@@ -107,6 +107,7 @@ class Children:
         self.bound = HOST_MAX_CHILDREN if self.host else MAX_CHILDREN
         self.records = {}
         self.brokers = set()
+        self.managed_brokers = set()
         self.families = {}
         self.forced = self.uncertain = False
         self.uncertainty_reason = None
@@ -195,6 +196,7 @@ class Children:
                 "managed_launch_reused")
         record = self.remember(identity)
         self.brokers.add(key)
+        self.managed_brokers.add(key)
         self.families[key]={key}
         receipt.consumed = True
         record.send(signal.SIGCONT)
@@ -333,10 +335,10 @@ class Children:
                 record.send(signal.SIGKILL)
         deadline = time.monotonic() + seconds
         while any(not record.gone() for record in self.records.values()):
-            for record in self.records.values():
+            for key,record in self.records.items():
                 # We may adopt an orphan under the root subreaper. Never wait on
                 # arbitrary pids; wait only original owned identities/pidfds.
-                if record.exited() and same(record.identity, record.any_uid):
+                if key not in self.managed_brokers and record.exited() and same(record.identity, record.any_uid):
                     try:
                         os.waitid(os.P_PIDFD, record.fd, os.WEXITED | os.WNOHANG)
                     except ChildProcessError:
@@ -350,3 +352,87 @@ class Children:
     def close(self):
         for record in self.records.values():
             record.close()
+
+
+class Adopted:
+    """Unassigned kernel-adopted children: cleanup custody, never role authority.
+
+    Only this exact root subreaper's direct children can enter this pool. No
+    caller PID, same-UID scan, transcript or empty snapshot grants ownership.
+    Discovering one permanently faults the manager; global reap never repairs
+    the missing window/role association or authorizes a replay.
+    """
+    def __init__(self,package):
+        require(os.geteuid()==0 and package.identity_split,'adopted_root_manager')
+        import ctypes
+        selected=ctypes.c_int()
+        require(ctypes.CDLL(None).prctl(37,ctypes.byref(selected),0,0,0)==0 and selected.value==1,
+                'adopted_subreaper_required')
+        self.parent=process(os.getpid());self.uid=package.executor_uid;self.records={}
+
+    def _remember(self,identity):
+        key=(identity['pid'],identity['start'])
+        require(identity['uid']==self.uid,'adopted_executor_identity')
+        if key not in self.records:
+            require(len(self.records)<MAX_CHILDREN,'adopted_child_bound')
+            try:self.records[key]=Process(identity)
+            except Vanished:return False
+            return True
+        return False
+
+    @staticmethod
+    def children(identity):
+        if not exists(identity):return []
+        root=Path('/proc',str(identity['pid']),'task')
+        try:tasks=list(root.iterdir())
+        except FileNotFoundError:return []
+        require(len(tasks)<=MAX_CHILDREN,'adopted_thread_bound')
+        pids=set()
+        for task in tasks:
+            try:
+                with (task/'children').open('rb') as stream:raw=stream.read(8193)
+            except (FileNotFoundError,ProcessLookupError):continue
+            require(len(raw)<=8192,'adopted_child_bound')
+            for token in raw.split():
+                require(token.isdigit(),'adopted_child_metadata');pids.add(int(token))
+        require(len(pids)<=MAX_CHILDREN,'adopted_child_bound')
+        return pids
+
+    def capture(self,known):
+        require(exists(self.parent) and self.parent['pid']==os.getpid(),'adopted_manager_changed')
+        added=False
+        for pid in self.children(self.parent):
+            identity=process(pid)
+            if identity is None or identity['ppid']!=self.parent['pid']:continue
+            key=(pid,identity['start'])
+            if key in known:continue
+            added=self._remember(identity) or added
+        return added
+
+    def observe(self):
+        pending=[record.identity for record in self.records.values()];seen=set()
+        while pending:
+            parent=pending.pop();key=(parent['pid'],parent['start'])
+            if key in seen:continue
+            seen.add(key)
+            for pid in self.children(parent):
+                child=process(pid)
+                if child is None or child['ppid']!=parent['pid']:continue
+                self._remember(child);pending.append(child)
+
+    def drain(self,known,seconds=2):
+        deadline=time.monotonic()+seconds
+        while True:
+            self.capture(known);self.observe()
+            for record in reversed(list(self.records.values())):
+                record.send(signal.SIGKILL)
+            for record in self.records.values():
+                if record.exited() and same(record.identity):
+                    try:os.waitid(os.P_PIDFD,record.fd,os.WEXITED|os.WNOHANG)
+                    except ChildProcessError:pass
+            if all(record.gone() for record in self.records.values()):return True
+            if time.monotonic()>=deadline:return False
+            time.sleep(.01)
+
+    def close(self):
+        for record in self.records.values():record.close()
