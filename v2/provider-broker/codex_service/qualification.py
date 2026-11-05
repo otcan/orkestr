@@ -220,6 +220,8 @@ class Gate:
             os.close(folder)
 
     def observe(self, identity):
+        from .resource_receipt import verify_package
+        verify_package(self.package)
         _, current = read(self.path, 65536)
         require(current == self.record_hash, 'qualification_record_replaced')
         held = self.hold_identity()

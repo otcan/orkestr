@@ -214,6 +214,22 @@ def main():
     from codex_bounded import trust
     for key, value in records.items():
         trust.remember(key, value)  # Package re-checks these without rehashing.
+    if mode in ("manager", "recover-owner-password") and os.geteuid() == 0:
+        runtime = trust.metadata(root / "service.json")
+        if "resource_namespace" in runtime:
+            if expected is None or not re.fullmatch(r"[0-9a-f]{64}", expected):
+                raise ValueError("manifest pin required")
+            from codex_service.resource_contract import context
+            from codex_service.resource_namespace import Activation
+            beta = trust.metadata(root / "beta.json", 262144)
+            profile = trust.metadata(root / "profile.json")
+            claude = trust.metadata(root / "claude-private.json") if "claude" in beta else None
+            with Activation(runtime["resource_namespace"], context(runtime,beta,profile,claude,root)):
+                return dispatch(root, mode, arguments, expected, manifest_digest, records)
+    return dispatch(root, mode, arguments, expected, manifest_digest, records)
+
+
+def dispatch(root, mode, arguments, expected, manifest_digest, records):
     from codex_service.package import Package
     package = Package(root, expected)
     if mode == "recover-owner-password":
