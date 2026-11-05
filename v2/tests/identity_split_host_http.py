@@ -35,8 +35,24 @@ class HostRehearsal(resume.ResumeRehearsal):
         manifest = json.loads(manifest_path.read_text()); manifest['files'][helper.name] = digest(helper)
         manifest_path.write_text(json.dumps(manifest))
         if provider == 'codex': self.configure_host_native()
-        else: self.trace_path = self.mapped / 'claude-peer.jsonl'
+        else:
+            self.trace_path = self.mapped / 'claude-peer.jsonl'
+            executable = self.fixture.root / 'synthetic-claude'
+            executable.write_text(executable.read_text().replace('import json',
+                'import os\nassert os.getcwd() == ' + repr(str(self.mapped)) + '\nimport json', 1))
         self.refresh_manifest()
+
+    def initialize_core(self):
+        super().initialize_core()
+        # Initialization creates the real conversation UUID; the initial dummy
+        # fixture UUID must never accidentally exercise only fallback cwd.
+        path = self.package.root / 'beta.json'; beta = json.loads(path.read_text())
+        beta['conversation_workspaces'] = {self.conversation: str(self.mapped)}
+        path.write_text(json.dumps(beta)); self.refresh_manifest()
+        check = 'import os,sys\ntry:os.stat(sys.argv[1])\nexcept PermissionError:pass\nelse:raise AssertionError("Core can traverse executor project")'
+        subprocess.run(['/usr/bin/python3', '-I', '-S', '-B', '-c', check, str(self.mapped)],
+            user=self.package.authority_uid, group=GID, extra_groups=[], check=True,
+            env={'PATH': '/usr/bin:/bin', 'PYTHONDONTWRITEBYTECODE': '1'}, capture_output=True)
 
     def configure_host_native(self):
         # Derive only this disposable oracle's host protocol variant. This is
@@ -57,6 +73,8 @@ class HostRehearsal(resume.ResumeRehearsal):
         source = source.replace('/account/auth.json', str(self.fixture.auth))
         source = source.replace('/account', str(self.fixture.account))
         source = source.replace('readOnly', 'dangerFullAccess')
+        source = source.replace('if (!getcwd(cwd, sizeof(cwd))) return 30;',
+            'if (!getcwd(cwd, sizeof(cwd)) || strcmp(cwd, ' + json.dumps(str(self.mapped)) + ')) return 30;')
         generated = self.fixture.root / 'synthetic-managed-host.c'; generated.write_text(source)
         self.synthetic_sha256 = hashlib.sha256(source.encode()).hexdigest()
         subprocess.run(['/usr/bin/cc','-std=c11','-O2','-Wall','-Wextra','-Werror',

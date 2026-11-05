@@ -63,7 +63,7 @@ impl ChildDirectories {
         Ok(result)
     }
 
-    pub(super) fn managed_workspace(&self) -> bool {
+    pub(crate) fn managed_workspace(&self) -> bool {
         self.managed_workspace
     }
 
@@ -83,7 +83,7 @@ impl ChildDirectories {
         Ok(self)
     }
 
-    pub(super) fn workspace(&self) -> &Path {
+    pub(crate) fn workspace(&self) -> &Path {
         &self.workspace
     }
 

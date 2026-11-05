@@ -117,7 +117,8 @@ async fn revoked_or_foreign_selection_cannot_replace_the_current_controller() {
         Arc::new(InitialAuthority::new(&config).unwrap()),
         Handles::new(owner.clone(), conversation.clone()).unwrap(),
         manager,
-    );
+    )
+    .unwrap();
     let input = ExecutionWindowRequest {
         request_key: "one-intent".into(),
         input_message_id: orkestr_v2_contracts::MessageId(Uuid::new_v4()),
@@ -229,7 +230,8 @@ async fn historical_admission_replay_never_selects_or_closes_another_conversatio
         Arc::new(InitialAuthority::new(&config).unwrap()),
         Handles::new(owner.clone(), selected.conversation_id.clone()).unwrap(),
         manager,
-    );
+    )
+    .unwrap();
     let WindowOutcome::Admitted(replay) = controller
         .process("synthetic-browser", &owner, &original, &input)
         .await
@@ -404,6 +406,7 @@ async fn deploy_drain_queues_fresh_input_durably_and_reports_drained() {
         Handles::new(owner.clone(), conversation.clone()).unwrap(),
         manager,
     )
+    .unwrap()
     .with_deploy_drain(drain.clone());
     let input = ExecutionWindowRequest {
         request_key: "drained-window".into(),

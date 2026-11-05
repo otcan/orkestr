@@ -52,9 +52,10 @@ impl Controller {
         initial: Arc<InitialAuthority>,
         handles: Handles,
         manager: ManagerClient,
-    ) -> Self {
+    ) -> Result<Self, &'static str> {
+        let primary = selected_config(&config, &config.conversation_id)?;
         let configured = Arc::new(ConversationController::new(
-            config.clone(),
+            primary,
             home.clone(),
             store.clone(),
             initial,
@@ -63,7 +64,7 @@ impl Controller {
         ));
         let mut conversations = HashMap::new();
         conversations.insert(config.conversation_id.clone(), configured);
-        Self {
+        Ok(Self {
             capacity: config.active_windows(),
             config,
             home,
@@ -73,7 +74,7 @@ impl Controller {
             opening: tokio::sync::Mutex::new(()),
             queue: QueueState::default(),
             drain: Arc::default(),
-        }
+        })
     }
 
     /// Trusted startup only: share the process's operator deploy drain.

@@ -166,6 +166,8 @@ impl PreparingCodex {
         if grant.provider() != ProviderKind::Codex
             || if workspace_launch.is_some() {
                 workspace != Path::new("/workspace")
+            } else if directories.managed_workspace() {
+                workspace != directories.workspace()
             } else {
                 workspace.canonicalize().ok().as_deref() != Some(workspace)
             }

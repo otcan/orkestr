@@ -216,7 +216,7 @@ impl AppState {
                 initial.clone(),
                 handles.clone(),
                 manager,
-            )
+            )?
             .with_deploy_drain(self.deploy_drain.clone()),
         );
         controller.start_dispatcher();
