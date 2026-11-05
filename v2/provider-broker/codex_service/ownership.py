@@ -368,11 +368,15 @@ class Adopted:
         selected=ctypes.c_int()
         require(ctypes.CDLL(None).prctl(37,ctypes.byref(selected),0,0,0)==0 and selected.value==1,
                 'adopted_subreaper_required')
-        self.parent=process(os.getpid());self.uid=package.executor_uid;self.records={}
+        self.parent=process(os.getpid());self.uids={package.executor_uid,package.authority_uid};self.records={}
+        require(len(self.uids)==2 and all(type(uid) is int and uid>0 for uid in self.uids),'adopted_identity_split')
 
     def _remember(self,identity):
         key=(identity['pid'],identity['start'])
-        require(identity['uid']==self.uid,'adopted_executor_identity')
+        # Failed setup may orphan an authority-UID proxy before Root received
+        # its launch claim. Kernel adoption grants physical cleanup custody
+        # only, just as for executor orphans; it never reconstructs a role.
+        require(identity['uid'] in self.uids,'adopted_executor_identity')
         if key not in self.records:
             require(len(self.records)<MAX_CHILDREN,'adopted_child_bound')
             try:self.records[key]=Process(identity)

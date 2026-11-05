@@ -13,9 +13,28 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from identity_split_service_http import Rehearsal, wait
 from codex_bounded.trust import exists
+from codex_service.ownership import Adopted
 
 
 class ResumeRehearsal(Rehearsal):
+    def start_rehearsal(self):
+        original=Adopted._remember
+        def remember(pool, identity):
+            try:return original(pool,identity)
+            except BaseException:
+                self.unknown_adopted=dict(identity)
+                try:self.unknown_adopted['executable']=str(Path('/proc',str(identity['pid']),'exe').resolve())
+                except OSError:pass
+                raise
+        self.original_remember=original
+        Adopted._remember=remember
+        super().start_rehearsal()
+
+    def close(self):
+        try:super().close()
+        finally:
+            if hasattr(self,'original_remember'):Adopted._remember=self.original_remember
+
     def rows(self, query, args=()):
         with sqlite3.connect((self.package.data / 'core.sqlite3').as_uri() + '?mode=ro', uri=True) as db:
             db.execute('PRAGMA query_only=ON')
@@ -28,14 +47,24 @@ class ResumeRehearsal(Rehearsal):
     def run(self):
         report = super().run()
         first = self.rows("SELECT id,role,native_session_id FROM production_runs ORDER BY role")
-        def retired():
-            assert not self.pump_errors, self.pump_errors
-            return any(r['state'] == 'exited' and r['setup']['role'] == 'deep'
-                       for r in self.claims())
-        wait(retired, 'original accepted Deep broker physically retired', seconds=15)
         path = '/api/v2/conversations/' + self.conversation
         code, window = self.request(path + '/window')
         assert code == 200 and window['generation'] == 1, (code, window)
+        # The supported operator drain retires accepted idle natively owned
+        # processes and their window. No terminal/ownership SQL is modified.
+        drain=self.package.data/'deploy-drain.request'
+        drain.touch(mode=0o600);os.chown(drain,self.package.authority_uid,self.package.authority_gid)
+        def retired():
+            assert not self.pump_errors, self.pump_errors
+            code,current=self.request(path+'/window')
+            return code==200 and current['state']=='closed' and all(
+                r['state']=='exited' for r in self.claims())
+        wait(retired, 'accepted idle window drained and original brokers retired', seconds=20)
+        drain.unlink()
+        def resumed_admission():
+            status=self.package.data/'deploy-drain.status.json'
+            return status.exists() and json.loads(status.read_text())['draining'] is False
+        wait(resumed_admission,'operator drain released',seconds=5)
         key = 'synthetic-split-second'
         code, receipt = self.request(path + '/messages', 'POST',
             {'client_message_id': key, 'text': 'synthetic ordinary HTTP input 2', 'author': 'owner'})
@@ -43,8 +72,8 @@ class ResumeRehearsal(Rehearsal):
         code, admission = self.request(path + '/window', 'POST',
             {'request_key': 'window:' + key, 'input_message_id': receipt['message_id'],
              'input_event_id': receipt['event_id'], 'input_request_key': key,
-             'expected_generation': 1, 'window_id': window['window_id'],
-             'predecessor_window_id': None})
+             'expected_generation': 1, 'window_id': None,
+             'predecessor_window_id': window['window_id']})
         assert code == 201, (code, admission)
         def completed():
             assert not self.pump_errors, self.pump_errors
@@ -95,7 +124,8 @@ def main():
         report.update(case.run(), passed=True)
     except BaseException as error:
         report.update(error_type=type(error).__name__, error=str(error),
-                      manager_errors=case.pump_errors, launch_claims=case.claims())
+                      manager_errors=case.pump_errors, launch_claims=case.claims(),
+                      unknown_adopted=getattr(case,'unknown_adopted',None))
         if (case.package.data / 'core.sqlite3').exists():
             report['runs'] = case.rows('SELECT id,role,state,native_session_id FROM production_runs')
         raise
