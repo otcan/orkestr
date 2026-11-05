@@ -70,6 +70,10 @@ processes cannot claim this identity. Registration comes only from the original
 tracked broker's SCM_CREDENTIALS and direct Popen child. Native wrappers lacking
 this proof remain unsupported. Yama protection is required; a copied path or
 caller-supplied bearer/PID/header is never authentication.
+The socket/native proof is refreshed across partial reads, before dispatch and
+before every response, including after a long helper wait. A cached pidfd alone
+cannot preserve authority after the original Root pipe or socket custody changes;
+loss of custody fences admission and cancels an active fixed helper.
 
 Terminal effect evidence is persisted before Core issues a distinct one-use
 result release. Its writer fence verifies the still-current consumed run and

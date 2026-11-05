@@ -168,6 +168,7 @@ class Ingress:
                     require(exists(peer.proof.identity) and not peer.proof.exited(),'managed_caller_gone')
                     require(self.manager._desk_window_active(peer.source['window_id'],peer.source['window_generation']),
                             'managed_window_closed')
+                    if hasattr(peer,'authenticate'):peer.authenticate()
                 if peer.path is None:
                     try:value=peer.receive()
                     except BlockingIOError:continue
@@ -195,7 +196,10 @@ class Ingress:
             except Exception:
                 if peer.path and peer.path.exists():
                     record=metadata(peer.path,32768)
-                    if record['state'] not in ('completed','unknown','cancelled'):record['state']='unknown';atomic(peer.path,record)
+                    if record['state'] not in ('completed','unknown','cancelled'):
+                        record['state']='unknown';atomic(peer.path,record)
+                        if record['request']['operation']=='desk_login' and self.manager.desk:
+                            self.manager.desk.cancel(record['request_id'])
                 peer.close();self.peers.remove(peer)
         # Process metadata-only original-broker registrations before accepting
         # native HTTP connections created during that same startup interval.
@@ -208,8 +212,14 @@ class Ingress:
     def pending(self,window,generation):
         if not self.manager._desk_window_active(window,generation):return []
         # Disk contains durable claims, never reconstructed caller authority.
-        live={p.request:p.source for p in self.peers if p.request and p.proof is not None and time.monotonic()<p.deadline
-              and exists(p.proof.identity) and not p.proof.exited()}
+        live={}
+        for p in self.peers:
+            if not (p.request and p.proof is not None and time.monotonic()<p.deadline
+                    and exists(p.proof.identity) and not p.proof.exited()):continue
+            try:
+                if hasattr(p,'authenticate'):p.authenticate()
+            except Exception:continue
+            live[p.request]=p.source
         result=[]
         for path in self.directory.glob('*.json'):
             record=metadata(path,32768);scope=record['source']
