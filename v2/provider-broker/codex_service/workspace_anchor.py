@@ -88,6 +88,8 @@ def main(package, arguments):
                     identity(workspace) == installation.identities[0], 'managed_anchor_project_changed')
             require(all(stat.S_ISFIFO(os.fstat(fd).st_mode) for fd in (out, err)), 'managed_anchor_output_type')
             execution_environment = environment(trusted['managed_executor'], installation.credential_protected, installation.workspace)
+            from .resource_projects import git_environment
+            execution_environment = git_environment(package,execution_environment)
             root = Root(profile['cgroup_root']); job = Job(root, 'job-' + value['operation_id'], cgroup); job.check()
             timeout = trusted.get('job_timeout_ms', 1800000) if background else trusted.get('command_timeout_ms', 30000)
             require(type(timeout) is int and 1 <= timeout <= (1800000 if background else 30000), 'managed_anchor_timeout')

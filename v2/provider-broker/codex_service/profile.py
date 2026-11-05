@@ -26,6 +26,9 @@ class Configuration:
         # with the real executor environment (V1-equivalent, host-root equivalent).
         self.host_full_access = type(access) is dict and access.get("providers", True) is True
         self.host_environment = dict(access["environment"]) if self.host_full_access else None
+        if self.host_environment is not None:
+            from .resource_projects import git_environment
+            self.host_environment = git_environment(package,self.host_environment)
         self.host_environment_files = list(access.get("environment_files", [])) if self.host_full_access else []
         # Host natives run real commands: a CommandExecution item/completed
         # carries the full aggregated output and can exceed the 64 KiB default.

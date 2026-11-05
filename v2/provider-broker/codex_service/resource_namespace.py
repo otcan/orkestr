@@ -4,17 +4,14 @@ Original credential data is never read or copied. Existing Root process/child
 custody owns the namespace; there is no service, general command or RPC port.
 """
 import ctypes
-import hashlib
-import json
 import os
 from pathlib import Path
 import stat
-import subprocess
 
 from codex_bounded.trust import protected,private,process
 from .contract import require
 from .resource_contract import load,validate,selection,encoded,open_source,DIRECTORIES,READONLY
-from .resource_receipt import ns,receipt_path,mount_id,verify,check_source,FORMAT
+from .resource_receipt import ns,receipt_path,mount_id,verify,check_source,original_source,FORMAT
 from .resource_probe import denied
 
 CLONE_NEWNS=0x20000
@@ -48,26 +45,41 @@ def target(ctx,row):
 class Activation:
     def __init__(self,selected,ctx):
         self.selected=selected;self.ctx=ctx;self.original=None;self.mounted=[];self.receipt=None;self.receipt_identity=None
+        self.homes=[];self.sources=[];self.projects=[]
 
     def __enter__(self):
         if self.selected is None:return self
+        try:return self.activate()
+        except BaseException:
+            self.__exit__(None,None,None);raise
+
+    def activate(self):
         require(os.geteuid()==0,'resource_namespace_root')
         doc=validate(load(self.selected),self.ctx)
         require(doc['receipt_directory']==self.selected['receipt_directory'],'resource_receipt_binding')
         self.doc=doc
-        # Original homes are not mounted or chmodded. A fresh executor must
-        # lack traversal in the actual original filesystem, not merely a mask.
+        # Original home permissions never change. Before any private sparse
+        # projection, verify the fresh executor lacks real host traversal.
         for home in doc['source_homes']:
-            f=open_source(home['path'],doc['source_owner_uid'],True)
+            f=open_source(home['path'],home.get('uid',doc['source_owner_uid']),True,doc['source_homes'])
             try:
                 info=os.fstat(f)
                 require((info.st_dev,info.st_ino,info.st_uid,info.st_gid)==
-                    (home['device'],home['inode'],doc['source_owner_uid'],home['gid']),
+                    (home['device'],home['inode'],home.get('uid',doc['source_owner_uid']),home['gid']),
                     'resource_source_home_changed')
-            finally:os.close(f)
+            except BaseException:os.close(f);raise
+            self.homes.append(dict(home,uid=home.get('uid',doc['source_owner_uid']),fd=f))
         denied(self.ctx['executor_uid'],self.ctx['executor_gid'],
             [{'path':h['path'],'operation':'traverse_home'} for h in doc['source_homes']])
-        for row in doc['resources']:check_source(row)
+        for row in doc['resources']:
+            check_source(row,self.homes,process(os.getpid()),doc['source_homes'])
+            source=original_source(row,self.homes,process(os.getpid()),doc['source_homes'])
+            try:
+                from .resource_mount import clone_source
+                self.sources.append(clone_source(source))
+            finally:os.close(source)
+        from .resource_projects import prepare
+        self.projects=prepare(self.ctx,doc)
         directory=Path(self.selected['receipt_directory'])
         if not directory.exists():
             protected(directory.parent,True);directory.mkdir(mode=0o750)
@@ -77,40 +89,38 @@ class Activation:
                 'resource_receipt_directory')
         self.original=os.open('/proc/self/ns/mnt',os.O_RDONLY|os.O_CLOEXEC)
         parent=ns('mnt');libc=ctypes.CDLL(None,use_errno=True)
-        try:
-            require(libc.unshare(CLONE_NEWNS)==0,'resource_unshare')
-            require(libc.mount(None,b'/',None,(1<<18)|(1<<14),None)==0,'resource_private_propagation')
-            targets=[]
-            for row in doc['resources']:
-                source=open_source(row['source'],row['uid'],row['kind'] in DIRECTORIES)
-                parentfd,placeholder,name=target(self.ctx,row)
-                try:
-                    from .resource_mount import attach
-                    attach(source,placeholder,row['uid'],row['gid'],self.ctx['executor_uid'],
-                           self.ctx['executor_gid'],row['kind'] in READONLY,row['kind']!='toolchain')
-                    mounted=os.open(name,os.O_PATH|os.O_NOFOLLOW|os.O_CLOEXEC,dir_fd=parentfd)
-                    self.mounted.append(mounted)
-                    targets.append({'target':row['target'],'mount_id':mount_id(mounted)})
-                finally:
-                    os.close(source);os.close(parentfd);os.close(placeholder)
-            checks=[{'path':str(self.ctx['home']),'operation':'read'},*doc['denials']]
-            denied(self.ctx['executor_uid'],self.ctx['executor_gid'],checks)
-            denied(self.ctx['authority_uid'],self.ctx['authority_gid'],[
-                {'path':row['target'],'operation':'read'} for row in doc['resources'] if row['kind'] not in READONLY])
-            value=dict(format=FORMAT,contract=doc,creator=process(os.getpid()),namespace=ns('mnt'),
-                       parent_namespace=parent,user_namespace=ns('user'),targets=targets)
-            self.receipt=receipt_path(self.selected)
-            fd=os.open(self.receipt,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW|os.O_CLOEXEC,0o440)
+        require(libc.unshare(CLONE_NEWNS)==0,'resource_unshare')
+        require(libc.mount(None,b'/',None,(1<<18)|(1<<14),None)==0,'resource_private_propagation')
+        from .resource_projects import install
+        projected=install(self.ctx,doc,self.projects,self.mounted)
+        targets=[]
+        for row,source in zip(doc['resources'],self.sources):
+            parentfd,placeholder,name=target(self.ctx,row)
             try:
-                os.fchown(fd,0,self.ctx['executor_gid']);os.fchmod(fd,0o440)
-                with os.fdopen(fd,'wb',closefd=False) as out:
-                    out.write(encoded(value));out.flush();os.fsync(fd)
-                self.receipt_identity=(os.fstat(fd).st_dev,os.fstat(fd).st_ino)
-            finally:os.close(fd)
-            verify(self.selected,self.ctx)
-            return self
-        except BaseException:
-            self.__exit__(None,None,None);raise
+                from .resource_mount import attach
+                attach(source,placeholder,row['uid'],row['gid'],self.ctx['executor_uid'],
+                       self.ctx['executor_gid'],row['kind'] in READONLY,row['kind']!='toolchain',tree=source)
+                mounted=os.open(name,os.O_PATH|os.O_NOFOLLOW|os.O_CLOEXEC,dir_fd=parentfd)
+                self.mounted.append(mounted)
+                targets.append({'target':row['target'],'mount_id':mount_id(mounted)})
+            finally:
+                os.close(parentfd);os.close(placeholder)
+        checks=[{'path':str(self.ctx['home']),'operation':'read'},*doc['denials']]
+        denied(self.ctx['executor_uid'],self.ctx['executor_gid'],checks)
+        denied(self.ctx['authority_uid'],self.ctx['authority_gid'],[
+            {'path':row['target'],'operation':'read'} for row in doc['resources'] if row['kind'] not in READONLY])
+        value=dict(format=FORMAT,contract=doc,creator=process(os.getpid()),namespace=ns('mnt'),
+                   parent_namespace=parent,user_namespace=ns('user'),targets=targets,home_lookups=self.homes,projects=projected)
+        self.receipt=receipt_path(self.selected)
+        fd=os.open(self.receipt,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW|os.O_CLOEXEC,0o440)
+        try:
+            os.fchown(fd,0,self.ctx['executor_gid']);os.fchmod(fd,0o440)
+            with os.fdopen(fd,'wb',closefd=False) as out:
+                out.write(encoded(value));out.flush();os.fsync(fd)
+            self.receipt_identity=(os.fstat(fd).st_dev,os.fstat(fd).st_ino)
+        finally:os.close(fd)
+        verify(self.selected,self.ctx)
+        return self
 
     def __exit__(self,*_):
         if self.selected is None:return
@@ -129,4 +139,7 @@ class Activation:
         if self.original is not None:
             if libc.setns(self.original,CLONE_NEWNS)!=0:errors.append('resource_namespace_restore')
             os.close(self.original);self.original=None
+        for fd in [*self.sources,*[h['fd'] for h in self.homes],*[p[k] for p in self.projects for k in ('fd','tree')]]:
+            os.close(fd)
+        self.sources=[];self.homes=[];self.projects=[]
         require(not errors,'resource_cleanup')
