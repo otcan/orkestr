@@ -22,7 +22,7 @@ class DeskOperationTests(identity_tests.SplitPackageTests):
     test_executor_cannot_read_replace_authority_or_gain_setuid_with_nnp=None
     test_external_server_configurations_require_authority_private_custody=None
 
-    def prepare(self,mode='complete'):
+    def prepare(self,mode='complete',duration_ms=30000,wait_seconds=30):
         self.package=self.select_split();root=self.fixture.root
         self.marker=root/'helper-proof.json'
         helper=root/'fixed-helper'
@@ -35,12 +35,12 @@ assert set(os.environ)<=set(['PATH','LANG','PYTHONDONTWRITEBYTECODE','LC_CTYPE']
 first=subprocess.Popen(['/usr/bin/python3','-I','-S','-B','-c','import os,time;os.fork();time.sleep(30)'],start_new_session=True)
 p=Path(%r);p.write_text(json.dumps({'helper':os.getpid(),'escaped':first.pid}));p.chmod(0o600)
 %s
-'''%(self.package.conversation,str(self.marker),'time.sleep(30)' if mode=='wait' else ''))
+'''%(self.package.conversation,str(self.marker),'time.sleep(%s)'%wait_seconds if mode=='wait' else ''))
         helper.chmod(0o550)
         definition=root/'desk-definitions.json'
         definition.write_text(json.dumps({'format':'orkestr-desk-operations-v1','operations':{'synthetic-login':{
             'helper':str(helper),'sha256':digest(helper),'conversation_id':self.package.conversation,
-            'desk':'synthetic-desk','site':'example.invalid','duration_ms':30000}}}))
+            'desk':'synthetic-desk','site':'example.invalid','duration_ms':duration_ms}}}))
         definition.chmod(0o440)
         runtime=self.package.root/'service.json';value=json.loads(runtime.read_text())
         value['desk_login']={'path':str(definition),'sha256':digest(definition)};runtime.write_text(json.dumps(value))
@@ -83,6 +83,42 @@ p=Path(%r);p.write_text(json.dumps({'helper':os.getpid(),'escaped':first.pid}));
         self.assertIsNone(process(proof['helper']));self.assertIsNone(process(proof['escaped']))
         with patch('subprocess.Popen',side_effect=AssertionError('must not replay')):
             self.assertEqual(self.operations.start(self.request,self.launcher),result)
+
+    def test_renewal_keeps_original_helper_alive_without_extending_hard_deadline(self):
+        self.prepare('wait',duration_ms=4000,wait_seconds=.8)
+        cap=self.request['capability'];cap['expires_at_ms']=int(time.time()*1000)+500
+        cap['hard_deadline_ms']=int(time.time()*1000)+5000
+        self.operations.start(self.request,self.launcher);time.sleep(.2)
+        operation=cap['operation_id'];hard=cap['hard_deadline_ms']
+        with self.assertRaisesRegex(Refused,'desk_renewal_scope'):
+            self.operations.renew(operation,2,int(time.time()*1000)+1500,hard+1)
+        self.operations.renew(operation,2,int(time.time()*1000)+1500,hard)
+        result=self.finish();self.assertEqual(result['state'],'helper_completed');self.assertTrue(result['cleanup'])
+        record=json.loads((self.operations.directory/(operation+'.json')).read_text())
+        self.assertEqual(record['lease_generation'],2);self.assertLessEqual(record['hard_deadline_ms'],hard)
+
+    def test_expired_lease_cannot_revive_original_helper(self):
+        self.prepare('wait',duration_ms=4000)
+        cap=self.request['capability'];cap['expires_at_ms']=int(time.time()*1000)+150
+        cap['hard_deadline_ms']=int(time.time()*1000)+5000
+        self.operations.start(self.request,self.launcher);time.sleep(.2)
+        with self.assertRaises(Refused):
+            self.operations.renew(cap['operation_id'],2,int(time.time()*1000)+1500,cap['hard_deadline_ms'])
+        result=self.finish();self.assertEqual(result['state'],'cancelled');self.assertTrue(result['cleanup'])
+
+    def test_expiry_before_payload_delivery_proves_no_helper_spawn_with_echild(self):
+        self.prepare('wait',duration_ms=4000)
+        cap=self.request['capability'];cap['expires_at_ms']=int(time.time()*1000)+100
+        cap['hard_deadline_ms']=int(time.time()*1000)+5000
+        original=subprocess.Popen
+        def delay(*args,**kwargs):
+            child=original(*args,**kwargs);time.sleep(.2);return child
+        with patch('codex_service.desk_operations.subprocess.Popen',side_effect=delay):
+            self.operations.start(self.request,self.launcher)
+        result=self.finish();self.assertEqual(result['state'],'cancelled');self.assertTrue(result['cleanup'])
+        record=json.loads((self.operations.directory/(cap['operation_id']+'.json')).read_text())
+        self.assertEqual(record['anchor_proof'],{'cleanup':True,'cancelled':True,'helper_exit':125,'helper_started':False})
+        self.assertFalse(self.marker.exists())
 
     def test_cancellation_reaps_actual_root_and_detached_children(self):
         self.prepare('wait');self.operations.start(self.request,self.launcher)

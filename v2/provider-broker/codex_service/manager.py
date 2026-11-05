@@ -39,6 +39,7 @@ class Manager:
         self.launcher = None
         self.desk = None
         self.workspace_projects = None
+        self.managed = None
         self.adopted = None
         self.custody_fault = False
         try:
@@ -48,6 +49,9 @@ class Manager:
             if self.package.runtime.get('desk_login'):
                 from .desk_operations import Operations
                 self.desk=Operations(self.package)
+            if self.package.runtime.get('managed_operations'):
+                from .managed_ingress import Ingress
+                self.managed=Ingress(self)
         except BaseException:
             self.close()
             raise
@@ -165,7 +169,7 @@ class Manager:
         self.ledger._scope(request)
         operation = request["operation"]
         self._capture_orphans()
-        require(not getattr(self,'custody_fault',False) or operation in ('status','drain','uncertain','desk_login_poll','desk_login_cancel'),
+        require(not getattr(self,'custody_fault',False) or operation in ('status','drain','uncertain','desk_login_poll','desk_login_cancel','managed_poll','managed_cancel','managed_run_close'),
                 'manager_custody_fault')
         if operation == "status":
             return {"ok": True, "receipt": self.ledger.status(request["conversation_id"])}
@@ -182,6 +186,9 @@ class Manager:
         row = self.ledger.details(request["window_id"], request["generation"])
         require(row["conversation"] == request["conversation_id"], "scope")
         window = self.windows.get(request["window_id"])
+        if operation in ('managed_pending','managed_consume','managed_poll','managed_cancel','managed_run_open','managed_run_close','managed_renew'):
+            from .managed_control import dispatch
+            return dispatch(self,request,window)
         if operation in ('desk_login','desk_login_poll','desk_login_cancel'):
             from .desk_operations import dispatch
             return dispatch(self,request,window)
@@ -328,6 +335,9 @@ class Manager:
 
     def tick(self):
         if getattr(self,'desk',None):self.desk.tick(self._desk_window_active)
+        if getattr(self,'managed',None):
+            from .managed_control import tick
+            tick(self.managed);self.managed.tick()
         self._capture_orphans()
         if getattr(self, "launcher", None) is not None:
             def released(window_id, generation, broker):
@@ -438,6 +448,7 @@ class Manager:
                 errors.append("server_cleanup")
         try:
             self._uncertain_all("manager_stopped")
+            if getattr(self,'managed',None):self.managed.close()
             if getattr(self,'desk',None) and not self.desk.close():errors.append('desk_cleanup')
             if not self._terminate_all():
                 errors.append("window_cleanup")

@@ -39,6 +39,7 @@ def pump_type(base, become_subreaper):
             finally:
                 for descriptor in descriptors:
                     os.close(descriptor)
+            if native_io is not None:native_io.attest(self.child)
             for pipe in (self.child.stdin, self.child.stdout):
                 os.set_blocking(pipe.fileno(), False)
             require(self.handoff is not None, "native_writer_handoff_required")

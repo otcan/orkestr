@@ -63,7 +63,7 @@ class OwnedSocket:
             # The root-private flock proves the old manager is gone. Never
             # unlink an unrecorded/replaced endpoint or erase window history.
             self.path.unlink()
-        self.socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.socket = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET if name=='managed' else socket.SOCK_STREAM)
         self.identity = None
         try:
             self.socket.bind(str(self.path))

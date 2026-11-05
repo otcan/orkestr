@@ -17,6 +17,9 @@ use std::path::PathBuf;
 #[serde(deny_unknown_fields)]
 pub(crate) struct BetaConfig {
     pub schema_version: u32,
+    /// Root-controlled external admission hold, retained across process restarts.
+    #[serde(default)]
+    pub deploy_maintenance_marker: Option<PathBuf>,
     #[serde(default)]
     pub identity_split: Option<identity_split::IdentitySplit>,
     pub owner_id: OwnerId,
@@ -140,6 +143,13 @@ impl BetaConfig {
                 .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
         {
             return Err("invalid beta configuration");
+        }
+        if self
+            .deploy_maintenance_marker
+            .as_ref()
+            .is_some_and(|path| !conversation_workspace_path(path))
+        {
+            return Err("invalid deploy maintenance path");
         }
         if let Some(identity) = &self.identity_split {
             identity.validate()?;

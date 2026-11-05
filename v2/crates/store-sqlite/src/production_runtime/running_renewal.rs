@@ -12,6 +12,9 @@ pub struct RunRenewalAuthority {
 }
 
 impl RunRenewalAuthority {
+    pub(super) fn current_provider(&self) -> &ProviderAdmission {
+        &self.provider
+    }
     /// Immutable owner/host budget deadline, for trusted scheduling only.
     /// None means no extended Worker budget was issued; ordinary lease and
     /// current authority checks still apply on every operation.

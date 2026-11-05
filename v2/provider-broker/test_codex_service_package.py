@@ -79,6 +79,25 @@ class PackageTests(unittest.TestCase):
         self.assertFalse(package.endpoint.exists())
         self.assertEqual(list(self.fixture.account.iterdir()), [])
 
+    def test_optional_maintenance_marker_is_external_root_controlled_and_not_inventory(self):
+        directory = self.fixture.root / "operator-maintenance"
+        directory.mkdir(mode=0o755)
+        marker = directory / "hold"
+        self.fixture.alter("beta.json", lambda value: value.update(deploy_maintenance_marker=str(marker)))
+        package = Package(self.root, self.fixture.receipt["manifest_sha256"])
+        self.assertNotIn(str(marker), package.manifest["files"])
+        self.assertFalse(marker.exists(), "packaging never creates or clears maintenance")
+        marker.write_text("synthetic transition")
+        Package(self.root, self.fixture.receipt["manifest_sha256"])
+        directory.chmod(0o777)
+        with self.assertRaises(TrustRefused):
+            Package(self.root, self.fixture.receipt["manifest_sha256"])
+        directory.chmod(0o755)
+        for invalid in ("relative/hold", str(self.fixture.home / "hold")):
+            self.fixture.alter("beta.json", lambda value: value.update(deploy_maintenance_marker=invalid))
+            with self.assertRaises((Refused, TrustRefused)):
+                Package(self.root, self.fixture.receipt["manifest_sha256"])
+
     def test_running_package_rechecks_root_owned_bytecode_without_relaxing_inventory(self):
         package = Package(self.root, self.receipt["manifest_sha256"])
         cache = self.root / "broker/__pycache__"

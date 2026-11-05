@@ -17,8 +17,8 @@ MODULES_SERVICE = ("__init__.py", "contract.py", "ledger.py", "budget.py", "cust
                    "server_child.py", "broker.py", "profile.py", "entry.py", "role_profiles.py",
                    "claude_broker.py", "identity.py", "launch.py", "launch_child.py", "proxy.py", "attachment_exports.py",
                    "password_recovery.py", "managed_resume.py", "managed_host.py", "native_io.py", "desk_operations.py", "desk_anchor.py",
-                   "workspace_custody.py", "workspace_setup.py", "workspace_environment.py",
-                   "workspace_cgroup.py", "workspace_anchor.py")
+                   "workspace_custody.py", "workspace_setup.py", "workspace_environment.py", "workspace_cgroup.py", "workspace_anchor.py",
+                   "managed_ingress.py", "managed_control.py", "managed_client.py", "managed_native.py", "managed_runs.py")
 # Shared with the server and packager: room for many per-conversation
 # command profiles.
 MAX_BETA_CONFIG_BYTES = 262144
@@ -150,7 +150,7 @@ class Package:
 
     def _bind(self):
         value = self.runtime
-        require(set(value) - IDENTITY_FIELDS - {"operator_recovery", "desk_login", "password_rotation_ready", "attachment_export_dir", "live_map", "desktop_broker", "timer_config", "v1_chat_icons_dir", "whatsapp_chats", "claude_quota_projection", "codex_quota_projection", "metrics_port"} == {"format", "uid", "gid", "owner_id", "conversation_id", "home",
+        require(set(value) - IDENTITY_FIELDS - {"operator_recovery", "desk_login", "managed_operations", "password_rotation_ready", "attachment_export_dir", "live_map", "desktop_broker", "timer_config", "v1_chat_icons_dir", "whatsapp_chats", "claude_quota_projection", "codex_quota_projection", "metrics_port"} == {"format", "uid", "gid", "owner_id", "conversation_id", "home",
                 "bootstrap_file", "ledger_directory", "endpoint_directory", "port", "trusted_origin"}
                 and value["format"] == "orkestr-v2-codex-service-v1", "service_format")
         require("password_rotation_ready" not in value or type(value["password_rotation_ready"]) is bool,
@@ -186,6 +186,8 @@ class Package:
         self.identity_split = identity["split"]
         self.authority_uid, self.authority_gid = identity["authority_uid"], identity["authority_gid"]
         self.executor_uid, self.executor_gid = identity["executor_uid"], identity["executor_gid"]
+        if 'managed_operations' in value:
+            require(self.identity_split and value['managed_operations'] is True,'managed_split_configuration')
         if 'desk_login' in value:
             selected=value['desk_login']
             require(self.identity_split and type(selected) is dict and set(selected)=={'path','sha256'} and
@@ -223,10 +225,15 @@ class Package:
         beta = self.beta
         require(set(beta) - {"roles", "workspace_exec", "additional_workspace_exec", "max_active_windows",
                              "window_max_minutes", "conversation_window_max_minutes",
-                             "host_full_access", "managed_host", "claude", "conversation_workspaces", "provider_routing", "identity_split"} == {"schema_version", "owner_id", "conversation_id", "manager_socket",
+                             "host_full_access", "managed_host", "claude", "conversation_workspaces", "provider_routing", "identity_split", "deploy_maintenance_marker"} == {"schema_version", "owner_id", "conversation_id", "manager_socket",
                 "launcher", "launcher_sha256", "workspace", "namespace", "supervisor_key"}
                 and type(beta["schema_version"]) is int and beta["schema_version"] == 1,
                 "beta_format")
+        if "deploy_maintenance_marker" in beta:
+            marker = Path(live_map_path(beta["deploy_maintenance_marker"]))
+            require(str(marker) == beta["deploy_maintenance_marker"]
+                    and self.home not in (marker, *marker.parents), "maintenance_marker_path")
+            protected(marker.parent, True)
         if self.identity_split:
             require(not any(key in beta for key in ("host_full_access", "workspace_exec", "additional_workspace_exec")),
                     "split_privileged_or_advanced_mode_unsupported")
@@ -411,6 +418,7 @@ class Package:
                 "ORKESTR_V2_UI_DIST": str(self.root / "ui"),
                 "ORKESTR_V2_ORIGIN": self.runtime["trusted_origin"],
                 **({'ORKESTR_V2_DESK_LOGIN_ENABLED':'1'} if 'desk_login' in self.runtime else {}),
+                **({'ORKESTR_V2_MANAGED_OPERATIONS_ENABLED':'1'} if self.runtime.get('managed_operations') else {}),
                 **({"ORKESTR_V2_PASSWORD_ROTATION_READY": "1" if self.runtime["password_rotation_ready"] else "0"}
                    if "password_rotation_ready" in self.runtime else {}),
                 ACCESS_LOG_ENV: "quiet",

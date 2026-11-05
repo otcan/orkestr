@@ -77,6 +77,23 @@ class Selected(unittest.TestCase):
         with authority(REPO,source) as (_,manager,_):
             package=manager.Package(self.root/'release/package',sha(self.root/'release/package/manifest.json'))
             self.assertEqual(package.environment()['ORKESTR_V2_METRICS_BIND'],'127.0.0.1:19850')
+
+    def test_root_maintenance_marker_is_emitted_only_as_external_beta_configuration(self):
+        self.current_source()
+        parent=self.root/'maintenance';parent.mkdir(mode=0o755)
+        marker=str(parent/'admission.hold')
+        self.plan['deploy_maintenance_marker']=marker
+        selected.prepare(self.plan)
+        package=self.root/'release/package'
+        self.assertEqual(json.loads((package/'beta.json').read_bytes())['deploy_maintenance_marker'],marker)
+        self.assertNotIn('deploy_maintenance_marker',json.loads((package/'service.json').read_bytes()))
+        self.assertFalse(Path(marker).exists(),'packaging never clears or creates the admission hold')
+
+    def test_maintenance_alias_or_core_home_path_refuses_before_output(self):
+        for marker in ('relative',str(self.root/'home'/'hold'),'/srv/example/../hold','/srv/example//hold'):
+            self.plan['deploy_maintenance_marker']=marker
+            with self.subTest(marker=marker),self.assertRaises(RuntimeError):selected.prepare(self.plan)
+            self.assertFalse((self.root/'release').exists())
     def test_attachment_export_bad_shape_or_scope_refused_before_output(self):
         for value in (True, None, '/', 'relative', '/a//b', '/a/../b',
                       self.plan['home'], self.plan['workspace']+'/export',

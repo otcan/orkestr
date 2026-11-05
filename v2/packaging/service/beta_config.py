@@ -24,7 +24,9 @@ def provider_routing(value):
     if 'provider_routing' not in value:
         return
     policy = value['provider_routing']
-    require(type(policy) is dict and set(policy) == {'rules'}, 'closed provider routing policy required')
+    require(type(policy) is dict and set(policy) - {'allow_native_handoff'} == {'rules'}
+            and type(policy.get('allow_native_handoff', False)) is bool,
+            'closed provider routing policy required')
     rules = policy['rules']
     require(type(rules) is list and 1 <= len(rules) <= 32, 'bounded provider routing rules required')
     ids = set()
@@ -149,7 +151,7 @@ def validate(raw):
     require(type(raw) is bytes and len(raw) <= MAX_BETA_CONFIG_BYTES, 'bounded beta config required')
     value = json.loads(raw.decode('utf-8'), object_pairs_hook=unique,
                        parse_constant=lambda _: (_ for _ in ()).throw(RuntimeError('invalid beta number')))
-    require(type(value) is dict and set(value) - {'roles', 'workspace_exec', 'additional_workspace_exec', 'max_active_windows', 'host_full_access', 'claude', 'window_max_minutes', 'conversation_window_max_minutes', 'conversation_workspaces', 'provider_routing', 'identity_split', 'managed_host'} == FIELDS, 'closed beta config fields required')
+    require(type(value) is dict and set(value) - {'roles', 'workspace_exec', 'additional_workspace_exec', 'max_active_windows', 'host_full_access', 'claude', 'window_max_minutes', 'conversation_window_max_minutes', 'conversation_workspaces', 'provider_routing', 'identity_split', 'managed_host', 'deploy_maintenance_marker'} == FIELDS, 'closed beta config fields required')
     require(type(value['schema_version']) is int and value['schema_version'] == 1, 'beta schema version')
     for name in ('owner_id', 'conversation_id'):
         text = value[name]
@@ -165,6 +167,11 @@ def validate(raw):
     for name in ('namespace', 'supervisor_key'):
         require(type(value[name]) is str and re.fullmatch(r'[A-Za-z0-9_.:-]{1,128}', value[name]), 'bounded beta identifier required')
     require(type(value['launcher_sha256']) is str and re.fullmatch('[0-9a-f]{64}', value['launcher_sha256']), 'beta launcher digest required')
+    if 'deploy_maintenance_marker' in value:
+        marker=value['deploy_maintenance_marker']
+        require(absolute(marker) and not marker.endswith('/')
+                and all(part not in ('','.','..') for part in marker.split('/')[1:]),
+                'normalized deploy maintenance marker required')
     if 'identity_split' in value:
         identity=value['identity_split']
         require(type(identity) is dict and set(identity)=={'authority_uid','executor_uid','shared_gid'}
