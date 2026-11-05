@@ -42,11 +42,12 @@ class ManagedSpawn:
 
 
 class Handle:
-    def __init__(self,child,path,lifecycle,proxy,window,generation,broker):
+    def __init__(self,child,path,lifecycle,proxy,window,generation,broker,native_io=None):
         self.child,self.path,self.lifecycle,self.proxy=child,path,lifecycle,proxy
         self.window,self.generation=window,generation
         self.cancelled=False
         self.broker=dict(broker)
+        self.native_io=native_io
 
 
 class Launcher:
@@ -150,10 +151,17 @@ class Launcher:
             if request['mode']=='resume':
                 resume_fd=fcntl.fcntl(descriptors[4],fcntl.F_DUPFD_CLOEXEC,10)
                 inherited.append(resume_fd)
+            from .native_io import create as create_native_io
+            native_io = create_native_io()
+            inherited.extend(native_io)
+            native_identity = {name: {'device': os.fstat(fd).st_dev, 'inode': os.fstat(fd).st_ino}
+                               for name, fd in zip(('input', 'output'), (native_io[0], native_io[2]))}
+            record['native_io'] = native_identity
+            atomic(path,record)
             interpreter=str(Path('/usr/bin/python3').resolve())
             command=[interpreter,'-I','-S','-B',str(self.package.root/'codex_service/entry.py'),
                      'launch-child',str(provider_fd),str(capsule_fd),str(resume_fd),request['role'],request['mode'],
-                     str(os.getpid()),str(self.manager['start'])]
+                     str(os.getpid()),str(self.manager['start']),','.join(map(str,native_io))]
             child=subprocess.Popen(command,stdin=descriptors[0],stdout=descriptors[1],stderr=subprocess.DEVNULL,
                                    cwd='/',env={'PATH':'/usr/bin:/bin','LANG':'C.UTF-8','PYTHONDONTWRITEBYTECODE':'1'},
                                    pass_fds=tuple(inherited),start_new_session=True)
@@ -174,7 +182,7 @@ class Launcher:
             receipt=ManagedSpawn(current,self.server,self.manager['pid'],request['window_id'],
                                  request['generation'],request['role'],proxy)
             # Register original pidfd/window/role ownership before continuation.
-            self.children[identity]=Handle(child,path,lifecycle,proxy_proof,request["window_id"],request["generation"],current)
+            self.children[identity]=Handle(child,path,lifecycle,proxy_proof,request["window_id"],request["generation"],current,native_identity)
             register(receipt)
             require(receipt.consumed,'launch_registration_missing')
             record.update(state='spawned',broker_pid=current['pid'],broker_start=current['start'])

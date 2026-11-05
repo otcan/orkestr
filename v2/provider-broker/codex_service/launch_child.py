@@ -15,9 +15,13 @@ from .identity import enforce_no_new_privs
 
 def main(package, arguments):
     from codex_bounded.trust import process
-    require(os.geteuid() == 0 and package.identity_split and len(arguments) == 7,
+    require(os.geteuid() == 0 and package.identity_split and len(arguments) == 8,
             'manager_launch_bootstrap')
-    provider, capsule, resume, role, mode, parent, start = arguments
+    provider, capsule, resume, role, mode, parent, start, native_io = arguments
+    require(len(native_io.split(",")) == 4 and all(v.isdigit() for v in native_io.split(",")), "native_io_fields")
+    native_io = list(map(int, native_io.split(",")))
+    from .native_io import validate as validate_native_io, SLOTS
+    validate_native_io(native_io)
     require(all(v.isdigit() for v in (provider, capsule, resume, parent, start)), 'launch_descriptor_fields')
     provider, capsule, resume, parent, start = map(int, (provider, capsule, resume, parent, start))
     require(mode in ('fresh','resume') and ((resume==0) if mode=='fresh' else
@@ -30,16 +34,20 @@ def main(package, arguments):
     with socket.socket(fileno=os.dup(capsule)) as proof:
         pid, uid, _ = struct.unpack('3i', proof.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
         require(pid == parent and uid == 0, 'launch_manager_capsule')
+    require(len(set(native_io + [provider, capsule] + ([resume] if resume else []))) == 6 + bool(resume),
+            "native_io_descriptor_alias")
     # Duplicate above destinations first so descriptor remapping never clobbers
     # another source; no arbitrary source file or executable is opened.
     import fcntl
     a=fcntl.fcntl(provider,fcntl.F_DUPFD_CLOEXEC,10)
     b=fcntl.fcntl(capsule,fcntl.F_DUPFD_CLOEXEC,10)
     c=fcntl.fcntl(resume,fcntl.F_DUPFD_CLOEXEC,10) if resume else None
+    io_copies = [fcntl.fcntl(fd,fcntl.F_DUPFD_CLOEXEC,20) for fd in native_io]
     os.dup2(a,3,inheritable=True);os.dup2(b,6,inheritable=True)
     if c is not None:os.dup2(c,4,inheritable=True)
     os.close(a);os.close(b)
-    os.closerange(7,1048576)
+    for source,target in zip(io_copies,SLOTS): os.dup2(source,target,inheritable=True)
+    os.closerange(11,1048576)
     os.closerange(5,6)
     if c is None:os.closerange(4,5)
     os.setgroups([])

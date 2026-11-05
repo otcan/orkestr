@@ -135,7 +135,9 @@ class Pump:
         command = self.config.command()
         if getattr(self.config, "uncontained", False) is not True:
             command = contained_command(command)
-        self.child = subprocess.Popen(command, env=self.config.environment(),
+        native_io = getattr(self.config, "native_io", None)
+        spawn = native_io.spawn if native_io is not None else subprocess.Popen
+        self.child = spawn(command, env=self.config.environment(),
                                       cwd=self.config.workspace, stdin=subprocess.PIPE,
                                       stdout=subprocess.PIPE,
                                       stderr=subprocess.PIPE if self.stderr_capture is not None else subprocess.DEVNULL,
