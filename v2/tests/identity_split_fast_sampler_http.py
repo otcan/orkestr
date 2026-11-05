@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import time
 
 sys.path.insert(0,str(Path(__file__).resolve().parent))
 from identity_split_host_fast_http import FastHostRehearsal
@@ -19,7 +20,28 @@ from codex_service.fast_sampler import capture,verify
 class FastSamplerObservations:
     def initialize_samples(self):
         self.samples=self.fixture.root/'fast-proofs';self.samples.mkdir(mode=0o700)
-        self.observations=[]
+        self.observations=[];self.pending_samples={}
+
+    def fast_pending_observed(self,fact):
+        # Optional private service-adapter witness, before the fixture releases
+        # its original ELF result. No operation or business message is issued.
+        pass
+
+    def observe_pending_fast(self,path,body):
+        lookup=path[:-len('/window')]+'/fast-runs/lookup'
+        deadline=time.monotonic()+20
+        while time.monotonic()<deadline:
+            code,fact=super().request(lookup,'POST',dict(input_message_id=body['input_message_id'],
+                input_event_id=body['input_event_id']))
+            if code==200:
+                result=self.pending_samples.get(fact['run_id']) or capture(self.package,fact,self.samples)
+                if result['status']=='observed':
+                    self.pending_samples[fact['run_id']]=result
+                    self.fast_pending_observed(fact)
+                    (self.mapped/(fact['native_session_id']+'.sampled')).touch(mode=0o400)
+                    return
+            time.sleep(.02)
+        raise AssertionError('original pending Fast actor was not observed')
 
     def request(self,path,method='GET',body=None,headers=None):
         response=super().request(path,method,body,headers)
@@ -29,10 +51,12 @@ class FastSamplerObservations:
                 input_event_id=body['input_event_id']))
             assert code==200,(code,fact)
             assert fact['state']=='succeeded' and fact['acceptance_event_id'] is not None,fact
-            result=capture(self.package,fact,self.samples)
+            result=self.pending_samples.get(fact['run_id']) or capture(self.package,fact,self.samples)
             assert result['status']=='observed',result
             accepted=verify(result['receipt_path'],fact,package=self.package)
             assert accepted['status']=='accepted',accepted
+            if fact['run_id'] in self.pending_samples:
+                (self.mapped/(fact['native_session_id']+'.sampled')).unlink()
             snapshot=json.loads(Path(result['receipt_path']).read_text())
             assert snapshot['launch']['identity']['setup']['role']=='fast'
             assert accepted['native_pid_claim'] is None and not accepted['original_native_pid_registered']

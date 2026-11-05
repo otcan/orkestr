@@ -1,22 +1,43 @@
-"""Three existing synthetic Claude inputs, with cold-retirement and warm Fast.
+"""Three existing synthetic Claude inputs, with provider-specific Fast resume.
 
-This adapts the existing host fixture to the same Fast sequence as Codex. No
+This adapts the existing host fixture to retired-window and warm presentation. No
 provider API, extra message, live account or configured profile is introduced.
 """
 import json
+import hashlib
+import subprocess
 import os
 
 from identity_split_host_http import HostRehearsal
-from identity_split_service_http import Rehearsal, wait
+from identity_split_service_http import ROOT, Rehearsal, wait
 
 
 class ClaudeFastRehearsal(HostRehearsal):
     def __init__(self, binary):
         super().__init__(binary, 'claude')
+        source=(ROOT/'v2/tests/managed_mcp_claude_native.c').read_text()
+        source=source.replace('(void)mcp_configuration;', '(void)mcp_configuration; (void)mcp_request;')
+        source=source.replace('if ((read_only && *mcp_url) || (!read_only && !*mcp_url)) return 23;', 'if (*mcp_url) return 23;')
+        source='\n'.join(line for line in source.splitlines() if not line.strip().startswith('mcp_request('))+'\n'
+        marker='    printf("{\\\"type\\\":\\\"result\\\"'
+        position=source.index(marker,source.index('int main('))
+        source=source[:position]+'    if (read_only) {\n        char ack[128]; snprintf(ack,sizeof(ack),"%s.sampled",native);\n        time_t deadline=time(NULL)+30;\n        while(access(ack,F_OK)) { if(time(NULL)>=deadline)return 93; usleep(10000); }\n    }\n'+source[position:]
+        generated=self.fixture.root/'synthetic-claude-fast.c';generated.write_text(source)
+        self.synthetic_sha256=hashlib.sha256(source.encode()).hexdigest()
+        executable=self.fixture.root/'synthetic-claude'
+        subprocess.run(['/usr/bin/cc','-std=c11','-O2','-Wall','-Wextra','-Werror',
+            '-I'+str(ROOT/'v2/tests'),
+            '-DORKESTR_TEST_AUTHORITY_CORE='+json.dumps(str(self.package.data/'core.sqlite3')),
+            '-DORKESTR_TEST_WORKSPACE='+json.dumps(str(self.mapped)),
+            str(generated),'-o',str(executable)],check=True,capture_output=True,
+            env={'PATH':'/usr/bin:/bin'})
+        os.chown(executable,0,self.package.executor_gid);executable.chmod(0o550)
+        self.refresh_manifest()
 
     def request(self, path, method='GET', body=None, headers=None):
         response = super().request(path, method, body, headers)
         if method == 'POST' and path.endswith('/window') and response[0] == 201:
+            self.observe_pending_fast(path,body)
             def completed():
                 assert not self.pump_errors, self.pump_errors
                 rows = self.rows('SELECT role,state FROM production_runs WHERE message_id=?',
@@ -65,8 +86,16 @@ class ClaudeFastRehearsal(HostRehearsal):
         assert len(rows) == 6 and all(row['state'] == 'succeeded' for row in rows), rows
         fast = [row['native_session_id'] for row in rows if row['role'] == 'fast']
         deep = [row['native_session_id'] for row in rows if row['role'] == 'deep']
-        assert len(fast) == len(deep) == 3 and fast[0] != fast[1] == fast[2], rows
+        assert len(fast) == len(deep) == 3 and len(set(fast)) == 1, rows
+        claims=[item for item in self.claims() if item['setup']['role']=='fast']
+        initial=[item for item in claims if item['generation']==1]
+        resumed=[item for item in claims if item['generation']==2]
+        assert len(initial)==1 and initial[0]['mode']=='fresh' and len(resumed)==2, claims
+        assert all(item['mode']=='resume' and item['setup']['native_session_id']==fast[0] for item in resumed), claims
         assert len(set(deep)) == 1 and len(self.rows('SELECT id FROM messages')) == 3
         report.update(original_inputs_replayed=False, managed_host=True,
-                      fresh_after_window_retirement=True, warm_within_window=True)
+                      native_resume_across_retirement=True, warm_within_window=True,
+                      claude_fast_resume_claims=[dict(mode=item['mode'],window_id=item['window_id'],
+                          generation=item['generation'],setup=item['setup']) for item in claims],
+                      synthetic_native_source_sha256=self.synthetic_sha256)
         return report
