@@ -20,7 +20,7 @@ MODULES_SERVICE = ("__init__.py", "contract.py", "ledger.py", "budget.py", "cust
     "workspace_custody.py", "workspace_setup.py", "workspace_environment.py", "workspace_cgroup.py", "workspace_anchor.py", "workspace_command.py", "workspace_ops.py", "workspace_acl.py",
                    "managed_ingress.py", "managed_control.py", "managed_client.py", "managed_native.py", "managed_runs.py",
                    "managed_socket_owner.py", "managed_http.py", "managed_advertisement.py",
-                   "fast_sampler.py", "fast_sample_kernel.py", "fast_sample_evidence.py")
+                   "qualification.py", "qualification_publish.py", "fast_sampler.py", "fast_sample_kernel.py", "fast_sample_evidence.py")
 # Shared with the server and packager: room for many per-conversation
 # command profiles.
 MAX_BETA_CONFIG_BYTES = 262144
@@ -152,7 +152,7 @@ class Package:
 
     def _bind(self):
         value = self.runtime
-        require(set(value) - IDENTITY_FIELDS - {"operator_recovery", "desk_login", "managed_operations", "password_rotation_ready", "attachment_export_dir", "live_map", "desktop_broker", "timer_config", "v1_chat_icons_dir", "whatsapp_chats", "claude_quota_projection", "codex_quota_projection", "metrics_port"} == {"format", "uid", "gid", "owner_id", "conversation_id", "home",
+        require(set(value) - IDENTITY_FIELDS - {"qualification_record", "operator_recovery", "desk_login", "managed_operations", "password_rotation_ready", "attachment_export_dir", "live_map", "desktop_broker", "timer_config", "v1_chat_icons_dir", "whatsapp_chats", "claude_quota_projection", "codex_quota_projection", "metrics_port"} == {"format", "uid", "gid", "owner_id", "conversation_id", "home",
                 "bootstrap_file", "ledger_directory", "endpoint_directory", "port", "trusted_origin"}
                 and value["format"] == "orkestr-v2-codex-service-v1", "service_format")
         require("password_rotation_ready" not in value or type(value["password_rotation_ready"]) is bool,
@@ -160,6 +160,9 @@ class Package:
         if "operator_recovery" in value:
             from .password_recovery import configuration as recovery_configuration
             recovery_configuration(value["operator_recovery"])
+        if "qualification_record" in value:
+            from .qualification import check_path
+            check_path(value["qualification_record"], value["home"], self.root)
         self.live_map = live_map_path(value["live_map"]) if "live_map" in value else None
         self.desktop_broker = (live_map_path(value["desktop_broker"])
                                if "desktop_broker" in value else None)

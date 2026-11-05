@@ -24,6 +24,8 @@ def main(parent_text):
     require(32 <= len(bootstrap) <= 256 and all(c in
             b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_" for c in bootstrap),
             "private_bootstrap_format")
+    if package.identity_split:
+        os.umask(0o077)
     environment = package.environment()
     environment["ORKESTR_V2_BOOTSTRAP_TOKEN"] = bootstrap.decode("ascii")
     os.execve(str(root / "server"), [str(root / "server")], environment)
