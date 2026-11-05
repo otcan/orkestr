@@ -63,6 +63,11 @@ The Rust rewrite lives in `v2/` and builds with the toolchain pinned in
 - `v2-rust.yml` (rust-v2) runs on every push to `v2/rust-rewrite` and on PRs
   into `v2/**`: format, clippy, the locked workspace build, the HTTP
   scenarios and `cargo test --locked --workspace`.
+- The same workflow's `cargo-advisories` job checks every crate version in
+  `v2/Cargo.lock` against published advisories without installing or building
+  anything. A vulnerable or unsound crate fails it until the crate is updated
+  or `scripts/security/cargo-policy.json` carries a dated exception (at most
+  seven days, with a rationale and a ticket).
 - `v2-browser.yml` runs the headless-rendering checks.
 - Both restore a dependency build cache (`Swatinem/rust-cache`) saved from
   `v2/rust-rewrite`, so PR runs recompile only workspace crates.
