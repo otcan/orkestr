@@ -18,9 +18,11 @@ impl Store {
         if valid != 1 {
             return Err(StoreError::NotFound);
         }
-        let row=sqlx::query("SELECT r.native_session_id,r.provider_kind,r.binding_generation,COALESCE(s.provider_generation,0) AS provider_generation,COALESCE((b.state!='retired' AND b.generation=r.binding_generation AND b.native_session_id=r.native_session_id AND r.provider_kind=COALESCE(s.provider,'codex')),0) AS eligible FROM production_runs r JOIN session_bindings b ON b.id=r.session_id AND b.owner_id=r.owner_id AND b.conversation_id=r.conversation_id AND b.role='deep' LEFT JOIN conversation_settings s ON s.owner_id=r.owner_id AND s.conversation_id=r.conversation_id WHERE r.id=? AND r.owner_id=? AND r.conversation_id=? AND r.message_id=? AND r.role='deep'")
+        let row=sqlx::query("SELECT r.native_session_id,r.provider_kind,r.binding_generation,COALESCE(s.provider_generation,0) AS provider_generation FROM production_runs r JOIN session_bindings b ON b.id=r.session_id AND b.owner_id=r.owner_id AND b.conversation_id=r.conversation_id AND b.role='deep' LEFT JOIN conversation_settings s ON s.owner_id=r.owner_id AND s.conversation_id=r.conversation_id WHERE r.id=? AND r.owner_id=? AND r.conversation_id=? AND r.message_id=? AND r.role='deep'")
             .bind(query.source_run_id.to_string()).bind(owner.to_string()).bind(conversation.to_string())
             .bind(query.source_message_id.to_string()).fetch_optional(&mut *tx).await.map_err(db)?.ok_or(StoreError::NotFound)?;
+        let eligible =
+            source_binding_is_current(&mut tx, owner, conversation, &query.source_run_id).await?;
         let proof = SourceContextProof {
             schema_version: 1,
             owner_id: owner.clone(),
@@ -31,9 +33,24 @@ impl Store {
             source_provider: crate::source_receipts::provider(row.get("provider_kind"))?,
             provider_generation: row.get("provider_generation"),
             binding_generation: row.get("binding_generation"),
-            eligible_for_continuation: row.get::<i64, _>("eligible") == 1,
+            eligible_for_continuation: eligible,
         };
         tx.commit().await.map_err(db)?;
         Ok(proof)
     }
+}
+
+/// Acceptance releases the exact occupied binding and advances its generation
+/// once in the same transaction. Only that recorded completion can explain a
+/// ready binding one generation ahead; reuse, replacement or retirement cannot.
+pub(super) async fn source_binding_is_current(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    owner: &OwnerId,
+    conversation: &ConversationId,
+    run: &RunId,
+) -> Result<bool> {
+    let valid: i64 = sqlx::query_scalar("SELECT count(*) FROM production_runs r JOIN session_bindings b ON b.id=r.session_id AND b.owner_id=r.owner_id AND b.conversation_id=r.conversation_id LEFT JOIN conversation_settings s ON s.owner_id=r.owner_id AND s.conversation_id=r.conversation_id WHERE r.id=? AND r.owner_id=? AND r.conversation_id=? AND r.role='deep' AND b.role='deep' AND b.provider_kind=r.provider_kind AND b.native_session_id=r.native_session_id AND r.provider_kind=COALESCE(s.provider,'codex') AND ((b.state='busy' AND b.generation=r.binding_generation) OR (b.state='ready' AND b.generation=r.binding_generation+1 AND r.state='succeeded' AND EXISTS(SELECT 1 FROM production_acceptances a WHERE a.run_id=r.id AND a.owner_id=r.owner_id AND a.conversation_id=r.conversation_id))) AND NOT EXISTS(SELECT 1 FROM production_runs other WHERE other.session_id=r.session_id AND other.id!=r.id AND other.binding_generation>=r.binding_generation)")
+        .bind(run.to_string()).bind(owner.to_string()).bind(conversation.to_string())
+        .fetch_one(&mut **tx).await.map_err(db)?;
+    Ok(valid == 1)
 }
