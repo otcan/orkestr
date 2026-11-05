@@ -50,13 +50,14 @@ def open_checked(path, owner, directory=True, executor=None, executor_gid=None, 
                      stat.S_ISREG(meta.st_mode) and meta.st_nlink == 1), 'workspace_managed_custody')
             leaf=index+1==len(parts)
             if not leaf and os.geteuid()==0 and executor!=owner:
-                # Root retains the exact leaf FD; executor traversal of its
-                # original private ancestors is neither required nor granted.
+                # Only declared private homes use Root-retained lookup FDs.
+                # Ordinary ancestors must remain traversable by the executor.
                 current=Path('/',*parts[:index+1])
                 declared=any(meta.st_uid==home.get('uid',owner) and
                     (current==Path(home['path']) or Path(home['path']) in current.parents) for home in ancestry)
                 require(meta.st_uid in (0,owner) or declared,'workspace_managed_ancestor_owner')
-                check_acl(fd,meta.st_uid,executor,0,executor_gid=executor_gid)
+                check_acl(fd,meta.st_uid if declared else owner,executor,0 if declared else 1,
+                          executor_gid=executor_gid)
             else:
                 check_acl(fd,owner,executor,7 if leaf and directory else 1 if is_directory else 4,
                           owner_leaf=leaf and directory,executor_gid=executor_gid)
