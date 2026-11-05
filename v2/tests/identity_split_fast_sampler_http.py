@@ -12,12 +12,12 @@ import sys
 
 sys.path.insert(0,str(Path(__file__).resolve().parent))
 from identity_split_host_fast_http import FastHostRehearsal
+from identity_split_claude_fast_http import ClaudeFastRehearsal
 from codex_service.fast_sampler import capture,verify
 
 
-class FastSamplerRehearsal(FastHostRehearsal):
-    def __init__(self,binary):
-        super().__init__(binary)
+class FastSamplerObservations:
+    def initialize_samples(self):
         self.samples=self.fixture.root/'fast-proofs';self.samples.mkdir(mode=0o700)
         self.observations=[]
 
@@ -46,20 +46,33 @@ class FastSamplerRehearsal(FastHostRehearsal):
         assert len({row['core']['run_id'] for row in self.observations})==3
         report.update(fast_sampler_exact_inputs=3,root_live_tree_and_io_observed=True,
             fast_dispatch_states_observed=sorted({row['core']['dispatch_state'] for row in self.observations}),
-            native_pid_registration_claimed=False,additional_provider_turns=0,
+            native_pid_registration_claimed=False,additional_provider_turns=0,additional_business_messages=0,
             root_module_sha256={name:sha for name,sha in self.package.manifest['files'].items()
                 if name.startswith('codex_service/')},
             fixture_scoped_snapshots_verified_before_cleanup=True,fast_observations=self.observations)
         return report
 
 
+class FastSamplerRehearsal(FastSamplerObservations, FastHostRehearsal):
+    def __init__(self, binary):
+        super().__init__(binary)
+        self.initialize_samples()
+
+
+class ClaudeFastSamplerRehearsal(FastSamplerObservations, ClaudeFastRehearsal):
+    def __init__(self, binary):
+        super().__init__(binary)
+        self.initialize_samples()
+
+
 def main():
     parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('binary')
     parser.add_argument('--expected-source',required=True);parser.add_argument('--report',required=True)
+    parser.add_argument('--provider',choices=('codex','claude'),default='codex')
     args=parser.parse_args();assert os.geteuid()==0
     identity=json.loads(subprocess.check_output([args.binary,'--version','--json']))
     assert identity.get('source_commit')==args.expected_source,identity
-    os.umask(0o077);case=FastSamplerRehearsal(args.binary)
+    os.umask(0o077);case=(FastSamplerRehearsal if args.provider=='codex' else ClaudeFastSamplerRehearsal)(args.binary)
     report=dict(passed=False,actual_provider=False,live_activation=False)
     try:report.update(case.run(),passed=True)
     except BaseException as error:
