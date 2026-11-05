@@ -30,6 +30,38 @@ def normalize_source(value):
     return {**value,'native_session_id':value.get('native_session_id'),'resume_setup_id':value.get('resume_setup_id')}
 
 
+def result_capability(value):
+    require(type(value) is dict and set(value)=={'operation_id','run_id','lease_generation','dispatch_fence',
+            'expires_at_ms','result_sha256'},'managed_result_fields')
+    identifier(value['operation_id']);identifier(value['run_id'])
+    generation(value['lease_generation']);generation(value['dispatch_fence'])
+    require(type(value['expires_at_ms']) is int and 0<value['expires_at_ms']-int(time.time()*1000)<=30000
+            and type(value['result_sha256']) is str and len(value['result_sha256'])==64
+            and all(c in '0123456789abcdef' for c in value['result_sha256']),'managed_result_capability')
+    return value
+
+
+def authorize_result(ingress,cap,request):
+    from .managed_runs import key
+    cap=result_capability(cap);path=ingress.directory/(cap['operation_id']+'.json');record=metadata(protected(path),32768)
+    source=record['source'];previous=record.get('latest_capability',record['capability'])
+    require(source['window_id']==request['window_id'] and source['window_generation']==request['generation']
+            and source['owner_id']==request['owner_id'] and source['conversation_id']==request['conversation_id'],
+            'managed_result_scope')
+    require(record['state']=='completed' and not record.get('delivery_cancelled') and record['run_id']==cap['run_id']
+            and cap['lease_generation']==previous['lease_generation'] and cap['dispatch_fence']==previous['dispatch_fence']
+            and cap['expires_at_ms']==previous['expires_at_ms'],'managed_result_scope')
+    require(ingress.runs.contexts.get(key(source),{}).get('run_id')==cap['run_id']
+            and ingress.manager._desk_window_active(source['window_id'],source['window_generation']),
+            'managed_result_run_closed')
+    expected=hashlib.sha256(canonical({'state':record['state'],'result':record['result']})).hexdigest()
+    require(expected==cap['result_sha256'],'managed_result_changed')
+    fingerprint=hashlib.sha256(canonical(cap)).hexdigest()
+    require(record.get('result_authorization') in (None,fingerprint),'managed_result_conflict')
+    record['result_authorization']=fingerprint;record['result_expires_at_ms']=cap['expires_at_ms'];atomic(path,record)
+    return record
+
+
 def consume(ingress,cap):
     cap=capability(cap);operation=cap['operation_id'];path=ingress.directory/(operation+'.json')
     require(path.exists(),'managed_unknown_request');record=metadata(protected(path),32768)
@@ -141,6 +173,10 @@ def dispatch(manager,request,window):
     ingress=manager.managed
     require(ingress is not None,'managed_unconfigured')
     operation=request['operation'];window_id=request['window_id'];generation=request['generation']
+    if operation=='managed_result':
+        record=authorize_result(ingress,request['result'],request)
+        return {'ok':True,'receipt':manager.ledger.status(request['conversation_id']),
+                'managed_result':{'operation_id':record['request_id'],'run_id':record['run_id'],'authorized':True}}
     if operation in ('managed_run_open','managed_run_close'):
         if operation=='managed_run_open':run=ingress.runs.open(request)
         else:

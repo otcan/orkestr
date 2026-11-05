@@ -18,7 +18,8 @@ MODULES_SERVICE = ("__init__.py", "contract.py", "ledger.py", "budget.py", "cust
                    "claude_broker.py", "identity.py", "launch.py", "launch_child.py", "proxy.py", "attachment_exports.py",
                    "password_recovery.py", "managed_resume.py", "managed_host.py", "native_io.py", "desk_operations.py", "desk_anchor.py",
     "workspace_custody.py", "workspace_setup.py", "workspace_environment.py", "workspace_cgroup.py", "workspace_anchor.py", "workspace_command.py", "workspace_ops.py", "workspace_acl.py",
-                   "managed_ingress.py", "managed_control.py", "managed_client.py", "managed_native.py", "managed_runs.py")
+                   "managed_ingress.py", "managed_control.py", "managed_client.py", "managed_native.py", "managed_runs.py",
+                   "managed_socket_owner.py", "managed_http.py", "managed_advertisement.py")
 # Shared with the server and packager: room for many per-conversation
 # command profiles.
 MAX_BETA_CONFIG_BYTES = 262144

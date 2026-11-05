@@ -192,7 +192,7 @@ class Manager:
         if operation in ('workspace_command','workspace_command_receipt','workspace_command_cancel'):
             from .workspace_ops import dispatch
             return dispatch(self,request,window,descriptors)
-        if operation in ('managed_pending','managed_consume','managed_poll','managed_cancel','managed_run_open','managed_run_close','managed_renew'):
+        if operation in ('managed_pending','managed_consume','managed_poll','managed_cancel','managed_run_open','managed_run_close','managed_renew','managed_result'):
             from .managed_control import dispatch
             return dispatch(self,request,window)
         if operation in ('desk_login','desk_login_poll','desk_login_cancel'):

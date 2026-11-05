@@ -194,42 +194,6 @@ impl Store {
         }
         self.with_execution_fence(&parent.parent, action)
     }
-    pub async fn complete_managed_operation(
-        &self,
-        credential: &str,
-        operation: ConsumedManagedOperation,
-        outcome: ManagedOperationOutcome,
-    ) -> Result<()> {
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
-        launch_fence::checked(self, &mut tx, credential, &operation).await?;
-        let state = match outcome {
-            ManagedOperationOutcome::HelperCompleted => "helper_completed",
-            ManagedOperationOutcome::Submitted => "submitted",
-            ManagedOperationOutcome::Failed => "failed",
-            ManagedOperationOutcome::Cancelled => "cancelled",
-        };
-        if (state == "submitted"
-            && operation.evidence["request"]["operation"] != "root_request_submit")
-            || (state == "helper_completed"
-                && operation.evidence["request"]["operation"] != "desk_login")
-        {
-            return Err(RuntimeStoreError::Fenced);
-        }
-        let changed = sqlx::query(
-            "UPDATE managed_operations SET state=? WHERE id=? AND state='delivery_unknown'",
-        )
-        .bind(state)
-        .bind(operation.id.to_string())
-        .execute(&mut *tx)
-        .await
-        .map_err(db)?
-        .rows_affected();
-        if changed != 1 {
-            return Err(RuntimeStoreError::Fenced);
-        }
-        tx.commit().await.map_err(db)?;
-        Ok(())
-    }
     pub async fn authorize_managed_operation_parent(
         &self,
         credential: &str,
@@ -365,6 +329,8 @@ impl Store {
 }
 mod launch_fence;
 mod renewal;
+mod result;
 pub use renewal::ManagedOperationRenewal;
+pub use result::CompletedManagedOperation;
 #[cfg(test)]
 mod tests;

@@ -84,13 +84,19 @@ def receive_launch_context(package, descriptor=6):
             raw.extend(chunk)
             require(len(raw) <= 4096, 'launch_capsule_bound')
     value = json.loads(bytes(raw))
+    mcp=(getattr(package,'runtime',{}).get('managed_operations') and type(value) is dict and value.get('role') in ('deep','claude')
+         and type(value.get('setup')) is dict and value['setup'].get('role')=='deep')
     required = {'server_pid', 'server_start', 'server_uid',
             'manager_pid', 'manager_start', 'owner_id', 'conversation_id', 'manifest_sha256',
             'window_id', 'generation', 'role', 'request_id','setup','preferences'}
+    if mcp:required.add('managed_mcp_url')
     require(type(value) is dict and required <= set(value) <= required|{'workspace_worker'}, 'launch_capsule_fields')
     require(type(value.get('workspace_worker',False)) is bool and (not value.get('workspace_worker',False) or
             type(value['role']) is str and value['role'].startswith('worker-') and
             type(value['setup']) is dict and value['setup'].get('role')=='worker'), 'workspace_worker_capsule')
+    if mcp:
+        from .managed_advertisement import valid_url
+        valid_url(value.get('managed_mcp_url'))
     require(value['manager_pid'] == pid and value['server_uid'] == package.authority_uid,
             'launch_capsule_identity')
     manager=process(pid)

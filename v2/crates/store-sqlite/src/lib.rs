@@ -48,11 +48,12 @@ pub mod service_credentials;
 pub use production_runtime::DeskLoginSetup;
 pub use production_runtime::{CompletedDeskLogin, DeskLoginOutcome};
 pub use production_runtime::{
-    ConsumedManagedOperation, ManagedCallerEvidence, ManagedOperationConsumption,
-    ManagedOperationOutcome, ManagedOperationParent, ManagedOperationRenewal,
-    ManagedOperationRequest, ManagedOperationSetup,
+    CompletedManagedOperation, ConsumedManagedOperation, ManagedCallerEvidence,
+    ManagedOperationConsumption, ManagedOperationOutcome, ManagedOperationParent,
+    ManagedOperationRenewal, ManagedOperationRequest, ManagedOperationSetup,
 };
 mod source_context;
+mod source_intake;
 mod source_receipts;
 pub use production_runtime::{
     auto_accept_request_key, AutomaticReplyConsumption, AutomaticReplyDelivery,

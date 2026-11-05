@@ -356,7 +356,7 @@ while True:time.sleep(1)
             with sqlite3.connect(core.as_uri()+'?mode=ro',uri=True) as db:
                 db.execute('PRAGMA query_only=ON')
                 return db.execute("SELECT id,state,native_session_id FROM production_runs WHERE message_id=? AND role='deep' AND state='succeeded'",(admitted['message_id'],)).fetchone()
-        row=wait(accepted,'Core accepted synthetic Codex completion',seconds=30)
+        row=wait(accepted,'Core accepted synthetic Codex completion',seconds=getattr(self,'completion_wait_seconds',30))
         if self.provider=='claude':
             def fast_accepted():
                 assert not self.pump_errors,self.pump_errors

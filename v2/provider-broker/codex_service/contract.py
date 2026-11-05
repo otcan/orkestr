@@ -87,6 +87,7 @@ def decode(raw):
         "managed_run_close": {"window_id","generation","run_id"},
         "managed_consume": {"window_id","generation","capability"},
         "managed_renew": {"window_id","generation","capability"},
+        "managed_result": {"window_id","generation","result"},
         "managed_poll": {"window_id","generation","operation_id"},
         "managed_cancel": {"window_id","generation","operation_id"},
         "desk_login": {"window_id","generation","capability"},
@@ -159,6 +160,9 @@ def decode(raw):
     if operation in ('managed_consume','managed_renew'):
         from .managed_control import capability
         capability(value['capability'])
+    if operation=='managed_result':
+        from .managed_control import result_capability
+        result_capability(value['result'])
     if operation in ('managed_poll','managed_cancel'):identifier(value['operation_id'])
     if operation in ('desk_login_poll','desk_login_cancel'):identifier(value['operation_id'])
     if operation == "bind_child":

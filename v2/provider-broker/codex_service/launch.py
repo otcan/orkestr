@@ -149,6 +149,10 @@ class Launcher:
                            manager_start=self.manager['start'],owner_id=self.package.owner,
                            conversation_id=request['conversation_id'],
                            manifest_sha256=digest(self.package.root/'manifest.json'))
+            if getattr(self.package,'runtime',{}).get('managed_operations') and request['role'] in ('deep','claude') and request['setup']['role']=='deep':
+                from .managed_advertisement import valid_url
+                require(type(self.package.beta.get('managed_host')) is dict,'managed_mcp_host_required')
+                payload['managed_mcp_url']=valid_url(getattr(self.package,'managed_mcp_url',None))
             parent.sendall(json.dumps(payload).encode());parent.shutdown(socket.SHUT_WR)
             # No preexec callback in the multithreaded manager. The immutable,
             # fixed root child remaps FDs and drops privilege before broker exec.

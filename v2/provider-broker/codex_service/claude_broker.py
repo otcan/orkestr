@@ -98,6 +98,11 @@ def main(root):
                 session = config.new_session(launch_preferences=preferences)
             from .native_io import capture as capture_native_io
             session.native_io = capture_native_io(package)
+            from .managed_advertisement import claude_options
+            session.managed_mcp_options=claude_options(package)
+            if session.managed_mcp_options:
+                original_environment=session.environment
+                session.environment=lambda:{**original_environment(),'MCP_TOOL_TIMEOUT':'330000'}
             pump = Pump(session, ClaudeChannel(session, catalog_warning=catalog_warning,
                         quota_observer=QuotaSink.optional(package, config)),
                         handoff=handoff, diagnostics=True, stderr_capture=StderrCapture())

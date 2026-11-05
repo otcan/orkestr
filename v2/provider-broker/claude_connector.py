@@ -182,7 +182,7 @@ class ClaudeOwnedSession:
             return [str(self._config.executable), "-p", "--input-format", "stream-json",
                     "--output-format", "stream-json", "--verbose",
                     "--dangerously-skip-permissions", "--no-chrome",
-                    "--prompt-suggestions", "false", *session]
+                    "--prompt-suggestions", "false", *getattr(self,'managed_mcp_options',()), *session]
         return [str(self._config.executable), "-p", "--input-format", "stream-json",
                 "--output-format", "stream-json", "--verbose",
                 "--permission-mode", "dontAsk", "--permission-prompts", "none",
