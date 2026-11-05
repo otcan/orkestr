@@ -7,37 +7,33 @@ from pathlib import Path
 import tempfile
 import threading
 import unittest
+import uuid
+import shutil
 
 from v2.compat.v1_runtime.rust_client import ClientError
 from v2.compat.v1_runtime.service_session_cache import ServiceSessionCache
 from v2.compat.v1_runtime.tests.test_provision_service_credential import Peer, OWNER, SOURCE, SECRET
 
 
+@unittest.skipUnless(os.geteuid()==0,"Root-published service peer fixture")
 class CacheTests(unittest.TestCase):
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory(prefix="service-cache-synthetic-")
-        self.root = Path(self.temporary.name)
+        self.root=Path('/orkestr-cache-test-'+str(uuid.uuid4()));self.root.mkdir(mode=0o755)
+        self.private=self.root/'private';self.private.mkdir(mode=0o700)
         self.key = self.root / "service.json"
         self.key.write_text(json.dumps({"service_token": SECRET}))
         self.key.chmod(0o600)
-        self.cache = self.root / "cache.json"
-        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Peer)
-        self.server.requests = []
-        self.server.source = SOURCE
-        self.server.reject_cookie = self.server.reject_service = self.server.unknown_create = False
-        self.server.on_exchange = None
-        self.thread = threading.Thread(target=self.server.serve_forever, kwargs={"poll_interval": 0.01})
-        self.thread.start()
+        self.cache = self.private / "cache.json"
+        from v2.compat.tests.peer_test_fixture import CorePeer
+        self.server=CorePeer(self.root,Peer)
+        descriptor=self.server.publish()
         self.options = dict(origin="https://example.test",
                             loopback_url=f"http://127.0.0.1:{self.server.server_port}",
                             credentials_path=str(self.key), expected_owner=OWNER,
-                            expected_source=SOURCE, timeout_s=0.5)
+                            expected_source=SOURCE, timeout_s=1, peer_descriptor_path=str(descriptor))
 
     def tearDown(self):
-        self.server.shutdown()
-        self.server.server_close()
-        self.thread.join()
-        self.temporary.cleanup()
+        self.server.close();shutil.rmtree(self.root)
 
     def context(self, **extra):
         return ServiceSessionCache(self.cache, **(self.options | extra))

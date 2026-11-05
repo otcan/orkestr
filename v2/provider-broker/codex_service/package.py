@@ -14,7 +14,7 @@ from .role_profiles import ROLE_FILES, bind as bind_roles
 
 MODULES_SERVICE = ("__init__.py", "contract.py", "ledger.py", "budget.py", "custody.py",
                    "channel.py", "package.py", "ownership.py", "egress.py", "manager.py",
-                   "server_child.py", "broker.py", "profile.py", "entry.py", "role_profiles.py",
+                   "server_child.py", "manager_service_peer.py", "broker.py", "profile.py", "entry.py", "role_profiles.py",
                    "claude_broker.py", "identity.py", "launch.py", "launch_child.py", "proxy.py", "attachment_exports.py",
                    "password_recovery.py", "managed_resume.py", "desk_operations.py", "desk_anchor.py",
                    "managed_ingress.py", "managed_control.py", "managed_client.py", "managed_native.py", "managed_runs.py",

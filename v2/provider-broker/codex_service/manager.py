@@ -39,6 +39,7 @@ class Manager:
         self.launcher = None
         self.desk = None
         self.managed = None
+        self.service_peer = None
         self.adopted = None
         self.custody_fault = False
         try:
@@ -81,6 +82,12 @@ class Manager:
         require(self.identity is not None and self.identity["ppid"] == os.getpid()
                 and self.identity["uid"] == package.authority_uid, "owned_server_identity")
         self.peer = ServerPeer(self.identity, package.root / "server")
+        self.publish_service_peer()
+
+    def publish_service_peer(self):
+        require(not self.closed and self.service_peer is None and self.peer is not None,"http_peer_already_published")
+        from .manager_service_peer import Publisher
+        self.service_peer=Publisher(self.package,self.child,self.identity)
 
     def _uncertain(self, window, generation, reason):
         try:
@@ -422,6 +429,9 @@ class Manager:
     def close(self):
         self.closed = True
         errors = []
+        if getattr(self, "service_peer", None) is not None:
+            try:self.service_peer.close()
+            except Exception:errors.append("service_peer_cleanup")
         # Runtime first receives ordinary shutdown and has its cleanup margin.
         # systemd KillMode=mixed gives the root manager ordered ownership here.
         if self.child is not None:

@@ -8,6 +8,8 @@ import shutil
 import tempfile
 import threading
 import unittest
+import os
+import uuid
 
 ROOT=Path(__file__).parents[1]
 spec=importlib.util.spec_from_file_location('service_client_fixture',ROOT/'service_client.py')
@@ -36,23 +38,24 @@ class Peer(BaseHTTPRequestHandler):
         for key,value in headers.items():self.send_header(key,value)
         self.send_header('Content-Type','application/json');self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body)
 
+@unittest.skipUnless(os.geteuid()==0,"Root-published peer fixture required")
 class ServiceOnlyTests(unittest.TestCase):
     def setUp(self):
-        self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup);self.root=Path(self.tmp.name)
+        self.root=Path("/orkestr-service-client-test-"+str(uuid.uuid4()));self.root.mkdir(mode=0o755)
+        self.addCleanup(shutil.rmtree,self.root)
         self.runtime=self.root/'runtime';self.runtime.mkdir(mode=0o700);pins={}
         for name in m.RUNTIME_FILES:
             target=self.runtime/name;shutil.copyfile(ROOT/'v1_runtime'/name,target);target.chmod(0o400)
             pins[name]=hashlib.sha256(target.read_bytes()).hexdigest()
         self.key=self.root/'key';self.key.write_text(json.dumps({'service_token':'c'*64}));self.key.chmod(0o600)
-        self.peer=ThreadingHTTPServer(('127.0.0.1',0),Peer);self.peer.calls=[];self.peer.source='a'*40
-        self.peer.owner=OWNER;self.peer.conversation=CONVERSATION;self.peer.post_status=201;self.peer.revoked=False
-        self.thread=threading.Thread(target=self.peer.serve_forever,kwargs={'poll_interval':0.01});self.thread.start()
-        self.addCleanup(self.stop)
+        from peer_test_fixture import CorePeer
+        self.peer=CorePeer(self.root,Peer);self.addCleanup(self.peer.close)
+        descriptor=self.peer.publish()
+        self.cache_dir=self.root/'sessions';self.cache_dir.mkdir(mode=0o700)
         self.config=self.root/'config';self.settings=dict(runtime_directory=str(self.runtime),runtime_files=pins,
-            credentials_path=str(self.key),cache_path=str(self.root/'cache'),origin='https://example.invalid',
-            loopback_url='http://127.0.0.1:'+str(self.peer.server_port),expected_owner=OWNER,expected_source='a'*40)
+            credentials_path=str(self.key),cache_path=str(self.cache_dir/'cache'),origin='https://example.invalid',
+            loopback_url='http://127.0.0.1:'+str(self.peer.server_port),expected_owner=OWNER,expected_source='a'*40,peer_descriptor_path=str(descriptor))
         self.save()
-    def stop(self):self.peer.shutdown();self.peer.server_close();self.thread.join()
     def save(self):self.config.write_text(json.dumps(self.settings));self.config.chmod(0o600)
     def client(self):return m.ServiceClient(self.config,routes=[('POST',PREFIX+'/posts')])
     def send(self):return self.client().request('POST',PREFIX+'/posts',{'request_key':'synthetic','text':'synthetic'},allowed=(200,201))
@@ -97,6 +100,6 @@ class ServiceOnlyTests(unittest.TestCase):
         for _ in range(2):
             with self.assertRaises(m.ServiceError):self.send()
         self.assertEqual(sum(method=='POST' and path=='/api/v2/machine/service-session' for method,path,_ in self.peer.calls),1)
-        self.assertTrue(json.loads((self.root/'cache').read_text())['revoked'])
+        self.assertTrue(json.loads((self.cache_dir/'cache').read_text())['revoked'])
 
 if __name__=='__main__':unittest.main()
