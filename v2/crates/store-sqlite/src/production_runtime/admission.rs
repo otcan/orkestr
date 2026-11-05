@@ -112,6 +112,16 @@ impl Store {
             return Ok(result);
         }
         c.validate(&mut tx).await?;
+        // A decision may wait behind another admitted input. Recheck its exact
+        // originating binding immediately before creating any new run.
+        crate::source_continuation::validate(
+            &mut tx,
+            &c.owner,
+            &claim.conversation_id,
+            &claim.message_id,
+        )
+        .await
+        .map_err(|_| RuntimeStoreError::Fenced)?;
         let window = self
             .execution_window_input_in(&mut tx, &claim.conversation_id, Some(&claim.event_id))
             .await?;

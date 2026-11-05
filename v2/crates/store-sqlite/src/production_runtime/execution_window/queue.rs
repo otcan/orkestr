@@ -301,7 +301,7 @@ pub(in crate::production_runtime) async fn enqueue_timer_intent(
 
 /// The same durable intent for another trusted scheduler grant (for example a
 /// thread-ask input). `request_key` must name the source kind and its event.
-pub(in crate::production_runtime) async fn enqueue_trusted_intent(
+pub(crate) async fn enqueue_trusted_intent(
     tx: &mut SqliteConnection,
     owner: &OwnerId,
     conversation: &ConversationId,
