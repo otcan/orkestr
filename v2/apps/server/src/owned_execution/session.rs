@@ -146,7 +146,7 @@ impl ConfiguredExecution {
                 run_control.disable();
                 drop(schedule);
                 if let Some(managed) = managed.as_mut() {
-                    managed.cancel().await?;
+                    Box::pin(managed.cancel()).await?;
                 }
                 if let Some(desk) = desk.as_mut() {
                     desk.cancel().await?;
@@ -160,7 +160,7 @@ impl ConfiguredExecution {
             }
             if status.phase == ExecutionPhase::Completed {
                 if let Some(managed) = managed.as_mut() {
-                    managed.cancel().await?;
+                    Box::pin(managed.cancel()).await?;
                 }
                 steering.retire();
                 drop(schedule);
@@ -218,9 +218,6 @@ impl ConfiguredExecution {
                 let _ = authority.revoke();
                 authority = next_authority;
                 pump = next_pump;
-                if let Some(managed) = managed.as_mut() {
-                    managed.refresh_lease(liveness.authority()).await?;
-                }
                 (run_control, controls) = self
                     .control
                     .register(self.store.clone(), &run)
@@ -231,7 +228,7 @@ impl ConfiguredExecution {
             }
             if status.phase == ExecutionPhase::AwaitingAcceptance {
                 if let Some(managed) = managed.as_mut() {
-                    managed.cancel().await?;
+                    Box::pin(managed.cancel()).await?;
                 }
                 steering.retire();
                 pump.check_broker_liveness()
@@ -289,7 +286,7 @@ impl ConfiguredExecution {
                 ExecutionPhase::Failed | ExecutionPhase::Blocked | ExecutionPhase::Cancelled
             ) {
                 if let Some(managed) = managed.as_mut() {
-                    managed.cancel().await?;
+                    Box::pin(managed.cancel()).await?;
                 }
                 if let Some(desk) = desk.as_mut() {
                     desk.cancel().await?;
@@ -322,7 +319,7 @@ impl ConfiguredExecution {
                     .map_err(|_| "execution shutdown handoff requires reconciliation")?;
                 drop(schedule);
                 if let Some(managed) = managed.as_mut() {
-                    managed.cancel().await?;
+                    Box::pin(managed.cancel()).await?;
                 }
                 if let Some(desk) = desk.as_mut() {
                     desk.cancel().await?;
@@ -336,7 +333,7 @@ impl ConfiguredExecution {
             }
             Self::poll_worker(&mut worker).await;
             if let Some(managed) = managed.as_mut() {
-                managed.poll().await?;
+                Box::pin(managed.poll()).await?;
             }
             if let Some(desk) = desk.as_mut() {
                 desk.poll(&mut pump).await?;
@@ -397,6 +394,9 @@ impl ConfiguredExecution {
                 let _ = authority.revoke();
                 authority = next_authority;
                 pump = next_pump;
+                if let Some(managed) = managed.as_mut() {
+                    Box::pin(managed.refresh_lease(liveness.authority())).await?;
+                }
             }
             // A persistence retry may retain an observation during this step.
             // Refuse new control handoff until that exact evidence is committed.
