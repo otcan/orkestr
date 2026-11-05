@@ -18,7 +18,7 @@ class Tests(unittest.TestCase):
     def setUp(self):
         self.root=Path(tempfile.mkdtemp(prefix='ork-launch-diag-',dir='/'));self.root.chmod(0o755)
         self.addCleanup(lambda:shutil.rmtree(self.root))
-        path=self.root/'codex_service/entry.py';path.parent.mkdir()
+        path=self.root/'codex_service/entry.py';path.parent.mkdir();path.parent.chmod(0o755)
         path.write_bytes(Path(entry.__file__).read_bytes());path.chmod(0o444)
         self.sha=hashlib.sha256(path.read_bytes()).hexdigest()
         (self.root/'manifest.json').write_text(json.dumps({'files':{'codex_service/entry.py':self.sha}}))

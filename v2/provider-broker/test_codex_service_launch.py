@@ -188,6 +188,26 @@ p.wait()
         self.launcher.close()
         self.assertIsNone(process(identity['pid']))
 
+    def test_child_refusal_retains_original_exit_and_static_report_before_cleanup(self):
+        import codex_service.launch as launch
+        value=request();value.update(self.proxy)
+        popen=subprocess.Popen
+        def refused(command,*args,**kwargs):
+            command=list(command);command[9]='not-a-configured-role'
+            return popen(command,*args,**kwargs)
+        with patch.object(launch.subprocess,'Popen',side_effect=refused):
+            with self.assertRaisesRegex(Refused,'launch_child_lost'):
+                self.launcher.launch(value,self.fds,lambda _:self.fail('must not register'),time.monotonic()+4)
+        records=[json.loads(p.read_text()) for p in self.launcher.directory.glob('*.json')]
+        self.assertEqual(len(records),1)
+        record=records[0];self.assertEqual(record['state'],'unknown')
+        self.assertGreater(record['original_child']['pid'],0)
+        self.assertEqual(record['original_child']['wait_status'],2)
+        self.assertEqual(record['child_failure']['exception_class'],'Refused')
+        self.assertEqual(record['child_failure']['module'],'codex_service/contract.py')
+        self.assertEqual(record['cleanup_wait_status'],2)
+        self.assertNotIn('not-a-configured-role',json.dumps(record))
+
     def test_registration_failure_is_unknown_durable_and_reaped_without_replay(self):
         value=request();value.update(self.proxy)
         def failed(_):raise ValueError('synthetic registration loss')
