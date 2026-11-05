@@ -19,6 +19,11 @@ from codex_service.ownership import Adopted
 
 
 class ResumeRehearsal(Rehearsal):
+    def __init__(self,*args,**kwargs):
+        super().__init__(*args,**kwargs)
+        self.server_identity=json.loads(subprocess.check_output([self.binary,'--version','--json']))
+        self.server_sha256=hashlib.sha256(self.binary.read_bytes()).hexdigest()
+
     def start_rehearsal(self):
         original=Adopted._remember
         def remember(pool, identity):
@@ -128,8 +133,7 @@ class ResumeRehearsal(Rehearsal):
             root_attested_metadata_and_private_fd4=True,
             source_authority_uid=self.package.authority_uid,
             resumed_executor_uid=self.package.executor_uid,
-            server_identity=json.loads(subprocess.check_output([self.binary,'--version','--json'])),
-            server_sha256=hashlib.sha256(self.binary.read_bytes()).hexdigest())
+            server_identity=self.server_identity,server_sha256=self.server_sha256)
         return report
 
 
