@@ -133,8 +133,18 @@ then uses the store's transactional recovery method. Human browser sessions are
 revoked; service, machine and execution-window credentials are preserved. This
 port is unavailable over HTTP and never writes database rows from Python.
 
+Recovery requires the exact current schema and validates an expendable copy
+before opening the source for writing. It never initializes or upgrades Core.
+A missing systemd unit cannot qualify as stopped, even when `systemctl show`
+returns success and reports an inactive state.
+
 Restart through the normal operator process after a confirmed receipt. The
 helper does not change a stored human-password file or automatically restart a
 service. An unknown recovery outcome requires checking the new password before
 any retry. Implementation alone does not migrate consumers or qualify live
 recovery; disposable end-to-end acceptance remains required before deployment.
+`v2/tests/operator_password_recovery_http.py` exercises the actual authority
+process, Root socket, inherited manager lock and durable transaction. Its unit
+and cgroup metadata are synthetic; it never stops a live service. It checks
+unprivileged-parent, owner and lock refusals, browser revocation, new login and
+preservation of existing machine/service credentials, then removes its fixture.

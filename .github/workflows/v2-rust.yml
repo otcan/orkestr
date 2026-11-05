@@ -88,6 +88,9 @@ jobs:
         run: |
           sudo /usr/bin/python3 -I -S -B -m unittest discover -s "$PWD/provider-broker" -p test_codex_service_package.py -v
           sudo /usr/bin/python3 -I -S -B -m unittest discover -s "$PWD/provider-broker" -p test_codex_service_roles.py -v
+          sudo env PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -I -S -B -m unittest discover -s "$PWD/provider-broker" -p test_codex_service_password_recovery.py -v
+          sudo env PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -I -S -B -m unittest discover -s "$PWD/provider-broker" -p test_codex_service_identity.py -v
+          sudo env PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -I -S -B -m unittest discover -s "$PWD/provider-broker" -p test_codex_service_orphans.py -v
       - name: Service packager and passive quota inventory
         run: |
           python3 -I -S -B -m unittest discover -s packaging/service/tests -v
@@ -96,7 +99,9 @@ jobs:
           sudo /usr/bin/python3 -I -S -B -m unittest discover -s "$PWD/packaging/service/tests" -p test_release.py -v
       - name: Scoped V1 runtime compatibility regressions
         working-directory: ${{ github.workspace }}
-        run: python3 -B -m unittest discover -s v2/compat/v1_runtime/tests -v
+        run: |
+          python3 -B -m unittest discover -s v2/compat/v1_runtime/tests -v
+          python3 -I -S -B -m unittest discover -s v2/compat/tests -v
       - name: Mocked provider metadata probe safety
         env:
           PYTHONDONTWRITEBYTECODE: '1'
@@ -123,7 +128,12 @@ jobs:
       - name: Rust lint
         run: cargo +1.99.1 clippy --locked --workspace --all-targets -- -D warnings
       - name: Locked build
-        run: cargo +1.99.1 build --locked --workspace
+        run: |
+          version=$(python3 -I -S -B -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')
+          ORKESTR_V2_BUILD_IDENTITY="ORKESTR_V2_BUILD_IDENTITY_V1|server|$version|$(git rev-parse HEAD)|END" cargo +1.99.1 build --locked --workspace
+      - name: Privileged password recovery over actual local socket and Core
+        run: |
+          sudo env PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -I -S -B tests/operator_password_recovery_http.py --server "$CARGO_TARGET_DIR/debug/orkestr-v2-server" --source-commit "$(git rev-parse HEAD)" --report "$RUNNER_TEMP/v2-password-recovery.json"
       - name: Protected beta configuration custody regressions
         run: |
           cargo +1.99.1 test --locked -p orkestr-v2-server --lib --no-run --message-format=json > "$RUNNER_TEMP/beta-custody-artifacts.jsonl"

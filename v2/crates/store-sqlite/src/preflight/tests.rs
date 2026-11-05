@@ -184,16 +184,36 @@ async fn current_only_open_never_initializes_and_preserves_current_schema() {
         .setup("synthetic-owner", "synthetic-hash")
         .await
         .unwrap();
-    store.close().await;
-    let before = dir.files();
-    let current = Store::open_current(&dir.db()).await.unwrap();
-    assert!(current
-        .credentials("synthetic-owner")
+    let schema_query =
+        "SELECT type,name,sql FROM sqlite_schema WHERE sql IS NOT NULL ORDER BY type,name";
+    let before_schema: Vec<(String, String, String)> = sqlx::query_as(schema_query)
+        .fetch_all(&store.pool)
         .await
-        .unwrap()
-        .is_some());
+        .unwrap();
+    let migrations_query = "SELECT version,description,success,checksum,execution_time FROM _sqlx_migrations ORDER BY version";
+    let before_migrations: Vec<(i64, String, bool, Vec<u8>, i64)> =
+        sqlx::query_as(migrations_query)
+            .fetch_all(&store.pool)
+            .await
+            .unwrap();
+    let before_owner = store.credentials("synthetic-owner").await.unwrap();
+    store.close().await;
+    let current = Store::open_current(&dir.db()).await.unwrap();
+    assert_eq!(
+        current.credentials("synthetic-owner").await.unwrap(),
+        before_owner
+    );
+    let after_schema: Vec<(String, String, String)> = sqlx::query_as(schema_query)
+        .fetch_all(&current.pool)
+        .await
+        .unwrap();
+    let after_migrations: Vec<(i64, String, bool, Vec<u8>, i64)> = sqlx::query_as(migrations_query)
+        .fetch_all(&current.pool)
+        .await
+        .unwrap();
+    assert_eq!(before_schema, after_schema);
+    assert_eq!(before_migrations, after_migrations);
     current.close().await;
-    assert_eq!(before, dir.files());
 }
 
 async fn populated_dispatch_prefix(dir: &Directory) -> SqliteConnection {
