@@ -13,6 +13,8 @@ pub fn Auth(onlogin: EventHandler<transport::BrowserSession>) -> Element {
     let mut setup = use_signal(|| false);
     // Desktop first run: the app handed over the setup token (no terminal).
     let mut local = use_signal(|| false);
+    let mut local_account = use_signal(|| false);
+    let mut checking = use_signal(|| true);
     let mut busy = use_signal(|| false);
     let mut status = use_signal(String::new);
     use_future(move || async move {
@@ -20,12 +22,22 @@ pub fn Auth(onlogin: EventHandler<transport::BrowserSession>) -> Element {
             bootstrap.set(token);
             setup.set(true);
             local.set(true);
+        } else if let Ok(value) =
+            transport::request::<Value>("GET", "/api/v2/oss-setup/account", Value::Null, "", "")
+                .await
+        {
+            if value["setup_required"] == true {
+                setup.set(true);
+                local.set(true);
+                local_account.set(true);
+            }
         }
+        checking.set(false);
     });
     rsx! {
         form { onsubmit: move |event| {
             event.prevent_default();
-            if busy() { return; }
+            if busy() || checking() { return; }
             busy.set(true);
             spawn(async move {
                 let credentials = Credentials { username: username(), password: password() };
@@ -35,7 +47,8 @@ pub fn Auth(onlogin: EventHandler<transport::BrowserSession>) -> Element {
                 if !local() { bootstrap.set(String::new()); }
                 let body = serde_json::to_value(credentials).unwrap_or(Value::Null);
                 let result = if setup() {
-                    match transport::request::<Value>("POST", "/api/v2/setup", body.clone(), "", &secret).await {
+                    let path = if local_account() { "/api/v2/oss-setup/account" } else { "/api/v2/setup" };
+                    match transport::request::<Value>("POST", path, body.clone(), "", &secret).await {
                         // This computer already has its owner: sign in instead.
                         Err(error) if local() && error.status == 409 => { setup.set(false); Ok(()) }
                         result => result.map(|_| ()),
@@ -51,7 +64,7 @@ pub fn Auth(onlogin: EventHandler<transport::BrowserSession>) -> Element {
                 busy.set(false);
             });
         },
-            h2 { if setup() && local() { "Create your account" } else if setup() { "Create owner account" } else { "Sign in" } }
+            h2 { if checking() { "Opening Orkestr…" } else if setup() && local() { "Create your account" } else if setup() { "Create owner account" } else { "Sign in" } }
             if setup() && local() {
                 p { "This account stays on this computer. Choose a username and a password of at least 12 characters." }
             } else {
@@ -66,8 +79,8 @@ pub fn Auth(onlogin: EventHandler<transport::BrowserSession>) -> Element {
                 input { id: "bootstrap", r#type: "password", autocomplete: "off", required: true, value: "{bootstrap}", oninput: move |e| bootstrap.set(e.value()) }
                 p { "Use the setup token from the Orkestr logs (Docker: run docker logs orkestr) or from your operator. Keep it private. Setup creates the first owner account once." }
             }
-            button { r#type: "submit", disabled: busy(), if busy() { "Connecting…" } else { "Continue" } }
-            button { r#type: "button", disabled: busy(), onclick: move |_| setup.set(!setup()), if setup() { "Use existing owner account" } else { "First-time setup" } }
+            button { r#type: "submit", disabled: busy() || checking(), if busy() { "Connecting…" } else { "Continue" } }
+            button { r#type: "button", disabled: busy() || checking(), onclick: move |_| setup.set(!setup()), if setup() { "Use existing owner account" } else { "First-time setup" } }
             p { role: "status", "{status}" }
         }
     }

@@ -42,6 +42,8 @@ jobs:
         run: |
           python3 -I -S -B v2/packaging/oss/fresh_install.py \
             --image orkestr-v2:amd64 --source "$GITHUB_SHA" --report "$RUNNER_TEMP/image/fresh-install-amd64.json"
+          python3 -I -S -B v2/packaging/oss/fresh_install.py --local-setup \
+            --image orkestr-v2:amd64 --source "$GITHUB_SHA" --report "$RUNNER_TEMP/image/local-fresh-install-amd64.json"
       - name: Export the tested image
         run: |
           set -euo pipefail
@@ -81,6 +83,8 @@ jobs:
         run: |
           python3 -I -S -B v2/packaging/oss/fresh_install.py \
             --image orkestr-v2:arm64 --source "$GITHUB_SHA" --report "$RUNNER_TEMP/image/fresh-install-arm64.json"
+          python3 -I -S -B v2/packaging/oss/fresh_install.py --local-setup \
+            --image orkestr-v2:arm64 --source "$GITHUB_SHA" --report "$RUNNER_TEMP/image/local-fresh-install-arm64.json"
       - name: Export the tested image
         run: |
           set -euo pipefail
@@ -168,6 +172,8 @@ jobs:
           test "$(docker image inspect --format '{{.Architecture}}' "ghcr.io/otcan/orkestr:$GITHUB_REF_NAME")" = amd64
           python3 -I -S -B v2/packaging/oss/fresh_install.py --image "ghcr.io/otcan/orkestr:$GITHUB_REF_NAME" \
             --source "$GITHUB_SHA" --report "$RUNNER_TEMP/pulled/fresh-install-amd64.json"
+          python3 -I -S -B v2/packaging/oss/fresh_install.py --local-setup --image "ghcr.io/otcan/orkestr:$GITHUB_REF_NAME" \
+            --source "$GITHUB_SHA" --report "$RUNNER_TEMP/pulled/local-fresh-install-amd64.json"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:
@@ -192,6 +198,8 @@ jobs:
           test "$(docker image inspect --format '{{.Architecture}}' "ghcr.io/otcan/orkestr:$GITHUB_REF_NAME")" = arm64
           python3 -I -S -B v2/packaging/oss/fresh_install.py --image "ghcr.io/otcan/orkestr:$GITHUB_REF_NAME" \
             --source "$GITHUB_SHA" --report "$RUNNER_TEMP/pulled/fresh-install-arm64.json"
+          python3 -I -S -B v2/packaging/oss/fresh_install.py --local-setup --image "ghcr.io/otcan/orkestr:$GITHUB_REF_NAME" \
+            --source "$GITHUB_SHA" --report "$RUNNER_TEMP/pulled/local-fresh-install-arm64.json"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:
