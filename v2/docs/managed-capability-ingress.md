@@ -57,7 +57,7 @@ or changes arguments. The protected map caps duration at five minutes; a shorter
 map remains shorter. The immutable Core hard deadline is additionally capped by
 the window work deadline. Expired leases cannot revive a helper. Stop cancels
 and reaps its original tree. Full 120-second owner-wait acceptance remains a
-qualification requirement; the short kernel tests do not establish that parity.
+qualification requirement; the short kernel tests alone do not establish that parity.
 
 For explicit managed-host plans, the original native receives a fixed loopback
 HTTP MCP endpoint through its protected launch capsule. Codex and Claude advertise
@@ -81,9 +81,38 @@ application consumption. No successful helper receipt proves website login.
 Offline probes with fake homes and no provider turns establish tool discovery
 with actual Codex and Claude clients. Kernel tests cover an unrelated same-UID
 native, socket-FD reopening, pidfd duplication and process-memory access. These
-do not establish complete workflow parity. Before activation this path still
-requires full separate-UID Core/Root HTTP acceptance, used fresh/resume workflows,
-120-second owner wait, watcher delivery and failure injection.
+do not establish complete workflow parity. Disposable separate-UID Core/Root
+HTTP rehearsals additionally cover both providers: one original helper waits
+120 seconds through actual same-run renewals, followed by a supported drain,
+exact native resume and another turn in the resumed window. Each turn submits
+one protected Root request and invokes one fixed desk helper. A separate owner
+HTTP Stop after renewal confirms the exact native interrupt and original helper
+reap, with no positive tool result or replay of the unknown Core effect.
+
+The native fixtures are synthetic and use no provider, Vault or website.
+This establishes the capability transport and lifecycle, not an installed
+helper's dependency custody or a real account login. Before activation this path
+still requires the protected watcher/reviewer, credential and operator-IPC
+boundaries, installed helper qualification and the remaining used-mode checks.
+
+Run these explicit Root-only fixtures against a source-built server; they
+bypass the production startup gate only inside their disposable harness:
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 python3 -I -S -B v2/tests/identity_split_managed_mcp_http.py \
+  /path/to/server --provider codex --report /private/codex-wait.json
+PYTHONDONTWRITEBYTECODE=1 python3 -I -S -B v2/tests/identity_split_managed_mcp_http.py \
+  /path/to/server --provider claude --report /private/claude-wait.json
+PYTHONDONTWRITEBYTECODE=1 python3 -I -S -B v2/tests/identity_split_managed_stop_http.py \
+  /path/to/server --provider codex --report /private/codex-stop.json
+PYTHONDONTWRITEBYTECODE=1 python3 -I -S -B v2/tests/identity_split_managed_stop_http.py \
+  /path/to/server --provider claude --report /private/claude-stop.json
+```
+
+The long Codex debug rehearsal also covers a previously reproducible runtime
+stack overflow at lease renewal. The SQL renewal future is boxed at Runtime's
+owned-pump transfer boundary; the test uses ordinary stack sizes and preserves
+all original lease and cancellation checks.
 
 Standard provider-created MCP stdin pipes are not an authenticated origin
 channel between processes sharing an executor UID. A fixed stdio forwarder must
