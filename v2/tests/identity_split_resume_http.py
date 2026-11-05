@@ -8,7 +8,9 @@ import json
 import os
 from pathlib import Path
 import sqlite3
+import sys
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from identity_split_service_http import Rehearsal, wait
 from codex_bounded.trust import exists
 
