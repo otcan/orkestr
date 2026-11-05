@@ -86,6 +86,9 @@ impl WorkspaceExecConfig {
     pub(crate) fn validate_with(&self, host: Option<&HostAccess>) -> Result<(), &'static str> {
         self.validate()?;
         if let Some(trusted) = &self.trusted {
+            if trusted.managed_profile()?.is_some() {
+                return trusted.validate_managed_runtime();
+            }
             trusted.profile(host, &self.workspace)?.validate(&[
                 &self.workspace,
                 &self.cgroup_root,

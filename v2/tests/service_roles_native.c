@@ -100,6 +100,10 @@ static int failure(int code) {
     return code;
 }
 
+#ifdef ORKESTR_TEST_WORKSPACE_TOOLS
+#include "service_workspace_tools.c"
+#endif
+
 int main(int argc, char **argv) {
 #ifdef ORKESTR_TEST_AUTHORITY_CORE
     int authority = open(ORKESTR_TEST_AUTHORITY_CORE, O_RDONLY);
@@ -205,6 +209,11 @@ int main(int argc, char **argv) {
             printf("{\"method\":\"item/agentMessage/delta\",\"params\":{\"threadId\":\"%s\","
                    "\"turnId\":\"%s\",\"delta\":\"synthetic %s progress\"}}\n", native, turn, role);
             fflush(stdout);
+#ifdef ORKESTR_TEST_WORKSPACE_TOOLS
+            if (!strncmp(role,"worker-",7)) {
+                workspace_tools();terminal("completed");continue;
+            }
+#endif
             char mode[32]; read_fixed("mode", mode, sizeof(mode));
             if (!strcmp(mode, "complete")) terminal("completed");
             else if (!strcmp(mode, "hold") || !strcmp(mode, "ack-only")) held_turn(input, mode);

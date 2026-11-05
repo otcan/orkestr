@@ -27,6 +27,10 @@ impl WorkerCancellation {
     pub fn cancel(&self) {
         self.0.store(true, Ordering::Release);
     }
+    /// Trusted reapers may observe cancellation without acquiring authority.
+    pub fn is_cancelled(&self) -> bool {
+        self.cancelled()
+    }
     pub(crate) fn cancelled(&self) -> bool {
         self.0.load(Ordering::Acquire)
     }

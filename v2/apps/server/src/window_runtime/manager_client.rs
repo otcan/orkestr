@@ -25,6 +25,7 @@ mod workspace;
 #[allow(dead_code)] // Profile gate remains closed until dispatcher qualification.
 mod workspace_command;
 use wire::*;
+pub(crate) use workspace_command::{RootCommand, RootCommandReceipt};
 
 const MAX_FRAME: usize = 8192;
 const INTEGER_LIMIT: u64 = 1 << 53;

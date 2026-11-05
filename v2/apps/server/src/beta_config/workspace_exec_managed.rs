@@ -89,6 +89,69 @@ impl ManagedExecutorConfig {
     }
 }
 
+impl super::workspace_exec_trusted::TrustedConfig {
+    pub(crate) fn validate_managed_runtime(&self) -> Result<(), &'static str> {
+        self.managed_profile()?
+            .ok_or("explicit managed command profile missing")?;
+        if !self.network
+            || !self.host_toolchain
+            || self.home.is_some()
+            || self.path.is_some()
+            || self.workspace_target.is_some()
+            || self.tmp_bytes.is_some()
+            || self.home_bytes.is_some()
+            || !self.toolchain_mounts.is_empty()
+            || !self.cache_mounts.is_empty()
+            || !self.credential_mounts.is_empty()
+            || !self.skill_mounts.is_empty()
+            || !(1..=30_000).contains(&self.command_timeout_ms.unwrap_or(30_000))
+            || !(1..=128 * 1024).contains(&self.command_output_bytes.unwrap_or(128 * 1024))
+            || !(1..=1_800_000).contains(&self.job_timeout_ms.unwrap_or(1_800_000))
+            || !(1..=16 * 1024 * 1024).contains(&self.job_output_bytes.unwrap_or(4 * 1024 * 1024))
+            || self.max_jobs.unwrap_or(1) > 4
+            || !(30_000..=3_600_000).contains(&self.worker_run_ms())
+            || !(256 * 1024 * 1024..=64 * 1024 * 1024 * 1024)
+                .contains(&self.memory_bytes.unwrap_or(8 * 1024 * 1024 * 1024))
+            || !(16..=4096).contains(&self.pids.unwrap_or(1024))
+            || !(1..=16).contains(&self.cpus.unwrap_or(4))
+            || !(1024 * 1024..=64 * 1024 * 1024 * 1024)
+                .contains(&self.file_bytes.unwrap_or(4 * 1024 * 1024 * 1024))
+            || !(64..=65536).contains(&self.open_files.unwrap_or(4096))
+        {
+            return Err("managed command profile has unsupported fields or limits");
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod runtime_tests {
+    use super::super::workspace_exec_trusted::TrustedConfig;
+    #[test]
+    fn managed_runtime_requires_explicit_host_shape_and_refuses_ignored_legacy_fields() {
+        let value = serde_json::json!({"network":true,"host_toolchain":true,
+            "managed_executor":{"environment":{"HOME":"/srv/business-home","PATH":"/usr/bin:/bin"}}});
+        let parse = |value| serde_json::from_value::<TrustedConfig>(value).unwrap();
+        assert!(parse(value.clone()).validate_managed_runtime().is_ok());
+        for (field, bad) in [
+            ("network", serde_json::json!(false)),
+            ("home", serde_json::json!("/ignored-home")),
+            ("cache_mounts", serde_json::json!(["/ignored-cache"])),
+            ("max_jobs", serde_json::json!(5)),
+            ("command_timeout_ms", serde_json::json!(30001)),
+            ("environment", serde_json::json!({"TOKEN":"legacy"})),
+            ("host_privileged", serde_json::json!(true)),
+        ] {
+            let mut changed = value.clone();
+            changed[field] = bad;
+            assert!(
+                parse(changed).validate_managed_runtime().is_err(),
+                "{field}"
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

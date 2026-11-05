@@ -94,7 +94,8 @@ def main(package, arguments):
             expires = value['expires_at_ms']; require(type(expires) is int, 'managed_anchor_launch_expired')
             remaining = expires - int(time.time() * 1000)
             require(0 < remaining <= 30000, 'managed_anchor_launch_expired')
-            timeout = timeout if background else min(timeout, remaining)
+            require(background or remaining>2000,'managed_anchor_result_margin')
+            timeout = timeout if background else min(timeout, remaining-2000)
             deadline = time.monotonic() + timeout / 1000
             libc = ctypes.CDLL(None, use_errno=True)
             require(libc.prctl(36, 1, 0, 0, 0) == 0, 'managed_anchor_subreaper')
@@ -135,7 +136,9 @@ def main(package, arguments):
                     return 0
                 remaining=expires-int(time.time()*1000)
                 require(remaining>0,'managed_anchor_launch_expired')
-                if not background: timeout=min(timeout,remaining)
+                if not background:
+                    require(remaining>2000,'managed_anchor_result_margin')
+                    timeout=min(timeout,remaining-2000)
                 deadline=time.monotonic()+timeout/1000
             def dropped():
                 # This anchor is single-threaded. Only this original shell

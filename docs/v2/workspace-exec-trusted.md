@@ -1,22 +1,29 @@
 # Trusted owner workspace commands
 
-## Gated managed executor preparation
+## Managed executor candidate
 
-Split Core/executor workspace commands remain refused by the selected-package
-and beta-config gates. The managed command modules currently provide inert
+Split Core/executor workspace commands require an explicit managed profile;
+legacy privileged/restricted profiles remain refused. The managed modules provide inert
 Root preparation, durable unknown/no-replay claims, an immutable consumed
 source FD, and a private activation socket. Activation must occur inside the
 actual Core consumed spawn fence and wait for the actual dropped shell's ACK.
 Root retains the original anchor child, cgroup and descendant cleanup proof.
-Dispatcher integration, background/control parity and actual Core HTTP
-qualification are required before enabling this path. Component tests do not
-establish those acceptance claims.
+The dispatcher observes Root receipts, bounds output, and retains foreground
+accounting until physical cleanup. Background jobs use the existing private
+per-project registry and revocation monitor. Status/wait/cancel spend a fresh
+Core control fence and address that registry's original job observer.
+Actual Core HTTP qualification is required before selecting this candidate in
+a release. Component tests do not establish that acceptance claim.
 
 The closed `trusted.managed_executor` object supplies `environment` and optional
 `credentials: [{path, keys}]`. It cannot inherit `host_privileged`, legacy
 credential env files or the old trusted environment. Root opens only protected
 credential sources and exports only selected business keys to the dropped
 process environment. Core, bootstrap and provider-account roots stay excluded.
+Managed profiles require explicit `network: true` and `host_toolchain: true`;
+ignored legacy mount, home, path and tmpfs settings are refused. The selected
+executor has its ordinary host filesystem/network access with no privilege
+escalation through its own process tree.
 
 Optional `project_owner_uid` defaults to the executor UID. A separate executor
 does not change project ownership. Root requires an explicit named executor

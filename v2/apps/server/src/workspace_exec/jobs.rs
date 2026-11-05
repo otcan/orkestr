@@ -19,6 +19,8 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use uuid::Uuid;
+#[path = "managed_jobs.rs"]
+mod managed;
 
 const TAIL: usize = 4096;
 const RETAINED_RECORDS: usize = 64;

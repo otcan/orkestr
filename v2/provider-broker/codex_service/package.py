@@ -235,7 +235,7 @@ class Package:
                     and self.home not in (marker, *marker.parents), "maintenance_marker_path")
             protected(marker.parent, True)
         if self.identity_split:
-            require(not any(key in beta for key in ("host_full_access", "workspace_exec", "additional_workspace_exec")),
+            require("host_full_access" not in beta,
                     "split_privileged_or_advanced_mode_unsupported")
             require(beta.get("identity_split") == {"authority_uid": self.authority_uid,
                     "executor_uid": self.executor_uid, "shared_gid": self.gid}, "beta_identity_binding")
@@ -298,6 +298,9 @@ class Package:
         scopes = [(c["conversation_id"], c["project_id"]) for c in
                   ([beta["workspace_exec"]] if "workspace_exec" in beta else []) + additional]
         require(len({c for c, _ in scopes}) == len({p for _, p in scopes}) == len(scopes), "workspace_exec_scope")
+        if self.identity_split and scopes:
+            from .workspace_setup import Projects
+            Projects(self) if os.geteuid()==0 else None
         profile = self.profile
         require(set(profile) == {"format", "native", "auth_file", "state_root", "workspace",
                 "egress_socket", "supervisor", "hosts"}

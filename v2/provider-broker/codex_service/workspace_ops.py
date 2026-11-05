@@ -62,13 +62,19 @@ class Operations:
         source, selected = sealed_source(fds[0], cap)
         # Background/control handling is enabled only with its separate durable
         # job lifecycle. Never reinterpret a reserved operation as a shell.
-        require(selected.kind == 'command', 'workspace_job_runtime_not_ready')
+        require(selected.kind in ('command','start'), 'workspace_job_runtime_not_ready')
         worker = worker_parent(self.manager.launcher, request)
         scope = (request['conversation_id'], cap['project_id'])
         require(scope in self.projects.profiles and request['owner_id'] == self.package.owner, 'workspace_command_project_scope')
         remaining = cap['expires_at_ms'] - int(time.time() * 1000)
         require(0 < remaining <= 30000, 'workspace_command_deadline')
         profile = self.projects.profiles[scope]
+        if selected.kind=='start':
+            maximum=profile['trusted'].get('max_jobs',1)
+            require(type(maximum) is int and 1<=maximum<=4,'workspace_job_disabled')
+            require(sum(metadata(h['path'],16384)['kind']=='start' and
+                metadata(h['path'],16384)['capability']['project_id']==cap['project_id']
+                for h in self.active.values())<maximum,'workspace_job_capacity')
         if profile['cgroup_root'] not in self.roots: self.roots[profile['cgroup_root']] = Root(profile['cgroup_root'])
         # Root already retained these handles at Core's trusted project setup.
         require(scope in self.projects.installations, 'workspace_command_project_not_attested')
@@ -106,6 +112,7 @@ class Operations:
             handle = dict(child=child, identity=process(child.pid), job=job, channel=channel,
                 path=path, worker=dict(worker.broker), window=request['window_id'], generation=request['generation'],
                 buffer=b'', prepared=False, ready=False, proof=None, cancelled=False, uncertain=False,
+                kind=selected.kind,job_timeout=profile['trusted'].get('job_timeout_ms',1800000),
                 deadline=time.monotonic()+remaining/1000)
             self.active[cap['operation_id']] = handle
             lifecycle.close();lifecycle=None  # Only the anchor retains Core's activation endpoint.
@@ -160,6 +167,7 @@ class Operations:
                 elif frame.get('kind') == 'ready':
                     require(set(frame) == common and handle['prepared'] and not handle['ready'], 'workspace_anchor_ready')
                     handle['ready'] = True
+                    if handle['kind']=='start':handle['deadline']=time.monotonic()+handle['job_timeout']/1000
                     row['state']='running';atomic(handle['path'],row)
                 else:
                     require(set(frame) == common | {'cleanup','cancelled','cancellation','exit_code','started'} and
@@ -185,7 +193,7 @@ class Operations:
 
     def tick(self, window_active):
         for operation, handle in list(self.active.items()):
-            if (time.monotonic() >= handle['deadline'] or not exists(handle['worker']) or
+            if (time.monotonic() >= handle['deadline'] or handle['kind']=='command' and not exists(handle['worker']) or
                 not exists(self.manager.identity) or not window_active(handle['window'],handle['generation'])):
                 self.cancel(operation)
             try: self.poll_handle(handle)
