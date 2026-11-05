@@ -5,6 +5,7 @@ use super::*;
 pub(super) enum ToolProfile {
     None,
     OfflinePython,
+    DeskLogin,
     WorkspaceExec,
     /// Operator-configured trusted command profile (background jobs).
     TrustedWorkspaceExec,
@@ -15,7 +16,7 @@ impl ToolProfile {
         match self {
             Self::WorkspaceExec => Some(false),
             Self::TrustedWorkspaceExec => Some(true),
-            Self::None | Self::OfflinePython => None,
+            Self::None | Self::OfflinePython | Self::DeskLogin => None,
         }
     }
 }

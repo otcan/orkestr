@@ -4,6 +4,7 @@ pub(crate) mod broker;
 mod broker_frames;
 mod cancellation;
 mod claude_cancellation;
+mod desk_result;
 mod environment;
 mod framing;
 mod lease_refresh;

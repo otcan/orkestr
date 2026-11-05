@@ -168,7 +168,7 @@ FAST_SANDBOX = ("read-only", "readOnly")
 class Channel:
     def __init__(self, workspace, *, expected_native=None, offline_python=False, workspace_exec=False,
                  workspace_trusted=False, host_full_access=False, conversation_workspaces=(),
-                 fast_only=False, quota_observer=None):
+                 fast_only=False, quota_observer=None,desk_login=False):
         # Operator instance opt-in only: Codex danger-full-access on the host.
         require(type(host_full_access) is bool)
         # Optional passive quota cache (codex_quota.QuotaSink.observe). Never
@@ -194,7 +194,9 @@ class Channel:
         self.workspace_trusted = workspace_trusted
         self.offline_python = offline_python
         self.workspace_exec = workspace_exec
-        self.tool_enabled = offline_python or workspace_exec
+        require(type(desk_login) is bool and not (desk_login and (offline_python or workspace_exec or fast_only)))
+        self.desk_login=desk_login
+        self.tool_enabled = offline_python or workspace_exec or desk_login
         self.offline_route = None
         if offline_python:
             from offline_route import OfflineRoute
@@ -202,6 +204,9 @@ class Channel:
         if workspace_exec:
             from workspace_route import WorkspaceRoute
             self.offline_route = WorkspaceRoute(workspace_trusted)
+        if desk_login:
+            from desk_tool import DeskRoute
+            self.offline_route=DeskRoute()
         require(expected_native is None or identifier(expected_native))
         self.expected_native = expected_native
         self.workspace = str(workspace)
@@ -248,7 +253,7 @@ class Channel:
             # Closed transport metadata only. Core must separately issue Worker
             # parent/task admission; role JSON cannot create that authority.
             require(identity["role"] in ("fast", "deep", "worker"))
-            require(not self.tool_enabled or identity["role"] == "worker")
+            require(not self.tool_enabled or identity["role"] == ('deep' if self.desk_login else 'worker'))
             # The read-only (Fast) service broker also serves a read-only
             # parallel Deep slot (docs/v2/parallel-deep.md): same sandbox,
             # same native profile without MCP servers, apps or hooks.
@@ -381,7 +386,9 @@ class Channel:
                 require("ephemeral" not in params)
                 params["ephemeral"] = False
             if self.tool_enabled:
-                if self.workspace_exec:
+                if self.desk_login:
+                    from desk_tool import advertisement
+                elif self.workspace_exec:
                     from workspace_tool import advertisement
                 else:
                     from offline_tool import advertisement

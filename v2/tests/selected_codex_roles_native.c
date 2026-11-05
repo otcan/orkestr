@@ -172,6 +172,9 @@ int main(int argc, char **argv) {
             if (!refresh || strncmp(refresh, "false", 5)) return 34;
             printf("{\"id\":%ld,\"result\":{\"requiresOpenaiAuth\":true,\"account\":{\"type\":\"chatgpt\"}}}\n", request);
         } else if (!strncmp(method, "\"thread/start\"", 14) || !strncmp(method, "\"thread/resume\"", 15)) {
+#ifdef ORKESTR_TEST_DESK
+            if (!strstr(line,"orkestr_desk_login") || !strstr(line,"operation_id")) return 70;
+#endif
             int resumed = !strncmp(method, "\"thread/resume\"", 15);
             const char *exclude = value(line, "\"excludeTurns\"");
             if (ready++ || resumed != (instance > 1) || !strstr(line, cwd) ||
@@ -195,6 +198,18 @@ int main(int argc, char **argv) {
             printf("{\"method\":\"item/agentMessage/delta\",\"params\":{\"threadId\":\"%s\","
                    "\"turnId\":\"%s\",\"delta\":\"synthetic %s progress\"}}\n", native, turn, role);
             fflush(stdout);
+#ifdef ORKESTR_TEST_DESK
+            printf("{\"id\":0,\"method\":\"item/tool/call\",\"params\":{\"tool\":\"orkestr_desk_login\",\"callId\":\"synthetic-desk-call\",\"threadId\":\"%s\",\"turnId\":\"%s\",\"arguments\":{\"operation_id\":\"synthetic-login\"}}}\n",native,turn);
+            fflush(stdout);
+            if (!fgets(line,sizeof(line),stdin)) return 71;
+            if (strstr(line,"\"turn/interrupt\"")) {
+                const char *interrupt=value(line,"\"id\"");if(!interrupt) return 72;
+                printf("{\"id\":%ld,\"result\":{}}\n",strtol(interrupt,NULL,10));
+                record("interrupt",input,0);terminal("interrupted");continue;
+            }
+            if (!strstr(line,"\"id\":0") || !strstr(line,"\"success\":true") || !strstr(line,"process tree was reaped")) return 71;
+            record("desk-result",input,0);
+#endif
             char mode[32]; read_fixed("mode", mode, sizeof(mode));
             if (!strcmp(mode, "complete")) terminal("completed");
             else if (!strcmp(mode, "hold") || !strcmp(mode, "ack-only")) held_turn(input, mode);
