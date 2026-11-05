@@ -223,6 +223,16 @@ impl Store {
                 .await
                 .map_err(db)?;
         }
+        if !admission.duplicate && credential.is_some() && continuation_source_run_id.is_some() {
+            crate::source_continuation::enqueue(
+                &mut tx,
+                owner,
+                conversation,
+                input,
+                &admission.receipt,
+            )
+            .await?;
+        }
         tx.commit().await.map_err(db)?;
         Ok(admission)
     }

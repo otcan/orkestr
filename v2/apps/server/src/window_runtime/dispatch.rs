@@ -195,6 +195,13 @@ impl Controller {
         self.queue.wake();
     }
 
+    /// A freshly authenticated source continuation already has durable intent.
+    /// Re-authentication still happens at every normal window admission.
+    pub(crate) fn wake_source_continuation(&self, credential: &str) {
+        self.queue.remember(credential);
+        self.queue.wake();
+    }
+
     /// Start the background dispatcher. It holds only a weak controller link.
     pub(crate) fn start_dispatcher(self: &Arc<Self>) {
         let Ok(runtime) = tokio::runtime::Handle::try_current() else {

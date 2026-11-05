@@ -118,19 +118,38 @@ pub async fn message(
     // a claimed owner author is never proof of a human browser origin.
     let author = request.author;
     let (input, reply_to) = request.into_parts();
-    let admitted = s
-        .store
-        .admit_authenticated_attributed(
-            &credential,
-            &owner,
-            &conversation(id)?,
-            &input,
-            reply_to.as_ref(),
-            expected_provider_generation,
-            continuation_source_run_id.as_ref(),
-            author,
+    let conversation = conversation(id)?;
+    // Own admission and wake across a disconnected HTTP caller. Replays retain
+    // their first durable intent; they never gain missing continuation evidence.
+    let admitted = tokio::spawn(async move {
+        let admitted = s
+            .store
+            .admit_authenticated_attributed(
+                &credential,
+                &owner,
+                &conversation,
+                &input,
+                reply_to.as_ref(),
+                expected_provider_generation,
+                continuation_source_run_id.as_ref(),
+                author,
+            )
+            .await?;
+        if continuation_source_run_id.is_some() {
+            if let Some(controller) = &s.window_controller {
+                controller.wake_source_continuation(&credential);
+            }
+        }
+        Ok::<_, orkestr_v2_application::StoreError>(admitted)
+    })
+    .await
+    .map_err(|_| {
+        Error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "admission_unavailable",
+            "Admission outcome unavailable",
         )
-        .await?;
+    })??;
     Ok((
         if admitted.duplicate {
             StatusCode::OK

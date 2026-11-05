@@ -433,3 +433,6 @@ async fn source_receipt_links_actual_continuation_run_and_accepted_report_not_bu
 
 #[path = "completed_source_tests.rs"]
 mod completed_source_tests;
+
+#[path = "continuation_dispatch_tests.rs"]
+mod continuation_dispatch;
