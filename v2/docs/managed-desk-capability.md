@@ -87,7 +87,9 @@ The pinned native's `thread/resume` schema has no `dynamicTools` property. This
 fresh dynamic-tool profile explicitly rejects resume. It does not establish
 Claude, steering, long-running helper/lease-refresh or existing-session parity.
 A fixed process-level MCP/CLI ingress with actual managed caller and Core run
-proof is a separate required implementation; sessions must not be transplanted
+proof is implemented separately in [managed capability ingress](managed-capability-ingress.md).
+Its explicit managed-host option covers the fresh/resume transport; the legacy
+dynamic-tool profile's limits above remain unchanged. Sessions must not be transplanted
 or silently lose their native identity. Protected Root-request submission also
 requires a typed agent-summary capability; writable intake or sudo fallback is
 not an acceptable replacement. No owner approval/review path is changed here.
