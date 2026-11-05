@@ -142,6 +142,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE: '1'
         run: |
           python3 -m unittest discover -s migration/tests -v
+          sudo env PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -I -S -B -m unittest discover -s "$PWD/migration/tests" -p test_service_client.py -v
           python3 acceptance/migration_quarantine_replay.py --checkout .. --revision "$(git rev-parse HEAD)"
       - name: Rust format
         run: cargo +1.99.1 fmt --all -- --check

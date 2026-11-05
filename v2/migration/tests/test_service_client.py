@@ -1,45 +1,41 @@
 """Migration consumers must retain source/owner pins and service provenance."""
-from http.server import ThreadingHTTPServer
 import json
+import os
 from pathlib import Path
+import shutil
 import sys
-import tempfile
-import threading
 import unittest
+import uuid
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 import v2_client
 from v2.compat.v1_runtime.tests.test_provision_service_credential import Peer, OWNER, SOURCE, SECRET
+from v2.compat.tests.peer_test_fixture import CorePeer
 
 
+@unittest.skipUnless(os.geteuid() == 0, 'Root-published migration peer fixture')
 class ServiceClientTests(unittest.TestCase):
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory(prefix='migration-service-synthetic-')
-        self.root = Path(self.temporary.name)
+        self.root = Path('/orkestr-migration-test-' + str(uuid.uuid4()))
+        self.root.mkdir(mode=0o755)
         self.secret = self.root / 'service.json'
         self.secret.write_text(json.dumps({'service_token': SECRET}))
         self.secret.chmod(0o600)
-        self.server = ThreadingHTTPServer(('127.0.0.1', 0), Peer)
-        self.server.requests = []
-        self.server.source = SOURCE
-        self.server.reject_service = self.server.unknown_create = False
-        self.server.on_exchange = None
-        self.thread = threading.Thread(target=self.server.serve_forever, kwargs={'poll_interval': 0.01})
-        self.thread.start()
+        self.server = CorePeer(self.root, Peer)
+        self.descriptor = self.server.publish()
         self.client = v2_client.Client(f'http://127.0.0.1:{self.server.server_port}',
                                        origin='https://example.test', timeout=0.5)
 
     def tearDown(self):
         self.client.close()
-        self.server.shutdown()
-        self.server.server_close()
-        self.thread.join()
-        self.temporary.cleanup()
+        self.server.close()
+        shutil.rmtree(self.root)
 
     def login(self, **pins):
         return self.client.login_file(self.secret, **({'expected_owner': OWNER,
-                                                       'expected_source': SOURCE} | pins))
+                                                       'expected_source': SOURCE,
+                                                       'peer_descriptor_path': str(self.descriptor)} | pins))
 
     def test_service_login_no_origin_and_logout_with_csrf(self):
         self.assertEqual(self.login(), {'owner_id': OWNER})
@@ -58,14 +54,20 @@ class ServiceClientTests(unittest.TestCase):
         self.assertEqual(self.server.requests, [])
 
     def test_wrong_source_never_sends_secret(self):
-        with self.assertRaisesRegex(v2_client.ApiError, 'source_mismatch'):
+        with self.assertRaisesRegex(v2_client.ApiError, 'peer_identity_refused'):
             self.login(expected_source='e' * 40)
-        self.assertFalse(any(r[0] == 'POST' for r in self.server.requests))
+        self.assertEqual(self.server.requests, [])
 
     def test_wrong_owner_refuses_session(self):
-        with self.assertRaisesRegex(v2_client.ApiError, 'session_scope_mismatch'):
+        with self.assertRaisesRegex(v2_client.ApiError, 'peer_identity_refused'):
             self.login(expected_owner='00000000-0000-4000-8000-000000000099')
         self.assertIsNone(self.client.service)
+        self.assertEqual(self.server.requests, [])
+
+    def test_missing_peer_descriptor_refuses_without_network(self):
+        with self.assertRaisesRegex(v2_client.ApiError, 'service_peer_descriptor_required'):
+            self.login(peer_descriptor_path=None)
+        self.assertEqual(self.server.requests, [])
 
     def test_drift_after_login_blocks_mutation(self):
         self.login()

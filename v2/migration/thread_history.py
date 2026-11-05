@@ -28,7 +28,7 @@ import v2_rollback  # noqa: E402
 def _client(args):
     client = v2_client.Client(args.v2_url, origin=args.origin)
     client.login_file(args.credentials_file, expected_owner=args.expected_owner,
-                      expected_source=args.expected_source)
+                      expected_source=args.expected_source, peer_descriptor_path=args.peer_descriptor)
     return client
 
 
@@ -95,6 +95,7 @@ def parser():
                              help='private 0600 JSON {"service_token"} or legacy {"username","password"}')
         command.add_argument('--expected-owner', help='required owner UUID for service credentials')
         command.add_argument('--expected-source', help='required deployed source commit for service credentials')
+        command.add_argument('--peer-descriptor', help='Root-published Core descriptor for service credentials')
 
     export = commands.add_parser('v1-export')
     export.add_argument('--v1-home', required=True)
