@@ -104,10 +104,12 @@ jobs:
           sudo env PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -I -S -B -m unittest discover -s "$PWD/provider-broker" -p test_codex_service_fast_sampler.py -v
           sudo env PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -I -S -B -m unittest discover -s "$PWD/provider-broker" -p 'test_workspace_*.py' -v
           sudo env PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -I -S -B -m unittest discover -s "$PWD/provider-broker" -p test_split_qualification.py -v
+          sudo env PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -I -S -B -m unittest discover -s "$PWD/provider-broker" -p test_resource_namespace.py -v
       - name: Service packager and passive quota inventory
         run: |
           python3 -I -S -B -m unittest discover -s packaging/service/tests -v
           sudo /usr/bin/python3 -I -S -B -m unittest discover -s "$PWD/packaging/service/tests" -p test_selected.py -v
+          sudo env PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -I -S -B -m unittest discover -s "$PWD/packaging/service/tests" -p test_selected_managed.py -v
           sudo /usr/bin/python3 -I -S -B -m unittest discover -s "$PWD/packaging/service/tests" -p test_artifact_boundary.py -v
           sudo /usr/bin/python3 -I -S -B -m unittest discover -s "$PWD/packaging/service/tests" -p test_release.py -v
       - name: Kernel-bound service credentials and cache

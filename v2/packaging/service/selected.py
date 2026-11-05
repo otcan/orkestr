@@ -1,6 +1,7 @@
 #!/usr/bin/python3
 """Prepare the complete persistent selected Codex release. Never activate it."""
 import argparse
+from contextlib import ExitStack
 import json
 import os
 from pathlib import Path
@@ -22,6 +23,8 @@ from manager_source import authority
 from prepare import inventory, settings
 from release import final_bindings, wrapper
 import selected_roles
+import selected_managed
+import selected_resources
 
 
 def encoded(value):
@@ -84,7 +87,7 @@ def pair_bytes(plan):
     return pair
 
 
-OPTIONAL = {'qualification_record', 'deploy_maintenance_marker', 'managed_host', 'operator_recovery', 'desk_login', 'managed_operations', 'attachment_export_dir', 'password_rotation_ready', 'authority_uid', 'authority_gid', 'executor_uid', 'executor_gid', 'provider_home', 'roles', 'preserve_state', 'workspace_exec', 'additional_workspace_exec', 'max_active_windows', 'host_full_access',
+OPTIONAL = {'resource_namespace', 'qualification_record', 'deploy_maintenance_marker', 'managed_host', 'operator_recovery', 'desk_login', 'managed_operations', 'attachment_export_dir', 'password_rotation_ready', 'authority_uid', 'authority_gid', 'executor_uid', 'executor_gid', 'provider_home', 'roles', 'preserve_state', 'workspace_exec', 'additional_workspace_exec', 'max_active_windows', 'host_full_access',
             'window_max_minutes', 'conversation_window_max_minutes', 'conversation_workspaces', 'provider_routing',
             'code_mode_host', 'code_mode_host_sha256', 'claude', 'claude_quota_projection', 'codex_quota_projection', 'live_map', 'desktop_broker', 'timer_config', 'whatsapp_chats', 'v1_chat_icons_dir', 'metrics_port'}
 CLAUDE_PATHS = ('executable', 'account', 'workspace', 'home', 'temporary')
@@ -267,7 +270,7 @@ def prepare(plan):
     output=Path(plan['output']);inner=output/'package'
     settings(Path(plan['home']),plan['origin'],plan['port'],plan.get('authority_uid',uid),output,gid)
     require(not output.exists() and not output.is_symlink(),'fresh release required')
-    with authority(Path(plan['source_repository']),source) as (src,manager,config):
+    with authority(Path(plan['source_repository']),source) as (src,manager,config), ExitStack() as resources:
         trust=sys.modules['codex_bounded.trust']
         trust.protected(output.parent,True)
         if 'operator_recovery' in plan:
@@ -285,11 +288,10 @@ def prepare(plan):
         else:
             # Historical exact-source packages predate identity.py. Preserve
             # their qualified single-UID plan without mixing newer source in.
-            identity={'split':False, 'authority_uid':uid,
+            identity={'split':False, 'authority_uid':uid, 'executor_uid':uid, 'executor_gid':gid,
                       'provider_home':str(Path(plan['home'])/'provider-home')}
-        if identity['split']:
-            require(not any(key in plan for key in ('host_full_access','workspace_exec','additional_workspace_exec')),
-                    'split privileged/advanced mode requires a separately qualified scoped broker')
+        selected_managed.modes(plan, identity['split'])
+        resources.enter_context(selected_resources.view(plan, manager))
         home=trust.private(plan['home'],identity['authority_uid'],True)
         trust.private(home/'data',identity['authority_uid'],True)
         trust.private(identity['provider_home'],uid,True)
@@ -313,7 +315,7 @@ def prepare(plan):
             for b in roots[index+1:]:require(a!=b and a not in b.parents and b not in a.parents,'isolated path overlap')
         role_paths = selected_roles.validate(plan['roles'],trust,uid,roots,preserve) if 'roles' in plan else None
         for command in ([plan['workspace_exec']] if 'workspace_exec' in plan else [])+plan.get('additional_workspace_exec',[]):
-            project = trust.private(command['workspace'],uid,True)
+            project = selected_managed.project(command, trust, identity)
             isolated = [*roots, *(p for pair in role_paths.values() for p in pair)]
             for other in isolated:
                 require(project != other and project not in other.parents and other not in project.parents,
@@ -384,6 +386,7 @@ def prepare(plan):
                      'bootstrap_file':plan['bootstrap_file'],'ledger_directory':str(ledger),
                      'endpoint_directory':str(endpoint),'port':plan['port'],'trusted_origin':plan['origin']}
             runtime.update({key:plan[key] for key in IDENTITY_FIELDS if key in plan})
+            if 'resource_namespace' in plan:runtime['resource_namespace']=plan['resource_namespace']
             if identity['split']:
                 beta['identity_split']={'authority_uid':identity['authority_uid'],'executor_uid':uid,'shared_gid':gid}
             profile={'format':'orkestr-v2-codex-isolated-v2','native':str(inner/'native'),
@@ -459,7 +462,7 @@ def prepare(plan):
                       'files':{name:pin(inner/name)['sha256'] for name in sorted(package_files)},
                       'dependencies':deps,'ui':{name:info['sha256'] for name,info in pair['web']['files'].items()}}
             write(inner/'manifest.json',encoded(manifest),gid);digest=pin(inner/'manifest.json')['sha256']
-            manager.Package(inner,digest);final_bindings(inner,inner,gid)
+            selected_managed.validate_package(manager.Package(inner,digest));final_bindings(inner,inner,gid)
             write(output/'start-service',wrapper(output,Path('/usr/bin/python3').resolve(),digest),gid,True)
             receipt={'format':'orkestr-v2-selected-service-release-v1','source_commit':source,
                      'version':pair['version'],'pair_sha256':plan['pair_sha256'],'native_sha256':plan['native_sha256'],
