@@ -9,6 +9,8 @@ from pathlib import Path
 import sqlite3
 import threading
 import time
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from identity_split_service_http import Rehearsal, wait
 
 
@@ -111,6 +113,24 @@ def main():
     report={'passed':False}
     try:
         report=case.run_maintenance()
+    except BaseException as error:
+        report['error']=type(error).__name__+': '+str(error)
+        for key,query in {
+            'windows':'SELECT generation,state FROM execution_windows',
+            'runs':'SELECT role,state,dispatch_state FROM production_runs',
+            'inbox':'SELECT state,claim_generation FROM reasoning_inbox',
+            'queue':'SELECT state,withdrawal FROM execution_window_queue',
+            'timers':'SELECT count(*) FROM dormant_timer_inputs',
+        }.items():
+            try:report[key]=case.read(query)
+            except sqlite3.Error:pass
+        status=case.package.data/'deploy-drain.status.json'
+        if status.exists():report['drain']=json.loads(status.read_text())
+        if case.process and case.process.stderr:
+            os.set_blocking(case.process.stderr.fileno(),False)
+            try:report['synthetic_stderr']=os.read(case.process.stderr.fileno(),16384).decode(errors='replace')
+            except BlockingIOError:pass
+        raise
     finally:
         try:case.close()
         finally:
