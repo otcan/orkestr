@@ -74,6 +74,23 @@ class Peer(BaseHTTPRequestHandler):
 
 
 class ClientTests(unittest.TestCase):
+    def test_service_credential_requires_kernel_peer_before_secret_exchange(self):
+        self.secret.write_text(json.dumps({"service_token":"c"*64}))
+        with self.assertRaisesRegex(ClientError,"service_peer_descriptor_required"):
+            self.client.session.login()
+        self.assertFalse(any(r[1]==client_module.SERVICE_SESSION for r in self.server.observed))
+
+    def test_revocation_recovers_only_after_explicit_credential_replacement(self):
+        self.client.session.login()
+        self.client.session._revoked = True
+        with self.assertRaisesRegex(ClientError,"session_revoked"):
+            self.client.session.login()
+        generation = self.client.session.generation
+        self.secret.write_text(json.dumps({"username":"synthetic-owner","password":"synthetic-replacement-password"}))
+        self.client.session.login()
+        self.assertGreater(self.client.session.generation,generation)
+        self.assertFalse(self.client.session._revoked)
+
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="rust-client-synthetic-")
         self.root = Path(self.temporary.name)
@@ -331,6 +348,18 @@ class ClientTests(unittest.TestCase):
         os.link(self.secret, alias)
         with self.assertRaisesRegex(ClientError, "credential_file_refused"):
             client_module.credentials(self.secret)
+
+    def test_rejected_response_is_closed_before_returning_error(self):
+        closed=[]
+        original=client_module.http.client.HTTPResponse.close
+        def close(response):
+            closed.append(response)
+            return original(response)
+        with patch.object(client_module.http.client.HTTPResponse,'close',close):
+            with self.assertRaisesRegex(ClientError,'unexpected_status'):
+                self.client.session._wire('GET','/api/v2/health',allowed=(201,))
+            self.assertTrue(closed)
+            self.assertTrue(all(response.isclosed() for response in closed))
 
     def test_failed_login_does_not_include_body_or_secret_in_error(self):
         original = self.respond

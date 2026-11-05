@@ -1,6 +1,7 @@
 //! Serialized private admission-to-task handoff; receipts alone never launch.
 #[path = "conversation_drain.rs"]
 mod drain;
+mod provider_routing;
 use super::{
     context::Context,
     handles::Handles,
@@ -97,6 +98,8 @@ impl ConversationController {
         let _operation = self.operation.lock().await;
         self.refresh().await?;
         super::integers::generation(input.expected_generation)?;
+        self.apply_provider_routing(browser, owner, conversation, input)
+            .await?;
         let admission = self
             .initial
             .admit(&self.store, browser, owner, conversation, input)
@@ -425,8 +428,17 @@ impl ConversationController {
                     .map_err(|_| "initial window binding refused")?;
                 let workspace = match self.config.workspace_profile().filter(|_| !claude) {
                     Some(profile) => {
-                        let installation =
-                            profile.installation(&self.home, self.native_workspaces())?;
+                        let installation = profile
+                            .installation_for_window(
+                                &self.home,
+                                self.native_workspaces().collect(),
+                                self.config
+                                    .identity_split
+                                    .as_ref()
+                                    .map(|split| split.executor_uid),
+                                &self.manager,
+                            )
+                            .await?;
                         let workspace = bound
                             .register_workspace(
                                 grant.credential(),
@@ -474,8 +486,17 @@ impl ConversationController {
                 let (bound, metadata, workspace) =
                     match self.config.workspace_profile().filter(|_| !claude) {
                         Some(profile) => {
-                            let installation =
-                                profile.installation(&self.home, self.native_workspaces())?;
+                            let installation = profile
+                                .installation_for_window(
+                                    &self.home,
+                                    self.native_workspaces().collect(),
+                                    self.config
+                                        .identity_split
+                                        .as_ref()
+                                        .map(|split| split.executor_uid),
+                                    &self.manager,
+                                )
+                                .await?;
                             let (bound, metadata, workspace) = self
                                 .store
                                 .reattach_terminal_supervisor_with_workspace(

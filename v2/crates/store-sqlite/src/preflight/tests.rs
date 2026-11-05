@@ -156,6 +156,13 @@ async fn supported_earlier_migration_prefix_is_identified_then_upgraded() {
         .bind(first.version).bind(first.description.as_ref()).bind(first.checksum.as_ref())
         .execute(&mut conn).await.unwrap();
     conn.close().await.unwrap();
+    let before_recovery = dir.files();
+    assert!(Store::open_current(&dir.db()).await.is_err());
+    assert_eq!(
+        before_recovery,
+        dir.files(),
+        "recovery must not upgrade an older Core"
+    );
     let store = Store::open(&dir.db()).await.unwrap();
     let count: i64 = sqlx::query_scalar("SELECT count(*) FROM _sqlx_migrations")
         .fetch_one(&store.pool)
@@ -165,6 +172,48 @@ async fn supported_earlier_migration_prefix_is_identified_then_upgraded() {
     store.close().await;
     let reopened = Store::open(&dir.db()).await.unwrap();
     reopened.close().await;
+}
+
+#[tokio::test]
+async fn current_only_open_never_initializes_and_preserves_current_schema() {
+    let dir = Directory::new();
+    assert!(Store::open_current(&dir.db()).await.is_err());
+    assert!(dir.files().is_empty());
+    let store = Store::open(&dir.db()).await.unwrap();
+    store
+        .setup("synthetic-owner", "synthetic-hash")
+        .await
+        .unwrap();
+    let schema_query =
+        "SELECT type,name,sql FROM sqlite_schema WHERE sql IS NOT NULL ORDER BY type,name";
+    let before_schema: Vec<(String, String, String)> = sqlx::query_as(schema_query)
+        .fetch_all(&store.pool)
+        .await
+        .unwrap();
+    let migrations_query = "SELECT version,description,success,checksum,execution_time FROM _sqlx_migrations ORDER BY version";
+    let before_migrations: Vec<(i64, String, bool, Vec<u8>, i64)> =
+        sqlx::query_as(migrations_query)
+            .fetch_all(&store.pool)
+            .await
+            .unwrap();
+    let before_owner = store.credentials("synthetic-owner").await.unwrap();
+    store.close().await;
+    let current = Store::open_current(&dir.db()).await.unwrap();
+    assert_eq!(
+        current.credentials("synthetic-owner").await.unwrap(),
+        before_owner
+    );
+    let after_schema: Vec<(String, String, String)> = sqlx::query_as(schema_query)
+        .fetch_all(&current.pool)
+        .await
+        .unwrap();
+    let after_migrations: Vec<(i64, String, bool, Vec<u8>, i64)> = sqlx::query_as(migrations_query)
+        .fetch_all(&current.pool)
+        .await
+        .unwrap();
+    assert_eq!(before_schema, after_schema);
+    assert_eq!(before_migrations, after_migrations);
+    current.close().await;
 }
 
 async fn populated_dispatch_prefix(dir: &Directory) -> SqliteConnection {
@@ -423,6 +472,17 @@ async fn populated_payload_prefix_upgrade_preserves_all_rows_and_foreign_links()
         "production_parallel_deep_deferrals",
         "production_parallel_deep_notes",
         "production_parallel_deep_withdrawals",
+        "agent_timer_limits",
+        "service_credentials",
+        "message_request_sources",
+        "source_admission_fences",
+        "operator_provider_handoffs",
+        "conversation_provider_policy_matches",
+        "encrypted_uploads",
+        "encrypted_upload_chunks",
+        "deep_desk_operations",
+        "managed_operations",
+        "deep_desk_results",
     ] {
         expected.insert(table.into(), Vec::new());
     }
@@ -523,7 +583,11 @@ async fn populated_payload_prefix_upgrade_preserves_all_rows_and_foreign_links()
             .fetch_one(&mut conn)
             .await
             .unwrap(),
-        84
+        sqlx::migrate!("./migrations")
+            .iter()
+            .last()
+            .unwrap()
+            .version
     );
     for table in [
         "history_imports",

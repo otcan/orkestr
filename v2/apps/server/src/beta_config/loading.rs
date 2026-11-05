@@ -26,7 +26,15 @@ pub(crate) fn load(path: &Path, home: &Path) -> Result<BetaConfig, &'static str>
     let raw = protected_bytes(path, gid, false, super::MAX_BETA_CONFIG_BYTES)?;
     let config: BetaConfig = serde_json::from_slice(&raw).map_err(|_| REFUSED)?;
     config.validate()?;
-    let workspace_info = private_directory(&config.workspace, uid, gid)?;
+    let executor_uid = if let Some(split) = &config.identity_split {
+        if split.authority_uid != uid || split.shared_gid != gid {
+            return Err(REFUSED);
+        }
+        split.executor_uid
+    } else {
+        uid
+    };
+    let workspace_info = private_directory(&config.workspace, executor_uid, gid)?;
     if config.workspace.starts_with(home)
         || home.starts_with(&config.workspace)
         || (home_info.dev(), home_info.ino()) == (workspace_info.dev(), workspace_info.ino())
@@ -34,7 +42,13 @@ pub(crate) fn load(path: &Path, home: &Path) -> Result<BetaConfig, &'static str>
         return Err(REFUSED);
     }
     for workspace in config.conversation_workspaces.values() {
-        workspace.custody(home, uid)?;
+        if config.identity_split.is_none() {
+            workspace.custody(home, executor_uid)?;
+        } else if workspace.path().starts_with(home) || home.starts_with(workspace.path()) {
+            return Err(REFUSED);
+        }
+        // Split mapped directories are checked by the original Root manager
+        // and again by the executor. Core cannot open executor-private trees.
     }
     let launcher = protected_bytes(&config.launcher, gid, true, 16 * 1024 * 1024)?;
     if format!("{:x}", Sha256::digest(launcher)) != config.launcher_sha256 {
@@ -42,7 +56,7 @@ pub(crate) fn load(path: &Path, home: &Path) -> Result<BetaConfig, &'static str>
     }
     if let Some(roles) = &config.roles {
         for role in roles.launches() {
-            let info = private_directory(&role.workspace, uid, gid)?;
+            let info = private_directory(&role.workspace, executor_uid, gid)?;
             if role.workspace.starts_with(home)
                 || home.starts_with(&role.workspace)
                 || (home_info.dev(), home_info.ino()) == (info.dev(), info.ino())
@@ -56,7 +70,7 @@ pub(crate) fn load(path: &Path, home: &Path) -> Result<BetaConfig, &'static str>
         }
     }
     if let Some(claude) = &config.claude {
-        let info = private_directory(&claude.workspace, uid, gid)?;
+        let info = private_directory(&claude.workspace, executor_uid, gid)?;
         if claude.workspace.starts_with(home)
             || home.starts_with(&claude.workspace)
             || (home_info.dev(), home_info.ino()) == (info.dev(), info.ino())
@@ -69,6 +83,16 @@ pub(crate) fn load(path: &Path, home: &Path) -> Result<BetaConfig, &'static str>
         }
     }
     for profile in config.workspace_profiles() {
+        if config.identity_split.is_some() {
+            profile
+                .trusted
+                .as_ref()
+                .ok_or(REFUSED)?
+                .validate_managed_runtime()?;
+            // Core receives the exact Root-retained project descriptors later,
+            // before registration. Loading never widens private traversal.
+            continue;
+        }
         // Readiness only: no Core project registration, command, or cgroup is
         // created by loading the trusted operator profile.
         profile.installation(
@@ -108,20 +132,26 @@ pub(crate) fn load(path: &Path, home: &Path) -> Result<BetaConfig, &'static str>
     control_socket(&config.manager_socket, gid)?;
     // Recheck custody after the bounded reads; no stale pre-read path approval.
     private_directory(home, uid, gid)?;
-    private_directory(&config.workspace, uid, gid)?;
+    private_directory(&config.workspace, executor_uid, gid)?;
     for workspace in config.conversation_workspaces.values() {
-        workspace.custody(home, uid)?;
+        if config.identity_split.is_none() {
+            workspace.custody(home, executor_uid)?;
+        } else if workspace.path().starts_with(home) || home.starts_with(workspace.path()) {
+            return Err(REFUSED);
+        }
+        // Split mapped directories are checked by the original Root manager
+        // and again by the executor. Core cannot open executor-private trees.
     }
     protected_chain(path, None)?;
     protected_chain(&config.launcher, None)?;
     if let Some(roles) = &config.roles {
         for role in roles.launches() {
-            private_directory(&role.workspace, uid, gid)?;
+            private_directory(&role.workspace, executor_uid, gid)?;
             protected_chain(&role.launcher, None)?;
         }
     }
     if let Some(claude) = &config.claude {
-        private_directory(&claude.workspace, uid, gid)?;
+        private_directory(&claude.workspace, executor_uid, gid)?;
         protected_chain(&claude.launcher, None)?;
     }
     Ok(config)

@@ -3,7 +3,13 @@
 
   agent_timer_provision.py --v2-url URL --credentials FILE --grant-dir DIR
                            --only ID_OR_NAME ... [--rotate] [--revoke]
+                           [--create-cap owner_only|off|default|N]
                            [--chown USER] [--dry-run]
+
+--create-cap sets the selected conversations' rolling 24-hour agent timer
+create cap: owner_only (a chat only the owner is in; server default 200),
+off, default (the server default, 24) or a fixed number. It never changes
+timer history, and the hourly and live-timer caps always apply.
 
 The default is one conversation at a time (--only). --all-owner-conversations
 also needs --i-understand-shared-grant-dir, because every grant then sits in
@@ -81,6 +87,22 @@ class Api(_BASE.Api):
     def revoke(self, conversation):
         return self.call('DELETE', f'/api/v2/conversations/{conversation}/agent-timer-grant')
 
+    def set_limits(self, conversation, body):
+        return self.call('PUT', f'/api/v2/conversations/{conversation}/agent-timer-limits', body)
+
+
+def create_cap(value):
+    """--create-cap to the limits request body."""
+    if value in ('owner_only', 'off', 'default'):
+        return {'mode': value}
+    try:
+        number = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError('owner_only, off, default or 1..10000') from None
+    if not 1 <= number <= 10_000:
+        raise argparse.ArgumentTypeError('owner_only, off, default or 1..10000')
+    return {'mode': 'fixed', 'daily_creates_max': number}
+
 
 def plan(rows, only=None, rotate=False, revoke=False, grant_dir=None):
     """(conversation, action) for each selected row; pure, for tests."""
@@ -113,6 +135,7 @@ def parser():
     selection.add_argument('--all-owner-conversations', action='store_true')
     root.add_argument('--i-understand-shared-grant-dir', action='store_true',
                       help='required with --all-owner-conversations: every grant lands in one directory')
+    root.add_argument('--create-cap', type=create_cap, metavar='owner_only|off|default|N')
     root.add_argument('--chown')
     root.add_argument('--dry-run', action='store_true')
     return root
@@ -146,6 +169,12 @@ def main(argv=None, api=None):
                     path.unlink(missing_ok=True)
                 else:
                     install(path, api.issue(conversation)['grant'], owner)
+                if args.create_cap and action != 'revoke':
+                    if args.dry_run:
+                        line['create_cap'] = args.create_cap
+                    else:
+                        limits = api.set_limits(conversation, args.create_cap)
+                        line['create_cap'] = {k: limits.get(k) for k in ('mode', 'daily_creates_max')}
             except ProvisionError as failure:
                 failed = True
                 line.update(action='failed', status=failure.status, code=failure.code)

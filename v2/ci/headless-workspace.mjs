@@ -120,7 +120,7 @@ export const scenarios = [
     await until(() => state.windowPosts.some(w => w.input_request_key === Object.keys(state.intake).at(-1)), 'work request of the sent message');
     assert.equal(posts(), before + 1, 'Enter sends once');
     const sent = state.messages[A].at(-1).text;
-    assert.match(sent, /^Synthetic first line\nsecond line\n\n\[Files attached in the Orkestr app/);
+    assert.match(sent, /^Synthetic first line\nsecond line\n\n\[File attached in the Orkestr app/);
     assert.match(sent, /orkestr-v2-synthetic-pixel\.png \(image\/png, \d+ bytes.*local file \/synthetic\/attachments\//);
     assert.equal(await page.$$eval('.attachment-chip', n => n.length), 0, 'Sent attachments leave the composer');
   }],
@@ -142,8 +142,8 @@ export const scenarios = [
     await page.evaluate(() => document.querySelector('.chat-transcript').dispatchEvent(new DragEvent('drop', { dataTransfer: window.__drop, bubbles: true, cancelable: true })));
     await page.waitForFunction(() => document.querySelectorAll('.message-composer .attachment-chip').length === 2);
     assert.equal(await page.$('.conversation-pane.drop-active'), null);
-    assert.deepEqual(state.uploads.at(-1).files.map(f => [f.filename, f.media_type]), [['drop-one.txt', 'text/plain'], ['drop-two.md', 'text/markdown']]);
-    assert.equal(state.uploads.length, uploads + 1, 'one upload for one drop');
+    assert.deepEqual(state.uploads.slice(uploads).flatMap(u=>u.files).map(f => [f.filename, f.media_type]), [['drop-one.txt', 'text/plain'], ['drop-two.md', 'text/markdown']]);
+    assert.equal(state.uploads.length, uploads + 2, 'one encrypted session per file');
     await page.evaluate(() => {
       const dt = new DataTransfer();
       dt.items.add(new File([new Uint8Array([137, 80, 78, 71])], 'image.png', { type: 'image/png' }));
@@ -155,11 +155,14 @@ export const scenarios = [
     // Over the limit: a clear error and nothing uploaded.
     await page.evaluate(() => {
       const dt = new DataTransfer();
-      dt.items.add(new File([new Uint8Array(17 * 1024 * 1024)], 'too-big.bin'));
+      const size=Object.getOwnPropertyDescriptor(Blob.prototype,'size').get;
+      Object.defineProperty(File.prototype,'size',{configurable:true,get(){return this.name==='too-big.bin'?1_000_000_001:size.call(this);}});
+      dt.items.add(new File(['synthetic size boundary'], 'too-big.bin'));
       document.querySelector('.conversation-pane').dispatchEvent(new DragEvent('drop', { dataTransfer: dt, bubbles: true, cancelable: true }));
     });
-    await waitText('Not attached: Attachments are limited to 16 MiB per message.');
-    assert.equal(state.uploads.length, uploads + 2);
+    await waitText('A file must contain 1 to 1,000,000,000 bytes.');
+    await page.evaluate(()=>delete File.prototype.size);
+    assert.equal(state.uploads.length, uploads + 3);
     while (await page.$('.message-composer .chip-remove')) await page.click('.message-composer .chip-remove');
   }],
   ['parallel-sends', async label => {
@@ -503,11 +506,19 @@ export const scenarios = [
       honor_no_reply: true, reply_prefix: 'synthetic-new:', reply_footer: null, review_before_accepting: false });
     // Desktops of the chat: binding and current lease.
     await waitText('synthetic-desk');
+    await clickWithin('[aria-label="Available desktops"]', 'Open desktop');
+    await page.waitForSelector('[aria-label="Available desktops"] a[target="_blank"]');
+    assert.equal(await page.$eval('[aria-label="Available desktops"] a', a => a.href),
+      'https://desktop.example.test/desktop-share/synthetic?key=fixture');
+    assert.equal(await page.$eval('[aria-label="Available desktops"] a', a => a.rel), 'noopener noreferrer');
+    await waitText('The desktop may ask you to approve a viewing challenge.');
     assert.equal(await page.$eval('#desktop-thread', n => n.value), 'synthetic-thread');
     await page.type('#desktop-slugs', ', other-desk');
     await clickText('Save desktops');
     await waitText('Desktops saved (revision 2)');
     assert.deepEqual(state.bindingPuts.at(-1).desktop_slugs, ['synthetic-desk', 'other-desk']);
+    await page.waitForFunction(() => document.querySelectorAll('[aria-label="Available desktops"] a').length === 0);
+    await waitText('other-desk');
     await screenshot(label, 'chat-settings');
     await noHorizontalScroll();
     // Timers of the chat are listed; selecting one opens its controls.

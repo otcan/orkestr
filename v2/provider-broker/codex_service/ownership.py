@@ -67,6 +67,13 @@ class Process:
             self.fd = os.pidfd_open(identity["pid"], 0)
         except ProcessLookupError:
             raise Vanished("owned_process_missing") from None
+        except OSError as error:
+            if error.errno == errno.EINVAL:
+                # A /proc child locator can disappear while the kernel pins
+                # it. Only a fresh original-identity check may classify this
+                # as gone; a live/unpinnable original remains uncertain.
+                _refuse(identity,"owned_process_missing")
+            raise
         try:
             if not same(identity, any_uid):
                 _refuse(identity, "owned_process_changed")
@@ -103,9 +110,12 @@ class Children:
         # directly on the host. Descendants may legitimately run as another
         # uid (sudo), and a long window may start many short-lived commands.
         self.host = host_full_access(package)
+        self.allow_uid_change = self.host and not getattr(package, "identity_split", False)
         self.bound = HOST_MAX_CHILDREN if self.host else MAX_CHILDREN
         self.records = {}
         self.brokers = set()
+        self.managed_brokers = set()
+        self.families = {}
         self.forced = self.uncertain = False
         self.uncertainty_reason = None
         self.lock = threading.RLock()
@@ -117,7 +127,7 @@ class Children:
             if len(self.records) >= self.bound:
                 self._forget_reaped()
             require(len(self.records) < self.bound, "owned_child_bound")
-            self.records[key] = Process(identity, any_uid=self.host)
+            self.records[key] = Process(identity, any_uid=self.allow_uid_change)
         return self.records[key]
 
     def _forget_reaped(self):
@@ -126,6 +136,7 @@ class Children:
         for key in [key for key, record in self.records.items()
                     if key not in self.brokers and record.gone()]:
             self.records.pop(key).close()
+            self.families.pop(key,None)
 
     @serialized
     def bind(self, pid, start, deadline):
@@ -171,8 +182,31 @@ class Children:
         require(exists(identity) and belongs(pid, self.server), "broker_owner_changed")
         require(time.monotonic() < deadline, "broker_pause_deadline")
         self.brokers.add(key)  # Retain original ownership BEFORE releasing launch.
+        self.families[key]={key}
         record.send(signal.SIGCONT)
         return True
+
+    @serialized
+    def bind_managed(self, receipt, window, generation):
+        from .launch import ManagedSpawn
+        require(isinstance(receipt, ManagedSpawn) and not receipt.consumed
+                and getattr(self.package, "identity_split", False), "managed_launch_proof")
+        identity = receipt.identity
+        require(receipt.window == window and receipt.generation == generation
+                and receipt.server == self.server and exists(self.server)
+                and receipt.manager == os.getpid() and identity["ppid"] == os.getpid()
+                and identity["uid"] == self.package.executor_uid and exists(identity),
+                "managed_launch_scope")
+        key = (identity["pid"], identity["start"])
+        require(key not in self.brokers and (receipt.role in self.package.role_profiles or
+                receipt.role=='claude' and self.package.claude is not None),
+                "managed_launch_reused")
+        record = self.remember(identity)
+        self.brokers.add(key)
+        self.managed_brokers.add(key)
+        self.families[key]={key}
+        receipt.consumed = True
+        record.send(signal.SIGCONT)
 
     @serialized
     def broker_for(self, pid):
@@ -184,15 +218,19 @@ class Children:
 
     @serialized
     def observe(self):
-        pending = [self.records[key].identity for key in self.brokers]
+        for key in self.brokers:self.families.setdefault(key,{key})
+        # Retain each observed descendant's original broker assignment even
+        # when its parent exits and the root subreaper adopts it.
+        pending = [(record.identity,root) for key,record in self.records.items()
+                   for root in self.families.get(key,())]
         visited = set()
         try:
             while pending:
-                parent = pending.pop()
+                parent,root = pending.pop()
                 key = (parent["pid"], parent["start"])
-                if key in visited or not same(parent, self.host):
+                if (key,root) in visited or not same(parent, self.allow_uid_change):
                     continue
-                visited.add(key)
+                visited.add((key,root))
                 require(len(visited) <= self.bound, "owned_child_bound")
                 path = Path(f"/proc/{parent['pid']}/task/{parent['pid']}/children")
                 try:
@@ -208,14 +246,18 @@ class Children:
                     child = process(int(token))
                     if child is None or child["ppid"] != parent["pid"]:
                         continue
-                    require(self.host or child["uid"] == self.package.uid, "owned_child_identity")
+                    require(self.allow_uid_change or child["uid"] == self.package.uid, "owned_child_identity")
                     try:
                         self.remember(child)
                     except Vanished:
                         # A short-lived descendant (CLI helper, shell probe)
                         # exited and was reaped mid-walk. Not uncertainty.
                         continue
-                    pending.append(child)
+                    child_key=(child['pid'],child['start'])
+                    roots=self.families.setdefault(child_key,set())
+                    require(not roots or roots=={root},'owned_child_family_changed')
+                    roots.add(root)
+                    pending.append((child,root))
         except BaseException as error:
             self._observation_failed(error)
             raise
@@ -227,7 +269,7 @@ class Children:
             return
         reason = error.args[0] if error.args else None
         allowed = {"owned_child_bound", "owned_child_identity", "owned_child_metadata",
-                   "owned_process_missing", "owned_process_changed"}
+                   "owned_process_missing", "owned_process_changed","owned_child_family_changed"}
         if isinstance(reason, str) and reason in allowed:
             self.uncertainty_reason = reason
         elif isinstance(error, OSError) and error.errno in (errno.ENOENT, errno.ESRCH):
@@ -249,6 +291,15 @@ class Children:
         self.observe()
         live = self._log_live()
         return not self.uncertain and not live
+
+    @serialized
+    def released_broker(self,identity):
+        """Release one original broker tree while other window roles stay live."""
+        self.observe()
+        root=(identity['pid'],identity['start'])
+        require(root in self.brokers,'original_cleanup_proof_missing')
+        return not self.uncertain and all(record.gone() for key,record in self.records.items()
+                if root in self.families.get(key,()) or not self.families.get(key))
 
     def _log_live(self):
         """Owned identities still alive. Operator diagnostic on stderr: pid and
@@ -291,10 +342,10 @@ class Children:
                 record.send(signal.SIGKILL)
         deadline = time.monotonic() + seconds
         while any(not record.gone() for record in self.records.values()):
-            for record in self.records.values():
+            for key,record in self.records.items():
                 # We may adopt an orphan under the root subreaper. Never wait on
                 # arbitrary pids; wait only original owned identities/pidfds.
-                if record.exited() and same(record.identity, record.any_uid):
+                if key not in self.managed_brokers and record.exited() and same(record.identity, record.any_uid):
                     try:
                         os.waitid(os.P_PIDFD, record.fd, os.WEXITED | os.WNOHANG)
                     except ChildProcessError:
@@ -308,3 +359,95 @@ class Children:
     def close(self):
         for record in self.records.values():
             record.close()
+
+
+class Adopted:
+    """Unassigned kernel-adopted children: cleanup custody, never role authority.
+
+    Only this exact root subreaper's direct children can enter this pool. No
+    caller PID, same-UID scan, transcript or empty snapshot grants ownership.
+    Discovering one permanently faults the manager; global reap never repairs
+    the missing window/role association or authorizes a replay.
+    """
+    def __init__(self,package):
+        require(os.geteuid()==0 and package.identity_split,'adopted_root_manager')
+        import ctypes
+        selected=ctypes.c_int()
+        require(ctypes.CDLL(None).prctl(37,ctypes.byref(selected),0,0,0)==0 and selected.value==1,
+                'adopted_subreaper_required')
+        self.parent=process(os.getpid());self.records={}
+        self.allowed_uids={package.executor_uid,package.authority_uid}
+        require(len(self.allowed_uids)==2 and all(type(uid) is int and uid>0 for uid in self.allowed_uids),
+                'adopted_identity_split')
+        # Fixed Root helpers have their own per-operation subreaper. If one
+        # dies, this manager inherits its actual kernel children. This expands
+        # cleanup custody only; unknown association still quarantines all work.
+        self.allow_uid_change=bool(getattr(package,'runtime',{}).get('desk_login'))
+        if self.allow_uid_change:self.allowed_uids.add(0)
+
+    def _remember(self,identity):
+        key=(identity['pid'],identity['start'])
+        require(identity['uid'] in self.allowed_uids,'adopted_executor_identity')
+        if key not in self.records:
+            require(len(self.records)<MAX_CHILDREN,'adopted_child_bound')
+            try:self.records[key]=Process(identity,any_uid=self.allow_uid_change)
+            except Vanished:return False
+            return True
+        return False
+
+    @staticmethod
+    def children(identity):
+        if not exists(identity):return []
+        root=Path('/proc',str(identity['pid']),'task')
+        try:tasks=list(root.iterdir())
+        except FileNotFoundError:return []
+        require(len(tasks)<=MAX_CHILDREN,'adopted_thread_bound')
+        pids=set()
+        for task in tasks:
+            try:
+                with (task/'children').open('rb') as stream:raw=stream.read(8193)
+            except (FileNotFoundError,ProcessLookupError):continue
+            require(len(raw)<=8192,'adopted_child_bound')
+            for token in raw.split():
+                require(token.isdigit(),'adopted_child_metadata');pids.add(int(token))
+        require(len(pids)<=MAX_CHILDREN,'adopted_child_bound')
+        return pids
+
+    def capture(self,known):
+        require(exists(self.parent) and self.parent['pid']==os.getpid(),'adopted_manager_changed')
+        added=False
+        for pid in self.children(self.parent):
+            identity=process(pid)
+            if identity is None or identity['ppid']!=self.parent['pid']:continue
+            key=(pid,identity['start'])
+            if key in known:continue
+            added=self._remember(identity) or added
+        return added
+
+    def observe(self):
+        pending=[record.identity for record in self.records.values()];seen=set()
+        while pending:
+            parent=pending.pop();key=(parent['pid'],parent['start'])
+            if key in seen:continue
+            seen.add(key)
+            for pid in self.children(parent):
+                child=process(pid)
+                if child is None or child['ppid']!=parent['pid']:continue
+                self._remember(child);pending.append(child)
+
+    def drain(self,known,seconds=2):
+        deadline=time.monotonic()+seconds
+        while True:
+            self.capture(known);self.observe()
+            for record in reversed(list(self.records.values())):
+                record.send(signal.SIGKILL)
+            for record in self.records.values():
+                if record.exited() and same(record.identity):
+                    try:os.waitid(os.P_PIDFD,record.fd,os.WEXITED|os.WNOHANG)
+                    except ChildProcessError:pass
+            if all(record.gone() for record in self.records.values()):return True
+            if time.monotonic()>=deadline:return False
+            time.sleep(.01)
+
+    def close(self):
+        for record in self.records.values():record.close()

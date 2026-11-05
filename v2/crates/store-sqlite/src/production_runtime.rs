@@ -5,13 +5,14 @@ use orkestr_v2_contracts::OwnerId;
 use sqlx::{Row, SqliteConnection};
 use uuid::Uuid;
 mod execution_window;
+pub(crate) use execution_window::enqueue_trusted_intent;
 #[cfg(test)]
 mod historical_guard_fixture;
 pub use execution_window::{
     ClosedExecutionWindowRetirement, ExecutionWindowBootstrap, ExecutionWindowCredential,
-    ExecutionWindowRetirement, RetiredExecutionWindowContext, StrandedExecutionWindow,
-    StrandedExecutionWindowPlan, EXECUTION_WINDOW_BASE_LIFETIME_MS, EXECUTION_WINDOW_CLEANUP_MS,
-    EXECUTION_WINDOW_MAX_LIFETIME_MS,
+    ExecutionWindowRetirement, OperatorProviderPolicy, RetiredExecutionWindowContext,
+    StrandedExecutionWindow, StrandedExecutionWindowPlan, EXECUTION_WINDOW_BASE_LIFETIME_MS,
+    EXECUTION_WINDOW_CLEANUP_MS, EXECUTION_WINDOW_MAX_LIFETIME_MS,
 };
 mod acceptance;
 mod auto_acceptance;
@@ -31,10 +32,24 @@ mod claude_identity;
 pub use claude_identity::ClaudeProcessInitialization;
 mod capability;
 pub use capability::{ConsumedProviderDispatch, ExecutionConsumption};
-mod deep_groups;
+mod desk_login;
+mod managed_operation;
+pub use desk_login::DeskLoginSetup;
+pub use desk_login::{CompletedDeskLogin, DeskLoginOutcome};
+pub use desk_login::{
+    ConsumedDeskLogin, DeskLoginConsumption, DeskLoginNativeCall, DeskLoginParent,
+};
+pub use managed_operation::{
+    CompletedManagedOperation, ConsumedManagedOperation, ManagedCallerEvidence,
+    ManagedOperationConsumption, ManagedOperationOutcome, ManagedOperationParent,
+    ManagedOperationRenewal, ManagedOperationRequest, ManagedOperationSetup,
+};
+pub(crate) mod deep_groups;
+pub use deep_groups::{DEFAULT_DEEP_BURST_QUIET_MS, MAX_DEEP_BURST_QUIET_MS};
 #[cfg(test)]
 mod deep_groups_tests;
 mod dispatch;
+mod failed_fast_setup;
 mod fast;
 mod fast_continuity;
 mod fast_digest;
@@ -65,8 +80,8 @@ mod workspace;
 pub(crate) use workspace::Registry as WorkspaceRegistry;
 #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
 pub use workspace::{
-    WorkspaceDescriptors, WorkspaceDirectoryIdentity, WorkspaceGrant, WorkspaceInstallation,
-    WorkspaceLaunch, WorkspaceLaunchConsumption, WorkspaceLaunchReservation,
+    RootWorkspaceCustody, WorkspaceDescriptors, WorkspaceDirectoryIdentity, WorkspaceGrant,
+    WorkspaceInstallation, WorkspaceLaunch, WorkspaceLaunchConsumption, WorkspaceLaunchReservation,
     WorkspaceLaunchReservationResult, WorkspaceOperatorAllowlist,
 };
 mod model_evidence;
@@ -115,6 +130,9 @@ pub use worker_tool::*;
 mod workspace_exec;
 #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
 pub use workspace_exec::*;
+#[cfg(test)]
+#[path = "source_receipts/tests.rs"]
+mod source_receipt_tests;
 #[cfg(test)]
 mod stop_tests;
 #[cfg(feature = "fixture-test-controls")]
@@ -228,6 +246,8 @@ impl Store {
         Ok(Store {
             #[cfg(feature = "fixture-test-controls")]
             production_checkpoint: None,
+            deep_burst_quiet_ms: self.deep_burst_quiet_ms,
+            agent_timer_daily: self.agent_timer_daily,
             pool: self.pool.clone(),
             #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
             workspace_handles: self.workspace_handles.clone(),
@@ -251,6 +271,8 @@ impl Store {
         let result = Store {
             #[cfg(feature = "fixture-test-controls")]
             production_checkpoint: None,
+            deep_burst_quiet_ms: self.deep_burst_quiet_ms,
+            agent_timer_daily: self.agent_timer_daily,
             pool: store.pool.clone(),
             #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
             workspace_handles: store.workspace_handles.clone(),

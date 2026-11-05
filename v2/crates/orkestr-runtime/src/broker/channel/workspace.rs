@@ -37,6 +37,7 @@ impl BrokerChannel {
             || self.pending.is_some()
             || self.next != 2
             || self.offline.enabled
+            || self.desk.enabled
         {
             return Err(Blocker::Protocol);
         }

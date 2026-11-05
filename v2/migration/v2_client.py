@@ -4,9 +4,13 @@ Credentials come from an explicit private JSON file; the session cookie and
 CSRF token stay in memory and are revoked on close. Nothing is logged.
 """
 import json
+import hashlib
+import importlib
+import importlib.util
 import os
 from pathlib import Path
 import stat
+import sys
 from urllib import error, parse, request
 
 
@@ -38,9 +42,26 @@ class Client:
         self.timeout = timeout
         self.cookie = None
         self.csrf = None
+        self.service = None
+        self.service_config = None
         self.opener = request.build_opener(request.HTTPHandler, request.HTTPSHandler)
 
     def _send(self, method, path, body=None, auth=True):
+        if self.service_config is not None:
+            try:
+                status,value=self.service_config.request(method,path,body,allowed=(200,201,202,204))
+                return status,value,[]
+            except RuntimeError as failure:
+                raise ApiError(getattr(failure,"status",None) or 0,getattr(failure,"code","service_request_refused")) from None
+        if self.service is not None:
+            try:
+                self.service.login(mutation=method not in {'GET', 'HEAD'})
+                return self.service._wire(method, path, body, allowed=(200, 201, 202, 204),
+                                          max_request=68 * 1024 * 1024)
+            except Exception as failure:
+                # ClientError exposes only a bounded code/status, never response data.
+                raise ApiError(getattr(failure, 'status', None) or 0,
+                               getattr(failure, 'code', 'service_request_failed')) from None
         headers = {'Accept': 'application/json', 'Origin': self.origin}
         data = None
         if body is not None:
@@ -76,7 +97,68 @@ class Client:
         self.csrf = body['csrf_token']
         return body
 
+    def login_service_config(self,path):
+        """Explicit service-only unattended mode; never reads owner credentials."""
+        module_path=Path(__file__).resolve().parents[1]/'compat/service_client.py'
+        spec=importlib.util.spec_from_file_location('orkestr_migration_service_config',module_path)
+        module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+        conv=r'/api/v2/conversations/[0-9a-f-]{36}/timers'
+        timer=r'/api/v2/timers/[A-Za-z0-9_.:%-]+'
+        routes=(('GET',conv),('GET',timer),('POST',r'/api/v2/timers/(?:import|calendar)'),
+                ('POST',timer+r'/(?:enable|control)'))
+        self.service_config=module.ServiceClient(path,routes=routes)
+        if self.service_config.config['loopback_url'].rstrip('/')!=self.base or self.service_config.config['origin'].rstrip('/')!=self.origin.rstrip('/'):
+            self.service_config=None
+            raise ApiError(0,'service_endpoint_mismatch')
+
+    def login_file(self, path, *, expected_owner=None, expected_source=None,
+                   peer_descriptor_path=None):
+        """Service mode requires loopback plus exact source/owner pins.
+
+        Load the sibling standard-library client by its reviewed source location
+        so the standalone migration entrypoints also work with python -I -S -B.
+        """
+        directory = Path(__file__).resolve().parents[1] / 'compat/v1_runtime'
+        name = 'orkestr_migration_runtime_' + hashlib.sha256(str(directory).encode()).hexdigest()[:16]
+        if name not in sys.modules:
+            spec = importlib.util.spec_from_file_location(name, directory / '__init__.py',
+                                                         submodule_search_locations=[str(directory)])
+            package = importlib.util.module_from_spec(spec)
+            sys.modules[name] = package
+            spec.loader.exec_module(package)
+        module = importlib.import_module(name + '.rust_client')
+        try:
+            secret = module.credentials(path)
+            if set(secret) != {'service_token'}:
+                return self.login(secret['username'], secret['password'])
+            if expected_owner is None or expected_source is None:
+                raise ApiError(0, 'service_identity_pins_required')
+            if peer_descriptor_path is None:
+                raise ApiError(0, 'service_peer_descriptor_required')
+            session = module.RustSession(origin=self.origin, loopback_url=self.base,
+                                         credentials_path=path, expected_owner=expected_owner,
+                                         expected_source=expected_source, timeout_s=min(self.timeout, 20),
+                                         peer_descriptor_path=peer_descriptor_path)
+            session.login()
+            self.service = session
+            return {'owner_id': session.owner}
+        except ApiError:
+            raise
+        except Exception as failure:
+            raise ApiError(getattr(failure, 'status', None) or 0,
+                           getattr(failure, 'code', 'service_login_failed')) from None
+
     def close(self):
+        if self.service_config is not None:
+            self.service_config=None
+            return  # Persistent service session is not revoked at tool exit.
+        if self.service is not None:
+            try:
+                self.service._wire('DELETE', '/api/v2/browser/session', allowed=(204,))
+            except Exception:
+                pass
+            self.service = None
+            return
         if self.cookie:
             try:
                 self._send('DELETE', '/api/v2/browser/session')

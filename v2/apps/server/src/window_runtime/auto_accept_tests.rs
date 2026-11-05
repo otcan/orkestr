@@ -144,6 +144,7 @@ impl Fixture {
             Handles::new(self.owner.clone(), self.home.clone()).unwrap(),
             manager,
         )
+        .unwrap()
     }
     async fn phase(&self) -> ExecutionPhase {
         self.store

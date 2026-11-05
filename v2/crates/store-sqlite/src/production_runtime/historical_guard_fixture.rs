@@ -1,5 +1,5 @@
-//! Test-only EMPTY guard scaffold for pre-42 typed upgrade producers.
-//! No authority is seeded. Removed before Store::open, with exact schema and
+//! Test-only empty window guards and faithful pre-42 session fixtures.
+//! No window/dispatch authority is seeded. Removed before Store::open, with exact schema and
 //! SQLx inventory restoration checked. Never compiled into the application.
 use crate::Store;
 
@@ -8,6 +8,17 @@ pub(super) struct HistoricalGuardFixture {
     migrations: Vec<(i64, String, String, i64, String, i64)>,
 }
 impl HistoricalGuardFixture {
+    /// The historical schema has no session-kind column. Reproduce its actual
+    /// row shape instead of making the current product accept an old schema.
+    pub(super) async fn save_session(
+        &self,
+        store: &Store,
+        token: &str,
+        owner: &orkestr_v2_contracts::OwnerId,
+    ) {
+        sqlx::query("INSERT INTO auth_sessions(token_hash,owner_id,expires_at) VALUES(?,?,unixepoch()+43200)")
+            .bind(crate::digest(token)).bind(owner.to_string()).execute(&store.pool).await.unwrap();
+    }
     pub(super) async fn install(store: &Store, version: i64) -> Self {
         assert!(matches!(version, 30 | 31));
         let schema = schema(store).await;

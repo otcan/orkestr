@@ -68,6 +68,9 @@ def _service(value):
     if not isinstance(token, str) or len(token) < 32 or len(token) > 256 or not token.isascii() or not token.isalnum():
         raise ValueError("config_token")
     value["token"] = token
+    if 'peer_descriptor_path' in value:
+        selected=Path(value['peer_descriptor_path'])
+        if not selected.is_absolute() or '..' in selected.parts:raise ValueError('config_peer_descriptor')
     return value
 
 
@@ -150,8 +153,9 @@ def binding(value, owner):
 def load(path):
     """Returns (service, static_bindings). A pilot file yields one static binding."""
     value = private_json(path)
-    if set(value) == PILOT_FIELDS:
-        service = _service({k: value[k] for k in PILOT_FIELDS - SCOPE_FIELDS - {"ledger_path", "enabled"}})
+    optional_peer={'peer_descriptor_path'} if 'peer_descriptor_path' in value else set()
+    if set(value) - optional_peer == PILOT_FIELDS:
+        service = _service({k: value[k] for k in (PILOT_FIELDS - SCOPE_FIELDS - {"ledger_path", "enabled"}) | optional_peer})
         pinned = {k: value[k] for k in SCOPE_FIELDS}
         # Pilot defaults: no progress or attachments; the pilot's 32-input bound.
         pinned.update(enabled=value["enabled"], revoked=False, progress_updates=False, attachments=False,
@@ -160,7 +164,7 @@ def load(path):
         static["ledger_path"] = value["ledger_path"]
         service.update(bindings_dir=None, ledger_dir=None)
         return service, [static]
-    if set(value) != SERVICE_FIELDS:
+    if set(value) - optional_peer != SERVICE_FIELDS:
         raise ValueError("config_fields")
     service = _service(value)
     service["bindings_dir"] = private_directory(value["bindings_dir"])

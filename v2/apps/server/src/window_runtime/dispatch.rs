@@ -195,6 +195,13 @@ impl Controller {
         self.queue.wake();
     }
 
+    /// A freshly authenticated source continuation already has durable intent.
+    /// Re-authentication still happens at every normal window admission.
+    pub(crate) fn wake_source_continuation(&self, credential: &str) {
+        self.queue.remember(credential);
+        self.queue.wake();
+    }
+
     /// Start the background dispatcher. It holds only a weak controller link.
     pub(crate) fn start_dispatcher(self: &Arc<Self>) {
         let Ok(runtime) = tokio::runtime::Handle::try_current() else {
@@ -303,6 +310,7 @@ impl Controller {
     }
 
     async fn drain_round(&self, browser: &str) -> Result<bool, RuntimeStoreError> {
+        self.recover_policy_steering(browser).await?;
         let rows = self
             .store
             .execution_window_queue_authenticated(browser, None)
@@ -362,6 +370,13 @@ impl Controller {
                 }
                 Err(error) => return Err(error),
             }
+            let request = match self
+                .route_operator_policy(browser, &self.config.owner_id, conversation, &request)
+                .await
+            {
+                Ok(Some(request)) => request,
+                Ok(None) | Err(_) => continue,
+            };
             let Ok(entry) = self.entry(conversation) else {
                 continue;
             };

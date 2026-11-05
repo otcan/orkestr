@@ -13,8 +13,12 @@
 //! not satisfy the running-Deep check.
 //!
 //! Caps: at most `AGENT_TIMER_ACTIVE_MAX` live agent-created timers and
-//! `AGENT_TIMER_HOURLY_CREATES_MAX` creates per hour and
-//! `AGENT_TIMER_DAILY_CREATES_MAX` per day per conversation; a turn started by
+//! `AGENT_TIMER_HOURLY_CREATES_MAX` creates and upserts per hour per
+//! conversation, and a rolling 24-hour create cap per conversation that the
+//! owner sets (`agent_timer_limits`: the server default, 24, for chats with
+//! other people; `owner_only`, 200 by default; a fixed number; or off). An
+//! upsert moves the conversation's timer with the same label instead of
+//! creating one and never counts against the daily cap; a turn started by
 //! a timer may control timers and create one-shot timers, never a recurring
 //! one (no self-perpetuating chains); a
 //! one-shot run at least 2 minutes ahead; a recurring rule never more often
@@ -26,9 +30,9 @@ use super::*;
 use crate::conversation_resources::{now_ms, owned};
 use crate::history_import::timers::{
     agent::{
-        agent_namespace, agent_schedule, agent_timer_control, agent_timer_create, agent_timer_list,
-        agent_timer_one, agent_timers_created_since, agent_timers_live, AgentTimerFacts,
-        AgentTimerNew,
+        agent_namespace, agent_schedule, agent_timer_by_label, agent_timer_control,
+        agent_timer_create, agent_timer_list, agent_timer_one, agent_timer_reschedule,
+        agent_timers_created_since, agent_timers_live, AgentTimerFacts, AgentTimerNew,
     },
     authority::store_clock,
     local_time_label,
@@ -40,10 +44,17 @@ use orkestr_v2_contracts::{
     AgentTimerControl, AgentTimerCreate, AgentTimerGrant, AgentTimerGrantDirectory,
     AgentTimerGrantEntry, AgentTimerGrantIssued, AgentTimerList, AgentTimerReceipt,
     AgentTimerSchedule, AgentTimerView, ConversationId, AGENT_TIMER_ACTIVE_MAX,
-    AGENT_TIMER_DAILY_CREATES_MAX, AGENT_TIMER_HOURLY_CREATES_MAX, AGENT_TIMER_REFUSALS_MAX,
+    AGENT_TIMER_HOURLY_CREATES_MAX, AGENT_TIMER_REFUSALS_MAX,
 };
 use sqlx::{sqlite::SqliteRow, Acquire, Sqlite, Transaction};
 mod grant;
+mod limits;
+pub(crate) use limits::daily_cap;
+
+/// Audit outcome of an upsert that moved an existing timer (operation
+/// `create`, so the audit schema is unchanged). Counts toward the hourly cap,
+/// never toward the daily one, and is not a refusal.
+const UPSERTED: &str = "upserted";
 
 type R<T> = std::result::Result<T, ResourceError>;
 fn unavailable(_: impl std::fmt::Display) -> ResourceError {
@@ -208,6 +219,7 @@ async fn settle(
     operation: &str,
     namespace: Uuid,
     request_key: &str,
+    accepted: &str,
 ) -> R<Step<AgentTimerReceipt>> {
     let changed = match step {
         Ok(changed) => changed,
@@ -236,7 +248,7 @@ async fn settle(
         operation,
         Some(namespace),
         request_key,
-        if changed { "accepted" } else { "replayed" },
+        if changed { accepted } else { "replayed" },
     )
     .await?;
     savepoint.commit().await.map_err(unavailable)?;
@@ -281,6 +293,55 @@ async fn finish(
     }
 }
 
+/// Live, hourly and daily caps of one new agent timer. The daily cap counts
+/// every agent create of the last 24 hours (fired, cancelled and live alike);
+/// upserts that moved a timer count only toward the hourly cap.
+async fn create_caps(
+    tx: &mut Transaction<'_, Sqlite>,
+    owner: &OwnerId,
+    conversation: &ConversationId,
+    now: i64,
+    defaults: orkestr_v2_contracts::AgentTimerDailyCaps,
+) -> Step<()> {
+    let live = agent_timers_live(tx, owner, conversation)
+        .await
+        .map_err(|r| r.code())?;
+    if live >= AGENT_TIMER_ACTIVE_MAX {
+        return Err("agent_timer_limit_reached");
+    }
+    hourly_cap(tx, owner, conversation, now).await?;
+    if let Some(max) = daily_cap(tx, owner, conversation, defaults)
+        .await
+        .map_err(|_| "agent_timer_unavailable")?
+    {
+        let today = agent_timers_created_since(tx, owner, conversation, now - 86_400_000)
+            .await
+            .map_err(|r| r.code())?;
+        if today >= max {
+            return Err("agent_timer_daily_limit");
+        }
+    }
+    Ok(())
+}
+/// Creates plus moving upserts of the last hour.
+async fn hourly_cap(
+    tx: &mut Transaction<'_, Sqlite>,
+    owner: &OwnerId,
+    conversation: &ConversationId,
+    now: i64,
+) -> Step<()> {
+    let created = agent_timers_created_since(tx, owner, conversation, now - 3_600_000)
+        .await
+        .map_err(|r| r.code())?;
+    let moved: i64 = sqlx::query_scalar("SELECT count(*) FROM agent_timer_audit WHERE owner_id=? AND conversation_id=? AND operation='create' AND outcome=? AND at_ms>?")
+        .bind(owner.to_string()).bind(conversation.to_string()).bind(UPSERTED).bind(now - 3_600_000)
+        .fetch_one(&mut **tx).await.map_err(|_| "agent_timer_unavailable")?;
+    if created + moved >= AGENT_TIMER_HOURLY_CREATES_MAX {
+        return Err("agent_timer_rate_limited");
+    }
+    Ok(())
+}
+
 impl Store {
     /// Validate the grant in a deferred read transaction. With `write`, the
     /// returned transaction is a fresh IMMEDIATE one that re-validated the
@@ -303,7 +364,7 @@ impl Store {
             return Ok((tx, caller));
         }
         // Over the refusal budget: refuse without any write.
-        let refused: i64 = sqlx::query_scalar("SELECT count(*) FROM agent_timer_audit WHERE conversation_id=? AND outcome NOT IN ('accepted','replayed') AND at_ms>?")
+        let refused: i64 = sqlx::query_scalar("SELECT count(*) FROM agent_timer_audit WHERE conversation_id=? AND outcome NOT IN ('accepted','replayed','upserted') AND at_ms>?")
             .bind(conversation.to_string()).bind(now_ms() - 600_000)
             .fetch_one(&mut *tx).await.map_err(unavailable)?;
         if refused >= AGENT_TIMER_REFUSALS_MAX {
@@ -395,26 +456,7 @@ impl Store {
             let now = store_clock(&mut savepoint)
                 .await
                 .map_err(|_| "agent_timer_unavailable")?;
-            let live = agent_timers_live(&mut savepoint, &owner, conversation)
-                .await
-                .map_err(|r| r.code())?;
-            let recent =
-                agent_timers_created_since(&mut savepoint, &owner, conversation, now - 3_600_000)
-                    .await
-                    .map_err(|r| r.code())?;
-            if live >= AGENT_TIMER_ACTIVE_MAX {
-                return Err("agent_timer_limit_reached");
-            }
-            if recent >= AGENT_TIMER_HOURLY_CREATES_MAX {
-                return Err("agent_timer_rate_limited");
-            }
-            let today =
-                agent_timers_created_since(&mut savepoint, &owner, conversation, now - 86_400_000)
-                    .await
-                    .map_err(|r| r.code())?;
-            if today >= AGENT_TIMER_DAILY_CREATES_MAX {
-                return Err("agent_timer_daily_limit");
-            }
+            create_caps(&mut savepoint, &owner, conversation, now, self.agent_timer_daily).await?;
             let schedule = agent_schedule(&request.schedule, now).map_err(|r| r.code())?;
             agent_timer_create(
                 &mut savepoint,
@@ -444,6 +486,151 @@ impl Store {
             "create",
             namespace,
             &request.request_key,
+            "accepted",
+        )
+        .await?;
+        finish(
+            tx,
+            settled,
+            &caller,
+            conversation,
+            run.as_deref(),
+            "create",
+            namespace,
+            &request.request_key,
+        )
+        .await
+    }
+
+    /// Upsert (`agent_timer.py upsert`): move the newest enabled or fired
+    /// one-shot agent timer of the grant's conversation with the same label
+    /// to the new schedule and text, or create one when there is none. A
+    /// move is not a create: it never counts toward the daily cap (it does
+    /// toward the hourly one, and re-arming a fired one-shot toward the live
+    /// timer cap). Same request key: a replay.
+    pub async fn upsert_agent_timer(
+        &self,
+        grant: &str,
+        conversation: &ConversationId,
+        request: &AgentTimerCreate,
+    ) -> R<AgentTimerReceipt> {
+        if !request.is_valid() {
+            return Err(ResourceError::Invalid);
+        }
+        let digest = request_digest(request)?;
+        let (mut tx, caller) = self.agent_timer_scope(grant, conversation, true).await?;
+        let owner = caller.owner.clone();
+        let fresh = agent_namespace(&owner, conversation, &request.request_key);
+        let running = running_deep(&mut tx, &owner, conversation).await?;
+        let run = running.as_ref().map(|(run, _)| run.clone());
+        let mut savepoint = tx.begin().await.map_err(unavailable)?;
+        let step: Step<(Uuid, bool, &'static str)> = async {
+            let (run, input) = running
+                .as_ref()
+                .map(|(run, input)| (run.as_str(), input.as_str()))
+                .ok_or("agent_timer_no_running_turn")?;
+            if unavailable_conversation(&mut savepoint, &owner, &conversation.to_string())
+                .await
+                .map_err(|_| "agent_timer_unavailable")?
+            {
+                return Err("agent_timer_conversation_unavailable");
+            }
+            // Replays: a key that created a timer, or that moved one.
+            let prior: Option<String> = sqlx::query_scalar("SELECT request_digest FROM agent_timers WHERE owner_id=? AND conversation_id=? AND request_key=?")
+                .bind(owner.to_string()).bind(conversation.to_string()).bind(&request.request_key)
+                .fetch_optional(&mut *savepoint).await.map_err(|_| "agent_timer_unavailable")?;
+            match prior {
+                Some(prior) if prior == digest => return Ok((fresh, false, "accepted")),
+                Some(_) => return Err("agent_timer_conflict"),
+                None => {}
+            }
+            let moved: Option<String> = sqlx::query_scalar("SELECT namespace FROM agent_timer_audit WHERE owner_id=? AND conversation_id=? AND operation='create' AND request_key=? AND outcome=? ORDER BY row_sequence DESC LIMIT 1")
+                .bind(owner.to_string()).bind(conversation.to_string()).bind(&request.request_key).bind(UPSERTED)
+                .fetch_optional(&mut *savepoint).await.map_err(|_| "agent_timer_unavailable")?;
+            if let Some(namespace) = moved {
+                let namespace = Uuid::parse_str(&namespace).map_err(|_| "agent_timer_unavailable")?;
+                return Ok((namespace, false, UPSERTED));
+            }
+            // Same chain cap as create: a timer turn never sets a recurring rule.
+            if matches!(request.schedule, AgentTimerSchedule::Calendar { .. })
+                && timer_started(&mut savepoint, input).await?
+            {
+                return Err("agent_timer_timer_turn");
+            }
+            let now = store_clock(&mut savepoint)
+                .await
+                .map_err(|_| "agent_timer_unavailable")?;
+            let schedule = agent_schedule(&request.schedule, now).map_err(|r| r.code())?;
+            let label = request.label.trim();
+            let Some((namespace, state, stored)) =
+                agent_timer_by_label(&mut savepoint, &owner, conversation, label)
+                    .await
+                    .map_err(|r| r.code())?
+            else {
+                let text = instruction(label, &request.text);
+                create_caps(&mut savepoint, &owner, conversation, now, self.agent_timer_daily)
+                    .await?;
+                let changed = agent_timer_create(
+                    &mut savepoint,
+                    &owner,
+                    conversation,
+                    &AgentTimerNew {
+                        namespace: fresh,
+                        label,
+                        schedule,
+                        instruction: text,
+                        request_key: &request.request_key,
+                        request_digest: &digest,
+                        run_id: run,
+                        grant_generation: caller.generation,
+                    },
+                )
+                .await
+                .map_err(|r| r.code())?;
+                return Ok((fresh, changed, "accepted"));
+            };
+            // Arming a fired one-shot again adds a live timer.
+            if state == TimerState::Exhausted
+                && agent_timers_live(&mut savepoint, &owner, conversation)
+                    .await
+                    .map_err(|r| r.code())?
+                    >= AGENT_TIMER_ACTIVE_MAX
+            {
+                return Err("agent_timer_limit_reached");
+            }
+            // The timer keeps its own label (and so its attribution line).
+            let text = instruction(&stored, &request.text);
+            let changed = agent_timer_reschedule(
+                &mut savepoint,
+                &owner,
+                conversation,
+                namespace,
+                &schedule,
+                &text,
+                &request.request_key,
+            )
+            .await
+            .map_err(|r| r.code())?;
+            if changed {
+                hourly_cap(&mut savepoint, &owner, conversation, now).await?;
+            }
+            Ok((namespace, changed, UPSERTED))
+        }
+        .await;
+        let (namespace, step, accepted) = match step {
+            Ok((namespace, changed, accepted)) => (namespace, Ok(changed), accepted),
+            Err(code) => (fresh, Err(code), "accepted"),
+        };
+        let settled = settle(
+            savepoint,
+            step,
+            &caller,
+            conversation,
+            run.as_deref(),
+            "create",
+            namespace,
+            &request.request_key,
+            accepted,
         )
         .await?;
         finish(
@@ -517,6 +704,7 @@ impl Store {
             operation,
             namespace,
             &request.request_key,
+            "accepted",
         )
         .await?;
         finish(

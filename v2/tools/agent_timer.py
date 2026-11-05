@@ -7,6 +7,7 @@ the V1 timer API) against the V2 API:
   list
   create --label LABEL (--at WHEN | --daily HH:MM [--weekdays 1,2,3] --timezone TZ)
          (--text TEXT | --text-file PATH) [--request-key KEY]
+  upsert (same options as create)
   cancel TIMER [--request-key KEY]
   pause TIMER [--until WHEN] [--request-key KEY]
   resume TIMER [--request-key KEY]
@@ -15,12 +16,18 @@ the V1 timer API) against the V2 API:
 Each change prints its request key first (stderr). After a failure or a lost
 response, rerun with --request-key KEY: an accepted key never applies twice.
 
+`upsert` moves this conversation's enabled (or already fired one-shot)
+timer with the same label to the new time and text instead of creating
+another one, so a recurring check keeps ONE watcher; only without such a
+timer does it create one. A move is not a new create.
+
 TIMER is a timer ID or an exact (case-insensitive) label from `list`. WHEN is
 an ISO 8601 time with an offset (2026-10-27T12:15:00+01:00 or ...Z). Every
 timer belongs to this conversation: there is no way to name another one.
 Orkestr enforces the caps (one-shot runs at least 2 minutes ahead, recurring
-runs at most every 30 minutes, at most 32 live agent timers and 12 creates an
-hour per conversation, pauses of at most 60 days). `cancel` disables a timer
+runs at most every 30 minutes, at most 32 live agent timers and 12 creates or
+upserts an hour per conversation, a daily create cap the owner sets (24 by
+default, 200 in an owner-only chat), pauses of at most 60 days). `cancel` disables a timer
 (the owner can re-enable it); stop and rollback stay with the owner.
 
 Exit status: 0 done (or nothing to change), 2 refused or failed.
@@ -60,6 +67,7 @@ V1 no longer runs this thread and refuses changes to its timers.
   agent_timer.py create --label "Biocytogen 12:15" --at 2026-10-27T12:00:00+01:00 \\
       --text "Remind the owner: Biocytogen meeting at 12:15, booth B12."
   agent_timer.py create --label "CHECK 08:00" --daily 08:00 --timezone Europe/Berlin --text "..."
+  agent_timer.py upsert --label "Watcher" --at 2026-10-27T15:00:00+01:00 --text "Check X again."
   agent_timer.py cancel "Biocytogen 12:15"      # meeting cancelled
   agent_timer.py pause "CHECK 08:00" --until 2026-11-03T08:00:00+01:00
   agent_timer.py resume "CHECK 08:00"
@@ -69,6 +77,9 @@ Retries: every change prints the request_key it uses. If a call fails or its
 answer is lost (timeout, unreachable), rerun the SAME command with
 --request-key <that key>. Never rerun skip-next without it: the next run has
 already moved, so a new key would skip a second run.
+
+For recurring checks, keep ONE watcher: use `agent_timer.py upsert --label
+<same label>` to move it instead of creating a new one-shot each time.
 
 Write the timer text so a later turn can act on it without this chat. Report
 to the owner exactly what the tool printed. If it refuses (too soon, too
@@ -183,6 +194,19 @@ class Client:
             failure.request_key = body['request_key']
             raise
 
+    def upsert(self, label, schedule, text, request_key=None, announce=None):
+        """Move the timer with this label (or create it). A fresh key per
+        call: the same label is what makes a repeat move the same timer."""
+        key = request_key or f'upsert-{uuid.uuid4().hex[:24]}'
+        if announce:
+            announce(key)
+        body = {'request_key': key, 'label': label, 'schedule': schedule, 'text': text}
+        try:
+            return self.call('POST', '/agent-timers/upsert', body)
+        except TimerError as failure:
+            failure.request_key = key
+            raise
+
     def control_key(self, namespace, operation):
         """A fresh key for one control step. For skip_next it names the run
         it skips. Reuse the printed key on a retry: after a lost response
@@ -227,17 +251,18 @@ def parser():
     commands = root.add_subparsers(dest='action', required=True)
     commands.add_parser('list')
     commands.add_parser('instructions')
-    create = commands.add_parser('create')
-    create.add_argument('--label', required=True)
-    when = create.add_mutually_exclusive_group(required=True)
-    when.add_argument('--at')
-    when.add_argument('--daily', metavar='HH:MM')
-    create.add_argument('--timezone')
-    create.add_argument('--weekdays', help='1=Monday .. 7=Sunday, comma separated')
-    text = create.add_mutually_exclusive_group(required=True)
-    text.add_argument('--text')
-    text.add_argument('--text-file')
-    create.add_argument('--request-key')
+    for name in ('create', 'upsert'):
+        create = commands.add_parser(name)
+        create.add_argument('--label', required=True)
+        when = create.add_mutually_exclusive_group(required=True)
+        when.add_argument('--at')
+        when.add_argument('--daily', metavar='HH:MM')
+        create.add_argument('--timezone')
+        create.add_argument('--weekdays', help='1=Monday .. 7=Sunday, comma separated')
+        text = create.add_mutually_exclusive_group(required=True)
+        text.add_argument('--text')
+        text.add_argument('--text-file')
+        create.add_argument('--request-key')
     for name in ('cancel', 'resume', 'skip-next', 'pause'):
         command = commands.add_parser(name)
         command.add_argument('timer')
@@ -262,7 +287,7 @@ def main(argv=None):
         if args.action == 'list':
             print(json.dumps({'ok': True, 'timers': client.list()}, indent=2, sort_keys=True))
             return 0
-        if args.action == 'create':
+        if args.action in ('create', 'upsert'):
             if args.at:
                 if args.timezone or args.weekdays:
                     raise TimerError(0, 'timezone_and_weekdays_need_daily')
@@ -270,8 +295,14 @@ def main(argv=None):
             else:
                 schedule = daily_schedule(args.daily, args.timezone, args.weekdays)
             body = Path(args.text_file).read_text() if args.text_file else args.text
-            receipt = client.create(args.label, schedule, body, args.request_key)
-            verb = 'set'
+            if args.action == 'create':
+                receipt = client.create(args.label, schedule, body, args.request_key)
+                verb = 'set'
+            else:
+                receipt = client.upsert(
+                    args.label, schedule, body, args.request_key,
+                    announce=lambda key: print(json.dumps({'request_key': key}), file=sys.stderr))
+                verb = 'set (upsert)'
         else:
             operation = args.action.replace('-', '_')
             until = instant_ms(args.until) if getattr(args, 'until', None) else None

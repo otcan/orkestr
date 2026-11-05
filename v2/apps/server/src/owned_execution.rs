@@ -1,6 +1,7 @@
 //! Explicit isolated acceptance composition. No HTTP configuration.
 mod admission;
 mod beta_window;
+mod provider_policy;
 pub(crate) use beta_window::WindowSetup;
 mod bootstrap;
 mod budget;
@@ -14,6 +15,7 @@ mod deep_slots;
 pub use deep_slot_gates::{
     set_quota_file as set_parallel_deep_quota_file, QUOTA_FILE_ENV as PARALLEL_DEEP_QUOTA_FILE_ENV,
 };
+mod desk_tools;
 mod directory;
 mod fast;
 mod fast_bootstrap;
@@ -23,6 +25,7 @@ mod fast_pool;
 mod fast_session;
 mod group;
 mod host_pressure;
+mod managed_tools;
 pub use group::{ConfiguredExecutions, ExecutionTasks};
 mod claude_fast;
 mod liveness;
@@ -73,6 +76,8 @@ pub struct ConfiguredExecution {
     offline_python: Option<std::sync::Arc<crate::offline_python::OfflinePythonDispatcher>>,
     workspace_exec: Option<std::sync::Arc<crate::workspace_exec::WorkspaceExecDispatcher>>,
     initial_grant: Option<BoundSessionMetadata>,
+    desk_setup: std::sync::Mutex<Option<orkestr_v2_store_sqlite::DeskLoginSetup>>,
+    managed_setup: std::sync::Mutex<Option<orkestr_v2_store_sqlite::ManagedOperationSetup>>,
     workspace_grant: Option<std::sync::Arc<orkestr_v2_store_sqlite::WorkspaceGrant>>,
     window: Option<std::sync::Arc<crate::window_runtime::context::Context>>,
     window_workers: Option<crate::worker_execution::WindowWorkers>,
@@ -227,6 +232,8 @@ impl ConfiguredExecution {
             workspace_exec: None,
             worker_reaps,
             initial_grant,
+            desk_setup: std::sync::Mutex::new(None),
+            managed_setup: std::sync::Mutex::new(None),
             workspace_grant,
             window: None,
             window_workers: None,

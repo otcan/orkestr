@@ -367,6 +367,7 @@ impl ConfiguredExecution {
         });
         let fast = Self {
             config: Config {
+                provider_routing: config.provider_routing.clone(),
                 schema_version: 1,
                 mode: "isolated_acceptance".into(),
                 conversation_id: config.conversation_id.clone(),
@@ -397,6 +398,8 @@ impl ConfiguredExecution {
             offline_python: None,
             workspace_exec: None,
             initial_grant: None,
+            desk_setup: std::sync::Mutex::new(None),
+            managed_setup: std::sync::Mutex::new(None),
             workspace_grant: self.workspace_grant.clone(),
             window: Some(context),
             window_workers: None,
@@ -427,6 +430,7 @@ impl ConfiguredExecution {
         let slots = super::deep_slots::DeepSlots::new(home);
         let parallel = Self {
             config: Config {
+                provider_routing: config.provider_routing.clone(),
                 schema_version: 1,
                 mode: "isolated_acceptance".into(),
                 conversation_id: config.conversation_id.clone(),
@@ -453,6 +457,8 @@ impl ConfiguredExecution {
             offline_python: None,
             workspace_exec: None,
             initial_grant: None,
+            desk_setup: std::sync::Mutex::new(None),
+            managed_setup: std::sync::Mutex::new(None),
             workspace_grant: None,
             window: self.window.clone(),
             window_workers: None,

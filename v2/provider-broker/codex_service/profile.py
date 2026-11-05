@@ -18,13 +18,17 @@ class Configuration:
         self.role = role
         self.profile = SelectedCodexProfile(package.role_profiles[role])
         self.workspace_descriptor = None
-        self.workspace = self.profile.workspace
+        from .managed_host import selected_workspace
+        self.workspace = selected_workspace(package, self.profile.workspace, role)
         self.issued = False
-        access = package.beta.get("host_full_access")
+        access = package.beta.get("managed_host", package.beta.get("host_full_access"))
         # Operator instance opt-in: run the pinned native directly on the host
         # with the real executor environment (V1-equivalent, host-root equivalent).
         self.host_full_access = type(access) is dict and access.get("providers", True) is True
         self.host_environment = dict(access["environment"]) if self.host_full_access else None
+        if self.host_environment is not None:
+            from .resource_projects import git_environment
+            self.host_environment = git_environment(package,self.host_environment)
         self.host_environment_files = list(access.get("environment_files", [])) if self.host_full_access else []
         # Host natives run real commands: a CommandExecution item/completed
         # carries the full aggregated output and can exceed the 64 KiB default.
@@ -42,8 +46,9 @@ class Configuration:
                 return host_command(self.profile.native, self.host_environment,
                                     self.host_environment_files, fast_host_options(),
                                     {"CODEX_HOME": str(home)}), ()
+            from .managed_advertisement import codex_options
             return host_command(self.profile.native, self.host_environment,
-                                self.host_environment_files), ()
+                                self.host_environment_files,codex_options(self.package)), ()
         descriptor = policy.filter_fd(allow_inet=True)
         try:
             command = self.profile._command(descriptor, "codex-bounded")
@@ -51,6 +56,12 @@ class Configuration:
             for name in HELPERS:
                 path = protected(self.package.root / "isolation" / name)
                 mounts += ["--ro-bind", str(path), "/opt/provider/" + name]
+            from .attachment_exports import conversation_mount
+            export = conversation_mount(self.package, self.role)
+            if export is not None:
+                # Root's verified launch capsule selects this conversation.
+                # A directory mount also exposes later atomic publications.
+                mounts += ["--ro-bind", str(export), str(export)]
             command[command.index("--chdir"):command.index("--chdir")] = mounts
             return command, (descriptor,)
         except BaseException:

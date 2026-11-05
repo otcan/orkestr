@@ -23,8 +23,11 @@ mod fast_metadata;
 mod guard;
 mod lifecycle;
 mod queue;
-pub(super) use queue::{enqueue_timer_intent, enqueue_trusted_intent};
+pub(super) use queue::enqueue_timer_intent;
+pub(crate) use queue::enqueue_trusted_intent;
+pub(super) mod operator_policy;
 mod provider_choice;
+pub use operator_policy::OperatorProviderPolicy;
 mod switching;
 pub use credential::{ExecutionWindowCredential, ExecutionWindowRetirement};
 use provider_choice::window_provider;
@@ -137,6 +140,8 @@ mod join_release_tests;
 
 #[cfg(test)]
 mod bootstrap_tests;
+#[cfg(test)]
+mod password_rotation_tests;
 
 mod retired_context;
 pub use retired_context::RetiredExecutionWindowContext;

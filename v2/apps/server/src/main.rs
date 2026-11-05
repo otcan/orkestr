@@ -6,9 +6,24 @@ use orkestr_v2_server::{
 use orkestr_v2_store_sqlite::Store;
 use std::path::PathBuf;
 mod bind_config;
+#[cfg(target_os = "linux")]
+mod password_recovery;
 mod shutdown_signal;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let arguments = std::env::args().skip(1).collect::<Vec<_>>();
+    if arguments == ["--recover-owner-password"] {
+        #[cfg(target_os = "linux")]
+        {
+            let runtime = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()?;
+            let result = runtime.block_on(password_recovery::run());
+            runtime.shutdown_timeout(std::time::Duration::from_secs(2));
+            return result;
+        }
+        #[cfg(not(target_os = "linux"))]
+        return Err("operator recovery requires Linux".into());
+    }
     if let Some(output) = build_identity::version_output(&arguments)? {
         println!("{output}");
         return Ok(());
@@ -20,6 +35,57 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // No detached task or blocking job may delay exit after serve() returns.
     runtime.shutdown_timeout(std::time::Duration::from_secs(2));
     result
+}
+
+/// Deep burst quiet window in ms (default 2500, 0 = off, at most 10000):
+/// owner messages split by WhatsApp within this window get one Deep turn.
+const DEEP_BURST_QUIET_ENV: &str = "ORKESTR_V2_DEEP_BURST_QUIET_MS";
+
+fn deep_burst_quiet_ms(value: Option<&str>) -> i64 {
+    use orkestr_v2_store_sqlite::{DEFAULT_DEEP_BURST_QUIET_MS, MAX_DEEP_BURST_QUIET_MS};
+    match value.map(|v| v.trim().parse::<i64>()) {
+        None => DEFAULT_DEEP_BURST_QUIET_MS,
+        Some(Ok(ms)) if (0..=MAX_DEEP_BURST_QUIET_MS).contains(&ms) => ms,
+        Some(_) => {
+            // A typo never stops the server: keep the default and say so.
+            eprintln!(
+                "{DEEP_BURST_QUIET_ENV} must be 0..={MAX_DEEP_BURST_QUIET_MS}; using {DEFAULT_DEEP_BURST_QUIET_MS}"
+            );
+            DEFAULT_DEEP_BURST_QUIET_MS
+        }
+    }
+}
+
+/// Agent timers' rolling 24-hour create cap: the server default (chats with
+/// other people and chats without an owner setting, default 24) and the
+/// default of chats the owner marked owner-only (default 200). Each is
+/// `off` or 1..=10000; the hourly and live-timer caps are not configurable.
+const AGENT_TIMER_DAILY_ENV: &str = "ORKESTR_V2_AGENT_TIMER_DAILY_CREATES_MAX";
+const AGENT_TIMER_OWNER_ONLY_DAILY_ENV: &str =
+    "ORKESTR_V2_AGENT_TIMER_OWNER_ONLY_DAILY_CREATES_MAX";
+
+fn agent_timer_daily_caps(
+    default: Option<&str>,
+    owner_only: Option<&str>,
+) -> orkestr_v2_contracts::AgentTimerDailyCaps {
+    use orkestr_v2_contracts::parse_agent_timer_daily_cap;
+    let mut caps = orkestr_v2_contracts::AgentTimerDailyCaps::default();
+    for (name, value, slot) in [
+        (AGENT_TIMER_DAILY_ENV, default, &mut caps.default),
+        (
+            AGENT_TIMER_OWNER_ONLY_DAILY_ENV,
+            owner_only,
+            &mut caps.owner_only,
+        ),
+    ] {
+        let Some(value) = value else { continue };
+        match parse_agent_timer_daily_cap(value) {
+            Some(cap) => *slot = cap,
+            // A typo never stops the server: keep the default and say so.
+            None => eprintln!("{name} must be off or 1..=10000; using the default"),
+        }
+    }
+    caps
 }
 
 async fn serve() -> Result<(), Box<dyn std::error::Error>> {
@@ -46,11 +112,25 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         .map_err(|_| "ORKESTR_V2_BOOTSTRAP_TOKEN is required")?;
     let store = Store::open(&home.join("core.sqlite3"))
         .await
-        .map_err(|_| "store startup failed")?;
+        .map_err(|_| "store startup failed")?
+        .with_deep_burst_quiet_ms(deep_burst_quiet_ms(
+            std::env::var(DEEP_BURST_QUIET_ENV).ok().as_deref(),
+        ))
+        .with_agent_timer_daily_caps(agent_timer_daily_caps(
+            std::env::var(AGENT_TIMER_DAILY_ENV).ok().as_deref(),
+            std::env::var(AGENT_TIMER_OWNER_ONLY_DAILY_ENV)
+                .ok()
+                .as_deref(),
+        ));
     // Import operator-supplied V1 browser recipients and seal plaintext residue.
     orkestr_v2_server::attachment_keys_http::startup(&store, &home).await;
     let origin = config.origin;
     let mut state = AppState::new(store.clone(), token, origin)?;
+    match std::env::var("ORKESTR_V2_PASSWORD_ROTATION_READY").as_deref() {
+        Ok("1") => state = state.with_password_rotation_ready(),
+        Ok("0") | Err(_) => {}
+        Ok(_) => return Err("ORKESTR_V2_PASSWORD_ROTATION_READY must be 0 or 1".into()),
+    }
     // Operator deploy drain: `<home>/deploy-drain.request` pauses admission.
     let deploy_drain = state.deploy_drain();
     deploy_drain.bind(&home);
@@ -80,9 +160,21 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         // Opt-in: absent means the live map endpoint reports "not configured".
         state = state.with_live_map_file(&PathBuf::from(path))?;
     }
-    state = state.with_attachment_export(
-        orkestr_v2_server::message_attachments::ExportDir::from_env(&home),
-    );
+    let attachment_export = orkestr_v2_server::message_attachments::ExportDir::from_env(&home);
+    let recovered =
+        orkestr_v2_server::encrypted_upload_ingest::recover_export_temporaries(&attachment_export)?;
+    if recovered.removed > 0 {
+        eprintln!(
+            "attachment recovery: removed {} abandoned private temporary files",
+            recovered.removed
+        );
+    }
+    state = state.with_attachment_export(attachment_export);
+    if let Some(path) = std::env::var_os("ORKESTR_V2_ATTACHMENT_INGEST_IDENTITY_FILE") {
+        state = state.with_attachment_ingest_file(&PathBuf::from(path))?;
+    } else {
+        state = state.with_attachment_ingest_home(&home)?;
+    }
     if let Some(dir) = std::env::var_os(orkestr_v2_server::thread_icons::V1_ICONS_ENV)
         .map(PathBuf::from)
         .filter(|p| p.is_absolute())
@@ -219,4 +311,33 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     tracker_cleanup?;
     cleanup?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{agent_timer_daily_caps, deep_burst_quiet_ms};
+
+    #[test]
+    fn agent_timer_daily_caps_from_env() {
+        let caps = agent_timer_daily_caps(None, None);
+        assert_eq!((caps.default, caps.owner_only), (Some(24), Some(200)));
+        let caps = agent_timer_daily_caps(Some("48"), Some("off"));
+        assert_eq!((caps.default, caps.owner_only), (Some(48), None));
+        let caps = agent_timer_daily_caps(Some("0"), Some("lots"));
+        assert_eq!((caps.default, caps.owner_only), (Some(24), Some(200)));
+    }
+
+    #[test]
+    fn the_deep_burst_window_defaults_to_two_and_a_half_seconds_and_is_bounded() {
+        assert_eq!(deep_burst_quiet_ms(None), 2_500);
+        assert_eq!(
+            deep_burst_quiet_ms(Some("0")),
+            0,
+            "0 turns burst waiting off"
+        );
+        assert_eq!(deep_burst_quiet_ms(Some(" 4000 ")), 4_000);
+        for bad in ["-1", "10001", "2.5", "soon", ""] {
+            assert_eq!(deep_burst_quiet_ms(Some(bad)), 2_500, "{bad}");
+        }
+    }
 }

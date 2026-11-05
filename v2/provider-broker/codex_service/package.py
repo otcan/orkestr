@@ -1,19 +1,26 @@
 """Closed immutable always-on package. Never inspect account credential bytes."""
 from pathlib import Path
+import os
 import re
 import stat
 
 from codex_bounded.configuration import BROKER, ISOLATION, MODULES, HOSTS
 from codex_bounded.trust import digest, metadata, private, protected, system_dependency
 from .contract import identifier, require
+from .identity import FIELDS as IDENTITY_FIELDS, bind as bind_identity
 
 MAX_RUNTIME_WINDOWS = 12
 from .role_profiles import ROLE_FILES, bind as bind_roles
 
 MODULES_SERVICE = ("__init__.py", "contract.py", "ledger.py", "budget.py", "custody.py",
-                   "channel.py", "package.py", "ownership.py", "egress.py", "manager.py",
-                   "server_child.py", "broker.py", "profile.py", "entry.py", "role_profiles.py",
-                   "claude_broker.py")
+                   "channel.py", "package.py", "ownership.py", "egress.py", "manager.py", "manager_shutdown.py", "resource_contract.py", "resource_namespace.py", "resource_receipt.py", "resource_probe.py", "resource_mount.py", "resource_projects.py",
+                   "server_child.py", "manager_service_peer.py", "broker.py", "profile.py", "entry.py", "role_profiles.py",
+                   "claude_broker.py", "identity.py", "launch.py", "launch_child.py", "proxy.py", "attachment_exports.py",
+                   "password_recovery.py", "managed_resume.py", "managed_host.py", "native_io.py", "desk_operations.py", "desk_anchor.py",
+    "workspace_custody.py", "workspace_setup.py", "workspace_environment.py", "workspace_cgroup.py", "workspace_anchor.py", "workspace_command.py", "workspace_ops.py", "workspace_acl.py",
+                   "managed_ingress.py", "managed_control.py", "managed_client.py", "managed_native.py", "managed_runs.py",
+                   "managed_socket_owner.py", "managed_http.py", "managed_advertisement.py",
+                   "qualification.py", "qualification_publish.py", "fast_sampler.py", "fast_sample_kernel.py", "fast_sample_evidence.py")
 # Shared with the server and packager: room for many per-conversation
 # command profiles.
 MAX_BETA_CONFIG_BYTES = 262144
@@ -129,8 +136,12 @@ class Package:
         self.runtime = metadata(self.root / "service.json")
         self.profile = metadata(self.root / "profile.json")
         self.beta = metadata(self.root / "beta.json", MAX_BETA_CONFIG_BYTES)
+        if "resource_namespace" in self.runtime:
+            from .resource_receipt import verify_package
+            verify_package(self)
         self._bind()
         bind_roles(self)
+        self._bind_attachment_export()
 
     def verify_inventory(self):
         """Recheck closed inventory and custody; never import or repair files."""
@@ -144,9 +155,17 @@ class Package:
 
     def _bind(self):
         value = self.runtime
-        require(set(value) - {"live_map", "desktop_broker", "timer_config", "v1_chat_icons_dir", "whatsapp_chats", "claude_quota_projection", "codex_quota_projection", "metrics_port"} == {"format", "uid", "gid", "owner_id", "conversation_id", "home",
+        require(set(value) - IDENTITY_FIELDS - {"resource_namespace", "qualification_record", "operator_recovery", "desk_login", "managed_operations", "password_rotation_ready", "attachment_export_dir", "live_map", "desktop_broker", "timer_config", "v1_chat_icons_dir", "whatsapp_chats", "claude_quota_projection", "codex_quota_projection", "metrics_port"} == {"format", "uid", "gid", "owner_id", "conversation_id", "home",
                 "bootstrap_file", "ledger_directory", "endpoint_directory", "port", "trusted_origin"}
                 and value["format"] == "orkestr-v2-codex-service-v1", "service_format")
+        require("password_rotation_ready" not in value or type(value["password_rotation_ready"]) is bool,
+                "password_rotation_readiness")
+        if "operator_recovery" in value:
+            from .password_recovery import configuration as recovery_configuration
+            recovery_configuration(value["operator_recovery"])
+        if "qualification_record" in value:
+            from .qualification import check_path
+            check_path(value["qualification_record"], value["home"], self.root)
         self.live_map = live_map_path(value["live_map"]) if "live_map" in value else None
         self.desktop_broker = (live_map_path(value["desktop_broker"])
                                if "desktop_broker" in value else None)
@@ -171,11 +190,36 @@ class Package:
                 and 1024 <= value["metrics_port"] <= 65535 and value["metrics_port"] != value["port"]),
                 "service_metrics_port")
         self.owner, self.conversation = identifier(value["owner_id"]), identifier(value["conversation_id"])
-        self.uid, self.gid = value["uid"], value["gid"]
-        self.home = private(value["home"], self.uid, True)
-        self.data = private(self.home / "data", self.uid, True)
-        self.provider_home = private(self.home / "provider-home", self.uid, True)
-        private(value["bootstrap_file"], self.uid)
+        identity = bind_identity(value)
+        self.identity_split = identity["split"]
+        self.authority_uid, self.authority_gid = identity["authority_uid"], identity["authority_gid"]
+        self.executor_uid, self.executor_gid = identity["executor_uid"], identity["executor_gid"]
+        if 'managed_operations' in value:
+            require(self.identity_split and value['managed_operations'] is True,'managed_split_configuration')
+        if 'desk_login' in value:
+            selected=value['desk_login']
+            require(self.identity_split and type(selected) is dict and set(selected)=={'path','sha256'} and
+                    type(selected['sha256']) is str and re.fullmatch('[0-9a-f]{64}',selected['sha256']),
+                    'desk_operator_configuration')
+            live_map_path(selected['path'])
+            if os.geteuid()==0:protected(selected['path'])
+        # Existing broker/profile paths keep uid/gid as explicit executor aliases.
+        self.uid, self.gid = self.executor_uid, self.executor_gid
+        if self.identity_split and os.geteuid() == self.executor_uid:
+            from .identity import receive_launch_context
+            receive_launch_context(self)
+        self.home = self.private(value["home"], self.authority_uid, True)
+        self.data = self.private(self.home / "data", self.authority_uid, True)
+        self.provider_home = self.private(identity["provider_home"], self.executor_uid, True)
+        self.private(value["bootstrap_file"], self.authority_uid)
+        if self.identity_split:
+            # These external server configurations contain broad bridge tokens
+            # or name private credential files. Their bytes are not package
+            # inputs and must never be read/hashed by an executor or packager.
+            # Root verifies custody before any authority or native launch;
+            # the server then validates its configuration/credential schema.
+            for path in (self.desktop_broker,self.timer_config,self.whatsapp_chats):
+                if path is not None:self.private(path,self.authority_uid)
         self.ledger_directory = protected(value["ledger_directory"], True)
         require(stat.S_IMODE(self.ledger_directory.stat().st_mode) == 0o700, "ledger_mode")
         endpoints = protected(value["endpoint_directory"], True)
@@ -189,10 +233,22 @@ class Package:
         beta = self.beta
         require(set(beta) - {"roles", "workspace_exec", "additional_workspace_exec", "max_active_windows",
                              "window_max_minutes", "conversation_window_max_minutes",
-                             "host_full_access", "claude", "conversation_workspaces"} == {"schema_version", "owner_id", "conversation_id", "manager_socket",
+                             "host_full_access", "managed_host", "claude", "conversation_workspaces", "provider_routing", "identity_split", "deploy_maintenance_marker"} == {"schema_version", "owner_id", "conversation_id", "manager_socket",
                 "launcher", "launcher_sha256", "workspace", "namespace", "supervisor_key"}
                 and type(beta["schema_version"]) is int and beta["schema_version"] == 1,
                 "beta_format")
+        if "deploy_maintenance_marker" in beta:
+            marker = Path(live_map_path(beta["deploy_maintenance_marker"]))
+            require(str(marker) == beta["deploy_maintenance_marker"]
+                    and self.home not in (marker, *marker.parents), "maintenance_marker_path")
+            protected(marker.parent, True)
+        if self.identity_split:
+            require("host_full_access" not in beta,
+                    "split_privileged_or_advanced_mode_unsupported")
+            require(beta.get("identity_split") == {"authority_uid": self.authority_uid,
+                    "executor_uid": self.executor_uid, "shared_gid": self.gid}, "beta_identity_binding")
+        else:
+            require("identity_split" not in beta, "beta_identity_binding")
         require(beta["owner_id"] == self.owner and beta["conversation_id"] == self.conversation
                 and beta["manager_socket"] == str(self.control)
                 and beta["launcher"] == str(self.root / "launcher.py")
@@ -203,6 +259,8 @@ class Package:
             # Runtime's owner-wide capacity; the ledger's own ceiling stays above it.
             require(type(beta["max_active_windows"]) is int
                     and 0 < beta["max_active_windows"] <= MAX_RUNTIME_WINDOWS, "beta_window_capacity")
+        from .managed_host import validate as validate_managed_host
+        validate_managed_host(self)
         if "host_full_access" in beta:
             access = beta["host_full_access"]
             require(type(access) is dict and set(access) <= {"providers", "environment", "environment_files"}
@@ -218,7 +276,7 @@ class Package:
         if "conversation_workspaces" in beta:
             # Per-conversation Deep/Fast working directories, host full access only.
             table = beta["conversation_workspaces"]
-            require(type(table) is dict and 0 < len(table) <= 128 and "host_full_access" in beta
+            require(type(table) is dict and 0 < len(table) <= 128 and ("host_full_access" in beta or "managed_host" in beta)
                     and all(type(k) is str and re.fullmatch(
                         r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", k)
                         for k in table), "conversation_workspaces")
@@ -229,7 +287,7 @@ class Package:
         require(type(additional) is list and len(additional) <= MAX_ADDITIONAL_WORKSPACE_EXEC
                 and (not additional or "workspace_exec" in beta), "workspace_exec_config")
         for command in ([beta["workspace_exec"]] if "workspace_exec" in beta else []) + additional:
-            require(type(command) is dict and set(command) - {"trusted"} == {"conversation_id",
+            require(type(command) is dict and set(command) - {"trusted","project_owner_uid"} == {"conversation_id",
                     "project_id", "workspace", "allowed_roots", "protected_roots", "cgroup_root",
                     "toolchain_root"} and "roles" in beta, "workspace_exec_config")
             # Runtime validates the trusted profile's fields, limits and overlaps.
@@ -248,6 +306,9 @@ class Package:
         scopes = [(c["conversation_id"], c["project_id"]) for c in
                   ([beta["workspace_exec"]] if "workspace_exec" in beta else []) + additional]
         require(len({c for c, _ in scopes}) == len({p for _, p in scopes}) == len(scopes), "workspace_exec_scope")
+        if self.identity_split and scopes:
+            from .workspace_setup import Projects
+            Projects(self) if os.geteuid()==0 else None
         profile = self.profile
         require(set(profile) == {"format", "native", "auth_file", "state_root", "workspace",
                 "egress_socket", "supervisor", "hosts"}
@@ -256,9 +317,9 @@ class Package:
                 profile["supervisor"] == str(self.root / "isolation/supervisor.py") and
                 profile["hosts"] == list(HOSTS) and profile["egress_socket"] == str(self.endpoint)
                 and profile["workspace"] == beta["workspace"], "profile_binding")
-        workspace = private(profile["workspace"], self.uid, True)
-        account = private(profile["state_root"], self.uid, True)
-        auth = private(profile["auth_file"], self.uid)  # Metadata only; NEVER digest/read.
+        workspace = self.private(profile["workspace"], self.uid, True)
+        account = self.private(profile["state_root"], self.uid, True)
+        auth = self.private(profile["auth_file"], self.uid)  # Metadata only; NEVER digest/read.
         require(auth.name == "auth.json", "canonical_auth_reference")
         for a, b in ((workspace, self.home), (account, self.home), (workspace, account),
                      (auth, workspace), (auth, account), (auth, self.home),
@@ -266,7 +327,7 @@ class Package:
             require(a != b and a not in b.parents and b not in a.parents, "state_scope_overlap")
         for name in ("server", "native", "manager.py", "launcher.py"):
             require((self.root / name).stat().st_mode & 0o111, "executable_required")
-        access = beta.get("host_full_access")
+        access = beta.get("managed_host", beta.get("host_full_access"))
         host_providers = type(access) is dict and access.get("providers", True) is True
         packaged = CODE_MODE_HOST in self.manifest["files"]
         # Host natives need their code-mode host; nothing else may carry one.
@@ -291,20 +352,76 @@ class Package:
                 and type(selected["default"]) is bool
                 and launcher.stat().st_mode & 0o111, "claude_launcher_binding")
         private_config = metadata(self.root / "claude-private.json")
+        access_key="managed_host" if self.identity_split else "host_full_access"
         require(type(private_config) is dict and set(private_config) == {"executable", "account",
-                "workspace", "home", "temporary", "host_full_access"}
+                "workspace", "home", "temporary", access_key}
                 and private_config["workspace"] == selected["workspace"]
-                and type(private_config["host_full_access"]) is dict, "claude_profile")
+                and type(private_config[access_key]) is dict, "claude_profile")
         paths = {key: Path(private_config[key]) for key in ("executable", "account", "workspace",
                                                             "home", "temporary")}
-        require(all(p.is_absolute() and p.resolve(strict=True) == p for p in paths.values()),
-                "claude_profile_paths")
-        workspace = private(paths["workspace"], self.uid, True)
-        state = [private(paths[key], self.uid, True) for key in ("home", "temporary")]
+        if self.identity_split:
+            access=private_config[access_key]
+            environment=access.get('environment')
+            require(set(access)=={'environment'} and type(environment) is dict and
+                    {'HOME','PATH'}<=set(environment) and len(environment)<=256 and
+                    environment['HOME']==str(paths['home']) and
+                    environment.get('TMPDIR',str(paths['temporary']))==str(paths['temporary']) and
+                    all(type(k) is str and type(v) is str and k and '=' not in k and
+                        '\0' not in k+v and len(v)<=16384 for k,v in environment.items()) and
+                    not {'ANTHROPIC_API_KEY','ANTHROPIC_AUTH_TOKEN','CLAUDE_CODE_OAUTH_TOKEN',
+                         'CLAUDE_CONFIG_DIR'}&set(environment),'managed_claude_environment')
+        require(all(p.is_absolute() and '..' not in p.parts for p in paths.values()),"claude_profile_paths")
+        if not self.identity_split or os.geteuid() in (0,self.executor_uid):
+            require(all(p.resolve(strict=True)==p for p in paths.values()),"claude_profile_paths")
+        if self.identity_split:
+            if os.geteuid()==0:
+                # Root validates the native before any provider input. The
+                # executor validates only its scoped profile/state; it must
+                # never probe the authority's private home or bootstrap.
+                require(protected(paths['executable']).stat().st_mode&0o111,
+                        'claude_executable_required')
+            for key,p in paths.items():
+                if key!='executable':self.private(p,self.uid,True)
+        workspace = self.private(paths["workspace"], self.uid, True)
+        state = [self.private(paths[key], self.uid, True) for key in ("home", "temporary")]
         for a in [workspace, *state]:
             for b in [self.home, self.root, self.ledger_directory, codex_account, codex_auth]:
                 require(a != b and a not in b.parents and b not in a.parents, "claude_scope_overlap")
         self.claude = selected
+
+    def _bind_attachment_export(self):
+        self.attachment_export_dir = None
+        if 'attachment_export_dir' not in self.runtime:
+            return
+        from .attachment_exports import bind
+        forbidden = [self.root, self.home, self.provider_home, self.ledger_directory,
+                     self.control.parent, Path(self.runtime['bootstrap_file'])]
+        for profile in self.role_profiles.values():
+            value = metadata(profile)
+            forbidden.extend(Path(value[k]) for k in ('workspace', 'state_root', 'auth_file'))
+        forbidden.extend(Path(value) for value in conversation_workspace_paths(self.beta))
+        for command in ([self.beta['workspace_exec']] if 'workspace_exec' in self.beta else []) + self.beta.get('additional_workspace_exec', []):
+            forbidden.append(Path(command['workspace']))
+        if self.claude:
+            value = metadata(self.root / 'claude-private.json')
+            forbidden.extend(Path(value[k]) for k in ('account', 'workspace', 'home', 'temporary'))
+        self.attachment_export_dir = bind(self.runtime['attachment_export_dir'],
+                                         self.authority_uid, self.gid, forbidden)
+
+    def private(self, value, uid, directory=False):
+        if not self.identity_split or os.geteuid() in (0, uid):
+            return private(value, uid, directory)
+        # The root manager has checked all external custody before starting the
+        # authoritative server or issuing a one-use executor launch capsule.
+        # Foreign private credentials must remain unreadable from this role.
+        from .identity import launch_context
+        require(os.geteuid() == self.authority_uid or
+                (os.geteuid() == self.executor_uid and launch_context() is not None),
+                "split_role_view")
+        path = Path(value)
+        require(path.is_absolute() and not any(p in ("..", ".") for p in path.parts),
+                "split_private_path")
+        return path
 
     def metrics_port(self):
         if "metrics_port" in self.runtime:
@@ -312,12 +429,18 @@ class Package:
         return self.runtime["port"] + 1 if self.runtime["port"] < 65535 else None
 
     def environment(self):
-        return {"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8", "HOME": str(self.provider_home),
+        return {"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8", "HOME": str(self.home if getattr(self, "identity_split", False) else self.provider_home),
                 "ORKESTR_V2_HOME": str(self.data), "ORKESTR_V2_BIND": f"127.0.0.1:{self.runtime['port']}",
                 "ORKESTR_V2_BETA_CONFIG": str(self.root / "beta.json"),
                 "ORKESTR_V2_UI_DIST": str(self.root / "ui"),
                 "ORKESTR_V2_ORIGIN": self.runtime["trusted_origin"],
+                **({'ORKESTR_V2_DESK_LOGIN_ENABLED':'1'} if 'desk_login' in self.runtime else {}),
+                **({'ORKESTR_V2_MANAGED_OPERATIONS_ENABLED':'1'} if self.runtime.get('managed_operations') else {}),
+                **({"ORKESTR_V2_PASSWORD_ROTATION_READY": "1" if self.runtime["password_rotation_ready"] else "0"}
+                   if "password_rotation_ready" in self.runtime else {}),
                 ACCESS_LOG_ENV: "quiet",
+                **({"ORKESTR_V2_ATTACHMENT_EXPORT_DIR": str(self.attachment_export_dir)}
+                   if getattr(self, "attachment_export_dir", None) is not None else {}),
                 **({METRICS_BIND_ENV: f"127.0.0.1:{self.metrics_port()}"}
                    if self.metrics_port() is not None else {}),
                 **({LIVE_MAP_ENV: self.live_map} if self.live_map else {}),

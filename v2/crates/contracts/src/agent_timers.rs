@@ -17,10 +17,18 @@ pub const AGENT_TIMER_LABEL_MAX: usize = 120;
 /// At most this many live (enabled or paused, not exhausted, cancelled or
 /// stopped) agent-created timers per conversation.
 pub const AGENT_TIMER_ACTIVE_MAX: i64 = 32;
-/// At most this many timers created by agents per conversation per hour.
+/// At most this many timers created (or moved by an upsert) by agents per
+/// conversation per hour. Not configurable: it keeps agent loops slow.
 pub const AGENT_TIMER_HOURLY_CREATES_MAX: i64 = 12;
-/// ... and at most this many per conversation per 24 hours.
+/// Default rolling 24-hour create cap of a conversation with other
+/// participants (and of any conversation not marked owner-only). The server
+/// default comes from `ORKESTR_V2_AGENT_TIMER_DAILY_CREATES_MAX`.
 pub const AGENT_TIMER_DAILY_CREATES_MAX: i64 = 24;
+/// Default rolling 24-hour create cap of a conversation the owner marked
+/// owner-only (`ORKESTR_V2_AGENT_TIMER_OWNER_ONLY_DAILY_CREATES_MAX`).
+pub const AGENT_TIMER_OWNER_ONLY_DAILY_CREATES_MAX: i64 = 200;
+/// Largest configurable daily create cap (a larger need is `off`).
+pub const AGENT_TIMER_DAILY_CREATES_LIMIT: i64 = 10_000;
 /// A one-shot timer must be at least this far in the future.
 pub const AGENT_TIMER_MIN_LEAD_MS: i64 = 2 * 60_000;
 /// ... and at most this far (400 days).
@@ -109,6 +117,10 @@ impl AgentTimerSchedule {
     }
 }
 
+/// Also the body of an upsert (`POST .../agent-timers/upsert`): the newest
+/// enabled or fired-one-shot agent timer of this conversation with the same
+/// label is moved to the new schedule and text instead of creating another
+/// one; only without such a timer is a new one created (and counted).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AgentTimerCreate {
@@ -129,6 +141,111 @@ impl AgentTimerCreate {
             && self.text.len() <= AGENT_TIMER_TEXT_MAX
             && !self.text.contains('\0')
     }
+}
+
+/// Server defaults of the rolling 24-hour create cap (`None` = no cap).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AgentTimerDailyCaps {
+    /// Conversations without an owner setting (and `default`).
+    pub default: Option<i64>,
+    /// Conversations the owner marked `owner_only`.
+    pub owner_only: Option<i64>,
+}
+impl Default for AgentTimerDailyCaps {
+    fn default() -> Self {
+        Self {
+            default: Some(AGENT_TIMER_DAILY_CREATES_MAX),
+            owner_only: Some(AGENT_TIMER_OWNER_ONLY_DAILY_CREATES_MAX),
+        }
+    }
+}
+impl AgentTimerDailyCaps {
+    /// The effective cap of a conversation with `mode`.
+    pub fn resolve(&self, mode: AgentTimerCapMode, fixed: Option<i64>) -> Option<i64> {
+        match mode {
+            AgentTimerCapMode::Default => self.default,
+            AgentTimerCapMode::OwnerOnly => self.owner_only,
+            AgentTimerCapMode::Fixed => fixed,
+            AgentTimerCapMode::Off => None,
+        }
+    }
+}
+/// Parse one cap setting: `off`, or 1..=`AGENT_TIMER_DAILY_CREATES_LIMIT`.
+pub fn parse_agent_timer_daily_cap(value: &str) -> Option<Option<i64>> {
+    let value = value.trim();
+    if value.eq_ignore_ascii_case("off") {
+        return Some(None);
+    }
+    value
+        .parse::<i64>()
+        .ok()
+        .filter(|n| (1..=AGENT_TIMER_DAILY_CREATES_LIMIT).contains(n))
+        .map(Some)
+}
+
+/// How a conversation's daily create cap is chosen (owner setting).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentTimerCapMode {
+    /// The server default (no setting stored).
+    Default,
+    /// Only the owner is in this chat: the server's owner-only default.
+    OwnerOnly,
+    /// Exactly `daily_creates_max`.
+    Fixed,
+    /// No daily cap. The hourly, live-timer and schedule caps still apply.
+    Off,
+}
+impl AgentTimerCapMode {
+    pub fn text(self) -> &'static str {
+        match self {
+            Self::Default => "default",
+            Self::OwnerOnly => "owner_only",
+            Self::Fixed => "fixed",
+            Self::Off => "off",
+        }
+    }
+    pub fn parse(value: &str) -> Option<Self> {
+        Some(match value {
+            "default" => Self::Default,
+            "owner_only" => Self::OwnerOnly,
+            "fixed" => Self::Fixed,
+            "off" => Self::Off,
+            _ => return None,
+        })
+    }
+}
+/// Owner request: `PUT .../agent-timer-limits`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentTimerLimitsUpdate {
+    pub mode: AgentTimerCapMode,
+    /// Required for `fixed`, refused otherwise.
+    #[serde(default)]
+    pub daily_creates_max: Option<i64>,
+}
+impl AgentTimerLimitsUpdate {
+    pub fn is_valid(&self) -> bool {
+        match (self.mode, self.daily_creates_max) {
+            (AgentTimerCapMode::Fixed, Some(n)) => {
+                (1..=AGENT_TIMER_DAILY_CREATES_LIMIT).contains(&n)
+            }
+            (_, None) => self.mode != AgentTimerCapMode::Fixed,
+            _ => false,
+        }
+    }
+}
+/// A conversation's create caps as they apply now.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentTimerLimits {
+    pub conversation_id: ConversationId,
+    pub mode: AgentTimerCapMode,
+    /// The effective rolling 24-hour create cap; `None` = no daily cap.
+    pub daily_creates_max: Option<i64>,
+    pub hourly_creates_max: i64,
+    pub live_timers_max: i64,
+    /// Agent creates of the last 24 hours (fired, cancelled and live alike).
+    pub created_last_24h: i64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -223,6 +340,32 @@ mod tests {
         assert!(pause(AgentTimerOperation::Pause, None).is_valid());
         assert!(!pause(AgentTimerOperation::Cancel, Some(5)).is_valid());
         assert!(pause(AgentTimerOperation::SkipNext, None).is_valid());
+    }
+
+    #[test]
+    fn daily_cap_settings() {
+        let caps = AgentTimerDailyCaps::default();
+        assert_eq!(caps.resolve(AgentTimerCapMode::Default, None), Some(24));
+        assert_eq!(caps.resolve(AgentTimerCapMode::OwnerOnly, None), Some(200));
+        assert_eq!(caps.resolve(AgentTimerCapMode::Fixed, Some(7)), Some(7));
+        assert_eq!(caps.resolve(AgentTimerCapMode::Off, Some(7)), None);
+        assert_eq!(parse_agent_timer_daily_cap(" off "), Some(None));
+        assert_eq!(parse_agent_timer_daily_cap("150"), Some(Some(150)));
+        for bad in ["0", "-1", "10001", "x", ""] {
+            assert_eq!(parse_agent_timer_daily_cap(bad), None, "{bad}");
+        }
+        let update = |mode, daily_creates_max| AgentTimerLimitsUpdate {
+            mode,
+            daily_creates_max,
+        };
+        assert!(update(AgentTimerCapMode::Fixed, Some(50)).is_valid());
+        assert!(!update(AgentTimerCapMode::Fixed, None).is_valid());
+        assert!(!update(AgentTimerCapMode::Fixed, Some(0)).is_valid());
+        assert!(!update(AgentTimerCapMode::Off, Some(50)).is_valid());
+        assert!(update(AgentTimerCapMode::OwnerOnly, None).is_valid());
+        let wire: AgentTimerLimitsUpdate =
+            serde_json::from_str(r#"{"mode":"owner_only"}"#).unwrap();
+        assert_eq!(wire.mode, AgentTimerCapMode::OwnerOnly);
     }
 
     #[test]

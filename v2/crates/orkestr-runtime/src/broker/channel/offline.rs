@@ -39,6 +39,7 @@ impl BrokerChannel {
             || self.pending.is_some()
             || self.next != 2
             || self.workspace_tool.enabled
+            || self.desk.enabled
         {
             return Err(Blocker::Protocol);
         }

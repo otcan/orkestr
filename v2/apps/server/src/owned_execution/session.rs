@@ -114,6 +114,8 @@ impl ConfiguredExecution {
             .await
             .map_err(|_| "execution steering issuer refused")?;
         let mut worker = self.prepare_worker(&capability)?;
+        let mut desk = self.prepare_desk(&capability).await?;
+        let mut managed = self.prepare_managed(&capability).await?;
         let (mut authority, mut pump) = ready
             .attach(self.store.clone(), capability)
             .map_err(|_| "execution attachment is uncertain; automatic replay refused")?;
@@ -143,6 +145,12 @@ impl ConfiguredExecution {
                 steering.retire();
                 run_control.disable();
                 drop(schedule);
+                if let Some(managed) = managed.as_mut() {
+                    Box::pin(managed.cancel()).await?;
+                }
+                if let Some(desk) = desk.as_mut() {
+                    desk.cancel().await?;
+                }
                 Self::quiesce_worker(&mut worker);
                 let proof = self
                     .stop_owned(&mut controls, authority, pump, &run, heartbeat)
@@ -151,6 +159,9 @@ impl ConfiguredExecution {
                 return Ok(SessionExit::Stopped { run, proof });
             }
             if status.phase == ExecutionPhase::Completed {
+                if let Some(managed) = managed.as_mut() {
+                    Box::pin(managed.cancel()).await?;
+                }
                 steering.retire();
                 drop(schedule);
                 // The previous parent's scheduler cannot survive into a new
@@ -197,6 +208,8 @@ impl ConfiguredExecution {
                     .await
                     .map_err(|_| "execution steering issuer refused")?;
                 worker = self.prepare_worker(&capability)?;
+                desk = self.prepare_desk(&capability).await?;
+                managed = self.prepare_managed(&capability).await?;
                 let (next_authority, next_pump) = pump
                     .attach_next(self.store.clone(), capability)
                     .map_err(|_| "execution continuation is uncertain; automatic replay refused")?;
@@ -214,6 +227,9 @@ impl ConfiguredExecution {
                 continue;
             }
             if status.phase == ExecutionPhase::AwaitingAcceptance {
+                if let Some(managed) = managed.as_mut() {
+                    Box::pin(managed.cancel()).await?;
+                }
                 steering.retire();
                 pump.check_broker_liveness()
                     .map_err(|_| "execution proposal broker exited; reconciliation required")?;
@@ -269,6 +285,12 @@ impl ConfiguredExecution {
                 status.phase,
                 ExecutionPhase::Failed | ExecutionPhase::Blocked | ExecutionPhase::Cancelled
             ) {
+                if let Some(managed) = managed.as_mut() {
+                    Box::pin(managed.cancel()).await?;
+                }
+                if let Some(desk) = desk.as_mut() {
+                    desk.cancel().await?;
+                }
                 // Drop only this owned child. CancelRequested remains unknown;
                 // killing a local helper is never reported as provider Stopped.
                 break;
@@ -296,6 +318,12 @@ impl ConfiguredExecution {
                     .publish(receipt)
                     .map_err(|_| "execution shutdown handoff requires reconciliation")?;
                 drop(schedule);
+                if let Some(managed) = managed.as_mut() {
+                    Box::pin(managed.cancel()).await?;
+                }
+                if let Some(desk) = desk.as_mut() {
+                    desk.cancel().await?;
+                }
                 Self::quiesce_worker(&mut worker);
                 let proof = self
                     .stop_owned(&mut controls, authority, pump, &run, heartbeat)
@@ -304,6 +332,12 @@ impl ConfiguredExecution {
                 return Ok(SessionExit::Stopped { run, proof });
             }
             Self::poll_worker(&mut worker).await;
+            if let Some(managed) = managed.as_mut() {
+                Box::pin(managed.poll()).await?;
+            }
+            if let Some(desk) = desk.as_mut() {
+                desk.poll(&mut pump).await?;
+            }
             if pump.pending().is_none() {
                 pump.flush().map_err(|_| "execution write fence refused")?;
             }
@@ -360,6 +394,9 @@ impl ConfiguredExecution {
                 let _ = authority.revoke();
                 authority = next_authority;
                 pump = next_pump;
+                if let Some(managed) = managed.as_mut() {
+                    Box::pin(managed.refresh_lease(liveness.authority())).await?;
+                }
             }
             // A persistence retry may retain an observation during this step.
             // Refuse new control handoff until that exact evidence is committed.

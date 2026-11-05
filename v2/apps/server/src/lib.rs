@@ -37,13 +37,18 @@ mod conversation_resources_http;
 mod conversation_status_http;
 mod conversations_http;
 pub mod deploy_drain;
+mod deploy_maintenance;
 mod desktop_broker;
 mod desktop_http;
+mod desktop_open_http;
+mod encrypted_upload_http;
+pub mod encrypted_upload_ingest;
 mod execution;
 mod execution_accept;
 mod execution_registry;
 pub mod fast_execution;
 mod fast_role_settings_http;
+mod fast_run_receipt_http;
 pub mod google_registry_metadata;
 mod held_inputs;
 pub mod host_metrics;
@@ -56,16 +61,23 @@ pub mod observability;
 pub mod offline_python;
 pub mod owned_children;
 pub mod owned_execution;
+mod owner_password;
 #[cfg(test)]
 mod provider_handoff_http_tests;
 mod provider_payload;
+mod provider_policy;
+#[cfg(test)]
+mod provider_policy_http_tests;
 mod resource_health;
 mod response_shaping;
 pub mod restricted_http;
 mod retired_inputs;
 mod routes;
+mod service_credentials;
 mod sidebar_http;
 mod sidebar_v1;
+mod source_intake_http;
+mod source_receipts_http;
 mod steering_http;
 mod steering_registry;
 pub mod stop_execution;
@@ -112,6 +124,7 @@ pub struct AppState {
     sidebar_v1: sidebar_v1::V1Cache,
     v1_uploads: message_attachments::V1Uploads,
     attachment_export: Option<Arc<message_attachments::ExportDir>>,
+    attachment_ingest: Option<Arc<encrypted_upload_ingest::Ingest>>,
     v1_chat_icons: Option<Arc<std::path::PathBuf>>,
     /// "New WhatsApp chat": owner numbers, accounts and the adapter client.
     whatsapp_chats: Option<Arc<whatsapp_chats::WhatsAppChats>>,
@@ -123,8 +136,15 @@ pub struct AppState {
     restricted: Option<Arc<restricted_http::RestrictedRuntime>>,
     /// Operator deploy drain shared by window admission and timer fires.
     deploy_drain: Arc<deploy_drain::DeployDrain>,
+    password_rotation_ready: bool,
+    provider_policy: Option<beta_config::provider_routing::ProviderRouting>,
 }
 impl AppState {
+    /// Trusted operator assertion after all unattended consumers use service credentials.
+    pub fn with_password_rotation_ready(mut self) -> Self {
+        self.password_rotation_ready = true;
+        self
+    }
     /// The process-wide deploy drain (inert until bound to a home directory).
     pub fn deploy_drain(&self) -> Arc<deploy_drain::DeployDrain> {
         self.deploy_drain.clone()
@@ -148,6 +168,7 @@ impl AppState {
         if config
             .host_full_access
             .as_ref()
+            .or(config.managed_host.as_ref())
             .is_some_and(|access| access.providers)
         {
             // Operator opt-in, before any provider session exists.
@@ -181,6 +202,10 @@ impl AppState {
         if self.initial_window.is_some() || self.window_handles.is_some() {
             return Err("beta configuration already installed");
         }
+        // Root maintenance is installed before any dispatcher, timer or listener.
+        self.deploy_drain
+            .bind_maintenance(config.deploy_maintenance_marker.as_deref(), home)?;
+        self.provider_policy = config.provider_routing.clone();
         let initial = window_runtime::initial::InitialAuthority::new(config)?;
         let handles = window_runtime::handles::Handles::new(
             config.owner_id.clone(),
@@ -202,7 +227,7 @@ impl AppState {
                 initial.clone(),
                 handles.clone(),
                 manager,
-            )
+            )?
             .with_deploy_drain(self.deploy_drain.clone()),
         );
         controller.start_dispatcher();
@@ -225,6 +250,22 @@ impl AppState {
     pub fn with_attachment_export(mut self, export: message_attachments::ExportDir) -> Self {
         self.attachment_export = Some(Arc::new(export));
         self
+    }
+    pub fn with_attachment_ingest_file(
+        mut self,
+        path: &std::path::Path,
+    ) -> Result<Self, &'static str> {
+        self.attachment_ingest = Some(Arc::new(encrypted_upload_ingest::Ingest::load(path)?));
+        Ok(self)
+    }
+    pub fn with_attachment_ingest_home(
+        mut self,
+        home: &std::path::Path,
+    ) -> Result<Self, &'static str> {
+        self.attachment_ingest = Some(Arc::new(encrypted_upload_ingest::Ingest::provision(
+            &home.join("keys/attachment-ingest.age"),
+        )?));
+        Ok(self)
     }
     /// Trusted startup only: the private V1 desktop broker client configuration.
     pub fn with_desktop_broker_file(
@@ -310,8 +351,11 @@ impl AppState {
             sidebar_v1: sidebar_v1::V1Cache::default(),
             v1_uploads: Default::default(),
             attachment_export: None,
+            attachment_ingest: None,
             v1_chat_icons: None,
             whatsapp_chats: None,
+            password_rotation_ready: false,
+            provider_policy: None,
             v1_timers: Default::default(),
             claude_turns: false,
             restricted: None,
@@ -432,7 +476,27 @@ async fn guard(
     // V1 desktop acquire (and a renewing heartbeat) can take 8-20 s while V1
     // prepares the desktop. Dropping it at 10 s would leave a V1 lease that
     // V2 never recorded, so these two get a longer, still bounded deadline.
-    let deadline = if desktop_slow_path(request.uri().path()) {
+    let deadline = if encrypted_attachment_slow_path(request.method(), request.uri().path()) {
+        // Only an authenticated native upload's bounded verification/export
+        // operation gets this allowance. Chunks and every other route retain
+        // their existing limits; cancellation drops the private temporary file.
+        if owner(&state, request.headers()).await.is_err() {
+            return unauthorized().into_response();
+        }
+        Duration::from_secs(15 * 60)
+    } else if match desktop_open_http::authenticated_slow_path(
+        &state,
+        request.method(),
+        request.uri().path(),
+        request.headers(),
+    )
+    .await
+    {
+        Ok(value) => value,
+        Err(error) => return error.into_response(),
+    } {
+        Duration::from_secs(50)
+    } else if desktop_slow_path(request.uri().path()) {
         Duration::from_secs(60)
     } else {
         Duration::from_secs(10)
@@ -455,6 +519,43 @@ async fn guard(
         .headers_mut()
         .insert(header::X_CONTENT_TYPE_OPTIONS, "nosniff".parse().unwrap());
     response
+}
+fn encrypted_attachment_slow_path(method: &axum::http::Method, path: &str) -> bool {
+    if *method != axum::http::Method::POST {
+        return false;
+    }
+    let parts: Vec<_> = path.trim_start_matches('/').split('/').collect();
+    match parts.as_slice() {
+        ["api", "v2", "conversations", conversation, "encrypted-uploads", upload, "attachment"] => {
+            [conversation, upload]
+                .iter()
+                .all(|v| uuid::Uuid::parse_str(v).is_ok_and(|id| !id.is_nil()))
+        }
+        _ => false,
+    }
+}
+
+#[test]
+fn encrypted_upload_attachment_deadline_is_exact_post_and_valid_scopes_only() {
+    use axum::http::Method;
+    let path="/api/v2/conversations/00000000-0000-4000-8000-000000000001/encrypted-uploads/00000000-0000-4000-8000-000000000002/attachment";
+    assert!(encrypted_attachment_slow_path(&Method::POST, path));
+    assert!(!encrypted_attachment_slow_path(&Method::GET, path));
+    assert!(!encrypted_attachment_slow_path(
+        &Method::POST,
+        &path.replace("/attachment", "/complete")
+    ));
+    assert!(!encrypted_attachment_slow_path(
+        &Method::POST,
+        &path.replace("00000000-0000-4000-8000-000000000001", "invalid")
+    ));
+    assert!(!encrypted_attachment_slow_path(
+        &Method::POST,
+        &path.replace(
+            "00000000-0000-4000-8000-000000000002",
+            "00000000-0000-0000-0000-000000000000"
+        )
+    ));
 }
 /// `/api/v2/conversations/{id}/desktops/{slug}/acquire` or `/heartbeat`.
 fn desktop_slow_path(path: &str) -> bool {
@@ -497,11 +598,16 @@ pub fn router_with_google_catalog(
     catalog: google_registry_metadata::RegistryCatalog,
 ) -> Router {
     Router::new()
-        .route("/api/v2/health",get(|| async { Json(serde_json::json!({"status":"ok","product":"orkestr-v2","contract_version":0,"fixture_mode":false,"features":["message_author","thread_asks","agent_timers"],"build":build_identity::identity()})) }))
+        .route("/api/v2/health",get(|| async { Json(serde_json::json!({"status":"ok","product":"orkestr-v2","contract_version":0,"fixture_mode":false,"features":["message_author","thread_asks","agent_timers","source_receipts_v1","root_intake_v1","fast_run_receipts_v1"],"build":build_identity::identity()})) }))
         .route("/api/v2/setup",get(auth::setup_status).post(auth::setup))
         .route("/api/v2/session",post(auth::session))
         .route("/api/v2/machine/session",post(auth::session))
         .route("/api/v2/browser/session",post(browser::login).get(browser::session).delete(browser::logout))
+        .route("/api/v2/browser/password",post(owner_password::change))
+        .route("/api/v2/browser/security",get(owner_password::status))
+        .route("/api/v2/browser/service-credentials",get(service_credentials::list).post(service_credentials::create))
+        .route("/api/v2/browser/service-credentials/{id}",delete(service_credentials::revoke))
+        .route("/api/v2/machine/service-session",post(service_credentials::exchange))
         .route("/api/v2/projects",get(routes::projects).post(routes::create_project))
         .route("/api/v2/resources",get(resource_health::resources))
         .route("/api/v2/live-map",get(live_map::read))
@@ -538,13 +644,18 @@ pub fn router_with_google_catalog(
         .nest("/api/v2",automatic_reply_control::router())
         .merge(memory_service::router(state.clone()))
         .merge(archived_history_http::router())
+        .merge(source_receipts_http::router())
+        .merge(source_intake_http::router())
+        .merge(fast_run_receipt_http::router())
         .merge(conversation_resources_http::router())
         .merge(fast_role_settings_http::router())
         .merge(conversation_status_http::router())
         .merge(host_metrics::router())
         .merge(desktop_http::router())
+        .merge(desktop_open_http::router())
         .merge(sidebar_http::router())
         .merge(message_attachments::router())
+        .merge(encrypted_upload_http::router())
         .merge(attachment_keys_http::router())
         .merge(message_times_http::router())
         .merge(conversation_posts_http::router())

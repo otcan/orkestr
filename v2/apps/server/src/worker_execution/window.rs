@@ -31,6 +31,12 @@ impl WindowWorkers {
     pub(super) fn reserve(&self) -> Result<Slot, &'static str> {
         self.pool.reserve()
     }
+
+    /// Window Workers use their own pinned slots, never their parent's mapped
+    /// Deep/Fast cwd (which may be executor-private and inaccessible to Core).
+    pub(super) fn workspaces(&self) -> impl Iterator<Item = &std::path::PathBuf> {
+        self.pool.launches.iter().map(|launch| &launch.workspace)
+    }
 }
 
 impl Pool {

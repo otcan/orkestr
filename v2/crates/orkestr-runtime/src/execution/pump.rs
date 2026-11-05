@@ -23,6 +23,7 @@ pub(super) struct CodexOutput {
     pub(super) steering: Option<super::steering::SteerWrite>,
     pub(super) tool_write: Option<super::offline_result::ToolResultWrite>,
     pub(super) workspace_write: Option<super::workspace_result::WorkspaceResultWrite>,
+    pub(super) desk_write: Option<super::desk_result::DeskResultWrite>,
     pub(super) writing: Option<super::provider_write::PendingWrite>,
     pub(super) native_model: Option<String>,
     models: super::model_evidence::ModelEvidence,
@@ -43,6 +44,13 @@ impl Provider for CodexOutput {
             return Err(error.clone());
         }
         if self.models.pending() {
+            return Ok(None);
+        }
+        if self
+            .desk_write
+            .as_ref()
+            .is_some_and(|w| w.prepared() && !w.finished())
+        {
             return Ok(None);
         }
         if let Some(model) = self.stream.take_model_observation() {
@@ -110,6 +118,8 @@ impl Provider for CodexOutput {
                                 } else if let Some(tool) = self.tool_write.as_mut() {
                                     tool.prepare(broker)?;
                                 } else if let Some(tool) = self.workspace_write.as_mut() {
+                                    tool.prepare(broker)?;
+                                } else if let Some(tool) = self.desk_write.as_mut() {
                                     tool.prepare(broker)?;
                                 } else {
                                     self.writing
@@ -208,6 +218,7 @@ impl CodexPump {
                 writing: None,
                 tool_write: None,
                 workspace_write: None,
+                desk_write: None,
                 steering: None,
                 native_model: None,
                 models: Default::default(),

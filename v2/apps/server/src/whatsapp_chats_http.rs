@@ -239,6 +239,17 @@ async fn create(
                         .map_err(refused)?;
                     chats::install_timer_grant(&path, &grant.grant).map_err(|e| (S::Group, e))?;
                 }
+                // The new group holds only the owner's numbers: owner-only
+                // timer caps, unless the owner already chose a cap.
+                state
+                    .store
+                    .default_agent_timer_limits_owner_only(
+                        &credential,
+                        &owner,
+                        &provision.conversation_id,
+                    )
+                    .await
+                    .map_err(refused)?;
             }
             let rules = chats::write_rules(
                 &config,

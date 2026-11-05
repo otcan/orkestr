@@ -77,6 +77,60 @@ class Selected(unittest.TestCase):
         with authority(REPO,source) as (_,manager,_):
             package=manager.Package(self.root/'release/package',sha(self.root/'release/package/manifest.json'))
             self.assertEqual(package.environment()['ORKESTR_V2_METRICS_BIND'],'127.0.0.1:19850')
+
+    def test_root_maintenance_marker_is_emitted_only_as_external_beta_configuration(self):
+        self.current_source()
+        parent=self.root/'maintenance';parent.mkdir(mode=0o755)
+        marker=str(parent/'admission.hold')
+        self.plan['deploy_maintenance_marker']=marker
+        selected.prepare(self.plan)
+        package=self.root/'release/package'
+        self.assertEqual(json.loads((package/'beta.json').read_bytes())['deploy_maintenance_marker'],marker)
+        self.assertNotIn('deploy_maintenance_marker',json.loads((package/'service.json').read_bytes()))
+        self.assertFalse(Path(marker).exists(),'packaging never clears or creates the admission hold')
+
+    def test_maintenance_alias_or_core_home_path_refuses_before_output(self):
+        for marker in ('relative',str(self.root/'home'/'hold'),'/srv/example/../hold','/srv/example//hold'):
+            self.plan['deploy_maintenance_marker']=marker
+            with self.subTest(marker=marker),self.assertRaises(RuntimeError):selected.prepare(self.plan)
+            self.assertFalse((self.root/'release').exists())
+    def test_attachment_export_bad_shape_or_scope_refused_before_output(self):
+        for value in (True, None, '/', 'relative', '/a//b', '/a/../b',
+                      self.plan['home'], self.plan['workspace']+'/export',
+                      self.plan['state_root'], self.plan['output']):
+            self.plan['attachment_export_dir']=value
+            with self.subTest(value=value), self.assertRaises(RuntimeError):
+                selected.prepare(self.plan)
+            self.assertFalse((self.root/'release').exists())
+    def test_external_attachment_export_roundtrips_closed_current_package(self):
+        source=self.current_source()
+        export=self.root/'exports';export.mkdir(mode=0o700);os.chown(export,995,986)
+        self.plan['attachment_export_dir']=str(export)
+        selected.prepare(self.plan)
+        descriptor=json.loads((self.root/'release/package/service.json').read_bytes())
+        self.assertEqual(descriptor['attachment_export_dir'],str(export))
+        with authority(REPO,source) as (_,manager,_):
+            package=manager.Package(self.root/'release/package',sha(self.root/'release/package/manifest.json'))
+            self.assertEqual(package.environment()['ORKESTR_V2_ATTACHMENT_EXPORT_DIR'],str(export))
+        self.assertEqual(export.stat().st_mode & 0o777,0o700)
+    def test_password_rotation_readiness_rejects_non_boolean_before_writes(self):
+        for bad in (1,0,'true',None,[]):
+            self.plan['password_rotation_ready']=bad
+            with self.subTest(bad=bad),self.assertRaisesRegex(RuntimeError,'readiness must be boolean'):
+                selected.prepare(self.plan)
+            self.assertFalse((self.root/'release').exists())
+    def test_operator_recovery_is_closed_and_bound_to_the_selected_service(self):
+        source=self.current_source()
+        config={'unit':'synthetic.service','cgroup':'/system.slice/synthetic.service'}
+        for invalid in (None,{},config|{'extra':True},config|{'cgroup':'/system.slice/other.service'}):
+            self.plan['operator_recovery']=invalid
+            with self.subTest(value=invalid),self.assertRaises(Exception):selected.prepare(self.plan)
+            self.assertFalse((self.root/'release').exists())
+        self.plan['operator_recovery']=config
+        selected.prepare(self.plan)
+        with authority(REPO,source) as (_,manager,_):
+            package=manager.Package(self.root/'release/package',sha(self.root/'release/package/manifest.json'))
+            self.assertEqual(package.runtime['operator_recovery'],config)
     def test_full_package_credentials_metadata_only(self):
         original=Path.open
         def guarded(path,*a,**kw):
@@ -90,6 +144,12 @@ class Selected(unittest.TestCase):
         self.assertFalse(receipt['credential_contents_read'])
         self.assertEqual((self.root/'release').stat().st_mode&0o777,0o750)
         self.assertIn('-I -S -B',(self.root/'release/package/launcher.py').read_text())
+    def test_split_plan_refuses_historical_source_before_writes(self):
+        self.plan.update(authority_uid=65533,authority_gid=986,executor_uid=995,
+                         executor_gid=986,provider_home=str(self.root/'external-provider'))
+        with self.assertRaisesRegex(RuntimeError,'source does not support the identity split'):
+            selected.prepare(self.plan)
+        self.assertFalse((self.root/'release').exists())
     def test_beta2_embedded_version_must_match_pair(self):
         r=self.root
         for name in ('server','ui/app.wasm'):
@@ -140,10 +200,16 @@ class Selected(unittest.TestCase):
         self.plan['timer_config']='/var/lib/synthetic-private/timers.json'
         self.plan['v1_chat_icons_dir']='/var/lib/synthetic-v1/chat-icons'
         self.plan['whatsapp_chats']='/var/lib/synthetic-private/whatsapp-chats.json'
+        self.plan['provider_routing']={'rules':[{'id':'synthetic-category','threshold':3,
+            'terms':[{'text':'cedar','weight':3}],'excluded':'claude','preferred':'codex'}]}
+        self.plan['password_rotation_ready']=True
         selected.prepare(self.plan)
         with authority(REPO,source) as (_,manager,_):
             package=manager.Package(r/'release/package',sha(r/'release/package/manifest.json'))
             self.assertEqual(set(package.role_profiles),{'deep','fast','worker-0','worker-1','worker-2','worker-3'})
+            self.assertEqual(package.beta['provider_routing'],self.plan['provider_routing'])
+            self.assertEqual(package.runtime['password_rotation_ready'],True)
+            self.assertEqual(package.environment()['ORKESTR_V2_PASSWORD_ROTATION_READY'],'1')
             self.assertEqual(package.environment()['ORKESTR_V2_LIVE_MAP'],'/var/lib/synthetic-live-map/map.json')
             self.assertEqual(package.environment()['ORKESTR_V2_DESKTOP_BROKER_CONFIG'],
                              '/var/lib/synthetic-private/desktop-broker.json')

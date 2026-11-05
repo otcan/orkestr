@@ -214,6 +214,7 @@ class FastCodexToolTests(unittest.TestCase):
     def configuration(self, role, operator, state, files=()):
         from codex_service.profile import Configuration
         config = object.__new__(Configuration)
+        config.package = types.SimpleNamespace(runtime={})
         config.role, config.issued, config.host_full_access = role, False, True
         config.profile = types.SimpleNamespace(native=Path("/opt/example/native"),
                                                state_root=str(state))

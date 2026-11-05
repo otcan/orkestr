@@ -27,6 +27,15 @@ Exactly-once:
 Only verified owner chat input is steered, never timer, post, digest, member,
 local-agent or web input, and only into a running, currently steerable Deep run
 of the binding's own head chat input.
+
+Split messages: WhatsApp often delivers one owner thought as several messages
+within a second or two. Core holds a fresh owner message's Deep turn until its
+burst is quiet and gives the whole burst one Deep turn (store-sqlite
+`deep_groups.rs`, ORKESTR_V2_DEEP_BURST_QUIET_MS). A part that arrives once
+that turn is already running is the rest of the same message, not a
+follow-up: in `question` mode it is steered without an open question
+(`burst_part`). `off` never steers; such a part queues and Core groups it
+with what queued behind the turn.
 """
 import sys
 import time
@@ -39,6 +48,10 @@ MODES = ("off", "question", "running")
 # Rust's ExecutionSteeringRequest bound, in bytes.
 STEER_TEXT_LIMIT = 16384
 MAX_STEERS_PER_HEAD = 8
+# A part sent at most this long after the previous part of the head's own
+# owner burst completes that split message. Core's default Deep burst quiet
+# window (DEFAULT_DEEP_BURST_QUIET_MS) is the same 2.5 s.
+BURST_PART_S = 2.5
 # A reservation without native consumption, seen after the handler answered.
 RESERVED_GRACE_S = 30
 # A held input never waits longer than this for a definite outcome: it is then
@@ -47,6 +60,10 @@ STEER_MAX_HOLD_S = 20 * 60
 STEER_NOTE = ("[The owner sent this message while you were still working on this turn. It may answer a "
               "question you asked. Take it into account now and continue the same task; your final reply "
               "for this turn also answers this message.]\n\n")
+# A split message's next part (see burst_part).
+BURST_STEER_NOTE = ("[The owner's message was split into several WhatsApp messages; this is its next part, "
+                    "sent right after the part you are answering. Read it as part of the same message and "
+                    "continue the same task; your final reply for this turn answers the whole message.]\n\n")
 # English renderings; the ledger sends them in the chat's language.
 UNKNOWN_NOTICE = TEMPLATES["steer_unknown"]["en"]
 QUEUED_NOTICE = TEMPLATES["steer_queued"]["en"]
@@ -76,16 +93,32 @@ def log(worker, event, row, alert=False, **fields):
           file=sys.stderr, flush=True)
 
 
-def steer_text(row):
-    text = STEER_NOTE + compose(row)
+def steer_text(row, burst=False):
+    text = (BURST_STEER_NOTE if burst else STEER_NOTE) + compose(row)
     quoted = row.get("reply_to") or {}
     if quoted.get("text"):
         text += "\n\n[Replying to: %s]" % " ".join(quoted["text"].split())[:300]
     return text
 
 
-def candidate_refusal(mode, head, row):
-    """Why `row` may not be steered into `head`'s turn, or None. Pure."""
+def burst_part(head, row, previous_at=None, window_s=BURST_PART_S):
+    """Whether `row` is the next part of the head's own split owner message:
+    the same verified owner, sent at most `window_s` after the head (or after
+    `previous_at`, the latest part already steered into it). Pure."""
+    def owner(value):
+        author = value.get("author") or {}
+        return author.get("id") if author.get("role") == "owner" else None
+    last = head.get("queued_at") if previous_at is None else previous_at
+    arrived = row.get("queued_at")
+    return (owner(head) is not None and owner(head) == owner(row) and
+            not head.get("origin") and not head.get("digest") and
+            all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in (last, arrived)) and
+            0 <= arrived - last <= window_s)
+
+
+def candidate_refusal(mode, head, row, burst=False):
+    """Why `row` may not be steered into `head`'s turn, or None. Pure.
+    `burst`: `row` is the next part of the head's split message."""
     if mode not in MODES or mode == "off":
         return "disabled"
     if row.get("remote_id") == head.get("remote_id"):
@@ -98,7 +131,7 @@ def candidate_refusal(mode, head, row):
         return "attachments"
     if not (row.get("text") or "").strip():
         return "empty"
-    if len(steer_text(row).encode()) > STEER_TEXT_LIMIT:
+    if len(steer_text(row, burst).encode()) > STEER_TEXT_LIMIT:
         return "too_long"
     for key in ("chat_id", "account_id", "public_thread_id"):
         if row.get(key) != head.get(key):
@@ -111,7 +144,7 @@ def candidate_refusal(mode, head, row):
         return "head_final_ready"
     if len(head.get("steered") or []) >= MAX_STEERS_PER_HEAD:
         return "steer_limit"
-    if mode == "question" and not question_before(head, row):
+    if mode == "question" and not burst and not question_before(head, row):
         # Checked again for the exact run; this only spares status reads.
         return "no_open_question"
     return None
@@ -125,7 +158,7 @@ def question_before(head, row, run_id=None):
     return bool(asked) and isinstance(arrived, (int, float)) and min(asked) <= arrived
 
 
-def run_refusal(mode, head, row, deep):
+def run_refusal(mode, head, row, deep, burst=False):
     """Why the head's Deep status is not a steerable target for `row`, or None. Pure."""
     if not isinstance(deep, dict) or deep.get("run_id") not in (head.get("matched_runs") or []):
         return "no_own_deep_run"
@@ -135,15 +168,25 @@ def run_refusal(mode, head, row, deep):
         return "run_not_steerable"
     if type(deep.get("revision")) is not int or type(deep.get("control_revision")) is not int or deep["control_revision"] < 1:
         return "run_revision_unknown"
-    if mode == "question" and not question_before(head, row, deep["run_id"]):
+    if mode == "question" and not burst and not question_before(head, row, deep["run_id"]):
         return "no_open_question"
     return None
 
 
-def decide(mode, head, row, deep):
+def decide(mode, head, row, deep, burst=False):
     """(steer?, reason) for one candidate behind the head. Pure."""
-    reason = candidate_refusal(mode, head, row) or run_refusal(mode, head, row, deep)
+    reason = candidate_refusal(mode, head, row, burst) or run_refusal(mode, head, row, deep, burst)
     return (reason is None, reason or "steerable")
+
+
+def latest_part(ledger, head):
+    """Arrival of the latest input already steered into `head`, else None."""
+    times = []
+    for remote_id in head.get("steered") or ():
+        steered = ledger.input(remote_id) or {}
+        if isinstance(steered.get("queued_at"), (int, float)):
+            times.append(steered["queued_at"])
+    return max(times) if times else None
 
 
 def holds(row):
@@ -196,22 +239,31 @@ def drive(worker):
     if mode == "off" or len(rows) < 2 or busy:
         return busy
     head, row = rows[0], rows[1]
-    if holds(head) or candidate_refusal(mode, head, row):
+    if holds(head):
+        return busy
+    try:
+        burst = burst_part(head, row, latest_part(worker.ledger, head))
+    except Exception:
+        burst = False
+    if candidate_refusal(mode, head, row, burst):
         return busy
     try:
         deep = worker.own_statuses(set(head["matched_runs"]), roles=("deep",))["deep"]
-        steer, reason = decide(mode, head, row, deep)
+        steer, reason = decide(mode, head, row, deep, burst)
         if not steer:
             return busy
         request = {"control": {"run_id": deep["run_id"], "expected_revision": deep["revision"],
                                "expected_control_revision": deep["control_revision"],
                                "request_key": "auto-steer:" + row["remote_id"]},
-                   "text": steer_text(row)}
+                   "text": steer_text(row, burst)}
         record = {"request": request, "head": head["remote_id"], "run_id": deep["run_id"], "mode": mode,
                   "decided_at": time.time()}
+        if burst:
+            record["burst"] = True
         if not worker.ledger.begin_steer(row, record):
             return busy
-        log(worker, "auto_steer_started", row, head=head["remote_id"], run=deep["run_id"], mode=mode)
+        log(worker, "auto_steer_started", row, head=head["remote_id"], run=deep["run_id"], mode=mode,
+            **({"burst": 1} if burst else {}))
         submit(worker, row)
     except Exception as error:
         if holds(row):

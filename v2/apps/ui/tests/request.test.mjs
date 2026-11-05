@@ -23,6 +23,21 @@ test('local account setup uses a fixed same-origin path and preflight header wit
     }
 });
 
+test('owner security APIs retain same-origin cookie and CSRF boundaries', async () => {
+    for (const [method,path] of [['GET','/api/v2/browser/security'],['POST','/api/v2/browser/password'],['GET','/api/v2/browser/service-credentials'],['POST','/api/v2/browser/service-credentials'],['DELETE','/api/v2/browser/service-credentials/00000000-0000-4000-8000-000000000001']]) {
+        await execute({recv:async()=>({...base,method,path,csrf:'synthetic-csrf',body:method==='POST'?{}:null})},async(actual,options)=>{
+            assert.equal(actual,path);
+            assert.equal(options.credentials,'same-origin');
+            assert.equal(options.headers.Authorization,undefined);
+            assert.equal(options.headers['x-orkestr-csrf'],method==='GET'?undefined:'synthetic-csrf');
+            return Response.json({ok:true});
+        });
+    }
+    for (const path of ['/api/v2/machine/service-session','/api/v2/browser/security?redirect=https://example.invalid','/api/v2/browser/password/extra','/api/v2/browser/service-credentials/../password','/api/v2/browser/service-credentials/%2e%2e','//example.invalid/api/v2/browser/password']) {
+        await assert.rejects(execute({recv:async()=>({...base,path})},()=>assert.fail('fetch must not run')),/Invalid API path/);
+    }
+});
+
 test('provider handoff and receipt keep scoped cookie paths and mutation CSRF', async () => {
     const root='/api/v2/conversations/00000000-0000-4000-8000-000000000001/provider-handoffs';
     for(const [method,path] of [['POST',root],['GET',root+'/synthetic:handoff']]) {
@@ -201,4 +216,18 @@ test('GET polls revalidate with the last ETag and a 304 returns the kept body',a
         assert.equal(options.headers['If-None-Match'],undefined);
         return new Response('{}');
     });
+});
+
+test('owner desktop open uses a scoped cookie mutation and refuses unbound paths', async () => {
+    const root='/api/v2/conversations/00000000-0000-4000-8000-000000000001/desktops';
+    await execute({recv:async()=>({...base,method:'POST',path:root+'/example-desk/open',csrf:'synthetic-csrf',body:{}})},async(path,options)=>{
+        assert.equal(path,root+'/example-desk/open');
+        assert.equal(options.credentials,'same-origin');
+        assert.equal(options.cache,'no-store');
+        assert.equal(options.headers['x-orkestr-csrf'],'synthetic-csrf');
+        assert.equal(options.headers.Authorization,undefined);
+        return Response.json({url:'https://desktop.example.test/desktop-share/example?key=opaque',challenge_required:true});
+    });
+    for(const path of [root+'/../open',root+'/%2e%2e/open',root+'/example/open?redirect=1',root+'/example/share',root+'/example/open/extra'])
+        await assert.rejects(execute({recv:async()=>({...base,path})},()=>assert.fail('fetch must not run')),/Invalid API path/);
 });

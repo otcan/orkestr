@@ -1,6 +1,7 @@
 #!/usr/bin/python3
 """Prepare the complete persistent selected Codex release. Never activate it."""
 import argparse
+from contextlib import ExitStack
 import json
 import os
 from pathlib import Path
@@ -15,12 +16,15 @@ from artifact_boundary import separate
 from beta_config import (validate as validate_beta, workspace_exec as validate_workspace_exec,
                          additional_workspace_exec as validate_additional_workspace_exec, window_lifetimes,
                          conversation_workspaces as validate_conversation_workspaces,
+                         provider_routing as validate_provider_routing,
                          host_full_access as validate_host_full_access)
 from closure import pin, require, trusted
 from manager_source import authority
 from prepare import inventory, settings
 from release import final_bindings, wrapper
 import selected_roles
+import selected_managed
+import selected_resources
 
 
 def encoded(value):
@@ -83,8 +87,8 @@ def pair_bytes(plan):
     return pair
 
 
-OPTIONAL = {'roles', 'preserve_state', 'workspace_exec', 'additional_workspace_exec', 'max_active_windows', 'host_full_access',
-            'window_max_minutes', 'conversation_window_max_minutes', 'conversation_workspaces',
+OPTIONAL = {'resource_namespace', 'qualification_record', 'deploy_maintenance_marker', 'managed_host', 'operator_recovery', 'desk_login', 'managed_operations', 'attachment_export_dir', 'password_rotation_ready', 'authority_uid', 'authority_gid', 'executor_uid', 'executor_gid', 'provider_home', 'roles', 'preserve_state', 'workspace_exec', 'additional_workspace_exec', 'max_active_windows', 'host_full_access',
+            'window_max_minutes', 'conversation_window_max_minutes', 'conversation_workspaces', 'provider_routing',
             'code_mode_host', 'code_mode_host_sha256', 'claude', 'claude_quota_projection', 'codex_quota_projection', 'live_map', 'desktop_broker', 'timer_config', 'whatsapp_chats', 'v1_chat_icons_dir', 'metrics_port'}
 CLAUDE_PATHS = ('executable', 'account', 'workspace', 'home', 'temporary')
 # Account selection stays with the Claude account reference, never the env.
@@ -107,13 +111,22 @@ def claude_inventory(manager):
 def claude(plan):
     """Optional Claude Deep/Fast window runtime; requires host full access."""
     value = plan['claude']
-    require(type(value) is dict and set(value) - {'default', 'fast'} == set(CLAUDE_PATHS)
+    require(type(value) is dict and set(value) - {'default', 'fast', 'managed_host'} == set(CLAUDE_PATHS)
             and all(type(value.get(k, False)) is bool for k in ('default', 'fast')),
             'closed Claude plan required')
     require(all(type(value[k]) is str and value[k].startswith('/') and '\x00' not in value[k]
                 and '..' not in Path(value[k]).parts for k in CLAUDE_PATHS), 'absolute Claude paths required')
     access = plan.get('host_full_access')
-    require(type(access) is dict, 'Claude windows require host_full_access')
+    managed=value.get('managed_host')
+    require((type(access) is dict) != (type(managed) is dict), 'Claude windows require one explicit host profile')
+    if managed is not None:
+        require('authority_uid' in plan and type(managed) is dict and set(managed)=={'environment'},
+                'managed Claude requires identity split')
+        validate_host_full_access(dict(providers=False,environment=managed['environment']))
+        require(managed['environment']['HOME']==value['home'] and
+                managed['environment'].get('TMPDIR',value['temporary'])==value['temporary'],
+                'managed Claude environment scope')
+        access=managed
     require(not CLAUDE_FORBIDDEN_ENV & set(access['environment']),
             'host environment must not select a Claude account')
     return value
@@ -121,16 +134,51 @@ def claude(plan):
 
 def optional(plan):
     """Shape of the optional plan extensions copied into the protected beta config."""
+    if 'qualification_record' in plan:
+        value = plan['qualification_record']
+        require(type(value) is str and value.startswith('/') and value != '/'
+                and len(value)<=4096 and not any(ord(c)<32 for c in value)
+                and all(p not in ('','.','..') for p in value.split('/')[1:])
+                and Path(plan['home']) not in (Path(value), *Path(value).parents),
+                'external normalized qualification record required')
+    if 'deploy_maintenance_marker' in plan:
+        marker = plan['deploy_maintenance_marker']
+        require(type(marker) is str and marker.startswith('/') and marker != '/'
+                and '\0' not in marker and not any(ord(c)<32 for c in marker)
+                and all(part not in ('','.','..') for part in marker.split('/')[1:]),
+                'normalized deploy maintenance marker required')
+        home = Path(plan['home'])
+        require(Path(marker)!=home and home not in Path(marker).parents,
+                'deploy maintenance marker must be outside Core home')
+    if 'attachment_export_dir' in plan:
+        value=plan['attachment_export_dir']
+        require(type(value) is str and value.startswith('/') and 1<len(value)<=4096
+                and '\0' not in value and not any(ord(c)<32 for c in value)
+                and all(part not in ('','.','..') for part in value.split('/')[1:]),
+                'attachment export path required')
+        path=Path(value)
+        # Metadata-free overlap refusals precede artifact reads and staging.
+        for key in ('home','provider_home','workspace','state_root','auth_file','bootstrap_file',
+                    'ledger_directory','endpoint_directory','output','source_repository'):
+            if type(plan.get(key)) is str:
+                other=Path(plan[key])
+                require(path!=other and path not in other.parents and other not in path.parents,
+                        'attachment export scope overlap')
     if 'workspace_exec' in plan:
         require('roles' in plan, 'workspace execution requires configured Worker roles')
         validate_workspace_exec(plan['workspace_exec'])
+    if 'managed_host' in plan:
+        require('authority_uid' in plan and 'host_full_access' not in plan,
+                'managed host requires explicit split identity and excludes legacy full access')
+        validate_host_full_access(plan['managed_host'])
+        require(plan['managed_host'].get('providers', True) is True, 'managed host requires host providers')
     if 'host_full_access' in plan:
         # Operator opt-in equivalent to host root; never derived from HTTP or model input.
         validate_host_full_access(plan['host_full_access'])
     # Host natives start Codex's code-mode host (dynamic tools) from their own
     # directory: the same-release binary is pinned beside the native.
-    host_providers = plan.get('host_full_access', {}).get('providers', True) is True \
-        if 'host_full_access' in plan else False
+    access = plan.get('managed_host', plan.get('host_full_access'))
+    host_providers = type(access) is dict and access.get('providers', True) is True
     require(('code_mode_host' in plan) == ('code_mode_host_sha256' in plan) == host_providers,
             'host_full_access providers require exactly one pinned code_mode_host')
     if 'code_mode_host' in plan:
@@ -158,12 +206,15 @@ def optional(plan):
             'host-privileged commands require host_full_access')
     window_lifetimes(plan)
     validate_conversation_workspaces(plan)
+    validate_provider_routing(plan)
     if 'additional_workspace_exec' in plan:
         require('roles' in plan, 'workspace execution requires configured Worker roles')
         validate_additional_workspace_exec(plan)
 
 
 def prepare(plan):
+    require('password_rotation_ready' not in plan or type(plan['password_rotation_ready']) is bool,
+            'password rotation readiness must be boolean')
     require(os.geteuid()==0,'root preparation required')
     require(sys.flags.isolated and sys.flags.no_site and sys.flags.dont_write_bytecode,'use -I -S -B')
     fields={'format','output','source_repository','pair','pair_sha256','server','ui','native','native_sha256',
@@ -172,6 +223,14 @@ def prepare(plan):
     require(set(plan) - OPTIONAL == fields and
             plan['format']=='orkestr-v2-selected-service-plan-v1','closed plan required')
     optional(plan)
+    if 'managed_operations' in plan:
+        require('authority_uid' in plan and plan['managed_operations'] is True,'closed split managed operations required')
+    if 'desk_login' in plan:
+        desk=plan['desk_login']
+        require('authority_uid' in plan and type(desk) is dict and set(desk)=={'path','sha256'} and
+                type(desk['path']) is str and Path(desk['path']).is_absolute() and '..' not in Path(desk['path']).parts and
+                type(desk['sha256']) is str and re.fullmatch('[0-9a-f]{64}',desk['sha256']),
+                'closed split desk configuration required')
     if 'live_map' in plan:
         # Opt-in read-only live map file; the server reads it, the packager never does.
         live=plan['live_map']
@@ -209,15 +268,34 @@ def prepare(plan):
     pair=pair_bytes(plan);source=pair['source_commit'];gid=plan['gid'];uid=plan['uid']
     require(type(uid) is int and 0<uid<2**31 and type(gid) is int and 0<gid<2**31,'dropped identity required')
     output=Path(plan['output']);inner=output/'package'
-    settings(Path(plan['home']),plan['origin'],plan['port'],uid,output,gid)
+    settings(Path(plan['home']),plan['origin'],plan['port'],plan.get('authority_uid',uid),output,gid)
     require(not output.exists() and not output.is_symlink(),'fresh release required')
-    with authority(Path(plan['source_repository']),source) as (src,manager,config):
+    with authority(Path(plan['source_repository']),source) as (src,manager,config), ExitStack() as resources:
         trust=sys.modules['codex_bounded.trust']
         trust.protected(output.parent,True)
+        if 'operator_recovery' in plan:
+            require('codex_service/password_recovery.py' in manager.FILES,
+                    'selected source does not support operator recovery')
+            from codex_service.password_recovery import configuration as recovery_configuration
+            recovery_configuration(plan['operator_recovery'])
         # Stat canonical credentials only. Never open, copy or hash these files.
-        home=trust.private(plan['home'],uid,True)
-        for name in ('data','provider-home'):trust.private(home/name,uid,True)
-        trust.private(plan['bootstrap_file'],uid)
+        IDENTITY_FIELDS = {'authority_uid', 'authority_gid', 'executor_uid', 'executor_gid', 'provider_home'}
+        if IDENTITY_FIELDS.intersection(plan):
+            require('codex_service/identity.py' in manager.FILES,
+                    'selected source does not support the identity split')
+            from codex_service.identity import bind as bind_identity
+            identity=bind_identity(plan)
+        else:
+            # Historical exact-source packages predate identity.py. Preserve
+            # their qualified single-UID plan without mixing newer source in.
+            identity={'split':False, 'authority_uid':uid, 'executor_uid':uid, 'executor_gid':gid,
+                      'provider_home':str(Path(plan['home'])/'provider-home')}
+        selected_managed.modes(plan, identity['split'])
+        resources.enter_context(selected_resources.view(plan, manager))
+        home=trust.private(plan['home'],identity['authority_uid'],True)
+        trust.private(home/'data',identity['authority_uid'],True)
+        trust.private(identity['provider_home'],uid,True)
+        trust.private(plan['bootstrap_file'],identity['authority_uid'])
         auth=trust.private(plan['auth_file'],uid);require(auth.name=='auth.json','canonical auth reference required')
         workspace=trust.private(plan['workspace'],uid,True)
         account=trust.private(plan['state_root'],uid,True)
@@ -237,7 +315,7 @@ def prepare(plan):
             for b in roots[index+1:]:require(a!=b and a not in b.parents and b not in a.parents,'isolated path overlap')
         role_paths = selected_roles.validate(plan['roles'],trust,uid,roots,preserve) if 'roles' in plan else None
         for command in ([plan['workspace_exec']] if 'workspace_exec' in plan else [])+plan.get('additional_workspace_exec',[]):
-            project = trust.private(command['workspace'],uid,True)
+            project = selected_managed.project(command, trust, identity)
             isolated = [*roots, *(p for pair in role_paths.values() for p in pair)]
             for other in isolated:
                 require(project != other and project not in other.parents and other not in project.parents,
@@ -259,6 +337,16 @@ def prepare(plan):
             for index,a in enumerate(claude_dirs):
                 for b in [*roots,*claude_dirs[index+1:]]:
                     require(a!=b and a not in b.parents and b not in a.parents,'isolated Claude path overlap')
+        if 'attachment_export_dir' in plan:
+            require('codex_service/attachment_exports.py' in manager.FILES,
+                    'selected source does not support attachment exports')
+            from codex_service.attachment_exports import bind as bind_exports
+            scopes=[*roots,Path(identity['provider_home'])]
+            if role_paths:scopes.extend(p for pair in role_paths.values() for p in pair)
+            if claude_plan:scopes.extend(claude_dirs)
+            scopes.extend(Path(c['workspace']) for c in ([plan['workspace_exec']] if 'workspace_exec' in plan else [])+plan.get('additional_workspace_exec',[]))
+            scopes.extend(Path(v['path'] if type(v) is dict else v) for v in plan.get('conversation_workspaces',{}).values())
+            bind_exports(plan['attachment_export_dir'],identity['authority_uid'],gid,scopes)
         package_files = manager.FILES | role_files | host_files | claude_files
         modules={}
         for folder,names in (('broker',config.BROKER),('isolation',config.ISOLATION),
@@ -297,10 +385,22 @@ def prepare(plan):
                      'owner_id':plan['owner_id'],'conversation_id':plan['conversation_id'],'home':str(home),
                      'bootstrap_file':plan['bootstrap_file'],'ledger_directory':str(ledger),
                      'endpoint_directory':str(endpoint),'port':plan['port'],'trusted_origin':plan['origin']}
+            runtime.update({key:plan[key] for key in IDENTITY_FIELDS if key in plan})
+            if 'resource_namespace' in plan:runtime['resource_namespace']=plan['resource_namespace']
+            if identity['split']:
+                beta['identity_split']={'authority_uid':identity['authority_uid'],'executor_uid':uid,'shared_gid':gid}
             profile={'format':'orkestr-v2-codex-isolated-v2','native':str(inner/'native'),
                      'auth_file':str(auth),'state_root':str(account),'workspace':str(workspace),
                      'egress_socket':str(endpoint/'egress.sock'),'supervisor':str(inner/'isolation/supervisor.py'),
                      'hosts':list(config.HOSTS)}
+            if 'qualification_record' in plan:
+                runtime['qualification_record']=plan['qualification_record']
+            if 'password_rotation_ready' in plan:
+                runtime['password_rotation_ready']=plan['password_rotation_ready']
+            if 'operator_recovery' in plan:
+                runtime['operator_recovery']=plan['operator_recovery']
+            if 'attachment_export_dir' in plan:
+                runtime['attachment_export_dir']=plan['attachment_export_dir']
             if role_paths is not None:
                 beta['roles']=selected_roles.emit(inner,role_paths,profile,gid,entry,write,encoded)
             if 'workspace_exec' in plan:
@@ -309,15 +409,19 @@ def prepare(plan):
                 beta['additional_workspace_exec']=plan['additional_workspace_exec']
             if 'max_active_windows' in plan:
                 beta['max_active_windows']=plan['max_active_windows']
-            for key in ('window_max_minutes', 'conversation_window_max_minutes', 'conversation_workspaces'):
+            for key in ('deploy_maintenance_marker', 'window_max_minutes', 'conversation_window_max_minutes', 'conversation_workspaces', 'provider_routing'):
                 if key in plan:
                     beta[key]=plan[key]
-            if 'host_full_access' in plan:
-                beta['host_full_access']=plan['host_full_access']
+            for access_key in ('host_full_access', 'managed_host'):
+                if access_key in plan: beta[access_key]=plan[access_key]
             if 'live_map' in plan:
                 runtime['live_map']=plan['live_map']
             if 'desktop_broker' in plan:
                 runtime['desktop_broker']=plan['desktop_broker']
+            if 'desk_login' in plan:
+                runtime['desk_login']=plan['desk_login']
+            if 'managed_operations' in plan:
+                runtime['managed_operations']=True
             if 'timer_config' in plan:
                 runtime['timer_config']=plan['timer_config']
             if 'metrics_port' in plan:
@@ -332,8 +436,11 @@ def prepare(plan):
             if claude_plan:
                 launcher=inner/'launcher-claude.py'
                 write(launcher,entry(inner,'broker-claude'),gid,True)
-                private={**{k:claude_plan[k] for k in CLAUDE_PATHS},
-                         'host_full_access':{'environment':plan['host_full_access']['environment']}}
+                private={k:claude_plan[k] for k in CLAUDE_PATHS}
+                if 'managed_host' in claude_plan:
+                    private['managed_host']=claude_plan['managed_host']
+                else:
+                    private['host_full_access']={'environment':plan['host_full_access']['environment']}
                 write(inner/'claude-private.json',encoded(private),gid)
                 beta['claude']={'launcher':str(launcher),'launcher_sha256':pin(launcher)['sha256'],
                                 'workspace':claude_plan['workspace'],'default':claude_plan.get('default',False),
@@ -355,7 +462,7 @@ def prepare(plan):
                       'files':{name:pin(inner/name)['sha256'] for name in sorted(package_files)},
                       'dependencies':deps,'ui':{name:info['sha256'] for name,info in pair['web']['files'].items()}}
             write(inner/'manifest.json',encoded(manifest),gid);digest=pin(inner/'manifest.json')['sha256']
-            manager.Package(inner,digest);final_bindings(inner,inner,gid)
+            selected_managed.validate_package(manager.Package(inner,digest));final_bindings(inner,inner,gid)
             write(output/'start-service',wrapper(output,Path('/usr/bin/python3').resolve(),digest),gid,True)
             receipt={'format':'orkestr-v2-selected-service-release-v1','source_commit':source,
                      'version':pair['version'],'pair_sha256':plan['pair_sha256'],'native_sha256':plan['native_sha256'],

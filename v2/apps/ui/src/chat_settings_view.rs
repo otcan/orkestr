@@ -188,13 +188,20 @@ fn Desktops(
         .as_ref()
         .map(|l| l.leases.clone())
         .unwrap_or_default();
+    let bound_slugs = list
+        .read()
+        .as_ref()
+        .and_then(|l| l.binding.as_ref())
+        .map(|binding| binding.desktop_slugs.clone())
+        .unwrap_or_default();
+    let save_csrf = csrf.clone();
     rsx! {
         form { class: "settings-form", "aria-label": "Desktops", onsubmit: move |event| {
             event.prevent_default();
             if busy() { return; }
             let body = json!({"expected_revision": revision, "v1_thread_id": thread().trim(), "desktop_slugs": slugs(&slug_text())});
             busy.set(true);
-            let (path, csrf) = (bind_path.clone(), csrf.clone());
+            let (path, csrf) = (bind_path.clone(), save_csrf.clone());
             spawn(async move {
                 let result = crate::transport::request::<DesktopBinding>("PUT", &path, body, &csrf, "").await;
                 if !session_scope.read().is_current(owner) { return; }
@@ -207,6 +214,14 @@ fn Desktops(
             });
         },
             h3 { "Desktops" }
+            ul { class: "lease-list", "aria-label": "Available desktops",
+                for slug in bound_slugs {
+                    crate::desktop_open_view::DesktopOpen {
+                        key: "{conversation}:{revision}:{slug}", conversation: conversation.clone(), slug,
+                        csrf: csrf.clone(), session_scope, onexpired,
+                    }
+                }
+            }
             p { class: "field-help", "Workers of this chat may lease these V1 desktops. Every desktop must be granted to the V1 thread in V1." }
             label { r#for: "desktop-thread", "V1 thread (grant holder)" }
             input { id: "desktop-thread", value: "{thread}", oninput: move |e| thread.set(e.value()) }

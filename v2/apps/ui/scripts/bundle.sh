@@ -23,6 +23,13 @@ mkdir -- "$UI_BUNDLE_DIR"
 # The name and producers sections are debugging metadata only (about a
 # third of the download); browsers do not need them to run the bundle.
 wasm-bindgen "$CARGO_TARGET_DIR/wasm32-unknown-unknown/wasm-release/orkestr-v2-ui.wasm" --target web --out-dir "$UI_BUNDLE_DIR" --out-name orkestr_v2_ui --no-typescript --remove-name-section --remove-producers-section
+# Use the already locked age-encryption dependency for bounded browser uploads.
+# No CDN/runtime package fetch and no handwritten encryption implementation.
+node --input-type=module - "$ui_dir" "$UI_BUNDLE_DIR" <<'JAVASCRIPT'
+import {build} from 'esbuild';
+import path from 'node:path';
+await build({entryPoints:[path.join(process.argv[2],'src/attachments/encrypted_composer.mjs')],outfile:path.join(process.argv[3],'encrypted_upload.js'),bundle:true,format:'esm',platform:'browser',target:'es2022',minify:true});
+JAVASCRIPT
 # Content-versioned URLs: index.html is always revalidated, so a new build
 # can never run against a stale cached script or WebAssembly module.
 js_version=$(sha256sum "$UI_BUNDLE_DIR/orkestr_v2_ui.js" | cut -c1-16)

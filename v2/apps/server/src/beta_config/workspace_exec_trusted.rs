@@ -18,6 +18,9 @@ pub(crate) struct TrustedConfig {
     /// the instance-level `host_full_access` opt-in. Default false.
     #[serde(default)]
     pub host_privileged: bool,
+    /// Explicit separate executor environment and selected business keys.
+    #[serde(default)]
+    pub managed_executor: Option<super::workspace_exec_managed::ManagedExecutorConfig>,
     #[serde(default)]
     pub network: bool,
     #[serde(default)]
@@ -70,6 +73,24 @@ pub(crate) struct TrustedConfig {
 }
 
 impl TrustedConfig {
+    pub(crate) fn managed_profile(
+        &self,
+    ) -> Result<Option<&super::workspace_exec_managed::ManagedExecutorConfig>, &'static str> {
+        let Some(managed) = &self.managed_executor else {
+            return Ok(None);
+        };
+        if self.host_privileged
+            || !self.credential_env_files.is_empty()
+            || !self.environment.is_empty()
+        {
+            return Err(
+                "managed commands require explicit business environment without legacy credentials",
+            );
+        }
+        managed.validate()?;
+        Ok(Some(managed))
+    }
+
     /// Worker run budget for a conversation that waits on background jobs.
     pub(crate) fn worker_run_ms(&self) -> u32 {
         self.worker_run_ms.unwrap_or(1_800_000)
@@ -81,6 +102,11 @@ impl TrustedConfig {
         host: Option<&super::host_full_access::HostFullAccess>,
         project: &std::path::Path,
     ) -> Result<TrustedProfile, &'static str> {
+        if self.managed_profile()?.is_some() {
+            // This legacy spawn API MUST NOT reinterpret managed execution as
+            // a shell running under Core's authority identity.
+            return Err("managed commands require the Root command runtime");
+        }
         if !(30_000..=3_600_000).contains(&self.worker_run_ms()) {
             return Err("trusted Worker run budget out of bounds");
         }

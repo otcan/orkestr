@@ -8,6 +8,7 @@ pub(crate) mod claude;
     reason = "Core requested-native protocol readiness issuer pending"
 )]
 pub(crate) mod claude_initialize;
+pub mod desk_tool;
 pub(crate) mod offline_setup;
 pub mod offline_tool;
 pub(crate) mod workspace_setup;

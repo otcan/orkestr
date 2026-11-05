@@ -39,7 +39,8 @@ The design is the thread-ask grant's (#341, migration 78), with its own grant:
   end date). It may also create **one-shot** timers (meeting reminders), but
   never a **recurring** one (`403 agent_timer_timer_turn`). A one-shot fires
   once, and the hourly and daily create caps still apply, so timers can never
-  keep themselves going beyond 24 creates a day.
+  keep themselves going beyond 12 creates or upserts an hour (and the
+  conversation's daily create cap).
 
 ## Operations
 
@@ -47,6 +48,7 @@ The design is the thread-ask grant's (#341, migration 78), with its own grant:
 |---|---|
 | `GET .../agent-timers` | Every timer of this conversation: owner-created, imported from V1 and agent-created (`created_by_agent`). |
 | `POST .../agent-timers` | Create and enable one. Body: `request_key`, `label`, `schedule` (`{"kind":"once","due_ms":...}` or a calendar rule `{"kind":"calendar","timezone":...,"weekdays":[...],"start_minute":...,"end_minute":...,"every_hours":1,"minutes":[...]}`), `text`. 201, or 200 for a replay of the same key and body. The same key with another body is `409 agent_timer_conflict`. |
+| `POST .../agent-timers/upsert` | Same body as create. Moves the newest agent-created timer of this conversation with the same label (trimmed, case-insensitive) that is enabled or a fired one-shot to the new schedule and text; only without one is a timer created. Always 200; `changed: false` for a replay of the key or a move to what is already set. |
 | `POST .../agent-timers/{namespace}/control` | `{"request_key":...,"operation":"cancel"\|"pause"\|"resume"\|"skip_next","until_ms":...}` |
 
 - `cancel` disables the timer: no further runs. The owner can re-enable it.
@@ -72,20 +74,45 @@ The design is the thread-ask grant's (#341, migration 78), with its own grant:
   moved, so a fresh key would skip a second run.
 - Every run of an agent-created timer receives its text behind one line that
   says the agent set it with this tool (not the owner just now).
+- **Upsert keeps one watcher.** For a recurring check an agent moves the same
+  timer (`agent_timer.py upsert --label <same label>`) instead of creating a
+  new one-shot each time. A move is not a create: it adds no `agent_timers`
+  row and never counts toward the daily cap. It counts toward the hourly cap,
+  and arming a fired one-shot again counts toward the live timer cap. With the
+  same text and no Stop since the timer was enabled, the schedule is edited in
+  place in the same timer generation, which is safe from the timer's own
+  running turn. A new text needs a new generation (instructions are immutable
+  per generation), and a new generation fences the old one's unfinished runs,
+  so it is refused with `409 agent_timer_busy` while one of the timer's runs is
+  queued or running. A cancelled, stopped or rolled back timer is never
+  revived; an upsert then creates a new one.
 
 ## Caps
 
 | Cap | Value | Refusal |
 |---|---|---|
 | Live agent-created timers per conversation (enabled or paused; owner and imported timers do not count) | 32 | `429 agent_timer_limit_reached` |
-| Creates per conversation per hour | 12 | `429 agent_timer_rate_limited` |
-| Creates per conversation per 24 hours | 24 | `429 agent_timer_daily_limit` |
+| Creates and moving upserts per conversation per hour | 12 | `429 agent_timer_rate_limited` |
+| Creates per conversation per rolling 24 hours (every create counts, fired or cancelled too; upsert moves do not) | the conversation's setting: server default 24, owner-only 200, fixed, or off | `429 agent_timer_daily_limit` |
 | Recurring creates from a turn a timer started | none (one-shots allowed) | `403 agent_timer_timer_turn` |
 | One-shot lead time | at least 2 minutes ahead | `422 agent_timer_too_soon` |
 | Horizon | at most 400 days ahead | `422 agent_timer_too_far` |
 | Recurring interval | never more often than every 30 minutes | `422 agent_timer_too_frequent` |
 | Pause length | at most 60 days | `422 agent_timer_pause_invalid` |
 | Audited refusals per conversation per 10 minutes | 20, then refused without any write | `429 agent_timer_rate_limited` |
+
+The daily cap is per conversation. The owner (browser session or machine
+bearer) reads and sets it with `GET|PUT /api/v2/conversations/{id}/agent-timer-limits`:
+`{"mode":"owner_only"}` for a chat only the owner is in, `{"mode":"off"}`,
+`{"mode":"fixed","daily_creates_max":N}` (1..10000) or `{"mode":"default"}`.
+The answer has the effective `daily_creates_max` (null = no daily cap), the
+hourly and live caps, and `created_last_24h`. Setting it never changes timer
+history. The server defaults come from
+`ORKESTR_V2_AGENT_TIMER_DAILY_CREATES_MAX` (default 24) and
+`ORKESTR_V2_AGENT_TIMER_OWNER_ONLY_DAILY_CREATES_MAX` (default 200), each
+`off` or 1..10000; an invalid value keeps the default and is logged. The
+hourly cap, the live timer cap, the schedule caps and the refusal budget are
+not configurable.
 
 A replay is never refused by the create caps; over the refusal budget every
 write request, a replay included, is refused until the window passes. Every authenticated attempt, accepted or
@@ -107,6 +134,7 @@ agent_timer.py cancel "Biocytogen 12:15"
 agent_timer.py pause "CHECK 08:00" --until 2026-11-03T08:00:00+01:00
 agent_timer.py resume "CHECK 08:00"
 agent_timer.py skip-next "CHECK 08:00"
+agent_timer.py upsert --label "Watcher" --at 2026-10-27T15:00:00+01:00 --text "Check X again."
 agent_timer.py instructions
 ```
 
@@ -116,8 +144,8 @@ the label, schedule and text, so a retried create is the same timer.
 ## Provisioning
 
 `v2/tools/agent_timer_provision.py --v2-url URL --credentials FILE --grant-dir
-DIR --only <conversation> [--rotate] [--revoke] [--chown USER] [--dry-run]`
-issues and installs grants as `DIR/<conversation>.grant`. The default and
+DIR --only <conversation> [--rotate] [--revoke] [--create-cap
+owner_only|off|default|N] [--chown USER] [--dry-run]` issues and installs grants as `DIR/<conversation>.grant`. The default and
 recommended scope is one conversation (`--only`). `--all-owner-conversations`
 refuses unless `--i-understand-shared-grant-dir` is also given, because every
 grant then sits in one directory. The script creates DIR owned by the caller
@@ -131,6 +159,8 @@ directory separate from the thread-ask grants and readable only by the Deep
 agents' user. Grants are owner-scoped, not thread-isolated: a process that can
 read DIR can use any conversation's grant (for that conversation only).
 Per-run broker injection is the follow-up, as for thread asks.
+`--create-cap` also sets the selected conversations' daily create cap (for
+example `--create-cap owner_only` for chats only the owner is in).
 
 Nothing is enabled live by this change: no grant exists until the operator
 provisions one.
@@ -153,12 +183,19 @@ owned by the service user, in a directory of that user that is neither group-
 nor world-writable (created 0700 if missing). The generated chat rules then
 carry "Timers of this chat (agent timer tool)" with this conversation's
 command instead of "ask Root". The group is created with the owner's numbers
-only, so the chat is owner-only when the grant is issued; revoke the grant
-if other members are added later. Without `agent_timers` nothing changes.
+only, so the chat is owner-only when the grant is issued, and its daily
+create cap is set to `owner_only` unless the owner already chose one. Revoke
+the grant (and set the cap back to `default`) if other members are added
+later. Without `agent_timers` nothing changes.
 Older servers refuse the key (`deny_unknown_fields`): add it only after the
 release with this change is live.
 
 ## Deployment and rollback
+
+Migration 85 adds `agent_timer_limits` only (additive). An older binary
+refuses the newer schema at preflight like any migration (see below); the
+upsert route and the limits routes are new, so an older server answers 404
+to `agent_timer.py upsert`.
 
 Migration 79 adds three tables and nothing else. It needs migration 78 (#341,
 thread asks) first. #348 (parallel Fast) renumbers to 80 and ships after it.

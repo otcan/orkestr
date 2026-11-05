@@ -1,8 +1,22 @@
 //! Historical fixtures may remove only empty scan-action data.
 use crate::Store;
 
+#[path = "credential_migration_fixture.rs"]
+mod credentials;
+
 pub(crate) async fn downgrade_empty(store: &Store) {
+    credentials::downgrade_empty(store).await;
     let mut tx = store.pool.begin().await.unwrap();
+    // Migration 85 down: only with no per-conversation agent timer limit.
+    let limits: i64 = sqlx::query_scalar("SELECT count(*) FROM agent_timer_limits")
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap();
+    assert_eq!(limits, 0, "historical fixture must not erase timer limits");
+    sqlx::raw_sql("DROP TABLE agent_timer_limits; DELETE FROM _sqlx_migrations WHERE version=85;")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
     // Migration 84 down: only with no withdrawn slot proposal; the 0055
     // terminal evidence view comes back unchanged.
     let withdrawn: i64 =

@@ -1,5 +1,6 @@
 //! Restart-safe controller with authenticated supervisor lifecycle.
 //! No browser credentials, instruction cache, caller clock or HTTP dispatch port.
+use orkestr_v2_application::runtime::RuntimeStoreError;
 use orkestr_v2_store_sqlite::history_import::timers::scan_action::TimerWorkKind;
 use orkestr_v2_store_sqlite::{history_import::HistoryError, Store};
 use std::{collections::HashMap, sync::Arc, time::Duration};
@@ -10,6 +11,23 @@ const PAGE: u16 = 32;
 /// changed Stop boundary, a removed conversation or a full window queue).
 const RETRY_BASE: Duration = Duration::from_secs(5);
 const RETRY_MAX: Duration = Duration::from_secs(15 * 60);
+
+/// The supervisor lease is written 60 s ahead and the heartbeat fires every
+/// second, so a store that is briefly locked is survivable: the lease is still
+/// valid and no other supervisor can take over inside that window. Only a loss
+/// of authority ends the controller. Half the lease is spent before giving up,
+/// which keeps a wide margin against the deadline the Store itself enforces.
+const SUPERVISOR_GRACE: Duration = Duration::from_secs(30);
+
+/// A locked or unavailable database is not a revoked credential. Everything
+/// else - revocation, fencing, expiry, a stale lease, a changed context - is
+/// authority loss and must still stop the controller.
+fn supervisor_authority_lost(error: &RuntimeStoreError) -> bool {
+    !matches!(
+        error,
+        RuntimeStoreError::Busy | RuntimeStoreError::Unavailable
+    )
+}
 
 fn retry_delay(failures: u32) -> Duration {
     RETRY_BASE
@@ -57,6 +75,9 @@ pub struct DurableTimerController {
     pub(crate) test_scan_delay: Option<Duration>,
     #[cfg(test)]
     pub(crate) test_trigger_delay: Option<(Duration, Arc<std::sync::atomic::AtomicBool>)>,
+    /// Shortens SUPERVISOR_GRACE so the bound itself is testable in seconds.
+    #[cfg(test)]
+    pub(crate) test_grace: Option<Duration>,
 }
 const DIGEST_CHECK: Duration = Duration::from_secs(30);
 impl DurableTimerController {
@@ -79,6 +100,8 @@ impl DurableTimerController {
             test_scan_delay: None,
             #[cfg(test)]
             test_trigger_delay: None,
+            #[cfg(test)]
+            test_grace: None,
         }
     }
     pub(crate) fn with_tracker_mail(
@@ -359,6 +382,14 @@ impl DurableTimerController {
         }
         Ok(())
     }
+    /// How long a store may stay unavailable before the controller gives up.
+    fn grace(&self) -> Duration {
+        #[cfg(test)]
+        if let Some(grace) = self.test_grace {
+            return grace;
+        }
+        SUPERVISOR_GRACE
+    }
     /// No runtime registration here. Caller must join this future on shutdown.
     /// Auth/context failure terminates; trusted bootstrap must provide a fresh context.
     pub async fn run(
@@ -369,11 +400,30 @@ impl DurableTimerController {
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         // Refresh a still-current session at startup too; a session may be near
         // expiry when an operator restarts the trusted service. Never resurrect it.
-        self.supervisor
-            .renew_timer_supervisor_credential()
-            .await
-            .map_err(|_| HistoryError::Unauthorized)?;
+        let started = Instant::now();
+        loop {
+            match self.supervisor.renew_timer_supervisor_credential().await {
+                Ok(_) => break,
+                Err(error) if supervisor_authority_lost(&error) => {
+                    eprintln!("timer supervisor credential refused at startup: {error:?}");
+                    return Err(HistoryError::Unauthorized);
+                }
+                Err(error) => {
+                    if *shutdown.borrow() || started.elapsed() >= self.grace() {
+                        eprintln!(
+                            "timer supervisor credential unavailable for {}s at startup: {error:?}",
+                            started.elapsed().as_secs()
+                        );
+                        return Err(HistoryError::Unavailable);
+                    }
+                    eprintln!("timer supervisor credential deferred at startup: {error:?}");
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                }
+            }
+        }
         let mut renewal = tokio::time::Instant::now();
+        // Last call the Store accepted. The lease is good for 60 s beyond it.
+        let mut accepted = tokio::time::Instant::now();
         loop {
             if *shutdown.borrow() {
                 return self
@@ -385,12 +435,70 @@ impl DurableTimerController {
             tokio::select! {
                 changed=shutdown.changed()=>{if changed.is_err() || *shutdown.borrow(){return self.supervisor.retire_timer_supervisor().await.map_err(|_| HistoryError::Unauthorized);}},
                 _=interval.tick()=>{
-                    self.supervisor.heartbeat_supervisor().await.map_err(|_| HistoryError::Unauthorized)?;
-                    if renewal.elapsed() >= Duration::from_secs(3600) {
-                        self.supervisor.renew_timer_supervisor_credential().await.map_err(|_| HistoryError::Unauthorized)?;
-                        renewal = tokio::time::Instant::now();
+                    match self.supervisor.heartbeat_supervisor().await {
+                        Ok(_) => accepted = tokio::time::Instant::now(),
+                        Err(error) if supervisor_authority_lost(&error) => {
+                            eprintln!("timer supervisor heartbeat refused: {error:?}");
+                            return Err(HistoryError::Unauthorized);
+                        }
+                        Err(error) => {
+                            if accepted.elapsed() >= self.grace() {
+                                eprintln!(
+                                    "timer supervisor heartbeat unavailable for {}s: {error:?}",
+                                    accepted.elapsed().as_secs()
+                                );
+                                return Err(HistoryError::Unavailable);
+                            }
+                            // Lease still valid; the next tick retries in a second.
+                            eprintln!("timer supervisor heartbeat deferred: {error:?}");
+                        }
                     }
-                    self.tick().await?;
+                    if renewal.elapsed() >= Duration::from_secs(3600) {
+                        match self.supervisor.renew_timer_supervisor_credential().await {
+                            Ok(_) => {
+                                renewal = tokio::time::Instant::now();
+                                accepted = tokio::time::Instant::now();
+                            }
+                            Err(error) if supervisor_authority_lost(&error) => {
+                                eprintln!("timer supervisor credential refused: {error:?}");
+                                return Err(HistoryError::Unauthorized);
+                            }
+                            Err(error) => {
+                                if accepted.elapsed() >= self.grace() {
+                                    eprintln!(
+                                        "timer supervisor credential unavailable for {}s: {error:?}",
+                                        accepted.elapsed().as_secs()
+                                    );
+                                    return Err(HistoryError::Unavailable);
+                                }
+                                // Leave `renewal` unmoved so the next tick retries it.
+                                eprintln!("timer supervisor credential renewal deferred: {error:?}");
+                            }
+                        }
+                    }
+                    match self.tick().await {
+                        // NOT a lease renewal. tick() returns Ok without touching the
+                        // store when paused, while timeout_retry is pending, and after a
+                        // pass timeout, so resetting the window here would let the
+                        // controller outlive its real lease without ever renewing.
+                        // Only heartbeat_supervisor and renew_timer_supervisor_credential
+                        // extend lease_deadline_ms, so only they may move `accepted`.
+                        Ok(_) => {}
+                        // Only an unavailable store is transient here: `fn db()` and
+                        // `unavailable()` collapse every sqlx failure to this variant,
+                        // so a locked database arrives as Unavailable and nothing else
+                        // does. Authority errors keep terminating the controller.
+                        Err(HistoryError::Unavailable) if accepted.elapsed() < self.grace() => {
+                            eprintln!("timer controller pass deferred: store unavailable");
+                        }
+                        Err(error) => {
+                            eprintln!(
+                                "timer controller pass refused after {}s: {error:?}",
+                                accepted.elapsed().as_secs()
+                            );
+                            return Err(error);
+                        }
+                    }
                 }
             }
         }

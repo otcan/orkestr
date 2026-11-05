@@ -2,6 +2,7 @@
 //! The optional trusted profile adds host toolchains, optional network,
 //! explicit credential allowlists and detached jobs, all operator-configured.
 mod jobs;
+mod managed;
 mod operation;
 mod render;
 
@@ -33,7 +34,8 @@ pub(crate) struct WorkspaceExecDispatcher {
     store: Store,
     credential: Arc<str>,
     profile: Arc<WorkspaceExecProfile>,
-    sandbox: Arc<WorkspaceExecSandbox>,
+    sandbox: Option<Arc<WorkspaceExecSandbox>>,
+    managed: Option<managed::Managed>,
     jobs: Option<Arc<Jobs>>,
     worker_run_ms: Option<u32>,
 }
@@ -72,7 +74,10 @@ impl WorkspaceExecDispatcher {
             store,
             credential: credential.into(),
             profile,
-            sandbox: Arc::new(sandbox.map_err(|_| "workspace command sandbox unavailable")?),
+            sandbox: Some(Arc::new(
+                sandbox.map_err(|_| "workspace command sandbox unavailable")?,
+            )),
+            managed: None,
             jobs,
             worker_run_ms: None,
         })
@@ -93,7 +98,11 @@ impl WorkspaceExecDispatcher {
     }
 
     pub(crate) fn trusted(&self) -> bool {
-        self.sandbox.trusted().is_some()
+        self.managed.is_some()
+            || self
+                .sandbox
+                .as_ref()
+                .is_some_and(|sandbox| sandbox.trusted().is_some())
     }
 
     /// Queue/authority failures never cause a replacement grant or command retry.
@@ -132,10 +141,28 @@ impl WorkspaceExecDispatcher {
             Operation::Command(launch.source())
         };
         let output = match operation {
-            Operation::Command(_) => self.command(&launch, permit, retained).await?,
+            Operation::Command(_) => match &self.managed {
+                Some(managed) => {
+                    self.managed_command(managed, launch.clone(), permit, retained, None)
+                        .await?
+                }
+                None => self.command(&launch, permit, retained).await?,
+            },
             Operation::Start(command) => {
                 let command = command.to_owned();
-                self.start_job(&launch, command, (permit, retained)).await?
+                match &self.managed {
+                    Some(managed) => {
+                        self.managed_command(
+                            managed,
+                            launch.clone(),
+                            permit,
+                            retained,
+                            Some(command),
+                        )
+                        .await?
+                    }
+                    None => self.start_job(&launch, command, (permit, retained)).await?,
+                }
             }
             Operation::Status(id) => {
                 self.control_job(&launch, id, Control::Status, (permit, retained))
@@ -175,12 +202,16 @@ impl WorkspaceExecDispatcher {
         let trusted = self.trusted();
         let maximum = self
             .sandbox
+            .as_ref()
+            .ok_or("legacy workspace sandbox absent")?
             .limits(CommandKind::Command)
             .ok_or("workspace command limits unavailable")?;
         let (store, credential, sandbox, cap) = (
             self.store.clone(),
             self.credential.clone(),
-            self.sandbox.clone(),
+            self.sandbox
+                .clone()
+                .ok_or("legacy workspace sandbox absent")?,
             launch.clone(),
         );
         let deadline = Instant::now() + QUEUE_DEADLINE;
@@ -247,7 +278,11 @@ impl WorkspaceExecDispatcher {
 
     async fn authorized(&self, launch: &ConsumedWorkspaceExec) -> bool {
         let result = tokio::time::timeout(
-            Duration::from_millis(50),
+            if self.managed.is_some() {
+                Duration::from_secs(2)
+            } else {
+                Duration::from_millis(50)
+            },
             self.store.check_workspace_exec(&self.credential, launch),
         )
         .await;
@@ -264,7 +299,9 @@ impl WorkspaceExecDispatcher {
         let (store, credential, sandbox, cap) = (
             self.store.clone(),
             self.credential.clone(),
-            self.sandbox.clone(),
+            self.sandbox
+                .clone()
+                .ok_or("legacy workspace sandbox absent")?,
             launch.clone(),
         );
         let timeout = sandbox.limits(CommandKind::Job).map(|l| l.timeout);

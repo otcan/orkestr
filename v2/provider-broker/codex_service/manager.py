@@ -11,7 +11,7 @@ import threading
 import time
 
 from codex_bounded.trust import exists, process
-from .channel import ServerPeer, bind_deadline, receive, respond
+from .channel import ServerPeer, bind_deadline, receive, receive_control, respond
 from .contract import BIND_REPLY_SECONDS, DRAIN_SECONDS, Refused, require
 from .custody import OwnedSocket, StateLock
 from .egress import Endpoint, Window
@@ -36,10 +36,24 @@ class Manager:
         self.windows = {}
         self.guard = threading.RLock()
         self.failed = self.closed = False
+        self.launcher = None
+        self.desk = None
+        self.workspace_projects = None
+        self.workspace_commands = None
+        self.managed = None
+        self.service_peer = None
+        self.adopted = None
+        self.custody_fault = False
         try:
             self.lock = StateLock(self.package.ledger_directory)
             self.ledger = Ledger(self.lock.path, self.package.owner, self.package.conversation)
             self.control = OwnedSocket(self.package.control, self.package.gid, self.ledger, "control", TICK_S)
+            if self.package.runtime.get('desk_login'):
+                from .desk_operations import Operations
+                self.desk=Operations(self.package)
+            if self.package.runtime.get('managed_operations'):
+                from .managed_ingress import Ingress
+                self.managed=Ingress(self)
         except BaseException:
             self.close()
             raise
@@ -48,6 +62,8 @@ class Manager:
         require(not self.closed and self.child is None, "manager_already_started")
         require(ctypes.CDLL(None, use_errno=True).prctl(36, 1, 0, 0, 0) == 0, "root_subreaper")
         package = self.package
+        from .qualification import start
+        self.qualification = start(package)
         command = [str(Path("/usr/bin/python3").resolve()), "-I", "-S", "-B",
                    str(package.root / "codex_service/entry.py"), "server", str(os.getpid())]
         # Host full access (operator opt-in) keeps the service user's real
@@ -59,13 +75,22 @@ class Manager:
                       if g != package.gid]
         # Retain trusted server diagnostics; contained provider stderr remains closed.
         self.child = subprocess.Popen(command, env={"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8"},
-            cwd="/", user=package.uid, group=package.gid, extra_groups=groups, close_fds=True,
+            cwd="/", user=package.authority_uid, group=package.authority_gid, extra_groups=groups, close_fds=True,
             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=None,
             process_group=0)
         self.identity = process(self.child.pid)
         require(self.identity is not None and self.identity["ppid"] == os.getpid()
-                and self.identity["uid"] == package.uid, "owned_server_identity")
+                and self.identity["uid"] == package.authority_uid, "owned_server_identity")
         self.peer = ServerPeer(self.identity, package.root / "server")
+        if self.qualification is not None:
+            self.qualification.core_identity = self.identity
+            package.qualification = self.qualification
+        self.publish_service_peer()
+
+    def publish_service_peer(self):
+        require(not self.closed and self.service_peer is None and self.peer is not None,"http_peer_already_published")
+        from .manager_service_peer import Publisher
+        self.service_peer=Publisher(self.package,self.child,self.identity)
 
     def _uncertain(self, window, generation, reason):
         try:
@@ -92,6 +117,10 @@ class Manager:
     def _terminate(self, window, wait=2):
         """Emergency cleanup of one window; others keep their custody."""
         errors = []
+        if getattr(self,'workspace_commands',None):self.workspace_commands.cancel_window(window.window)
+        if getattr(self,'desk',None):
+            for operation,handle in self.desk.active.items():
+                if handle['window']==window.window:self.desk.cancel(operation)
         try:
             self._close_egress(window)
         except Exception:
@@ -146,11 +175,20 @@ class Manager:
             raise Refused("package_inventory") from None
         self.inventory_alerted = False
 
-    def dispatch(self, request, deadline=None):
+    def dispatch(self, request, deadline=None, descriptors=()):
         self.ledger._scope(request)
         operation = request["operation"]
+        from .qualification import guard
+        guard(self, operation)
+        self._capture_orphans()
+        require(not getattr(self,'custody_fault',False) or operation in ('status','drain','uncertain','desk_login_poll','desk_login_cancel','managed_poll','managed_cancel','managed_run_close',
+                    'workspace_command_receipt','workspace_command_cancel'),
+                'manager_custody_fault')
         if operation == "status":
             return {"ok": True, "receipt": self.ledger.status(request["conversation_id"])}
+        if operation == 'workspace_attest':
+            from .workspace_setup import dispatch
+            return dispatch(self,request,descriptors)
         if operation == "admit":
             self._package_preflight()
             receipt, fresh = self.ledger.admit(request)
@@ -161,6 +199,33 @@ class Manager:
         row = self.ledger.details(request["window_id"], request["generation"])
         require(row["conversation"] == request["conversation_id"], "scope")
         window = self.windows.get(request["window_id"])
+        if operation in ('workspace_command','workspace_command_receipt','workspace_command_cancel'):
+            from .workspace_ops import dispatch
+            return dispatch(self,request,window,descriptors)
+        if operation in ('managed_pending','managed_consume','managed_poll','managed_cancel','managed_run_open','managed_run_close','managed_renew','managed_result'):
+            from .managed_control import dispatch
+            return dispatch(self,request,window)
+        if operation in ('desk_login','desk_login_poll','desk_login_cancel'):
+            from .desk_operations import dispatch
+            return dispatch(self,request,window)
+        if operation == "launch_child":
+            require(self.package.identity_split and window is not None and not window.egress_closed
+                    and self.ledger.tick(request["window_id"], request["generation"])["state"] == "active",
+                    "split_launch_window")
+            self._package_preflight()
+            if self.launcher is None:
+                from .launch import Launcher
+                self.launcher = Launcher(self.package, self.identity)
+            try:
+                if deadline is None:
+                    deadline = self._bind_deadline(request, time.monotonic())
+                receipt = self.launcher.launch(request, descriptors,
+                    lambda proof: window.children.bind_managed(proof, window.window, window.generation), deadline)
+            except BaseException:
+                self._uncertain(window.window, window.generation, "cleanup_unknown")
+                self._terminate(window, wait=0.25)
+                raise
+            return {"ok": True, "receipt": self.ledger.status(request["conversation_id"]), "launch": receipt}
         if operation == "bind_child":
             status = self.ledger.tick(request["window_id"], request["generation"])
             require(status["state"] == "active" and window is not None and not window.egress_closed
@@ -190,6 +255,8 @@ class Manager:
                 self._terminate(window)
             return {"ok": True, "receipt": self.ledger.status(request["conversation_id"])}
         if operation == "reconcile":
+            require(not getattr(self,'workspace_commands',None) or self.workspace_commands.window_clean(request['window_id']),'workspace_cleanup_unknown')
+            require(not getattr(self,'desk',None) or self.desk.window_clean(request['window_id']),'desk_cleanup_unknown')
             if row["state"] != "retired" and window is not None:
                 # This window still has custody in this manager (same manager
                 # life). Runtime reconciles only a window its own task no
@@ -214,6 +281,8 @@ class Manager:
                     self._cleanup_notice(window)
                     require(not window.children.uncertain, "owned_cleanup_uncertain")
                     require(False, "owned_child_not_reaped")
+            self._capture_orphans()
+            require(not getattr(self,'custody_fault',False),'manager_custody_fault')
             receipt = self.ledger.reconcile(request)
             if window is not None:
                 with self.guard:
@@ -221,12 +290,16 @@ class Manager:
                 window.children.close()
             return {"ok": True, "receipt": receipt}
         require(operation == "retire", "operation")
+        require(not getattr(self,'workspace_commands',None) or self.workspace_commands.window_clean(request['window_id']),'workspace_cleanup_unknown')
+        require(not getattr(self,'desk',None) or self.desk.window_clean(request['window_id']),'desk_cleanup_unknown')
         if row["state"] != "retired":
             require(window is not None, "original_cleanup_proof_missing")
             window.children.proven_gone()
             self._close_egress(window)
             # Metadata-only exact Core proof after original observed child reap.
             # This remains legal after normal expiry; uncertainty never recovers.
+        self._capture_orphans()
+        require(not getattr(self,'custody_fault',False),'manager_custody_fault')
         receipt = self.ledger.retire(request)
         if window is not None:
             with self.guard:
@@ -247,7 +320,57 @@ class Manager:
                              (window.window, window.generation, reason, bool(children.forced)))
             sys.stderr.flush()
 
+    def _known_children(self):
+        known={(self.identity['pid'],self.identity['start'])} if self.identity else set()
+        for window in self.windows.values():known.update(window.children.records)
+        if self.launcher:
+            known.update(self.launcher.proxies)
+            known.update((h.broker['pid'],h.broker['start']) for h in self.launcher.children.values())
+        if getattr(self,'desk',None):known.update((h['identity']['pid'],h['identity']['start']) for h in self.desk.active.values() if h['identity'])
+        if getattr(self,'workspace_commands',None):known.update((h['identity']['pid'],h['identity']['start']) for h in self.workspace_commands.active.values() if h['identity'])
+        return known
+
+    def _desk_window_active(self,window_id,generation):
+        window=self.windows.get(window_id)
+        return bool(not self.closed and window and not window.egress_closed and
+                    self.ledger.tick(window_id,generation)['state']=='active' and exists(self.identity))
+
+    def _capture_orphans(self):
+        if not getattr(getattr(self,'package',None),'identity_split',False) or not self.identity:return
+        if self.adopted is None:
+            from .ownership import Adopted
+            self.adopted=Adopted(self.package)
+        known=self._known_children()
+        if self.adopted.capture(known):
+            self.failed=self.custody_fault=True
+            if self.launcher:self.launcher.fault()
+            if getattr(self,'desk',None):self.desk.fault()
+            if getattr(self,'workspace_commands',None):self.workspace_commands.fault()
+            self._uncertain_all('cleanup_unknown')
+            for window in self.windows.values():
+                window.children._observation_failed(Refused('owned_child_association_unknown'))
+                self._terminate(window,wait=0)
+        if self.adopted.records:
+            require(self.adopted.drain(known),'adopted_children_not_reaped')
+
     def tick(self):
+        if not self.closed and getattr(self, "qualification", None) is not None:
+            self.qualification.observe(self.identity)
+        if getattr(self,'workspace_commands',None):self.workspace_commands.tick(self._desk_window_active)
+        if getattr(self,'desk',None):self.desk.tick(self._desk_window_active)
+        if getattr(self,'managed',None):
+            from .managed_control import tick
+            tick(self.managed);self.managed.tick()
+        self._capture_orphans()
+        if getattr(self, "launcher", None) is not None:
+            def released(window_id, generation, broker):
+                window=self.windows.get(window_id)
+                return bool(window and window.generation==generation and window.children.released_broker(broker))
+            for window_id,generation in self.launcher.poll(released):
+                window=self.windows.get(window_id)
+                if window and window.generation==generation:
+                    self._uncertain(window_id,generation,"runtime_refused")
+                    self._terminate(window,wait=.25)
         require(self.child is not None, "server_not_started")
         if self.child.poll() is not None and not self.closed:
             self.failed = True  # Even exit0 is unexpected outside close().
@@ -299,11 +422,12 @@ class Manager:
             accepted = time.monotonic()
             deadline = accepted + 1
             request = None
+            descriptors = []
             try:
-                request = receive(connection, deadline)
-                if request["operation"] == "bind_child":
+                request, descriptors = receive_control(connection, deadline)
+                if request["operation"] in ("bind_child", "launch_child"):
                     deadline = self._bind_deadline(request, accepted)
-                answer = self.dispatch(request, deadline)
+                answer = self.dispatch(request, deadline, descriptors)
             except Refused as error:
                 # Static refusal codes only (never request values): the operator
                 # needs the reason a retirement or custody check refused.
@@ -314,56 +438,17 @@ class Manager:
                 answer = {"ok": False, "code": "control_refused", "receipt": self.ledger.status()}
             except (OSError, ValueError):
                 answer = {"ok": False, "code": "control_unavailable"}
+            finally:
+                for fd in descriptors:
+                    os.close(fd)
             try:
                 respond(connection, answer, deadline)
             except (OSError, Refused):
                 pass  # A lost ACK never resets a committed admission/reservation.
 
     def close(self):
-        self.closed = True
-        errors = []
-        # Runtime first receives ordinary shutdown and has its cleanup margin.
-        # systemd KillMode=mixed gives the root manager ordered ownership here.
-        if self.child is not None:
-            try:
-                if self.child.poll() is None:
-                    self.child.send_signal(signal.SIGINT)
-                    deadline = time.monotonic() + 30
-                    # Keep the private control channel responsive so Runtime can
-                    # commit exact retirement while shutting down its owned task.
-                    while self.child.poll() is None and time.monotonic() < deadline:
-                        self.once()
-                    if self.child.poll() is None:
-                        self.failed = True
-                        self.child.kill()
-                        self.child.wait(3)
-                if self.child.returncode != 0:
-                    self.failed = True
-                require(not exists(self.identity), "server_not_reaped")
-            except Exception:
-                errors.append("server_cleanup")
-        try:
-            self._uncertain_all("manager_stopped")
-            if not self._terminate_all():
-                errors.append("window_cleanup")
-        except Exception:
-            errors.append("window_cleanup")
-        if self.egress is not None:
-            try:
-                endpoint, self.egress = self.egress, None
-                endpoint.close()
-            except Exception:
-                errors.append("window_cleanup")
-        for window in list(self.windows.values()):
-            window.children.close()
-        for item in (self.control, self.ledger, self.lock):
-            if item is not None:
-                try:
-                    item.close()
-                except Exception:
-                    errors.append("state_cleanup")
-        self.failed = self.failed or bool(errors)
-        return not self.failed
+        from .manager_shutdown import close
+        return close(self)
 
 
 def main(root, expected):

@@ -1,6 +1,10 @@
 # Source build: the only application input is an anonymous public Git commit.
 # No local source, provider login, build cache or account state is copied in.
+FROM node:22-bookworm-slim@sha256:4b150b48b4116e2a22f2c39cc27025fbf4f153e2078fd3b14d159fdb5c7279da AS browser-tools
 FROM rust:1.99.1-bookworm@sha256:48b7f435b8fc6378ce43b44f15e3a47fd8919b2825f835c39bd4bd3da50af5b8 AS build
+COPY --from=browser-tools /usr/local/bin/node /usr/local/bin/node
+COPY --from=browser-tools /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/npm
+RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm
 ARG SOURCE_COMMIT
 ENV PYTHONDONTWRITEBYTECODE=1 CARGO_BUILD_JOBS=2 CARGO_TARGET_DIR=/build/target
 RUN apt-get update && apt-get install -y --no-install-recommends python3 \
@@ -13,7 +17,9 @@ RUN { test ${#SOURCE_COMMIT} -eq 40 \
     && git init /src && git -C /src fetch https://github.com/otcan/orkestr.git "$SOURCE_COMMIT" \
     && git -C /src checkout --detach FETCH_HEAD \
     && test "$(git -C /src rev-parse HEAD)" = "$SOURCE_COMMIT"
-RUN python3 -I -S -B /src/v2/packaging/oss/build.py
+RUN npm --prefix /src ci --ignore-scripts --no-audit --no-fund \
+    && python3 -I -S -B /src/v2/packaging/oss/build.py \
+    && rm -rf /src/node_modules
 
 # Export the unchanged #265 tarball, paired receipt and checksums without publishing.
 FROM scratch AS bundle

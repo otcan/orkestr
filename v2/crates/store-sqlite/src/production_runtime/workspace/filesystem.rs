@@ -78,7 +78,11 @@ pub(super) struct Installation {
     pub(super) workspace: Directory,
     pub(super) git: Directory,
     pub(super) common: Directory,
+    root_custody: Option<Arc<dyn RootWorkspaceCustody>>,
 }
+#[path = "root_installation.rs"]
+mod root_installation;
+pub use root_installation::RootWorkspaceCustody;
 impl WorkspaceOperatorAllowlist {
     pub fn new(roots: Vec<PathBuf>, protected: Vec<PathBuf>, operator_uid: u32) -> Result<Self> {
         if roots.is_empty() || roots.len() > 32 || protected.is_empty() || protected.len() > 64 {
@@ -117,6 +121,7 @@ impl WorkspaceOperatorAllowlist {
             workspace: Directory::open(selected, self.uid)?,
             git: Directory::open(git, self.uid)?,
             common: Directory::open(common, self.uid)?,
+            root_custody: None,
         };
         for protected in &self.protected {
             installation.reject_overlap(protected)?;
@@ -137,6 +142,34 @@ impl Installation {
         Ok(())
     }
     pub(super) fn check(&self) -> Result<()> {
+        if let Some(custody) = &self.root_custody {
+            let paths = [
+                self.workspace.path.clone(),
+                self.git.path.clone(),
+                self.common.path.clone(),
+            ];
+            let directories = [&self.workspace, &self.git, &self.common];
+            let identities = directories.map(|directory| directory.identity);
+            custody.check(&paths, identities)?;
+            for (directory, expected) in directories.into_iter().zip(identities) {
+                let meta = directory.file.metadata().map_err(db)?;
+                if !meta.is_dir()
+                    || meta.dev() != expected.device
+                    || meta.ino() != expected.inode
+                    || meta.uid() != expected.uid
+                    || meta.mode()
+                        & if custody.verifies_named_executor_acl() {
+                            0o002
+                        } else {
+                            0o022
+                        }
+                        != 0
+                {
+                    return Err(RuntimeStoreError::Fenced);
+                }
+            }
+            return Ok(());
+        }
         for dir in [&self.workspace, &self.git, &self.common] {
             dir.check()?;
         }

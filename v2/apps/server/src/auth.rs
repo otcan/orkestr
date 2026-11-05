@@ -6,7 +6,7 @@ use argon2::{
 use axum::extract::rejection::JsonRejection;
 use sha2::{Digest, Sha256};
 
-async fn rate_limit(state: &AppState) -> Result<(), Error> {
+pub(crate) async fn rate_limit(state: &AppState) -> Result<(), Error> {
     let mut window = state.auth_window.lock().await;
     if window.0.elapsed() >= Duration::from_secs(60) {
         *window = (Instant::now(), 0);
@@ -104,9 +104,15 @@ pub async fn session(
     body: Result<Json<Credentials>, JsonRejection>,
 ) -> Result<Json<SessionResponse>, Error> {
     machine_request(&headers)?;
-    let owner = verify_credentials(&state, body).await?;
+    let (owner, verified_hash) = verify_credentials(&state, body).await?;
     let token = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
-    state.store.save_session(&token, &owner).await?;
+    if !state
+        .store
+        .save_verified_session(&token, &owner, &verified_hash)
+        .await?
+    {
+        return Err(unauthorized());
+    }
     Ok(Json(SessionResponse {
         token,
         token_type: "Bearer".into(),
@@ -118,7 +124,7 @@ pub async fn session(
 pub(crate) async fn verify_credentials(
     state: &AppState,
     body: Result<Json<Credentials>, JsonRejection>,
-) -> Result<OwnerId, Error> {
+) -> Result<(OwnerId, String), Error> {
     rate_limit(state).await?;
     let c = credentials(body)?;
     let record = state.store.credentials(&c.username).await?;
@@ -140,8 +146,7 @@ pub(crate) async fn verify_credentials(
     if !valid {
         return Err(unauthorized());
     }
-    let (owner, _) = record.ok_or_else(unauthorized)?;
-    Ok(owner)
+    record.ok_or_else(unauthorized)
 }
 
 #[cfg(test)]

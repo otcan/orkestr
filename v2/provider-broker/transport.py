@@ -129,17 +129,22 @@ class Pump:
 
     def launch(self):
         # A private native group can be killed without killing this subreaper.
+        if hasattr(self.config, "validate_execution"):
+            self.config.validate_execution()
         become_subreaper()
         command = self.config.command()
         if getattr(self.config, "uncontained", False) is not True:
             command = contained_command(command)
-        self.child = subprocess.Popen(command, env=self.config.environment(),
+        native_io = getattr(self.config, "native_io", None)
+        spawn = native_io.spawn if native_io is not None else subprocess.Popen
+        self.child = spawn(command, env=self.config.environment(),
                                       cwd=self.config.workspace, stdin=subprocess.PIPE,
                                       stdout=subprocess.PIPE,
                                       stderr=subprocess.PIPE if self.stderr_capture is not None else subprocess.DEVNULL,
                                       close_fds=True, process_group=0)
         if hasattr(self.config, "owned_spawned"):
             self.config.owned_spawned(self.child)
+        if native_io is not None:native_io.attest(self.child)
         for pipe in (self.child.stdin, self.child.stdout):
             os.set_blocking(pipe.fileno(), False)
         if self.stderr_capture is not None:

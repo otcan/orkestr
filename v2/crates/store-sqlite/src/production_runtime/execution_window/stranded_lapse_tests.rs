@@ -251,7 +251,11 @@ async fn schema53_lapsed_worker_settles_after_upgrade() {
     let fresh = restart_window(w, window, 1).await;
     assert_eq!(
         count(&fresh, "SELECT max(version) FROM _sqlx_migrations").await,
-        84
+        sqlx::migrate!("./migrations")
+            .iter()
+            .last()
+            .unwrap()
+            .version
     );
     assert_eq!(
         before,

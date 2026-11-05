@@ -1,10 +1,11 @@
-//! A window whose open failed before it ran anything of its own.
+//! A window whose open failed before it executed anything of its own.
 //!
 //! The opener lost its private credential (or never bound it) after the manager
 //! admitted the window, for example because broker readiness or Fast setup was
-//! refused. No run of the window exists, so there is nothing to accept, stop or
-//! abandon, and `stranded.rs` could never plan it: the conversation stayed
-//! blocked. Such a window is closed as `failed` with a derived cause.
+//! refused. No turn executed: either no run exists, or a single reserved Fast
+//! admission lapsed before dispatch with durable failure evidence. There is
+//! nothing to accept, stop or abandon. Such a window is closed as `failed`
+//! with a derived cause; any existing failed reservation remains archived.
 //!
 //! A successor opening already took over the retired predecessor's supervisor
 //! (new incarnation, readiness, workspace association and resume reservations
@@ -66,7 +67,7 @@ async fn lineage_in(tx: &mut SqliteConnection, retired: &SqliteRow) -> Result<Op
     }))
 }
 
-/// `Ok(None)`: the window ran something of its own; the turn plan decides.
+/// `Ok(None)`: the window has more than failed setup; the turn plan decides.
 pub(super) async fn plan(
     tx: &mut SqliteConnection,
     owner: &OwnerId,
@@ -145,7 +146,15 @@ pub(super) async fn plan(
                 .fetch_one(&mut *tx)
                 .await
                 .map_err(db)?;
-                if own != 0 {
+                if own != 0
+                    && !crate::production_runtime::failed_fast_setup::only_lapsed_reservation(
+                        tx,
+                        context,
+                        incarnation,
+                        window,
+                    )
+                    .await?
+                {
                     return Ok(None);
                 }
                 if unresolved != 0
@@ -278,8 +287,8 @@ pub(super) async fn commit(
         &plan.incarnation,
         plan.supervisor_generation,
     ) {
-        // No run exists under this failed incarnation; only unobserved setup
-        // reservations passed planning. Keep an immutable failure archive.
+        // Only unobserved setup reservations passed planning. An already
+        // failed, never-dispatched Fast reservation keeps its lapse evidence.
         sqlx::query("INSERT INTO execution_window_failed_native_requests(failure_id,session_id,binding_generation,context_id,incarnation_id,requested_native_id,initialization_key) SELECT ?,session_id,binding_generation,context_id,incarnation_id,requested_native_id,initialization_key FROM production_requested_native WHERE context_id=? AND incarnation_id=? AND observed_run_id IS NULL AND observed_event_key IS NULL")
             .bind(id.to_string()).bind(context).bind(failed)
             .execute(&mut *tx).await.map_err(db)?;

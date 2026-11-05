@@ -140,6 +140,8 @@ async fn populated_prefixes_copy_first_edges_to_50_preserve_rows_and_rollback_so
             "tracker_check_cancellations",
             "tracker_manual_checks",
             "tracker_action_digests",
+            "encrypted_uploads",
+            "encrypted_upload_chunks",
         ] {
             let count: i64 = sqlx::query_scalar(&format!("SELECT count(*) FROM {table}"))
                 .fetch_one(&mut upgraded)
@@ -152,7 +154,11 @@ async fn populated_prefixes_copy_first_edges_to_50_preserve_rows_and_rollback_so
                 .fetch_one(&mut upgraded)
                 .await
                 .unwrap(),
-            84
+            sqlx::migrate!("./migrations")
+                .iter()
+                .last()
+                .unwrap()
+                .version
         );
         assert!(sqlx::query("PRAGMA foreign_key_check")
             .fetch_all(&mut upgraded)
