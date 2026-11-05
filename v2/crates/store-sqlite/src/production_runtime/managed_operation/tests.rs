@@ -4,12 +4,13 @@ use orkestr_v2_application::IntakeStore;
 use orkestr_v2_contracts::{ExecutionWindowRequest, MessageInput};
 use std::time::Duration;
 
-async fn fixture() -> (
+async fn fixture_with_renewal() -> (
     Case,
     Store,
     String,
     ManagedOperationParent,
     ManagedCallerEvidence,
+    RunRenewalAuthority,
 ) {
     let f = fixtures::setup().await;
     let roles = f
@@ -116,6 +117,7 @@ async fn fixture() -> (
         .await
         .unwrap();
     let source = ManagedCallerEvidence {
+        run_id: parent.parent.run.run_id.to_string(),
         owner_id: f.owner.to_string(),
         conversation_id: f.conversation.to_string(),
         session_id: setup.binding.session_id.to_string(),
@@ -132,7 +134,18 @@ async fn fixture() -> (
         caller_start: 10002,
         caller_uid: 10003,
     };
-    (f, bound, grant.credential().into(), parent, source)
+    let renewal = bound.authorize_running_renewal(&consumed).await.unwrap();
+    (f, bound, grant.credential().into(), parent, source, renewal)
+}
+async fn fixture() -> (
+    Case,
+    Store,
+    String,
+    ManagedOperationParent,
+    ManagedCallerEvidence,
+) {
+    let (f, bound, token, parent, source, _) = fixture_with_renewal().await;
+    (f, bound, token, parent, source)
 }
 fn request() -> ManagedOperationRequest {
     ManagedOperationRequest {
@@ -180,6 +193,7 @@ async fn caller_claims_cannot_substitute_setup_window_or_authentication() {
     let (_f, bound, token, parent, source) = fixture().await;
     let original = serde_json::to_value(&source).unwrap();
     for (field, value) in [
+        ("run_id", json!(Uuid::new_v4().to_string())),
         ("conversation_id", json!(Uuid::new_v4().to_string())),
         ("generation", json!(999)),
         ("provider", json!("claude")),
@@ -335,6 +349,82 @@ async fn submitted_receipt_is_not_approval_and_unknown_claims_consume_window_bud
     }
     assert!(bound
         .consume_managed_operation(&token, &parent, Uuid::new_v4(), &source, &request())
+        .await
+        .is_err());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn opaque_same_run_renewal_preserves_scope_hard_deadline_and_one_write() {
+    use crate::production_runtime::observation_tests::input;
+    let (_f, bound, token, mut parent, source, mut authority) = fixture_with_renewal().await;
+    let ManagedOperationConsumption::Operation(mut operation) = bound
+        .consume_managed_operation(&token, &parent, Uuid::new_v4(), &source, &request())
+        .await
+        .unwrap()
+    else {
+        panic!()
+    };
+    bound
+        .with_managed_operation_launch_fence(&token, &operation, || Ok::<_, ()>(1))
+        .unwrap()
+        .unwrap();
+    let original = operation.root_request();
+    bound
+        .append_provider_event(
+            &parent.parent.run.owner_id,
+            &parent.parent,
+            &input(&parent.parent, 1, ProviderEvent::Started),
+        )
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    bound.heartbeat_supervisor().await.unwrap();
+    bound.renew_running(&mut authority).await.unwrap();
+    assert!(bound
+        .managed_operation_live(&token, &operation)
+        .await
+        .is_err());
+    let renewal = bound
+        .renew_managed_operation(&token, &mut operation, &authority)
+        .await
+        .unwrap();
+    bound
+        .refresh_managed_operation_parent(&token, &mut parent, &authority)
+        .await
+        .unwrap();
+    let renewed = renewal.root_request();
+    for field in [
+        "operation_id",
+        "run_id",
+        "evidence",
+        "hard_deadline_ms",
+        "source_message_id",
+        "source_event_id",
+    ] {
+        assert_eq!(original[field], renewed[field], "{field}");
+    }
+    assert!(
+        renewed["lease_generation"].as_u64().unwrap()
+            > original["lease_generation"].as_u64().unwrap()
+    );
+    assert!(
+        renewed["expires_at_ms"].as_i64().unwrap() > original["expires_at_ms"].as_i64().unwrap()
+    );
+    bound
+        .with_managed_renewal_fence(&token, &renewal, || Ok::<_, ()>(1))
+        .unwrap()
+        .unwrap();
+    assert!(bound
+        .with_managed_renewal_fence(&token, &renewal, || -> std::result::Result<usize, ()> {
+            panic!("renewal replay")
+        })
+        .is_err());
+    bound
+        .managed_operation_live(&token, &operation)
+        .await
+        .unwrap();
+    assert!(bound
+        .renew_managed_operation(&token, &mut operation, &authority)
         .await
         .is_err());
 }

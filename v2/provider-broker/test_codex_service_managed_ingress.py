@@ -136,6 +136,10 @@ class RootCallerTests(unittest.TestCase):
         self.manager.windows={'synthetic-window':SimpleNamespace(children=SimpleNamespace(
             observe=lambda:None,records={key:True},families={key:{key}}))}
 
+    def open_run(self,ingress,scope):
+        from codex_service.managed_runs import key
+        ingress.runs.contexts[key(scope)]={'run_id':'44444444-4444-4444-8444-444444444444'}
+
     def test_original_live_nnp_deep_caller_retains_root_source_including_resume(self):
         child=self.caller();self.bind(child)
         value,proof=source(self.manager,child.pid,65534)
@@ -160,6 +164,7 @@ class RootCallerTests(unittest.TestCase):
         ingress=Ingress(self.manager)
         try:
             value,proof=source(self.manager,child.pid,65534)
+            self.open_run(ingress,value)
             peer=SimpleNamespace(source=value,path=None,request=None)
             ingress._record(peer,REQUEST);path=peer.path
             ingress._record(peer,REQUEST);self.assertEqual(peer.path,path)
@@ -183,6 +188,7 @@ class RootCallerTests(unittest.TestCase):
         child=self.caller();self.bind(child);ingress=Ingress(self.manager)
         self.addCleanup(ingress.close)
         value,proof=source(self.manager,child.pid,65534)
+        self.open_run(ingress,value)
         peer=SimpleNamespace(source=value,path=None,request=None,proof=proof,
             deadline=time.monotonic()+30,close=proof.close)
         ingress._record(peer,REQUEST);ingress.peers.append(peer)
@@ -190,7 +196,8 @@ class RootCallerTests(unittest.TestCase):
         cap={'operation_id':peer.request,'run_id':'44444444-4444-4444-8444-444444444444',
             'source_message_id':'55555555-5555-4555-8555-555555555555','source_event_id':'66666666-6666-4666-8666-666666666666',
             'binding_generation':2,'lease_generation':1,'dispatch_fence':1,'expires_at_ms':int(time.time()*1000)+25000,
-            'evidence':{'source':normalize_source(value),'request':REQUEST}}
+            'hard_deadline_ms':int(time.time()*1000)+120000,
+            'evidence':{'source':normalize_source(peer.source),'request':REQUEST}}
         return ingress,peer,cap
 
     def test_fixed_protected_submit_is_agent_summary_without_owner_approval_or_replay(self):
@@ -235,6 +242,7 @@ path,endpoint=sys.argv[1:];sys.argv=[path,endpoint];runpy.run_path(path,run_name
             stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,user=65534,group=65534,extra_groups=[],
             env={'PATH':'/usr/bin:/bin','PYTHONDONTWRITEBYTECODE':'1'})
         self.children.append(child);self.assertEqual(child.stdout.readline(),b'ready\n');self.bind(child)
+        scope,proof=source(self.manager,child.pid,65534);self.open_run(ingress,scope);proof.close()
         child.stdin.write(b'!'+canonical(REQUEST));child.stdin.close();deadline=time.monotonic()+4
         while not ingress.pending('synthetic-window',1):
             self.assertLess(time.monotonic(),deadline);ingress.tick();time.sleep(.005)
@@ -242,6 +250,7 @@ path,endpoint=sys.argv[1:];sys.argv=[path,endpoint];runpy.run_path(path,run_name
         cap={'operation_id':record['request_id'],'run_id':'44444444-4444-4444-8444-444444444444',
             'source_message_id':'55555555-5555-4555-8555-555555555555','source_event_id':'66666666-6666-4666-8666-666666666666',
             'binding_generation':2,'lease_generation':1,'dispatch_fence':1,'expires_at_ms':int(time.time()*1000)+25000,
+            'hard_deadline_ms':int(time.time()*1000)+120000,
             'evidence':{'source':managed_control.normalize_source(record['source']),'request':REQUEST}}
         # This unit test supplies the trusted authority port's grant. Real Core
         # issuance/fences have separate tests; no owner decision is synthesized.
@@ -249,6 +258,26 @@ path,endpoint=sys.argv[1:];sys.argv=[path,endpoint];runpy.run_path(path,run_name
         self.assertEqual(child.returncode,0,child.stderr.read().decode())
         reply=json.loads(child.stdout.readline());self.assertEqual(reply['state'],'completed')
         self.assertFalse(reply['result']['owner_approval']);self.assertEqual(reply['result']['owner_delivery'],'unconfirmed')
+
+    def test_no_pre_run_queue_or_cross_turn_promotion(self):
+        from codex_service.managed_runs import setup
+        child=self.caller();self.bind(child);ingress=Ingress(self.manager);self.addCleanup(ingress.close)
+        scope,proof=source(self.manager,child.pid,65534);self.addCleanup(proof.close)
+        peer=SimpleNamespace(source=scope,path=None,request=None)
+        with self.assertRaisesRegex(Refused,'managed_no_consumed_run'):ingress._record(peer,REQUEST)
+        handle=next(iter(self.manager.launcher.children.values()));original=json.loads(handle.path.read_text())['setup']
+        run='44444444-4444-4444-8444-444444444444'
+        request={'window_id':scope['window_id'],'generation':scope['window_generation'],
+            'owner_id':scope['owner_id'],'conversation_id':scope['conversation_id'],
+            'run':{'run_id':run,'source_message_id':'55555555-5555-4555-8555-555555555555',
+                'source_event_id':'66666666-6666-4666-8666-666666666666','setup':setup(original)}}
+        ingress.runs.open(request);ingress._record(peer,REQUEST);old=peer.path
+        self.assertEqual(json.loads(old.read_text())['source']['run_id'],run)
+        ingress.runs.close(scope['window_id'],scope['window_generation'],run)
+        self.assertEqual(json.loads(old.read_text())['state'],'cancelled')
+        request['run']['run_id']='77777777-7777-4777-8777-777777777777';ingress.runs.open(request)
+        new=SimpleNamespace(source=scope,path=None,request=None);ingress._record(new,REQUEST)
+        self.assertNotEqual(new.path,old);self.assertEqual(json.loads(old.read_text())['state'],'cancelled')
 
 
 if __name__=='__main__':unittest.main()

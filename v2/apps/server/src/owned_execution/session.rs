@@ -218,6 +218,9 @@ impl ConfiguredExecution {
                 let _ = authority.revoke();
                 authority = next_authority;
                 pump = next_pump;
+                if let Some(managed) = managed.as_mut() {
+                    managed.refresh_lease(liveness.authority()).await?;
+                }
                 (run_control, controls) = self
                     .control
                     .register(self.store.clone(), &run)

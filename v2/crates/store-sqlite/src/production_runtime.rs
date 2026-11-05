@@ -40,8 +40,8 @@ pub use desk_login::{
 };
 pub use managed_operation::{
     ConsumedManagedOperation, ManagedCallerEvidence, ManagedOperationConsumption,
-    ManagedOperationOutcome, ManagedOperationParent, ManagedOperationRequest,
-    ManagedOperationSetup,
+    ManagedOperationOutcome, ManagedOperationParent, ManagedOperationRenewal,
+    ManagedOperationRequest, ManagedOperationSetup,
 };
 pub(crate) mod deep_groups;
 pub use deep_groups::{DEFAULT_DEEP_BURST_QUIET_MS, MAX_DEEP_BURST_QUIET_MS};

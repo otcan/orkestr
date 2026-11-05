@@ -39,6 +39,7 @@ pub struct ManagedOperationParent {
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ManagedCallerEvidence {
+    pub run_id: String,
     pub owner_id: String,
     pub conversation_id: String,
     pub session_id: String,
@@ -101,6 +102,7 @@ pub struct ConsumedManagedOperation {
     context: String,
     incarnation: String,
     expires: i64,
+    hard_deadline: i64,
     attempted: std::sync::atomic::AtomicBool,
     source_message_id: String,
     source_event_id: String,
@@ -123,8 +125,21 @@ impl ConsumedManagedOperation {
     pub fn root_request(&self) -> Value {
         json!({"operation_id":self.id,"run_id":self.parent.run.run_id.to_string(),
             "binding_generation":self.parent.binding.generation,"lease_generation":self.parent.run.lease_generation,
-            "dispatch_fence":self.parent.run.dispatch_fence,"expires_at_ms":self.expires,"evidence":self.evidence,
+            "dispatch_fence":self.parent.run.dispatch_fence,"expires_at_ms":self.expires,"hard_deadline_ms":self.hard_deadline,"evidence":self.evidence,
             "source_message_id":self.source_message_id,"source_event_id":self.source_event_id})
+    }
+}
+impl ManagedOperationParent {
+    /// Metadata sent only through the authenticated authority->Root port.
+    /// The opaque parent's live writer fence must surround that bounded write.
+    pub fn root_run_request(&self) -> Value {
+        let s = &self.setup;
+        let b = &s.binding;
+        json!({"run_id":self.parent.run.run_id.to_string(),"source_message_id":self.source_message_id,
+            "source_event_id":self.source_event_id,"setup":{"owner_id":b.owner_id.to_string(),
+            "conversation_id":b.conversation_id.to_string(),"session_id":b.session_id.to_string(),
+            "generation":b.generation,"role":"deep","provider":match s.provider {ProviderKind::Codex=>"codex",ProviderKind::Claude=>"claude",_=>"unsupported"},
+            "incarnation":s.incarnation,"native_session_id":b.native_session_id,"resume_setup_id":s.resume_setup_id}})
     }
 }
 async fn current(
@@ -148,6 +163,37 @@ async fn current(
     Ok(())
 }
 impl Store {
+    pub async fn refresh_managed_operation_parent(
+        &self,
+        credential: &str,
+        parent: &mut ManagedOperationParent,
+        renewal: &RunRenewalAuthority,
+    ) -> Result<()> {
+        let current = renewal.current_provider();
+        let previous = &parent.parent;
+        if current.run.run_id != previous.run.run_id
+            || current.binding != previous.binding
+            || current.run.dispatch_fence != previous.run.dispatch_fence
+            || current.run.lease_generation != previous.run.lease_generation + 1
+        {
+            return Err(RuntimeStoreError::Fenced);
+        }
+        let mut tx = self.pool.begin().await.map_err(db)?;
+        super::desk_login::live(self, &mut tx, credential, current).await?;
+        *parent.parent = current.clone();
+        Ok(())
+    }
+    pub fn with_managed_run_fence<E>(
+        &self,
+        credential: &str,
+        parent: &ManagedOperationParent,
+        action: impl FnOnce() -> std::result::Result<usize, E>,
+    ) -> Result<std::result::Result<usize, E>> {
+        if crate::digest(credential) != self.context()?.token_hash {
+            return Err(RuntimeStoreError::Unauthorized);
+        }
+        self.with_execution_fence(&parent.parent, action)
+    }
     pub async fn complete_managed_operation(
         &self,
         credential: &str,
@@ -228,6 +274,7 @@ impl Store {
         let s = &parent.setup;
         let b = &s.binding;
         if id.is_nil()
+            || source.run_id != parent.parent.run.run_id.to_string()
             || !request.bounded()
             || source.owner_id != b.owner_id.to_string()
             || source.conversation_id != b.conversation_id.to_string()
@@ -277,7 +324,16 @@ impl Store {
             return Err(RuntimeStoreError::Fenced);
         }
         let now = now(&mut tx).await?;
-        let expires = (now + 30000).min(parent.parent.run.lease_deadline_ms);
+        let window_deadline: i64 =
+            sqlx::query_scalar("SELECT work_deadline_ms FROM execution_windows WHERE id=?")
+                .bind(source.window_id.to_string())
+                .fetch_one(&mut *tx)
+                .await
+                .map_err(db)?;
+        let hard_deadline = (now + 300000).min(window_deadline);
+        let expires = (now + 30000)
+            .min(parent.parent.run.lease_deadline_ms)
+            .min(hard_deadline);
         if expires <= now {
             return Err(RuntimeStoreError::Expired);
         }
@@ -287,7 +343,8 @@ impl Store {
             .bind(id.to_string()).bind(c.owner.to_string()).bind(p.run.conversation_id.to_string()).bind(source.window_id.to_string())
             .bind(p.run.run_id.to_string()).bind(p.run.session_id.to_string()).bind(&c.id).bind(&c.incarnation)
             .bind(i64::try_from(p.binding.generation).map_err(db)?).bind(i64::try_from(p.run.lease_generation).map_err(db)?)
-            .bind(i64::try_from(p.run.dispatch_fence).map_err(db)?).bind(sha).bind(&request.operation).bind(encoded).bind(expires)
+            .bind(i64::try_from(p.run.dispatch_fence).map_err(db)?).bind(sha).bind(&request.operation)
+            .bind(serde_json::to_string(&json!({"evidence":evidence,"hard_deadline_ms":hard_deadline})).map_err(db)?).bind(expires)
             .bind(now).execute(&mut *tx).await.map_err(db)?;
         tx.commit().await.map_err(db)?;
         Ok(ManagedOperationConsumption::Operation(
@@ -298,6 +355,7 @@ impl Store {
                 context: c.id.clone(),
                 incarnation: c.incarnation.clone(),
                 expires,
+                hard_deadline,
                 attempted: std::sync::atomic::AtomicBool::new(false),
                 source_message_id: parent.source_message_id.clone(),
                 source_event_id: parent.source_event_id.clone(),
@@ -306,5 +364,7 @@ impl Store {
     }
 }
 mod launch_fence;
+mod renewal;
+pub use renewal::ManagedOperationRenewal;
 #[cfg(test)]
 mod tests;

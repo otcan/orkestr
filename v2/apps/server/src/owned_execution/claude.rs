@@ -236,6 +236,9 @@ impl ConfiguredExecution {
                             run_control.disable();
                             return Err(reason);
                         }
+                        if let Some(managed) = managed.as_mut() {
+                            managed.refresh_lease(liveness.authority()).await?;
+                        }
                     }
                     if let Some(managed) = managed.as_mut() {
                         managed.poll().await?;

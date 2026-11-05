@@ -60,31 +60,47 @@ def main(package,arguments):
         require(0<length<=8192,'desk_anchor_bound')
         payload=read(length)
         value=json.loads(payload)
-        require(type(value) is dict and set(value)=={'helper','sha256','conversation_id','desk','site','duration_ms'},'desk_anchor_fields')
+        require(type(value) is dict and set(value)=={'helper','sha256','conversation_id','desk','site','duration_ms','hard_deadline_ns','lease_deadline_ns'},'desk_anchor_fields')
+        hard=value.pop('hard_deadline_ns');deadline=value.pop('lease_deadline_ns')
+        require(type(hard) is int and type(deadline) is int and time.monotonic_ns()<deadline<=hard
+                and deadline<=time.monotonic_ns()+30000000000,'desk_anchor_lease_bound')
         from .desk_operations import mapping
         value=mapping(value)
         helper=protected(value['helper']);require(digest(helper)==value['sha256'],'desk_helper_pin')
         require(ctypes.CDLL(None).prctl(36,1,0,0,0)==0,'desk_anchor_subreaper')
         tree=Tree()
         cancelled=False;child=None;record=None;clean=False;code=None
-        deadline=time.monotonic()+value['duration_ms']/1000
+        require(hard<=time.monotonic_ns()+value['duration_ms']*1000000,'desk_anchor_hard_bound')
+        control=bytearray()
         channel.setblocking(False)
         def stop(_signal,_frame):
             nonlocal cancelled
             cancelled=True
         signal.signal(signal.SIGTERM,stop);signal.signal(signal.SIGINT,stop)
         try:
+            require(time.monotonic_ns()<deadline,'desk_anchor_expired_before_spawn')
             child=subprocess.Popen([str(helper),'--conversation',value['conversation_id'],'--desk',value['desk'],value['site']],
                 cwd='/',env={'PATH':'/usr/bin:/bin','LANG':'C.UTF-8','PYTHONDONTWRITEBYTECODE':'1'},
                 stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,close_fds=True,process_group=0)
             original=process(child.pid);require(original and original['ppid']==os.getpid(),'desk_owned_helper')
             record=Process(original,any_uid=True);known={(original['pid'],original['start'])}
             while child.poll() is None:
-                if not exists(identity) or time.monotonic()>=deadline:cancelled=True
+                if not exists(identity) or time.monotonic_ns()>=deadline:cancelled=True
                 try:
-                    received=channel.recv(16)
-                    if received in (b'',b'cancel'):cancelled=True
-                    elif received:cancelled=True
+                    received=channel.recv(145)
+                    if not received:cancelled=True
+                    else:
+                        control.extend(received)
+                        if len(control)>144:cancelled=True
+                        while control and not cancelled:
+                            if control[0]==ord('C'):
+                                cancelled=True;control.clear()
+                            elif control[0]==ord('R'):
+                                if len(control)<9:break
+                                renewed=struct.unpack('!Q',control[1:9])[0];del control[:9]
+                                if not time.monotonic_ns()<renewed<=hard or renewed>time.monotonic_ns()+30000000000:cancelled=True
+                                else:deadline=renewed
+                            else:cancelled=True
                 except BlockingIOError:pass
                 tree.capture(known)
                 for pid in Adopted.children(original):
