@@ -88,10 +88,10 @@ class WorkspaceRehearsal(Rehearsal):
             rows=db.execute('SELECT state,count(*) FROM workspace_exec_delegations GROUP BY state').fetchall()
             count=db.execute('SELECT count(*) FROM workspace_exec_results').fetchone()[0]
             deliveries=db.execute('SELECT state,count(*) FROM workspace_exec_results GROUP BY state').fetchall()
-        assert sum(number for _,number in rows)==8 and count==8,(rows,count)
-        assert deliveries==[('delivered',8)],deliveries
-        report.update(actual_consumed_workspace_commands=8,durable_root_claims=4,
-            foreground_commands=2,background_starts=2,status_controls=2,cancel_controls=2,
+        assert sum(number for _,number in rows)==10 and count==10,(rows,count)
+        assert deliveries==[('delivered',10)],deliveries
+        report.update(actual_consumed_workspace_commands=10,durable_root_claims=4,
+            foreground_commands=2,background_starts=2,busy_refusals_without_root_start=2,status_controls=2,cancel_controls=2,
             core_result_rows=count,core_delegation_states=rows,original_root_anchor_cleanup=True,
             project_owner_uid=self.project_owner,project_owner_preserved=True,named_executor_acl=self.project_owner!=UID,
             selected_business_environment=True,core_read_denied=True,no_new_privileges=True)
@@ -143,7 +143,7 @@ def main():
             for name in ('service_roles_native.c','service_workspace_tools.c')}
         Path(args.report).write_text(json.dumps(report,indent=2)+'\n');Path(args.report).chmod(0o600)
     assert report['passed'],report
-    print(json.dumps({'passed':True,'actual_core':True,'actual_provider':False,'workspace_operations':8}))
+    print(json.dumps({'passed':True,'actual_core':True,'actual_provider':False,'workspace_operations':10}))
 
 
 if __name__=='__main__':main()

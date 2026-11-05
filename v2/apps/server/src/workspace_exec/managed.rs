@@ -146,13 +146,28 @@ impl WorkspaceExecDispatcher {
         retained: Box<dyn Send + 'static>,
         background: Option<String>,
     ) -> Result<WorkspaceExecOutput, &'static str> {
-        if background.is_some()
-            && (self.jobs.is_none()
-                || self
-                    .jobs
-                    .as_ref()
-                    .is_some_and(|jobs| jobs.running() >= managed.max_jobs))
-        {
+        let reservation: Option<jobs::ManagedReservation> = if background.is_some() {
+            self.jobs
+                .as_ref()
+                .map(|jobs| jobs.reserve_managed(cap.id(), managed.max_jobs))
+                .transpose()?
+                .flatten()
+        } else {
+            None
+        };
+        if background.is_some() && reservation.is_none() {
+            let store = self.store.clone();
+            let credential = self.credential.clone();
+            let launch = cap.clone();
+            // A refusal starts nothing, but result preparation still requires
+            // spending the exact consumed operation's current one-use fence.
+            tokio::task::spawn_blocking(move || {
+                store.with_workspace_exec_fence(&credential, &launch, |_| Ok::<(), ()>(()))
+            })
+            .await
+            .map_err(|_| "managed workspace busy fence unavailable")?
+            .map_err(|_| "managed workspace busy fence refused")?
+            .map_err(|_| "managed workspace busy fence refused")?;
             return Ok(render::started(
                 &Started::Busy(managed.max_jobs),
                 managed.job_timeout,
@@ -174,7 +189,6 @@ impl WorkspaceExecDispatcher {
         observer.nonblocking()?;
         let store = self.store.clone();
         let credential = self.credential.clone();
-        let maximum = managed.max_jobs;
         let output_limit = managed.job_output;
         let jobs = self.jobs.clone();
         let profile = self.profile.clone();
@@ -210,9 +224,9 @@ impl WorkspaceExecDispatcher {
                 let jobs = jobs.ok_or("managed workspace background disabled")?;
                 let id = cap.id();
                 let started = jobs.attach_managed(
+                    reservation.ok_or("managed workspace reservation missing")?,
                     id,
                     &source,
-                    maximum,
                     output_limit,
                     move |cancel, consume| {
                         let receipt = observer.wait(cancel, |_, bytes| consume(bytes))?;
