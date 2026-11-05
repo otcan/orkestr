@@ -163,6 +163,7 @@ async fn source_receipt_recovery_does_not_revert_newer_decision_or_grant_authori
 
 #[tokio::test]
 async fn migration_75_preserves_existing_74_tracker_and_source_state() {
+    let _real = crate::test_template::real_migrations();
     let case = fixture().await;
     let old_source = r#"{"legacy_source":"synthetic"}"#;
     case.store

@@ -155,6 +155,7 @@ async fn downgrade_to_schema51(store: &Store) {
 /// reconciliation afterwards fails the Worker and closes the window.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn schema51_stranded_workbench_reconciles_after_upgrade() {
+    let _real = crate::test_template::real_migrations();
     let b = workbench().await;
     let w = &b.p.w;
     expire_worker_lease(&w.f.store, &b.worker).await;

@@ -117,7 +117,7 @@ mod tests {
         let home = std::path::PathBuf::from(std::env::var_os("ORKESTR_V2_HOME").unwrap());
         std::fs::create_dir_all(&home).unwrap();
         let path = home.join(format!("service-auth-{}.sqlite3", Uuid::new_v4()));
-        let store = Store::open(&path).await.unwrap();
+        let store = crate::test_template::open(&path).await;
         store.setup("synthetic-owner", "old-hash").await.unwrap();
         let owner = store
             .credentials("synthetic-owner")
@@ -222,7 +222,7 @@ mod tests {
         let home = std::path::PathBuf::from(std::env::var_os("ORKESTR_V2_HOME").unwrap());
         std::fs::create_dir_all(&home).unwrap();
         let path = home.join(format!("service-session-cap-{}.sqlite3", Uuid::new_v4()));
-        let store = Store::open(&path).await.unwrap();
+        let store = crate::test_template::open(&path).await;
         store.setup("synthetic-owner", "hash").await.unwrap();
         let owner = store
             .credentials("synthetic-owner")
