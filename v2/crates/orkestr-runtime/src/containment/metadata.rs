@@ -36,6 +36,7 @@ use std::sync::{Arc, Mutex, Weak};
 #[derive(Clone, PartialEq, Eq)]
 struct MetadataScope {
     binding: Binding,
+    resume_setup_id: Option<String>,
     namespace: String,
     incarnation: String,
     provider: ProviderKind,
@@ -44,6 +45,7 @@ impl MetadataScope {
     fn from_grant(grant: &BoundSessionMetadata) -> Self {
         Self {
             binding: grant.binding().clone(),
+            resume_setup_id: grant.resume_setup_id().map(str::to_owned),
             namespace: grant.namespace().into(),
             incarnation: grant.incarnation_id().into(),
             provider: grant.provider(),

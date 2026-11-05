@@ -148,7 +148,7 @@ def setup_scope(value,launcher,owner,conversation):
     require(type(launcher) is str and launcher in ('deep','fast','claude','worker-0','worker-1','worker-2','worker-3'),
             'setup_launcher')
     fields={'owner_id','conversation_id','session_id','generation','incarnation','provider','role'}
-    require(type(value) is dict and set(value) in (fields, fields|{'native_session_id'}),
+    require(type(value) is dict and set(value) in (fields, fields|{'native_session_id','resume_setup_id'}),
             'setup_fields')
     require(value['owner_id']==owner and value['conversation_id']==conversation,'setup_owner_scope')
     identifier(value['session_id']);generation(value['generation']);key(value['incarnation'])
@@ -156,6 +156,7 @@ def setup_scope(value,launcher,owner,conversation):
         value['provider']=='codex' and value['role']==('worker' if launcher.startswith('worker-') else launcher))
     require(expected,'setup_role')
     if 'native_session_id' in value:
+        identifier(value['resume_setup_id'])
         native=value['native_session_id']
         require(value['role'] in ('deep','fast') and type(native) is str and
                 0<len(native.encode())<=512 and not any(unicodedata.category(c)=='Cc' for c in native),

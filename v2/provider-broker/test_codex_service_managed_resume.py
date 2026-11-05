@@ -47,7 +47,9 @@ class ManagedResumeTests(unittest.TestCase):
                 a, b = socket.socketpair(); read, write = os.pipe(); descriptors = []
                 try:
                     value = request(); value['mode'] = mode
-                    if native: value['setup']['native_session_id'] = 'synthetic-resume'
+                    if native:
+                        value['setup']['native_session_id'] = 'synthetic-resume'
+                        value['setup']['resume_setup_id'] = '22222222-2222-4222-8222-222222222222'
                     a.sendmsg([encode(value)], [(socket.SOL_SOCKET, socket.SCM_RIGHTS,
                                                array.array('i', [read] * count))])
                     a.shutdown(socket.SHUT_WR)

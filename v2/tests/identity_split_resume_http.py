@@ -4,11 +4,13 @@ Only a disposable fixed synthetic native is used. Production gates, real native
 sessions, accounts and service configurations are never changed.
 """
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
 import sqlite3
 import sys
+import subprocess
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from identity_split_service_http import Rehearsal, wait
@@ -82,10 +84,27 @@ class ResumeRehearsal(Rehearsal):
             return rows if rows and any(r['role'] == 'deep' for r in rows) and all(
                 r['state'] == 'succeeded' for r in rows) else None
         second = wait(completed, 'new input accepted after exact native resume', seconds=30)
+        # Another accepted turn in the same window can require another native
+        # resume with unchanged binding generation. Its Core setup ID differs.
+        key='synthetic-split-third'
+        code,receipt=self.request(path+'/messages','POST',
+            {'client_message_id':key,'text':'synthetic ordinary HTTP input 3','author':'owner'})
+        assert code==202,(code,receipt)
+        code,current=self.request(path+'/window');assert code==200
+        code,joined=self.request(path+'/window','POST',
+            {'request_key':'window:'+key,'input_message_id':receipt['message_id'],
+             'input_event_id':receipt['event_id'],'input_request_key':key,
+             'expected_generation':current['generation'],'window_id':current['window_id'],
+             'predecessor_window_id':None})
+        assert code==201,(code,joined)
+        third=wait(completed,'third input accepted without reusing a setup claim',seconds=30)
         old = {r['role']: r for r in first}
-        for row in second:
+        for row in second+third:
             assert row['id'] != old[row['role']]['id']
             assert row['native_session_id'] == old[row['role']]['native_session_id']
+        drain.touch(mode=0o600);os.chown(drain,self.package.authority_uid,self.package.authority_gid)
+        wait(retired,'final accepted idle window and all original children retired',seconds=20)
+        drain.unlink()
         def reaped():
             claims = self.claims()
             resumed = [r for r in claims if r['mode'] == 'resume']
@@ -96,17 +115,21 @@ class ResumeRehearsal(Rehearsal):
         for record in resumed:
             role = record['setup']['role']
             assert record['setup']['native_session_id'] == old[role]['native_session_id']
+        setup_ids=[record['setup']['resume_setup_id'] for record in resumed]
+        assert len(setup_ids)==len(set(setup_ids))
         trace = (self.fixture.root / 'claude-workspace/claude-peer.jsonl' if self.provider == 'claude'
                  else self.fixture.account / 'sessions/synthetic-role.jsonl')
         events = [json.loads(line) for line in trace.read_text().splitlines()]
         assert any(r['resumed'] for r in events if r['kind'] in ('spawn', 'ready'))
-        assert len(self.rows('SELECT id FROM messages')) == 2
-        assert len(self.rows('SELECT id FROM production_runs')) == len(first) + len(second)
-        report.update(resumed_runs=second, resumed_launch_count=len(resumed),
+        assert len(self.rows('SELECT id FROM messages')) == 3
+        assert len(self.rows('SELECT id FROM production_runs')) == len(first) + len(second)+len(third)
+        report.update(resumed_runs=second+third, resumed_launch_count=len(resumed),
             same_native_identity=True, original_inputs_replayed=False,
             root_attested_metadata_and_private_fd4=True,
             source_authority_uid=self.package.authority_uid,
-            resumed_executor_uid=self.package.executor_uid)
+            resumed_executor_uid=self.package.executor_uid,
+            server_identity=json.loads(subprocess.check_output([self.binary,'--version','--json'])),
+            server_sha256=hashlib.sha256(self.binary.read_bytes()).hexdigest())
         return report
 
 

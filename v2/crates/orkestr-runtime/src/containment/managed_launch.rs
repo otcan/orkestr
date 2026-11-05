@@ -70,6 +70,7 @@ impl ManagedLaunchDescriptors {
         binding: &orkestr_v2_application::runtime::Binding,
         incarnation: &str,
         provider: orkestr_v2_application::runtime::ProviderKind,
+        resume_setup_id: Option<&str>,
     ) -> Result<(), Error> {
         use orkestr_v2_application::runtime::{ProviderKind, Role, SessionState};
         // A pre-run Starting binding is deliberately still Unconfigured;
@@ -85,7 +86,7 @@ impl ManagedLaunchDescriptors {
                 && binding.state == SessionState::Starting
                 && binding.native_session_id.is_none()
         };
-        if !valid {
+        if !valid || resuming != resume_setup_id.is_some() {
             return Err(Error::AuthorityProtocol);
         }
         let role = match binding.role {
@@ -119,6 +120,8 @@ impl ManagedLaunchDescriptors {
         if resuming {
             self.setup.as_mut().ok_or(Error::AuthorityProtocol)?["native_session_id"] =
                 serde_json::json!(binding.native_session_id);
+            self.setup.as_mut().ok_or(Error::AuthorityProtocol)?["resume_setup_id"] =
+                serde_json::json!(resume_setup_id);
         }
         Ok(())
     }
@@ -317,11 +320,21 @@ mod tests {
         assert!(transfer.setup().is_err());
         binding.role = Role::Deep;
         assert!(transfer
-            .attest_setup(&binding, "synthetic-core-incarnation", ProviderKind::Codex)
+            .attest_setup(
+                &binding,
+                "synthetic-core-incarnation",
+                ProviderKind::Codex,
+                None
+            )
             .is_err());
         binding.role = Role::Worker;
         transfer
-            .attest_setup(&binding, "synthetic-core-incarnation", ProviderKind::Codex)
+            .attest_setup(
+                &binding,
+                "synthetic-core-incarnation",
+                ProviderKind::Codex,
+                None,
+            )
             .unwrap();
         assert_eq!(transfer.setup().unwrap()["generation"], 7);
         assert_eq!(
@@ -329,7 +342,7 @@ mod tests {
             "11111111-1111-4111-8111-111111111111"
         );
         assert!(transfer
-            .attest_setup(&binding, "invented-retry", ProviderKind::Codex)
+            .attest_setup(&binding, "invented-retry", ProviderKind::Codex, None)
             .is_err());
     }
     #[test]
@@ -398,22 +411,42 @@ mod tests {
         .unwrap()
         .transfer;
         assert!(transfer
-            .attest_setup(&binding, "synthetic-incarnation", ProviderKind::Codex)
+            .attest_setup(
+                &binding,
+                "synthetic-incarnation",
+                ProviderKind::Codex,
+                Some("22222222-2222-4222-8222-222222222222")
+            )
             .is_err());
         transfer.attach_resume(&bootstrap).unwrap();
         assert_eq!(transfer.mode(), "resume");
         assert_eq!(transfer.descriptors().len(), 5);
         assert!(transfer.attach_resume(&bootstrap).is_err());
         assert!(transfer
-            .attest_setup(&binding, "synthetic-incarnation", ProviderKind::Claude)
+            .attest_setup(
+                &binding,
+                "synthetic-incarnation",
+                ProviderKind::Claude,
+                Some("22222222-2222-4222-8222-222222222222")
+            )
             .is_err());
         binding.state = SessionState::Starting;
         assert!(transfer
-            .attest_setup(&binding, "synthetic-incarnation", ProviderKind::Codex)
+            .attest_setup(
+                &binding,
+                "synthetic-incarnation",
+                ProviderKind::Codex,
+                Some("22222222-2222-4222-8222-222222222222")
+            )
             .is_err());
         binding.state = SessionState::Ready;
         transfer
-            .attest_setup(&binding, "synthetic-incarnation", ProviderKind::Codex)
+            .attest_setup(
+                &binding,
+                "synthetic-incarnation",
+                ProviderKind::Codex,
+                Some("22222222-2222-4222-8222-222222222222"),
+            )
             .unwrap();
         assert_eq!(
             transfer.setup().unwrap()["native_session_id"],
@@ -421,7 +454,12 @@ mod tests {
         );
         assert_eq!(transfer.setup().unwrap()["generation"], 7);
         assert!(transfer
-            .attest_setup(&binding, "synthetic-incarnation", ProviderKind::Codex)
+            .attest_setup(
+                &binding,
+                "synthetic-incarnation",
+                ProviderKind::Codex,
+                Some("22222222-2222-4222-8222-222222222222")
+            )
             .is_err());
         let mut worker = prepare(
             Configuration {

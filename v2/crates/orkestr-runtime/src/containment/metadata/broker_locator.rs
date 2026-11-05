@@ -46,6 +46,7 @@ impl MetadataChild {
                 &self.shared.scope.binding,
                 &self.shared.scope.incarnation,
                 self.shared.scope.provider,
+                self.shared.scope.resume_setup_id.as_deref(),
             )?;
         }
         locator.managed = std::sync::Mutex::new(managed);
