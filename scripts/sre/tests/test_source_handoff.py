@@ -22,7 +22,7 @@ class SourceHandoffTests(unittest.TestCase):
             calls = []
             def send(conversation, body):
                 calls.append((conversation, body))
-                return dict(message_id='message-a', event_id='event-a', secret='DO-NOT-COPY')
+                return dict(message_id='11111111-1111-4111-8111-111111111111', event_id='22222222-2222-4222-8222-222222222222', sequence=1, status='accepted', secret='DO-NOT-COPY')
             result = h.deliver(tmp, decision(), send)
             again = h.deliver(tmp, decision(), send)
             self.assertEqual(len(calls), 1)

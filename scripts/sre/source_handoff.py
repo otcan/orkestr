@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import tempfile
+import uuid
 
 
 class HandoffRefused(ValueError):
@@ -46,12 +47,25 @@ def deliver(root, decision, submit, dry=False):
         raise HandoffRefused('missing_source_or_scope')
     if decision['verdict'] not in ('approve', 'deny', 'revoke', 'rescope', 'escalate'):
         raise HandoffRefused('invalid_verdict')
-    if type(decision.get('provider_generation')) is not int or decision['provider_generation'] < 0:
+    if type(decision.get('provider_generation')) is not int or not 0 <= decision['provider_generation'] <= 2**63-1:
         raise HandoffRefused('missing_provider_fence')
     if decision['verdict'] == 'rescope' and not decision.get('scope'):
         raise HandoffRefused('missing_scope')
     # Explicit projection: callers cannot accidentally serialize credentials.
     frozen = {k: decision[k] for k in (*required, 'provider_generation')}
+    # New typed adapters obtain these from authenticated Core context. Legacy
+    # records remain usable as transport history but cannot gain this evidence.
+    if 'owner_id' in decision or 'source_provider' in decision:
+        try:
+            owner = uuid.UUID(decision['owner_id'])
+            if owner.int == 0 or str(owner) != decision['owner_id'] or decision['source_provider'] not in ('codex', 'claude'):
+                raise ValueError()
+            for key in ('conversation_id', 'source_run_id'):
+                value = uuid.UUID(decision[key])
+                if value.int == 0 or str(value) != decision[key]: raise ValueError()
+        except (KeyError, ValueError, TypeError, AttributeError):
+            raise HandoffRefused('invalid_source_context') from None
+        frozen.update(owner_id=decision['owner_id'], source_provider=decision['source_provider'])
     if decision.get('scope'):
         frozen['scope'] = decision['scope']
     digest = hashlib.sha256(json.dumps(frozen, sort_keys=True).encode()).hexdigest()
@@ -72,6 +86,7 @@ def deliver(root, decision, submit, dry=False):
                        'scope': frozen.get('scope') or {'action': frozen['action'], 'resource': frozen['resource']},
                        'runtime_privileges_changed': False},
              'body': body, 'status': 'dry-run' if dry else 'claimed',
+             'text_sha256': hashlib.sha256(body['text'].encode()).hexdigest(),
              'execution_owner': 'source', 'work_completed': False}
     if dry:
         return state
@@ -89,9 +104,13 @@ def deliver(root, decision, submit, dry=False):
         atomic(path, state)  # claim and scoped decision survive a process crash
         try:
             receipt = submit(frozen['conversation_id'], body)
-            if not isinstance(receipt, dict) or not receipt.get('message_id') or not receipt.get('event_id'):
+            if not isinstance(receipt, dict) or receipt.get('status') != 'accepted' or type(receipt.get('sequence')) is not int or receipt['sequence'] < 1:
                 raise HandoffRefused('invalid_admission_receipt')
-            state['receipt'] = {k: receipt[k] for k in ('message_id', 'event_id')}
+            for field in ('message_id', 'event_id'):
+                value = uuid.UUID(receipt[field])
+                if value.int == 0 or str(value) != receipt[field]:
+                    raise HandoffRefused('invalid_admission_receipt')
+            state['receipt'] = {k: receipt[k] for k in ('message_id', 'event_id', 'sequence', 'status')}
             state['status'] = 'accepted'
         except Exception:
             state['status'] = 'unknown'  # Never replay on transport error or malformed receipt.
