@@ -77,7 +77,8 @@ impl ConfiguredExecution {
             .await
             .ok()
             .flatten();
-        let directories = ChildDirectories::new(
+        let directories = ChildDirectories::for_launcher(
+            &self.config.launcher,
             &self.config.workspace,
             &directory.join("home"),
             &directory.join("tmp"),

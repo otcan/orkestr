@@ -165,6 +165,7 @@ impl AppState {
         if config
             .host_full_access
             .as_ref()
+            .or(config.managed_host.as_ref())
             .is_some_and(|access| access.providers)
         {
             // Operator opt-in, before any provider session exists.
@@ -220,7 +221,7 @@ impl AppState {
                 initial.clone(),
                 handles.clone(),
                 manager,
-            )
+            )?
             .with_deploy_drain(self.deploy_drain.clone()),
         );
         controller.start_dispatcher();

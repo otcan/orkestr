@@ -365,7 +365,7 @@ while True:time.sleep(1)
             wait(fast_accepted,'Core accepted read-only Claude Fast',seconds=30)
         trace=(self.fixture.account/'sessions/synthetic-role.jsonl' if self.provider!='claude' else
                self.fixture.root/'claude-workspace/claude-peer.jsonl')
-        records=[json.loads(line) for line in trace.read_text().splitlines()]
+        records=[json.loads(line) for line in getattr(self,'trace_path',trace).read_text().splitlines()]
         assert any(r['kind']=='turn' for r in records)
         if self.provider=='claude':
             spawns=[r for r in records if r['kind']=='spawn']

@@ -41,6 +41,9 @@ pub(crate) struct BetaConfig {
     /// Owner/instance-level V1-equivalent full access; absent by default.
     #[serde(default)]
     pub host_full_access: Option<host_full_access::HostFullAccess>,
+    /// Host native under the separate executor UID with inherited no-new-privileges.
+    #[serde(default)]
+    pub managed_host: Option<host_full_access::HostFullAccess>,
     /// Codex capacity fallback (one same-run retry on a fallback model);
     /// absent means the enabled built-in default.
     #[serde(default)]
@@ -149,6 +152,17 @@ impl BetaConfig {
                 return Err("unsupported split execution mode");
             }
         }
+        if self.managed_host.is_some()
+            && (self.identity_split.is_none() || self.host_full_access.is_some())
+        {
+            return Err("managed host requires the identity split and excludes legacy full access");
+        }
+        if let Some(access) = &self.managed_host {
+            access.validate()?;
+            if !access.providers {
+                return Err("managed host requires host providers");
+            }
+        }
         if let Some(roles) = &self.roles {
             roles.validate(&self.launcher)?;
         }
@@ -177,7 +191,7 @@ impl BetaConfig {
             return Err("invalid window lifetime ceiling");
         }
         if !self.conversation_workspaces.is_empty()
-            && (self.host_full_access.is_none()
+            && ((self.host_full_access.is_none() && self.managed_host.is_none())
                 || self.conversation_workspaces.len() > MAX_CONVERSATION_WORKSPACES
                 || self
                     .conversation_workspaces
