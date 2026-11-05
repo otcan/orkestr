@@ -17,7 +17,7 @@ import { parseArgs } from "node:util";
 import { isMainModule } from "../main-module.mjs";
 import { buildContentManifest, manifestSummary } from "./content-manifest.mjs";
 import { createGithubClient, githubTokenFromEnv, parseGithubRepository } from "./github-api.mjs";
-import { ghAttestationVerifier } from "./gh-attestation.mjs";
+import { ghAttestationVerifier, ghUnavailableReason } from "./gh-attestation.mjs";
 import { describeAttestation, describeRunArtifacts, loadReleasePolicy, verifyArtifactContent, verifyRequiredChecks } from "./verify.mjs";
 
 export const GATE_REJECTED_EXIT_CODE = 77;
@@ -104,6 +104,9 @@ export async function runPreGate({ repoUrl, sha, env = process.env, fetchImpl = 
         // The run that would attest this commit may simply not have finished yet.
         if (checks.incompleteRunIds?.length) artifactReasons.push("attestation_run_pending");
       }
+      // A lookup that could not be made says nothing about the artifact, so an
+      // enforcing gate stops instead of reading it as "nothing wrong found".
+      if (modes.artifact === "enforce" && record.attestation.status === "attestation_unverified" && record.attestation.reason && record.attestation.reason !== "digest_unknown") artifactReasons.push("attestation_lookup_failed");
       if (modes.artifact === "enforce" && !token) artifactReasons.push("github_token_required_for_download");
     }
   }
@@ -112,7 +115,7 @@ export async function runPreGate({ repoUrl, sha, env = process.env, fetchImpl = 
   return record;
 }
 
-export async function runPostGate({ releaseDir, provenance, env = process.env, fetchImpl = globalThis.fetch, policy, ghVerify } = {}) {
+export async function runPostGate({ releaseDir, provenance, env = process.env, fetchImpl = globalThis.fetch, policy, ghVerify, spawn } = {}) {
   const modes = gateModes(env);
   const record = { ...provenance, gate: { ...(provenance?.gate || {}), reasons: [...(provenance?.gate?.reasons || [])] } };
   const distManifest = await buildContentManifest(path.join(releaseDir, "dist"), { label: "dist" });
@@ -122,23 +125,37 @@ export async function runPostGate({ releaseDir, provenance, env = process.env, f
   };
   const repository = parseGithubRepository(record.repository || "");
   const token = githubTokenFromEnv(env);
-  if (modes.artifact !== "off" && repository && record.artifact?.runtime?.id && token) {
+  if (modes.artifact === "off") return record;
+  const verifier = ghVerify === undefined ? ghAttestationVerifier({ env, spawn }) : ghVerify;
+  if (repository && record.artifact?.runtime?.id && token) {
     const content = await verifyArtifactContent({
       owner: repository.owner,
       repo: repository.repo,
+      sha: record.commit,
       artifacts: record.artifact,
       localManifest: distManifest,
       policy: policy || await loadReleasePolicy(),
       client: createGithubClient({ fetchImpl, token, apiBase: env.ORKESTR_GITHUB_API_URL }),
       token,
-      ghVerify: ghVerify === undefined ? ghAttestationVerifier({ env }) : ghVerify,
+      ghVerify: verifier,
     });
     record.artifact = { ...record.artifact, verification: { ok: content.ok, problems: content.problems, digestMatch: content.digestMatch, contentMatch: content.contentMatch, ciManifestMatch: content.ciManifestMatch, comparison: content.comparison || null } };
-    if (content.attestation) record.attestation = { ...record.attestation, ...content.attestation };
+    // The verification result supersedes whatever the pre-gate lookup reported.
+    if (content.attestation) record.attestation = { ...record.attestation, reason: undefined, ...content.attestation };
     if (!content.ok) {
       record.gate.reasons = [...new Set([...record.gate.reasons, ...content.problems])];
       if (modes.artifact === "enforce") record.gate.result = "rejected";
       else if (record.gate.result === "passed") record.gate.result = "warned";
+    }
+  }
+  // Enforce means the signature was checked and matched. No verifier, or a
+  // verification that never ran, is not a pass; warn records why and continues.
+  if (!["attestation_verified", "attestation_failed"].includes(record.attestation?.status)) {
+    const reason = typeof verifier === "function" ? "attestation_not_verified" : ghUnavailableReason({ env, spawn }) || "attestation_verifier_unavailable";
+    record.attestation = { status: "attestation_unverified", ...record.attestation, reason: record.attestation?.reason || reason };
+    if (modes.artifact === "enforce") {
+      record.gate.reasons = [...new Set([...record.gate.reasons, reason])];
+      record.gate.result = "rejected";
     }
   }
   return record;
