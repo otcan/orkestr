@@ -1,15 +1,20 @@
 {
- "default_seconds": 0.3,
+ "about": [
+  "Seconds a test adds to its shard on a hosted runner; used only to balance the shards.",
+  "A test in a binary of its own adds its whole duration. A test inside a large binary runs",
+  "beside its neighbours and adds less. Unlisted tests count default_seconds each.",
+  "The two store property tests carry their duration in the former single job, so that",
+  "each keeps a shard to itself; alone on a runner they take about four minutes."
+ ],
+ "default_seconds": 0.34,
  "tests": {
   "production_runtime::execution_window::role_tests::stranded::failures::property::every_stranded_shape_becomes_terminal_after_the_grace": 738,
   "production_runtime::execution_window::role_tests::stranded::failures::property::every_stranded_shape_becomes_terminal_within_the_grace_once_the_owner_accepts": 738,
   "owner_worker_budgets_preserve_deadlines_stop_and_tool_lineage": 153,
-  "preflight::tests::schema36_edges::populated_prefixes_copy_first_edges_to_50_preserve_rows_and_rollback_source": 100,
   "ordinary_durable_timer_binary_logout_restart_crash_and_revocation": 72,
   "same_owned_process_survives_natural_lease_and_original_control_still_stops": 69,
-  "production_runtime::process_tests::actual_process_crashes_preserve_atomic_ack_and_never_reissue_dispatch": 64,
-  "containment::tests::durable_races::natural_store_deadline_expiry_fences_owned_child_without_clock_override": 62,
   "steering_is_scoped_durable_and_never_replayed_after_uncertainty": 60,
+  "containment::tests::durable_races::natural_store_deadline_expiry_fences_owned_child_without_clock_override": 54,
   "worker_original_reap_proofs_survive_parent_lifecycle": 47,
   "ordinary_fast_presentation_continuation_stop_restart_and_revocation": 43,
   "ordinary_http_dispatch_progress_acceptance_and_revocation": 43,
@@ -28,9 +33,11 @@
   "database_aliases_are_refused_without_mutation": 11,
   "http_and_crash_recovery": 11,
   "idle_broker_loss_reaps_without_fabricating_durable_authority": 10,
+  "preflight::tests::schema36_edges::populated_prefixes_copy_first_edges_to_50_preserve_rows_and_rollback_source": 10,
   "parent_proposal_cleans_workers_without_acceptance_or_new_dispatch": 7,
   "two_live_parent_worker_tasks_preserve_scope_and_independent_control": 6,
   "authenticated_execution_projection": 5,
+  "production_runtime::process_tests::actual_process_crashes_preserve_atomic_ack_and_never_reissue_dispatch": 5,
   "mounted_worker_discovery_requires_current_cookie_and_exact_scope": 3,
   "resource_health_http": 3
  }

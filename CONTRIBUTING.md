@@ -63,6 +63,10 @@ The Rust rewrite lives in `v2/` and builds with the toolchain pinned in
 - `v2-rust.yml` (rust-v2) runs on every push to `v2/rust-rewrite` and on PRs
   into `v2/**`: format, clippy, the locked workspace build, the HTTP
   scenarios and `cargo test --locked --workspace`.
+  The parts run as parallel jobs (`lint`, `service`, `http` and eight `unit`
+  shards of the workspace tests); `rust-v2` is the one check that needs them
+  all. A new test that takes more than a few seconds belongs in
+  `v2/tests/ci_test_weights.json`, which only balances the shards.
 - `v2-browser.yml` runs the headless-rendering checks.
 - Both restore a dependency build cache (`Swatinem/rust-cache`) saved from
   `v2/rust-rewrite`, so PR runs recompile only workspace crates.

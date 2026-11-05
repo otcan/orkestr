@@ -99,10 +99,15 @@ class CommandTests(unittest.TestCase):
                 with self.assertRaises(shards.Refused):
                     shards.load_weights(path)
 
-    def test_the_checked_in_weights_load(self):
+    def test_the_checked_in_weights_leave_each_store_property_test_alone_on_eight_shards(self):
         default, weights = shards.load_weights(Path(__file__).with_name("ci_test_weights.json"))
-        self.assertGreater(default, 0)
-        self.assertTrue(weights)
+        names = [*weights, *(f"suite::case_{n}" for n in range(1950))]
+        groups, loads = shards.assign(names, 8, default, weights)
+        alone = [group[0] for group in groups if len(group) == 1]
+        self.assertEqual(len(alone), 2)
+        self.assertTrue(all("::stranded::failures::property::" in name for name in alone))
+        shared = [load for group, load in zip(groups, loads) if len(group) > 1]
+        self.assertLess(max(shared) - min(shared), 2.0)
 
 
 if __name__ == "__main__":
