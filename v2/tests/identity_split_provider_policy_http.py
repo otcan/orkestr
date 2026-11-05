@@ -25,7 +25,7 @@ class PolicyRehearsal(Rehearsal):
                 (self.fixture.workspace/'mode').write_text('complete')
             if debug_broker:
                 path=self.package.root/'codex_service/broker.py';source=path.read_text()
-                diagnostic='\n'.join(['    except Exception as diagnostic:', '        import re', '        reason=str(diagnostic)', "        reason=reason if re.fullmatch('[a-z_]{1,80}',reason) else 'nonliteral_refusal'", '        frames=[];trace=diagnostic.__traceback__', '        while trace and len(frames)<10:', "            frames.append((trace.tb_frame.f_code.co_filename.rsplit('/',1)[-1],trace.tb_lineno));trace=trace.tb_next", "        sys.stderr.write('SYNTHETIC ONLY diagnostic: '+type(diagnostic).__name__+':'+reason+':'+str(getattr(diagnostic,'errno',0))+':'+str(frames)+'\\n')"])+'\n'
+                diagnostic='\n'.join(['    except Exception as diagnostic:', '        import re', '        reason=str(diagnostic)', "        reason=reason if re.fullmatch('[a-z_]{1,80}',reason) else 'nonliteral_refusal'", "        sys.stderr.write('SYNTHETIC_CHILD_EXIT='+str(getattr(getattr(pump,'child',None),'returncode',None))+'\\n')", '        frames=[];trace=diagnostic.__traceback__', '        while trace and len(frames)<10:', "            frames.append((trace.tb_frame.f_code.co_filename.rsplit('/',1)[-1],trace.tb_lineno));trace=trace.tb_next", "        sys.stderr.write('SYNTHETIC ONLY diagnostic: '+type(diagnostic).__name__+':'+reason+':'+str(getattr(diagnostic,'errno',0))+':'+str(frames)+'\\n')"])+'\n'
                 anchor='    except Exception:\n        sys.stderr.write(\"selected Codex service broker refused'
                 assert source.count(anchor)==1
                 changed=source.replace(anchor,diagnostic+'        sys.stderr.write(\"selected Codex service broker refused')
@@ -158,9 +158,10 @@ def main():
     version=subprocess.run([args.binary,'--version','--json'],check=True,capture_output=True,text=True,env={'PATH':'/usr/bin:/bin'})
     version=json.loads(version.stdout)
     assert version.get('component')=='server' and version.get('source_commit')==args.expected_source,'binary source mismatch'
+    from isolation.authenticated_budget import AUTHENTICATED
     hard=resource.getrlimit(resource.RLIMIT_AS)[1]
-    bound=3*1024**3 if hard==resource.RLIM_INFINITY else min(hard,3*1024**3)
-    resource.setrlimit(resource.RLIMIT_AS,(bound,bound))
+    assert hard==resource.RLIM_INFINITY or hard>=AUTHENTICATED.address_bytes,'inherited virtual limit conflicts with declared native budget'
+    resource.setrlimit(resource.RLIMIT_AS,(AUTHENTICATED.address_bytes,AUTHENTICATED.address_bytes))
     case=PolicyRehearsal(args.binary,args.minimal_profile,args.debug_broker,args.idle_handoff)
     case.expected_source=args.expected_source
     try:result=case.run()
