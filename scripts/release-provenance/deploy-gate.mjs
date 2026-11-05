@@ -83,12 +83,26 @@ export async function runPreGate({ repoUrl, sha, env = process.env, fetchImpl = 
     record.ci = compactChecks(checks);
     if (modes.checks !== "off" && !checks.ok) checkReasons.push(...checks.reasons);
     if (modes.artifact !== "off") {
-      const artifacts = await describeRunArtifacts({ owner, repo, runId: checks.runId, sha, policy: effectivePolicy, client });
+      // CI attests push and dispatch builds only. A pull_request run that passed
+      // for the same commit has an artifact nobody signed, so among the runs that
+      // passed, take the artifact from one that has an attestation.
+      let artifacts = null;
+      for (const runId of new Set([checks.runId, ...(checks.passedRunIds || [])])) {
+        const described = await describeRunArtifacts({ owner, repo, runId, sha, policy: effectivePolicy, client });
+        const attestation = described.runtime?.digest ? await describeAttestation({ owner, repo, digest: described.runtime.digest, client }) : null;
+        const attested = attestation?.status === "attestation_present_unverified";
+        if (!artifacts || attested) {
+          artifacts = described;
+          record.attestation = attestation || { status: "attestation_unverified" };
+        }
+        if (attested) break;
+      }
       record.artifact = { runId: artifacts.runId, runtime: artifacts.runtime, manifest: artifacts.manifest, problems: artifacts.problems };
       artifactReasons.push(...artifacts.problems);
-      if (artifacts.runtime?.digest) {
-        record.attestation = await describeAttestation({ owner, repo, digest: artifacts.runtime.digest, client });
-        if (record.attestation.status === "attestation_missing") artifactReasons.push("attestation_missing");
+      if (record.attestation.status === "attestation_missing") {
+        artifactReasons.push("attestation_missing");
+        // The run that would attest this commit may simply not have finished yet.
+        if (checks.incompleteRunIds?.length) artifactReasons.push("attestation_run_pending");
       }
       if (modes.artifact === "enforce" && !token) artifactReasons.push("github_token_required_for_download");
     }
@@ -147,6 +161,7 @@ function report(record, stderr) {
   const ci = record.ci?.runUrl ? ` CI run ${record.ci.runUrl}.` : "";
   if (gate.result === "rejected") {
     stderr.write(`Release provenance gate rejected ${record.commit} (checks=${gate.requireChecks}, artifact=${gate.artifactProvenance}): ${gate.reasons.join(", ")}.${ci}\n`);
+    if (gate.reasons.includes("attestation_run_pending")) stderr.write("Another CI run for this commit has not finished, and only push and dispatch runs attest the artifact. Retry when it has completed.\n");
     stderr.write("Fix CI for this exact commit, or set ORKESTR_DEPLOY_REQUIRE_CHECKS / ORKESTR_DEPLOY_ARTIFACT_PROVENANCE to warn for an explicitly accepted exception.\n");
   } else if (gate.result === "warned") {
     stderr.write(`Release provenance warning for ${record.commit}: ${gate.reasons.join(", ")} (continuing; checks=${gate.requireChecks}, artifact=${gate.artifactProvenance}).${ci}\n`);

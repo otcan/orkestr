@@ -83,6 +83,8 @@ export function evaluateCheckRuns(checkRuns = [], { sha, policy, owner = "", rep
     headShaMatch: chosen.checks.length > 0 && chosen.headMismatch.length === 0,
     runId: runId || null,
     runIds: evaluated.map((group) => group.runId).filter((id) => id && id !== "unknown"),
+    passedRunIds: evaluated.filter((group) => group.ok && group.runId !== "unknown").map((group) => group.runId),
+    incompleteRunIds: evaluated.filter((group) => !group.ok && group.runId !== "unknown" && !group.failed.length && !group.headMismatch.length).map((group) => group.runId),
     runUrl: runId && owner && repo ? `https://github.com/${owner}/${repo}/actions/runs/${runId}` : null,
     required: { checks: policy.requiredChecks, prefixes: policy.requiredCheckPrefixes || [] },
     checks: chosen.checks,
