@@ -128,11 +128,11 @@ jobs:
       - name: Rust lint
         run: cargo +1.99.1 clippy --locked --workspace --all-targets -- -D warnings
       - name: Locked build
-        run: |
-          version=$(python3 -I -S -B -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')
-          ORKESTR_V2_BUILD_IDENTITY="ORKESTR_V2_BUILD_IDENTITY_V1|server|$version|$(git rev-parse HEAD)|END" cargo +1.99.1 build --locked --workspace
+        run: cargo +1.99.1 build --locked --workspace
       - name: Privileged password recovery over actual local socket and Core
         run: |
+          version=$(python3 -I -S -B -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')
+          ORKESTR_V2_BUILD_IDENTITY="ORKESTR_V2_BUILD_IDENTITY_V1|server|$version|$(git rev-parse HEAD)|END" cargo +1.99.1 build --locked -p orkestr-v2-server
           sudo env PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -I -S -B tests/operator_password_recovery_http.py --server "$CARGO_TARGET_DIR/debug/orkestr-v2-server" --source-commit "$(git rev-parse HEAD)" --report "$RUNNER_TEMP/v2-password-recovery.json"
       - name: Protected beta configuration custody regressions
         run: |
