@@ -30,6 +30,7 @@ impl ConfiguredExecution {
             tasks: None,
         });
         let fast_config = config::Config {
+            provider_routing: config.provider_routing.clone(),
             schema_version: 1,
             mode: "isolated_acceptance".into(),
             conversation_id: config.conversation_id.clone(),

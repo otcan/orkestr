@@ -42,7 +42,13 @@ pub(crate) fn load(path: &Path, home: &Path) -> Result<BetaConfig, &'static str>
         return Err(REFUSED);
     }
     for workspace in config.conversation_workspaces.values() {
-        workspace.custody(home, executor_uid)?;
+        if config.identity_split.is_none() {
+            workspace.custody(home, executor_uid)?;
+        } else if workspace.path().starts_with(home) || home.starts_with(workspace.path()) {
+            return Err(REFUSED);
+        }
+        // Split mapped directories are checked by the original Root manager
+        // and again by the executor. Core cannot open executor-private trees.
     }
     let launcher = protected_bytes(&config.launcher, gid, true, 16 * 1024 * 1024)?;
     if format!("{:x}", Sha256::digest(launcher)) != config.launcher_sha256 {
@@ -118,7 +124,13 @@ pub(crate) fn load(path: &Path, home: &Path) -> Result<BetaConfig, &'static str>
     private_directory(home, uid, gid)?;
     private_directory(&config.workspace, executor_uid, gid)?;
     for workspace in config.conversation_workspaces.values() {
-        workspace.custody(home, executor_uid)?;
+        if config.identity_split.is_none() {
+            workspace.custody(home, executor_uid)?;
+        } else if workspace.path().starts_with(home) || home.starts_with(workspace.path()) {
+            return Err(REFUSED);
+        }
+        // Split mapped directories are checked by the original Root manager
+        // and again by the executor. Core cannot open executor-private trees.
     }
     protected_chain(path, None)?;
     protected_chain(&config.launcher, None)?;

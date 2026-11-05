@@ -303,6 +303,7 @@ impl Controller {
     }
 
     async fn drain_round(&self, browser: &str) -> Result<bool, RuntimeStoreError> {
+        self.recover_policy_steering(browser).await?;
         let rows = self
             .store
             .execution_window_queue_authenticated(browser, None)
@@ -362,6 +363,13 @@ impl Controller {
                 }
                 Err(error) => return Err(error),
             }
+            let request = match self
+                .route_operator_policy(browser, &self.config.owner_id, conversation, &request)
+                .await
+            {
+                Ok(Some(request)) => request,
+                Ok(None) | Err(_) => continue,
+            };
             let Ok(entry) = self.entry(conversation) else {
                 continue;
             };

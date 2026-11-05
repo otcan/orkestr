@@ -18,9 +18,10 @@ class Configuration:
         self.role = role
         self.profile = SelectedCodexProfile(package.role_profiles[role])
         self.workspace_descriptor = None
-        self.workspace = self.profile.workspace
+        from .managed_host import selected_workspace
+        self.workspace = selected_workspace(package, self.profile.workspace, role)
         self.issued = False
-        access = package.beta.get("host_full_access")
+        access = package.beta.get("managed_host", package.beta.get("host_full_access"))
         # Operator instance opt-in: run the pinned native directly on the host
         # with the real executor environment (V1-equivalent, host-root equivalent).
         self.host_full_access = type(access) is dict and access.get("providers", True) is True

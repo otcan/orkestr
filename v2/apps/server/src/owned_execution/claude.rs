@@ -340,11 +340,15 @@ impl ConfiguredExecution {
     ) -> Result<Option<ReadyClaudeExecution>, &'static str> {
         self.maintain(heartbeat).await?;
         self.config.verify_launcher()?;
+        if !self.provider_input_allowed(None).await? {
+            return Ok(None);
+        }
         self.capture_managed_setup(&grant)?;
         if *shutdown.borrow() {
             return Ok(None);
         }
-        let directories = ChildDirectories::new(
+        let directories = ChildDirectories::for_launcher(
+            &self.config.launcher,
             &self.config.workspace,
             &self.directory.join("home"),
             &self.directory.join("tmp"),

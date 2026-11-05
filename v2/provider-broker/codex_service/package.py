@@ -17,7 +17,7 @@ MODULES_SERVICE = ("__init__.py", "contract.py", "ledger.py", "budget.py", "cust
                    "server_child.py", "broker.py", "profile.py", "entry.py", "role_profiles.py",
                    "claude_broker.py", "identity.py", "launch.py", "launch_child.py", "proxy.py", "attachment_exports.py",
                    "password_recovery.py", "managed_resume.py", "desk_operations.py", "desk_anchor.py",
-                   "managed_ingress.py", "managed_control.py", "managed_client.py", "native_io.py")
+                   "managed_ingress.py", "managed_control.py", "managed_client.py", "native_io.py", "managed_host.py")
 # Shared with the server and packager: room for many per-conversation
 # command profiles.
 MAX_BETA_CONFIG_BYTES = 262144
@@ -224,7 +224,7 @@ class Package:
         beta = self.beta
         require(set(beta) - {"roles", "workspace_exec", "additional_workspace_exec", "max_active_windows",
                              "window_max_minutes", "conversation_window_max_minutes",
-                             "host_full_access", "claude", "conversation_workspaces", "provider_routing", "identity_split"} == {"schema_version", "owner_id", "conversation_id", "manager_socket",
+                             "host_full_access", "managed_host", "claude", "conversation_workspaces", "provider_routing", "identity_split"} == {"schema_version", "owner_id", "conversation_id", "manager_socket",
                 "launcher", "launcher_sha256", "workspace", "namespace", "supervisor_key"}
                 and type(beta["schema_version"]) is int and beta["schema_version"] == 1,
                 "beta_format")
@@ -245,6 +245,8 @@ class Package:
             # Runtime's owner-wide capacity; the ledger's own ceiling stays above it.
             require(type(beta["max_active_windows"]) is int
                     and 0 < beta["max_active_windows"] <= MAX_RUNTIME_WINDOWS, "beta_window_capacity")
+        from .managed_host import validate as validate_managed_host
+        validate_managed_host(self)
         if "host_full_access" in beta:
             access = beta["host_full_access"]
             require(type(access) is dict and set(access) <= {"providers", "environment", "environment_files"}
@@ -260,7 +262,7 @@ class Package:
         if "conversation_workspaces" in beta:
             # Per-conversation Deep/Fast working directories, host full access only.
             table = beta["conversation_workspaces"]
-            require(type(table) is dict and 0 < len(table) <= 128 and "host_full_access" in beta
+            require(type(table) is dict and 0 < len(table) <= 128 and ("host_full_access" in beta or "managed_host" in beta)
                     and all(type(k) is str and re.fullmatch(
                         r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", k)
                         for k in table), "conversation_workspaces")
@@ -308,7 +310,7 @@ class Package:
             require(a != b and a not in b.parents and b not in a.parents, "state_scope_overlap")
         for name in ("server", "native", "manager.py", "launcher.py"):
             require((self.root / name).stat().st_mode & 0o111, "executable_required")
-        access = beta.get("host_full_access")
+        access = beta.get("managed_host", beta.get("host_full_access"))
         host_providers = type(access) is dict and access.get("providers", True) is True
         packaged = CODE_MODE_HOST in self.manifest["files"]
         # Host natives need their code-mode host; nothing else may carry one.

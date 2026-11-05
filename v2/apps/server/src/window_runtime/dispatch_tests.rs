@@ -140,6 +140,7 @@ impl Fixture {
             Handles::new(self.owner.clone(), self.home.clone()).unwrap(),
             manager,
         )
+        .unwrap()
     }
     async fn conversation(&self, name: &str) -> ConversationId {
         self.store

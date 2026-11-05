@@ -476,6 +476,8 @@ async fn populated_payload_prefix_upgrade_preserves_all_rows_and_foreign_links()
         "service_credentials",
         "message_request_sources",
         "source_admission_fences",
+        "operator_provider_handoffs",
+        "conversation_provider_policy_matches",
         "encrypted_uploads",
         "encrypted_upload_chunks",
         "deep_desk_operations",

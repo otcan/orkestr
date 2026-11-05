@@ -88,13 +88,52 @@ impl Store {
         conversation: &ConversationId,
         request: &ProviderHandoffRequest,
     ) -> Result<ProviderHandoffReceipt> {
-        if !request.is_valid() {
+        self.handoff_provider_with_policy(browser, conversation, request, None)
+            .await
+    }
+
+    pub async fn handoff_provider_for_operator_policy(
+        &self,
+        browser: &str,
+        conversation: &ConversationId,
+        request: &ProviderHandoffRequest,
+        proof: &super::operator_policy::OperatorProviderPolicy,
+    ) -> Result<ProviderHandoffReceipt> {
+        self.handoff_provider_with_policy(browser, conversation, request, Some(proof))
+            .await
+    }
+
+    async fn handoff_provider_with_policy(
+        &self,
+        browser: &str,
+        conversation: &ConversationId,
+        request: &ProviderHandoffRequest,
+        policy: Option<&super::operator_policy::OperatorProviderPolicy>,
+    ) -> Result<ProviderHandoffReceipt> {
+        if !request.is_valid() || policy.is_some_and(|proof| !proof.valid(true)) {
             return Err(RuntimeStoreError::InvalidInput);
         }
         let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
-        let owner = authenticated_owner(self, &mut tx, browser).await?;
+        let owner = if policy.is_some() {
+            browser_owner(self, &mut tx, browser).await?
+        } else {
+            authenticated_owner(self, &mut tx, browser).await?
+        };
         crate::runtime::scope(&mut tx, &owner, conversation).await?;
         if let Some(receipt) = existing(&mut tx, &owner, conversation, request).await? {
+            if let Some(proof) = policy {
+                let expected = (
+                    proof.source_message_id.to_string(),
+                    proof.policy_sha256.clone(),
+                    proof.source_commit.clone(),
+                    serde_json::to_string(&proof.rule_ids).map_err(db)?,
+                );
+                let found:Option<(String,String,String,String)>=sqlx::query_as("SELECT source_message_id,policy_sha256,source_commit,rule_ids_json FROM operator_provider_handoffs WHERE handoff_id=?")
+                    .bind(receipt.handoff_id.to_string()).fetch_optional(&mut *tx).await.map_err(db)?;
+                if found != Some(expected) {
+                    return Err(RuntimeStoreError::Conflict);
+                }
+            }
             tx.commit().await.map_err(db)?;
             return Ok(receipt);
         }
@@ -121,9 +160,15 @@ impl Store {
             None,
         )
         .await?;
-        let queued: i64 = sqlx::query_scalar("SELECT (SELECT count(*) FROM reasoning_inbox WHERE conversation_id=? AND state='queued') + (SELECT count(*) FROM execution_window_queue WHERE owner_id=? AND conversation_id=? AND state='queued')")
-            .bind(conversation.to_string()).bind(owner.to_string()).bind(conversation.to_string())
-            .fetch_one(&mut *tx).await.map_err(db)?;
+        let queued = if let Some(proof) = policy {
+            super::operator_policy::pending_input(&mut tx, &owner, conversation, proof).await?;
+            sqlx::query_scalar::<_,i64>("SELECT (SELECT count(*) FROM reasoning_inbox WHERE conversation_id=? AND state IN ('queued','claimed') AND message_id!=?) + (SELECT count(*) FROM execution_window_queue WHERE owner_id=? AND conversation_id=? AND state='queued' AND message_id!=?)")
+                .bind(conversation.to_string()).bind(proof.source_message_id.to_string()).bind(owner.to_string()).bind(conversation.to_string()).bind(proof.source_message_id.to_string())
+                .fetch_one(&mut *tx).await.map_err(db)?
+        } else {
+            sqlx::query_scalar::<_,i64>("SELECT (SELECT count(*) FROM reasoning_inbox WHERE conversation_id=? AND state='queued') + (SELECT count(*) FROM execution_window_queue WHERE owner_id=? AND conversation_id=? AND state='queued')")
+                .bind(conversation.to_string()).bind(owner.to_string()).bind(conversation.to_string()).fetch_one(&mut *tx).await.map_err(db)?
+        };
         let unsafe_bindings: i64 = sqlx::query_scalar("SELECT count(*) FROM session_bindings WHERE owner_id=? AND conversation_id=? AND state IN ('busy','lost','blocked')")
             .bind(owner.to_string()).bind(conversation.to_string()).fetch_one(&mut *tx).await.map_err(db)?;
         let children: i64 = sqlx::query_scalar("SELECT count(*) FROM worker_provider_delegations d WHERE d.owner_id=? AND d.conversation_id=? AND ((d.admitted_run_id IS NULL AND d.state='delegated') OR (d.admitted_run_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM production_terminal_evidence t WHERE t.run_id=d.admitted_run_id)))")
@@ -171,6 +216,12 @@ impl Store {
             .bind(request.target_provider.as_str()).bind(receipt.settings_revision).bind(receipt.provider_generation)
             .bind(&request.history_summary).bind(&receipt.history_sha256).bind(receipt.created_at_ms)
             .bind(serde_json::to_string(&receipt).map_err(db)?).execute(&mut *tx).await.map_err(db)?;
+        if let Some(proof) = policy {
+            super::operator_policy::record(&mut tx, &owner, conversation, proof).await?;
+            sqlx::query("INSERT INTO operator_provider_handoffs(handoff_id,source_message_id,policy_sha256,source_commit,rule_ids_json) VALUES(?,?,?,?,?)")
+                .bind(receipt.handoff_id.to_string()).bind(proof.source_message_id.to_string()).bind(&proof.policy_sha256).bind(&proof.source_commit)
+                .bind(serde_json::to_string(&proof.rule_ids).map_err(db)?).execute(&mut *tx).await.map_err(db)?;
+        }
         tx.commit().await.map_err(db)?;
         Ok(receipt)
     }

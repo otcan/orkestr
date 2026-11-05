@@ -76,7 +76,11 @@ def main(root):
         preferences=launch_context()['preferences'] if package.identity_split else None
         require((config.managed_host is not None and package.identity_split) or
                 (config.host_full_access is not None and not package.identity_split), "claude_host_profile_required")
-        if not package.identity_split:
+        if package.identity_split:
+            from .managed_host import selected_workspace
+            config = dataclasses.replace(config, workspace=Path(selected_workspace(package, config.workspace, "claude")))
+            config.validate()
+        else:
             config = conversation_workspace(config, package.beta, os.getcwd())
         with socket.socket(fileno=3) as handoff:
             require(handoff.family == socket.AF_UNIX and handoff.type == socket.SOCK_STREAM,

@@ -21,6 +21,7 @@ impl ConfiguredExecution {
                     self.token.clone(),
                     WorkerConfiguration {
                         policy: policy.clone(),
+                        provider_routing: self.config.provider_routing.clone(),
                         launcher: launcher.to_owned(),
                         launcher_sha256: launcher_sha256.to_owned(),
                         workspace: self.config.workspace.clone(),

@@ -16,6 +16,9 @@ impl ConfiguredExecution {
     ) -> Result<Option<ReadyCodex>, &'static str> {
         self.maintain(heartbeat).await?;
         self.config.verify_launcher()?;
+        if !self.provider_input_allowed(None).await? {
+            return Ok(None);
+        }
         self.capture_managed_setup(&grant)?;
         if self.desk_enabled() {
             let source = orkestr_v2_store_sqlite::DeskLoginSetup::from_metadata(&grant)
@@ -28,7 +31,8 @@ impl ConfiguredExecution {
         if *shutdown.borrow() {
             return Ok(None);
         }
-        let directories = ChildDirectories::new(
+        let directories = ChildDirectories::for_launcher(
+            &self.config.launcher,
             &self.config.workspace,
             &self.directory.join("home"),
             &self.directory.join("tmp"),
