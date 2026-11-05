@@ -52,7 +52,7 @@ async fn actual_store_upgrade_holds_unverifiable_old_claims_and_preserves_histor
         .unwrap()
         .0;
     let token = "ab".repeat(32);
-    store.save_session(&token, &owner).await.unwrap();
+    historical_guard.save_session(&store, &token, &owner).await;
     let handle = store
         .authorize_supervisor(
             &token,
