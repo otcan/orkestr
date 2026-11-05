@@ -71,6 +71,16 @@ def context(runtime,beta,profile,claude=None,package_root=None):
         artifacts=[path(runtime[k]) for k in ('server','ui','native','pair','code_mode_host') if k in runtime],
         projects=([beta['workspace_exec']] if 'workspace_exec' in beta else [])+beta.get('additional_workspace_exec',[]),
         beta=beta)
+    native=beta.get('conversation_workspaces',{})
+    require(type(native) is dict and len(native)<=128,'resource_native_workspaces')
+    result['native_workspaces']=[]
+    for conversation,entry in native.items():
+        identifier(conversation)
+        shared=type(entry) is dict
+        require(not shared or set(entry)=={'path','shared'} and entry['shared'] is True,
+                'resource_native_workspace_fields')
+        result['native_workspaces'].append(dict(conversation_id=conversation,
+            workspace=str(path(entry['path'] if shared else entry)),shared=shared))
     result['protected']=[path(runtime[k]) for k in ('home','bootstrap_file','ledger_directory','endpoint_directory')]
     if package_root is not None:result['protected'].append(path(str(package_root)))
     environments=[]

@@ -17,8 +17,11 @@ def owner(profile, executor):
     return value
 
 
-def check(fd, project_owner, executor, permissions, owner_leaf=False, executor_gid=None):
+def check(fd, project_owner, executor, permissions, owner_leaf=False, executor_gid=None, selected_writers=()):
     if executor_gid is None:executor_gid=executor
+    require(type(selected_writers) in (tuple,list,set,frozenset) and len(selected_writers)<=9
+            and all(type(uid) is int and 0<uid<2**31 for uid in selected_writers), 'workspace_selected_writers')
+    writers={0,project_owner,executor,*selected_writers}
     meta=os.fstat(fd)
     require(meta.st_uid in (0,project_owner) and meta.st_mode&0o002==0,
             'workspace_managed_custody')
@@ -57,5 +60,5 @@ def check(fd, project_owner, executor, permissions, owner_leaf=False, executor_g
     require(effective&permissions==permissions,'workspace_executor_access')
     for tag,bits,uid in entries:
         require(tag in (1,2,4,8,0x10,0x20),'workspace_named_executor_acl')
-        if tag in (4,8,0x20) or tag==2 and uid not in (0,project_owner,executor):
+        if tag in (4,8,0x20) or tag==2 and uid not in writers:
             require(bits&2==0,'workspace_unselected_acl_writer')
