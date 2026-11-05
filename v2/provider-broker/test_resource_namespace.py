@@ -219,6 +219,15 @@ class ResourceNamespaceTests(unittest.TestCase):
             self.assertEqual(len(receipt['projects']),2)
             self.assertFalse(hidden.exists())
             self.assertEqual(worktree.stat().st_uid,OLD)
+            # Both selected leaves are otherwise readable/traversable. Only
+            # the private sparse-home ancestor must prevent Core path access.
+            self.assertEqual(worktree.stat().st_mode&0o005,0o005)
+            self.assertEqual((repo/'.git').stat().st_mode&0o005,0o005)
+            for candidate in (worktree/'data.txt',repo/'.git/HEAD'):
+                denied_core=subprocess.run(['/usr/bin/setpriv','--no-new-privs','--reuid='+str(CORE),
+                    '--regid='+str(EXEC),'--clear-groups','/bin/cat',str(candidate)],
+                    capture_output=True,env={'PATH':'/usr/bin:/bin'},timeout=5)
+                self.assertNotEqual(denied_core.returncode,0)
             # Original source lookup remains usable through Root's retained
             # original-home FD even while logical paths show sparse masks.
             fd=original_source(self.doc['resources'][0],receipt['home_lookups'],receipt['creator'],self.doc['source_homes'])

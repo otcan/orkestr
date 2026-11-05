@@ -53,7 +53,7 @@ def install(ctx,doc,projects,mounted):
                 'resource_artifact_in_private_home')
     for home in active:
         fd=os.open(home['path'],os.O_PATH|os.O_DIRECTORY|os.O_NOFOLLOW|os.O_CLOEXEC)
-        try:empty_home(fd)
+        try:empty_home(fd,ctx['executor_uid'])
         finally:os.close(fd)
         mounted.append(os.open(home['path'],os.O_PATH|os.O_DIRECTORY|os.O_NOFOLLOW|os.O_CLOEXEC))
     receipts=[]

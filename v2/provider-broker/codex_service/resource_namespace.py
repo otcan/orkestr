@@ -109,6 +109,8 @@ class Activation:
         denied(self.ctx['executor_uid'],self.ctx['executor_gid'],checks)
         denied(self.ctx['authority_uid'],self.ctx['authority_gid'],[
             {'path':row['target'],'operation':'read'} for row in doc['resources'] if row['kind'] not in READONLY])
+        denied(self.ctx['authority_uid'],self.ctx['authority_gid'],[
+            {'path':row['path'],'operation':'read'} for row in projected])
         value=dict(format=FORMAT,contract=doc,creator=process(os.getpid()),namespace=ns('mnt'),
                    parent_namespace=parent,user_namespace=ns('user'),targets=targets,home_lookups=self.homes,projects=projected)
         self.receipt=receipt_path(self.selected)
