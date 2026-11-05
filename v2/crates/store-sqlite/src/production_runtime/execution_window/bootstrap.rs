@@ -149,7 +149,7 @@ impl Store {
     }
 
     /// First-window bootstrap again, after every earlier opening of this
-    /// conversation was reconciled as `failed` before running anything. The
+    /// conversation was reconciled as `failed` before dispatching a turn. The
     /// fenced bootstrap supervisor is taken over (new incarnation, next
     /// generation) and the never-used Fast/Deep bindings are retired for fresh
     /// ones; no run, readiness or native identity is carried over.
@@ -172,14 +172,15 @@ impl Store {
         let floor = native_reset::floor(&mut tx, &owner, conversation).await?;
         let handoff =
             handoff_context::target(&mut tx, &owner, conversation, config.provider).await?;
-        let runs: i64 = sqlx::query_scalar("SELECT count(*) FROM production_runs r WHERE r.owner_id=? AND r.conversation_id=? AND NOT EXISTS(SELECT 1 FROM execution_windows w WHERE w.context_id=r.context_id AND w.incarnation_id=r.incarnation_id AND w.generation<=?)")
-        .bind(owner.to_string())
-        .bind(conversation.to_string())
-        .bind(floor)
-        .fetch_one(&mut *tx)
-        .await
-        .map_err(db)?;
-        if !failed_first_lineage_in(&mut tx, &owner, conversation).await? || runs != 0 {
+        if !failed_first_lineage_in(&mut tx, &owner, conversation).await?
+            || !super::super::failed_fast_setup::bootstrap_runs_clear(
+                &mut tx,
+                &owner,
+                conversation,
+                floor,
+            )
+            .await?
+        {
             return Err(RuntimeStoreError::Fenced);
         }
         let clock = now(&mut tx).await?;
@@ -250,8 +251,8 @@ impl Store {
                 (id, 1)
             }
         };
-        // The never-used role bindings (no run ever existed) are retired, not
-        // reused: their native setup belonged to the failed opening.
+        // Bindings without a dispatched turn are retired, not reused. A retained
+        // failed Fast reservation and its terminal/lapse rows stay unchanged.
         sqlx::query("UPDATE session_bindings SET state='retired' WHERE owner_id=? AND conversation_id=? AND role IN ('fast','deep') AND state!='retired'")
             .bind(owner.to_string()).bind(conversation.to_string())
             .execute(&mut *tx).await.map_err(db)?;
