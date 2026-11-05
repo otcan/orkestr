@@ -711,5 +711,8 @@ mod lapse;
 #[path = "stranded_property_tests.rs"]
 mod property;
 
+#[path = "stranded_fast_setup_tests.rs"]
+mod fast_setup;
+
 #[path = "auto_accept_window_tests.rs"]
 mod auto_accept;

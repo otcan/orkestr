@@ -30,9 +30,9 @@ pub enum ExecutionWindowTerminalOutcome {
     Accepted,
     Stopped,
     Abandoned,
-    /// The window's open failed before it produced any run of its own (no
-    /// prior run), or its last Deep turn lapsed with its process gone (names
-    /// that turn). Only a reconciliation outcome.
+    /// The window's open failed before executing a turn (no prior Deep run),
+    /// or its last Deep turn lapsed with its process gone (names that turn).
+    /// Only a reconciliation outcome.
     Failed,
 }
 impl ExecutionWindowTerminalOutcome {
@@ -69,7 +69,8 @@ pub enum ExecutionWindowOpenFailureCause {
     /// The credential was issued but the opening never bound it.
     CredentialUnbound,
     /// The window was bound, but setup (for example broker readiness or Fast
-    /// setup) failed before any run of its own existed.
+    /// setup) failed before a turn executed. A never-dispatched Fast reservation
+    /// may already have durable process-gone failure evidence.
     SetupIncomplete,
 }
 impl ExecutionWindowOpenFailureCause {
