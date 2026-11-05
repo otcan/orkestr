@@ -111,7 +111,7 @@ try {
   stage = 'reload-render';
   await page.reload({ waitUntil: 'networkidle2' });
   await checkSurface(mode);
-  await page.waitForFunction(() => document.querySelector('.messages')?.textContent.includes('Synthetic CI rendering message'));
+  await page.waitForFunction(() => document.querySelector('.chat-messages')?.textContent.includes('Synthetic CI rendering message'));
   const rejected = await page.evaluate(async conversation => {
     const response = await fetch(`/api/v2/conversations/${conversation}/messages`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -147,7 +147,7 @@ try {
   const dom = await page?.evaluate(() => ({
     composer: Boolean(document.querySelector('#composer')),
     login: Boolean(document.querySelector('#username')),
-    renderedMessages: document.querySelectorAll('.messages li').length,
+    renderedMessages: document.querySelectorAll('.chat-messages li').length,
     receiptCapture: globalThis.__orkestrCIReceipt?.state ?? 'not-installed',
   })).catch(() => null);
   console.error(JSON.stringify({ stage, error: error.name, network, dom, pageErrorCount: errors.length }));
