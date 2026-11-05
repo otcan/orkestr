@@ -109,7 +109,9 @@ def query_for(state, key):
 
 def evidence(state, query, projection):
     decision = state['decision']
-    require(type(projection) is dict and type(projection.get('schema_version')) is int and projection['schema_version'] == 1
+    require(type(projection) is dict and set(projection) == {'schema_version', 'owner_id', 'conversation_id',
+            'admission_state', 'admission', 'input_state', 'run', 'business_state', 'work_completed'}
+            and type(projection.get('schema_version')) is int and projection['schema_version'] == 1
             and projection.get('owner_id') == decision['owner_id']
             and projection.get('conversation_id') == decision['conversation_id']
             and projection.get('business_state') == 'unverified'
@@ -119,7 +121,9 @@ def evidence(state, query, projection):
         require(projection.get('admission') is None and projection.get('run') is None, 'core_projection_state')
         return None
     proof = projection.get('admission')
-    require(type(proof) is dict and all(proof.get(k) == v for k, v in query.items()), 'core_admission_fence')
+    require(type(proof) is dict and set(proof) == set(query) | {'message_id', 'event_id', 'sequence',
+            'source_binding_generation', 'authentication_kind', 'service_credential_id'}
+            and all(proof.get(k) == v for k, v in query.items()), 'core_admission_fence')
     canonical_uuid(proof.get('message_id')); canonical_uuid(proof.get('event_id'))
     require(integer(proof.get('sequence'), 1) and integer(proof.get('source_binding_generation'), 1)
             and integer(proof.get('expected_provider_generation'))
@@ -183,7 +187,10 @@ def ingest_report(root, key, lookup, report):
         run = projection.get('run')
         result = None
         if run is not None:
-            require(type(run) is dict and projection.get('input_state') == 'consumed', 'core_run_projection')
+            require(type(run) is dict and set(run) == {'run_id', 'native_session_id', 'provider',
+                    'binding_generation', 'state', 'dispatch_state', 'input_relation', 'completion_event_id',
+                    'acceptance_event_id', 'payload_id', 'payload_sha256', 'payload_text'}
+                    and projection.get('input_state') == 'consumed', 'core_run_projection')
             canonical_uuid(run.get('run_id'))
             for field in ('completion_event_id', 'acceptance_event_id', 'payload_id'):
                 if run.get(field) is not None: canonical_uuid(run[field])
