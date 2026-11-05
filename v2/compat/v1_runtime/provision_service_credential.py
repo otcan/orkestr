@@ -52,6 +52,7 @@ def output_directory(path):
 def provision(*, output, label, **session_options):
     require(isinstance(label, str) and label.strip() and len(label.encode()) <= 128,
             "label_refused")
+    require(session_options.get("peer_descriptor_path") is not None,"service_peer_descriptor_required")
     directory, path = output_directory(output)
     temporary = None
     issued = None
@@ -152,7 +153,7 @@ def provision(*, output, label, **session_options):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for field in ("origin", "loopback_url", "credentials_path", "expected_owner", "expected_source",
-                  "output", "label"):
+                  "output", "label", "peer_descriptor_path"):
         parser.add_argument("--" + field.replace("_", "-"), required=True)
     options = vars(parser.parse_args())
     try:

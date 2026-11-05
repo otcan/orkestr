@@ -16,8 +16,8 @@ import sys
 import threading
 
 FIELDS = {'runtime_directory', 'runtime_files', 'cache_path', 'credentials_path',
-          'origin', 'loopback_url', 'expected_owner', 'expected_source'}
-RUNTIME_FILES = {'__init__.py', 'rust_client.py', 'service_session_cache.py'}
+          'origin', 'loopback_url', 'expected_owner', 'expected_source', 'peer_descriptor_path'}
+RUNTIME_FILES = {'__init__.py', 'rust_client.py', 'service_session_cache.py', 'service_peer.py'}
 IMPORT_LOCK = threading.RLock()
 
 
@@ -115,7 +115,7 @@ class ServiceClient:
                 status, value, _ = session._wire(method, path, body, allowed=allowed, max_request=max_request)
                 return status, value
         except self.client.ClientError as failure:
-            ambiguous = (mutation and attempted and (failure.status is None or failure.status == 408
+            ambiguous = (mutation and attempted and getattr(failure, "outcome", None) != "refused" and (failure.status is None or failure.status == 408
                          or failure.status >= 500 or 200 <= failure.status < 400))
             raise ServiceError('mutation_outcome_unknown' if ambiguous else 'service_request_refused',
                                failure.status, 'unknown' if ambiguous else 'refused') from None
