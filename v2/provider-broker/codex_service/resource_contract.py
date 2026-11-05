@@ -68,6 +68,7 @@ def context(runtime,beta,profile,claude=None,package_root=None):
     result=dict(identity,owner_id=identifier(runtime['owner_id']),home=path(runtime['home']),
         provider_home=path(identity['provider_home']),endpoint=path(runtime['endpoint_directory']),
         auth=path(profile['auth_file']),claude=path(claude['account']) if claude else None,
+        artifacts=[path(runtime[k]) for k in ('server','ui','native','pair','code_mode_host') if k in runtime],
         projects=([beta['workspace_exec']] if 'workspace_exec' in beta else [])+beta.get('additional_workspace_exec',[]),
         beta=beta)
     result['protected']=[path(runtime[k]) for k in ('home','bootstrap_file','ledger_directory','endpoint_directory')]
@@ -98,9 +99,10 @@ def validate(doc,ctx):
     require(not any(overlap(receipt,q) for q in [*ctx['protected'],ctx['provider_home']]),'resource_receipt_scope')
     private=[]
     for item in homes:
-        require(type(item) is dict and set(item)=={'path','device','inode','gid'}
+        require(type(item) is dict and set(item)-{'uid'}=={'path','device','inode','gid'}
                 and integer(item['device'],True) and integer(item['inode']) and integer(item['gid'],True)
-                and item['gid']!=group,'resource_home_fields')
+                and item['gid']!=group and integer(item.get('uid',old))
+                and item.get('uid',old) not in (new,ctx['authority_uid']),'resource_home_fields')
         p=path(item['path'])
         require(not any(overlap(p,q) for q in [*private,*ctx['protected'],ctx['provider_home']]),
                 'resource_home_overlap')
@@ -148,7 +150,7 @@ def validate(doc,ctx):
     return doc
 
 
-def open_source(value,uid,directory):
+def open_source(value,uid,directory,homes=()):
     """Root walks original sources without links; never opens credential bytes."""
     p=path(str(value));fd=os.open('/',os.O_PATH|os.O_DIRECTORY|os.O_CLOEXEC)
     try:
@@ -156,7 +158,9 @@ def open_source(value,uid,directory):
             last=index==len(p.parts)-2
             child=os.open(part,os.O_PATH|os.O_NOFOLLOW|os.O_CLOEXEC,dir_fd=fd)
             os.close(fd);fd=child;info=os.fstat(fd)
-            require(not stat.S_ISLNK(info.st_mode) and info.st_uid in (0,uid)
+            require(not stat.S_ISLNK(info.st_mode) and (info.st_uid in (0,uid) or any(
+                    info.st_uid==h.get('uid',uid) and (Path(h['path'])==Path('/',*p.parts[1:index+2])
+                    or Path(h['path']) in Path('/',*p.parts[1:index+2]).parents) for h in homes))
                     and not info.st_mode&0o002,'resource_source_custody')
             require(stat.S_ISDIR(info.st_mode) if not last or directory else
                     stat.S_ISREG(info.st_mode) and info.st_nlink==1,'resource_source_type')

@@ -54,10 +54,10 @@ def mapping(uid,gid,target_uid,target_gid):
             os.waitpid(child,0)
 
 
-def attach(source,target,uid,gid,target_uid,target_gid,readonly=False,noexec=True):
+def attach(source,target,uid,gid,target_uid,target_gid,readonly=False,noexec=True,idmap=True,tree=None):
     require(os.geteuid()==0 and platform.machine() in ('x86_64','aarch64'),'resource_mount_host')
-    userns=mapping(uid,gid,target_uid,target_gid) if uid!=0 else None
-    detached=LIBC.syscall(428,source,b'',0x1000|1|os.O_CLOEXEC)  # open_tree AT_EMPTY_PATH CLONE
+    userns=mapping(uid,gid,target_uid,target_gid) if uid!=0 and idmap else None
+    detached=clone_source(source) if tree is None else os.dup(tree)
     try:
         require(detached>=0,'resource_open_tree')
         attributes=Attributes((0x100000 if userns is not None else 0)|2|4|(1 if readonly else 0)|(8 if noexec else 0),0,0,userns or 0)
@@ -67,3 +67,25 @@ def attach(source,target,uid,gid,target_uid,target_gid,readonly=False,noexec=Tru
     finally:
         if detached>=0:os.close(detached)
         if userns is not None:os.close(userns)
+
+
+def empty_home(target):
+    """Attach a new sparse tmpfs over a pinned home, without changing its inode."""
+    fs=LIBC.syscall(430,b'tmpfs',1);mount=None
+    try:
+        require(fs>=0,'resource_home_fsopen')
+        for key,value in ((b'mode',b'0711'),(b'size',b'4m')):
+            require(LIBC.syscall(431,fs,1,key,value,0)==0,'resource_home_fsconfig')
+        require(LIBC.syscall(431,fs,6,None,None,0)==0,'resource_home_create')
+        mount=LIBC.syscall(432,fs,1,2|4)  # Project scripts remain executable.
+        require(mount>=0,'resource_home_fsmount')
+        require(LIBC.syscall(429,mount,b'',target,b'',0x4|0x40)==0,'resource_home_attach')
+    finally:
+        if mount is not None and mount>=0:os.close(mount)
+        if fs>=0:os.close(fs)
+
+
+def clone_source(source):
+    result=LIBC.syscall(428,source,b'',0x1000|1|os.O_CLOEXEC)
+    require(result>=0,'resource_open_tree')
+    return result

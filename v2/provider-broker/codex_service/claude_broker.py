@@ -79,6 +79,8 @@ def main(root):
         if package.identity_split:
             from .managed_host import selected_workspace
             config = dataclasses.replace(config, workspace=Path(selected_workspace(package, config.workspace, "claude")))
+            from .resource_projects import git_environment
+            config = dataclasses.replace(config,managed_host=git_environment(package,config.managed_host))
             config.validate()
         else:
             config = conversation_workspace(config, package.beta, os.getcwd())

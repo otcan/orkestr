@@ -28,6 +28,9 @@ def check(fd, project_owner, executor, permissions, owner_leaf=False, executor_g
     except OSError as error:
         if error.errno not in (errno.ENODATA,errno.ENOTSUP):raise
         raw=None
+    if permissions==0 and raw is None:
+        require(meta.st_mode&0o022==0,'workspace_managed_custody')
+        return  # Root needs custody, not executor traversal of private ancestors.
     if not separate:
         require(meta.st_mode&0o022==0,'workspace_managed_custody')
         # No unadvertised ACL writer may hide behind a restrictive mask now
@@ -43,7 +46,7 @@ def check(fd, project_owner, executor, permissions, owner_leaf=False, executor_g
     mask=[bits for tag,bits,_ in entries if tag==0x10]
     require(len(mask)==1,'workspace_named_executor_acl')
     named=[bits&mask[0] for tag,bits,uid in entries if tag==2 and uid==executor]
-    if separate:require(len(named)==1 and named[0]&permissions==permissions,'workspace_named_executor_access')
+    if separate and permissions:require(len(named)==1 and named[0]&permissions==permissions,'workspace_named_executor_access')
     if meta.st_uid==executor:effective=(meta.st_mode>>6)&7
     elif named:effective=named[0]
     else:

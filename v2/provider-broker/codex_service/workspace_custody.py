@@ -34,7 +34,7 @@ def identity(fd):
     return (meta.st_dev, meta.st_ino, meta.st_uid)
 
 
-def open_checked(path, owner, directory=True, executor=None, executor_gid=None):
+def open_checked(path, owner, directory=True, executor=None, executor_gid=None, ancestry=()):
     if executor is None:executor=owner
     path = canonical(str(path))
     fd = os.open('/', os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
@@ -48,16 +48,26 @@ def open_checked(path, owner, directory=True, executor=None, executor_gid=None):
             meta = os.fstat(fd)
             require((stat.S_ISDIR(meta.st_mode) if is_directory else
                      stat.S_ISREG(meta.st_mode) and meta.st_nlink == 1), 'workspace_managed_custody')
-            check_acl(fd,owner,executor,7 if index+1==len(parts) and directory else 1 if is_directory else 4,
-                      owner_leaf=index+1==len(parts) and directory,executor_gid=executor_gid)
+            leaf=index+1==len(parts)
+            if not leaf and os.geteuid()==0 and executor!=owner:
+                # Root retains the exact leaf FD; executor traversal of its
+                # original private ancestors is neither required nor granted.
+                current=Path('/',*parts[:index+1])
+                declared=any(meta.st_uid==home.get('uid',owner) and
+                    (current==Path(home['path']) or Path(home['path']) in current.parents) for home in ancestry)
+                require(meta.st_uid in (0,owner) or declared,'workspace_managed_ancestor_owner')
+                check_acl(fd,meta.st_uid,executor,0,executor_gid=executor_gid)
+            else:
+                check_acl(fd,owner,executor,7 if leaf and directory else 1 if is_directory else 4,
+                          owner_leaf=leaf and directory,executor_gid=executor_gid)
         result = fd; fd = None
         return result
     finally:
         if fd is not None: os.close(fd)
 
 
-def small(path, owner, executor=None,executor_gid=None):
-    fd = open_checked(path, owner, False,executor,executor_gid)
+def small(path, owner, executor=None,executor_gid=None,ancestry=()):
+    fd = open_checked(path, owner, False,executor,executor_gid,ancestry)
     try:
         raw = os.read(fd, 8193)
         require(len(raw) <= 8192, 'workspace_git_pointer_bound')
@@ -65,20 +75,20 @@ def small(path, owner, executor=None,executor_gid=None):
     finally: os.close(fd)
 
 
-def association(workspace, owner, executor=None,executor_gid=None):
+def association(workspace, owner, executor=None,executor_gid=None,ancestry=()):
     dot = workspace / '.git'
     # Even the preliminary kind check is relative to a checked retained FD;
     # open_checked below independently refuses replacement/ancestor aliases.
-    fd = open_checked(workspace, owner,executor=executor,executor_gid=executor_gid)
+    fd = open_checked(workspace, owner,executor=executor,executor_gid=executor_gid,ancestry=ancestry)
     try: meta = os.stat('.git', dir_fd=fd, follow_symlinks=False)
     finally: os.close(fd)
     require(not stat.S_ISLNK(meta.st_mode), 'workspace_git_alias')
     if stat.S_ISDIR(meta.st_mode): git = dot
     else:
-        text = small(dot, owner,executor,executor_gid)
+        text = small(dot, owner,executor,executor_gid,ancestry)
         require(text.startswith('gitdir: '), 'workspace_git_pointer')
         git = normalized(workspace, text[8:])
-    try: common = normalized(git, small(git / 'commondir', owner,executor,executor_gid))
+    try: common = normalized(git, small(git / 'commondir', owner,executor,executor_gid,ancestry))
     except FileNotFoundError: common = git
     return git, common
 

@@ -173,4 +173,99 @@ class ResourceNamespaceTests(unittest.TestCase):
             self.assertEqual(result.stdout.strip(),'core-package-ok')
         with self.assertRaises((Refused,FileNotFoundError)):Package(fixture.package,pin)
 
+    def private_worktree(self):
+        import subprocess
+        ancestor=62004
+        home=self.directory('other-private-home',ancestor);home.chmod(0o750)
+        base=home/'coordinator';base.mkdir(mode=0o710);os.chown(base,ancestor,ancestor)
+        workspace=base/'workspace';workspace.mkdir(mode=0o755);os.chown(workspace,ancestor,ancestor)
+        repo=workspace/'repository';repo.mkdir(mode=0o755)
+        worktree=self.old/'private-worktree'
+        def git(*args):
+            subprocess.run(['/usr/bin/git',*map(str,args)],check=True,capture_output=True,
+                env={'PATH':'/usr/bin:/bin','HOME':'/nonexistent','GIT_CONFIG_NOSYSTEM':'1','GIT_CONFIG_GLOBAL':'/dev/null'})
+        git('init','-q',repo)
+        (repo/'data.txt').write_text('synthetic baseline\n')
+        git('-C',repo,'add','data.txt')
+        git('-C',repo,'-c','user.name=Synthetic','-c','user.email=fixture@example.invalid','commit','-qm','fixture')
+        git('-C',repo,'worktree','add','-q','-b','fixture-worktree',worktree)
+        for root in (repo,worktree):
+            for parent,dirs,files in os.walk(root):
+                os.chown(parent,OLD,OLD)
+                for name in files:os.chown(Path(parent)/name,OLD,OLD)
+            subprocess.run(['/usr/bin/setfacl','-Rm',f'u:{EXEC}:rwX,g::r-X,m::rwx',str(root)],
+                           check=True,capture_output=True)
+        hidden=home/'operator-private';hidden.write_text('synthetic-unselected');hidden.chmod(0o600);os.chown(hidden,ancestor,ancestor)
+        h=home.stat();self.doc['source_homes'].append(dict(path=str(home),device=h.st_dev,inode=h.st_ino,
+                                                       uid=ancestor,gid=ancestor))
+        self.beta['workspace_exec']=dict(project_id='11111111-2222-4333-8444-555555555555',
+            conversation_id='11111111-2222-4333-8444-666666666666',workspace=str(worktree),
+            project_owner_uid=OLD,allowed_roots=[str(worktree)],protected_roots=[str(self.core)],
+            cgroup_root=str(self.root/'cgroup'),toolchain_root=str(self.tool),trusted={
+            'host_privileged':False,'environment':{},'credential_env_files':[],
+            'managed_executor':{'environment':{'HOME':str(self.provider),'PATH':'/usr/bin:/bin'}}})
+        self.ctx=context(self.runtime,self.beta,self.profile,self.claude_config)
+        self.save();return home,repo,worktree,hidden
+
+    def test_private_different_owner_home_git_worktree_keeps_original_absolute_paths(self):
+        import subprocess
+        from types import SimpleNamespace
+        from codex_service.resource_projects import git_environment
+        from codex_service.resource_receipt import original_source
+        home,repo,worktree,hidden=self.private_worktree()
+        before=home.stat();initial=ns('mnt')
+        with Activation(self.selected,self.ctx) as active:
+            receipt=verify(self.selected,self.ctx)
+            self.assertEqual(len(receipt['projects']),2)
+            self.assertFalse(hidden.exists())
+            self.assertEqual(worktree.stat().st_uid,OLD)
+            # Original source lookup remains usable through Root's retained
+            # original-home FD even while logical paths show sparse masks.
+            fd=original_source(self.doc['resources'][0],receipt['home_lookups'],receipt['creator'],self.doc['source_homes'])
+            try:self.assertEqual(os.fstat(fd).st_uid,OLD)
+            finally:os.close(fd)
+            package=SimpleNamespace(runtime={'resource_namespace':self.selected},beta=self.beta)
+            env=git_environment(package,{'PATH':'/usr/bin:/bin','HOME':str(self.provider),
+                'GIT_CONFIG_NOSYSTEM':'1','GIT_CONFIG_GLOBAL':'/dev/null','GIT_TERMINAL_PROMPT':'0'})
+            def run(*args):
+                r=subprocess.run(['/usr/bin/setpriv','--no-new-privs','--reuid='+str(EXEC),
+                    '--regid='+str(EXEC),'--clear-groups',*map(str,args)],cwd=str(worktree),
+                    capture_output=True,text=True,env=env,timeout=10)
+                self.assertEqual(r.returncode,0,r.stderr);return r.stdout.strip()
+            self.assertEqual(run('/bin/pwd'),str(worktree))
+            self.assertEqual(run('/usr/bin/git','status','--porcelain'),'')
+            self.assertEqual(run('/usr/bin/git','rev-parse','--git-common-dir'),str(repo/'.git'))
+            run('/bin/sh','-c','printf "synthetic edit\n" >> data.txt; git status --porcelain')
+            self.assertIn('M data.txt',run('/usr/bin/git','status','--porcelain'))
+            run('/usr/bin/git','add','data.txt')
+            run('/usr/bin/git','-c','user.name=Synthetic','-c','user.email=fixture@example.invalid','commit','-qm','synthetic update')
+            self.assertEqual(run('/usr/bin/git','status','--porcelain'),'')
+            r=subprocess.run(['/usr/bin/setpriv','--no-new-privs','--reuid='+str(EXEC),
+                '--regid='+str(EXEC),'--clear-groups','/bin/cat',str(hidden)],capture_output=True,env=env)
+            self.assertNotEqual(r.returncode,0)
+        self.assertEqual(ns('mnt'),initial)
+        after=home.stat()
+        self.assertEqual((before.st_uid,before.st_gid,before.st_mode),(after.st_uid,after.st_gid,after.st_mode))
+        self.assertEqual(hidden.read_text(),'synthetic-unselected')
+        self.assertEqual(worktree.stat().st_uid,OLD)
+
+    def test_private_ancestor_must_be_explicit_and_canonical_project_replacement_refuses(self):
+        home,repo,worktree,hidden=self.private_worktree()
+        saved=self.doc['source_homes'][1].pop('uid');self.save()
+        initial=ns('mnt')
+        with self.assertRaises(Refused):
+            with Activation(self.selected,self.ctx):pass
+        self.assertEqual(ns('mnt'),initial)
+        self.doc['source_homes'][1]['uid']=saved;self.save()
+        with Activation(self.selected,self.ctx) as active:
+            old=next(h for h in active.homes if h['path']==str(self.old))['fd']
+            os.rename('private-worktree','renamed-worktree',src_dir_fd=old,dst_dir_fd=old)
+            os.mkdir('private-worktree',0o700,dir_fd=old)
+            os.chown('private-worktree',OLD,OLD,dir_fd=old,follow_symlinks=False)
+            # The visible bind still has the original inode, but the actual
+            # configured source path now names a different plausible owner.
+            with self.assertRaisesRegex(Refused,'resource_project_source_replaced'):
+                verify(self.selected,self.ctx)
+        self.assertEqual(ns('mnt'),initial)
+
 if __name__=='__main__':unittest.main()

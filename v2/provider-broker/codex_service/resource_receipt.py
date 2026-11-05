@@ -38,8 +38,33 @@ def options(mid,target=None):
     require(False,'resource_mount_missing')
 
 
-def check_source(row):
-    fd=open_source(row['source'],row['uid'],row['kind'] in DIRECTORIES)
+def original_source(row,lookups=(),creator=None,homes=()):
+    source=Path(row['source'])
+    selected=next((h for h in lookups if Path(h['path']) in source.parents),None)
+    if selected is None:return open_source(source,row['uid'],row['kind'] in DIRECTORIES,homes)
+    require(creator is not None and process(creator['pid'])==creator and creator['uid']==0,
+            'resource_original_owner_lost')
+    fd=os.open(f"/proc/{creator['pid']}/fd/{selected['fd']}",os.O_PATH|os.O_DIRECTORY|os.O_CLOEXEC)
+    try:
+        info=os.fstat(fd)
+        require((info.st_dev,info.st_ino,info.st_uid,info.st_gid)==
+                (selected['device'],selected['inode'],selected['uid'],selected['gid']),
+                'resource_original_home_lost')
+        parts=source.relative_to(selected['path']).parts
+        for index,part in enumerate(parts):
+            child=os.open(part,os.O_PATH|os.O_NOFOLLOW|os.O_CLOEXEC,dir_fd=fd)
+            os.close(fd);fd=child;info=os.fstat(fd)
+            directory=index+1<len(parts) or row['kind'] in DIRECTORIES
+            require(info.st_uid in (0,row['uid'],selected['uid']) and not info.st_mode&0o002
+                and (stat.S_ISDIR(info.st_mode) if directory else
+                     stat.S_ISREG(info.st_mode) and info.st_nlink==1),'resource_original_custody')
+        result=fd;fd=None;return result
+    finally:
+        if fd is not None:os.close(fd)
+
+
+def check_source(row,lookups=(),creator=None,homes=()):
+    fd=original_source(row,lookups,creator,homes)
     try:
         info=os.fstat(fd)
         require((info.st_dev,info.st_ino,info.st_uid,info.st_gid)==
@@ -61,7 +86,7 @@ def verify(selected,ctx):
         raw=os.read(fd,262145)
         value=json.loads(raw)
         require(len(raw)==info.st_size and set(value)=={'format','contract','creator','namespace',
-            'parent_namespace','user_namespace','targets'} and value['format']==FORMAT
+            'parent_namespace','user_namespace','targets','home_lookups','projects'} and value['format']==FORMAT
             and value['namespace']==ns('mnt') and value['namespace']!=value['parent_namespace']
             and value['user_namespace']==ns('user'),'resource_namespace_required')
         doc=value['contract'];validate(doc,ctx)
@@ -94,7 +119,16 @@ def verify(selected,ctx):
                 if row['kind'] in READONLY:required.add('ro')
                 require(required<=flags,'resource_mount_flags')
             finally:os.close(f)
-            if os.geteuid()==0:check_source(row)
+            if os.geteuid()==0:check_source(row,value['home_lookups'],creator,doc['source_homes'])
+        require(type(value['home_lookups']) is list and len(value['home_lookups'])==len(doc['source_homes']),
+                'resource_home_lookup_set')
+        for home,lookup in zip(doc['source_homes'],value['home_lookups']):
+            require(set(lookup)=={'path','device','inode','uid','gid','fd'} and
+                all(lookup[k]==home[k] for k in ('path','device','inode','gid')) and
+                lookup['uid']==home.get('uid',doc['source_owner_uid']) and type(lookup['fd']) is int
+                and lookup['fd']>2,'resource_home_lookup_binding')
+        from .resource_projects import verify_projects
+        verify_projects(value['projects'],ctx,value['home_lookups'],creator,doc['source_homes'])
         return value
     finally:os.close(fd)
 
