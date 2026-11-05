@@ -391,7 +391,12 @@ while True:time.sleep(1)
         assert core.stat().st_uid==self.package.authority_uid!=UID
         for child in children:
             if exists(child):assert 'NoNewPrivs:\t1' in Path('/proc',str(child['pid']),'status').read_text()
-        return dict(code_subject=code_subject(self.package),server_identity=self.server_identity,
+        export_evidence={}
+        if self.attachment_export:
+            from workflow_measured_evidence import attachment
+            export_evidence=dict(attachment_export_evidence=attachment(self,row[0]),
+                harness_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest())
+        return dict(**export_evidence,code_subject=code_subject(self.package),server_identity=self.server_identity,
                     server_sha256=self.server_sha256,core_run_id=row[0],core_run_state=row[1],native_session_id=row[2],
                     authority_uid=self.package.authority_uid,executor_uid=UID,managed_children=children,
                     synthetic_native_turns=sum(r['kind']=='turn' for r in records),
