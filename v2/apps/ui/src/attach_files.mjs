@@ -39,11 +39,11 @@ export function pastedText(text, now = new Date()) {
 }
 
 // Opens the browser file picker and resolves with the described files.
-export function pick(document) {
+export function pick(document, describeFiles = describe) {
   return new Promise(resolve => {
     const input = document.createElement('input');
     input.type = 'file'; input.multiple = true; input.style.display = 'none';
-    input.addEventListener('change', async () => { resolve(await describe(input.files)); input.remove(); }, { once: true });
+    input.addEventListener('change', async () => { resolve(await describeFiles(input.files)); input.remove(); }, { once: true });
     input.addEventListener('cancel', () => { resolve({ files: [] }); input.remove(); }, { once: true });
     document.body.append(input);
     input.click();
@@ -65,7 +65,7 @@ export function pastedFiles(clipboard) {
   return [...(clipboard?.files ?? [])];
 }
 
-export function installDropZone(zone, textarea, send) {
+export function installDropZone(zone, textarea, send, describeFiles = describe) {
   let depth = 0;
   const highlight = on => zone.classList.toggle('drop-active', on);
   const enter = event => { if (!carriesFiles(event.dataTransfer)) return; event.preventDefault(); depth += 1; highlight(true); };
@@ -74,13 +74,13 @@ export function installDropZone(zone, textarea, send) {
   const drop = async event => {
     if (!carriesFiles(event.dataTransfer)) return;
     event.preventDefault(); depth = 0; highlight(false);
-    send(await describe(event.dataTransfer.files));
+    send(await describeFiles(event.dataTransfer.files));
   };
   const paste = async event => {
     const files = pastedFiles(event.clipboardData);
     if (!files.length) return;
     event.preventDefault();
-    send(await describe(files));
+    send(await describeFiles(files));
   };
   // Files dropped elsewhere on the page must not replace the app with the file.
   const guard = event => { if (carriesFiles(event.dataTransfer) && !zone.contains(event.target)) { event.preventDefault(); if (event.type === 'dragover') event.dataTransfer.dropEffect = 'none'; } };
@@ -99,13 +99,13 @@ export function installDropZone(zone, textarea, send) {
 }
 
 // Finds the conversation pane around the composer tools with `id`.
-export async function watchDrops(document, id, dioxus) {
+export async function watchDrops(document, id, dioxus, describeFiles = describe) {
   let tools = null;
   for (let i = 0; i < 200 && !(tools = document.getElementById(id)); i++) await new Promise(r => setTimeout(r, 25));
   if (!tools) return null;
   const form = tools.closest('form');
   const zone = tools.closest('.conversation-pane') ?? form;
-  const off = installDropZone(zone, form?.querySelector('textarea'), batch => dioxus.send(batch));
+  const off = installDropZone(zone, form?.querySelector('textarea'), batch => dioxus.send(batch), describeFiles);
   await dioxus.recv();
   off();
   return null;

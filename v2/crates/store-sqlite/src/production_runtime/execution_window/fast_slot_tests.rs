@@ -3,6 +3,9 @@ use super::*;
 use orkestr_v2_application::IntakeStore;
 use orkestr_v2_contracts::{ExecutionAcceptanceRequest, MessageInput};
 
+#[path = "fast_run_receipt_tests.rs"]
+mod receipt;
+
 async fn ready(w: &Window, binding: &Binding, name: &str) -> Binding {
     let grant = w
         .bound

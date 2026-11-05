@@ -9,7 +9,7 @@ fn retirement() -> OwnerInputRetirementRequest {
     }
 }
 
-async fn settle(w: &Window, consumed: bool, close: bool) -> (Store, RunId) {
+pub(super) async fn settle(w: &Window, consumed: bool, close: bool) -> (Store, RunId) {
     let admission = admitted_fast(w).await;
     if consumed {
         w.consume(&admission).await;

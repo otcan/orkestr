@@ -78,6 +78,9 @@ class Endpoint:
                         connection.close()
                         continue
                     with self.lock:
+                        gate = getattr(self.package, "qualification", None)
+                        if gate is not None:
+                            gate.positive(gate.core_identity)
                         if window.egress_closed:
                             connection.close()
                             continue

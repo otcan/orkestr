@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 mod filesystem;
 use filesystem::Installation;
 pub use filesystem::{
-    WorkspaceDescriptors, WorkspaceDirectoryIdentity, WorkspaceInstallation,
+    RootWorkspaceCustody, WorkspaceDescriptors, WorkspaceDirectoryIdentity, WorkspaceInstallation,
     WorkspaceOperatorAllowlist,
 };
 #[cfg(test)]

@@ -6,6 +6,7 @@ import socket
 import sys
 from codex_bounded.broker import modules, pump_type
 from .contract import require
+from .identity import provider_privileges
 from .package import Package, conversation_workspace_paths
 from .profile import Configuration
 
@@ -40,6 +41,7 @@ def main(root, role="deep"):
     pump = None
     try:
         package = Package(root)
+        provider_privileges(package)
         require(os.geteuid() == package.uid, "broker_executor_identity")
         Channel, protocol, Refused, subreaper, reaped_exit, Pump = modules(package.root)
         fresh = ["open-owned-session", "--protocol", protocol]
@@ -47,6 +49,11 @@ def main(root, role="deep"):
         workspace = ["open-owned-workspace-worker-session", "--protocol", protocol]
         worker = role.startswith("worker-")
         workspace_enabled = worker and package.beta.get("workspace_exec") is not None
+        if package.identity_split:
+            from .identity import launch_context
+            context = launch_context()
+            require(context is not None and (sys.argv[1:]==workspace)==context.get('workspace_worker',False),
+                    'workspace_worker_capsule')
         allowed = (fresh, workspace) if workspace_enabled else ((fresh,) if worker else (fresh, resumed))
         require(role in package.role_profiles and sys.argv[1:] in allowed, "broker_operation")
         def stop(_number, _frame):
@@ -64,11 +71,16 @@ def main(root, role="deep"):
                     "private_writer_endpoint")
             handoff.getpeername()
             config = Configuration(package, role)
+            from .native_io import capture as capture_native_io
+            config.native_io = capture_native_io(package)
             # The exact owned root manager captures our original pidfd and only
             # then continues us. Runtime calls bind_child before waiting for FD3.
             os.kill(os.getpid(), signal.SIGSTOP)
             if sys.argv[1:] == resumed:
-                from codex_bootstrap import receive
+                if package.identity_split:
+                    from .managed_resume import receive
+                else:
+                    from codex_bootstrap import receive
                 expected_native = receive()  # Strict one-use FD4, after bind ACK.
                 if getattr(config, "host_full_access", False) is True:
                     # A sandbox-created thread lives in this role's private
@@ -83,7 +95,9 @@ def main(root, role="deep"):
                         host_full_access=getattr(config, "host_full_access", False) is True,
                         conversation_workspaces=conversation_workspace_paths(getattr(package, "beta", {}))
                         if not worker and getattr(config, "host_full_access", False) is True else (),
-                        fast_only=role == "fast"),
+                        fast_only=role == "fast",
+                        desk_login=role=='deep' and getattr(package,'identity_split',False) and 'desk_login' in getattr(package,'runtime',{})
+                        and not getattr(package,'runtime',{}).get('managed_operations')),
                 handoff=handoff,
                 diagnostics=True)
             pump.run()

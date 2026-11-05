@@ -183,7 +183,7 @@ class ExitDiagnostics(unittest.TestCase):
                     raise Refused("SYNTHETIC-CANARY")
         endpoint = types.SimpleNamespace(family=broker.socket.AF_UNIX,
             type=broker.socket.SOCK_STREAM, getpeername=lambda: None)
-        package = types.SimpleNamespace(root="/synthetic", uid=os.geteuid(),
+        package = types.SimpleNamespace(root="/synthetic", uid=os.geteuid(),identity_split=False,
             role_profiles={"deep": "/synthetic/profile.json"})
         with contextlib.ExitStack() as stack:
             stack.enter_context(patch.object(broker, "Package", return_value=package))

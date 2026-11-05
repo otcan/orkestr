@@ -294,7 +294,8 @@ def main():
     args = parser.parse_args()
     config, static = load(args.config)
     session = RustSession(**{key: config[key] for key in
-                             ("origin", "loopback_url", "credentials_path", "expected_owner", "expected_source")})
+                             ("origin", "loopback_url", "credentials_path", "expected_owner", "expected_source")},
+                          peer_descriptor_path=config.get("peer_descriptor_path"))
     registry = Registry(config, lambda conversation: RustClient(conversation_id=conversation, session=session), static)
     registry.reload()
     stop, wake = threading.Event(), threading.Event()

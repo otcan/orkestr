@@ -1,6 +1,12 @@
 //! Version 0 HTTP contracts. No storage or provider dependencies.
 mod accepted_results;
 pub use accepted_results::*;
+mod source_receipts;
+pub use source_receipts::*;
+mod source_intake;
+pub use source_intake::*;
+mod fast_run_receipt;
+pub use fast_run_receipt::*;
 mod archived_history;
 pub use archived_history::*;
 mod conversations;
@@ -341,6 +347,9 @@ pub use steering::*;
 
 mod attachments;
 pub use attachments::*;
+
+mod encrypted_upload;
+pub use encrypted_upload::*;
 
 mod attachment_transfer;
 pub use attachment_transfer::*;

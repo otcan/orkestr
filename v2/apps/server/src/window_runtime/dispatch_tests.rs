@@ -140,6 +140,7 @@ impl Fixture {
             Handles::new(self.owner.clone(), self.home.clone()).unwrap(),
             manager,
         )
+        .unwrap()
     }
     async fn conversation(&self, name: &str) -> ConversationId {
         self.store
@@ -210,6 +211,9 @@ impl Fixture {
         status.map_or(0, |status| status.generation as usize)
     }
 }
+
+#[path = "provider_routing_admission_tests.rs"]
+mod provider_routing_admission_tests;
 
 #[tokio::test]
 async fn saturated_capacity_queues_durably_then_dispatches_exactly_once() {

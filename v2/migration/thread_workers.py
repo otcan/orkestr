@@ -183,6 +183,9 @@ def parser():
             command.add_argument('--v2-url', required=True)
             command.add_argument('--origin')
             command.add_argument('--credentials-file', required=True)
+            command.add_argument('--expected-owner', help='required owner UUID for service credentials')
+            command.add_argument('--expected-source', help='required deployed source commit for service credentials')
+            command.add_argument('--peer-descriptor', help='Root-published Core descriptor for service credentials')
             command.add_argument('--apply', action='store_true')
     return root
 
@@ -195,9 +198,9 @@ def main(argv=None):
         if args.command == 'plan':
             result = report
         else:
-            username, password = v2_client.read_credentials(args.credentials_file)
             client = v2_client.Client(args.v2_url, origin=args.origin)
-            client.login(username, password)
+            client.login_file(args.credentials_file, expected_owner=args.expected_owner,
+                              expected_source=args.expected_source, peer_descriptor_path=args.peer_descriptor)
             try:
                 result = apply(client, args.conversation, workers, report, args.source_instance,
                                bundle=args.bundle, write=args.apply)

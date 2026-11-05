@@ -16,6 +16,9 @@
 //! no unresolved window, stops the unit and starts the new release; it removes
 //! the request on timeout to resume admission instead. A request never
 //! survives a restart: startup removes a stale one, so drain is per process.
+//! The optional sealed `deploy_maintenance_marker` is independent: Root alone
+//! publishes and clears it outside the Core home. Its hold survives restart and
+//! composes with ordinary drain until consumer publication and health complete.
 use serde::Serialize;
 use std::{
     path::{Path, PathBuf},
@@ -39,6 +42,8 @@ const UNKNOWN: i64 = -1;
 #[derive(Default)]
 pub struct DeployDrain {
     draining: AtomicBool,
+    maintenance_held: AtomicBool,
+    maintenance: Mutex<Option<crate::deploy_maintenance::Marker>>,
     since_ms: AtomicI64,
     unresolved: AtomicI64,
     queued: AtomicI64,
@@ -50,6 +55,8 @@ pub struct DeployDrain {
 pub struct DrainStatus {
     pub pid: u32,
     pub draining: bool,
+    /// Independent Root-controlled hold, retained across process restarts.
+    pub maintenance_held: bool,
     pub since_ms: i64,
     /// Execution windows Core still shows unresolved (-1: not yet observed).
     pub unresolved_windows: i64,
@@ -71,7 +78,38 @@ pub(crate) fn now_ms() -> i64 {
 
 impl DeployDrain {
     pub fn is_draining(&self) -> bool {
-        self.draining.load(Ordering::Acquire)
+        let held = self
+            .maintenance
+            .lock()
+            .map_or(true, |marker| marker.as_ref().is_some_and(|m| m.held()));
+        let prior = self.maintenance_held.swap(held, Ordering::AcqRel);
+        if held && !prior && !self.draining.load(Ordering::Acquire) {
+            self.since_ms.store(now_ms(), Ordering::Release);
+            self.observe(None, None);
+        }
+        held || self.draining.load(Ordering::Acquire)
+    }
+
+    /// Trusted sealed startup configuration only. Core never clears this hold.
+    pub(crate) fn bind_maintenance(
+        &self,
+        path: Option<&Path>,
+        home: &Path,
+    ) -> Result<(), &'static str> {
+        let marker = path
+            .map(|p| crate::deploy_maintenance::Marker::bind(p, home))
+            .transpose()?;
+        let mut slot = self
+            .maintenance
+            .lock()
+            .map_err(|_| "deploy maintenance unavailable")?;
+        if slot.is_some() {
+            return Err("deploy maintenance already bound");
+        }
+        *slot = marker;
+        drop(slot);
+        self.is_draining();
+        Ok(())
     }
 
     /// Bind to a home directory. A request left by a previous process is
@@ -115,15 +153,14 @@ impl DeployDrain {
 
     /// Apply the request file's presence; returns whether the state changed.
     pub fn poll(&self) -> bool {
-        let Some(request) = self.request_path() else {
-            return false;
-        };
-        let requested = request.exists();
-        if requested == self.is_draining() {
-            return false;
+        let prior = self.maintenance_held.load(Ordering::Acquire);
+        let requested = self.request_path().is_some_and(|request| request.exists());
+        let changed = requested != self.draining.load(Ordering::Acquire);
+        if changed {
+            self.set(requested);
         }
-        self.set(requested);
-        true
+        self.is_draining();
+        changed || prior != self.maintenance_held.load(Ordering::Acquire)
     }
 
     pub(crate) fn set(&self, draining: bool) {
@@ -135,7 +172,7 @@ impl DeployDrain {
             }
             eprintln!("deploy drain: requested; admission paused, timer fires deferred");
         } else {
-            eprintln!("deploy drain: request removed; admission resumed");
+            eprintln!("deploy drain: per-process request removed; Root maintenance still applies");
         }
         self.draining.store(draining, Ordering::Release);
     }
@@ -150,6 +187,7 @@ impl DeployDrain {
         DrainStatus {
             pid: std::process::id(),
             draining,
+            maintenance_held: self.maintenance_held.load(Ordering::Acquire),
             since_ms: if draining {
                 self.since_ms.load(Ordering::Acquire)
             } else {

@@ -4,6 +4,7 @@ import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { extname, join, normalize } from 'node:path';
 import { trackerApi } from './headless-tracker-mock.mjs';
+import { encryptedUploadMock } from './headless-encrypted-uploads.mjs';
 
 export const A = '00000000-0000-4000-8000-00000000000a';
 export const B = '00000000-0000-4000-8000-00000000000b';
@@ -467,8 +468,10 @@ async function api(state, req, res, url) {
 }
 
 export async function startMock(bundle, state = createState()) {
+  const encrypted = await encryptedUploadMock(state);
   const server = createServer(async (req, res) => {
     const url = new URL(req.url, 'http://127.0.0.1');
+    if (await encrypted(req,res,url.pathname)) return;
     if (url.pathname.startsWith('/api/')) return api(state, req, res, url);
     const deep = /^\/instance\/(ins_[A-Za-z0-9_-]{22})\/thread\/(thr_[A-Za-z0-9_-]{22})$/.exec(url.pathname);
     if (deep) { res.writeHead(303, { location: `/#v1-link/${deep[1]}/${deep[2]}`, 'cache-control': 'no-store' }); return res.end(); }

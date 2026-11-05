@@ -1,5 +1,7 @@
 use super::*;
 
+#[path = "stranded_fast_bootstrap_tests.rs"]
+mod bootstrap;
 #[path = "stranded_fast_retirement_tests.rs"]
 mod retirement;
 

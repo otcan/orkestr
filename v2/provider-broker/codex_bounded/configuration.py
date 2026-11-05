@@ -10,7 +10,7 @@ HELPERS = ("bounded_budget.py", "bounded_io.py", "bounded_pool.py", "bounded_dns
 ISOLATION = ("__init__.py", "policy.py", "launch.py", "authenticated.py",
              "authenticated_budget.py", "supervisor.py", "workspace_fd.py", *HELPERS)
 BROKER = ("configuration.py", "protocol.py", "transport.py", "reaping.py", "codex_bootstrap.py",
-          "workspace_tool.py", "workspace_route.py", "workspace_exec_supervisor.py")
+          "workspace_tool.py", "workspace_route.py", "workspace_exec_supervisor.py", "desk_tool.py")
 MODULES = ("__init__.py", "trust.py", "configuration.py", "profile.py", "broker.py",
            "peer.py", "egress.py", "controller.py", "server_child.py")
 ROLES = ("deep", "fast")

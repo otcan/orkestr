@@ -13,6 +13,9 @@ pub(super) struct RunningLease {
 }
 
 impl RunningLease {
+    pub(super) fn authority(&self) -> &RunRenewalAuthority {
+        &self.authority
+    }
     /// Capture the opaque authority before the exact consumed grant is moved
     /// into Runtime. Neither a run locator nor an HTTP field can replace it.
     pub(super) async fn capture(

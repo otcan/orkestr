@@ -7,6 +7,7 @@ pub mod keys;
 mod list;
 mod read;
 pub use read::StoredObject;
+mod encrypted_upload;
 #[cfg(test)]
 mod encryption_tests;
 pub mod seal;

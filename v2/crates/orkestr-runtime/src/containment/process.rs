@@ -27,6 +27,7 @@ pub(super) struct Live {
     pub(super) framing: Framing,
     pub(super) handoff: Option<super::provider_fd::Handoff>,
     pub(super) provider_writer: Option<super::provider_fd::ProviderWriter>,
+    pub(super) managed_launch: Option<super::managed_launch::ManagedLaunchDescriptors>,
 }
 
 pub(super) struct Process {
@@ -37,8 +38,10 @@ pub(super) struct Process {
     pub(super) broker_launcher: AtomicBool,
     pub(super) offline_python: AtomicBool,
     pub(super) workspace_exec: AtomicBool,
+    pub(super) desk_login: AtomicBool,
     pub(super) workspace_exec_trusted: AtomicBool,
     pub(super) broker_lineage: Arc<()>,
+    pub(super) managed_required: bool,
 }
 
 impl Process {
@@ -120,6 +123,7 @@ impl Process {
         } else {
             None
         };
+        let resuming = resume_native.is_some();
         let bootstrap = resume_native
             .map(|resume| {
                 use std::io::Write;
@@ -139,16 +143,77 @@ impl Process {
                 Ok(child)
             })
             .transpose()?;
+        let managed_config = if provider_fd {
+            super::managed_launch::configuration(program)?
+        } else {
+            None
+        };
+        if directories.managed_workspace() && managed_config.is_none() {
+            return Err(Error::AuthorityProtocol);
+        }
+        let workspace_worker = managed_config.as_ref().is_some_and(|config| {
+            config.role.starts_with("worker-")
+                && !resuming
+                && args
+                    == [
+                        "open-owned-workspace-worker-session",
+                        "--protocol",
+                        "orkestr-v2-provider-broker-v1",
+                    ]
+                    .map(std::ffi::OsString::from)
+        });
+        if managed_config.is_some()
+            && (workspace.is_some()
+                || !workspace_worker
+                    && args
+                        != [
+                            if resuming {
+                                "resume-owned-session"
+                            } else {
+                                "open-owned-session"
+                            },
+                            "--protocol",
+                            "orkestr-v2-provider-broker-v1",
+                        ]
+                        .map(std::ffi::OsString::from))
+        {
+            return Err(Error::Unsupported);
+        }
+        let mut managed = match (managed_config, pair.as_ref()) {
+            (Some(config), Some((_, socket))) => {
+                Some(super::managed_launch::prepare(config, socket)?)
+            }
+            (None, _) => None,
+            _ => return Err(Error::AuthorityProtocol),
+        };
+        if let Some(prepared) = managed.as_mut() {
+            prepared.transfer.set_workspace_worker(workspace_worker)?;
+            if let Some(bootstrap) = &bootstrap {
+                prepared.transfer.attach_resume(bootstrap)?;
+            }
+            prepared
+                .transfer
+                .set_preferences(directories.claude_preferences())?;
+        }
         let mut command = Command::new(program);
         command
             .args(args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
-        if workspace.is_some() {
+        if workspace.is_some() || managed.is_some() {
+            command.current_dir("/");
             directories.configure_without_cwd(&mut command);
         } else {
             directories.configure(&mut command);
+        }
+        if let Some(prepared) = &managed {
+            command.stdin(Stdio::from(
+                prepared.child_input.try_clone().map_err(|_| Error::Io)?,
+            ));
+            command.stdout(Stdio::from(
+                prepared.child_output.try_clone().map_err(|_| Error::Io)?,
+            ));
         }
         sys::configure_command(&mut command);
         if let Some((_, socket)) = &pair {
@@ -157,6 +222,9 @@ impl Process {
                 socket.as_raw_fd(),
                 bootstrap.as_ref().map(AsRawFd::as_raw_fd),
             )?;
+            if let Some(prepared) = &managed {
+                sys::inherit_lifecycle(&mut command, prepared.lifecycle.as_raw_fd())?;
+            }
         }
         if let Some(workspace) = workspace {
             workspace.configure(&mut command).map_err(|_| Error::Io)?;
@@ -168,8 +236,20 @@ impl Process {
         }
         let mut child = reaper.spawn(command)?;
         let handoff = pair.map(|(parent, _)| parent);
-        let input = child.stdin.take().ok_or(Error::Io);
-        let output = child.stdout.take().ok_or(Error::Io);
+        let managed_required = managed.is_some();
+        let (input, output, managed_launch) = if let Some(prepared) = managed.take() {
+            (
+                Ok(std::process::ChildStdin::from(prepared.input)),
+                Ok(std::process::ChildStdout::from(prepared.output)),
+                Some(prepared.transfer),
+            )
+        } else {
+            (
+                child.stdin.take().ok_or(Error::Io),
+                child.stdout.take().ok_or(Error::Io),
+                None,
+            )
+        };
         let pipes = input.and_then(|input| output.map(|output| (input, output)));
         let pipes = pipes.and_then(|(input, output)| {
             sys::nonblocking(&input)?;
@@ -190,6 +270,7 @@ impl Process {
                 framing: Framing::new(input, output, bounds),
                 handoff,
                 provider_writer: None,
+                managed_launch,
             }),
             reaper: reaper.clone(),
             workspace: logical_workspace,
@@ -197,8 +278,10 @@ impl Process {
             broker_launcher: AtomicBool::new(false),
             offline_python: AtomicBool::new(false),
             workspace_exec: AtomicBool::new(false),
+            desk_login: AtomicBool::new(false),
             workspace_exec_trusted: AtomicBool::new(false),
             broker_lineage: Arc::new(()),
+            managed_required,
         }))
     }
 
@@ -212,6 +295,7 @@ impl Process {
         // Even a signal error quarantines I/O; never grant a retry/replacement.
         live.framing.close();
         live.handoff = None;
+        live.managed_launch = None;
         live.provider_writer = None;
         // Even if signalling fails, preserve wait ownership and retained resources.
         if let Some(child) = live.child.take() {

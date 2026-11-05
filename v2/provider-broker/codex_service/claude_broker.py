@@ -12,6 +12,7 @@ import signal
 import socket
 import sys
 from .contract import require
+from .identity import provider_privileges
 from .package import Package, conversation_workspace_paths
 
 
@@ -48,6 +49,7 @@ def main(root):
     pump = None
     try:
         package = Package(root)
+        provider_privileges(package)
         require(os.geteuid() == package.uid and package.claude is not None, "claude_broker_identity")
         sys.path.insert(0, str(package.root / "broker"))
         from protocol import PROTOCOL, Failure, Refused
@@ -70,8 +72,18 @@ def main(root):
         require(parent > 1 and libc.prctl(1, signal.SIGKILL, 0, 0, 0) == 0
                 and os.getppid() == parent, "broker_parent_death")
         config = ClaudeConfiguration.load(package.root / "claude-private.json")
-        require(config.host_full_access is not None, "claude_full_access_required")
-        config = conversation_workspace(config, package.beta, os.getcwd())
+        from .identity import launch_context
+        preferences=launch_context()['preferences'] if package.identity_split else None
+        require((config.managed_host is not None and package.identity_split) or
+                (config.host_full_access is not None and not package.identity_split), "claude_host_profile_required")
+        if package.identity_split:
+            from .managed_host import selected_workspace
+            config = dataclasses.replace(config, workspace=Path(selected_workspace(package, config.workspace, "claude")))
+            from .resource_projects import git_environment
+            config = dataclasses.replace(config,managed_host=git_environment(package,config.managed_host))
+            config.validate()
+        else:
+            config = conversation_workspace(config, package.beta, os.getcwd())
         with socket.socket(fileno=3) as handoff:
             require(handoff.family == socket.AF_UNIX and handoff.type == socket.SOCK_STREAM,
                     "private_writer_endpoint")
@@ -79,10 +91,20 @@ def main(root):
             # The owned root manager captures our original pidfd, then continues us.
             os.kill(os.getpid(), signal.SIGSTOP)
             if sys.argv[1:] == resumed:
-                from claude_bootstrap import receive
-                session = config.resumed_session(receive(config))  # One-use FD4.
+                if package.identity_split:
+                    from .managed_resume import receive
+                else:
+                    from claude_bootstrap import receive
+                session = config.resumed_session(receive(config),launch_preferences=preferences)  # One-use FD4.
             else:
-                session = config.new_session()
+                session = config.new_session(launch_preferences=preferences)
+            from .native_io import capture as capture_native_io
+            session.native_io = capture_native_io(package)
+            from .managed_advertisement import claude_options
+            session.managed_mcp_options=claude_options(package)
+            if session.managed_mcp_options:
+                original_environment=session.environment
+                session.environment=lambda:{**original_environment(),'MCP_TOOL_TIMEOUT':'330000'}
             pump = Pump(session, ClaudeChannel(session, catalog_warning=catalog_warning,
                         quota_observer=QuotaSink.optional(package, config)),
                         handoff=handoff, diagnostics=True, stderr_capture=StderrCapture())

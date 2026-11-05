@@ -394,6 +394,7 @@ export async function acquireDesktopLease(slug, payload = {}, env = process.env,
       force: payload.force === true,
       releaseReason: payload.force ? "force_acquired" : recoveryCandidate ? "expired_stopped_auto_recovery" : "superseded",
       recoveryCandidate,
+      reuseExisting: options.reuseExisting === true,
     },
   );
   if (!result.ok) {
@@ -423,6 +424,7 @@ export async function acquireDesktopLease(slug, payload = {}, env = process.env,
     autoRecovered: recovery?.performed === true,
     recovery,
     renewed: result.renewed === true,
+    borrowed: result.borrowed === true,
     previousLease: publicDesktopLease(result.previousLease, new Map(), Date.now(), env),
   };
 }

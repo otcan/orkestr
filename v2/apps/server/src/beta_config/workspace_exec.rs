@@ -9,6 +9,9 @@ use std::path::{Path, PathBuf};
 pub(crate) struct WorkspaceExecConfig {
     pub conversation_id: ConversationId,
     pub project_id: uuid::Uuid,
+    /// Explicit operator-owned project identity; never a command-selected UID.
+    #[serde(default)]
+    pub project_owner_uid: Option<u32>,
     pub workspace: PathBuf,
     pub allowed_roots: Vec<PathBuf>,
     pub protected_roots: Vec<PathBuf>,
@@ -46,11 +49,46 @@ pub(crate) fn validate_set(
 }
 
 impl WorkspaceExecConfig {
+    /// Split bootstrap retains Root's exact handles; Core never acquires
+    /// traversal permission or substitutes an executor-private path check.
+    pub(crate) async fn installation_for_window(
+        &self,
+        home: &Path,
+        native_workspaces: Vec<PathBuf>,
+        executor: Option<u32>,
+        manager: &crate::window_runtime::manager_client::ManagerClient,
+    ) -> Result<WorkspaceInstallation, &'static str> {
+        let Some(executor) = executor else {
+            return self.installation(home, native_workspaces.into_iter());
+        };
+        self.validate()?;
+        let mut protected = self.protected_roots.clone();
+        protected.extend([
+            home.to_owned(),
+            self.toolchain_root.clone(),
+            self.cgroup_root.clone(),
+        ]);
+        protected.extend(native_workspaces);
+        let allowlist = WorkspaceOperatorAllowlist::new(
+            self.allowed_roots.clone(),
+            protected,
+            self.project_owner_uid.unwrap_or(executor),
+        )
+        .map_err(|_| "managed workspace allowlist refused")?;
+        manager
+            .workspace_installation(self.project_id, allowlist, executor)
+            .await
+            .map_err(|_| "Root workspace installation refused")
+    }
+
     /// Scope plus trusted profile; `host` is the instance-level opt-in that a
     /// `host_privileged` trusted profile requires.
     pub(crate) fn validate_with(&self, host: Option<&HostAccess>) -> Result<(), &'static str> {
         self.validate()?;
         if let Some(trusted) = &self.trusted {
+            if trusted.managed_profile()?.is_some() {
+                return trusted.validate_managed_runtime();
+            }
             trusted.profile(host, &self.workspace)?.validate(&[
                 &self.workspace,
                 &self.cgroup_root,
@@ -64,6 +102,14 @@ impl WorkspaceExecConfig {
     pub(crate) fn validate(&self) -> Result<(), &'static str> {
         if self.conversation_id.0.is_nil()
             || self.project_id.is_nil()
+            || self
+                .project_owner_uid
+                .is_some_and(|uid| uid == 0 || uid >= 1 << 31)
+            || (self.project_owner_uid.is_some()
+                && self
+                    .trusted
+                    .as_ref()
+                    .is_none_or(|trusted| trusted.managed_executor.is_none()))
             || self.allowed_roots != [self.workspace.clone()]
             || self.protected_roots.is_empty()
             || self.protected_roots.len() > 55

@@ -129,7 +129,7 @@ class Ledger:
             self.db.close()
 
     def endpoint(self, name):
-        require(name in ("control", "egress"), "endpoint_name")
+        require(name in ("control", "egress", "managed"), "endpoint_name")
         with self.lock:
             row = self.db.execute("SELECT device,inode FROM endpoints WHERE name=?", (name,)).fetchone()
             return tuple(row) if row else None

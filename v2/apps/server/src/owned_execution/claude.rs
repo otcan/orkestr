@@ -90,6 +90,7 @@ impl ConfiguredExecution {
         heartbeat: &mut Instant,
     ) -> Result<Option<ClaudeExit>, &'static str> {
         let run = capability.provider().run.run_id.clone();
+        let mut managed = self.prepare_managed(&capability).await?;
         // Capture before the consumed grant moves into Runtime, as for Codex.
         let mut liveness = super::liveness::RunningLease::capture(&self.store, &capability).await?;
         let mut live = ready
@@ -116,6 +117,9 @@ impl ConfiguredExecution {
                         | ExecutionPhase::CancelRequested
                 )
             {
+                if let Some(managed) = managed.as_mut() {
+                    Box::pin(managed.cancel()).await?;
+                }
                 run_control.disable();
                 self.store
                     .request_cancel(&self.owner, &run, "isolated-runtime-shutdown")
@@ -127,6 +131,9 @@ impl ConfiguredExecution {
             }
             match status.phase {
                 ExecutionPhase::Completed => {
+                    if let Some(managed) = managed.as_mut() {
+                        Box::pin(managed.cancel()).await?;
+                    }
                     // Consume the exact completed pump before opening a new
                     // child. Neither a projection nor local exit proves reap.
                     let retiring = live
@@ -136,6 +143,9 @@ impl ConfiguredExecution {
                     return Ok(Some(ClaudeExit::Accepted(run, proof)));
                 }
                 ExecutionPhase::AwaitingAcceptance => {
+                    if let Some(managed) = managed.as_mut() {
+                        Box::pin(managed.cancel()).await?;
+                    }
                     // Preserve the proposal and child while the owner decides;
                     // never read late provider frames or claim a queued input.
                     if *shutdown.borrow() {
@@ -170,6 +180,9 @@ impl ConfiguredExecution {
                     return Err("Claude execution requires reconciliation");
                 }
                 ExecutionPhase::CancelRequested => {
+                    if let Some(managed) = managed.as_mut() {
+                        Box::pin(managed.cancel()).await?;
+                    }
                     run_control.disable();
                     drop(schedule);
                     let proof = self
@@ -195,6 +208,9 @@ impl ConfiguredExecution {
                             .await
                             .map_err(|_| "Claude shutdown fence requires reconciliation")?;
                         run_control.disable();
+                        if let Some(managed) = managed.as_mut() {
+                            Box::pin(managed.cancel()).await?;
+                        }
                         run_control
                             .publish(receipt)
                             .map_err(|_| "Claude shutdown control handoff refused")?;
@@ -220,6 +236,12 @@ impl ConfiguredExecution {
                             run_control.disable();
                             return Err(reason);
                         }
+                        if let Some(managed) = managed.as_mut() {
+                            Box::pin(managed.refresh_lease(liveness.authority())).await?;
+                        }
+                    }
+                    if let Some(managed) = managed.as_mut() {
+                        Box::pin(managed.poll()).await?;
                     }
                     match live.tick().await {
                         Ok(true) => budget.observed(Instant::now()),
@@ -321,10 +343,15 @@ impl ConfiguredExecution {
     ) -> Result<Option<ReadyClaudeExecution>, &'static str> {
         self.maintain(heartbeat).await?;
         self.config.verify_launcher()?;
+        if !self.provider_input_allowed(None).await? {
+            return Ok(None);
+        }
+        self.capture_managed_setup(&grant)?;
         if *shutdown.borrow() {
             return Ok(None);
         }
-        let directories = ChildDirectories::new(
+        let directories = ChildDirectories::for_launcher(
+            &self.config.launcher,
             &self.config.workspace,
             &self.directory.join("home"),
             &self.directory.join("tmp"),

@@ -6,6 +6,21 @@ const AsyncFunction = Object.getPrototypeOf(async function() {}).constructor;
 const execute = new AsyncFunction('dioxus', 'fetch', code);
 const base = {method:'POST',path:'/api/v2/browser/session',body:{username:'synthetic-user',password:'synthetic-password'},csrf:'',bootstrap:''};
 
+test('owner security APIs retain same-origin cookie and CSRF boundaries', async () => {
+    for (const [method,path] of [['GET','/api/v2/browser/security'],['POST','/api/v2/browser/password'],['GET','/api/v2/browser/service-credentials'],['POST','/api/v2/browser/service-credentials'],['DELETE','/api/v2/browser/service-credentials/00000000-0000-4000-8000-000000000001']]) {
+        await execute({recv:async()=>({...base,method,path,csrf:'synthetic-csrf',body:method==='POST'?{}:null})},async(actual,options)=>{
+            assert.equal(actual,path);
+            assert.equal(options.credentials,'same-origin');
+            assert.equal(options.headers.Authorization,undefined);
+            assert.equal(options.headers['x-orkestr-csrf'],method==='GET'?undefined:'synthetic-csrf');
+            return Response.json({ok:true});
+        });
+    }
+    for (const path of ['/api/v2/machine/service-session','/api/v2/browser/security?redirect=https://example.invalid','/api/v2/browser/password/extra','/api/v2/browser/service-credentials/../password','/api/v2/browser/service-credentials/%2e%2e','//example.invalid/api/v2/browser/password']) {
+        await assert.rejects(execute({recv:async()=>({...base,path})},()=>assert.fail('fetch must not run')),/Invalid API path/);
+    }
+});
+
 test('provider handoff and receipt keep scoped cookie paths and mutation CSRF', async () => {
     const root='/api/v2/conversations/00000000-0000-4000-8000-000000000001/provider-handoffs';
     for(const [method,path] of [['POST',root],['GET',root+'/synthetic:handoff']]) {

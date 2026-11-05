@@ -231,7 +231,7 @@ impl Store {
             .fetch_one(&mut *tx)
             .await
             .map_err(db)?;
-        sqlx::query("INSERT INTO auth_sessions(token_hash,owner_id,expires_at) VALUES(?,?,?)")
+        sqlx::query("INSERT INTO auth_sessions(token_hash,owner_id,expires_at,kind) VALUES(?,?,?,'machine')")
             .bind(&hash)
             .bind(c.owner.to_string())
             .bind(expiry)

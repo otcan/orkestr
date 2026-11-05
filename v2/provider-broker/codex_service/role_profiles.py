@@ -25,9 +25,9 @@ def bind(package):
         require(not (ROLE_FILES & set(package.manifest["files"])), "unexpected_role_files")
         return
     require(ROLE_FILES <= set(package.manifest["files"]), "missing_role_files")
-    state_paths = [private(package.profile["state_root"], package.uid, True)]
+    state_paths = [package.private(package.profile["state_root"], package.uid, True)]
     shared_auth = package.profile["auth_file"]
-    workspaces = [private(package.profile["workspace"], package.uid, True)]
+    workspaces = [package.private(package.profile["workspace"], package.uid, True)]
     for role, value in entries(roles):
         require(type(value) is dict and set(value) ==
                 {"launcher", "launcher_sha256", "workspace"}, "role_configuration")
@@ -44,10 +44,10 @@ def bind(package):
                     ("format", "native", "auth_file", "egress_socket", "supervisor", "hosts")) and
                 profile["hosts"] == list(HOSTS) and profile["auth_file"] == shared_auth and
                 profile["workspace"] == value["workspace"], "role_profile_binding")
-        state_paths.append(private(profile["state_root"], package.uid, True))
-        workspaces.append(private(profile["workspace"], package.uid, True))
+        state_paths.append(package.private(profile["state_root"], package.uid, True))
+        workspaces.append(package.private(profile["workspace"], package.uid, True))
         package.role_profiles[role] = path
-    auth = private(shared_auth, package.uid)
+    auth = package.private(shared_auth, package.uid)
     for workspace in workspaces[1:]:
         for other in [package.root, package.home, state_paths[0], auth,
                       package.ledger_directory, package.control.parent]:

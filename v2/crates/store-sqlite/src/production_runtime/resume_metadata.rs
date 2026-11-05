@@ -8,6 +8,9 @@ pub(super) struct ResumeLink {
     terminal_event: EventId,
 }
 impl ResumeLink {
+    pub(super) fn setup_id(&self) -> &str {
+        &self.id
+    }
     #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
     pub(super) fn workspace_identity(&self) -> &str {
         &self.id

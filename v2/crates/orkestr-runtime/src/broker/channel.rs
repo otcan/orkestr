@@ -3,6 +3,8 @@ use super::*;
 mod offline;
 mod workspace;
 use workspace::WorkspaceState;
+mod desk;
+use desk::DeskState;
 mod steering;
 use offline::OfflineState;
 
@@ -11,6 +13,7 @@ pub(crate) struct BrokerChannel {
     handle: String,
     offline: OfflineState,
     workspace_tool: WorkspaceState,
+    desk: DeskState,
     steering: Option<steering::Correlation>,
     steering_ids: std::collections::HashSet<String>,
     native: Option<String>,
@@ -51,6 +54,7 @@ impl OwnedMetadataHandle {
             handle: self._handle,
             offline: OfflineState::default(),
             workspace_tool: WorkspaceState::default(),
+            desk: DeskState::default(),
             steering: None,
             steering_ids: std::collections::HashSet::new(),
             native: None,
@@ -87,6 +91,7 @@ impl BrokerChannel {
         self.cancellation_pending = true;
         self.offline.cancel();
         self.workspace_tool.cancel();
+        self.desk.cancel();
         Ok((lineage, bytes))
     }
     /// Enable only for the actual-FD transport before submitting any setup.
@@ -195,6 +200,7 @@ impl BrokerChannel {
             || self.pending.is_some()
             || self.offline.pending.is_some()
             || self.workspace_tool.pending.is_some()
+            || self.desk.pending.is_some()
             || self.active_turn.is_none()
             || self.preparation.is_some_and(|p| p != Preparation::Written)
             || inner_id <= self.last_execution_inner
@@ -221,6 +227,7 @@ impl BrokerChannel {
             && self.steering.is_none()
             && self.offline.pending.is_none()
             && self.workspace_tool.pending.is_none()
+            && self.desk.pending.is_none()
             && !self.cancellation_pending
     }
 
@@ -234,6 +241,7 @@ impl BrokerChannel {
             && self.steering.is_none()
             && self.offline.pending.is_none()
             && self.workspace_tool.pending.is_none()
+            && self.desk.pending.is_none()
             && !self.cancellation_pending
     }
 
@@ -251,6 +259,7 @@ impl BrokerChannel {
             && self.steering.is_none()
             && self.offline.pending.is_none()
             && self.workspace_tool.pending.is_none()
+            && self.desk.pending.is_none()
             && !self.cancellation_pending
     }
 
@@ -357,6 +366,7 @@ impl BrokerChannel {
         let cancelling_output = (self.cancellation_pending
             || self.offline.result_pending
             || self.workspace_tool.result_pending
+            || self.desk.result_pending
             || self.steering.is_some())
             && self.active_turn.is_some()
             && value.get("method").and_then(Value::as_str) == Some("BrokerOutput");
@@ -383,11 +393,7 @@ impl BrokerChannel {
                 .ok_or(Blocker::Protocol)?;
             if frame.get("method").and_then(Value::as_str) == Some("item/tool/call") {
                 self.turn_tool_called = true;
-                if self.workspace_tool.enabled {
-                    self.accept_workspace_call(frame)?;
-                } else {
-                    self.accept_offline_call(frame)?;
-                }
+                self.accept_native_tool(frame)?;
                 return Ok(None);
             }
             if frame.get("id").is_some() {
@@ -407,6 +413,7 @@ impl BrokerChannel {
             }
             self.validate_offline_terminal(frame)?;
             self.validate_workspace_terminal(frame)?;
+            self.validate_desk_terminal(frame)?;
             self.observe_turn(frame)?;
             return Ok(Some(frame.clone()));
         }
@@ -451,6 +458,10 @@ impl BrokerChannel {
         if self.workspace_tool.result_pending {
             self.workspace_tool.result_pending = false;
             self.workspace_tool.pending = None;
+        }
+        if self.desk.result_pending {
+            self.desk.result_pending = false;
+            self.desk.pending = None;
         }
         Ok((!frame.is_null()).then(|| frame.clone()))
     }

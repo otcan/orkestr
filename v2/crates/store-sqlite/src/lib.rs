@@ -38,11 +38,25 @@ pub use conversation_export::{
 pub mod history_import;
 pub use history_import::{history_source_digest, HistoryError};
 mod intake;
+pub mod owner_password;
 mod paths;
 mod preflight;
 mod production_runtime;
 mod replay;
 mod runtime;
+pub mod service_credentials;
+pub use production_runtime::DeskLoginSetup;
+pub use production_runtime::{CompletedDeskLogin, DeskLoginOutcome};
+pub use production_runtime::{
+    CompletedManagedOperation, ConsumedManagedOperation, ManagedCallerEvidence,
+    ManagedOperationConsumption, ManagedOperationOutcome, ManagedOperationParent,
+    ManagedOperationRenewal, ManagedOperationRequest, ManagedOperationSetup,
+};
+mod fast_run_receipt;
+mod source_context;
+mod source_continuation;
+mod source_intake;
+mod source_receipts;
 pub use production_runtime::{
     auto_accept_request_key, AutomaticReplyConsumption, AutomaticReplyDelivery,
     AutomaticReplyProducer, AutomaticReplyReservation, AutomaticReplyReservationResult,
@@ -53,7 +67,7 @@ pub use production_runtime::{
     OfflinePythonDelegation, OfflinePythonNativeCall, OfflinePythonNativeRequestId,
     OfflinePythonOutcome, OfflinePythonOutput, OfflinePythonParent, OfflinePythonReceipt,
     OfflinePythonResultConsumption, OfflinePythonResultPreparation, OfflinePythonResultReservation,
-    OfflinePythonState, ProductionSupervisorStore, ReadySessionTransition,
+    OfflinePythonState, OperatorProviderPolicy, ProductionSupervisorStore, ReadySessionTransition,
     RetiredExecutionWindowContext, RunLeaseTransition, RunRenewalAuthority,
     StrandedExecutionWindow, StrandedExecutionWindowPlan, ThreadAskCursor, ThreadAskTick,
     TimerSchedulerIssuer, WorkerAdmissionInput, WorkerDelegation, WorkerDelegationReceipt,
@@ -62,6 +76,9 @@ pub use production_runtime::{
     EXECUTION_WINDOW_MAX_LIFETIME_MS, FAST_INPUT_BUDGET, FAST_NOTE_RESERVE,
     MAX_AUXILIARY_FAST_SLOTS, MAX_DEEP_BURST_QUIET_MS, MAX_PARALLEL_DEEP_SLOTS,
     PARALLEL_DEEP_DEFAULT_EFFORT, PARALLEL_DEEP_DEFAULT_MODEL, PARALLEL_DEFER,
+};
+pub use production_runtime::{
+    ConsumedDeskLogin, DeskLoginConsumption, DeskLoginNativeCall, DeskLoginParent,
 };
 
 pub use production_runtime::inspection::{
@@ -72,14 +89,14 @@ pub use production_runtime::test_controls::ProductionCheckpoint;
 
 #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
 pub use production_runtime::{
-    CompletedWorkspaceExecDelivery, ConsumedWorkspaceExec, WorkspaceDescriptors,
-    WorkspaceDirectoryIdentity, WorkspaceExecAdmission, WorkspaceExecConsumption,
-    WorkspaceExecDelegation, WorkspaceExecNativeCall, WorkspaceExecNativeRequestId,
-    WorkspaceExecOutcome, WorkspaceExecOutput, WorkspaceExecParent, WorkspaceExecProfile,
-    WorkspaceExecReceipt, WorkspaceExecResultConsumption, WorkspaceExecResultPreparation,
-    WorkspaceExecResultReservation, WorkspaceExecState, WorkspaceGrant, WorkspaceInstallation,
-    WorkspaceLaunch, WorkspaceLaunchConsumption, WorkspaceLaunchReservation,
-    WorkspaceLaunchReservationResult, WorkspaceOperatorAllowlist,
+    CompletedWorkspaceExecDelivery, ConsumedWorkspaceExec, RootWorkspaceCustody,
+    WorkspaceDescriptors, WorkspaceDirectoryIdentity, WorkspaceExecAdmission,
+    WorkspaceExecConsumption, WorkspaceExecDelegation, WorkspaceExecNativeCall,
+    WorkspaceExecNativeRequestId, WorkspaceExecOutcome, WorkspaceExecOutput, WorkspaceExecParent,
+    WorkspaceExecProfile, WorkspaceExecReceipt, WorkspaceExecResultConsumption,
+    WorkspaceExecResultPreparation, WorkspaceExecResultReservation, WorkspaceExecState,
+    WorkspaceGrant, WorkspaceInstallation, WorkspaceLaunch, WorkspaceLaunchConsumption,
+    WorkspaceLaunchReservation, WorkspaceLaunchReservationResult, WorkspaceOperatorAllowlist,
 };
 #[derive(Clone)]
 pub struct Store {
@@ -110,6 +127,16 @@ impl Store {
     pub async fn open(path: &Path) -> Result<Self> {
         paths::validate(path)?;
         let created = preflight::prepare(path).await?;
+        Self::connect_validated(path, created, true).await
+    }
+    /// Open an existing exact-current Core without running any migration.
+    /// The caller controls the stopped namespace and excludes other writers.
+    pub async fn open_current(path: &Path) -> Result<Self> {
+        paths::validate(path)?;
+        preflight::current(path).await?;
+        Self::connect_validated(path, false, false).await
+    }
+    async fn connect_validated(path: &Path, created: bool, migrate: bool) -> Result<Self> {
         let options = SqliteConnectOptions::new()
             .filename(path)
             .create_if_missing(false)
@@ -126,10 +153,12 @@ impl Store {
             .connect_with(options)
             .await
             .map_err(db)?;
-        sqlx::migrate!("./migrations")
-            .run(&pool)
-            .await
-            .map_err(db)?;
+        if migrate {
+            sqlx::migrate!("./migrations")
+                .run(&pool)
+                .await
+                .map_err(db)?;
+        }
         Ok(Self {
             pool,
             authority: None,
@@ -223,8 +252,13 @@ impl Store {
             .execute(&mut *tx)
             .await
             .map_err(db)?;
-        sqlx::query("INSERT INTO auth_sessions(token_hash,owner_id,expires_at) VALUES (?,?,unixepoch()+43200)")
-            .bind(digest(token)).bind(owner.to_string()).execute(&mut *tx).await.map_err(db)?;
+        let kind = if token.starts_with("browser:") {
+            "browser"
+        } else {
+            "machine"
+        };
+        sqlx::query("INSERT INTO auth_sessions(token_hash,owner_id,expires_at,kind) VALUES (?,?,unixepoch()+43200,?)")
+            .bind(digest(token)).bind(owner.to_string()).bind(kind).execute(&mut *tx).await.map_err(db)?;
         tx.commit().await.map_err(db)?;
         Ok(())
     }

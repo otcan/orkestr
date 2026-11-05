@@ -101,6 +101,13 @@ int main(int argc, char **argv) {
     if (!getenv("CODEX_HOME") || strcmp(getenv("CODEX_HOME"), "/account") ||
         !getenv("HOME") || strcmp(getenv("HOME"), "/home/provider") ||
         getenv("OPENAI_API_KEY") || getenv("ORKESTR_V2_EXECUTION_SET")) return 21;
+#ifdef ORKESTR_TEST_AUTHORITY_CORE
+    /* Split-identity oracle: this is a disposable authority DB path supplied by
+       the explicit root-only test harness, never a production location. */
+    int authority = open(ORKESTR_TEST_AUTHORITY_CORE, O_RDONLY);
+    if (authority >= 0) { close(authority); return 60; }
+    if (errno != EACCES && errno != ENOENT) return 61;
+#endif
     char auth[128];
     read_fixed("/account/auth.json", auth, sizeof(auth));
     if (strcmp(auth, "{\"fixture\":\"synthetic-roles-only\"}")) return 22;
@@ -115,6 +122,37 @@ int main(int argc, char **argv) {
     strcpy(native, !strcmp(role, "fast") ? "22222222-2222-4333-8444-555555555555"
                                         : "11111111-2222-4333-8444-555555555555");
     if (mkdir("/account/sessions", 0700) && errno != EEXIST) return 28;
+#ifdef ORKESTR_TEST_ATTACHMENT
+    FILE *proof = fopen("/account/sessions/synthetic-attachment-proof", "a");
+    if (!proof) return 67;
+    fputs("begin\n",proof);fflush(proof);
+    char attachment[4096], text[128];
+    read_fixed("attachment-path", attachment, sizeof(attachment));
+    fputs("reference\n",proof);fflush(proof);
+    read_fixed(attachment, text, sizeof(text));
+    fputs("read\n",proof);fflush(proof);
+    if (strcmp(text, "synthetic authorized attachment")) return 62;
+    fputs("matched\n",proof);fflush(proof);
+    int writable = open(attachment, O_WRONLY);
+    int write_error=errno;
+    fprintf(proof,"write=%d errno=%d\n",writable,write_error);fflush(proof);
+    if (writable >= 0) { close(writable); return 63; }
+    if (write_error != EROFS && write_error != EACCES) return 64;
+    char canary[4096];
+    snprintf(canary,sizeof(canary),"%.*s/writable-canary",(int)(strrchr(attachment,'/')-attachment),attachment);
+    writable=open(canary,O_WRONLY);
+    int canary_error=errno;
+    fprintf(proof,"canary_write=%d errno=%d\n",writable,canary_error);fflush(proof);
+    if (writable>=0) {close(writable);return 68;}
+    if (canary_error!=EROFS) return 69;
+    fputs("readonly\n",proof);fflush(proof);
+    int foreign = open(ORKESTR_TEST_OTHER_ATTACHMENT, O_RDONLY);
+    int foreign_error=errno;
+    fprintf(proof,"foreign_read=%d errno=%d\n",foreign,foreign_error);fflush(proof);
+    if (foreign >= 0) { close(foreign); return 65; }
+    if (foreign_error != ENOENT) return 66;
+    fputs("scoped\n",proof);fclose(proof);
+#endif
     FILE *state = fopen("/account/sessions/synthetic-role-state", "r");
     if (state) {
         if (fscanf(state, "%d %d", &instance, &turns) != 2) return 29;
@@ -139,6 +177,9 @@ int main(int argc, char **argv) {
             if (!refresh || strncmp(refresh, "false", 5)) return 34;
             printf("{\"id\":%ld,\"result\":{\"requiresOpenaiAuth\":true,\"account\":{\"type\":\"chatgpt\"}}}\n", request);
         } else if (!strncmp(method, "\"thread/start\"", 14) || !strncmp(method, "\"thread/resume\"", 15)) {
+#ifdef ORKESTR_TEST_DESK
+            if (!strstr(line,"orkestr_desk_login") || !strstr(line,"operation_id")) return 70;
+#endif
             int resumed = !strncmp(method, "\"thread/resume\"", 15);
             const char *exclude = value(line, "\"excludeTurns\"");
             if (ready++ || resumed != (instance > 1) || !strstr(line, cwd) ||
@@ -162,6 +203,18 @@ int main(int argc, char **argv) {
             printf("{\"method\":\"item/agentMessage/delta\",\"params\":{\"threadId\":\"%s\","
                    "\"turnId\":\"%s\",\"delta\":\"synthetic %s progress\"}}\n", native, turn, role);
             fflush(stdout);
+#ifdef ORKESTR_TEST_DESK
+            printf("{\"id\":0,\"method\":\"item/tool/call\",\"params\":{\"tool\":\"orkestr_desk_login\",\"callId\":\"synthetic-desk-call\",\"threadId\":\"%s\",\"turnId\":\"%s\",\"arguments\":{\"operation_id\":\"synthetic-login\"}}}\n",native,turn);
+            fflush(stdout);
+            if (!fgets(line,sizeof(line),stdin)) return 71;
+            if (strstr(line,"\"turn/interrupt\"")) {
+                const char *interrupt=value(line,"\"id\"");if(!interrupt) return 72;
+                printf("{\"id\":%ld,\"result\":{}}\n",strtol(interrupt,NULL,10));
+                record("interrupt",input,0);terminal("interrupted");continue;
+            }
+            if (!strstr(line,"\"id\":0") || !strstr(line,"\"success\":true") || !strstr(line,"process tree was reaped")) return 71;
+            record("desk-result",input,0);
+#endif
             char mode[32]; read_fixed("mode", mode, sizeof(mode));
             if (!strcmp(mode, "complete")) terminal("completed");
             else if (!strcmp(mode, "hold") || !strcmp(mode, "ack-only")) held_turn(input, mode);

@@ -3,6 +3,8 @@ use super::*;
 use orkestr_v2_contracts::{ConversationProvider, ProviderHandoffRequest};
 #[path = "provider_handoff_intake_tests.rs"]
 mod intake_tests;
+#[path = "operator_policy_tests.rs"]
+mod operator_tests;
 #[path = "provider_handoff_policy_tests.rs"]
 mod policy_tests;
 

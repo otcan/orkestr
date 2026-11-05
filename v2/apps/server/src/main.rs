@@ -6,9 +6,24 @@ use orkestr_v2_server::{
 use orkestr_v2_store_sqlite::Store;
 use std::path::PathBuf;
 mod bind_config;
+#[cfg(target_os = "linux")]
+mod password_recovery;
 mod shutdown_signal;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let arguments = std::env::args().skip(1).collect::<Vec<_>>();
+    if arguments == ["--recover-owner-password"] {
+        #[cfg(target_os = "linux")]
+        {
+            let runtime = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()?;
+            let result = runtime.block_on(password_recovery::run());
+            runtime.shutdown_timeout(std::time::Duration::from_secs(2));
+            return result;
+        }
+        #[cfg(not(target_os = "linux"))]
+        return Err("operator recovery requires Linux".into());
+    }
     if let Some(output) = build_identity::version_output(&arguments)? {
         println!("{output}");
         return Ok(());
@@ -111,6 +126,11 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     orkestr_v2_server::attachment_keys_http::startup(&store, &home).await;
     let origin = config.origin;
     let mut state = AppState::new(store.clone(), token, origin)?;
+    match std::env::var("ORKESTR_V2_PASSWORD_ROTATION_READY").as_deref() {
+        Ok("1") => state = state.with_password_rotation_ready(),
+        Ok("0") | Err(_) => {}
+        Ok(_) => return Err("ORKESTR_V2_PASSWORD_ROTATION_READY must be 0 or 1".into()),
+    }
     // Operator deploy drain: `<home>/deploy-drain.request` pauses admission.
     let deploy_drain = state.deploy_drain();
     deploy_drain.bind(&home);
@@ -140,9 +160,21 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         // Opt-in: absent means the live map endpoint reports "not configured".
         state = state.with_live_map_file(&PathBuf::from(path))?;
     }
-    state = state.with_attachment_export(
-        orkestr_v2_server::message_attachments::ExportDir::from_env(&home),
-    );
+    let attachment_export = orkestr_v2_server::message_attachments::ExportDir::from_env(&home);
+    let recovered =
+        orkestr_v2_server::encrypted_upload_ingest::recover_export_temporaries(&attachment_export)?;
+    if recovered.removed > 0 {
+        eprintln!(
+            "attachment recovery: removed {} abandoned private temporary files",
+            recovered.removed
+        );
+    }
+    state = state.with_attachment_export(attachment_export);
+    if let Some(path) = std::env::var_os("ORKESTR_V2_ATTACHMENT_INGEST_IDENTITY_FILE") {
+        state = state.with_attachment_ingest_file(&PathBuf::from(path))?;
+    } else {
+        state = state.with_attachment_ingest_home(&home)?;
+    }
     if let Some(dir) = std::env::var_os(orkestr_v2_server::thread_icons::V1_ICONS_ENV)
         .map(PathBuf::from)
         .filter(|p| p.is_absolute())

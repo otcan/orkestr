@@ -41,12 +41,71 @@ pub(crate) async fn submit(
         Some(selected) => selected.authority().await,
         None => None,
     };
-    let authority = held_authority.as_deref().and_then(|issuer| issuer.as_ref());
+    let native = state
+        .store
+        .conversation_native_provider(&owner, &conversation)
+        .await
+        .map_err(store_error)?;
+    let selected_provider = if native == Some(orkestr_v2_application::runtime::ProviderKind::Claude)
+    {
+        orkestr_v2_contracts::ConversationProvider::Claude
+    } else {
+        orkestr_v2_contracts::ConversationProvider::Codex
+    };
+    let policy_decision = match &state.provider_policy {
+        Some(policy) => Some(
+            crate::provider_policy::select(
+                &state.store,
+                policy,
+                &owner,
+                &conversation,
+                &input.text,
+                selected_provider,
+            )
+            .await
+            .map_err(|_| {
+                Error(
+                    StatusCode::CONFLICT,
+                    "provider_policy_refused",
+                    "Provider policy requires reconciliation",
+                )
+            })?,
+        ),
+        None => None,
+    };
+    let blocked = policy_decision
+        .as_ref()
+        .is_some_and(|(target, _)| *target != selected_provider);
+    let authority = if blocked {
+        None
+    } else {
+        held_authority.as_deref().and_then(|issuer| issuer.as_ref())
+    };
     let (receipt, reservation) = scope
         .store
         .steer_execution_authenticated(&credential, &conversation, &input, authority)
         .await
         .map_err(store_error)?;
+    if let (Some(policy), Some((_, rules))) = (&state.provider_policy, &policy_decision) {
+        if !rules.is_empty() {
+            let proof =
+                crate::provider_policy::proof(policy, receipt.message_id.clone(), rules.clone())
+                    .map_err(|_| unavailable())?;
+            state
+                .store
+                .remember_provider_policy_authenticated(&credential, &owner, &conversation, &proof)
+                .await
+                .map_err(store_error)?;
+        }
+    }
+    if blocked {
+        if let Some(controller) = &state.window_controller {
+            controller
+                .queue_policy_steering(&credential, &owner, &receipt)
+                .await
+                .map_err(|_| unavailable())?;
+        }
+    }
     if let Some(reservation) = reservation {
         // Commit DeliveryUnknown before moving the one-use value to the owned
         // run. A lost HTTP response, closed mailbox or restart cannot replay it.

@@ -31,12 +31,15 @@ def pump_type(base, become_subreaper):
             become_subreaper()
             command, descriptors = self.config.isolated_command()
             try:
-                self.child = subprocess.Popen(command, env={}, cwd=self.config.workspace if self.config.workspace_descriptor is None else None,
+                native_io = getattr(self.config, "native_io", None)
+                spawn = native_io.spawn if native_io is not None else subprocess.Popen
+                self.child = spawn(command, env={}, cwd=self.config.workspace if self.config.workspace_descriptor is None else None,
                     stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                     close_fds=True, pass_fds=descriptors, process_group=0)
             finally:
                 for descriptor in descriptors:
                     os.close(descriptor)
+            if native_io is not None:native_io.attest(self.child)
             for pipe in (self.child.stdin, self.child.stdout):
                 os.set_blocking(pipe.fileno(), False)
             require(self.handoff is not None, "native_writer_handoff_required")

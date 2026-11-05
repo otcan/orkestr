@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import sys
 import time
 import uuid
 
@@ -22,6 +23,8 @@ class BudgetCase(tools.ToolCase):
     def __init__(self):
         super().__init__()
         self.measurements = {}
+        self.retain_server_diagnostics = True
+        self.server_diagnostic = None
 
     def configure(self):
         super().configure()
@@ -221,7 +224,12 @@ def main():
                 try:
                     item["trace"] = case.trace()
                 finally:
-                    case.cleanup()
+                    try:
+                        case.cleanup()
+                    finally:
+                        item['server_diagnostic'] = case.server_diagnostic
+                        if case.server_diagnostic and case.server_diagnostic['already_exited_before_stop']:
+                            print('synthetic Worker Core exit:', json.dumps(case.server_diagnostic), file=sys.stderr)
             item["status"] = "passed"
             print("ordinary synthetic Worker budget HTTP case passed:", test.__name__, flush=True)
     finally:

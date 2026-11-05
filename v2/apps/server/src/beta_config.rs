@@ -2,9 +2,12 @@
 pub(crate) mod capacity_fallback;
 mod conversation_workspaces;
 pub(crate) mod host_full_access;
+mod identity_split;
 pub(crate) mod loading;
+pub(crate) mod provider_routing;
 pub(crate) mod roles;
 pub(crate) mod workspace_exec;
+mod workspace_exec_managed;
 pub(crate) mod workspace_exec_trusted;
 use orkestr_v2_contracts::{ConversationId, OwnerId};
 use serde::Deserialize;
@@ -14,6 +17,11 @@ use std::path::PathBuf;
 #[serde(deny_unknown_fields)]
 pub(crate) struct BetaConfig {
     pub schema_version: u32,
+    /// Root-controlled external admission hold, retained across process restarts.
+    #[serde(default)]
+    pub deploy_maintenance_marker: Option<PathBuf>,
+    #[serde(default)]
+    pub identity_split: Option<identity_split::IdentitySplit>,
     pub owner_id: OwnerId,
     pub conversation_id: ConversationId,
     pub manager_socket: PathBuf,
@@ -37,10 +45,16 @@ pub(crate) struct BetaConfig {
     /// Owner/instance-level V1-equivalent full access; absent by default.
     #[serde(default)]
     pub host_full_access: Option<host_full_access::HostFullAccess>,
+    /// Host native under the separate executor UID with inherited no-new-privileges.
+    #[serde(default)]
+    pub managed_host: Option<host_full_access::HostFullAccess>,
     /// Codex capacity fallback (one same-run retry on a fallback model);
     /// absent means the enabled built-in default.
     #[serde(default)]
     pub capacity_fallback: Option<capacity_fallback::CapacityFallbackConfig>,
+    /// Operator-pinned domain policy, applied before any window admission.
+    #[serde(default)]
+    pub provider_routing: Option<provider_routing::ProviderRouting>,
     /// Total window lifetime (minutes) an active window may be extended to
     /// while its Deep or Worker runs are still working. Default 60, at most 240.
     #[serde(default)]
@@ -130,6 +144,46 @@ impl BetaConfig {
         {
             return Err("invalid beta configuration");
         }
+        if self
+            .deploy_maintenance_marker
+            .as_ref()
+            .is_some_and(|path| !conversation_workspace_path(path))
+        {
+            return Err("invalid deploy maintenance path");
+        }
+        if let Some(identity) = &self.identity_split {
+            identity.validate()?;
+            // Advanced paths require their own closed Root FD contracts,
+            // never a fallback to the legacy privileged service identity.
+            if self.host_full_access.is_some() {
+                return Err("unsupported split execution mode");
+            }
+            for profile in self.workspace_profiles() {
+                profile
+                    .trusted
+                    .as_ref()
+                    .ok_or("split workspace requires managed commands")?
+                    .validate_managed_runtime()?;
+            }
+        } else if self.workspace_profiles().any(|profile| {
+            profile
+                .trusted
+                .as_ref()
+                .is_some_and(|trusted| trusted.managed_executor.is_some())
+        }) {
+            return Err("managed workspace commands require the identity split");
+        }
+        if self.managed_host.is_some()
+            && (self.identity_split.is_none() || self.host_full_access.is_some())
+        {
+            return Err("managed host requires the identity split and excludes legacy full access");
+        }
+        if let Some(access) = &self.managed_host {
+            access.validate()?;
+            if !access.providers {
+                return Err("managed host requires host providers");
+            }
+        }
         if let Some(roles) = &self.roles {
             roles.validate(&self.launcher)?;
         }
@@ -145,6 +199,9 @@ impl BetaConfig {
         if let Some(fallback) = &self.capacity_fallback {
             fallback.policy()?;
         }
+        if let Some(routing) = &self.provider_routing {
+            routing.validate()?;
+        }
         if self
             .window_max_minutes
             .iter()
@@ -155,7 +212,7 @@ impl BetaConfig {
             return Err("invalid window lifetime ceiling");
         }
         if !self.conversation_workspaces.is_empty()
-            && (self.host_full_access.is_none()
+            && ((self.host_full_access.is_none() && self.managed_host.is_none())
                 || self.conversation_workspaces.len() > MAX_CONVERSATION_WORKSPACES
                 || self
                     .conversation_workspaces

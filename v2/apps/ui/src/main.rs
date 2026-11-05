@@ -40,6 +40,7 @@ mod message_time_view;
 mod new_whatsapp_chat;
 mod outbox_driver;
 mod outbox_view;
+mod owner_password_view;
 mod page_memory_bridge;
 mod progress_view;
 mod projects_view;
@@ -272,6 +273,9 @@ fn App() -> Element {
             if !csrf().is_empty() { outbox_view::ReplyGestures {} }
             if !csrf().is_empty() && !current().is_empty() && !global().is_empty() {
                 outbox_driver::OutboxDriver { key: "outbox-{session_scope.read().generation()}-{global}", global: global(), csrf: csrf(), session_scope, onexpired: expired }
+            }
+            if !csrf().is_empty() {
+                    owner_password_view::OwnerPassword { key: "password-{session_scope.read().generation()}", csrf: csrf(), session_scope, onexpired: expired }
             }
             if !csrf().is_empty() {
                     attachment_keys_view::AttachmentKeyEnrollment { key: "keys-{session_scope.read().generation()}", csrf: csrf() }

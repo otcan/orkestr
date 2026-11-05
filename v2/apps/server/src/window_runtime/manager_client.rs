@@ -9,9 +9,23 @@ use std::{path::PathBuf, time::Instant};
 use tokio::net::UnixStream;
 use uuid::Uuid;
 
+#[path = "manager_desk.rs"]
+mod desk;
+#[path = "manager_launch_wire.rs"]
+mod launch_wire;
+#[path = "manager_managed_launch.rs"]
+mod managed_launch;
+#[path = "manager_operations.rs"]
+mod managed_operations;
 #[path = "manager_client_wire.rs"]
 mod wire;
+#[path = "manager_workspace.rs"]
+mod workspace;
+#[path = "manager_workspace_command.rs"]
+#[allow(dead_code)] // Profile gate remains closed until dispatcher qualification.
+mod workspace_command;
 use wire::*;
+pub(crate) use workspace_command::{RootCommand, RootCommandReceipt};
 
 const MAX_FRAME: usize = 8192;
 const INTEGER_LIMIT: u64 = 1 << 53;
@@ -349,35 +363,6 @@ impl ManagerClient {
         }
         Ok(receipt)
     }
-    /// Blocking setup worker ONLY, before FD3 receive/FD4 bootstrap. Never call
-    /// from an async executor thread. The opaque locator is not signal authority.
-    pub fn bind_child(
-        &self,
-        request_id: &str,
-        window: &Window,
-        child: &BrokerChildLocator,
-        deadline: Instant,
-    ) -> Result<BindAck> {
-        let mut request = self.binding(request_id, window, child.pid(), child.start())?;
-        request["bind_deadline_ms"] = json!(bind_deadline_ms(deadline)?);
-        tokio::runtime::Builder::new_current_thread()
-            .enable_io()
-            .enable_time()
-            .build()
-            .map_err(|_| ManagerError::Unavailable)?
-            .block_on(async {
-                let (value, _) = self.exchange(request, deadline).await?;
-                success_fields(&value, Some("fresh_child"))?;
-                let receipt = self.window_receipt(&value["receipt"], window)?;
-                if receipt.state != WindowState::Active {
-                    return Err(ManagerError::Protocol);
-                }
-                Ok(BindAck {
-                    receipt,
-                    fresh_child: boolean(&value, "fresh_child")?,
-                })
-            })
-    }
     fn binding(&self, request_id: &str, window: &Window, pid: u32, start: u64) -> Result<Value> {
         if !(2..(1 << 31)).contains(&pid) || start == 0 || start >= INTEGER_LIMIT {
             return Err(ManagerError::InvalidRequest);
@@ -403,6 +388,15 @@ impl ManagerClient {
         Ok(receipt)
     }
     async fn exchange(&self, request: Value, deadline: Instant) -> Result<(Value, Vec<u8>)> {
+        self.exchange_with_descriptors(request, deadline, None)
+            .await
+    }
+    async fn exchange_with_descriptors(
+        &self,
+        request: Value,
+        deadline: Instant,
+        descriptors: Option<&[std::os::fd::OwnedFd]>,
+    ) -> Result<(Value, Vec<u8>)> {
         if Instant::now() >= deadline {
             return Err(ManagerError::Deadline);
         }
@@ -422,7 +416,11 @@ impl ManagerClient {
                 return Err(ManagerError::Peer);
             }
             self.parent()?; // No request bytes reach an unverified or reparented peer.
-            write(&stream, &frame).await?;
+            if let Some(descriptors) = descriptors {
+                launch_wire::write(&stream, &frame, descriptors).await?;
+            } else {
+                write(&stream, &frame).await?;
+            }
             let size = u32::from_be_bytes(
                 read(&stream, 4)
                     .await?

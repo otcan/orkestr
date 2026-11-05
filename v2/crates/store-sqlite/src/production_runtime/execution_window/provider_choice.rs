@@ -4,6 +4,30 @@ use super::*;
 use orkestr_v2_contracts::TurnLaunch;
 
 impl Store {
+    /// Read the exact prospective input only after authenticating its owner.
+    /// Provider policy must not depend on caller-supplied prompt text.
+    pub async fn conversation_routing_input(
+        &self,
+        credential: &str,
+        owner: &OwnerId,
+        conversation: &ConversationId,
+        message: &orkestr_v2_contracts::MessageId,
+    ) -> Result<String> {
+        let mut tx = self
+            .owner_scope(credential, owner, conversation, false)
+            .await
+            .map_err(|_| RuntimeStoreError::Unauthorized)?;
+        let row: Option<(String, i64)> = sqlx::query_as(
+            "SELECT CASE WHEN length(CAST(text AS BLOB))<=262144 THEN text ELSE '' END, length(CAST(text AS BLOB)) FROM messages WHERE owner_id=? AND conversation_id=? AND id=?",
+        ).bind(owner.to_string()).bind(conversation.to_string()).bind(message.to_string())
+            .fetch_optional(&mut *tx).await.map_err(db)?;
+        let (text, bytes) = row.ok_or(RuntimeStoreError::NotFound)?;
+        if bytes > 262144 {
+            return Err(RuntimeStoreError::InvalidInput);
+        }
+        tx.commit().await.map_err(db)?;
+        Ok(text)
+    }
     /// Unbound read for the trusted window controller and Claude launches:
     /// the settings a turn started now would use (owner-scoped).
     pub async fn conversation_turn_launch(

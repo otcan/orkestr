@@ -56,6 +56,20 @@ pub(super) async fn prepare(path: &Path) -> Result<bool> {
         Err(error) if error.kind() == ErrorKind::AlreadyExists => {}
         Err(error) => return Err(db(error)),
     }
+    inspect(path, false).await?;
+    Ok(false)
+}
+
+/// Emergency operator writes require the exact current schema. Inspect only an
+/// expendable copy; neither source migration nor initialization is permitted.
+pub(super) async fn current(path: &Path) -> Result<()> {
+    if !path.try_exists().map_err(db)? {
+        return Err(StoreError::Invalid);
+    }
+    inspect(path, true).await
+}
+
+async fn inspect(path: &Path, current_only: bool) -> Result<()> {
     // WAL stores have no rollback journal. Never recover a foreign hot journal.
     if sidecar(path, "-journal").try_exists().map_err(db)? {
         return Err(StoreError::Invalid);
@@ -80,12 +94,23 @@ pub(super) async fn prepare(path: &Path) -> Result<bool> {
     .map_err(db)?;
     let result = async {
         identify(&mut probe).await?;
+        if current_only {
+            let count: i64 = sqlx::query_scalar("SELECT count(*) FROM _sqlx_migrations")
+                .fetch_one(&mut probe)
+                .await
+                .map_err(db)?;
+            if count as usize != sqlx::migrate!("./migrations").iter().count() {
+                return Err(StoreError::Invalid);
+            }
+        }
         // Rehearse all pending upgrades on the disposable copy, including data
         // constraints and inbound foreign keys, before writable source open.
-        sqlx::migrate!("./migrations")
-            .run(&mut probe)
-            .await
-            .map_err(db)?;
+        if !current_only {
+            sqlx::migrate!("./migrations")
+                .run(&mut probe)
+                .await
+                .map_err(db)?;
+        }
         let violations = sqlx::query("PRAGMA foreign_key_check")
             .fetch_all(&mut probe)
             .await
@@ -99,7 +124,7 @@ pub(super) async fn prepare(path: &Path) -> Result<bool> {
     let closed = probe.close().await.map_err(db);
     result?;
     closed?;
-    Ok(false)
+    Ok(())
 }
 
 async fn schema(connection: &mut SqliteConnection) -> Result<Vec<(String, String, String)>> {

@@ -45,29 +45,45 @@ impl ConfiguredExecution {
                     .install_workspace_exec(&token, workspace)
                     .await
                     .map_err(|_| "workspace execution installation refused")?;
-                let trusted = profile.trusted_profile(
-                    home,
-                    std::iter::once(config.workspace.clone()).chain(
-                        config
-                            .roles
-                            .iter()
-                            .flat_map(|roles| roles.launches().map(|r| r.workspace.clone())),
-                    ),
-                    config.host_full_access.as_ref(),
-                )?;
-                // Private per-project job records beside the server's own state.
                 let jobs = home.join(format!("workspace-jobs-{}", profile.project_id));
-                Some(Arc::new(
-                    crate::workspace_exec::WorkspaceExecDispatcher::configured(
-                        store.clone(),
-                        token.clone(),
-                        Arc::new(authority),
-                        &profile.cgroup_root,
-                        &profile.toolchain_root,
-                        trusted.map(|trusted| (trusted, jobs.as_path())),
-                    )?
-                    .with_worker_run_ms(profile.trusted.as_ref().map(|t| t.worker_run_ms())),
-                ))
+                if config.identity_split.is_some() {
+                    Some(Arc::new(
+                        crate::workspace_exec::WorkspaceExecDispatcher::configured_managed(
+                            store.clone(),
+                            token.clone(),
+                            Arc::new(authority),
+                            profile
+                                .trusted
+                                .as_ref()
+                                .ok_or("managed command profile missing")?,
+                            context.clone(),
+                            &jobs,
+                        )?,
+                    ))
+                } else {
+                    let trusted = profile.trusted_profile(
+                        home,
+                        std::iter::once(config.workspace.clone()).chain(
+                            config
+                                .roles
+                                .iter()
+                                .flat_map(|roles| roles.launches().map(|r| r.workspace.clone())),
+                        ),
+                        config.host_full_access.as_ref(),
+                    )?;
+                    // Private per-project job records beside the server's own state.
+                    Some(Arc::new(
+                        crate::workspace_exec::WorkspaceExecDispatcher::configured(
+                            store.clone(),
+                            token.clone(),
+                            Arc::new(authority),
+                            &profile.cgroup_root,
+                            &profile.toolchain_root,
+                            trusted.map(|trusted| (trusted, jobs.as_path())),
+                        )?
+                        .with_worker_run_ms(profile.trusted.as_ref().map(|t| t.worker_run_ms())),
+                    ))
+                }
             }
             None if workspace_grant.is_none() => None,
             None => return Err("workspace profile scope changed"),
@@ -76,6 +92,7 @@ impl ConfiguredExecution {
         let owner = config.owner_id.clone();
         let mut factory = Self {
             config: Config {
+                provider_routing: config.provider_routing.clone(),
                 schema_version: 1,
                 mode: "isolated_acceptance".into(),
                 conversation_id: config.conversation_id.clone(),
@@ -123,6 +140,8 @@ impl ConfiguredExecution {
             offline_python: None,
             workspace_exec,
             initial_grant: Some(grant),
+            desk_setup: std::sync::Mutex::new(None),
+            managed_setup: std::sync::Mutex::new(None),
             workspace_grant,
             window_workers: config
                 .roles

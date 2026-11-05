@@ -51,6 +51,20 @@ impl ConsumedWorkspaceExec {
     pub fn parent(&self) -> &ProviderAdmission {
         &self.parent
     }
+    /// Immutable consumed scope for the private Root command port, never a
+    /// constructor or replacement for the current Store launch fence.
+    pub fn project_id(&self) -> &str {
+        self.profile.workspace.exec_identity().0
+    }
+    pub fn project_generation(&self) -> i64 {
+        self.profile.workspace.exec_identity().1
+    }
+    pub fn context_id(&self) -> &str {
+        &self.context_id
+    }
+    pub fn incarnation(&self) -> &str {
+        &self.incarnation
+    }
     /// Immutable metadata from the committed consume, not present-day authority.
     pub fn receipt(&self) -> &WorkspaceExecReceipt {
         &self.receipt

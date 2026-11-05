@@ -50,3 +50,32 @@ pub(super) async fn retirable_input(
             && super::terminal_retirement::descendants_clear(tx, &context).await?,
     )
 }
+
+/// A first opening may retain its never-dispatched Fast failure. That evidence
+/// is not a turn to resume. Every post-reset run must belong to exactly one
+/// closed, audited failed opening and satisfy the same immutable lapse proof.
+pub(super) async fn bootstrap_runs_clear(
+    tx: &mut SqliteConnection,
+    owner: &OwnerId,
+    conversation: &orkestr_v2_contracts::ConversationId,
+    floor: i64,
+) -> Result<bool> {
+    let scopes: Vec<(String, String)> = sqlx::query_as("SELECT DISTINCT r.context_id,r.incarnation_id FROM production_runs r WHERE r.owner_id=? AND r.conversation_id=? AND NOT EXISTS(SELECT 1 FROM execution_windows w WHERE w.context_id=r.context_id AND w.incarnation_id=r.incarnation_id AND w.generation<=?)")
+        .bind(owner.to_string()).bind(conversation.to_string()).bind(floor)
+        .fetch_all(&mut *tx).await.map_err(db)?;
+    for (context, incarnation) in scopes {
+        let windows: Vec<String> = sqlx::query_scalar("SELECT w.id FROM execution_windows w JOIN execution_window_open_failures f ON f.window_id=w.id AND f.owner_id=w.owner_id AND f.conversation_id=w.conversation_id AND f.generation=w.generation AND f.context_id=w.context_id AND f.failed_incarnation_id=w.incarnation_id WHERE w.owner_id=? AND w.conversation_id=? AND w.context_id=? AND w.incarnation_id=? AND w.generation>? AND w.state='closed' AND w.terminal_run_id IS NULL AND f.restored_window_id IS NULL AND f.cause='setup_incomplete'")
+            .bind(owner.to_string()).bind(conversation.to_string()).bind(&context).bind(&incarnation).bind(floor)
+            .fetch_all(&mut *tx).await.map_err(db)?;
+        if windows.len() != 1 {
+            return Ok(false);
+        }
+        let window = windows[0].parse().map_err(db)?;
+        if !only_lapsed_reservation(tx, &context, &incarnation, window).await?
+            || !super::terminal_retirement::descendants_clear(tx, &context).await?
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}

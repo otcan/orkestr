@@ -30,7 +30,7 @@ impl ConfiguredExecution {
                 return Err("execution input eligibility invalid");
             }
             if page.eligible_input_available {
-                return Ok(true);
+                return self.provider_input_allowed(None).await;
             }
             tokio::select! {
                 _ = tokio::time::sleep(Duration::from_millis(100)) => {},
@@ -86,6 +86,9 @@ impl ConfiguredExecution {
             }
             self.maintain(heartbeat).await?;
             live()?;
+            if !self.provider_input_allowed(None).await? {
+                return Ok(None);
+            }
             if let Some(claim) = self
                 .store
                 .claim_next(
@@ -113,6 +116,15 @@ impl ConfiguredExecution {
             .await
             .map_err(|_| "execution supervisor heartbeat refused")?;
         *heartbeat = Instant::now();
+        // The FIFO head can change between the prospective read and claim
+        // (parallel slots). Re-evaluate the actual lease before any admission.
+        if let Some(proof) = self.provider_input_refusal(&claim.message_id).await? {
+            self.store
+                .release_provider_policy_claim(&claim, &proof)
+                .await
+                .map_err(|_| "provider policy claim release refused")?;
+            return Ok(None);
+        }
         let key = format!("http:{}", claim.message_id);
         let admitted = self
             .store

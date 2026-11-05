@@ -331,3 +331,150 @@ and copied into the protected beta configuration. A trusted profile with
 must also pin `code_mode_host` and `code_mode_host_sha256` (the same Codex
 release's `codex-code-mode-host`), which is packaged beside `native`. No other
 package may carry it.
+
+## Optional authority/executor identity contract (launch still unqualified)
+
+A selected-service plan may provide all five fields `authority_uid`,
+`authority_gid`, `executor_uid`, `executor_gid`, and `provider_home`. Omission
+retains legacy single-UID behavior. Partial declarations, equal authority and
+executor UIDs, inconsistent legacy `uid`/`gid` executor aliases and provider-home
+paths inside the authority home are refused. This initial contract requires a
+shared package/IPC group; distinct groups require an explicit reviewed ACL
+contract and currently fail closed.
+
+The authority home/data/bootstrap belong to the authority UID under immutable
+parents. Provider home, credentials, profiles and workspaces remain executor
+owned. The descriptor and identity module are covered by the closed package
+manifest, preparation inventory and startup seal. Provider entry points enforce
+Linux `no_new_privs` for a configured split, inherited by native/code-mode
+children, without modifying the operator's root or sudo policy.
+
+The manager deliberately refuses configured split startup with
+`split_launch_unqualified`: workflow parity and installed-service qualification remain incomplete. These fields
+must not be represented as completed authority separation or activated on a live
+service. Synthetic tests prove protected path ownership and that `no_new_privs`
+blocks a disposable setuid euid probe while preserving the parent root context;
+they do not qualify a real provider or deployment.
+
+The next staged primitive adds a closed `launch_child` control operation to the
+existing exact-server peer channel. Four explicit one-use descriptors carry
+read-only child stdin pipe, write-only child stdout pipe, a provider socket and a
+private proxy lifecycle socket created by that authoritative server incarnation. The manager journals a semantic
+window/role/setup claim before spawning; changing a retry UUID cannot obtain a second
+fresh broker. An immutable root-manager child remaps descriptors, drops all
+supplementary groups/UID/capabilities, enforces NNP and enters the fixed role.
+The executor consumes a kernel-authenticated root-parent capsule before treating
+foreign Core paths as descriptor references; it never gains Core traversal rights.
+Original broker pidfd/window/role registration precedes continuation, and cleanup
+observes the owned tree before killing/reaping its broker. Failed registration
+stays unknown and cannot replay.
+
+The Rust runtime retains a real authority-UID proxy Child while the root manager
+owns the actual executor broker. Both source incarnation and original stopped
+proxy are authenticated independently of socketpair creator credentials. The
+proxy cannot cause a second launch. Its exit, lifecycle EOF or cancellation
+quarantines the window, and release waits for actual broker and owned-tree reap
+proof. Lost delivery remains unknown. No caller-supplied executable, environment
+or path crosses the launch protocol.
+
+The root-only `v2/tests/identity_split_service_http.py <ordinary-server-binary>
+--report <private-report-path>` rehearsal exercises actual ordinary HTTP setup,
+Core/window admission, four-FD transfer, namespace/native startup, one synthetic
+completion accepted into Core and successful manager shutdown. All accounts,
+credentials and native executables are fixed disposable fixtures. The harness
+explicitly reproduces the proposed root startup path; production startup stays
+gated. This proves fresh base Deep flow only. Fast has transport role support
+but lacks end-to-end qualification. Multi-role plans, resume, workspace, Worker,
+Claude and host-full-access split plans fail closed. Privileged approved helper
+mediation and attachment-group integration still need qualification before used
+workflow parity can be claimed.
+
+Standalone privileged operator terminals remain outside managed executor
+isolation. Source provenance cannot defend against a trusted privileged operator
+editing authority state. No live service, account, terminal, sudoers or deployment
+is changed by these tests.
+
+### Staged managed Claude Deep
+
+An optional `claude.managed_host` plan object contains exactly `environment` with
+fixed `HOME`, `PATH` and optional `TMPDIR` matching the pinned Claude home/temp.
+It requires the explicit identity split and excludes `host_full_access`. Account
+selecting credential environment keys are refused. The protected private Claude
+profile retains this distinct name; it never aliases legacy full root access.
+The managed broker and native require non-root execution with inherited NNP;
+there is no shell command, path or environment override in the launch request.
+
+For a split package, external `desktop_broker`, `timer_config` and
+`whatsapp_chats` files must also be single-link regular files owned by the
+authority UID with mode 0600 and protected root/authority ancestry. Root checks
+their metadata before launch; it does not hash or copy secret bytes into the
+package. Referenced credentials still require the server consumer's private-file
+checks. Legacy desktop grants and Vault access require separate scoped mediation;
+passing this custody check does not qualify those helper workflows.
+
+`--provider claude` selects the same disposable HTTP rehearsal using fixed native
+stream JSON. It asserts actual executor UID, NNP, authority Core read denial,
+accepted Deep and Fast completion and successful actual-tree reap. The owner
+selects an explicit model/effort through the settings API; Root forwards only
+these closed values in the authenticated launch capsule. The fixture checks Deep
+receives them and Fast retains its fixed model/effort and read-only native flags.
+Preferences cannot select an account, environment, executable or retry an
+already claimed setup. This qualifies fresh synthetic Claude Deep/Fast only;
+native resume stays refused. Existing provider
+policy refusal handling is preserved. Privileged helpers and full workflow parity
+remain outstanding, so production split startup remains gated.
+
+### Staged Core setup fence and Worker slots
+
+Managed descriptor locators privately attest the Core-issued Starting binding's
+owner, conversation, session, generation and issuer incarnation/provider/role.
+Pre-native bindings remain `unconfigured`; provider selection comes from their
+protected issuer context. No public JSON constructor can mint this attestation.
+The root manager claims each exact setup once and also consumes the original
+proxy incarnation once. Inventing a request ID or reusing a proxy with another
+claimed setup never replays an unknown launch. A new Core-issued setup may reuse
+a sealed Worker slot, within the existing 32-launch window bound. This is metadata
+launch only; existing parent grants, native readiness and consumed business
+execution fences still authorize every actual inference.
+
+`--provider workers` exercises two fresh Worker tasks under a held Deep parent
+in one disposable window, then completes Deep and reaps the actual owned tree.
+It uses fixed read-only Codex fixture natives. Workspace, privileged host and
+resume paths remain refused, and production split startup remains disabled.
+
+The root launch path initializes the exact attested conversation export directory
+before any executor metadata/native startup. `--attachment-export` adds a bounded
+Codex HTTP rehearsal: Core remains private, a synthetic authority-owned 0640
+attachment is read through the conversation mount, a separate owner-writable
+canary proves the mount itself rejects writes, and another group-readable
+conversation's file is absent. This uses a small fixed fixture; large encrypted
+upload, publication and revocation acceptance remain separate checks.
+
+### Faulted managed actors
+
+The root launcher remains the sole reaper of its actual broker `Popen` Child;
+window pidfd cleanup cannot consume that wait or replace a negative status with
+an apparent zero exit. Proxy pidfds stay pinned until actual reap. Negative or
+lost outcomes remain unknown/quarantined and cannot replay.
+
+If this exact root subreaper adopts previously unobserved executor descendants,
+original kernel parentage and pidfds provide global cleanup custody only. The
+manager freezes affected window associations and further authority transitions,
+then reaps that owned pool without assigning a conversation/role to its members.
+Checks before control operations and after original child reap protect terminal
+commits from incomplete descendant snapshots. A global cleanup never repairs
+lost semantic ownership or converts it into business completion.
+
+The explicit `--provider claude --fault-orphan` disposable HTTP fixture kills the
+real broker before window observation, after its synthetic host native forks an
+escaped child and grandchild. It requires all three original identities reaped,
+zero business runs, retained reconciliation/unknown states, preserved `-9` exit,
+and fenced admit/extend/launch/retire/reconcile operations. Its manager remains
+faulted: passing this check proves physical cleanup, not automatic recovery or
+production activation. A separate kernel test preserves another known same-UID
+peer and never scans or kills processes merely by UID.
+
+The staged [Deep desk capability](../../docs/managed-desk-capability.md) adds a
+fixed Root helper bridge with one-use Core grants and separate cleanup proof.
+Fresh HTTP, owner Stop and Root-anchor fault rehearsals remain disposable;
+existing-session/Claude/helper parity and production split startup stay gated.

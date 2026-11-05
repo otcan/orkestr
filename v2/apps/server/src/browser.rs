@@ -29,7 +29,7 @@ fn token(headers: &HeaderMap) -> Result<String, Error> {
     }
     found.ok_or_else(unauthorized)
 }
-fn stored(token: &str) -> String {
+pub(crate) fn stored(token: &str) -> String {
     format!("browser:{token}")
 }
 fn csrf(token: &str) -> String {
@@ -110,7 +110,7 @@ pub(crate) async fn guard(
     }
     Ok(())
 }
-fn cookie(state: &AppState, token: &str, ttl: u32) -> String {
+pub(crate) fn cookie(state: &AppState, token: &str, ttl: u32) -> String {
     let secure = if state.origin.starts_with("https://") {
         "; Secure"
     } else {
@@ -118,7 +118,7 @@ fn cookie(state: &AppState, token: &str, ttl: u32) -> String {
     };
     format!("{COOKIE}={token}; Path=/api/v2; HttpOnly; SameSite=Strict; Max-Age={ttl}{secure}")
 }
-async fn body(
+pub(crate) async fn body(
     state: &AppState,
     owner: &OwnerId,
     token: &str,
@@ -134,9 +134,15 @@ pub async fn login(
     headers: HeaderMap,
     credentials: Result<Json<Credentials>, JsonRejection>,
 ) -> Result<Response, Error> {
-    let owner = auth::verify_credentials(&state, credentials).await?;
+    let (owner, verified_hash) = auth::verify_credentials(&state, credentials).await?;
     let value = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
-    state.store.save_session(&stored(&value), &owner).await?;
+    if !state
+        .store
+        .save_verified_session(&stored(&value), &owner, &verified_hash)
+        .await?
+    {
+        return Err(unauthorized());
+    }
     // Rotate an existing cookie only after successful credential verification.
     if let Ok(old) = token(&headers) {
         state.store.revoke_session(&stored(&old)).await?;
