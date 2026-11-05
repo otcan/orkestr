@@ -6,9 +6,13 @@ declared private homes, together with their checked Git metadata when present.
 It preserves absolute paths and source ownership; unrelated home contents stay
 hidden. Leaf owners must belong to the contract's declared source identities.
 Foreign-owned leaves retain the existing `shared: true` named-executor ACL rule.
-Existing named writers from the explicitly declared source identities are admitted
-only inside selected native/Git roots. This never grants a writer permission or
-permits an unrelated writer/group, and never applies to whole-home ancestors.
+Existing named writers from explicitly declared source identities are admitted
+inside selected native/Git roots. Root may also traverse their original private
+ancestors with those identities as owners/writers. Writable ancestor groups must
+resolve every named and primary-GID member to Root or a declared source identity;
+unknown groups or unrelated members refuse. This traversal does not project an
+ancestor, grant any permission, or relax Worker custody. Selected leaves still
+refuse group/other writers. Whole homes are never selected native views.
 A non-Git CWD is valid here; a malformed or missing Git pointer target refuses.
 
 These selections do not create `workspace_exec` profiles or Worker command

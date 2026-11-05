@@ -161,7 +161,12 @@ def verify_projects(rows,ctx,lookups=(),creator=None,homes=()):
         require({'nosuid','nodev'}<=options(row['mount_id'],row['path']),'resource_project_flags')
         if os.geteuid()==0:
             from .resource_receipt import original_source
-            original=original_source({'source':row['path'],'uid':row['uid'],'kind':'toolchain'},lookups,creator,homes)
+            writers=tuple({h['uid'] for h in lookups}) if key=='conversation_id' else ()
+            roots=tuple(Path(p['workspace']) for p in ctx.get('native_workspaces',[]))
+            roots+=tuple(Path(p['path']) for p in rows if 'conversation_id' in p)
+            original=original_source({'source':row['path'],'uid':row['uid'],'kind':'toolchain'},
+                                     lookups,creator,homes,native_writers=writers,native_roots=roots,
+                                     native_executor=ctx['executor_uid'])
             try:
                 meta=os.fstat(original)
                 require((meta.st_dev,meta.st_ino,meta.st_uid)==(row['device'],row['inode'],row['uid']),

@@ -38,7 +38,7 @@ def options(mid,target=None):
     require(False,'resource_mount_missing')
 
 
-def original_source(row,lookups=(),creator=None,homes=()):
+def original_source(row,lookups=(),creator=None,homes=(),native_writers=(),native_roots=(),native_executor=None):
     source=Path(row['source'])
     selected=next((h for h in lookups if Path(h['path']) in source.parents),None)
     if selected is None:return open_source(source,row['uid'],row['kind'] in DIRECTORIES,homes)
@@ -50,14 +50,27 @@ def original_source(row,lookups=(),creator=None,homes=()):
         require((info.st_dev,info.st_ino,info.st_uid,info.st_gid)==
                 (selected['device'],selected['inode'],selected['uid'],selected['gid']),
                 'resource_original_home_lost')
+        if native_writers:
+            from .workspace_acl import check
+            home=os.open('.',os.O_RDONLY|os.O_DIRECTORY|os.O_CLOEXEC,dir_fd=fd)
+            try:check(home,info.st_uid,native_executor,0,selected_writers=native_writers,source_ancestry=True)
+            finally:os.close(home)
         parts=source.relative_to(selected['path']).parts
         for index,part in enumerate(parts):
-            child=os.open(part,os.O_PATH|os.O_NOFOLLOW|os.O_CLOEXEC,dir_fd=fd)
+            child=os.open(part,(os.O_RDONLY|os.O_NONBLOCK if native_writers else os.O_PATH)|os.O_NOFOLLOW|os.O_CLOEXEC,dir_fd=fd)
             os.close(fd);fd=child;info=os.fstat(fd)
             directory=index+1<len(parts) or row['kind'] in DIRECTORIES
-            require(info.st_uid in (0,row['uid'],selected['uid']) and not info.st_mode&0o002
+            leaf=index+1==len(parts)
+            owners=(0,row['uid'],selected['uid'],*(native_writers if not leaf else ()))
+            require(info.st_uid in owners and not info.st_mode&0o002
                 and (stat.S_ISDIR(info.st_mode) if directory else
                      stat.S_ISREG(info.st_mode) and info.st_nlink==1),'resource_original_custody')
+            if native_writers:
+                from .workspace_acl import check
+                current=Path(selected['path'],*parts[:index+1])
+                scoped=any(current==root or root in current.parents for root in native_roots)
+                check(fd,info.st_uid,native_executor,0,selected_writers=native_writers,
+                      source_ancestry=not scoped)
         result=fd;fd=None;return result
     finally:
         if fd is not None:os.close(fd)

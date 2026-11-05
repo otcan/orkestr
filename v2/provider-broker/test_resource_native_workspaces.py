@@ -116,6 +116,61 @@ class NativeWorkspaceTests(unittest.TestCase):
             os.mkdir('native-repository',0o700,dir_fd=fd);os.chown('native-repository',OLD,OLD,dir_fd=fd)
             with self.assertRaisesRegex(Refused,'resource_project_source_replaced'):verify(f.selected,f.ctx)
 
+    def test_native_only_shared_ancestors_resolve_group_members_and_keep_exact_leaf(self):
+        from codex_service.workspace_custody import open_checked
+        from codex_service import workspace_acl
+        f=self.f
+        parent=f.old/'shared-native-ancestor';parent.mkdir(mode=0o700);os.chown(parent,OTHER,0)
+        original=self.repo;self.repo=parent/'native-repository';original.rename(self.repo)
+        for entry in f.beta['conversation_workspaces'].values():
+            if entry['path']==str(original):entry['path']=str(self.repo)
+        f.ctx=context(f.runtime,f.beta,f.profile,f.claude_config)
+        # Root group has an actual primary-GID member; source cross-owner named
+        # ACLs are retained. Neither the ancestor nor its unrelated child is a
+        # native view, and executor traversal of the original remains denied.
+        (parent/'unselected-secret').write_text('synthetic hidden sibling')
+        subprocess.run(['/usr/bin/setfacl','-m',f'u:{OLD}:rwx,g::rwx,g:0:rwx,o::---',str(parent)],check=True,capture_output=True)
+        with self.assertRaises(Refused):
+            fd=open_checked(self.repo,OLD,executor=EXEC,executor_gid=EXEC,ancestry=f.doc['source_homes'])
+            os.close(fd)  # Worker custody retains its original strict policy.
+        with Activation(f.selected,f.ctx):
+            receipt=verify(f.selected,f.ctx)
+            self.assertNotIn(str(parent),[row['path'] for row in receipt['projects']])
+            self.assertFalse((parent/'unselected-secret').exists())
+            result=self.executor('from pathlib import Path;assert Path("data").read_text()=="synthetic native cwd"',cwd=self.repo)
+            self.assertEqual(result.returncode,0,result.stderr)
+        # An unknown group or any supplementary/primary member outside sealed
+        # source owners remains forbidden, even if the ACL mask restricts it.
+        subprocess.run(['/usr/bin/setfacl','-m','g:62005:rwx',str(parent)],check=True,capture_output=True)
+        with self.assertRaisesRegex(Refused,'workspace_source_group_unknown'):
+            with Activation(f.selected,f.ctx):pass
+        subprocess.run(['/usr/bin/setfacl','-x','g:62005',str(parent)],check=True,capture_output=True)
+        for member in ('named','primary'):
+            group=SimpleNamespace(gr_mem=['unrelated'] if member=='named' else [])
+            users=[SimpleNamespace(pw_uid=62005,pw_gid=0)] if member=='primary' else [SimpleNamespace(pw_uid=0,pw_gid=0)]
+            with patch.object(workspace_acl.grp,'getgrgid',return_value=group), patch.object(workspace_acl.pwd,'getpwnam',return_value=SimpleNamespace(pw_uid=62005)), patch.object(workspace_acl.pwd,'getpwall',return_value=users):
+                with self.assertRaisesRegex(Refused,'workspace_unselected_group_writer'):
+                    with Activation(f.selected,f.ctx):pass
+        subprocess.run(['/usr/bin/setfacl','-m','u:62005:rwx',str(parent)],check=True,capture_output=True)
+        with self.assertRaisesRegex(Refused,'workspace_unselected_acl_writer'):
+            with Activation(f.selected,f.ctx):pass
+        subprocess.run(['/usr/bin/setfacl','-x','u:62005',str(parent)],check=True,capture_output=True)
+        with Activation(f.selected,f.ctx) as active:
+            home=next(row for row in active.homes if row['path']==str(f.old))['fd']
+            original_parent=f'/proc/{os.getpid()}/fd/{home}/{parent.name}'
+            subprocess.run(['/usr/bin/setfacl','-m','u:62005:rwx',original_parent],check=True,capture_output=True)
+            with self.assertRaisesRegex(Refused,'workspace_unselected_acl_writer'):verify(f.selected,f.ctx)
+            subprocess.run(['/usr/bin/setfacl','-x','u:62005',original_parent],check=True,capture_output=True)
+            with patch.object(workspace_acl.pwd,'getpwall',return_value=[SimpleNamespace(pw_uid=62005,pw_gid=0)]):
+                with self.assertRaisesRegex(Refused,'workspace_unselected_group_writer'):verify(f.selected,f.ctx)
+            os.rename(parent.name,parent.name+'-old',src_dir_fd=home,dst_dir_fd=home)
+            os.mkdir(parent.name,0o700,dir_fd=home);os.chown(parent.name,OLD,OLD,dir_fd=home)
+            replacement=os.open(parent.name,os.O_PATH|os.O_DIRECTORY,dir_fd=home)
+            try:
+                os.mkdir(self.repo.name,0o700,dir_fd=replacement);os.chown(self.repo.name,OLD,OLD,dir_fd=replacement)
+            finally:os.close(replacement)
+            with self.assertRaisesRegex(Refused,'resource_project_source_replaced'):verify(f.selected,f.ctx)
+
     def test_root_owned_native_cwd_outside_homes_uses_shared_acl_without_chown(self):
         f=self.f;cwd=f.root/'root-native';cwd.mkdir(mode=0o700);(cwd/'data').write_text('synthetic native cwd')
         subprocess.run(['/usr/bin/setfacl','-m',f'u:{EXEC}:rwx,u:{CORE}:---,u:{OLD}:rwx,d:u:{OLD}:rwx,g::---,o::---',str(cwd)],check=True,capture_output=True)

@@ -57,9 +57,18 @@ def open_checked(path, owner, directory=True, executor=None, executor_gid=None, 
                 current=Path('/',*parts[:index+1])
                 declared=any(meta.st_uid==home.get('uid',owner) and
                     (current==Path(home['path']) or Path(home['path']) in current.parents) for home in ancestry)
+                native_private=bool(selected_writers) and any(
+                    Path(home['path']) in current.parents and meta.st_uid in {0,*selected_writers}
+                    for home in ancestry)
+                declared=declared or native_private
                 require(meta.st_uid in (0,owner) or declared,'workspace_managed_ancestor_owner')
+                # Root only traverses the original sealed native source chain;
+                # these ancestors are never projected or granted to executors.
+                native_ancestry=bool(declared and selected_writers and not writers)
                 check_acl(fd,meta.st_uid if declared else owner,executor,0 if declared else 1,
-                          executor_gid=executor_gid,selected_writers=writers)
+                          executor_gid=executor_gid,
+                          selected_writers=selected_writers if native_ancestry else writers,
+                          source_ancestry=native_ancestry)
             else:
                 check_acl(fd,owner,executor,7 if leaf and directory else 1 if is_directory else 4,
                           owner_leaf=leaf and directory,executor_gid=executor_gid,selected_writers=writers)
