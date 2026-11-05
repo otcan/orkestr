@@ -21,8 +21,9 @@ jobs:
   rust-v2:
     runs-on: ubuntu-latest
     # Process-failure tests exercise real deadlines; allow the full suite to finish.
-    # The suite now takes about 25 minutes; keep headroom so slow runners do not cancel it.
-    timeout-minutes: 45
+    # Source-qualified process rehearsals and populated-schema tests exceed
+    # 45 minutes on small hosted runners. Preserve the full checks and evidence.
+    timeout-minutes: 90
     defaults:
       run:
         working-directory: v2
