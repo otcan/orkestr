@@ -30,7 +30,7 @@ class HostRehearsal(resume.ResumeRehearsal):
         beta['conversation_workspaces'] = {self.package.conversation: str(self.mapped)}
         beta_path.write_text(json.dumps(beta))
         helper = self.package.root / CODE_MODE_HOST
-        shutil.copyfile('/usr/bin/true', helper); helper.chmod(0o550)
+        shutil.copyfile('/usr/bin/true', helper); os.chown(helper, 0, GID); helper.chmod(0o550)
         manifest_path = self.package.root / 'manifest.json'
         manifest = json.loads(manifest_path.read_text()); manifest['files'][helper.name] = digest(helper)
         manifest_path.write_text(json.dumps(manifest))
@@ -63,6 +63,7 @@ class HostRehearsal(resume.ResumeRehearsal):
             '-DORKESTR_TEST_AUTHORITY_CORE=' + json.dumps(str(self.package.data / 'core.sqlite3')),
             str(generated), '-o', str(self.package.root / 'native')], check=True, capture_output=True,
             env={'PATH': '/usr/bin:/bin'})
+        os.chown(self.package.root / 'native', 0, GID); (self.package.root / 'native').chmod(0o550)
         for name in ('role', 'mode'):
             self.fixture.write_private(self.mapped / name, (self.fixture.workspace / name).read_bytes())
         self.fixture.workspace = self.mapped
