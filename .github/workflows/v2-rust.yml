@@ -100,6 +100,9 @@ jobs:
           sudo env PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -I -S -B -m unittest discover -s "$PWD/provider-broker" -p 'test_codex_service_managed_*.py' -v
           sudo env PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -I -S -B -m unittest discover -s "$PWD/provider-broker" -p test_codex_service_desk.py -v
           sudo env PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -I -S -B -m unittest discover -s "$PWD/provider-broker" -p test_codex_service_launch.py -v
+          sudo env PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -I -S -B -m unittest discover -s "$PWD/provider-broker" -p test_codex_service_claude_custody.py -v
+          sudo env PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -I -S -B -m unittest discover -s "$PWD/provider-broker" -p test_codex_service_fast_sampler.py -v
+          sudo env PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -I -S -B -m unittest discover -s "$PWD/provider-broker" -p 'test_workspace_*.py' -v
       - name: Service packager and passive quota inventory
         run: |
           python3 -I -S -B -m unittest discover -s packaging/service/tests -v
