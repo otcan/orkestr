@@ -16,7 +16,7 @@ import stat
 from urllib.parse import urlsplit
 
 MAX_DESCRIPTOR = 65536
-MAX_EXECUTABLE = 256 * 1024 * 1024
+MAX_EXECUTABLE = 512 * 1024 * 1024
 MAX_TCP_TABLE = 8 * 1024 * 1024
 
 
