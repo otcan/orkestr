@@ -10,6 +10,7 @@ use std::{
 #[derive(Clone)]
 pub struct WorkerConfiguration {
     pub policy: WorkerPolicy,
+    pub(crate) provider_routing: Option<crate::beta_config::provider_routing::ProviderRouting>,
     pub launcher: PathBuf,
     pub launcher_sha256: String,
     pub workspace: PathBuf,

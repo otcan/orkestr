@@ -9,9 +9,9 @@ mod execution_window;
 mod historical_guard_fixture;
 pub use execution_window::{
     ClosedExecutionWindowRetirement, ExecutionWindowBootstrap, ExecutionWindowCredential,
-    ExecutionWindowRetirement, RetiredExecutionWindowContext, StrandedExecutionWindow,
-    StrandedExecutionWindowPlan, EXECUTION_WINDOW_BASE_LIFETIME_MS, EXECUTION_WINDOW_CLEANUP_MS,
-    EXECUTION_WINDOW_MAX_LIFETIME_MS,
+    ExecutionWindowRetirement, OperatorProviderPolicy, RetiredExecutionWindowContext,
+    StrandedExecutionWindow, StrandedExecutionWindowPlan, EXECUTION_WINDOW_BASE_LIFETIME_MS,
+    EXECUTION_WINDOW_CLEANUP_MS, EXECUTION_WINDOW_MAX_LIFETIME_MS,
 };
 mod acceptance;
 mod auto_acceptance;

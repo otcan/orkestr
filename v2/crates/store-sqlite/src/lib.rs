@@ -59,7 +59,7 @@ pub use production_runtime::{
     OfflinePythonDelegation, OfflinePythonNativeCall, OfflinePythonNativeRequestId,
     OfflinePythonOutcome, OfflinePythonOutput, OfflinePythonParent, OfflinePythonReceipt,
     OfflinePythonResultConsumption, OfflinePythonResultPreparation, OfflinePythonResultReservation,
-    OfflinePythonState, ProductionSupervisorStore, ReadySessionTransition,
+    OfflinePythonState, OperatorProviderPolicy, ProductionSupervisorStore, ReadySessionTransition,
     RetiredExecutionWindowContext, RunLeaseTransition, RunRenewalAuthority,
     StrandedExecutionWindow, StrandedExecutionWindowPlan, ThreadAskCursor, ThreadAskTick,
     TimerSchedulerIssuer, WorkerAdmissionInput, WorkerDelegation, WorkerDelegationReceipt,

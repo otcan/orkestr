@@ -1,14 +1,17 @@
 //! Operator-configured provider exclusions. No domain vocabulary is built in.
 use orkestr_v2_contracts::{ConversationId, ConversationProvider};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ProviderRouting {
     pub rules: Vec<Rule>,
+    /// Explicit standing permission for a fresh native session after proved release.
+    #[serde(default)]
+    pub allow_native_handoff: bool,
 }
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Rule {
     pub id: String,
@@ -21,7 +24,7 @@ pub(crate) struct Rule {
     pub preferred: ConversationProvider,
 }
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Term {
     pub text: String,
@@ -74,13 +77,23 @@ impl ProviderRouting {
         text: &str,
         selected: ConversationProvider,
     ) -> Result<ConversationProvider, &'static str> {
+        self.route_inherited(conversation, text, selected, &[])
+    }
+
+    pub(crate) fn matching_rules(
+        &self,
+        conversation: &ConversationId,
+        text: &str,
+        inherited: &[String],
+    ) -> Result<Vec<String>, &'static str> {
         self.validate()?;
         let lower = text.to_lowercase();
-        let active: Vec<_> = self
+        Ok(self
             .rules
             .iter()
             .filter(|rule| {
                 rule.conversations.contains(conversation)
+                    || inherited.contains(&rule.id)
                     || rule
                         .terms
                         .iter()
@@ -88,6 +101,22 @@ impl ProviderRouting {
                         .fold(0u32, |score, term| score.saturating_add(term.weight))
                         >= rule.threshold
             })
+            .map(|rule| rule.id.clone())
+            .collect())
+    }
+
+    pub(crate) fn route_inherited(
+        &self,
+        conversation: &ConversationId,
+        text: &str,
+        selected: ConversationProvider,
+        inherited: &[String],
+    ) -> Result<ConversationProvider, &'static str> {
+        let matches = self.matching_rules(conversation, text, inherited)?;
+        let active: Vec<_> = self
+            .rules
+            .iter()
+            .filter(|rule| matches.contains(&rule.id))
             .collect();
         if !active.iter().any(|rule| rule.excluded == selected) {
             return Ok(selected);

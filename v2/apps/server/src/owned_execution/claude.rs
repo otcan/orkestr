@@ -321,6 +321,9 @@ impl ConfiguredExecution {
     ) -> Result<Option<ReadyClaudeExecution>, &'static str> {
         self.maintain(heartbeat).await?;
         self.config.verify_launcher()?;
+        if !self.provider_input_allowed(None).await? {
+            return Ok(None);
+        }
         if *shutdown.borrow() {
             return Ok(None);
         }

@@ -79,6 +79,29 @@ impl WorkerSchedule {
     }
 
     async fn begin(&mut self) -> Result<(Phase, WorkerProgress), &'static str> {
+        if let Some(policy) = &self.configuration.provider_routing {
+            let text = self
+                .store
+                .provider_policy_input(
+                    &self.parent.owner_id,
+                    &self.parent.conversation_id,
+                    &self.message,
+                )
+                .await
+                .map_err(|_| "Worker provider policy input unavailable")?;
+            let (target, _) = crate::provider_policy::select(
+                &self.store,
+                policy,
+                &self.parent.owner_id,
+                &self.parent.conversation_id,
+                &text,
+                orkestr_v2_contracts::ConversationProvider::Codex,
+            )
+            .await?;
+            if target != orkestr_v2_contracts::ConversationProvider::Codex {
+                return Err("Worker provider excluded by inherited conversation policy");
+            }
+        }
         let slot = match self.slot.take() {
             Some(slot) => slot,
             None => capacity()

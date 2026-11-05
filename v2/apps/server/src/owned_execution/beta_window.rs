@@ -76,6 +76,7 @@ impl ConfiguredExecution {
         let owner = config.owner_id.clone();
         let mut factory = Self {
             config: Config {
+                provider_routing: config.provider_routing.clone(),
                 schema_version: 1,
                 mode: "isolated_acceptance".into(),
                 conversation_id: config.conversation_id.clone(),
