@@ -73,8 +73,8 @@ mod workspace;
 pub(crate) use workspace::Registry as WorkspaceRegistry;
 #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
 pub use workspace::{
-    WorkspaceDescriptors, WorkspaceDirectoryIdentity, WorkspaceGrant, WorkspaceInstallation,
-    WorkspaceLaunch, WorkspaceLaunchConsumption, WorkspaceLaunchReservation,
+    RootWorkspaceCustody, WorkspaceDescriptors, WorkspaceDirectoryIdentity, WorkspaceGrant,
+    WorkspaceInstallation, WorkspaceLaunch, WorkspaceLaunchConsumption, WorkspaceLaunchReservation,
     WorkspaceLaunchReservationResult, WorkspaceOperatorAllowlist,
 };
 mod model_evidence;
