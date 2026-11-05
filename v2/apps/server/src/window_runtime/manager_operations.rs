@@ -1,8 +1,9 @@
 //! Authenticated Root-observed requests; no provider-supplied caller claims.
 use super::*;
 use orkestr_v2_store_sqlite::{
-    ConsumedManagedOperation, ManagedCallerEvidence, ManagedOperationOutcome,
-    ManagedOperationParent, ManagedOperationRenewal, ManagedOperationRequest, Store,
+    CompletedManagedOperation, ConsumedManagedOperation, ManagedCallerEvidence,
+    ManagedOperationOutcome, ManagedOperationParent, ManagedOperationRenewal,
+    ManagedOperationRequest, Store,
 };
 
 #[derive(Deserialize)]
@@ -19,6 +20,48 @@ pub(crate) struct ManagedReceipt {
     pub terminal: Option<ManagedOperationOutcome>,
 }
 impl ManagerClient {
+    pub(crate) async fn release_managed_result(
+        &self,
+        store: &Store,
+        credential: &str,
+        window: &Window,
+        result: &CompletedManagedOperation,
+        deadline: Instant,
+    ) -> Result<()> {
+        let mut request = self.request(
+            "managed_result",
+            &format!("managed-result:{}", result.id()),
+            Some(window),
+        )?;
+        request["result"] = result.root_request();
+        let value = self
+            .managed_fenced_exchange(request, deadline, |stream, frame| {
+                store
+                    .with_managed_result_fence(credential, result, || {
+                        if Instant::now() >= deadline {
+                            return Err(ManagerError::Deadline);
+                        }
+                        self.parent()?;
+                        stream
+                            .try_write(frame)
+                            .map_err(|_| ManagerError::Unavailable)
+                    })
+                    .map_err(|_| ManagerError::Refused)?
+            })
+            .await?;
+        success_fields(&value, Some("managed_result"))?;
+        self.window_receipt(&value["receipt"], window)?;
+        let expected = result.root_request();
+        let observed = &value["managed_result"];
+        if !fields(observed, &["operation_id", "run_id", "authorized"])
+            || observed["operation_id"] != expected["operation_id"]
+            || observed["run_id"] != expected["run_id"]
+            || observed["authorized"] != true
+        {
+            return Err(ManagerError::Protocol);
+        }
+        Ok(())
+    }
     pub(crate) async fn renew_managed(
         &self,
         store: &Store,

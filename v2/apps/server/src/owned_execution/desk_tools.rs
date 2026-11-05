@@ -21,6 +21,7 @@ impl ConfiguredExecution {
             && self.config.role == config::ExecutionRole::Deep
             && self.config.provider == config::Provider::Codex
             && std::env::var("ORKESTR_V2_DESK_LOGIN_ENABLED").as_deref() == Ok("1")
+            && std::env::var("ORKESTR_V2_MANAGED_OPERATIONS_ENABLED").as_deref() != Ok("1")
     }
     pub(super) async fn prepare_desk(
         &self,

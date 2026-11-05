@@ -5,7 +5,7 @@ a Root-side observer and authority control ports. It remains off by default.
 The production split startup gate remains closed; no existing session or
 operator terminal is changed by installing this source.
 
-The optional future channel uses a Root-owned Unix SEQPACKET socket. Socket
+The metadata/control channel uses a Root-owned Unix SEQPACKET socket. Socket
 creation peer credentials and fresh SCM_CREDENTIALS on the packet must name
 the same original PID/UID. An inherited connection does not transfer caller
 authority. Root retains the actual caller pidfd, requires NNP, verifies original
@@ -59,14 +59,36 @@ the window work deadline. Expired leases cannot revive a helper. Stop cancels
 and reaps its original tree. Full 120-second owner-wait acceptance remains a
 qualification requirement; the short kernel tests do not establish that parity.
 
-Before activation this path still requires a protected provider-facing client
-and native advertisement, full separate-UID Core/Root end-to-end acceptance,
-used Claude/native resume acceptance, watcher delivery, and failure injection.
-The old fresh-only dynamic-tool desk path is not yet replaced for resume.
+For explicit managed-host plans, the original native receives a fixed loopback
+HTTP MCP endpoint through its protected launch capsule. Codex and Claude advertise
+the same closed tools at process startup, including native resume. The optional
+channel replaces the fresh-only dynamic desk advertisement only when enabled.
+Root matches the kernel TCP tuple/socket inode to the registered original native
+PID/start and its Root-created input/output pipe pair. It checks the actual pinned
+executable device/inode, NNP and retained pidfd; descendants and unrelated same-UID
+processes cannot claim this identity. Registration comes only from the original
+tracked broker's SCM_CREDENTIALS and direct Popen child. Native wrappers lacking
+this proof remain unsupported. Yama protection is required; a copied path or
+caller-supplied bearer/PID/header is never authentication.
+
+Terminal effect evidence is persisted before Core issues a distinct one-use
+result release. Its writer fence verifies the still-current consumed run and
+exact result hash before the bounded Root-control write. Root then checks the
+original run and expiry before sending the fixed result; Stop closes pending
+positive delivery. A socket write proves delivery to the transport, not native
+application consumption. No successful helper receipt proves website login.
+
+Offline probes with fake homes and no provider turns establish tool discovery
+with actual Codex and Claude clients. Kernel tests cover an unrelated same-UID
+native, socket-FD reopening, pidfd duplication and process-memory access. These
+do not establish complete workflow parity. Before activation this path still
+requires full separate-UID Core/Root HTTP acceptance, used fresh/resume workflows,
+120-second owner wait, watcher delivery and failure injection.
 
 Standard provider-created MCP stdin pipes are not an authenticated origin
 channel between processes sharing an executor UID. A fixed stdio forwarder must
 not turn arbitrary bytes received there into Root-attested native intent.
-Potential streamable-HTTP MCP support requires separate kernel connection-owner
-qualification; TCP has no Unix SO_PEERCRED equivalent. Existing operator
-terminals and sudo policy are unchanged.
+TCP has no Unix SO_PEERCRED equivalent. Existing operator terminals and sudo
+policy are unchanged. In particular NNP alone cannot prevent delegation to an
+accessible same-UID privileged operator daemon. Such IPC access remains a
+separate production qualification blocker, even when direct sudo is denied.

@@ -43,8 +43,9 @@ class Configuration:
                 return host_command(self.profile.native, self.host_environment,
                                     self.host_environment_files, fast_host_options(),
                                     {"CODEX_HOME": str(home)}), ()
+            from .managed_advertisement import codex_options
             return host_command(self.profile.native, self.host_environment,
-                                self.host_environment_files), ()
+                                self.host_environment_files,codex_options(self.package)), ()
         descriptor = policy.filter_fd(allow_inet=True)
         try:
             command = self.profile._command(descriptor, "codex-bounded")

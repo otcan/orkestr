@@ -3,6 +3,8 @@ use crate::production_runtime::tests::{self as fixtures, Case};
 use orkestr_v2_application::IntakeStore;
 use orkestr_v2_contracts::{ExecutionWindowRequest, MessageInput};
 use std::time::Duration;
+#[path = "result_tests.rs"]
+mod results;
 
 async fn fixture_with_renewal() -> (
     Case,
