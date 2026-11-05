@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from identity_split_host_http import HostRehearsal
 from identity_split_service_http import GID, Rehearsal, wait
 from codex_service.profile import fast_home, fast_host_options
+from codex_service.qualification import code_subject
 
 
 class FastHostRehearsal(HostRehearsal):
@@ -168,6 +169,7 @@ static const char *account_path(const char *relative) {
         assert (self.fast_home / 'auth.json').is_symlink()
         assert (self.fast_home / 'auth.json').resolve() == self.fixture.auth
         report.update(codex_deep_and_fast=traces, roles_selected_by_fixed_argv=True,
+            code_subject=code_subject(self.package),
             shared_mapped_cwd=True, fast_separate_codex_home=True, fast_pinned_options=list(fast_host_options()),
             server_identity=self.server_identity, server_sha256=self.server_sha256, original_inputs_replayed=False,
             synthetic_native_source_sha256=self.synthetic_sha256, managed_host=True,
