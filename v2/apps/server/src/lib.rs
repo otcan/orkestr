@@ -39,6 +39,7 @@ mod conversations_http;
 pub mod deploy_drain;
 mod desktop_broker;
 mod desktop_http;
+mod desktop_open_http;
 mod execution;
 mod execution_accept;
 mod execution_registry;
@@ -543,6 +544,7 @@ pub fn router_with_google_catalog(
         .merge(conversation_status_http::router())
         .merge(host_metrics::router())
         .merge(desktop_http::router())
+        .merge(desktop_open_http::router())
         .merge(sidebar_http::router())
         .merge(message_attachments::router())
         .merge(attachment_keys_http::router())

@@ -415,6 +415,12 @@ async function api(state, req, res, url) {
     state.settings = { ...state.settings, ...fields, revision: state.settings.revision + 1 };
     return json(res, 200, state.settings);
   }
+  if (rest === '/desktops/synthetic-desk/open' && req.method === 'POST') {
+    const request = JSON.parse(await body(req));
+    if (Object.keys(request).length || req.headers['x-orkestr-csrf'] !== 'synthetic-csrf')
+      return json(res, 403, {code:'desktop_open_denied',message:'Synthetic desktop owner verification failed.'});
+    return json(res, 200, {url:'https://desktop.example.test/desktop-share/synthetic?key=fixture',challenge_required:true});
+  }
   if (rest === '/desktops' && req.method === 'GET') return json(res, 200, { schema_version: 1, conversation_id: id,
     binding: { schema_version: 1, conversation_id: id, revision: 1, v1_thread_id: 'synthetic-thread', desktop_slugs: ['synthetic-desk'], grant_issued: false, grant_generation: 0 },
     leases: [{ conversation_id: id, desktop_slug: 'synthetic-desk', v1_thread_id: 'synthetic-thread', v1_lease_id: 'lease-1', fencing_version: 1,

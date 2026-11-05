@@ -185,3 +185,17 @@ test('GET polls revalidate with the last ETag and a 304 returns the kept body',a
         return new Response('{}');
     });
 });
+
+test('owner desktop open uses a scoped cookie mutation and refuses unbound paths', async () => {
+    const root='/api/v2/conversations/00000000-0000-4000-8000-000000000001/desktops';
+    await execute({recv:async()=>({...base,method:'POST',path:root+'/example-desk/open',csrf:'synthetic-csrf',body:{}})},async(path,options)=>{
+        assert.equal(path,root+'/example-desk/open');
+        assert.equal(options.credentials,'same-origin');
+        assert.equal(options.cache,'no-store');
+        assert.equal(options.headers['x-orkestr-csrf'],'synthetic-csrf');
+        assert.equal(options.headers.Authorization,undefined);
+        return Response.json({url:'https://desktop.example.test/desktop-share/example?key=opaque',challenge_required:true});
+    });
+    for(const path of [root+'/../open',root+'/%2e%2e/open',root+'/example/open?redirect=1',root+'/example/share',root+'/example/open/extra'])
+        await assert.rejects(execute({recv:async()=>({...base,path})},()=>assert.fail('fetch must not run')),/Invalid API path/);
+});

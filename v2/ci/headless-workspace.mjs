@@ -503,6 +503,12 @@ export const scenarios = [
       honor_no_reply: true, reply_prefix: 'synthetic-new:', reply_footer: null, review_before_accepting: false });
     // Desktops of the chat: binding and current lease.
     await waitText('synthetic-desk');
+    await clickWithin('[aria-label="Available desktops"]', 'Open desktop');
+    await page.waitForSelector('[aria-label="Available desktops"] a[target="_blank"]');
+    assert.equal(await page.$eval('[aria-label="Available desktops"] a', a => a.href),
+      'https://desktop.example.test/desktop-share/synthetic?key=fixture');
+    assert.equal(await page.$eval('[aria-label="Available desktops"] a', a => a.rel), 'noopener noreferrer');
+    await waitText('The desktop may ask you to approve a viewing challenge.');
     assert.equal(await page.$eval('#desktop-thread', n => n.value), 'synthetic-thread');
     await page.type('#desktop-slugs', ', other-desk');
     await clickText('Save desktops');
