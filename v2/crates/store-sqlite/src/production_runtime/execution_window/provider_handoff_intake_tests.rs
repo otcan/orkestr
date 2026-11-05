@@ -70,15 +70,24 @@ async fn continuation_wins_blocks_handoff_and_exact_retired_receipt_never_requeu
         .unwrap();
     retire_old(&fresh, w).await;
     let input = continuation();
+    // Abandoning the prior turn rotates its binding generation. That source
+    // may no longer assert native continuation. A new input fenced to the
+    // current provider generation still serializes against a handoff.
+    assert!(matches!(
+        fresh
+            .admit_with_provider_generation(
+                &w.f.owner,
+                &w.f.conversation,
+                &input,
+                None,
+                Some(0),
+                Some(&p.deep.run.run_id),
+            )
+            .await,
+        Err(orkestr_v2_application::StoreError::ProviderGenerationMismatch)
+    ));
     let admitted = fresh
-        .admit_with_provider_generation(
-            &w.f.owner,
-            &w.f.conversation,
-            &input,
-            None,
-            Some(0),
-            Some(&p.deep.run.run_id),
-        )
+        .admit_with_provider_generation(&w.f.owner, &w.f.conversation, &input, None, Some(0), None)
         .await
         .unwrap();
     assert!(fresh
@@ -114,6 +123,16 @@ async fn continuation_wins_blocks_handoff_and_exact_retired_receipt_never_requeu
         .unwrap();
     assert!(replay.duplicate);
     assert_eq!(replay.receipt.message_id, admitted.receipt.message_id);
+    let retrofitted: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM source_admission_fences WHERE message_id=?")
+            .bind(replay.receipt.message_id.to_string())
+            .fetch_one(&fresh.pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        retrofitted, 0,
+        "a duplicate cannot acquire a claimed source fence"
+    );
     let state: String = sqlx::query_scalar("SELECT state FROM reasoning_inbox WHERE message_id=?")
         .bind(replay.receipt.message_id.to_string())
         .fetch_one(&fresh.pool)
