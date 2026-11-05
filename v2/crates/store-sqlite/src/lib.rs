@@ -53,6 +53,7 @@ pub use production_runtime::{
     ManagedOperationRequest, ManagedOperationSetup,
 };
 mod source_context;
+mod source_intake;
 mod source_receipts;
 pub use production_runtime::{
     auto_accept_request_key, AutomaticReplyConsumption, AutomaticReplyDelivery,

@@ -4,6 +4,9 @@ use orkestr_v2_application::IntakeStore;
 use orkestr_v2_contracts::{ExecutionWindowRequest, MessageInput};
 use std::time::Duration;
 
+#[path = "intake_tests.rs"]
+mod intake;
+
 async fn fixture_with_renewal() -> (
     Case,
     Store,
