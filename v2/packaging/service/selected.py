@@ -84,7 +84,7 @@ def pair_bytes(plan):
     return pair
 
 
-OPTIONAL = {'managed_host', 'operator_recovery', 'desk_login', 'attachment_export_dir', 'password_rotation_ready', 'authority_uid', 'authority_gid', 'executor_uid', 'executor_gid', 'provider_home', 'roles', 'preserve_state', 'workspace_exec', 'additional_workspace_exec', 'max_active_windows', 'host_full_access',
+OPTIONAL = {'deploy_maintenance_marker', 'managed_host', 'operator_recovery', 'desk_login', 'attachment_export_dir', 'password_rotation_ready', 'authority_uid', 'authority_gid', 'executor_uid', 'executor_gid', 'provider_home', 'roles', 'preserve_state', 'workspace_exec', 'additional_workspace_exec', 'max_active_windows', 'host_full_access',
             'window_max_minutes', 'conversation_window_max_minutes', 'conversation_workspaces', 'provider_routing',
             'code_mode_host', 'code_mode_host_sha256', 'claude', 'claude_quota_projection', 'codex_quota_projection', 'live_map', 'desktop_broker', 'timer_config', 'whatsapp_chats', 'v1_chat_icons_dir', 'metrics_port'}
 CLAUDE_PATHS = ('executable', 'account', 'workspace', 'home', 'temporary')
@@ -131,6 +131,15 @@ def claude(plan):
 
 def optional(plan):
     """Shape of the optional plan extensions copied into the protected beta config."""
+    if 'deploy_maintenance_marker' in plan:
+        marker = plan['deploy_maintenance_marker']
+        require(type(marker) is str and marker.startswith('/') and marker != '/'
+                and '\0' not in marker and not any(ord(c)<32 for c in marker)
+                and all(part not in ('','.','..') for part in marker.split('/')[1:]),
+                'normalized deploy maintenance marker required')
+        home = Path(plan['home'])
+        require(Path(marker)!=home and home not in Path(marker).parents,
+                'deploy maintenance marker must be outside Core home')
     if 'attachment_export_dir' in plan:
         value=plan['attachment_export_dir']
         require(type(value) is str and value.startswith('/') and 1<len(value)<=4096
@@ -386,7 +395,7 @@ def prepare(plan):
                 beta['additional_workspace_exec']=plan['additional_workspace_exec']
             if 'max_active_windows' in plan:
                 beta['max_active_windows']=plan['max_active_windows']
-            for key in ('window_max_minutes', 'conversation_window_max_minutes', 'conversation_workspaces', 'provider_routing'):
+            for key in ('deploy_maintenance_marker', 'window_max_minutes', 'conversation_window_max_minutes', 'conversation_workspaces', 'provider_routing'):
                 if key in plan:
                     beta[key]=plan[key]
             for access_key in ('host_full_access', 'managed_host'):
