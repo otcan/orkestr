@@ -5,12 +5,14 @@ import subprocess
 import time
 from pathlib import Path
 import unittest
+from unittest.mock import patch
 
 from codex_service.contract import Refused
 from codex_service.manager import Manager
 from codex_service.package import Package
 from codex_service.qualification import (Gate, CODE_WORKFLOWS, BOUNDARY, INSTANCE,
     CONSUMERS, code_subject, instance_subject, encoded, start)
+from codex_bounded.trust import exists
 import test_codex_service_identity as identity_tests
 
 
@@ -246,6 +248,24 @@ int main(void) {
             finally:
                 manager.close()
                 self.assertIsNotNone(manager.child.returncode)
+
+    def test_shutdown_control_failure_still_reaps_exact_original_core_and_reports_failure(self):
+        package = self.provision()
+        manager = Manager(package.root, self.digest(package.root / 'manifest.json'))
+        try:
+            manager.start()
+            original = dict(manager.identity)
+            # Keep the actual child alive until the negative-control callback
+            # fails, so this covers the exception path rather than a quick exit.
+            with patch.object(manager.child, 'send_signal', return_value=None), \
+                 patch.object(manager, 'once', side_effect=Refused('synthetic_shutdown_control_failure')):
+                self.assertFalse(manager.close())
+            self.assertIsNotNone(manager.child.returncode)
+            self.assertFalse(exists(original))
+            self.assertTrue(manager.failed)
+        finally:
+            if manager.child and manager.child.poll() is None:
+                manager.child.kill(); manager.child.wait(3)
 
     def test_boot_nonce_never_clears_replaced_or_inplace_operator_hold(self):
         package = self.provision('qualified_runtime')
