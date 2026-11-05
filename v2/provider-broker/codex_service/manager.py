@@ -170,14 +170,8 @@ class Manager:
         if operation == "status":
             return {"ok": True, "receipt": self.ledger.status(request["conversation_id"])}
         if operation == 'workspace_attest':
-            require(self.package.identity_split and self.identity is not None and len(descriptors)==1,
-                    'workspace_source_required')
-            self._package_preflight()
-            if self.workspace_projects is None:
-                from .workspace_setup import Projects
-                self.workspace_projects = Projects(self.package)
-            proof = self.workspace_projects.attest(self.identity, request, descriptors[0])
-            return {'ok': True, 'receipt': self.ledger.status(request['conversation_id']), 'workspace': proof}
+            from .workspace_setup import dispatch
+            return dispatch(self,request,descriptors)
         if operation == "admit":
             self._package_preflight()
             receipt, fresh = self.ledger.admit(request)

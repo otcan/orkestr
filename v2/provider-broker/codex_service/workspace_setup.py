@@ -66,3 +66,12 @@ class Projects:
     def close(self):
         for installation in self.installations.values(): installation.close()
         self.installations = {}
+
+
+def dispatch(manager, request, descriptors):
+    require(manager.package.identity_split and manager.identity is not None and len(descriptors) == 1,
+            'workspace_source_required')
+    manager._package_preflight()
+    if manager.workspace_projects is None: manager.workspace_projects = Projects(manager.package)
+    proof = manager.workspace_projects.attest(manager.identity, request, descriptors[0])
+    return {'ok': True, 'receipt': manager.ledger.status(request['conversation_id']), 'workspace': proof}
