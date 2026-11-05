@@ -12,13 +12,23 @@ import socket
 import struct
 import subprocess
 import time
-from types import SimpleNamespace
 from codex_bounded.trust import digest,exists,process,protected
 from .contract import require
 from .ownership import Adopted,Process,Vanished,MAX_CHILDREN
 
 
 class Tree(Adopted):
+    def __init__(self):
+        # This is one Root-owned operation anchor, not a split service identity
+        # configuration. Reuse kernel custody mechanics without inventing zero
+        # authority/executor UIDs or weakening the service's identity contract.
+        require(os.geteuid()==0,'desk_tree_root')
+        selected=ctypes.c_int()
+        require(ctypes.CDLL(None).prctl(37,ctypes.byref(selected),0,0,0)==0 and selected.value==1,
+                'desk_tree_subreaper')
+        self.parent=process(os.getpid());self.records={}
+        require(self.parent and self.parent['uid']==0,'desk_tree_identity')
+
     def _remember(self,identity):
         # This per-operation anchor owns kernel descendants even if a protected
         # helper legitimately drops UID. No same-UID or caller-PID discovery.
@@ -55,7 +65,7 @@ def main(package,arguments):
         value=mapping(value)
         helper=protected(value['helper']);require(digest(helper)==value['sha256'],'desk_helper_pin')
         require(ctypes.CDLL(None).prctl(36,1,0,0,0)==0,'desk_anchor_subreaper')
-        tree=Tree(SimpleNamespace(identity_split=True,executor_uid=0))
+        tree=Tree()
         cancelled=False;child=None;record=None;clean=False;code=None
         deadline=time.monotonic()+value['duration_ms']/1000
         channel.setblocking(False)
