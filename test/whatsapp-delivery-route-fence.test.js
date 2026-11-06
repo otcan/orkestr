@@ -30,3 +30,10 @@ test('restriction clearance, identity, isolation, fresh evidence and expected ro
  assert.throws(()=>f.activate({from:'other',to:'primary',evidence:evidence('primary')}),/compare_failed/);
  assert.equal(f.current().route,'temporary');
 });
+
+test('new reservation blocked before dispatch is distinct from a prior same-id ambiguous attempt',t=>{
+ const {f}=fixture(t);f.reserve({id:'original',hash:'h',route:'temporary',createdAt:at});f.uncertain('original');
+ assert.throws(()=>f.reserve({id:'original',hash:'h',route:'temporary',createdAt:at}),/delivery_route_attempt_unresolved/);
+ assert.throws(()=>f.reserve({id:'new',hash:'new-hash',route:'temporary',createdAt:at}),/delivery_route_blocked_before_reservation/);
+ assert.equal(f.blocked(),true);
+});

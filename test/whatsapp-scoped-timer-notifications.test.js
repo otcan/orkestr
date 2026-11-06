@@ -278,3 +278,24 @@ test('a timer answer with trailing whitespace and no footer still matches its pr
  assert.equal((await notifier.tick()).sent,1);
  assert.equal(state.sent[0].text,'⏰ Example check\nAll clear.');
 });
+
+test('closed pre-dispatch wrapper rejections revoke a timer proof without poisoning the shared fence',async t=>{
+ const {wrapperRejection}=await import('../packages/connectors/src/whatsapp-scoped-wrapper-errors.js');
+ const {notificationKey}=await import('../packages/connectors/src/whatsapp-timer-notification-proof.js');
+ for(const code of ['group_transport_configuration_changed','delivery_route_blocked_before_reservation']) {
+  const f=fixture(t);
+  const notifier=createScopedTimerNotifications({...f.options,send:async()=>{throw wrapperRejection({stderr:JSON.stringify({ok:false,error:code})});}});
+  t.after(()=>notifier.close());
+  await assert.rejects(notifier.tick(),/send_rejected/);
+  const id='timer:'+notificationKey(['thread-1','parent1'])+':0';
+  assert.equal(f.proofs.get(id).state,'revoked');assert.equal(f.proofs.finished('parent1'),'rejected');
+  assert.equal(f.fence.blocked(),false);assert.equal(f.state.sent.length,0);
+ }
+});
+
+test('ambiguous wrapper/provider failure still creates durable uncertainty and blocks future sends',async t=>{
+ const {wrapperRejection}=await import('../packages/connectors/src/whatsapp-scoped-wrapper-errors.js');
+ const f=fixture(t),notifier=createScopedTimerNotifications({...f.options,send:async()=>{throw wrapperRejection({stderr:JSON.stringify({ok:false,error:'whatsapp_worker_timeout'})});}});
+ t.after(()=>notifier.close());await assert.rejects(notifier.tick(),/delivery_unresolved/);
+ assert.equal(f.fence.blocked(),true);
+});

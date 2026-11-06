@@ -43,3 +43,33 @@ test('preflight validates owner-approved direct chats like the worker does at st
     assert.doesNotMatch(JSON.stringify(result), /15550000002/);
   }
 });
+
+test('existing static journal contract catches nested JSON key ordering before activation, without writes', async t => {
+  const fs = await import('node:fs'), os = await import('node:os'), path = await import('node:path');
+  const {DatabaseSync} = await import('node:sqlite');
+  const crypto = await import('node:crypto');
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'scoped-preflight-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
+  const journalPath=path.join(dir,'input.sqlite'), config={...base,journalPath,groups:[{chatId:groups[0].chatId,threadId:'thread-a',name:'Example'}],routeControl:undefined};
+  const db=new DatabaseSync(journalPath);
+  db.exec('CREATE TABLE group_meta(key TEXT PRIMARY KEY,value TEXT NOT NULL)');
+  const contract=crypto.createHash('sha256').update(JSON.stringify([config.ownChatId,config.activatedAt,config.groups])).digest('hex');
+  db.prepare('INSERT INTO group_meta VALUES(?,?)').run('contract',contract);db.close();
+  const before=fs.readFileSync(journalPath);
+  const reordered={...config,groups:[{chatId:groups[0].chatId,name:'Example',threadId:'thread-a'}]};
+  assert.deepEqual(config.groups,reordered.groups,'values match but the persisted contract preserves key order');
+  const check=c=>preflightScopedGroupConfigs(['/cfg/live.json'],{readFile:()=>JSON.stringify(c)});
+  assert.equal(check(config).ok,true);
+  assert.equal(check(reordered).results[0].code,'group_transport_configuration_changed');
+  assert.deepEqual(fs.readFileSync(journalPath),before);
+});
+
+test('absent and initial empty journals remain untouched; unreadable existing journals refuse', async t => {
+  const fs = await import('node:fs'), os = await import('node:os'), path = await import('node:path');
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'scoped-initial-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
+  const journalPath=path.join(dir,'input.sqlite'),config={...base,journalPath};
+  const check=()=>preflightScopedGroupConfigs(['/cfg/live.json'],{readFile:()=>JSON.stringify(config)});
+  assert.equal(check().ok,true);assert.equal(fs.existsSync(journalPath),false);
+  fs.writeFileSync(journalPath,'');assert.equal(check().ok,true);assert.equal(fs.statSync(journalPath).size,0);
+  fs.writeFileSync(journalPath,'not SQLite');
+  assert.equal(check().results[0].code,'group_transport_journal_unreadable');
+});

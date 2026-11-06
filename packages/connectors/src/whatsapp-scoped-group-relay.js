@@ -1,3 +1,4 @@
+import {wrapperErrorCode} from './whatsapp-scoped-wrapper-errors.js';
 import {createParticipantRecoveryPolicy,readProtectedParticipantGrant} from './whatsapp-participant-recovery.js';
 import {readGroupInputs} from './scoped-group-inbox.js';
 import {createScopedInputAdmission} from './scoped-group-input-intake.js';
@@ -40,7 +41,8 @@ const threadSuppressesUpdates = (thread = {}) => {
     || ['mirrorWhatsAppUpdates', 'mirrorWhatsAppProgress', 'mirrorUpdateMessages', 'whatsappMirrorUpdates']
       .some(k => Object.hasOwn(b, k) && flagOff(b[k]));
 };
-const errorCode = error => /^[a-z_]+$/.test(error.message) ? error.message : 'operation_failed';
+export const scopedRelayErrorCode = error => /^[a-z_]{1,120}$/.test(error?.message || '') ? error.message : wrapperErrorCode(error) || 'operation_failed';
+const errorCode = scopedRelayErrorCode;
 const GROUP_IMAGE_MIMES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp']);
 const GROUP_MEDIA_MAX_BYTES = 10 * 1024 * 1024;
 export {buildReplyTo} from './scoped-group-reply-quote.js';

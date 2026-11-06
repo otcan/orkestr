@@ -19,6 +19,7 @@ import {encodeReplyFile, readReplyFile} from './whatsapp-scoped-reply-files.js';
 
 const fail=code=>{throw new Error(`group_transport_${code}`);};
 const hash=value=>crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
+export const scopedGroupContract=config=>hash([config.ownChatId,config.activatedAt,config.groups]);
 const IMAGE_MIME_EXTENSIONS=new Map([['image/jpeg','.jpg'],['image/png','.png'],['image/gif','.gif'],['image/webp','.webp']]);
 const MAX_GROUP_MEDIA_BYTES=10*1024*1024;
 // Types that can never become an image attachment: skip the download so a large
@@ -105,7 +106,7 @@ export function createScopedGroupTransport({config,token,base,dbPath=config.jour
   const mediaDir=path.resolve(config.mediaDir || (dbPath===':memory:'
     ? path.join(os.tmpdir(),`orkestr-scoped-group-media-${process.pid}`)
     : `${dbPath}.media`));
-  const contract=hash([config.ownChatId,config.activatedAt,config.groups]);  // static groups only
+  const contract=scopedGroupContract(config);  // static groups only
   const prior=db.prepare('SELECT value FROM group_meta WHERE key=?').get('contract');
   if(prior && prior.value!==contract)fail('configuration_changed');
   db.prepare('INSERT OR IGNORE INTO group_meta VALUES(?,?)').run('contract',contract);
