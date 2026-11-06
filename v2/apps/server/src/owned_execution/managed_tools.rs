@@ -79,16 +79,17 @@ impl ConfiguredExecution {
             .map_err(|_| "managed parent refused")?;
         let context = self.window.clone().ok_or("managed window missing")?;
         let started = Instant::now();
-        let result = context
-            .manager
-            .open_managed_run(
-                &self.store,
-                &self.token,
-                &context.window,
-                &parent,
-                Instant::now() + Duration::from_secs(1),
-            )
-            .await;
+        let result = async {
+            let deadline = super::managed_observation::deadline(
+                context.work_deadline(),
+                parent.lease_deadline_ms(),
+            )?;
+            context
+                .manager
+                .open_managed_run(&self.store, &self.token, &context.window, &parent, deadline)
+                .await
+        }
+        .await;
         observed_rpc(ManagedRpc::RunOpen, started, result)
             .map_err(|_| "managed run observation uncertain")?;
         Ok(Some(ManagedTools {
@@ -133,14 +134,17 @@ impl ManagedTools {
     pub(super) async fn poll(&mut self) -> Result<(), &'static str> {
         if self.operation.is_none() {
             let started = Instant::now();
-            let result = self
-                .context
-                .manager
-                .pending_managed(
-                    &self.context.window,
-                    Instant::now() + Duration::from_secs(1),
-                )
-                .await;
+            let result = async {
+                let deadline = super::managed_observation::deadline(
+                    self.context.work_deadline(),
+                    self.parent.lease_deadline_ms(),
+                )?;
+                self.context
+                    .manager
+                    .pending_managed(&self.context.window, deadline)
+                    .await
+            }
+            .await;
             let Some(request) = observed_rpc(ManagedRpc::Pending, started, result)
                 .map_err(|_| "managed Root source unavailable")?
             else {

@@ -60,6 +60,10 @@ impl Clock {
         now >= self.current().work
     }
 
+    pub(super) fn work_deadline(&self) -> Instant {
+        self.current().work
+    }
+
     pub(super) fn cleanup_deadline(&self) -> tokio::time::Instant {
         self.current().cleanup.into()
     }

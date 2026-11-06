@@ -24,6 +24,7 @@ fn setup_time_consumes_original_budget_and_cannot_restart_cleanup_clock() {
     let clock = Clock::opening(&opening(), 1_005_000, now).unwrap();
     assert!(!clock.work_due(now + Duration::from_secs(864)));
     assert!(clock.work_due(now + Duration::from_secs(865)));
+    assert_eq!(clock.work_deadline(), now + Duration::from_secs(865));
     assert_eq!(
         clock.cleanup_deadline().into_std(),
         now + Duration::from_secs(895)
@@ -54,6 +55,7 @@ fn extension_moves_both_deadlines_later_only() {
     clock.extend_to(2_470_000).unwrap(); // +10 minutes
     assert!(!clock.work_due(now + Duration::from_secs(1464)));
     assert!(clock.work_due(now + Duration::from_secs(1465)));
+    assert_eq!(clock.work_deadline(), now + Duration::from_secs(1465));
     assert_eq!(
         clock.cleanup_deadline().into_std(),
         now + Duration::from_secs(1495)

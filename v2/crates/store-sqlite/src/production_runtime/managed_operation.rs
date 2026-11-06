@@ -130,6 +130,11 @@ impl ConsumedManagedOperation {
     }
 }
 impl ManagedOperationParent {
+    /// Current consumed run lease; observing this bound grants no renewal.
+    pub fn lease_deadline_ms(&self) -> i64 {
+        self.parent.run.lease_deadline_ms
+    }
+
     /// Metadata sent only through the authenticated authority->Root port.
     /// The opaque parent's live writer fence must surround that bounded write.
     pub fn root_run_request(&self) -> Value {
