@@ -14,3 +14,5 @@ pub mod execution;
 pub mod provider_access;
 pub mod worker_sandbox;
 pub mod workspace_exec;
+
+mod setup_diagnostics;

@@ -14,12 +14,22 @@ use orkestr_v2_store_sqlite::{BoundSessionMetadata, Store};
 use std::path::{Path, PathBuf};
 use tool_profile::ToolProfile;
 
+use crate::setup_diagnostics::{measure, FailureCode, Stage};
+
 type BeforeOpen<'a> = &'a mut dyn FnMut(&MetadataChild) -> Result<(), SetupFailure>;
 
 #[derive(Debug)]
 pub enum SetupFailure {
     Protocol(Blocker),
     Transport(crate::containment::Error),
+}
+impl FailureCode for SetupFailure {
+    fn failure_code(&self) -> &'static str {
+        match self {
+            Self::Protocol(_) => "protocol",
+            Self::Transport(error) => error.failure_code(),
+        }
+    }
 }
 impl From<Blocker> for SetupFailure {
     fn from(value: Blocker) -> Self {
@@ -175,57 +185,73 @@ impl PreparingCodex {
             return Err(Blocker::Protocol.into());
         }
         let binding = grant.binding().clone();
-        let launcher = TrustedLauncher::configured(launcher)?;
-        let (authority, child) = if let Some((credential, launch)) = workspace_launch {
-            launcher.open_workspace_metadata_fd_retained(
-                store,
-                grant,
-                credential,
-                launch,
-                directories,
-                TransportBounds::default(),
-                resources,
-            )?
-        } else if tool_profile.workspace().is_some() {
-            launcher.open_workspace_worker_metadata_fd_retained(
-                store,
-                grant,
-                directories,
-                TransportBounds::default(),
-                resources,
-            )?
-        } else if tool_profile == ToolProfile::OfflinePython {
-            launcher.open_worker_metadata_fd_retained(
-                store,
-                grant,
-                directories,
-                TransportBounds::default(),
-                resources,
-            )?
-        } else if actual_fd {
-            launcher.open_metadata_fd_retained(
-                store,
-                grant,
-                directories,
-                TransportBounds::default(),
-                resources,
-            )?
-        } else {
-            launcher.open_metadata(store, grant, directories, TransportBounds::default())?
-        };
-        if let Some(trusted) = tool_profile.workspace() {
-            child.enable_workspace_exec(trusted)?;
-        }
-        if tool_profile == ToolProfile::OfflinePython {
-            child.enable_offline_python()?;
-        }
-        if tool_profile == ToolProfile::DeskLogin {
-            child.enable_desk_login()?;
-        }
+        let (authority, child) = measure(
+            Stage::Launcher,
+            binding.role,
+            || -> Result<_, SetupFailure> {
+                let launcher = TrustedLauncher::configured(launcher)?;
+                let pair = if let Some((credential, launch)) = workspace_launch {
+                    launcher.open_workspace_metadata_fd_retained(
+                        store,
+                        grant,
+                        credential,
+                        launch,
+                        directories,
+                        TransportBounds::default(),
+                        resources,
+                    )?
+                } else if tool_profile.workspace().is_some() {
+                    launcher.open_workspace_worker_metadata_fd_retained(
+                        store,
+                        grant,
+                        directories,
+                        TransportBounds::default(),
+                        resources,
+                    )?
+                } else if tool_profile == ToolProfile::OfflinePython {
+                    launcher.open_worker_metadata_fd_retained(
+                        store,
+                        grant,
+                        directories,
+                        TransportBounds::default(),
+                        resources,
+                    )?
+                } else if actual_fd {
+                    launcher.open_metadata_fd_retained(
+                        store,
+                        grant,
+                        directories,
+                        TransportBounds::default(),
+                        resources,
+                    )?
+                } else {
+                    launcher.open_metadata(store, grant, directories, TransportBounds::default())?
+                };
+                Ok(pair)
+            },
+        )?;
+        measure(
+            Stage::CapabilityEnable,
+            binding.role,
+            || -> Result<_, SetupFailure> {
+                if let Some(trusted) = tool_profile.workspace() {
+                    child.enable_workspace_exec(trusted)?;
+                }
+                if tool_profile == ToolProfile::OfflinePython {
+                    child.enable_offline_python()?;
+                }
+                if tool_profile == ToolProfile::DeskLogin {
+                    child.enable_desk_login()?;
+                }
+                Ok(())
+            },
+        )?;
         if let Some(bind) = before_open {
-            bind(&child)?;
+            measure(Stage::ManagerBind, binding.role, || bind(&child))?;
         }
-        let open = child.open_broker_metadata()?;
+        let open = measure(Stage::MetadataOpen, binding.role, || {
+            child.open_broker_metadata()
+        })?;
         let rpc = CodexRpc::for_role(binding.role);
         Ok(Self {
             authority,
@@ -533,3 +559,6 @@ impl std::fmt::Display for SetupFailure {
         }
     }
 }
+
+#[cfg(test)]
+mod setup_diagnostics_tests;

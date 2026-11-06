@@ -284,6 +284,10 @@ impl MetadataChild {
     /// caller JSON, handle or identity is accepted. Latch before enqueue; an
     /// uncertain queue/transaction outcome quarantines instead of retrying.
     pub fn open_broker_metadata(&self) -> Result<crate::broker::BrokerOpen, Error> {
+        let mut fence_diagnostics = None;
+        let mut diagnostic_role = None;
+        let mut enqueue_event = None;
+        let mut fence_event = None;
         let result = (|| {
             let mut state = self.shared.state.lock().map_err(|_| Error::Revoked)?;
             let outcome = (|| {
@@ -295,6 +299,7 @@ impl MetadataChild {
                 }
                 state.broker_open_attempted = true;
                 let grant = state.grant.as_ref().ok_or(Error::Revoked)?;
+                diagnostic_role = Some(grant.binding().role);
                 let mut codec = crate::broker::BrokerOpen::from_metadata(grant)
                     .map_err(|_| Error::InvalidFrame)?;
                 codec
@@ -304,17 +309,40 @@ impl MetadataChild {
                 if frame.len() > self.process.max_frame {
                     return Err(Error::FrameTooLarge);
                 }
-                self.shared
-                    .store
-                    .with_metadata_fence(grant, || {
-                        self.process
-                            .live
-                            .lock()
-                            .map_err(|_| Error::Revoked)?
-                            .framing
-                            .enqueue(&frame)
-                    })
-                    .map_err(|_| Error::Revoked)??;
+                use crate::setup_diagnostics::FailureCode;
+                let started = std::time::Instant::now();
+                let (fenced, diagnostics) =
+                    self.shared
+                        .store
+                        .with_metadata_fence_diagnostics(grant, || {
+                            let started = std::time::Instant::now();
+                            let result = (|| {
+                                self.process
+                                    .live
+                                    .lock()
+                                    .map_err(|_| Error::Revoked)?
+                                    .framing
+                                    .enqueue(&frame)
+                            })();
+                            enqueue_event = Some((
+                                started.elapsed(),
+                                result
+                                    .as_ref()
+                                    .err()
+                                    .map_or("ok", FailureCode::failure_code),
+                            ));
+                            result
+                        });
+                fence_diagnostics = Some(diagnostics);
+                let fenced = fenced.map_err(|_| Error::Revoked);
+                fence_event = Some((
+                    started.elapsed(),
+                    fenced
+                        .as_ref()
+                        .err()
+                        .map_or("ok", FailureCode::failure_code),
+                ));
+                fenced??;
                 Ok(codec)
             })();
             // Close the phase under the same gate before another thread can
@@ -326,6 +354,27 @@ impl MetadataChild {
         })();
         if result.is_err() {
             self.shared.quarantine(&self.process);
+        }
+        // Both metadata-state and live-process locks, plus the SQLite
+        // transaction, have left scope before any diagnostic sink is touched.
+        if let Some(diagnostics) = fence_diagnostics {
+            diagnostics.emit();
+        }
+        if let (Some(role), Some((elapsed, outcome))) = (diagnostic_role, fence_event) {
+            crate::setup_diagnostics::record(
+                crate::setup_diagnostics::Stage::MetadataFence,
+                role,
+                elapsed,
+                outcome,
+            );
+        }
+        if let (Some(role), Some((elapsed, outcome))) = (diagnostic_role, enqueue_event) {
+            crate::setup_diagnostics::record(
+                crate::setup_diagnostics::Stage::MetadataEnqueue,
+                role,
+                elapsed,
+                outcome,
+            );
         }
         result
     }
