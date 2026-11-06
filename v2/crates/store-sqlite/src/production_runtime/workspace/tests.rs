@@ -193,3 +193,64 @@ async fn revoked_machine_and_foreign_binding_refuse() {
         .is_err());
     assert!(!called);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn same_project_fast_reopen_does_not_revoke_deep_starting_metadata() {
+    let f = setup().await;
+    let (deep_project, deep_metadata, allow, root) = prepared(&f).await;
+    let roles = f
+        .handle
+        .ensure_role_bindings(&f.owner, &f.conversation)
+        .await
+        .unwrap();
+    let cloned = f.handle.clone();
+    let fast_project = cloned
+        .register_workspace(
+            &f.token,
+            &f.conversation,
+            deep_project.project.parse().unwrap(),
+            allow.installation(&root).unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(deep_project.generation, fast_project.generation);
+    cloned
+        .bind_workspace_session(&f.token, &fast_project, &roles.fast)
+        .await
+        .unwrap();
+    let fast_metadata = cloned
+        .authorize_session_metadata(&roles.fast)
+        .await
+        .unwrap();
+    assert_eq!(
+        f.handle
+            .with_metadata_fence(&deep_metadata, || Ok::<_, ()>(())),
+        Ok(Ok(()))
+    );
+    assert_eq!(
+        cloned.with_metadata_fence(&fast_metadata, || Ok::<_, ()>(())),
+        Ok(Ok(()))
+    );
+    // Explicit project generation replacement is different from exact reopen:
+    // both old grants must then refuse before their callbacks can execute.
+    cloned
+        .replace_workspace(&f.token, &fast_project, allow.installation(&root).unwrap())
+        .await
+        .unwrap();
+    let mut calls = 0;
+    assert!(matches!(
+        f.handle.with_metadata_fence(&deep_metadata, || {
+            calls += 1;
+            Ok::<_, ()>(())
+        }),
+        Err(RuntimeStoreError::Fenced)
+    ));
+    assert!(matches!(
+        cloned.with_metadata_fence(&fast_metadata, || {
+            calls += 1;
+            Ok::<_, ()>(())
+        }),
+        Err(RuntimeStoreError::Fenced)
+    ));
+    assert_eq!(calls, 0);
+}

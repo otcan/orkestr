@@ -304,17 +304,27 @@ impl MetadataChild {
                 if frame.len() > self.process.max_frame {
                     return Err(Error::FrameTooLarge);
                 }
-                self.shared
-                    .store
-                    .with_metadata_fence(grant, || {
-                        self.process
-                            .live
-                            .lock()
-                            .map_err(|_| Error::Revoked)?
-                            .framing
-                            .enqueue(&frame)
-                    })
-                    .map_err(|_| Error::Revoked)??;
+                crate::setup_diagnostics::measure(
+                    crate::setup_diagnostics::Stage::MetadataFence,
+                    || {
+                        self.shared
+                            .store
+                            .with_metadata_fence(grant, || {
+                                crate::setup_diagnostics::measure(
+                                    crate::setup_diagnostics::Stage::MetadataEnqueue,
+                                    || {
+                                        self.process
+                                            .live
+                                            .lock()
+                                            .map_err(|_| Error::Revoked)?
+                                            .framing
+                                            .enqueue(&frame)
+                                    },
+                                )
+                            })
+                            .map_err(|_| Error::Revoked)
+                    },
+                )??;
                 Ok(codec)
             })();
             // Close the phase under the same gate before another thread can

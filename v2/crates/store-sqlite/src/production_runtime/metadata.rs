@@ -175,10 +175,23 @@ impl Store {
         action: impl FnOnce() -> std::result::Result<T, E>,
     ) -> Result<std::result::Result<T, E>> {
         let operation = async {
-            let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
-            self.validate_metadata(&mut tx, grant).await?;
+            use super::metadata_diagnostics::{report, Stage};
+            use std::time::Instant;
+            let started = Instant::now();
+            let mut tx = report(
+                Stage::Begin,
+                started,
+                self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db),
+            )?;
+            let started = Instant::now();
+            report(
+                Stage::Validate,
+                started,
+                self.validate_metadata(&mut tx, grant).await,
+            )?;
             let result = action();
-            tx.commit().await.map_err(db)?;
+            let started = Instant::now();
+            report(Stage::Commit, started, tx.commit().await.map_err(db))?;
             Ok(result)
         };
         match tokio::runtime::Handle::try_current() {
