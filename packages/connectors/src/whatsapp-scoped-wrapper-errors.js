@@ -17,7 +17,7 @@ const PRE_DISPATCH = new Set([
   'delivery_route_blocked_before_reservation',
 ]);
 const WRAPPER_CODES = new Set([...PRE_DISPATCH,
-  'scoped_reply_failed', 'scoped_reply_unconfirmed', 'whatsapp_worker_timeout', 'whatsapp_worker_request_failed',
+  'scoped_reply_failed', 'scoped_reply_unconfirmed', 'delivery_uncertain', 'whatsapp_worker_timeout', 'whatsapp_worker_request_failed',
   'group_transport_delivery_uncertain', 'group_transport_request_conflict', 'timer_notification_proof_denied',
   'delivery_route_delivery_unresolved', 'delivery_route_attempt_unresolved', 'delivery_route_inactive',
 ]);

@@ -1,3 +1,4 @@
+import {hasParticipantRecoveryAdmission} from './whatsapp-participant-recovery-admission.js';
 import {createParticipantRecoveryPolicy,readProtectedParticipantGrant} from './whatsapp-participant-recovery.js';
 import crypto from 'node:crypto';
 import {createGroupParticipantPolicy} from './whatsapp-group-participant-author.js';
@@ -376,7 +377,11 @@ export function createScopedGroupTransport({config,token,base,dbPath=config.jour
           parent=db.prepare('SELECT * FROM group_input WHERE id=? AND chat_id=?').get(request.parentId,to);
           if(!parent)fail('reply_parent_required');
           const author=db.prepare('SELECT proof FROM group_input_author WHERE id=?').get(parent.id);
-          if(author && !participants.allows(JSON.parse(author.proof),parent))fail('participant_reply_denied');
+          if(author) {
+            const proof=JSON.parse(author.proof);
+            if(!participants.allows(proof,parent) && !(proof.recoveryGrantSha256 && participants.allowsRoutedRecovery(proof,parent)
+                && hasParticipantRecoveryAdmission(config,parent,author.proof,groups.get(to).threadId)))fail('participant_reply_denied');
+          }
         }
         const material=hash([to,text,request.parentId]);
         const previous=db.prepare('SELECT * FROM group_send WHERE id=?').get(request.requestId);

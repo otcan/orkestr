@@ -1,3 +1,4 @@
+import {createParticipantInput,recordScopedInputAdmission} from './whatsapp-scoped-participant-input.js';
 import {wrapperErrorCode} from './whatsapp-scoped-wrapper-errors.js';
 import {createParticipantRecoveryPolicy,readProtectedParticipantGrant} from './whatsapp-participant-recovery.js';
 import {readGroupInputs} from './scoped-group-inbox.js';
@@ -7,7 +8,7 @@ import {createScopedAcknowledgements} from './scoped-group-acknowledgements.js';
 import {acknowledgementActivity} from './scoped-acknowledgement-activity.js';
 import {createKeyedSerial} from './scoped-relay-serial.js';
 import crypto from 'node:crypto';
-import {createGroupParticipantPolicy, participantInputMetadata} from './whatsapp-group-participant-author.js';
+import {createGroupParticipantPolicy} from './whatsapp-group-participant-author.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import {createDeliveryRouteFence} from './whatsapp-delivery-route-fence.js';
@@ -175,28 +176,7 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
     return t;
   }
 
-  async function inputThread(input, group) {
-    const thread = await threadFor(group);
-    const hasAuthors = inbox.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='group_input_author'").get();
-    if (participants.count && !hasAuthors) throw new Error('group_participant_journal_required');
-    const author = hasAuthors ? inbox.prepare('SELECT proof FROM group_input_author WHERE id=?').get(input.id) : null;
-    const proof = author ? JSON.parse(author.proof) : null;
-    const routed = db.prepare('SELECT * FROM routed WHERE id=?').get(input.id);
-    const admitted = db.prepare('SELECT * FROM participant_recovery_admissions WHERE id=?').get(input.id);
-    const historicalAdmitted = proof?.recoveryGrantSha256 && routed && admitted
-      && routed.thread_id===group.threadId && admitted.thread_id===group.threadId
-      && routed.message_id===admitted.message_id && admitted.proof===author.proof && admitted.body_sha256===key(input.body);
-    const policy = historicalAdmitted ? {accountId:participants.accountId,allows:participants.allowsRoutedRecovery} : participants;
-    const metadata = author ? participantInputMetadata({proof, input, group, thread, policy}) : {};
-    if (author) {
-      const check = await api(`/api/threads/${encodeURIComponent(group.threadId)}/whatsapp-participant-check`, {method: 'POST', body: {...metadata, text: input.body}});
-      if (check.allowed !== true) throw new Error('group_participant_security_denied');
-      // The external member check may await I/O; expiry/revocation must still
-      // hold when a first input is admitted. Routed completions use their receipt.
-      if(!policy.allows(proof,input))throw new Error('group_participant_binding_denied');
-    }
-    return {thread, metadata};
-  }
+  const inputThread = createParticipantInput({inbox,db,participants,api,threadFor});
 
   const progressBudget = createProgressBudget(db, now), routeAge = createRouteAge(db, now), readPage = createMessagePageReader({api, now, log});
   async function answersFor(group, route, suppressUpdates = false) {
@@ -405,16 +385,7 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
       }});
       const messageId = response.message?.id || response.messageId;
       if (!messageId) throw new Error('group_input_unacknowledged');
-      db.exec('BEGIN IMMEDIATE');
-      try {
-        db.prepare('INSERT OR IGNORE INTO routed(id,thread_id,message_id) VALUES(?,?,?)').run(input.id, group.threadId, messageId);
-        if(current.metadata.scopedParticipant?.recoveryGrantSha256) {
-          const author=inbox.prepare('SELECT proof FROM group_input_author WHERE id=?').get(input.id);
-          db.prepare('INSERT OR IGNORE INTO participant_recovery_admissions(id,thread_id,message_id,proof,body_sha256) VALUES(?,?,?,?,?)')
-            .run(input.id,group.threadId,messageId,author.proof,key(input.body));
-        }
-        db.exec('COMMIT');
-      } catch(error){db.exec('ROLLBACK');throw error;}
+      recordScopedInputAdmission({db,inbox,input,group,messageId,metadata:current.metadata});
       routeAge.routed(input.id);
       route = db.prepare('SELECT * FROM routed WHERE id=?').get(input.id);
       log({event: 'input_routed', threadId: group.threadId, messageId});

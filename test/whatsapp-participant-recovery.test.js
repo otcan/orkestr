@@ -33,11 +33,12 @@ function fixture(t) {
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-function pipeline(t) {
+function pipeline(t,{actualTransport=false}={}) {
  const f=fixture(t),dir=fs.mkdtempSync(path.join(os.tmpdir(),'participant-recovery-'));
  f.config.journalPath=path.join(dir,'inbox.sqlite');
+ f.config.relayJournalPath=path.join(dir,'relay.sqlite');
  const transport=createScopedGroupTransport({config:f.config,token:'fixture-token',base:{},now:f.now,readRecoveryGrant:f.read});
- const inbox=new DatabaseSync(f.config.journalPath),db=new DatabaseSync(':memory:');
+ const inbox=new DatabaseSync(f.config.journalPath),db=new DatabaseSync(actualTransport?f.config.relayJournalPath:':memory:');
  const api=async(url,options={})=>{
   if(url.endsWith('/whatsapp-participant-check'))return {allowed:f.state.member};
   if(url.endsWith('/input')){f.state.posts.push(options.body);return {message:{id:'routed-message'}};}
@@ -46,7 +47,9 @@ function pipeline(t) {
    allowOtherPeople:true,authorizedContactIds:f.state.member?[phone]:[]}}};
  };
  const relay=createScopedGroupRelay({config:f.config,api,inboxDb:inbox,relayDb:db,now:f.now,readRecoveryGrant:f.read,
-  send:async p=>{f.state.sends.push(p);return {ok:true,ids:['fixture-sent']};}});
+  send:async p=>{
+   if(actualTransport){f.client.sendMessage=async()=>{f.state.sends.push(p);return {id:{_serialized:'fixture-sent'}};};return transport.sendText(f.client,p.chatId,p.text,'main',p);}
+   f.state.sends.push(p);return {ok:true,ids:['fixture-sent']};}});
  t.after(()=>{relay.close();inbox.close();db.close();transport.close();fs.rmSync(dir,{recursive:true,force:true});});
  return {...f,transport,inbox,db,relay};
 }
@@ -107,7 +110,7 @@ test('relay refuses unadmitted historical input after grant expiry',async t=>{
 });
 
 test('already admitted recovery completes after expiry using exact routed receipt, with current member policy',async t=>{
- const f=pipeline(t);await f.transport.recoverParticipantMessage(f.client,group,f.request());
+ const f=pipeline(t,{actualTransport:true});await f.transport.recoverParticipantMessage(f.client,group,f.request());
  await f.relay.tick();assert.equal(f.state.posts.length,1);
  f.setNow(Date.parse(f.grant.expiresAt)+1);f.revoke();
  f.state.answers=[{id:'answer',parentMessageId:'routed-message',role:'assistant',state:'completed',phase:'final_answer',text:'A scoped reply'}];
@@ -115,7 +118,7 @@ test('already admitted recovery completes after expiry using exact routed receip
 });
 
 test('removing membership still denies completion after a recovery was admitted',async t=>{
- const f=pipeline(t);await f.transport.recoverParticipantMessage(f.client,group,f.request());await f.relay.tick();
+ const f=pipeline(t,{actualTransport:true});await f.transport.recoverParticipantMessage(f.client,group,f.request());await f.relay.tick();
  f.state.member=false;f.setNow(Date.parse(f.grant.expiresAt)+1);
  f.state.answers=[{id:'answer',parentMessageId:'routed-message',role:'assistant',state:'completed',phase:'final_answer',text:'Not sent'}];
  assert.deepEqual((await f.relay.tick()).errors,['group_participant_binding_denied']);assert.equal(f.state.sends.length,0);
@@ -219,4 +222,31 @@ test('renewal still requires the current Root protected file digest', {skip:proc
  const wrong={...config,participantRecoveryGrant:{path:file,sha256:prior}};
  assert.equal(createParticipantRecoveryPolicy(wrong,{now:f.now}).matches(proof,input),false);
  fs.chmodSync(file,0o600);assert.equal(createParticipantRecoveryPolicy(config,{now:f.now}).matches(proof,input),false);
+});
+
+test('expired historical input cannot send without an exact prior relay admission at the worker layer',async t=>{
+ const f=pipeline(t,{actualTransport:true});await f.transport.recoverParticipantMessage(f.client,group,f.request());
+ f.setNow(Date.parse(f.grant.expiresAt)+1);f.revoke();
+ const request={requestId:'reply-not-admitted',parentId:messageId};
+ await assert.rejects(f.transport.sendText(f.client,group,'A final reply','main',request),/participant_reply_denied/);
+ assert.equal(f.state.sends.length,0);
+});
+
+test('worker rejects changed admission proof, body, thread, message join and current membership',async t=>{
+ const f=pipeline(t,{actualTransport:true});await f.transport.recoverParticipantMessage(f.client,group,f.request());
+ await f.relay.tick();f.setNow(Date.parse(f.grant.expiresAt)+1);f.revoke();
+ const original=f.db.prepare('SELECT * FROM participant_recovery_admissions').get();
+ const send=()=>f.transport.sendText(f.client,group,'A final reply','main',{requestId:'reply-admission',parentId:messageId});
+ for(const [column,value] of [['proof','{}'],['body_sha256','a'.repeat(64)],['thread_id','other'],['message_id','other']]){
+  f.db.prepare(`UPDATE participant_recovery_admissions SET ${column}=?`).run(value);
+  await assert.rejects(send(),/participant_reply_denied/);
+  f.db.prepare(`UPDATE participant_recovery_admissions SET ${column}=?`).run(original[column]);
+ }
+ f.db.prepare("UPDATE routed SET thread_id='other'").run();await assert.rejects(send(),/participant_reply_denied/);
+ f.db.prepare("UPDATE routed SET thread_id='thread-a'").run();
+ const changed={...f.config,participantAuthors:[{...f.config.participantAuthors[0],ids:['15550000003@c.us']}]};
+ const transport=createScopedGroupTransport({config:changed,token:'fixture-token',base:{},now:f.now,readRecoveryGrant:f.read});
+ t.after(()=>transport.close());
+ await assert.rejects(transport.sendText(f.client,group,'A final reply','main',{requestId:'reply-removed',parentId:messageId}),/participant_reply_denied/);
+ assert.equal(f.state.sends.length,0);
 });
