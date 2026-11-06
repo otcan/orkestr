@@ -1,3 +1,6 @@
+import {createParticipantInput,recordScopedInputAdmission} from './whatsapp-scoped-participant-input.js';
+import {wrapperErrorCode} from './whatsapp-scoped-wrapper-errors.js';
+import {createParticipantRecoveryPolicy,readProtectedParticipantGrant} from './whatsapp-participant-recovery.js';
 import {readGroupInputs} from './scoped-group-inbox.js';
 import {createScopedInputAdmission} from './scoped-group-input-intake.js';
 import {buildReplyTo} from './scoped-group-reply-quote.js';
@@ -5,7 +8,7 @@ import {createScopedAcknowledgements} from './scoped-group-acknowledgements.js';
 import {acknowledgementActivity} from './scoped-acknowledgement-activity.js';
 import {createKeyedSerial} from './scoped-relay-serial.js';
 import crypto from 'node:crypto';
-import {createGroupParticipantPolicy, participantInputMetadata} from './whatsapp-group-participant-author.js';
+import {createGroupParticipantPolicy} from './whatsapp-group-participant-author.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import {createDeliveryRouteFence} from './whatsapp-delivery-route-fence.js';
@@ -39,12 +42,14 @@ const threadSuppressesUpdates = (thread = {}) => {
     || ['mirrorWhatsAppUpdates', 'mirrorWhatsAppProgress', 'mirrorUpdateMessages', 'whatsappMirrorUpdates']
       .some(k => Object.hasOwn(b, k) && flagOff(b[k]));
 };
-const errorCode = error => /^[a-z_]+$/.test(error.message) ? error.message : 'operation_failed';
+export const scopedRelayErrorCode = error => /^[a-z_]{1,120}$/.test(error?.message || '') ? error.message : wrapperErrorCode(error) || 'operation_failed';
+const errorCode = scopedRelayErrorCode;
 const GROUP_IMAGE_MIMES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp']);
 const GROUP_MEDIA_MAX_BYTES = 10 * 1024 * 1024;
 export {buildReplyTo} from './scoped-group-reply-quote.js';
 
 export function createScopedGroupRelay({config, api, send, log = () => {}, inboxDb, relayDb, formatter, env = process.env, readMediaFile = fs.readFile, now = Date.now,
+    readRecoveryGrant = readProtectedParticipantGrant,
     openRegistry = path => createDynamicGroupRegistry(path, {now, staticGroups: config.groups})}) {
   // Operator holds are exclusions, not delivery/completion receipts. Validate
   // before opening either journal and snapshot the policy for this process.
@@ -52,7 +57,7 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
   if (!Array.isArray(heldIds) || heldIds.some(id => typeof id !== 'string' || !id.trim()))
     throw new Error('group_held_inputs_invalid');
   const heldInputIds = new Set(heldIds);
-  const participants = createGroupParticipantPolicy(config);
+  const participants = createGroupParticipantPolicy(config,now,createParticipantRecoveryPolicy(config,{now,readGrant:readRecoveryGrant}));
   const fencedThreads = scopedRouteMembership(config);
   if (config.appendDebugFooter === true && !['shouldAppendWhatsAppDebugFooter', 'stripWhatsAppDebugFooter', 'whatsappDebugFooter'].every(k => typeof formatter?.[k] === 'function'))
     throw new Error('group_footer_formatter_required');
@@ -63,6 +68,7 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
   const db = relayDb || new DatabaseSync(config.relayJournalPath);
   db.exec(`PRAGMA journal_mode=WAL;
     CREATE TABLE IF NOT EXISTS routed(id TEXT PRIMARY KEY,thread_id TEXT NOT NULL,message_id TEXT NOT NULL,completed INTEGER NOT NULL DEFAULT 0);
+    CREATE TABLE IF NOT EXISTS participant_recovery_admissions(id TEXT PRIMARY KEY,thread_id TEXT NOT NULL,message_id TEXT NOT NULL,proof TEXT NOT NULL,body_sha256 TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS replies(id TEXT PRIMARY KEY,state TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS reply_payloads(id TEXT PRIMARY KEY,chunks TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS input_media_uploads(id TEXT PRIMARY KEY,attachments TEXT NOT NULL,created_at TEXT NOT NULL);
@@ -170,18 +176,7 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
     return t;
   }
 
-  async function inputThread(input, group) {
-    const thread = await threadFor(group);
-    const hasAuthors = inbox.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='group_input_author'").get();
-    if (participants.count && !hasAuthors) throw new Error('group_participant_journal_required');
-    const author = hasAuthors ? inbox.prepare('SELECT proof FROM group_input_author WHERE id=?').get(input.id) : null;
-    const metadata = author ? participantInputMetadata({proof: JSON.parse(author.proof), input, group, thread, policy: participants}) : {};
-    if (author) {
-      const check = await api(`/api/threads/${encodeURIComponent(group.threadId)}/whatsapp-participant-check`, {method: 'POST', body: {...metadata, text: input.body}});
-      if (check.allowed !== true) throw new Error('group_participant_security_denied');
-    }
-    return {thread, metadata};
-  }
+  const inputThread = createParticipantInput({inbox,db,participants,api,threadFor});
 
   const progressBudget = createProgressBudget(db, now), routeAge = createRouteAge(db, now), readPage = createMessagePageReader({api, now, log});
   async function answersFor(group, route, suppressUpdates = false) {
@@ -382,14 +377,15 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
       const own = input.quote_row ? ownReplyFor(input.quote_id) : null;
       const quoted = buildReplyTo(input, {own: own ? {text: own.text || input.quote_body || '', sentAt: own.sentAt || null} : null,
         ownChatId: config.ownChatId, timeZone: config.timeZone || env.ORKESTR_TIMEZONE || 'Europe/Berlin'});
+      const current = metadata.scopedParticipant?.recoveryGrantSha256 ? await inputThread(input, group) : {metadata};
       const response = await api(`/api/threads/${encodeURIComponent(group.threadId)}/input`, {method: 'POST', body: {
-        ...metadata, text: `[WhatsApp: ${group.name}]\n\n${quoted ? `${quoted.line}\n\n` : ''}${inputBody}`,
+        ...current.metadata, text: `[WhatsApp: ${group.name}]\n\n${quoted ? `${quoted.line}\n\n` : ''}${inputBody}`,
         ...(quoted ? {replyTo: quoted.replyTo} : {}), ...(attachments.length ? {attachments} : {}), source: 'whatsapp_group_relay',
         parseCommands: false, controlAllowed: false, idempotencyKey: `group:${key(input.id)}`,
       }});
       const messageId = response.message?.id || response.messageId;
       if (!messageId) throw new Error('group_input_unacknowledged');
-      db.prepare('INSERT OR IGNORE INTO routed(id,thread_id,message_id) VALUES(?,?,?)').run(input.id, group.threadId, messageId);
+      recordScopedInputAdmission({db,inbox,input,group,messageId,metadata:current.metadata});
       routeAge.routed(input.id);
       route = db.prepare('SELECT * FROM routed WHERE id=?').get(input.id);
       log({event: 'input_routed', threadId: group.threadId, messageId});
