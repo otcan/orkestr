@@ -127,6 +127,7 @@ jobs:
       - name: Protected synthetic manager package regressions
         run: |
           sudo /usr/bin/python3 -I -S -B -m unittest discover -s "$PWD/provider-broker" -p test_codex_service_package.py -v
+          sudo /usr/bin/python3 -I -S -B -m unittest discover -s "$PWD/provider-broker" -p test_package_inventory.py -v
           sudo /usr/bin/python3 -I -S -B -m unittest discover -s "$PWD/provider-broker" -p test_codex_service_roles.py -v
           sudo env PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -I -S -B -m unittest discover -s "$PWD/provider-broker" -p test_codex_service_password_recovery.py -v
           sudo env PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -I -S -B -m unittest discover -s "$PWD/provider-broker" -p test_codex_service_identity.py -v
