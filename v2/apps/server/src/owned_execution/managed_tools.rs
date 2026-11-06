@@ -1,10 +1,35 @@
 //! Poll only the Root-observed channel, then issue through the current Deep run.
 use super::*;
+use crate::window_runtime::manager_client::ManagerError;
 use orkestr_v2_store_sqlite::{
     ConsumedManagedOperation, ConsumedProviderDispatch, ManagedOperationConsumption,
     ManagedOperationParent, ManagedOperationSetup,
 };
 use std::time::Instant;
+
+#[derive(Clone, Copy, Debug)]
+enum ManagedRpc {
+    RunOpen,
+    Pending,
+}
+
+// Observe only the closed error enum after the RPC has released its resources.
+// The original error, deadline and caller's generic pause text remain unchanged.
+fn observed_rpc<T>(
+    operation: ManagedRpc,
+    started: Instant,
+    result: Result<T, ManagerError>,
+) -> Result<T, ManagerError> {
+    if let Err(error) = &result {
+        use std::io::Write;
+        let _ = writeln!(
+            std::io::stderr().lock(),
+            "owned_managed_rpc operation={operation:?} outcome={error:?} elapsed_us={}",
+            started.elapsed().as_micros()
+        );
+    }
+    result
+}
 
 pub(super) struct ManagedTools {
     store: Store,
@@ -53,16 +78,19 @@ impl ConfiguredExecution {
             .await
             .map_err(|_| "managed parent refused")?;
         let context = self.window.clone().ok_or("managed window missing")?;
-        context
-            .manager
-            .open_managed_run(
-                &self.store,
-                &self.token,
-                &context.window,
-                &parent,
-                Instant::now() + Duration::from_secs(1),
-            )
-            .await
+        let started = Instant::now();
+        let result = async {
+            let deadline = super::managed_observation::deadline(
+                context.work_deadline(),
+                parent.lease_deadline_ms(),
+            )?;
+            context
+                .manager
+                .open_managed_run(&self.store, &self.token, &context.window, &parent, deadline)
+                .await
+        }
+        .await;
+        observed_rpc(ManagedRpc::RunOpen, started, result)
             .map_err(|_| "managed run observation uncertain")?;
         Ok(Some(ManagedTools {
             store: self.store.clone(),
@@ -105,14 +133,19 @@ impl ManagedTools {
     }
     pub(super) async fn poll(&mut self) -> Result<(), &'static str> {
         if self.operation.is_none() {
-            let Some(request) = self
-                .context
-                .manager
-                .pending_managed(
-                    &self.context.window,
-                    Instant::now() + Duration::from_secs(1),
-                )
-                .await
+            let started = Instant::now();
+            let result = async {
+                let deadline = super::managed_observation::deadline(
+                    self.context.work_deadline(),
+                    self.parent.lease_deadline_ms(),
+                )?;
+                self.context
+                    .manager
+                    .pending_managed(&self.context.window, deadline)
+                    .await
+            }
+            .await;
+            let Some(request) = observed_rpc(ManagedRpc::Pending, started, result)
                 .map_err(|_| "managed Root source unavailable")?
             else {
                 return Ok(());
@@ -229,5 +262,37 @@ impl ManagedTools {
             cancel = false;
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
+    }
+}
+
+#[cfg(test)]
+mod rpc_diagnostic_tests {
+    use super::*;
+
+    #[test]
+    fn observation_preserves_each_closed_rpc_error() {
+        for operation in [ManagedRpc::RunOpen, ManagedRpc::Pending] {
+            for error in [
+                ManagerError::InvalidRequest,
+                ManagerError::Peer,
+                ManagerError::Deadline,
+                ManagerError::Unavailable,
+                ManagerError::Protocol,
+                ManagerError::Refused,
+            ] {
+                assert_eq!(
+                    observed_rpc::<()>(operation, Instant::now(), Err(error)),
+                    Err(error)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn observation_preserves_success_value() {
+        let value = Box::new(17);
+        let address = std::ptr::from_ref(value.as_ref());
+        let observed = observed_rpc(ManagedRpc::Pending, Instant::now(), Ok(value)).unwrap();
+        assert_eq!(std::ptr::from_ref(observed.as_ref()), address);
     }
 }

@@ -362,6 +362,11 @@ async fn submitted_receipt_is_not_approval_and_unknown_claims_consume_window_bud
 async fn opaque_same_run_renewal_preserves_scope_hard_deadline_and_one_write() {
     use crate::production_runtime::observation_tests::input;
     let (_f, bound, token, mut parent, source, mut authority) = fixture_with_renewal().await;
+    let original_parent_deadline = parent.lease_deadline_ms();
+    assert_eq!(
+        original_parent_deadline,
+        parent.parent.run.lease_deadline_ms
+    );
     let ManagedOperationConsumption::Operation(mut operation) = bound
         .consume_managed_operation(&token, &parent, Uuid::new_v4(), &source, &request())
         .await
@@ -397,6 +402,11 @@ async fn opaque_same_run_renewal_preserves_scope_hard_deadline_and_one_write() {
         .refresh_managed_operation_parent(&token, &mut parent, &authority)
         .await
         .unwrap();
+    assert!(parent.lease_deadline_ms() > original_parent_deadline);
+    assert_eq!(
+        parent.lease_deadline_ms(),
+        authority.current_provider().run.lease_deadline_ms
+    );
     let renewed = renewal.root_request();
     for field in [
         "operation_id",

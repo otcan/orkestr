@@ -62,6 +62,9 @@ impl Context {
     pub(crate) fn work_due(&self) -> bool {
         self.clock.work_due(Instant::now())
     }
+    pub(crate) fn work_deadline(&self) -> Instant {
+        self.clock.work_deadline()
+    }
     pub(crate) fn cleanup_deadline(&self) -> tokio::time::Instant {
         self.clock.cleanup_deadline()
     }

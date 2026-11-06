@@ -25,6 +25,7 @@ mod fast_pool;
 mod fast_session;
 mod group;
 mod host_pressure;
+mod managed_observation;
 mod managed_tools;
 pub use group::{ConfiguredExecutions, ExecutionTasks};
 mod claude_fast;
