@@ -174,37 +174,62 @@ impl Store {
         grant: &BoundSessionMetadata,
         action: impl FnOnce() -> std::result::Result<T, E>,
     ) -> Result<std::result::Result<T, E>> {
-        let operation = async {
-            use super::metadata_diagnostics::{report, Stage};
-            use std::time::Instant;
-            let started = Instant::now();
-            let mut tx = report(
-                Stage::Begin,
-                started,
-                self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db),
-            )?;
-            let started = Instant::now();
-            report(
-                Stage::Validate,
-                started,
-                self.validate_metadata(&mut tx, grant).await,
-            )?;
-            let result = action();
-            let started = Instant::now();
-            report(Stage::Commit, started, tx.commit().await.map_err(db))?;
-            Ok(result)
-        };
-        match tokio::runtime::Handle::try_current() {
-            Ok(h) if h.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => {
-                tokio::task::block_in_place(|| h.block_on(operation))
+        self.with_metadata_fence_diagnostics(grant, action).0
+    }
+
+    /// Returns value-free observations without performing diagnostic I/O.
+    /// The caller must release its process/metadata locks before emitting them.
+    pub fn with_metadata_fence_diagnostics<T, E>(
+        &self,
+        grant: &BoundSessionMetadata,
+        action: impl FnOnce() -> std::result::Result<T, E>,
+    ) -> (
+        Result<std::result::Result<T, E>>,
+        super::MetadataFenceDiagnostics,
+    ) {
+        let mut events = super::MetadataFenceDiagnostics::new(grant.binding.role);
+        let result = {
+            let operation = async {
+                use super::metadata_diagnostics::Stage;
+                use std::time::Instant;
+                let started = Instant::now();
+                let mut tx = events.capture(
+                    Stage::Begin,
+                    started,
+                    self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db),
+                )?;
+                let started = Instant::now();
+                events.capture(
+                    if grant.resume.is_some() {
+                        Stage::ValidateResumeGrant
+                    } else {
+                        Stage::ValidateFreshGrant
+                    },
+                    started,
+                    self.validate_metadata(&mut tx, grant).await,
+                )?;
+                let result = action();
+                let started = Instant::now();
+                events.capture(Stage::Commit, started, tx.commit().await.map_err(db))?;
+                Ok(result)
+            };
+            match tokio::runtime::Handle::try_current() {
+                Ok(h) if h.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => {
+                    tokio::task::block_in_place(|| h.block_on(operation))
+                }
+                Ok(_) => Err(RuntimeStoreError::Unavailable),
+                Err(_) => match tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                {
+                    Ok(runtime) => runtime.block_on(operation),
+                    Err(error) => Err(db(error)),
+                },
             }
-            Ok(_) => Err(RuntimeStoreError::Unavailable),
-            Err(_) => tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .map_err(db)?
-                .block_on(operation),
-        }
+        };
+        // The async operation has returned: its transaction is committed or
+        // dropped before any potentially blocking diagnostic output occurs.
+        (result, events)
     }
     /// The trusted protocol adapter must first validate persistent native session
     /// identity, canonical workspace and correlated readiness response. Consumes

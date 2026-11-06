@@ -1,5 +1,8 @@
 //! Closed, value-free diagnostics; never authority or a retry decision.
-use std::{io::Write, time::Instant};
+use std::{
+    io::Write,
+    time::{Duration, Instant},
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Stage {
@@ -17,6 +20,7 @@ pub(crate) trait FailureCode {
 
 pub(crate) fn measure<T, E: FailureCode>(
     stage: Stage,
+    role: orkestr_v2_application::runtime::Role,
     action: impl FnOnce() -> Result<T, E>,
 ) -> Result<T, E> {
     let started = Instant::now();
@@ -25,14 +29,23 @@ pub(crate) fn measure<T, E: FailureCode>(
         .as_ref()
         .err()
         .map_or("ok", FailureCode::failure_code);
+    record(stage, role, started.elapsed(), outcome);
+    result
+}
+
+pub(crate) fn record(
+    stage: Stage,
+    role: orkestr_v2_application::runtime::Role,
+    elapsed: Duration,
+    outcome: &'static str,
+) {
     #[cfg(test)]
     EVENTS.with(|events| events.borrow_mut().push((stage, outcome)));
     let _ = writeln!(
         std::io::stderr().lock(),
-        "owned_setup stage={stage:?} outcome={outcome} elapsed_us={}",
-        started.elapsed().as_micros()
+        "owned_setup stage={stage:?} role={role:?} outcome={outcome} elapsed_us={}",
+        elapsed.as_micros()
     );
-    result
 }
 
 impl FailureCode for crate::containment::Error {
