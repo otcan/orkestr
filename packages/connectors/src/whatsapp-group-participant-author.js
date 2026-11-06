@@ -1,10 +1,11 @@
+import {createParticipantRecoveryPolicy} from './whatsapp-participant-recovery.js';
 // Explicit per-group inbound authorization. Participant identities never become
 // owners, change reply destinations, or authorize commands in other threads.
 const pn = value => typeof value === 'string' && /^\d+@c\.us$/.test(value);
 const time = value => Date.parse(value);
 const invalid = () => { throw new Error('group_participant_configuration_invalid'); };
 
-export function createGroupParticipantPolicy(config, now = Date.now) {
+export function createGroupParticipantPolicy(config, now = Date.now, recovery = createParticipantRecoveryPolicy(config, {now})) {
   const rules = config.participantAuthors ?? [];
   if (!Array.isArray(rules)) invalid();
   const byGroup = new Map();
@@ -18,23 +19,31 @@ export function createGroupParticipantPolicy(config, now = Date.now) {
         || Object.keys(rule).some(key => !['chatId', 'threadId', 'ids', 'since'].includes(key))) invalid();
     byGroup.set(rule.chatId, {...rule, ids: new Set(rule.ids)});
   }
-  function allows(proof, input) {
+  function identity(proof, input) {
     const rule = byGroup.get(input.chat_id);
     return !!rule && proof?.version === 1 && proof.chatId === input.chat_id
       && proof.threadId === rule.threadId && proof.inputId === input.id
       && proof.createdAt === input.created_at && rule.ids.has(proof.phoneId)
       && (proof.authorId === proof.phoneId || /^\d+@lid$/.test(proof.authorId || ''))
-      && Number.isFinite(time(input.created_at)) && time(input.created_at) > time(rule.since)
-      && time(input.created_at) <= now() + 5000;
+      && Number.isFinite(time(input.created_at)) && time(input.created_at) <= now() + 5000;
+  }
+  function allows(proof, input) {
+    const rule = byGroup.get(input.chat_id);
+    return identity(proof,input) && (proof.recoveryGrantSha256!==undefined
+      ? recovery.matches(proof,input) : time(input.created_at)>time(rule.since));
   }
   return {
     count: rules.length, accountId: config.workerAccountId || "main",
     allows,
-    async identify(client, message, chatId) {
+    // Only a relay's exact persisted admission receipt may select this port.
+    // Current member/binding/block policy still applies to every completion.
+    allowsRoutedRecovery:(proof,input)=>identity(proof,input) && /^[0-9a-f]{64}$/.test(proof.recoveryGrantSha256 || ''),
+    async identify(client, message, chatId, historical = null) {
       const rule = byGroup.get(chatId), authorId = message?.author;
       const timestamp = Number(message?.timestamp) * 1000;
       if (!rule || message?.fromMe !== false || typeof authorId !== 'string'
-          || !Number.isFinite(timestamp) || timestamp <= time(rule.since) || timestamp > now() + 5000) return null;
+          || !Number.isFinite(timestamp) || (!historical && timestamp <= time(rule.since)) || timestamp > now() + 5000) return null;
+      if(historical)recovery.message(historical,message,chatId);
       let phoneId = rule.ids.has(authorId) ? authorId : null;
       if (!phoneId && /^\d+@lid$/.test(authorId) && typeof client.getContactLidAndPhone === 'function') {
         let timer;
@@ -47,9 +56,10 @@ export function createGroupParticipantPolicy(config, now = Date.now) {
         } catch { /* Unavailable or ambiguous provider mapping fails closed. */ }
         finally { clearTimeout(timer); }
       }
-      if (!phoneId) return null;
+      if (!phoneId || (historical && phoneId!==historical.phoneId)) return null;
       return {version: 1, inputId: message.id._serialized, chatId, threadId: rule.threadId,
-        authorId, phoneId, createdAt: new Date(timestamp).toISOString()};
+        authorId, phoneId, createdAt: new Date(timestamp).toISOString(),
+        ...(historical ? {recoveryGrantSha256:historical.grantSha256} : {})};
     },
   };
 }

@@ -1,3 +1,4 @@
+import {createParticipantRecoveryPolicy,readProtectedParticipantGrant} from './whatsapp-participant-recovery.js';
 import {readGroupInputs} from './scoped-group-inbox.js';
 import {createScopedInputAdmission} from './scoped-group-input-intake.js';
 import {buildReplyTo} from './scoped-group-reply-quote.js';
@@ -45,6 +46,7 @@ const GROUP_MEDIA_MAX_BYTES = 10 * 1024 * 1024;
 export {buildReplyTo} from './scoped-group-reply-quote.js';
 
 export function createScopedGroupRelay({config, api, send, log = () => {}, inboxDb, relayDb, formatter, env = process.env, readMediaFile = fs.readFile, now = Date.now,
+    readRecoveryGrant = readProtectedParticipantGrant,
     openRegistry = path => createDynamicGroupRegistry(path, {now, staticGroups: config.groups})}) {
   // Operator holds are exclusions, not delivery/completion receipts. Validate
   // before opening either journal and snapshot the policy for this process.
@@ -52,7 +54,7 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
   if (!Array.isArray(heldIds) || heldIds.some(id => typeof id !== 'string' || !id.trim()))
     throw new Error('group_held_inputs_invalid');
   const heldInputIds = new Set(heldIds);
-  const participants = createGroupParticipantPolicy(config);
+  const participants = createGroupParticipantPolicy(config,now,createParticipantRecoveryPolicy(config,{now,readGrant:readRecoveryGrant}));
   const fencedThreads = scopedRouteMembership(config);
   if (config.appendDebugFooter === true && !['shouldAppendWhatsAppDebugFooter', 'stripWhatsAppDebugFooter', 'whatsappDebugFooter'].every(k => typeof formatter?.[k] === 'function'))
     throw new Error('group_footer_formatter_required');
@@ -63,6 +65,7 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
   const db = relayDb || new DatabaseSync(config.relayJournalPath);
   db.exec(`PRAGMA journal_mode=WAL;
     CREATE TABLE IF NOT EXISTS routed(id TEXT PRIMARY KEY,thread_id TEXT NOT NULL,message_id TEXT NOT NULL,completed INTEGER NOT NULL DEFAULT 0);
+    CREATE TABLE IF NOT EXISTS participant_recovery_admissions(id TEXT PRIMARY KEY,thread_id TEXT NOT NULL,message_id TEXT NOT NULL,proof TEXT NOT NULL,body_sha256 TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS replies(id TEXT PRIMARY KEY,state TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS reply_payloads(id TEXT PRIMARY KEY,chunks TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS input_media_uploads(id TEXT PRIMARY KEY,attachments TEXT NOT NULL,created_at TEXT NOT NULL);
@@ -175,10 +178,20 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
     const hasAuthors = inbox.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='group_input_author'").get();
     if (participants.count && !hasAuthors) throw new Error('group_participant_journal_required');
     const author = hasAuthors ? inbox.prepare('SELECT proof FROM group_input_author WHERE id=?').get(input.id) : null;
-    const metadata = author ? participantInputMetadata({proof: JSON.parse(author.proof), input, group, thread, policy: participants}) : {};
+    const proof = author ? JSON.parse(author.proof) : null;
+    const routed = db.prepare('SELECT * FROM routed WHERE id=?').get(input.id);
+    const admitted = db.prepare('SELECT * FROM participant_recovery_admissions WHERE id=?').get(input.id);
+    const historicalAdmitted = proof?.recoveryGrantSha256 && routed && admitted
+      && routed.thread_id===group.threadId && admitted.thread_id===group.threadId
+      && routed.message_id===admitted.message_id && admitted.proof===author.proof && admitted.body_sha256===key(input.body);
+    const policy = historicalAdmitted ? {accountId:participants.accountId,allows:participants.allowsRoutedRecovery} : participants;
+    const metadata = author ? participantInputMetadata({proof, input, group, thread, policy}) : {};
     if (author) {
       const check = await api(`/api/threads/${encodeURIComponent(group.threadId)}/whatsapp-participant-check`, {method: 'POST', body: {...metadata, text: input.body}});
       if (check.allowed !== true) throw new Error('group_participant_security_denied');
+      // The external member check may await I/O; expiry/revocation must still
+      // hold when a first input is admitted. Routed completions use their receipt.
+      if(!policy.allows(proof,input))throw new Error('group_participant_binding_denied');
     }
     return {thread, metadata};
   }
@@ -382,14 +395,24 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
       const own = input.quote_row ? ownReplyFor(input.quote_id) : null;
       const quoted = buildReplyTo(input, {own: own ? {text: own.text || input.quote_body || '', sentAt: own.sentAt || null} : null,
         ownChatId: config.ownChatId, timeZone: config.timeZone || env.ORKESTR_TIMEZONE || 'Europe/Berlin'});
+      const current = metadata.scopedParticipant?.recoveryGrantSha256 ? await inputThread(input, group) : {metadata};
       const response = await api(`/api/threads/${encodeURIComponent(group.threadId)}/input`, {method: 'POST', body: {
-        ...metadata, text: `[WhatsApp: ${group.name}]\n\n${quoted ? `${quoted.line}\n\n` : ''}${inputBody}`,
+        ...current.metadata, text: `[WhatsApp: ${group.name}]\n\n${quoted ? `${quoted.line}\n\n` : ''}${inputBody}`,
         ...(quoted ? {replyTo: quoted.replyTo} : {}), ...(attachments.length ? {attachments} : {}), source: 'whatsapp_group_relay',
         parseCommands: false, controlAllowed: false, idempotencyKey: `group:${key(input.id)}`,
       }});
       const messageId = response.message?.id || response.messageId;
       if (!messageId) throw new Error('group_input_unacknowledged');
-      db.prepare('INSERT OR IGNORE INTO routed(id,thread_id,message_id) VALUES(?,?,?)').run(input.id, group.threadId, messageId);
+      db.exec('BEGIN IMMEDIATE');
+      try {
+        db.prepare('INSERT OR IGNORE INTO routed(id,thread_id,message_id) VALUES(?,?,?)').run(input.id, group.threadId, messageId);
+        if(current.metadata.scopedParticipant?.recoveryGrantSha256) {
+          const author=inbox.prepare('SELECT proof FROM group_input_author WHERE id=?').get(input.id);
+          db.prepare('INSERT OR IGNORE INTO participant_recovery_admissions(id,thread_id,message_id,proof,body_sha256) VALUES(?,?,?,?,?)')
+            .run(input.id,group.threadId,messageId,author.proof,key(input.body));
+        }
+        db.exec('COMMIT');
+      } catch(error){db.exec('ROLLBACK');throw error;}
       routeAge.routed(input.id);
       route = db.prepare('SELECT * FROM routed WHERE id=?').get(input.id);
       log({event: 'input_routed', threadId: group.threadId, messageId});

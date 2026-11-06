@@ -1,3 +1,4 @@
+import {createParticipantRecoveryPolicy,readProtectedParticipantGrant} from './whatsapp-participant-recovery.js';
 import crypto from 'node:crypto';
 import {createGroupParticipantPolicy} from './whatsapp-group-participant-author.js';
 import fs from 'node:fs/promises';
@@ -59,13 +60,13 @@ export async function captureQuote(message) {
 // keeps its legacy router disabled; only explicitly authorized, fresh group input enters.
 // Pure contract validation: no files are opened. Shared by the transport and
 // the deploy preflight, so a release that rejects a live config is never activated.
-export function validateScopedGroupConfig(config,now=Date.now) {
+export function validateScopedGroupConfig(config,now=Date.now,recovery) {
   if(!/^\d+@c\.us$/.test(config?.ownChatId || '') || !Number.isFinite(Date.parse(config.activatedAt))
       || !Array.isArray(config.groups) || !config.groups.length)fail('configuration_invalid');
   const groups=new Map(config.groups.map(g=>[g.chatId,g]));
   if(groups.size!==config.groups.length || [...groups].some(([id,g])=>!/^\d+(?:-\d+)?@g\.us$/.test(id) || !g.threadId))fail('configuration_invalid');
   const authors=createGroupOwnerAuthorPolicy(config,now);
-  const participants=createGroupParticipantPolicy(config,now);
+  const participants=createGroupParticipantPolicy(config,now,recovery);
   const scope=notificationScope(config);
   const fencedThreads=scopedRouteMembership(config);
   if(fencedThreads && [...fencedThreads].some(id=>!config.groups.some(g=>g.threadId===id)))fail('route_thread_invalid');
@@ -78,17 +79,20 @@ export function validateScopedGroupConfig(config,now=Date.now) {
 }
 
 export function createScopedGroupTransport({config,token,base,dbPath=config.journalPath,now=Date.now,routeFence: suppliedFence,proofStore: suppliedProof,sendLookupDelayMs=1000,
-    report=entry=>console.error(JSON.stringify(entry)),mediaDownloadOptions={}}) {
+    report=entry=>console.error(JSON.stringify(entry)),mediaDownloadOptions={},readRecoveryGrant=readProtectedParticipantGrant}) {
   if(!token)fail('configuration_invalid');
   // Validate the whole contract before opening durable state: a build that
   // rejects the live configuration must leave the journal untouched.
-  const {groups: staticGroups,authors,participants,scope: staticScope,fencedThreads,coordinator,delegates,dynamic,operator}=validateScopedGroupConfig(config,now);
+  const recovery=createParticipantRecoveryPolicy(config,{now,readGrant:readRecoveryGrant});
+  const historicalObservation=Symbol();
+  const {groups: staticGroups,authors,participants,scope: staticScope,fencedThreads,coordinator,delegates,dynamic,operator}=validateScopedGroupConfig(config,now,recovery);
   // The coordinator bearer must be a dedicated credential, never the transport token.
   if(coordinatorTokenMatches(coordinator,token) || delegateForBearer(delegates,token))fail('configuration_invalid');
   const db=new DatabaseSync(dbPath);db.exec(`PRAGMA journal_mode=WAL;
     CREATE TABLE IF NOT EXISTS group_input(id TEXT PRIMARY KEY,chat_id TEXT NOT NULL,body TEXT NOT NULL,created_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS group_send(id TEXT PRIMARY KEY,hash TEXT NOT NULL,chat_id TEXT NOT NULL,parent_id TEXT NOT NULL,state TEXT NOT NULL,provider_id TEXT,created_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS group_input_author(id TEXT PRIMARY KEY,proof TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS group_input_participant_recovery(id TEXT PRIMARY KEY,receipt TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS group_meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);
     ${MEDIA_TABLE};
     ${QUOTE_TABLE};`);
@@ -178,24 +182,45 @@ export function createScopedGroupTransport({config,token,base,dbPath=config.jour
       }
       return {recorded,failed};
     },
-    observe(client,message) {
+    async recoverParticipantMessage(client,chatId,request) {
+      assertClient(client);
+      const grant=recovery.request(chatId,request);
+      const original=db.prepare('SELECT receipt FROM group_input_participant_recovery WHERE id=?').get(grant.messageId);
+      if(original){
+        const receipt=JSON.parse(original.receipt),fields=['messageId','chatId','threadId','createdAt','authorId','phoneId','bodySha256','grantSha256'];
+        if(Object.keys(receipt).length!==fields.length || !fields.every(k=>receipt[k]===grant[k]))fail('participant_recovery_receipt_conflict');
+        return {ok:true,duplicate:true,receipt};
+      }
+      if(db.prepare('SELECT 1 FROM group_input WHERE id=?').get(grant.messageId))fail('participant_recovery_receipt_missing');
+      if(typeof client.getMessageById!=='function')fail('participant_recovery_unavailable');
+      let timer;
+      const message=await Promise.race([client.getMessageById(grant.messageId),
+        new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('participant_recovery_lookup_timeout')),5000);})]).finally(()=>clearTimeout(timer));
+      recovery.message(grant,message,chatId);
+      const inserted=await this.observe(client,message,{[historicalObservation]:grant});
+      const saved=db.prepare('SELECT receipt FROM group_input_participant_recovery WHERE id=?').get(grant.messageId);
+      if(!saved)fail('participant_recovery_unconfirmed');
+      return {ok:true,duplicate:!inserted,receipt:JSON.parse(saved.receipt)};
+    },
+    observe(client,message,internal={}) {
       return serial(async()=>{
         assertClient(client);
         const id=message?.id?._serialized,chatId=message?.fromMe===true?message?.to:message?.from;
         const ts=Number(message?.timestamp)*1000;
         const hasMedia=message?.hasMedia===true;
         const group=groups.get(chatId);
+        const historical=internal[historicalObservation];
         if(!group || typeof id!=='string' || !id || id.startsWith('summary:')
             || typeof message.body!=='string' || (!message.body.trim()&&!hasMedia) || message.body.length>32000
-            || !Number.isFinite(ts) || ts<=Date.parse(config.activatedAt) || ts>now()+5000)return false;
+            || !Number.isFinite(ts) || (!historical && ts<=Date.parse(config.activatedAt)) || ts>now()+5000)return false;
         // A registered group starts at its registration: older history is never imported.
         if(group.dynamic && (ts<=Date.parse(group.registeredAt) || ts<=dynamic.since))return false;
         if(db.prepare('SELECT 1 FROM group_input WHERE id=?').get(id))return false;
         const remote=message?.id?.remote?._serialized || message?.id?.remote;
         if(remote && remote!==chatId)return false;
         let participant=null;
-        if(message?.fromMe!==true && !await authors.accepts(client,message)) {
-          participant=await participants.identify(client,message,chatId);
+        if(historical || (message?.fromMe!==true && !await authors.accepts(client,message))) {
+          participant=await participants.identify(client,message,chatId,historical);
           if(!participant)return false;
         }
         if(fenced(chatId)) {
@@ -238,6 +263,11 @@ export function createScopedGroupTransport({config,token,base,dbPath=config.jour
         }
         // Input and participant evidence commit together; a crash cannot turn a
         // participant input into a legacy owner input on the next relay poll.
+        if(historical) {
+          recovery.message(historical,message,chatId);
+          if(!participants.allows(participant,{id,chat_id:chatId,body,created_at:new Date(ts).toISOString()}))
+            fail('participant_recovery_expired_or_changed');
+        }
         db.exec('BEGIN IMMEDIATE');
         try {
           const result=db.prepare('INSERT OR IGNORE INTO group_input(id,chat_id,body,created_at) VALUES(?,?,?,?)')
@@ -247,6 +277,11 @@ export function createScopedGroupTransport({config,token,base,dbPath=config.jour
           if(result.changes && quote) db.prepare('INSERT OR IGNORE INTO group_input_quote(id,quoted_id,author,sent_at,body,from_me,resolved) VALUES(?,?,?,?,?,?,?)')
             .run(id,quote.quotedId,quote.author,quote.sentAt,quote.body||null,quote.fromMe?1:0,quote.resolved?1:0);
           if(result.changes && participant) db.prepare('INSERT INTO group_input_author VALUES(?,?)').run(id,JSON.stringify(participant));
+          if(result.changes && historical) {
+            const receipt={messageId:id,chatId,threadId:participant.threadId,createdAt:participant.createdAt,
+              authorId:participant.authorId,phoneId:participant.phoneId,bodySha256:historical.bodySha256,grantSha256:historical.grantSha256};
+            db.prepare('INSERT INTO group_input_participant_recovery(id,receipt) VALUES(?,?)').run(id,JSON.stringify(receipt));
+          }
           db.exec('COMMIT');
           return Boolean(result.changes);
         } catch(error) {db.exec('ROLLBACK');throw error;}

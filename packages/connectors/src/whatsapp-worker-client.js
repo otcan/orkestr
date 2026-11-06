@@ -192,6 +192,11 @@ export function whatsappWorkerConversation(accountId = "", conversationId = "", 
       body: { title: clean(options.title) },
     }, env);
   }
+  if (action === "recover-participant-message") {
+    return requestWhatsAppWorker(`/accounts/${account}/chats/${conversation}/recover-participant-message`, {
+      method: "POST", body: options,
+    }, env);
+  }
   if (action === "recover") {
     return requestWhatsAppWorker(`/accounts/${account}/chats/${conversation}/recover`, {
       method: "POST",

@@ -26,6 +26,7 @@ import {
   probeLocalWhatsAppStore,
   promoteLocalWhatsAppGroupParticipants,
   recoverLocalWhatsAppChatMessages,
+  recoverLocalWhatsAppScopedParticipantMessage,
   recoverUnreadLocalWhatsAppMessages,
   sendLocalWhatsAppMessage,
   sendLocalWhatsAppScopedDocument,
@@ -347,6 +348,7 @@ const defaultBridge = {
   probeLocalWhatsAppStore,
   promoteLocalWhatsAppGroupParticipants,
   recoverLocalWhatsAppChatMessages,
+  recoverLocalWhatsAppScopedParticipantMessage,
   recoverUnreadLocalWhatsAppMessages,
   sendLocalWhatsAppMessage,
   sendLocalWhatsAppScopedDocument,
@@ -360,7 +362,8 @@ async function handleRequest(req, res, env = process.env, bridge = defaultBridge
   const method = clean(req.method || "GET").toUpperCase();
   const url = new URL(req.url || "/", "http://orkestr-wa.local");
   const scoped = scopedNativeWorker(env);
-  if (scoped && !(method === "POST" && ["/send-text", "/send-document", "/send-file", "/chats"].includes(url.pathname))) scoped.checkRequest(method, url);
+  if (scoped && !(method === "POST" && (["/send-text", "/send-document", "/send-file", "/chats"].includes(url.pathname)
+      || /^\/accounts\/[^/]+\/chats\/[^/]+\/recover-participant-message$/.test(url.pathname)))) scoped.checkRequest(method, url);
   if (method === "GET" && (url.pathname === "/" || url.pathname === "/health")) {
     requireAuth(req, env);
     const health = publicHealth(await bridge.getLocalWhatsAppBridgeStatus(env, { probeChatOps: false }), env);
@@ -575,6 +578,18 @@ async function handleRequest(req, res, env = process.env, bridge = defaultBridge
       chatId: params.chatId,
       participantIds,
       env,
+    }));
+  }
+
+  params = routeMatch(url.pathname, "/accounts/:accountId/chats/:chatId/recover-participant-message");
+  if (method === "POST" && params) {
+    requireAuth(req, env);
+    const body = await readJsonBody(req);
+    if (!scoped) throw Object.assign(new Error("scoped_worker_required"), {statusCode:403});
+    scoped.checkRequest(method, url, body);
+    requireServicePolicy(req, url, env, body, {accounts:[params.accountId],recipients:[params.chatId],recipientScope:"history"});
+    return json(res, 200, await bridge.recoverLocalWhatsAppScopedParticipantMessage({
+      accountId:params.accountId,chatId:params.chatId,request:body,env,
     }));
   }
 
