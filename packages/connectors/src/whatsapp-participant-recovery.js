@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 const FORMAT='orkestr-whatsapp-participant-message-recovery-v1';
+const RENEWAL_FORMAT='orkestr-whatsapp-participant-message-recovery-v2';
 const FIELDS=['format','accountId','chatId','threadId','messageId','authorId','phoneId','createdAt','bodySha256','expiresAt'];
 export const PARTICIPANT_RECOVERY_FIELDS=['threadId','messageId','expectedAuthorId','expectedPhoneId','expectedCreatedAt','expectedBodySha256'];
 const deny=()=>{throw Object.assign(new Error('participant_recovery_denied'),{statusCode:403});};
@@ -45,7 +46,9 @@ export function createParticipantRecoveryPolicy(config,{now=Date.now,readGrant=r
   if(!ref)deny();
   const g=readGrant(ref),group=config.groups?.find(r=>r.chatId===g?.chatId);
   const member=config.participantAuthors?.find(r=>r.chatId===g?.chatId && r.threadId===g?.threadId && Array.isArray(r.ids) && r.ids.includes(g?.phoneId));
-  if(!exact(g,FIELDS) || g.format!==FORMAT || g.accountId!==accountId || !group || !member || group.threadId!==g.threadId
+  const renewal=g?.format===RENEWAL_FORMAT;
+  if(!(renewal ? exact(g,[...FIELDS,'supersedesGrantSha256']) && sha(g.supersedesGrantSha256) && g.supersedesGrantSha256!==ref.sha256
+      : exact(g,FIELDS) && g.format===FORMAT) || g.accountId!==accountId || !group || !member || group.threadId!==g.threadId
      || !identifier(g.messageId) || !/^\d+(?:-\d+)?@g\.us$/.test(g.chatId) || !identifier(g.threadId)
      || !/^\d+@(?:lid|c\.us)$/.test(g.authorId) || !/^\d+@c\.us$/.test(g.phoneId) || g.phoneId===config.ownChatId
      || !canonicalTime(g.createdAt) || !canonicalTime(g.expiresAt) || !sha(g.bodySha256)
@@ -54,7 +57,8 @@ export function createParticipantRecoveryPolicy(config,{now=Date.now,readGrant=r
  }
  function request(chatId,body) {
   const g=grant();
-  if(!exact(body,PARTICIPANT_RECOVERY_FIELDS) || chatId!==g.chatId || body.threadId!==g.threadId
+  // Renewal is relay admission of an immutable observation, never another provider fetch.
+  if(g.format!==FORMAT || !exact(body,PARTICIPANT_RECOVERY_FIELDS) || chatId!==g.chatId || body.threadId!==g.threadId
      || body.messageId!==g.messageId || body.expectedAuthorId!==g.authorId || body.expectedPhoneId!==g.phoneId
      || body.expectedCreatedAt!==g.createdAt || body.expectedBodySha256!==g.bodySha256)deny();
   return Object.freeze({...g,grantSha256:ref.sha256});
@@ -62,7 +66,8 @@ export function createParticipantRecoveryPolicy(config,{now=Date.now,readGrant=r
  function matches(proof,input) {
   try {
    const g=grant();
-   return proof?.recoveryGrantSha256===ref.sha256 && proof.inputId===g.messageId && input.id===g.messageId
+   const expected=g.format===RENEWAL_FORMAT ? g.supersedesGrantSha256 : ref.sha256;
+   return proof?.recoveryGrantSha256===expected && proof.inputId===g.messageId && input.id===g.messageId
      && proof.chatId===g.chatId && input.chat_id===g.chatId && proof.threadId===g.threadId
      && proof.authorId===g.authorId && proof.phoneId===g.phoneId && proof.createdAt===g.createdAt
      && input.created_at===g.createdAt && typeof input.body==='string' && digest(input.body)===g.bodySha256;

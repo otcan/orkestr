@@ -163,3 +163,60 @@ test('authenticated scoped HTTP port dispatches exact recovery only; no legacy o
  assert.deepEqual(calls[0].request,f.request());assert.equal(calls[0].accountId,'sender');assert.equal(calls[0].chatId,group);
  assert.equal(fs.existsSync(config.routeControl.dbPath),false,'policy validation did not create a route journal');
 });
+
+test('Root v2 renewal admits only the exact existing immutable proof, without another recovery',async t=>{
+ const f=pipeline(t);await f.transport.recoverParticipantMessage(f.client,group,f.request());
+ const saved=JSON.parse(f.inbox.prepare('SELECT proof FROM group_input_author').get().proof);
+ const input=f.inbox.prepare('SELECT * FROM group_input').get();
+ f.setNow(Date.parse(f.grant.expiresAt)+1);
+ const renewal={...f.grant,format:'orkestr-whatsapp-participant-message-recovery-v2',
+  supersedesGrantSha256:saved.recoveryGrantSha256,expiresAt:'2026-01-03T14:00:00.000Z'};
+ const config={...f.config,participantRecoveryGrant:{path:'/protected/renewal.json',sha256:hash(JSON.stringify(renewal))}};
+ const policy=createParticipantRecoveryPolicy(config,{now:f.now,readGrant:()=>structuredClone(renewal)});
+ assert.equal(policy.matches(saved,input),true);
+ assert.throws(()=>policy.request(group,f.request()),/denied/,'renewal cannot fetch or reobserve provider input');
+ const api=async(url,options={})=>{
+  if(url.endsWith('/whatsapp-participant-check'))return {allowed:f.state.member};
+  if(url.endsWith('/input')){f.state.posts.push(options.body);return {message:{id:'renewed-route'}};}
+  if(url.includes('/messages'))return {messages:[]};
+  return {thread:{id:'thread-a',ownerUserId:'owner',binding:{chatId:group,enabled:true,mirrorToWhatsApp:false,
+   allowOtherPeople:true,authorizedContactIds:[phone]}}};
+ };
+ const relay=createScopedGroupRelay({config,api,inboxDb:f.inbox,relayDb:f.db,now:f.now,readRecoveryGrant:()=>structuredClone(renewal),send:async()=>({ok:true,ids:[]})});
+ await relay.tick();await relay.tick();assert.equal(f.state.posts.length,1);assert.deepEqual(f.state.lookups,[messageId]);
+ assert.equal(f.inbox.prepare('SELECT count(*) n FROM group_input').get().n,1);
+ assert.deepEqual(JSON.parse(f.inbox.prepare('SELECT proof FROM group_input_author').get().proof),saved);
+});
+
+test('renewal rejects wrong prior SHA, scope, body, expiry and nonclosed authority',t=>{
+ const f=fixture(t),old=f.config.participantRecoveryGrant.sha256;
+ const proof={recoveryGrantSha256:old,inputId:messageId,chatId:group,threadId:'thread-a',authorId:lid,phoneId:phone,createdAt};
+ const input={id:messageId,chat_id:group,body,created_at:createdAt};
+ const valid={...f.grant,format:'orkestr-whatsapp-participant-message-recovery-v2',supersedesGrantSha256:old};
+ for(const patch of [{supersedesGrantSha256:'a'.repeat(64)},{supersedesGrantSha256:'bad'},{messageId:'other'},
+  {threadId:'other'},{chatId:other},{authorId:own},{phoneId:own},{createdAt:'2026-01-03T03:00:01.000Z'},
+  {bodySha256:hash('other')},{expiresAt:'2026-01-03T11:00:00.000Z'},{originOwner:true}]){
+  const grant={...valid,...patch},config={...f.config,participantRecoveryGrant:{path:'/protected/new.json',sha256:hash(JSON.stringify(grant))}};
+  assert.equal(createParticipantRecoveryPolicy(config,{now:f.now,readGrant:()=>grant}).matches(proof,input),false);
+ }
+ const config={...f.config,participantRecoveryGrant:{path:'/protected/new.json',sha256:hash(JSON.stringify(valid))}};
+ const policy=createParticipantRecoveryPolicy(config,{now:f.now,readGrant:()=>valid});
+ assert.equal(policy.matches({...proof,recoveryGrantSha256:config.participantRecoveryGrant.sha256},input),false);
+ assert.equal(policy.matches(proof,{...input,body:'other'}),false);
+ f.setNow(Date.parse(valid.expiresAt)+1);assert.equal(policy.matches(proof,input),false);
+ assert.equal(createParticipantRecoveryPolicy(config,{now:()=>NOW,readGrant:()=>{throw Error('revoked');}}).matches(proof,input),false);
+});
+
+test('renewal still requires the current Root protected file digest', {skip:process.getuid()!==0},t=>{
+ const f=fixture(t),prior=f.config.participantRecoveryGrant.sha256;
+ const dir=fs.mkdtempSync('/run/participant-renewal-test-');t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
+ const file=path.join(dir,'grant.json'),grant={...f.grant,format:'orkestr-whatsapp-participant-message-recovery-v2',supersedesGrantSha256:prior};
+ const raw=JSON.stringify(grant);fs.writeFileSync(file,raw,{mode:0o400});
+ const config={...f.config,participantRecoveryGrant:{path:file,sha256:hash(raw)}};
+ const proof={recoveryGrantSha256:prior,inputId:messageId,chatId:group,threadId:'thread-a',authorId:lid,phoneId:phone,createdAt};
+ const input={id:messageId,chat_id:group,body,created_at:createdAt};
+ assert.equal(createParticipantRecoveryPolicy(config,{now:f.now}).matches(proof,input),true);
+ const wrong={...config,participantRecoveryGrant:{path:file,sha256:prior}};
+ assert.equal(createParticipantRecoveryPolicy(wrong,{now:f.now}).matches(proof,input),false);
+ fs.chmodSync(file,0o600);assert.equal(createParticipantRecoveryPolicy(config,{now:f.now}).matches(proof,input),false);
+});
