@@ -26,19 +26,27 @@ def mount_id(fd):
     return int(next(line.split()[1] for line in lines if line.startswith('mnt_id:')))
 
 
-def options(mid,target=None):
+def mount_options():
+    """One fresh kernel snapshot per verification, never a process-wide cache."""
+    mounts={}
     for line in Path('/proc/self/mountinfo').read_text().splitlines():
         fields=line.split()
-        if int(fields[0])==mid:
-            actual=fields[4]
-            for escaped,decoded in ((r'\040',' '),(r'\011','\t'),(r'\012','\n'),(r'\134','\\')):
-                actual=actual.replace(escaped,decoded)
-            require(target is None or actual==target,'resource_mount_target')
-            return set(fields[5].split(','))
-    require(False,'resource_mount_missing')
+        actual=fields[4]
+        for escaped,decoded in ((r'\040',' '),(r'\011','\t'),(r'\012','\n'),(r'\134','\\')):
+            actual=actual.replace(escaped,decoded)
+        mounts[int(fields[0])]=(actual,frozenset(fields[5].split(',')))
+    return mounts
 
 
-def original_source(row,lookups=(),creator=None,homes=(),native_writers=(),native_roots=(),native_executor=None):
+def options(mid,target=None,mounts=None):
+    if mounts is None:mounts=mount_options()
+    require(mid in mounts,'resource_mount_missing')
+    actual,flags=mounts[mid]
+    require(target is None or actual==target,'resource_mount_target')
+    return flags
+
+
+def original_source(row,lookups=(),creator=None,homes=(),native_writers=(),native_roots=(),native_executor=None,source_groups=None):
     source=Path(row['source'])
     selected=next((h for h in lookups if Path(h['path']) in source.parents),None)
     if selected is None:return open_source(source,row['uid'],row['kind'] in DIRECTORIES,homes)
@@ -53,7 +61,7 @@ def original_source(row,lookups=(),creator=None,homes=(),native_writers=(),nativ
         if native_writers:
             from .workspace_acl import check
             home=os.open('.',os.O_RDONLY|os.O_DIRECTORY|os.O_CLOEXEC,dir_fd=fd)
-            try:check(home,info.st_uid,native_executor,0,selected_writers=native_writers,source_ancestry=True)
+            try:check(home,info.st_uid,native_executor,0,selected_writers=native_writers,source_ancestry=True,source_groups=source_groups)
             finally:os.close(home)
         parts=source.relative_to(selected['path']).parts
         for index,part in enumerate(parts):
@@ -68,9 +76,9 @@ def original_source(row,lookups=(),creator=None,homes=(),native_writers=(),nativ
             if native_writers:
                 from .workspace_acl import check
                 current=Path(selected['path'],*parts[:index+1])
-                scoped=any(current==root or root in current.parents for root in native_roots)
+                scoped=current in native_roots or any(parent in native_roots for parent in current.parents)
                 check(fd,info.st_uid,native_executor,0,selected_writers=native_writers,
-                      source_ancestry=not scoped)
+                      source_ancestry=not scoped,source_groups=source_groups)
         result=fd;fd=None;return result
     finally:
         if fd is not None:os.close(fd)
@@ -111,11 +119,12 @@ def verify(selected,ctx):
         require(creator==value['creator'] and creator['uid']==0,'resource_namespace_owner_lost')
         require(type(value['targets']) is list and len(value['targets'])==len(doc['resources']),
                 'resource_receipt_targets')
+        mounts=mount_options()
         for row,target in zip(doc['resources'],value['targets']):
             require(set(target)=={'target','mount_id'} and target['target']==row['target'],
                     'resource_target_binding')
             if os.geteuid()==ctx['authority_uid']:
-                flags=options(target['mount_id'],row['target'])
+                flags=options(target['mount_id'],row['target'],mounts)
                 required={'nosuid','nodev'}
                 if row['kind']!='toolchain':required.add('noexec')
                 if row['kind'] in READONLY:required.add('ro')
@@ -128,7 +137,7 @@ def verify(selected,ctx):
                     (row['device'],row['inode'],ctx['executor_uid'] if row['uid']!=0 else 0,
                      ctx['executor_gid'] if row['uid']!=0 else row['gid'])
                     and mid==target['mount_id'],'resource_target_identity')
-                flags=options(mid,row['target'])
+                flags=options(mid,row['target'],mounts)
                 required={'nosuid','nodev'}
                 if row['kind']!='toolchain':required.add('noexec')
                 if row['kind'] in READONLY:required.add('ro')
@@ -143,7 +152,7 @@ def verify(selected,ctx):
                 lookup['uid']==home.get('uid',doc['source_owner_uid']) and type(lookup['fd']) is int
                 and lookup['fd']>2,'resource_home_lookup_binding')
         from .resource_projects import verify_projects
-        verify_projects(value['projects'],ctx,value['home_lookups'],creator,doc['source_homes'])
+        verify_projects(value['projects'],ctx,value['home_lookups'],creator,doc['source_homes'],mounts)
         return value
     finally:os.close(fd)
 

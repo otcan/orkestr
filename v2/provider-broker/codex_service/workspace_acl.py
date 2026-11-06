@@ -19,23 +19,29 @@ def owner(profile, executor):
     return value
 
 
-def source_group(gid, selected_writers):
+def source_group(gid, selected_writers, source_groups=None):
     """Resolve every current NSS member; an unknown/unselected writer is fatal.
 
     Used only for Root traversal of sealed native source ancestry. This grants
     no directory access and never authorizes a Worker or a projected leaf.
+    A verification may share membership observations; each call still checks
+    its own selected writers, and the next verification resolves NSS again.
     """
     require(selected_writers, 'workspace_unselected_group_writer')
-    try:
-        group=grp.getgrgid(gid)
-        members={pwd.getpwnam(name).pw_uid for name in group.gr_mem}
-        members.update(row.pw_uid for row in pwd.getpwall() if row.pw_gid==gid)
-    except (KeyError,OSError):
-        require(False,'workspace_source_group_unknown')
+    if source_groups is not None and gid in source_groups:
+        members=source_groups[gid]
+    else:
+        try:
+            group=grp.getgrgid(gid)
+            members={pwd.getpwnam(name).pw_uid for name in group.gr_mem}
+            members.update(row.pw_uid for row in pwd.getpwall() if row.pw_gid==gid)
+        except (KeyError,OSError):
+            require(False,'workspace_source_group_unknown')
+        if source_groups is not None:source_groups[gid]=frozenset(members)
     require(members and members <= {0,*selected_writers}, 'workspace_unselected_group_writer')
 
 
-def check(fd, project_owner, executor, permissions, owner_leaf=False, executor_gid=None, selected_writers=(), source_ancestry=False):
+def check(fd, project_owner, executor, permissions, owner_leaf=False, executor_gid=None, selected_writers=(), source_ancestry=False, source_groups=None):
     if executor_gid is None:executor_gid=executor
     require(type(selected_writers) in (tuple,list,set,frozenset) and len(selected_writers)<=9
             and all(type(uid) is int and 0<uid<2**31 for uid in selected_writers), 'workspace_selected_writers')
@@ -54,7 +60,7 @@ def check(fd, project_owner, executor, permissions, owner_leaf=False, executor_g
         raw=None
     if permissions==0 and raw is None:
         if source_ancestry and meta.st_mode&0o020:
-            source_group(meta.st_gid,selected_writers)
+            source_group(meta.st_gid,selected_writers,source_groups)
         else:require(meta.st_mode&0o022==0,'workspace_managed_custody')
         return  # Root needs custody, not executor traversal of private ancestors.
     if not separate:
@@ -84,6 +90,6 @@ def check(fd, project_owner, executor, permissions, owner_leaf=False, executor_g
     for tag,bits,uid in entries:
         require(tag in (1,2,4,8,0x10,0x20),'workspace_named_executor_acl')
         if source_ancestry and tag in (4,8) and bits&2:
-            source_group(meta.st_gid if tag==4 else uid,selected_writers)
+            source_group(meta.st_gid if tag==4 else uid,selected_writers,source_groups)
         elif tag in (4,8,0x20) or tag==2 and uid not in writers:
             require(bits&2==0,'workspace_unselected_acl_writer')
