@@ -53,6 +53,12 @@ paste retries retain the same immutable File while the textarea exists;
 editing the text or changing the conversation/session creates a new identity.
 No paste text or file bytes are persisted in browser draft storage.
 
+The file picker opens before uploader initialization. Browsers that deny access
+to session/local storage can still start a new encrypted transfer; optional
+resume metadata is unavailable, and decrypting an earlier transfer still
+requires its enrolled browser identity. Missing uploader assets produce a
+retryable upload error after selection rather than blocking the picker.
+
 ## Service-readable files and key custody
 
 This preserves native V2's existing server-readable attachment semantics. The

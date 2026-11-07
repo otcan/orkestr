@@ -18,3 +18,15 @@ test('batch validation precedes transfers and storage failures do not block uplo
   assert.match((await describe([file,{...file,size:1_000_000_001}])).error,/1,000,000,000/);assert.equal(uploaded,0);
   assert.deepEqual(await describe([file]),{receipts:[{verified:true}]});assert.equal(uploaded,1);
 });
+test('denied storage getters do not prevent native uploader initialization',async()=>{
+  const names=['sessionStorage','localStorage'];
+  const original=names.map(name=>Object.getOwnPropertyDescriptor(globalThis,name));
+  try{
+    for(const name of names)Object.defineProperty(globalThis,name,{configurable:true,get(){throw new DOMException('Denied','SecurityError');}});
+    // Use the real default encrypted client: construction must not touch
+    // inaccessible storage. Empty selection performs no network request.
+    assert.deepEqual(await nativeDescribe({conversation,csrf:'synthetic'})([]),{receipts:[]});
+  }finally{
+    names.forEach((name,index)=>{if(original[index])Object.defineProperty(globalThis,name,original[index]);else delete globalThis[name];});
+  }
+});

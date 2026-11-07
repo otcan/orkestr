@@ -72,6 +72,10 @@ jobs:
         env:
           SCREENSHOT_DIR: ${{ runner.temp }}/v2-screenshots
         run: node v2/ci/headless-workspace.mjs
+      - name: Mounted attachment picker with restricted browser storage
+        env:
+          SCREENSHOT_DIR: ${{ runner.temp }}/v2-screenshots
+        run: node v2/ci/headless-attachment-picker.mjs
       - name: Retain synthetic desktop and phone screenshots
         if: ${{ always() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

@@ -67,7 +67,9 @@ fn file_helper(call: &str, target: &AttachTarget, csrf: &str) -> String {
         AttachTarget::Native(conversation) => {
             let source = include_str!("attach_files.mjs").replace("export ", "");
             let context = json!({"conversation":conversation,"csrf":csrf});
-            format!("{source}\nconst module=await import('/encrypted_upload.js'); const describeFiles=module.nativeDescribe({context});\n{call}")
+            // Open the picker before loading the uploader. Optional browser
+            // facilities must not prevent the owner selecting a file.
+            format!("{source}\nconst describeFiles=async files=>{{try{{const module=await import('/encrypted_upload.js'); return await module.nativeDescribe({context})(files);}}catch{{return {{error:'Encrypted uploads are unavailable. Reload the page and try again.'}};}}}};\n{call}")
         }
     }
 }
