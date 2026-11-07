@@ -43,7 +43,7 @@ pub(crate) async fn daily_cap(
 }
 
 impl Store {
-    async fn limits_in(
+    pub(super) async fn limits_in(
         &self,
         tx: &mut SqliteConnection,
         owner: &OwnerId,

@@ -173,7 +173,7 @@ def main(package, arguments):
             channel.setblocking(False)
             original = process(child.pid)
             known = {(child.pid, original['start'])} if original else set()
-            while child.poll() is None:
+            while True:
                 if not exists(original_parent): cancel('parent_lost')
                 if time.monotonic() >= deadline: cancel('deadline')
                 try:
@@ -185,6 +185,10 @@ def main(package, arguments):
                         received=core.recv(16)
                         cancel('cancelled' if received else 'core_closed')
                     except BlockingIOError: pass
+                # The controller sends cancellation before killing the job.
+                # Consume that notification even when the child has already
+                # exited, so the terminal proof retains the cancellation.
+                if child.poll() is not None: break
                 tree.capture(known); tree.observe()
                 if cancelled: job.kill()
                 time.sleep(.005)

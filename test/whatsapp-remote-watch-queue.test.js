@@ -74,3 +74,36 @@ test('older V1 gateways keep the original cursor-after-delivery recovery contrac
     assert.deepEqual(cursors.slice(0, 2), ['', '']);
   } finally {await watch.close();}
 });
+
+const flush = async () => {for (let i = 0; i < 10; i++) await new Promise(resolve => setImmediate(resolve));};
+
+test('a retry deadline crossing during drain does not strand the queued thread', async t => {
+  t.mock.timers.enable({apis: ['setTimeout']});
+  let clock = 1000, advancing = false;
+  t.mock.method(Date, 'now', () => advancing ? clock++ : clock);
+  let initial = true, attempts = 0;
+  const api = async (url, options) => {
+    if (url.endsWith('/watches')) return {version: 2, backends: ['backend']};
+    if (url.includes('/changes?')) {
+      if (initial) {initial = false; return {cursor: 'epoch:1', threadIds: ['thread']};}
+      return new Promise((_resolve, reject) => options.signal.addEventListener('abort', () => reject(new Error('aborted')), {once: true}));
+    }
+    return {ok: true, threadId: 'thread'};
+  };
+  const watch = startScopedRemoteWatch({api, deliver: async () => {
+    if (++attempts === 1) throw new Error('lost confirmation after durable send');
+  }});
+  try {
+    await flush();
+    assert.equal(attempts, 1);
+    // The retry timer can wake just before its wall-clock deadline. Let the
+    // clock advance through that deadline while the queue is inspected.
+    clock = 1499; advancing = true;
+    t.mock.timers.tick(500);
+    await flush();
+    assert.equal(attempts, 1, 'the retry must respect its backoff');
+    t.mock.timers.tick(1);
+    await flush();
+    assert.equal(attempts, 2, 'the queued thread must retry without another export');
+  } finally {await watch.close();}
+});

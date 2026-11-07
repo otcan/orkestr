@@ -138,3 +138,14 @@ class HttpManifestTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class NativeTimerObservationTests(unittest.TestCase):
+    def test_native_timer_health_is_never_inferred_from_managed_registry(self):
+        from codex_service.managed_capabilities import manifest, NAME
+        scope = {'conversation_id': CONVERSATION, 'provider': 'codex'}
+        for registered in ([{'name': NAME}], [{'name': NAME}, {'name': 'orkestr_desk_login'}]):
+            value = manifest(scope, registered)
+            self.assertEqual(value['native_timers']['status'], 'unassessed')
+            self.assertEqual(value['native_timers']['operations'], [])
+            self.assertIn('native_timers', value['uncovered'])

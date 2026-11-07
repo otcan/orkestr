@@ -105,7 +105,7 @@ def run_case(fixture, package, profile, project, core, root, kind):
         'assert os.getcwd()==' + repr(str(project)) + '\n'
         'Path("proof-' + kind + '").write_text("executor project write")\n'
         'print(json.dumps({"uid":os.geteuid(),"nnp":True,"core_denied":True,"selected_key_only":True}),flush=True)\n' +
-        ('import time\ntime.sleep(10)\n' if kind in ('timeout', 'cancel') else
+        ('import time\ntime.sleep(10)\n' if kind in ('timeout', 'cancel', 'cancel_after_exit') else
          'import time\nmarker=Path("detached-ready")\nif os.fork()==0:\n os.setsid()\n if os.fork()==0:\n  marker.write_text(str(os.getpid()))\n  time.sleep(10)\n os._exit(0)\n'
          'until=time.monotonic()+.5\nwhile not marker.exists():\n assert time.monotonic()<until\n time.sleep(.005)\n'))
     probe.chmod(0o600); os.chown(probe, UID, GID)
@@ -160,17 +160,28 @@ else:raise SystemExit(6)
             assert control.recv(32)==(b'started\n' if kind=='activate' else b'dropped')
             if kind=='activate':ready=read(parent)
         if kind!='no_activation':assert ready == {'operation_id':operation, 'source_sha256':source_sha, 'kind':'ready'}
-        if kind == 'cancel':
+        if kind in ('cancel', 'cancel_after_exit'):
             until = time.monotonic() + .8
-            while not (project / 'proof-cancel').exists():
+            while not (project / ('proof-' + kind)).exists():
                 assert time.monotonic() < until
                 time.sleep(.005)
+            if kind == 'cancel_after_exit':
+                # Stop only the Root anchor, outside the job cgroup. Force
+                # cancellation and job exit before its next child poll.
+                child.send_signal(signal.SIGSTOP)
+                until = time.monotonic() + 1
+                while '\nState:\tT' not in Path('/proc', str(child.pid), 'status').read_text():
+                    assert time.monotonic() < until
+                    time.sleep(.005)
             parent.sendall(b'cancel')
+            if kind == 'cancel_after_exit':
+                job.kill(); assert job.empty(2)
+                child.send_signal(signal.SIGCONT)
         complete = read(parent)
         assert complete['operation_id'] == operation and complete['source_sha256'] == source_sha
         assert complete['kind'] == 'complete' and complete['cleanup'] is True
-        assert complete['cancelled'] == (kind in ('timeout','cancel','no_activation'))
-        assert complete['cancellation'] == ('deadline' if kind == 'timeout' else 'cancelled' if kind == 'cancel' else 'core_closed' if kind=='no_activation' else None)
+        assert complete['cancelled'] == (kind in ('timeout','cancel','cancel_after_exit','no_activation'))
+        assert complete['cancellation'] == ('deadline' if kind == 'timeout' else 'cancelled' if kind in ('cancel','cancel_after_exit') else 'core_closed' if kind=='no_activation' else None)
         assert child.wait(timeout=3) == 0, child.stderr.read().decode()
         output = os.read(stdout, 4096); error_output = os.read(stderr, 4096)
         assert not error_output and not job.populated()
@@ -192,6 +203,7 @@ else:raise SystemExit(6)
                 try: os.close(fd)
                 except OSError: pass
         if child is not None:
+            if kind == 'cancel_after_exit' and child.poll() is None: child.send_signal(signal.SIGCONT)
             if child.poll() is None: child.send_signal(signal.SIGTERM)
             try: child.wait(timeout=5)
             except subprocess.TimeoutExpired: job.kill(); child.kill(); child.wait()
@@ -216,7 +228,7 @@ def main():
                   live_activation=False, scope_memory_limit_bytes=int((base/'memory.max').read_text()))
     try:
         package, profile, core, project = prepare(fixture, jobs); root = Root(jobs)
-        report['cases'] = [run_case(fixture, package, profile, project, core, root, kind) for kind in ('normal','timeout','cancel','activate','no_activation')]
+        report['cases'] = [run_case(fixture, package, profile, project, core, root, kind) for kind in ('normal','timeout','cancel','cancel_after_exit','activate','no_activation')]
         report['source_files_sha256'] = {name: hashlib.sha256((ROOT/'v2/provider-broker/codex_service'/name).read_bytes()).hexdigest()
             for name in ('workspace_anchor.py','workspace_cgroup.py','workspace_custody.py','workspace_environment.py')}
         report['scope_memory_peak_bytes'] = int((base/'memory.peak').read_text()); report['passed'] = True
@@ -226,7 +238,7 @@ def main():
         if root is not None: root.close()
         fixture.close(); jobs.rmdir(); report['disposable_data_removed'] = True
         Path(args.report).write_text(json.dumps(report,indent=2)+'\n'); Path(args.report).chmod(0o600)
-    print(json.dumps({'passed':True,'kernel_component_only':True,'cases':5}))
+    print(json.dumps({'passed':True,'kernel_component_only':True,'cases':6}))
 
 
 if __name__ == '__main__': main()

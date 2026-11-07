@@ -11,7 +11,14 @@ pub(super) async fn next(
     if duration < Duration::from_secs(1) || duration > Duration::from_secs(60) {
         return Err(RuntimeStoreError::InvalidInput);
     }
-    let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+    // Contention before BEGIN acquired the writer has consumed no input and
+    // made no durable change. Preserve that distinction from an uncertain
+    // failure after a claim or dispatch has been written.
+    let mut tx = store
+        .pool
+        .begin_with("BEGIN IMMEDIATE")
+        .await
+        .map_err(begin_error)?;
     store.check_context_in(&mut tx, owner).await?;
     scope(&mut tx, owner, conversation).await?;
     let valid: i64 = sqlx::query_scalar("SELECT count(*) FROM session_bindings WHERE id=? AND owner_id=? AND conversation_id=? AND role='deep' AND state IN ('starting','ready','busy')")
@@ -55,6 +62,7 @@ pub(super) async fn next(
     }
     let row = select.fetch_optional(&mut *tx).await.map_err(db)?;
     let Some(row) = row else {
+        tx.rollback().await.map_err(db)?;
         return Ok(None);
     };
     if row.get::<&str, _>("state") == "claimed"
@@ -62,6 +70,7 @@ pub(super) async fn next(
             .get::<Option<i64>, _>("claim_deadline_ms")
             .is_some_and(|deadline| deadline > now)
     {
+        tx.rollback().await.map_err(db)?;
         return Err(RuntimeStoreError::Busy);
     }
     let sequence: i64 = row.get("sequence");
@@ -80,6 +89,7 @@ pub(super) async fn next(
         )
         .await?
     {
+        tx.rollback().await.map_err(db)?;
         return Ok(None);
     }
     let generation = row
@@ -104,4 +114,16 @@ pub(super) async fn next(
     };
     tx.commit().await.map_err(db)?;
     Ok(Some(result))
+}
+
+fn begin_error(error: sqlx::Error) -> RuntimeStoreError {
+    let code = error
+        .as_database_error()
+        .and_then(|error| error.code())
+        .and_then(|code| code.parse::<i32>().ok());
+    if code.is_some_and(|code| matches!(code & 0xff, 5 | 6)) {
+        RuntimeStoreError::Busy
+    } else {
+        db(error)
+    }
 }

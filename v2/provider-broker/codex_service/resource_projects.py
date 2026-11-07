@@ -148,8 +148,8 @@ def git_environment(package,environment):
     return result
 
 
-def verify_projects(rows,ctx,lookups=(),creator=None,homes=()):
-    from .resource_receipt import mount_id,options
+def verify_projects(rows,ctx,lookups=(),creator=None,homes=(),mounts=None):
+    from .resource_receipt import mount_id,options,mount_options
     require(type(rows) is list and len(rows)<=3*(len(ctx['projects'])+len(ctx.get('native_workspaces',[]))),'resource_project_receipts')
     ids={p['project_id'] for p in ctx['projects']}
     native_ids={p['conversation_id'] for p in ctx.get('native_workspaces',[])}
@@ -158,15 +158,19 @@ def verify_projects(rows,ctx,lookups=(),creator=None,homes=()):
         key='project_id' if 'project_id' in row else 'conversation_id'
         require(type(row) is dict and set(row)=={'path',key,'device','inode','uid','mount_id'}
                 and row[key] in (ids if key=='project_id' else native_ids),'resource_project_receipt')
-        require({'nosuid','nodev'}<=options(row['mount_id'],row['path']),'resource_project_flags')
+    if mounts is None:mounts=mount_options()
+    writers=tuple({h['uid'] for h in lookups})
+    roots=frozenset([Path(p['workspace']) for p in ctx.get('native_workspaces',[])]+[
+        Path(p['path']) for p in rows if 'conversation_id' in p])
+    source_groups={}  # Fresh NSS membership for every verification invocation.
+    for row in rows:
+        key='project_id' if 'project_id' in row else 'conversation_id'
+        require({'nosuid','nodev'}<=options(row['mount_id'],row['path'],mounts),'resource_project_flags')
         if os.geteuid()==0:
             from .resource_receipt import original_source
-            writers=tuple({h['uid'] for h in lookups}) if key=='conversation_id' else ()
-            roots=tuple(Path(p['workspace']) for p in ctx.get('native_workspaces',[]))
-            roots+=tuple(Path(p['path']) for p in rows if 'conversation_id' in p)
             original=original_source({'source':row['path'],'uid':row['uid'],'kind':'toolchain'},
-                                     lookups,creator,homes,native_writers=writers,native_roots=roots,
-                                     native_executor=ctx['executor_uid'])
+                                     lookups,creator,homes,native_writers=writers if key=='conversation_id' else (),
+                                     native_roots=roots,native_executor=ctx['executor_uid'],source_groups=source_groups)
             try:
                 meta=os.fstat(original)
                 require((meta.st_dev,meta.st_ino,meta.st_uid)==(row['device'],row['inode'],row['uid']),

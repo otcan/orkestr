@@ -145,12 +145,27 @@ class Package:
 
     def verify_inventory(self):
         """Recheck closed inventory and custody; never import or repair files."""
+        # Check ancestry once, then every entry without following aliases. Each
+        # checked directory is Root-owned and has no non-Root writer, so a
+        # caller cannot replace a descendant between these observations.
+        protected(self.root, True)
         actual = set()
-        for path in self.root.rglob("*"):
-            require(not path.is_symlink(), "package_alias")
-            protected(path, path.is_dir())
-            if path.is_file():
-                actual.add(str(path.relative_to(self.root)))
+        pending = [(self.root, "")]
+        while pending:
+            directory, prefix = pending.pop()
+            with os.scandir(directory) as entries:
+                for entry in entries:
+                    info = entry.stat(follow_symlinks=False)
+                    require(not stat.S_ISLNK(info.st_mode), "package_alias")
+                    require(info.st_uid == 0 and not info.st_mode & 0o022,
+                            "package_custody")
+                    relative = prefix + entry.name
+                    if stat.S_ISDIR(info.st_mode):
+                        pending.append((entry.path, relative + "/"))
+                    else:
+                        require(stat.S_ISREG(info.st_mode) and info.st_nlink == 1,
+                                "package_file")
+                        actual.add(relative)
         require(actual == self.inventory, "unexpected_package_file")
 
     def _bind(self):

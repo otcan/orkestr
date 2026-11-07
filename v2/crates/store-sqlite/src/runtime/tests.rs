@@ -133,6 +133,79 @@ async fn claim_race_expiry_and_followup_order() {
 }
 
 #[tokio::test]
+async fn writer_contention_leaves_the_input_unclaimed_and_retryable() {
+    let (mut store, root, owner, conversation) = fixture().await;
+    let roles = store
+        .ensure_role_bindings(&owner, &conversation)
+        .await
+        .unwrap();
+    store
+        .admit(
+            &owner,
+            &conversation,
+            &MessageInput {
+                client_message_id: "contended-input".into(),
+                text: "synthetic input".into(),
+            },
+        )
+        .await
+        .unwrap();
+    // Exercise a real SQLite writer conflict without a five-second fixture
+    // delay. Production keeps its existing busy timeout.
+    store.pool.close().await;
+    store.pool = sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(2)
+        .connect_with(
+            sqlx::sqlite::SqliteConnectOptions::new()
+                .filename(root.join("test.sqlite3"))
+                .foreign_keys(true)
+                .busy_timeout(Duration::from_millis(25)),
+        )
+        .await
+        .unwrap();
+    let writer = store.pool.begin_with("BEGIN IMMEDIATE").await.unwrap();
+    assert_eq!(
+        store
+            .claim_next(
+                &owner,
+                &conversation,
+                &roles.deep.session_id,
+                Duration::from_secs(10),
+            )
+            .await
+            .unwrap_err(),
+        RuntimeStoreError::Busy
+    );
+    let unchanged: (String, i64, Option<String>) = sqlx::query_as(
+        "SELECT state,claim_generation,admitted_run_id FROM reasoning_inbox WHERE conversation_id=?",
+    )
+    .bind(conversation.to_string())
+    .fetch_one(&store.pool)
+    .await
+    .unwrap();
+    assert_eq!(unchanged, ("queued".into(), 0, None));
+    writer.rollback().await.unwrap();
+    let claim = store
+        .claim_next(
+            &owner,
+            &conversation,
+            &roles.deep.session_id,
+            Duration::from_secs(10),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(claim.claim_generation, 1);
+    let runs: i64 = sqlx::query_scalar("SELECT count(*) FROM production_runs")
+        .fetch_one(&store.pool)
+        .await
+        .unwrap();
+    assert_eq!(runs, 0);
+    store.close().await;
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
 async fn scope_and_role_checks_precede_claim_mutation() {
     let (store, root, owner, conversation) = fixture().await;
     let roles = store
