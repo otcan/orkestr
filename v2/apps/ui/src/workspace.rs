@@ -275,6 +275,12 @@ pub fn Workspace(
                             crate::memory_view::MemoryView { key: "{session_scope.read().generation()}", csrf, project: None, session_scope, onexpired }
                         } else if tab() == Tab::LiveMap {
                             crate::live_map_view::LiveMapView { key: "{session_scope.read().generation()}", session_scope, onexpired }
+                        } else if tab() == Tab::VirtualDesks {
+                            crate::virtual_desks_view::VirtualDesks {
+                                key: "desks-{current()}-{session_scope.read().generation()}",
+                                conversation: current(), csrf, session_scope, onexpired,
+                                onsettings: move |_| tab.set(Tab::Settings),
+                            }
                         } else if tab() == Tab::Host {
                             crate::host_dashboard::HostDashboard { key: "{session_scope.read().generation()}", session_scope, charts: host_charts, range: host_range, onexpired }
                         } else {
