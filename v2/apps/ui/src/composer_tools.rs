@@ -59,8 +59,9 @@ fn file_helper(call: &str, target: &AttachTarget, csrf: &str) -> String {
         AttachTarget::V1(_) => helper(call),
         AttachTarget::Native(conversation) => {
             let source = include_str!("attach_files.mjs").replace("export ", "");
+            let assets = include_str!("asset_base.mjs").replace("export ", "");
             let context = json!({"conversation":conversation,"csrf":csrf});
-            format!("{source}\nconst module=await import('/encrypted_upload.js'); const describeFiles=module.nativeDescribe({context});\n{call}")
+            format!("{source}\n{assets}\nconst module=await import(uiAssetUrl('encrypted_upload.js')); const describeFiles=module.nativeDescribe({context});\n{call}")
         }
     }
 }
