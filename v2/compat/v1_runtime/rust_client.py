@@ -167,6 +167,10 @@ class RustSession:
             raise ClientError("request_shape_refused") from None
         require(data is None or len(data) <= max_request, "request_too_large")
         timeout_s = timeout_s or self.timeout_s
+        # A short journal observation starts after peer proof and validated
+        # HTTP headers. It must not shut down the socket during its own proof.
+        # The ordinary session ceiling still bounds the complete exchange.
+        transport_timeout_s = self.timeout_s if events else timeout_s
         # The login state is read once under the session lock; the exchange
         # itself runs without it (see `_lock` on RustClient), so one binding's
         # event wait never stalls every other binding's requests.
@@ -195,9 +199,9 @@ class RustSession:
         raw = bytearray()
         try:
             connection = (PeerConnection(self.host,self.port,descriptor_path=self.peer_descriptor_path,
-                          owner=self.owner,source=self.source,timeout=timeout_s)
+                          owner=self.owner,source=self.source,timeout=transport_timeout_s)
                           if self.peer_descriptor_path is not None else
-                          http.client.HTTPConnection(self.host,self.port,timeout=timeout_s))
+                          http.client.HTTPConnection(self.host,self.port,timeout=transport_timeout_s))
             connection.connect()
             retained_socket = connection.sock
             def expire():
@@ -205,7 +209,7 @@ class RustSession:
                     retained_socket.shutdown(socket.SHUT_RDWR)
                 except OSError:
                     pass
-            timer = threading.Timer(max(0.001, timeout_s - (time.monotonic() - started)), expire)
+            timer = threading.Timer(max(0.001, transport_timeout_s - (time.monotonic() - started)), expire)
             timer.daemon = True
             timer.start()
             connection.request(method, path, body=data, headers=headers)
@@ -227,6 +231,17 @@ class RustSession:
             expected_type = "text/event-stream" if events else "application/json"
             require(response.getheader("Content-Type", "").split(";")[0].lower() == expected_type and
                     response.getheader("Content-Encoding", "identity") == "identity", "response_type_refused")
+            if events:
+                timer.cancel()
+                timer.join()  # A stale transport callback cannot close a new read.
+                remaining = max(0.001, min(timeout_s, transport_timeout_s - (time.monotonic() - started)))
+                try:
+                    retained_socket.settimeout(remaining)
+                except OSError:
+                    pass  # An already buffered complete response can own no socket.
+                timer = threading.Timer(remaining, expire)
+                timer.daemon = True
+                timer.start()
             complete, scanned = 0, 0
             while len(raw) <= MAX_BODY:
                 try:
