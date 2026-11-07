@@ -42,6 +42,8 @@ async fn explicit_root_grant_keeps_its_fresh_actor_across_independent_pools() {
         independent_writer: AtomicBool::new(false),
         original_alive: AtomicBool::new(true),
         change_during_check: AtomicBool::new(false),
+        ordinary_write_during_check: AtomicBool::new(false),
+        physical_checks: AtomicUsize::new(0),
     });
     other
         .register_workspace(

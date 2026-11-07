@@ -9,6 +9,7 @@ use std::{
 // This is an operation deadline, not a refresh/cache interval. An expired
 // proof never invokes an action and cannot be used by a later operation.
 const HANDOFF: Duration = Duration::from_millis(100);
+const PHYSICAL_BUDGET: Duration = Duration::from_secs(5);
 
 pub(crate) struct WorkspaceCheck {
     owner: OwnerId,
@@ -118,6 +119,32 @@ impl Store {
                 owns: false,
             });
         }
+        let deadline = Instant::now() + PHYSICAL_BUDGET;
+        // A running command may create an ordinary child file while Root is
+        // checking the project. Discard that entire observation and permit one
+        // complete fresh check, before any writer, outer connection or action.
+        // Root refusals and already-issued/stale proofs never enter this path.
+        for _ in 0..2 {
+            if let Some(checked) = self
+                .workspace_preflight_attempt(owner, conversation, selected.clone(), deadline)
+                .await?
+            {
+                return Ok(checked);
+            }
+        }
+        Err(RuntimeStoreError::Fenced)
+    }
+
+    async fn workspace_preflight_attempt(
+        &self,
+        owner: &OwnerId,
+        conversation: &ConversationId,
+        selected: Option<Arc<Installation>>,
+        deadline: Instant,
+    ) -> Result<Option<WorkspacePreflight>> {
+        if Instant::now() >= deadline {
+            return Err(RuntimeStoreError::Unavailable);
+        }
         #[cfg(test)]
         let legacy = sqlx::query_scalar::<_, i64>(
             "SELECT COALESCE(MAX(version),0) FROM _sqlx_migrations WHERE success=1",
@@ -162,23 +189,30 @@ impl Store {
             .transpose()?;
         if let Some(installation) = &installation {
             let retained = installation.clone();
-            // Blocking-pool threads inherit Tokio's Handle. Isolate the Root
-            // callback from it so its private RPC runtime is legal even when
-            // this fence was entered outside Tokio on a current-thread bridge.
-            tokio::task::spawn_blocking(move || {
-                std::thread::spawn(move || retained.check())
-                    .join()
-                    .map_err(|_| RuntimeStoreError::Unavailable)?
-            })
-            .await
-            .map_err(db)??;
+            // No inherited Tokio Handle, or blocking-pool shutdown wait after
+            // timeout. Root's read-only transport has its own bounded deadline;
+            // a late result is discarded and can never produce a scoped proof.
+            let (ready, response) = tokio::sync::oneshot::channel();
+            let _reader = std::thread::Builder::new()
+                .name("workspace-preflight".into())
+                .spawn(move || {
+                    let _ = ready.send(retained.check());
+                })
+                .map_err(|_| RuntimeStoreError::Unavailable)?;
+            tokio::time::timeout_at(deadline.into(), response)
+                .await
+                .map_err(|_| RuntimeStoreError::Unavailable)?
+                .map_err(|_| RuntimeStoreError::Unavailable)??;
         }
         let retained = installation
             .as_ref()
             .map(|installation| installation.retained_stamp())
             .transpose()?;
         if before != retained {
-            return Err(RuntimeStoreError::Fenced);
+            return Ok(None);
+        }
+        if Instant::now() >= deadline {
+            return Err(RuntimeStoreError::Unavailable);
         }
         let proof = Arc::new(WorkspaceCheck {
             owner: owner.clone(),
@@ -199,11 +233,11 @@ impl Store {
         });
         let mut store = self.clone();
         store.workspace_check = Some(proof.clone());
-        Ok(WorkspacePreflight {
+        Ok(Some(WorkspacePreflight {
             store,
             proof,
             owns: true,
-        })
+        }))
     }
 
     pub(in crate::production_runtime) async fn check_binding_before_writer(

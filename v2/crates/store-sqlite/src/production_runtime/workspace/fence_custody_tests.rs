@@ -1,6 +1,8 @@
 //! A slow live Root check must not reserve the shared Core writer.
 #[path = "fence_custody_tests/cross_pool.rs"]
 mod cross_pool;
+#[path = "fence_custody_tests/mutable_workspace.rs"]
+mod mutable_workspace;
 use super::*;
 use crate::production_runtime::tests::{claim, setup, Case};
 use sqlx::{sqlite::SqliteConnectOptions, Connection, SqliteConnection};
@@ -18,6 +20,8 @@ struct RootCheck {
     independent_writer: AtomicBool,
     original_alive: AtomicBool,
     change_during_check: AtomicBool,
+    ordinary_write_during_check: AtomicBool,
+    physical_checks: AtomicUsize,
 }
 
 impl RootWorkspaceCustody for RootCheck {
@@ -28,7 +32,15 @@ impl RootWorkspaceCustody for RootCheck {
             Err(RuntimeStoreError::Fenced)
         }
     }
-    fn check(&self, _: &[PathBuf; 3], _: [WorkspaceDirectoryIdentity; 3]) -> Result<()> {
+    fn check(&self, paths: &[PathBuf; 3], _: [WorkspaceDirectoryIdentity; 3]) -> Result<()> {
+        self.physical_checks.fetch_add(1, Ordering::SeqCst);
+        self.check_original_actor()?;
+        if self
+            .ordinary_write_during_check
+            .swap(false, Ordering::SeqCst)
+        {
+            std::fs::write(paths[0].join("ordinary-command-output"), b"output").unwrap();
+        }
         if !self.probing.load(Ordering::SeqCst) {
             return Ok(());
         }
@@ -73,7 +85,7 @@ impl RootWorkspaceCustody for RootCheck {
     }
 }
 
-fn root_installation(f: &Case, check: Arc<RootCheck>) -> WorkspaceInstallation {
+fn root_installation(f: &Case, check: Arc<dyn RootWorkspaceCustody>) -> WorkspaceInstallation {
     let (allowlist, root) = super::tests::installation(f);
     let paths = [root.clone(), root.join(".git"), root.join(".git")];
     let descriptors = paths.clone().map(|path| File::open(path).unwrap().into());
@@ -90,8 +102,17 @@ async fn prepared(f: &Case) -> (BoundSessionMetadata, Arc<RootCheck>) {
         independent_writer: AtomicBool::new(false),
         original_alive: AtomicBool::new(true),
         change_during_check: AtomicBool::new(false),
+        ordinary_write_during_check: AtomicBool::new(false),
+        physical_checks: AtomicUsize::new(0),
     });
-    let installation = root_installation(f, check.clone());
+    (prepared_with_check(f, check.clone()).await, check)
+}
+
+async fn prepared_with_check(
+    f: &Case,
+    check: Arc<dyn RootWorkspaceCustody>,
+) -> BoundSessionMetadata {
+    let installation = root_installation(f, check);
     let project = f
         .handle
         .register_workspace(&f.token, &f.conversation, Uuid::new_v4(), installation)
@@ -107,8 +128,7 @@ async fn prepared(f: &Case) -> (BoundSessionMetadata, Arc<RootCheck>) {
         .bind_workspace_session(&f.token, &project, &binding)
         .await
         .unwrap();
-    let metadata = f.handle.authorize_session_metadata(&binding).await.unwrap();
-    (metadata, check)
+    f.handle.authorize_session_metadata(&binding).await.unwrap()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
