@@ -55,12 +55,14 @@ try{
   const chunkHold={seen:latch(),resume:latch()};proxy.state.chunkHold=chunkHold;
   holds.push(chunkHold);
   const file=join(scratch,'synthetic-release-file.bin');await writeFile(file,Buffer.alloc(2*1024*1024+19,0x71));
+  await first.bringToFront();
   const picker=first.waitForFileChooser();await first.click('button[aria-label="Attach a file or image"]');await(await picker).accept([file]);
   await bounded(chunkHold.seen.promise,'A encrypted chunk receipt');proxy.state.active=snapshots[0].plan.release_id;chunkHold.resume.release();helperHold.resume.release();
   await first.waitForFunction(()=>document.querySelector('.attachment-chip'));
   assert.equal(api.state.uploads.length,1);assert.equal(api.state.uploads[0].encrypted,true);
   assert.equal(Buffer.from(api.state.uploads[0].files[0].content_base64,'base64').length,2*1024*1024+19);
   // B's lazy helper remains B even after root rollback to A.
+  await second.bringToFront();
   const bPicker=second.waitForFileChooser();await second.click('button[aria-label="Attach a file or image"]');await(await bPicker).cancel();
   await second.waitForFunction(()=>!document.querySelector('button[aria-label="Attach a file or image"]').disabled);
   const requests=proxy.state.requests;
@@ -73,6 +75,7 @@ try{
   assert.ok(proxy.state.responses.some(r=>r.path===helperHold.path&&r.active===snapshots[0].plan.release_id),'retained B helper is served after rollback to A');
   const last=await page();await last.goto(`${proxy.origin}/#conversation/${A}`,{waitUntil:'domcontentloaded'});await last.waitForSelector('#composer');
   assert.equal(await last.evaluate(()=>globalThis.__syntheticUiRelease),'A','rollback affects only new bootstrap reads');
+  await first.bringToFront();
   await first.$eval('#composer',node=>{node.value='Synthetic UI release continuity';node.dispatchEvent(new Event('input',{bubbles:true}));});
   await first.focus('#composer');await first.keyboard.press('Enter');
   await first.waitForFunction(()=>document.querySelector('#composer')?.value==='');
