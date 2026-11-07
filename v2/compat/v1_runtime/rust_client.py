@@ -9,6 +9,7 @@ from pathlib import Path
 import re
 import socket
 import stat
+import sys
 import threading
 import time
 from urllib.parse import parse_qsl, urlsplit
@@ -257,9 +258,14 @@ class RustSession:
                 return response.status, bytes(raw), response.getheaders()
             require(response.length in (None, 0), "response_incomplete")
             return response.status, decode(raw), response.getheaders()
-        except PeerError:
+        except PeerError as error:
             self._verified_at = None
             offered = bool(connection is not None and getattr(connection,'offered_bytes',False))
+            reason = str(error)
+            if not re.fullmatch(r"peer_[a-z_]{1,100}", reason):
+                reason = "peer_proof_unavailable"
+            print("WARN orkestr-v2-wa-adapter peer_proof_refused reason=%s offered_bytes=%d"
+                  % (reason, offered), file=sys.stderr, flush=True)
             raise ClientError('peer_changed_outcome_unknown' if offered else 'peer_identity_refused',
                               outcome='unknown' if offered else 'refused') from None
         except ClientError:

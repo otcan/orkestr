@@ -19,6 +19,7 @@ from . import recovery
 from . import thread_ask_relay
 from . import deep_group
 from . import parallel_watch
+from .peer_observation import before_send_refused, alert_held
 from . import switch_command
 from .notices import TEMPLATES
 from .participants import compose
@@ -140,6 +141,8 @@ def ledger_retry_s(attempt):
 
 
 def transient(error):
+    if before_send_refused(error):
+        return True
     code, status = getattr(error, "code", None), getattr(error, "status", None)
     if code is None or code in TRANSIENT_CODES:
         return True
@@ -1488,6 +1491,8 @@ class Worker:
             # refusals are terminal like any other refusal.
             if not transient(error):
                 self.ledger.refuse(data, refusal_reason(error), alert=data.get("origin") == "timer")
+            elif before_send_refused(error):
+                alert_held(self, data, error)
             elif getattr(error, "code", None) == "session_revoked" and not self._revoked_alerted:
                 # Retried, but never silently: nothing reaches Rust until an
                 # operator restores the owner session.
