@@ -95,10 +95,15 @@ def grant_path(conversation, environ=os.environ):
 def read_grant(path=None, environ=os.environ):
     if path:
         path = Path(path)
-        info = path.lstat()
-        if not stat.S_ISREG(info.st_mode) or info.st_mode & 0o077 or info.st_uid != os.getuid():
-            raise TimerError(0, 'grant_file_must_be_private')
-        value = path.read_text().strip()
+        try:
+            info = path.lstat()
+            if not stat.S_ISREG(info.st_mode) or info.st_mode & 0o077 or info.st_uid != os.getuid():
+                raise TimerError(0, 'grant_file_must_be_private')
+            value = path.read_text().strip()
+        except (OSError, UnicodeError):
+            # Filesystem and decoding errors can include private paths or
+            # grant bytes. Keep them inside the CLI's structured boundary.
+            raise TimerError(0, 'grant_missing_or_invalid') from None
     else:
         value = environ.get('ORKESTR_V2_AGENT_TIMER_GRANT', '').strip()
     if len(value) != 64 or any(c not in '0123456789abcdef' for c in value):
