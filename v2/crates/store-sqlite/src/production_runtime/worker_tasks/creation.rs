@@ -28,8 +28,17 @@ impl Store {
         }
         let context = self.context()?;
         let digest = request_digest(request);
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
-        self.task_browser_in(&mut tx, credential, conversation)
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let workspace = self
+            .check_workspace_before_writer(&self.context()?.owner, conversation, None)
+            .await?;
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let store = &*workspace;
+        #[cfg(not(all(target_os = "linux", target_pointer_width = "64")))]
+        let store = self;
+        let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        store
+            .task_browser_in(&mut tx, credential, conversation)
             .await?;
         if let Some(row) = sqlx::query(
             "SELECT * FROM worker_tasks WHERE owner_id=? AND parent_run_id=? AND request_key=?",
@@ -54,7 +63,7 @@ impl Store {
         if !scheduler_available {
             return Err(RuntimeStoreError::Unavailable);
         }
-        let parent = self
+        let parent = store
             .worker_parent_current_in(&mut tx, &request.parent_run_id)
             .await?;
         if parent.get::<&str, _>("conversation_id") != conversation.to_string() {

@@ -36,8 +36,18 @@ impl Store {
         action: impl FnOnce() -> std::result::Result<T, E>,
     ) -> Result<std::result::Result<T, E>> {
         let operation = async {
-            let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
-            let row = self.production_authorized_run(&mut tx, admission).await?;
+            #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+            let workspace = if purpose == AdmissionPurpose::Execution {
+                Some(self.check_binding_before_writer(&admission.binding).await?)
+            } else {
+                None
+            };
+            #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+            let store = workspace.as_deref().unwrap_or(self);
+            #[cfg(not(all(target_os = "linux", target_pointer_width = "64")))]
+            let store = self;
+            let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+            let row = store.production_authorized_run(&mut tx, admission).await?;
             if admission.run.purpose != purpose
                 || match purpose {
                     AdmissionPurpose::Execution => {
@@ -50,6 +60,10 @@ impl Store {
                 || row.get::<&str, _>("dispatch_state") != "delivery_unknown"
             {
                 return Err(RuntimeStoreError::Fenced);
+            }
+            #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+            if purpose == AdmissionPurpose::Execution {
+                store.workspace_effect_once()?;
             }
             let result = action();
             #[cfg(feature = "fixture-test-controls")]

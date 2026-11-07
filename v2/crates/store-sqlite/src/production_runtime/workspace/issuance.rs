@@ -15,7 +15,11 @@ impl Store {
         }
         let c = self.context()?;
         c.require_provider_context()?;
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let checked = self
+            .check_workspace_before_writer(&c.owner, conversation, Some(installation.inner.clone()))
+            .await?;
+        let store = &*checked;
+        let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
         c.validate(&mut tx).await?;
         let owned: i64 =
             sqlx::query_scalar("SELECT count(*) FROM conversations WHERE id=? AND owner_id=?")
@@ -27,7 +31,7 @@ impl Store {
         if owned != 1 {
             return Err(RuntimeStoreError::NotFound);
         }
-        installation.inner.check()?;
+        store.check_workspace_installation(&installation.inner)?;
         let databases = sqlx::query("PRAGMA database_list")
             .fetch_all(&mut *tx)
             .await
@@ -68,17 +72,21 @@ impl Store {
             1
         };
         tx.commit().await.map_err(db)?;
-        self.workspace_handles
-            .0
-            .lock()
-            .map_err(db)?
-            .insert(project.to_string(), installation.inner.clone());
+        // An exact reopen does not revoke retained grants or their original
+        // Root actor. Explicit replacement below owns generation changes.
+        let installation = {
+            let mut handles = self.workspace_handles.0.lock().map_err(db)?;
+            handles
+                .entry(project.to_string())
+                .or_insert_with(|| installation.inner.clone())
+                .clone()
+        };
         Ok(WorkspaceGrant {
             project: project.to_string(),
             generation,
             conversation: conversation.clone(),
             context: c.clone(),
-            installation: installation.inner,
+            installation,
         })
     }
     /// Explicit generation replacement. Existing sessions remain bound to the
@@ -91,8 +99,10 @@ impl Store {
     ) -> Result<WorkspaceGrant> {
         self.worker_credential(credential)?;
         installation.inner.check()?;
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
-        self.workspace_grant_in(&mut tx, grant).await?;
+        let checked = grant.check_before_writer(self).await?;
+        let store = &*checked;
+        let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        store.workspace_grant_in(&mut tx, grant).await?;
         for row in sqlx::query("PRAGMA database_list")
             .fetch_all(&mut *tx)
             .await
@@ -157,8 +167,10 @@ impl Store {
         binding: &Binding,
     ) -> Result<()> {
         self.worker_credential(credential)?;
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
-        self.workspace_grant_in(&mut tx, grant).await?;
+        let checked = grant.check_before_writer(self).await?;
+        let store = &*checked;
+        let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        store.workspace_grant_in(&mut tx, grant).await?;
         let row = sqlx::query("SELECT * FROM session_bindings WHERE id=? AND owner_id=?")
             .bind(binding.session_id.to_string())
             .bind(grant.context.owner.to_string())

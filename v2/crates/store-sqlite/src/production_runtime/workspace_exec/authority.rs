@@ -128,8 +128,10 @@ impl Store {
         credential: &str,
         launch: &ConsumedWorkspaceExec,
     ) -> Result<()> {
-        let mut tx = self.pool.begin().await.map_err(db)?;
-        let row = live(self, &mut tx, credential, launch).await?;
+        let checked_workspace = launch.profile.workspace.check_before_writer(self).await?;
+        let store = &*checked_workspace;
+        let mut tx = store.pool.begin().await.map_err(db)?;
+        let row = live(store, &mut tx, credential, launch).await?;
         if row.get::<&str, _>("state") != "delivery_unknown" {
             return Err(RuntimeStoreError::Fenced);
         }
@@ -147,8 +149,10 @@ impl Store {
         action: impl FnOnce(WorkspaceDescriptors<'_>) -> std::result::Result<T, E>,
     ) -> Result<std::result::Result<T, E>> {
         let operation = async {
-            let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
-            let row = live(self, &mut tx, credential, launch).await?;
+            let checked_workspace = launch.profile.workspace.check_before_writer(self).await?;
+            let store = &*checked_workspace;
+            let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+            let row = live(store, &mut tx, credential, launch).await?;
             if row.get::<&str, _>("state") != "delivery_unknown" {
                 return Err(RuntimeStoreError::Fenced);
             }
@@ -159,6 +163,7 @@ impl Store {
             {
                 return Err(RuntimeStoreError::Fenced);
             }
+            store.workspace_effect_once()?;
             let result = action(launch.profile.workspace.exec_descriptors());
             tx.commit().await.map_err(db)?;
             Ok(result)

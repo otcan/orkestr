@@ -14,7 +14,7 @@ impl Store {
         if project.is_nil() || binding.owner_id != c.owner {
             return Err(RuntimeStoreError::Fenced);
         }
-        installation.inner.check()?;
+        self.check_workspace_installation(&installation.inner)?;
         for row in sqlx::query("PRAGMA database_list")
             .fetch_all(&mut *tx)
             .await

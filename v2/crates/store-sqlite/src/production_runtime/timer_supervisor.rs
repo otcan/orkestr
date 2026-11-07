@@ -66,6 +66,8 @@ impl Store {
             pool: self.pool.clone(),
             #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
             workspace_handles: self.workspace_handles.clone(),
+            #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+            workspace_check: None,
             authority: Some(Context {
                 owner: OwnerId(Uuid::parse_str(&owner).map_err(db)?),
                 provider: ProviderKind::Codex,

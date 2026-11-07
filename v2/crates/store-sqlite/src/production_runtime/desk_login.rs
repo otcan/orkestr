@@ -125,8 +125,16 @@ impl Store {
         consumed: &ConsumedProviderDispatch,
         source: &DeskLoginSetup,
     ) -> Result<DeskLoginParent> {
-        let mut tx = self.pool.begin().await.map_err(db)?;
-        live(self, &mut tx, credential, consumed.provider()).await?;
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let workspace = self
+            .check_binding_before_writer(&consumed.provider().binding)
+            .await?;
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let store = &*workspace;
+        #[cfg(not(all(target_os = "linux", target_pointer_width = "64")))]
+        let store = self;
+        let mut tx = store.pool.begin().await.map_err(db)?;
+        live(store, &mut tx, credential, consumed.provider()).await?;
         let binding = &consumed.provider().binding;
         if source.binding.owner_id != binding.owner_id
             || source.binding.conversation_id != binding.conversation_id
@@ -174,9 +182,17 @@ impl Store {
         {
             return Err(RuntimeStoreError::InvalidInput);
         }
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
-        live(self, &mut tx, credential, &parent.parent).await?;
-        let context = self.context()?;
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let workspace = self
+            .check_binding_before_writer(&parent.parent.binding)
+            .await?;
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let store = &*workspace;
+        #[cfg(not(all(target_os = "linux", target_pointer_width = "64")))]
+        let store = self;
+        let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        live(store, &mut tx, credential, &parent.parent).await?;
+        let context = store.context()?;
         if parent.namespace != context.namespace || parent.incarnation != context.incarnation {
             return Err(RuntimeStoreError::Fenced);
         }
@@ -246,9 +262,17 @@ impl Store {
         credential: &str,
         operation: &ConsumedDeskLogin,
     ) -> Result<()> {
-        let mut tx = self.pool.begin().await.map_err(db)?;
-        live(self, &mut tx, credential, &operation.parent).await?;
-        let context = self.context()?;
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let workspace = self
+            .check_binding_before_writer(&operation.parent.binding)
+            .await?;
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let store = &*workspace;
+        #[cfg(not(all(target_os = "linux", target_pointer_width = "64")))]
+        let store = self;
+        let mut tx = store.pool.begin().await.map_err(db)?;
+        live(store, &mut tx, credential, &operation.parent).await?;
+        let context = store.context()?;
         let present:i64=sqlx::query_scalar("SELECT count(*) FROM deep_desk_operations WHERE id=? AND context_id=? AND incarnation_id=? AND correlation_sha256=? AND expires_at_ms=? AND expires_at_ms>CAST(unixepoch('subsec')*1000 AS INTEGER) AND state='delivery_unknown'")
             .bind(operation.id.to_string()).bind(&operation.context).bind(&operation.incarnation).bind(&operation.correlation).bind(operation.expires)
             .fetch_one(&mut *tx).await.map_err(db)?;

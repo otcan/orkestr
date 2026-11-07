@@ -133,14 +133,20 @@ impl Store {
         &self,
         binding: &Binding,
     ) -> Result<BoundSessionMetadata> {
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let checked = self.check_binding_before_writer(binding).await?;
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let store = &*checked;
+        #[cfg(not(all(target_os = "linux", target_pointer_width = "64")))]
+        let store = self;
         let grant = BoundSessionMetadata {
             context: self.context()?.clone(),
             binding: binding.clone(),
             parent_run: None,
             resume: None,
         };
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
-        self.validate_metadata(&mut tx, &grant).await?;
+        let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        store.validate_metadata(&mut tx, &grant).await?;
         tx.commit().await.map_err(db)?;
         Ok(grant)
     }
@@ -156,14 +162,20 @@ impl Store {
         if binding.role != Role::Worker {
             return Err(RuntimeStoreError::Fenced);
         }
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let checked = self.check_binding_before_writer(binding).await?;
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let store = &*checked;
+        #[cfg(not(all(target_os = "linux", target_pointer_width = "64")))]
+        let store = self;
         let grant = BoundSessionMetadata {
             context: self.context()?.clone(),
             binding: binding.clone(),
             parent_run: Some(parent.clone()),
             resume: None,
         };
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
-        self.validate_metadata(&mut tx, &grant).await?;
+        let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        store.validate_metadata(&mut tx, &grant).await?;
         tx.commit().await.map_err(db)?;
         Ok(grant)
     }
@@ -192,11 +204,17 @@ impl Store {
             let operation = async {
                 use super::metadata_diagnostics::Stage;
                 use std::time::Instant;
+                #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+                let workspace = self.check_binding_before_writer(&grant.binding).await?;
+                #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+                let store = &*workspace;
+                #[cfg(not(all(target_os = "linux", target_pointer_width = "64")))]
+                let store = self;
                 let started = Instant::now();
                 let mut tx = events.capture(
                     Stage::Begin,
                     started,
-                    self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db),
+                    store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db),
                 )?;
                 let started = Instant::now();
                 events.capture(
@@ -206,8 +224,10 @@ impl Store {
                         Stage::ValidateFreshGrant
                     },
                     started,
-                    self.validate_metadata(&mut tx, grant).await,
+                    store.validate_metadata(&mut tx, grant).await,
                 )?;
+                #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+                store.workspace_effect_once()?;
                 let result = action();
                 let started = Instant::now();
                 events.capture(Stage::Commit, started, tx.commit().await.map_err(db))?;
@@ -239,17 +259,23 @@ impl Store {
         grant: BoundSessionMetadata,
         evidence: NativeSessionConfirmation,
     ) -> Result<ReadySessionTransition> {
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let checked = self.check_binding_before_writer(&grant.binding).await?;
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let store = &*checked;
+        #[cfg(not(all(target_os = "linux", target_pointer_width = "64")))]
+        let store = self;
         if grant.resume.is_some() {
-            return self.confirm_resumed_metadata(grant, evidence).await;
+            return store.confirm_resumed_metadata(grant, evidence).await;
         }
         if evidence.session_id != grant.binding.session_id
             || evidence.expected_generation != grant.binding.generation
         {
             return Err(RuntimeStoreError::Conflict);
         }
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
-        self.validate_metadata(&mut tx, &grant).await?;
-        let ready = self
+        let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        store.validate_metadata(&mut tx, &grant).await?;
+        let ready = store
             .confirm_native_session_in(&mut tx, evidence, grant.parent_run.is_some())
             .await?;
         tx.commit().await.map_err(db)?;

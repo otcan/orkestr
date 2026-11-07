@@ -51,8 +51,16 @@ impl Store {
         {
             return Err(RuntimeStoreError::Fenced);
         }
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
-        let row = self
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let workspace = self
+            .check_binding_before_writer(&dispatch.provider().binding)
+            .await?;
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let store = &*workspace;
+        #[cfg(not(all(target_os = "linux", target_pointer_width = "64")))]
+        let store = self;
+        let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let row = store
             .production_authorized_run(&mut tx, dispatch.provider())
             .await?;
         if dispatch.provider().run.purpose != AdmissionPurpose::Execution

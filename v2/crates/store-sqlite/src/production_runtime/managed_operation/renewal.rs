@@ -30,10 +30,16 @@ impl Store {
         {
             return Err(RuntimeStoreError::Fenced);
         }
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let workspace = self.check_binding_before_writer(&next.binding).await?;
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let store = &*workspace;
+        #[cfg(not(all(target_os = "linux", target_pointer_width = "64")))]
+        let store = self;
+        let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
         let source: ManagedCallerEvidence =
             serde_json::from_value(operation.evidence["source"].clone()).map_err(db)?;
-        current(self, &mut tx, credential, next, &source).await?;
+        current(store, &mut tx, credential, next, &source).await?;
         let now = now(&mut tx).await?;
         let expires = (now + 30000)
             .min(next.run.lease_deadline_ms)

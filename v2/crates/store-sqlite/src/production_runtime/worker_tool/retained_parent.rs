@@ -14,9 +14,17 @@ impl Store {
         credential: &str,
         consumed: &ConsumedProviderDispatch,
     ) -> Result<OfflinePythonParent> {
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
-        execution(self, &mut tx, credential, consumed.provider()).await?;
-        let c = self.context()?;
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let workspace = self
+            .check_binding_before_writer(&consumed.provider().binding)
+            .await?;
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let store = &*workspace;
+        #[cfg(not(all(target_os = "linux", target_pointer_width = "64")))]
+        let store = self;
+        let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        execution(store, &mut tx, credential, consumed.provider()).await?;
+        let c = store.context()?;
         if consumed.provider().run.role != Role::Worker
             || consumed.namespace() != c.namespace
             || consumed.incarnation_id() != c.incarnation
@@ -63,13 +71,19 @@ impl Store {
         renewal: &super::super::RunRenewalAuthority,
     ) -> Result<OfflinePythonParent> {
         let provider = self.renewal_provider(renewal)?;
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
-        execution(self, &mut tx, credential, provider).await?;
-        let row = self.production_authorized_run(&mut tx, provider).await?;
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let workspace = self.check_binding_before_writer(&provider.binding).await?;
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let store = &*workspace;
+        #[cfg(not(all(target_os = "linux", target_pointer_width = "64")))]
+        let store = self;
+        let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        execution(store, &mut tx, credential, provider).await?;
+        let row = store.production_authorized_run(&mut tx, provider).await?;
         if provider.run.role != Role::Worker || row.get::<&str, _>("state") != "running" {
             return Err(RuntimeStoreError::Fenced);
         }
-        let c = self.context()?;
+        let c = store.context()?;
         let result = OfflinePythonParent {
             parent: Box::new(provider.clone()),
             namespace: c.namespace.clone(),

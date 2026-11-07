@@ -82,7 +82,15 @@ impl Store {
         if expected_generation == 0 || expected_generation > i64::MAX as u64 {
             return Err(RuntimeStoreError::InvalidInput);
         }
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let workspace = self
+            .check_run_workspace_before_writer(&admission.run_id)
+            .await?;
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let store = &*workspace;
+        #[cfg(not(all(target_os = "linux", target_pointer_width = "64")))]
+        let store = self;
+        let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
         context.validate(&mut tx).await?;
         let row =
             sqlx::query("SELECT * FROM production_runs WHERE id=? AND owner_id=? AND context_id=?")
@@ -105,7 +113,7 @@ impl Store {
         if provider.run != *admission {
             return Err(RuntimeStoreError::Conflict);
         }
-        self.production_authorized_run(&mut tx, &provider).await?;
+        store.production_authorized_run(&mut tx, &provider).await?;
         if running_only
             && (row.get::<&str, _>("state") != "running"
                 || row.get::<&str, _>("dispatch_state") != "delivery_unknown")
@@ -129,7 +137,7 @@ impl Store {
             let limit:i64=sqlx::query_scalar("SELECT expires_at_ms FROM worker_provider_delegations WHERE admitted_run_id=? AND state='admitted'")
                 .bind(admission.run_id.to_string()).fetch_one(&mut *tx).await.map_err(db)?;
             extended = if let Some(budget) = worker_budget {
-                let (deadline, parent) = self
+                let (deadline, parent) = store
                     .worker_budget_deadline_in(&mut tx, &row, budget, supervisor_deadline)
                     .await?;
                 retained = parent;
@@ -142,7 +150,8 @@ impl Store {
             return Err(RuntimeStoreError::Busy);
         }
         if let Some(parent) = &retained {
-            self.extend_retained_parent_in(&mut tx, parent, extended)
+            store
+                .extend_retained_parent_in(&mut tx, parent, extended)
                 .await?;
         }
         if worker_budget.is_some() {

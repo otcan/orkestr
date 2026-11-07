@@ -14,7 +14,15 @@ impl Store {
             return Err(RuntimeStoreError::InvalidInput);
         }
         let c = self.context()?;
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let workspace = self
+            .check_workspace_before_writer(&self.context()?.owner, conversation, None)
+            .await?;
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let store = &*workspace;
+        #[cfg(not(all(target_os = "linux", target_pointer_width = "64")))]
+        let store = self;
+        let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
         browser(&mut tx, credential, &c.owner).await?;
         c.authenticate(&mut tx).await?;
         let digest = hash(
@@ -39,7 +47,8 @@ impl Store {
         {
             return Err(RuntimeStoreError::Fenced);
         }
-        self.production_authorized_run(&mut tx, &super::super::admission::envelope(&row)?)
+        store
+            .production_authorized_run(&mut tx, &super::super::admission::envelope(&row)?)
             .await?;
         let revision: i64 =
             sqlx::query_scalar("SELECT revision FROM execution_revisions WHERE conversation_id=?")
@@ -56,7 +65,7 @@ impl Store {
         let queued:i64=sqlx::query_scalar("SELECT count(*) FROM reasoning_inbox i WHERE conversation_id=? AND state IN ('queued','claimed') AND NOT EXISTS(SELECT 1 FROM ordinary_input_holds h WHERE h.event_id=i.event_id)").bind(conversation.to_string()).fetch_one(&mut *tx).await.map_err(db)?;
         let pending:i64=sqlx::query_scalar("SELECT count(*) FROM production_steering WHERE run_id=? AND state IN ('reserved','delivery_unknown')").bind(input.control.run_id.to_string()).fetch_one(&mut *tx).await.map_err(db)?;
         let turn = if let Some(a) = authority {
-            current(self, &mut tx, a).await?;
+            current(store, &mut tx, a).await?;
             if a.provider.run.run_id != input.control.run_id {
                 return Err(RuntimeStoreError::Fenced);
             }

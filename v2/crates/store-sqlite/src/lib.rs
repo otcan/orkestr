@@ -99,6 +99,7 @@ pub use production_runtime::{
     WorkspaceExecResultPreparation, WorkspaceExecResultReservation, WorkspaceExecState,
     WorkspaceGrant, WorkspaceInstallation, WorkspaceLaunch, WorkspaceLaunchConsumption,
     WorkspaceLaunchReservation, WorkspaceLaunchReservationResult, WorkspaceOperatorAllowlist,
+    WorkspacePreflight,
 };
 #[derive(Clone)]
 pub struct Store {
@@ -106,6 +107,8 @@ pub struct Store {
     authority: Option<production_runtime::Context>,
     #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
     workspace_handles: std::sync::Arc<production_runtime::WorkspaceRegistry>,
+    #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+    workspace_check: Option<std::sync::Arc<production_runtime::WorkspaceCheck>>,
     #[cfg(feature = "fixture-test-controls")]
     production_checkpoint:
         Option<std::sync::Arc<production_runtime::test_controls::ArmedCheckpoint>>,
@@ -166,6 +169,8 @@ impl Store {
             authority: None,
             #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
             workspace_handles: Default::default(),
+            #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+            workspace_check: None,
             #[cfg(feature = "fixture-test-controls")]
             production_checkpoint: None,
             deep_burst_quiet_ms: 0,

@@ -46,8 +46,16 @@ impl Store {
         let sha = crate::digest(
             &serde_json::to_string(&json!({"state":"completed","result":result})).map_err(db)?,
         );
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
-        launch_fence::checked(self, &mut tx, credential, &operation).await?;
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let workspace = self
+            .check_binding_before_writer(&operation.parent.binding)
+            .await?;
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let store = &*workspace;
+        #[cfg(not(all(target_os = "linux", target_pointer_width = "64")))]
+        let store = self;
+        let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        launch_fence::checked(store, &mut tx, credential, &operation).await?;
         let changed = sqlx::query(
             "UPDATE managed_operations SET state=? WHERE id=? AND state='delivery_unknown'",
         )
@@ -81,16 +89,33 @@ impl Store {
             return Err(RuntimeStoreError::Fenced);
         }
         let future = async {
-            let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+            #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+            let workspace = self
+                .check_binding_before_writer(&result.operation.parent.binding)
+                .await?;
+            #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+            let store = &*workspace;
+            #[cfg(not(all(target_os = "linux", target_pointer_width = "64")))]
+            let store = self;
+            let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
             let source: ManagedCallerEvidence =
                 serde_json::from_value(result.operation.evidence["source"].clone()).map_err(db)?;
-            current(self, &mut tx, credential, &result.operation.parent, &source).await?;
+            current(
+                store,
+                &mut tx,
+                credential,
+                &result.operation.parent,
+                &source,
+            )
+            .await?;
             let found:i64=sqlx::query_scalar("SELECT count(*) FROM managed_operations WHERE id=? AND context_id=? AND incarnation_id=? AND state=? AND expires_at_ms=? AND expires_at_ms>CAST(unixepoch('subsec')*1000 AS INTEGER)")
                 .bind(result.operation.id.to_string()).bind(&result.operation.context).bind(&result.operation.incarnation)
                 .bind(result.state).bind(result.operation.expires).fetch_one(&mut *tx).await.map_err(db)?;
             if found != 1 {
                 return Err(RuntimeStoreError::Fenced);
             }
+            #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+            store.workspace_effect_once()?;
             let value = action();
             tx.commit().await.map_err(db)?;
             Ok(value)

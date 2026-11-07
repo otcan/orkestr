@@ -42,7 +42,30 @@ impl Store {
         if credential.is_empty() || credential.len() > 1024 {
             return Err(RuntimeStoreError::Unauthorized);
         }
-        let mut tx = self.pool.begin().await.map_err(db)?;
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let workspace = if self.authority.is_some() {
+            match self
+                .check_workspace_before_writer(owner, conversation, None)
+                .await
+            {
+                Ok(workspace) => Some(workspace),
+                Err(
+                    RuntimeStoreError::Unauthorized
+                    | RuntimeStoreError::Fenced
+                    | RuntimeStoreError::StaleLease
+                    | RuntimeStoreError::Expired
+                    | RuntimeStoreError::NotFound,
+                ) => None,
+                Err(error) => return Err(error),
+            }
+        } else {
+            None
+        };
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let (store, physical_current) = (workspace.as_deref().unwrap_or(self), workspace.is_some());
+        #[cfg(not(all(target_os = "linux", target_pointer_width = "64")))]
+        let (store, physical_current) = (self, true);
+        let mut tx = store.pool.begin().await.map_err(db)?;
         let authorized: i64 = sqlx::query_scalar("SELECT count(*) FROM auth_sessions WHERE token_hash=? AND owner_id=? AND expires_at>unixepoch()")
             .bind(crate::digest(credential)).bind(owner.to_string())
             .fetch_one(&mut *tx).await.map_err(db)?;
@@ -56,8 +79,9 @@ impl Store {
         if exists != 1 {
             return Err(RuntimeStoreError::NotFound);
         }
-        let eligible = self.authority.is_some()
-            && match self.worker_parent_current_in(&mut tx, parent).await {
+        let eligible = store.authority.is_some()
+            && physical_current
+            && match store.worker_parent_current_in(&mut tx, parent).await {
                 Ok(_) => true,
                 Err(
                     RuntimeStoreError::Unauthorized
@@ -84,7 +108,7 @@ impl Store {
             let available = row.get::<Option<String>, _>("payload_present").is_some();
             // Creation remains Running-only. A consumed child instead reports
             // its own current authority, including a retained parent proposal.
-            let current = if self.authority.is_none() {
+            let current = if store.authority.is_none() || !physical_current {
                 Err(RuntimeStoreError::Fenced)
             } else if let Some(run) = run_id.as_ref().filter(|_| {
                 matches!(
@@ -92,9 +116,9 @@ impl Store {
                     Some("starting" | "running")
                 )
             }) {
-                self.task_run_current_in(&mut tx, run).await
+                store.task_run_current_in(&mut tx, run).await
             } else {
-                self.task_parent_in(&mut tx, &row).await.map(|_| ())
+                store.task_parent_in(&mut tx, &row).await.map(|_| ())
             };
             let live = match current {
                 Ok(_) => true,

@@ -29,6 +29,16 @@ impl ManagerClient {
         result: &CompletedManagedOperation,
         deadline: Instant,
     ) -> Result<()> {
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let workspace = tokio::time::timeout_at(
+            deadline.into(),
+            store.preflight_workspace(&self.owner, &self.conversation),
+        )
+        .await
+        .map_err(|_| ManagerError::Deadline)?
+        .map_err(|_| ManagerError::Refused)?;
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let store = &*workspace;
         let mut request = self.request(
             "managed_result",
             &format!("managed-result:{}", result.id()),
@@ -72,6 +82,16 @@ impl ManagerClient {
         renewal: &ManagedOperationRenewal,
         deadline: Instant,
     ) -> Result<ManagedReceipt> {
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let workspace = tokio::time::timeout_at(
+            deadline.into(),
+            store.preflight_workspace(&self.owner, &self.conversation),
+        )
+        .await
+        .map_err(|_| ManagerError::Deadline)?
+        .map_err(|_| ManagerError::Refused)?;
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let store = &*workspace;
         let mut request = self.request(
             "managed_renew",
             &format!("managed-renew:{}", renewal.id()),
@@ -103,6 +123,16 @@ impl ManagerClient {
         parent: &ManagedOperationParent,
         deadline: Instant,
     ) -> Result<()> {
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let workspace = tokio::time::timeout_at(
+            deadline.into(),
+            store.preflight_workspace(&self.owner, &self.conversation),
+        )
+        .await
+        .map_err(|_| ManagerError::Deadline)?
+        .map_err(|_| ManagerError::Refused)?;
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let store = &*workspace;
         let run = parent.root_run_request();
         let mut request = self.request(
             "managed_run_open",
@@ -258,6 +288,16 @@ impl ManagerClient {
         operation: &ConsumedManagedOperation,
         deadline: Instant,
     ) -> Result<ManagedReceipt> {
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let workspace = tokio::time::timeout_at(
+            deadline.into(),
+            store.preflight_workspace(&self.owner, &self.conversation),
+        )
+        .await
+        .map_err(|_| ManagerError::Deadline)?
+        .map_err(|_| ManagerError::Refused)?;
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let store = &*workspace;
         let mut request = self.request(
             "managed_consume",
             &format!("managed:{}", operation.id()),

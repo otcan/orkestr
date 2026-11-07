@@ -9,8 +9,30 @@ impl Store {
         delegation: WorkerDelegation,
     ) -> Result<RunAdmissionResult> {
         self.worker_credential(credential)?;
-        let c = self.context()?;
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let workspace = {
+            let c = self.context()?;
+            let conversation: String = sqlx::query_scalar(
+                "SELECT conversation_id FROM worker_provider_delegations WHERE id=? AND owner_id=? AND context_id=? AND incarnation_id=?",
+            )
+            .bind(delegation.id().to_string())
+            .bind(c.owner.to_string())
+            .bind(&c.id)
+            .bind(&c.incarnation)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(db)?
+            .ok_or(RuntimeStoreError::NotFound)?;
+            let conversation = ConversationId(conversation.parse().map_err(db)?);
+            self.check_workspace_before_writer(&c.owner, &conversation, None)
+                .await?
+        };
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let store = &*workspace;
+        #[cfg(not(all(target_os = "linux", target_pointer_width = "64")))]
+        let store = self;
+        let c = store.context()?;
+        let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
         c.validate(&mut tx).await?;
         let d=sqlx::query("SELECT * FROM worker_provider_delegations WHERE id=? AND owner_id=? AND context_id=? AND incarnation_id=?")
             .bind(delegation.id().to_string()).bind(c.owner.to_string()).bind(&c.id).bind(&c.incarnation)
@@ -23,7 +45,9 @@ impl Store {
         {
             return Err(RuntimeStoreError::Conflict);
         }
-        self.worker_delegation_parent_in(&mut tx, &d, false).await?;
+        store
+            .worker_delegation_parent_in(&mut tx, &d, false)
+            .await?;
         let clock = now(&mut tx).await?;
         let deadline: i64 = d.get("expires_at_ms");
         if deadline <= clock {

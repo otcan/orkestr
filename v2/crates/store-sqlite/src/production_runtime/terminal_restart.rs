@@ -131,6 +131,31 @@ impl Store {
         if !valid(&config.namespace) || !valid(&config.supervisor_key) {
             return Err(RuntimeStoreError::InvalidInput);
         }
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let physical = {
+            let scope =
+                sqlx::query("SELECT owner_id,conversation_id FROM production_runs WHERE id=?")
+                    .bind(prior_run.to_string())
+                    .fetch_optional(&self.pool)
+                    .await
+                    .map_err(db)?
+                    .ok_or(RuntimeStoreError::NotFound)?;
+            let owner = OwnerId(scope.get::<String, _>("owner_id").parse().map_err(db)?);
+            let conversation = ConversationId(
+                scope
+                    .get::<String, _>("conversation_id")
+                    .parse()
+                    .map_err(db)?,
+            );
+            if let Some((_, installation)) = &workspace {
+                installation
+                    .check_before_writer(self, &owner, &conversation)
+                    .await?
+            } else {
+                self.check_workspace_before_writer(&owner, &conversation, None)
+                    .await?
+            }
+        };
         let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
         let token_hash = crate::digest(credential);
         let owner: String = sqlx::query_scalar(
@@ -220,6 +245,8 @@ impl Store {
             pool: self.pool.clone(),
             #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
             workspace_handles: self.workspace_handles.clone(),
+            #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+            workspace_check: None,
             authority: Some(Context {
                 owner: OwnerId(owner.parse().map_err(db)?),
                 provider: config.provider,
@@ -232,13 +259,19 @@ impl Store {
                 window_bootstrap_only: false,
             }),
         };
-        store
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let checked = physical.after_verified_takeover(&store)?;
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let scoped = &*checked;
+        #[cfg(not(all(target_os = "linux", target_pointer_width = "64")))]
+        let scoped = &store;
+        scoped
             .rebind_execution_window_in(&mut tx, &incarnation_id)
             .await?;
         #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
         let workspace_grant = if let Some((project, installation)) = workspace {
             Some(
-                store
+                scoped
                     .rebind_terminal_workspace_in(
                         &mut tx,
                         &binding,
@@ -251,7 +284,7 @@ impl Store {
         } else {
             None
         };
-        let grant = store
+        let grant = scoped
             .reserve_terminal_metadata(tx, prior_run, &binding, terminal.get("event_id"))
             .await?;
         Ok(TerminalReattachment {

@@ -27,8 +27,10 @@ impl Store {
         workspace: &Arc<WorkspaceGrant>,
     ) -> Result<WorkspaceExecProfile> {
         self.worker_credential(credential)?;
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
-        self.workspace_grant_in(&mut tx, workspace).await?;
+        let checked_workspace = workspace.check_before_writer(self).await?;
+        let store = &*checked_workspace;
+        let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        store.workspace_grant_in(&mut tx, workspace).await?;
         let (project, generation, conversation) = workspace.exec_identity();
         let existing = sqlx::query("SELECT * FROM workspace_exec_profiles WHERE project_id=?")
             .bind(project)
@@ -36,7 +38,7 @@ impl Store {
             .await
             .map_err(db)?;
         if let Some(row) = existing {
-            if row.get::<String, _>("owner_id") != self.context()?.owner.to_string()
+            if row.get::<String, _>("owner_id") != store.context()?.owner.to_string()
                 || row.get::<String, _>("conversation_id") != conversation.to_string()
                 || row.get::<i64, _>("project_generation") != generation
                 || row.get::<i64, _>("enabled") != 1
@@ -51,7 +53,7 @@ impl Store {
             }
             sqlx::query("INSERT INTO workspace_exec_profiles VALUES(?,?,?,?,1)")
                 .bind(project)
-                .bind(self.context()?.owner.to_string())
+                .bind(store.context()?.owner.to_string())
                 .bind(conversation.to_string())
                 .bind(generation)
                 .execute(&mut *tx)
@@ -71,8 +73,10 @@ impl Store {
         profile: &WorkspaceExecProfile,
     ) -> Result<()> {
         authority::credential(self, credential)?;
-        let mut tx = self.pool.begin().await.map_err(db)?;
-        profile.validate(self, &mut tx).await?;
+        let checked_workspace = profile.workspace.check_before_writer(self).await?;
+        let store = &*checked_workspace;
+        let mut tx = store.pool.begin().await.map_err(db)?;
+        profile.validate(store, &mut tx).await?;
         tx.commit().await.map_err(db)?;
         Ok(())
     }
@@ -83,8 +87,12 @@ impl Store {
         profile: &WorkspaceExecProfile,
     ) -> Result<()> {
         self.worker_credential(credential)?;
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
-        self.workspace_grant_in(&mut tx, &profile.workspace).await?;
+        let checked_workspace = profile.workspace.check_before_writer(self).await?;
+        let store = &*checked_workspace;
+        let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        store
+            .workspace_grant_in(&mut tx, &profile.workspace)
+            .await?;
         let (project, generation, _) = profile.workspace.exec_identity();
         let changed = sqlx::query("UPDATE workspace_exec_profiles SET enabled=0 WHERE project_id=? AND project_generation=? AND enabled=1")
             .bind(project).bind(generation).execute(&mut *tx).await.map_err(db)?.rows_affected();

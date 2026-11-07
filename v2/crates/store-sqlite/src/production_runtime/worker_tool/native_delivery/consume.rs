@@ -64,8 +64,16 @@ impl Store {
         credential: &str,
         reservation: OfflinePythonResultReservation,
     ) -> Result<OfflinePythonResultConsumption> {
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
-        let row = current(self, &mut tx, credential, &reservation).await?;
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let workspace = self
+            .check_binding_before_writer(&reservation.launch.parent.binding)
+            .await?;
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let store = &*workspace;
+        #[cfg(not(all(target_os = "linux", target_pointer_width = "64")))]
+        let store = self;
+        let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let row = current(store, &mut tx, credential, &reservation).await?;
         if matches!(
             row.get::<&str, _>("state"),
             "delivery_unknown" | "delivered"

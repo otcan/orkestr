@@ -198,9 +198,15 @@ impl Store {
             parent_run: None,
             resume: None,
         };
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let workspace = self.check_binding_before_writer(binding).await?;
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let store = &*workspace;
+        #[cfg(not(all(target_os = "linux", target_pointer_width = "64")))]
+        let store = self;
+        let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
         own_slot(&mut tx, &c.id, &c.incarnation, &binding.session_id).await?;
-        self.validate_metadata(&mut tx, &grant).await?;
+        store.validate_metadata(&mut tx, &grant).await?;
         tx.commit().await.map_err(db)?;
         Ok(grant)
     }

@@ -65,8 +65,10 @@ impl Store {
         if source.is_empty() || source.len() > 32768 || source.contains('\0') {
             return Err(RuntimeStoreError::InvalidInput);
         }
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
-        execution(self, &mut tx, credential, &parent.parent).await?;
+        let checked_workspace = parent.profile.workspace.check_before_writer(self).await?;
+        let store = &*checked_workspace;
+        let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        execution(store, &mut tx, credential, &parent.parent).await?;
         if parent.parent.run.role != Role::Worker
             || parent.parent.run.native_session_id.as_deref() != Some(call.thread_id.as_str())
         {
@@ -93,7 +95,7 @@ impl Store {
                 return Err(RuntimeStoreError::Busy);
             }
         }
-        let admission = self
+        let admission = store
             .delegate_workspace_exec_in_transaction(
                 &mut tx,
                 credential,

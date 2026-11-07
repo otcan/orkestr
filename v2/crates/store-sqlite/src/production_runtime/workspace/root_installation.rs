@@ -8,6 +8,11 @@ use super::*;
 /// anchored path/Git association check and refuse unknown/lost replies. A
 /// cached fingerprint, filesystem path or model-supplied JSON is insufficient.
 pub trait RootWorkspaceCustody: Send + Sync {
+    /// Local original-actor liveness only: no IPC, provider or blocking wait.
+    /// An implementation must opt in before a preflight can cross into a writer.
+    fn check_original_actor(&self) -> Result<()> {
+        Err(RuntimeStoreError::Unavailable)
+    }
     /// Explicit contract: the authenticated Root checks each retained inode's
     /// named executor ACL and rejects every unselected effective writer on
     /// every check. Default false preserves strict Unix mode-only custody.
@@ -95,6 +100,13 @@ mod tests {
         expected: [PathBuf; 3],
     }
     impl RootWorkspaceCustody for RootCheck {
+        fn check_original_actor(&self) -> Result<()> {
+            if self.valid.load(Ordering::SeqCst) {
+                Ok(())
+            } else {
+                Err(RuntimeStoreError::Fenced)
+            }
+        }
         fn check(&self, paths: &[PathBuf; 3], _: [WorkspaceDirectoryIdentity; 3]) -> Result<()> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             if self.valid.load(Ordering::SeqCst) && paths == &self.expected {

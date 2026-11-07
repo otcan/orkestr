@@ -65,8 +65,16 @@ impl Store {
         if source.is_empty() || source.len() > 32768 || source.contains('\0') {
             return Err(RuntimeStoreError::InvalidInput);
         }
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
-        execution(self, &mut tx, credential, &parent.parent).await?;
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let workspace = self
+            .check_binding_before_writer(&parent.parent.binding)
+            .await?;
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let store = &*workspace;
+        #[cfg(not(all(target_os = "linux", target_pointer_width = "64")))]
+        let store = self;
+        let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        execution(store, &mut tx, credential, &parent.parent).await?;
         if parent.parent.run.role != Role::Worker
             || parent.parent.run.native_session_id.as_deref() != Some(call.thread_id.as_str())
         {
@@ -93,7 +101,7 @@ impl Store {
                 return Err(RuntimeStoreError::Busy);
             }
         }
-        let admission = self
+        let admission = store
             .delegate_offline_python_in_transaction(
                 &mut tx,
                 credential,

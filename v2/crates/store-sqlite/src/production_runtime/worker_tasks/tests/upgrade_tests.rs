@@ -31,6 +31,8 @@ async fn actual_store_upgrade_holds_unverifiable_old_claims_and_preserves_histor
         authority: None,
         #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
         workspace_handles: Default::default(),
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        workspace_check: None,
         #[cfg(feature = "fixture-test-controls")]
         production_checkpoint: None,
         deep_burst_quiet_ms: 0,

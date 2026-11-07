@@ -32,8 +32,14 @@ impl Store {
         source: &str,
         lifetime_ms: u32,
     ) -> Result<OfflinePythonAdmission> {
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
-        let result = self
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let workspace = self.check_binding_before_writer(&parent.binding).await?;
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let store = &*workspace;
+        #[cfg(not(all(target_os = "linux", target_pointer_width = "64")))]
+        let store = self;
+        let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let result = store
             .delegate_offline_python_in_transaction(
                 &mut tx,
                 credential,
@@ -114,10 +120,18 @@ impl Store {
         credential: &str,
         grant: OfflinePythonDelegation,
     ) -> Result<OfflinePythonConsumption> {
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
-        execution(self, &mut tx, credential, &grant.parent).await?;
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let workspace = self
+            .check_binding_before_writer(&grant.parent.binding)
+            .await?;
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let store = &*workspace;
+        #[cfg(not(all(target_os = "linux", target_pointer_width = "64")))]
+        let store = self;
+        let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        execution(store, &mut tx, credential, &grant.parent).await?;
         let row = load(
-            self,
+            store,
             &mut tx,
             grant.id,
             &grant.parent,

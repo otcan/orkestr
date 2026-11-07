@@ -22,8 +22,10 @@ impl Store {
         {
             return Err(RuntimeStoreError::InvalidInput);
         }
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
-        let row = authority::live(self, &mut tx, credential, launch).await?;
+        let checked_workspace = launch.profile.workspace.check_before_writer(self).await?;
+        let store = &*checked_workspace;
+        let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let row = authority::live(store, &mut tx, credential, launch).await?;
         if !launch.spawn_spent.load(Ordering::Acquire) {
             return Err(RuntimeStoreError::Conflict);
         }
@@ -53,9 +55,15 @@ impl Store {
         launch: &ConsumedWorkspaceExec,
         control: &ProviderAdmission,
     ) -> Result<WorkspaceExecReceipt> {
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
-        authority::credential(self, credential)?;
-        let parent_row = self.production_authorized_run(&mut tx, control).await?;
+        let checked_workspace = if control.run.purpose == AdmissionPurpose::Execution {
+            Some(launch.profile.workspace.check_before_writer(self).await?)
+        } else {
+            None
+        };
+        let store = checked_workspace.as_deref().unwrap_or(self);
+        let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        authority::credential(store, credential)?;
+        let parent_row = store.production_authorized_run(&mut tx, control).await?;
         if control.run.purpose != AdmissionPurpose::CancellationAcknowledgement
             || parent_row.get::<&str, _>("state") != "cancel_requested"
             || control.run.run_id != launch.parent.run.run_id
@@ -67,7 +75,7 @@ impl Store {
         // immutable scope/session identity must still match the original launch.
         super::super::leases::authenticate(&mut tx, &parent_row, &launch.parent).await?;
         let row = load(
-            self,
+            store,
             &mut tx,
             launch.id(),
             &launch.parent,

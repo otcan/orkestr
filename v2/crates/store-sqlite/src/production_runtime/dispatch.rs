@@ -163,8 +163,16 @@ impl Store {
         if !valid(key) {
             return Err(RuntimeStoreError::InvalidInput);
         }
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
-        let row = self
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let workspace = self
+            .check_binding_before_writer(&candidate.provider.binding)
+            .await?;
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let store = &*workspace;
+        #[cfg(not(all(target_os = "linux", target_pointer_width = "64")))]
+        let store = self;
+        let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let row = store
             .production_authorized_run(&mut tx, &candidate.provider)
             .await?;
         if candidate.provider.run.purpose != AdmissionPurpose::Execution {
@@ -235,8 +243,16 @@ impl Store {
     /// Trusted runtime/Executor bridge. Caller text cannot replace durable message
     /// input. Lost reply leaves DeliveryUnknown and no replacement capability.
     pub async fn consume_execution(&self, claim: &DispatchClaim) -> Result<ExecutionConsumption> {
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
-        let row = self
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let workspace = self
+            .check_binding_before_writer(&claim.provider.binding)
+            .await?;
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let store = &*workspace;
+        #[cfg(not(all(target_os = "linux", target_pointer_width = "64")))]
+        let store = self;
+        let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let row = store
             .production_authorized_run(&mut tx, &claim.provider)
             .await?;
         if claim.provider.run.purpose != AdmissionPurpose::Execution {
@@ -256,9 +272,9 @@ impl Store {
         {
             return Err(RuntimeStoreError::Conflict);
         }
-        let context = self.context()?;
+        let context = store.context()?;
         let message_id: String = row.get("message_id");
-        let text = match self.worker_task_input_in(&mut tx, &row).await? {
+        let text = match store.worker_task_input_in(&mut tx, &row).await? {
             Some(instructions) => instructions,
             None => sqlx::query_scalar(
                 "SELECT text FROM messages WHERE id=? AND owner_id=? AND conversation_id=?",
@@ -367,7 +383,7 @@ impl Store {
                 .execute(&mut *tx)
                 .await
                 .map_err(db)?;
-            let attached = self
+            let attached = store
                 .attach_turn_context(&mut tx, &claim.provider, &row, inlined)
                 .await?;
             if super::fast_rules::fits(&attached) {
@@ -390,7 +406,8 @@ impl Store {
         let text = match final_text {
             Some(text) => text,
             None => {
-                self.attach_turn_context(&mut tx, &claim.provider, &row, text)
+                store
+                    .attach_turn_context(&mut tx, &claim.provider, &row, text)
                     .await?
             }
         };

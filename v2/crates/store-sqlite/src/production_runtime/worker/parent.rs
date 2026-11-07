@@ -1,6 +1,27 @@
 use super::*;
 use sqlx::sqlite::SqliteRow;
 impl Store {
+    #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+    pub(in crate::production_runtime) async fn check_run_workspace_before_writer(
+        &self,
+        run: &RunId,
+    ) -> Result<WorkspacePreflight> {
+        let c = self.context()?;
+        let conversation: String = sqlx::query_scalar(
+            "SELECT conversation_id FROM production_runs WHERE id=? AND owner_id=? AND context_id=?",
+        )
+        .bind(run.to_string())
+        .bind(c.owner.to_string())
+        .bind(&c.id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(db)?
+        .ok_or(RuntimeStoreError::NotFound)?;
+        let conversation = ConversationId(conversation.parse().map_err(db)?);
+        self.check_workspace_before_writer(&c.owner, &conversation, None)
+            .await
+    }
+
     pub(crate) fn worker_credential(&self, credential: &str) -> Result<()> {
         if credential.len() != 64
             || !credential.bytes().all(|b| b.is_ascii_hexdigit())

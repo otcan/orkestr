@@ -16,10 +16,12 @@ impl Store {
         consumed: &ConsumedProviderDispatch,
         profile: &Arc<WorkspaceExecProfile>,
     ) -> Result<WorkspaceExecParent> {
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
-        profile.validate(self, &mut tx).await?;
-        execution(self, &mut tx, credential, consumed.provider()).await?;
-        let c = self.context()?;
+        let checked_workspace = profile.workspace.check_before_writer(self).await?;
+        let store = &*checked_workspace;
+        let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        profile.validate(store, &mut tx).await?;
+        execution(store, &mut tx, credential, consumed.provider()).await?;
+        let c = store.context()?;
         if consumed.provider().run.role != Role::Worker
             || consumed.namespace() != c.namespace
             || consumed.incarnation_id() != c.incarnation
@@ -72,14 +74,16 @@ impl Store {
         profile: &Arc<WorkspaceExecProfile>,
     ) -> Result<WorkspaceExecParent> {
         let provider = self.renewal_provider(renewal)?;
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
-        profile.validate(self, &mut tx).await?;
-        execution(self, &mut tx, credential, provider).await?;
-        let row = self.production_authorized_run(&mut tx, provider).await?;
+        let checked_workspace = profile.workspace.check_before_writer(self).await?;
+        let store = &*checked_workspace;
+        let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        profile.validate(store, &mut tx).await?;
+        execution(store, &mut tx, credential, provider).await?;
+        let row = store.production_authorized_run(&mut tx, provider).await?;
         if provider.run.role != Role::Worker || row.get::<&str, _>("state") != "running" {
             return Err(RuntimeStoreError::Fenced);
         }
-        let c = self.context()?;
+        let c = store.context()?;
         if provider.run.conversation_id != *profile.workspace.exec_identity().2 {
             return Err(RuntimeStoreError::Fenced);
         }

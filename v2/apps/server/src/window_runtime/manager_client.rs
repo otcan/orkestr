@@ -25,6 +25,9 @@ mod workspace;
 #[allow(dead_code)] // Profile gate remains closed until dispatcher qualification.
 mod workspace_command;
 use wire::*;
+#[cfg(all(test, target_os = "linux", target_pointer_width = "64"))]
+#[path = "manager_control_order_tests.rs"]
+mod control_order_tests;
 pub(crate) use workspace_command::{RootCommand, RootCommandReceipt};
 
 const MAX_FRAME: usize = 8192;
