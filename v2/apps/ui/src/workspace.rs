@@ -284,7 +284,13 @@ pub fn Workspace(
                         } else if tab() == Tab::Host {
                             crate::host_dashboard::HostDashboard { key: "{session_scope.read().generation()}", session_scope, charts: host_charts, range: host_range, onexpired }
                         } else {
-                            crate::chat_settings_view::ChatSettings { key: "settings-{current()}-{session_scope.read().generation()}", conversation: current(), csrf, session_scope, onexpired }
+                            crate::chat_settings_view::ChatSettings { key: "settings-{current()}-{session_scope.read().generation()}", conversation: current(), csrf: csrf.clone(), session_scope, onexpired }
+                            section { "aria-label": "Account settings",
+                                h2 { "Account settings" }
+                                crate::owner_password_view::OwnerPassword {
+                                    key: "password-{session_scope.read().generation()}", csrf, session_scope, onexpired,
+                                }
+                            }
                             crate::beta_settings::BetaSettings {}
                         }
                     }

@@ -276,9 +276,6 @@ fn App() -> Element {
                 outbox_driver::OutboxDriver { key: "outbox-{session_scope.read().generation()}-{global}", global: global(), csrf: csrf(), session_scope, onexpired: expired }
             }
             if !csrf().is_empty() {
-                    owner_password_view::OwnerPassword { key: "password-{session_scope.read().generation()}", csrf: csrf(), session_scope, onexpired: expired }
-            }
-            if !csrf().is_empty() {
                     attachment_keys_view::AttachmentKeyEnrollment { key: "keys-{session_scope.read().generation()}", csrf: csrf() }
                     button { class: "sign-out", disabled: logging_out(), onclick: move |_| {
                         if logging_out() { return; }
