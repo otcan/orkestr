@@ -11,7 +11,7 @@ import time
 from .contract import canonical,require,unique
 from .managed_ingress import MAX_PACKET,packet,source
 from .managed_socket_owner import socket_owner
-from . import managed_capabilities
+from . import managed_capabilities,managed_context
 
 def tools(ingress,scope):
     result=[];desk=ingress.manager.desk
@@ -31,6 +31,12 @@ def tools(ingress,scope):
         'annotations':{'readOnlyHint':False,'destructiveHint':True,'idempotentHint':False,'openWorldHint':True}})
     result.append(managed_capabilities.advertisement())
     return result
+
+
+def discovery(ingress,scope):
+    value=managed_capabilities.manifest(scope,tools(ingress,scope))
+    value['application_instructions']=managed_context.instructions()
+    return value
 
 
 class Listener:
@@ -106,7 +112,8 @@ class Peer:
             version=params.get('protocolVersion')
             require(type(version) is str and re.fullmatch('[0-9]{4}-[0-9]{2}-[0-9]{2}',version),'managed_mcp_version')
             self.result({'protocolVersion':version,'capabilities':{'tools':{}},
-                'serverInfo':{'name':'orkestr-managed','version':'1'}})
+                'serverInfo':{'name':'orkestr-managed','version':'1'},
+                'instructions':canonical(discovery(self.ingress,self.source)).decode()})
             self.metadata_done=True;return None
         if method=='tools/list':
             require(set(params)<={'cursor','_meta'},'managed_mcp_list_fields')
@@ -126,7 +133,7 @@ class Peer:
         name=params['name'];arguments=params['arguments']
         if name==managed_capabilities.NAME:
             require(type(arguments) is dict and not arguments,'managed_capability_arguments')
-            value=managed_capabilities.manifest(self.source,tools(self.ingress,self.source))
+            value=discovery(self.ingress,self.source)
             self.result({'content':[{'type':'text','text':canonical(value).decode()}],
                          'structuredContent':value,'isError':False})
             self.metadata_done=True;return None

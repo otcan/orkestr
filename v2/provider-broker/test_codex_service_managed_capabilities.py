@@ -79,7 +79,7 @@ class ManifestTests(unittest.TestCase):
 
 
 class HttpManifestTests(unittest.TestCase):
-    def peer(self, arguments, fail_auth_at=None, method='tools/call'):
+    def peer(self, arguments, fail_auth_at=None, method='tools/call', params=None):
         server, client = socket.socketpair()
         self.addCleanup(server.close)
         self.addCleanup(client.close)
@@ -94,7 +94,8 @@ class HttpManifestTests(unittest.TestCase):
                 raise Refused('synthetic_identity_revoked')
 
         peer.authenticate = authenticate
-        params = {'name': capabilities.NAME, 'arguments': arguments} if method == 'tools/call' else {}
+        if params is None:
+            params = {'name': capabilities.NAME, 'arguments': arguments} if method == 'tools/call' else {}
         body = json.dumps({'jsonrpc': '2.0', 'id': 7, 'method': method, 'params': params}).encode()
         client.sendall(b'POST /mcp HTTP/1.1\r\nContent-Type: application/json\r\nContent-Length: '
                        + str(len(body)).encode() + b'\r\n\r\n' + body)
