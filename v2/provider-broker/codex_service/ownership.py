@@ -1,6 +1,7 @@
 """Original pidfds only. Empty process snapshots never create retirement proof."""
 import math
 import errno
+from itertools import islice
 import os
 from functools import wraps
 from pathlib import Path
@@ -216,6 +217,29 @@ class Children:
                 return owner
         return None
 
+    def _children(self, parent):
+        # Linux records fork children per task, not on the thread-group leader.
+        # Native async workers can spawn tools while the leader has none.
+        root = Path('/proc', str(parent['pid']), 'task')
+        try:
+            tasks = list(islice(root.iterdir(), self.bound + 1))
+        except (FileNotFoundError, ProcessLookupError):
+            return set()
+        require(len(tasks) <= self.bound, 'owned_child_bound')
+        pids = set()
+        for task in tasks:
+            try:
+                with (task / 'children').open('rb') as stream:
+                    raw = stream.read(8193)
+            except (FileNotFoundError, ProcessLookupError):
+                continue
+            require(len(raw) <= 8192, 'owned_child_bound')
+            for token in raw.split():
+                require(token.isdigit(), 'owned_child_metadata')
+                pids.add(int(token))
+            require(len(pids) <= self.bound, 'owned_child_bound')
+        return pids
+
     @serialized
     def observe(self):
         for key in self.brokers:self.families.setdefault(key,{key})
@@ -232,18 +256,8 @@ class Children:
                     continue
                 visited.add((key,root))
                 require(len(visited) <= self.bound, "owned_child_bound")
-                path = Path(f"/proc/{parent['pid']}/task/{parent['pid']}/children")
-                try:
-                    with path.open("rb") as stream:
-                        raw = stream.read(8193)
-                except (FileNotFoundError, ProcessLookupError):
-                    # Pinned descendant reaped since `same` above (ESRCH):
-                    # its orphans re-parent under the broker subreaper.
-                    continue
-                require(len(raw) <= 8192, "owned_child_bound")
-                for token in raw.split():
-                    require(token.isdigit(), "owned_child_metadata")
-                    child = process(int(token))
+                for pid in self._children(parent):
+                    child = process(pid)
                     if child is None or child["ppid"] != parent["pid"]:
                         continue
                     require(self.allow_uid_change or child["uid"] == self.package.uid, "owned_child_identity")
