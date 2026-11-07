@@ -76,6 +76,12 @@ the private operator admission path may bind them to actual qualified bytes,
 current health and approval. An untrusted caller can prepare files but cannot
 thereby acquire publication authority.
 
+`server_sha256` hashes the actual backend executable bytes.
+`code_subject_sha256` hashes the exact qualified public `code_subject` object
+using this contract's canonical JSON encoding with a final newline. Feature
+names are a sorted unique list. The observed tuple must come from the live
+qualified package, not from the UI branch's separately built server artifact.
+
 ```sh
 node v2/apps/ui/scripts/ui_release.mjs snapshot \
   --bundle /tmp/example-ui-bundle \
