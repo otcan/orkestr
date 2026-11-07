@@ -126,7 +126,7 @@ async fn timer_capability_http_timer_origin_matches_operation_restrictions() {
         &recurring.to_string(),
     )
     .await;
-    assert_eq!(status, 409);
+    assert_eq!(status, 403);
     assert_eq!(refused["code"], "agent_timer_timer_turn");
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
