@@ -23,7 +23,7 @@ from .package import Package
 # deadlines) runs at most once per TICK_S instead of on every 50 ms accept
 # timeout, which kept the manager at a quarter of a core while idle.
 TICK_S = 0.25
-OBSERVATION_REPLY_SECONDS = 5
+MANAGED_REPLY_SECONDS = 5
 
 
 class Manager:
@@ -166,8 +166,13 @@ class Manager:
         self.ledger._scope(request)
         row = self.ledger.details(request["window_id"], request["generation"])
         require(row["conversation"] == request["conversation_id"], "scope")
-        deadline = min(accepted + OBSERVATION_REPLY_SECONDS,
-                       row["deadline_mono_ns"] / 1e9 - DRAIN_SECONDS)
+        work = row["deadline_mono_ns"] / 1e9 - DRAIN_SECONDS
+        # Cleanup may still observe a cancelled operation after work ended.
+        # Keep that existing one-second bound inside the original cleanup end.
+        if request.get("operation") == "managed_poll" and time.monotonic() >= work:
+            deadline = min(accepted + 1, row["deadline_mono_ns"] / 1e9)
+        else:
+            deadline = min(accepted + MANAGED_REPLY_SECONDS, work)
         require(time.monotonic() < deadline, "observation_deadline")
         return deadline
 
@@ -437,10 +442,11 @@ class Manager:
                 request, descriptors = receive_control(connection, deadline)
                 if request["operation"] in ("bind_child", "launch_child"):
                     deadline = self._bind_deadline(request, accepted)
-                elif request["operation"] == "managed_pending":
-                    # Read-only custody observation can queue behind other
-                    # windows. Match Core's bounded allowance without renewing
-                    # the receive budget, run lease or window cleanup margin.
+                elif request["operation"] in ("managed_pending", "managed_run_open", "managed_consume",
+                                               "managed_poll", "managed_renew", "managed_result"):
+                    # A consumed capability can commit before a delayed ACK.
+                    # Share Core's bounded control allowance; capability expiry,
+                    # receive budget, run leases and cleanup bounds stay fixed.
                     deadline = self._observation_deadline(request, accepted)
                 answer = self.dispatch(request, deadline, descriptors)
             except Refused as error:

@@ -11,6 +11,10 @@ use std::time::Instant;
 enum ManagedRpc {
     RunOpen,
     Pending,
+    Consume,
+    Query,
+    Renew,
+    Result,
 }
 
 // Observe only the closed error enum after the RPC has released its resources.
@@ -103,17 +107,29 @@ impl ConfiguredExecution {
     }
 }
 impl ManagedTools {
+    fn control_deadline(&self) -> Result<Instant, &'static str> {
+        super::managed_observation::deadline(
+            self.context.work_deadline(),
+            self.parent.lease_deadline_ms(),
+        )
+        .map_err(|_| "managed control deadline passed")
+    }
+
     pub(super) async fn refresh_lease(
         &mut self,
         authority: &orkestr_v2_store_sqlite::RunRenewalAuthority,
     ) -> Result<(), &'static str> {
-        if let Some(operation) = self.operation.as_mut() {
+        if self.operation.is_some() {
+            let deadline = self.control_deadline()?;
+            let operation = self.operation.as_mut().ok_or("managed operation lost")?;
             let renewal = self
                 .store
                 .renew_managed_operation(&self.credential, operation, authority)
                 .await
                 .map_err(|_| "managed scope renewal refused")?;
-            self.context
+            let started = Instant::now();
+            let result = self
+                .context
                 .manager
                 .renew_managed(
                     &self.store,
@@ -121,9 +137,10 @@ impl ManagedTools {
                     &self.context.window,
                     operation,
                     &renewal,
-                    Instant::now() + Duration::from_secs(1),
+                    deadline,
                 )
-                .await
+                .await;
+            observed_rpc(ManagedRpc::Renew, started, result)
                 .map_err(|_| "managed renewal delivery unknown")?;
         }
         self.store
@@ -165,16 +182,19 @@ impl ManagedTools {
                 return Err("managed operation already consumed; reconciliation required");
             };
             self.operation = Some(operation);
-            self.context
+            let started = Instant::now();
+            let result = self
+                .context
                 .manager
                 .start_managed(
                     &self.store,
                     &self.credential,
                     &self.context.window,
                     self.operation.as_ref().ok_or("managed operation lost")?,
-                    Instant::now() + Duration::from_secs(1),
+                    self.control_deadline()?,
                 )
-                .await
+                .await;
+            observed_rpc(ManagedRpc::Consume, started, result)
                 .map_err(|_| "managed Root delivery unknown; replay refused")?;
         }
         let operation = self.operation.as_ref().ok_or("managed operation lost")?;
@@ -187,16 +207,18 @@ impl ManagedTools {
             self.cancel().await?;
             return Err("managed operation fence closed");
         }
-        let receipt = self
+        let started = Instant::now();
+        let result = self
             .context
             .manager
             .query_managed(
                 &self.context.window,
                 operation,
                 false,
-                Instant::now() + Duration::from_secs(1),
+                self.control_deadline()?,
             )
-            .await
+            .await;
+        let receipt = observed_rpc(ManagedRpc::Query, started, result)
             .map_err(|_| "managed Root result unknown")?;
         if let Some(outcome) = receipt.terminal {
             let result = self
@@ -208,16 +230,19 @@ impl ManagedTools {
                 )
                 .await
                 .map_err(|_| "managed result persistence uncertain")?;
-            self.context
+            let started = Instant::now();
+            let result = self
+                .context
                 .manager
                 .release_managed_result(
                     &self.store,
                     &self.credential,
                     &self.context.window,
                     &result,
-                    Instant::now() + Duration::from_secs(1),
+                    self.control_deadline()?,
                 )
-                .await
+                .await;
+            observed_rpc(ManagedRpc::Result, started, result)
                 .map_err(|_| "managed result release unknown; replay refused")?;
         }
         Ok(())
@@ -271,7 +296,14 @@ mod rpc_diagnostic_tests {
 
     #[test]
     fn observation_preserves_each_closed_rpc_error() {
-        for operation in [ManagedRpc::RunOpen, ManagedRpc::Pending] {
+        for operation in [
+            ManagedRpc::RunOpen,
+            ManagedRpc::Pending,
+            ManagedRpc::Consume,
+            ManagedRpc::Query,
+            ManagedRpc::Renew,
+            ManagedRpc::Result,
+        ] {
             for error in [
                 ManagerError::InvalidRequest,
                 ManagerError::Peer,

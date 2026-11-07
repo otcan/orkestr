@@ -51,11 +51,14 @@ class ObservationReplyTests(unittest.TestCase):
         return reply, deadlines, manager
 
     def test_observation_reply_survives_work_past_the_old_one_second_limit(self):
-        reply, deadlines, manager = self.exchange(1.2)
-        self.assertIsNotNone(reply, 'the manager closed without its observation reply')
-        self.assertTrue(reply['ok'])
-        self.assertEqual(deadlines, [11, 15])
-        manager.ledger._scope.assert_called_once()
+        for operation in ('managed_pending', 'managed_run_open', 'managed_consume',
+                          'managed_poll', 'managed_renew', 'managed_result'):
+            with self.subTest(operation=operation):
+                reply, deadlines, manager = self.exchange(1.2, operation=operation)
+                self.assertIsNotNone(reply, 'the manager closed without its acknowledgement')
+                self.assertTrue(reply['ok'])
+                self.assertEqual(deadlines, [11, 15])
+                manager.ledger._scope.assert_called_once()
 
     def test_receive_time_does_not_restart_the_five_second_budget(self):
         reply, deadlines, _manager = self.exchange(1.2, received=.7)
@@ -70,12 +73,23 @@ class ObservationReplyTests(unittest.TestCase):
                 self.assertEqual(deadlines, [11, expected])
 
     def test_other_operations_keep_the_existing_one_second_reply_bound(self):
-        for operation in ('status', 'managed_consume', 'managed_result', 'managed_cancel'):
+        for operation in ('status', 'managed_cancel', 'managed_run_close'):
             with self.subTest(operation=operation):
                 reply, deadlines, manager = self.exchange(1.2, operation=operation)
                 self.assertIsNone(reply)
                 self.assertEqual(deadlines, [11, 11])
                 manager.ledger._scope.assert_not_called()
+
+    def test_poll_during_cleanup_keeps_one_second_and_the_original_cleanup_end(self):
+        reply, deadlines, _ = self.exchange(.2, operation='managed_poll', work=9)
+        self.assertTrue(reply['ok'])
+        self.assertEqual(deadlines, [11, 11])
+        reply, deadlines, _ = self.exchange(1.2, operation='managed_poll', work=9)
+        self.assertIsNone(reply)
+        self.assertEqual(deadlines, [11, 11])
+        reply, deadlines, _ = self.exchange(.2, operation='managed_poll', work=10.1-DRAIN_SECONDS)
+        self.assertIsNone(reply)
+        self.assertEqual(deadlines, [11, 10.1])
 
     def test_observation_scope_and_expired_work_refuse_before_dispatch(self):
         manager = Manager.__new__(Manager)
