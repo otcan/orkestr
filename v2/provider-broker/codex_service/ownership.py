@@ -392,6 +392,11 @@ class Adopted:
             require(len(self.records)<MAX_CHILDREN,'adopted_child_bound')
             try:self.records[key]=Process(identity,any_uid=self.allow_uid_change)
             except Vanished:return False
+            # Closed kernel identity only. This is cleanup custody, never an
+            # association, role grant, successful reap or permission to retry.
+            sys.stderr.write('manager unassigned adopted child: pid=%d start=%d uid=%d ppid=%d\n' %
+                             (identity['pid'],identity['start'],identity['uid'],identity['ppid']))
+            sys.stderr.flush()
             return True
         return False
 

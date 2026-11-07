@@ -1,6 +1,7 @@
 """Actual kernel orphan adoption in a disposable root actor; no live service."""
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -53,7 +54,8 @@ time.sleep(60)
   assert all(not exists(identity) for identity in originals)
   assert peer.poll() is None
   assert not any(hasattr(record,'role') for record in pool.records.values())
-  print(json.dumps({'global_reaped':True,'unassigned':True,'known_peer_preserved':True,'broker_exit':broker.returncode}))
+  print(json.dumps({'global_reaped':True,'unassigned':True,'known_peer_preserved':True,'broker_exit':broker.returncode,
+                   'original_pids':sorted(identity['pid'] for identity in originals),'peer_pid':peer.pid}))
  finally:
   pool.drain({(peer.pid,process(peer.pid)['start'])} if peer.poll() is None else set(),seconds=3);pool.close()
   for child in (broker,peer):
@@ -64,8 +66,18 @@ time.sleep(60)
             capture_output=True,text=True,timeout=20,
             env={'PATH':'/usr/bin:/bin','PYTHONDONTWRITEBYTECODE':'1'})
         self.assertEqual(result.returncode,0,result.stderr)
-        self.assertEqual(json.loads(result.stdout),dict(global_reaped=True,unassigned=True,
+        report=json.loads(result.stdout)
+        original_pids=report.pop('original_pids');peer_pid=report.pop('peer_pid')
+        self.assertEqual(report,dict(global_reaped=True,unassigned=True,
                          known_peer_preserved=True,broker_exit=-9))
+        lines=result.stderr.splitlines()
+        captures=[re.fullmatch(r'manager unassigned adopted child: pid=(\d+) start=(\d+) uid=(\d+) ppid=(\d+)',line)
+                  for line in lines]
+        self.assertTrue(captures and all(captures),result.stderr)
+        self.assertEqual(sorted(int(match[1]) for match in captures),original_pids)
+        self.assertNotIn(peer_pid,[int(match[1]) for match in captures])
+        self.assertTrue(all(int(match[2])>0 and int(match[3])==actor_uid and int(match[4])>1
+                            for match in captures))
 
 
 if __name__=='__main__':unittest.main()

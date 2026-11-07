@@ -1,5 +1,6 @@
 //! Trusted owned-broker setup. No run or inference authority is invented here.
 mod desk;
+mod readiness_diagnostics;
 mod tool_profile;
 mod window;
 use super::*;
@@ -299,7 +300,8 @@ impl PreparingCodex {
             return Err(Blocker::Protocol.into());
         }
         let result = self.poll_inner();
-        if result.is_err() {
+        if let Err(error) = &result {
+            readiness_diagnostics::refused(self.phase, self.binding.role, error);
             self.failed = true;
             let _ = self.authority.revoke();
         }
