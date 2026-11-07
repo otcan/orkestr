@@ -94,6 +94,8 @@ class Api:
                 code = str(json.loads(failure.read()).get('code') or 'http_error')[:64]
             except (ValueError, AttributeError):
                 code = 'http_error'
+            finally:
+                failure.close()
             raise ProvisionError(failure.code, code) from None
         except (error.URLError, OSError):
             raise ProvisionError(0, 'unreachable') from None
