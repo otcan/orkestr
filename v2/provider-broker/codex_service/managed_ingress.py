@@ -214,6 +214,9 @@ class Ingress:
         # Disk contains durable claims, never reconstructed caller authority.
         live={}
         for p in self.peers:
+            scope=getattr(p,'source',None)
+            if not (type(scope) is dict and scope.get('window_id')==window
+                    and scope.get('window_generation')==generation):continue
             if not (p.request and p.proof is not None and time.monotonic()<p.deadline
                     and exists(p.proof.identity) and not p.proof.exited()):continue
             try:

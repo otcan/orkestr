@@ -23,6 +23,7 @@ from .package import Package
 # deadlines) runs at most once per TICK_S instead of on every 50 ms accept
 # timeout, which kept the manager at a quarter of a core while idle.
 TICK_S = 0.25
+OBSERVATION_REPLY_SECONDS = 5
 
 
 class Manager:
@@ -160,6 +161,15 @@ class Manager:
         require(row["conversation"] == request["conversation_id"], "scope")
         return bind_deadline(request["bind_deadline_ms"], accepted,
                              row["deadline_mono_ns"] / 1e9 - DRAIN_SECONDS)
+
+    def _observation_deadline(self, request, accepted):
+        self.ledger._scope(request)
+        row = self.ledger.details(request["window_id"], request["generation"])
+        require(row["conversation"] == request["conversation_id"], "scope")
+        deadline = min(accepted + OBSERVATION_REPLY_SECONDS,
+                       row["deadline_mono_ns"] / 1e9 - DRAIN_SECONDS)
+        require(time.monotonic() < deadline, "observation_deadline")
+        return deadline
 
     def _package_preflight(self):
         try:
@@ -427,6 +437,11 @@ class Manager:
                 request, descriptors = receive_control(connection, deadline)
                 if request["operation"] in ("bind_child", "launch_child"):
                     deadline = self._bind_deadline(request, accepted)
+                elif request["operation"] == "managed_pending":
+                    # Read-only custody observation can queue behind other
+                    # windows. Match Core's bounded allowance without renewing
+                    # the receive budget, run lease or window cleanup margin.
+                    deadline = self._observation_deadline(request, accepted)
                 answer = self.dispatch(request, deadline, descriptors)
             except Refused as error:
                 # Static refusal codes only (never request values): the operator
