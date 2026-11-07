@@ -2,8 +2,16 @@
 // receipts, never a gigabyte base64 string. Reselect an interrupted file to
 // resume its session; no file bytes/private keys are retained in draft state.
 import {encryptedUploadClient,validateUploadFile} from './encrypted_upload.mjs';
+import {uploadPastedText} from './pasted_text.mjs';
+import {browserStorage} from './browser_storage.mjs';
 
-export function nativeDescribe({conversation,csrf},{drafts=globalThis.sessionStorage,client=encryptedUploadClient({conversation,csrf})}={}) {
+export function nativePaste(config, element, options) {
+  return uploadPastedText(element, nativeDescribe(config, options), {
+    scope: `${config.conversation}:${config.csrf}`,
+  });
+}
+
+export function nativeDescribe({conversation,csrf},{drafts=browserStorage('sessionStorage'),client=encryptedUploadClient({conversation,csrf})}={}) {
   return async files=>{
     const list=[...files],receipts=[];
     if(list.length>8)return{error:'Attach at most 8 files at once.'};

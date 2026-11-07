@@ -47,4 +47,11 @@ assets = [p for p in files if p.is_file()]
 if len(assets) > 4096 or any(p.stat().st_size > 8*1024*1024 for p in assets) or sum(p.stat().st_size for p in assets) > 64*1024*1024:
     sys.exit('BLOCKED: bundle exceeds static snapshot limits; candidate retained for inspection')
 PYTHON
+if [[ -n ${UI_RELEASE_MANIFEST:-} ]]; then
+    : "${UI_SOURCE_COMMIT:?An opt-in UI release requires its exact source commit}"
+    : "${UI_BACKEND_SOURCES:?An opt-in UI release requires explicit compatible backend commits}"
+    node "$ui_dir/scripts/ui_release.mjs" manifest --bundle "$UI_BUNDLE_DIR" \
+        --source "$UI_SOURCE_COMMIT" --backend-sources "$UI_BACKEND_SOURCES" \
+        --requirements "$ui_dir/release_requirements.json" --output "$UI_RELEASE_MANIFEST"
+fi
 printf 'Bundle candidate: %s\n' "$UI_BUNDLE_DIR"

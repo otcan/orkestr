@@ -19,7 +19,7 @@ export async function describe(files) {
   if (!list.length) return { files: [] };
   if (list.length > FILES_MAX) return { error: `Attach at most ${FILES_MAX} files at once.` };
   const total = list.reduce((sum, f) => sum + f.size, 0);
-  if (total > BYTES_MAX) return { error: 'Attachments are limited to 16 MiB per message.' };
+  if (total > BYTES_MAX) return { error: 'This linked chat accepts up to 16 MiB of attachments per message.' };
   const out = [];
   for (const file of list) {
     if (!file.size) return { error: `${safeName(file.name)} is empty or a folder.` };
