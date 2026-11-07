@@ -394,9 +394,11 @@ class Adopted:
             except Vanished:return False
             # Closed kernel identity only. This is cleanup custody, never an
             # association, role grant, successful reap or permission to retry.
-            sys.stderr.write('manager unassigned adopted child: pid=%d start=%d uid=%d ppid=%d\n' %
-                             (identity['pid'],identity['start'],identity['uid'],identity['ppid']))
-            sys.stderr.flush()
+            try:
+                sys.stderr.write('manager unassigned adopted child: pid=%d start=%d uid=%d ppid=%d\n' %
+                                 (identity['pid'],identity['start'],identity['uid'],identity['ppid']))
+                sys.stderr.flush()
+            except (OSError,ValueError):pass  # Optional diagnostics cannot affect cleanup.
             return True
         return False
 
