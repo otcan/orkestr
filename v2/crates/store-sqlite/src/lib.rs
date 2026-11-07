@@ -42,6 +42,7 @@ pub mod owner_password;
 mod paths;
 mod preflight;
 mod production_runtime;
+pub use production_runtime::MetadataFenceDiagnostics;
 mod replay;
 mod runtime;
 pub mod service_credentials;
