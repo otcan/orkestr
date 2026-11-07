@@ -172,6 +172,8 @@ class Client:
                 code = str(json.loads(failure.read()).get('code') or 'http_error')[:64]
             except (ValueError, AttributeError):
                 code = 'http_error'
+            finally:
+                failure.close()
             raise TimerError(failure.code, code) from None
         except (error.URLError, OSError):
             raise TimerError(0, 'unreachable') from None
