@@ -1,4 +1,6 @@
 //! A slow live Root check must not reserve the shared Core writer.
+#[path = "fence_custody_tests/cross_pool.rs"]
+mod cross_pool;
 use super::*;
 use crate::production_runtime::tests::{claim, setup, Case};
 use sqlx::{sqlite::SqliteConnectOptions, Connection, SqliteConnection};

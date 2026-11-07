@@ -246,6 +246,33 @@ impl Store {
         self.workspace_check_current()
     }
 
+    pub(in crate::production_runtime) fn checked_workspace_installation(
+        &self,
+        project: &str,
+    ) -> Result<Arc<Installation>> {
+        if let Some(proof) = &self.workspace_check {
+            self.workspace_check_current()?;
+            if proof
+                .project
+                .as_ref()
+                .is_none_or(|(id, _, _)| id != project)
+            {
+                return Err(RuntimeStoreError::Fenced);
+            }
+            // An explicit grant can retain different descriptors from a
+            // reopened pool. Use the exact installation freshly verified for
+            // this attempt; the writer still checks its full durable identity.
+            return proof.installation.clone().ok_or(RuntimeStoreError::Fenced);
+        }
+        self.workspace_handles
+            .0
+            .lock()
+            .map_err(db)?
+            .get(project)
+            .cloned()
+            .ok_or(RuntimeStoreError::Fenced)
+    }
+
     pub(in crate::production_runtime) fn check_workspace_row(
         &self,
         binding: &Binding,

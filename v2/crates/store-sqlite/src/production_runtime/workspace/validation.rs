@@ -64,14 +64,7 @@ impl Store {
             return Err(RuntimeStoreError::Fenced);
         }
         let id: String = row.get("id");
-        let installation = self
-            .workspace_handles
-            .0
-            .lock()
-            .map_err(db)?
-            .get(&id)
-            .cloned()
-            .ok_or(RuntimeStoreError::Fenced)?;
+        let installation = self.checked_workspace_installation(&id)?;
         if installation.fingerprint() != row.get::<String, _>("identity_json") {
             return Err(RuntimeStoreError::Fenced);
         }
