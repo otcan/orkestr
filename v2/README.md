@@ -81,6 +81,10 @@ When rebuilding another commit with the same Docker builder, unchanged tooling
 and locked dependency downloads can be reused. Application compilation and the
 paired server/UI receipt still use the exact selected source. A missing or
 malformed commit is refused before package or toolchain installation.
+Cargo uses two build jobs by default for smaller hosts. On a machine with enough
+memory, set `ORKESTR_BUILD_JOBS=8` for Compose, or pass `--build-arg BUILD_JOBS=8`
+to Docker. The accepted range is 1–64. Changing this limit changes the tooling
+cache key; changing only the source commit does not.
 
 ### macOS (Apple Silicon) with Docker Desktop
 

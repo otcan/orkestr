@@ -3,10 +3,14 @@
 FROM node:22-bookworm-slim@sha256:4b150b48b4116e2a22f2c39cc27025fbf4f153e2078fd3b14d159fdb5c7279da AS browser-tools
 FROM rust:1.99.1-bookworm@sha256:48b7f435b8fc6378ce43b44f15e3a47fd8919b2825f835c39bd4bd3da50af5b8 AS source-check
 ARG SOURCE_COMMIT
+ARG BUILD_JOBS=2
 RUN { test ${#SOURCE_COMMIT} -eq 40 \
       && test -z "$(printf %s "$SOURCE_COMMIT" | tr -d '0-9a-f')"; } \
     || { echo 'SOURCE_COMMIT must be the exact 40-character public commit; see v2/README.md (ORKESTR_SOURCE_COMMIT in v2/packaging/oss/.env).' >&2; exit 1; } \
-    && touch /source-validated
+    && case "$BUILD_JOBS" in \
+         [1-9]|[1-5][0-9]|6[0-4]) touch /source-validated ;; \
+         *) echo 'BUILD_JOBS must be a whole number from 1 to 64.' >&2; exit 1 ;; \
+       esac
 
 FROM source-check AS source
 RUN git init /src && git -C /src fetch https://github.com/otcan/orkestr.git "$SOURCE_COMMIT" \
@@ -20,9 +24,11 @@ COPY --from=source-check /source-validated /tmp/source-validated
 COPY --from=browser-tools /usr/local/bin/node /usr/local/bin/node
 COPY --from=browser-tools /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/npm
 RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm
-ENV PYTHONDONTWRITEBYTECODE=1 CARGO_BUILD_JOBS=2 CARGO_TARGET_DIR=/build/target
+ENV PYTHONDONTWRITEBYTECODE=1 CARGO_TARGET_DIR=/build/target
 RUN apt-get update && apt-get install -y --no-install-recommends python3 \
     && rm -rf /var/lib/apt/lists/*
+ARG BUILD_JOBS=2
+ENV CARGO_BUILD_JOBS=$BUILD_JOBS
 RUN rustup target add wasm32-unknown-unknown \
     && cargo install --locked wasm-bindgen-cli --version 0.2.129
 
