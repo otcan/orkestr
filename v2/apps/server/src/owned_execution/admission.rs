@@ -1,7 +1,7 @@
 //! Durable FIFO intake. A browser message never supplies provider authority.
 use super::*;
 use orkestr_v2_application::runtime::{
-    AdmissionDisposition, DispatchClaimResult, RuntimeStore, SessionState,
+    AdmissionDisposition, DispatchClaimResult, RuntimeStore, RuntimeStoreError, SessionState,
 };
 use orkestr_v2_store_sqlite::{ConsumedProviderDispatch, ExecutionConsumption};
 use std::time::Instant;
@@ -89,7 +89,7 @@ impl ConfiguredExecution {
             if !self.provider_input_allowed(None).await? {
                 return Ok(None);
             }
-            if let Some(claim) = self
+            match self
                 .store
                 .claim_next(
                     &self.owner,
@@ -98,12 +98,17 @@ impl ConfiguredExecution {
                     Duration::from_secs(60),
                 )
                 .await
-                .map_err(|error| {
-                    eprintln!("owned execution inbox claim refused: {error:?}");
-                    "execution inbox claim refused"
-                })?
             {
-                break claim;
+                Ok(Some(claim)) => break claim,
+                // Busy means the writer was not acquired or an earlier
+                // unconsumed claim still owns the FIFO head. Neither case
+                // authorizes a provider turn. Wait under the same window and
+                // supervisor checks instead of stranding an idle window.
+                Ok(None) | Err(RuntimeStoreError::Busy) => {}
+                Err(error) => {
+                    eprintln!("owned execution inbox claim refused: {error:?}");
+                    return Err("execution inbox claim refused");
+                }
             }
             tokio::select! {
                 _ = tokio::time::sleep(Duration::from_millis(100)) => {},
