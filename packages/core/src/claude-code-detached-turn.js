@@ -358,7 +358,12 @@ function createTailFacade({ record, child = null, resumeOffset = 0, pollMs = 50,
         await recordObservedExit(record, childExit, () => readDetachedTurnExit(record)).catch(() => {});
         return await finish(childExit.code !== null ? exitStatusFromShellCode(childExit.code) : { code: null, signal: childExit.signal });
       }
-      if (!child && !detachedTurnProcessAlive(record)) return await finish({ code: null, signal: "SIGKILL" });
+      if (!child && !detachedTurnProcessAlive(record)) {
+        // The wrapper may publish its exit between the first read and the
+        // liveness check. Keep that observed exit instead of inventing a kill.
+        const confirmedExit = await readDetachedTurnExit(record);
+        return await finish(confirmedExit ? exitStatusFromShellCode(confirmedExit.code) : { code: null, signal: "SIGKILL" });
+      }
     } catch (error) {
       if (!closed) {
         closed = true;
