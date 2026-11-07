@@ -12,9 +12,12 @@ export function startScopedRemoteWatch({api, deliver, log = () => {}}) {
   function drain() {
     clearTimeout(retryTimer);
     if (abort.signal.aborted) return;
+    // Use one clock observation for dispatch and retry selection so a deadline
+    // crossing during this drain cannot leave a skipped job without a timer.
+    const now = Date.now();
     const pending = [...jobs.values()].filter(job => !job.running).sort((a, b) => Number(a.background) - Number(b.background));
     for (const job of pending) {
-      if (job.next > Date.now() || (job.background ? background >= 2 : foreground >= 4)) continue;
+      if (job.next > now || (job.background ? background >= 2 : foreground >= 4)) continue;
       const lane = job.background;
       if (lane) background++; else foreground++;
       job.running = true; job.dirty = false;
@@ -40,7 +43,7 @@ export function startScopedRemoteWatch({api, deliver, log = () => {}}) {
       running.add(task);
       task.finally(() => {running.delete(task); drain();});
     }
-    const next = Math.min(...[...jobs.values()].filter(job => !job.running && job.next > Date.now()).map(job => job.next));
+    const next = Math.min(...[...jobs.values()].filter(job => !job.running && job.next > now).map(job => job.next));
     if (Number.isFinite(next)) retryTimer = setTimeout(drain, Math.max(1, next - Date.now()));
   }
   function enqueue(backend, ids, snapshot) {
