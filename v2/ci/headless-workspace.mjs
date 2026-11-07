@@ -6,6 +6,7 @@ import { A, C, V1_INSTANCE_REF, V1_LINKS, V1_WORKER, createState, startMock } fr
 import { mkdir } from 'node:fs/promises';
 import { providerHandoff } from './headless-provider-handoff.mjs';
 import { trackerScenario } from './headless-tracker.mjs';
+import { virtualDesksAndAccountSettings } from './headless-virtual-desks-settings.mjs';
 
 assert.equal(process.env.CI, 'true', 'Run only in isolated CI');
 assert.ok(process.env.UI_BUNDLE_DIR, 'UI_BUNDLE_DIR is required');
@@ -492,6 +493,7 @@ export const scenarios = [
     await openDrawer(label);
     await choose('Assistant');
     await page.waitForSelector('#composer');
+    await virtualDesksAndAccountSettings({page,state,conversation:A,clickText,clickWithin,waitText,screenshot,label});
     await clickText('Settings');
     await page.waitForSelector('#settings-model');
     assert.equal(await page.$eval('#settings-model', n => n.value), 'synthetic-model');
