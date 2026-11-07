@@ -12,6 +12,7 @@ pub mod codex_rpc;
 pub mod containment;
 pub mod execution;
 pub mod provider_access;
+pub mod store_diagnostics;
 pub mod worker_sandbox;
 pub mod workspace_exec;
 

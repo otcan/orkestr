@@ -1,5 +1,6 @@
 //! Authenticated Root-observed requests; no provider-supplied caller claims.
 use super::*;
+use orkestr_runtime::store_diagnostics::{observe, Operation};
 use orkestr_v2_store_sqlite::{
     CompletedManagedOperation, ConsumedManagedOperation, ManagedCallerEvidence,
     ManagedOperationOutcome, ManagedOperationParent, ManagedOperationRenewal,
@@ -114,8 +115,10 @@ impl ManagerClient {
         request["run"] = run.clone();
         let value = self
             .managed_fenced_exchange(request, deadline, |stream, frame| {
-                store
-                    .with_managed_run_fence(credential, parent, || {
+                observe(
+                    Operation::ManagedRunFence,
+                    None,
+                    store.with_managed_run_fence(credential, parent, || {
                         if Instant::now() >= deadline {
                             return Err(ManagerError::Deadline);
                         }
@@ -123,8 +126,9 @@ impl ManagerClient {
                         stream
                             .try_write(frame)
                             .map_err(|_| ManagerError::Unavailable)
-                    })
-                    .map_err(|_| ManagerError::Refused)?
+                    }),
+                )
+                .map_err(|_| ManagerError::Refused)?
             })
             .await?;
         success_fields(&value, Some("managed_run"))?;
