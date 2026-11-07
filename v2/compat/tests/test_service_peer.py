@@ -4,8 +4,10 @@ import json
 import os
 from pathlib import Path
 import shutil
+import signal
 import socket
 import sys
+import threading
 import unittest
 import uuid
 
@@ -32,6 +34,36 @@ class KernelPeerTests(unittest.TestCase):
         response=connection.getresponse();value=json.loads(response.read());response.close()
         self.assertEqual(value['build']['source_commit'],'a'*40)
         self.assertTrue(connection.offered_bytes)
+
+    def delayed_accept(self, delay):
+        # A connection can enter the listener backlog before the original Core
+        # accepts it. Keep that exact actor alive and resume it within the
+        # caller's deadline; no substitute server is involved.
+        os.kill(self.core._process.pid, signal.SIGSTOP)
+        resume=threading.Timer(delay, os.kill, args=(self.core._process.pid, signal.SIGCONT))
+        resume.start()
+        self.addCleanup(resume.join)
+        return resume
+
+    def test_original_core_accept_after_one_second_uses_caller_deadline(self):
+        connection=self.connection();self.addCleanup(connection.close)
+        self.delayed_accept(1.3)
+        connection.connect()
+        connection.request('GET','/api/v2/health')
+        response=connection.getresponse();value=json.loads(response.read());response.close()
+        self.assertEqual(value['build']['source_commit'],'a'*40)
+        self.assertTrue(connection.offered_bytes)
+
+    def test_caller_deadline_still_refuses_without_offering_http_bytes(self):
+        connection=Connection('127.0.0.1',self.core.server_port,descriptor_path=str(self.path),
+                              owner=OWNER,source='a'*40,timeout=.1)
+        self.addCleanup(connection.close)
+        resume=self.delayed_accept(.4)
+        with self.assertRaisesRegex(PeerError,'peer_accepted_socket_not_original_core'):
+            connection.connect()
+        self.assertFalse(connection.offered_bytes)
+        resume.join()
+        self.assertEqual(self.core.calls,[])
 
     def test_same_port_foreign_uid_spoof_gets_zero_http_or_secret_bytes(self):
         self.core.close_listener()
