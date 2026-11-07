@@ -77,6 +77,11 @@ The image fetches the exact public commit anonymously; no host home, credentials
 or application state is copied. Open **http://127.0.0.1:19822**. Only loopback is
 published. On a remote Linux server, use an SSH port forward and the same URL.
 
+When rebuilding another commit with the same Docker builder, unchanged tooling
+and locked dependency downloads can be reused. Application compilation and the
+paired server/UI receipt still use the exact selected source. A missing or
+malformed commit is refused before package or toolchain installation.
+
 ### macOS (Apple Silicon) with Docker Desktop
 
 Docker Desktop on an M-series Mac runs a Linux arm64 VM, and the image builds

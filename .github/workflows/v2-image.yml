@@ -33,6 +33,10 @@ jobs:
         run: |
           mkdir "$RUNNER_TEMP/empty-docker-config"
           export DOCKER_CONFIG="$RUNNER_TEMP/empty-docker-config"
+          OTHER_SOURCE=$(git cat-file -p "$SOURCE" | awk '$1 == "parent" { print $2; exit }')
+          python3 -I -S -B v2/packaging/oss/cache_boundaries.py \
+            --source "$SOURCE" --other-source "$OTHER_SOURCE" \
+            --report "$RUNNER_TEMP/cache-boundaries.json"
           docker build --progress=plain --build-arg SOURCE_COMMIT="$SOURCE" \
             --tag orkestr-v2:fresh --file v2/packaging/oss/Dockerfile .
           docker build --build-arg SOURCE_COMMIT="$SOURCE" --target bundle \
@@ -90,6 +94,7 @@ jobs:
           path: |
             ${{ runner.temp }}/fresh-install.json
             ${{ runner.temp }}/local-fresh-install.json
+            ${{ runner.temp }}/cache-boundaries*
             ${{ runner.temp }}/bundle/*.tar.gz
             ${{ runner.temp }}/bundle/SHA256SUMS
             ${{ runner.temp }}/bundle/paired-artifacts.json
@@ -115,6 +120,10 @@ jobs:
         run: |
           mkdir "$RUNNER_TEMP/empty-docker-config"
           export DOCKER_CONFIG="$RUNNER_TEMP/empty-docker-config"
+          OTHER_SOURCE=$(git cat-file -p "$SOURCE" | awk '$1 == "parent" { print $2; exit }')
+          python3 -I -S -B v2/packaging/oss/cache_boundaries.py \
+            --source "$SOURCE" --other-source "$OTHER_SOURCE" \
+            --report "$RUNNER_TEMP/cache-boundaries.json"
           docker build --progress=plain --build-arg SOURCE_COMMIT="$SOURCE" \
             --tag orkestr-v2:fresh --file v2/packaging/oss/Dockerfile .
           docker build --build-arg SOURCE_COMMIT="$SOURCE" --target bundle \
@@ -172,6 +181,7 @@ jobs:
           path: |
             ${{ runner.temp }}/fresh-install.json
             ${{ runner.temp }}/local-fresh-install.json
+            ${{ runner.temp }}/cache-boundaries*
             ${{ runner.temp }}/bundle/*.tar.gz
             ${{ runner.temp }}/bundle/SHA256SUMS
             ${{ runner.temp }}/bundle/paired-artifacts.json
