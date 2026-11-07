@@ -118,7 +118,7 @@ report['memory_result']=result;report['memory_errno']=ctypes.get_errno();print(j
     def test_tools_metadata_is_scoped(self):
         ingress,_,_=self.prepare_http({'jsonrpc':'2.0','id':2,'method':'tools/list','params':{'_meta':{'progressToken':'synthetic'}}})
         response=self.read_reply(ingress);names=[t['name'] for t in json.loads(response['body'])['result']['tools']]
-        self.assertEqual(names,['orkestr_root_request_submit'])
+        self.assertEqual(names,['orkestr_root_request_submit','orkestr_capabilities'])
         self.assertFalse(list(ingress.directory.glob('*.json')))
         self.close_broker(self.children[-1])
 
@@ -126,6 +126,16 @@ report['memory_result']=result;report['memory_errno']=ctypes.get_errno();print(j
         ingress,_,_=self.prepare_http({'jsonrpc':'2.0','id':3,'method':'tools/call','params':{
             'name':'orkestr_root_request_submit','arguments':{'action':'read','resource':'example.invalid','summary':'Synthetic summary'}}})
         response=self.read_reply(ingress);self.assertIn('error',response)
+        self.assertFalse(list(ingress.directory.glob('*.json')))
+
+    def test_actual_native_can_read_manifest_without_queueing_business_work(self):
+        ingress,_,_=self.prepare_http({'jsonrpc':'2.0','id':8,'method':'tools/call','params':{
+            'name':'orkestr_capabilities','arguments':{}}})
+        response=self.read_reply(ingress);self.assertEqual(response['status'],200)
+        value=json.loads(response['body'])['result']['structuredContent']
+        self.assertEqual(value['conversation_id'],'22222222-2222-4222-8222-222222222222')
+        self.assertEqual(value['surface'],'managed_mcp')
+        self.assertIn('orkestr_capabilities',value['registered_tools'])
         self.assertFalse(list(ingress.directory.glob('*.json')))
 
     def test_actual_native_call_roundtrip_preserves_rpc_id_and_never_asserts_owner_approval(self):
