@@ -106,14 +106,21 @@ export const scenarios = [
     const [chooser] = await Promise.all([page.waitForFileChooser(), page.click('.message-composer .tool-button')]);
     await chooser.accept([file]);
     await page.waitForFunction(() => document.querySelector('.attachment-chip .chip-name')?.textContent === 'orkestr-v2-synthetic-pixel.png');
+    assert.match(await text('.attachment-limit'), /1 GB per file/);
     await clickText('Paste text');
-    await page.type('#paste-text', 'Synthetic long pasted text');
+    // Above the old 16 MiB limit; exercise the real mounted Rust -> JS path.
+    const longText = 'ü'.repeat(9 * 1024 * 1024);
+    await page.$eval('.paste-panel textarea', (node, value) => {
+      node.value = value;
+      node.dispatchEvent(new Event('input', {bubbles: true}));
+    }, longText);
     await clickText('Attach as text file');
-    await page.waitForFunction(() => document.querySelectorAll('.attachment-chip').length === 2);
-    assert.match(await text('.composer-tools'), /pasted-text-\d{14}\.txt/);
+    await page.waitForFunction(() => document.querySelectorAll('.attachment-chip').length === 2, {timeout: 90000});
+    assert.match(await text('.composer-tools'), /pasted-text-\d{14}-[0-9a-f]{8}\.txt/);
     const uploads = state.uploads.filter(u => u.target === A);
     assert.equal(uploads.at(-2).files[0].media_type, 'image/png');
-    assert.equal(Buffer.from(uploads.at(-1).files[0].content_base64, 'base64').toString(), 'Synthetic long pasted text');
+    assert.equal(uploads.at(-1).encrypted, true, 'native pasted text uses ciphertext chunks, not legacy JSON/base64');
+    assert.equal(Buffer.from(uploads.at(-1).files[0].content_base64, 'base64').toString(), longText);
     await screenshot(label, 'composer-attachments');
     await page.focus('#composer');
     await page.keyboard.press('Enter');
