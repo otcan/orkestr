@@ -1,6 +1,7 @@
 """Actual kernel orphan adoption in a disposable root actor; no live service."""
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -15,7 +16,10 @@ class AdoptedKernelTests(unittest.TestCase):
     def test_orphaned_authority_family_reaps_without_reconstructing_setup(self):
         self.kernel_actor(65533)
 
-    def kernel_actor(self,actor_uid):
+    def test_failed_diagnostic_sink_cannot_change_cleanup_custody(self):
+        self.kernel_actor(65534,closed_stderr=True)
+
+    def kernel_actor(self,actor_uid,closed_stderr=False):
         script=r'''
 import ctypes,json,os,subprocess,sys,tempfile,time
 from pathlib import Path
@@ -25,6 +29,11 @@ from codex_service.ownership import Adopted
 from codex_bounded.trust import process,exists
 assert ctypes.CDLL(None).prctl(36,1,0,0,0)==0
 actor_uid=int(sys.argv[2])
+if sys.argv[3]=='closed':
+ class ClosedSink:
+  def write(self,_text):raise OSError(28,'synthetic closed diagnostic sink')
+  def flush(self):pass
+ sys.stderr=ClosedSink()
 with tempfile.TemporaryDirectory(prefix='synthetic-orphan-actor-') as directory:
  root=Path(directory);root.chmod(0o755);marker=root/'markers';marker.mkdir(mode=0o700);os.chown(marker,actor_uid,65534)
  code="""import ctypes,os,sys,time
@@ -53,19 +62,34 @@ time.sleep(60)
   assert all(not exists(identity) for identity in originals)
   assert peer.poll() is None
   assert not any(hasattr(record,'role') for record in pool.records.values())
-  print(json.dumps({'global_reaped':True,'unassigned':True,'known_peer_preserved':True,'broker_exit':broker.returncode}))
+  print(json.dumps({'global_reaped':True,'unassigned':True,'known_peer_preserved':True,'broker_exit':broker.returncode,
+                   'original_pids':sorted(identity['pid'] for identity in originals),'peer_pid':peer.pid}))
  finally:
   pool.drain({(peer.pid,process(peer.pid)['start'])} if peer.poll() is None else set(),seconds=3);pool.close()
   for child in (broker,peer):
    if child.poll() is None:child.kill()
    child.wait(timeout=3)
 '''
-        result=subprocess.run([sys.executable,'-I','-S','-B','-c',script,str(Path(__file__).parent),str(actor_uid)],
+        result=subprocess.run([sys.executable,'-I','-S','-B','-c',script,str(Path(__file__).parent),str(actor_uid),
+                               'closed' if closed_stderr else 'open'],
             capture_output=True,text=True,timeout=20,
             env={'PATH':'/usr/bin:/bin','PYTHONDONTWRITEBYTECODE':'1'})
         self.assertEqual(result.returncode,0,result.stderr)
-        self.assertEqual(json.loads(result.stdout),dict(global_reaped=True,unassigned=True,
+        report=json.loads(result.stdout)
+        original_pids=report.pop('original_pids');peer_pid=report.pop('peer_pid')
+        self.assertEqual(report,dict(global_reaped=True,unassigned=True,
                          known_peer_preserved=True,broker_exit=-9))
+        if closed_stderr:
+            self.assertEqual(result.stderr,'')
+            return
+        lines=result.stderr.splitlines()
+        captures=[re.fullmatch(r'manager unassigned adopted child: pid=(\d+) start=(\d+) uid=(\d+) ppid=(\d+)',line)
+                  for line in lines]
+        self.assertTrue(captures and all(captures),result.stderr)
+        self.assertEqual(sorted(int(match[1]) for match in captures),original_pids)
+        self.assertNotIn(peer_pid,[int(match[1]) for match in captures])
+        self.assertTrue(all(int(match[2])>0 and int(match[3])==actor_uid and int(match[4])>1
+                            for match in captures))
 
 
 if __name__=='__main__':unittest.main()
