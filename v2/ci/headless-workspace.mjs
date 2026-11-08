@@ -787,12 +787,21 @@ try {
   browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox'] });
   for (const [label, viewport] of [['desktop', { width: 1280, height: 860 }], ['phone', { width: 390, height: 844, isMobile: true, hasTouch: true }]]) {
     Object.assign(state, createState());
+    // A sidebar read slower than its old 4s refresh interval must complete.
+    // Before the fix every timer tick cancelled the awaiting Rust resource,
+    // so rows never appeared and additional fetches accumulated.
+    state.sidebarDelayMs = 4500;
+    state.sidebarReads = 0;
     page = await browser.newPage();
     page.on('pageerror', error => errors.push(error.message));
     await page.setViewport(viewport);
     stage = `${label}:load`;
     await page.goto(`${origin}/#conversation/${A}`, { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('#composer');
+    await page.waitForSelector('.conversation-row', { timeout: 12000 });
+    assert.equal(state.sidebarReads, 1, 'slow initial sidebar request is not cancelled or overlapped');
+    assert.equal(await page.$eval('.conversation-sidebar', n => n.textContent.includes('Conversations unavailable')), false);
+    state.sidebarDelayMs = 0;
     for (const [name, run] of scenarios) {
       stage = `${label}:${name}`;
       await run(label);
