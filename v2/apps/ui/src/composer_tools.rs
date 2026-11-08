@@ -1,6 +1,7 @@
 use dioxus::prelude::*;
 use orkestr_v2_contracts::MessageAttachmentReceipt;
 use orkestr_v2_ui::composer_attachments::{self, Attached};
+use orkestr_v2_ui::upload_progress::UploadProgress;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::{cell::Cell, rc::Rc};
@@ -47,6 +48,7 @@ struct Picked {
     #[serde(default)]
     receipts: Vec<MessageAttachmentReceipt>,
     error: Option<String>,
+    progress: Option<UploadProgress>,
 }
 
 fn helper(call: &str) -> String {
@@ -60,9 +62,30 @@ fn file_helper(call: &str, target: &AttachTarget, csrf: &str) -> String {
         AttachTarget::Native(conversation) => {
             let source = include_str!("attach_files.mjs").replace("export ", "");
             let context = json!({"conversation":conversation,"csrf":csrf});
-            format!("{source}\nconst module=await import('/encrypted_upload.js'); const describeFiles=module.nativeDescribe({context});\n{call}")
+            format!("{source}\nconst module=await import('/encrypted_upload.js'); const describeFiles=module.nativeDescribe({context},{{progress:value=>dioxus.send({{progress:value}})}});\n{call}")
         }
     }
+}
+
+async fn pick_with_progress(
+    script: &str,
+    mut progress: Signal<Option<UploadProgress>>,
+    mounted: Signal<bool>,
+) -> Result<Picked, ()> {
+    let mut eval = document::eval(script);
+    while let Ok(picked) = eval.recv::<Picked>().await {
+        if !mounted() {
+            return Err(());
+        }
+        if let Some(value) = picked.progress.as_ref() {
+            if value.is_valid() {
+                progress.set(Some(value.clone()));
+            }
+            continue;
+        }
+        return Ok(picked);
+    }
+    Err(())
 }
 
 fn accept_receipts(
@@ -91,6 +114,7 @@ pub fn AttachTools(
 ) -> Element {
     let mut busy = use_signal(|| false);
     let mut status = use_signal(String::new);
+    let mut progress = use_signal(|| None::<UploadProgress>);
     let mut pasting = use_signal(|| false);
     let mut pasted = use_signal(String::new);
     let mut mounted = use_signal(|| true);
@@ -102,6 +126,7 @@ pub fn AttachTools(
             let (target, csrf) = (target.clone(), csrf.clone());
             spawn(async move {
                 busy.set(true);
+                progress.set(None);
                 status.set("Uploading…".into());
                 let result = async {
                     let key = crate::transport::key().await?;
@@ -180,7 +205,23 @@ pub fn AttachTools(
                     if !mounted() {
                         return;
                     }
+                    if let Some(value) = picked.progress.as_ref() {
+                        if value.is_valid() {
+                            busy.set(value.is_active());
+                            status.set(String::new());
+                            progress.set(Some(value.clone()));
+                        }
+                        continue;
+                    }
+                    if !picked.receipts.is_empty()
+                        || (picked.error.is_none() && picked.files.is_empty())
+                    {
+                        busy.set(false);
+                        progress.set(None);
+                        status.set(String::new());
+                    }
                     if !accept_receipts(picked.receipts.clone(), attached) {
+                        progress.set(None);
                         status.set("Upload reply could not be verified.".into());
                         continue;
                     }
@@ -205,14 +246,16 @@ pub fn AttachTools(
                     let upload = pick_upload.clone();
                     let target=pick_target.clone();let csrf=pick_csrf.clone();
                     spawn(async move {
-                        busy.set(true);status.set("Uploading…".into());
-                        let picked = document::eval(&file_helper("return await pick(document, describeFiles);",&target,&csrf)).join::<Picked>().await;
+                        busy.set(true);progress.set(None);status.set("Choose files to attach…".into());
+                        let script=file_helper("dioxus.send(await pick(document, describeFiles));return null;",&target,&csrf);
+                        let picked = pick_with_progress(&script,progress,mounted).await;
+                        if !mounted() {return;}
                         busy.set(false);status.set(String::new());
-                        if let Ok(picked)=&picked {if !accept_receipts(picked.receipts.clone(),attached){status.set("Upload reply could not be verified.".into());return;}}
+                        if let Ok(picked)=&picked {if !accept_receipts(picked.receipts.clone(),attached){progress.set(None);status.set("Upload reply could not be verified.".into());return;}}
                         match picked {
                             Ok(Picked { error: Some(error), .. }) => status.set(error),
                             Ok(Picked { files, .. }) if !files.is_empty() => upload(files),
-                            Ok(_) => {}
+                            Ok(_) => {progress.set(None);}
                             Err(_) => status.set("Files could not be read.".into()),
                         }
                     });
@@ -233,6 +276,8 @@ pub fn AttachTools(
                 }
             }
             span { class: "drop-hint", "aria-hidden": "true", "or drop files here" }
+            if let Some(value)=progress() {crate::upload_progress_view::UploadProgressView {value}}
+            else if busy() {progress {"aria-label":"Preparing file upload",class:"upload-progress-pending"}}
             if !status().is_empty() { span { class: "tool-status", role: "status", "{status}" } }
         }
         if pasting() {

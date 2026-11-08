@@ -103,8 +103,17 @@ export const scenarios = [
     // Attach an image through the file picker and paste long text as a file.
     const file = '/tmp/orkestr-v2-synthetic-pixel.png';
     await import('node:fs/promises').then(fs => fs.writeFile(file, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==', 'base64')));
+    state.holdEncryptedAttachment=true;
     const [chooser] = await Promise.all([page.waitForFileChooser(), page.click('.message-composer .tool-button')]);
     await chooser.accept([file]);
+    await page.waitForFunction(()=>document.querySelector('.upload-progress-stage')?.textContent.includes('preparing attachment'));
+    assert.equal(await page.$eval('.upload-progress progress',p=>p.value),100,'acknowledged transfer is complete');
+    assert.match(await text('.upload-progress-bytes'),/100%.*transferred/);
+    assert.equal(await page.$('.attachment-chip'),null,'no attachment before the preparation receipt');
+    await screenshot(label,'encrypted-upload-progress');
+    assert.equal(typeof state.releaseEncryptedAttachment,'function');
+    state.holdEncryptedAttachment=false;state.releaseEncryptedAttachment();
+
     await page.waitForFunction(() => document.querySelector('.attachment-chip .chip-name')?.textContent === 'orkestr-v2-synthetic-pixel.png');
     await clickText('Paste text');
     await page.type('#paste-text', 'Synthetic long pasted text');
