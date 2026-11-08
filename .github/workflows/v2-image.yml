@@ -43,6 +43,11 @@ jobs:
           test "$(docker info --format '{{.Architecture}}')" = x86_64
       - name: Failure-oriented bootstrap checks
         run: python3 -I -S -B -m unittest discover -s v2/packaging/oss/tests -v
+      - name: Sample build CPU and memory counters
+        run: |
+          python3 -I -S -B v2/packaging/oss/image_metrics.py \
+            --output "$RUNNER_TEMP/image-metrics.jsonl" --stop "$RUNNER_TEMP/image-metrics.stop" \
+            > "$RUNNER_TEMP/image-metrics.log" 2>&1 < /dev/null &
       - name: Import shared tooling and locked dependencies (PRs read only)
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
@@ -169,6 +174,11 @@ jobs:
           push: false
           target: runtime
           cache-to: type=gha,version=2,scope=v2-image-v1-amd64-${{ hashFiles('v2/packaging/oss/Dockerfile', 'v2/rust-toolchain.toml', 'v2/Cargo.lock', 'package-lock.json') }},mode=max,compression=gzip,force-compression=true,timeout=5m,ignore-error=true
+      - name: Finish resource sampling
+        if: always()
+        run: |
+          touch "$RUNNER_TEMP/image-metrics.stop"
+          sleep 3
       - name: Retain synthetic acceptance evidence and candidate bundle
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -179,6 +189,7 @@ jobs:
             ${{ runner.temp }}/local-fresh-install.json
             ${{ runner.temp }}/cache-boundaries*
             ${{ runner.temp }}/cache-budget.json
+            ${{ runner.temp }}/image-metrics*
             ${{ runner.temp }}/bundle/*.tar.gz
             ${{ runner.temp }}/bundle/SHA256SUMS
             ${{ runner.temp }}/bundle/paired-artifacts.json
@@ -214,6 +225,11 @@ jobs:
           test "$(docker info --format '{{.Architecture}}')" = aarch64
       - name: Failure-oriented bootstrap checks
         run: python3 -I -S -B -m unittest discover -s v2/packaging/oss/tests -v
+      - name: Sample build CPU and memory counters
+        run: |
+          python3 -I -S -B v2/packaging/oss/image_metrics.py \
+            --output "$RUNNER_TEMP/image-metrics.jsonl" --stop "$RUNNER_TEMP/image-metrics.stop" \
+            > "$RUNNER_TEMP/image-metrics.log" 2>&1 < /dev/null &
       - name: Import shared tooling and locked dependencies (PRs read only)
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
@@ -340,6 +356,11 @@ jobs:
           push: false
           target: runtime
           cache-to: type=gha,version=2,scope=v2-image-v1-arm64-${{ hashFiles('v2/packaging/oss/Dockerfile', 'v2/rust-toolchain.toml', 'v2/Cargo.lock', 'package-lock.json') }},mode=max,compression=gzip,force-compression=true,timeout=5m,ignore-error=true
+      - name: Finish resource sampling
+        if: always()
+        run: |
+          touch "$RUNNER_TEMP/image-metrics.stop"
+          sleep 3
       - name: Retain synthetic acceptance evidence and candidate bundle
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -350,6 +371,7 @@ jobs:
             ${{ runner.temp }}/local-fresh-install.json
             ${{ runner.temp }}/cache-boundaries*
             ${{ runner.temp }}/cache-budget.json
+            ${{ runner.temp }}/image-metrics*
             ${{ runner.temp }}/bundle/*.tar.gz
             ${{ runner.temp }}/bundle/SHA256SUMS
             ${{ runner.temp }}/bundle/paired-artifacts.json
