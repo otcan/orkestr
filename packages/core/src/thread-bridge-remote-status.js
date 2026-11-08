@@ -1,3 +1,4 @@
+import { backendForBinding, remoteJson } from "./remote-runtime-http.js";
 import { remoteWhatsAppRuntimeBinding } from "./thread-remote-runtime-binding.js";
 
 const MAX_AGE_MS = 5000;
@@ -6,7 +7,6 @@ const phases = new Set(["queued", "starting", "running", "cancel_requested", "ca
 async function read(thread, suffix, env, fetchImpl) {
   const remote = remoteWhatsAppRuntimeBinding(thread, env);
   if (!remote) return null;
-  const { backendForBinding, remoteJson } = await import("../../connectors/src/whatsapp-remote-runtime.js");
   const backend = backendForBinding(remote.binding, env);
   return remoteJson(backend, `threads/${encodeURIComponent(remote.remoteThreadId)}/${suffix}`, fetchImpl);
 }
