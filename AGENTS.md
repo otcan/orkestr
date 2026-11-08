@@ -112,3 +112,14 @@ of relying on static thread or workspace text in this file.
 - Do not launch unmanaged Chrome, create ad hoc browser profiles, or bypass the
   desktop lease APIs for web work. If a connector needs browser state, use the
   managed Orkestr browser or desktop surface assigned to that connector.
+
+## Grant Application Workflows
+
+When a task concerns grant or funding applications, follow
+[the grant application workflow](docs/grant-applications.md). Keep each
+application's canonical section Markdown files and Git history in its authorized
+private repository. Pin portal-verified content separately from later drafts;
+never infer submission from a local commit. Use a permission-aware, metadata-only
+catalog for coordination between parent and application threads. This public
+repository contains generic guidance only, not real application records, private
+catalog entries, evidence, or private repository/thread links.
