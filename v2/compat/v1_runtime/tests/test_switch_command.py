@@ -83,6 +83,25 @@ class SwitchCommandTests(Harness):
     def applied(self):
         return [c for c in self.tool.calls if c[:1] != ["--status"] and "--dry-run" not in c]
 
+    def test_unqualified_model_form_and_legacy_deep_alias_target_the_same_agent(self):
+        expected = parse("/switch deep gpt-b high all from gpt-a")
+        for text in ("/switch gpt-b high all from gpt-a", "/switch model gpt-b high all from gpt-a"):
+            self.assertEqual(parse(text), expected)
+        self.answer("/switch gpt-b high")
+        self.assertEqual(self.applied()[0][:4], ["--layer", "deep", "--to", "gpt-b"])
+
+    def test_retired_fast_commands_do_not_even_read_tool_status(self):
+        for text in ("/switch fast gpt-b", "/switch fast claude", "/switch fast codex"):
+            self.assertIn("retired", self.answer(text))
+        self.assertEqual(self.tool.calls, [])
+
+    def test_legacy_fast_confirmation_cannot_mutate_the_retired_layer(self):
+        switch_command.save_pending(self.binding(1).ledger,
+            {"args": ["--layer", "fast", "--to", "gpt-b", "--scope", self.conversation],
+             "expires_at": 10 ** 12, "conversation": self.conversation})
+        self.assertIn("retired", self.answer("/switch yes"))
+        self.assertEqual(self.tool.calls, [])
+
     def test_the_command_is_consumed_and_answered_through_the_normal_export(self):
         self.send("/switch status")
         ledger = self.binding(1).ledger
@@ -94,9 +113,9 @@ class SwitchCommandTests(Harness):
         self.assertEqual((user["role"], user["text"]), ("user", "/switch status"))
         self.assertEqual((reply["role"], reply["kind"], reply["phase"], reply["parentMessageId"]),
                          ("assistant", "notice", "final_answer", user["id"]))
-        self.assertIn("Deep: codex gpt-a, effort medium", reply["text"])
-        self.assertIn("Fast: gpt-f, effort low", reply["text"])
-        self.assertIn("All live chats: Deep codex:gpt-a ×2", reply["text"])
+        self.assertIn("Agent: codex gpt-a, effort medium", reply["text"])
+        self.assertNotIn("gpt-f", reply["text"])
+        self.assertIn("All live chats: codex:gpt-a ×2", reply["text"])
         self.assertTrue(reply["text"].endswith(switch_command.FOOTER))
         self.assertEqual(self.tool.calls, [["--status", "--json"]])
         # Answered once: a second pass does nothing; the ack settles it as usual.
@@ -121,9 +140,9 @@ class SwitchCommandTests(Harness):
         self.assertIn("Chat: codex:gpt-a/medium → codex:gpt-b/medium", text)
         self.assertIn("/switch back to undo.", text)
 
-    def test_fast_all_and_from_forms(self):
-        self.answer("/switch fast gpt-c low all from gpt-f")
-        self.assertEqual(self.applied()[0][:10], ["--layer", "fast", "--to", "gpt-c", "--effort", "low", "--scope", "codex",
+    def test_agent_all_and_from_forms(self):
+        self.answer("/switch gpt-c low all from gpt-f")
+        self.assertEqual(self.applied()[0][:10], ["--layer", "deep", "--to", "gpt-c", "--effort", "low", "--scope", "codex",
                                                   "--from", "gpt-f"])
         text = self.answer("/switch deep default")
         self.assertEqual(self.applied()[1][:6], ["--layer", "deep", "--to", "default", "--scope", self.conversation])
@@ -152,7 +171,7 @@ class SwitchCommandTests(Harness):
         [apply] = self.applied()
         self.assertEqual(apply[apply.index("--provider") + 1], "claude")
         self.assertIn("--yes", apply)
-        self.assertIn("✅ Deep switched for this chat (1 changed, 0 skipped):", text)
+        self.assertIn("✅ Agent switched for this chat (1 changed, 0 skipped):", text)
         # The confirmation is used once.
         self.assertIn("No provider switch is waiting", self.answer("/switch yes"))
         self.assertEqual(len(self.applied()), 1)
@@ -199,12 +218,12 @@ class SwitchCommandTests(Harness):
         self.assertEqual(self.applied(), [])
         self.assertEqual([c for c in self.tool.calls if "--dry-run" in c], [])
 
-    def test_fast_provider_shorthand(self):
-        self.assertIn("Fast is Codex-only", self.answer("/switch fast claude"))
-        self.assertIn("Fast is already on Codex: gpt-f, effort low.", self.answer("/switch fast Codex"))
-        self.tool.chats = [chat(self.conversation, provider="claude", model="opus", fast=None)]
-        self.assertIn("Fast preferences are Codex-only", self.answer("/switch fast codex"))
-        self.assertEqual([c for c in self.tool.calls if c[:1] != ["--status"]], [])
+    def test_provider_prefix_matches_shorthand_and_keeps_confirmation(self):
+        self.assertEqual(parse("/switch provider claude"), parse("/switch claude"))
+        self.assertIn("Reply /switch yes", self.answer("/switch provider claude"))
+        self.assertEqual(self.applied(), [])
+        self.answer("/switch yes")
+        self.assertEqual(self.applied()[0][-1], "--yes")
 
     def test_codex_model_for_the_claude_chats_is_a_provider_switch(self):
         self.answer("/switch deep gpt-b for claude")
@@ -215,7 +234,7 @@ class SwitchCommandTests(Harness):
 
     def test_a_claude_chat_switching_to_codex_asks_first(self):
         self.tool.chats = [chat(self.conversation, provider="claude", model="opus", effort="high", fast=None)]
-        self.assertIn("Fast preferences are Codex-only", self.answer("/switch status"))
+        self.assertIn("Agent: claude opus, effort high", self.answer("/switch status"))
         self.assertIn("/switch yes", self.answer("/switch deep gpt-b"))
         self.assertEqual(self.applied(), [])
 
@@ -238,6 +257,13 @@ class SwitchCommandTests(Harness):
         self.assertIn("Nothing to switch back in this chat", self.answer("/switch back"))
         self.tool._history = []
         self.assertIn("Nothing to switch back: nothing to revert", self.answer("/switch back all"))
+
+    def test_retired_history_is_not_reverted(self):
+        self.tool._history = [{"kind": "switch", "record": "F1", "layer": "fast", "changed": [
+            {"conversation": self.conversation, "before": {"model": "gpt-old"}, "after": {"model": "gpt-f"}}]}]
+        self.assertIn("Nothing to switch back", self.answer("/switch back"))
+        self.assertIn("retired role", self.answer("/switch back all"))
+        self.assertEqual(self.applied(), [])
 
     def test_an_unconfigured_host_says_so_and_changes_nothing(self):
         self.binding(1).worker.switcher = Switcher(tool="", records="")
@@ -292,7 +318,7 @@ class WorkerPassTests(unittest.TestCase):
             worker.switcher = FakeSwitcher([chat("c1")])
             worker.run_once(Signal())
             [user, reply] = ledger.messages()
-            self.assertIn("Deep: codex gpt-a", reply["text"])
+            self.assertIn("Agent: codex gpt-a", reply["text"])
             self.assertEqual([m for m in peer.mutations if m[0] == "/messages"], [])
 
 
