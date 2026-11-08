@@ -269,7 +269,10 @@ impl AppState {
         )?));
         Ok(self)
     }
-    pub fn with_provider_quota_file(mut self, path: &std::path::Path) -> Result<Self, &'static str> {
+    pub fn with_provider_quota_file(
+        mut self,
+        path: &std::path::Path,
+    ) -> Result<Self, &'static str> {
         self.provider_quota = Some(Arc::new(provider_quota_http::Source::load(path)?));
         Ok(self)
     }

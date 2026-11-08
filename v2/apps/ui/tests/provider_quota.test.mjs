@@ -24,3 +24,18 @@ test('fixed passive cookie-only path and bounded response; malformed responses c
  for(const body of ['x'.repeat(17000),'not json']){const result=await providerQuotaRequest(undefined,async()=>new Response(body),()=>now);assert.equal(result.status,0);assert.equal(result.cards[0].status,'unavailable');}
  const denied=await providerQuotaRequest(undefined,async()=>new Response('',{status:401}),()=>now);assert.equal(denied.status,401);
 });
+
+test('one expired window does not hide a valid window or invent a fresh observation',()=>{
+ const [card]=quotaCards({quota:{codex:{...q,fiveHourResetsAt:'2026-01-01T12:00:00Z',observedAt:'2026-01-01T01:00:00Z'}}},now);
+ assert.equal(card.label,'5h ? · wk 0%');
+ assert.equal(card.status,'stale');
+ assert.equal(card.reset,'5h ↻ ? · wk ↻ 2d 0h');
+ assert.match(card.detail,/expired observation; waiting for new telemetry/);
+});
+test('reset countdown is visible without hover and updates from passive time only',()=>{
+ const snapshot={quota:{codex:q}};
+ assert.equal(quotaCards(snapshot,now)[0].reset,'5h ↻ 1h 0m · wk ↻ 2d 0h');
+ const later=quotaCards(snapshot,now+30*60*1000)[0];
+ assert.equal(later.reset,'5h ↻ 30m · wk ↻ 1d 23h');
+ assert.equal(later.label,'5h 75% · wk 0%');
+});
