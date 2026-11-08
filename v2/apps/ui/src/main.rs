@@ -17,6 +17,7 @@ mod conversation_posts_view;
 mod conversation_sidebar;
 mod conversation_status_poll;
 mod desktop_open_view;
+mod desktop_resource_card;
 mod execution_panel;
 mod execution_poll;
 mod fast_panel;

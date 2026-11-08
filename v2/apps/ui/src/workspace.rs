@@ -27,6 +27,7 @@ pub fn Workspace(
     let mut tab = use_signal(|| match &initial {
         Some(Route::Conversation { tab, .. }) => *tab,
         Some(Route::Host { .. }) => Tab::Host,
+        Some(Route::VirtualDesks) => Tab::VirtualDesks,
         _ => Tab::Chat,
     });
     let mut host_charts = use_signal(|| matches!(initial, Some(Route::Host { charts: true, .. })));
@@ -66,6 +67,7 @@ pub fn Workspace(
                 Some(thread) => Route::V1Thread { thread },
                 None => return,
             },
+            None if tab() == Tab::VirtualDesks => Route::VirtualDesks,
             None if tab() == Tab::Host => Route::Host {
                 charts: host_charts(),
                 range: host_range(),
@@ -108,6 +110,10 @@ pub fn Workspace(
                         reload += 1;
                     }
                     tab.set(wanted_tab);
+                }
+                Route::VirtualDesks => {
+                    linked.set(None);
+                    tab.set(Tab::VirtualDesks);
                 }
                 Route::Host { charts, range } => {
                     linked.set(None);
@@ -221,12 +227,12 @@ pub fn Workspace(
                 if !link_notice().is_empty() { p { class: "app-notice link-notice", role: "status", "{link_notice}" } }
                 header { class: "conversation-heading",
                     button { class: "threads-toggle", "aria-expanded": "{sidebar}", "aria-label": "Conversations", onclick: move |_| sidebar.set(!sidebar()), span { "aria-hidden": "true", "☰" } }
-                    if let Some(entry) = header.as_ref() {
+                    if let Some(entry) = header.as_ref().filter(|_| tab() != Tab::VirtualDesks) {
                         crate::conversation_sidebar::Avatar { key: "{entry.key}", name: entry.name.clone(), thread: entry.v1_thread_id.clone() }
                     }
                     div { class: "heading-title",
-                        h2 { "{title}" }
-                        if let Some(label) = activity.clone() {
+                        h2 { if tab() == Tab::VirtualDesks { "Virtual desks" } else { "{title}" } }
+                        if let Some(label) = activity.clone().filter(|_| tab() != Tab::VirtualDesks) {
                             p { class: "heading-activity", role: "status", "{label}" }
                         } else if let Some(entry) = header.as_ref().filter(|e| e.read_only) {
                             p { class: "heading-meta", if entry.coordinator { "On V1 · coordinator attached" } else { "On V1 · read-only" } }
@@ -277,9 +283,8 @@ pub fn Workspace(
                             crate::live_map_view::LiveMapView { key: "{session_scope.read().generation()}", session_scope, onexpired }
                         } else if tab() == Tab::VirtualDesks {
                             crate::virtual_desks_view::VirtualDesks {
-                                key: "desks-{current()}-{session_scope.read().generation()}",
-                                conversation: current(), csrf, session_scope, onexpired,
-                                onsettings: move |_| tab.set(Tab::Settings),
+                                key: "desks-{session_scope.read().generation()}",
+                                csrf, session_scope, onexpired,
                             }
                         } else if tab() == Tab::Host {
                             crate::host_dashboard::HostDashboard { key: "{session_scope.read().generation()}", session_scope, charts: host_charts, range: host_range, onexpired }
