@@ -634,6 +634,10 @@ export const scenarios = [
   ['host-metrics', async label => {
     // The heading panel is always visible and opens the host overview.
     await page.waitForFunction(() => document.querySelector('.host-metrics-panel')?.textContent.includes('32%'), { timeout: 20000 });
+    await page.waitForFunction(() => document.querySelector('.provider-quota-panel')?.textContent.includes('5h 75% · wk 40%'), {timeout:20000});
+    assert.equal(await page.$$eval('.provider-quota-item', cards => cards.length), 2);
+    assert.match(await text('.provider-quota-panel'), /Claude.*wk 8%.*stale/s);
+    assert.match(await page.$eval('.provider-quota-item', card => card.title), /resets in/);
     await page.click('.host-metrics-panel');
     await page.waitForFunction(() => location.hash === '#host');
     await waitText('Top consumers');
