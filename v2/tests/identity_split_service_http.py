@@ -132,6 +132,7 @@ class Rehearsal:
             roles[role]={'launcher':str(launcher),'launcher_sha256':digest(launcher),'workspace':paths['workspace']}
             for path in (profile,launcher):manifest['files'][path.name]=digest(path)
         beta['roles']={'fast':roles['fast'],'workers':[roles['worker-'+str(i)] for i in range(4)]}
+        beta['legacy_companions']=True  # Historical companion/Worker fixture.
         beta_path.write_text(json.dumps(beta));manifest_path.write_text(json.dumps(manifest))
         (self.fixture.workspace/'mode').write_text('hold')
 
@@ -207,6 +208,7 @@ while True:time.sleep(1)
         beta_path=package/'beta.json';beta=json.loads(beta_path.read_text())
         beta['claude']={'launcher':str(launcher),'launcher_sha256':digest(launcher),
                         'workspace':directories['workspace'],'default':True,'fast':not self.fault_orphan}
+        beta['legacy_companions']=True  # Historical Claude companion fixture.
         beta_path.write_text(json.dumps(beta))
         manifest_path=package/'manifest.json';manifest=json.loads(manifest_path.read_text())
         for name in CLAUDE_BROKER:
@@ -372,7 +374,7 @@ while True:time.sleep(1)
                 db.execute('PRAGMA query_only=ON')
                 return db.execute("SELECT id,state,native_session_id FROM production_runs WHERE message_id=? AND role='deep' AND state='succeeded'",(admitted['message_id'],)).fetchone()
         row=wait(accepted,'Core accepted synthetic Codex completion',seconds=getattr(self,'completion_wait_seconds',30))
-        if self.provider=='claude':
+        if self.provider=='claude' and self.package.beta.get('legacy_companions',False):
             def fast_accepted():
                 assert not self.pump_errors,self.pump_errors
                 with sqlite3.connect(core.as_uri()+'?mode=ro',uri=True) as db:
@@ -385,7 +387,10 @@ while True:time.sleep(1)
         if self.provider=='claude':
             spawns=[r for r in records if r['kind']=='spawn']
             assert any(not r['read_only'] and r['model']=='synthetic-claude-model' and r['effort']=='low' for r in spawns),spawns
-            assert any(r['read_only'] and r['model']=='sonnet' and r['effort']=='low' for r in spawns),spawns
+            if self.package.beta.get('legacy_companions',False):
+                assert any(r['read_only'] and r['model']=='sonnet' and r['effort']=='low' for r in spawns),spawns
+            else:
+                assert not any(r['read_only'] for r in spawns),spawns
         children=[record.identity for window in self.manager.windows.values() for record in window.children.records.values()]
         assert children and all(r['uid']==UID for r in children)
         assert core.stat().st_uid==self.package.authority_uid!=UID
