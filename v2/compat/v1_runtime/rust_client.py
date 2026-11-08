@@ -199,7 +199,8 @@ class RustSession:
         raw = bytearray()
         try:
             connection = (PeerConnection(self.host,self.port,descriptor_path=self.peer_descriptor_path,
-                          owner=self.owner,source=self.source,timeout=transport_timeout_s)
+                          owner=self.owner,source=self.source,timeout=transport_timeout_s,
+                          deadline=started+transport_timeout_s)
                           if self.peer_descriptor_path is not None else
                           http.client.HTTPConnection(self.host,self.port,timeout=transport_timeout_s))
             connection.connect()

@@ -162,6 +162,7 @@ jobs:
         working-directory: ${{ github.workspace }}
         run: |
           sudo env PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -I -S -B -m unittest discover -s "$PWD/v2/compat/tests" -p test_service_peer.py -v
+          sudo env PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -I -S -B -m unittest discover -s "$PWD/v2/compat/tests" -p test_service_peer_handoff.py -v
           sudo env PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -I -S -B -m unittest discover -s "$PWD/v2/compat/tests" -p test_service_client.py -v
           sudo env PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -B -m unittest discover -s v2/compat/v1_runtime/tests -p test_service_session_cache.py -v
           sudo env PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -B -m unittest discover -s v2/compat/v1_runtime/tests -p test_provision_service_credential.py -v
