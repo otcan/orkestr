@@ -4,7 +4,7 @@ on:
     branches: ['v2/**']
     paths: ['v2/**', '.github/workflows/v2-image.yml']
   push:
-    branches: [v2/rust-rewrite]
+    branches: [v2/rust-rewrite, 'ci/image-cache/**']
     paths: ['v2/**', '.github/workflows/v2-image.yml']
   workflow_dispatch:
 permissions:
@@ -17,30 +17,79 @@ jobs:
     # Native builds only (no QEMU); runners stay literal for the workflow policy.
     runs-on: ubuntu-latest
     timeout-minutes: 75
+    permissions:
+      contents: read
+      actions: read
+    env:
+      DOCKER_CONFIG: ${{ runner.temp }}/empty-docker-config
+      DOCKER_BUILD_RECORD_UPLOAD: 'false'
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
+      - name: Create an empty anonymous Docker configuration
+        run: mkdir "$DOCKER_CONFIG"
+      - name: Set up the isolated native BuildKit builder
+        id: builder
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          version: v0.38.2
+          driver: docker-container
+          buildkitd-flags: ''
+          cache-binary: false
       - name: Runner architecture is native amd64
         run: |
           test "$(docker info --format '{{.Architecture}}')" = x86_64
       - name: Failure-oriented bootstrap checks
         run: python3 -I -S -B -m unittest discover -s v2/packaging/oss/tests -v
-      - name: Build only from anonymous public source (no push)
+      - name: Import shared tooling and locked dependencies (PRs read only)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: v2/packaging/oss/Dockerfile
+          builder: ${{ steps.builder.outputs.name }}
+          build-args: |
+            SOURCE_COMMIT=${{ github.event.pull_request.head.sha || github.sha }}
+            BUILD_JOBS=4
+          push: false
+          target: dependencies
+          cache-from: type=gha,version=2,scope=v2-image-v1-amd64-${{ hashFiles('v2/packaging/oss/Dockerfile', 'v2/rust-toolchain.toml', 'v2/Cargo.lock', 'package-lock.json') }},timeout=2m
+      - name: Verify fail-fast gates and cross-source tooling reuse
         env:
           SOURCE: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
-          mkdir "$RUNNER_TEMP/empty-docker-config"
-          export DOCKER_CONFIG="$RUNNER_TEMP/empty-docker-config"
           OTHER_SOURCE=$(git cat-file -p "$SOURCE" | awk '$1 == "parent" { print $2; exit }')
           python3 -I -S -B v2/packaging/oss/cache_boundaries.py \
-            --source "$SOURCE" --other-source "$OTHER_SOURCE" \
+            --source "$SOURCE" --other-source "$OTHER_SOURCE" --jobs 4 \
             --report "$RUNNER_TEMP/cache-boundaries.json"
-          docker build --progress=plain --build-arg SOURCE_COMMIT="$SOURCE" \
-            --tag orkestr-v2:fresh --file v2/packaging/oss/Dockerfile .
-          docker build --build-arg SOURCE_COMMIT="$SOURCE" --target bundle \
-            --output "type=local,dest=$RUNNER_TEMP/bundle" --file v2/packaging/oss/Dockerfile .
+      - name: Build only from anonymous public source (no push)
+        id: runtime
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: v2/packaging/oss/Dockerfile
+          builder: ${{ steps.builder.outputs.name }}
+          build-args: |
+            SOURCE_COMMIT=${{ github.event.pull_request.head.sha || github.sha }}
+            BUILD_JOBS=4
+          push: false
+          target: runtime
+          load: true
+          tags: orkestr-v2:fresh
+          cache-from: type=gha,version=2,scope=v2-image-v1-amd64-${{ hashFiles('v2/packaging/oss/Dockerfile', 'v2/rust-toolchain.toml', 'v2/Cargo.lock', 'package-lock.json') }},timeout=2m
+      - name: Export the paired candidate bundle
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: v2/packaging/oss/Dockerfile
+          builder: ${{ steps.builder.outputs.name }}
+          build-args: |
+            SOURCE_COMMIT=${{ github.event.pull_request.head.sha || github.sha }}
+            BUILD_JOBS=4
+          push: false
+          target: bundle
+          outputs: type=local,dest=${{ runner.temp }}/bundle
       - name: Everyday Compose commands need no exported commit
         env:
           SOURCE: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -86,6 +135,40 @@ jobs:
           if-no-files-found: error
           compression-level: 0
           retention-days: 7
+      - name: Preview the compressed cache within the free storage allowance
+        if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: v2/packaging/oss/Dockerfile
+          builder: ${{ steps.builder.outputs.name }}
+          build-args: |
+            SOURCE_COMMIT=${{ github.event.pull_request.head.sha || github.sha }}
+            BUILD_JOBS=4
+          push: false
+          target: runtime
+          cache-to: type=local,dest=${{ runner.temp }}/cache-preview,mode=max,compression=gzip,force-compression=true
+      - name: Admit cache export without evicting unrelated caches
+        id: cache-budget
+        if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 -I -S -B v2/packaging/oss/cache_budget.py \
+            --preview "$RUNNER_TEMP/cache-preview" --report "$RUNNER_TEMP/cache-budget.json"
+      - name: Publish trusted-branch cache only (never PR results)
+        if: ${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && steps.cache-budget.outputs.allowed == 'true' }}
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: v2/packaging/oss/Dockerfile
+          builder: ${{ steps.builder.outputs.name }}
+          build-args: |
+            SOURCE_COMMIT=${{ github.event.pull_request.head.sha || github.sha }}
+            BUILD_JOBS=4
+          push: false
+          target: runtime
+          cache-to: type=gha,version=2,scope=v2-image-v1-amd64-${{ hashFiles('v2/packaging/oss/Dockerfile', 'v2/rust-toolchain.toml', 'v2/Cargo.lock', 'package-lock.json') }},mode=max,compression=gzip,force-compression=true,timeout=5m,ignore-error=true
       - name: Retain synthetic acceptance evidence and candidate bundle
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -95,6 +178,7 @@ jobs:
             ${{ runner.temp }}/fresh-install.json
             ${{ runner.temp }}/local-fresh-install.json
             ${{ runner.temp }}/cache-boundaries*
+            ${{ runner.temp }}/cache-budget.json
             ${{ runner.temp }}/bundle/*.tar.gz
             ${{ runner.temp }}/bundle/SHA256SUMS
             ${{ runner.temp }}/bundle/paired-artifacts.json
@@ -104,30 +188,79 @@ jobs:
     # Native builds only (no QEMU); runners stay literal for the workflow policy.
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 75
+    permissions:
+      contents: read
+      actions: read
+    env:
+      DOCKER_CONFIG: ${{ runner.temp }}/empty-docker-config
+      DOCKER_BUILD_RECORD_UPLOAD: 'false'
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
+      - name: Create an empty anonymous Docker configuration
+        run: mkdir "$DOCKER_CONFIG"
+      - name: Set up the isolated native BuildKit builder
+        id: builder
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          version: v0.38.2
+          driver: docker-container
+          buildkitd-flags: ''
+          cache-binary: false
       - name: Runner architecture is native arm64
         run: |
           test "$(docker info --format '{{.Architecture}}')" = aarch64
       - name: Failure-oriented bootstrap checks
         run: python3 -I -S -B -m unittest discover -s v2/packaging/oss/tests -v
-      - name: Build only from anonymous public source (no push)
+      - name: Import shared tooling and locked dependencies (PRs read only)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: v2/packaging/oss/Dockerfile
+          builder: ${{ steps.builder.outputs.name }}
+          build-args: |
+            SOURCE_COMMIT=${{ github.event.pull_request.head.sha || github.sha }}
+            BUILD_JOBS=4
+          push: false
+          target: dependencies
+          cache-from: type=gha,version=2,scope=v2-image-v1-arm64-${{ hashFiles('v2/packaging/oss/Dockerfile', 'v2/rust-toolchain.toml', 'v2/Cargo.lock', 'package-lock.json') }},timeout=2m
+      - name: Verify fail-fast gates and cross-source tooling reuse
         env:
           SOURCE: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
-          mkdir "$RUNNER_TEMP/empty-docker-config"
-          export DOCKER_CONFIG="$RUNNER_TEMP/empty-docker-config"
           OTHER_SOURCE=$(git cat-file -p "$SOURCE" | awk '$1 == "parent" { print $2; exit }')
           python3 -I -S -B v2/packaging/oss/cache_boundaries.py \
-            --source "$SOURCE" --other-source "$OTHER_SOURCE" \
+            --source "$SOURCE" --other-source "$OTHER_SOURCE" --jobs 4 \
             --report "$RUNNER_TEMP/cache-boundaries.json"
-          docker build --progress=plain --build-arg SOURCE_COMMIT="$SOURCE" \
-            --tag orkestr-v2:fresh --file v2/packaging/oss/Dockerfile .
-          docker build --build-arg SOURCE_COMMIT="$SOURCE" --target bundle \
-            --output "type=local,dest=$RUNNER_TEMP/bundle" --file v2/packaging/oss/Dockerfile .
+      - name: Build only from anonymous public source (no push)
+        id: runtime
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: v2/packaging/oss/Dockerfile
+          builder: ${{ steps.builder.outputs.name }}
+          build-args: |
+            SOURCE_COMMIT=${{ github.event.pull_request.head.sha || github.sha }}
+            BUILD_JOBS=4
+          push: false
+          target: runtime
+          load: true
+          tags: orkestr-v2:fresh
+          cache-from: type=gha,version=2,scope=v2-image-v1-arm64-${{ hashFiles('v2/packaging/oss/Dockerfile', 'v2/rust-toolchain.toml', 'v2/Cargo.lock', 'package-lock.json') }},timeout=2m
+      - name: Export the paired candidate bundle
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: v2/packaging/oss/Dockerfile
+          builder: ${{ steps.builder.outputs.name }}
+          build-args: |
+            SOURCE_COMMIT=${{ github.event.pull_request.head.sha || github.sha }}
+            BUILD_JOBS=4
+          push: false
+          target: bundle
+          outputs: type=local,dest=${{ runner.temp }}/bundle
       - name: Everyday Compose commands need no exported commit
         env:
           SOURCE: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -173,6 +306,40 @@ jobs:
           if-no-files-found: error
           compression-level: 0
           retention-days: 7
+      - name: Preview the compressed cache within the free storage allowance
+        if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: v2/packaging/oss/Dockerfile
+          builder: ${{ steps.builder.outputs.name }}
+          build-args: |
+            SOURCE_COMMIT=${{ github.event.pull_request.head.sha || github.sha }}
+            BUILD_JOBS=4
+          push: false
+          target: runtime
+          cache-to: type=local,dest=${{ runner.temp }}/cache-preview,mode=max,compression=gzip,force-compression=true
+      - name: Admit cache export without evicting unrelated caches
+        id: cache-budget
+        if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 -I -S -B v2/packaging/oss/cache_budget.py \
+            --preview "$RUNNER_TEMP/cache-preview" --report "$RUNNER_TEMP/cache-budget.json"
+      - name: Publish trusted-branch cache only (never PR results)
+        if: ${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && steps.cache-budget.outputs.allowed == 'true' }}
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: v2/packaging/oss/Dockerfile
+          builder: ${{ steps.builder.outputs.name }}
+          build-args: |
+            SOURCE_COMMIT=${{ github.event.pull_request.head.sha || github.sha }}
+            BUILD_JOBS=4
+          push: false
+          target: runtime
+          cache-to: type=gha,version=2,scope=v2-image-v1-arm64-${{ hashFiles('v2/packaging/oss/Dockerfile', 'v2/rust-toolchain.toml', 'v2/Cargo.lock', 'package-lock.json') }},mode=max,compression=gzip,force-compression=true,timeout=5m,ignore-error=true
       - name: Retain synthetic acceptance evidence and candidate bundle
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -182,6 +349,7 @@ jobs:
             ${{ runner.temp }}/fresh-install.json
             ${{ runner.temp }}/local-fresh-install.json
             ${{ runner.temp }}/cache-boundaries*
+            ${{ runner.temp }}/cache-budget.json
             ${{ runner.temp }}/bundle/*.tar.gz
             ${{ runner.temp }}/bundle/SHA256SUMS
             ${{ runner.temp }}/bundle/paired-artifacts.json

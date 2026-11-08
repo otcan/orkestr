@@ -66,6 +66,7 @@ def main():
     parser.add_argument('--source', required=True)
     parser.add_argument('--other-source', required=True)
     parser.add_argument('--report', type=Path, required=True)
+    parser.add_argument('--jobs', default='2', choices=[str(i) for i in range(1, 65)])
     args = parser.parse_args()
     if args.source == args.other_source:
         parser.error('two different source commits are required')
@@ -96,7 +97,7 @@ def main():
         report['checks'].append({'valid_jobs': jobs, 'accepted_by_gate': True, 'seconds': seconds})
     for index, source in enumerate(report['sources']):
         code, events, seconds, _ = build(
-            source, 'tooling', args.report.with_suffix('.tooling-' + str(index) + '.log'))
+            source, 'tooling', args.report.with_suffix('.tooling-' + str(index) + '.log'), args.jobs)
         setup = setup_events(events)
         if code or len(setup) != 3:
             raise RuntimeError('tooling build failed or expected setup vertices are missing')
