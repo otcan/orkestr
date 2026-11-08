@@ -1,8 +1,12 @@
 //! A slow live Root check must not reserve the shared Core writer.
 #[path = "fence_custody_tests/cross_pool.rs"]
 mod cross_pool;
+#[path = "fence_custody_tests/execution_handoff.rs"]
+mod execution_handoff;
 #[path = "fence_custody_tests/mutable_workspace.rs"]
 mod mutable_workspace;
+#[path = "fence_custody_tests/terminal_history.rs"]
+mod terminal_history;
 use super::*;
 use crate::production_runtime::tests::{claim, setup, Case};
 use sqlx::{sqlite::SqliteConnectOptions, Connection, SqliteConnection};
@@ -19,6 +23,7 @@ struct RootCheck {
     calls: AtomicUsize,
     independent_writer: AtomicBool,
     original_alive: AtomicBool,
+    policy_valid: AtomicBool,
     change_during_check: AtomicBool,
     ordinary_write_during_check: AtomicBool,
     physical_checks: AtomicUsize,
@@ -32,9 +37,27 @@ impl RootWorkspaceCustody for RootCheck {
             Err(RuntimeStoreError::Fenced)
         }
     }
-    fn check(&self, paths: &[PathBuf; 3], _: [WorkspaceDirectoryIdentity; 3]) -> Result<()> {
+    fn check(
+        &self,
+        paths: &[PathBuf; 3],
+        identities: [WorkspaceDirectoryIdentity; 3],
+    ) -> Result<()> {
         self.physical_checks.fetch_add(1, Ordering::SeqCst);
         self.check_original_actor()?;
+        if !self.policy_valid.load(Ordering::SeqCst) {
+            return Err(RuntimeStoreError::Fenced);
+        }
+        for (path, identity) in paths.iter().zip(identities) {
+            use std::os::unix::fs::MetadataExt;
+            let current = std::fs::symlink_metadata(path).map_err(db)?;
+            if !current.is_dir()
+                || current.dev() != identity.device()
+                || current.ino() != identity.inode()
+                || current.uid() != identity.uid()
+            {
+                return Err(RuntimeStoreError::Fenced);
+            }
+        }
         if self
             .ordinary_write_during_check
             .swap(false, Ordering::SeqCst)
@@ -94,17 +117,22 @@ fn root_installation(f: &Case, check: Arc<dyn RootWorkspaceCustody>) -> Workspac
         .unwrap()
 }
 
-async fn prepared(f: &Case) -> (BoundSessionMetadata, Arc<RootCheck>) {
-    let check = Arc::new(RootCheck {
+fn root_check(f: &Case) -> Arc<RootCheck> {
+    Arc::new(RootCheck {
         database: f.root.join("core.sqlite3"),
         probing: AtomicBool::new(false),
         calls: AtomicUsize::new(0),
         independent_writer: AtomicBool::new(false),
         original_alive: AtomicBool::new(true),
+        policy_valid: AtomicBool::new(true),
         change_during_check: AtomicBool::new(false),
         ordinary_write_during_check: AtomicBool::new(false),
         physical_checks: AtomicUsize::new(0),
-    });
+    })
+}
+
+async fn prepared(f: &Case) -> (BoundSessionMetadata, Arc<RootCheck>) {
+    let check = root_check(f);
     (prepared_with_check(f, check.clone()).await, check)
 }
 
@@ -423,66 +451,5 @@ async fn exact_reopen_retains_the_installation_of_existing_grants_and_metadata()
     assert_eq!(
         f.handle.with_metadata_fence(&metadata, || Ok::<_, ()>(1)),
         Ok(Ok(1))
-    );
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn slow_root_execution_attestation_does_not_hold_core_writer() {
-    let f = setup().await;
-    let (metadata, check) = prepared(&f).await;
-    let binding = f
-        .handle
-        .confirm_metadata_session(
-            metadata,
-            NativeSessionConfirmation {
-                session_id: f
-                    .handle
-                    .ensure_role_bindings(&f.owner, &f.conversation)
-                    .await
-                    .unwrap()
-                    .deep
-                    .session_id,
-                expected_generation: 1,
-                native_session_id: "synthetic-native".into(),
-                protocol_version: "codex-rpc-1".into(),
-                source_event_key: "synthetic-ready".into(),
-            },
-        )
-        .await
-        .unwrap();
-    let claim = claim(&f, binding.binding()).await;
-    let candidate = f
-        .handle
-        .admit_run(
-            &claim,
-            &binding.binding().session_id,
-            binding.binding().generation,
-            "synthetic-run",
-        )
-        .await
-        .unwrap();
-    let DispatchClaimResult::Reserved(reservation) = f
-        .handle
-        .claim_provider_dispatch(&candidate, "synthetic-dispatch")
-        .await
-        .unwrap()
-    else {
-        panic!("fresh reservation")
-    };
-    let ExecutionConsumption::Dispatch(capability) =
-        f.handle.consume_execution(&reservation).await.unwrap()
-    else {
-        panic!("fresh dispatch")
-    };
-    check.probing.store(true, Ordering::SeqCst);
-    assert_eq!(
-        f.handle
-            .with_execution_fence(capability.provider(), || Ok::<_, ()>(9)),
-        Ok(Ok(9))
-    );
-    assert_eq!(check.calls.load(Ordering::SeqCst), 1);
-    assert!(
-        check.independent_writer.load(Ordering::SeqCst),
-        "Root attestation held the Core SQLite writer while awaiting its peer"
     );
 }

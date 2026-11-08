@@ -36,52 +36,82 @@ impl Store {
         action: impl FnOnce() -> std::result::Result<T, E>,
     ) -> Result<std::result::Result<T, E>> {
         let operation = async {
+            let mut action = Some(action);
             #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
-            let workspace = if purpose == AdmissionPurpose::Execution {
+            let mut workspace = if purpose == AdmissionPurpose::Execution {
                 Some(self.check_binding_before_writer(&admission.binding).await?)
             } else {
                 None
             };
-            #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
-            let store = workspace.as_deref().unwrap_or(self);
-            #[cfg(not(all(target_os = "linux", target_pointer_width = "64")))]
-            let store = self;
-            let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
-            let row = store.production_authorized_run(&mut tx, admission).await?;
-            if admission.run.purpose != purpose
-                || match purpose {
-                    AdmissionPurpose::Execution => {
-                        !matches!(row.get::<&str, _>("state"), "starting" | "running")
+            for _attempt in 0..2 {
+                #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+                let store = workspace.as_deref().unwrap_or(self);
+                #[cfg(not(all(target_os = "linux", target_pointer_width = "64")))]
+                let store = self;
+                let result = async {
+                    let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+                    let validation = async {
+                        let row = store.production_authorized_run(&mut tx, admission).await?;
+                        if admission.run.purpose != purpose
+                            || match purpose {
+                                AdmissionPurpose::Execution => {
+                                    !matches!(row.get::<&str, _>("state"), "starting" | "running")
+                                }
+                                AdmissionPurpose::CancellationAcknowledgement => {
+                                    row.get::<&str, _>("state") != "cancel_requested"
+                                }
+                            }
+                            || row.get::<&str, _>("dispatch_state") != "delivery_unknown"
+                        {
+                            return Err(RuntimeStoreError::Fenced);
+                        }
+                        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+                        if purpose == AdmissionPurpose::Execution {
+                            store.workspace_effect_once()?;
+                        }
+                        Ok(())
                     }
-                    AdmissionPurpose::CancellationAcknowledgement => {
-                        row.get::<&str, _>("state") != "cancel_requested"
+                    .await;
+                    if let Err(error) = validation {
+                        // Do not enter a fresh Root read until SQLite has
+                        // actually released the original writer.
+                        tx.rollback().await.map_err(db)?;
+                        return Err(error);
                     }
+                    let result = action.take().ok_or(RuntimeStoreError::Fenced)?();
+                    #[cfg(feature = "fixture-test-controls")]
+                    if purpose == AdmissionPurpose::Execution {
+                        if let Err(error) = self
+                            .production_checkpoint("execution-fence-after-action-rollback")
+                            .await
+                        {
+                            tx.rollback().await.map_err(db)?;
+                            return Err(error);
+                        }
+                    }
+                    // Once action ran, COMMIT uncertainty cannot retry it.
+                    tx.commit().await.map_err(db)?;
+                    Ok(result)
                 }
-                || row.get::<&str, _>("dispatch_state") != "delivery_unknown"
-            {
-                return Err(RuntimeStoreError::Fenced);
-            }
-            #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
-            if purpose == AdmissionPurpose::Execution {
-                store.workspace_effect_once()?;
-            }
-            let result = action();
-            #[cfg(feature = "fixture-test-controls")]
-            if purpose == AdmissionPurpose::Execution {
-                if let Err(error) = self
-                    .production_checkpoint("execution-fence-after-action-rollback")
-                    .await
+                .await;
+                #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+                if _attempt == 0
+                    && action.is_some()
+                    && matches!(&result, Err(RuntimeStoreError::Fenced))
                 {
-                    // Inject an unavailable outcome only AFTER the real callback.
-                    // Roll back explicitly; no value/grant escapes on this path.
-                    tx.rollback().await.map_err(db)?;
-                    return Err(error);
+                    if let Some(guard) = workspace.take() {
+                        if let Some(fresh) = guard
+                            .refresh_before_effect(self, &admission.binding)
+                            .await?
+                        {
+                            workspace = Some(fresh);
+                            continue;
+                        }
+                    }
                 }
+                return result;
             }
-            // This transaction makes no durable change. Once action ran, a
-            // failed COMMIT cannot justify retrying inference or granting a token.
-            tx.commit().await.map_err(db)?;
-            Ok(result)
+            Err(RuntimeStoreError::Fenced)
         };
         match tokio::runtime::Handle::try_current() {
             Ok(handle) if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => {

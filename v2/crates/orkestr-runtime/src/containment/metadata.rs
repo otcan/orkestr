@@ -80,24 +80,6 @@ impl MetadataShared {
         }
         let _ = process.stop();
     }
-    // Lock order: metadata gate -> Core durable fence -> execution gate -> child.
-    // No caller may enter metadata methods from a durable fence callback.
-    fn setup<T>(&self, action: impl FnOnce() -> Result<T, Error>) -> Result<T, Error> {
-        let result = {
-            let state = self.state.lock().map_err(|_| Error::Revoked)?;
-            if state.phase != Phase::Setup {
-                return Err(Error::Revoked);
-            }
-            let grant = state.grant.as_ref().ok_or(Error::Revoked)?;
-            self.store.with_metadata_fence(grant, action)
-        };
-        crate::store_diagnostics::observe(
-            crate::store_diagnostics::Operation::MetadataSetupFence,
-            None,
-            result,
-        )
-        .map_err(|_| Error::Revoked)?
-    }
 }
 
 /// One authenticated Starting grant, one child, no inference capability.
@@ -564,6 +546,7 @@ impl ReadyMetadataChild {
 mod broker_admission;
 mod liveness;
 mod retirement;
+mod setup;
 pub use retirement::{ReapedMetadata, RetiringMetadata};
 #[cfg(test)]
 mod tests;

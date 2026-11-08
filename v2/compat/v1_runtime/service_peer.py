@@ -7,6 +7,7 @@ This privileged Linux operator transport never discovers authority from labels.
 import hashlib
 import http.client
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -106,8 +107,10 @@ def descriptor(path,owner,source,host,port):
 
 class Binding:
     def __init__(self,path,owner,source,host,port,timeout=1):
-        self.descriptors=[];self.socket=None;self.timeout=min(float(timeout),1.0)
+        self.descriptors=[];self.socket=None
         try:
+            self.timeout=float(timeout)
+            require(math.isfinite(self.timeout) and self.timeout>0,'peer_timeout_invalid')
             self.value=descriptor(path,owner,source,host,port)
             for name in ('manager','core'):
                 self.descriptors.append(os.pidfd_open(self.value[name]['pid'],0))

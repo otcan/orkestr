@@ -9,6 +9,8 @@
 mod liveness_tests;
 #[path = "retirement_tests.rs"]
 mod retirement_tests;
+#[path = "setup_diagnostics_tests.rs"]
+mod setup_diagnostics_tests;
 use super::*;
 use orkestr_v2_application::{runtime::*, IntakeStore};
 use orkestr_v2_contracts::MessageInput;

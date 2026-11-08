@@ -22,8 +22,11 @@ pub(in crate::production_runtime) async fn descendants_clear(
     }
     // Confirmed Worker setup without a terminal run is unresolved even if its
     // binding later became Lost. Binding labels/expiry are not cleanup proof.
-    let setup: i64 = sqlx::query_scalar("SELECT count(*) FROM production_readiness rd JOIN session_bindings b ON b.id=rd.session_id WHERE rd.context_id=? AND b.role='worker' AND NOT EXISTS(SELECT 1 FROM worker_task_failures f WHERE f.setup_session_id=b.id AND b.state='lost') AND NOT EXISTS(SELECT 1 FROM production_runs r JOIN production_terminal_evidence t ON t.run_id=r.id WHERE r.session_id=b.id AND r.context_id=rd.context_id AND b.generation=r.binding_generation+1)")
-        .bind(context).fetch_one(&mut *tx).await.map_err(db)?;
+    // Keep every same-context Worker, including older windows. Materializing
+    // their exact candidate run IDs once avoids seven whole-history scans
+    // while retaining the complete canonical terminal-evidence checks.
+    let setup: i64 = sqlx::query_scalar("WITH candidates AS MATERIALIZED (SELECT r.id FROM production_runs r JOIN production_readiness rd ON rd.context_id=r.context_id JOIN session_bindings b ON b.id=rd.session_id WHERE rd.context_id=? AND b.role='worker' AND r.session_id=b.id AND b.generation=r.binding_generation+1), terminal AS MATERIALIZED (SELECT * FROM production_terminal_evidence WHERE run_id IN (SELECT id FROM candidates)) SELECT count(*) FROM production_readiness rd JOIN session_bindings b ON b.id=rd.session_id WHERE rd.context_id=? AND b.role='worker' AND NOT EXISTS(SELECT 1 FROM worker_task_failures f WHERE f.setup_session_id=b.id AND b.state='lost') AND NOT EXISTS(SELECT 1 FROM production_runs r JOIN terminal t ON t.run_id=r.id WHERE r.session_id=b.id AND r.context_id=rd.context_id AND b.generation=r.binding_generation+1)")
+        .bind(context).bind(context).fetch_one(&mut *tx).await.map_err(db)?;
     if setup != 0 {
         return Ok(false);
     }

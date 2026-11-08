@@ -101,6 +101,15 @@ pub(super) struct DirectoryStamp {
     mode: u32,
     changed: (i64, i64),
 }
+impl DirectoryStamp {
+    pub(super) fn same_authority_attributes(&self, other: &Self) -> bool {
+        self.device == other.device
+            && self.inode == other.inode
+            && self.uid == other.uid
+            && self.gid == other.gid
+            && self.mode == other.mode
+    }
+}
 pub(super) type RetainedStamp = [DirectoryStamp; 3];
 #[path = "root_installation.rs"]
 mod root_installation;

@@ -2,6 +2,35 @@ use super::*;
 use std::os::unix::fs::MetadataExt;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn changed_explicit_scoped_proof_is_not_silently_refreshed() {
+    let f = setup().await;
+    let (metadata, check) = prepared(&f).await;
+    let project = f.root.with_extension("project");
+    let identity = |m: std::fs::Metadata| (m.dev(), m.ino(), m.uid(), m.gid(), m.mode());
+    let before = identity(project.metadata().unwrap());
+    let checks = check.physical_checks.load(Ordering::SeqCst);
+    let guard = f
+        .handle
+        .preflight_workspace(&f.owner, &f.conversation)
+        .await
+        .unwrap();
+    // A concurrently running, already-authorized command can publish its output
+    // after the fresh Root check and before this separate bounded pipe flush.
+    std::fs::write(project.join("ordinary-command-output"), b"output").unwrap();
+    assert_eq!(identity(project.metadata().unwrap()), before);
+    let mut calls = 0;
+    assert_eq!(
+        guard.with_metadata_fence(&metadata, || {
+            calls += 1;
+            Ok::<_, ()>(())
+        }),
+        Err(RuntimeStoreError::Fenced)
+    );
+    assert_eq!(calls, 0);
+    assert_eq!(check.physical_checks.load(Ordering::SeqCst) - checks, 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn ordinary_child_file_creation_during_root_check_preserves_authority() {
     let f = setup().await;
     let (metadata, check) = prepared(&f).await;
