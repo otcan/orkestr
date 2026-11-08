@@ -78,7 +78,7 @@ class WebMirrorTests(Base):
     def setUp(self):
         super().setUp()
         self.peer = WebPeer()
-        self.worker = Worker(self.peer, self.ledger)
+        self.worker = Worker(self.peer, self.ledger, legacy_companions=True)
 
     def scan(self):
         self.worker._web_checked = None
@@ -151,7 +151,7 @@ class WebMirrorTests(Base):
         self.scan()
         first = self.ledger.messages()
         self.ledger.set_web_cursor(10)  # lost cursor write: the same rows are read again
-        restarted = Worker(self.peer, Ledger(Path(self.temp.name) / "ledger.sqlite3", SCOPE))
+        restarted = Worker(self.peer, Ledger(Path(self.temp.name) / "ledger.sqlite3", SCOPE), legacy_companions=True)
         restarted._web_checked = None
         restarted.run_once(_Stop())
         self.assertEqual(self.ledger.messages(), first)

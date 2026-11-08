@@ -90,7 +90,7 @@ class WorkerOutboundTests(unittest.TestCase):
                 return 200, dict(run_id="deep-run", payload_id=payload, text=self.texts[payload])
             return original(method, route, **kwargs)
         self.peer.request = request
-        self.worker = Worker(self.peer, self.ledger, progress_updates=True)
+        self.worker = Worker(self.peer, self.ledger, progress_updates=True, legacy_companions=True)
 
     def progress(self, payload_id, at):
         status = dict(run_id="deep-run", phase="running", progress=dict(payload_id=payload_id))

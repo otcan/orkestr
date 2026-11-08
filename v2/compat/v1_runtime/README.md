@@ -20,6 +20,28 @@ Run the loopback-only service from a pinned checkout:
 PYTHONDONTWRITEBYTECODE=1 python3 -B -m v2.compat.v1_runtime.server --config /private/operator/service.json
 ```
 
+The default is one execution agent per conversation, internally named `deep`
+for protocol compatibility. New inputs need only their own execution run and
+canonical accepted result; no Fast polling, grace period, footer lookup or
+companion acceptance participates in their delivery. Owner/member intake still
+reaches Core in FIFO order while that execution is busy. Existing source,
+window, author, queue, timer and delivery-acknowledgement fences remain required.
+
+A deprecated Root-only `legacy_companions: true` at the top level of the adapter
+service JSON restores the old transport for explicit historical rehearsals.
+The matching runtime switch is separately at the top level of `beta.json`.
+Both default to false; old `fast_reply_policy` presentation settings do not
+turn companions on. The mode is not added to the pinned ledger identity, so
+existing bindings are adopted unchanged. An input frozen in single-agent mode
+never acquires a companion after a restart. Historical exports and ACKs stay in
+the journal. Explicitly linked pending Fast exports are withdrawn at startup
+using the existing superseded outcome, without manufacturing a delivery ACK;
+late physical receipts remain recordable. Sends already materialized by V1
+require deployment drain/reconciliation. Unresolved old runtime children or
+proposals require ordinary supported reconciliation, never manufactured Fast
+acceptance or replay.
+
+
 `SIGHUP` rescans the binding directory immediately; it is also rescanned every
 five seconds. `SIGTERM` stops the service.
 

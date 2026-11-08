@@ -57,7 +57,7 @@ class Base(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.ledger = Ledger(Path(self.temp.name) / "ledger.sqlite3", SCOPE)
         self.peer = TimerPeer()
-        self.worker = Worker(self.peer, self.ledger)
+        self.worker = Worker(self.peer, self.ledger, legacy_companions=True)
 
 
 class TimerRelayTests(Base):
@@ -242,7 +242,7 @@ class TriggerTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.ledger = Ledger(Path(self.temp.name) / "ledger.sqlite3", SCOPE)
         self.peer = Peer()
-        self.worker = Worker(self.peer, self.ledger)
+        self.worker = Worker(self.peer, self.ledger, legacy_companions=True)
 
     def inbound(self, public_id="wa-msg-1"):
         return self.ledger.enqueue({"publicThreadId": "v1-thread", "publicMessageId": public_id, "chatId": "chat@g.us",

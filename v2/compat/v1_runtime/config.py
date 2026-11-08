@@ -53,6 +53,9 @@ def private_directory(path):
 
 
 def _service(value):
+    if type(value.get("legacy_companions", False)) is not bool:
+        raise ValueError("config_legacy_companions")
+    value["legacy_companions"] = value.get("legacy_companions", False)
     for key in ("origin", "loopback_url"):
         url = urlsplit(value[key])
         if url.username or url.password or url.path not in ("", "/") or url.query or url.fragment:
@@ -155,7 +158,7 @@ def binding(value, owner):
 def load(path):
     """Returns (service, static_bindings). A pilot file yields one static binding."""
     value = private_json(path)
-    optional_peer={key for key in ('peer_descriptor_path', 'internal_context_dir') if key in value}
+    optional_peer={key for key in ('peer_descriptor_path', 'internal_context_dir', 'legacy_companions') if key in value}
     if set(value) - optional_peer == PILOT_FIELDS:
         service = _service({k: value[k] for k in (PILOT_FIELDS - SCOPE_FIELDS - {"ledger_path", "enabled"}) | optional_peer})
         pinned = {k: value[k] for k in SCOPE_FIELDS}
