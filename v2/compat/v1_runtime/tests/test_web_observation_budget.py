@@ -39,7 +39,7 @@ class WebObservationBudgetTests(Base):
         super().setUp()
         self.clock = Clock()
         self.peer = WaitingPeer(self.clock)
-        self.worker = Worker(self.peer, self.ledger)
+        self.worker = Worker(self.peer, self.ledger, legacy_companions=True)
 
     def watches(self, count=8):
         for i in range(count):
