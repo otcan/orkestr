@@ -5,6 +5,16 @@ use crate::Store;
 mod credentials;
 
 pub(crate) async fn downgrade_empty(store: &Store) {
+    // Migration 95 down: remove the derived lookup indexes and their ledger
+    // entry together. Every older fixture must remain an exact schema prefix.
+    sqlx::raw_sql(
+        "DROP INDEX production_runs_context_lookup;
+         DROP INDEX production_runs_session_generation;
+         DELETE FROM _sqlx_migrations WHERE version=95;",
+    )
+    .execute(&store.pool)
+    .await
+    .unwrap();
     // Migration 94 down: the enable floor is a derived bound, safe to drop.
     sqlx::raw_sql(
         "ALTER TABLE dormant_timers DROP COLUMN enable_floor_ms;
