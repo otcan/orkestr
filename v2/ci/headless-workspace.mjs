@@ -86,6 +86,16 @@ const transcript = () => page.$eval('.conversation-pane > .conversation-scroll',
   ({ gap: el.scrollHeight - el.scrollTop - el.clientHeight, pinned: el.dataset.pinned, scrollable: el.scrollHeight > el.clientHeight + 100 }));
 
 export const scenarios = [
+  ['single-agent', async () => {
+    await page.waitForSelector('[aria-label="Agent and workers"] .intelligence-summary');
+    const summary = await text('.intelligence-summary');
+    assert.match(summary, /Agent/);
+    assert.match(summary, /Workers/);
+    assert.doesNotMatch(summary, /Fast|Deep/);
+    assert.equal(await page.$('[aria-label="Fast reply"]'), null);
+    assert.equal(await page.$eval('.intelligence-tools', el => [...el.querySelectorAll('summary')]
+      .some(s => s.textContent.includes('Fast'))), false);
+  }],
   ['tracker-guided', async label => trackerScenario({page,state,conversation:A,label,screenshot})],
   ['composer-tools', async label => {
     await page.waitForSelector('#composer');
@@ -797,6 +807,8 @@ try {
       stage = `${label}:${name}`;
       await run(label);
     }
+    assert.equal(state.requests.some(request => request.includes('/fast/execution')), false,
+      'the single-agent interface never polls a second execution role');
     stage = `${label}:layout`;
     await noHorizontalScroll();
     stage = `${label}:dark`;

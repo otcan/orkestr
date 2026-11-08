@@ -350,6 +350,12 @@ async function api(state, req, res, url) {
   const m = /^\/api\/v2\/conversations\/([0-9a-f-]{36})(\/.*)?$/.exec(path);
   if (!m || !names[m[1]]) return missing(res);
   const [, id, rest = ''] = m;
+  if (rest === '/intelligence' && req.method === 'GET') {
+    const role = (configured, steer, max) => ({ configured, available: false, stop: configured,
+      steer: configured && steer, accept: configured, max_parallel: configured ? max : 0 });
+    return json(res, 200, { schema_version: 1, conversation_id: id,
+      deep: role(true, true, 1), fast: role(false, false, 1), worker: role(true, false, 4) });
+  }
   if (rest === '' && req.method === 'GET') {
     const after = Number(q.get('after') ?? 0), rows = state.messages[id].filter(x => x.sequence > after);
     return json(res, 200, { conversation_id: id, scope: { kind: 'global' }, messages: rows, last_sequence: state.messages[id].length, next_cursor: null });
