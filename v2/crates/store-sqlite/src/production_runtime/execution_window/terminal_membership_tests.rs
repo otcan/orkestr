@@ -124,11 +124,25 @@ async fn scoped_context_locators_preserve_exact_membership_and_duplicate_counts(
     // One context reached by both direct and historical locators is still
     // counted once; only locators are deduplicated, not retirement evidence.
     sqlx::query("UPDATE execution_windows SET context_id=? WHERE id=?")
-        .bind(&codex).bind(w.status.window_id.to_string())
-        .execute(&mut *tx).await.unwrap();
+        .bind(&codex)
+        .bind(w.status.window_id.to_string())
+        .execute(&mut *tx)
+        .await
+        .unwrap();
     expected.retain(|item| item != &context);
     for query in [original, narrowed.as_str()] {
-        assert_eq!(members(&mut tx, query, &owner, &config.namespace, &config.supervisor_key, &conversation).await, expected);
+        assert_eq!(
+            members(
+                &mut tx,
+                query,
+                &owner,
+                &config.namespace,
+                &config.supervisor_key,
+                &conversation
+            )
+            .await,
+            expected
+        );
     }
     // Even malformed cross-owner locators cannot smuggle another owner's
     // supervisor into a same-owner conversation membership set.

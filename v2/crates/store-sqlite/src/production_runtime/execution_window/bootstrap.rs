@@ -192,8 +192,10 @@ impl Store {
             .map(|row| row.get::<String, _>("context_id"))
             .unwrap_or_default();
         // Every scope of this conversation is that one configured supervisor.
+        // Keep the suffix numbered too: SQLx treats mixed anonymous binds as
+        // a separate argument sequence from the shared locator's ?1..?5.
         let others: i64 = sqlx::query_scalar(&format!(
-            "SELECT count(*) {} AND s.context_id!=?",
+            "SELECT count(*) {} AND s.context_id!=?6",
             retired_context::CONVERSATION_SUPERVISORS
         ))
         .bind(owner.to_string())
