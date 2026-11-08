@@ -30,9 +30,12 @@ pub fn About() -> Element {
             match backend() {
                 None => rsx! { p { "Server version: checking…" } },
                 Some(Err(())) => rsx! { p { role: "status", "Server version: unavailable (request failed or invalid identity)" } },
-                Some(Ok(server)) => rsx! {
-                    p { "Server version: {server.version}" }
-                    p { "Server source: {server.source_commit.as_deref().unwrap_or("Unknown (unpinned build)")}" }
+                Some(Ok(server)) => {
+                    let source = server.source_commit.as_deref().unwrap_or("Unknown (unpinned build)");
+                    rsx! {
+                        p { "Server version: {server.version}" }
+                        p { "Server source: {source}" }
+                    }
                 },
             }
             button { onclick: move |_| revision += 1, "Refresh server identity" }
