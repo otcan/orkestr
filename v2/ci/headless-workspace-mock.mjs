@@ -241,7 +241,11 @@ async function api(state, req, res, url) {
     if (!HOST_STEPS[range]) return json(res, 400, { code: 'invalid_range', message: 'Range', request_id: 'synthetic', retryable: false });
     return json(res, 200, hostHistory(range));
   }
-  if (path === '/api/v2/sidebar' && req.method === 'GET') return json(res, 200, sidebar(state));
+  if (path === '/api/v2/sidebar' && req.method === 'GET') {
+    state.sidebarReads = (state.sidebarReads ?? 0) + 1;
+    if (state.sidebarDelayMs) await new Promise(resolve => setTimeout(resolve, state.sidebarDelayMs));
+    return json(res, 200, sidebar(state));
+  }
   if (path === '/api/v2/sidebar/read' && req.method === 'PUT') {
     if (req.headers['x-orkestr-csrf'] !== 'synthetic-csrf') return json(res, 403, { code: 'csrf', message: 'CSRF required' });
     const mark = JSON.parse(await body(req));
