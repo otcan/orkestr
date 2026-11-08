@@ -42,6 +42,7 @@ mod outbox_driver;
 mod outbox_view;
 mod owner_password_view;
 mod page_memory_bridge;
+mod provider_quota_panel;
 mod progress_view;
 mod projects_view;
 mod provider_handoff_view;
@@ -230,6 +231,7 @@ fn App() -> Element {
                 if !csrf().is_empty() && !current().is_empty() {
                     host_metrics_panel::HostMetricsPanel { key: "{session_scope.read().generation()}", session_scope, onexpired: expired,
                         onopen: move |_| { let mut open = open_metrics.0; open += 1; } }
+                    provider_quota_panel::ProviderQuotaPanel { key: "quota-{session_scope.read().generation()}", session_scope, onexpired: expired }
                 }
             }
             if csrf().is_empty() || notice().contains("not confirmed") {

@@ -233,6 +233,10 @@ async function api(state, req, res, url) {
       controls: { stop: true, steer: true, accept: true }, limits: LIMITS, window: state.window[id] });
   }
   if (path === '/api/v2/live-map' && req.method === 'GET') return json(res, 200, liveMap());
+  if (path === '/api/v2/provider-quotas' && req.method === 'GET') {
+    const window = {fiveHourRemainingPct:75,weeklyRemainingPct:40,fiveHourResetsAt:new Date(Date.now()+3600000).toISOString(),weeklyResetsAt:new Date(Date.now()+86400000).toISOString(),observedAt:new Date().toISOString(),stale:false,limited:false};
+    return json(res,200,{quota:{codex:window,claude:{...window,weeklyRemainingPct:8,stale:true}}});
+  }
   if (path === '/api/v2/host-metrics' && req.method === 'GET') return json(res, 200, hostSummary());
   if (path === '/api/v2/host-metrics/consumers' && req.method === 'GET') return json(res, 200, hostConsumers());
   if (path === '/api/v2/host-metrics/disks' && req.method === 'GET') return json(res, 200, hostDisks());
