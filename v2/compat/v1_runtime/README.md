@@ -883,7 +883,20 @@ path) is set in the adapter's environment, each imported file is also written
 to `<dir>/<conversation_id>/<sha256><ext>` (directory 0750, file 0640, group
 `ORKESTR_V2_ADAPTER_ATTACHMENT_GROUP` when set), and the note names that
 local file so a host-mode provider can open it (an image viewing tool or a
-file read). A write failure keeps the reference-only note.
+file read). Use a canonical absolute export directory without symlink ancestors.
+The Root publisher must derive the reader's group from the selected runtime's
+configured executor identity, rather than assuming the adapter's user/group is
+also the provider's. Set `ORKESTR_V2_ADAPTER_ATTACHMENT_EXECUTOR_GID` to that
+numeric GID alongside `ORKESTR_V2_ADAPTER_ATTACHMENT_GROUP`; an unknown group or
+a declared-reader mismatch refuses configuration instead of silently exporting
+inaccessible files. This setting grants no additional execution authority.
+
+An existing digest-named file is reused only after checking its owner, group,
+0640 mode, single-link regular-file identity, length and content digest. Unsafe
+old exports are not automatically re-owned, replaced or advertised as readable.
+An operator changing executor identity must inventory and repair the selected
+retained exports with a reviewed metadata migration before relying on them.
+A write or custody failure keeps the reference-only note.
 
 Final replies also carry the conversation's `provider` and `model` (from
 `GET /settings`, when available) so V1 can show them in its debug footer.
