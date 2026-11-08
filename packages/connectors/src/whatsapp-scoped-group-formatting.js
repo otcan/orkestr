@@ -44,22 +44,18 @@ export function validReplyDocument(document) {
 // The canonical string form of an entry: the text itself, or a fixed-order
 // JSON envelope for a document. It is what timer proofs store and what the
 // send journal hashes, so a document is authorized and deduplicated exactly
-// like a text. Timer and post texts start with their header line, never with "{".
-// The header line of a relayed timer-run or conversation-post reply.
-// V2 conversation posts (coordinator notes, operator alerts, assistant
-// questions) reach V1 as pseudo timer turns whose source timer id is "post"
-// and whose parent text is the post label; the V2 adapter also exports the
-// post author. Only real timers are labelled as timers.
+// like a text.
+// Named sources reuse the timer transport for ordinary conversation replies.
+// Their transport metadata belongs in the audit rather than a reply heading.
 export const POST_TIMER_SOURCE_ID = 'post';
 const oneLine = value => String(value || '').replace(/[\r\n]/g, ' ').trim().slice(0, 120);
 
-export function scopedReplyHeader({label, timerId, postAuthor} = {}) {
-  const name = oneLine(label);
-  if (String(timerId || '').trim() !== POST_TIMER_SOURCE_ID) return `⏰ ${name || 'Scheduled task'}`;
-  const author = String(postAuthor || '').trim().toLowerCase() || ({operator: 'operator', system: 'operator', question: 'assistant_question'})[name.toLowerCase()] || 'coordinator';
-  if (author === 'operator') return '⚙️ System:';
-  if (author === 'assistant_question') return `❓ ${name || 'Question'}:`;
-  return `🤖 ${name || 'Coordinator'}:`;
+export function scopedReplyHeader({label, timerId} = {}) {
+  const source = String(timerId || '').trim();
+  // The V1 reminder caller supplies only a label. Remote genuine timer IDs
+  // are UUIDs; named sources are conversation transport, not reminders.
+  const scheduled = !source || /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(source);
+  return scheduled ? `⏰ ${oneLine(label) || 'Scheduled task'}` : '';
 }
 
 export function encodeReplyEntry(entry) {

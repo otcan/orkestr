@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  decodeReplyEntry, encodeReplyEntry, replyEntrySendFields, scopedGroupReplyChunks, scopedGroupReplyLimit, scopedReplyPreview,
+  decodeReplyEntry, encodeReplyEntry, replyEntrySendFields, scopedGroupReplyChunks, scopedGroupReplyLimit, scopedReplyHeader, scopedReplyPreview,
   SCOPED_ATTACHED_MARKER, SCOPED_SEND_MAX_TEXT_LENGTH,
 } from '../packages/connectors/src/whatsapp-scoped-group-formatting.js';
 import * as formatter from '../packages/connectors/src/whatsapp-formatting.js';
@@ -12,6 +12,16 @@ const chunk = (text, config = {}, env = {}, withFormatter = false) =>
 const loneSurrogate = text => /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(text);
 const words = n => Array.from({length: n}, (_, i) => `word${i}`).join(' ');
 const marker = `\n\n${SCOPED_ATTACHED_MARKER}`;
+
+test('only real timer metadata adds a reminder heading', () => {
+  assert.equal(scopedReplyHeader({timerId: '10000000-0000-4000-8000-000000000001', label: 'Daily brief'}), '⏰ Daily brief');
+  assert.equal(scopedReplyHeader({label: 'Local reminder'}), '⏰ Local reminder');
+  for (const timerId of ['web', 'task-update', 'post', 'fast', 'status', 'unknown-transport']) {
+    for (const label of ['Update', 'Güncelleme', '更新']) {
+      assert.equal(scopedReplyHeader({timerId, label}), '');
+    }
+  }
+});
 
 test('reply limit defaults to 20000, honours config then env, and is clamped', () => {
   assert.equal(scopedGroupReplyLimit({}, {}), 20000);

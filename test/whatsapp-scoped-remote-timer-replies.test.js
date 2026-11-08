@@ -53,19 +53,22 @@ function fixture(t) {
   return {notifier, state, options, proofs, fence, advance: ms => clock += ms};
 }
 
-test('V2 conversation posts are labelled by author, never as timers', async t => {
-  for (const [parent, header] of [
-    [{text: 'Coordinator', timerId: 'post', postAuthor: 'coordinator'}, '🤖 Coordinator:'],
-    [{text: 'Operator', timerId: 'post', postAuthor: 'operator'}, '⚙️ System:'],
-    [{text: 'Question', timerId: 'post', postAuthor: 'assistant_question'}, '❓ Question:'],
-    [{text: 'Operator', timerId: 'post'}, '⚙️ System:'],
-    [{text: 'Coordinator', timerId: 'post'}, '🤖 Coordinator:'],
+test('conversation transport replies stay plain and are delivered once', async t => {
+  for (const parent of [
+    {text: 'Coordinator', timerId: 'post', postAuthor: 'coordinator'},
+    {text: 'Operator', timerId: 'post', postAuthor: 'operator'},
+    {text: 'Question', timerId: 'post', postAuthor: 'assistant_question'},
+    {text: 'Web transport excerpt', timerId: 'web'},
+    {text: 'Internal result reference', timerId: 'task-update'},
+    {text: 'Quick reply', timerId: 'fast'},
+    {text: 'Status', timerId: 'status'},
   ]) {
     const {notifier, state} = fixture(t);
     Object.assign(state.messages[0], parent);
     assert.equal((await notifier.tick()).sent, 1);
-    assert.equal(state.sent[0].text, `${header}\nGood morning.`);
-    assert.doesNotMatch(state.sent[0].text, /Timer/);
+    assert.equal(state.sent[0].text, 'Good morning.');
+    assert.equal((await notifier.tick()).sent, 0);
+    assert.equal(state.sent.length, 1);
   }
 });
 
