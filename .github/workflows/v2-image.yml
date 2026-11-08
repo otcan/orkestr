@@ -57,7 +57,7 @@ jobs:
           python3 -I -S -B v2/packaging/oss/image_metrics.py \
             --output "$RUNNER_TEMP/image-metrics.jsonl" --stop "$RUNNER_TEMP/image-metrics.stop" \
             > "$RUNNER_TEMP/image-metrics.log" 2>&1 < /dev/null &
-      - name: Import shared tooling and locked dependencies (PRs read only)
+      - name: Import shared tooling for mandatory cache probes (PRs read only)
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
@@ -67,7 +67,7 @@ jobs:
             SOURCE_COMMIT=${{ github.event.pull_request.head.sha || github.sha }}
             BUILD_JOBS=4
           push: false
-          target: dependencies
+          target: tooling
           cache-from: type=gha,version=2,scope=v2-image-v1-amd64-${{ hashFiles('v2/packaging/oss/Dockerfile', 'v2/rust-toolchain.toml', 'v2/Cargo.lock', 'package-lock.json') }},timeout=2m
       - name: Verify fail-fast gates and cross-source tooling reuse
         env:
@@ -104,6 +104,7 @@ jobs:
           push: false
           target: bundle
           outputs: type=local,dest=${{ runner.temp }}/bundle
+          cache-from: type=gha,version=2,scope=v2-image-v1-amd64-${{ hashFiles('v2/packaging/oss/Dockerfile', 'v2/rust-toolchain.toml', 'v2/Cargo.lock', 'package-lock.json') }},timeout=2m
       - name: Everyday Compose commands need no exported commit
         env:
           SOURCE: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -161,6 +162,7 @@ jobs:
             BUILD_JOBS=4
           push: false
           target: runtime
+          cache-from: type=gha,version=2,scope=v2-image-v1-amd64-${{ hashFiles('v2/packaging/oss/Dockerfile', 'v2/rust-toolchain.toml', 'v2/Cargo.lock', 'package-lock.json') }},timeout=2m
           cache-to: type=local,dest=${{ runner.temp }}/cache-preview,mode=max
       - name: Admit cache export within the measured free allowance
         id: cache-budget
@@ -183,6 +185,7 @@ jobs:
             BUILD_JOBS=4
           push: false
           target: runtime
+          cache-from: type=gha,version=2,scope=v2-image-v1-amd64-${{ hashFiles('v2/packaging/oss/Dockerfile', 'v2/rust-toolchain.toml', 'v2/Cargo.lock', 'package-lock.json') }},timeout=2m
           cache-to: type=gha,version=2,scope=v2-image-v1-amd64-${{ hashFiles('v2/packaging/oss/Dockerfile', 'v2/rust-toolchain.toml', 'v2/Cargo.lock', 'package-lock.json') }},mode=max,timeout=5m,ignore-error=true
       - name: Finish resource sampling
         if: always()
@@ -250,7 +253,7 @@ jobs:
           python3 -I -S -B v2/packaging/oss/image_metrics.py \
             --output "$RUNNER_TEMP/image-metrics.jsonl" --stop "$RUNNER_TEMP/image-metrics.stop" \
             > "$RUNNER_TEMP/image-metrics.log" 2>&1 < /dev/null &
-      - name: Import shared tooling and locked dependencies (PRs read only)
+      - name: Import shared tooling for mandatory cache probes (PRs read only)
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
@@ -260,7 +263,7 @@ jobs:
             SOURCE_COMMIT=${{ github.event.pull_request.head.sha || github.sha }}
             BUILD_JOBS=4
           push: false
-          target: dependencies
+          target: tooling
           cache-from: type=gha,version=2,scope=v2-image-v1-arm64-${{ hashFiles('v2/packaging/oss/Dockerfile', 'v2/rust-toolchain.toml', 'v2/Cargo.lock', 'package-lock.json') }},timeout=2m
       - name: Verify fail-fast gates and cross-source tooling reuse
         env:
@@ -297,6 +300,7 @@ jobs:
           push: false
           target: bundle
           outputs: type=local,dest=${{ runner.temp }}/bundle
+          cache-from: type=gha,version=2,scope=v2-image-v1-arm64-${{ hashFiles('v2/packaging/oss/Dockerfile', 'v2/rust-toolchain.toml', 'v2/Cargo.lock', 'package-lock.json') }},timeout=2m
       - name: Everyday Compose commands need no exported commit
         env:
           SOURCE: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -354,6 +358,7 @@ jobs:
             BUILD_JOBS=4
           push: false
           target: runtime
+          cache-from: type=gha,version=2,scope=v2-image-v1-arm64-${{ hashFiles('v2/packaging/oss/Dockerfile', 'v2/rust-toolchain.toml', 'v2/Cargo.lock', 'package-lock.json') }},timeout=2m
           cache-to: type=local,dest=${{ runner.temp }}/cache-preview,mode=max
       - name: Admit cache export within the measured free allowance
         id: cache-budget
@@ -376,6 +381,7 @@ jobs:
             BUILD_JOBS=4
           push: false
           target: runtime
+          cache-from: type=gha,version=2,scope=v2-image-v1-arm64-${{ hashFiles('v2/packaging/oss/Dockerfile', 'v2/rust-toolchain.toml', 'v2/Cargo.lock', 'package-lock.json') }},timeout=2m
           cache-to: type=gha,version=2,scope=v2-image-v1-arm64-${{ hashFiles('v2/packaging/oss/Dockerfile', 'v2/rust-toolchain.toml', 'v2/Cargo.lock', 'package-lock.json') }},mode=max,timeout=5m,ignore-error=true
       - name: Finish resource sampling
         if: always()

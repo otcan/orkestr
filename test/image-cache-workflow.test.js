@@ -23,6 +23,9 @@ test("native image cache jobs keep PR imports read only and exact-source checks"
     for (const step of builds) {
       assert.equal(step.with.context, ".");
       assert.equal(step.with.push, false);
+      // Remote ancestor metadata is scoped to a BuildKit solve/session; a
+      // cached runtime COPY must not cause the later bundle to compile again.
+      assert.ok(step.with["cache-from"], "every independent solve imports its compatible metadata");
       assert.match(step.with["build-args"], /SOURCE_COMMIT=\$\{\{ github.event.pull_request.head.sha \|\| github.sha \}\}/);
       assert.match(step.with["build-args"], /BUILD_JOBS=4/);
       if (step.with["cache-from"]) {
@@ -40,6 +43,7 @@ test("native image cache jobs keep PR imports read only and exact-source checks"
     }
     assert.ok(job.steps.some(step => step.run?.includes("cache_boundaries.py")));
     assert.equal(job.steps.filter(step => step.run?.includes("fresh_install.py")).length, 2);
+    assert.ok(builds.some(step => step.with.target === "tooling"));
     assert.ok(job.steps.some(step => step.run?.includes("docker save")));
   }
   assert.equal(scopes.size, 2);
