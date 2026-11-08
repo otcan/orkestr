@@ -96,3 +96,14 @@ test('cancelled upload/preparation does not issue a request or retry aborts',asy
   const f=await fixture(3);const status=await f.client.upload(f.file,id);
   await assert.rejects(client.attach(status,{signal:controller.signal}),{name:'AbortError'});assert.equal(requests,0);
 });
+
+
+test('progress counts only acknowledged chunks despite lost replies and stays bounded on resume',async()=>{
+  const f=await fixture(),progress=[],phases=[];
+  const status=await f.client.upload(f.file,id,{progress:(done,total)=>progress.push([done,total]),phase:p=>phases.push(p)});
+  assert.deepEqual(progress,[[UPLOAD_CHUNK_BYTES,f.file.size],[f.file.size,f.file.size]]);
+  assert.equal(status.complete,true);
+  assert.ok(phases.includes('encrypting'));assert.ok(phases.includes('uploading'));assert.equal(phases.at(-1),'finalizing');
+  const resumed=[];await f.client.upload(f.file,id,{phase:p=>resumed.push(p)});
+  assert.ok(resumed.includes('checking'));assert.equal(resumed.includes('encrypting'),false);
+});

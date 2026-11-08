@@ -447,3 +447,9 @@ li[data-replyable="true"]:hover .reply-action, li[data-replyable="true"]:focus-w
 .composer-quote .reply-quote { flex: 1; min-width: 0; margin: 0; color: var(--text); }
 .composer-quote .reply-quote p { font-size: .85rem; color: var(--muted); -webkit-line-clamp: 2; }
 .composer-quote-cancel { align-self: center; min-width: 1.8rem; min-height: 1.8rem; width: 1.8rem; padding: 0; border-radius: 50%; background: var(--surface-2); color: var(--text); border: 1px solid var(--border); font-weight: 400; }
+
+/* Upload progress remains readable on a narrow composer. */
+.upload-progress { flex-basis:100%; min-width:0; padding:.35rem 0; }
+.upload-progress-stage { margin:.15rem 0; font-size:.8rem; overflow-wrap:anywhere; }
+.upload-progress progress { display:block; width:100%; height:.65rem; accent-color:var(--accent, #4f7cff); }
+.upload-progress-bytes { font-size:.75rem; color:var(--muted); font-variant-numeric:tabular-nums; }
