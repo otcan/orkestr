@@ -1,7 +1,4 @@
 """Serial, restart-safe Rust intake for one binding. Only the matched Deep run is mirrored."""
-import grp
-import os
-from pathlib import Path
 import re
 import sqlite3
 import sys
@@ -12,6 +9,7 @@ import uuid
 from .ledger import (DEFAULT_MAX_INPUT_AGE_S, DIGEST_NAMESPACE as DIGEST_REPLY_NAMESPACE, PROGRESS_LIMIT, WEB_TEXT_LIMIT,
                      no_reply)
 from . import failure_cause
+from .attachment_files import MEDIA_EXTENSIONS, attachment_export_settings, export_attachment
 from . import instructions
 from . import continuation_guard
 from . import auto_steer
@@ -166,54 +164,6 @@ def attachment_note(text, manifest_id, references, paths=None):
     return (text.rstrip() + "\n\n" if text.strip() else "") + "\n".join(lines) + "]"
 
 
-MEDIA_EXTENSIONS = {"image/jpeg": ".jpg", "image/png": ".png", "image/gif": ".gif", "image/webp": ".webp",
-                    "application/pdf": ".pdf", "text/plain": ".txt"}
-
-
-def attachment_export_settings(environ=os.environ):
-    """Optional host directory where imported attachments are also written as
-    files, so a provider turn (which receives text only) can open them.
-    Returns (directory, gid) or (None, None) when not configured."""
-    directory = environ.get("ORKESTR_V2_ADAPTER_ATTACHMENT_DIR", "").strip()
-    if not directory or not os.path.isabs(directory):
-        return None, None
-    group = environ.get("ORKESTR_V2_ADAPTER_ATTACHMENT_GROUP", "").strip()
-    try:
-        gid = grp.getgrnam(group).gr_gid if group else None
-    except KeyError:
-        gid = None
-    return directory, gid
-
-
-def export_attachment(directory, gid, conversation, item, content):
-    """Write one attachment as <dir>/<conversation>/<sha256><ext>, readable by
-    the configured group only. Idempotent: the name is the content digest."""
-    digest = item["sha256"]
-    if not re.fullmatch("[0-9a-f]{64}", digest) or not re.fullmatch("[0-9a-zA-Z-]{1,64}", str(conversation)):
-        return None
-    suffix = MEDIA_EXTENSIONS.get(item["media_type"]) or "".join(
-        c for c in Path(item.get("filename") or "").suffix.lower()[:8] if c.isalnum() or c == ".")
-    folder = Path(directory) / conversation
-    folder.mkdir(mode=0o750, parents=True, exist_ok=True)
-    os.chmod(folder, 0o750)
-    if gid is not None:
-        os.chown(folder.parent, -1, gid)
-        os.chown(folder, -1, gid)
-    target = folder / (digest + suffix)
-    if not target.exists():
-        temporary = folder / (".%s.%s.tmp" % (digest, uuid.uuid4().hex))
-        fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o640)
-        try:
-            with os.fdopen(fd, "wb") as handle:
-                handle.write(content)
-            if gid is not None:
-                os.chown(temporary, -1, gid)
-            os.chmod(temporary, 0o640)
-            os.replace(temporary, target)
-        finally:
-            if temporary.exists():
-                temporary.unlink()
-    return str(target)
 
 
 class Signal:
