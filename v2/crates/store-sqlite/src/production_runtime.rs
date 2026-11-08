@@ -51,6 +51,7 @@ mod deep_groups_tests;
 mod dispatch;
 mod failed_fast_setup;
 mod fast;
+mod fast_artifacts;
 mod fast_continuity;
 mod fast_digest;
 pub(crate) mod fast_rules;

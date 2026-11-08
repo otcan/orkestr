@@ -26,12 +26,21 @@ fn render_with(intro: &str, rows: Vec<(i64, String, String)>) -> Result<String> 
     let mut items = Vec::new();
     // Rows arrive newest first. Prefer recent evidence when escaping expands it.
     for (sequence, role, text) in rows.into_iter().take(MAX_ITEMS) {
-        let item = serde_json::json!({
+        let mut item = serde_json::json!({
             "sequence": sequence,
             "role": role,
             "excerpt": excerpt(&text, MAX_TEXT_BYTES),
             "may_be_truncated": true,
         });
+        if role == "deep" {
+            let references = super::fast_artifacts::references(&text);
+            if !references.is_empty() {
+                item["artifact_references"] = serde_json::json!({
+                    "provenance": "reported_in_accepted_answer_not_verified_file_contents",
+                    "locators": references,
+                });
+            }
+        }
         items.push(item);
         if intro.len() + serde_json::to_string(&items).map_err(db)?.len() + CURRENT.len()
             > MAX_DIGEST_BYTES
@@ -101,7 +110,7 @@ pub(super) async fn attach(
     if timer != 0 {
         return Ok(current);
     }
-    let rows = sqlx::query("SELECT sequence,role,text FROM (SELECT e.sequence,'owner' AS role,substr(m.text,1,512) AS text FROM events e JOIN messages m ON m.id=e.message_id WHERE e.owner_id=?1 AND e.conversation_id=?2 AND m.owner_id=e.owner_id AND m.conversation_id=e.conversation_id AND e.kind='message_accepted' AND m.actor_kind='owner' AND e.sequence<?3 AND e.sequence>?4 AND NOT EXISTS(SELECT 1 FROM production_runs own WHERE own.session_id=?5 AND own.event_id=e.id) AND NOT EXISTS(SELECT 1 FROM dormant_timer_inputs t WHERE t.event_id=e.id) AND NOT EXISTS(SELECT 1 FROM thread_asks q WHERE q.input_event_id=e.id) AND NOT EXISTS(SELECT 1 FROM thread_asks q WHERE q.reply_event_id=e.id) AND NOT EXISTS(SELECT 1 FROM ordinary_input_holds h WHERE h.event_id=e.id) UNION ALL SELECT e.sequence,r.role AS role,substr(p.text,1,512) AS text FROM production_acceptances a JOIN production_runs r ON r.id=a.run_id JOIN events e ON e.id=a.event_id JOIN production_observations o ON o.event_id=a.completion_event_id AND o.run_id=r.id AND o.kind='completed_proposal' JOIN production_payloads p ON p.id=(SELECT payload.id FROM production_payloads payload JOIN production_observations progress ON progress.event_id=payload.event_id AND progress.run_id=r.id AND progress.kind='progress' WHERE payload.run_id=r.id AND payload.owner_id=r.owner_id AND payload.conversation_id=r.conversation_id AND progress.run_sequence<o.run_sequence ORDER BY progress.run_sequence DESC LIMIT 1) WHERE r.owner_id=?1 AND r.conversation_id=?2 AND e.owner_id=r.owner_id AND e.conversation_id=r.conversation_id AND e.sequence<?3 AND e.sequence>?4 AND r.session_id!=?5 AND r.role IN ('fast','deep') AND p.text IS NOT NULL AND NOT EXISTS(SELECT 1 FROM dormant_timer_inputs t WHERE t.event_id=r.event_id) AND NOT EXISTS(SELECT 1 FROM thread_asks q WHERE q.input_event_id=r.event_id) AND NOT EXISTS(SELECT 1 FROM thread_asks q WHERE q.reply_event_id=r.event_id) AND NOT EXISTS(SELECT 1 FROM ordinary_input_holds h WHERE h.event_id=r.event_id)) ORDER BY sequence DESC LIMIT 8")
+    let rows = sqlx::query("SELECT sequence,role,text FROM (SELECT e.sequence,'owner' AS role,substr(m.text,1,512) AS text FROM events e JOIN messages m ON m.id=e.message_id WHERE e.owner_id=?1 AND e.conversation_id=?2 AND m.owner_id=e.owner_id AND m.conversation_id=e.conversation_id AND e.kind='message_accepted' AND m.actor_kind='owner' AND e.sequence<?3 AND e.sequence>?4 AND NOT EXISTS(SELECT 1 FROM production_runs own WHERE own.session_id=?5 AND own.event_id=e.id) AND NOT EXISTS(SELECT 1 FROM dormant_timer_inputs t WHERE t.event_id=e.id) AND NOT EXISTS(SELECT 1 FROM thread_asks q WHERE q.input_event_id=e.id) AND NOT EXISTS(SELECT 1 FROM thread_asks q WHERE q.reply_event_id=e.id) AND NOT EXISTS(SELECT 1 FROM ordinary_input_holds h WHERE h.event_id=e.id) UNION ALL SELECT e.sequence,r.role AS role,substr(p.text,1,CASE WHEN r.role='deep' THEN 32768 ELSE 512 END) AS text FROM production_acceptances a JOIN production_runs r ON r.id=a.run_id JOIN events e ON e.id=a.event_id JOIN production_observations o ON o.event_id=a.completion_event_id AND o.run_id=r.id AND o.kind='completed_proposal' JOIN production_payloads p ON p.id=(SELECT payload.id FROM production_payloads payload JOIN production_observations progress ON progress.event_id=payload.event_id AND progress.run_id=r.id AND progress.kind='progress' WHERE payload.run_id=r.id AND payload.owner_id=r.owner_id AND payload.conversation_id=r.conversation_id AND progress.run_sequence<o.run_sequence ORDER BY progress.run_sequence DESC LIMIT 1) WHERE r.owner_id=?1 AND r.conversation_id=?2 AND e.owner_id=r.owner_id AND e.conversation_id=r.conversation_id AND e.sequence<?3 AND e.sequence>?4 AND r.session_id!=?5 AND r.role IN ('fast','deep') AND p.text IS NOT NULL AND NOT EXISTS(SELECT 1 FROM dormant_timer_inputs t WHERE t.event_id=r.event_id) AND NOT EXISTS(SELECT 1 FROM thread_asks q WHERE q.input_event_id=r.event_id) AND NOT EXISTS(SELECT 1 FROM thread_asks q WHERE q.reply_event_id=r.event_id) AND NOT EXISTS(SELECT 1 FROM ordinary_input_holds h WHERE h.event_id=r.event_id)) ORDER BY sequence DESC LIMIT 8")
         .bind(admission.run.owner_id.to_string()).bind(admission.run.conversation_id.to_string())
         .bind(source_sequence).bind(previous.unwrap_or(0)).bind(admission.run.session_id.to_string())
         .fetch_all(&mut *tx).await.map_err(db)?;
@@ -132,6 +141,34 @@ pub(super) async fn attach(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn artifact_locators_keep_accepted_deep_provenance_and_digest_budget() {
+        let answer = format!("{} [report](/workspace/report.csv)", "result ".repeat(100));
+        let rows = (1..=8)
+            .rev()
+            .map(|n| (n, "deep".into(), answer.clone()))
+            .collect();
+        let digest = render(rows).unwrap();
+        assert!(digest.len() <= MAX_DIGEST_BYTES);
+        let items: Vec<serde_json::Value> = serde_json::from_str(
+            digest
+                .strip_prefix(INTRO)
+                .unwrap()
+                .strip_suffix(CURRENT)
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(items.iter().all(|item| {
+            item["artifact_references"]["locators"][0] == "/workspace/report.csv"
+                && !item["excerpt"]
+                    .as_str()
+                    .unwrap()
+                    .contains("/workspace/report.csv")
+        }));
+        let owner = render(vec![(1, "owner".into(), answer)]).unwrap();
+        assert!(!owner.contains("artifact_references"));
+    }
 
     #[test]
     fn digest_bounds_escaped_utf8_and_preserves_exact_current_input() {

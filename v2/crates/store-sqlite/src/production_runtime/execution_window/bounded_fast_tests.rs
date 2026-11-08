@@ -578,7 +578,11 @@ async fn warm_fast_receives_only_the_deep_answers_accepted_since_its_previous_tu
     let done = propose(&w, cap.provider(), "WARM_OWN_ANSWER").await;
     accept(&w, cap.provider(), done).await;
     let deep = deep_run(&w, "warm-update-deep").await;
-    let done = propose(&w, deep.provider(), "DEEP_ANSWER_SINCE").await;
+    let answer = format!(
+        "DEEP_ANSWER_SINCE {} [report](/workspace/reports/result.json)",
+        "supporting evidence ".repeat(60)
+    );
+    let done = propose(&w, deep.provider(), &answer).await;
     accept(&w, deep.provider(), done).await;
     let next = join_window(&w, "warm-update-next", "SECOND_OWNER_INPUT").await;
     let released = ready(&w).await;
@@ -597,6 +601,10 @@ async fn warm_fast_receives_only_the_deep_answers_accepted_since_its_previous_tu
         .text()
         .starts_with("Conversation update since your previous turn"));
     assert!(cap.text().contains("DEEP_ANSWER_SINCE"));
+    assert!(cap.text().contains("/workspace/reports/result.json"));
+    assert!(cap
+        .text()
+        .contains("reported_in_accepted_answer_not_verified_file_contents"));
     assert!(!cap.text().contains("WARM_OWN_ANSWER"));
     assert!(!cap.text().contains("synthetic window input"));
     assert!(cap
