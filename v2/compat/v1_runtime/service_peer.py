@@ -106,11 +106,16 @@ def descriptor(path,owner,source,host,port):
 
 
 class Binding:
-    def __init__(self,path,owner,source,host,port,timeout=1):
+    def __init__(self,path,owner,source,host,port,timeout=1,deadline=None):
         self.descriptors=[];self.socket=None
         try:
             self.timeout=float(timeout)
             require(math.isfinite(self.timeout) and self.timeout>0,'peer_timeout_invalid')
+            self.deadline=time.monotonic()+self.timeout
+            if deadline is not None:
+                deadline=float(deadline)
+                require(math.isfinite(deadline),'peer_timeout_invalid')
+                self.deadline=min(self.deadline,deadline)
             self.value=descriptor(path,owner,source,host,port)
             for name in ('manager','core'):
                 self.descriptors.append(os.pidfd_open(self.value[name]['pid'],0))
@@ -142,6 +147,7 @@ class Binding:
 
     def _verify(self,sock,wait=False):
         self.actors()
+        require(time.monotonic()<self.deadline,'peer_proof_deadline_expired')
         require(sock is not None and sock.fileno()>=0,'peer_socket_missing')
         local,remote=sock.getsockname(),sock.getpeername()
         require(local[0]==remote[0]=='127.0.0.1' and remote[1]==self.value['endpoint']['port'],'peer_socket_endpoint')
@@ -149,7 +155,7 @@ class Binding:
         # cannot substitute for ownership of the accepted reverse connection.
         client=os.fstat(sock.fileno())
         wanted=('0100007F:'+format(remote[1],'04X'),'0100007F:'+format(local[1],'04X'))
-        own=(wanted[1],wanted[0]);deadline=time.monotonic()+(self.timeout if wait else 0)
+        own=(wanted[1],wanted[0]);deadline=self.deadline if wait else time.monotonic()
         while True:
             rows=[];client_seen=False
             for line in Path('/proc/net/tcp').read_text().splitlines()[1:]:
@@ -164,8 +170,11 @@ class Binding:
                         if os.readlink(fd)=='socket:['+rows[0]+']':owned.append(fd)
                     except FileNotFoundError:pass
                 if owned:
-                    self.actors();return
+                    self.actors()
+                    require(time.monotonic()<self.deadline,'peer_proof_deadline_expired')
+                    return
             require(time.monotonic()<deadline,'peer_accepted_socket_not_original_core')
+            self.actors()
             time.sleep(.005)
 
     def close(self):
@@ -176,10 +185,10 @@ class Binding:
 
 
 class Connection(http.client.HTTPConnection):
-    def __init__(self,host,port,*,descriptor_path,owner,source,timeout):
+    def __init__(self,host,port,*,descriptor_path,owner,source,timeout,deadline=None):
         super().__init__(host,port,timeout=timeout)
         self.offered_bytes=False
-        self.binding=Binding(descriptor_path,owner,source,host,port,timeout)
+        self.binding=Binding(descriptor_path,owner,source,host,port,timeout,deadline)
 
     def connect(self):
         try:
@@ -188,7 +197,10 @@ class Connection(http.client.HTTPConnection):
 
     def send(self,data):
         require(self.sock is not None,'peer_reconnect_refused')
-        self.binding.verify(self.sock)
+        # An incomplete kernel observation cannot authorize a send. Re-prove
+        # this same connection within its original deadline; never reconnect
+        # or offer bytes on an incomplete proof.
+        self.binding.verify(self.sock,wait=True)
         # HTTPConnection sends headers and body through this method separately.
         # No cookie, CSRF or key byte leaves before this exact-connection check.
         self.offered_bytes=True

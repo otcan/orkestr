@@ -168,7 +168,7 @@ class WorkerOutboundTests(unittest.TestCase):
             participants=[{"ids": ["491700000001@c.us"], "label": "Ayse", "role": "member"}],
             max_input_age_seconds=60, instructions_path=None, auto_steer=None, owner_only_verified=True))
         with patch("v2.compat.v1_runtime.registry.auto_steer_mode", return_value=None):
-            Registry._start(SimpleNamespace(workers=False), binding)
+            Registry._start(SimpleNamespace(workers=False, service={}), binding)
         self.assertTrue(self.ledger.owner_only, "owner_only Fast intake is kept")
         text = "Done: [deck](/var/lib/orkestr-v2-pilot/workspace/a/deck.pptx)"
         self.assertEqual(self.final(text), "Done: deck: deck.pptx (not attached)")
@@ -205,7 +205,7 @@ class WorkerOutboundTests(unittest.TestCase):
                     config["owner_only_verified"] = verified
                 binding = SimpleNamespace(worker=self.worker, ledger=ledger, thread=True, config=config)
                 with patch("v2.compat.v1_runtime.registry.auto_steer_mode", return_value=None):
-                    Registry._start(SimpleNamespace(workers=False), binding)
+                    Registry._start(SimpleNamespace(workers=False, service={}), binding)
                 self.assertIs(ledger.scrub_paths, expected)
                 self.assertIs(ledger.owner_only, policy == "owner_only", "Fast policy is unchanged")
 

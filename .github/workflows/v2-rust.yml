@@ -162,6 +162,7 @@ jobs:
         working-directory: ${{ github.workspace }}
         run: |
           sudo env PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -I -S -B -m unittest discover -s "$PWD/v2/compat/tests" -p test_service_peer.py -v
+          sudo env PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -I -S -B -m unittest discover -s "$PWD/v2/compat/tests" -p test_service_peer_handoff.py -v
           sudo env PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -I -S -B -m unittest discover -s "$PWD/v2/compat/tests" -p test_service_client.py -v
           sudo env PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -B -m unittest discover -s v2/compat/v1_runtime/tests -p test_service_session_cache.py -v
           sudo env PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -B -m unittest discover -s v2/compat/v1_runtime/tests -p test_provision_service_credential.py -v
@@ -258,6 +259,9 @@ jobs:
       - name: Shared Fast, Deep and Worker windows over real HTTP
         run: |
           sudo /usr/bin/python3 -B tests/service_roles_http.py "$CARGO_TARGET_DIR/debug/orkestr-v2-server" --source "$(git rev-parse HEAD)" --report "$RUNNER_TEMP/v2-service-roles.json"
+      - name: Abandoned Fast preserves the original Root-managed Deep
+        run: |
+          sudo env PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -I -S -B tests/identity_split_fast_abandonment_http.py "$CARGO_TARGET_DIR/debug/orkestr-v2-server" --expected-source "$(git rev-parse HEAD)" --report "$RUNNER_TEMP/v2-fast-abandonment.json"
       - name: Owner auto-accept of Deep, Worker and Fast without a browser session over real HTTP
         run: |
           sudo /usr/bin/python3 -B tests/service_auto_accept_http.py "$CARGO_TARGET_DIR/debug/orkestr-v2-server" --source "$(git rev-parse HEAD)" --report "$RUNNER_TEMP/v2-auto-accept.json"
@@ -286,6 +290,9 @@ jobs:
           if [ -f "$RUNNER_TEMP/v2-password-recovery.json" ]; then
             sudo chown --no-dereference -- "$(id -u):$(id -g)" "$RUNNER_TEMP/v2-password-recovery.json"
           fi
+          if [ -f "$RUNNER_TEMP/v2-fast-abandonment.json" ]; then
+            sudo chown --no-dereference -- "$(id -u):$(id -g)" "$RUNNER_TEMP/v2-fast-abandonment.json"
+          fi
       - name: Retain synthetic HTTP evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -296,6 +303,7 @@ jobs:
             ${{ runner.temp }}/v2-service-roles.json
             ${{ runner.temp }}/v2-password-recovery.json
             ${{ runner.temp }}/v2-maintenance-restart.json
+            ${{ runner.temp }}/v2-fast-abandonment.json
           if-no-files-found: ignore
           retention-days: 7
 

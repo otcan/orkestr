@@ -65,6 +65,7 @@ mod tracker_source_view;
 mod tracker_table_view;
 mod tracker_view;
 mod transport;
+mod upload_progress_view;
 mod v1_manage_view;
 mod v1_thread_view;
 mod v1_workers_view;

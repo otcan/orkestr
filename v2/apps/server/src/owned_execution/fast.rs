@@ -96,12 +96,22 @@ impl ConfiguredExecution {
             };
             if let Some(companion) = &self.companion {
                 if !companion.claim_ready() {
+                    self.reap_abandoned_fast(ready, &mut heartbeat).await?;
                     return Err(ABANDONED);
                 }
             }
-            self.wait_window_active(&mut shutdown, &mut heartbeat)
-                .await?;
-            let Some(input) = self.fast_input(&mut shutdown, &mut heartbeat).await? else {
+            if let Err(reason) = self.wait_window_active(&mut shutdown, &mut heartbeat).await {
+                self.reap_abandoned_fast(ready, &mut heartbeat).await?;
+                return Err(reason);
+            }
+            let input = match self.fast_input(&mut shutdown, &mut heartbeat).await {
+                Ok(input) => input,
+                Err(reason) => {
+                    self.reap_abandoned_fast(ready, &mut heartbeat).await?;
+                    return Err(reason);
+                }
+            };
+            let Some(input) = input else {
                 self.reap_fast_setup(
                     ready
                         .retire_setup()
@@ -116,6 +126,7 @@ impl ConfiguredExecution {
             };
             if let Some(companion) = &self.companion {
                 if !companion.claim_start() {
+                    self.reap_abandoned_fast(ready, &mut heartbeat).await?;
                     return Err(ABANDONED);
                 }
             }
@@ -248,7 +259,13 @@ impl ConfiguredExecution {
             .as_deref()
             .map_or(&local_warned, |companion| companion.eligibility_warned());
         loop {
-            if *shutdown.borrow() || self.fast_window_due() {
+            if *shutdown.borrow()
+                || self.fast_window_due()
+                || self
+                    .companion
+                    .as_ref()
+                    .is_some_and(|companion| companion.has_failed())
+            {
                 return Ok(None);
             }
             self.maintain(heartbeat).await?;
@@ -419,3 +436,7 @@ pub(super) fn started(value: FastStart) -> Result<Box<LiveFast>, &'static str> {
         }
     }
 }
+
+#[cfg(all(test, unix))]
+#[path = "fast_abandonment_tests.rs"]
+mod abandonment_tests;
