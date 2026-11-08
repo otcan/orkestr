@@ -37,13 +37,21 @@ jobs:
         with:
           version: v0.38.2
           driver: docker-container
-          buildkitd-flags: ''
+          buildkitd-flags: --debug=false
           cache-binary: false
       - name: Runner architecture is native amd64
         run: |
           test "$(docker info --format '{{.Architecture}}')" = x86_64
       - name: Failure-oriented bootstrap checks
         run: python3 -I -S -B -m unittest discover -s v2/packaging/oss/tests -v
+      - name: Reserve this architecture's share of measured free cache space
+        id: cache-allowance
+        if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 -I -S -B v2/packaging/oss/cache_budget.py \
+            --prepare --report "$RUNNER_TEMP/cache-allowance.json"
       - name: Sample build CPU and memory counters
         run: |
           python3 -I -S -B v2/packaging/oss/image_metrics.py \
@@ -153,15 +161,16 @@ jobs:
             BUILD_JOBS=4
           push: false
           target: runtime
-          cache-to: type=local,dest=${{ runner.temp }}/cache-preview,mode=max,compression=gzip,force-compression=true
-      - name: Admit cache export without evicting unrelated caches
+          cache-to: type=local,dest=${{ runner.temp }}/cache-preview,mode=max
+      - name: Admit cache export within the measured free allowance
         id: cache-budget
         if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
         env:
           GH_TOKEN: ${{ github.token }}
+          CACHE_ALLOWANCE: ${{ steps.cache-allowance.outputs.bytes }}
         run: |
           python3 -I -S -B v2/packaging/oss/cache_budget.py \
-            --preview "$RUNNER_TEMP/cache-preview" --report "$RUNNER_TEMP/cache-budget.json"
+            --allocation "${CACHE_ALLOWANCE:-0}" --preview "$RUNNER_TEMP/cache-preview" --report "$RUNNER_TEMP/cache-budget.json"
       - name: Publish trusted-branch cache only (never PR results)
         if: ${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && steps.cache-budget.outputs.allowed == 'true' }}
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
@@ -174,7 +183,7 @@ jobs:
             BUILD_JOBS=4
           push: false
           target: runtime
-          cache-to: type=gha,version=2,scope=v2-image-v1-amd64-${{ hashFiles('v2/packaging/oss/Dockerfile', 'v2/rust-toolchain.toml', 'v2/Cargo.lock', 'package-lock.json') }},mode=max,compression=gzip,force-compression=true,timeout=5m,ignore-error=true
+          cache-to: type=gha,version=2,scope=v2-image-v1-amd64-${{ hashFiles('v2/packaging/oss/Dockerfile', 'v2/rust-toolchain.toml', 'v2/Cargo.lock', 'package-lock.json') }},mode=max,timeout=5m,ignore-error=true
       - name: Finish resource sampling
         if: always()
         run: |
@@ -190,6 +199,7 @@ jobs:
             ${{ runner.temp }}/local-fresh-install.json
             ${{ runner.temp }}/cache-boundaries*
             ${{ runner.temp }}/cache-budget.json
+            ${{ runner.temp }}/cache-allowance.json
             ${{ runner.temp }}/image-metrics*
             ${{ runner.temp }}/bundle/*.tar.gz
             ${{ runner.temp }}/bundle/SHA256SUMS
@@ -220,13 +230,21 @@ jobs:
         with:
           version: v0.38.2
           driver: docker-container
-          buildkitd-flags: ''
+          buildkitd-flags: --debug=false
           cache-binary: false
       - name: Runner architecture is native arm64
         run: |
           test "$(docker info --format '{{.Architecture}}')" = aarch64
       - name: Failure-oriented bootstrap checks
         run: python3 -I -S -B -m unittest discover -s v2/packaging/oss/tests -v
+      - name: Reserve this architecture's share of measured free cache space
+        id: cache-allowance
+        if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 -I -S -B v2/packaging/oss/cache_budget.py \
+            --prepare --report "$RUNNER_TEMP/cache-allowance.json"
       - name: Sample build CPU and memory counters
         run: |
           python3 -I -S -B v2/packaging/oss/image_metrics.py \
@@ -336,15 +354,16 @@ jobs:
             BUILD_JOBS=4
           push: false
           target: runtime
-          cache-to: type=local,dest=${{ runner.temp }}/cache-preview,mode=max,compression=gzip,force-compression=true
-      - name: Admit cache export without evicting unrelated caches
+          cache-to: type=local,dest=${{ runner.temp }}/cache-preview,mode=max
+      - name: Admit cache export within the measured free allowance
         id: cache-budget
         if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
         env:
           GH_TOKEN: ${{ github.token }}
+          CACHE_ALLOWANCE: ${{ steps.cache-allowance.outputs.bytes }}
         run: |
           python3 -I -S -B v2/packaging/oss/cache_budget.py \
-            --preview "$RUNNER_TEMP/cache-preview" --report "$RUNNER_TEMP/cache-budget.json"
+            --allocation "${CACHE_ALLOWANCE:-0}" --preview "$RUNNER_TEMP/cache-preview" --report "$RUNNER_TEMP/cache-budget.json"
       - name: Publish trusted-branch cache only (never PR results)
         if: ${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && steps.cache-budget.outputs.allowed == 'true' }}
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
@@ -357,7 +376,7 @@ jobs:
             BUILD_JOBS=4
           push: false
           target: runtime
-          cache-to: type=gha,version=2,scope=v2-image-v1-arm64-${{ hashFiles('v2/packaging/oss/Dockerfile', 'v2/rust-toolchain.toml', 'v2/Cargo.lock', 'package-lock.json') }},mode=max,compression=gzip,force-compression=true,timeout=5m,ignore-error=true
+          cache-to: type=gha,version=2,scope=v2-image-v1-arm64-${{ hashFiles('v2/packaging/oss/Dockerfile', 'v2/rust-toolchain.toml', 'v2/Cargo.lock', 'package-lock.json') }},mode=max,timeout=5m,ignore-error=true
       - name: Finish resource sampling
         if: always()
         run: |
@@ -373,6 +392,7 @@ jobs:
             ${{ runner.temp }}/local-fresh-install.json
             ${{ runner.temp }}/cache-boundaries*
             ${{ runner.temp }}/cache-budget.json
+            ${{ runner.temp }}/cache-allowance.json
             ${{ runner.temp }}/image-metrics*
             ${{ runner.temp }}/bundle/*.tar.gz
             ${{ runner.temp }}/bundle/SHA256SUMS

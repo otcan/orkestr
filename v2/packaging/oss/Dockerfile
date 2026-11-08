@@ -51,7 +51,7 @@ FROM dependencies AS build
 COPY --from=source /src /src
 RUN cp -a /dependencies/node_modules /src/node_modules \
     && python3 -I -S -B /src/v2/packaging/oss/build.py \
-    && rm -rf /src/node_modules
+    && rm -rf /src/node_modules /build/target
 
 # Export the unchanged #265 tarball, paired receipt and checksums without publishing.
 FROM scratch AS bundle

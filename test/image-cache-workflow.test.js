@@ -12,6 +12,13 @@ test("native image cache jobs keep PR imports read only and exact-source checks"
   const scopes = new Set();
   for (const [name, job] of Object.entries(workflow.jobs)) {
     assert.deepEqual(job.permissions, { contents: "read", actions: "read" });
+    // GitHub rejected the original run before allocating any runner because
+    // runner.temp is unavailable in job-level env expressions.
+    for (const value of Object.values(job.env || {})) assert.doesNotMatch(String(value), /\$\{\{[^}]*runner\./);
+    assert.ok(job.steps.some(step => step.run?.includes('DOCKER_CONFIG=$RUNNER_TEMP/empty-docker-config') &&
+      step.run.includes('"$GITHUB_ENV"')));
+    const builder = job.steps.find(step => step.uses?.startsWith("docker/setup-buildx-action@"));
+    assert.equal(builder.with["buildkitd-flags"], "--debug=false");
     const builds = job.steps.filter(step => step.uses?.startsWith("docker/build-push-action@"));
     for (const step of builds) {
       assert.equal(step.with.context, ".");
