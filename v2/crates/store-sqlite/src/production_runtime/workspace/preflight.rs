@@ -1,4 +1,4 @@
-//! One fresh physical check per operation, performed before taking a writer.
+//! Bounded, operation-scoped physical checks before taking a writer.
 use super::*;
 use std::{
     ops::Deref,
@@ -17,8 +17,10 @@ pub(crate) struct WorkspaceCheck {
     project: Option<(String, i64, String)>,
     installation: Option<Arc<Installation>>,
     deadline: Option<Instant>,
+    physical_deadline: Instant,
     alive: AtomicBool,
     effect: AtomicBool,
+    stamp_changed: AtomicBool,
     context: Option<(String, String, i64)>,
     retained: Option<super::filesystem::RetainedStamp>,
 }
@@ -42,6 +44,37 @@ impl Drop for WorkspacePreflight {
     }
 }
 impl WorkspacePreflight {
+    /// A changed directory stamp can be ordinary command output. It is never
+    /// accepted as authority: discard this owned proof and repeat the complete
+    /// Root check outside the writer, within the original physical budget.
+    /// Borrowed proofs may be inside an already-connected Root exchange and
+    /// must never acquire another Root channel here.
+    pub(in crate::production_runtime) async fn refresh_before_effect(
+        self,
+        store: &Store,
+        binding: &Binding,
+    ) -> Result<Option<Self>> {
+        let deadline = self.proof.physical_deadline;
+        let eligible = self.owns
+            && self.proof.alive.load(Ordering::SeqCst)
+            && !self.proof.effect.load(Ordering::SeqCst)
+            && self.proof.stamp_changed.load(Ordering::SeqCst)
+            && Instant::now() < deadline;
+        drop(self);
+        if !eligible {
+            return Ok(None);
+        }
+        store
+            .check_workspace_before_writer_until(
+                &binding.owner_id,
+                &binding.conversation_id,
+                None,
+                deadline,
+            )
+            .await
+            .map(Some)
+    }
+
     /// Same operation only, after the existing transaction proved and changed
     /// supervisor ownership. Physical evidence and deadline are unchanged;
     /// the returned durable Store itself never retains this scoped proof.
@@ -60,9 +93,11 @@ impl WorkspacePreflight {
             project: self.proof.project.clone(),
             installation: self.proof.installation.clone(),
             deadline: self.proof.deadline,
+            physical_deadline: self.proof.physical_deadline,
             retained: self.proof.retained,
             alive: AtomicBool::new(true),
             effect: AtomicBool::new(false),
+            stamp_changed: AtomicBool::new(false),
             context: Some((
                 context.id.clone(),
                 context.incarnation.clone(),
@@ -90,7 +125,16 @@ impl WorkspaceCheck {
         }
         if let Some(installation) = &self.installation {
             installation.check_retained()?;
-            if Some(installation.retained_stamp()?) != self.retained {
+            let current = installation.retained_stamp()?;
+            if Some(current) != self.retained {
+                if self.retained.as_ref().is_some_and(|expected| {
+                    expected
+                        .iter()
+                        .zip(&current)
+                        .all(|(expected, current)| expected.same_authority_attributes(current))
+                }) {
+                    self.stamp_changed.store(true, Ordering::SeqCst);
+                }
                 return Err(RuntimeStoreError::Fenced);
             }
         }
@@ -104,6 +148,22 @@ impl Store {
         owner: &OwnerId,
         conversation: &ConversationId,
         selected: Option<Arc<Installation>>,
+    ) -> Result<WorkspacePreflight> {
+        self.check_workspace_before_writer_until(
+            owner,
+            conversation,
+            selected,
+            Instant::now() + PHYSICAL_BUDGET,
+        )
+        .await
+    }
+
+    async fn check_workspace_before_writer_until(
+        &self,
+        owner: &OwnerId,
+        conversation: &ConversationId,
+        selected: Option<Arc<Installation>>,
+        deadline: Instant,
     ) -> Result<WorkspacePreflight> {
         if let Some(proof) = &self.workspace_check {
             if &proof.owner != owner || &proof.conversation != conversation {
@@ -119,7 +179,6 @@ impl Store {
                 owns: false,
             });
         }
-        let deadline = Instant::now() + PHYSICAL_BUDGET;
         // A running command may create an ordinary child file while Root is
         // checking the project. Discard that entire observation and permit one
         // complete fresh check, before any writer, outer connection or action.
@@ -222,9 +281,11 @@ impl Store {
                 .as_ref()
                 .filter(|i| i.root_attested())
                 .map(|_| Instant::now() + HANDOFF),
+            physical_deadline: deadline,
             installation,
             alive: AtomicBool::new(true),
             effect: AtomicBool::new(false),
+            stamp_changed: AtomicBool::new(false),
             retained,
             context: self
                 .authority

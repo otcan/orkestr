@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import puppeteer from 'puppeteer';
 import { submitLogin } from './headless-login.mjs';
+import { submitLogout } from './headless-logout.mjs';
 import { discoveryMode } from './headless-beta.mjs';
 import { verifyIntake } from './headless-intake.mjs';
 import { installIntakeCapture } from './headless-receipt-capture.mjs';
@@ -38,7 +39,7 @@ try {
   page.on('response', response => {
     const url = new URL(response.url());
     if (url.origin === origin && url.pathname.startsWith('/api/v2/')) {
-      network.push({ route: url.pathname.replace(/[0-9a-f-]{36}/g, ':id'), status: response.status() });
+      network.push({ method: response.request().method(), route: url.pathname.replace(/[0-9a-f-]{36}/g, ':id'), status: response.status() });
       if (network.length > 40) network.shift();
     }
   });
@@ -125,8 +126,24 @@ try {
     await page.reload({ waitUntil: 'networkidle2' });
     await checkSurface(mode);
   }
-  await clickText('Sign out');
-  await page.waitForSelector('#username');
+  stage = 'confirmed-sign-out';
+  // Deterministically cover the actual unavailable-revocation contract. The
+  // first DELETE does not reach the synthetic server; the UI must retain its
+  // authenticated state and reconcile before a second gesture can revoke it.
+  let refusedLogout = 0;
+  await page.setRequestInterception(true);
+  page.on('request', request => {
+    if (request.isInterceptResolutionHandled()) return;
+    const refuse = request.url() === `${origin}/api/v2/browser/session`
+      && request.method() === 'DELETE' && refusedLogout === 0;
+    if (refuse) refusedLogout += 1;
+    const pending = refuse
+      ? request.respond({ status: 503, contentType: 'application/json', body: '{"error":"unavailable"}' })
+      : request.continue();
+    pending.catch(() => errors.push('Synthetic request interception failed'));
+  });
+  await submitLogout(page, origin, clickText);
+  assert.equal(refusedLogout, 1, 'Unavailable revocation scenario was not exercised');
   await page.reload({ waitUntil: 'networkidle2' });
   await page.waitForSelector('#username');
   // Exercise a fresh password login after server-confirmed revocation, not just resume.

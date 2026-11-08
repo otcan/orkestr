@@ -179,8 +179,11 @@ impl Store {
         let context_id: String = row.get("context_id");
         // Natural expiry, revoked retirement and legacy deadline zero are not
         // graceful evidence. Match the immutable original decision before CAS.
-        let graceful: i64 = sqlx::query_scalar("SELECT count(*) FROM production_retirement_provenance g JOIN production_runs r ON r.id=g.prior_run_id JOIN production_terminal_evidence a ON a.run_id=r.id JOIN session_bindings b ON b.id=r.session_id WHERE g.context_id=? AND g.incarnation_id=? AND g.supervisor_generation=? AND g.prior_run_id=? AND g.terminal_event_id=a.event_id AND g.session_id=r.session_id AND g.binding_generation=b.generation")
-            .bind(&context_id).bind(&incarnation_id).bind(row.get::<i64,_>("generation"))
+        // Materialize only this exact prior run, preserving every canonical
+        // terminal predicate without scanning unrelated history under the
+        // short-lived physical handoff.
+        let graceful: i64 = sqlx::query_scalar("WITH terminal AS MATERIALIZED (SELECT * FROM production_terminal_evidence WHERE run_id=?) SELECT count(*) FROM production_retirement_provenance g JOIN production_runs r ON r.id=g.prior_run_id JOIN terminal a ON a.run_id=r.id JOIN session_bindings b ON b.id=r.session_id WHERE g.context_id=? AND g.incarnation_id=? AND g.supervisor_generation=? AND g.prior_run_id=? AND g.terminal_event_id=a.event_id AND g.session_id=r.session_id AND g.binding_generation=b.generation")
+            .bind(prior_run.to_string()).bind(&context_id).bind(&incarnation_id).bind(row.get::<i64,_>("generation"))
             .bind(prior_run.to_string()).fetch_one(&mut *tx).await.map_err(db)?;
         if row.get::<i64, _>("lease_deadline_ms") != 0 || graceful != 1 {
             return Err(RuntimeStoreError::Fenced);
