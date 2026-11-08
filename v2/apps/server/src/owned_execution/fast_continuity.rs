@@ -43,6 +43,23 @@ impl Drop for PendingFastRetirement {
 }
 
 impl ConfiguredExecution {
+    /// A failed companion grants no presentation. Keep its unused native's
+    /// original cleanup owner until EOF and wait prove it gone; dropping the
+    /// managed proxy first would cancel the surviving Deep's entire window.
+    pub(super) async fn reap_abandoned_fast(
+        &self,
+        ready: crate::fast_execution::ReadyFast,
+        heartbeat: &mut Instant,
+    ) -> Result<(), &'static str> {
+        self.reap_fast_setup(
+            ready
+                .retire_setup()
+                .map_err(|_| "Fast abandoned setup retirement refused")?,
+            heartbeat,
+        )
+        .await
+    }
+
     pub(super) async fn reap_fast_setup(
         &self,
         mut retiring: RetiringMetadata,
