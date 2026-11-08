@@ -205,6 +205,7 @@ class Registry:
         binding.worker.attachments = binding.config["attachments"]
         binding.worker.max_input_age_s = binding.config["max_input_age_seconds"]
         binding.worker.instructions_path = binding.config["instructions_path"]
+        binding.worker.internal_context_dir = self.service.get("internal_context_dir")
         if binding.thread is None and self.workers:
             binding.thread = threading.Thread(target=self._supervise, args=(binding,),
                                               daemon=True, name="binding-" + binding.remote_thread_id[:8])
