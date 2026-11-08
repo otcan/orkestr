@@ -33,6 +33,14 @@ class SingleAgentRehearsal(ResumeRehearsal):
         self.refresh_manifest()
         assert 'legacy_companions' not in self.package.beta
 
+    def exercise_worker_reuse(self, path):
+        completed = super().exercise_worker_reuse(path)
+        # Only the first owner turn is held while its two Workers finish.
+        # Later resumed turns must use the ordinary completion protocol;
+        # release-1 cannot release the native's per-input holds for 2 and 3.
+        (self.fixture.workspace / 'mode').write_text('complete')
+        return completed
+
     def run(self):
         report = super().run()
         runs = self.rows('SELECT id,role,state,native_session_id FROM production_runs')
