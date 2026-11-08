@@ -267,6 +267,7 @@ class Worker:
         self._web_checked = None
         # Binding flags: mirror web-UI owner messages; name their files (else count only).
         self.web_mirror = True
+        self.internal_context_dir = None
         self.attachments = False
         self._timers_checked = None
         self._burst_due = None  # Wall time a waiting burst head may be sent.
@@ -568,6 +569,12 @@ class Worker:
                         uuid.UUID(row["message_id"])
                         if identity is None:
                             identity = self.provider_identity()
+                        from . import internal_context
+                        if internal_context.registered(self.internal_context_dir, self.client.conversation, row):
+                            self.ledger.await_internal_context(row)
+                            cursor = row["sequence"]
+                            self.ledger.set_web_cursor(cursor)
+                            continue
                         text = self.web_text(row["text"])
                         if text and self.ledger.enqueue_web(row, text, identity):
                             print("orkestr-v2-wa-adapter web_mirrored conversation=%s message=%s"
