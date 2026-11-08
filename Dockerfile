@@ -53,7 +53,7 @@ RUN apt-get update \
     arm64) cloudflared_arch=arm64 ;; \
     *) echo "unsupported TARGETARCH for cloudflared: ${TARGETARCH}" >&2; exit 1 ;; \
   esac \
-  && curl -fsSL -o /usr/local/bin/cloudflared "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${cloudflared_arch}" \
+  && curl -fsSL --connect-timeout 15 --max-time 120 --retry 2 --retry-delay 2 --retry-max-time 360 -o /usr/local/bin/cloudflared "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${cloudflared_arch}" \
   && chmod +x /usr/local/bin/cloudflared \
   && cloudflared --version \
   && rm -rf /var/lib/apt/lists/*
