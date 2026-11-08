@@ -5,6 +5,8 @@ import io
 from pathlib import Path
 import platform
 import tarfile
+import time
+import urllib.error
 import urllib.request
 
 CODEX = 'https://github.com/openai/codex/releases/download/rust-v0.163.0/'
@@ -31,6 +33,19 @@ ASSETS = {
 }
 # ELF e_machine of each supported architecture (little-endian, 64-bit).
 ELF_MACHINE = {'x86_64': b'\x3e\x00', 'aarch64': b'\xb7\x00'}
+
+
+def download(url):
+    """Retry transient HTTP failures; keep exact asset and digest validation."""
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(url, timeout=120) as response:
+                return response.read(256 * 1024 * 1024 + 1)
+        except urllib.error.HTTPError as error:
+            error.close()
+            if error.code not in (408, 429, 500, 502, 503, 504) or attempt == 2:
+                raise
+            time.sleep(attempt + 1)
 
 
 def assets(machine=None):
@@ -62,8 +77,7 @@ def main():
     output.mkdir()
     machine = platform.machine()
     for name, url, algorithm, expected in assets(machine):
-        with urllib.request.urlopen(url, timeout=120) as response:
-            raw = response.read(256 * 1024 * 1024 + 1)
+        raw = download(url)
         if len(raw) > 256 * 1024 * 1024 or hashlib.new(algorithm, raw).hexdigest() != expected:
             raise ValueError('pinned provider download checksum mismatch')
         path = output / name
