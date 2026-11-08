@@ -6,6 +6,7 @@ from pathlib import Path
 import platform
 import tarfile
 import time
+from types import MappingProxyType
 import urllib.error
 import urllib.request
 
@@ -33,13 +34,33 @@ ASSETS = {
 }
 # ELF e_machine of each supported architecture (little-endian, 64-bit).
 ELF_MACHINE = {'x86_64': b'\x3e\x00', 'aarch64': b'\xb7\x00'}
+# Exact official release assets for the unchanged URLs/digests above. The API
+# route avoids the browser-download endpoint; no token or runtime lookup is used.
+GITHUB_ASSET_IDS = MappingProxyType({
+    CODEX + 'codex-x86_64-unknown-linux-musl.tar.gz': 645227929,
+    CODEX + 'codex-code-mode-host-x86_64-unknown-linux-musl.tar.gz': 645227482,
+    CODEX + 'codex-aarch64-unknown-linux-musl.tar.gz': 645213549,
+    CODEX + 'codex-code-mode-host-aarch64-unknown-linux-musl.tar.gz': 645213791,
+})
+
+
+def download_request(url):
+    asset = GITHUB_ASSET_IDS.get(url)
+    if asset is None:
+        if url.startswith(CODEX):
+            raise ValueError('unreviewed GitHub provider asset')
+        return url
+    return urllib.request.Request(
+        'https://api.github.com/repos/openai/codex/releases/assets/' + str(asset),
+        headers={'Accept': 'application/octet-stream',
+                 'X-GitHub-Api-Version': '2022-11-28'})
 
 
 def download(url):
     """Retry transient HTTP failures; keep exact asset and digest validation."""
     for attempt in range(3):
         try:
-            with urllib.request.urlopen(url, timeout=120) as response:
+            with urllib.request.urlopen(download_request(url), timeout=120) as response:
                 return response.read(256 * 1024 * 1024 + 1)
         except urllib.error.HTTPError as error:
             error.close()

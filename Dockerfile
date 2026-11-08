@@ -30,6 +30,7 @@ ENV NODE_ENV=production \
 
 WORKDIR /app
 
+# Official 2026.10.7 assets: the release selected by latest when reviewed.
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
     ca-certificates \
@@ -49,12 +50,16 @@ RUN apt-get update \
     xauth \
     xvfb \
   && case "${TARGETARCH}" in \
-    amd64) cloudflared_arch=amd64 ;; \
-    arm64) cloudflared_arch=arm64 ;; \
+    amd64) cloudflared_arch=amd64; cloudflared_asset=692817008; cloudflared_sha256=1f99fb518b83dec2ba8d870a7cc991d82a77e6196295a3d2754ba17ab9f91872 ;; \
+    arm64) cloudflared_arch=arm64; cloudflared_asset=692818763; cloudflared_sha256=3df43aedc9ff291d1735b5cb576cb97e0b157488796db2e32b28aecabb445775 ;; \
     *) echo "unsupported TARGETARCH for cloudflared: ${TARGETARCH}" >&2; exit 1 ;; \
   esac \
-  && curl -fsSL --connect-timeout 15 --max-time 120 --retry 2 --retry-delay 2 --retry-max-time 360 -o /usr/local/bin/cloudflared "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${cloudflared_arch}" \
-  && chmod +x /usr/local/bin/cloudflared \
+  && cloudflared_dir="$(mktemp -d)" \
+  && cloudflared_file="$cloudflared_dir/cloudflared-linux-${cloudflared_arch}" \
+  && curl -fsSL --connect-timeout 15 --max-time 120 --retry 2 --retry-delay 2 --retry-max-time 360 --header 'Accept: application/octet-stream' --header 'X-GitHub-Api-Version: 2022-11-28' -o "$cloudflared_file" "https://api.github.com/repos/cloudflare/cloudflared/releases/assets/${cloudflared_asset}" \
+  && printf '%s  %s\n' "$cloudflared_sha256" "$cloudflared_file" | sha256sum --check --status \
+  && install -m 0755 "$cloudflared_file" /usr/local/bin/cloudflared \
+  && rm -rf "$cloudflared_dir" \
   && cloudflared --version \
   && rm -rf /var/lib/apt/lists/*
 
