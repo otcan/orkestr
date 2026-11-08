@@ -14,7 +14,7 @@ export async function submitLogout(page, origin, click) {
   let status = await revoke();
   if (status === 503) {
     const current = await page.evaluate(async () => (await fetch('/api/v2/browser/session', {
-      redirect: 'error', cache: 'no-store',
+      redirect: 'error', cache: 'no-store', signal: AbortSignal.timeout(10000),
     })).status);
     assert.ok(current === 200 || current === 401, 'Sign-out session reconciliation unavailable');
     if (current === 401) {

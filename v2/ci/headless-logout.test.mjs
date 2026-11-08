@@ -20,7 +20,19 @@ function fixture(statuses, sessionStatus = 200, unknown = false) {
       assert.equal(options.timeout, 10000);
       calls.push('ready');
     },
-    async evaluate() { calls.push('reconcile'); return sessionStatus; },
+    async evaluate(fn) {
+      calls.push('reconcile');
+      const original = globalThis.fetch;
+      globalThis.fetch = async (path, options) => {
+        assert.equal(path, '/api/v2/browser/session');
+        assert.equal(options.cache, 'no-store');
+        assert.equal(options.redirect, 'error');
+        assert.ok(options.signal instanceof AbortSignal, 'reconciliation must have an abort deadline');
+        assert.equal(options.signal.aborted, false);
+        return { status: sessionStatus };
+      };
+      try { return await fn(); } finally { globalThis.fetch = original; }
+    },
     async reload() { calls.push('reload'); signedOut = sessionStatus === 401; },
   };
   const click = async text => {
