@@ -1,11 +1,16 @@
 """Only verified same-ref content-addressed layers can reduce an export budget."""
 import gzip
+from contextlib import redirect_stdout
 import hashlib
 import importlib.util
+import io
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
+import urllib.error
 
 SPEC = importlib.util.spec_from_file_location(
     'cache_budget_preview', Path(__file__).resolve().parents[1] / 'cache_budget.py')
@@ -43,6 +48,39 @@ def observed(layer, ref=REF, version=None, prefix=None, duplicate=False):
 
 
 class CachePreviewTests(unittest.TestCase):
+    def run_main(self, root, argv):
+        env = {'GITHUB_REPOSITORY': 'owner/product', 'GITHUB_REF': REF,
+               'GH_TOKEN': 'synthetic-sensitive-token', 'GITHUB_OUTPUT': str(root / 'output')}
+        output = io.StringIO()
+        with patch.dict(os.environ, env, clear=True), patch('sys.argv', ['cache_budget.py', *argv]), redirect_stdout(output):
+            budget.main()
+        self.assertNotIn('synthetic-sensitive-token', output.getvalue())
+        return json.loads((root / 'report.json').read_text())
+
+    def test_http_failure_reports_status_once_without_response_or_token(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            error = urllib.error.HTTPError('https://api.github.com/', 403, 'refused', {},
+                                          io.BytesIO(b'synthetic-sensitive-body'))
+            with patch.object(budget.urllib.request, 'urlopen', side_effect=error) as request:
+                report = self.run_main(root, ['--prepare', '--report', str(root / 'report.json')])
+            self.assertEqual(request.call_count, 1)
+            self.assertFalse(report['export_allowed'])
+            self.assertEqual(report['http_status'], 403)
+            self.assertNotIn('synthetic-sensitive-body', json.dumps(report))
+
+    def test_actual_preview_refusal_retains_its_static_validation_code(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            fixture(root / 'preview', duplicate=True)
+            usage = {'repository_cache_bytes': 0, '_visible_blob_sizes': {}}
+            with patch.object(budget, 'observed_usage', return_value=usage):
+                report = self.run_main(root, ['--preview', str(root / 'preview'),
+                    '--allocation', '100000000', '--report', str(root / 'report.json')])
+            self.assertFalse(report['export_allowed'])
+            self.assertEqual(report['validation_code'], 'duplicate_cache_layer_descriptor')
+            self.assertEqual(report['preview_layer_media_types'], ['application/vnd.oci.image.layer.v1.tar+gzip'])
+
     def test_exact_visible_layer_is_counted_once_not_recharged(self):
         with tempfile.TemporaryDirectory() as scratch:
             root = Path(scratch)

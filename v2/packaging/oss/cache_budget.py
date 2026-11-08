@@ -65,12 +65,15 @@ def allocation(used):
     return max(0, (LIMIT - RESERVE - used) // EXPORTERS)
 
 
-def preview_inventory(root, visible):
+def preview_inventory(root, visible, diagnostics=None):
     """Discount only verified OCI layer blobs already readable on this ref."""
     files = list(root.rglob('*'))
+    diagnostics = diagnostics if diagnostics is not None else {}
+    diagnostics['preview_file_count'] = len(files)
     if root.is_symlink() or any(p.is_symlink() for p in files):
         raise ValueError('cache preview symlink')
     regular = [p for p in files if p.is_file()]
+    diagnostics['preview_max_file_links'] = max((p.stat().st_nlink for p in regular), default=0)
     if any(not stat.S_ISREG(p.stat().st_mode) or p.stat().st_nlink != 1 for p in regular):
         raise ValueError('cache preview file custody')
     total = sum(p.stat().st_size for p in regular)
@@ -98,16 +101,28 @@ def preview_inventory(root, visible):
         return path, match[1], size
 
     index = read_json(root / 'index.json')
+    diagnostics['preview_index_type'] = type(index).__name__
+    if not isinstance(index, dict):
+        raise ValueError('unknown cache index')
+    diagnostics['preview_index_media_type'] = index.get('mediaType')
+    diagnostics['preview_manifest_count'] = len(index.get('manifests', []))
     if (index.get('schemaVersion') != 2 or index.get('mediaType') != 'application/vnd.oci.image.index.v1+json'
             or len(index['manifests']) != 1
             or index['manifests'][0].get('mediaType') != 'application/vnd.oci.image.manifest.v1+json'):
         raise ValueError('unknown cache index')
     manifest = read_json(blob(index['manifests'][0])[0])
+    diagnostics['preview_manifest_type'] = type(manifest).__name__
+    if not isinstance(manifest, dict):
+        raise ValueError('unknown cache manifest')
+    diagnostics['preview_manifest_media_type'] = manifest.get('mediaType')
+    diagnostics['preview_config_media_type'] = manifest.get('config', {}).get('mediaType')
     if (manifest.get('schemaVersion') != 2 or manifest.get('mediaType') != 'application/vnd.oci.image.manifest.v1+json'
             or manifest['config']['mediaType'] != 'application/vnd.buildkit.cacheconfig.v0'):
         raise ValueError('unknown cache manifest')
     read_json(blob(manifest['config'])[0])
     layers = manifest['layers']
+    if isinstance(layers, list):
+        diagnostics['preview_layer_media_types'] = sorted({str(row.get('mediaType'))[:128] for row in layers if isinstance(row, dict)})
     if not isinstance(layers, list) or len(layers) > 1000:
         raise ValueError('unknown cache layers')
     seen, already = set(), 0
@@ -170,15 +185,21 @@ def main():
         usage = observed_usage(fetch, os.environ.get('GITHUB_REF'))
         visible = usage.pop('_visible_blob_sizes')
         used = usage['repository_cache_bytes']
+        report.update(usage)
         if args.prepare:
             report = {'repository_cache_bytes': used, 'architecture_allowance_bytes': allocation(used)}
         else:
-            total, already = preview_inventory(args.preview, visible)
-            report = decide(used, total, args.allocation, already)
+            total, already = preview_inventory(args.preview, visible, report)
+            report.update(decide(used, total, args.allocation, already))
         report.update(usage)
-    except Exception:
+    except Exception as error:
         # Do not print HTTP bodies, authentication headers or runner state.
         report['reason'] = 'usage_or_inventory_unavailable'
+        report['error_type'] = type(error).__name__
+        if type(error) is ValueError:
+            report['validation_code'] = str(error).replace(' ', '_')
+        if type(getattr(error, 'code', None)) is int:
+            report['http_status'] = error.code
     args.report.write_text(json.dumps(report, indent=2, sort_keys=True) + '\n')
     with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
         output.write('allowed=' + str(report.get('export_allowed', False)).lower() + '\n')
