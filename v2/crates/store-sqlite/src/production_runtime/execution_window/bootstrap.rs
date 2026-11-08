@@ -193,7 +193,7 @@ impl Store {
             .unwrap_or_default();
         // Every scope of this conversation is that one configured supervisor.
         let others: i64 = sqlx::query_scalar(&format!(
-            "SELECT count(*) FROM production_supervisors s WHERE {} AND s.context_id!=?",
+            "SELECT count(*) {} AND s.context_id!=?",
             retired_context::CONVERSATION_SUPERVISORS
         ))
         .bind(owner.to_string())

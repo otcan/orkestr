@@ -2,6 +2,10 @@
 use super::*;
 use orkestr_v2_contracts::ExecutionAcceptanceRequest;
 
+#[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+#[path = "terminal_handoff_tests.rs"]
+mod terminal_handoff;
+
 async fn accept(w: &Window, provider: &ProviderAdmission, key: &str) {
     w.bound
         .append_provider_event(
