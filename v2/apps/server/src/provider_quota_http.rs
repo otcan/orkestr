@@ -164,8 +164,10 @@ mod tests {
     }
     #[test]
     fn projection_rejects_invalid_numeric_and_text_fields() {
-        let mut value = Provider::default();
-        value.weekly_remaining_pct = Some(101.0);
+        let mut value = Provider {
+            weekly_remaining_pct: Some(101.0),
+            ..Provider::default()
+        };
         assert!(!value.valid());
         value.weekly_remaining_pct = Some(0.0);
         assert!(value.valid());
