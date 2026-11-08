@@ -76,10 +76,16 @@ host full access:
 - A Claude Fast session gets only `Read`, `Grep`, `Glob` and `WebSearch`, no MCP
   server, no settings sources and no hooks (`claude_connector.FAST_TOOLS`).
 - Every Fast turn starts with the reply contract `FAST_TURN_NOTE`
-  (`orkestr-runtime/src/execution.rs`): acknowledge and restate, answer only
-  from the message or history, never claim anything was done, never treat a bug
-  report as user error, open listed attachments, short and in the owner's
-  language.
+  (`orkestr-runtime/src/execution.rs`): answer the actual question from available
+  message/history evidence, explain task-relevant unknowns, and distinguish this
+  role's read-only limits from the assistant's overall capabilities. It must not
+  infer another role's execution status from role assignment or substitute a
+  handoff announcement for an answer. Confirmed historical results may be
+  reported with attribution; Fast must not claim it performed an action or
+  invent completion, facts or an ETA. Bugs are not blamed on the owner, listed
+  attachments are opened, and replies stay short and in the owner's language.
+  Internal tool JSON and receipt details stay internal unless requested or
+  needed to answer the question.
 - The binding's chat rules are inlined into a Fast turn only when the adapter's
   own leading line names them (first line, followed by the adapter's source
   header), the file matches that line's version, is at most 20 KiB and is

@@ -73,16 +73,18 @@ fn execution_scope(
     )
 }
 
-/// Prefixed to every Fast turn (Codex and Claude). Fast is a quick, read-only
-/// acknowledgement: a Deep turn handles the same input in parallel and owns
-/// every action, check and fact. The broker independently runs Fast with a
+/// Prefixed to every Fast turn (Codex and Claude). Fast gives a useful,
+/// read-only answer from available context; it cannot infer execution status
+/// merely because another role owns actions. The broker independently runs Fast with a
 /// read-only sandbox and without side-effect tools; this note is the reply
 /// contract, not the enforcement.
-pub const FAST_TURN_NOTE: &str = "[Fast reply: you are the quick, read-only first reply. A Deep turn is working on this same message in parallel and does all real work.
+pub const FAST_TURN_NOTE: &str = "[Fast reply: give a useful, concise first answer from the available context. This role is read-only; task execution belongs to the execution role.
 - Read-only: never send messages, emails or requests to other threads, never write files, logs, notes or ledgers, never run git, schedule, deploy or use browser or desktop tools. Writes and network are blocked here; do not try them or work around them. Use at most two quick read-only lookups, and none when the message, the history or the chat rules already answer it; no long-running commands, waits or polling loops.
-- Acknowledge and briefly restate the request. Answer it only when the answer is directly in this message or the conversation history; otherwise say Deep is looking into it.
-- Never say or imply that anything was done, sent, verified, fixed, scheduled or queued, and never promise a time. Do not state dates, numbers or statuses that are not written in this message or the history.
-- If the owner reports a problem or bug, do not call it a user error or tell them how they caused it; acknowledge it and say Deep is investigating.
+- Answer the actual question directly when this message or the conversation history provides the answer. Otherwise explain the specific unknowns that matter to the task. Do not merely paraphrase the request or announce a handoff as a substitute for an answer.
+- Never claim another role has started, is working or has completed an action without an observed status in this message or the conversation history. This role's read-only limits do not mean the assistant as a whole lacks permission or capability to perform the task.
+- Do not claim that you performed actions from this read-only role. You may report confirmed results from this message or the conversation history, attributing them to the observed source. Do not invent completion, dates, numbers, statuses or an ETA.
+- If the owner reports a problem or bug, do not call it a user error or tell them how they caused it. Explain what is known and what evidence is still needed without inventing a diagnosis.
+- Keep internal tool JSON, receipt paths, hashes and permission boilerplate out of the reply unless the owner asks for them or they are needed to answer the question.
 - If the input lists attachments, open each listed local file before answering (use your image viewing tool for images). Never say you cannot see an attachment that is listed unless opening it failed.
 - Reply in the language of the owner's message: the language the current message itself is written in, not the language of the history, the chat rules, attachments, screenshots, quoted or pasted text, or the sender's name or phone number. Chat rules about the language of messages to other people apply to drafts for them, not to this reply. Use at most three short sentences.]";
 
@@ -190,46 +192,18 @@ mod fast_contract_tests {
     use orkestr_v2_contracts::runtime::Role;
 
     #[test]
-    fn fast_note_is_a_read_only_no_claims_contract() {
-        let note = FAST_TURN_NOTE.to_lowercase();
-        for required in [
-            // Read-only: no cross-thread requests, writes, git, browser.
-            "read-only",
-            "never send messages, emails or requests to other threads",
-            "never write files, logs, notes or ledgers",
-            "never run git",
-            "browser or desktop tools",
-            // Acknowledge, restate, answer only from message/history.
-            "acknowledge and briefly restate the request",
-            "only when the answer is directly in this message or the conversation history",
-            "deep is looking into it",
-            // No completion claims or invented facts.
-            "never say or imply that anything was done, sent, verified, fixed, scheduled or queued",
-            "never promise a time",
-            "do not state dates, numbers or statuses",
-            // Bug reports are never user error.
-            "do not call it a user error",
-            "deep is investigating",
-            // Attachments are opened, not ignored.
-            "open each listed local file before answering",
-            "image viewing tool",
-            // Short, in the owner's language.
-            "language of the owner's message",
-            "the language the current message itself is written in",
-            "not the language of the history, the chat rules, attachments",
-            "sender's name or phone number",
-            "apply to drafts for them, not to this reply",
-            "at most three short sentences",
-        ] {
-            assert!(note.contains(required), "missing: {required}");
-        }
-        // The note must not invite long work or polling.
-        assert!(note.contains("no long-running commands, waits or polling loops"));
-        assert!(note.contains("at most two quick read-only lookups"));
+    fn largest_fast_input_still_fits_after_role_note_injection() {
+        // Structural transport checks, not an English prompt-quality oracle.
+        // Actual answer quality needs Native scenario acceptance.
         assert!(FAST_TURN_NOTE.starts_with('[') && FAST_TURN_NOTE.ends_with(']'));
-        // Core budgets Fast inputs so note + input fit the 32 KiB turn bound.
         assert!(FAST_TURN_NOTE.len() + 2 <= orkestr_v2_store_sqlite::FAST_NOTE_RESERVE);
-        assert!(FAST_TURN_NOTE.len() + 2 + orkestr_v2_store_sqlite::FAST_INPUT_BUDGET <= 32_768);
+        let input = "x".repeat(orkestr_v2_store_sqlite::FAST_INPUT_BUDGET);
+        let fast = turn_text(Role::Fast, &input);
+        assert!(fast.len() <= 32_768);
+        let prefix = format!("{FAST_TURN_NOTE}\n\n");
+        assert_eq!(fast.strip_prefix(&prefix), Some(input.as_str()));
+        assert_eq!(turn_text(Role::Deep, &input), input);
+        assert_eq!(turn_text(Role::Worker, &input), input);
     }
 
     #[test]
