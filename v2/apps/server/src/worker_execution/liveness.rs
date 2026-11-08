@@ -7,6 +7,28 @@ const REFRESH_INTERVAL: Duration = Duration::from_secs(10);
 const RETRY_INTERVAL: Duration = Duration::from_secs(1);
 const STOP_MARGIN_MS: u64 = 250;
 
+pub(super) fn legacy_stop_deadline(
+    lifetime_ms: u32,
+    lease_deadline_ms: i64,
+) -> Result<Instant, &'static str> {
+    let now = Instant::now();
+    Ok(now + legacy_stop_after(lifetime_ms, lease_deadline_ms, epoch_ms()?))
+}
+
+fn legacy_stop_after(lifetime_ms: u32, lease_deadline_ms: i64, clock_ms: i64) -> Duration {
+    Duration::from_millis(lifetime_ms.into())
+        .saturating_sub(Duration::from_millis(STOP_MARGIN_MS))
+        .min(window(lease_deadline_ms, clock_ms).1)
+}
+
+fn epoch_ms() -> Result<i64, &'static str> {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .and_then(|elapsed| i64::try_from(elapsed.as_millis()).ok())
+        .ok_or("Worker scheduling clock unavailable")
+}
+
 pub(super) struct WorkerLease {
     authority: RunRenewalAuthority,
     hard_deadline_ms: i64,
@@ -84,11 +106,7 @@ impl WorkerLease {
     }
 
     fn schedule(&mut self, now: Instant) -> Result<(), &'static str> {
-        let epoch_ms = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .ok()
-            .and_then(|elapsed| i64::try_from(elapsed.as_millis()).ok())
-            .ok_or("Worker scheduling clock unavailable")?;
+        let epoch_ms = epoch_ms()?;
         let (refresh, stop) = window(self.lease_deadline_ms.min(self.hard_deadline_ms), epoch_ms);
         self.next_refresh = now + refresh;
         self.stop_at = now + stop;
@@ -111,6 +129,31 @@ fn window(deadline_ms: i64, clock_ms: i64) -> (Duration, Duration) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn delayed_legacy_setup_never_restarts_the_consumed_lease_allowance() {
+        for (setup_ms, expected_ms) in [
+            (0, 29_750),
+            (1_000, 28_750),
+            (29_900, 0),
+            (30_000, 0),
+            (35_000, 0),
+        ] {
+            assert_eq!(
+                legacy_stop_after(30_000, 130_000, 100_000 + setup_ms),
+                Duration::from_millis(expected_ms),
+                "setup delay {setup_ms} must consume the original hard lease"
+            );
+        }
+        assert_eq!(
+            legacy_stop_after(5_000, 130_000, 100_000),
+            Duration::from_millis(4_750)
+        );
+        assert_eq!(
+            legacy_stop_after(30_000, i64::MIN, i64::MAX),
+            Duration::ZERO
+        );
+    }
 
     #[test]
     fn clipped_or_expired_leases_never_create_a_new_local_allowance() {
