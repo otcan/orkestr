@@ -57,8 +57,7 @@ impl ConfiguredExecution {
             .await
     }
 
-    /// Exact status of this factory's role: the conversation's Deep status,
-    /// or the exact Fast run's status for a Fast companion.
+    /// Exact status of this factory's owned run, including a Fast companion.
     async fn claude_status(
         &self,
         run: &orkestr_v2_contracts::RunId,
@@ -66,11 +65,9 @@ impl ConfiguredExecution {
         if self.config.role == super::config::ExecutionRole::Fast {
             return self.fast_status(run).await;
         }
-        self.store
-            .execution_status(&self.owner, &self.config.conversation_id)
+        self.owned_run_status(run)
             .await
-            .map_err(|_| "Claude status unavailable")?
-            .ok_or("Claude status missing")
+            .map_err(|_| "Claude status unavailable")
     }
 
     /// Window work for this role is due (the Fast companion also yields to
@@ -326,7 +323,7 @@ impl ConfiguredExecution {
                     return Ok(proof);
                 }
                 StopProgress::ReconciliationRequired => {
-                    return Err("Claude Stop remains unconfirmed")
+                    return Err("Claude Stop remains unconfirmed");
                 }
                 StopProgress::Pending | StopProgress::InterruptAcknowledged => {}
             }
