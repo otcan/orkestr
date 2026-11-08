@@ -596,9 +596,24 @@ class Worker:
         Never blocks the serial WhatsApp queue and never opens a window or
         accepts a run: the web UI (or owner auto-accept) does that. Runs are
         matched by the message's own source tuple and read by run ID."""
+        watches = []
         for watch in self.ledger.web_watches(WEB_WATCHES_PER_PASS):
+            if time.time() - watch.get("since", time.time()) > WEB_ANSWER_MAX_S:
+                self.web_dropped(watch, "answer_timeout")
+            else:
+                watches.append(watch)
+        if not watches:
+            return
+        # One bounded observation serves every watch. A caught-up stream used
+        # to wait the full transport timeout once per watch, ahead of the
+        # foreground input's accepted final. Identity proof still uses the
+        # normal transport budget; only the event observation wait is shorter.
+        cursor = min(w.get("cursor", w["sequence"] - 1) for w in watches)
+        shared = shared_journal.shared(self).page(self.client, cursor, OBSERVE_PAGES, OBSERVE_BUDGET_S,
+                                                 timeout_s=EVENT_WAIT_S)
+        for watch in watches:
             try:
-                self.drive_web_one(watch)
+                self.drive_web_one(watch, shared)
             except Refused as error:
                 self.web_dropped(watch, str(error))
             except Exception:
@@ -606,12 +621,13 @@ class Worker:
                 if time.time() - watch.get("since", 0) > WEB_ANSWER_MAX_S:
                     self.web_dropped(watch, "answer_timeout")
 
-    def drive_web_one(self, watch):
+    def drive_web_one(self, watch, shared=None):
         now = time.time()
         if now - watch.get("since", now) > WEB_ANSWER_MAX_S:
             return self.web_dropped(watch, "answer_timeout")
         if "event_id" not in watch:
-            first = shared_journal.shared(self).read(self.client, watch["sequence"] - 1, 1)
+            first = shared_journal.shared(self).read(self.client, watch["sequence"] - 1, 1,
+                                                    timeout_s=EVENT_WAIT_S)
             event = first[0] if first else None
             if (not event or event.get("sequence") != watch["sequence"] or
                     (event.get("payload_ref_or_safe_payload") or {}).get("message_id") != watch["message_id"]):
@@ -619,8 +635,16 @@ class Worker:
             watch.update(event_id=event["event_id"], cursor=watch["sequence"])
             self.ledger.save_web_watch(watch)
         intake = {"message_id": watch["message_id"], "event_id": watch["event_id"]}
-        events = shared_journal.shared(self).read(self.client, watch["cursor"], 100)
-        ids = set(watch.get("runs", [])) | set(self.client.matching_run_ids(events, intake))
+        if shared is None:
+            events = shared_journal.shared(self).read(self.client, watch["cursor"], 100,
+                                                      timeout_s=EVENT_WAIT_S)
+            caught_up = len(events) < 100
+        else:
+            scanned, caught_up = shared
+            events = [event for event in scanned if event["sequence"] > watch["cursor"]]
+        ids = set(watch.get("runs", []))
+        for start in range(0, len(events), 100):  # The matcher accepts at most one page.
+            ids |= set(self.client.matching_run_ids(events[start:start + 100], intake))
         if len(ids) > 128:
             raise Refused("too_many_runs")
         watch["runs"] = sorted(ids)
@@ -644,7 +668,7 @@ class Worker:
             if notice:
                 return self.ledger.complete_web(watch, notice["text"], notice)
             return self.web_dropped(watch, "deep_" + str(deep[-1].get("phase")))
-        if len(events) == 100 or now - watch["since"] < WEB_NO_RUN_GRACE_S:
+        if not caught_up or now - watch["since"] < WEB_NO_RUN_GRACE_S:
             return
         current = self.call("GET", "/window", allowed=(200, 204))
         if isinstance(current, dict) and current.get("state") != "closed":
