@@ -158,4 +158,13 @@
  .hd-gauges { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .55rem; }
  .hd-gauge { flex-direction: column; align-items: flex-start; padding: .65rem; gap: .4rem; }
 }
-.provider-quota-panel{display:flex;gap:.7rem;flex-wrap:wrap;font-size:.75rem;align-items:center}.provider-quota-item{display:flex;gap:.3rem;flex-wrap:wrap;max-width:24rem;border:1px solid var(--border,#d5dbe5);border-radius:.5rem;padding:.3rem .5rem}.provider-quota-item small{opacity:.7}.quota-reset-detail{font-size:.65rem;opacity:.75;flex-basis:100%;overflow-wrap:anywhere}@media(max-width:700px){.provider-quota-panel{width:100%;gap:.3rem}.provider-quota-item{flex:1;min-width:9rem}.quota-reset-detail{display:none}}
+/* Quotas share the resource heading and wrap rather than hiding on phones. */
+.app-heading { height: auto; min-height: 3.25rem; flex-wrap: wrap; }
+.provider-quota-panel { display: flex; gap: .7rem; flex-wrap: wrap; font-size: .75rem; align-items: center; min-width: 0; }
+.provider-quota-item { display: flex; gap: .3rem; flex-wrap: wrap; max-width: 20rem; border: 1px solid var(--border); border-radius: .5rem; padding: .3rem .5rem; }
+.provider-quota-item small { opacity: .7; }
+.quota-reset-detail { font-size: .65rem; opacity: .75; flex-basis: 100%; overflow-wrap: anywhere; }
+@media(max-width:700px) {
+ .provider-quota-panel { width: 100%; gap: .3rem; }
+ .provider-quota-item { flex: 1; min-width: 0; }
+}

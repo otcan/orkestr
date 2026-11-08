@@ -12,10 +12,10 @@ export function quotaCards(snapshot, now = Date.now()) {
    const n = q?.[`${prefix}RemainingPct`], at = epoch(q?.[`${prefix}ResetsAt`]);
    const expired = Number.isFinite(at) && at <= now;
    const valid = knownObservation && !expired && typeof n === 'number' && Number.isFinite(n) && n >= 0 && n <= 100;
-   return {label: `${label} ${valid ? `${Math.round(n)}%` : '?'}`, detail: `${label}: ${expired ? 'expired observation; waiting for new telemetry' : valid ? `${Math.round(n)}% remaining` : 'unknown'}${Number.isFinite(at) && !expired ? `; resets in ${countdown(at)} (${new Date(at).toISOString()})` : '; reset time unknown'}`, valid};
+   return {label: `${label} ${valid ? `${Math.round(n)}%` : '?'}`, detail: `${label}: ${expired ? 'expired observation; waiting for new telemetry' : valid ? `${Math.round(n)}% remaining` : 'unknown'}${Number.isFinite(at) && !expired ? `; resets in ${countdown(at)} (${new Date(at).toISOString()})` : '; reset time unknown'}`, reset: `${label} ↻ ${Number.isFinite(at) && !expired ? countdown(at) : '?'}`, valid};
   });
   const status = !q ? 'unavailable' : !windows.some(w=>w.valid) ? 'unknown' : stale ? 'stale' : 'current';
-  return {name, label: windows.map(w=>w.label).join(' · '), status: `${status}${q?.limited === true ? ' · limited' : ''}`, detail: [...windows.map(w=>w.detail), knownObservation ? `Observed ${new Date(observed).toISOString()}` : 'No verified observation time'].join(' · ')};
+  return {name, label: windows.map(w=>w.label).join(' · '), status: `${status}${q?.limited === true ? ' · limited' : ''}`, reset: windows.map(w=>w.reset).join(' · '), detail: [...windows.map(w=>w.detail), knownObservation ? `Observed ${new Date(observed).toISOString()}` : 'No verified observation time'].join(' · ')};
  });
 }
 export async function providerQuotaRequest(signal, fetcher = fetch, now = () => Date.now()) {

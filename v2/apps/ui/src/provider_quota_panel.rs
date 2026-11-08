@@ -4,7 +4,7 @@ use orkestr_v2_ui::session_scope::SessionScope;
 use serde::Deserialize;
 use serde_json::json;
 #[derive(Clone, Deserialize)]
-struct Card { name: String, label: String, status: String, detail: String }
+struct Card { name: String, label: String, status: String, detail: String, reset: String }
 #[derive(Deserialize)]
 struct Reply { status: u16, cards: Vec<Card> }
 #[component]
@@ -41,7 +41,7 @@ pub fn ProviderQuotaPanel(session_scope: Signal<SessionScope>, onexpired: EventH
                 strong { "{card.name}" }
                 span { "{card.label}" }
                 small { "{card.status}" }
-                span { class: "quota-reset-detail", "{card.detail}" }
+                span { class: "quota-reset-detail", "{card.reset}" }
             }
         }
     } }
