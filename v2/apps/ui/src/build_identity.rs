@@ -47,3 +47,42 @@ pub fn parse<'a>(record: &'a str, version: &'a str) -> Identity<'a> {
 pub fn identity() -> Identity<'static> {
     parse(RECORD, VERSION)
 }
+
+/// Validated runtime identity, separate from the assets executing in this tab.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ServerIdentity {
+    pub version: String,
+    pub source_commit: Option<String>,
+}
+
+pub fn server_identity(health: &serde_json::Value) -> Option<ServerIdentity> {
+    let build = health.get("build")?;
+    let version = build.get("version")?.as_str()?;
+    if health.get("status")?.as_str()? != "ok"
+        || health.get("product")?.as_str()? != "orkestr-v2"
+        || build.get("format")?.as_str()? != "orkestr-v2-build-identity-v1"
+        || build.get("component")?.as_str()? != "server"
+        || build.get("error").is_some()
+        || version.is_empty()
+        || version.len() > 128
+        || version.chars().any(char::is_control)
+    {
+        return None;
+    }
+    let source_commit = match build.get("source_commit")? {
+        serde_json::Value::Null => None,
+        serde_json::Value::String(source)
+            if source.len() == 40
+                && source
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) =>
+        {
+            Some(source.clone())
+        }
+        _ => return None,
+    };
+    Some(ServerIdentity {
+        version: version.into(),
+        source_commit,
+    })
+}

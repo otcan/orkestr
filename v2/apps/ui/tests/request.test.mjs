@@ -231,3 +231,15 @@ test('owner desktop open uses a scoped cookie mutation and refuses unbound paths
     for(const path of [root+'/../open',root+'/%2e%2e/open',root+'/example/open?redirect=1',root+'/example/share',root+'/example/open/extra'])
         await assert.rejects(execute({recv:async()=>({...base,path})},()=>assert.fail('fetch must not run')),/Invalid API path/);
 });
+
+test('build identity read is restricted to the exact same-origin health GET', async () => {
+    await execute({recv:async()=>({...base,method:'GET',path:'/api/v2/health',body:null})}, async(path, options)=>{
+        assert.equal(path,'/api/v2/health');
+        assert.equal(options.credentials,'same-origin');
+        assert.equal(options.cache,'no-store');
+        return Response.json({status:'ok'});
+    });
+    for (const [method,path] of [['POST','/api/v2/health'],['GET','/api/v2/health?url=https://example.invalid'],['GET','/api/v2/health/extra']]) {
+        await assert.rejects(execute({recv:async()=>({...base,method,path})},()=>assert.fail('fetch must not run')),/Invalid API path/);
+    }
+});
