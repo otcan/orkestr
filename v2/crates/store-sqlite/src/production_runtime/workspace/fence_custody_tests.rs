@@ -5,6 +5,8 @@ mod cross_pool;
 mod execution_handoff;
 #[path = "fence_custody_tests/mutable_workspace.rs"]
 mod mutable_workspace;
+#[path = "fence_custody_tests/terminal_history.rs"]
+mod terminal_history;
 use super::*;
 use crate::production_runtime::tests::{claim, setup, Case};
 use sqlx::{sqlite::SqliteConnectOptions, Connection, SqliteConnection};
