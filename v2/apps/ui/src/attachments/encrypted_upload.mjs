@@ -3,6 +3,7 @@
 // materializes the service-readable file before issuing a composer receipt.
 import {Encrypter} from 'age-encryption';
 import {ageOpenSealed} from './age.mjs';
+import {browserStorage} from './browser_storage.mjs';
 export const UPLOAD_MAX_BYTES = 1_000_000_000;
 export const UPLOAD_CHUNK_BYTES = 1024 * 1024;
 export const UPLOAD_CIPHER_MAX = UPLOAD_CHUNK_BYTES + 64 * 1024;
@@ -66,7 +67,7 @@ async function openChunk(status,receipt,ciphertext,options) {
   return content;
 }
 
-export function encryptedUploadClient({conversation,csrf,fetcher=fetch,subtle=crypto.subtle,storage=globalThis.localStorage,random}={}) {
+export function encryptedUploadClient({conversation,csrf,fetcher=fetch,subtle=crypto.subtle,storage=browserStorage('localStorage'),random}={}) {
   if(!uuid(conversation)||!csrf)fail('Conversation and browser authorization required.');
   const root=`/api/v2/conversations/${conversation}/encrypted-uploads`;
   const request=async(method,path,body,raw=false,digest='',signal)=>{

@@ -32,6 +32,13 @@ pub enum AttachTarget {
     V1(String),
 }
 impl AttachTarget {
+    fn limit_hint(&self) -> &'static str {
+        match self {
+            Self::Native(_) => "Up to 1 GB per file.",
+            Self::V1(_) => "This linked chat accepts up to 16 MiB per message.",
+        }
+    }
+
     fn path(&self) -> String {
         match self {
             Self::Native(id) => format!("/api/v2/conversations/{id}/message-attachments"),
@@ -59,8 +66,23 @@ fn file_helper(call: &str, target: &AttachTarget, csrf: &str) -> String {
         AttachTarget::V1(_) => helper(call),
         AttachTarget::Native(conversation) => {
             let source = include_str!("attach_files.mjs").replace("export ", "");
+            let assets = include_str!("asset_base.mjs").replace("export ", "");
             let context = json!({"conversation":conversation,"csrf":csrf});
-            format!("{source}\nconst module=await import('/encrypted_upload.js'); const describeFiles=module.nativeDescribe({context});\n{call}")
+            // Open the picker before loading the uploader. Optional browser
+            // facilities must not prevent the owner selecting a file.
+            format!("{source}\n{assets}\nconst describeFiles=async files=>{{try{{const module=await import(uiAssetUrl('encrypted_upload.js')); return await module.nativeDescribe({context})(files);}}catch{{return {{error:'Encrypted uploads are unavailable. Reload the page and try again.'}};}}}};\n{call}")
+        }
+    }
+}
+
+fn paste_helper(target: &AttachTarget, csrf: &str, input: &str) -> String {
+    match target {
+        AttachTarget::V1(_) => helper("return {files:[pastedText(await dioxus.recv())]};"),
+        AttachTarget::Native(conversation) => {
+            let assets = include_str!("asset_base.mjs").replace("export ", "");
+            let context = json!({"conversation":conversation,"csrf":csrf});
+            let input = json!(input);
+            format!("{assets}\nconst module=await import(uiAssetUrl('encrypted_upload.js')); return await module.nativePaste({context},document.getElementById({input}));")
         }
     }
 }
@@ -136,6 +158,9 @@ pub fn AttachTools(
     let pick_target = target.clone();
     let pick_csrf = csrf.clone();
     let paste_upload = upload.clone();
+    let paste_target = target.clone();
+    let paste_csrf = csrf.clone();
+    let limit_hint = target.limit_hint();
     // Files dropped onto the conversation or images pasted into the composer
     // upload like Attach. The listener lives as long as this component.
     let tools_id = format!(
@@ -147,6 +172,8 @@ pub fn AttachTools(
             .collect::<String>()
     );
     let gate = use_hook(|| Rc::new(Cell::new(false)));
+    let paste_id = format!("paste-text-{tools_id}");
+    let paste_input = paste_id.clone();
     gate.set(disabled);
     let mut drops = use_signal(|| None::<document::Eval>);
     use_drop(move || {
@@ -233,21 +260,38 @@ pub fn AttachTools(
                 }
             }
             span { class: "drop-hint", "aria-hidden": "true", "or drop files here" }
+            span { class: "attachment-limit", "{limit_hint}" }
             if !status().is_empty() { span { class: "tool-status", role: "status", "{status}" } }
         }
         if pasting() {
             div { class: "paste-panel",
-                label { r#for: "paste-text", "Paste long text; it is sent as a text file" }
-                textarea { id: "paste-text", rows: 6, value: "{pasted}", oninput: move |e| pasted.set(e.value()) }
+                label { r#for: "{paste_id}", "Paste long text; it is sent as a text file" }
+                textarea { id: "{paste_id}", rows: 6, value: "{pasted}", disabled: busy(), oninput: move |e| pasted.set(e.value()) }
                 div { class: "paste-actions",
                     button { r#type: "button", disabled: busy() || pasted().trim().is_empty(), onclick: move |_| {
-                        let text = pasted();
                         let upload = paste_upload.clone();
+                        let target = paste_target.clone();
+                        let csrf = paste_csrf.clone();
+                        let input = paste_input.clone();
+                        busy.set(true);
+                        status.set("Uploading…".into());
                         spawn(async move {
-                            let eval = document::eval(&helper("return pastedText(await dioxus.recv());"));
-                            let _ = eval.send(json!(text));
-                            match eval.join::<Value>().await {
-                                Ok(file) => { upload(vec![file]); pasted.set(String::new()); pasting.set(false); }
+                            let eval = document::eval(&paste_helper(&target, &csrf, &input));
+                            if matches!(target, AttachTarget::V1(_)) {
+                                let _ = eval.send(json!(pasted()));
+                            }
+                            let result = eval.join::<Picked>().await;
+                            if !mounted() { return; }
+                            busy.set(false);
+                            match result {
+                                Ok(picked) if !accept_receipts(picked.receipts.clone(), attached) => status.set("Upload reply could not be verified.".into()),
+                                Ok(Picked { error: Some(error), .. }) => status.set(error),
+                                Ok(Picked { files, .. }) => {
+                                    status.set(String::new());
+                                    if !files.is_empty() { upload(files); }
+                                    pasted.set(String::new());
+                                    pasting.set(false);
+                                }
                                 Err(_) => status.set("Text could not be attached.".into()),
                             }
                         });
