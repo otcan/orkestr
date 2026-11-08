@@ -17,7 +17,17 @@ impl Store {
         if owner != &context.owner || owner != &provider.run.owner_id {
             return Err(RuntimeStoreError::Unauthorized);
         }
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let workspace = if provider.run.purpose == AdmissionPurpose::Execution {
+            Some(self.check_binding_before_writer(&provider.binding).await?)
+        } else {
+            None
+        };
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let store = workspace.as_deref().unwrap_or(self);
+        #[cfg(not(all(target_os = "linux", target_pointer_width = "64")))]
+        let store = self;
+        let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
         // Authenticate principal and exact issued historical envelope BEFORE
         // receipt lookup, but defer current expiry/incarnation checks for replay.
         context.authenticate(&mut tx).await?;
@@ -73,7 +83,7 @@ impl Store {
                 state: state(committed.get("receipt_state"))?, duplicate: true,
             });
         }
-        let row = self.production_authorized_run(&mut tx, provider).await?;
+        let row = store.production_authorized_run(&mut tx, provider).await?;
         let stopping = matches!(input.event, ProviderEvent::Stopped);
         let purpose = if stopping {
             AdmissionPurpose::CancellationAcknowledgement
@@ -98,7 +108,7 @@ impl Store {
                 | ProviderEvent::Lost
                 | ProviderEvent::Stopped
         ) {
-            self.require_observed_native(&mut tx, provider).await?;
+            store.require_observed_native(&mut tx, provider).await?;
         }
         let next: i64 = sqlx::query_scalar(
             "SELECT coalesce(max(run_sequence),0)+1 FROM production_observations WHERE run_id=?",
@@ -163,20 +173,22 @@ impl Store {
                 .bind(input.session_id.to_string()).bind(provider.binding.generation as i64).execute(&mut *tx).await.map_err(db)?;
         }
         #[cfg(feature = "fixture-test-controls")]
-        self.production_checkpoint(if stopping {
-            "stopped-before-commit"
-        } else {
-            "observation-before-commit"
-        })
-        .await?;
+        store
+            .production_checkpoint(if stopping {
+                "stopped-before-commit"
+            } else {
+                "observation-before-commit"
+            })
+            .await?;
         tx.commit().await.map_err(db)?;
         #[cfg(feature = "fixture-test-controls")]
-        self.production_checkpoint(if stopping {
-            "stopped-after-commit"
-        } else {
-            "observation-after-commit"
-        })
-        .await?;
+        store
+            .production_checkpoint(if stopping {
+                "stopped-after-commit"
+            } else {
+                "observation-after-commit"
+            })
+            .await?;
         Ok(ProviderEventReceipt {
             event_id,
             scope_sequence: sequence,

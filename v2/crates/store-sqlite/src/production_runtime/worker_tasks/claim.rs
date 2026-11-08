@@ -10,8 +10,14 @@ impl Store {
     ) -> Result<Option<WorkerTaskClaim>> {
         self.worker_credential(credential)?;
         let context = self.context()?;
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
-        self.worker_parent_current_in(&mut tx, parent).await?;
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let workspace = self.check_run_workspace_before_writer(parent).await?;
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let store = &*workspace;
+        #[cfg(not(all(target_os = "linux", target_pointer_width = "64")))]
+        let store = self;
+        let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        store.worker_parent_current_in(&mut tx, parent).await?;
         let row = sqlx::query("SELECT * FROM worker_tasks WHERE parent_run_id=? AND owner_id=? AND context_id=? AND incarnation_id=? AND state='queued' ORDER BY ordinal LIMIT 1")
             .bind(parent.to_string()).bind(context.owner.to_string()).bind(&context.id).bind(&context.incarnation)
             .fetch_optional(&mut *tx).await.map_err(db)?;
@@ -19,8 +25,8 @@ impl Store {
             tx.commit().await.map_err(db)?;
             return Ok(None);
         };
-        let parent = self.task_parent_in(&mut tx, &row).await?;
-        self.task_payload_in(&mut tx, &row).await?;
+        let parent = store.task_parent_in(&mut tx, &row).await?;
+        store.task_payload_in(&mut tx, &row).await?;
         let locator = secret();
         let hash = hash("worker-task-claim-v1", &[&locator]);
         let changed = sqlx::query(
@@ -70,7 +76,13 @@ impl Store {
     ) -> Result<WorkerDelegation> {
         self.worker_credential(credential)?;
         let context = self.context()?;
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let workspace = self.check_binding_before_writer(binding).await?;
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let store = &*workspace;
+        #[cfg(not(all(target_os = "linux", target_pointer_width = "64")))]
+        let store = self;
+        let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
         // Revocation may already have durably cleared the claim. Authenticate
         // the current principal before reporting any historical claim state.
         context.validate(&mut tx).await?;
@@ -83,8 +95,8 @@ impl Store {
         {
             return Err(RuntimeStoreError::Fenced);
         }
-        self.task_parent_in(&mut tx, &row).await?;
-        self.task_payload_in(&mut tx, &row).await?;
+        store.task_parent_in(&mut tx, &row).await?;
+        store.task_payload_in(&mut tx, &row).await?;
         let input = WorkerAdmissionInput {
             worker_binding_id: binding.session_id.clone(),
             expected_binding_generation: binding.generation,
@@ -93,7 +105,7 @@ impl Store {
             request_key: delegation_key(&claim.id, row.get("request_digest")),
             lifetime_ms: claim.lifetime_ms,
         };
-        let WorkerDelegationResult::Fresh(delegation) = self
+        let WorkerDelegationResult::Fresh(delegation) = store
             .delegate_worker_in(&mut tx, credential, &claim.parent.run_id, &input)
             .await?
         else {

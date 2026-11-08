@@ -74,12 +74,43 @@ pub struct WorkspaceOperatorAllowlist {
 pub struct WorkspaceInstallation {
     pub(super) inner: Arc<Installation>,
 }
-pub(super) struct Installation {
+impl WorkspaceInstallation {
+    pub(in crate::production_runtime) async fn check_before_writer(
+        &self,
+        store: &Store,
+        owner: &OwnerId,
+        conversation: &ConversationId,
+    ) -> Result<WorkspacePreflight> {
+        store
+            .check_workspace_before_writer(owner, conversation, Some(self.inner.clone()))
+            .await
+    }
+}
+pub(in crate::production_runtime) struct Installation {
     pub(super) workspace: Directory,
     pub(super) git: Directory,
     pub(super) common: Directory,
     root_custody: Option<Arc<dyn RootWorkspaceCustody>>,
 }
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) struct DirectoryStamp {
+    device: u64,
+    inode: u64,
+    uid: u32,
+    gid: u32,
+    mode: u32,
+    changed: (i64, i64),
+}
+impl DirectoryStamp {
+    pub(super) fn same_authority_attributes(&self, other: &Self) -> bool {
+        self.device == other.device
+            && self.inode == other.inode
+            && self.uid == other.uid
+            && self.gid == other.gid
+            && self.mode == other.mode
+    }
+}
+pub(super) type RetainedStamp = [DirectoryStamp; 3];
 #[path = "root_installation.rs"]
 mod root_installation;
 pub use root_installation::RootWorkspaceCustody;
@@ -133,6 +164,48 @@ impl WorkspaceOperatorAllowlist {
     }
 }
 impl Installation {
+    pub(super) fn retained_stamp(&self) -> Result<RetainedStamp> {
+        let mut stamps = Vec::new();
+        for directory in [&self.workspace, &self.git, &self.common] {
+            let m = directory.file.metadata().map_err(db)?;
+            stamps.push(DirectoryStamp {
+                device: m.dev(),
+                inode: m.ino(),
+                uid: m.uid(),
+                gid: m.gid(),
+                mode: m.mode(),
+                changed: (m.ctime(), m.ctime_nsec()),
+            });
+        }
+        stamps.try_into().map_err(|_| RuntimeStoreError::Fenced)
+    }
+    pub(super) fn root_attested(&self) -> bool {
+        self.root_custody.is_some()
+    }
+    pub(super) fn check_retained(&self) -> Result<()> {
+        let Some(custody) = &self.root_custody else {
+            return self.check();
+        };
+        custody.check_original_actor()?;
+        for directory in [&self.workspace, &self.git, &self.common] {
+            let meta = directory.file.metadata().map_err(db)?;
+            if !meta.is_dir()
+                || meta.dev() != directory.identity.device
+                || meta.ino() != directory.identity.inode
+                || meta.uid() != directory.identity.uid
+                || meta.mode()
+                    & if custody.verifies_named_executor_acl() {
+                        0o002
+                    } else {
+                        0o022
+                    }
+                    != 0
+            {
+                return Err(RuntimeStoreError::Fenced);
+            }
+        }
+        Ok(())
+    }
     pub(super) fn reject_overlap(&self, protected: &Path) -> Result<()> {
         for dir in [&self.workspace, &self.git, &self.common] {
             if dir.path.starts_with(protected) || protected.starts_with(&dir.path) {

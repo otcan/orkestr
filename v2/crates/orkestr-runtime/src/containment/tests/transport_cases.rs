@@ -57,6 +57,7 @@ fn output_overflow_and_truncated_eof_fail_closed() {
             .unwrap();
         assert_eq!(frame(&child, &scope), Err(error));
         assert_eq!(child.poll_stdout(&scope), Err(Error::PipeClosed));
+        assert_eq!(child.flush_pending_stdin(&scope), Err(Error::PipeClosed));
     }
 }
 

@@ -79,6 +79,10 @@ mod workspace;
 #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
 pub(crate) use workspace::Registry as WorkspaceRegistry;
 #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+pub(crate) use workspace::WorkspaceCheck;
+#[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+pub use workspace::WorkspacePreflight;
+#[cfg(all(target_os = "linux", target_pointer_width = "64"))]
 pub use workspace::{
     RootWorkspaceCustody, WorkspaceDescriptors, WorkspaceDirectoryIdentity, WorkspaceGrant,
     WorkspaceInstallation, WorkspaceLaunch, WorkspaceLaunchConsumption, WorkspaceLaunchReservation,
@@ -251,6 +255,8 @@ impl Store {
             pool: self.pool.clone(),
             #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
             workspace_handles: self.workspace_handles.clone(),
+            #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+            workspace_check: None,
             authority: Some(Context {
                 owner: OwnerId(Uuid::parse_str(&owner).map_err(db)?),
                 provider: config.provider,
@@ -276,6 +282,8 @@ impl Store {
             pool: store.pool.clone(),
             #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
             workspace_handles: store.workspace_handles.clone(),
+            #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+            workspace_check: None,
             authority: Some(self.context()?.clone()),
         };
         let mut tx = result.pool.begin().await.map_err(db)?;

@@ -183,8 +183,14 @@ impl Store {
         {
             return Err(RuntimeStoreError::Fenced);
         }
-        let mut tx = self.pool.begin().await.map_err(db)?;
-        super::desk_login::live(self, &mut tx, credential, current).await?;
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let workspace = self.check_binding_before_writer(&current.binding).await?;
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let store = &*workspace;
+        #[cfg(not(all(target_os = "linux", target_pointer_width = "64")))]
+        let store = self;
+        let mut tx = store.pool.begin().await.map_err(db)?;
+        super::desk_login::live(store, &mut tx, credential, current).await?;
         *parent.parent = current.clone();
         Ok(())
     }
@@ -205,8 +211,16 @@ impl Store {
         consumed: &ConsumedProviderDispatch,
         setup: &ManagedOperationSetup,
     ) -> Result<ManagedOperationParent> {
-        let mut tx = self.pool.begin().await.map_err(db)?;
-        super::desk_login::live(self, &mut tx, credential, consumed.provider()).await?;
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let workspace = self
+            .check_binding_before_writer(&consumed.provider().binding)
+            .await?;
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let store = &*workspace;
+        #[cfg(not(all(target_os = "linux", target_pointer_width = "64")))]
+        let store = self;
+        let mut tx = store.pool.begin().await.map_err(db)?;
+        super::desk_login::live(store, &mut tx, credential, consumed.provider()).await?;
         let b = &consumed.provider().binding;
         if setup.binding.owner_id != b.owner_id
             || setup.binding.conversation_id != b.conversation_id
@@ -269,8 +283,16 @@ impl Store {
             return Err(RuntimeStoreError::InvalidInput);
         }
         let sha = crate::digest(&encoded);
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
-        current(self, &mut tx, credential, &parent.parent, source).await?;
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let workspace = self
+            .check_binding_before_writer(&parent.parent.binding)
+            .await?;
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let store = &*workspace;
+        #[cfg(not(all(target_os = "linux", target_pointer_width = "64")))]
+        let store = self;
+        let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        current(store, &mut tx, credential, &parent.parent, source).await?;
         let existing: Option<String> =
             sqlx::query_scalar("SELECT evidence_sha256 FROM managed_operations WHERE id=?")
                 .bind(id.to_string())
@@ -306,7 +328,7 @@ impl Store {
         if expires <= now {
             return Err(RuntimeStoreError::Expired);
         }
-        let c = self.context()?;
+        let c = store.context()?;
         let p = &parent.parent;
         sqlx::query("INSERT INTO managed_operations VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'delivery_unknown',?)")
             .bind(id.to_string()).bind(c.owner.to_string()).bind(p.run.conversation_id.to_string()).bind(source.window_id.to_string())

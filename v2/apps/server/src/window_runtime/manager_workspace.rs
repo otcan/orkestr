@@ -58,6 +58,28 @@ impl Custody {
 }
 
 impl RootWorkspaceCustody for Custody {
+    fn check_original_actor(&self) -> std::result::Result<(), RuntimeStoreError> {
+        self.manager
+            .parent()
+            .map_err(|_| RuntimeStoreError::Fenced)?;
+        let mut status = String::new();
+        std::fs::File::open(format!("/proc/{}/status", self.manager.manager_pid))
+            .map_err(|_| RuntimeStoreError::Fenced)?
+            .take(8193)
+            .read_to_string(&mut status)
+            .map_err(|_| RuntimeStoreError::Fenced)?;
+        let uids: Vec<_> = status
+            .lines()
+            .find(|line| line.starts_with("Uid:"))
+            .ok_or(RuntimeStoreError::Fenced)?
+            .split_whitespace()
+            .skip(1)
+            .collect();
+        if status.len() > 8192 || uids.len() != 4 || uids.iter().any(|uid| *uid != "0") {
+            return Err(RuntimeStoreError::Fenced);
+        }
+        self.manager.parent().map_err(|_| RuntimeStoreError::Fenced)
+    }
     fn verifies_named_executor_acl(&self) -> bool {
         true
     }
@@ -107,7 +129,7 @@ impl ManagerClient {
         if project.is_nil() {
             return Err(ManagerError::InvalidRequest);
         }
-        let deadline = Instant::now() + Duration::from_secs(1);
+        let deadline = Instant::now() + Duration::from_secs(5);
         let request_id = format!("workspace:{}", Uuid::new_v4());
         let mut request = self.request("workspace_attest", &request_id, None)?;
         request["project_id"] = json!(project);

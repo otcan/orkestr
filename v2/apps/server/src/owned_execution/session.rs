@@ -95,7 +95,6 @@ impl ConfiguredExecution {
         shutdown: &mut watch::Receiver<bool>,
         heartbeat: &mut Instant,
     ) -> Result<SessionExit, &'static str> {
-        let conversation = &self.config.conversation_id;
         let Some(capability) = self
             .next_with_liveness(shutdown, heartbeat, || {
                 ready
@@ -130,12 +129,7 @@ impl ConfiguredExecution {
             // Parent Stop serializes against both its own pump and a bounded
             // Worker step. Lock order is always Deep then Worker.
             let schedule = run_control.serialize().await;
-            let status = self
-                .store
-                .execution_status(&self.owner, conversation)
-                .await
-                .map_err(|_| "execution status unavailable")?
-                .ok_or("execution status missing")?;
+            let status = self.owned_run_status(&run).await?;
             if status.run_id.as_ref() != Some(&run) {
                 return Err("execution scope changed; reconciliation required");
             }
@@ -262,11 +256,9 @@ impl ConfiguredExecution {
                     // and before shutdown is observed. Keep the original pump
                     // until a post-shutdown read decides whether it must retire.
                     let current = self
-                        .store
-                        .execution_status(&self.owner, conversation)
+                        .owned_run_status(&run)
                         .await
-                        .map_err(|_| "execution shutdown status unavailable")?
-                        .ok_or("execution shutdown status missing")?;
+                        .map_err(|_| "execution shutdown status unavailable")?;
                     if current.run_id.as_ref() != Some(&run) {
                         return Err("execution shutdown scope changed");
                     }
@@ -356,12 +348,7 @@ impl ConfiguredExecution {
                 // A committed proposal/terminal event may change phase during
                 // this step. Publish availability from that result before HTTP
                 // acquires the same lock, not from the pre-step Running sample.
-                let current = self
-                    .store
-                    .execution_status(&self.owner, conversation)
-                    .await
-                    .map_err(|_| "execution status unavailable")?
-                    .ok_or("execution status missing")?;
+                let current = self.owned_run_status(&run).await?;
                 if current.run_id.as_ref() != Some(&run) {
                     return Err("execution scope changed; reconciliation required");
                 }

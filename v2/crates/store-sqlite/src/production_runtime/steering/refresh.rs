@@ -16,8 +16,16 @@ impl Store {
             context: authority.context,
             incarnation: authority.incarnation,
         };
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
-        current(self, &mut tx, &refreshed).await?;
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let workspace = self
+            .check_binding_before_writer(&refreshed.provider.binding)
+            .await?;
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let store = &*workspace;
+        #[cfg(not(all(target_os = "linux", target_pointer_width = "64")))]
+        let store = self;
+        let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        current(store, &mut tx, &refreshed).await?;
         let bound: i64 =
             sqlx::query_scalar("SELECT count(*) FROM production_steering_turns WHERE run_id=?")
                 .bind(refreshed.provider.run.run_id.to_string())

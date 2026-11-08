@@ -351,6 +351,7 @@ impl WorkerSchedule {
             ),
             None => None,
         };
+        let consumed_lease_deadline_ms = capability.provider().run.lease_deadline_ms;
         let (authority, pump) = ready
             .attach(self.store.clone(), capability)
             .map_err(|_| "Worker attachment is uncertain; automatic replay refused")?;
@@ -359,11 +360,15 @@ impl WorkerSchedule {
             .controls
             .register(self.store.clone(), &run)
             .map_err(|_| "Worker control registration refused")?;
-        // Attempt native interruption before the hard lease expires. Core's
-        // clipped authoritative deadline may be earlier; refusal stays unknown.
-        self.deadline = Instant::now()
-            + Duration::from_millis(self.lifetime_ms.into())
-                .saturating_sub(Duration::from_millis(250));
+        // Setup consumes the original lease; it cannot restart that allowance.
+        // Explicit-budget Workers retain their separate lease-derived schedule.
+        self.deadline = if liveness.is_none() {
+            liveness::legacy_stop_deadline(self.lifetime_ms, consumed_lease_deadline_ms)?
+        } else {
+            Instant::now()
+                + Duration::from_millis(self.lifetime_ms.into())
+                    .saturating_sub(Duration::from_millis(250))
+        };
         Ok((
             Phase::Running(Box::new(Running {
                 authority,

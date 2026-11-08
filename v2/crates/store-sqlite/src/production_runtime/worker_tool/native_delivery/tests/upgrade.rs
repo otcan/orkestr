@@ -29,6 +29,8 @@ async fn populated_31_upgrade_preserves_legacy_output_without_inventing_native_c
         authority: None,
         #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
         workspace_handles: Default::default(),
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        workspace_check: None,
         #[cfg(feature = "fixture-test-controls")]
         production_checkpoint: None,
         deep_burst_quiet_ms: 0,

@@ -65,6 +65,20 @@ class ObservationReplyTests(unittest.TestCase):
         self.assertTrue(reply['ok'])
         self.assertEqual(deadlines, [11, 15])
 
+    def test_workspace_attestation_has_one_bounded_read_only_reply_allowance(self):
+        for elapsed, received, succeeds in ((1.2, 0, True), (1.2, .7, True),
+                                            (5.01, 0, False), (4.4, .7, False)):
+            with self.subTest(elapsed=elapsed, received=received):
+                reply, deadlines, manager = self.exchange(
+                    elapsed, operation='workspace_attest', received=received)
+                self.assertEqual(reply is not None, succeeds)
+                if succeeds:
+                    self.assertTrue(reply['ok'])
+                self.assertEqual(deadlines, [11, 15])
+                # Physical proof does not admit work or spend a window's
+                # cleanup margin. Actual project scope is checked by dispatch.
+                manager.ledger._scope.assert_not_called()
+
     def test_observation_cannot_spend_window_cleanup_time_or_exceed_five_seconds(self):
         for elapsed, work, expected in [(1.2, 10.5, 10.5), (5.01, 100, 15)]:
             with self.subTest(elapsed=elapsed, work=work):

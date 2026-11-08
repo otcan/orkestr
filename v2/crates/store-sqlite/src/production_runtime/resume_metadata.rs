@@ -27,13 +27,20 @@ impl Store {
         binding: &Binding,
     ) -> Result<BoundSessionMetadata> {
         self.worker_credential(credential)?;
-        let c = self.context()?;
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let workspace = self.check_binding_before_writer(binding).await?;
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let store = &*workspace;
+        #[cfg(not(all(target_os = "linux", target_pointer_width = "64")))]
+        let store = self;
+        let c = store.context()?;
+        let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
         c.validate(&mut tx).await?;
         let terminal: String = sqlx::query_scalar("SELECT event_id FROM production_acceptances WHERE run_id=? AND owner_id=? AND conversation_id=?")
             .bind(prior_run.to_string()).bind(c.owner.to_string()).bind(binding.conversation_id.to_string())
             .fetch_optional(&mut *tx).await.map_err(db)?.ok_or(RuntimeStoreError::Fenced)?;
-        self.reserve_terminal_metadata(tx, prior_run, binding, terminal)
+        store
+            .reserve_terminal_metadata(tx, prior_run, binding, terminal)
             .await
     }
     pub(super) async fn reserve_terminal_metadata(
@@ -188,8 +195,14 @@ impl Store {
         if !valid(&evidence.protocol_version) || !valid(&evidence.source_event_key) {
             return Err(RuntimeStoreError::InvalidInput);
         }
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
-        self.validate_resume_metadata(&mut tx, &grant).await?;
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let workspace = self.check_binding_before_writer(&grant.binding).await?;
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let store = &*workspace;
+        #[cfg(not(all(target_os = "linux", target_pointer_width = "64")))]
+        let store = self;
+        let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        store.validate_resume_metadata(&mut tx, &grant).await?;
         let link = grant.resume.as_ref().ok_or(RuntimeStoreError::Fenced)?;
         let digest = crate::runtime::ledger::hash(
             "accepted-session-metadata-v1",

@@ -26,7 +26,13 @@ impl Store {
         if provider.run.owner_id != context.owner {
             return Err(RuntimeStoreError::Unauthorized);
         }
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let workspace = self.check_binding_before_writer(&provider.binding).await?;
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let store = &*workspace;
+        #[cfg(not(all(target_os = "linux", target_pointer_width = "64")))]
+        let store = self;
+        let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
         context.authenticate(&mut tx).await?;
         let row =
             sqlx::query("SELECT * FROM production_runs WHERE id=? AND owner_id=? AND context_id=?")
@@ -65,11 +71,11 @@ impl Store {
                 Err(RuntimeStoreError::Conflict)
             };
         }
-        let row = self.production_authorized_run(&mut tx, provider).await?;
+        let row = store.production_authorized_run(&mut tx, provider).await?;
         if !matches!(row.get::<&str, _>("state"), "starting" | "running") {
             return Err(RuntimeStoreError::Fenced);
         }
-        self.require_observed_native(&mut tx, provider).await?;
+        store.require_observed_native(&mut tx, provider).await?;
         let count: i64 =
             sqlx::query_scalar("SELECT count(*) FROM production_run_models WHERE run_id=?")
                 .bind(provider.run.run_id.to_string())

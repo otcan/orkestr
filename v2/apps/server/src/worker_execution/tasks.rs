@@ -1,5 +1,6 @@
 //! Parent-owned bounded dispatch of explicit owner tasks, never provider prose.
 use super::*;
+use orkestr_runtime::store_diagnostics::{observe, Operation};
 use orkestr_v2_contracts::ExecutionPhase;
 
 const MAX_ACTIVE: usize = 4;
@@ -70,11 +71,16 @@ impl TaskQueue {
         // before consuming the claim; reapers retain permits until actual wait.
         if self.registration.is_some() && self.children.len() < MAX_ACTIVE {
             if let Ok(slot) = capacity().clone().try_acquire_owned() {
-                if let Some(claim) = parent
+                let claim = parent
                     .store
                     .claim_worker_task(&parent.credential, &parent.parent.run_id)
-                    .await
-                    .map_err(|_| "Worker task claim refused")?
+                    .await;
+                if let Some(claim) = observe(
+                    Operation::WorkerTaskClaim,
+                    Some(&parent.parent.run_id),
+                    claim,
+                )
+                .map_err(|_| "Worker task claim refused")?
                 {
                     let child = WorkerSchedule::from_task(parent, claim, slot)?;
                     self.children.push(child);

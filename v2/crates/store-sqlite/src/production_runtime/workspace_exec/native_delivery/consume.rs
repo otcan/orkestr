@@ -67,8 +67,15 @@ impl Store {
         credential: &str,
         reservation: WorkspaceExecResultReservation,
     ) -> Result<WorkspaceExecResultConsumption> {
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
-        let row = current(self, &mut tx, credential, &reservation).await?;
+        let checked_workspace = reservation
+            .launch
+            .profile
+            .workspace
+            .check_before_writer(self)
+            .await?;
+        let store = &*checked_workspace;
+        let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let row = current(store, &mut tx, credential, &reservation).await?;
         if matches!(
             row.get::<&str, _>("state"),
             "delivery_unknown" | "delivered"

@@ -4,6 +4,11 @@ use std::{io::Write, time::Instant};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Stage {
+    RuntimeMultiThread,
+    RuntimeCurrentThread,
+    RuntimeBuild,
+    #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+    WorkspacePreflight,
     Begin,
     ValidateFreshGrant,
     ValidateResumeGrant,
@@ -19,13 +24,13 @@ struct Event {
 
 /// Non-authorizing closed stage observations, emitted only after caller locks are released.
 pub struct MetadataFenceDiagnostics {
-    events: [Option<Event>; 3],
+    events: [Option<Event>; 5],
     role: Role,
 }
 impl MetadataFenceDiagnostics {
     pub(super) fn new(role: Role) -> Self {
         Self {
-            events: [None; 3],
+            events: [None; 5],
             role,
         }
     }
@@ -48,9 +53,12 @@ impl MetadataFenceDiagnostics {
             Err(RuntimeStoreError::Unavailable) => "unavailable",
         };
         self.events[match stage {
-            Stage::Begin => 0,
-            Stage::ValidateFreshGrant | Stage::ValidateResumeGrant => 1,
-            Stage::Commit => 2,
+            Stage::RuntimeMultiThread | Stage::RuntimeCurrentThread | Stage::RuntimeBuild => 0,
+            #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+            Stage::WorkspacePreflight => 1,
+            Stage::Begin => 2,
+            Stage::ValidateFreshGrant | Stage::ValidateResumeGrant => 3,
+            Stage::Commit => 4,
         }] = Some(Event {
             stage,
             outcome,
@@ -110,8 +118,62 @@ mod tests {
         assert_eq!(calls, 0);
         diagnostics.emit_to(&mut Vec::new());
         let events = EVENTS.with(|events| events.borrow().clone());
-        assert_eq!(events, vec![(Stage::Begin, "unavailable")]);
+        let mut expected = vec![(Stage::RuntimeMultiThread, "ok")];
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        expected.push((Stage::WorkspacePreflight, "ok"));
+        expected.push((Stage::Begin, "unavailable"));
+        assert_eq!(events, expected);
         drop(blocker);
+    }
+
+    #[tokio::test]
+    async fn current_thread_refusal_is_observable_before_begin() {
+        let f = super::super::tests::setup().await;
+        let binding = f
+            .handle
+            .ensure_role_bindings(&f.owner, &f.conversation)
+            .await
+            .unwrap()
+            .deep;
+        let grant = f.handle.authorize_session_metadata(&binding).await.unwrap();
+        let (result, diagnostics) = f
+            .handle
+            .with_metadata_fence_diagnostics(&grant, || -> std::result::Result<(), ()> {
+                panic!("refused runtime invoked metadata action")
+            });
+        assert!(matches!(result, Err(RuntimeStoreError::Unavailable)));
+        let mut output = Vec::new();
+        diagnostics.emit_to(&mut output);
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.contains("stage=RuntimeCurrentThread role=Deep outcome=unavailable"));
+        assert!(!output.contains("stage=Begin"));
+    }
+
+    #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn missing_retained_workspace_reports_preflight_without_writer_or_action() {
+        let f = super::super::tests::setup().await;
+        let binding = f
+            .handle
+            .ensure_role_bindings(&f.owner, &f.conversation)
+            .await
+            .unwrap()
+            .deep;
+        let grant = f.handle.authorize_session_metadata(&binding).await.unwrap();
+        sqlx::query("INSERT INTO workspace_projects(id,owner_id,conversation_id,generation,active,identity_json) VALUES (?,?,?,1,1,'{}')")
+            .bind("synthetic-unretained-project").bind(f.owner.to_string()).bind(f.conversation.to_string())
+            .execute(&f.store.pool).await.unwrap();
+        let (result, diagnostics) = f
+            .handle
+            .with_metadata_fence_diagnostics(&grant, || -> std::result::Result<(), ()> {
+                panic!("missing custody invoked metadata action")
+            });
+        assert!(matches!(result, Err(RuntimeStoreError::Fenced)));
+        let mut output = Vec::new();
+        diagnostics.emit_to(&mut output);
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.contains("stage=WorkspacePreflight role=Deep outcome=fenced"));
+        assert!(!output.contains("stage=Begin"));
     }
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn blocked_failing_sink_cannot_hold_database_writer_or_change_result() {

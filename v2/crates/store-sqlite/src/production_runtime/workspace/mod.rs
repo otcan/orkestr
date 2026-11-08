@@ -10,12 +10,17 @@ pub use filesystem::{
 };
 #[cfg(test)]
 mod boundary_tests;
+#[cfg(test)]
+mod fence_custody_tests;
 mod issuance;
 mod launch;
+mod preflight;
 mod restart;
 #[cfg(test)]
 mod tests;
 mod validation;
+pub(crate) use preflight::WorkspaceCheck;
+pub use preflight::WorkspacePreflight;
 
 #[derive(Default)]
 pub(crate) struct Registry(Mutex<std::collections::BTreeMap<String, Arc<Installation>>>);
@@ -47,6 +52,18 @@ pub enum WorkspaceLaunchConsumption {
     ReconciliationRequired,
 }
 impl WorkspaceGrant {
+    pub(in crate::production_runtime) async fn check_before_writer(
+        &self,
+        store: &Store,
+    ) -> Result<WorkspacePreflight> {
+        store
+            .check_workspace_before_writer(
+                &self.context.owner,
+                &self.conversation,
+                Some(self.installation.clone()),
+            )
+            .await
+    }
     pub(super) fn exec_identity(&self) -> (&str, i64, &ConversationId) {
         (&self.project, self.generation, &self.conversation)
     }

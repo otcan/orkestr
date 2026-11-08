@@ -1,5 +1,6 @@
 //! Authenticated Root-observed requests; no provider-supplied caller claims.
 use super::*;
+use orkestr_runtime::store_diagnostics::{observe, Operation};
 use orkestr_v2_store_sqlite::{
     CompletedManagedOperation, ConsumedManagedOperation, ManagedCallerEvidence,
     ManagedOperationOutcome, ManagedOperationParent, ManagedOperationRenewal,
@@ -28,6 +29,16 @@ impl ManagerClient {
         result: &CompletedManagedOperation,
         deadline: Instant,
     ) -> Result<()> {
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let workspace = tokio::time::timeout_at(
+            deadline.into(),
+            store.preflight_workspace(&self.owner, &self.conversation),
+        )
+        .await
+        .map_err(|_| ManagerError::Deadline)?
+        .map_err(|_| ManagerError::Refused)?;
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let store = &*workspace;
         let mut request = self.request(
             "managed_result",
             &format!("managed-result:{}", result.id()),
@@ -71,6 +82,16 @@ impl ManagerClient {
         renewal: &ManagedOperationRenewal,
         deadline: Instant,
     ) -> Result<ManagedReceipt> {
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let workspace = tokio::time::timeout_at(
+            deadline.into(),
+            store.preflight_workspace(&self.owner, &self.conversation),
+        )
+        .await
+        .map_err(|_| ManagerError::Deadline)?
+        .map_err(|_| ManagerError::Refused)?;
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let store = &*workspace;
         let mut request = self.request(
             "managed_renew",
             &format!("managed-renew:{}", renewal.id()),
@@ -102,6 +123,16 @@ impl ManagerClient {
         parent: &ManagedOperationParent,
         deadline: Instant,
     ) -> Result<()> {
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let workspace = tokio::time::timeout_at(
+            deadline.into(),
+            store.preflight_workspace(&self.owner, &self.conversation),
+        )
+        .await
+        .map_err(|_| ManagerError::Deadline)?
+        .map_err(|_| ManagerError::Refused)?;
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let store = &*workspace;
         let run = parent.root_run_request();
         let mut request = self.request(
             "managed_run_open",
@@ -114,8 +145,10 @@ impl ManagerClient {
         request["run"] = run.clone();
         let value = self
             .managed_fenced_exchange(request, deadline, |stream, frame| {
-                store
-                    .with_managed_run_fence(credential, parent, || {
+                observe(
+                    Operation::ManagedRunFence,
+                    None,
+                    store.with_managed_run_fence(credential, parent, || {
                         if Instant::now() >= deadline {
                             return Err(ManagerError::Deadline);
                         }
@@ -123,8 +156,9 @@ impl ManagerClient {
                         stream
                             .try_write(frame)
                             .map_err(|_| ManagerError::Unavailable)
-                    })
-                    .map_err(|_| ManagerError::Refused)?
+                    }),
+                )
+                .map_err(|_| ManagerError::Refused)?
             })
             .await?;
         success_fields(&value, Some("managed_run"))?;
@@ -254,6 +288,16 @@ impl ManagerClient {
         operation: &ConsumedManagedOperation,
         deadline: Instant,
     ) -> Result<ManagedReceipt> {
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let workspace = tokio::time::timeout_at(
+            deadline.into(),
+            store.preflight_workspace(&self.owner, &self.conversation),
+        )
+        .await
+        .map_err(|_| ManagerError::Deadline)?
+        .map_err(|_| ManagerError::Refused)?;
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let store = &*workspace;
         let mut request = self.request(
             "managed_consume",
             &format!("managed:{}", operation.id()),

@@ -56,6 +56,8 @@ async fn populated_schema44_copy_first_upgrade_preserves_every_old_row_and_has_n
             .unwrap(),
         authority: None,
         workspace_handles: Default::default(),
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        workspace_check: None,
         #[cfg(feature = "fixture-test-controls")]
         production_checkpoint: None,
         deep_burst_quiet_ms: 0,

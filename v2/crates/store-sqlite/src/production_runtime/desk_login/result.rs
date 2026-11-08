@@ -51,15 +51,23 @@ impl Store {
         operation: ConsumedDeskLogin,
         outcome: DeskLoginOutcome,
     ) -> Result<CompletedDeskLogin> {
-        self.desk_login_live(credential, &operation).await?;
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let workspace = self
+            .check_binding_before_writer(&operation.parent.binding)
+            .await?;
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let store = &*workspace;
+        #[cfg(not(all(target_os = "linux", target_pointer_width = "64")))]
+        let store = self;
+        store.desk_login_live(credential, &operation).await?;
         let (state,text,success)=match outcome {
             DeskLoginOutcome::HelperCompleted=>("helper_completed","The approved desk helper finished and its process tree was reaped. This receipt does not assert that the website accepted a login.",true),
             DeskLoginOutcome::Failed=>("failed","The approved desk helper failed and its process tree was reaped.",false),
         };
         let mut bytes=serde_json::to_vec(&json!({"id":operation.call.request_id,"result":{"contentItems":[{"type":"inputText","text":text}],"success":success}})).map_err(db)?;
         bytes.push(b'\n');
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
-        live(self, &mut tx, credential, &operation.parent).await?;
+        let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        live(store, &mut tx, credential, &operation.parent).await?;
         let changed=sqlx::query("UPDATE deep_desk_operations SET state=? WHERE id=? AND state='delivery_unknown' AND expires_at_ms>CAST(unixepoch('subsec')*1000 AS INTEGER)")
             .bind(state).bind(operation.id.to_string()).execute(&mut *tx).await.map_err(db)?.rows_affected();
         if changed != 1 {
@@ -98,8 +106,18 @@ impl Store {
         }
         let result = {
             let operation = async {
-                let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
-                current(self, &mut tx, credential, delivery).await?;
+                #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+                let workspace = self
+                    .check_binding_before_writer(&delivery.operation.parent.binding)
+                    .await?;
+                #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+                let store = &*workspace;
+                #[cfg(not(all(target_os = "linux", target_pointer_width = "64")))]
+                let store = self;
+                let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+                current(store, &mut tx, credential, delivery).await?;
+                #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+                store.workspace_effect_once()?;
                 let result = action();
                 if result.as_ref().is_ok_and(|n| *n > offered) {
                     return Err(RuntimeStoreError::Conflict);
@@ -139,8 +157,16 @@ impl Store {
         if delivery.poisoned || delivery.offset != delivery.bytes.len() {
             return Err(RuntimeStoreError::Fenced);
         }
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
-        current(self, &mut tx, credential, &delivery).await?;
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let workspace = self
+            .check_binding_before_writer(&delivery.operation.parent.binding)
+            .await?;
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let store = &*workspace;
+        #[cfg(not(all(target_os = "linux", target_pointer_width = "64")))]
+        let store = self;
+        let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        current(store, &mut tx, credential, &delivery).await?;
         sqlx::query("UPDATE deep_desk_results SET state='delivered' WHERE operation_id=? AND state='delivery_unknown'")
             .bind(delivery.operation.id.to_string()).execute(&mut *tx).await.map_err(db)?;
         tx.commit().await.map_err(db)?;

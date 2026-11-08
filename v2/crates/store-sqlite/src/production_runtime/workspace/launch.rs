@@ -12,9 +12,11 @@ impl Store {
         if !valid(key) {
             return Err(RuntimeStoreError::InvalidInput);
         }
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
-        self.workspace_grant_in(&mut tx, grant).await?;
-        self.validate_metadata(&mut tx, metadata).await?;
+        let checked = grant.check_before_writer(self).await?;
+        let store = &*checked;
+        let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        store.workspace_grant_in(&mut tx, grant).await?;
+        store.validate_metadata(&mut tx, metadata).await?;
         if metadata.binding.conversation_id != grant.conversation {
             return Err(RuntimeStoreError::Fenced);
         }
@@ -68,9 +70,14 @@ impl Store {
         reservation: WorkspaceLaunchReservation,
     ) -> Result<WorkspaceLaunchConsumption> {
         self.worker_credential(credential)?;
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
-        self.workspace_grant_in(&mut tx, &reservation.grant).await?;
-        self.validate_workspace_binding(&mut tx, &reservation.binding)
+        let checked = reservation.grant.check_before_writer(self).await?;
+        let store = &*checked;
+        let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        store
+            .workspace_grant_in(&mut tx, &reservation.grant)
+            .await?;
+        store
+            .validate_workspace_binding(&mut tx, &reservation.binding)
             .await?;
         let binding = sqlx::query("SELECT * FROM session_bindings WHERE id=? AND owner_id=?")
             .bind(reservation.binding.session_id.to_string())
@@ -110,9 +117,11 @@ impl Store {
         let operation = async {
             self.worker_credential(credential)?;
             let r = &launch.reservation;
-            let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
-            self.workspace_grant_in(&mut tx, &r.grant).await?;
-            self.validate_metadata(&mut tx, metadata).await?;
+            let checked = r.grant.check_before_writer(self).await?;
+            let store = &*checked;
+            let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+            store.workspace_grant_in(&mut tx, &r.grant).await?;
+            store.validate_metadata(&mut tx, metadata).await?;
             if metadata.binding != *r.binding || metadata.workspace_identity() != r.metadata_key {
                 return Err(RuntimeStoreError::Fenced);
             }
@@ -121,7 +130,8 @@ impl Store {
             if unknown != 1 {
                 return Err(RuntimeStoreError::Fenced);
             }
-            r.grant.installation.check()?;
+            store.check_workspace_installation(&r.grant.installation)?;
+            store.workspace_effect_once()?;
             let result = action(r.grant.installation.descriptors());
             sqlx::query("UPDATE workspace_launches SET callback_attempted=1 WHERE id=? AND state='delivery_unknown'").bind(&r.id).execute(&mut *tx).await.map_err(db)?;
             // Even a COMMIT error after spawn permanently spends the local token.

@@ -1,6 +1,8 @@
 //! Proven gracefully retired supervisor restart, never recovery of an uncertain turn.
 use super::*;
 use orkestr_v2_contracts::{ConversationId, RunId};
+mod diagnostics;
+use diagnostics::{Diagnostics, Phase};
 
 struct TerminalReattachment {
     store: Store,
@@ -121,6 +123,32 @@ impl Store {
             WorkspaceInstallation,
         )>,
     ) -> Result<TerminalReattachment> {
+        let mut diagnostics = Diagnostics::new();
+        let result = self
+            .reattach_terminal_supervisor_diagnosed(
+                credential,
+                config,
+                prior_run,
+                #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+                workspace,
+                &mut diagnostics,
+            )
+            .await;
+        diagnostics.emit(&result);
+        result
+    }
+
+    async fn reattach_terminal_supervisor_diagnosed(
+        &self,
+        credential: &str,
+        config: ProductionSupervisorConfig,
+        prior_run: &RunId,
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))] workspace: Option<(
+            Uuid,
+            WorkspaceInstallation,
+        )>,
+        diagnostics: &mut Diagnostics,
+    ) -> Result<TerminalReattachment> {
         if credential.len() != 64 || !credential.bytes().all(|b| b.is_ascii_hexdigit()) {
             return Err(RuntimeStoreError::Unauthorized);
         }
@@ -131,7 +159,35 @@ impl Store {
         if !valid(&config.namespace) || !valid(&config.supervisor_key) {
             return Err(RuntimeStoreError::InvalidInput);
         }
+        diagnostics.enter(Phase::WorkspacePreflight);
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let physical = {
+            let scope =
+                sqlx::query("SELECT owner_id,conversation_id FROM production_runs WHERE id=?")
+                    .bind(prior_run.to_string())
+                    .fetch_optional(&self.pool)
+                    .await
+                    .map_err(db)?
+                    .ok_or(RuntimeStoreError::NotFound)?;
+            let owner = OwnerId(scope.get::<String, _>("owner_id").parse().map_err(db)?);
+            let conversation = ConversationId(
+                scope
+                    .get::<String, _>("conversation_id")
+                    .parse()
+                    .map_err(db)?,
+            );
+            if let Some((_, installation)) = &workspace {
+                installation
+                    .check_before_writer(self, &owner, &conversation)
+                    .await?
+            } else {
+                self.check_workspace_before_writer(&owner, &conversation, None)
+                    .await?
+            }
+        };
+        diagnostics.enter(Phase::BeginWriter);
         let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        diagnostics.enter(Phase::AuthenticateOwner);
         let token_hash = crate::digest(credential);
         let owner: String = sqlx::query_scalar(
             "SELECT owner_id FROM auth_sessions WHERE token_hash=? AND expires_at>unixepoch()",
@@ -141,6 +197,7 @@ impl Store {
         .await
         .map_err(db)?
         .ok_or(RuntimeStoreError::Unauthorized)?;
+        diagnostics.enter(Phase::Supervisor);
         let row = sqlx::query("SELECT * FROM production_supervisors WHERE owner_id=? AND provider_kind=? AND namespace=? AND supervisor_key=?")
             .bind(&owner).bind(provider).bind(&config.namespace).bind(&config.supervisor_key)
             .fetch_optional(&mut *tx).await.map_err(db)?.ok_or(RuntimeStoreError::NotFound)?;
@@ -154,13 +211,18 @@ impl Store {
         let context_id: String = row.get("context_id");
         // Natural expiry, revoked retirement and legacy deadline zero are not
         // graceful evidence. Match the immutable original decision before CAS.
-        let graceful: i64 = sqlx::query_scalar("SELECT count(*) FROM production_retirement_provenance g JOIN production_runs r ON r.id=g.prior_run_id JOIN production_terminal_evidence a ON a.run_id=r.id JOIN session_bindings b ON b.id=r.session_id WHERE g.context_id=? AND g.incarnation_id=? AND g.supervisor_generation=? AND g.prior_run_id=? AND g.terminal_event_id=a.event_id AND g.session_id=r.session_id AND g.binding_generation=b.generation")
-            .bind(&context_id).bind(&incarnation_id).bind(row.get::<i64,_>("generation"))
+        // Materialize only this exact prior run, preserving every canonical
+        // terminal predicate without scanning unrelated history under the
+        // short-lived physical handoff.
+        diagnostics.enter(Phase::GracefulPredecessor);
+        let graceful: i64 = sqlx::query_scalar("WITH terminal AS MATERIALIZED (SELECT * FROM production_terminal_evidence WHERE run_id=?) SELECT count(*) FROM production_retirement_provenance g JOIN production_runs r ON r.id=g.prior_run_id JOIN terminal a ON a.run_id=r.id JOIN session_bindings b ON b.id=r.session_id WHERE g.context_id=? AND g.incarnation_id=? AND g.supervisor_generation=? AND g.prior_run_id=? AND g.terminal_event_id=a.event_id AND g.session_id=r.session_id AND g.binding_generation=b.generation")
+            .bind(prior_run.to_string()).bind(&context_id).bind(&incarnation_id).bind(row.get::<i64,_>("generation"))
             .bind(prior_run.to_string()).fetch_one(&mut *tx).await.map_err(db)?;
         if row.get::<i64, _>("lease_deadline_ms") != 0 || graceful != 1 {
             return Err(RuntimeStoreError::Fenced);
         }
 
+        diagnostics.enter(Phase::RetiredWindowPredecessor);
         self.validate_window_retired_predecessor_in(
             &mut tx,
             &token_hash,
@@ -175,6 +237,7 @@ impl Store {
 
         // Clean means no unresolved run anywhere in this supervisor namespace,
         // including children. Do not convert unknown delivery into a new attempt.
+        diagnostics.enter(Phase::Descendants);
         let unresolved: i64 = sqlx::query_scalar("SELECT count(*) FROM production_runs r WHERE context_id=? AND NOT EXISTS(SELECT 1 FROM production_terminal_evidence t WHERE t.run_id=r.id)")
             .bind(&context_id).fetch_one(&mut *tx).await.map_err(db)?;
         if unresolved != 0 {
@@ -183,6 +246,7 @@ impl Store {
         if !super::terminal_retirement::descendants_clear(&mut tx, &context_id).await? {
             return Err(RuntimeStoreError::Fenced);
         }
+        diagnostics.enter(Phase::TerminalBinding);
         let terminal = sqlx::query("SELECT r.session_id,a.event_id FROM production_runs r JOIN production_terminal_evidence a ON a.run_id=r.id WHERE r.id=? AND r.owner_id=? AND r.context_id=? AND r.incarnation_id=? AND r.role IN ('deep','fast')")
             .bind(prior_run.to_string()).bind(&owner).bind(&context_id).bind(&incarnation_id)
             .fetch_optional(&mut *tx).await.map_err(db)?.ok_or(RuntimeStoreError::Fenced)?;
@@ -197,6 +261,7 @@ impl Store {
         .await
         .map_err(db)?;
         let binding = crate::runtime::binding(&binding)?;
+        diagnostics.enter(Phase::TakeoverRows);
         let generation = row
             .get::<i64, _>("generation")
             .checked_add(1)
@@ -220,6 +285,8 @@ impl Store {
             pool: self.pool.clone(),
             #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
             workspace_handles: self.workspace_handles.clone(),
+            #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+            workspace_check: None,
             authority: Some(Context {
                 owner: OwnerId(owner.parse().map_err(db)?),
                 provider: config.provider,
@@ -232,13 +299,22 @@ impl Store {
                 window_bootstrap_only: false,
             }),
         };
-        store
+        diagnostics.enter(Phase::PhysicalHandoff);
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let checked = physical.after_verified_takeover(&store)?;
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let scoped = &*checked;
+        #[cfg(not(all(target_os = "linux", target_pointer_width = "64")))]
+        let scoped = &store;
+        diagnostics.enter(Phase::RebindWindow);
+        scoped
             .rebind_execution_window_in(&mut tx, &incarnation_id)
             .await?;
+        diagnostics.enter(Phase::RebindWorkspace);
         #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
         let workspace_grant = if let Some((project, installation)) = workspace {
             Some(
-                store
+                scoped
                     .rebind_terminal_workspace_in(
                         &mut tx,
                         &binding,
@@ -251,7 +327,8 @@ impl Store {
         } else {
             None
         };
-        let grant = store
+        diagnostics.enter(Phase::ReserveMetadata);
+        let grant = scoped
             .reserve_terminal_metadata(tx, prior_run, &binding, terminal.get("event_id"))
             .await?;
         Ok(TerminalReattachment {

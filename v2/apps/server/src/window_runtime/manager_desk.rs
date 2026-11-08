@@ -25,6 +25,16 @@ impl ManagerClient {
         operation: &ConsumedDeskLogin,
         deadline: Instant,
     ) -> Result<DeskReceipt> {
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let workspace = tokio::time::timeout_at(
+            deadline.into(),
+            store.preflight_workspace(&self.owner, &self.conversation),
+        )
+        .await
+        .map_err(|_| ManagerError::Deadline)?
+        .map_err(|_| ManagerError::Refused)?;
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let store = &*workspace;
         let mut request = self.request(
             "desk_login",
             &format!("desk:{}", operation.id()),

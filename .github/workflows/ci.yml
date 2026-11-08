@@ -105,7 +105,8 @@ jobs:
         run: |
           set -euo pipefail
           scan_dir=$(mktemp -d)
-          curl --fail --silent --show-error --location --max-time 60 https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz -o "$scan_dir/release.tar.gz"
+          # Exact v8.30.1 asset; the existing digest below remains authoritative.
+          curl --fail --silent --show-error --location --max-time 60 --retry 2 --retry-delay 2 --retry-max-time 180 --header 'Accept: application/octet-stream' --header 'X-GitHub-Api-Version: 2022-11-28' https://api.github.com/repos/gitleaks/gitleaks/releases/assets/378332058 -o "$scan_dir/release.tar.gz"
           printf '551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  %s\n' "$scan_dir/release.tar.gz" | sha256sum --check --status
           tar -xzf "$scan_dir/release.tar.gz" -C "$scan_dir" gitleaks
           ORKESTR_TEST_GITLEAKS_BINARY="$scan_dir/gitleaks" node --test test/gitleaks-reviewed-digest.test.js test/secret-scan-coverage.test.js

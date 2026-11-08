@@ -33,8 +33,17 @@ impl Store {
         parent_run_id: &RunId,
         input: &WorkerAdmissionInput,
     ) -> Result<WorkerDelegationResult> {
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
-        let result = self
+        self.worker_credential(credential)?;
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let workspace = self
+            .check_run_workspace_before_writer(parent_run_id)
+            .await?;
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let store = &*workspace;
+        #[cfg(not(all(target_os = "linux", target_pointer_width = "64")))]
+        let store = self;
+        let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let result = store
             .delegate_worker_in(&mut tx, credential, parent_run_id, input)
             .await?;
         tx.commit().await.map_err(db)?;

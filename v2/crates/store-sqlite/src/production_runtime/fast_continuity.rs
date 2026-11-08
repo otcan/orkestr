@@ -78,7 +78,16 @@ impl Store {
         >,
     ) -> Result<BoundSessionMetadata> {
         self.worker_credential(credential)?;
-        let c = self.context()?;
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let checked_workspace = match workspace {
+            Some(workspace) => workspace.check_before_writer(self).await?,
+            None => self.check_binding_before_writer(binding).await?,
+        };
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let store = &*checked_workspace;
+        #[cfg(not(all(target_os = "linux", target_pointer_width = "64")))]
+        let store = self;
+        let c = store.context()?;
         if c.provider != ProviderKind::Codex
             || binding.owner_id != c.owner
             || binding.role != Role::Fast
@@ -86,13 +95,13 @@ impl Store {
         {
             return Err(RuntimeStoreError::Fenced);
         }
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
         c.validate(&mut tx).await?;
         let window = c
             .window_scope(&mut tx)
             .await?
             .ok_or(RuntimeStoreError::Fenced)?;
-        self.window_metadata_in(&mut tx, binding).await?;
+        store.window_metadata_in(&mut tx, binding).await?;
         let row = sqlx::query("SELECT * FROM session_bindings WHERE id=?")
             .bind(binding.session_id.to_string())
             .fetch_optional(&mut *tx)
@@ -109,7 +118,7 @@ impl Store {
         }
         #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
         if let Some(workspace) = workspace {
-            self.workspace_grant_in(&mut tx, workspace).await?;
+            store.workspace_grant_in(&mut tx, workspace).await?;
             if *workspace.exec_identity().2 != binding.conversation_id {
                 return Err(RuntimeStoreError::Fenced);
             }
@@ -180,16 +189,17 @@ impl Store {
             {
                 if binding.state == SessionState::Lost {
                     if let Some(workspace) = workspace {
-                        self.rebind_window_fast_workspace_in(
-                            &mut tx,
-                            workspace,
-                            binding,
-                            &incarnation,
-                        )
-                        .await?;
+                        store
+                            .rebind_window_fast_workspace_in(
+                                &mut tx,
+                                workspace,
+                                binding,
+                                &incarnation,
+                            )
+                            .await?;
                     }
                 }
-                self.validate_workspace_binding(&mut tx, binding).await?;
+                store.validate_workspace_binding(&mut tx, binding).await?;
             }
             #[cfg(not(all(target_os = "linux", target_pointer_width = "64")))]
             let _ = incarnation;
@@ -224,7 +234,7 @@ impl Store {
             parent_run: None,
             resume: None,
         };
-        self.validate_metadata(&mut tx, &grant).await?;
+        store.validate_metadata(&mut tx, &grant).await?;
         tx.commit().await.map_err(db)?;
         Ok(grant)
     }

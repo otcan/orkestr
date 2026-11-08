@@ -19,7 +19,7 @@ impl Store {
         if count != 1 {
             return Err(RuntimeStoreError::Fenced);
         }
-        grant.installation.check()
+        self.check_workspace_installation(&grant.installation)
     }
     pub(in crate::production_runtime) async fn validate_workspace_binding(
         &self,
@@ -44,8 +44,17 @@ impl Store {
         let row=sqlx::query("SELECT p.id,p.generation,p.active,p.identity_json,s.generation AS bound_generation,s.context_id,s.incarnation_id FROM workspace_projects p LEFT JOIN workspace_session_projects s ON s.project_id=p.id AND s.session_id=? WHERE p.owner_id=? AND p.conversation_id=?")
             .bind(binding.session_id.to_string()).bind(binding.owner_id.to_string()).bind(binding.conversation_id.to_string()).fetch_optional(&mut *tx).await.map_err(db)?;
         let Some(row) = row else {
+            self.check_workspace_row(binding, None)?;
             return Ok(());
         };
+        self.check_workspace_row(
+            binding,
+            Some((
+                &row.get::<String, _>("id"),
+                row.get("generation"),
+                &row.get::<String, _>("identity_json"),
+            )),
+        )?;
         let c = self.context()?;
         if row.get::<i64, _>("active") != 1
             || row.try_get::<i64, _>("bound_generation").ok() != Some(row.get("generation"))
@@ -55,17 +64,10 @@ impl Store {
             return Err(RuntimeStoreError::Fenced);
         }
         let id: String = row.get("id");
-        let installation = self
-            .workspace_handles
-            .0
-            .lock()
-            .map_err(db)?
-            .get(&id)
-            .cloned()
-            .ok_or(RuntimeStoreError::Fenced)?;
+        let installation = self.checked_workspace_installation(&id)?;
         if installation.fingerprint() != row.get::<String, _>("identity_json") {
             return Err(RuntimeStoreError::Fenced);
         }
-        installation.check()
+        self.check_workspace_installation(&installation)
     }
 }

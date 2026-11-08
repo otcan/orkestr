@@ -442,6 +442,10 @@ class Manager:
                 request, descriptors = receive_control(connection, deadline)
                 if request["operation"] in ("bind_child", "launch_child"):
                     deadline = self._bind_deadline(request, accepted)
+                elif request["operation"] == "workspace_attest":
+                    # Read-only proof completes before Core opens a dependent
+                    # control request or acquires its durable writer fence.
+                    deadline = accepted + MANAGED_REPLY_SECONDS
                 elif request["operation"] in ("managed_pending", "managed_run_open", "managed_consume",
                                                "managed_poll", "managed_renew", "managed_result"):
                     # A consumed capability can commit before a delayed ACK.

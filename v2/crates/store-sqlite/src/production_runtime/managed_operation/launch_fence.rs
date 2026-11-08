@@ -6,8 +6,16 @@ impl Store {
         credential: &str,
         operation: &ConsumedManagedOperation,
     ) -> Result<()> {
-        let mut tx = self.pool.begin().await.map_err(db)?;
-        checked(self, &mut tx, credential, operation).await
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let workspace = self
+            .check_binding_before_writer(&operation.parent.binding)
+            .await?;
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let store = &*workspace;
+        #[cfg(not(all(target_os = "linux", target_pointer_width = "64")))]
+        let store = self;
+        let mut tx = store.pool.begin().await.map_err(db)?;
+        checked(store, &mut tx, credential, operation).await
     }
     pub fn with_managed_operation_launch_fence<E>(
         &self,
@@ -22,8 +30,18 @@ impl Store {
             return Err(RuntimeStoreError::Fenced);
         }
         let future = async {
-            let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
-            checked(self, &mut tx, credential, operation).await?;
+            #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+            let workspace = self
+                .check_binding_before_writer(&operation.parent.binding)
+                .await?;
+            #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+            let store = &*workspace;
+            #[cfg(not(all(target_os = "linux", target_pointer_width = "64")))]
+            let store = self;
+            let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+            checked(store, &mut tx, credential, operation).await?;
+            #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+            store.workspace_effect_once()?;
             let result = action();
             tx.commit().await.map_err(db)?;
             Ok(result)

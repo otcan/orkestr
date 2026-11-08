@@ -36,15 +36,24 @@ impl Store {
         >,
     ) -> Result<BoundSessionMetadata> {
         self.worker_credential(credential)?;
-        let c = self.context()?;
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let checked_workspace = match workspace {
+            Some(workspace) => workspace.check_before_writer(self).await?,
+            None => self.check_binding_before_writer(binding).await?,
+        };
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let store = &*checked_workspace;
+        #[cfg(not(all(target_os = "linux", target_pointer_width = "64")))]
+        let store = self;
+        let c = store.context()?;
         if binding.role != Role::Fast || binding.parent_session_id.is_some() {
             return Err(RuntimeStoreError::Fenced);
         }
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
         c.validate(&mut tx).await?;
         #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
         if let Some(workspace) = workspace {
-            self.workspace_grant_in(&mut tx, workspace).await?;
+            store.workspace_grant_in(&mut tx, workspace).await?;
             if *workspace.exec_identity().2 != binding.conversation_id {
                 return Err(RuntimeStoreError::Fenced);
             }
@@ -53,7 +62,7 @@ impl Store {
             .window_scope(&mut tx)
             .await?
             .ok_or(RuntimeStoreError::Fenced)?;
-        self.window_metadata_in(&mut tx, binding).await?;
+        store.window_metadata_in(&mut tx, binding).await?;
         if binding.state == SessionState::Starting {
             let grant = BoundSessionMetadata {
                 context: c.clone(),
@@ -61,7 +70,7 @@ impl Store {
                 parent_run: None,
                 resume: None,
             };
-            self.validate_metadata(&mut tx, &grant).await?;
+            store.validate_metadata(&mut tx, &grant).await?;
             tx.commit().await.map_err(db)?;
             return Ok(grant);
         }
@@ -88,13 +97,14 @@ impl Store {
         }
         #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
         if let Some(workspace) = workspace {
-            self.rebind_window_fast_workspace_in(
-                &mut tx,
-                workspace,
-                binding,
-                prior.get("incarnation_id"),
-            )
-            .await?;
+            store
+                .rebind_window_fast_workspace_in(
+                    &mut tx,
+                    workspace,
+                    binding,
+                    prior.get("incarnation_id"),
+                )
+                .await?;
         }
         let changed = sqlx::query("UPDATE production_readiness SET incarnation_id=? WHERE session_id=? AND context_id=? AND incarnation_id=?")
             .bind(&c.incarnation).bind(binding.session_id.to_string()).bind(&c.id)
@@ -110,7 +120,8 @@ impl Store {
         let mut ready = binding.clone();
         ready.state = SessionState::Ready;
         let run = RunId(prior.get::<String, _>("id").parse().map_err(db)?);
-        self.reserve_terminal_metadata(tx, &run, &ready, prior.get("event_id"))
+        store
+            .reserve_terminal_metadata(tx, &run, &ready, prior.get("event_id"))
             .await
     }
 }

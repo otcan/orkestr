@@ -44,8 +44,18 @@ impl Store {
         }
         let result = {
             let operation = async {
-                let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
-                current(self, &mut tx, credential, delivery).await?;
+                #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+                let workspace = self
+                    .check_binding_before_writer(&delivery.reservation.launch.parent.binding)
+                    .await?;
+                #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+                let store = &*workspace;
+                #[cfg(not(all(target_os = "linux", target_pointer_width = "64")))]
+                let store = self;
+                let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+                current(store, &mut tx, credential, delivery).await?;
+                #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+                store.workspace_effect_once()?;
                 let result = action();
                 if result.as_ref().is_ok_and(|written| *written > offered) {
                     return Err(RuntimeStoreError::Conflict);
@@ -91,8 +101,16 @@ impl Store {
         {
             return Err(RuntimeStoreError::Fenced);
         }
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
-        current(self, &mut tx, credential, &delivery).await?;
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let workspace = self
+            .check_binding_before_writer(&delivery.reservation.launch.parent.binding)
+            .await?;
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let store = &*workspace;
+        #[cfg(not(all(target_os = "linux", target_pointer_width = "64")))]
+        let store = self;
+        let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        current(store, &mut tx, credential, &delivery).await?;
         sqlx::query("UPDATE worker_tool_results SET state='delivered' WHERE delegation_id=? AND state='delivery_unknown'")
             .bind(delivery.delegation_id().to_string()).execute(&mut *tx).await.map_err(db)?;
         tx.commit().await.map_err(db)?;

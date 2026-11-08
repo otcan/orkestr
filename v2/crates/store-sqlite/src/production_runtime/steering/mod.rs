@@ -58,8 +58,16 @@ impl Store {
         if c.provider != ProviderKind::Codex || cap.provider().run.role != Role::Deep {
             return Err(RuntimeStoreError::Fenced);
         }
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
-        let row = self
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let workspace = self
+            .check_binding_before_writer(&cap.provider().binding)
+            .await?;
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let store = &*workspace;
+        #[cfg(not(all(target_os = "linux", target_pointer_width = "64")))]
+        let store = self;
+        let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        let row = store
             .production_authorized_run(&mut tx, cap.provider())
             .await?;
         if row.get::<&str, _>("dispatch_state") != "delivery_unknown"
@@ -91,8 +99,16 @@ impl Store {
         if !valid(native_turn_id) {
             return Err(RuntimeStoreError::InvalidInput);
         }
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
-        current(self, &mut tx, authority).await?;
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let workspace = self
+            .check_binding_before_writer(&authority.provider.binding)
+            .await?;
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+        let store = &*workspace;
+        #[cfg(not(all(target_os = "linux", target_pointer_width = "64")))]
+        let store = self;
+        let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
+        current(store, &mut tx, authority).await?;
         let prior: Option<String> = sqlx::query_scalar(
             "SELECT native_turn_id FROM production_steering_turns WHERE run_id=?",
         )
