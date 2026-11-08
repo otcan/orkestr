@@ -7,7 +7,6 @@ use serde_json::{json, Value};
 pub fn ExecutionPoll(
     id: String,
     #[props(default)] run: String,
-    #[props(default)] fast: bool,
     #[props(default = true)] worker_tasks: bool,
     #[props(default)] headless: bool,
     #[props(default)] clock: Option<Signal<u64>>,
@@ -17,9 +16,8 @@ pub fn ExecutionPoll(
     onexpired: EventHandler<()>,
     #[props(default)] onaccepted: Option<EventHandler<i64>>,
     #[props(default = true)] allow_steer: bool,
-    #[props(default)] auto_accept: bool,
 ) -> Element {
-    let parent_tasks = worker_tasks && run.is_empty() && !fast;
+    let parent_tasks = worker_tasks && run.is_empty();
     let generation = session_scope.read().generation();
     let selected = id.clone();
     let selected_run = run.clone();
@@ -27,13 +25,7 @@ pub fn ExecutionPoll(
     let mut now = use_signal(|| 0u64);
     let channel = use_hook(move || {
         let eval = document::eval(include_str!("execution_poll.js"));
-        let path = if fast {
-            if run.is_empty() {
-                format!("/api/v2/conversations/{id}/fast/execution")
-            } else {
-                format!("/api/v2/conversations/{id}/fast/execution?run_id={run}")
-            }
-        } else if run.is_empty() {
+        let path = if run.is_empty() {
             format!("/api/v2/conversations/{id}/execution")
         } else {
             format!("/api/v2/conversations/{id}/execution?run_id={run}")
@@ -98,8 +90,6 @@ pub fn ExecutionPoll(
     });
     if headless {
         rsx! {}
-    } else if fast {
-        rsx! { crate::fast_panel::FastPanel { execution, now_ms: now(), csrf, session_scope, onexpired, onaccepted, auto_accept } }
     } else {
         rsx! { crate::execution_panel::ExecutionPanel { execution, now_ms: now(), csrf, session_scope, onexpired, parent_tasks, onaccepted, allow_steer } }
     }

@@ -234,7 +234,7 @@ test("a mirrored reply keeps the remote provider and model for the debug footer"
   assert.equal(reply.remoteModel, "example-model-1");
   const footer = whatsappDebugFooter({ message: reply, thread: {}, messages: [], deliveryType: "final", env: {} });
   assert.equal(reply.remoteBackend, "example");
-  assert.match(footer, /^dbg: example\/codex\/example-model-1 · rt:example · msg:\*final\*/);
+  assert.match(footer, /^🤖 codex example-model-1 · msg:\*final\*/);
 });
 
 // Counts full reads of one thread's message list (listThreadMessageRows).

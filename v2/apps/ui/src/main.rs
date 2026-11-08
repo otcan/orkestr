@@ -19,7 +19,6 @@ mod conversation_status_poll;
 mod desktop_open_view;
 mod execution_panel;
 mod execution_poll;
-mod fast_panel;
 mod held_inputs_poll;
 mod held_inputs_view;
 mod history;
