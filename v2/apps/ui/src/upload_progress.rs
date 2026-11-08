@@ -37,11 +37,10 @@ impl UploadProgress {
             && (self.phase != UploadPhase::Ready || self.completed_bytes == self.total_bytes)
     }
     pub fn percent(&self) -> u64 {
-        if self.total_bytes == 0 {
-            0
-        } else {
-            self.completed_bytes.saturating_mul(100) / self.total_bytes
-        }
+        self.completed_bytes
+            .saturating_mul(100)
+            .checked_div(self.total_bytes)
+            .unwrap_or(0)
     }
     pub fn label(&self) -> &'static str {
         match self.phase {
