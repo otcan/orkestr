@@ -195,7 +195,7 @@ mod tests {
     use super::*;
     #[test]
     fn inventory_is_closed_and_missing_lease_is_unknown() {
-        let result = project(&json!({"ok":true,"sessions":[{"slug":"desk-a","status":"running","lease":{"threadId":"holder","fencingToken":"secret","expiresAt":"later"},"profilePath":"private","cdpUrl":"secret"},{"slug":"desk-b"},{"slug":"desk-c","lease":null}]})).unwrap();
+        let result = project(&json!({"ok":true,"sessions":[{"slug":"desk-a","status":"running","lease":{"threadId":"holder","fencingToken":"secret","expiresAt":"later"},"profilePath":"private","cdpUrl":"secret"},{"slug":"desk-b"},{"slug":"desk-c","lease":null}]})).unwrap_or_else(|_| panic!("valid inventory fixture rejected"));
         assert_eq!(result[0].lease_state, "reserved");
         assert_eq!(result[1].lease_state, "unknown");
         assert_eq!(result[2].lease_state, "unreserved");
@@ -211,7 +211,6 @@ mod tests {
 
 #[cfg(test)]
 mod http_tests {
-    use super::*;
     use crate::conversation_resources_http::tests::{case, send};
     #[tokio::test]
     async fn global_inventory_and_reset_require_owner_and_reset_requires_a_fence() {

@@ -18,6 +18,7 @@ pub fn DesktopResourceCard(
     let mut busy = use_signal(|| false);
     let mut uncertain = use_signal(|| false);
     let mut confirm = use_signal(|| false);
+    let mut link_generation = use_signal(|| 0_u64);
     let mut status = use_signal(String::new);
     rsx! {
         article { class: "settings-form", "aria-label": "Desk {desk.slug}",
@@ -38,7 +39,7 @@ pub fn DesktopResourceCard(
                 }
                 if !selected().is_empty() {
                     ul { class: "lease-list",
-                        crate::desktop_open_view::DesktopOpen {key: "{selected()}:{desk.slug}:{owner}", conversation:selected(),slug:desk.slug.clone(),csrf:csrf.clone(),session_scope,onexpired}
+                        crate::desktop_open_view::DesktopOpen {key: "{selected()}:{desk.slug}:{owner}:{link_generation}", conversation:selected(),slug:desk.slug.clone(),csrf:csrf.clone(),session_scope,onexpired}
                     }
                 }
                 button { r#type:"button",disabled:busy() || uncertain() || selected().is_empty() || token().is_some(),onclick:{
@@ -81,7 +82,7 @@ pub fn DesktopResourceCard(
                             let (slug,csrf,fence)=(desk.slug.clone(),csrf.clone(),fence.clone());
                             move |_| {
                                 if busy() || uncertain() {return;}
-                                busy.set(true);confirm.set(false);
+                                busy.set(true);confirm.set(false);link_generation += 1;
                                 let (slug,csrf,fence,conversation)=(slug.clone(),csrf.clone(),fence.clone(),selected());
                                 spawn(async move {
                                     let result=crate::transport::request::<Value>("POST",&format!("/api/v2/conversations/{conversation}/desktops/{slug}/reset"),json!({"fencing_token":fence,"confirm":true}),&csrf,"").await;

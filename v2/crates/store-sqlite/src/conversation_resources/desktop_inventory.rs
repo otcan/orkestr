@@ -47,7 +47,6 @@ impl Store {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::conversation_resources::tests_settings::Case;
     use orkestr_v2_contracts::{DesktopBindingRequest, OwnerId};
     #[tokio::test]
