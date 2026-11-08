@@ -553,3 +553,6 @@ async fn lapsed_deep_closes_before_the_window_deadline_on_the_owner_side() {
     assert_eq!(receipt.outcome, Outcome::Failed);
     assert_eq!(window_state(&fresh, window).await, "closed");
 }
+
+#[path = "stranded_workspace_history_tests.rs"]
+mod workspace_history;

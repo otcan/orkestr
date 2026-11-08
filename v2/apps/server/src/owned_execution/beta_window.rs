@@ -190,17 +190,15 @@ impl ConfiguredExecution {
             // Metadata-only lease maintenance: the provider tree is already reaped.
             self.maintain(heartbeat).await?;
             let status = self
-                .store
-                .execution_status(&self.owner, &self.config.conversation_id)
+                .owned_run_status(run)
                 .await
-                .map_err(|_| "late owner status unavailable")?
-                .ok_or("late owner status missing")?;
+                .map_err(|_| "late owner status unavailable")?;
             if status.run_id.as_ref() != Some(run) {
                 return Err("late owner run changed");
             }
             match status.phase {
                 orkestr_v2_contracts::ExecutionPhase::Completed => {
-                    return self.retire_terminal(run, proof).await
+                    return self.retire_terminal(run, proof).await;
                 }
                 orkestr_v2_contracts::ExecutionPhase::AwaitingAcceptance => {}
                 _ => return Err("late owner decision is not canonical acceptance"),
