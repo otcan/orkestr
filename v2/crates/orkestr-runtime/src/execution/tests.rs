@@ -13,6 +13,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[path = "completion_flush_tests.rs"]
+mod completion_flush;
+
 static NEXT: AtomicU64 = AtomicU64::new(1);
 
 fn ready_rpc(native: &str) -> CodexRpc {

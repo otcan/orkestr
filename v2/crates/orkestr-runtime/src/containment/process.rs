@@ -393,6 +393,23 @@ impl OwnedChild {
         })
     }
 
+    /// Polling output does not spend a write grant when no input remains.
+    /// Keep local scope/revocation/pipe checks even for that no-I/O result.
+    /// A queued or partial frame still crosses the original durable fence.
+    pub(crate) fn flush_pending_stdin(&self, scope: &ExecutionScope) -> Result<Flush, Error> {
+        {
+            let state = self.shared.state.lock().map_err(|_| Error::Revoked)?;
+            self.shared.check(scope, &state)?;
+            let mut live = self.process.live.lock().map_err(|_| Error::Revoked)?;
+            live.child.as_ref().ok_or(Error::PipeClosed)?;
+            if live.framing.queue.is_empty() {
+                return live.framing.flush();
+            }
+        }
+        // Never take the durable writer while holding either process lock.
+        self.flush_stdin(scope)
+    }
+
     pub fn poll_stdout(&self, scope: &ExecutionScope) -> Result<Output, Error> {
         let state = self.shared.state.lock().map_err(|_| Error::Revoked)?;
         self.shared.check(scope, &state)?;

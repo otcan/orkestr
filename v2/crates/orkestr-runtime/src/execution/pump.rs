@@ -308,7 +308,7 @@ impl CodexPump {
         if self.source.failed.is_some() {
             return Err(crate::containment::Error::Revoked);
         }
-        match self.source.child.flush_stdin(&self.source.scope) {
+        match self.source.child.flush_pending_stdin(&self.source.scope) {
             Ok(_) => Ok(()),
             Err(error) => {
                 self.source.failed = Some(Blocker::Protocol);
