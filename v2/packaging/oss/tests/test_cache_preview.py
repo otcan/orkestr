@@ -19,7 +19,7 @@ SPEC.loader.exec_module(budget)
 REF = 'refs/heads/build-candidate'
 
 
-def fixture(root, duplicate=False, media='application/vnd.oci.image.layer.v1.tar+gzip'):
+def fixture(root, duplicate=False, conflict=False, media='application/vnd.oci.image.layer.v1.tar+gzip'):
     blobs = root / 'blobs/sha256'
     blobs.mkdir(parents=True)
 
@@ -30,8 +30,9 @@ def fixture(root, duplicate=False, media='application/vnd.oci.image.layer.v1.tar
 
     layer = put(gzip.compress(b'generic sealed build output', mtime=0), media)
     config = put(b'{"layers":[],"records":[]}', 'application/vnd.buildkit.cacheconfig.v0')
+    layers = [layer, {**layer, 'size': layer['size'] + 1}] if conflict else [layer, layer] if duplicate else [layer]
     manifest = {'schemaVersion': 2, 'mediaType': 'application/vnd.oci.image.manifest.v1+json',
-                'config': config, 'layers': [layer, layer] if duplicate else [layer]}
+                'config': config, 'layers': layers}
     descriptor = put(json.dumps(manifest).encode(), manifest['mediaType'])
     (root / 'index.json').write_text(json.dumps({'schemaVersion': 2,
         'mediaType': 'application/vnd.oci.image.index.v1+json', 'manifests': [descriptor]}))
@@ -72,13 +73,13 @@ class CachePreviewTests(unittest.TestCase):
     def test_actual_preview_refusal_retains_its_static_validation_code(self):
         with tempfile.TemporaryDirectory() as scratch:
             root = Path(scratch)
-            fixture(root / 'preview', duplicate=True)
+            fixture(root / 'preview', conflict=True)
             usage = {'repository_cache_bytes': 0, '_visible_blob_sizes': {}}
             with patch.object(budget, 'observed_usage', return_value=usage):
                 report = self.run_main(root, ['--preview', str(root / 'preview'),
                     '--allocation', '100000000', '--report', str(root / 'report.json')])
             self.assertFalse(report['export_allowed'])
-            self.assertEqual(report['validation_code'], 'duplicate_cache_layer_descriptor')
+            self.assertEqual(report['validation_code'], 'cache_descriptor_size_mismatch')
             self.assertEqual(report['preview_layer_media_types'], ['application/vnd.oci.image.layer.v1.tar+gzip'])
 
     def test_exact_visible_layer_is_counted_once_not_recharged(self):
@@ -126,8 +127,16 @@ class CachePreviewTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'symlink'):
                 budget.preview_inventory(root, observed(layer))
 
-    def test_duplicate_descriptors_and_unknown_compression_fail_closed(self):
-        for kwargs in [{'duplicate': True}, {'media': 'application/vnd.oci.image.layer.v1.tar+zstd'}]:
+    def test_repeated_verified_layer_is_discounted_once(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            layer = fixture(root, duplicate=True)
+            total, already = budget.preview_inventory(root, observed(layer))
+            self.assertEqual(already, layer['size'])
+            self.assertGreater(total, already)
+
+    def test_conflicting_descriptors_and_unknown_compression_fail_closed(self):
+        for kwargs in [{'conflict': True}, {'media': 'application/vnd.oci.image.layer.v1.tar+zstd'}]:
             with tempfile.TemporaryDirectory() as scratch:
                 root = Path(scratch)
                 layer = fixture(root, **kwargs)

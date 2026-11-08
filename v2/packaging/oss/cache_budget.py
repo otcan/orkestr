@@ -125,15 +125,19 @@ def preview_inventory(root, visible, diagnostics=None):
         diagnostics['preview_layer_media_types'] = sorted({str(row.get('mediaType'))[:128] for row in layers if isinstance(row, dict)})
     if not isinstance(layers, list) or len(layers) > 1000:
         raise ValueError('unknown cache layers')
-    seen, already = set(), 0
+    seen, already = {}, 0
     for layer in layers:
         if layer['mediaType'] not in ('application/vnd.oci.image.layer.v1.tar+gzip',
                                       'application/vnd.docker.image.rootfs.diff.tar.gzip'):
             raise ValueError('unknown cache layer compression')
         _, digest, size = blob(layer)
         if digest in seen:
-            raise ValueError('duplicate cache layer descriptor')
-        seen.add(digest)
+            if seen[digest] != size:
+                raise ValueError('conflicting cache layer descriptor')
+            # OCI cache graphs may reference the same verified layer more
+            # than once. The content store and GHA cache store it only once.
+            continue
+        seen[digest] = size
         if digest in visible:
             if visible[digest] != size:
                 raise ValueError('existing blob size mismatch')
