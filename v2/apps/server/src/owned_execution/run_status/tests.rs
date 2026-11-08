@@ -1,6 +1,6 @@
 //! Real Store projections; only historical ordering is seeded synthetically.
 use super::*;
-use orkestr_v2_application::{IntakeStore, runtime::*};
+use orkestr_v2_application::{runtime::*, IntakeStore};
 use orkestr_v2_contracts::{ExecutionPhase, MessageInput};
 use orkestr_v2_store_sqlite::ExecutionConsumption;
 use sqlx::{Connection, Row};
