@@ -33,7 +33,7 @@ class RefusalTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.ledger = Ledger(Path(self.temp.name) / "ledger.sqlite3", {"test_scope": "one"}, max_outstanding=2)
         self.peer = Peer()
-        self.worker = Worker(self.peer, self.ledger)
+        self.worker = Worker(self.peer, self.ledger, legacy_companions=True)
 
     def fail_route(self, failing_route, response=None, error=None, once=True):
         original = self.peer.request
@@ -106,7 +106,7 @@ class RefusalTests(unittest.TestCase):
                         raise ClientError("unexpected_status", status)
                     return original(method, route, **kwargs)
                 peer.request = request
-                worker = Worker(peer, ledger)
+                worker = Worker(peer, ledger, legacy_companions=True)
                 worker.run_once(Stop())
                 self.assertNotIn("refused", ledger.next_input())
                 worker.run_once(Stop())
@@ -130,7 +130,7 @@ class ExpiryTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.ledger = Ledger(Path(self.temp.name) / "ledger.sqlite3", SCOPE)
         self.peer = TimerPeer()
-        self.worker = Worker(self.peer, self.ledger, max_input_age_s=600)
+        self.worker = Worker(self.peer, self.ledger, max_input_age_s=600, legacy_companions=True)
 
     def aged(self, public_id, seconds, **fields):
         data, _ = self.ledger.enqueue(body(public_id))

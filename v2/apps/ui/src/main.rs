@@ -19,7 +19,6 @@ mod conversation_status_poll;
 mod desktop_open_view;
 mod execution_panel;
 mod execution_poll;
-mod fast_panel;
 mod held_inputs_poll;
 mod held_inputs_view;
 mod history;
@@ -65,10 +64,12 @@ mod tracker_source_view;
 mod tracker_table_view;
 mod tracker_view;
 mod transport;
+mod upload_progress_view;
 mod v1_manage_view;
 mod v1_thread_view;
 mod v1_workers_view;
 mod views;
+mod virtual_desks_view;
 mod work_view;
 mod worker_tasks_panel;
 mod worker_tasks_view;
@@ -273,9 +274,6 @@ fn App() -> Element {
             if !csrf().is_empty() { outbox_view::ReplyGestures {} }
             if !csrf().is_empty() && !current().is_empty() && !global().is_empty() {
                 outbox_driver::OutboxDriver { key: "outbox-{session_scope.read().generation()}-{global}", global: global(), csrf: csrf(), session_scope, onexpired: expired }
-            }
-            if !csrf().is_empty() {
-                    owner_password_view::OwnerPassword { key: "password-{session_scope.read().generation()}", csrf: csrf(), session_scope, onexpired: expired }
             }
             if !csrf().is_empty() {
                     attachment_keys_view::AttachmentKeyEnrollment { key: "keys-{session_scope.read().generation()}", csrf: csrf() }

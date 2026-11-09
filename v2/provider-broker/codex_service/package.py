@@ -249,12 +249,13 @@ class Package:
                 origin == f"http://127.0.0.1:{value['port']}") and len(origin) <= 512
                 and not any(ord(c) < 33 for c in origin) and not origin.endswith("/"), "trusted_origin")
         beta = self.beta
-        require(set(beta) - {"roles", "workspace_exec", "additional_workspace_exec", "max_active_windows",
+        require(set(beta) - {"roles", "legacy_companions", "workspace_exec", "additional_workspace_exec", "max_active_windows",
                              "window_max_minutes", "conversation_window_max_minutes",
                              "host_full_access", "managed_host", "claude", "conversation_workspaces", "provider_routing", "identity_split", "deploy_maintenance_marker"} == {"schema_version", "owner_id", "conversation_id", "manager_socket",
                 "launcher", "launcher_sha256", "workspace", "namespace", "supervisor_key"}
                 and type(beta["schema_version"]) is int and beta["schema_version"] == 1,
                 "beta_format")
+        require(type(beta.get("legacy_companions", False)) is bool, "beta_legacy_companions")
         if "deploy_maintenance_marker" in beta:
             marker = Path(live_map_path(beta["deploy_maintenance_marker"]))
             require(str(marker) == beta["deploy_maintenance_marker"]

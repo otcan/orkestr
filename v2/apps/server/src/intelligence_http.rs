@@ -39,6 +39,10 @@ pub(crate) async fn read(
         .window_controller
         .as_ref()
         .is_some_and(|controller| controller.roles_configured(&owner, &conversation));
+    let fast_configured = state
+        .window_controller
+        .as_ref()
+        .is_some_and(|controller| controller.fast_configured(&owner, &conversation));
     let worker_available = status
         .as_ref()
         .filter(|status| status.phase == ExecutionPhase::Running)
@@ -52,7 +56,7 @@ pub(crate) async fn read(
         schema_version: 1,
         conversation_id: conversation,
         deep: capability(configured || deep.is_some(), deep.is_some(), true, 1),
-        fast: capability(roles || fast.is_some(), fast.is_some(), false, 1),
+        fast: capability(fast_configured || fast.is_some(), fast.is_some(), false, 1),
         worker: capability(roles || worker_available, worker_available, false, 4),
     };
     Ok(Json(capabilities).into_response())

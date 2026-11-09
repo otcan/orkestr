@@ -13,7 +13,7 @@ impl ConfiguredExecution {
         home: &Path,
         config: &crate::beta_config::BetaConfig,
     ) -> Result<(), &'static str> {
-        if !config.claude.as_ref().is_some_and(|claude| claude.fast) {
+        if !config.legacy_companions || !config.claude.as_ref().is_some_and(|claude| claude.fast) {
             return Ok(());
         }
         let context = self

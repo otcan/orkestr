@@ -31,14 +31,15 @@ class WebPeer(TimerPeer):
         self.payloads = {}
         self.window_state = "active"
 
-    def read_events(self, after, maximum):
+    def read_events(self, after, maximum, timeout_s=None):
         # One consistent journal (the adapter shares one read across its
         # readers): a snapshot message's own event at its sequence.
-        for item in self.snapshot:
-            if item["sequence"] == after + 1:
-                return [{"sequence": item["sequence"], "event_id": "ev-" + item["message_id"],
-                         "payload_ref_or_safe_payload": {"kind": "message_accepted", "message_id": item["message_id"]}}]
-        return [] if maximum == 1 else [{"sequence": after + 1}]
+        events = [{"sequence": item["sequence"], "event_id": "ev-" + item["message_id"],
+                   "payload_ref_or_safe_payload": {"kind": "message_accepted", "message_id": item["message_id"]}}
+                  for item in self.snapshot]
+        last = max([10] + [item["sequence"] for item in self.snapshot])
+        events += [{"sequence": last + i + 1} for i, _ in enumerate(self.runs)]
+        return [event for event in events if event["sequence"] > after][:maximum]
 
     def matching_run_ids(self, events, intake):
         if "event_id" in intake and intake["event_id"].startswith("ev-"):
@@ -77,7 +78,7 @@ class WebMirrorTests(Base):
     def setUp(self):
         super().setUp()
         self.peer = WebPeer()
-        self.worker = Worker(self.peer, self.ledger)
+        self.worker = Worker(self.peer, self.ledger, legacy_companions=True)
 
     def scan(self):
         self.worker._web_checked = None
@@ -150,7 +151,7 @@ class WebMirrorTests(Base):
         self.scan()
         first = self.ledger.messages()
         self.ledger.set_web_cursor(10)  # lost cursor write: the same rows are read again
-        restarted = Worker(self.peer, Ledger(Path(self.temp.name) / "ledger.sqlite3", SCOPE))
+        restarted = Worker(self.peer, Ledger(Path(self.temp.name) / "ledger.sqlite3", SCOPE), legacy_companions=True)
         restarted._web_checked = None
         restarted.run_once(_Stop())
         self.assertEqual(self.ledger.messages(), first)

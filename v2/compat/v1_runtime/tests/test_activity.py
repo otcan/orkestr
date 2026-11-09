@@ -17,7 +17,7 @@ class ActivityCase(unittest.TestCase):
     def setUp(self):
         temp=tempfile.TemporaryDirectory();self.addCleanup(temp.cleanup)
         self.ledger=Ledger(Path(temp.name)/'ledger.sqlite3',dict(public_thread_id='thread',chat_id='chat',account_id='account'))
-        self.worker=Worker(Peer(),self.ledger,progress_updates=False);self.worker.deep_heartbeat=self.heartbeat
+        self.worker=Worker(Peer(),self.ledger,progress_updates=False, legacy_companions=True);self.worker.deep_heartbeat=self.heartbeat
         self.data=self.ledger.enqueue(dict(publicMessageId='owner',publicThreadId='thread',chatId='chat',accountId='account',text='work'))[0]
         self.data.update(queued_at=1,admitted_at=1000,phase='running',matched_runs=['own'])
         self.ledger.save(self.data)
@@ -58,7 +58,7 @@ class ActivityTests(ActivityCase):
         self.assertEqual(self.ledger.health()['stalledInputs'],0)
 
     def test_unresolved_notice_is_one_per_thread_even_after_restart_and_another_input(self):
-        self.advance(1600);self.worker=Worker(Peer(),self.ledger);self.worker.deep_heartbeat=False
+        self.advance(1600);self.worker=Worker(Peer(),self.ledger, legacy_companions=True);self.worker.deep_heartbeat=False
         self.advance(2200);self.assertEqual(len(self.notices()),1)
         other=dict(self.data,remote_id='other')
         # The same admitted head cannot create a second message after restart.
@@ -142,7 +142,7 @@ class DeepHeartbeatTests(ActivityCase):
         for bad in (None,'false',0):
             with self.subTest(value=bad),self.assertRaisesRegex(ValueError,'config_activation'):
                 config.binding(binding_doc(1,deep_heartbeat=bad),OWNER)
-        self.assertTrue(Worker(Peer(),self.ledger).deep_heartbeat)
+        self.assertTrue(Worker(Peer(),self.ledger, legacy_companions=True).deep_heartbeat)
 
     def test_off_keeps_the_legacy_ten_minute_notice(self):
         self.worker.deep_heartbeat=False;self.advance(1590);self.assertEqual(self.notices(),[])
