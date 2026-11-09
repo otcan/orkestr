@@ -1,5 +1,6 @@
 """Foreground head stepping, before independent adapter discovery work."""
 import sys
+from contextlib import nullcontext
 from . import failure_cause
 from .peer_observation import before_send_refused, alert_held
 
@@ -13,7 +14,9 @@ def drive(worker, data, stop):
         worker.ledger.refuse(data, data["blocked"])
         return True
     try:
-        worker.step(data)
+        gate = getattr(getattr(getattr(worker, "client", None), "session", None), "outbound_gate", None)
+        with gate.foreground() if gate is not None else nullcontext():
+            worker.step(data)
     except Refused as error:
         # A definite refusal is terminal for this input only: the owner gets
         # a notice and later inputs proceed. Health keeps it for review.

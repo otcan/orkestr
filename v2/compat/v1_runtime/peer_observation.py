@@ -3,7 +3,8 @@ import sys
 
 
 def before_send_refused(error):
-    return (getattr(error, "code", None) in ("peer_identity_refused", "peer_connection_refused")
+    return (getattr(error, "code", None) in ("peer_identity_refused", "peer_connection_refused",
+                                             "outbound_capacity_refused")
             and getattr(error, "outcome", None) == "refused")
 
 
