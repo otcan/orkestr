@@ -794,15 +794,22 @@ class Ledger:
         """Atomically record the accepted final reply and make it visible to V1."""
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
+            from .accepted_final_export import select
+            self.scrub(reply)
+            selected = select(db, data, reply)
+            if selected is None:
+                return False
+            source_key, already_exported = selected
+            if already_exported:
+                return True
             from .first_response_store import final_ready
             if not final_ready(self, db, data):
                 return False
             from .fast_watch_giveup import stamp_final
-            self.scrub(reply)
             stamp_final(data, reply)
+            self._export(db, data, "final", source_key, reply)
             data.update(reply=reply, phase="completed")
             self.save(data, db)
-            self._export(db, data, "final", "final:" + data["remote_id"], reply)
             return True
 
     def continue_notice(self, data, text):
