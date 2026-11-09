@@ -195,7 +195,8 @@ class Registry:
             client = self.client_factory(binding.config["conversation_id"])
             directory, gid = attachment_export_settings()
             binding.worker = Worker(client, binding.ledger, attachment_dir=directory, attachment_gid=gid,
-                                    burst_quiet_s=DEFAULT_BURST_QUIET_S)
+                                    burst_quiet_s=DEFAULT_BURST_QUIET_S,
+                                    legacy_companions=self.service.get("legacy_companions", False))
         binding.worker.progress_updates = binding.config["progress_updates"]
         binding.worker.deep_heartbeat = binding.config.get("deep_heartbeat", True) is not False
         binding.worker.fast_reply_policy = binding.config["fast_reply_policy"]
@@ -205,6 +206,7 @@ class Registry:
         binding.worker.attachments = binding.config["attachments"]
         binding.worker.max_input_age_s = binding.config["max_input_age_seconds"]
         binding.worker.instructions_path = binding.config["instructions_path"]
+        binding.worker.internal_context_dir = self.service.get("internal_context_dir")
         if binding.thread is None and self.workers:
             binding.thread = threading.Thread(target=self._supervise, args=(binding,),
                                               daemon=True, name="binding-" + binding.remote_thread_id[:8])

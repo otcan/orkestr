@@ -19,15 +19,12 @@ pub fn IntelligencePanel(
     session_scope: Signal<SessionScope>,
     execution: Signal<Execution>,
     onexpired: EventHandler<()>,
-    onaccepted: EventHandler<i64>,
-    #[props(default)] auto_accept: bool,
 ) -> Element {
     let owner = session_scope.read().generation();
     let mut capabilities = use_signal(|| None::<IntelligenceCapabilities>);
-    let mut notice = use_signal(|| "Checking intelligence layers…".to_string());
+    let mut notice = use_signal(|| "Checking agent capabilities…".to_string());
     let mut channel = use_signal(|| None::<document::Eval>);
     let mut mounted = use_signal(|| true);
-    let fast_execution = use_signal(Execution::default);
     use_drop(move || {
         mounted.set(false);
         if let Some(channel) = channel.peek().as_ref() {
@@ -67,16 +64,14 @@ pub fn IntelligencePanel(
                             }
                             _ => {
                                 capabilities.set(None);
-                                notice
-                                    .set("Intelligence capabilities could not be verified.".into());
+                                notice.set("Agent capabilities could not be verified.".into());
                             }
                         }
                     }
                     _ => {
                         capabilities.set(None);
                         notice.set(
-                            "Intelligence capabilities unavailable. Existing work is unchanged."
-                                .into(),
+                            "Agent capabilities unavailable. Existing work is unchanged.".into(),
                         );
                     }
                 }
@@ -88,24 +83,16 @@ pub fn IntelligencePanel(
         .read()
         .control_status()
         .filter(|s| s.conversation_id.to_string() == id);
-    rsx! { section { class:"intelligence-layers", "aria-label":"Intelligence layers",
+    rsx! { section { class:"intelligence-layers", "aria-label":"Agent and workers",
         if let Some(caps)=capabilities() {
             div { class:"intelligence-summary",
-                span { class:"deep-label", strong {"Deep"} " · {caps.deep.label()}" }
-                span { "Fast · {caps.fast.label()}" }
+                span { class:"deep-label", strong {"Agent"} " · {caps.deep.label()}" }
                 span { "Workers · {caps.worker.label()}" }
             }
             div { class:"intelligence-tools",
                 details { class:"intelligence-layer",
-                    summary { "Fast reply" }
-                    p { "Fast responds to the same message. Review or stop its reply independently of Deep." }
-                    if caps.fast.configured {
-                        crate::execution_poll::ExecutionPoll { key:"fast-{id}-{owner}", id:id.clone(), fast:true, worker_tasks:false, csrf:csrf.clone(), session_scope, execution:fast_execution, onexpired, onaccepted:Some(onaccepted), auto_accept }
-                    } else { p { "Fast is not configured on this server." } }
-                }
-                details { class:"intelligence-layer",
                     summary { "Worker tasks" }
-                    p { "Delegate an independent task while Deep is running. Workers share the remaining work limits." }
+                    p { "Delegate an independent task while the agent is running. Workers share the remaining work limits." }
                     if caps.worker.configured {
                         if let Some(parent)=parent.as_ref() {
                             if let Some(run)=parent.run_id.as_ref() {
@@ -114,8 +101,8 @@ pub fn IntelligencePanel(
                                     csrf:csrf.clone(), session_scope, onexpired,
                                     allow_create:caps.worker.available && parent.phase==ExecutionPhase::Running,
                                 }
-                            } else { p {"Start Deep work before creating a worker task."} }
-                        } else { p { "Start Deep work before creating a worker task. Reading this panel does not start work." } }
+                            } else { p {"Start work before creating a worker task."} }
+                        } else { p { "Start work before creating a worker task. Reading this panel does not start work." } }
                     } else { p { "Workers are not configured on this server." } }
                 }
             }

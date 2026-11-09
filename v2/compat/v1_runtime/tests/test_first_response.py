@@ -27,7 +27,7 @@ class FirstResponseTests(unittest.TestCase):
                 return 200, {"run_id": "deep-run", "payload_id": self.state["payload"], "text": "Still checking."}
             return original(method, route, **kwargs)
         self.peer.request = request
-        self.worker = Worker(self.peer, self.ledger, progress_updates=True)
+        self.worker = Worker(self.peer, self.ledger, progress_updates=True, legacy_companions=True)
         self.worker.fast_reply_policy = "owner_only"
 
     def step_at(self, seconds):
@@ -50,7 +50,7 @@ class FirstResponseTests(unittest.TestCase):
         first = self.replies()
         self.assertEqual([r["text"] for r in first], [self.state["fast"]])
         self.assertTrue(first[0]["firstResponse"])
-        self.worker = Worker(self.peer, self.ledger, progress_updates=True)
+        self.worker = Worker(self.peer, self.ledger, progress_updates=True, legacy_companions=True)
         self.worker.fast_reply_policy="owner_only"
         self.step_at(6)
         self.assertEqual(self.replies(), first)
@@ -154,7 +154,7 @@ class FirstResponseTests(unittest.TestCase):
     def test_no_stale_fast_after_final_and_ordering_survives_restart(self):
         self.configure(deep="ready");self.step_at(1)
         (fast,)=self.replies()
-        self.worker=Worker(self.peer,self.ledger,progress_updates=False)
+        self.worker=Worker(self.peer,self.ledger,progress_updates=False, legacy_companions=True)
         self.worker.fast_reply_policy="owner_only"
         self.step_at(2);self.assertEqual(self.replies(),[fast])
         self.ack_fast();self.step_at(3)
@@ -198,7 +198,7 @@ class FirstResponseTests(unittest.TestCase):
     def test_hanging_fast_never_holds_final_longer_than_fifteen_seconds_even_after_restart(self):
         self.configure(deep="ready");self.step_at(1)
         (fast,)=self.replies()
-        self.worker=Worker(self.peer,self.ledger)
+        self.worker=Worker(self.peer,self.ledger, legacy_companions=True)
         self.worker.fast_reply_policy="owner_only"
         self.step_at(15);self.assertEqual(self.replies(),[fast])
         self.step_at(16);(final,)=self.replies()

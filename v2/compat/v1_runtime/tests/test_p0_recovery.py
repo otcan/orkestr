@@ -156,7 +156,7 @@ class Base(unittest.TestCase):
             accountId="account", text="Merhaba, bu profili bugün güncelleyebilir misin? Teşekkürler"),
             author=dict(role="member", id="synthetic-member", label="Member"))
         self.peer = self.peer_class()
-        self.worker = Worker(self.peer, self.ledger)
+        self.worker = Worker(self.peer, self.ledger, legacy_companions=True)
 
     def notices(self):
         return [m for m in self.ledger.messages() if m.get("kind") == "notice"]

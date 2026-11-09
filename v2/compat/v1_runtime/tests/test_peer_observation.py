@@ -18,7 +18,7 @@ class PeerObservationTests(unittest.TestCase):
         self.addCleanup(directory.cleanup)
         self.ledger = Ledger(Path(directory.name) / "ledger.sqlite3", {"test_scope": "one"})
         self.peer = Peer()
-        self.worker = Worker(self.peer, self.ledger)
+        self.worker = Worker(self.peer, self.ledger, legacy_companions=True)
 
     def test_before_send_refusal_after_admission_observes_same_turn_without_replay(self):
         original = self.peer.request

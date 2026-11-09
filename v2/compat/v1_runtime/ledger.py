@@ -42,12 +42,15 @@ POST_SOURCE_ID = "post"
 # timer input for the message itself, one for its answer, one per progress note.
 WEB_NAMESPACE = uuid.UUID("7c2e9b14-6d3a-4f8e-a1b5-9e0d4c7f2a68")
 WEB_SOURCE_ID = "web"
+TASK_UPDATE_SOURCE_ID = "task-update"
 WEB_LABEL = "\U0001f5a5\ufe0f (web)"
 
 
 def watch_label(watch, kind):
     """Parent label of a web-watch export. A returned thread-ask answer's turn
     reads "↩ from <thread name>"; a web message keeps its web labels."""
+    if watch.get("internal_context"):
+        return "Task update"
     source = watch.get("thread_name")
     if watch.get("thread_ask") and source:
         return "\u21a9 from %s%s" % (source, " (progress)" if kind == "progress" else "")
@@ -502,6 +505,19 @@ class Ledger:
             rows = db.execute("SELECT data FROM web_watch ORDER BY rowid LIMIT ?", (limit,)).fetchall()
         return [json.loads(raw) for (raw,) in rows]
 
+    def await_internal_context(self, message):
+        """Keep the ordinary exact-source Deep answer; never export tool input.
+
+        The Root registry was checked before this call. No window, run, or
+        acceptance is created, and duplicate scans cannot duplicate a reply.
+        """
+        watch = {"message_id": message["message_id"], "sequence": message["sequence"],
+                 "cursor": message["sequence"] - 1, "since": time.time(),
+                 "excerpt": "Task update", "runs": [], "progress": [], "internal_context": True}
+        with self.connect() as db:
+            return db.execute("INSERT OR IGNORE INTO web_watch VALUES (?,?)",
+                              (message["message_id"], json.dumps(watch))).rowcount == 1
+
     def save_web_watch(self, watch):
         with self.connect() as db:
             db.execute("UPDATE web_watch SET data=? WHERE message_id=?", (json.dumps(watch), watch["message_id"]))
@@ -521,7 +537,8 @@ class Ledger:
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
             self._pseudo_timer(db, remote_id, watch_label(watch, "progress"), int(time.time() * 1000),
-                               {"web": {"message_id": message_id, "kind": "progress"}}, reply)
+                               {"web": {"message_id": message_id, "kind": "progress"}}, reply,
+                               source_id=TASK_UPDATE_SOURCE_ID if watch.get("internal_context") else WEB_SOURCE_ID)
             watch.setdefault("progress", []).append(payload_id)
             db.execute("UPDATE web_watch SET data=? WHERE message_id=?", (json.dumps(watch), message_id))
 
@@ -536,7 +553,8 @@ class Ledger:
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
             self._pseudo_timer(db, remote_id, watch_label(watch, "answer"), int(time.time() * 1000),
-                               {"web": {"message_id": message_id, "kind": "answer"}}, reply)
+                               {"web": {"message_id": message_id, "kind": "answer"}}, reply,
+                               source_id=TASK_UPDATE_SOURCE_ID if watch.get("internal_context") else WEB_SOURCE_ID)
             db.execute("DELETE FROM web_watch WHERE message_id=?", (message_id,))
 
     def finish_silently(self, data, outcome):

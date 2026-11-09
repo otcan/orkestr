@@ -18,6 +18,10 @@ fn every_view_round_trips_through_its_fragment() {
             id: ID.into(),
             tab: Tab::LiveMap,
         },
+        Route::Conversation {
+            id: ID.into(),
+            tab: Tab::VirtualDesks,
+        },
         Route::V1Thread {
             thread: "group-coordinated".into(),
         },
@@ -88,4 +92,5 @@ fn unknown_or_hostile_fragments_are_ignored() {
         assert_eq!(Route::parse(hash), None, "{hash}");
     }
     assert_eq!(Tab::from_label("Host resources"), Some(Tab::Host));
+    assert_eq!(Tab::from_label("Virtual desks"), Some(Tab::VirtualDesks));
 }

@@ -82,7 +82,7 @@ pub fn BetaDiscoveryGate(
 
 /// Signed-in first screen before any model is connected: tell the owner what to do.
 pub(crate) const MODELS_NOT_CONNECTED: &str = "Models are not connected yet. Open Connect models to sign in to Codex from this browser (Claude is optional); Orkestr then activates them and reloads.";
-const DEEP_UNAVAILABLE: &str = "Deep is unavailable. Reload to check the server again.";
+const DEEP_UNAVAILABLE: &str = "The agent is unavailable. Reload to check the server again.";
 
 fn unavailable_notice(status: u16, code: Option<&str>) -> &'static str {
     // beta_request.js surfaces only this fixed code from a refusal body.

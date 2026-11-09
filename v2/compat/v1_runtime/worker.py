@@ -1,7 +1,4 @@
 """Serial, restart-safe Rust intake for one binding. Only the matched Deep run is mirrored."""
-import grp
-import os
-from pathlib import Path
 import re
 import sqlite3
 import sys
@@ -12,6 +9,8 @@ import uuid
 from .ledger import (DEFAULT_MAX_INPUT_AGE_S, DIGEST_NAMESPACE as DIGEST_REPLY_NAMESPACE, PROGRESS_LIMIT, WEB_TEXT_LIMIT,
                      no_reply)
 from . import failure_cause
+from .attachment_files import MEDIA_EXTENSIONS, attachment_export_settings, export_attachment
+from . import execution_mode, intake_ahead
 from . import instructions
 from . import continuation_guard
 from . import auto_steer
@@ -34,7 +33,7 @@ from .input_activity import record as record_transport_activity
 from .intake import admit as admit_input, window as admit_window
 from .acceptance_retry import reconcile as reconcile_acceptance
 from . import journal as shared_journal
-from .intake_fast import (EVENT_WAIT_S, eligible as early_fast_eligible, isolated as isolated_fast,
+from .intake_fast import (EVENT_WAIT_S, isolated as isolated_fast,
                           drive as drive_intake_fast)
 
 PROGRESS_INTERVAL_S = 60
@@ -166,54 +165,6 @@ def attachment_note(text, manifest_id, references, paths=None):
     return (text.rstrip() + "\n\n" if text.strip() else "") + "\n".join(lines) + "]"
 
 
-MEDIA_EXTENSIONS = {"image/jpeg": ".jpg", "image/png": ".png", "image/gif": ".gif", "image/webp": ".webp",
-                    "application/pdf": ".pdf", "text/plain": ".txt"}
-
-
-def attachment_export_settings(environ=os.environ):
-    """Optional host directory where imported attachments are also written as
-    files, so a provider turn (which receives text only) can open them.
-    Returns (directory, gid) or (None, None) when not configured."""
-    directory = environ.get("ORKESTR_V2_ADAPTER_ATTACHMENT_DIR", "").strip()
-    if not directory or not os.path.isabs(directory):
-        return None, None
-    group = environ.get("ORKESTR_V2_ADAPTER_ATTACHMENT_GROUP", "").strip()
-    try:
-        gid = grp.getgrnam(group).gr_gid if group else None
-    except KeyError:
-        gid = None
-    return directory, gid
-
-
-def export_attachment(directory, gid, conversation, item, content):
-    """Write one attachment as <dir>/<conversation>/<sha256><ext>, readable by
-    the configured group only. Idempotent: the name is the content digest."""
-    digest = item["sha256"]
-    if not re.fullmatch("[0-9a-f]{64}", digest) or not re.fullmatch("[0-9a-zA-Z-]{1,64}", str(conversation)):
-        return None
-    suffix = MEDIA_EXTENSIONS.get(item["media_type"]) or "".join(
-        c for c in Path(item.get("filename") or "").suffix.lower()[:8] if c.isalnum() or c == ".")
-    folder = Path(directory) / conversation
-    folder.mkdir(mode=0o750, parents=True, exist_ok=True)
-    os.chmod(folder, 0o750)
-    if gid is not None:
-        os.chown(folder.parent, -1, gid)
-        os.chown(folder, -1, gid)
-    target = folder / (digest + suffix)
-    if not target.exists():
-        temporary = folder / (".%s.%s.tmp" % (digest, uuid.uuid4().hex))
-        fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o640)
-        try:
-            with os.fdopen(fd, "wb") as handle:
-                handle.write(content)
-            if gid is not None:
-                os.chown(temporary, -1, gid)
-            os.chmod(temporary, 0o640)
-            os.replace(temporary, target)
-        finally:
-            if temporary.exists():
-                temporary.unlink()
-    return str(target)
 
 
 class Signal:
@@ -250,8 +201,13 @@ class Signal:
 
 class Worker:
     def __init__(self, client, ledger, progress_updates=False, max_input_age_s=DEFAULT_MAX_INPUT_AGE_S,
-                 attachment_dir=None, attachment_gid=None, burst_quiet_s=0.0):
+                 attachment_dir=None, attachment_gid=None, burst_quiet_s=0.0, legacy_companions=False):
         self.client, self.ledger = client, ledger
+        if type(legacy_companions) is not bool:
+            raise ValueError("config_legacy_companions")
+        self.legacy_companions = legacy_companions
+        if not legacy_companions:
+            execution_mode.retire_exports(ledger)
         # 0 sends a fresh input at once; queued inputs are still merged.
         self.burst_quiet_s = burst_quiet_s
         self.attachment_dir, self.attachment_gid = attachment_dir, attachment_gid
@@ -267,6 +223,7 @@ class Worker:
         self._web_checked = None
         # Binding flags: mirror web-UI owner messages; name their files (else count only).
         self.web_mirror = True
+        self.internal_context_dir = None
         self.attachments = False
         self._timers_checked = None
         self._burst_due = None  # Wall time a waiting burst head may be sent.
@@ -568,6 +525,12 @@ class Worker:
                         uuid.UUID(row["message_id"])
                         if identity is None:
                             identity = self.provider_identity()
+                        from . import internal_context
+                        if internal_context.registered(self.internal_context_dir, self.client.conversation, row):
+                            self.ledger.await_internal_context(row)
+                            cursor = row["sequence"]
+                            self.ledger.set_web_cursor(cursor)
+                            continue
                         text = self.web_text(row["text"])
                         if text and self.ledger.enqueue_web(row, text, identity):
                             print("orkestr-v2-wa-adapter web_mirrored conversation=%s message=%s"
@@ -589,9 +552,24 @@ class Worker:
         Never blocks the serial WhatsApp queue and never opens a window or
         accepts a run: the web UI (or owner auto-accept) does that. Runs are
         matched by the message's own source tuple and read by run ID."""
+        watches = []
         for watch in self.ledger.web_watches(WEB_WATCHES_PER_PASS):
+            if time.time() - watch.get("since", time.time()) > WEB_ANSWER_MAX_S:
+                self.web_dropped(watch, "answer_timeout")
+            else:
+                watches.append(watch)
+        if not watches:
+            return
+        # One bounded observation serves every watch. A caught-up stream used
+        # to wait the full transport timeout once per watch, ahead of the
+        # foreground input's accepted final. Identity proof still uses the
+        # normal transport budget; only the event observation wait is shorter.
+        cursor = min(w.get("cursor", w["sequence"] - 1) for w in watches)
+        shared = shared_journal.shared(self).page(self.client, cursor, OBSERVE_PAGES, OBSERVE_BUDGET_S,
+                                                 timeout_s=EVENT_WAIT_S)
+        for watch in watches:
             try:
-                self.drive_web_one(watch)
+                self.drive_web_one(watch, shared)
             except Refused as error:
                 self.web_dropped(watch, str(error))
             except Exception:
@@ -599,12 +577,13 @@ class Worker:
                 if time.time() - watch.get("since", 0) > WEB_ANSWER_MAX_S:
                     self.web_dropped(watch, "answer_timeout")
 
-    def drive_web_one(self, watch):
+    def drive_web_one(self, watch, shared=None):
         now = time.time()
         if now - watch.get("since", now) > WEB_ANSWER_MAX_S:
             return self.web_dropped(watch, "answer_timeout")
         if "event_id" not in watch:
-            first = shared_journal.shared(self).read(self.client, watch["sequence"] - 1, 1)
+            first = shared_journal.shared(self).read(self.client, watch["sequence"] - 1, 1,
+                                                    timeout_s=EVENT_WAIT_S)
             event = first[0] if first else None
             if (not event or event.get("sequence") != watch["sequence"] or
                     (event.get("payload_ref_or_safe_payload") or {}).get("message_id") != watch["message_id"]):
@@ -612,8 +591,16 @@ class Worker:
             watch.update(event_id=event["event_id"], cursor=watch["sequence"])
             self.ledger.save_web_watch(watch)
         intake = {"message_id": watch["message_id"], "event_id": watch["event_id"]}
-        events = shared_journal.shared(self).read(self.client, watch["cursor"], 100)
-        ids = set(watch.get("runs", [])) | set(self.client.matching_run_ids(events, intake))
+        if shared is None:
+            events = shared_journal.shared(self).read(self.client, watch["cursor"], 100,
+                                                      timeout_s=EVENT_WAIT_S)
+            caught_up = len(events) < 100
+        else:
+            scanned, caught_up = shared
+            events = [event for event in scanned if event["sequence"] > watch["cursor"]]
+        ids = set(watch.get("runs", []))
+        for start in range(0, len(events), 100):  # The matcher accepts at most one page.
+            ids |= set(self.client.matching_run_ids(events[start:start + 100], intake))
         if len(ids) > 128:
             raise Refused("too_many_runs")
         watch["runs"] = sorted(ids)
@@ -637,7 +624,7 @@ class Worker:
             if notice:
                 return self.ledger.complete_web(watch, notice["text"], notice)
             return self.web_dropped(watch, "deep_" + str(deep[-1].get("phase")))
-        if len(events) == 100 or now - watch["since"] < WEB_NO_RUN_GRACE_S:
+        if not caught_up or now - watch["since"] < WEB_NO_RUN_GRACE_S:
             return
         current = self.call("GET", "/window", allowed=(200, 204))
         if isinstance(current, dict) and current.get("state") != "closed":
@@ -782,7 +769,7 @@ class Worker:
             return self.finish_digest(data)
         if auto_steer.holds(data):
             return  # Only auto_steer.drive settles a frozen steer; never admitted here.
-        if not admit_input(self, data, merge_burst=not early_fast_eligible(self, data)):
+        if not admit_input(self, data, merge_burst=not intake_ahead.eligible(self, data)):
             return
         if data.get("origin") == "timer" and "window" not in data and "window_request" not in data:
             if not self.timer_window(data):
@@ -826,10 +813,12 @@ class Worker:
     def observe(self, data):
         if "window" not in data:
             return
+        single = execution_mode.single(self, data)
         independent_fast = isolated_fast(self, data)
+        deep_only = single or independent_fast
         events, caught_up = shared_journal.shared(self).page(
             self.client, data["cursor"], OBSERVE_PAGES, OBSERVE_BUDGET_S,
-            timeout_s=EVENT_WAIT_S if independent_fast else None)
+            timeout_s=EVENT_WAIT_S if deep_only else None)
         # The client returns only complete validated envelopes. Advance the cursor
         # together with the exact source tuple's run IDs, before reading statuses.
         ids = set(data.get("matched_runs", []))
@@ -846,11 +835,11 @@ class Worker:
         # to the guarded original-source watch, including on this serial pass.
         # A later timer or browser input can replace the current views before
         # this input is observed. Match every origin to its own proven run IDs.
-        statuses = self.own_statuses(ids, roles=("deep",) if independent_fast else ("fast", "deep"))
-        if independent_fast:
+        statuses = self.own_statuses(ids, roles=("deep",) if deep_only else ("fast", "deep"))
+        if deep_only:
             statuses = {"deep": statuses["deep"]}
         question_ids = ids
-        if independent_fast:
+        if deep_only:
             question_ids = {statuses["deep"]["run_id"]} if statuses.get("deep") else set()
         # A grouped Deep turn answers the burst queued behind it: fold those
         # inputs into this head so they settle with its one final.
@@ -872,14 +861,14 @@ class Worker:
             # are buffered. Only an empty read proves this cursor caught up.
             if self.timer_without_deep(data, statuses, caught_up=caught_up):
                 return
-        if parallel_watch.head_failed(self, data, statuses.get("deep"), ids):
+        if not single and parallel_watch.head_failed(self, data, statuses.get("deep"), ids):
             return  # A failed slot turn: the writer answers this input.
         notice = policy_notice(statuses["deep"], ids)
         if notice:
             self.settle_own_fast(data, statuses.get("fast"), ids)
             self.ledger.refuse(data, "provider_policy_refusal", alert=data.get("origin") == "timer", notice=notice)
             return
-        if not independent_fast:
+        if not deep_only:
             capture_first_response(self, data, statuses, ids)
         self.capture_progress(data, statuses["deep"], ids)
         observe_activity(self, data, statuses)
@@ -914,7 +903,7 @@ class Worker:
                 return
         # Legacy bindings wait for both proposals. Isolated owner Fast has its
         # own guarded acceptance; neither path accepts another source's run.
-        for role in (("deep",) if independent_fast else ("fast", "deep")):
+        for role in (("deep",) if deep_only else ("fast", "deep")):
             if role not in accepted:
                 if not self.accept_role(data, role, ids):
                     return
@@ -933,9 +922,9 @@ class Worker:
         if len(matches) != 1 or matches[0].get("payload_removed") is not False or any(matches[0].get(k) != deep[k] for k in ("run_id", "completion_event_id")) or matches[0].get("payload_id") != data["deep_payload"]["payload_id"]:
             raise Refused("accepted_history_mismatch")
         text = self.timer_final(data, data["deep_payload"]["text"])
-        if parallel_watch.deferred(self, data, deep, text, statuses.get("deep")):
+        if not single and parallel_watch.deferred(self, data, deep, text, statuses.get("deep")):
             return  # The writer answers it: its own Deep run is awaited.
-        if (text is not None and data.get("origin") is None and not deep_group.grouped(data)
+        if (not single and text is not None and data.get("origin") is None and not deep_group.grouped(data)
                 and repeats_fast(data, text)):
             # "Thanks" answered twice: the Fast reply already said this.
             print("orkestr-v2-wa-adapter deep_final_repeats_fast conversation=%s input=%s"
@@ -950,7 +939,8 @@ class Worker:
         reply.update(self.provider_identity(run_id=deep["run_id"]))
         # The Quick of this input for the one footer layer line (V1 #389).
         try:
-            reply.update(quick_identity(self.call, data, statuses.get("fast")))
+            if not single:
+                reply.update(quick_identity(self.call, data, statuses.get("fast")))
         except Exception:
             pass  # A footer detail never holds up the final.
         deep_group.quote(data, reply)
@@ -960,9 +950,12 @@ class Worker:
             reply.update(text="NO_REPLY", noReply=True)
         self.ledger.complete(data, reply)
 
-    def own_statuses(self, ids, roles=("fast", "deep")):
+    def own_statuses(self, ids, roles=None):
         """Status of this input's own Fast and Deep runs, looked up by run ID
         (a run of the other role answers 404). Missing roles are None."""
+        roles = roles or (("deep",) if execution_mode.single(self) else ("fast", "deep"))
+        if execution_mode.single(self):
+            roles = tuple(role for role in roles if role != "fast")
         found = {"fast": None, "deep": None}
         for run in sorted(ids):
             for role, route in (("deep", "/execution"), ("fast", "/fast/execution")):
@@ -1070,7 +1063,7 @@ class Worker:
         except ClientError as error:
             if error.status != 409:
                 raise
-            if isolated_fast(self, data):
+            if execution_mode.single(self, data) or isolated_fast(self, data):
                 return reconcile_acceptance(self, data, role, ids)
             # Other policies keep their existing canonical-adoption path.
             self.adopt_acceptance(data, role, request["run_id"], ids)
@@ -1221,7 +1214,7 @@ class Worker:
     def settle_own_fast(self, data, fast, ids):
         """Before refusing an input, accept its own pending Fast proposal so the
         window is not held open for an answer nobody will accept."""
-        if (isinstance(fast, dict) and fast.get("run_id") in ids and fast.get("phase") == "awaiting_acceptance"
+        if (not execution_mode.single(self, data) and isinstance(fast, dict) and fast.get("run_id") in ids and fast.get("phase") == "awaiting_acceptance"
                 and "fast" not in data.get("accepted", {})):
             try:
                 self.accept_role(data, "fast", ids)
@@ -1291,7 +1284,7 @@ class Worker:
         except ValueError as error:
             raise Refused(str(error)) from None
         fast = statuses.get("fast")
-        if (isinstance(fast, dict) and fast.get("run_id") in ids and fast.get("phase") == "awaiting_acceptance" and
+        if (not execution_mode.single(self, data) and isinstance(fast, dict) and fast.get("run_id") in ids and fast.get("phase") == "awaiting_acceptance" and
                 "fast" not in data.get("accepted", {})):
             try:
                 # This input's own short reply; accepting it lets its window close.
@@ -1396,7 +1389,7 @@ class Worker:
             pass
 
     def run_once(self, stop):
-        """One pass. Fast intake is independent; Deep finishes in ledger order."""
+        """One pass. Authenticated intake proceeds ahead of the serial execution."""
         try:
             # Owner /switch commands: answered here, never sent to Rust.
             switch_command.drive(self)
@@ -1408,10 +1401,12 @@ class Worker:
         except Exception:
             pass  # Retried next pass; never blocks the binding.
         steering = auto_steer.drive(self)
-        fast_pending = drive_intake_fast(self) or steering
+        single = execution_mode.single(self)
+        fast_pending = (intake_ahead.drive(self) if single else drive_intake_fast(self)) or steering
         try:
             # Parallel Deep finals settle out of ledger order (switch on only).
-            fast_pending = parallel_watch.drive(self) or fast_pending
+            if not single:
+                fast_pending = parallel_watch.drive(self) or fast_pending
         except Exception:
             pass  # Retried next pass; never blocks the binding.
         try:
@@ -1419,7 +1414,7 @@ class Worker:
             waiting_heartbeat(self)
         except Exception:
             pass  # Retried next check; never blocks the binding.
-        if not fast_pending:
+        if single or not fast_pending:
             self._fast_since = None
         elif self._fast_since is None:
             self._fast_since = time.monotonic()

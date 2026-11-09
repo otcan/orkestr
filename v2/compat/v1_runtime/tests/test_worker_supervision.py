@@ -103,7 +103,7 @@ class WorkerLedgerOutageTests(unittest.TestCase):
         self.ledger = Ledger(Path(self.temp.name) / "ledger.sqlite3", {"test_scope": "one"})
 
     def test_unopenable_ledger_is_retried_not_fatal(self):
-        worker = Worker(None, self.ledger)
+        worker = Worker(None, self.ledger, legacy_companions=True)
         stop, calls = Signal(), []
 
         def run_once(_stop):
@@ -185,7 +185,10 @@ class RegistrySupervisionTests(unittest.TestCase):
     def test_crashed_worker_is_alerted_and_restarted_with_backoff(self):
         self.crashes = {2: 5}
         registry = self.start()
-        self.assertTrue(wait_until(lambda: registry.status()["workers"]["alive"] == 3))
+        def recovered():
+            status = registry.status()["workers"]
+            return status["alive"] == 3 and status["crashes"] == 5
+        self.assertTrue(wait_until(recovered))
         status = registry.status()["workers"]
         self.assertEqual((status["expected"], status["alive"], status["enabledAlive"], status["crashes"], status["notAlive"]),
                          (3, 3, 3, 5, []))
