@@ -181,6 +181,9 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     {
         state = state.with_v1_chat_icons(dir);
     }
+    if let Some(path) = std::env::var_os(orkestr_v2_server::provider_quota_http::CONFIG_ENV) {
+        state = state.with_provider_quota_file(&PathBuf::from(path))?;
+    }
     if let Some(path) = std::env::var_os("ORKESTR_V2_DESKTOP_BROKER_CONFIG") {
         state = state.with_desktop_broker_file(&PathBuf::from(path))?;
     }
