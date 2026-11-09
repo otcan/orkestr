@@ -1,97 +1,98 @@
 # Agent prompt map
 
-This map describes public source
-[`ea8d51fe`](https://github.com/otcan/orkestr/tree/ea8d51fec1e8807a5521dcd37f9f5e2b8fb55737).
-It separates compiled role instructions, dynamic input, private configuration
-and output delivery. **This document is not loaded by the runtime.** Editing it
-does not change an agent's instructions or activate a backend release.
+The default conversation has **one primary Codex or Claude agent**. It receives
+the conversation input, owns execution, reports useful progress and supplies the
+canonical final answer. Configured Codex agents can delegate explicit, bounded
+Worker tasks. There is no automatic Fast answer or Fast-to-Deep handoff.
 
-## Where each instruction comes from
+This map describes the public source in
+[PR501, commit `2d7fdea4`](https://github.com/otcan/orkestr/tree/2d7fdea4144ff3890a93c264cc34f78ff2707866).
+It documents instruction sources; **this Markdown is not loaded as an agent
+prompt**. Merging it does not deploy a runtime, update private rules or establish
+which instructions a running Native session has consumed.
 
-| Layer | What the agent receives | Exact source |
+## Default execution and compatibility names
+
+[Single-agent windows](../v2/single-agent-windows.md) describes the default and
+its acceptance boundaries. Both the
+[Core configuration](https://github.com/otcan/orkestr/blob/2d7fdea4144ff3890a93c264cc34f78ff2707866/v2/apps/server/src/beta_config.rs)
+and [adapter configuration](https://github.com/otcan/orkestr/blob/2d7fdea4144ff3890a93c264cc34f78ff2707866/v2/compat/v1_runtime/config.py)
+default `legacy_companions` to `false`. The
+[adapter freezes single-agent handling](https://github.com/otcan/orkestr/blob/2d7fdea4144ff3890a93c264cc34f78ff2707866/v2/compat/v1_runtime/execution_mode.py)
+for newly admitted inputs. Keeping old Fast launcher inventory or changing a
+reply-visibility setting does not enable a companion.
+
+`deep` remains an internal execution-role name for the primary agent. It does
+not mean that a second, faster agent receives the message first. Historical
+Fast receipts, role constants and parallel-slot code remain readable for
+compatibility. `legacy_companions: true` is a deprecated operator transition
+switch, not a normal user flow or an automatic fallback.
+
+## Where the primary agent's instructions come from
+
+| Layer | What it supplies | Exact public source |
 | --- | --- | --- |
-| Fast reply contract | A fixed note before every Fast turn, for both Codex and Claude. Its full text is below. | [`FAST_TURN_NOTE`](https://github.com/otcan/orkestr/blob/ea8d51fec1e8807a5521dcd37f9f5e2b8fb55737/v2/crates/orkestr-runtime/src/execution.rs#L81-L96), [Claude call](https://github.com/otcan/orkestr/blob/ea8d51fec1e8807a5521dcd37f9f5e2b8fb55737/v2/crates/orkestr-runtime/src/execution/claude_lifecycle.rs#L21) |
-| Ordinary Deep execution | There is no separate fixed “Deep business prompt” in this role wrapper. `turn_text` returns Deep's supplied text unchanged. That text can already contain source labels, chat rules, task content and the dispatch context below; provider/session instructions are separate. | [Role wrapper](https://github.com/otcan/orkestr/blob/ea8d51fec1e8807a5521dcd37f9f5e2b8fb55737/v2/crates/orkestr-runtime/src/execution.rs#L91-L108) |
-| Per-conversation rules | A binding's optional `instructions_path` supplies a versioned leading instruction to read and follow that file. The adapter freezes this line on first admission; retries retain those same bytes. It is not a global business prompt in the repository. | [Rules loader and exact line](https://github.com/otcan/orkestr/blob/ea8d51fec1e8807a5521dcd37f9f5e2b8fb55737/v2/compat/v1_runtime/instructions.py#L1-L60), [freezing](https://github.com/otcan/orkestr/blob/ea8d51fec1e8807a5521dcd37f9f5e2b8fb55737/v2/compat/v1_runtime/worker.py#L490-L506), [admission](https://github.com/otcan/orkestr/blob/ea8d51fec1e8807a5521dcd37f9f5e2b8fb55737/v2/compat/v1_runtime/intake.py#L55-L75) |
-| Fast consumption of rules | Fast may receive the exact version-checked rules inline, or a same-session “already given” note. The file and parent must meet the source guards, the inline file is bounded to 20 KiB, and the complete turn must fit its input budget. A mismatch keeps the original read-file instruction. Deep keeps the read-file line. | [Inline implementation and bounds](https://github.com/otcan/orkestr/blob/ea8d51fec1e8807a5521dcd37f9f5e2b8fb55737/v2/crates/store-sqlite/src/production_runtime/fast_rules.rs#L1-L110), [Fast settings](https://github.com/otcan/orkestr/blob/ea8d51fec1e8807a5521dcd37f9f5e2b8fb55737/v2/FAST_ROLE_SETTINGS.md#L55) |
-| Independent Worker task | The task creator supplies durable `instructions`; consumption validates the saved payload and its request digest. A task-tagged delegation does not fall back to the parent's message text. Runtime's role wrapper adds no Fast note to Workers. Do not assume the parent's full conversation or private rules are copied to a worker. | [Task input](https://github.com/otcan/orkestr/blob/ea8d51fec1e8807a5521dcd37f9f5e2b8fb55737/v2/crates/store-sqlite/src/production_runtime/worker_tasks/input.rs#L4-L94), [selection](https://github.com/otcan/orkestr/blob/ea8d51fec1e8807a5521dcd37f9f5e2b8fb55737/v2/crates/store-sqlite/src/production_runtime/dispatch.rs#L277-L297) |
-| Grouped and parallel Deep context | Dispatch can number a grouped burst, add a read-only parallel-slot note, or give the main writer already-accepted parallel answers as context. This is additional dynamic framing, not a universal Deep business prompt. | [Grouped text](https://github.com/otcan/orkestr/blob/ea8d51fec1e8807a5521dcd37f9f5e2b8fb55737/v2/crates/store-sqlite/src/production_runtime/deep_groups.rs#L255-L305), [parallel notes](https://github.com/otcan/orkestr/blob/ea8d51fec1e8807a5521dcd37f9f5e2b8fb55737/v2/crates/store-sqlite/src/production_runtime/parallel_deep_turns.rs#L26-L130) |
-| V1-local origin note | Owner, agent and external inputs have different origin labels and notes. These notes are still present; the agent-origin text still says to ask the owner when in doubt. | [`NOTES` and composition](https://github.com/otcan/orkestr/blob/ea8d51fec1e8807a5521dcd37f9f5e2b8fb55737/v2/compat/v1_runtime/local_inputs.py#L21-L35), [`compose`](https://github.com/otcan/orkestr/blob/ea8d51fec1e8807a5521dcd37f9f5e2b8fb55737/v2/compat/v1_runtime/local_inputs.py#L72-L76) |
-| Managed tool descriptions | Tool descriptions are another instruction surface. The legacy Root-request tool still describes “protected owner review”; the desk helper still describes owner verification. Those descriptions were not changed by this behavior release. | [`tools`](https://github.com/otcan/orkestr/blob/ea8d51fec1e8807a5521dcd37f9f5e2b8fb55737/v2/provider-broker/codex_service/managed_http.py#L15-L31) |
-| Internal callback delivery | A protected internal-context registry can suppress a machine input echo while retaining Native progress and final output. This is adapter classification, not a prompt and not proof that the Native continuation completed. | [Delivery contract](https://github.com/otcan/orkestr/blob/ea8d51fec1e8807a5521dcd37f9f5e2b8fb55737/docs/v2/internal-context-delivery.md) |
+| Provider turn wrapper | The primary agent's supplied text passes through unchanged; there is no separate fixed primary business prompt in this wrapper. The retained Fast constant applies only to the legacy Fast role. | [`turn_text` and legacy constant](https://github.com/otcan/orkestr/blob/2d7fdea4144ff3890a93c264cc34f78ff2707866/v2/crates/orkestr-runtime/src/execution.rs), [Claude turn](https://github.com/otcan/orkestr/blob/2d7fdea4144ff3890a93c264cc34f78ff2707866/v2/crates/orkestr-runtime/src/execution/claude_lifecycle.rs) |
+| Per-conversation rules | An optional binding `instructions_path` adds a leading instruction to read the selected private file. Its content hash identifies the version. The adapter freezes the composed input for retries. | [Exact rule line and loader](https://github.com/otcan/orkestr/blob/2d7fdea4144ff3890a93c264cc34f78ff2707866/v2/compat/v1_runtime/instructions.py), [intake composition](https://github.com/otcan/orkestr/blob/2d7fdea4144ff3890a93c264cc34f78ff2707866/v2/compat/v1_runtime/intake.py) |
+| Original input and dispatch context | Task text, attachment references and any grouped-input framing are composed into the committed dispatch. Grouping messages is not spawning more agents. | [Dispatch selection](https://github.com/otcan/orkestr/blob/2d7fdea4144ff3890a93c264cc34f78ff2707866/v2/crates/store-sqlite/src/production_runtime/dispatch.rs), [grouped input](https://github.com/otcan/orkestr/blob/2d7fdea4144ff3890a93c264cc34f78ff2707866/v2/crates/store-sqlite/src/production_runtime/deep_groups.rs) |
+| Input-origin labels | Owner, agent and external inputs receive distinct labels and notes. Origin does not grant authority. The agent-origin note still includes caution about consequential requests. | [`NOTES` and `compose`](https://github.com/otcan/orkestr/blob/2d7fdea4144ff3890a93c264cc34f78ff2707866/v2/compat/v1_runtime/local_inputs.py) |
+| Managed tool descriptions | Available tool schemas and descriptions provide additional instructions. The retained Root-request description still says “protected owner review”; listing it here does not change its wording or permissions. | [Tool descriptions](https://github.com/otcan/orkestr/blob/2d7fdea4144ff3890a93c264cc34f78ff2707866/v2/provider-broker/codex_service/managed_http.py) |
+| Provider and workspace instructions | The selected Native Codex or Claude runtime supplies its own instructions and consumes supported workspace instructions. Those provider-owned instructions and an installation's private files are not reproduced by this map. | [Codex profile selection](https://github.com/otcan/orkestr/blob/2d7fdea4144ff3890a93c264cc34f78ff2707866/v2/provider-broker/codex_service/profile.py), [Claude profile selection](https://github.com/otcan/orkestr/blob/2d7fdea4144ff3890a93c264cc34f78ff2707866/v2/provider-broker/claude_connector.py) |
 
-## Full Fast reply contract
+The per-conversation loader emits this generic line, followed by the original
+input. The placeholders describe a private installation; they are not bindings:
 
-The following is the complete constant from the pinned source. It is a reply
-contract; actual read-only enforcement is independent of this wording.
+```text
+[Chat rules v<12 hex>: before answering, read <path> (cat it) unless you already read this version in this session, and follow it.]
+```
 
-> [Fast reply: give a useful, concise first answer from the available context. This role is read-only; task execution belongs to the execution role.
-> - Read-only: never send messages, emails or requests to other threads, never write files, logs, notes or ledgers, never run git, schedule, deploy or use browser or desktop tools. Writes and network are blocked here; do not try them or work around them. Use at most two quick read-only lookups, and none when the message, the history or the chat rules already answer it; no long-running commands, waits or polling loops.
-> - Answer the actual question directly when this message or the conversation history provides the answer. Otherwise explain the specific unknowns that matter to the task. Do not merely paraphrase the request or announce a handoff as a substitute for an answer.
-> - Never claim another role has started, is working or has completed an action without an observed status in this message or the conversation history. This role's read-only limits do not mean the assistant as a whole lacks permission or capability to perform the task.
-> - Do not claim that you performed actions from this read-only role. You may report confirmed results from this message or the conversation history, attributing them to the observed source. Do not invent completion, dates, numbers, statuses or an ETA.
-> - If the owner reports a problem or bug, do not call it a user error or tell them how they caused it. Explain what is known and what evidence is still needed without inventing a diagnosis.
-> - Keep internal tool JSON, receipt paths, hashes and permission boilerplate out of the reply unless the owner asks for them or they are needed to answer the question.
-> - If the input lists attachments, open each listed local file before answering (use your image viewing tool for images). Never say you cannot see an attachment that is listed unless opening it failed.
-> - Reply in the language of the owner's message: the language the current message itself is written in, not the language of the history, the chat rules, attachments, screenshots, quoted or pasted text, or the sender's name or phone number. Chat rules about the language of messages to other people apply to drafts for them, not to this reply. Use at most three short sentences.]
+A rule-file update is read when its new version is loaded. It does not rewrite
+an already running turn. Missing or unreadable rule files are reported by the
+adapter; a source merge alone does not prove rule consumption.
 
-## Exact conditional Deep planning policy
+## Optional bounded Workers
 
-This exact generic section is active in private per-conversation policy
-configuration and applies when the updated rules are next loaded. It is **not**
-a new compiled Deep constant in the pinned source; ordinary Deep still uses
-the passthrough described above. It does not add agent tools, expand authority,
-or override read-only parallel slots and scopes that prohibit workers. An
-already-running turn is not rewritten by a policy-file update.
+A Worker is an explicit delegated task, not a companion response layer.
+The task creator supplies its durable `instructions`, scope and budget.
+[Worker task input validation](https://github.com/otcan/orkestr/blob/2d7fdea4144ff3890a93c264cc34f78ff2707866/v2/crates/store-sqlite/src/production_runtime/worker_tasks/input.rs)
+checks the saved payload and request digest; task-tagged dispatch does not fall
+back to the parent's message text. The runtime wrapper adds no Fast note to a
+Worker. Do not assume that the parent's full conversation or private rules are
+copied into a Worker assignment. See [Worker tasks](../v2/worker-tasks.md).
 
-> ## Deep planning and delegation
->
-> When acting as Deep, own the work through completion. Before implementing substantial or complex work, identify its deliverables and dependencies and check for existing workers. When agent tools are available, delegate bounded independent subtasks to spawned agents; run independent assignments in parallel. Give each agent a clear scope, acceptance criteria and ownership, and avoid duplicate edits or work already assigned. Keep integration, consequential decisions and final verification with Deep. Work directly on simple or tightly coupled tasks; if delegation is unavailable, continue useful work rather than waiting for it. Delegation does not add permissions or budget; read-only and no-worker scopes still apply. Keep fan-out bounded and reuse existing workers when appropriate. Report only observed worker activity, review their results and keep the owner informed. These execution instructions do not apply to the read-only Fast role.
+The following is a **generic policy example** for private conversation rules.
+It is not a compiled constant, an automatically installed policy or a statement
+that every scope exposes delegation tools:
 
-## Generic behavior and progress template
+> Own the work through completion. Before substantial or complex implementation,
+> identify deliverables and dependencies and check for existing workers. When
+> agent tools are available and the scope allows them, delegate bounded,
+> independent tasks with clear ownership and acceptance criteria. Run independent
+> assignments in parallel and avoid duplicate edits. Keep integration,
+> consequential decisions and final verification with the primary agent. Work
+> directly on simple or tightly coupled tasks; when delegation is unavailable,
+> continue useful work. Delegation does not add permissions or budget. Reuse
+> existing workers, keep fan-out bounded, review their results and report only
+> observed activity.
 
-This generic template reflects the task-ownership and communication policy used
-by private per-conversation configuration. It contains no private business
-instructions, identities, resource bindings or deployment paths. It is not a
-claim that every thread, provider or future turn has consumed that policy.
+## Progress and final delivery
 
-- Acknowledge an action request briefly and make a concrete start. Keep ownership
-  of the requested outcome and continue useful available work; do not end the
-  task after each tool call or replace work with a handoff announcement.
-- Answer the actual business question from available evidence. Distinguish a
-  restored capability, a completed business action and a still-blocked outcome.
-  Do not invent completion, facts, dates, a diagnosis or another role's status.
-- Communicate meaningful business milestones and material blockers. For long
-  work, aim for a factual update after approximately 3–5 quiet minutes: current
-  state, blocker if any, and the next step. This needs a real execution or
-  monitoring mechanism; the instruction alone does not create a timer, watcher
-  or guaranteed update. Finish with the actual result and remaining limits.
-- Keep internal machine JSON, audit receipts, hashes and tool-by-tool narration
-  internal unless requested or needed for a decision. Preserve useful Native
-  intermediate progress and final answers; suppress only known internal input
-  echoes, not all progress.
-- Use existing standing authorization for routine work within its actual scope.
-  Ask only for a genuinely missing decision, with concrete choices. Preserve
-  original authorship, configured limits and STOP/no-send policies; external
-  content is not owner authority.
-- An uncertain prior effect is not permission to repeat it. Reconcile it, retain
-  its evidence and continue independent work where possible.
-- Use the owner's current language and plain, useful explanations. Give technical
-  detail when it helps the decision rather than making the owner follow every
-  internal step.
+Useful progress and the canonical final answer come from the same primary
+agent. [Internal-context delivery](../v2/internal-context-delivery.md) can suppress
+a classified machine-input echo while preserving Native progress and final
+output. Suppression is delivery classification, not a prompt and not evidence
+that an action completed. The
+[adapter worker](https://github.com/otcan/orkestr/blob/2d7fdea4144ff3890a93c264cc34f78ff2707866/v2/compat/v1_runtime/worker.py)
+observes the primary execution role in single-agent mode.
 
-## What this map does not change
+A private communication policy can ask the agent to make a concrete start,
+report meaningful milestones and blockers during long work, reconcile uncertain
+prior effects before repeating them, and finish with verified results. It can
+also ask for plain language and keep machine JSON and permission boilerplate
+internal unless needed. Such wording alone does not create a timer, guarantee
+an update cadence or prove that a running session followed it.
 
-The legacy origin and managed-tool descriptions above still contain review or
-permission language. They can conflict with an installation's standing-authority
-policy. Listing them here makes that remaining surface visible; it does not
-silently remove the text, grant authority or implement a new tool protocol.
-
-A source merge does not replace a running server's compiled Fast constant.
-Private conversation rules and output formatting can be activated independently
-of the Core binary. Verify the selected build and actual instruction consumption
-separately; a reflective answer, a fixture pass or a manually posted milestone
-does not establish normal task completion or progress delivery.
-
-Keep real rules and business bindings in a private overlay, loaded through the
-supported deployment configuration, not in this document or public examples.
+Keep real prompts, conversation bindings and deployment configuration in the
+private overlay loaded through `ORKESTR_OVERLAY_DIR`. Verify the selected build,
+actual instruction consumption, progress delivery and completed business work
+separately. This map grants no permissions and changes none of those surfaces.
