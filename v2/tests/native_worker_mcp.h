@@ -39,7 +39,7 @@ static void native_worker_turn(int input) {
     for (int i = 0; i < 2; ++i) if (pthread_join(threads[i], NULL)) exit(107);
     if (!strcmp(worker_tasks[0], worker_tasks[1])) exit(108);
     for (int i = 0; i < 2; ++i) {
-        char arguments[80]; snprintf(arguments, sizeof(arguments), "{\"task_id\":\"%s\"}", worker_tasks[i]);
+        char arguments[80]; snprintf(arguments, sizeof(arguments), "{\"task_id\":\"%.36s\"}", worker_tasks[i]);
         mcp_request("orkestr_worker_status", arguments, input * 10 + i + 1);
     }
     record("workers-finished", input, 0);

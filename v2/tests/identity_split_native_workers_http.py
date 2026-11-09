@@ -49,9 +49,12 @@ class NativeWorkerRehearsal(HostRehearsal):
         source=native_source(self.fixture.auth,self.fixture.account)
         path=self.fixture.root/'synthetic-native-workers.c';path.write_text(source)
         self.synthetic_sha256=hashlib.sha256(source.encode()).hexdigest()
-        subprocess.run(['/usr/bin/cc','-std=c11','-O2','-Wall','-Wextra','-Werror','-pthread',
-            '-DORKESTR_TEST_AUTHORITY_CORE='+json.dumps(str(self.package.data/'core.sqlite3')),
-            str(path),'-o',str(self.package.root/'native')],check=True,capture_output=True,env={'PATH':'/usr/bin:/bin'})
+        try:
+            subprocess.run(['/usr/bin/cc','-std=c11','-O2','-Wall','-Wextra','-Werror','-pthread',
+                '-DORKESTR_TEST_AUTHORITY_CORE='+json.dumps(str(self.package.data/'core.sqlite3')),
+                str(path),'-o',str(self.package.root/'native')],check=True,capture_output=True,env={'PATH':'/usr/bin:/bin'})
+        except subprocess.CalledProcessError as error:
+            raise RuntimeError('synthetic Native compiler failed: '+error.stderr.decode(errors='replace')[:12000]) from error
         os.chown(self.package.root/'native',0,GID);(self.package.root/'native').chmod(0o550)
         for name in ('role','mode'):
             self.fixture.write_private(self.mapped/name,(self.fixture.workspace/name).read_bytes())
@@ -126,15 +129,23 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('binary')
     parser.add_argument('--expected-source',required=True);parser.add_argument('--report',required=True)
     args=parser.parse_args();assert os.geteuid()==0;os.umask(0o077)
-    case=NativeWorkerRehearsal(args.binary,args.expected_source)
+    case=NativeWorkerRehearsal.__new__(NativeWorkerRehearsal)
     report={'passed':False,'actual_provider':False,'live_activation':False}
-    try:report.update(case.run(),passed=True)
+    try:
+        case.__init__(args.binary,args.expected_source)
+        report.update(case.run(),passed=True)
     except BaseException as error:
-        report.update(error_type=type(error).__name__,error=str(error),manager_errors=case.pump_errors,
-            launches=case.claims(),runs=case.rows('SELECT id,role,state FROM production_runs'))
+        report.update(error_type=type(error).__name__,error=str(error),manager_errors=getattr(case,'pump_errors',[]))
+        if hasattr(case,'package'):
+            report['launches']=case.claims()
+            if (case.package.data/'core.sqlite3').exists():
+                report['runs']=case.rows('SELECT id,role,state FROM production_runs')
         raise
     finally:
-        try:case.close();report['cleanup_completed']=True
+        try:
+            if hasattr(case,'pump_stop'):case.close()
+            elif hasattr(case,'fixture'):case.fixture.close()
+            report['cleanup_completed']=True
         finally:
             path=Path(args.report);path.write_text(json.dumps(report,indent=2)+'\n');path.chmod(0o600)
     print('synthetic fresh/resumed Native Worker bridge passed')
