@@ -50,6 +50,19 @@ impl Store {
         binding: &Binding,
         terminal: String,
     ) -> Result<BoundSessionMetadata> {
+        let grant = self
+            .reserve_terminal_metadata_in(&mut tx, prior_run, binding, terminal)
+            .await?;
+        tx.commit().await.map_err(db)?;
+        Ok(grant)
+    }
+    pub(super) async fn reserve_terminal_metadata_in(
+        &self,
+        tx: &mut SqliteConnection,
+        prior_run: &RunId,
+        binding: &Binding,
+        terminal: String,
+    ) -> Result<BoundSessionMetadata> {
         let c = self.context()?;
         let grant = BoundSessionMetadata {
             context: c.clone(),
@@ -85,7 +98,7 @@ impl Store {
         .map_err(db)?;
         if previous != 0 {
             let window = c
-                .window_scope(&mut tx)
+                .window_scope(&mut *tx)
                 .await?
                 .ok_or(RuntimeStoreError::Fenced)?;
             let valid: i64 = sqlx::query_scalar("SELECT count(*) FROM production_resume_metadata WHERE prior_run_id=? AND state='confirmed' AND context_id=? AND session_id=? AND binding_generation=? AND terminal_event_id=?")
@@ -105,8 +118,7 @@ impl Store {
             .bind(&link.id).bind(prior_run.to_string()).bind(link.terminal_event.to_string()).bind(&c.id).bind(&c.incarnation)
             .bind(binding.session_id.to_string()).bind(i64::try_from(binding.generation).map_err(db)?)
             .execute(&mut *tx).await.map_err(db)?;
-        self.validate_accepted_binding(&mut tx, &grant).await?;
-        tx.commit().await.map_err(db)?;
+        self.validate_accepted_binding(tx, &grant).await?;
         Ok(grant)
     }
     async fn validate_accepted_binding(

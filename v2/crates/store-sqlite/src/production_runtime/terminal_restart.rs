@@ -143,7 +143,7 @@ impl Store {
         credential: &str,
         config: ProductionSupervisorConfig,
         prior_run: &RunId,
-        #[cfg(all(target_os = "linux", target_pointer_width = "64"))] mut workspace: Option<(
+        #[cfg(all(target_os = "linux", target_pointer_width = "64"))] workspace: Option<(
             Uuid,
             WorkspaceInstallation,
         )>,
@@ -186,6 +186,8 @@ impl Store {
             }
         });
         for _attempt in 0..2 {
+            #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+            let mut rolled_back = false;
             let result = async {
                 diagnostics.enter(Phase::BeginWriter);
                 let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
@@ -310,6 +312,7 @@ impl Store {
                         // Fresh Root IPC is forbidden until the original writer has
                         // actually released every tentative takeover/readiness change.
                         tx.rollback().await.map_err(db)?;
+                        rolled_back = true;
                         return Err(error);
                     }
                 };
@@ -317,40 +320,57 @@ impl Store {
                 let scoped = &*checked;
                 #[cfg(not(all(target_os = "linux", target_pointer_width = "64")))]
                 let scoped = &store;
-                diagnostics.enter(Phase::RebindWindow);
-                scoped
-                    .rebind_execution_window_in(&mut tx, &incarnation_id)
-                    .await?;
-                diagnostics.enter(Phase::RebindWorkspace);
-                #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
-                let workspace_grant = if let Some((project, installation)) = workspace.take() {
-                    Some(
-                        scoped
-                            .rebind_terminal_workspace_in(
-                                &mut tx,
-                                &binding,
-                                &incarnation_id,
-                                project,
-                                installation,
-                            )
-                            .await?,
-                    )
-                } else {
-                    None
-                };
-                diagnostics.enter(Phase::ReserveMetadata);
-                let grant = scoped
-                    .reserve_terminal_metadata(tx, prior_run, &binding, terminal.get("event_id"))
-                    .await?;
-                Ok(TerminalReattachment {
-                    store,
-                    metadata: grant,
+                let prepared = async {
+                    diagnostics.enter(Phase::RebindWindow);
+                    scoped
+                        .rebind_execution_window_in(&mut tx, &incarnation_id)
+                        .await?;
+                    diagnostics.enter(Phase::RebindWorkspace);
+                    #[cfg(test)]
                     #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
-                    workspace: workspace_grant,
-                })
+                    handoff_test_control::checkpoint(prior_run, &checked);
+                    #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+                    let workspace_grant = if let Some((project, installation)) = &workspace {
+                        Some(
+                            scoped
+                                .rebind_terminal_workspace_in(
+                                    &mut tx,
+                                    &binding,
+                                    &incarnation_id,
+                                    *project,
+                                    installation,
+                                )
+                                .await?,
+                        )
+                    } else {
+                        None
+                    };
+                    diagnostics.enter(Phase::ReserveMetadata);
+                    let grant = scoped
+                        .reserve_terminal_metadata_in(&mut tx, prior_run, &binding, terminal.get("event_id"))
+                        .await?;
+                    Ok::<_, RuntimeStoreError>(TerminalReattachment {
+                        store,
+                        metadata: grant,
+                        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+                        workspace: workspace_grant,
+                    })
+                }.await;
+                let prepared = match prepared {
+                    Ok(prepared) => prepared,
+                    Err(error) => {
+                        tx.rollback().await.map_err(db)?;
+                        #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+                        { rolled_back = true; }
+                        return Err(error);
+                    }
+                };
+                // A commit with an uncertain result is never replayed.
+                tx.commit().await.map_err(db)?;
+                Ok(prepared)
             }.await;
             #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
-            if _attempt == 0 && matches!(&result, Err(RuntimeStoreError::Fenced)) {
+            if _attempt == 0 && rolled_back && matches!(&result, Err(RuntimeStoreError::Fenced)) {
                 if let Some(proof) = physical.take() {
                     if proof.terminal_handoff_refresh_eligible() {
                         diagnostics.enter(Phase::WorkspacePreflight);
@@ -368,3 +388,7 @@ impl Store {
 }
 #[cfg(test)]
 mod tests;
+
+#[cfg(all(test, target_os = "linux", target_pointer_width = "64"))]
+#[path = "terminal_restart/handoff_test_control.rs"]
+pub(super) mod handoff_test_control;
