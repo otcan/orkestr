@@ -52,7 +52,8 @@ class ClaudeWindowCase(ServiceRolesCase):
             native, account = Path(self.executable), Path(self.account_reference)
         broker = f.package / "broker"
         for name in CLAUDE_BROKER:
-            packager.write(broker / name, (ordinary.broker / name).read_bytes(), GID, 0o440)
+            assert (broker / name).read_bytes() == (ordinary.broker / name).read_bytes(), \
+                "fixture provider source changed"
         launcher = f.package / "launcher-claude.py"
         interpreter = Path("/usr/bin/python3").resolve()
         packager.write(launcher, (f'#!/bin/sh\nexec {interpreter} -I -S -B '
