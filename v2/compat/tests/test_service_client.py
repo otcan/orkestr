@@ -32,11 +32,15 @@ class Peer(BaseHTTPRequestHandler):
             if self.command=='POST':headers['Set-Cookie']='orkestr_v2_session='+TOKEN+'; Path=/api/v2; HttpOnly; SameSite=Strict; Secure'
             elif self.server.revoked:status=401
         elif self.path==PREFIX:value=dict(conversation_id=self.server.conversation)
-        elif self.path==PREFIX+'/posts':status=self.server.post_status;value={'post':{'id':CONVERSATION}}
+        elif self.path==PREFIX+'/posts':
+            __import__('time').sleep(getattr(self.server,'post_delay',0))
+            status=self.server.post_status;value={'post':{'id':CONVERSATION}}
         else:status=404;value={}
         body=json.dumps(value).encode();self.send_response(status)
         for key,value in headers.items():self.send_header(key,value)
-        self.send_header('Content-Type','application/json');self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body)
+        self.send_header('Content-Type','application/json');self.send_header('Content-Length',str(len(body)));self.end_headers()
+        try:self.wfile.write(body)
+        except BrokenPipeError:pass  # A timed-out client must not resend the effect.
 
 @unittest.skipUnless(os.geteuid()==0,"Root-published peer fixture required")
 class ServiceOnlyTests(unittest.TestCase):
@@ -101,5 +105,38 @@ class ServiceOnlyTests(unittest.TestCase):
             with self.assertRaises(m.ServiceError):self.send()
         self.assertEqual(sum(method=='POST' and path=='/api/v2/machine/service-session' for method,path,_ in self.peer.calls),1)
         self.assertTrue(json.loads((self.cache_dir/'cache').read_text())['revoked'])
+
+    def test_operation_deadline_can_cover_a_slow_single_effect(self):
+        client=self.client();client.options['timeout_s']=0.5
+        self.peer.command({'set':{'post_delay':1.0}})
+        status,_=client.request('POST',PREFIX+'/posts',{'request_key':'slow'},
+                                allowed=(201,),timeout_s=2)
+        self.assertEqual(status,201)
+        self.assertEqual(sum(path.endswith('/posts') for _,path,_ in self.peer.calls),1)
+        # The override belongs to this operation, not the shared session options.
+        self.assertEqual(client.options['timeout_s'],0.5)
+
+    def test_default_deadline_timeout_remains_unknown_without_retry(self):
+        client=self.client();client.options['timeout_s']=0.5
+        self.peer.command({'set':{'post_delay':1.0}})
+        with self.assertRaises(m.ServiceError) as failed:
+            client.request('POST',PREFIX+'/posts',{},allowed=(201,))
+        self.assertEqual(failed.exception.outcome,'unknown')
+        self.assertEqual(sum(path.endswith('/posts') for _,path,_ in self.peer.calls),1)
+
+    def test_shorter_operation_deadline_does_not_inherit_the_session_budget(self):
+        client=self.client();client.options['timeout_s']=2
+        self.peer.command({'set':{'post_delay':1.0}})
+        with self.assertRaises(m.ServiceError) as failed:
+            client.request('POST',PREFIX+'/posts',{},allowed=(201,),timeout_s=0.5)
+        self.assertEqual(failed.exception.outcome,'unknown')
+        self.assertEqual(sum(path.endswith('/posts') for _,path,_ in self.peer.calls),1)
+        self.assertEqual(client.options['timeout_s'],2)
+
+    def test_invalid_operation_deadline_refuses_before_network(self):
+        for timeout in (True,False,0,-1,120.001,121,float('nan'),float('inf'),float('-inf'),'110'):
+            with self.subTest(timeout=timeout),self.assertRaisesRegex(m.ServiceError,'deadline_refused'):
+                self.client().request('POST',PREFIX+'/posts',{},timeout_s=timeout)
+        self.assertEqual(self.peer.calls,[])
 
 if __name__=='__main__':unittest.main()
