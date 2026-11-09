@@ -82,6 +82,9 @@ export function scopedRelayParticipantLabel(thread = {}, ...ids) {
 
 function definiteRefusal(error) {
   const status = Number(error?.statusCode || 0);
+  // The adapter refused before enqueueing: retain this exact input for the
+  // relay's bounded retry. Other conflicts are still terminal refusals.
+  if (status === 409 && error?.payload?.error === "binding_capacity_reached") return false;
   return status >= 400 && status < 500 && ![401, 403, 408, 425, 429].includes(status);
 }
 

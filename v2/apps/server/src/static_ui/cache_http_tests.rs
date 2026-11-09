@@ -81,6 +81,13 @@ async fn full_router_revalidates_public_assets_and_keeps_api_uncacheable() {
     let app = with_static_ui(router(state), &dist).unwrap();
     let task = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     let result = tokio::task::spawn_blocking(move || {
+        let page = request(address, "GET", "/virtual-desks", None);
+        assert_eq!(page.code, 200);
+        assert_eq!(page.body, b"<html>public UI</html>");
+        assert_eq!(
+            request(address, "GET", "/virtual-desks/unknown", None).code,
+            404
+        );
         let first = request(address, "GET", "/app.wasm", None);
         assert_eq!(first.code, 200);
         assert_eq!(first.body, wasm);

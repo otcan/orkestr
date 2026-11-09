@@ -1,4 +1,4 @@
-const pattern = /^#conversation\/([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})(?:\/(?:chat|work|history|projects|timers|tracker|memory|live-map|settings))?$/i;
+const pattern = /^#conversation\/([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})(?:\/(?:chat|work|history|projects|timers|tracker|memory|live-map|virtual-desks|settings))?$/i;
 const nil = '00000000-0000-0000-0000-000000000000';
 // This is a presentation pointer. Owner-authenticated discovery still gates mounting.
 export function selectedConversation(hash) {
@@ -22,6 +22,7 @@ export function conversationFragment(id) {
 // conversation is (re)selected.
 export function keepsFragment(hash, id) {
  if (typeof hash !== 'string') return false;
+ if (hash === '#virtual-desks') return true;
  if (/^#host(?:[/?]|$)/.test(hash) || /^#v1\//.test(hash)) return true;
  return id !== null && selectedConversation(hash) === selectedConversation(`#conversation/${id}`) && hash.length > `#conversation/${id}`.length;
 }

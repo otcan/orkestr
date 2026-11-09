@@ -18,10 +18,7 @@ fn every_view_round_trips_through_its_fragment() {
             id: ID.into(),
             tab: Tab::LiveMap,
         },
-        Route::Conversation {
-            id: ID.into(),
-            tab: Tab::VirtualDesks,
-        },
+        Route::VirtualDesks,
         Route::V1Thread {
             thread: "group-coordinated".into(),
         },
@@ -93,4 +90,19 @@ fn unknown_or_hostile_fragments_are_ignored() {
     }
     assert_eq!(Tab::from_label("Host resources"), Some(Tab::Host));
     assert_eq!(Tab::from_label("Virtual desks"), Some(Tab::VirtualDesks));
+}
+
+#[test]
+fn desks_are_global_and_old_links_remain_compatible() {
+    for location in [
+        "/virtual-desks",
+        "/virtual-desks/",
+        "#virtual-desks",
+        &format!("#conversation/{ID}/virtual-desks"),
+    ] {
+        assert_eq!(Route::parse(location), Some(Route::VirtualDesks));
+    }
+    assert_eq!(Route::VirtualDesks.hash(), "/virtual-desks");
+    assert_eq!(Route::parse("#conversation/not-a-uuid/virtual-desks"), None);
+    assert_eq!(Route::parse("/virtual-desks/other"), None);
 }

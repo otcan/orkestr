@@ -144,7 +144,11 @@ fn respond(method: Method, uri: Uri, request_headers: &HeaderMap, assets: &Asset
     if path.contains(['%', '\\']) || path.split('/').any(|part| part == "." || part == "..") {
         return StatusCode::NOT_FOUND.into_response();
     }
-    let key = if path == "/" { "/index.html" } else { path };
+    let key = if matches!(path, "/" | "/virtual-desks" | "/virtual-desks/") {
+        "/index.html"
+    } else {
+        path
+    };
     let Some(asset) = assets.get(key) else {
         return StatusCode::NOT_FOUND.into_response();
     };

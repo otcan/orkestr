@@ -115,7 +115,13 @@ pub(super) async fn retired_row_in(
 
 /// Supervisors belonging to one conversation: its derived namespace/key, any
 /// context its windows used, or any context with readiness for its sessions.
-pub(super) const CONVERSATION_SUPERVISORS: &str = "s.owner_id=? AND ((s.namespace=? AND s.supervisor_key=?) OR EXISTS(SELECT 1 FROM execution_windows cw WHERE cw.context_id=s.context_id AND cw.owner_id=s.owner_id AND cw.conversation_id=?) OR EXISTS(SELECT 1 FROM production_readiness cr JOIN session_bindings cb ON cb.id=cr.session_id WHERE cr.context_id=s.context_id AND cb.owner_id=s.owner_id AND cb.conversation_id=?))";
+// Enumerate membership once, then drive exact context primary-key lookups.
+// CROSS JOIN fixes this loop order: an owner-wide supervisor scan would make
+// unrelated scopes consume the short physical handoff despite the locator set.
+// Both provider kinds are schema-constrained. UNION deduplicates locators,
+// never canonical retirement evidence; the outer owner predicate still fences
+// malformed cross-owner readiness/window associations.
+pub(super) const CONVERSATION_SUPERVISORS: &str = "FROM (SELECT scoped.context_id FROM production_supervisors scoped WHERE scoped.owner_id=?1 AND scoped.provider_kind IN ('codex','claude') AND scoped.namespace=?2 AND scoped.supervisor_key=?3 UNION SELECT cw.context_id FROM execution_windows cw WHERE cw.owner_id=?1 AND cw.conversation_id=?4 UNION SELECT cr.context_id FROM production_readiness cr JOIN session_bindings cb ON cb.id=cr.session_id WHERE cb.owner_id=?1 AND cb.conversation_id=?5) scope CROSS JOIN production_supervisors s ON s.context_id=scope.context_id WHERE s.owner_id=?1";
 
 pub(super) async fn all_prior_retired(
     tx: &mut SqliteConnection,
@@ -134,7 +140,7 @@ pub(super) async fn all_prior_retired(
     let windows: i64 = sqlx::query_scalar("SELECT count(*) FROM execution_windows WHERE owner_id=? AND conversation_id=? AND state!='closed' AND (? IS NULL OR id!=?)")
         .bind(&owner).bind(&conversation).bind(opening).bind(opening)
         .fetch_one(&mut *tx).await.map_err(db)?;
-    let supervisors: i64 = sqlx::query_scalar(&format!("SELECT count(*) FROM production_supervisors s WHERE {CONVERSATION_SUPERVISORS} AND (s.lease_deadline_ms!=0 OR NOT EXISTS(SELECT 1 FROM production_retirement_provenance g WHERE g.context_id=s.context_id AND g.incarnation_id=s.incarnation_id AND g.supervisor_generation=s.generation))"))
+    let supervisors: i64 = sqlx::query_scalar(&format!("SELECT count(*) {CONVERSATION_SUPERVISORS} AND (s.lease_deadline_ms!=0 OR NOT EXISTS(SELECT 1 FROM production_retirement_provenance g WHERE g.context_id=s.context_id AND g.incarnation_id=s.incarnation_id AND g.supervisor_generation=s.generation))"))
         .bind(&owner).bind(namespace).bind(key).bind(&conversation).bind(&conversation)
         .fetch_one(&mut *tx).await.map_err(db)?;
     let runs: i64 = sqlx::query_scalar("SELECT count(*) FROM production_runs r WHERE r.owner_id=? AND r.conversation_id=? AND NOT EXISTS(SELECT 1 FROM production_terminal_evidence t WHERE t.run_id=r.id)")
@@ -144,17 +150,16 @@ pub(super) async fn all_prior_retired(
         return Err(RuntimeStoreError::Fenced);
     }
     // Retired contexts of this conversation must not hide pending descendants.
-    let contexts: Vec<String> = sqlx::query_scalar(&format!(
-        "SELECT s.context_id FROM production_supervisors s WHERE {CONVERSATION_SUPERVISORS}"
-    ))
-    .bind(&owner)
-    .bind(namespace)
-    .bind(key)
-    .bind(&conversation)
-    .bind(&conversation)
-    .fetch_all(&mut *tx)
-    .await
-    .map_err(db)?;
+    let contexts: Vec<String> =
+        sqlx::query_scalar(&format!("SELECT s.context_id {CONVERSATION_SUPERVISORS}"))
+            .bind(&owner)
+            .bind(namespace)
+            .bind(key)
+            .bind(&conversation)
+            .bind(&conversation)
+            .fetch_all(&mut *tx)
+            .await
+            .map_err(db)?;
     for context in contexts {
         if !super::super::terminal_retirement::descendants_clear(tx, &context).await? {
             return Err(RuntimeStoreError::Fenced);
