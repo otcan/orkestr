@@ -88,12 +88,16 @@ class ResourceNamespaceTests(unittest.TestCase):
 
     def test_stale_source_and_alias_and_cross_authority_fail_before_namespace(self):
         initial=ns('mnt')
-        for field,value in [('uid',CORE),('inode',1),('target',str(self.core/'auth.json'))]:
+        for field,value in [('uid',CORE),('target',str(self.core/'auth.json'))]:
             original=self.doc['resources'][0][field];self.doc['resources'][0][field]=value;self.save()
             with self.assertRaises(Refused):
                 with Activation(self.selected,self.ctx):pass
             self.assertEqual(ns('mnt'),initial)
             self.doc['resources'][0][field]=original
+        original=self.doc['resources'][1]['inode'];self.doc['resources'][1]['inode']=1;self.save()
+        with self.assertRaisesRegex(Refused,'resource_source_changed'):
+            with Activation(self.selected,self.ctx):pass
+        self.doc['resources'][1]['inode']=original
         self.save();original=self.auth.with_suffix('.original');self.auth.rename(original);self.auth.symlink_to(original)
         with self.assertRaises(Refused):
             with Activation(self.selected,self.ctx):pass
@@ -115,11 +119,17 @@ class ResourceNamespaceTests(unittest.TestCase):
             self.assertEqual(r.returncode,0,r.stderr)
             self.assertEqual((self.gog/'new').stat().st_uid,OLD)
             self.assertEqual((self.gog/'new').read_text(),'synthetic-new-business')
-            # A source file unlink/recreation must never bless the stale bound
-            # inode, even when its bytes and owner look plausible.
+            # Atomic source refresh does not rewrite the already-attested
+            # mounted inode. The new source still has to satisfy its custody.
+            mounted=Path(self.profile['auth_file']).stat().st_ino
             old=self.auth.with_suffix('.old');self.auth.rename(old)
             self.auth.write_bytes(b'synthetic-replacement');self.auth.chmod(0o600);os.chown(self.auth,OLD,OLD)
-            with self.assertRaisesRegex(Refused,'resource_source_changed'):verify(self.selected,self.ctx)
+            receipt=verify(self.selected,self.ctx)
+            auth_target=next(t for t in receipt['targets'] if t['target']==self.profile['auth_file'])
+            self.assertEqual(auth_target['source_inode'],mounted)
+            self.assertEqual(Path(self.profile['auth_file']).stat().st_ino,mounted)
+            self.auth.chmod(0o644)
+            with self.assertRaisesRegex(Refused,'resource_auth_custody'):verify(self.selected,self.ctx)
 
     def test_full_package_requires_namespace_and_core_consumes_readonly_attestation(self):
         import subprocess

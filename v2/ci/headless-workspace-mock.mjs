@@ -240,6 +240,10 @@ async function api(state, req, res, url) {
       controls: { stop: true, steer: true, accept: true }, limits: LIMITS, window: state.window[id] });
   }
   if (path === '/api/v2/live-map' && req.method === 'GET') return json(res, 200, liveMap());
+  if (path === '/api/v2/provider-quotas' && req.method === 'GET') {
+    const window = {fiveHourRemainingPct:75,weeklyRemainingPct:40,fiveHourResetsAt:new Date(Date.now()+3600000).toISOString(),weeklyResetsAt:new Date(Date.now()+86400000).toISOString(),observedAt:new Date().toISOString(),stale:false,limited:false};
+    return json(res,200,{quota:{codex:window,claude:{...window,weeklyRemainingPct:8,stale:true}}});
+  }
   if (path === '/api/v2/host-metrics' && req.method === 'GET') return json(res, 200, hostSummary());
   if (path === '/api/v2/host-metrics/consumers' && req.method === 'GET') return json(res, 200, hostConsumers());
   if (path === '/api/v2/host-metrics/disks' && req.method === 'GET') return json(res, 200, hostDisks());
@@ -248,7 +252,11 @@ async function api(state, req, res, url) {
     if (!HOST_STEPS[range]) return json(res, 400, { code: 'invalid_range', message: 'Range', request_id: 'synthetic', retryable: false });
     return json(res, 200, hostHistory(range));
   }
-  if (path === '/api/v2/sidebar' && req.method === 'GET') return json(res, 200, sidebar(state));
+  if (path === '/api/v2/sidebar' && req.method === 'GET') {
+    state.sidebarReads = (state.sidebarReads ?? 0) + 1;
+    if (state.sidebarDelayMs) await new Promise(resolve => setTimeout(resolve, state.sidebarDelayMs));
+    return json(res, 200, sidebar(state));
+  }
   if (path === '/api/v2/sidebar/read' && req.method === 'PUT') {
     if (req.headers['x-orkestr-csrf'] !== 'synthetic-csrf') return json(res, 403, { code: 'csrf', message: 'CSRF required' });
     const mark = JSON.parse(await body(req));
@@ -357,6 +365,12 @@ async function api(state, req, res, url) {
   const m = /^\/api\/v2\/conversations\/([0-9a-f-]{36})(\/.*)?$/.exec(path);
   if (!m || !names[m[1]]) return missing(res);
   const [, id, rest = ''] = m;
+  if (rest === '/intelligence' && req.method === 'GET') {
+    const role = (configured, steer, max) => ({ configured, available: false, stop: configured,
+      steer: configured && steer, accept: configured, max_parallel: configured ? max : 0 });
+    return json(res, 200, { schema_version: 1, conversation_id: id,
+      deep: role(true, true, 1), fast: role(false, false, 1), worker: role(true, false, 4) });
+  }
   if (rest === '' && req.method === 'GET') {
     const after = Number(q.get('after') ?? 0), rows = state.messages[id].filter(x => x.sequence > after);
     return json(res, 200, { conversation_id: id, scope: { kind: 'global' }, messages: rows, last_sequence: state.messages[id].length, next_cursor: null });

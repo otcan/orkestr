@@ -1,7 +1,7 @@
 """`/switch`: the owner's model switch from any owner WhatsApp chat, without a model turn.
 
 The adapter consumes a `/switch ...` message at intake: it is stored as a
-completed input (no Fast, no Deep, no burst ever sees it) and this binding's
+completed input (no provider turn or burst ever sees it) and this binding's
 worker answers it through the ordinary export path. Only the verified WhatsApp
 owner may switch; members, V1-local senders (agents, threads, CLI) and timers
 are refused with a reply. Every change runs the root-owned
@@ -11,7 +11,7 @@ from the owner within two minutes. The tool writes its own record and
 COORDINATION.md line; the adapter also logs one `SWITCH` line per call.
 
   /switch status | help | yes | back [all]
-  /switch deep|fast <model|default> [effort] [all | for claude] [from <old>]
+  /switch <model|default> [effort] [all | for claude] [from <old>]
 """
 import json
 import os
@@ -27,7 +27,7 @@ COMMAND = re.compile(r"^/switch(?:\s|$)", re.I)
 MODEL = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$")
 EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra")
 CLAUDE_HINT = re.compile(r"^(claude|opus|sonnet|haiku)", re.I)
-KEYWORDS = ("deep", "fast", "all", "for", "from", "status", "back", "yes", "help", "claude", "codex")
+KEYWORDS = ("deep", "fast", "model", "provider", "all", "for", "from", "status", "back", "yes", "help", "claude", "codex")
 CONFIRM_S = 120
 CLAUDE_EFFORTS = ("low", "medium", "high", "max")
 # Shorthand targets: `/switch claude` and `/switch codex` (the configured
@@ -39,16 +39,16 @@ NAMESPACE = uuid.UUID("2a7c4e91-5b3d-4f08-9e6a-c1d2b3a4f5e6")
 FOOTER = "\n\n⚙️ /switch · handled by the adapter, no model turn"
 PLAN_LIMIT = 6
 HELP = ("Model switch (owner only, handled without a model turn):\n"
-        "/switch status: this chat's Deep and Fast model, plus all chats\n"
-        "/switch deep <model> [effort]: this chat's Deep\n"
-        "/switch fast <model> [effort]: this chat's Fast (Codex chats)\n"
+        "/switch status: this chat's agent model, plus all chats\n"
+        "/switch <model> [effort]: this chat's agent\n"
         "  add `all` for every Codex chat, `from <old>` to change only chats on <old>\n"
         "  `default` as model or effort clears the override\n"
-        "/switch claude | /switch codex: this chat's Deep to that provider's default model (asks /switch yes)\n"
-        "/switch deep <codex model> for claude: move the Claude chats to Codex (asks /switch yes)\n"
+        "/switch claude | /switch codex: this chat to that provider's default model (asks /switch yes)\n"
+        "/switch <codex model> for claude: move the Claude chats to Codex (asks /switch yes)\n"
         "/switch back: undo the latest switch of this chat; /switch back all: the latest fallback switch\n"
         "/switch yes: confirm a provider switch within 2 minutes\n"
-        "Example: /switch deep gpt-6.1-sol high")
+        "Example: /switch gpt-6.1-sol high")
+RETIRED_FAST = "Fast has been retired. Use /switch <model> or /switch codex|claude for this chat's agent."
 
 
 class Invalid(ValueError):
@@ -87,28 +87,31 @@ def parse(text):
         return {"op": "yes"}
     if low in (["back"], ["back", "all"]):
         return {"op": "back", "all": len(low) == 2}
-    if low in (["claude"], ["codex"], ["deep", "claude"], ["deep", "codex"], ["fast", "claude"], ["fast", "codex"]):
-        # Shorthand: this chat's layer to that provider's default model.
-        return {"op": "provider", "layer": "fast" if low[0] == "fast" else "deep", "provider": low[-1]}
-    if low[0] not in ("deep", "fast"):
-        raise Invalid("Unknown /switch form.")
-    if len(words) < 2 or not model_ok(words[1]):
-        raise Invalid("Give a model name, for example /switch %s gpt-6.1-sol." % low[0])
-    out = {"op": "set", "layer": low[0], "model": words[1], "effort": None, "scope": "chat", "from": None}
-    i = 2
+    if low[0] == "fast":
+        raise Invalid(RETIRED_FAST)
+    # Keep Deep as a compatibility alias for the primary agent/tool layer.
+    if low[0] in ("deep", "model", "provider"):
+        provider_form = low[0] == "provider"
+        words, low = words[1:], low[1:]
+        if provider_form and low not in (["codex"], ["claude"]):
+            raise Invalid("Use /switch provider codex|claude.")
+    if low in (["claude"], ["codex"]):
+        return {"op": "provider", "layer": "deep", "provider": low[0]}
+    if not words or not model_ok(words[0]):
+        raise Invalid("Give a model name, for example /switch gpt-6.1-sol.")
+    out = {"op": "set", "layer": "deep", "model": words[0], "effort": None, "scope": "chat", "from": None}
+    i = 1
     while i < len(words):
         w = low[i]
         if w == "all" and out["scope"] == "chat":
             out["scope"] = "all"
         elif w == "for" and i + 1 < len(words) and low[i + 1] == "claude" and out["scope"] == "chat":
-            if out["layer"] != "deep":
-                raise Invalid("`for claude` is only for Deep: Fast preferences are Codex-only.")
             out["scope"] = "claude"
             i += 1
         elif w == "from" and i + 1 < len(words) and out["from"] is None and model_ok(words[i + 1]):
             out["from"] = words[i + 1]
             i += 1
-        elif (w in EFFORTS or w == "default") and out["effort"] is None and i == 2:
+        elif (w in EFFORTS or w == "default") and out["effort"] is None and i == 1:
             out["effort"] = w
         else:
             raise Invalid("I did not understand %r." % words[i])
@@ -141,28 +144,20 @@ def status_text(status, conversation):
     lines = []
     if row:
         provider = row.get("provider") or "codex"
-        deep = row.get("model") or ("default (%s)" % codex.get("model") if provider == "codex" else "default")
+        model = row.get("model") or ("default (%s)" % codex.get("model") if provider == "codex" else "default")
         lines.append("This chat (%s):" % (row.get("name") or "?"))
-        lines.append("\U0001f9e0 Deep: %s %s, effort %s" % (provider, deep, row.get("effort") or "default"))
-        if provider == "codex":
-            fast = row.get("fast") or {}
-            lines.append("⚡ Fast: %s, effort %s" % (fast.get("model") or "same as Deep", fast.get("effort") or "default"))
-        else:
-            lines.append("⚡ Fast: Claude chat (Fast preferences are Codex-only)")
+        lines.append("Agent: %s %s, effort %s" % (provider, model, row.get("effort") or "default"))
     else:
         lines.append("This chat has no live V2 settings row.")
     count = lambda d: ", ".join("%s ×%s" % kv for kv in sorted((d or {}).items(), key=lambda kv: -kv[1])) or "none"
     lines.append("")
-    lines.append("All live chats: Deep %s; Fast %s" % (count(status.get("deep")), count(status.get("fast"))))
+    lines.append("All live chats: %s" % count(status.get("deep")))
     lines.append("Global Codex default: %s/%s" % (codex.get("model") or "?", codex.get("effort") or "default"))
-    effect = status.get("switches_in_effect") or []
-    lines.append("Switches in effect: %s" % ("; ".join("%s → %s on %s" % (e.get("origin"), e.get("current"), e.get("targets"))
-                                                      for e in effect) or "none"))
     return "\n".join(lines)
 
 
 def set_args(cmd, conversation, status):
-    """(args, needs confirmation) for a deep/fast change."""
+    """(args, needs confirmation) for the primary agent's model change."""
     args = ["--layer", cmd["layer"], "--to", cmd["model"]]
     if cmd["effort"]:
         args += ["--effort", cmd["effort"]]
@@ -188,19 +183,13 @@ def set_args(cmd, conversation, status):
 
 
 def provider_args(cmd, conversation, status):
-    """`/switch claude|codex` (and `fast ...`): (args, None) or (None, reply)."""
+    """`/switch claude|codex`: (args, None) or (None, reply)."""
     row = chat_row(status, conversation)
     if not row:
         return None, "This chat has no live V2 settings row."
     current = row.get("provider") or "codex"
     if cmd["layer"] == "fast":
-        if cmd["provider"] == "claude":
-            return None, "Fast is Codex-only: there is no Claude Fast setting. /switch claude moves this chat's Deep."
-        if current != "codex":
-            return None, "This is a Claude chat: its Fast preferences are Codex-only and not used here."
-        fast = row.get("fast") or {}
-        return None, "Fast is already on Codex: %s, effort %s." % (fast.get("model") or "same as Deep",
-                                                                   fast.get("effort") or "default")
+        return None, RETIRED_FAST
     if current == cmd["provider"]:
         codex = (status.get("global_codex_default") or {}).get("model")
         model = row.get("model") or ("default (%s)" % codex if current == "codex" and codex else "default")
@@ -224,10 +213,9 @@ def back_args(conversation, status, history):
     row = chat_row(status, conversation)
     if not row:
         return None, False, "This chat has no live V2 settings row."
-    current = {"deep": {"provider": row.get("provider") or "codex", "model": row.get("model"), "effort": row.get("effort")},
-               "fast": {"model": (row.get("fast") or {}).get("model"), "effort": (row.get("fast") or {}).get("effort")}}
+    current = {"deep": {"provider": row.get("provider") or "codex", "model": row.get("model"), "effort": row.get("effort")}}
     for record in history:
-        if record.get("kind") != "switch" or record.get("layer") not in ("deep", "fast"):
+        if record.get("kind") != "switch" or record.get("layer") != "deep":
             continue
         mine = [c for c in record.get("changed") or [] if c.get("conversation") == conversation]
         if not mine:
@@ -268,7 +256,7 @@ def applied_text(args, out, plan):
         text = "✅ Switched back"
     else:
         where = {"codex": "all Codex chats", "claude": "the Claude chats"}.get(scope, "this chat")
-        text = "✅ %s switched for %s" % (args[args.index("--layer") + 1].capitalize(), where)
+        text = "✅ Agent switched for %s" % where
     if counts:
         text += " (%s changed, %s skipped)" % counts.groups()
     text += ":\n" + bullet(lines) if lines else "."
@@ -279,6 +267,8 @@ def applied_text(args, out, plan):
 
 def execute(switcher, conversation, args, confirmed=False):
     """Dry run, then apply. Returns (reply text, pending dict or None)."""
+    if "--layer" in args and args[args.index("--layer") + 1] == "fast":
+        return RETIRED_FAST, None  # A pre-migration pending confirmation cannot revive Fast.
     reason_args = ["--reason", "WhatsApp /switch by the owner in conversation %s" % conversation]
     code, out, err = switcher.call(args + ["--dry-run"] + (["--yes"] if confirmed else []), "dry")
     log(conversation, args + ["--dry-run"], code)
@@ -292,9 +282,9 @@ def execute(switcher, conversation, args, confirmed=False):
         return "Nothing to change: already on that setting.", None
     if not confirmed and ("--provider" in args or "PROVIDER SWITCH" in (plan[0] or "") or "WARNING" in out):
         provider = args[args.index("--provider") + 1] if "--provider" in args else "the previous provider"
-        text = ("⚠️ Provider switch (%s):\n%s\nEach chat finishes its current turn, then continues on %s "
+        text = ("⚠️ Provider switch to %s:\n%s\nEach chat finishes its current turn, then continues on %s "
                 "with a one-time handoff. Reply /switch yes within 2 minutes to apply."
-                % (plan[0], bullet(plan[1]), provider))
+                % (provider, bullet(plan[1]), provider))
         return text, {"args": args, "expires_at": time.time() + CONFIRM_S, "conversation": conversation}
     full = args + reason_args + (["--yes"] if confirmed else [])
     code, out, err = switcher.call(full, "apply")
@@ -338,6 +328,9 @@ def answer(switcher, ledger, data, now=None):
             return note
     elif cmd["op"] == "back":
         if cmd["all"]:
+            latest = next((r for r in switcher.history() if r.get("kind") == "switch"), None)
+            if latest and latest.get("layer") != "deep":
+                return "The latest switch is for a retired role. Use /switch back for this chat's agent."
             args = ["--revert", "latest"]
         else:
             args, _, note = back_args(conversation, status, switcher.history())

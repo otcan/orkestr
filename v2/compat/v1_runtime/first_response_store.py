@@ -41,6 +41,8 @@ def add(ledger, data, payload_id, text, identity=None, quote=False):
 
 def final_ready(ledger, db, data):
     """A final can leave only after Fast has a definite transport decision."""
+    if data.get("execution_mode") == "single":
+        return True
     fast = data.get("first_response") or {}
     if fast.get("remote_id") and not (data.get("author") or {}).get("role") in LOCAL_ROLES:
         row = db.execute("SELECT e.outcome,e.ack,i.data FROM exports e JOIN inputs i ON i.remote_id=e.input_id "

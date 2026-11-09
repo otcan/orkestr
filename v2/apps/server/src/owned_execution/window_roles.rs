@@ -352,6 +352,25 @@ impl ConfiguredExecution {
         let Some(roles) = &config.roles else {
             return Ok(());
         };
+        self.config.worker = Some(
+            if let Some(run_ms) = self
+                .workspace_exec
+                .as_ref()
+                .and_then(|dispatcher| dispatcher.worker_run_ms())
+            {
+                crate::worker_execution::WorkerPolicy::window_trusted_workspace_tasks(run_ms)
+            } else if self.workspace_exec.is_some() {
+                crate::worker_execution::WorkerPolicy::window_workspace_tasks()
+            } else {
+                crate::worker_execution::WorkerPolicy::window_owner_tasks()
+            },
+        );
+        // Worker authorization belongs to the owner agent, independently of
+        // the retired Fast/pool composition. Old launcher inventory is kept
+        // readable without spawning a second conversation session.
+        if !config.legacy_companions {
+            return Ok(());
+        }
         let context = self
             .window
             .clone()
@@ -409,19 +428,6 @@ impl ConfiguredExecution {
             deep_slots: None,
             parallel_factory: None,
         };
-        self.config.worker = Some(
-            if let Some(run_ms) = self
-                .workspace_exec
-                .as_ref()
-                .and_then(|dispatcher| dispatcher.worker_run_ms())
-            {
-                crate::worker_execution::WorkerPolicy::window_trusted_workspace_tasks(run_ms)
-            } else if self.workspace_exec.is_some() {
-                crate::worker_execution::WorkerPolicy::window_workspace_tasks()
-            } else {
-                crate::worker_execution::WorkerPolicy::window_owner_tasks()
-            },
-        );
         self.companion = Some(companion);
         self.fast_factory = Some(Box::new(fast));
         // Read-only parallel Deep slots (docs/v2/parallel-deep.md) launch on
@@ -478,7 +484,10 @@ impl ConfiguredExecution {
         shutdown: watch::Receiver<bool>,
     ) -> Result<(), &'static str> {
         match self.fast_factory.take() {
-            None => self.run(shutdown).await,
+            // The Codex execution future contains its tool/worker state. Keep
+            // it on the heap just as the legacy JoinSet did, rather than
+            // embedding it in the default window/controller poll frame.
+            None => Box::pin(self.run(shutdown)).await,
             Some(fast) => {
                 // A lost or failed Fast companion fails alone: Deep (and its
                 // Workers) keep the window. Core still decides retirement.
@@ -508,7 +517,7 @@ impl ConfiguredExecution {
                         }
                     })
                 };
-                join_roles(self.run(shutdown.clone()), side, move |reason| {
+                join_roles(Box::pin(self.run(shutdown.clone())), side, move |reason| {
                     eprintln!("owned window Fast companion failed: {reason}");
                     if let Some(companion) = companion {
                         companion.fail();

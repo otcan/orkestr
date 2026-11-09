@@ -86,6 +86,16 @@ const transcript = () => page.$eval('.conversation-pane > .conversation-scroll',
   ({ gap: el.scrollHeight - el.scrollTop - el.clientHeight, pinned: el.dataset.pinned, scrollable: el.scrollHeight > el.clientHeight + 100 }));
 
 export const scenarios = [
+  ['single-agent', async () => {
+    await page.waitForSelector('[aria-label="Agent and workers"] .intelligence-summary');
+    const summary = await text('.intelligence-summary');
+    assert.match(summary, /Agent/);
+    assert.match(summary, /Workers/);
+    assert.doesNotMatch(summary, /Fast|Deep/);
+    assert.equal(await page.$('[aria-label="Fast reply"]'), null);
+    assert.equal(await page.$eval('.intelligence-tools', el => [...el.querySelectorAll('summary')]
+      .some(s => s.textContent.includes('Fast'))), false);
+  }],
   ['tracker-guided', async label => trackerScenario({page,state,conversation:A,label,screenshot})],
   ['composer-tools', async label => {
     await page.waitForSelector('#composer');
@@ -104,17 +114,33 @@ export const scenarios = [
     // Attach an image through the file picker and paste long text as a file.
     const file = '/tmp/orkestr-v2-synthetic-pixel.png';
     await import('node:fs/promises').then(fs => fs.writeFile(file, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==', 'base64')));
+    state.holdEncryptedAttachment=true;
     const [chooser] = await Promise.all([page.waitForFileChooser(), page.click('.message-composer .tool-button')]);
     await chooser.accept([file]);
+    await page.waitForFunction(()=>document.querySelector('.upload-progress-stage')?.textContent.includes('preparing attachment'));
+    assert.equal(await page.$eval('.upload-progress progress',p=>p.value),100,'acknowledged transfer is complete');
+    assert.match(await text('.upload-progress-bytes'),/100%.*transferred/);
+    assert.equal(await page.$('.attachment-chip'),null,'no attachment before the preparation receipt');
+    await screenshot(label,'encrypted-upload-progress');
+    assert.equal(typeof state.releaseEncryptedAttachment,'function');
+    state.holdEncryptedAttachment=false;state.releaseEncryptedAttachment();
+
     await page.waitForFunction(() => document.querySelector('.attachment-chip .chip-name')?.textContent === 'orkestr-v2-synthetic-pixel.png');
+    assert.match(await text('.attachment-limit'), /1 GB per file/);
     await clickText('Paste text');
-    await page.type('#paste-text', 'Synthetic long pasted text');
+    // Above the old 16 MiB limit; exercise the real mounted Rust -> JS path.
+    const longText = 'ü'.repeat(9 * 1024 * 1024);
+    await page.$eval('.paste-panel textarea', (node, value) => {
+      node.value = value;
+      node.dispatchEvent(new Event('input', {bubbles: true}));
+    }, longText);
     await clickText('Attach as text file');
-    await page.waitForFunction(() => document.querySelectorAll('.attachment-chip').length === 2);
-    assert.match(await text('.composer-tools'), /pasted-text-\d{14}\.txt/);
+    await page.waitForFunction(() => document.querySelectorAll('.attachment-chip').length === 2, {timeout: 90000});
+    assert.match(await text('.composer-tools'), /pasted-text-\d{14}-[0-9a-f]{8}\.txt/);
     const uploads = state.uploads.filter(u => u.target === A);
     assert.equal(uploads.at(-2).files[0].media_type, 'image/png');
-    assert.equal(Buffer.from(uploads.at(-1).files[0].content_base64, 'base64').toString(), 'Synthetic long pasted text');
+    assert.equal(uploads.at(-1).encrypted, true, 'native pasted text uses ciphertext chunks, not legacy JSON/base64');
+    assert.equal(Buffer.from(uploads.at(-1).files[0].content_base64, 'base64').toString(), longText);
     await screenshot(label, 'composer-attachments');
     await page.focus('#composer');
     await page.keyboard.press('Enter');
@@ -618,6 +644,10 @@ export const scenarios = [
   ['host-metrics', async label => {
     // The heading panel is always visible and opens the host overview.
     await page.waitForFunction(() => document.querySelector('.host-metrics-panel')?.textContent.includes('32%'), { timeout: 20000 });
+    await page.waitForFunction(() => document.querySelector('.provider-quota-panel')?.textContent.includes('5h 75% · wk 40%'), {timeout:20000});
+    assert.equal(await page.$$eval('.provider-quota-item', cards => cards.length), 2);
+    assert.match(await text('.provider-quota-panel'), /Claude.*wk 8%.*stale/s);
+    assert.match(await page.$eval('.provider-quota-item', card => card.title), /resets in/);
     await page.click('.host-metrics-panel');
     await page.waitForFunction(() => location.hash === '#host');
     await waitText('Top consumers');
@@ -771,16 +801,27 @@ try {
   browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox'] });
   for (const [label, viewport] of [['desktop', { width: 1280, height: 860 }], ['phone', { width: 390, height: 844, isMobile: true, hasTouch: true }]]) {
     Object.assign(state, createState());
+    // A sidebar read slower than its old 4s refresh interval must complete.
+    // Before the fix every timer tick cancelled the awaiting Rust resource,
+    // so rows never appeared and additional fetches accumulated.
+    state.sidebarDelayMs = 4500;
+    state.sidebarReads = 0;
     page = await browser.newPage();
     page.on('pageerror', error => errors.push(error.message));
     await page.setViewport(viewport);
     stage = `${label}:load`;
     await page.goto(`${origin}/#conversation/${A}`, { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('#composer');
+    await page.waitForSelector('.conversation-row', { timeout: 12000 });
+    assert.equal(state.sidebarReads, 1, 'slow initial sidebar request is not cancelled or overlapped');
+    assert.equal(await page.$eval('.conversation-sidebar', n => n.textContent.includes('Conversations unavailable')), false);
+    state.sidebarDelayMs = 0;
     for (const [name, run] of scenarios) {
       stage = `${label}:${name}`;
       await run(label);
     }
+    assert.equal(state.requests.some(request => request.includes('/fast/execution')), false,
+      'the single-agent interface never polls a second execution role');
     stage = `${label}:layout`;
     await noHorizontalScroll();
     stage = `${label}:dark`;

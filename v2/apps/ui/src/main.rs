@@ -20,7 +20,6 @@ mod desktop_open_view;
 mod desktop_resource_card;
 mod execution_panel;
 mod execution_poll;
-mod fast_panel;
 mod held_inputs_poll;
 mod held_inputs_view;
 mod history;
@@ -46,6 +45,7 @@ mod page_memory_bridge;
 mod progress_view;
 mod projects_view;
 mod provider_handoff_view;
+mod provider_quota_panel;
 mod restricted_view;
 mod rich_text_view;
 mod scroll_pin;
@@ -66,6 +66,7 @@ mod tracker_source_view;
 mod tracker_table_view;
 mod tracker_view;
 mod transport;
+mod upload_progress_view;
 mod v1_manage_view;
 mod v1_thread_view;
 mod v1_workers_view;
@@ -228,8 +229,11 @@ fn App() -> Element {
         main { class: "app-shell",
             header { class: "app-heading", h1 { "Orkestr" } span { "Rust workspace · beta" }
                 if !csrf().is_empty() && !current().is_empty() {
-                    host_metrics_panel::HostMetricsPanel { key: "{session_scope.read().generation()}", session_scope, onexpired: expired,
-                        onopen: move |_| { let mut open = open_metrics.0; open += 1; } }
+                    div { key: "{session_scope.read().generation()}", style: "display: contents",
+                        host_metrics_panel::HostMetricsPanel { session_scope, onexpired: expired,
+                            onopen: move |_| { let mut open = open_metrics.0; open += 1; } }
+                        provider_quota_panel::ProviderQuotaPanel { session_scope, onexpired: expired }
+                    }
                 }
             }
             if csrf().is_empty() || notice().contains("not confirmed") {

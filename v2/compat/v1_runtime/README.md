@@ -20,6 +20,28 @@ Run the loopback-only service from a pinned checkout:
 PYTHONDONTWRITEBYTECODE=1 python3 -B -m v2.compat.v1_runtime.server --config /private/operator/service.json
 ```
 
+The default is one execution agent per conversation, internally named `deep`
+for protocol compatibility. New inputs need only their own execution run and
+canonical accepted result; no Fast polling, grace period, footer lookup or
+companion acceptance participates in their delivery. Owner/member intake still
+reaches Core in FIFO order while that execution is busy. Existing source,
+window, author, queue, timer and delivery-acknowledgement fences remain required.
+
+A deprecated Root-only `legacy_companions: true` at the top level of the adapter
+service JSON restores the old transport for explicit historical rehearsals.
+The matching runtime switch is separately at the top level of `beta.json`.
+Both default to false; old `fast_reply_policy` presentation settings do not
+turn companions on. The mode is not added to the pinned ledger identity, so
+existing bindings are adopted unchanged. An input frozen in single-agent mode
+never acquires a companion after a restart. Historical exports and ACKs stay in
+the journal. Explicitly linked pending Fast exports are withdrawn at startup
+using the existing superseded outcome, without manufacturing a delivery ACK;
+late physical receipts remain recordable. Sends already materialized by V1
+require deployment drain/reconciliation. Unresolved old runtime children or
+proposals require ordinary supported reconciliation, never manufactured Fast
+acceptance or replay.
+
+
 `SIGHUP` rescans the binding directory immediately; it is also rescanned every
 five seconds. `SIGTERM` stops the service.
 
@@ -883,7 +905,20 @@ path) is set in the adapter's environment, each imported file is also written
 to `<dir>/<conversation_id>/<sha256><ext>` (directory 0750, file 0640, group
 `ORKESTR_V2_ADAPTER_ATTACHMENT_GROUP` when set), and the note names that
 local file so a host-mode provider can open it (an image viewing tool or a
-file read). A write failure keeps the reference-only note.
+file read). Use a canonical absolute export directory without symlink ancestors.
+The Root publisher must derive the reader's group from the selected runtime's
+configured executor identity, rather than assuming the adapter's user/group is
+also the provider's. Set `ORKESTR_V2_ADAPTER_ATTACHMENT_EXECUTOR_GID` to that
+numeric GID alongside `ORKESTR_V2_ADAPTER_ATTACHMENT_GROUP`; an unknown group or
+a declared-reader mismatch refuses configuration instead of silently exporting
+inaccessible files. This setting grants no additional execution authority.
+
+An existing digest-named file is reused only after checking its owner, group,
+0640 mode, single-link regular-file identity, length and content digest. Unsafe
+old exports are not automatically re-owned, replaced or advertised as readable.
+An operator changing executor identity must inventory and repair the selected
+retained exports with a reviewed metadata migration before relying on them.
+A write or custody failure keeps the reference-only note.
 
 Final replies also carry the conversation's `provider` and `model` (from
 `GET /settings`, when available) so V1 can show them in its debug footer.

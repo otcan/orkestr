@@ -95,6 +95,10 @@ impl Controller {
         owner == &self.config.owner_id && !conversation.0.is_nil() && self.config.roles.is_some()
     }
 
+    pub(crate) fn fast_configured(&self, owner: &OwnerId, conversation: &ConversationId) -> bool {
+        self.config.legacy_companions && self.roles_configured(owner, conversation)
+    }
+
     pub(super) fn existing(
         &self,
         conversation: &ConversationId,

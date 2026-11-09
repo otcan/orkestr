@@ -9,7 +9,8 @@ from codex_bounded.trust import process,protected,metadata
 from .contract import require
 from .resource_contract import (encoded,selection,validate,open_source,DIRECTORIES,READONLY)
 
-FORMAT='orkestr-resource-namespace-receipt-v1'
+FORMAT='orkestr-resource-namespace-receipt-v2'
+CODEX_AUTH_MAX_BYTES=65536
 
 
 def ns(name):
@@ -84,19 +85,49 @@ def original_source(row,lookups=(),creator=None,homes=(),native_writers=(),nativ
         if fd is not None:os.close(fd)
 
 
-def check_source(row,lookups=(),creator=None,homes=()):
+def auth_metadata(info):
+    require(stat.S_ISREG(info.st_mode) and info.st_nlink==1
+            and stat.S_IMODE(info.st_mode)==0o600
+            and 0<info.st_size<=CODEX_AUTH_MAX_BYTES,'resource_auth_custody')
+
+
+def checked_source(row,lookups=(),creator=None,homes=()):
+    """Retain the exact checked source FD; account refresh never reads bytes."""
     fd=original_source(row,lookups,creator,homes)
     try:
         info=os.fstat(fd)
-        require((info.st_dev,info.st_ino,info.st_uid,info.st_gid)==
-                (row['device'],row['inode'],row['uid'],row['gid']),'resource_source_changed')
+        require((info.st_dev,info.st_uid,info.st_gid)==
+                (row['device'],row['uid'],row['gid']),'resource_source_changed')
+        if row['kind']=='codex_auth':
+            # Codex atomically replaces this one selected credential leaf.
+            # Its immutable scope/owner/device remain pinned; activation binds
+            # this fresh inode in the Root namespace receipt below.
+            auth_metadata(info)
+        else:
+            require(info.st_ino==row['inode'],'resource_source_changed')
         from .resource_timers import private_mode
         private_mode(row,info)
         if row['kind'] not in READONLY:
             require(stat.S_IMODE(info.st_mode)==(0o700 if row['kind'] in DIRECTORIES else 0o600),
                     'resource_source_private_mode')
-        return info
+        result=fd;fd=None;return result
+    finally:
+        if fd is not None:os.close(fd)
+
+
+def check_source(row,lookups=(),creator=None,homes=()):
+    fd=checked_source(row,lookups,creator,homes)
+    try:return os.fstat(fd)
     finally:os.close(fd)
+
+
+def target_inode(row,target):
+    fields={'target','mount_id'}
+    if row['kind']=='codex_auth':fields.add('source_inode')
+    require(set(target)==fields and target['target']==row['target'],'resource_target_binding')
+    inode=target.get('source_inode',row['inode'])
+    require(type(inode) is int and 0<inode<2**63,'resource_target_inode')
+    return inode
 
 
 def verify(selected,ctx):
@@ -121,8 +152,7 @@ def verify(selected,ctx):
                 'resource_receipt_targets')
         mounts=mount_options()
         for row,target in zip(doc['resources'],value['targets']):
-            require(set(target)=={'target','mount_id'} and target['target']==row['target'],
-                    'resource_target_binding')
+            inode=target_inode(row,target)
             if os.geteuid()==ctx['authority_uid']:
                 flags=options(target['mount_id'],row['target'],mounts)
                 required={'nosuid','nodev'}
@@ -134,9 +164,10 @@ def verify(selected,ctx):
             try:
                 meta=os.fstat(f);mid=mount_id(f)
                 require((meta.st_dev,meta.st_ino,meta.st_uid,meta.st_gid)==
-                    (row['device'],row['inode'],ctx['executor_uid'] if row['uid']!=0 else 0,
+                    (row['device'],inode,ctx['executor_uid'] if row['uid']!=0 else 0,
                      ctx['executor_gid'] if row['uid']!=0 else row['gid'])
                     and mid==target['mount_id'],'resource_target_identity')
+                if row['kind']=='codex_auth':auth_metadata(meta)
                 flags=options(mid,row['target'],mounts)
                 required={'nosuid','nodev'}
                 if row['kind']!='toolchain':required.add('noexec')

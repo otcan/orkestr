@@ -232,7 +232,6 @@ test('owner desktop open uses a scoped cookie mutation and refuses unbound paths
         await assert.rejects(execute({recv:async()=>({...base,path})},()=>assert.fail('fetch must not run')),/Invalid API path/);
 });
 
-
 test('global desk discovery and scoped lease actions use fixed cookie and CSRF paths',async()=>{
     const root='/api/v2/conversations/00000000-0000-4000-8000-000000000001/desktops/desk-a';
     for(const [method,path] of [['GET','/api/v2/desktops'],...['acquire','release','reset'].map(a=>['POST',root+'/'+a])]) {
@@ -244,4 +243,16 @@ test('global desk discovery and scoped lease actions use fixed cookie and CSRF p
     }
     for(const [method,path] of [['POST','/api/v2/desktops'],['GET',root+'/reset'],['POST',root+'/cleanup'],['POST',root+'/../reset'],['GET','/api/v2/desktops?owner=other'],['POST',root+'/reset?force=true']])
         await assert.rejects(execute({recv:async()=>({...base,method,path})},()=>assert.fail('fetch must not run')),/Invalid API path/);
+});
+
+test('build identity read is restricted to the exact same-origin health GET', async () => {
+    await execute({recv:async()=>({...base,method:'GET',path:'/api/v2/health',body:null})}, async(path, options)=>{
+        assert.equal(path,'/api/v2/health');
+        assert.equal(options.credentials,'same-origin');
+        assert.equal(options.cache,'no-store');
+        return Response.json({status:'ok'});
+    });
+    for (const [method,path] of [['POST','/api/v2/health'],['GET','/api/v2/health?url=https://example.invalid'],['GET','/api/v2/health/extra']]) {
+        await assert.rejects(execute({recv:async()=>({...base,method,path})},()=>assert.fail('fetch must not run')),/Invalid API path/);
+    }
 });

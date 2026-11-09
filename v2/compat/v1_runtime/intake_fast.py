@@ -8,17 +8,10 @@ import copy
 import sys
 
 from .first_response import capture
-from .intake import admit, window
 from . import fast_watch, journal
-from .auto_steer import in_rust
-from .ledger import LOCAL_ROLES
+from .execution_mode import single
+from .intake_ahead import individual, eligible as intake_eligible, drive as drive_admission
 
-# No per-pass admission throttle: every pending owner message is admitted in
-# the same pass it is seen (the pending snapshot itself holds at most 64 rows,
-# the ledger's hard capacity). Window requests and Fast observations are
-# bounded per pass only so one pass stays short; both cover a whole burst.
-MAX_ADMISSIONS = 64
-MAX_WINDOW_ATTEMPTS = 64
 MAX_FAST_OBSERVATIONS = 24
 # A caught-up SSE stream otherwise holds the binding worker for five seconds
 # per pending source, delaying the next intake pass behind unrelated Deep work.
@@ -32,58 +25,12 @@ SCAN_PAGES = 20
 SCAN_BUDGET_S = 3.0
 
 
-# Chat authors verified at HTTP intake whose events are admitted one by one.
-# A listed group member is included: under the serial path an unadmitted member
-# message held every later owner message (and its Fast reply) until the
-# running Deep turn ended, because owner admission must not pass it. Admitting
-# both in arrival order keeps Core's message order and Deep stays serialized.
-# Local-agent and V1-relayed authors keep the serial path.
-ISOLATED_ROLES = ("owner", "member")
-
-
 def isolated(worker, data):
-    return (worker.fast_reply_policy == "owner_only" and
-            (data.get("author") or {}).get("role") in ISOLATED_ROLES and not data.get("origin"))
+    return not single(worker, data) and individual(worker, data)
 
 
 def eligible(worker, data):
-    """Explicit binding consent plus the author verified at HTTP intake."""
-    return (isolated(worker, data) and data.get("phase") != "completed" and not data.get("origin") and
-            not any(data.get(key) for key in
-                    ("blocked", "digest", "refused", "absorbed_into", "burst", "requeued", "steer")))
-# A deadline-continued or re-admitted owner row is an ordinary owner event
-# again: it is admitted here at once (its own continuation fence still
-# applies in intake.admit) instead of holding every later owner message's
-# admission, and so its Fast reply, until it reaches the ledger head.
-
-
-def local_ahead(worker, data):
-    """An unadmitted plain V1-local row (local agent, V1 owner or V1 external
-    input, e.g. a watcher alert) that drive() may admit ahead of a person's
-    later input, exactly as the serial head path would admit it: once, in
-    FIFO order, with its own burst. Before, such a row waited for the running
-    Deep turn on the serial path and held every later owner message, its Fast
-    reply and its Deep heartbeat (otcanClaw-academic 2026-10-29: "Stats?"
-    reached Core 10.5 min late behind two queued watcher alerts)."""
-    return (worker.fast_reply_policy == "owner_only" and not data.get("origin") and
-            (data.get("author") or {}).get("role") in LOCAL_ROLES and
-            data.get("phase") in ("queued", "admitted") and "intake" not in data and
-            not any(data.get(key) for key in
-                    ("blocked", "digest", "refused", "absorbed_into", "requeued", "continued", "steer")))
-
-
-def failed(worker, data, error):
-    """Use normal per-input refusal semantics; uncertainty keeps frozen I/O."""
-    from .worker import Refused, refusal_reason, transient
-    if isinstance(error, Refused):
-        worker.ledger.refuse(data, str(error))
-    elif not transient(error):
-        worker.ledger.refuse(data, refusal_reason(error))
-    elif getattr(error, "code", None) == "session_revoked" and not worker._revoked_alerted:
-        worker._revoked_alerted = True
-        print("ALERT orkestr-v2-wa-adapter session_revoked conversation=%s input=%s"
-              % (getattr(worker.client, "conversation", "?"), data["remote_id"]),
-              file=sys.stderr, flush=True)
+    return not single(worker, data) and intake_eligible(worker, data)
 
 
 def scan(worker, watches):
@@ -160,58 +107,10 @@ def observe(worker, data, shared=None):
 def drive(worker):
     if worker.fast_reply_policy != "owner_only":
         return False
+    if single(worker):
+        return False
+    drive_admission(worker)
     rows = worker.ledger.pending_inputs()
-    waiting = [index for index, data in enumerate(rows)
-               if eligible(worker, data) and "intake" not in data and not in_rust(data)]
-    admissions, absorbed = 0, set()
-    for index, data in enumerate(rows):
-        if "intake" in data or in_rust(data) or data["remote_id"] in absorbed:
-            # A steer Rust already holds never needs FIFO admission before a
-            # later input: it either joins the running turn or comes back as
-            # a fresh message after it. Do not hold later Fast replies on it.
-            continue
-        if admissions >= MAX_ADMISSIONS:
-            break
-        if not eligible(worker, data):
-            # Never pass an earlier unadmitted input: Core keeps arrival order.
-            # A plain V1-local row with a person's input behind it is admitted
-            # here in its place, with its own burst (as the serial path would);
-            # anything else (a frozen legacy burst, a timer) holds later events.
-            if not (local_ahead(worker, data) and any(later > index for later in waiting)):
-                break
-            if not data.get("fronted"):
-                data["fronted"] = True  # Its window is then also requested here, in order.
-                worker.ledger.save(data)
-            admissions += 1
-            try:
-                if not admit(worker, data, merge_burst=True):
-                    break  # Its burst may still grow; the next pass decides.
-            except Exception as error:
-                failed(worker, data, error)
-                break
-            absorbed |= set(data.get("burst") or ())
-            continue
-        admissions += 1
-        try:
-            admit(worker, data, merge_burst=False)
-        except Exception as error:
-            failed(worker, data, error)
-            break  # Unknown intake cannot be passed by a later source.
-    attempts = 0
-    for data in rows:
-        if data["remote_id"] in absorbed or data.get("phase") == "completed":
-            continue
-        if not (eligible(worker, data) or data.get("fronted")) or "intake" not in data or "window" in data:
-            continue
-        if attempts >= MAX_WINDOW_ATTEMPTS:
-            break
-        attempts += 1
-        try:
-            if not window(worker, data):
-                break  # Keep ordinary window admission/queue order.
-        except Exception as error:
-            failed(worker, data, error)
-            break
     try:
         for data in rows:
             if isolated(worker, data) and data.get("phase") != "completed" and "intake" in data and "window" in data:

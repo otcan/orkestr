@@ -97,7 +97,7 @@ class SplitPackageTests(unittest.TestCase):
         package=self.select_split()
         service=package.root/'service.json';value=json.loads(service.read_text())
         files=[]
-        for key in ('desktop_broker','timer_config','whatsapp_chats'):
+        for key in ('desktop_broker','provider_quota','timer_config','whatsapp_chats'):
             path=self.fixture.root/(key+'.json');path.write_text('{}')
             os.chown(path,package.authority_uid,self.gid);path.chmod(0o600)
             value[key]=str(path);files.append(path)

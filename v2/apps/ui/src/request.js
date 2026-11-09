@@ -9,8 +9,9 @@ const security = /^\/api\/v2\/browser\/(?:security|password|service-credentials(
 // Owner-wide discovery; mutations retain an explicit conversation and lease scope.
 const deskRequest = (input.method === 'GET' && input.path === '/api/v2/desktops') ||
     (input.method === 'POST' && /^\/api\/v2\/conversations\/[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}\/desktops\/[a-z0-9][a-z0-9_-]{0,63}\/(?:acquire|release|reset)$/.test(input.path));
+const health = input.path === "/api/v2/health" && input.method === "GET";
 const localAccount = input.path === "/api/v2/oss-setup/account" && ["GET", "POST"].includes(input.method);
-if (!deskRequest && !localAccount && !security.test(input.path) && !route.test(input.path) && !(manage.test(input.path) && !input.path.includes("..")) && !(sidebar.test(input.path) && !input.path.includes(".."))) throw new Error("Invalid API path");
+if (!deskRequest && !health && !localAccount && !security.test(input.path) && !route.test(input.path) && !(manage.test(input.path) && !input.path.includes("..")) && !(sidebar.test(input.path) && !input.path.includes(".."))) throw new Error("Invalid API path");
 const headers = {"Content-Type": "application/json"};
 if (localAccount) headers["x-orkestr-local-setup"] = "1";
 if (input.csrf && !["GET", "HEAD"].includes(input.method)) headers["x-orkestr-csrf"] = input.csrf;

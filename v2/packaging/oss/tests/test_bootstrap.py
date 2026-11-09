@@ -169,6 +169,7 @@ class LocalOriginTests(unittest.TestCase):
     def test_compose_needs_commit_only_for_builds(self):
         compose = (HERE / 'compose.yaml').read_text()
         self.assertIn('SOURCE_COMMIT: ${ORKESTR_SOURCE_COMMIT:-}', compose)
+        self.assertIn('BUILD_JOBS: ${ORKESTR_BUILD_JOBS:-2}', compose)
         self.assertNotIn(':?', compose)
         dockerfile = (HERE / 'Dockerfile').read_text()
         self.assertIn('SOURCE_COMMIT must be the exact 40-character public commit', dockerfile)

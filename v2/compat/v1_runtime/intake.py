@@ -3,6 +3,7 @@ import time
 import sys
 
 from . import continuation_guard
+from .execution_mode import freeze
 from .participants import compose
 
 
@@ -55,6 +56,7 @@ def with_quoted_id(text, reply_to):
 def admit(worker, data, merge_burst=True):
     """Freeze and admit one source through the existing owner HTTP surface."""
     from .worker import Refused
+    freeze(worker, data)
     if merge_burst:
         if not worker.gather_burst(data):
             return False

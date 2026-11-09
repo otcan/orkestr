@@ -100,7 +100,7 @@ class Handler(BaseHTTPRequestHandler):
         if target.path == "/changes":
             return self.changes(target.query)
         binding, action = self.route(target.path)
-        if binding is None or action not in ("messages", "health", "activity"):
+        if binding is None or action not in ("messages", "health", "activity", "status"):
             return self.answer(404, {"ok": False, "error": "route_not_found"})
         if action == "health" and not target.query:
             members = sum(entry["role"] == participants.MEMBER for entry in binding.config["participants"])
@@ -112,6 +112,15 @@ class Handler(BaseHTTPRequestHandler):
         if binding.state in ("revoked", "refused"):
             return self.answer(410 if binding.state == "revoked" else 503,
                                {"ok": False, "error": binding.error or "binding_revoked"})
+        if action == "status":
+            if target.query:
+                return self.answer(400, {"ok": False, "error": "invalid_status_query"})
+            from .thread_status import read
+            from .rust_client import ClientError
+            try:
+                return self.answer(200, dict(ok=True, **read(binding)))
+            except ClientError:
+                return self.answer(503, {"ok": False, "error": "core_status_unavailable"})
         if action == "activity":
             from .input_activity import read
             try:
