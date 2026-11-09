@@ -38,7 +38,7 @@ class BurstTests(unittest.TestCase):
     def test_queued_inputs_become_one_intake_with_one_reply_and_settle_together(self):
         for public_id, text in (("a", "merhaba, bi eksik fark ettim"), ("b", "en önemlisi bu"), ("c", "eski versiyonunda böyle")):
             self.ledger.enqueue(body(public_id, text))
-        worker = Worker(self.peer, self.ledger)
+        worker = Worker(self.peer, self.ledger, legacy_companions=True)
         log = io.StringIO()
         with contextlib.redirect_stderr(log):
             worker.step(self.ledger.next_input())
@@ -60,7 +60,7 @@ class BurstTests(unittest.TestCase):
         self.assertEqual(self.ledger.health()["outstandingInputs"], 0)
 
     def test_a_fresh_input_waits_for_the_burst_to_go_quiet(self):
-        worker = Worker(self.peer, self.ledger, burst_quiet_s=3)
+        worker = Worker(self.peer, self.ledger, burst_quiet_s=3, legacy_companions=True)
         self.ledger.enqueue(body("a", "one"))
         self.ledger.enqueue(body("b", "two"))
         self.age("a", 2)
@@ -76,7 +76,7 @@ class BurstTests(unittest.TestCase):
         self.assertEqual(self.intakes(), ["\n\n".join([BURST_NOTE % 3, "one", "two", "three"])])
 
     def test_a_continuous_stream_cannot_hold_the_first_input_past_the_max_wait(self):
-        worker = Worker(self.peer, self.ledger, burst_quiet_s=3)
+        worker = Worker(self.peer, self.ledger, burst_quiet_s=3, legacy_companions=True)
         self.ledger.enqueue(body("a", "one"))
         self.ledger.enqueue(body("b", "two"))
         self.age("a", BURST_MAX_WAIT_S + 1)
@@ -85,14 +85,14 @@ class BurstTests(unittest.TestCase):
 
     def test_a_single_input_is_sent_unchanged(self):
         self.ledger.enqueue(body("a", "only one"))
-        Worker(self.peer, self.ledger, burst_quiet_s=3).step(self.ledger.next_input())
+        Worker(self.peer, self.ledger, burst_quiet_s=3, legacy_companions=True).step(self.ledger.next_input())
         self.assertEqual(self.intakes(), ["only one"])
 
     def test_inputs_from_another_chat_or_author_or_already_sent_never_join(self):
         self.ledger.enqueue(body("a", "owner one"))
         self.ledger.enqueue(body("b", "other chat", chatId="chat-2"))
         self.ledger.enqueue(body("c", "owner two"))
-        worker = Worker(self.peer, self.ledger)
+        worker = Worker(self.peer, self.ledger, legacy_companions=True)
         worker.step(self.ledger.next_input())
         self.assertEqual(self.intakes(), ["owner one"], "the run stops at the first incompatible input")
         member = {"role": "member", "id": "member@lid", "label": "Ayse", "labelled": True}
@@ -114,7 +114,7 @@ class BurstTests(unittest.TestCase):
             digest = hashlib.sha256(content).hexdigest()
             upload, _ = self.ledger.stage_upload(public_id, public_id + ".jpg", "image/jpeg", content, digest)
             self.ledger.enqueue(body(public_id, "", attachments=[{"uploadId": upload, "sha256": digest}]))
-        Worker(self.peer, self.ledger).step(self.ledger.next_input())
+        Worker(self.peer, self.ledger, legacy_companions=True).step(self.ledger.next_input())
         self.assertEqual(len(imports), 2)
         [intake] = self.intakes()
         self.assertTrue(intake.startswith(BURST_NOTE % 3))
@@ -126,7 +126,7 @@ class BurstTests(unittest.TestCase):
         self.ledger.enqueue(body("a", "one"))
         self.ledger.enqueue(body("b", "two"))
         head = self.ledger.next_input()
-        worker = Worker(self.peer, self.ledger)
+        worker = Worker(self.peer, self.ledger, legacy_companions=True)
         self.assertTrue(worker.gather_burst(head))
         notice = self.ledger.refuse(head, "window_refused")
         self.assertIsNone(self.ledger.next_input())

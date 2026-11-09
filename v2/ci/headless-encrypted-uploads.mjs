@@ -64,6 +64,7 @@ export async function encryptedUploadMock(state) {
       }
       if(operation==='attachment') {
         assert.ok(entry.status.complete);
+        if(state.holdEncryptedAttachment===true) await new Promise(resolve=>{state.releaseEncryptedAttachment=resolve;});
         const parts=[];
         for(const receipt of entry.status.chunks) {
           const decrypter=new Decrypter();decrypter.addIdentity(identity);

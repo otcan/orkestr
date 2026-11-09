@@ -48,7 +48,7 @@ class Case(unittest.TestCase):
         self.data, _ = self.ledger.enqueue(dict(publicMessageId="public", publicThreadId="thread", chatId="chat",
                                                 accountId="account", text="request"))
         self.peer = QueuePeer()
-        self.worker = Worker(self.peer, self.ledger)
+        self.worker = Worker(self.peer, self.ledger, legacy_companions=True)
 
     def notices(self):
         return [m for m in self.ledger.messages() if m.get("kind") == "progress"]
@@ -185,7 +185,7 @@ class StrandedFastTests(unittest.TestCase):
         self.data, _ = self.ledger.enqueue(dict(publicMessageId="public", publicThreadId="thread", chatId="chat",
                                                 accountId="account", text="request"))
         self.peer = StrandedFastPeer()
-        self.worker = Worker(self.peer, self.ledger)
+        self.worker = Worker(self.peer, self.ledger, legacy_companions=True)
 
     def test_missing_fast_never_holds_the_deep_reply(self):
         self.worker.step(self.data)
@@ -310,7 +310,7 @@ class OrphanedFollowUpTests(Case):
         data["requeued"] = {"previous_message_id": "legacy", "at": 1}
         data["readmitted"] = {"at": time.time(), "trigger": "automatic"}
         self.end_window(data)
-        restarted = Worker(self.peer, Ledger(Path(self.temp.name) / "ledger.sqlite3", {"test_scope": "one"}))
+        restarted = Worker(self.peer, Ledger(Path(self.temp.name) / "ledger.sqlite3", {"test_scope": "one"}), legacy_companions=True)
         with self.assertRaisesRegex(Refused, "window_setup_failed"):
             restarted.step(restarted.ledger.next_input())
         self.assertEqual(len([r for r, _ in self.peer.mutations if r == "/messages"]), 1)
@@ -388,13 +388,13 @@ class ServerAcceptanceTests(unittest.TestCase):
 
     def test_already_completed_runs_are_adopted_and_mirrored(self):
         peer = ServerAcceptedPeer({"fast", "deep"})
-        Worker(peer, self.ledger).step(self.data)
+        Worker(peer, self.ledger, legacy_companions=True).step(self.data)
         self.assert_mirrored(peer)
         self.assertFalse([route for route, _ in peer.mutations if route == "/accept"])
 
     def test_conflicting_accept_adopts_the_server_acceptance(self):
         peer = ServerAcceptedPeer({"deep"}, before_freeze=False)
-        Worker(peer, self.ledger).step(self.data)
+        Worker(peer, self.ledger, legacy_companions=True).step(self.data)
         self.assert_mirrored(peer)
         self.assertEqual([body["run_id"] for route, body in peer.mutations if route == "/accept"], ["fast-run", "deep-run"])
         self.assertEqual(self.data["accepted"]["fast"]["acceptance_event_id"], "fast-accepted")
@@ -408,12 +408,12 @@ class ServerAcceptanceTests(unittest.TestCase):
             return original(method, route, body=body, allowed=allowed)
         peer.request = request
         with self.assertRaisesRegex(Refused, "execution_requires_review"):
-            Worker(peer, self.ledger).step(self.data)
+            Worker(peer, self.ledger, legacy_companions=True).step(self.data)
         self.assertNotIn("reply", self.data)
 
     def test_foreign_completed_run_is_never_adopted(self):
         peer = ServerAcceptedPeer({"fast", "deep"})
         peer.foreign = True
-        Worker(peer, self.ledger).step(self.data)
+        Worker(peer, self.ledger, legacy_companions=True).step(self.data)
         self.assertFalse(self.data.get("accepted"))
         self.assertNotIn("reply", self.data)

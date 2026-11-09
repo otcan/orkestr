@@ -77,6 +77,15 @@ The image fetches the exact public commit anonymously; no host home, credentials
 or application state is copied. Open **http://127.0.0.1:19822**. Only loopback is
 published. On a remote Linux server, use an SSH port forward and the same URL.
 
+When rebuilding another commit with the same Docker builder, unchanged tooling
+and locked dependency downloads can be reused. Application compilation and the
+paired server/UI receipt still use the exact selected source. A missing or
+malformed commit is refused before package or toolchain installation.
+Cargo uses two build jobs by default for smaller hosts. On a machine with enough
+memory, set `ORKESTR_BUILD_JOBS=8` for Compose, or pass `--build-arg BUILD_JOBS=8`
+to Docker. The accepted range is 1–64. Changing this limit changes the tooling
+cache key; changing only the source commit does not.
+
 ### macOS (Apple Silicon) with Docker Desktop
 
 Docker Desktop on an M-series Mac runs a Linux arm64 VM, and the image builds
@@ -263,6 +272,19 @@ Full Rust and browser suites run in `.github/workflows/v2-rust.yml` and
 then tests a fresh isolated account through **provider login required**. CI uses
 no real provider login or inference. The owner separately accepts both providers,
 follow-up, Fast/Deep, review/Stop, switching and one timer before release.
+
+Native image CI uses four Cargo jobs and architecture/configuration-scoped
+[GitHub Actions API v2 caches](https://docs.docker.com/build/cache/backends/gha/).
+Each independent BuildKit solve imports its compatible metadata; this includes
+the separate bundle export. Pull requests import only. Trusted pushes and
+manual runs can export within the existing 10 GiB allowance, with 1 GiB of
+headroom and separate allowances for the two native builds. Existing layers
+reduce the export estimate only when their current-ref cache keys, OCI digests
+and byte sizes match. Unknown usage or insufficient space skips export; no
+existing cache is deleted and no storage limit is raised. Other writers can
+race these observations, so the admission check is not an atomic reservation.
+A missing cache still builds and runs the same checks. Same-head application
+reuse does not establish incremental Rust compilation across different commits.
 
 On shared hosts use the assigned Cargo wrapper for changed-crate checks only;
 see [AGENTS.md](../AGENTS.md). Full workspace suites belong in CI. The source

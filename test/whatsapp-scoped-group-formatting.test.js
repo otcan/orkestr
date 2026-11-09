@@ -125,7 +125,7 @@ test('a reply mirrored from a remote runtime carries the remote debug footer', (
     message: {id: 'm2', chatId: 'group-1', role: 'assistant', source: 'rust-v2-pilot', phase: 'final_answer', remoteBackend: 'rust-v2', remoteMessageId: 'r1'},
     thread: {codexModel: 'example-model', binding: {remoteBackend: 'rust-v2'}}, messages: [], config: {appendDebugFooter: true}, formatter, env: {}});
   assert.equal(entries.length, 1);
-  assert.match(entries[0], /^Done\n\ndbg: rust · rt:rust-v2 · msg:\*final\*\n/);
+  assert.match(entries[0], /^Done\n\n🤖 Agent · msg:\*final\*\n/);
 });
 
 test('a footer embedded at the end of a long reply stays on the message', () => {

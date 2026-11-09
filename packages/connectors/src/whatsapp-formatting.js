@@ -1,4 +1,5 @@
 import os from "node:os";
+import { singleAgentFooter } from "./whatsapp-agent-footer.js";
 import { dualProviderQuotaLines } from "./whatsapp-quota-footer.js";
 import { threadQuotaProvider } from "../../core/src/provider-quota-snapshot.js";
 import { threadRequiresTenantIsolation } from "../../core/src/tenant-policy.js";
@@ -101,10 +102,16 @@ function footerEnabled(env = process.env) {
 
 // Matches the multi-line footer ("dbg: ..." then provider quota lines and the
 // queue/load line) and the older single-line "dbg: m:..." footer.
-const WHATSAPP_DEBUG_FOOTER_PATTERN = /\s*\ndbg:[^\n]*(?:\n(?:codex|claude)\b[^\n]*){0,2}(?:\n(?:q|queue):[^\n]*)?\s*$/i;
+const WHATSAPP_DEBUG_FOOTER_PATTERN = /\s*\n(?:dbg:|🤖 |⚡ Quick:|🧠 (?:Deep|Coordinator):)[^\n]*(?:\n(?:codex|claude)\b[^\n]*){0,2}(?:\n(?:q|queue):[^\n]*)?\s*$/i;
 
 export function stripWhatsAppDebugFooter(text) {
-  return String(text || "").replace(WHATSAPP_DEBUG_FOOTER_PATTERN, "").trim();
+  let current = String(text || "");
+  for (let i = 0; i < 8; i++) {
+    const next = current.replace(WHATSAPP_DEBUG_FOOTER_PATTERN, "");
+    if (next === current) break;
+    current = next;
+  }
+  return current.trim();
 }
 
 function shortReasoningEffort(value) {
@@ -366,7 +373,7 @@ export function whatsappDebugFooter({ message = {}, thread = {}, messages = [], 
   const runtimeSurface = runtimeSurfaceDebugValue(thread);
   const queueNotice = String(deliveryType || "").trim() === "queue_notice";
   const identity = remoteRuntimeReply(message, env) ? [
-    ...remoteRuntimeIdentity(message, env),
+    singleAgentFooter(message),
     `msg:*${footerMessageType(deliveryType)}*`,
   ] : [
     `dbg: ${agent}/${modelDebugLabel(message, thread, env)}`,

@@ -29,7 +29,7 @@ class QuestionExportTests(unittest.TestCase):
                 return 200,dict(run_id='deep-run',payload_id=self.question,text=self.text)
             return original(method,route,**kwargs)
         self.peer.request = request
-        self.worker = Worker(self.peer,self.ledger,progress_updates=True)
+        self.worker = Worker(self.peer,self.ledger,progress_updates=True, legacy_companions=True)
 
     def observe(self):
         with patch('time.time',return_value=1000):
@@ -49,7 +49,7 @@ class QuestionExportTests(unittest.TestCase):
         self.configure(event_first=True)
         self.observe()
         self.assert_once()
-        self.worker=Worker(self.peer,self.ledger,progress_updates=True)
+        self.worker=Worker(self.peer,self.ledger,progress_updates=True, legacy_companions=True)
         self.observe()
         self.assert_once()
 
@@ -58,7 +58,7 @@ class QuestionExportTests(unittest.TestCase):
         self.observe()
         self.assert_once()
         self.event_visible=True
-        self.worker=Worker(self.peer,self.ledger,progress_updates=True)
+        self.worker=Worker(self.peer,self.ledger,progress_updates=True, legacy_companions=True)
         self.observe()
         self.assert_once()
 

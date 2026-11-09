@@ -1,10 +1,11 @@
 # Encrypted browser uploads
 
-Native V2 conversation Attach, dropped files and pasted images use a resumable
+Native V2 conversation Attach, dropped files, pasted images and Paste text use a resumable
 ciphertext protocol. The limit is **1,000,000,000 plaintext bytes per file**,
 with at most eight files selected together. This is not a memory setting or an
-outbound WhatsApp allowance. Linked V1 uploads and the existing pasted-text
-helper retain their legacy limits. The Python WhatsApp adapter's 16 MiB import
+outbound WhatsApp allowance. Linked V1 uploads retain their legacy 16 MiB per-message
+limit, displayed separately in that chat's composer. The separate Thread files
+copy/archive panel retains its published transfer limits. The Python WhatsApp adapter's 16 MiB import
 path is not on this native browser path and is deliberately not raised.
 
 The browser uses the existing locked `age-encryption` 0.3.1 package. No CDN,
@@ -43,7 +44,20 @@ owner reselects the file. The draft retains only its session UUID in browser
 session storage. Already committed chunks are decrypted and compared to the
 reselected ranges before being skipped. A lost PUT response retries the same
 ciphertext and returns the same receipt. Private browser identities remain in
-the existing browser key store.
+the existing browser key store. Native pasted text is prepared as a browser
+File and sent through that same ciphertext transport; it no longer crosses
+the Rust bridge as base64 or calls the legacy message-attachments endpoint.
+The text already resides in the textarea, and creating its File requires a
+UTF-8 browser copy; this does not claim constant-memory text editing. Failed
+paste retries retain the same immutable File while the textarea exists;
+editing the text or changing the conversation/session creates a new identity.
+No paste text or file bytes are persisted in browser draft storage.
+
+The file picker opens before uploader initialization. Browsers that deny access
+to session/local storage can still start a new encrypted transfer; optional
+resume metadata is unavailable, and decrypting an earlier transfer still
+requires its enrolled browser identity. Missing uploader assets produce a
+retryable upload error after selection rather than blocking the picker.
 
 ## Service-readable files and key custody
 

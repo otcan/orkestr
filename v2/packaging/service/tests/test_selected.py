@@ -197,6 +197,7 @@ class Selected(unittest.TestCase):
         self.plan['roles']={'fast':roles[0],'workers':roles[1:]}
         self.plan['live_map']='/var/lib/synthetic-live-map/map.json'
         self.plan['desktop_broker']='/var/lib/synthetic-private/desktop-broker.json'
+        self.plan['provider_quota']='/var/lib/synthetic-private/provider-quota.json'
         self.plan['timer_config']='/var/lib/synthetic-private/timers.json'
         self.plan['v1_chat_icons_dir']='/var/lib/synthetic-v1/chat-icons'
         self.plan['whatsapp_chats']='/var/lib/synthetic-private/whatsapp-chats.json'
@@ -213,6 +214,10 @@ class Selected(unittest.TestCase):
             self.assertEqual(package.environment()['ORKESTR_V2_LIVE_MAP'],'/var/lib/synthetic-live-map/map.json')
             self.assertEqual(package.environment()['ORKESTR_V2_DESKTOP_BROKER_CONFIG'],
                              '/var/lib/synthetic-private/desktop-broker.json')
+            self.assertEqual(package.environment()['ORKESTR_V2_PROVIDER_QUOTA_CONFIG'],
+                             '/var/lib/synthetic-private/provider-quota.json')
+            self.assertNotIn('provider_quota',package.manifest['files'])
+            self.assertFalse(Path(self.plan['provider_quota']).exists())
             self.assertEqual(package.environment()['ORKESTR_V2_TIMER_CONFIG'],'/var/lib/synthetic-private/timers.json')
             self.assertEqual(package.environment()['ORKESTR_V2_V1_CHAT_ICONS_DIR'],'/var/lib/synthetic-v1/chat-icons')
             self.assertEqual(package.environment()['ORKESTR_V2_WHATSAPP_CHATS_CONFIG'],
@@ -225,6 +230,11 @@ class Selected(unittest.TestCase):
         for bad in ('relative/broker.json','/var/../broker.json',7):
             self.plan['desktop_broker']=bad
             with self.assertRaisesRegex(RuntimeError,'desktop broker path'):selected.prepare(self.plan)
+        self.assertFalse((self.root/'release').exists())
+    def test_provider_quota_path_refused_before_any_artifact_read(self):
+        for bad in ('relative/quota.json','/var/../quota.json',7,'/', '/x\0y','/x\ny','/'+4096*'a'):
+            self.plan['provider_quota']=bad
+            with self.assertRaisesRegex(RuntimeError,'provider quota path'):selected.prepare(self.plan)
         self.assertFalse((self.root/'release').exists())
     def test_timer_config_path_refused_before_any_artifact_read(self):
         for bad in ('relative/timers.json','/var/../timers.json',7):

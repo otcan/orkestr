@@ -133,7 +133,7 @@ class BurstWakeTests(unittest.TestCase):
         self.addCleanup(temp.cleanup)
         ledger = Ledger(Path(temp.name) / "ledger.sqlite3", {"test_scope": "one"})
         peer, signal = Peer(), Signal()
-        worker = Worker(peer, ledger, burst_quiet_s=0.6)
+        worker = Worker(peer, ledger, burst_quiet_s=0.6, legacy_companions=True)
         def message(public_id, text):
             data, _ = ledger.enqueue(dict(publicMessageId=public_id, publicThreadId="thread", chatId="chat",
                                           accountId="account", text=text))
@@ -171,7 +171,7 @@ class BurstWakeTests(unittest.TestCase):
         self.assertLess(at - last, 0.6 + 0.5, "sent when quiet, not a whole pass later")
 
     def test_busy_pause_is_one_pass_or_until_the_burst_is_due(self):
-        worker = Worker(Peer(), None)
+        worker = Worker(Peer(), None, legacy_companions=True)
         self.assertEqual(worker.busy_pause(), worker_module.PASS_S)
         worker._burst_due = 100.3
         self.assertAlmostEqual(worker.busy_pause(now=100.0), 0.3)
