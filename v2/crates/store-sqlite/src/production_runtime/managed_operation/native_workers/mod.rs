@@ -31,29 +31,36 @@ impl NativeWorkerCall {
     pub fn waits(&self) -> bool {
         self.wait && self.immediate.is_none()
     }
-    pub fn root_binding(&self, parent: &ManagedOperationParent) -> Value {
+    pub fn root_binding(&self, parent: &ManagedOperationParent) -> Result<Value> {
         let mut value = self.root_reply(
             &NativeWorkerObservation {
                 result: Value::Null,
                 terminal: false,
             },
             parent,
-        );
+        )?;
         value
             .as_object_mut()
             .expect("fixed reply object")
             .remove("result");
         value["task_id"] = json!(self.task);
-        value
+        Ok(value)
     }
     pub fn root_reply(
         &self,
         result: &NativeWorkerObservation,
         parent: &ManagedOperationParent,
-    ) -> Value {
-        json!({"operation_id":self.id,"run_id":parent.parent.run.run_id.to_string(),
+    ) -> Result<Value> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|_| RuntimeStoreError::Unavailable)?;
+        let now = i64::try_from(now.as_millis()).map_err(|_| RuntimeStoreError::Unavailable)?;
+        let expires = delivery_expiry(parent.parent.run.lease_deadline_ms, now)?;
+        Ok(
+            json!({"operation_id":self.id,"run_id":parent.parent.run.run_id.to_string(),
             "source":self.source,"request_sha256":crate::digest(&serde_json::to_string(&self.request).expect("stored JSON value")),
-            "expires_at_ms":parent.parent.run.lease_deadline_ms,"result":result.result})
+            "expires_at_ms":expires,"result":result.result}),
+        )
     }
 }
 impl ManagedOperationRequest {
@@ -269,6 +276,18 @@ impl Store {
             "execution_budget_ms":availability.execution_budget_ms,"queued_is_running":false}),
         )
     }
+}
+// Observation delivery cannot spend the full execution lease. Root retains
+// its independent 30-second ceiling; this narrower bound leaves queue margin.
+fn delivery_expiry(parent_lease_ms: i64, now_ms: i64) -> Result<i64> {
+    let bound = now_ms
+        .checked_add(25_000)
+        .ok_or(RuntimeStoreError::Unavailable)?;
+    let expires = parent_lease_ms.min(bound);
+    if now_ms < 0 || expires <= now_ms {
+        return Err(RuntimeStoreError::Expired);
+    }
+    Ok(expires)
 }
 fn current_authority<T>(value: Result<T>) -> Result<bool> {
     match value {

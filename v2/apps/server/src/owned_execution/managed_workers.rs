@@ -70,7 +70,8 @@ impl ManagedTools {
                     &self.credential,
                     &self.context.window,
                     &self.parent,
-                    call.root_binding(&self.parent),
+                    call.root_binding(&self.parent)
+                        .map_err(|_| "native Worker delivery deadline passed")?,
                     self.control_deadline()?,
                 )
                 .await
@@ -91,7 +92,8 @@ impl ManagedTools {
                     &self.credential,
                     &self.context.window,
                     &self.parent,
-                    call.root_reply(&observation, &self.parent),
+                    call.root_reply(&observation, &self.parent)
+                        .map_err(|_| "native Worker delivery deadline passed")?,
                     self.control_deadline()?,
                 )
                 .await
@@ -112,7 +114,9 @@ impl ManagedTools {
             self.workers.calls.push_back((call, deadline));
             return Ok(());
         }
-        let reply = call.root_reply(&observation, &self.parent);
+        let reply = call
+            .root_reply(&observation, &self.parent)
+            .map_err(|_| "native Worker delivery deadline passed")?;
         self.context
             .manager
             .reply_native_worker(
