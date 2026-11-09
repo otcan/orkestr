@@ -1,7 +1,6 @@
 """Original pidfds only. Empty process snapshots never create retirement proof."""
 import math
 import errno
-from itertools import islice
 import os
 from functools import wraps
 from pathlib import Path
@@ -13,12 +12,6 @@ import threading
 from codex_bounded.trust import belongs, exists, process
 from .contract import MAX_BIND_MS, Refused, require
 from .role_profiles import ROLE_NAMES
-
-MAX_CHILDREN = 256
-# Host full access runs real commands (builds, sudo, code-mode hosts) under the
-# native, so its live descendant tree is larger and may include setuid children.
-HOST_MAX_CHILDREN = 512
-
 
 def serialized(function):
     @wraps(function)
@@ -112,7 +105,6 @@ class Children:
         # uid (sudo), and a long window may start many short-lived commands.
         self.host = host_full_access(package)
         self.allow_uid_change = self.host and not getattr(package, "identity_split", False)
-        self.bound = HOST_MAX_CHILDREN if self.host else MAX_CHILDREN
         self.records = {}
         self.brokers = set()
         self.managed_brokers = set()
@@ -120,14 +112,19 @@ class Children:
         self.forced = self.uncertain = False
         self.uncertainty_reason = None
         self.lock = threading.RLock()
+        self.next_prune = time.monotonic() + 1
 
     @serialized
     def remember(self, identity):
         key = (identity["pid"], identity["start"])
         if key not in self.records:
-            if len(self.records) >= self.bound:
+            # A large legitimate process/thread tree must not poison custody.
+            # Retain every live original; periodically discard only proven-reaped
+            # non-brokers so a long session does not retain obsolete pidfds.
+            now = time.monotonic()
+            if now >= self.next_prune:
                 self._forget_reaped()
-            require(len(self.records) < self.bound, "owned_child_bound")
+                self.next_prune = now + 1
             self.records[key] = Process(identity, any_uid=self.allow_uid_change)
         return self.records[key]
 
@@ -222,22 +219,19 @@ class Children:
         # Native async workers can spawn tools while the leader has none.
         root = Path('/proc', str(parent['pid']), 'task')
         try:
-            tasks = list(islice(root.iterdir(), self.bound + 1))
+            tasks = list(root.iterdir())
         except (FileNotFoundError, ProcessLookupError):
             return set()
-        require(len(tasks) <= self.bound, 'owned_child_bound')
         pids = set()
         for task in tasks:
             try:
                 with (task / 'children').open('rb') as stream:
-                    raw = stream.read(8193)
+                    raw = stream.read()
             except (FileNotFoundError, ProcessLookupError):
                 continue
-            require(len(raw) <= 8192, 'owned_child_bound')
             for token in raw.split():
                 require(token.isdigit(), 'owned_child_metadata')
                 pids.add(int(token))
-            require(len(pids) <= self.bound, 'owned_child_bound')
         return pids
 
     @serialized
@@ -255,7 +249,6 @@ class Children:
                 if (key,root) in visited or not same(parent, self.allow_uid_change):
                     continue
                 visited.add((key,root))
-                require(len(visited) <= self.bound, "owned_child_bound")
                 for pid in self._children(parent):
                     child = process(pid)
                     if child is None or child["ppid"] != parent["pid"]:

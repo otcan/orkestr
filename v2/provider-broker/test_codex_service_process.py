@@ -185,16 +185,20 @@ class ProcessTests(unittest.TestCase):
             child.kill()
             child.wait(3)
 
-    def test_reaped_descendants_do_not_exhaust_the_window_bound(self):
+    def test_reaped_descendants_are_pruned_during_a_long_window(self):
         for children in (self.children, self.host_children()):
             batch = []
-            for _ in range(children.bound + 64):
-                batch.append(subprocess.Popen(["/usr/bin/true"], env={"PATH": "/usr/bin:/bin"}))
-                # Remember while alive or as an unreaped zombie, then reap it.
-                identity = process(batch[-1].pid)
-                children.remember(identity)
-                batch[-1].wait(3)
-            self.assertLessEqual(len(children.records), children.bound)
+            now = time.monotonic()
+            with unittest.mock.patch('codex_service.ownership.time',
+                                     SimpleNamespace(monotonic=lambda: now)):
+                for _ in range(320):
+                    now += 0.05
+                    batch.append(subprocess.Popen(["/usr/bin/true"], env={"PATH": "/usr/bin:/bin"}))
+                    # Remember while alive or as an unreaped zombie, then reap it.
+                    identity = process(batch[-1].pid)
+                    children.remember(identity)
+                    batch[-1].wait(3)
+            self.assertLess(len(children.records), len(batch))
             # Every reaped original remains proven gone; nothing live was dropped.
             self.assertTrue(all(record.gone() for record in children.records.values()))
 
