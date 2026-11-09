@@ -91,6 +91,22 @@ class ForegroundFinalTests(fixture.IntakeBase):
         self.assertEqual(finals[0]["model"], "synthetic-model")
         self.assertFalse(self.mutations("/accept"))
 
+    def test_stop_during_foreground_does_not_start_background_discovery(self):
+        self.canonical_final()
+        stop = threading.Event()
+        original = self.worker.step
+
+        def finishing(data):
+            original(data)
+            stop.set()
+
+        self.worker.step = finishing
+        self.worker._timers_checked = None
+        with patch.object(self.worker, "discover_timers") as discovery:
+            self.worker.run_once(stop)
+        discovery.assert_not_called()
+        self.assertEqual(len([m for m in self.ledger.messages() if m["role"] == "assistant"]), 1)
+
     def test_a_later_pass_revalidates_canonical_evidence_after_unexported_result(self):
         data = self.canonical_final()
         with patch.object(self.ledger, "complete", return_value=False):

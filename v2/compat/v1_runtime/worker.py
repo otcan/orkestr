@@ -1436,6 +1436,8 @@ class Worker:
         data = self.ledger.next_input()
         if data:
             drive_foreground(self, data, stop)
+            if getattr(stop, "is_set", lambda: False)():
+                return True  # A stopped foreground never starts new discovery.
         if self._due(self._timers_checked, TIMER_POLL_S):
             self._timers_checked = time.monotonic()
             try:
