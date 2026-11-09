@@ -889,12 +889,15 @@ class Ledger:
                     continue
                 author = data.get("author")
                 local = bool(author) and author.get("role") in LOCAL_ROLES
-                row = {"id": data["remote_id"], "role": "user", "text": data["text"],
+                from .accepted_final_export import parent_text
+                row = {"id": data["remote_id"], "role": "user", "text": parent_text(data),
                        "publicMessageId": data["public_id"], "publicThreadId": data["public_thread_id"],
                        "chatId": data["chat_id"], "accountId": data["account_id"],
                        "source": author["source"] if local else "whatsapp_inbound",
                        "connector": LOCAL_CONNECTOR if local else "whatsapp",
                        "state": "delivered", "deliveryState": "delivered", "observedVia": "rust-pilot-ledger"}
+                if "text" not in data:
+                    row["pruned"] = True
                 if local:
                     row["origin"] = LOCAL_KIND
                 if author:

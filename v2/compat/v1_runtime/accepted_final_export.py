@@ -53,6 +53,26 @@ def _accepted_key(data, reply):
     return "accepted-final:" + hashlib.sha256(raw).hexdigest()
 
 
+def parent_text(data):
+    """A reconciled, accepted answer may retain only its pruned parent identity.
+
+    V1 already owns that original user message; its parent update does not
+    replace text. Ordinary missing bodies and timer materialization stay strict.
+    """
+    if "text" in data:
+        return data["text"]
+    audit = data.get("operator_reconciliation")
+    previous = audit.get("previous") if isinstance(audit, dict) else None
+    if (data.get("phase") != "completed" or not isinstance(previous, dict)
+            or not isinstance(previous.get("refused"), dict)
+            or not previous["refused"].get("reason")
+            or not isinstance(previous.get("settled"), dict)
+            or previous["settled"].get("outcome") != "delivered"
+            or _accepted_key(data, data.get("reply") or {}) is None):
+        raise KeyError("text")
+    return ""
+
+
 def select(db, data, reply):
     """Return (key, already exported), or None to hold without completing.
 

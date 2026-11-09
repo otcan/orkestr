@@ -28,6 +28,8 @@ def exports(ledger):
 def resume_fixture(ledger, data):
     # Only this synthetic fixture models an already reviewed operator resume.
     # The product fix does not reopen inputs or request any Core mutation.
+    data["operator_reconciliation"] = {"previous": {
+        key: copy.deepcopy(data.get(key)) for key in ("phase", "refused", "settled")}}
     for key in ("refused", "settled"):
         data.pop(key, None)
     data["phase"] = "admitted"
@@ -74,6 +76,12 @@ class AcceptedFinalWorkerTests(fixture.IntakeBase):
         self.assertEqual(self.mutations("/window"), [frozen["window_request"]])
         self.assertEqual(self.row("first")["intake"], frozen["intake"])
         self.assertEqual(self.row("first")["keys"], frozen["keys"])
+        listed = self.ledger.listing()["messages"]
+        self.assertEqual(listed[0]["id"], original["remote_id"])
+        self.assertEqual(listed[0]["text"], "")
+        self.assertTrue(listed[0]["pruned"])
+        self.assertEqual(listed[1]["id"], reply["id"])
+        self.assertEqual(listed[1]["text"], reply["text"])
         ack(self.ledger, reply["id"])
         self.assertEqual(exports(self.ledger)[0], old_notice)
 
@@ -186,6 +194,36 @@ class AcceptedFinalLedgerTests(unittest.TestCase):
                      parentMessageId=self.data["remote_id"], text="Normal reply")
         self.assertTrue(self.ledger.complete(self.data, reply))
         self.assertEqual(exports(self.ledger)[0][3], "final:" + self.data["remote_id"])
+
+    def test_missing_ordinary_body_cannot_be_listed_as_a_pruned_parent(self):
+        self.data.pop("text")
+        self.ledger.save(self.data)
+        with self.assertRaises(KeyError):
+            self.ledger.listing()
+
+    def test_pruned_parent_requires_reconciliation_and_current_acceptance(self):
+        self.notice(); reply = self.accepted()
+        self.assertTrue(self.ledger.complete(self.data, reply))
+        original = copy.deepcopy(self.data)
+        for field in ("operator_reconciliation", "accepted", "intake", "reply"):
+            with self.subTest(field=field):
+                changed = copy.deepcopy(original); changed.pop(field)
+                self.ledger.save(changed)
+                with self.assertRaises(KeyError):
+                    self.ledger.listing()
+        changed = copy.deepcopy(original)
+        changed["operator_reconciliation"]["previous"]["settled"]["outcome"] = "uncertain"
+        self.ledger.save(changed)
+        with self.assertRaises(KeyError):
+            self.ledger.listing()
+
+    def test_missing_timer_body_does_not_use_reconciled_parent_exception(self):
+        self.notice(); reply = self.accepted()
+        self.assertTrue(self.ledger.complete(self.data, reply))
+        self.data["origin"] = "timer"
+        self.ledger.save(self.data)
+        with self.assertRaises(KeyError):
+            self.ledger.listing()
 
 
 if __name__ == "__main__":
