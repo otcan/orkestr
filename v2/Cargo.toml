@@ -25,3 +25,7 @@ inherits = "release"
 opt-level = "s"
 lto = true
 codegen-units = 1
+
+# Temporary upstream SQLite security compatibility patch; see vendor provenance.
+[patch.crates-io]
+sqlx-sqlite = { path = "vendor/sqlx-sqlite-0.8.6" }
