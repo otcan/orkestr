@@ -211,11 +211,12 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
     throw new Error('group_reply_history_incomplete');
   }
 
-  const deliverAnswer = (input, group, answer, messages) => outboundSerial('send', async () => {
+  const deliverAnswer = (input, group, answer, messages, verify) => outboundSerial('send', async () => {
     if (deliveryBlocked()) throw new Error('group_delivery_requires_review');
-    return deliverAnswerOnce(input, group, answer, messages);
+    await verify?.();
+    return deliverAnswerOnce(input, group, answer, messages, verify);
   });
-  async function deliverAnswerOnce(input, group, answer, messages) {
+  async function deliverAnswerOnce(input, group, answer, messages, verify) {
     const text = String(answer.text || '').trim();
     if (text === 'NO_REPLY') acknowledgements.mark(input.id, 'no_reply');
     if (!text || text === 'NO_REPLY') return;
@@ -241,6 +242,7 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
       const requestId = `reply:${key(`${input.id}:${answer.id}:${index}`)}`;
       if (db.prepare("SELECT 1 FROM replies WHERE id=? AND state='sent'").get(requestId)) continue;
       await inputThread(input, group);
+      await verify?.();
       // An entry is a text or, for a reply over the budget, its full-text document.
       const entry = chunks[index];
       if (deliveryBlocked()) throw new Error('group_delivery_requires_review');
@@ -257,7 +259,9 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
         db.prepare('INSERT OR IGNORE INTO reply_sent_text VALUES(?,?,?,?)').run(providerId, requestId, sentText, new Date().toISOString());
       log({event: 'reply_delivered', threadId: group.threadId, messageId: answer.id});
     }
-    await replyFiles.deliver(input, group, answer, () => inputThread(input, group));
+    await replyFiles.deliver(input, group, answer, async () => {
+      const view = await inputThread(input, group); await verify?.(); return view;
+    });
     // A mirrored remote-runtime reply: report the confirmed send so V1 can
     // acknowledge it to the runtime. A failed report retries on the next
     // poll without resending (every chunk above is already 'sent').
@@ -402,41 +406,67 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
     }
   }
 
-  // A reply posted after the turn completed (a bound api-session answer, which V1
-  // parents to the latest relay-routed input) is delivered once through the same
-  // durable payload/receipt journal. Only each group's newest completed input
-  // inside the window is watched, polled at most every LATE_REPLY_POLL_MS.
+  // Explicit accepted-run lineage permits a later Rust final without reopening
+  // the original completed route. API-session replies retain newest-input scope.
+  function acceptedRustFinal(message, parent, thread) {
+    const binding = thread?.binding || {};
+    const backend = binding.remoteBackend || binding.remoteRuntimeBackend || binding.runtimeBackend;
+    const remoteThread = binding.remoteThreadId || binding.remoteRuntimeThreadId || binding.delegatedThreadId;
+    const uuid = value => typeof value === 'string' && /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(value);
+    return message.source === 'rust-v2-pilot' && message.remoteBackend === 'rust-v2' && backend === 'rust-v2'
+      && binding.remoteRuntimeEnabled !== false && binding.remoteRouterEnabled !== false && binding.mirrorToWhatsApp === false
+      && parent?.role === 'user' && parent.remoteBackend === backend && parent.remoteThreadId === remoteThread
+      && uuid(parent.remoteMessageId) && message.remoteThreadId === remoteThread
+      && message.remoteParentMessageId === parent.remoteMessageId && message.remoteOriginalInputId === parent.remoteMessageId
+      && message.remoteLayer === 'deep' && message.remoteIdentitySource === 'run'
+      && uuid(message.remoteRunId) && uuid(message.remoteMessageId)
+      && /^[1-9][0-9]*$/.test(String(message.remoteExportSequence || '')) && Number.isSafeInteger(Number(message.remoteExportSequence));
+  }
   const lastLatePoll = new Map();
   async function deliverLateReplies(inputs, immediate = false) {
-    const latest = new Map();
-    for (const input of inputs) if (!heldInputIds.has(input.id) && groups.has(input.chat_id)) latest.set(input.chat_id, input);
-    for (const [chatId, input] of latest) {
-      const group = groups.get(chatId);
-      const at = Date.parse(input.created_at);
-      if (!Number.isFinite(at) || now() - at > LATE_REPLY_WINDOW_MS) continue;
-      const route = db.prepare('SELECT * FROM routed WHERE id=? AND completed=1').get(input.id);
-      if (!route || (!immediate && now() - (lastLatePoll.get(chatId) || 0) < LATE_REPLY_POLL_MS)) continue;
-      if (routeFence && fencedGroup(group)) {
-        const active = routeFence.current();
-        if (active?.route !== config.routeControl.routeId || at < Date.parse(active.since)) continue;
-      }
+    const byChat = new Map();
+    for (const input of inputs) if (!heldInputIds.has(input.id) && groups.has(input.chat_id)) {
+      if (!byChat.has(input.chat_id)) byChat.set(input.chat_id, []);
+      byChat.get(input.chat_id).push(input);
+    }
+    for (const [chatId, chatInputs] of byChat) {
+      const group = groups.get(chatId), newest = chatInputs.at(-1);
+      if (!immediate && now() - (lastLatePoll.get(chatId) || 0) < LATE_REPLY_POLL_MS) continue;
+      const candidates = chatInputs.flatMap(input => {
+        const at = Date.parse(input.created_at), route = db.prepare('SELECT * FROM routed WHERE id=? AND completed=1').get(input.id);
+        if (!route || route.thread_id !== group.threadId || !Number.isFinite(at) || now() - at > LATE_REPLY_WINDOW_MS) return [];
+        if (routeFence && fencedGroup(group)) {
+          const active = routeFence.current();
+          if (active?.route !== config.routeControl.routeId || at < Date.parse(active.since)) return [];
+        }
+        return [{input, at, route}];
+      });
+      if (!candidates.length) continue;
       lastLatePoll.set(chatId, now());
       try {
-        await inputSerial(input.id, async () => {
         if (deliveryBlocked()) throw new Error('group_delivery_requires_review');
-        const page = await api(`/api/threads/${encodeURIComponent(group.threadId)}/messages?limit=50`);
-        const messages = page.messages || [];
-        const late = messages.filter(m => m.role === 'assistant' && m.state === 'completed' && finalPhases.has(m.phase)
-            && lateSources.has(m.source) && m.parentMessageId === route.message_id
-            && Date.parse(m.createdAt) >= at && Date.parse(m.createdAt) - at <= LATE_REPLY_WINDOW_MS)
-          .sort((a, b) => Number(a.cursor || 0) - Number(b.cursor || 0));
-        for (const answer of late) await deliverAnswer(input, group, answer, messages);
+        const thread = await threadFor(group);
+        const {messages = []} = await api(`/api/threads/${encodeURIComponent(group.threadId)}/messages?limit=50`);
+        for (const {input, at, route} of candidates) await inputSerial(input.id, async () => {
+          const parent = messages.find(m => m.id === route.message_id);
+          const late = messages.filter(m => m.role === 'assistant' && m.state === 'completed' && finalPhases.has(m.phase)
+            && m.parentMessageId === route.message_id && Date.parse(m.createdAt) >= at && Date.parse(m.createdAt) - at <= LATE_REPLY_WINDOW_MS
+            && ((input === newest && lateSources.has(m.source)) || acceptedRustFinal(m, parent, thread)))
+            .sort((a, b) => Number(a.cursor || 0) - Number(b.cursor || 0));
+          for (const answer of late) {
+            const verify = answer.source === 'rust-v2-pilot' ? async () => {
+              const current = db.prepare('SELECT * FROM routed WHERE id=?').get(input.id);
+              if (!current?.completed || current.thread_id !== group.threadId || current.message_id !== route.message_id
+                  || !acceptedRustFinal(answer, parent, await threadFor(group))) throw new Error('group_remote_final_binding_changed');
+            } : undefined;
+            await deliverAnswer(input, group, answer, messages, verify);
+          }
+          errors.delete(`late:${input.id}`);
         });
-        errors.delete(`late:${input.id}`);
       } catch (error) {
-        const code = errorCode(error);
-        if (errors.get(`late:${input.id}`) !== code) log({event: 'group_relay_error', threadId: group.threadId, code});
-        errors.set(`late:${input.id}`, code);
+        const code = errorCode(error), id = candidates[0].input.id;
+        if (errors.get(`late:${id}`) !== code) log({event: 'group_relay_error', threadId: group.threadId, code});
+        errors.set(`late:${id}`, code);
       }
     }
   }
