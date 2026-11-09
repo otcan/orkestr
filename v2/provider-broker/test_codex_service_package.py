@@ -13,7 +13,7 @@ from codex_bounded.trust import digest, exists, process, protected, Refused as T
 from codex_service.contract import Refused
 from codex_service.custody import StateLock, OwnedSocket
 from codex_service.manager import Manager
-from codex_service.package import CODEX_QUOTA_FILE_ENV, DESKTOP_BROKER_ENV, TIMER_CONFIG_ENV, V1_CHAT_ICONS_ENV, LIVE_MAP_ENV, METRICS_BIND_ENV, ACCESS_LOG_ENV, WHATSAPP_CHATS_ENV, Package, live_map_path
+from codex_service.package import PROVIDER_QUOTA_ENV, CODEX_QUOTA_FILE_ENV, DESKTOP_BROKER_ENV, TIMER_CONFIG_ENV, V1_CHAT_ICONS_ENV, LIVE_MAP_ENV, METRICS_BIND_ENV, ACCESS_LOG_ENV, WHATSAPP_CHATS_ENV, Package, live_map_path
 from codex_service_fixture import ServiceFixture, UID, GID
 
 
@@ -38,6 +38,10 @@ class LiveMapPathTests(unittest.TestCase):
         self.assertNotIn(DESKTOP_BROKER_ENV, Package.environment(stub))
         stub.desktop_broker = "/var/lib/synthetic/desktop-broker.json"
         self.assertEqual(Package.environment(stub)[DESKTOP_BROKER_ENV], "/var/lib/synthetic/desktop-broker.json")
+        with patch.dict(os.environ, {PROVIDER_QUOTA_ENV: "/untrusted/inherited.json"}):
+            self.assertNotIn(PROVIDER_QUOTA_ENV, Package.environment(stub))
+        stub.provider_quota = "/var/lib/synthetic/provider-quota.json"
+        self.assertEqual(Package.environment(stub)[PROVIDER_QUOTA_ENV], stub.provider_quota)
         self.assertNotIn(TIMER_CONFIG_ENV, Package.environment(stub))
         stub.timer_config = "/var/lib/synthetic/timers.json"
         self.assertEqual(Package.environment(stub)[TIMER_CONFIG_ENV], "/var/lib/synthetic/timers.json")
