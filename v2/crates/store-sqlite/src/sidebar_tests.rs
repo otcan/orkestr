@@ -2,6 +2,8 @@ use super::*;
 use crate::conversation_resources::tests_settings::Case;
 use orkestr_v2_application::IntakeStore;
 use orkestr_v2_contracts::*;
+#[path = "sidebar_link_tests.rs"]
+mod link;
 
 fn archived(thread: &str, texts: &[(&str, &str, &str)]) -> ArchivedImportRequest {
     ArchivedImportRequest {

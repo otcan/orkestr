@@ -194,7 +194,7 @@ impl ManagerClient {
         }
         Ok(())
     }
-    async fn managed_fenced_exchange(
+    pub(super) async fn managed_fenced_exchange(
         &self,
         request: Value,
         deadline: Instant,

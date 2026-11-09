@@ -43,6 +43,7 @@ pub use managed_operation::{
     CompletedManagedOperation, ConsumedManagedOperation, ManagedCallerEvidence,
     ManagedOperationConsumption, ManagedOperationOutcome, ManagedOperationParent,
     ManagedOperationRenewal, ManagedOperationRequest, ManagedOperationSetup,
+    NativeWorkerAvailability, NativeWorkerCall, NativeWorkerObservation,
 };
 pub(crate) mod deep_groups;
 pub use deep_groups::{DEFAULT_DEEP_BURST_QUIET_MS, MAX_DEEP_BURST_QUIET_MS};
@@ -111,6 +112,8 @@ mod retirement;
 #[cfg(test)]
 mod retirement_tests;
 mod status;
+mod status_projection;
+pub use execution_window::{ConversationStatusSnapshot, WindowQueueSnapshot};
 mod stop;
 mod stopped_metadata;
 mod terminal_restart;

@@ -26,8 +26,6 @@ impl Store {
         if !request.is_valid() {
             return Err(RuntimeStoreError::InvalidInput);
         }
-        let context = self.context()?;
-        let digest = request_digest(request);
         #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
         let workspace = self
             .check_workspace_before_writer(&self.context()?.owner, conversation, None)
@@ -40,6 +38,27 @@ impl Store {
         store
             .task_browser_in(&mut tx, credential, conversation)
             .await?;
+        let result = store
+            .create_worker_task_in(&mut tx, conversation, request, scheduler_available)
+            .await?;
+        tx.commit().await.map_err(db)?;
+        Ok(result)
+    }
+
+    /// Shared data insertion after the caller-specific browser or native fence.
+    /// This helper does not authenticate a caller or create dispatch authority.
+    pub(in crate::production_runtime) async fn create_worker_task_in(
+        &self,
+        tx: &mut SqliteConnection,
+        conversation: &ConversationId,
+        request: &WorkerTaskCreateRequest,
+        scheduler_available: bool,
+    ) -> Result<WorkerTaskReceipt> {
+        if !request.is_valid() {
+            return Err(RuntimeStoreError::InvalidInput);
+        }
+        let context = self.context()?;
+        let digest = request_digest(request);
         if let Some(row) = sqlx::query(
             "SELECT * FROM worker_tasks WHERE owner_id=? AND parent_run_id=? AND request_key=?",
         )
@@ -57,14 +76,13 @@ impl Store {
                 return Err(RuntimeStoreError::Conflict);
             }
             let result = receipt(&row)?;
-            tx.commit().await.map_err(db)?;
             return Ok(result);
         }
         if !scheduler_available {
             return Err(RuntimeStoreError::Unavailable);
         }
-        let parent = store
-            .worker_parent_current_in(&mut tx, &request.parent_run_id)
+        let parent = self
+            .worker_parent_current_in(&mut *tx, &request.parent_run_id)
             .await?;
         if parent.get::<&str, _>("conversation_id") != conversation.to_string() {
             return Err(RuntimeStoreError::NotFound);
@@ -88,7 +106,7 @@ impl Store {
             return Err(RuntimeStoreError::Busy);
         }
         let id = Uuid::new_v4();
-        let clock = now(&mut tx).await?;
+        let clock = now(&mut *tx).await?;
         let row = sqlx::query("INSERT INTO worker_tasks(id,owner_id,conversation_id,parent_run_id,context_id,incarnation_id,parent_control_revision,source_message_id,source_event_id,request_key,request_digest,lifetime_ms,created_at_ms,state,issuer_token_hash,execution_budget_ms) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,'queued',?,?) RETURNING *")
             .bind(id.to_string()).bind(context.owner.to_string()).bind(conversation.to_string())
             .bind(request.parent_run_id.to_string()).bind(&context.id).bind(&context.incarnation)
@@ -104,7 +122,6 @@ impl Store {
             .await
             .map_err(db)?;
         let result = receipt(&row)?;
-        tx.commit().await.map_err(db)?;
         Ok(result)
     }
 

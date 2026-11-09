@@ -363,7 +363,7 @@ fn invalid() -> Error {
         "Invalid window request",
     )
 }
-fn store_error(error: RuntimeStoreError) -> Error {
+pub(crate) fn store_error(error: RuntimeStoreError) -> Error {
     match error {
         RuntimeStoreError::Unauthorized => unauthorized(),
         RuntimeStoreError::InvalidInput => invalid(),

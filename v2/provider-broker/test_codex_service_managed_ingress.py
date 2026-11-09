@@ -47,6 +47,26 @@ class ManagedPackageTests(identity_tests.SplitPackageTests):
             with self.assertRaisesRegex(Refused,'managed_split_configuration'):Package(self.fixture.package,expected)
 
 
+    def test_native_workers_gate_is_explicit_true_and_requires_managed_split(self):
+        from codex_service.package import Package
+        self.select_split();service=self.fixture.package/'service.json';manifest=self.fixture.package/'manifest.json'
+        baseline=json.loads(service.read_text())
+        def selected(flags):
+            value=dict(baseline);value.update(flags);service.write_text(json.dumps(value))
+            record=json.loads(manifest.read_text());record['files']['service.json']=self.digest(service)
+            manifest.write_text(json.dumps(record));return Package(self.fixture.package,self.digest(manifest))
+        for flags in ({'managed_workers':True},{'managed_operations':True,'managed_workers':False},
+                      {'managed_operations':True,'managed_workers':1}):
+            with self.assertRaises(Refused):selected(flags)
+        self.assertNotIn('ORKESTR_V2_MANAGED_WORKERS_ENABLED',selected({'managed_operations':True}).environment())
+        for budget in (True,29999,3600001):
+            with self.assertRaises(Refused):selected({'managed_operations':True,'managed_workers':True,'managed_worker_execution_budget_ms':budget})
+        with self.assertRaises(Refused):selected({'managed_operations':True,'managed_worker_execution_budget_ms':300000})
+        enabled=selected({'managed_operations':True,'managed_workers':True,'managed_worker_execution_budget_ms':300000})
+        self.assertEqual(enabled.environment()['ORKESTR_V2_MANAGED_WORKERS_ENABLED'],'1')
+        self.assertEqual(enabled.environment()['ORKESTR_V2_MANAGED_WORKER_EXECUTION_BUDGET_MS'],'300000')
+
+
 class PacketTests(unittest.TestCase):
     def test_closed_fields_and_text_bounds(self):
         self.assertEqual(packet(canonical(REQUEST)),REQUEST)

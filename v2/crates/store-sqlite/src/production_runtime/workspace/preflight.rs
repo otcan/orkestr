@@ -19,9 +19,11 @@ pub(crate) struct WorkspaceCheck {
     deadline: Option<Instant>,
     physical_deadline: Instant,
     alive: AtomicBool,
-    effect: AtomicBool,
+    effect: Arc<AtomicBool>,
     stamp_changed: AtomicBool,
-    handoff_expired: AtomicBool,
+    handoff_expired: Arc<AtomicBool>,
+    #[cfg(test)]
+    forced_handoff_expiry: AtomicBool,
     context: Option<(String, String, i64)>,
     retained: Option<super::filesystem::RetainedStamp>,
 }
@@ -45,6 +47,13 @@ impl Drop for WorkspacePreflight {
     }
 }
 impl WorkspacePreflight {
+    #[cfg(test)]
+    pub(in crate::production_runtime) fn expire_terminal_handoff_for_test(&self) {
+        self.proof
+            .forced_handoff_expiry
+            .store(true, Ordering::SeqCst);
+    }
+
     pub(in crate::production_runtime) fn terminal_handoff_refresh_eligible(&self) -> bool {
         self.owns
             && self.proof.alive.load(Ordering::SeqCst)
@@ -128,9 +137,11 @@ impl WorkspacePreflight {
             physical_deadline: self.proof.physical_deadline,
             retained: self.proof.retained,
             alive: AtomicBool::new(true),
-            effect: AtomicBool::new(false),
+            effect: self.proof.effect.clone(),
             stamp_changed: AtomicBool::new(false),
-            handoff_expired: AtomicBool::new(false),
+            handoff_expired: self.proof.handoff_expired.clone(),
+            #[cfg(test)]
+            forced_handoff_expiry: AtomicBool::new(false),
             context: Some((
                 context.id.clone(),
                 context.incarnation.clone(),
@@ -152,10 +163,20 @@ impl WorkspaceCheck {
         if !self.alive.load(Ordering::SeqCst) {
             return Err(RuntimeStoreError::Fenced);
         }
-        if self
+        #[cfg(test)]
+        let handoff_now =
+            crate::production_runtime::terminal_restart::handoff_test_control::handoff_clock(
+                &self.conversation,
+            )
+            .unwrap_or_else(Instant::now);
+        #[cfg(not(test))]
+        let handoff_now = Instant::now();
+        let expired = self
             .deadline
-            .is_some_and(|deadline| Instant::now() >= deadline)
-        {
+            .is_some_and(|deadline| handoff_now >= deadline);
+        #[cfg(test)]
+        let expired = expired || self.forced_handoff_expiry.load(Ordering::SeqCst);
+        if expired {
             self.handoff_expired.store(true, Ordering::SeqCst);
             return Err(RuntimeStoreError::Fenced);
         }
@@ -320,9 +341,11 @@ impl Store {
             physical_deadline: deadline,
             installation,
             alive: AtomicBool::new(true),
-            effect: AtomicBool::new(false),
+            effect: Arc::new(AtomicBool::new(false)),
             stamp_changed: AtomicBool::new(false),
-            handoff_expired: AtomicBool::new(false),
+            handoff_expired: Arc::new(AtomicBool::new(false)),
+            #[cfg(test)]
+            forced_handoff_expiry: AtomicBool::new(false),
             retained,
             context: self
                 .authority

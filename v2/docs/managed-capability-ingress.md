@@ -15,7 +15,7 @@ Caller JSON cannot supply those fields. Fast and Worker processes cannot borrow
 Deep authority, including a Fast launcher whose metadata is a read-only Deep
 projection.
 
-Closed operations currently describe a desk operation identifier or a Root
+The original effect operations describe a desk operation identifier or a Root
 request's action, resource and **agent-requested summary**. The latter is never
 verbatim owner input, owner approval, a decision, or an overrule. Request bytes
 are bounded; every window has a durable claim bound. An exact retry finds the
@@ -125,3 +125,9 @@ TCP has no Unix SO_PEERCRED equivalent. Existing operator terminals and sudo
 policy are unchanged. In particular NNP alone cannot prevent delegation to an
 accessible same-UID privileged operator daemon. Such IPC access remains a
 separate production qualification blocker, even when direct sudo is denied.
+
+The separately gated [Native Worker bridge](native-worker-managed-bridge.md)
+adds source-bound task create/status and bounded observation over the existing
+Core Worker scheduler. It does not use the Desk/Root one-use operation table or
+change their wire contracts. Current Core capability observation is required;
+registration alone does not establish Worker readiness.

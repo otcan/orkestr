@@ -6,8 +6,9 @@
 use super::*;
 use axum::{
     body::to_bytes,
-    extract::{rejection::QueryRejection, Path, Query},
+    extract::{rejection::QueryRejection, Query},
 };
+use orkestr_v2_application::runtime::RuntimeStoreError;
 use serde_json::{json, Value};
 
 /// Same bound as the browser poller.
@@ -72,23 +73,87 @@ pub(crate) async fn read(
     query: Result<Query<Ids>, QueryRejection>,
 ) -> Result<Response, Error> {
     // One authentication failure answers the whole request.
-    browser::owner(&state, &headers).await?;
+    let owner = browser::owner(&state, &headers).await?;
+    let credential = browser::credential(&headers)?;
     let Query(query) = query.map_err(|_| invalid())?;
     let ids = parse_ids(&query.ids)?;
-    let mut rows = Vec::with_capacity(ids.len());
-    for id in ids {
-        let execution = row(execution::status(
-            State(state.clone()),
-            headers.clone(),
-            Path(id.clone()),
-            Ok(Query(execution::StatusQuery::default())),
+    let conversations: Vec<_> = ids
+        .iter()
+        .map(|id| ConversationId(Uuid::parse_str(id).expect("validated UUID")))
+        .collect();
+    let snapshots = state
+        .store
+        .conversation_statuses_authenticated(
+            &credential,
+            &owner,
+            &conversations,
+            state.window_controller.is_some(),
         )
-        .await)
-        .await;
-        let queue =
-            row(window_http::queue(State(state.clone()), headers.clone(), Path(id.clone())).await)
-                .await;
-        rows.push(json!({"id": id, "execution": execution, "queue": queue}));
+        .await
+        .map_err(|error| match error {
+            RuntimeStoreError::Unauthorized => unauthorized(),
+            _ => Error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "store_unavailable",
+                "Execution status unavailable",
+            ),
+        })?;
+    let capacity = state
+        .window_controller
+        .as_ref()
+        .filter(|_| snapshots.iter().any(|row| matches!(row.queue, Some(Ok(_)))))
+        .map(|controller| controller.queue_snapshot_capacity(&credential));
+    let mut rows = Vec::with_capacity(snapshots.len());
+    for snapshot in snapshots {
+        let conversation = snapshot.conversation_id;
+        let execution = snapshot
+            .execution
+            .map_err(|error| match error {
+                RuntimeStoreError::NotFound | RuntimeStoreError::Unauthorized => {
+                    Error(StatusCode::NOT_FOUND, "not_found", "Conversation not found")
+                }
+                _ => Error(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "store_unavailable",
+                    "Execution status unavailable",
+                ),
+            })
+            .and_then(|status| {
+                execution::current_status(
+                    &owner,
+                    &conversation,
+                    state
+                        .registered_execution_scope(&owner, &conversation)
+                        .as_ref(),
+                    status,
+                )
+            });
+        let queue = match (snapshot.queue, capacity) {
+            (Some(result), Some(capacity)) => {
+                result.map_err(window_http::store_error).map(|queue| {
+                    Json(orkestr_v2_contracts::ExecutionWindowQueue {
+                        conversation_id: conversation.clone(),
+                        capacity,
+                        active: queue.active,
+                        queued_total: queue.queued_total,
+                        entries: queue.entries,
+                    })
+                    .into_response()
+                })
+            }
+            (Some(Err(error)), None) => Err(window_http::store_error(error)),
+            (None, _) => Err(Error(
+                StatusCode::NOT_FOUND,
+                "beta_unconfigured",
+                "Beta execution is not configured",
+            )),
+            _ => Err(Error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "window_unavailable",
+                "Window unavailable",
+            )),
+        };
+        rows.push(json!({"id": conversation, "execution": row(execution).await, "queue": row(queue).await}));
     }
     Ok(Json(json!({"rows": rows})).into_response())
 }

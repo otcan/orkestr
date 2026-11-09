@@ -52,6 +52,7 @@ pub use production_runtime::{
     CompletedManagedOperation, ConsumedManagedOperation, ManagedCallerEvidence,
     ManagedOperationConsumption, ManagedOperationOutcome, ManagedOperationParent,
     ManagedOperationRenewal, ManagedOperationRequest, ManagedOperationSetup,
+    NativeWorkerAvailability, NativeWorkerCall, NativeWorkerObservation,
 };
 mod fast_run_receipt;
 mod source_context;
@@ -292,6 +293,8 @@ impl Store {
         id.map(|s| parse(s).map(OwnerId)).transpose()
     }
 }
+
+pub use production_runtime::{ConversationStatusSnapshot, WindowQueueSnapshot};
 
 pub use production_runtime::{
     CodexSteeringAuthority, ConsumedSteering, SteeringConsumption, SteeringReservation,
