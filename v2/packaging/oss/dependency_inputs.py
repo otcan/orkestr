@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+import tomllib
 
 
 def create(root, output):
@@ -26,6 +27,33 @@ def create(root, output):
         manifests.add(relative(package['manifest_path']))
         for target in package['targets']:
             targets.add(relative(target['src_path']))
+    # --no-deps deliberately excludes registry dependencies, including local
+    # path patches. Their manifests must still exist when the download-only
+    # layer resolves Cargo.lock. Keep target contents empty like workspace code.
+    document = tomllib.loads((workspace / 'Cargo.toml').read_text())
+    for scope in document.get('patch', {}).values():
+        for specification in scope.values():
+            if not isinstance(specification, dict) or 'path' not in specification:
+                continue
+            directory = workspace / specification['path']
+            manifest = directory / 'Cargo.toml'
+            manifests.add(relative(manifest))
+            package = tomllib.loads(manifest.read_text())
+            library = package.get('lib', {})
+            library_path = directory / library.get('path', 'src/lib.rs')
+            if library_path.exists() or library_path.is_symlink() or 'path' in library:
+                targets.add(relative(library_path))
+            for kind in ('bin', 'example', 'test', 'bench'):
+                for target in package.get(kind, []):
+                    if 'path' in target:
+                        targets.add(relative(directory / target['path']))
+            for default in ('src/main.rs', 'build.rs'):
+                candidate = directory / default
+                if candidate.exists() or candidate.is_symlink():
+                    targets.add(relative(candidate))
+            build = package.get('package', {}).get('build')
+            if isinstance(build, str):
+                targets.add(relative(directory / build))
     # Cargo discovers configuration relative to its working directory. Include
     # it in the key rather than silently using a different registry or flags.
     for parent in (root, workspace):
