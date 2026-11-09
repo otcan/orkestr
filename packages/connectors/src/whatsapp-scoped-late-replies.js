@@ -25,3 +25,11 @@ export function completedLateRoutes({inputs, threadId, readRoute, now, windowMs,
     return [{input, at, route}];
   });
 }
+
+export function lateReplyCandidates({messages, parent, thread, route, at, windowMs, newest}) {
+  return messages.filter(message => message.role === 'assistant' && message.state === 'completed'
+    && ['final_answer', 'final'].includes(message.phase) && message.parentMessageId === route.message_id
+    && Date.parse(message.createdAt) >= at && Date.parse(message.createdAt) - at <= windowMs
+    && ((newest && message.source === 'api-session') || acceptedRustFinal(message, parent, thread)))
+    .sort((a, b) => Number(a.cursor || 0) - Number(b.cursor || 0));
+}
