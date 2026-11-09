@@ -1,3 +1,4 @@
+import {acceptedRustFinal, completedLateRoutes} from './whatsapp-scoped-late-replies.js';
 import {readGroupInputs} from './scoped-group-inbox.js';
 import {buildReplyTo} from './scoped-group-reply-quote.js';
 import {createScopedAcknowledgements} from './scoped-group-acknowledgements.js';
@@ -408,20 +409,6 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
 
   // Explicit accepted-run lineage permits a later Rust final without reopening
   // the original completed route. API-session replies retain newest-input scope.
-  function acceptedRustFinal(message, parent, thread) {
-    const binding = thread?.binding || {};
-    const backend = binding.remoteBackend || binding.remoteRuntimeBackend || binding.runtimeBackend;
-    const remoteThread = binding.remoteThreadId || binding.remoteRuntimeThreadId || binding.delegatedThreadId;
-    const uuid = value => typeof value === 'string' && /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(value);
-    return message.source === 'rust-v2-pilot' && message.remoteBackend === 'rust-v2' && backend === 'rust-v2'
-      && binding.remoteRuntimeEnabled !== false && binding.remoteRouterEnabled !== false && binding.mirrorToWhatsApp === false
-      && parent?.role === 'user' && parent.remoteBackend === backend && parent.remoteThreadId === remoteThread
-      && uuid(parent.remoteMessageId) && message.remoteThreadId === remoteThread
-      && message.remoteParentMessageId === parent.remoteMessageId && message.remoteOriginalInputId === parent.remoteMessageId
-      && message.remoteLayer === 'deep' && message.remoteIdentitySource === 'run'
-      && uuid(message.remoteRunId) && uuid(message.remoteMessageId)
-      && /^[1-9][0-9]*$/.test(String(message.remoteExportSequence || '')) && Number.isSafeInteger(Number(message.remoteExportSequence));
-  }
   const lastLatePoll = new Map();
   async function deliverLateReplies(inputs, immediate = false) {
     const byChat = new Map();
@@ -432,15 +419,9 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
     for (const [chatId, chatInputs] of byChat) {
       const group = groups.get(chatId), newest = chatInputs.at(-1);
       if (!immediate && now() - (lastLatePoll.get(chatId) || 0) < LATE_REPLY_POLL_MS) continue;
-      const candidates = chatInputs.flatMap(input => {
-        const at = Date.parse(input.created_at), route = db.prepare('SELECT * FROM routed WHERE id=? AND completed=1').get(input.id);
-        if (!route || route.thread_id !== group.threadId || !Number.isFinite(at) || now() - at > LATE_REPLY_WINDOW_MS) return [];
-        if (routeFence && fencedGroup(group)) {
-          const active = routeFence.current();
-          if (active?.route !== config.routeControl.routeId || at < Date.parse(active.since)) return [];
-        }
-        return [{input, at, route}];
-      });
+      const candidates = completedLateRoutes({inputs: chatInputs, threadId: group.threadId, now, windowMs: LATE_REPLY_WINDOW_MS,
+        readRoute: id => db.prepare('SELECT * FROM routed WHERE id=? AND completed=1').get(id),
+        fence: routeFence && fencedGroup(group) ? {read: () => routeFence.current(), routeId: config.routeControl.routeId} : null});
       if (!candidates.length) continue;
       lastLatePoll.set(chatId, now());
       try {
