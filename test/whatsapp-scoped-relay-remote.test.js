@@ -55,7 +55,7 @@ async function fixture(t, { binding = {} } = {}) {
     const body = options.body ? JSON.parse(options.body) : null;
     if (parsed.pathname.endsWith("/input")) {
       runtime.inputs.push(body);
-      if (runtime.inputStatus) return Response.json({ ok: false, error: "synthetic_refusal" }, { status: runtime.inputStatus });
+      if (runtime.inputStatus) return Response.json(runtime.inputFailure || { ok: false, error: "synthetic_refusal" }, { status: runtime.inputStatus });
       runtime.user = {
         id: "example-remote-user", role: "user", source: "whatsapp_inbound", connector: "whatsapp",
         publicMessageId: body.publicMessageId, publicThreadId: body.publicThreadId, state: "delivered",
@@ -155,6 +155,72 @@ test("a transient runtime failure is retried by the relay; a definite refusal is
   assert.equal(repeat.refused, true);
   assert.equal(runtime.inputs.length, 2);
   assert.equal((await listThreadMessages("example-thread", env)).length, 2);
+});
+
+test("an explicit adapter capacity conflict retries the identical input before one acceptance", async (t) => {
+  const { env, runtime, fetchImpl, relayInput } = await fixture(t);
+  const thread = await getThread("example-thread", env);
+  const remote = scopedRelayRemoteBinding(thread, relayBody, env);
+  const message = await relayInput();
+  runtime.inputStatus = 409;
+  runtime.inputFailure = { ok: false, error: "binding_capacity_reached" };
+  await assert.rejects(forwardScopedRelayInputToRemote({ thread, message, remote }, env, fetchImpl),
+    (error) => error.message === "scoped_relay_remote_unavailable" && error.statusCode === 502);
+  let rows = await listThreadMessages("example-thread", env);
+  assert.equal(rows.length, 1, "no terminal refusal answer during backpressure");
+  assert.equal(rows[0].state, "queued");
+  assert.equal(rows[0].remoteMessageId, undefined);
+  assert.equal(runtime.user, null, "the refused attempt was not accepted");
+  assert.equal(runtime.sends, 0);
+  assert.deepEqual(runtime.acks, []);
+
+  runtime.inputStatus = 0;
+  assert.equal((await forwardScopedRelayInputToRemote({ thread, message: rows[0], remote }, env, fetchImpl)).forwarded, true);
+  assert.equal(runtime.inputs.length, 2);
+  assert.deepEqual(runtime.inputs[1], runtime.inputs[0], "original ID, author, source and body are immutable");
+  assert.equal(runtime.inputs[1].publicMessageId, message.id);
+  assert.equal(runtime.inputs[1].originOwner, true);
+  rows = await listThreadMessages("example-thread", env);
+  assert.equal((await forwardScopedRelayInputToRemote({ thread, message: rows[0], remote }, env, fetchImpl)).duplicate, true);
+  assert.equal(runtime.inputs.length, 2, "an acknowledged retry is never resubmitted");
+});
+
+test("capacity retries retain the existing age bound", async (t) => {
+  const { env, runtime, fetchImpl, relayInput } = await fixture(t);
+  const thread = await getThread("example-thread", env);
+  const remote = scopedRelayRemoteBinding(thread, relayBody, env);
+  const message = { ...await relayInput(), createdAt: new Date(Date.now() - 31 * 60 * 1000).toISOString() };
+  runtime.inputStatus = 409;
+  runtime.inputFailure = { ok: false, error: "binding_capacity_reached" };
+  const result = await forwardScopedRelayInputToRemote({ thread, message, remote }, env, fetchImpl);
+  assert.equal(result.refused, true);
+  assert.equal(result.error, "remote_runtime_input_expired:409");
+  assert.equal(runtime.user, null);
+  const rows = await listThreadMessages("example-thread", env);
+  assert.equal(rows.length, 2);
+  assert.equal(rows[0].state, "failed");
+  assert.match(rows[1].text, /input_expired:409/);
+});
+
+test("other conflicts and an unstructured capacity message remain terminal refusals", async (t) => {
+  for (const [status, payload] of [
+    [409, { ok: false, error: "input_identity_changed" }],
+    [409, { ok: false, message: "binding_capacity_reached" }],
+    [422, { ok: false, error: "binding_capacity_reached" }],
+  ]) await t.test(JSON.stringify([status, payload]), async (t) => {
+    const { env, runtime, fetchImpl, relayInput } = await fixture(t);
+    const thread = await getThread("example-thread", env);
+    const remote = scopedRelayRemoteBinding(thread, relayBody, env);
+    const message = await relayInput();
+    runtime.inputStatus = status;runtime.inputFailure = payload;
+    assert.equal((await forwardScopedRelayInputToRemote({ thread, message, remote }, env, fetchImpl)).refused, true);
+    const rows = await listThreadMessages("example-thread", env);
+    assert.equal(rows.length, 2);
+    assert.equal(rows[0].state, "failed");
+    assert.equal(runtime.user, null);
+    assert.equal((await forwardScopedRelayInputToRemote({ thread, message: rows[0], remote }, env, fetchImpl)).refused, true);
+    assert.equal(runtime.inputs.length, 1);
+  });
 });
 
 test("the mirrored reply is never sent by the legacy outbox and is acknowledged after the relay's receipt", async (t) => {
@@ -315,6 +381,22 @@ test("an admitted group participant is forwarded with its own author and no owne
     connector: "whatsapp", accountId: "example-account", chatId: "example-group@g.us", threadId: "example-thread",
     senderId: lid, participantId: lid, fromMe: false, phoneId: phone,
   });
+});
+
+test("a capacity retry preserves a participant's original scope without owner authority", async (t) => {
+  const { env, runtime, fetchImpl, relayInput } = await fixture(t);
+  const thread = await getThread("example-thread", env);
+  const remote = scopedRelayRemoteBinding(thread, participantBody(), env);
+  const message = await relayInput();
+  runtime.inputStatus = 409;runtime.inputFailure = { ok: false, error: "binding_capacity_reached" };
+  await assert.rejects(forwardScopedRelayInputToRemote({ thread, message, remote }, env, fetchImpl), /scoped_relay_remote_unavailable/);
+  runtime.inputStatus = 0;
+  const [stored] = await listThreadMessages("example-thread", env);
+  assert.equal((await forwardScopedRelayInputToRemote({ thread, message: stored, remote }, env, fetchImpl)).forwarded, true);
+  assert.deepEqual(runtime.inputs[1], runtime.inputs[0]);
+  assert.equal(runtime.inputs[1].originOwner, false);
+  assert.equal(runtime.inputs[1].controlAllowed, false);
+  assert.equal(runtime.inputs[1].from, lid);
 });
 
 test("a phone-JID participant needs no label, and an unverified or owner-claiming participant is refused", async (t) => {

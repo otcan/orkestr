@@ -40,6 +40,7 @@ pub mod deploy_drain;
 mod deploy_maintenance;
 mod desktop_broker;
 mod desktop_http;
+mod desktop_inventory_http;
 mod desktop_open_http;
 mod encrypted_upload_http;
 pub mod encrypted_upload_ingest;
@@ -88,6 +89,7 @@ pub mod stop_execution;
 mod thread_asks_http;
 pub mod thread_icons;
 pub mod timer_bootstrap;
+mod timer_capabilities_http;
 pub mod timer_http;
 mod timer_lifecycle;
 mod tracker_actions_http;
@@ -584,7 +586,7 @@ fn desktop_slow_path(path: &str) -> bool {
             _,
             "desktops",
             _,
-            "acquire" | "heartbeat"
+            "acquire" | "heartbeat" | "reset"
         ]
     )
 }
@@ -668,6 +670,7 @@ pub fn router_with_google_catalog(
         .merge(conversation_status_http::router())
         .merge(host_metrics::router())
         .merge(desktop_http::router())
+        .merge(desktop_inventory_http::router())
         .merge(desktop_open_http::router())
         .merge(sidebar_http::router())
         .merge(message_attachments::router())
@@ -681,6 +684,7 @@ pub fn router_with_google_catalog(
         .merge(thread_icons::router())
         .merge(thread_asks_http::router())
         .merge(agent_timers_http::router())
+        .merge(timer_capabilities_http::router())
         .merge(v1_links::router())
         .merge(v1_manage_http::router())
         .merge(v1_workers_http::router())

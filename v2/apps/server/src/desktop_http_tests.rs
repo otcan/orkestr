@@ -26,6 +26,12 @@ fn handle(v1: &mut FakeV1, method: &str, path: &str, auth: bool, body: Value) ->
     if !auth {
         return reply(401, json!({"error":"unauthorized"}));
     }
+    if method == "GET" && path == "/api/browser-sessions?inventory=owner" {
+        return reply(
+            200,
+            json!({"ok":true,"sessions":[{"slug":"sales-nav","label":"Sales desk","status":"running","lease":null,"profilePath":"never-expose"},{"slug":"unbound-desk","status":"stopped"}]}),
+        );
+    }
     if method == "GET" && path.ends_with("/desktop-grants") {
         let grants: Vec<Value> = v1
             .grants
@@ -70,6 +76,12 @@ fn handle(v1: &mut FakeV1, method: &str, path: &str, auth: bool, body: Value) ->
                     json!({"ok": true, "lease": lease(&thread, &key, v1.counter)}),
                 )
             }
+        },
+        Some("restart") => match v1.lease.clone() {
+            Some((s, t, k, _)) if s == slug && t == thread && k == token => {
+                reply(200, json!({"browser":{"slug":slug,"status":"running"}}))
+            }
+            _ => reply(409, json!({"error":"lease_lost"})),
         },
         Some(action @ ("heartbeat" | "release")) => match v1.lease.clone() {
             Some((s, t, _, _)) if s == slug && t != thread => {
@@ -488,3 +500,6 @@ fn broker_url_must_be_ipv4_loopback_http() {
         Some((200, json!({"a":1})))
     );
 }
+
+#[path = "desktop_inventory_integration_tests.rs"]
+mod inventory_tests;

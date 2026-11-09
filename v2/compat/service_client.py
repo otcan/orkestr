@@ -99,9 +99,18 @@ class ServiceClient:
         require(type(routes) in (tuple, list) and routes, 'service_routes_required')
         self.routes = [(method, re.compile(pattern)) for method, pattern in routes]
 
-    def request(self, method, path, body=None, *, allowed=(200,), max_request=32768):
+    def request(self, method, path, body=None, *, allowed=(200,), max_request=32768,
+                timeout_s=None):
+        """One request; an explicit bounded operation deadline never changes defaults.
+
+        Some configured operations complete external setup before responding.
+        A longer deadline avoids abandoning those single requests; it never
+        retries them or changes source, peer, session or route validation.
+        """
         require(type(path) is str and len(path) <= 4096 and not any(ord(c) < 32 for c in path)
                 and any(method == verb and pattern.fullmatch(path) for verb, pattern in self.routes), 'service_route_refused')
+        require(timeout_s is None or (type(timeout_s) in (int, float) and 0 < timeout_s <= 120),
+                'service_deadline_refused')
         mutation = method in ('POST', 'PUT', 'PATCH', 'DELETE')
         attempted = False
         try:
@@ -112,7 +121,8 @@ class ServiceClient:
                 else:
                     session.login(mutation=mutation)
                 attempted = True
-                status, value, _ = session._wire(method, path, body, allowed=allowed, max_request=max_request)
+                status, value, _ = session._wire(method, path, body, allowed=allowed,
+                                               max_request=max_request, timeout_s=timeout_s)
                 return status, value
         except self.client.ClientError as failure:
             ambiguous = (mutation and attempted and getattr(failure, "outcome", None) != "refused" and (failure.status is None or failure.status == 408

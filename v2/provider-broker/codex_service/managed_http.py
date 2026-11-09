@@ -11,6 +11,7 @@ import time
 from .contract import canonical,require,unique
 from .managed_ingress import MAX_PACKET,packet,source
 from .managed_socket_owner import socket_owner
+from . import managed_capabilities,managed_context
 
 def tools(ingress,scope):
     result=[];desk=ingress.manager.desk
@@ -23,12 +24,19 @@ def tools(ingress,scope):
                 'required':['operation_id'],'additionalProperties':False},
             'annotations':{'readOnlyHint':False,'destructiveHint':True,'idempotentHint':False,'openWorldHint':True}})
     result.append({'name':'orkestr_root_request_submit','description':
-        'Submit an agent-requested summary to protected owner review. This does not approve the request or transfer business execution to Root.',
+        'Submit an agent-requested summary to the configured execution policy. This call does not execute the request or change its authorization.',
         'inputSchema':{'type':'object','properties':{k:{'type':'string','minLength':1,'maxLength':cap}
             for k,cap in (('action',256),('resource',512),('summary',4096))},
             'required':['action','resource','summary'],'additionalProperties':False},
         'annotations':{'readOnlyHint':False,'destructiveHint':True,'idempotentHint':False,'openWorldHint':True}})
+    result.append(managed_capabilities.advertisement())
     return result
+
+
+def discovery(ingress,scope):
+    value=managed_capabilities.manifest(scope,tools(ingress,scope))
+    value['application_instructions']=managed_context.instructions()
+    return value
 
 
 class Listener:
@@ -64,7 +72,7 @@ class Peer:
         self.source,self.proof=source(self.ingress.manager,identity['pid'],identity['uid'])
         record=self.ingress.natives.actor(identity['pid'])
         count=record.get('http_requests',0)+1
-        require(count<=128,'managed_http_request_bound');record['http_requests']=count
+        require(count<=managed_capabilities.HTTP_REQUESTS_MAX,'managed_http_request_bound');record['http_requests']=count
 
     def receive(self):
         self.authenticate()
@@ -104,7 +112,8 @@ class Peer:
             version=params.get('protocolVersion')
             require(type(version) is str and re.fullmatch('[0-9]{4}-[0-9]{2}-[0-9]{2}',version),'managed_mcp_version')
             self.result({'protocolVersion':version,'capabilities':{'tools':{}},
-                'serverInfo':{'name':'orkestr-managed','version':'1'}})
+                'serverInfo':{'name':'orkestr-managed','version':'1'},
+                'instructions':canonical(discovery(self.ingress,self.source)).decode()})
             self.metadata_done=True;return None
         if method=='tools/list':
             require(set(params)<={'cursor','_meta'},'managed_mcp_list_fields')
@@ -122,6 +131,12 @@ class Peer:
         require(method=='tools/call' and set(params)<={'name','arguments','_meta'} and
                 {'name','arguments'}<=set(params),'managed_mcp_method')
         name=params['name'];arguments=params['arguments']
+        if name==managed_capabilities.NAME:
+            require(type(arguments) is dict and not arguments,'managed_capability_arguments')
+            value=discovery(self.ingress,self.source)
+            self.result({'content':[{'type':'text','text':canonical(value).decode()}],
+                         'structuredContent':value,'isError':False})
+            self.metadata_done=True;return None
         require(name in ('orkestr_desk_login','orkestr_root_request_submit'),'managed_mcp_tool')
         # The native's RPC correlation, not a model-selected key, is stable
         # across an exact transport retry. Core additionally binds the live run.
@@ -132,7 +147,7 @@ class Peer:
     def send_http(self,status,body):
         self.authenticate()  # No cached identity across a helper/owner wait.
         names={200:'OK',202:'Accepted',405:'Method Not Allowed'}
-        headers=('HTTP/1.1 '+str(status)+' '+names[status]+'\r\nContent-Type: application/json\r\nContent-Length: '+
+        headers=('HTTP/1.1 '+str(status)+' '+names[status]+'\r\nCache-Control: no-store\r\nContent-Type: application/json\r\nContent-Length: '+
             str(len(body))+'\r\nConnection: close\r\n\r\n').encode()
         frame=headers+body;require(len(frame)<=MAX_PACKET,'managed_http_reply_bound')
         require(self.connection.send(frame)==len(frame),'managed_http_reply_unknown')

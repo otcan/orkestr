@@ -9,6 +9,7 @@ import {
   attachDetachedClaudeTurn,
   claudeCodeDetachedTransport,
   detachedTurnProcessAlive,
+  detachedTurnPaths,
   detachedTurnState,
   listDetachedTurnRecords,
   readDetachedTurnRecord,
@@ -284,4 +285,44 @@ test("a detached turn that finished while the server was down is replayed and de
   assert.equal(recovery.reattached, 1);
   await recovery.results.find((result) => result.reattached).done;
   await assertDeliveredOnce(env, thread.id, "finished offline");
+});
+
+async function exitedTailRecord(t, name) {
+  const home = await tempHome(t, name);
+  const child = spawn(process.execPath, ["-e", ""]);
+  await new Promise((resolve) => child.once("close", resolve));
+  const paths = detachedTurnPaths(home);
+  await fs.writeFile(paths.events, "");
+  return { pid: child.pid, procStartTime: "unavailable", forwardedOffset: 0, paths };
+}
+
+test("reattached tail honors an exit published between the exit read and liveness check", async (t) => {
+  const record = await exitedTailRecord(t, "exit-race");
+  let published = false;
+  const readFile = fs.readFile;
+  t.mock.method(fs, "readFile", async (...args) => {
+    try { return await readFile(...args); }
+    catch (error) {
+      if (!published && args[0] === record.paths.exit && error.code === "ENOENT") {
+        published = true;
+        // The first read already observed absence; the wrapper publishes its
+        // terminal output and status before the following liveness check.
+        await fs.writeFile(record.paths.events, '{"type":"result","is_error":false,"result":"done"}\n');
+        await fs.writeFile(record.paths.exit, '{"code":0}\n');
+      }
+      throw error;
+    }
+  });
+  const facade = attachDetachedClaudeTurn(record, { ORKESTR_CLAUDE_DETACHED_POLL_MS: "5" });
+  const { lines, closed } = collect(facade);
+  assert.deepEqual(await closed, { code: 0, signal: null });
+  assert.equal(published, true);
+  assert.deepEqual(lines.map((item) => JSON.parse(item.line).result), ["done"]);
+});
+
+test("reattached tail still fails a vanished process with no exit record", async (t) => {
+  const record = await exitedTailRecord(t, "missing-exit");
+  const { lines, closed } = collect(attachDetachedClaudeTurn(record));
+  assert.deepEqual(await closed, { code: null, signal: "SIGKILL" });
+  assert.deepEqual(lines, []);
 });

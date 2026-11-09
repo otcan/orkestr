@@ -29,6 +29,36 @@ async fn grant_row(
 }
 
 impl Store {
+    /// One reauthenticated current-conversation snapshot. Never returns grant
+    /// values, hashes, run IDs or resources of another conversation.
+    pub async fn agent_timer_discovery(
+        &self,
+        credential: &str,
+        owner: &OwnerId,
+        conversation: &ConversationId,
+    ) -> R<orkestr_v2_contracts::AgentTimerDiscovery> {
+        let mut tx = self
+            .owner_scope(credential, owner, conversation, false)
+            .await?;
+        let row = grant_row(&mut tx, conversation).await?;
+        let limits = self.limits_in(&mut tx, owner, conversation).await?;
+        let eligible = !unavailable_conversation(&mut tx, owner, &conversation.to_string()).await?;
+        let run = running_deep(&mut tx, owner, conversation).await?;
+        let recurring_allowed = match &run {
+            Some((_, input)) => !timer_started(&mut tx, input).await.map_err(unavailable)?,
+            None => false,
+        };
+        let value = orkestr_v2_contracts::AgentTimerDiscovery {
+            grant: grant_of(conversation, row.as_ref()),
+            limits,
+            eligible,
+            running_deep: run.is_some(),
+            recurring_allowed,
+        };
+        tx.commit().await.map_err(unavailable)?;
+        Ok(value)
+    }
+
     pub async fn agent_timer_grant(
         &self,
         credential: &str,

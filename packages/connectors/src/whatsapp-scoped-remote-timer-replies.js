@@ -81,7 +81,7 @@ export function createRemoteTimerReplies({config, api, send, formatter, env, now
       let current = t;
       try { const {quota} = await api(`/api/quota/providers?ownerUserId=${encodeURIComponent(config.ownerUserId)}`, {timeoutMs: 1000}); if (quota) current = {...current, whatsAppDebugProviderQuota: quota}; } catch {}
       const header = scopedReplyHeader({label: String(parent.text || '').replace(/^Scheduled timer:\s*/, ''), timerId: parent.timerId, postAuthor: parent.postAuthor});
-      chunks = scopedGroupReplyChunks({text: `${header}\n${answer.text}`, message: {...answer, chatId}, thread: current, messages, config, formatter, env, deliveryType: 'router_update'});
+      chunks = scopedGroupReplyChunks({text: header ? `${header}\n${answer.text}` : answer.text, message: {...answer, chatId}, thread: current, messages, config, formatter, env, deliveryType: 'router_update'});
       proofs.prepareBatch(chunks.map((entry, i) => ({id: baseId + ':' + i, threadId, chatId, timerId: pick(parent.timerId, event.timerSourceId, 'v2-timer'),
         parentId: parent.id, answerId: answer.id, text: encodeReplyEntry(entry), createdAt: answer.createdAt, runAt: event.ts,
         expiresAt: new Date(answerAt + scope.maxAgeMs).toISOString()})));

@@ -77,6 +77,7 @@ impl Tab {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Route {
+    VirtualDesks,
     Conversation {
         id: String,
         tab: Tab,
@@ -123,6 +124,13 @@ impl Route {
                 id: uuid(id)?,
                 tab: Tab::Chat,
             }),
+            ["conversation", id, "virtual-desks"] => {
+                uuid(id)?;
+                Some(Route::VirtualDesks)
+            }
+            ["virtual-desks"] | ["", "virtual-desks"] | ["", "virtual-desks", ""] => {
+                Some(Route::VirtualDesks)
+            }
             ["conversation", id, slug] => Some(Route::Conversation {
                 id: uuid(id)?,
                 tab: Tab::from_slug(slug)?,
@@ -149,6 +157,7 @@ impl Route {
 
     pub fn hash(&self) -> String {
         match self {
+            Route::VirtualDesks => "/virtual-desks".into(),
             Route::Conversation { id, tab: Tab::Chat } => format!("#conversation/{id}"),
             Route::Conversation { id, tab } => format!("#conversation/{id}/{}", tab.slug()),
             Route::V1Thread { thread } => format!("#v1/{thread}"),
