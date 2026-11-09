@@ -89,7 +89,7 @@ def pair_bytes(plan):
 
 OPTIONAL = {'resource_namespace', 'agent_timer_grants', 'qualification_record', 'deploy_maintenance_marker', 'managed_host', 'operator_recovery', 'desk_login', 'managed_operations', 'attachment_export_dir', 'password_rotation_ready', 'authority_uid', 'authority_gid', 'executor_uid', 'executor_gid', 'provider_home', 'roles', 'preserve_state', 'workspace_exec', 'additional_workspace_exec', 'max_active_windows', 'host_full_access',
             'window_max_minutes', 'conversation_window_max_minutes', 'conversation_workspaces', 'provider_routing',
-            'code_mode_host', 'code_mode_host_sha256', 'claude', 'claude_quota_projection', 'codex_quota_projection', 'live_map', 'desktop_broker', 'timer_config', 'whatsapp_chats', 'v1_chat_icons_dir', 'metrics_port'}
+            'code_mode_host', 'code_mode_host_sha256', 'claude', 'claude_quota_projection', 'codex_quota_projection', 'live_map', 'desktop_broker', 'provider_quota', 'timer_config', 'whatsapp_chats', 'v1_chat_icons_dir', 'metrics_port'}
 CLAUDE_PATHS = ('executable', 'account', 'workspace', 'home', 'temporary')
 # Account selection stays with the Claude account reference, never the env.
 CLAUDE_FORBIDDEN_ENV = {'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN',
@@ -258,6 +258,11 @@ def prepare(plan):
         broker=plan['desktop_broker']
         require(type(broker) is str and broker.startswith('/') and 1<len(broker)<=4096 and '\0' not in broker
                 and '..' not in Path(broker).parts and not any(ord(c)<32 for c in broker),'desktop broker path')
+    if 'provider_quota' in plan:
+        # Private Core-owned quota bridge configuration: carry only its path.
+        quota=plan['provider_quota']
+        require(type(quota) is str and quota.startswith('/') and 1<len(quota)<=4096 and '\0' not in quota
+                and '..' not in Path(quota).parts and not any(ord(c)<32 for c in quota),'provider quota path')
     if 'whatsapp_chats' in plan:
         # Private "New WhatsApp chat" file (adapter token, owner numbers): path
         # only, never opened or hashed by the packager; the server validates it.
@@ -421,6 +426,8 @@ def prepare(plan):
                 runtime['live_map']=plan['live_map']
             if 'desktop_broker' in plan:
                 runtime['desktop_broker']=plan['desktop_broker']
+            if 'provider_quota' in plan:
+                runtime['provider_quota']=plan['provider_quota']
             if 'desk_login' in plan:
                 runtime['desk_login']=plan['desk_login']
             if 'managed_operations' in plan:

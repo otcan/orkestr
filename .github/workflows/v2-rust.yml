@@ -262,6 +262,8 @@ jobs:
       - name: Abandoned Fast preserves the original Root-managed Deep
         run: |
           sudo env PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -I -S -B tests/identity_split_fast_abandonment_http.py "$CARGO_TARGET_DIR/debug/orkestr-v2-server" --expected-source "$(git rev-parse HEAD)" --report "$RUNNER_TEMP/v2-fast-abandonment.json"
+      - name: Managed package owner-bound quota projection over real HTTP
+        run: sudo /usr/bin/python3 -B tests/identity_split_provider_quota_http.py "$CARGO_TARGET_DIR/debug/orkestr-v2-server" --report "$RUNNER_TEMP/v2-provider-quota-package.json"
       - name: Default single-agent fresh and resumed windows for both providers
         run: |
           sudo env PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -B tests/identity_split_single_agent_http.py "$CARGO_TARGET_DIR/debug/orkestr-v2-server" --provider codex --report "$RUNNER_TEMP/v2-single-agent-codex.json"

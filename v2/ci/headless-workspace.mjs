@@ -644,6 +644,10 @@ export const scenarios = [
   ['host-metrics', async label => {
     // The heading panel is always visible and opens the host overview.
     await page.waitForFunction(() => document.querySelector('.host-metrics-panel')?.textContent.includes('32%'), { timeout: 20000 });
+    await page.waitForFunction(() => document.querySelector('.provider-quota-panel')?.textContent.includes('5h 75% · wk 40%'), {timeout:20000});
+    assert.equal(await page.$$eval('.provider-quota-item', cards => cards.length), 2);
+    assert.match(await text('.provider-quota-panel'), /Claude.*wk 8%.*stale/s);
+    assert.match(await page.$eval('.provider-quota-item', card => card.title), /resets in/);
     await page.click('.host-metrics-panel');
     await page.waitForFunction(() => location.hash === '#host');
     await waitText('Top consumers');
@@ -797,12 +801,21 @@ try {
   browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox'] });
   for (const [label, viewport] of [['desktop', { width: 1280, height: 860 }], ['phone', { width: 390, height: 844, isMobile: true, hasTouch: true }]]) {
     Object.assign(state, createState());
+    // A sidebar read slower than its old 4s refresh interval must complete.
+    // Before the fix every timer tick cancelled the awaiting Rust resource,
+    // so rows never appeared and additional fetches accumulated.
+    state.sidebarDelayMs = 4500;
+    state.sidebarReads = 0;
     page = await browser.newPage();
     page.on('pageerror', error => errors.push(error.message));
     await page.setViewport(viewport);
     stage = `${label}:load`;
     await page.goto(`${origin}/#conversation/${A}`, { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('#composer');
+    await page.waitForSelector('.conversation-row', { timeout: 12000 });
+    assert.equal(state.sidebarReads, 1, 'slow initial sidebar request is not cancelled or overlapped');
+    assert.equal(await page.$eval('.conversation-sidebar', n => n.textContent.includes('Conversations unavailable')), false);
+    state.sidebarDelayMs = 0;
     for (const [name, run] of scenarios) {
       stage = `${label}:${name}`;
       await run(label);
