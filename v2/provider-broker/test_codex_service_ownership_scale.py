@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 from codex_service.contract import Refused
 from codex_service.ownership import Adopted, Children
+from codex_service.desk_anchor import Tree
 
 
 class Original:
@@ -22,6 +23,15 @@ class Original:
 
 
 class OwnershipScaleTests(unittest.TestCase):
+    def test_large_root_helper_family_keeps_every_original(self):
+        tree = Tree.__new__(Tree)
+        tree.records = {}
+        self.addCleanup(tree.close)
+        with patch('codex_service.desk_anchor.Process', Original):
+            for pid in range(10, 1035):
+                self.assertTrue(tree._remember({'pid': pid, 'start': pid, 'uid': 0, 'ppid': 1}))
+        self.assertEqual(len(tree.records), 1025)
+
     def tracker(self, host=False):
         beta = {'host_full_access': {'providers': True}} if host else {}
         return Children(SimpleNamespace(uid=1000, beta=beta), {'pid': 1, 'start': 1})
