@@ -77,7 +77,7 @@ class ContextTests(unittest.TestCase):
     def test_rules_have_no_shared_mutable_state_and_retain_role_boundaries(self):
         rules = managed_context.instructions()
         text = ' '.join(rules['rules'])
-        self.assertIn('Fast read-only', text)
+        self.assertIn('primary agent', text)
         self.assertIn('Workers within their delegated scope', text)
         self.assertIn('after resuming a session', text)
         rules['rules'].clear()

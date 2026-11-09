@@ -34,7 +34,7 @@ fn projection(facts: AgentTimerDiscovery, scheduler: bool) -> serde_json::Value 
         (
             "denied",
             "no_running_deep",
-            "Only this conversation's running Deep turn may use agent timers.",
+            "Only this conversation's running primary turn may use agent timers.",
         )
     } else {
         (

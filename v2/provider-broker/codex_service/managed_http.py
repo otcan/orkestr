@@ -24,7 +24,7 @@ def tools(ingress,scope):
                 'required':['operation_id'],'additionalProperties':False},
             'annotations':{'readOnlyHint':False,'destructiveHint':True,'idempotentHint':False,'openWorldHint':True}})
     result.append({'name':'orkestr_root_request_submit','description':
-        'Submit an agent-requested summary to protected owner review. This does not approve the request or transfer business execution to Root.',
+        'Submit an agent-requested summary to the configured execution policy. This call does not execute the request or change its authorization.',
         'inputSchema':{'type':'object','properties':{k:{'type':'string','minLength':1,'maxLength':cap}
             for k,cap in (('action',256),('resource',512),('summary',4096))},
             'required':['action','resource','summary'],'additionalProperties':False},
