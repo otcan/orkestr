@@ -40,6 +40,7 @@ pub mod deploy_drain;
 mod deploy_maintenance;
 mod desktop_broker;
 mod desktop_http;
+mod desktop_inventory_http;
 mod desktop_open_http;
 mod encrypted_upload_http;
 pub mod encrypted_upload_ingest;
@@ -580,7 +581,7 @@ fn desktop_slow_path(path: &str) -> bool {
             _,
             "desktops",
             _,
-            "acquire" | "heartbeat"
+            "acquire" | "heartbeat" | "reset"
         ]
     )
 }
@@ -664,6 +665,7 @@ pub fn router_with_google_catalog(
         .merge(conversation_status_http::router())
         .merge(host_metrics::router())
         .merge(desktop_http::router())
+        .merge(desktop_inventory_http::router())
         .merge(desktop_open_http::router())
         .merge(sidebar_http::router())
         .merge(message_attachments::router())

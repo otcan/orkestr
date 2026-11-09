@@ -375,3 +375,6 @@ pub use execution_window_queue::*;
 
 mod execution_window_reconciliation;
 pub use execution_window_reconciliation::*;
+
+mod desktop_inventory;
+pub use desktop_inventory::*;
