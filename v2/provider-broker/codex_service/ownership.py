@@ -396,7 +396,6 @@ class Adopted:
         key=(identity['pid'],identity['start'])
         require(identity['uid'] in self.allowed_uids,'adopted_executor_identity')
         if key not in self.records:
-            require(len(self.records)<MAX_CHILDREN,'adopted_child_bound')
             try:self.records[key]=Process(identity,any_uid=self.allow_uid_change)
             except Vanished:return False
             # Closed kernel identity only. This is cleanup custody, never an
@@ -415,16 +414,13 @@ class Adopted:
         root=Path('/proc',str(identity['pid']),'task')
         try:tasks=list(root.iterdir())
         except FileNotFoundError:return []
-        require(len(tasks)<=MAX_CHILDREN,'adopted_thread_bound')
         pids=set()
         for task in tasks:
             try:
-                with (task/'children').open('rb') as stream:raw=stream.read(8193)
+                with (task/'children').open('rb') as stream:raw=stream.read()
             except (FileNotFoundError,ProcessLookupError):continue
-            require(len(raw)<=8192,'adopted_child_bound')
             for token in raw.split():
                 require(token.isdigit(),'adopted_child_metadata');pids.add(int(token))
-        require(len(pids)<=MAX_CHILDREN,'adopted_child_bound')
         return pids
 
     def capture(self,known):
