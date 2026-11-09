@@ -149,11 +149,81 @@ async fn foreign_missing_revoked_and_bound_supervisor_reads_remain_scoped() {
 }
 
 #[tokio::test]
+async fn window_credentials_cannot_gain_browser_queue_visibility() {
+    let f = setup().await;
+    crate::production_runtime::tests::ready(&f).await;
+    let request = super::super::tests::input(&f, "status-window-credential").await;
+    let window = f
+        .store
+        .admit_execution_window_authenticated(&f.token, &f.conversation, &request)
+        .await
+        .unwrap();
+    let grant = f
+        .handle
+        .issue_execution_window_credential(
+            &f.token,
+            window.status.window_id,
+            window.status.generation,
+            "synthetic-status-boot",
+            window.status.expires_at_ms,
+            &"a".repeat(64),
+        )
+        .await
+        .unwrap();
+    reset(&f.store);
+    let rows = f
+        .store
+        .conversation_statuses_authenticated(
+            grant.credential(),
+            &f.owner,
+            std::slice::from_ref(&f.conversation),
+            true,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        rows[0].execution.as_ref().unwrap().as_ref().unwrap().phase,
+        orkestr_v2_contracts::ExecutionPhase::Queued
+    );
+    assert!(matches!(
+        rows[0].queue,
+        Some(Err(RuntimeStoreError::Unauthorized))
+    ));
+    assert_eq!(
+        f.store
+            .status_read_counts()
+            .global_queue
+            .load(Ordering::Relaxed),
+        0
+    );
+    assert_eq!(
+        f.store
+            .status_read_counts()
+            .global_live
+            .load(Ordering::Relaxed),
+        0
+    );
+    assert!(matches!(
+        f.store
+            .execution_window_queue_authenticated(grant.credential(), Some(&f.conversation))
+            .await,
+        Err(RuntimeStoreError::Unauthorized)
+    ));
+    f.store.close().await;
+    std::fs::remove_dir_all(f.root).unwrap();
+}
+
+#[tokio::test]
 async fn each_snapshot_reads_current_queue_without_reusing_a_previous_result() {
     let f = setup().await;
     let before = f
         .store
-        .conversation_statuses_authenticated(&f.token, &f.owner, &[f.conversation.clone()], true)
+        .conversation_statuses_authenticated(
+            &f.token,
+            &f.owner,
+            std::slice::from_ref(&f.conversation),
+            true,
+        )
         .await
         .unwrap();
     assert_eq!(
@@ -195,7 +265,12 @@ async fn each_snapshot_reads_current_queue_without_reusing_a_previous_result() {
         .unwrap();
     let next = f
         .store
-        .conversation_statuses_authenticated(&f.token, &f.owner, &[f.conversation.clone()], true)
+        .conversation_statuses_authenticated(
+            &f.token,
+            &f.owner,
+            std::slice::from_ref(&f.conversation),
+            true,
+        )
         .await
         .unwrap();
     let queue = next[0].queue.as_ref().unwrap().as_ref().unwrap();
@@ -212,7 +287,12 @@ async fn each_snapshot_reads_current_queue_without_reusing_a_previous_result() {
         .unwrap();
     let last = f
         .store
-        .conversation_statuses_authenticated(&f.token, &f.owner, &[f.conversation.clone()], true)
+        .conversation_statuses_authenticated(
+            &f.token,
+            &f.owner,
+            std::slice::from_ref(&f.conversation),
+            true,
+        )
         .await
         .unwrap();
     let queue = last[0].queue.as_ref().unwrap().as_ref().unwrap();

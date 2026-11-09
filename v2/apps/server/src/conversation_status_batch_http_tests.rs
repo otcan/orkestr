@@ -62,6 +62,8 @@ fn normalized(mut value: Value) -> Value {
         // Read-time observations may advance; durable progress timestamps stay.
         body.remove("observed_at_ms");
         body.remove("queue_age_ms");
+        // Separate requests generate distinct diagnostic correlation IDs.
+        body.remove("request_id");
     }
     value
 }

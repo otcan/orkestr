@@ -5,6 +5,10 @@ use orkestr_v2_contracts::{
 };
 
 impl Store {
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "retains the existing scoped projection options plus the shared transaction"
+    )]
     pub(super) async fn execution_status_snapshot(
         &self,
         tx: &mut SqliteConnection,
