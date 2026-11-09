@@ -68,6 +68,7 @@ mod provider_payload;
 mod provider_policy;
 #[cfg(test)]
 mod provider_policy_http_tests;
+pub mod provider_quota_http;
 mod resource_health;
 mod response_shaping;
 pub mod restricted_http;
@@ -119,6 +120,7 @@ pub struct AppState {
     authority: Arc<String>,
     auth_window: Arc<Mutex<(Instant, u32)>>,
     resources: resource_health::ResourceSampler,
+    provider_quota: Option<Arc<provider_quota_http::Source>>,
     timers: timer_http::DurableOwnerController,
     live_map: Option<Arc<std::path::PathBuf>>,
     desktop_broker: Option<Arc<desktop_broker::Broker>>,
@@ -268,6 +270,13 @@ impl AppState {
         )?));
         Ok(self)
     }
+    pub fn with_provider_quota_file(
+        mut self,
+        path: &std::path::Path,
+    ) -> Result<Self, &'static str> {
+        self.provider_quota = Some(Arc::new(provider_quota_http::Source::load(path)?));
+        Ok(self)
+    }
     /// Trusted startup only: the private V1 desktop broker client configuration.
     pub fn with_desktop_broker_file(
         mut self,
@@ -347,6 +356,7 @@ impl AppState {
             authority: Arc::new(authority),
             auth_window: Arc::new(Mutex::new((Instant::now(), 0))),
             resources: resource_health::ResourceSampler::new(),
+            provider_quota: None,
             live_map: None,
             desktop_broker: None,
             sidebar_v1: sidebar_v1::V1Cache::default(),
@@ -611,6 +621,7 @@ pub fn router_with_google_catalog(
         .route("/api/v2/machine/service-session",post(service_credentials::exchange))
         .route("/api/v2/projects",get(routes::projects).post(routes::create_project))
         .route("/api/v2/resources",get(resource_health::resources))
+        .route("/api/v2/provider-quotas",get(provider_quota_http::read))
         .route("/api/v2/live-map",get(live_map::read))
         .route("/api/v2/conversations/{id}",get(routes::snapshot))
         .route("/api/v2/conversations",get(conversations_http::list).post(conversations_http::create))

@@ -12,6 +12,8 @@ import { authorization, target } from "./thread-bridge.js";
 import { enqueueThreadInput, getThread, getThreadMessage, listThreadMessageCandidates } from "./threads.js";
 import { currentCodexGenerationMatches } from "./codex-generation.js";
 import { createBridgeReplyDeliveryIntent } from "./reply-delivery-intent.js";
+import { remoteBridgeStatus, remoteInputActivity } from "./thread-bridge-remote-status.js";
+import { remoteWhatsAppRuntimeBinding } from "./thread-remote-runtime-binding.js";
 
 export const BRIDGE_MESSAGE_SOURCE = "thread_bridge_message";
 const MAX_MESSAGES_PER_HOUR = 30;
@@ -80,7 +82,7 @@ function summarize(message, limit = 600) {
   return { messageId: message.id, createdAt: message.createdAt || null, text: text.slice(0, limit), truncated: text.length > limit };
 }
 
-// Busy/idle state from the thread's own transcript and runtime record.
+// Remote threads use Core; a legacy terminal record cannot describe their work.
 export async function bridgeThreadStatus(threadId, principal, env = process.env) {
   const grant = await authorization(principal, env);
   const thread = await target(threadId, grant, "observe", env);
@@ -89,6 +91,7 @@ export async function bridgeThreadStatus(threadId, principal, env = process.env)
   const queued = inputs.filter((message) => QUEUED_INPUT_STATES.includes(message.state)).length;
   const running = inputs.some((message) => message.state === "running") || Boolean(thread.runtime?.activeTurnId);
   const lastInput = inputs.at(-1);
+  const remote = await remoteBridgeStatus(thread, env);
   const state = running ? "working" : queued ? "queued" : lastInput?.state === "failed" ? "last_turn_failed" : "idle";
   return {
     threadId,
@@ -100,6 +103,7 @@ export async function bridgeThreadStatus(threadId, principal, env = process.env)
     model: thread.claudeModelResolved || thread.codexModel || null,
     lastError: state === "last_turn_failed" ? String(lastInput?.error || "").slice(0, 300) || null : null,
     lastAnswer: summarize([...messages].reverse().find(finalAnswer)),
+    ...(remote || {}),
   };
 }
 
@@ -209,7 +213,9 @@ export async function waitForBridgeReply(threadId, messageId, principal, { timeo
     }
     // Only the runtime's record that this input's own turn ended counts; the
     // final may be projected just after it, hence the short grace.
-    const outcome = inputTurnOutcome(input, await getThread(threadId, env).catch(() => null));
+    const thread = await getThread(threadId, env).catch(() => null);
+    const remote = Boolean(remoteWhatsAppRuntimeBinding(thread, env));
+    const outcome = remote ? null : inputTurnOutcome(input, thread);
     if (outcome === "failed") return { status: "failed", inputState: input.state || null, error: "turn_failed" };
     if (outcome === "completed") {
       terminalSince ||= Date.now();
@@ -218,6 +224,12 @@ export async function waitForBridgeReply(threadId, messageId, principal, { timeo
       terminalSince = 0;
     }
     if (Date.now() >= deadline || signal?.aborted) {
+      if (remote) {
+        const activity = await remoteInputActivity(thread, input, env);
+        return { status: activity.state === "working" ? "still_working" : "waiting_for_reply", inputState: input.state || null,
+          executionState: activity.state, observedAtMs: activity.observedAtMs || null,
+          hint: "No correlated final answer observed. Call wait_for_reply again, or subscribe to thread.message.created." };
+      }
       return { status: "still_working", inputState: input.state || null, hint: "Call wait_for_reply again, or subscribe to thread.message.created." };
     }
     await sleep(Math.min(pollMs, Math.max(0, deadline - Date.now())), signal);

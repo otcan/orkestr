@@ -3,6 +3,7 @@
 // materializes the service-readable file before issuing a composer receipt.
 import {Encrypter} from 'age-encryption';
 import {ageOpenSealed} from './age.mjs';
+import {browserStorage} from './browser_storage.mjs';
 export const UPLOAD_MAX_BYTES = 1_000_000_000;
 export const UPLOAD_CHUNK_BYTES = 1024 * 1024;
 export const UPLOAD_CIPHER_MAX = UPLOAD_CHUNK_BYTES + 64 * 1024;
@@ -66,7 +67,7 @@ async function openChunk(status,receipt,ciphertext,options) {
   return content;
 }
 
-export function encryptedUploadClient({conversation,csrf,fetcher=fetch,subtle=crypto.subtle,storage=globalThis.localStorage,random}={}) {
+export function encryptedUploadClient({conversation,csrf,fetcher=fetch,subtle=crypto.subtle,storage=browserStorage('localStorage'),random}={}) {
   if(!uuid(conversation)||!csrf)fail('Conversation and browser authorization required.');
   const root=`/api/v2/conversations/${conversation}/encrypted-uploads`;
   const request=async(method,path,body,raw=false,digest='',signal)=>{
@@ -88,8 +89,9 @@ export function encryptedUploadClient({conversation,csrf,fetcher=fetch,subtle=cr
     // Persist uploadId in the caller's owner/session-scoped UI state. On resume
     // the owner reselects the File; committed chunks are decrypted and compared
     // to it before skipping. Uncertain PUTs can safely retry the same ciphertext.
-    async upload(file,uploadId,{progress=()=>{},signal,requireIngest=false}={}) {
+    async upload(file,uploadId,{progress=()=>{},phase=()=>{},signal,requireIngest=false}={}) {
       const descriptor=validateUploadFile(file,uploadId);
+      phase('preparing');
       let status=validateStatus(await request('POST',root,descriptor,false,'',signal),descriptor,conversation);
       if(requireIngest&&(!status.ingest_recipient||!status.recipients.includes(status.ingest_recipient)))fail('Encrypted attachment preparation is not configured on this server.');
       const pinned={owner:status.owner_id,recipients:[...status.recipients]};
@@ -100,12 +102,15 @@ export function encryptedUploadClient({conversation,csrf,fetcher=fetch,subtle=cr
         if(bytes.length!==chunkSize(descriptor,index))fail('File changed while uploading.');
         let receipt=status.chunks.find(c=>c.index===index);
         if(receipt) {
+          phase('checking');
           const existing=await read(status,receipt,signal);
           if(await hash(bytes,subtle)!==await hash(existing,subtle))fail('Selected file differs from the interrupted upload.');
         } else {
+          phase('encrypting');
           const encrypter=new Encrypter();for(const recipient of status.recipients)encrypter.addRecipient(recipient);
           const ciphertext=await encrypter.encrypt(await frame(status,index,bytes,subtle)),digest=await hash(ciphertext,subtle);
           if(ciphertext.length>UPLOAD_CIPHER_MAX)fail('Encrypted chunk exceeds transport limit.');
+          phase('uploading');
           let error;
           for(let attempt=0;attempt<3;attempt++) {
             try {receipt=await request('PUT',`${root}/${uploadId}/chunks/${index}`,ciphertext,true,digest,signal);break;}catch(e){if(signal?.aborted)throw e;error=e;}
@@ -115,6 +120,7 @@ export function encryptedUploadClient({conversation,csrf,fetcher=fetch,subtle=cr
         }
         receipts.push(receipt);progress(Math.min(file.size,offset+bytes.length),file.size);
       }
+      phase('finalizing');
       status=validateStatus(await request('POST',`${root}/${uploadId}/complete`,receipts,false,'',signal),descriptor,conversation);
       if(!status.complete||status.owner_id!==pinned.owner||!same(status.recipients,pinned.recipients)||!same(status.chunks,receipts))fail('Encrypted upload completion mismatch.');
       return status;

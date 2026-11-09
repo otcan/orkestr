@@ -64,7 +64,7 @@ class PostTests(Base):
         self.assertEqual(self.peer.posts_acked, [])
         first = self.ledger.messages()
         self.peer.request = original
-        restarted = Worker(self.peer, Ledger(Path(self.temp.name) / "ledger.sqlite3", SCOPE))
+        restarted = Worker(self.peer, Ledger(Path(self.temp.name) / "ledger.sqlite3", SCOPE), legacy_companions=True)
         restarted.run_once(_Stop())
         self.assertEqual(self.peer.posts_acked, [POST_ID])
         self.assertEqual(self.ledger.messages(), first, "same deterministic ids, one export")

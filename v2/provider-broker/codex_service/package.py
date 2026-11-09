@@ -74,6 +74,7 @@ LIVE_MAP_ENV = "ORKESTR_V2_LIVE_MAP"
 CODEX_QUOTA_FILE_ENV = "ORKESTR_V2_CODEX_QUOTA_FILE"
 # Private V1 desktop lease broker client file (0600, service user); the server
 # validates and reads it, the package never does.
+PROVIDER_QUOTA_ENV = "ORKESTR_V2_PROVIDER_QUOTA_CONFIG"
 DESKTOP_BROKER_ENV = "ORKESTR_V2_DESKTOP_BROKER_CONFIG"
 # Private durable-timer scheduler config (0600, service user; names the machine
 # token file). The server validates and reads it, the package never does.
@@ -170,7 +171,7 @@ class Package:
 
     def _bind(self):
         value = self.runtime
-        require(set(value) - IDENTITY_FIELDS - {"resource_namespace", "agent_timer_grants", "qualification_record", "operator_recovery", "desk_login", "managed_operations", "password_rotation_ready", "attachment_export_dir", "live_map", "desktop_broker", "timer_config", "v1_chat_icons_dir", "whatsapp_chats", "claude_quota_projection", "codex_quota_projection", "metrics_port"} == {"format", "uid", "gid", "owner_id", "conversation_id", "home",
+        require(set(value) - IDENTITY_FIELDS - {"resource_namespace", "agent_timer_grants", "qualification_record", "operator_recovery", "desk_login", "managed_operations", "password_rotation_ready", "attachment_export_dir", "live_map", "desktop_broker", "provider_quota", "timer_config", "v1_chat_icons_dir", "whatsapp_chats", "claude_quota_projection", "codex_quota_projection", "metrics_port"} == {"format", "uid", "gid", "owner_id", "conversation_id", "home",
                 "bootstrap_file", "ledger_directory", "endpoint_directory", "port", "trusted_origin"}
                 and value["format"] == "orkestr-v2-codex-service-v1", "service_format")
         require("password_rotation_ready" not in value or type(value["password_rotation_ready"]) is bool,
@@ -184,6 +185,8 @@ class Package:
         self.live_map = live_map_path(value["live_map"]) if "live_map" in value else None
         self.desktop_broker = (live_map_path(value["desktop_broker"])
                                if "desktop_broker" in value else None)
+        self.provider_quota = (live_map_path(value["provider_quota"])
+                               if "provider_quota" in value else None)
         self.timer_config = (live_map_path(value["timer_config"])
                              if "timer_config" in value else None)
         self.v1_chat_icons_dir = (live_map_path(value["v1_chat_icons_dir"])
@@ -236,7 +239,7 @@ class Package:
             # inputs and must never be read/hashed by an executor or packager.
             # Root verifies custody before any authority or native launch;
             # the server then validates its configuration/credential schema.
-            for path in (self.desktop_broker,self.timer_config,self.whatsapp_chats):
+            for path in (self.desktop_broker,self.provider_quota,self.timer_config,self.whatsapp_chats):
                 if path is not None:self.private(path,self.authority_uid)
         self.ledger_directory = protected(value["ledger_directory"], True)
         require(stat.S_IMODE(self.ledger_directory.stat().st_mode) == 0o700, "ledger_mode")
@@ -249,12 +252,13 @@ class Package:
                 origin == f"http://127.0.0.1:{value['port']}") and len(origin) <= 512
                 and not any(ord(c) < 33 for c in origin) and not origin.endswith("/"), "trusted_origin")
         beta = self.beta
-        require(set(beta) - {"roles", "workspace_exec", "additional_workspace_exec", "max_active_windows",
+        require(set(beta) - {"roles", "legacy_companions", "workspace_exec", "additional_workspace_exec", "max_active_windows",
                              "window_max_minutes", "conversation_window_max_minutes",
                              "host_full_access", "managed_host", "claude", "conversation_workspaces", "provider_routing", "identity_split", "deploy_maintenance_marker"} == {"schema_version", "owner_id", "conversation_id", "manager_socket",
                 "launcher", "launcher_sha256", "workspace", "namespace", "supervisor_key"}
                 and type(beta["schema_version"]) is int and beta["schema_version"] == 1,
                 "beta_format")
+        require(type(beta.get("legacy_companions", False)) is bool, "beta_legacy_companions")
         if "deploy_maintenance_marker" in beta:
             marker = Path(live_map_path(beta["deploy_maintenance_marker"]))
             require(str(marker) == beta["deploy_maintenance_marker"]
@@ -464,6 +468,8 @@ class Package:
                 **({LIVE_MAP_ENV: self.live_map} if self.live_map else {}),
                 **({DESKTOP_BROKER_ENV: self.desktop_broker}
                    if getattr(self, "desktop_broker", None) else {}),
+                **({PROVIDER_QUOTA_ENV: self.provider_quota}
+                   if getattr(self, "provider_quota", None) else {}),
                 **({TIMER_CONFIG_ENV: self.timer_config}
                    if getattr(self, "timer_config", None) else {}),
                 **({WHATSAPP_CHATS_ENV: self.whatsapp_chats}

@@ -11,7 +11,7 @@ import stat
 from codex_bounded.trust import protected,private,process
 from .contract import require
 from .resource_contract import load,validate,selection,encoded,open_source,DIRECTORIES,READONLY
-from .resource_receipt import ns,receipt_path,mount_id,verify,check_source,original_source,FORMAT
+from .resource_receipt import ns,receipt_path,mount_id,verify,checked_source,FORMAT
 from .resource_probe import denied
 
 CLONE_NEWNS=0x20000
@@ -45,7 +45,7 @@ def target(ctx,row):
 class Activation:
     def __init__(self,selected,ctx):
         self.selected=selected;self.ctx=ctx;self.original=None;self.mounted=[];self.receipt=None;self.receipt_identity=None
-        self.homes=[];self.sources=[];self.projects=[]
+        self.homes=[];self.sources=[];self.source_inodes=[];self.projects=[]
 
     def __enter__(self):
         if self.selected is None:return self
@@ -72,11 +72,11 @@ class Activation:
         denied(self.ctx['executor_uid'],self.ctx['executor_gid'],
             [{'path':h['path'],'operation':'traverse_home'} for h in doc['source_homes']])
         for row in doc['resources']:
-            check_source(row,self.homes,process(os.getpid()),doc['source_homes'])
-            source=original_source(row,self.homes,process(os.getpid()),doc['source_homes'])
+            source=checked_source(row,self.homes,process(os.getpid()),doc['source_homes'])
             try:
                 from .resource_mount import clone_source
                 self.sources.append(clone_source(source))
+                self.source_inodes.append(os.fstat(source).st_ino)
             finally:os.close(source)
         from .resource_projects import prepare
         self.projects=prepare(self.ctx,doc)
@@ -94,7 +94,7 @@ class Activation:
         from .resource_projects import install
         projected=install(self.ctx,doc,self.projects,self.mounted)
         targets=[]
-        for row,source in zip(doc['resources'],self.sources):
+        for row,source,inode in zip(doc['resources'],self.sources,self.source_inodes):
             parentfd,placeholder,name=target(self.ctx,row)
             try:
                 from .resource_mount import attach
@@ -102,7 +102,9 @@ class Activation:
                        self.ctx['executor_gid'],row['kind'] in READONLY,row['kind']!='toolchain',tree=source)
                 mounted=os.open(name,os.O_PATH|os.O_NOFOLLOW|os.O_CLOEXEC,dir_fd=parentfd)
                 self.mounted.append(mounted)
-                targets.append({'target':row['target'],'mount_id':mount_id(mounted)})
+                selected_target={'target':row['target'],'mount_id':mount_id(mounted)}
+                if row['kind']=='codex_auth':selected_target['source_inode']=inode
+                targets.append(selected_target)
             finally:
                 os.close(parentfd);os.close(placeholder)
         checks=[{'path':str(self.ctx['home']),'operation':'read'},*doc['denials'],
@@ -146,5 +148,5 @@ class Activation:
             os.close(self.original);self.original=None
         for fd in [*self.sources,*[h['fd'] for h in self.homes],*[p[k] for p in self.projects for k in ('fd','tree')]]:
             os.close(fd)
-        self.sources=[];self.homes=[];self.projects=[]
+        self.sources=[];self.source_inodes=[];self.homes=[];self.projects=[]
         require(not errors,'resource_cleanup')

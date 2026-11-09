@@ -2,7 +2,7 @@ use dioxus::prelude::*;
 use orkestr_v2_contracts::BetaDiscovery;
 use orkestr_v2_ui::{execution::Execution, session_scope::SessionScope, workers::Workers};
 
-/// Per-conversation work: configured controls, the Deep run with Stop/Steer and
+/// Per-conversation work: configured controls, the agent run with Stop/Steer and
 /// worker tasks, window/queue state, independent workers and the linked V1
 /// thread's V1 workers. Reading never starts work.
 #[component]
@@ -25,7 +25,7 @@ pub fn WorkView(
                 if let Some(value) = discovery() {
                     dl {
                         dt { "Provider" } dd { "{provider(&value)}" }
-                        dt { "Role" } dd { "Deep (Fast and Workers when configured)" }
+                        dt { "Role" } dd { "Agent (delegated workers when configured)" }
                         dt { "Model and reasoning effort" } dd { "Set by the server configuration for this provider" }
                         dt { "Stop" } dd { if value.controls.stop { "Available for the current run" } else { "Not available right now" } }
                         dt { "Steer" } dd { if value.controls.steer { "Available for the current run" } else { "Not available right now" } }

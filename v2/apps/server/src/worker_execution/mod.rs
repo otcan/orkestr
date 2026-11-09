@@ -184,7 +184,10 @@ impl WorkerSchedule {
 
     async fn poll_one(&mut self) -> Result<WorkerProgress, &'static str> {
         let phase = std::mem::replace(&mut self.phase, Phase::Closed(WorkerProgress::Unknown));
-        match self.advance(phase).await {
+        // Keep setup/dispatch state off the enclosing parent scheduler's
+        // stack. This remains the same owned future through poll and drain;
+        // it is not a detached task and retains every cleanup obligation.
+        match Box::pin(self.advance(phase)).await {
             Ok((phase, progress)) => {
                 self.phase = phase;
                 Ok(progress)
@@ -201,4 +204,29 @@ impl WorkerSchedule {
 fn capacity() -> &'static Arc<Semaphore> {
     static CAPACITY: OnceLock<Arc<Semaphore>> = OnceLock::new();
     CAPACITY.get_or_init(|| Arc::new(Semaphore::new(4)))
+}
+
+#[cfg(test)]
+mod future_layout_tests {
+    use super::WorkerSchedule;
+    use std::future::Future;
+
+    // Inspect the future type without fabricating a schedule or capability.
+    fn bytes<'a, F: Future>(_: impl FnOnce(&'a mut WorkerSchedule) -> F) -> usize {
+        std::mem::size_of::<F>()
+    }
+
+    #[test]
+    fn worker_poll_future_fits_the_parent_task_stack() {
+        // The default Tokio stack is shared with the parent and HTTP runtime.
+        // A scheduler step must not embed the complete native setup/dispatch
+        // state machine in every enclosing future. No thread-stack increase.
+        for (name, size, maximum) in [
+            ("poll", bytes(WorkerSchedule::poll), 64 * 1024),
+            ("poll_one", bytes(WorkerSchedule::poll_one), 1024),
+            ("drain", bytes(WorkerSchedule::drain), 64 * 1024),
+        ] {
+            assert!(size <= maximum, "Worker {name} future is {size} bytes");
+        }
+    }
 }

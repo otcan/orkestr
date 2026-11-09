@@ -23,6 +23,18 @@ class AskPeer(WebPeer):
         super().__init__()
         self.asks, self.asks_last, self.asks_route = [], 20, True
 
+    def read_events(self, after, maximum, timeout_s=None):
+        # A returned ask has its own committed journal input and later run
+        # events. Do not manufacture a matching run from an empty journal.
+        events = super().read_events(after, maximum, timeout_s=timeout_s)
+        for row in self.asks:
+            events.append(dict(sequence=row['sequence'], event_id=row['event_id'],
+                payload_ref_or_safe_payload=dict(kind='message_accepted', message_id=row['message_id'])))
+            events.extend(dict(sequence=row['sequence'] + n + 1, run_id=run)
+                          for n, run in enumerate(self.runs.get(row['message_id'], [])))
+        return sorted((event for event in events if event['sequence'] > after),
+                      key=lambda event: event['sequence'])[:maximum]
+
     def matching_run_ids(self, events, intake):
         if intake.get("event_id") == EVENT:
             return list(self.runs.get(intake["message_id"], []))
@@ -43,7 +55,7 @@ class ThreadAskRelayTests(Base):
     def setUp(self):
         super().setUp()
         self.peer = AskPeer()
-        self.worker = Worker(self.peer, self.ledger)
+        self.worker = Worker(self.peer, self.ledger, legacy_companions=True)
 
     def scan(self):
         self.worker._web_checked = None
@@ -77,7 +89,7 @@ class ThreadAskRelayTests(Base):
         self.assertEqual(self.ledger.web_watches(), [])
         # Replays (lost cursor write, restart) adopt nothing new.
         thread_ask_relay._set_cursor(self.ledger, 20)
-        restarted = Worker(self.peer, Ledger(Path(self.temp.name) / "ledger.sqlite3", SCOPE))
+        restarted = Worker(self.peer, Ledger(Path(self.temp.name) / "ledger.sqlite3", SCOPE), legacy_companions=True)
         restarted._web_checked = None
         restarted.run_once(_Stop())
         self.assertEqual(len(self.replies()), 1)
@@ -112,7 +124,7 @@ class VerifiedAuthorTests(Base):
         peer = AskPeer()
         if features is not None:
             peer.features = frozenset(features)
-        worker = Worker(peer, self.ledger)
+        worker = Worker(peer, self.ledger, legacy_companions=True)
         self.ledger.enqueue({"publicThreadId": "v1-thread", "publicMessageId": "wa-1", "chatId": "chat@g.us",
                              "accountId": "account", "text": "ask hosting for the Bedrock region"},
                             author={"role": "owner", "id": "owner@c.us", "label": "Owner"})

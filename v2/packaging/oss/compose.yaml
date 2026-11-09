@@ -12,6 +12,7 @@ services:
       # in any terminal; a build without it is refused by the Dockerfile.
       args:
         SOURCE_COMMIT: ${ORKESTR_SOURCE_COMMIT:-}
+        BUILD_JOBS: ${ORKESTR_BUILD_JOBS:-2}
     ports:
       - "127.0.0.1:19822:19823"
     # This compose service is published on loopback only. Remote/exposed

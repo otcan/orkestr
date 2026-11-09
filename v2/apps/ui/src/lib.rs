@@ -267,3 +267,5 @@ pub mod rich_text;
 pub mod route;
 pub mod send_intent;
 pub mod sidebar;
+
+pub mod upload_progress;

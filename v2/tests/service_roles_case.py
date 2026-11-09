@@ -140,6 +140,7 @@ class ServiceRolesCase:
             else:
                 roles["workers"].append(value)
         beta["roles"] = roles
+        beta["legacy_companions"] = True  # Explicit historical dual-role fixture.
         # Two live windows: a third conversation must queue durably, then start.
         beta["max_active_windows"] = 2
         (f.package / "beta.json").write_bytes(packager.encoded(beta))
