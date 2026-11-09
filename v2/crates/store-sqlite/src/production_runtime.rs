@@ -43,6 +43,7 @@ pub use managed_operation::{
     CompletedManagedOperation, ConsumedManagedOperation, ManagedCallerEvidence,
     ManagedOperationConsumption, ManagedOperationOutcome, ManagedOperationParent,
     ManagedOperationRenewal, ManagedOperationRequest, ManagedOperationSetup,
+    NativeWorkerAvailability, NativeWorkerCall, NativeWorkerObservation,
 };
 pub(crate) mod deep_groups;
 pub use deep_groups::{DEFAULT_DEEP_BURST_QUIET_MS, MAX_DEEP_BURST_QUIET_MS};

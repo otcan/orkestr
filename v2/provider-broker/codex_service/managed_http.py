@@ -8,10 +8,11 @@ import json
 import re
 import socket
 import time
-from .contract import canonical,require,unique
+from .contract import Refused,canonical,require,unique
 from .managed_ingress import MAX_PACKET,packet,source
 from .managed_socket_owner import socket_owner
 from . import managed_capabilities,managed_context
+from .managed_workers import NAMES,advertisements
 
 def tools(ingress,scope):
     result=[];desk=ingress.manager.desk
@@ -30,6 +31,10 @@ def tools(ingress,scope):
             'required':['action','resource','summary'],'additionalProperties':False},
         'annotations':{'readOnlyHint':False,'destructiveHint':True,'idempotentHint':False,'openWorldHint':True}})
     result.append(managed_capabilities.advertisement())
+    selected=advertisements()
+    if not getattr(getattr(ingress.manager,'package',None),'runtime',{}).get('managed_workers'):
+        selected=selected[:1]
+    result.extend(selected)
     return result
 
 
@@ -59,7 +64,7 @@ class Peer:
         self.ingress,self.connection=ingress,connection
         self.source=self.proof=self.path=self.request=None
         self.deadline=time.monotonic()+35;self.registration_deadline=time.monotonic()+2
-        self.buffer=bytearray();self.call=None;self.metadata_done=False
+        self.buffer=bytearray();self.call=None;self.tool=None;self.metadata_done=False
 
     def authenticate(self):
         try:identity=socket_owner(self.ingress,self.connection)
@@ -130,19 +135,26 @@ class Peer:
             self.metadata_done=True;return None
         require(method=='tools/call' and set(params)<={'name','arguments','_meta'} and
                 {'name','arguments'}<=set(params),'managed_mcp_method')
-        name=params['name'];arguments=params['arguments']
+        name=params['name'];arguments=params['arguments'];self.tool=name
         if name==managed_capabilities.NAME:
             require(type(arguments) is dict and not arguments,'managed_capability_arguments')
             value=discovery(self.ingress,self.source)
             self.result({'content':[{'type':'text','text':canonical(value).decode()}],
                          'structuredContent':value,'isError':False})
             self.metadata_done=True;return None
-        require(name in ('orkestr_desk_login','orkestr_root_request_submit'),'managed_mcp_tool')
+        require(type(name) is str and name in (*NAMES,'orkestr_desk_login','orkestr_root_request_submit'),'managed_mcp_tool')
         # The native's RPC correlation, not a model-selected key, is stable
         # across an exact transport retry. Core additionally binds the live run.
         request_key='mcp:'+hashlib.sha256(canonical([self.call,name])).hexdigest()
-        operation='desk_login' if name=='orkestr_desk_login' else 'root_request_submit'
-        return packet(canonical({'version':1,'request_key':request_key,'operation':operation,'arguments':arguments}))
+        operation=NAMES.get(name,'desk_login' if name=='orkestr_desk_login' else 'root_request_submit')
+        try:
+            return packet(canonical({'version':1,'request_key':request_key,'operation':operation,'arguments':arguments}))
+        except Refused:
+            if name not in NAMES:raise
+            result={'kind':'native_worker_refusal','reason':'invalid_task_data','created':False}
+            self.result({'content':[{'type':'text','text':canonical(result).decode()}],
+                'structuredContent':result,'isError':True})
+            self.metadata_done=True;return None
 
     def send_http(self,status,body):
         self.authenticate()  # No cached identity across a helper/owner wait.
@@ -159,7 +171,13 @@ class Peer:
         text=canonical({'state':value['state'],'result':value['result']}).decode()
         failed=value['state']!='completed' or (type(value['result']) is dict and value['result'].get('kind')=='desk_helper'
                                               and value['result'].get('state')!='helper_completed')
-        self.result({'content':[{'type':'text','text':text}],'isError':failed})
+        result={'content':[{'type':'text','text':text}],'isError':failed}
+        if type(value['result']) is dict and value['result'].get('kind') in ('native_worker_task','native_worker_capability'):
+            result['structuredContent']=value['result']
+            if value['result'].get('kind')=='native_worker_capability':
+                result['isError']=value['state']!='completed' or (self.tool=='orkestr_worker_submit'
+                    and value['result'].get('state')!='ready')
+        self.result(result)
 
     def close(self):
         self.connection.close()

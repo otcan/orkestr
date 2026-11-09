@@ -1,4 +1,4 @@
-//! Durable owner-authored Worker subtasks. Task data does not grant provider I/O.
+//! Durable bounded Worker subtasks. Task data does not grant provider I/O.
 use super::*;
 use crate::runtime::ledger::{hash, secret};
 use orkestr_v2_contracts::{

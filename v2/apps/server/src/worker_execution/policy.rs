@@ -90,7 +90,7 @@ impl WorkerPolicy {
             .zip(self.broker_launcher_sha256.as_deref())
     }
 
-    pub(super) fn owner_tasks(&self) -> bool {
+    pub(crate) fn owner_tasks(&self) -> bool {
         self.mode == "owner-tasks-v1"
     }
 

@@ -217,7 +217,7 @@ class Manager:
         if operation in ('workspace_command','workspace_command_receipt','workspace_command_cancel'):
             from .workspace_ops import dispatch
             return dispatch(self,request,window,descriptors)
-        if operation in ('managed_pending','managed_consume','managed_poll','managed_cancel','managed_run_open','managed_run_close','managed_renew','managed_result'):
+        if operation in ('managed_pending','managed_consume','managed_poll','managed_cancel','managed_run_open','managed_run_close','managed_renew','managed_result','managed_worker_reply','managed_worker_bind'):
             from .managed_control import dispatch
             return dispatch(self,request,window)
         if operation in ('desk_login','desk_login_poll','desk_login_cancel'):
@@ -447,7 +447,7 @@ class Manager:
                     # control request or acquires its durable writer fence.
                     deadline = accepted + MANAGED_REPLY_SECONDS
                 elif request["operation"] in ("managed_pending", "managed_run_open", "managed_consume",
-                                               "managed_poll", "managed_renew", "managed_result"):
+                                               "managed_poll", "managed_renew", "managed_result", "managed_worker_reply", "managed_worker_bind"):
                     # A consumed capability can commit before a delayed ACK.
                     # Share Core's bounded control allowance; capability expiry,
                     # receive budget, run leases and cleanup bounds stay fixed.

@@ -6,6 +6,7 @@ are deliberately outside this incremental manifest's coverage.
 """
 from .contract import identifier, require
 from .managed_ingress import MAX_CONNECTIONS, MAX_WINDOW_REQUESTS
+from .managed_workers import NAMES
 
 NAME = 'orkestr_capabilities'
 HTTP_REQUESTS_MAX = 128
@@ -31,7 +32,7 @@ def manifest(scope, registered):
     provider = scope['provider']
     require(provider in ('codex', 'claude'), 'managed_capability_provider')
     names = [tool['name'] for tool in registered]
-    known = {NAME, 'orkestr_desk_login', 'orkestr_root_request_submit'}
+    known = {NAME, 'orkestr_desk_login', 'orkestr_root_request_submit', *NAMES}
     require(len(names) == len(set(names)) and set(names) <= known
             and NAME in names, 'managed_capability_registry')
     capabilities = []
