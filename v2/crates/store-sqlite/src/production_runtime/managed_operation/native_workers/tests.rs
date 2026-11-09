@@ -341,3 +341,12 @@ async fn only_the_trusted_sealed_selection_supplies_a_task_budget() {
         ));
     }
 }
+
+#[test]
+fn reply_expiry_is_bounded_by_delivery_window_and_immutable_parent_lease() {
+    assert_eq!(delivery_expiry(61_000, 1_000).unwrap(), 26_000);
+    assert_eq!(delivery_expiry(11_000, 1_000).unwrap(), 11_000);
+    assert!(delivery_expiry(1_000, 1_000).is_err());
+    assert!(delivery_expiry(999, 1_000).is_err());
+    assert!(delivery_expiry(i64::MAX, i64::MAX - 100).is_err());
+}
