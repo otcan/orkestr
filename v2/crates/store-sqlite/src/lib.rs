@@ -291,6 +291,8 @@ impl Store {
     }
 }
 
+pub use production_runtime::{ConversationStatusSnapshot, WindowQueueSnapshot};
+
 pub use production_runtime::{
     CodexSteeringAuthority, ConsumedSteering, SteeringConsumption, SteeringReservation,
 };

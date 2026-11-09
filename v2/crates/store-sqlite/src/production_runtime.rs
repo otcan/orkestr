@@ -111,6 +111,8 @@ mod retirement;
 #[cfg(test)]
 mod retirement_tests;
 mod status;
+mod status_projection;
+pub use execution_window::{ConversationStatusSnapshot, WindowQueueSnapshot};
 mod stop;
 mod stopped_metadata;
 mod terminal_restart;
