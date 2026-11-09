@@ -14,5 +14,6 @@ def instructions():
             'Use only this authenticated conversation. Do not borrow operation identifiers, grants or authority from another conversation or an earlier session.',
             'Submitting a managed request does not execute it; its configured authorization policy determines execution.',
             'Use the current conversation\'s primary agent and keep Workers within their delegated scope. Provider choice does not change those boundaries.',
+            'Call orkestr_worker_capability before delegating Native Worker tasks. Tool registration is not a running scheduler; report the current capability state and actual task phase.',
             'The uncovered capability surfaces have not been assessed here; discover them through their own authorized interfaces.'
         ]}

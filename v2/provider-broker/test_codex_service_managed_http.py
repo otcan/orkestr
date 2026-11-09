@@ -122,7 +122,7 @@ report['memory_result']=result;report['memory_errno']=ctypes.get_errno();print(j
     def test_tools_metadata_is_scoped(self):
         ingress,_,_=self.prepare_http({'jsonrpc':'2.0','id':2,'method':'tools/list','params':{'_meta':{'progressToken':'synthetic'}}})
         response=self.read_reply(ingress);names=[t['name'] for t in json.loads(response['body'])['result']['tools']]
-        self.assertEqual(names,['orkestr_root_request_submit','orkestr_capabilities'])
+        self.assertEqual(names,['orkestr_root_request_submit','orkestr_capabilities','orkestr_worker_capability'])
         self.assertFalse(list(ingress.directory.glob('*.json')))
         self.close_broker(self.children[-1])
 
@@ -165,6 +165,28 @@ report['memory_result']=result;report['memory_errno']=ctypes.get_errno();print(j
         self.assertEqual(value['id'],'native-rpc-4');self.assertFalse(value['result']['isError'])
         result=json.loads(value['result']['content'][0]['text'])
         self.assertFalse(result['result']['owner_approval']);self.assertEqual(result['result']['owner_delivery'],'unconfirmed')
+
+    def test_native_worker_reply_returns_actual_scoped_receipt_and_preserves_rpc_id(self):
+        from codex_service.managed_worker_reply import reply
+        ingress,_,native=self.prepare_http({'jsonrpc':'2.0','id':'native-worker-rpc','method':'tools/call','params':{
+            'name':'orkestr_worker_submit','arguments':{'title':'Synthetic bounded task','instructions':'Count 1, 2, 3.'}}})
+        self.manager.package.runtime['managed_workers']=True
+        scope,proof=source(self.manager,native,65534);proof.close();self.open_run(ingress,scope)
+        deadline=time.monotonic()+4
+        while not ingress.pending('synthetic-window',1):
+            self.assertLess(time.monotonic(),deadline);ingress.tick();time.sleep(.005)
+        record=ingress.pending('synthetic-window',1)[0]
+        actual={'kind':'native_worker_task','task_id':'77777777-7777-4777-8777-777777777777',
+            'parent_run_id':record['source']['run_id'],'phase':'queued','run_id':None,'provider':None,'result':None}
+        reply(ingress,{'window_id':'synthetic-window','generation':1,'owner_id':record['source']['owner_id'],
+            'conversation_id':record['source']['conversation_id'],'result':{'operation_id':record['request_id'],
+                'run_id':record['source']['run_id'],'source':managed_control.normalize_source(record['source']),
+                'request_sha256':record['payload_sha256'],'expires_at_ms':int(time.time()*1000)+25000,'result':actual}})
+        response=self.read_reply(ingress);value=json.loads(response['body'])
+        self.assertEqual(value['id'],'native-worker-rpc');self.assertFalse(value['result']['isError'])
+        self.assertEqual(value['result']['structuredContent'],actual)
+        self.assertEqual(value['result']['structuredContent']['phase'],'queued')
+        self.assertIsNone(value['result']['structuredContent']['run_id'])
 
     def test_unrelated_same_uid_connection_cannot_claim_native_role_in_http_body(self):
         self.manager.package.runtime={'managed_operations':True};ingress=Ingress(self.manager);self.addCleanup(ingress.close)

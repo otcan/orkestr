@@ -52,6 +52,7 @@ pub use production_runtime::{
     CompletedManagedOperation, ConsumedManagedOperation, ManagedCallerEvidence,
     ManagedOperationConsumption, ManagedOperationOutcome, ManagedOperationParent,
     ManagedOperationRenewal, ManagedOperationRequest, ManagedOperationSetup,
+    NativeWorkerAvailability, NativeWorkerCall, NativeWorkerObservation,
 };
 mod fast_run_receipt;
 mod source_context;

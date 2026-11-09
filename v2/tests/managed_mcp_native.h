@@ -71,5 +71,9 @@ static void mcp_request(const char *tool, const char *arguments, int input) {
         mcp_stop_line(line, input);
     }
     if (!strstr(response, "HTTP/1.1 200 OK") || !strstr(response, "\"isError\":false")) exit(90);
+#ifdef ORKESTR_MCP_RESPONSE
+    ORKESTR_MCP_RESPONSE(tool,input,response);
+#else
     record(!strcmp(tool, "orkestr_desk_login") ? "desk-result" : "root-intake-result", input, 0);
+#endif
 }

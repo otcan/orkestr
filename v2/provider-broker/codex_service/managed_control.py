@@ -173,6 +173,11 @@ def dispatch(manager,request,window):
     ingress=manager.managed
     require(ingress is not None,'managed_unconfigured')
     operation=request['operation'];window_id=request['window_id'];generation=request['generation']
+    if operation in ('managed_worker_bind','managed_worker_reply'):
+        from .managed_worker_reply import bind,reply
+        record=bind(ingress,request) if operation=='managed_worker_bind' else reply(ingress,request)
+        return {'ok':True,'receipt':manager.ledger.status(request['conversation_id']),
+                operation:{'operation_id':record['request_id'],'run_id':record['run_id'],'authorized':True}}
     if operation=='managed_result':
         record=authorize_result(ingress,request['result'],request)
         return {'ok':True,'receipt':manager.ledger.status(request['conversation_id']),
