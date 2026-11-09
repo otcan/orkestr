@@ -99,6 +99,22 @@ impl ConfiguredExecution {
         .await;
         observed_rpc(ManagedRpc::RunOpen, started, result)
             .map_err(|_| "managed run observation uncertain")?;
+        let selected_budget = std::env::var("ORKESTR_V2_MANAGED_WORKER_EXECUTION_BUDGET_MS")
+            .ok()
+            .map(|value| {
+                value
+                    .parse::<u32>()
+                    .ok()
+                    .filter(|ms| (30_000..=3_600_000).contains(ms))
+                    .ok_or("native Worker budget refused")
+            })
+            .transpose()?;
+        let worker_budget = selected_budget.and_then(|ms| {
+            self.config
+                .worker
+                .as_ref()
+                .and_then(|policy| policy.native_execution_budget(ms))
+        });
         Ok(Some(ManagedTools {
             store: self.store.clone(),
             credential: self.token.clone(),
@@ -114,6 +130,7 @@ impl ConfiguredExecution {
                     .as_ref()
                     .is_some_and(|policy| policy.owner_tasks())
                     && std::env::var("ORKESTR_V2_MANAGED_WORKERS_ENABLED").as_deref() == Ok("1"),
+                worker_budget,
             ),
         }))
     }

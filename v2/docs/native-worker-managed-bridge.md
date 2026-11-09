@@ -31,9 +31,11 @@ silent provider fallback.
 The existing limits remain four active scheduler slots and 32 tasks per primary.
 Four simultaneous Native waits are permitted. Task title and instructions are
 data only; the complete arguments are capped at 4 KiB. Initial task lifetime is
-30 seconds. This increment does not grant an extended execution budget. Longer
-work still requires a separate owner-authorized budget path; a host ceiling is
-not that authorization. Existing control/MCP frame and connection bounds remain.
+30 seconds. An explicit sealed `managed_worker_execution_budget_ms` selection
+(30,000 through 3,600,000) authorizes same-child renewal within the existing
+Worker policy ceiling. Core clamps that owner selection to the host policy.
+The model cannot supply a budget. Omitting the selection preserves the 30-second
+hard lifetime; a host ceiling alone is not owner authorization. Existing control/MCP frame and connection bounds remain.
 
 ## Authority and persistence
 
@@ -69,9 +71,10 @@ operation IDs are unchanged.
 A result is `completed` only after the real Worker proposal is accepted. Before
 acceptance it remains `awaiting_acceptance`, with no accepted answer attached.
 Completed results include the immutable acceptance/completion/payload references
-and a bounded text preview. Removed payloads and truncation are explicit. The
-bridge itself does not approve proposals or change the configured acceptance
-policy.
+and a bounded text preview. Removed payloads and truncation are explicit. The existing window system principal auto-accepts Worker proposals first when
+the persisted owner setting `review_before_accepting` is false, with an audit
+receipt and no browser decision. If that setting is true, results remain
+`awaiting_acceptance`. The bridge preserves this configured policy.
 
 ## Remaining rollout acceptance
 

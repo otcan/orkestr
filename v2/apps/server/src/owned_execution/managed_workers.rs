@@ -8,6 +8,7 @@ pub(super) struct NativeWorkers {
     access: crate::worker_tasks::WorkerTaskAccess,
     parent: RunAdmission,
     configured: bool,
+    execution_budget_ms: Option<u32>,
     calls: std::collections::VecDeque<(NativeWorkerCall, Instant)>,
 }
 impl NativeWorkers {
@@ -15,11 +16,13 @@ impl NativeWorkers {
         access: crate::worker_tasks::WorkerTaskAccess,
         parent: RunAdmission,
         configured: bool,
+        execution_budget_ms: Option<u32>,
     ) -> Self {
         Self {
             access,
             parent,
             configured,
+            execution_budget_ms,
             calls: std::collections::VecDeque::new(),
         }
     }
@@ -29,6 +32,7 @@ impl NativeWorkers {
     fn availability(&self) -> NativeWorkerAvailability {
         NativeWorkerAvailability {
             configured: self.configured,
+            execution_budget_ms: self.execution_budget_ms,
             scheduler_available: self.calls.len() < 4
                 && self.access.available(
                     &self.parent.owner_id,

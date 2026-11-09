@@ -7,6 +7,7 @@ mod presentation;
 pub struct NativeWorkerAvailability {
     pub configured: bool,
     pub scheduler_available: bool,
+    pub execution_budget_ms: Option<u32>,
 }
 /// A bounded observation handle, not a dispatch or renewable execution grant.
 pub struct NativeWorkerCall {
@@ -108,6 +109,12 @@ impl Store {
         request: &ManagedOperationRequest,
         availability: NativeWorkerAvailability,
     ) -> Result<NativeWorkerCall> {
+        if availability
+            .execution_budget_ms
+            .is_some_and(|ms| !(30_000..=3_600_000).contains(&ms))
+        {
+            return Err(RuntimeStoreError::InvalidInput);
+        }
         if id.is_nil() || !request.native_bounded() || !parent.matches_source(source) {
             return Err(RuntimeStoreError::Fenced);
         }
@@ -166,7 +173,7 @@ impl Store {
                         .ok_or(RuntimeStoreError::InvalidInput)?
                         .into(),
                     lifetime_ms: 30_000,
-                    execution_budget_ms: None,
+                    execution_budget_ms: availability.execution_budget_ms,
                 };
                 let receipt = store
                     .create_worker_task_in(
@@ -258,7 +265,8 @@ impl Store {
         Ok(
             json!({"kind":"native_worker_capability","state":state,"provider":provider_name(parent.setup.provider)?,
             "max_active":4,"max_tasks":32,"tasks_created":count,"initial_lifetime_ms":30000,
-            "extended_budget":false,"queued_is_running":false}),
+            "extended_budget":availability.execution_budget_ms.is_some(),
+            "execution_budget_ms":availability.execution_budget_ms,"queued_is_running":false}),
         )
     }
 }

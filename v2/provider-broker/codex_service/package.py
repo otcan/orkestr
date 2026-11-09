@@ -171,7 +171,7 @@ class Package:
 
     def _bind(self):
         value = self.runtime
-        require(set(value) - IDENTITY_FIELDS - {"resource_namespace", "agent_timer_grants", "qualification_record", "operator_recovery", "desk_login", "managed_operations", "managed_workers", "password_rotation_ready", "attachment_export_dir", "live_map", "desktop_broker", "provider_quota", "timer_config", "v1_chat_icons_dir", "whatsapp_chats", "claude_quota_projection", "codex_quota_projection", "metrics_port"} == {"format", "uid", "gid", "owner_id", "conversation_id", "home",
+        require(set(value) - IDENTITY_FIELDS - {"resource_namespace", "agent_timer_grants", "qualification_record", "operator_recovery", "desk_login", "managed_operations", "managed_workers", "managed_worker_execution_budget_ms", "password_rotation_ready", "attachment_export_dir", "live_map", "desktop_broker", "provider_quota", "timer_config", "v1_chat_icons_dir", "whatsapp_chats", "claude_quota_projection", "codex_quota_projection", "metrics_port"} == {"format", "uid", "gid", "owner_id", "conversation_id", "home",
                 "bootstrap_file", "ledger_directory", "endpoint_directory", "port", "trusted_origin"}
                 and value["format"] == "orkestr-v2-codex-service-v1", "service_format")
         require("password_rotation_ready" not in value or type(value["password_rotation_ready"]) is bool,
@@ -220,6 +220,9 @@ class Package:
         if 'managed_workers' in value:
             require(self.identity_split and value.get('managed_operations') is True
                     and value['managed_workers'] is True,'managed_workers_configuration')
+        if 'managed_worker_execution_budget_ms' in value:
+            require(value.get('managed_workers') is True and type(value['managed_worker_execution_budget_ms']) is int
+                    and 30000<=value['managed_worker_execution_budget_ms']<=3600000,'managed_worker_budget_configuration')
         if 'desk_login' in value:
             selected=value['desk_login']
             require(self.identity_split and type(selected) is dict and set(selected)=={'path','sha256'} and
@@ -462,6 +465,8 @@ class Package:
                 **({'ORKESTR_V2_DESK_LOGIN_ENABLED':'1'} if 'desk_login' in self.runtime else {}),
                 **({'ORKESTR_V2_MANAGED_OPERATIONS_ENABLED':'1'} if self.runtime.get('managed_operations') else {}),
                 **({'ORKESTR_V2_MANAGED_WORKERS_ENABLED':'1'} if self.runtime.get('managed_workers') else {}),
+                **({'ORKESTR_V2_MANAGED_WORKER_EXECUTION_BUDGET_MS':str(self.runtime['managed_worker_execution_budget_ms'])}
+                   if 'managed_worker_execution_budget_ms' in self.runtime else {}),
                 **({"ORKESTR_V2_PASSWORD_ROTATION_READY": "1" if self.runtime["password_rotation_ready"] else "0"}
                    if "password_rotation_ready" in self.runtime else {}),
                 ACCESS_LOG_ENV: "quiet",

@@ -59,8 +59,12 @@ class ManagedPackageTests(identity_tests.SplitPackageTests):
                       {'managed_operations':True,'managed_workers':1}):
             with self.assertRaises(Refused):selected(flags)
         self.assertNotIn('ORKESTR_V2_MANAGED_WORKERS_ENABLED',selected({'managed_operations':True}).environment())
-        enabled=selected({'managed_operations':True,'managed_workers':True})
+        for budget in (True,29999,3600001):
+            with self.assertRaises(Refused):selected({'managed_operations':True,'managed_workers':True,'managed_worker_execution_budget_ms':budget})
+        with self.assertRaises(Refused):selected({'managed_operations':True,'managed_worker_execution_budget_ms':300000})
+        enabled=selected({'managed_operations':True,'managed_workers':True,'managed_worker_execution_budget_ms':300000})
         self.assertEqual(enabled.environment()['ORKESTR_V2_MANAGED_WORKERS_ENABLED'],'1')
+        self.assertEqual(enabled.environment()['ORKESTR_V2_MANAGED_WORKER_EXECUTION_BUDGET_MS'],'300000')
 
 
 class PacketTests(unittest.TestCase):

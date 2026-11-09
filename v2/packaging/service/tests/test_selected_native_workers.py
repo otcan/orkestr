@@ -17,6 +17,16 @@ class NativeWorkerSelection(unittest.TestCase):
         self.assertEqual(runtime,{'owner_id':'synthetic-owner','managed_workers':True})
         self.assertEqual(plan,{'authority_uid':10002,'managed_operations':True,'managed_workers':True})
 
+    def test_only_sealed_bounded_budget_is_forwarded(self):
+        base={'authority_uid':10002,'managed_operations':True,'managed_workers':True}
+        for budget in (30000,300000,3600000):
+            self.assertEqual(workers.runtime({**base,'managed_worker_execution_budget_ms':budget}),
+                {'managed_workers':True,'managed_worker_execution_budget_ms':budget})
+        for budget in (True,None,1,29999,3600001,'300000'):
+            with self.subTest(budget=budget),self.assertRaises(RuntimeError):
+                workers.runtime({**base,'managed_worker_execution_budget_ms':budget})
+        with self.assertRaises(RuntimeError):workers.runtime({'managed_worker_execution_budget_ms':300000})
+
     def test_incomplete_or_nonboolean_selection_fails_before_staging(self):
         for plan in ({'managed_workers':True},{'authority_uid':10002,'managed_workers':True},
                      {'authority_uid':10002,'managed_operations':False,'managed_workers':True},
