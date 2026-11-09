@@ -1,5 +1,8 @@
 use super::*;
 use crate::conversation_resources_http::tests::{case, send};
+#[cfg(target_os = "linux")]
+#[path = "conversation_status_batch_http_tests.rs"]
+mod batch;
 
 #[test]
 fn conversation_lists_are_bounded_unique_uuids() {

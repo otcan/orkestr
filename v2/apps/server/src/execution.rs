@@ -3,8 +3,10 @@
 #[path = "execution/retired_history_tests.rs"]
 mod retired_history_tests;
 use super::*;
+mod projection;
 use axum::extract::{rejection::QueryRejection, Path, Query};
 use orkestr_v2_application::runtime::RuntimeStoreError;
+pub(crate) use projection::current_status;
 
 #[derive(Default, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -101,6 +103,9 @@ async fn status_for(
             "Execution status unavailable",
         ),
     })?;
+    if !fast && query.run_id.is_none() {
+        return current_status(&owner, &conversation, scope.as_ref(), status);
+    }
     match status {
         None if query.run_id.is_some() => Err(Error(
             StatusCode::NOT_FOUND,
@@ -116,26 +121,7 @@ async fn status_for(
                     .as_ref()
                     .is_none_or(|run| status.run_id.as_ref() == Some(run)) =>
         {
-            status.capabilities.stop = status.phase == ExecutionPhase::Running
-                && scope
-                    .as_ref()
-                    .and_then(|scope| scope.control.as_ref())
-                    .is_some_and(|control| {
-                        status
-                            .run_id
-                            .as_ref()
-                            .is_some_and(|run| control.available(&owner, &conversation, run))
-                    });
-            status.capabilities.steer = status.phase == ExecutionPhase::Running
-                && status.queue_age_ms.is_none()
-                && scope
-                    .as_ref()
-                    .and_then(|scope| scope.control.as_ref())
-                    .is_some_and(|control| {
-                        status.run_id.as_ref().is_some_and(|run| {
-                            control.steering_available(&owner, &conversation, run)
-                        })
-                    });
+            projection::apply_controls(&owner, &conversation, scope.as_ref(), &mut status);
             if let (true, Some(run)) = (fast, query.run_id.as_ref()) {
                 // Burst marker for channel adapters: quote this reply's
                 // source message. Absent (not false) for a lone reply, so the

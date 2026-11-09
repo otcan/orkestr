@@ -88,23 +88,36 @@ impl AppState {
         Ok(self)
     }
 
+    /// Retained controls only; the caller must first authenticate and read
+    /// the exact owned conversation from Core. Never issues execution.
+    pub(crate) fn registered_execution_scope(
+        &self,
+        owner: &OwnerId,
+        conversation: &ConversationId,
+    ) -> Option<ExecutionScope> {
+        if let Some(controller) = &self.window_controller {
+            if let Some(scope) = controller.snapshot(owner, conversation) {
+                return Some(scope);
+            }
+        }
+        if let Some(handles) = &self.window_handles {
+            if handles.matches(owner, conversation) {
+                return handles.snapshot(owner, conversation);
+            }
+        }
+        if let Some(scope) = self.executions.get(owner, conversation) {
+            return Some(scope.clone());
+        }
+        None
+    }
+
     pub(crate) async fn execution_scope(
         &self,
         owner: &OwnerId,
         conversation: &ConversationId,
     ) -> Result<Option<ExecutionScope>, Error> {
-        if let Some(controller) = &self.window_controller {
-            if let Some(scope) = controller.snapshot(owner, conversation) {
-                return Ok(Some(scope));
-            }
-        }
-        if let Some(handles) = &self.window_handles {
-            if handles.matches(owner, conversation) {
-                return Ok(handles.snapshot(owner, conversation));
-            }
-        }
-        if let Some(scope) = self.executions.get(owner, conversation) {
-            return Ok(Some(scope.clone()));
+        if let Some(scope) = self.registered_execution_scope(owner, conversation) {
+            return Ok(Some(scope));
         }
         // Preserve unknown/foreign scope refusal without looking up any other
         // runtime handle. A known but unconfigured conversation stays unavailable.
