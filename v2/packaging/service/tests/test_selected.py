@@ -93,6 +93,20 @@ class Selected(unittest.TestCase):
             package=manager.Package(self.root/'release/package',sha(self.root/'release/package/manifest.json'))
             self.assertEqual(package.environment()['ORKESTR_V2_METRICS_BIND'],'127.0.0.1:19850')
 
+    def test_codex_only_package_keeps_provider_source_without_runtime_bindings(self):
+        source = self.current_source()
+        selected.prepare(self.plan)
+        root = self.root/'release/package'
+        with authority(REPO,source) as (_,manager,_):
+            package = manager.Package(root,sha(root/'manifest.json'))
+            self.assertIsNone(package.claude)
+            self.assertNotIn('claude',package.beta)
+            self.assertFalse((root/'launcher-claude.py').exists())
+            self.assertFalse((root/'claude-private.json').exists())
+            for name in manager.CLAUDE_BROKER:
+                self.assertIn('broker/'+name,package.manifest['files'])
+                self.assertEqual(package.manifest['files']['broker/'+name],sha(root/'broker'/name))
+
     def test_root_maintenance_marker_is_emitted_only_as_external_beta_configuration(self):
         self.current_source()
         parent=self.root/'maintenance';parent.mkdir(mode=0o755)
