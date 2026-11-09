@@ -1,4 +1,4 @@
-import {acceptedRustFinal, completedLateRoutes} from './whatsapp-scoped-late-replies.js';
+import {acceptedRustFinal, completedLateRoutes, lateReplyCandidates} from './whatsapp-scoped-late-replies.js';
 import {readGroupInputs} from './scoped-group-inbox.js';
 import {buildReplyTo} from './scoped-group-reply-quote.js';
 import {createScopedAcknowledgements} from './scoped-group-acknowledgements.js';
@@ -16,10 +16,6 @@ import {createProgressBudget, progressPhases, progressPolicy} from './scoped-gro
 import {createDynamicGroupRegistry, createDynamicGroupView, eligibleGroups, validateDynamicGroups} from './whatsapp-scoped-dynamic-groups.js';
 
 const key = value => crypto.createHash('sha256').update(value).digest('hex');
-// Replies posted after the turn ended (a bound api-session) and parented by V1
-// to the latest relay-routed input. Delivered once, within a bounded window.
-const lateSources = new Set(['api-session']);
-const finalPhases = new Set(['final_answer', 'final']);
 const LATE_REPLY_WINDOW_MS = 6 * 60 * 60 * 1000;
 const LATE_REPLY_POLL_MS = 10_000;
 // How often the relay reconciles registered groups with V1's thread registry.
@@ -430,10 +426,7 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
         const {messages = []} = await api(`/api/threads/${encodeURIComponent(group.threadId)}/messages?limit=50`);
         for (const {input, at, route} of candidates) await inputSerial(input.id, async () => {
           const parent = messages.find(m => m.id === route.message_id);
-          const late = messages.filter(m => m.role === 'assistant' && m.state === 'completed' && finalPhases.has(m.phase)
-            && m.parentMessageId === route.message_id && Date.parse(m.createdAt) >= at && Date.parse(m.createdAt) - at <= LATE_REPLY_WINDOW_MS
-            && ((input === newest && lateSources.has(m.source)) || acceptedRustFinal(m, parent, thread)))
-            .sort((a, b) => Number(a.cursor || 0) - Number(b.cursor || 0));
+          const late = lateReplyCandidates({messages, parent, thread, route, at, windowMs: LATE_REPLY_WINDOW_MS, newest: input === newest});
           for (const answer of late) {
             const verify = answer.source === 'rust-v2-pilot' ? async () => {
               const current = db.prepare('SELECT * FROM routed WHERE id=?').get(input.id);
