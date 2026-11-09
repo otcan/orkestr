@@ -20,3 +20,20 @@ fn successful_delete_wins_in_flight_get_and_failure_hides_unverified_text() {
     other_selection.observed(Some("different payload".into()));
     assert!(other_selection.text.is_some());
 }
+
+#[test]
+fn silence_marker_is_exact_and_does_not_hide_explanations_or_quoted_examples() {
+    use orkestr_v2_ui::payload::silent_assistant_reply;
+    for text in ["NO_REPLY", "  NO_REPLY\n"] {
+        assert!(silent_assistant_reply(text));
+    }
+    for text in [
+        "no_reply",
+        "NO_REPLY.",
+        "Why does NO_REPLY appear?",
+        "`NO_REPLY`",
+        "> NO_REPLY",
+    ] {
+        assert!(!silent_assistant_reply(text));
+    }
+}
