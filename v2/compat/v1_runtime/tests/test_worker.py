@@ -39,7 +39,7 @@ class Peer:
         return dict(request_key=request_key, input_message_id=intake["message_id"], input_event_id=intake["event_id"],
                     input_request_key=input_key, expected_generation=0, window_id=None, predecessor_window_id=None)
 
-    def read_events(self, after, maximum):
+    def read_events(self, after, maximum, timeout_s=None):
         return [event for event in [{"sequence": 2, "run_id": "fast-run"},
                                     {"sequence": 3, "run_id": "deep-run"}] if event["sequence"] > after][:maximum]
 
@@ -130,7 +130,7 @@ class WorkerTests(unittest.TestCase):
         self.ledger = Ledger(Path(self.temp.name) / "ledger.sqlite3", {"test_scope": "one"})
         self.data, _ = self.ledger.enqueue(dict(publicMessageId="public", publicThreadId="thread", chatId="chat", accountId="account", text="request"))
         self.peer = Peer()
-        self.worker = Worker(self.peer, self.ledger)
+        self.worker = Worker(self.peer, self.ledger, legacy_companions=True)
 
     def test_only_accepted_deep_is_exported(self):
         self.worker.step(self.data)
@@ -196,7 +196,7 @@ class WorkerTests(unittest.TestCase):
             with self.subTest(route=dropped):
                 data, _ = self.ledger.enqueue(dict(publicMessageId=dropped, publicThreadId="thread", chatId="chat", accountId="account", text="request"))
                 peer = Peer()
-                worker = Worker(peer, self.ledger)
+                worker = Worker(peer, self.ledger, legacy_companions=True)
                 original = peer.request
                 lost = [False]
                 def request(method, route, **kwargs):
@@ -240,7 +240,7 @@ class WorkerTests(unittest.TestCase):
                 peer.request = request
                 stderr = io.StringIO()
                 with contextlib.redirect_stderr(stderr):
-                    Worker(peer, ledger).run(Stop())
+                    Worker(peer, ledger, legacy_companions=True).run(Stop())
                 # Only this input's own Fast may be settled; a refused Deep never is.
                 self.assertFalse(any(route == "/accept" and body["run_id"] == "deep-run"
                                      for route, body in peer.mutations))
@@ -289,7 +289,7 @@ class ExtensionTests(unittest.TestCase):
 
     def test_final_reply_uses_conversation_reply_settings(self):
         self.peer.reply_settings = dict(prefix="orkestr:", footer="-- v2", honor_no_reply=True)
-        Worker(self.peer, self.ledger).step(self.enqueue())
+        Worker(self.peer, self.ledger, legacy_companions=True).step(self.enqueue())
         final = self.ledger.messages()[-1]
         self.assertEqual(final["text"], "orkestr: deep result\n\n-- v2")
         self.assertNotIn("noReply", final)
@@ -297,7 +297,7 @@ class ExtensionTests(unittest.TestCase):
 
     def test_render_route_absent_keeps_v1_no_reply_rule(self):
         self.peer.render_missing = True
-        Worker(self.peer, self.ledger).step(self.enqueue())
+        Worker(self.peer, self.ledger, legacy_companions=True).step(self.enqueue())
         self.assertEqual(self.ledger.messages()[-1]["text"], "deep result")
         peer = Peer()
         peer.render_missing = True
@@ -311,7 +311,7 @@ class ExtensionTests(unittest.TestCase):
         ledger = Ledger(Path(self.temp.name) / "fallback.sqlite3", {"test_scope": "one"})
         data = ledger.enqueue(dict(publicMessageId="public", publicThreadId="thread", chatId="chat",
                                    accountId="account", text="request"))[0]
-        Worker(peer, ledger).step(data)
+        Worker(peer, ledger, legacy_companions=True).step(data)
         final = ledger.messages()[-1]
         self.assertEqual((final["text"], final["noReply"]), ("NO_REPLY", True))
 
@@ -324,7 +324,7 @@ class ExtensionTests(unittest.TestCase):
             return status, value
         self.peer.request = request
         data = self.enqueue()
-        Worker(self.peer, self.ledger).step(data)
+        Worker(self.peer, self.ledger, legacy_companions=True).step(data)
         final = self.ledger.messages()[-1]
         self.assertEqual((final["text"], final["noReply"]), ("NO_REPLY", True))
 
@@ -346,7 +346,7 @@ class ExtensionTests(unittest.TestCase):
                                          text="NO_REPLY" if payload == "p2" else "working on " + payload + ".")
                     return original(method, route, **kwargs)
                 peer.request = request
-                worker = Worker(peer, ledger, progress_updates=enabled)
+                worker = Worker(peer, ledger, progress_updates=enabled, legacy_companions=True)
                 with patch.object(worker_module, "PROGRESS_INTERVAL_S", 0), \
                         patch.object(outbound_text, "PROGRESS_SETTLE_S", 0):
                     # Each snapshot is seen twice: the first sighting only holds it.
@@ -377,7 +377,7 @@ class ExtensionTests(unittest.TestCase):
                                  text="Here is the latest schedule.")
             return original(method, route, **kwargs)
         peer.request = request
-        worker = Worker(peer, ledger, progress_updates=True)
+        worker = Worker(peer, ledger, progress_updates=True, legacy_companions=True)
         with patch.object(worker_module, "PROGRESS_INTERVAL_S", 0):
             for step in ("running", "running", "running", "done"):
                 phase[0] = step
@@ -408,7 +408,7 @@ class ExtensionTests(unittest.TestCase):
             return original(method, route, **kwargs)
         self.peer.request = request
         data = self.enqueue()
-        worker = Worker(self.peer, self.ledger)  # progress_updates off: questions still go out
+        worker = Worker(self.peer, self.ledger, legacy_companions=True)  # progress_updates off: questions still go out
         worker.step(data)
         worker.step(self.ledger.next_input() or data)
         rows = self.ledger.messages()
@@ -427,7 +427,7 @@ class ExtensionTests(unittest.TestCase):
 
     def test_progress_from_a_foreign_run_is_ignored(self):
         data = self.enqueue()
-        worker = Worker(self.peer, self.ledger, progress_updates=True)
+        worker = Worker(self.peer, self.ledger, progress_updates=True, legacy_companions=True)
         with patch.object(worker_module, "PROGRESS_INTERVAL_S", 0):
             worker.capture_progress(data, dict(run_id="other-run", phase="running", progress=dict(payload_id="x")),
                                     {"deep-run"})
@@ -447,7 +447,7 @@ class ExtensionTests(unittest.TestCase):
             return {"import_id": "import", "manifest": request["target_manifest"], "mapping": request["mapping"],
                     "source_manifest_id": request["source"]["manifest"]["manifest_id"]}
         self.peer.import_attachments = import_attachments
-        worker = Worker(self.peer, self.ledger)
+        worker = Worker(self.peer, self.ledger, legacy_companions=True)
         with self.assertRaises(ConnectionError):
             worker.step(data)
         worker.step(self.ledger.next_input())
@@ -469,12 +469,12 @@ class ExtensionTests(unittest.TestCase):
         data = self.enqueue(attachments=[{"uploadId": upload, "sha256": digest}])
         self.ledger.release_uploads([upload])
         with self.assertRaisesRegex(Refused, "attachment_bytes_missing"):
-            Worker(self.peer, self.ledger).step(data)
+            Worker(self.peer, self.ledger, legacy_companions=True).step(data)
         self.assertFalse(any(route == "/messages" for route, _ in self.peer.mutations))
 
     def test_final_reply_does_not_infer_the_actual_model_from_settings(self):
         self.peer.settings = dict(provider="codex", model="gpt-6-astra", revision=3)
-        Worker(self.peer, self.ledger).step(self.enqueue())
+        Worker(self.peer, self.ledger, legacy_companions=True).step(self.enqueue())
         final = self.ledger.messages()[-1]
         self.assertNotIn("provider", final)
         self.assertEqual(final["model"], "unreported")
@@ -490,7 +490,7 @@ class ExtensionTests(unittest.TestCase):
             return {"quickProvider": "codex", "quickModel": "quick-model"}
         with mock.patch.object(worker_module, "quick_identity", quick):
             data = self.enqueue()
-            Worker(self.peer, self.ledger).step(data)
+            Worker(self.peer, self.ledger, legacy_companions=True).step(data)
         final = self.ledger.messages()[-1]
         self.assertEqual(final["phase"], "final_answer")
         self.assertEqual((final["quickProvider"], final["quickModel"]), ("codex", "quick-model"))
@@ -501,12 +501,12 @@ class ExtensionTests(unittest.TestCase):
         ledger = Ledger(Path(self.temp.name) / "second.sqlite3", {"test_scope": "one"})
         second, _ = ledger.enqueue(dict(publicMessageId="public", publicThreadId="thread", chatId="chat", accountId="account", text="request"))
         with mock.patch.object(worker_module, "quick_identity", broken):
-            Worker(Peer(), ledger).step(second)
+            Worker(Peer(), ledger, legacy_companions=True).step(second)
         self.assertEqual(ledger.messages()[-1]["phase"], "final_answer")
         self.assertNotIn("quickModel", ledger.messages()[-1])
 
     def test_final_reply_without_settings_route_omits_provider(self):
-        Worker(self.peer, self.ledger).step(self.enqueue())
+        Worker(self.peer, self.ledger, legacy_companions=True).step(self.enqueue())
         self.assertNotIn("provider", self.ledger.messages()[-1])
 
     def test_attachments_are_exported_as_files_named_in_the_intake_note(self):
@@ -516,7 +516,7 @@ class ExtensionTests(unittest.TestCase):
         data = self.enqueue(text="what is this", attachments=[{"uploadId": upload, "sha256": digest}])
         self.peer.import_attachments = lambda request: {"import_id": "import"}
         export = Path(self.temp.name) / "media"
-        Worker(self.peer, self.ledger, attachment_dir=str(export)).step(data)
+        Worker(self.peer, self.ledger, attachment_dir=str(export), legacy_companions=True).step(data)
         path = export / "conversation" / (digest + ".png")
         self.assertEqual(path.read_bytes(), content)
         self.assertEqual(path.stat().st_mode & 0o777, 0o640)
@@ -532,7 +532,7 @@ class ExtensionTests(unittest.TestCase):
         self.peer.import_attachments = lambda request: {"import_id": "import"}
         blocker = Path(self.temp.name) / "file"
         blocker.write_text("not a directory")
-        Worker(self.peer, self.ledger, attachment_dir=str(blocker)).step(data)
+        Worker(self.peer, self.ledger, attachment_dir=str(blocker), legacy_companions=True).step(data)
         intake = [body for route, body in self.peer.mutations if route == "/messages"][0]
         self.assertNotIn("local file", intake["text"])
         self.assertIn("reference", intake["text"])

@@ -223,7 +223,7 @@ pub fn HostOverview(
                             }
                         }
                     }
-                    p { class: "hm-foot", "CPU is the share of the whole host (all {s.cores} threads). Conversations include their Deep, Fast and Worker sessions and tools; workspaces are V1 thread and Worker commands by working directory. Disk I/O shows — where the kernel keeps it private to another user." }
+                    p { class: "hm-foot", "CPU is the share of the whole host (all {s.cores} threads). Conversations include their agent and Worker sessions and tools; workspaces are V1 thread and Worker commands by working directory. Disk I/O shows — where the kernel keeps it private to another user." }
                 }
             }
             div { class: "hd-two",

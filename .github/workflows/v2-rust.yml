@@ -262,6 +262,12 @@ jobs:
       - name: Abandoned Fast preserves the original Root-managed Deep
         run: |
           sudo env PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -I -S -B tests/identity_split_fast_abandonment_http.py "$CARGO_TARGET_DIR/debug/orkestr-v2-server" --expected-source "$(git rev-parse HEAD)" --report "$RUNNER_TEMP/v2-fast-abandonment.json"
+      - name: Managed package owner-bound quota projection over real HTTP
+        run: sudo /usr/bin/python3 -B tests/identity_split_provider_quota_http.py "$CARGO_TARGET_DIR/debug/orkestr-v2-server" --report "$RUNNER_TEMP/v2-provider-quota-package.json"
+      - name: Default single-agent fresh and resumed windows for both providers
+        run: |
+          sudo env PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -B tests/identity_split_single_agent_http.py "$CARGO_TARGET_DIR/debug/orkestr-v2-server" --provider codex --report "$RUNNER_TEMP/v2-single-agent-codex.json"
+          sudo env PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -B tests/identity_split_single_agent_http.py "$CARGO_TARGET_DIR/debug/orkestr-v2-server" --provider claude --report "$RUNNER_TEMP/v2-single-agent-claude.json"
       - name: Owner auto-accept of Deep, Worker and Fast without a browser session over real HTTP
         run: |
           sudo /usr/bin/python3 -B tests/service_auto_accept_http.py "$CARGO_TARGET_DIR/debug/orkestr-v2-server" --source "$(git rev-parse HEAD)" --report "$RUNNER_TEMP/v2-auto-accept.json"
@@ -293,6 +299,11 @@ jobs:
           if [ -f "$RUNNER_TEMP/v2-fast-abandonment.json" ]; then
             sudo chown --no-dereference -- "$(id -u):$(id -g)" "$RUNNER_TEMP/v2-fast-abandonment.json"
           fi
+          for report in "$RUNNER_TEMP/v2-single-agent-codex.json" "$RUNNER_TEMP/v2-single-agent-claude.json"; do
+            if [ -f "$report" ]; then
+              sudo chown --no-dereference -- "$(id -u):$(id -g)" "$report"
+            fi
+          done
       - name: Retain synthetic HTTP evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -304,6 +315,8 @@ jobs:
             ${{ runner.temp }}/v2-password-recovery.json
             ${{ runner.temp }}/v2-maintenance-restart.json
             ${{ runner.temp }}/v2-fast-abandonment.json
+            ${{ runner.temp }}/v2-single-agent-codex.json
+            ${{ runner.temp }}/v2-single-agent-claude.json
           if-no-files-found: ignore
           retention-days: 7
 

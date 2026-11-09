@@ -18,7 +18,7 @@ class InternalContextTests(Base):
         super().setUp()
         self.peer = WebPeer()
         self.peer.conversation = "a1000000-0000-4000-8000-000000000008"
-        self.worker = Worker(self.peer, self.ledger)
+        self.worker = Worker(self.peer, self.ledger, legacy_companions=True)
         self.registry = Path(self.temp.name) / "internal-contexts"
         self.registry.mkdir(mode=0o700)
         self.worker.internal_context_dir = str(self.registry)
@@ -70,7 +70,7 @@ class InternalContextTests(Base):
         self.scan()
         before = self.ledger.messages()
         self.ledger.set_web_cursor(10)
-        self.worker = Worker(self.peer, self.ledger)
+        self.worker = Worker(self.peer, self.ledger, legacy_companions=True)
         self.worker.internal_context_dir = str(self.registry)
         self.scan()
         self.assertEqual(self.ledger.messages(), before)

@@ -27,7 +27,7 @@ class InputOverlapTests(unittest.TestCase):
         self.peer.texts['fast-owner'] = 'NO_REPLY' # This overlap case exercises only the substantive Deep answer.
         self.peer.ran(2, text='NO_REPLY')
         self.peer.timer_rows = [occurrence(2)]
-        self.worker = Worker(self.peer, self.ledger)
+        self.worker = Worker(self.peer, self.ledger, legacy_companions=True)
         self.ledger.set_timer_cursor(0)
 
     def row(self, remote):

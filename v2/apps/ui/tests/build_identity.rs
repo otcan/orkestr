@@ -30,3 +30,34 @@ fn unpinned_is_explicit_not_a_fabricated_source() {
     let json = serde_json::to_value(build).unwrap();
     assert!(json["source_commit"].is_null());
 }
+
+#[test]
+fn server_identity_never_substitutes_web_source_or_accepts_invalid_health() {
+    use orkestr_v2_ui::build_identity::server_identity;
+    let source = "b".repeat(40);
+    let healthy = serde_json::json!({"status":"ok","product":"orkestr-v2","build":{
+        "format":"orkestr-v2-build-identity-v1","component":"server","version":"2.0.0-dev","source_commit":source
+    }});
+    assert_eq!(
+        server_identity(&healthy).unwrap().source_commit.as_deref(),
+        Some(source.as_str())
+    );
+    let mut unknown = healthy.clone();
+    unknown["build"]["source_commit"] = serde_json::Value::Null;
+    assert!(server_identity(&unknown).unwrap().source_commit.is_none());
+    for (key, value) in [
+        ("component", "web"),
+        ("source_commit", "unknown"),
+        ("source_commit", "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"),
+        ("format", "different-format"),
+        ("version", ""),
+    ] {
+        let mut invalid = healthy.clone();
+        invalid["build"][key] = value.into();
+        assert!(server_identity(&invalid).is_none(), "{key}={value}");
+    }
+    let mut invalid = healthy;
+    invalid["build"]["error"] = "invalid embedded build identity".into();
+    assert!(server_identity(&invalid).is_none());
+    assert!(server_identity(&serde_json::json!({"status":"ok"})).is_none());
+}

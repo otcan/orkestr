@@ -139,7 +139,7 @@ class IntakeBase(unittest.TestCase):
         self.worker = self.new_worker()
 
     def new_worker(self):
-        worker = Worker(self.peer, self.ledger, burst_quiet_s=3)
+        worker = Worker(self.peer, self.ledger, burst_quiet_s=3, legacy_companions=True)
         worker.fast_reply_policy = "owner_only"
         worker.web_mirror = False
         worker._timers_checked = worker._posts_checked = worker._digest_checked = time.monotonic()

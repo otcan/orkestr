@@ -12,8 +12,12 @@ use orkestr_v2_store_sqlite::{
 };
 use std::{
     path::PathBuf,
+    sync::atomic::{AtomicU64, Ordering},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
+
+// Parallel fixture roots must remain unique even when the clock repeats.
+static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(0);
 
 struct Fixture {
     root: PathBuf,
@@ -27,12 +31,13 @@ impl Fixture {
     async fn new() -> Self {
         let root = PathBuf::from(std::env::var_os("ORKESTR_V2_HOME").expect("isolated home")).join(
             format!(
-                "runtime-dispatch-{}-{}",
+                "runtime-dispatch-{}-{}-{}",
                 std::process::id(),
                 SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .unwrap()
-                    .as_nanos()
+                    .as_nanos(),
+                NEXT_FIXTURE.fetch_add(1, Ordering::Relaxed)
             ),
         );
         std::fs::create_dir_all(&root).unwrap();

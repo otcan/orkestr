@@ -321,7 +321,7 @@ pub fn Conversation(
             }
             div { class: "conversation-scroll", tabindex: "0", "aria-label": "Conversation transcript",
                 crate::archived_history_view::ArchivedHistory { key: "archived-{id}-{generation}", id: id.clone(), session_scope, onexpired }
-                crate::intelligence_view::IntelligencePanel { key:"intelligence-{id}-{generation}", id:id.clone(), csrf:csrf.clone(), session_scope, execution, onexpired, onaccepted:move |_revision| { let next = *accepted_revision.peek() + 1; accepted_revision.set(next); }, auto_accept: auto_accept() }
+                crate::intelligence_view::IntelligencePanel { key:"intelligence-{id}-{generation}", id:id.clone(), csrf:csrf.clone(), session_scope, execution, onexpired }
                 crate::accepted_results_view::AcceptedReplies { key: "accepted-{id}-{generation}", id: id.clone(), session_scope, messages, posts: posts(), update: Some(accepted_revision), inline: true, onexpired }
                 if let Some(current) = live_status.filter(|s| s.progress.is_some() && s.phase != orkestr_v2_contracts::ExecutionPhase::Completed) {
                     div { key: "{current.conversation_id}/{current.progress.as_ref().unwrap().payload_id}", class: "chat-messages live-answer-row",
