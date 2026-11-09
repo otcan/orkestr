@@ -4,6 +4,7 @@ import io
 from pathlib import Path
 import tempfile
 import unittest
+import uuid
 
 import hashlib
 from unittest.mock import patch
@@ -18,8 +19,9 @@ class Peer:
     conversation = "conversation"
     owner = "owner"
 
-    def __init__(self):
+    def __init__(self, unique_acceptances=False):
         self.accepted, self.mutations = {}, []
+        self.unique_acceptances, self.input_key = unique_acceptances, None
         self.lose_deep_response = False
         self.foreign = False
         self.busy = False
@@ -34,6 +36,12 @@ class Peer:
         # queued row is still allowed: the adapter itself must refuse.
         self.held = []
         self.window_queue = []  # Core's queued window requests (entries).
+
+    def acceptance_event(self, role):
+        # Multi-input fixtures need real Core's globally distinct event identity.
+        # The frozen intake key keeps a lost-response retry on the same event.
+        return (str(uuid.uuid5(uuid.NAMESPACE_URL, "synthetic-acceptance:" + self.input_key + ":" + role + "-run"))
+                if getattr(self, "unique_acceptances", False) else role + "-accepted")
 
     def window_request(self, intake, input_key, request_key, current):
         return dict(request_key=request_key, input_message_id=intake["message_id"], input_event_id=intake["event_id"],
@@ -71,6 +79,9 @@ class Peer:
         if method == "GET" and route == "":
             return 200, dict(conversation_id=self.conversation, last_sequence=getattr(self, "head", 3))
         if route == "/messages":
+            if getattr(self, "unique_acceptances", False) and self.input_key != body["client_message_id"]:
+                self.input_key = body["client_message_id"]
+                self.accepted.clear()
             return 202, dict(status="accepted", message_id="message", event_id="event", sequence=1)
         if route == "/window" and method == "GET":
             return 204, None
@@ -98,7 +109,7 @@ class Peer:
         if route == "/accept":
             role = body["run_id"].split("-")[0]
             receipt = self.accepted.setdefault(role, dict(body, requested_revision=body["expected_revision"],
-                revision=body["expected_revision"] + 1, outcome="succeeded", acceptance_event_id=role + "-accepted"))
+                revision=body["expected_revision"] + 1, outcome="succeeded", acceptance_event_id=self.acceptance_event(role)))
             if role == "deep" and self.lose_deep_response:
                 self.lose_deep_response = False
                 raise ConnectionError("synthetic lost commit response")
@@ -118,7 +129,7 @@ class Peer:
             return 200, dict(settings_revision=1, outcome="deliver", text=text)
         if route.startswith("/accepted-results?"):
             return 200, dict(results=[dict(run_id=role + "-run", completion_event_id=role + "-completion",
-                acceptance_event_id=role + "-accepted", payload_id=role + "-payload", payload_removed=False)
+                acceptance_event_id=self.acceptance_event(role), payload_id=role + "-payload", payload_removed=False)
                 for role in self.accepted], next_after_sequence=None)
         raise AssertionError(route)
 
@@ -195,7 +206,7 @@ class WorkerTests(unittest.TestCase):
         for dropped in ("/messages", "/window"):
             with self.subTest(route=dropped):
                 data, _ = self.ledger.enqueue(dict(publicMessageId=dropped, publicThreadId="thread", chatId="chat", accountId="account", text="request"))
-                peer = Peer()
+                peer = Peer(unique_acceptances=True)
                 worker = Worker(peer, self.ledger, legacy_companions=True)
                 original = peer.request
                 lost = [False]
@@ -217,6 +228,9 @@ class WorkerTests(unittest.TestCase):
                 self.assertEqual(len(attempts), 2)
                 self.assertEqual(attempts[0], attempts[1])
                 self.assertEqual(resumed["phase"], "completed")
+                finals = [message for message in self.ledger.messages() if message.get("role") == "assistant"
+                          and message.get("parentMessageId") == resumed["remote_id"]]
+                self.assertEqual([message["id"] for message in finals], [peer.acceptance_event("deep")])
 
     def test_terminal_and_definite_upstream_refusals_are_visible_and_do_not_retry(self):
         class Stop:
