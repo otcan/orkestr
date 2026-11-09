@@ -88,6 +88,8 @@ def decode(raw):
         "managed_consume": {"window_id","generation","capability"},
         "managed_renew": {"window_id","generation","capability"},
         "managed_result": {"window_id","generation","result"},
+        "managed_worker_reply": {"window_id","generation","result"},
+        "managed_worker_bind": {"window_id","generation","result"},
         "managed_poll": {"window_id","generation","operation_id"},
         "managed_cancel": {"window_id","generation","operation_id"},
         "desk_login": {"window_id","generation","capability"},

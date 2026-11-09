@@ -65,6 +65,21 @@ class Selected(unittest.TestCase):
         pair['web']['server_candidate']=source
         (r/'pair').write_text(json.dumps(pair));self.plan['pair_sha256']=sha(r/'pair')
         return source
+    def test_native_worker_gate_uses_normal_split_plan_and_sealed_package(self):
+        source=self.current_source();self.root.chmod(0o755)
+        provider=self.root/'provider';provider.mkdir(mode=0o700);os.chown(provider,995,986)
+        self.plan.update(authority_uid=994,authority_gid=986,executor_uid=995,executor_gid=986,
+            provider_home=str(provider),managed_operations=True,managed_workers=True,managed_worker_execution_budget_ms=300000)
+        for name in ('home','home/data','bootstrap'):os.chown(self.root/name,994,986)
+        result=selected.prepare(self.plan);self.assertFalse(result['activated'])
+        package=self.root/'release/package'
+        runtime=json.loads((package/'service.json').read_bytes())
+        self.assertIs(runtime['managed_operations'],True);self.assertIs(runtime['managed_workers'],True)
+        with authority(REPO,source) as (_,manager,_):
+            loaded=manager.Package(package,sha(package/'manifest.json'))
+            self.assertEqual(loaded.environment()['ORKESTR_V2_MANAGED_WORKERS_ENABLED'],'1')
+            self.assertEqual(loaded.environment()['ORKESTR_V2_MANAGED_WORKER_EXECUTION_BUDGET_MS'],'300000')
+
     def test_explicit_metrics_port_reaches_service_metadata(self):
         source=self.current_source()
         for bad in (self.plan['port'], 80, 70000, '19850', True):

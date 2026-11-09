@@ -3,6 +3,8 @@
 use super::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+mod native_workers;
+pub use native_workers::{NativeWorkerAvailability, NativeWorkerCall, NativeWorkerObservation};
 
 #[derive(Clone)]
 pub struct ManagedOperationSetup {
@@ -36,7 +38,7 @@ pub struct ManagedOperationParent {
 }
 /// Non-authorizing Root receipt locators. The authority adapter must validate
 /// the original pinned manager peer before decoding this shape.
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ManagedCallerEvidence {
     pub run_id: String,
@@ -130,6 +132,26 @@ impl ConsumedManagedOperation {
     }
 }
 impl ManagedOperationParent {
+    fn matches_source(&self, source: &ManagedCallerEvidence) -> bool {
+        let s = &self.setup;
+        let b = &s.binding;
+        source.run_id == self.parent.run.run_id.to_string()
+            && source.owner_id == b.owner_id.to_string()
+            && source.conversation_id == b.conversation_id.to_string()
+            && source.session_id == b.session_id.to_string()
+            && source.generation == b.generation
+            && source.incarnation == s.incarnation
+            && provider_name(s.provider).ok() == Some(source.provider.as_str())
+            && source.native_session_id == b.native_session_id
+            && source.resume_setup_id == s.resume_setup_id
+            && !source.window_id.is_nil()
+            && source.window_generation > 0
+            && source.broker_pid > 1
+            && source.caller_pid > 1
+            && source.broker_start > 0
+            && source.caller_start > 0
+            && source.caller_uid > 0
+    }
     /// Current consumed run lease; observing this bound grants no renewal.
     pub fn lease_deadline_ms(&self) -> i64 {
         self.parent.run.lease_deadline_ms
@@ -254,27 +276,7 @@ impl Store {
         source: &ManagedCallerEvidence,
         request: &ManagedOperationRequest,
     ) -> Result<ManagedOperationConsumption> {
-        let s = &parent.setup;
-        let b = &s.binding;
-        if id.is_nil()
-            || source.run_id != parent.parent.run.run_id.to_string()
-            || !request.bounded()
-            || source.owner_id != b.owner_id.to_string()
-            || source.conversation_id != b.conversation_id.to_string()
-            || source.session_id != b.session_id.to_string()
-            || source.generation != b.generation
-            || source.incarnation != s.incarnation
-            || source.provider != provider_name(s.provider)?
-            || source.native_session_id != b.native_session_id
-            || source.resume_setup_id != s.resume_setup_id
-            || source.window_id.is_nil()
-            || source.window_generation == 0
-            || source.broker_pid <= 1
-            || source.caller_pid <= 1
-            || source.broker_start == 0
-            || source.caller_start == 0
-            || source.caller_uid == 0
-        {
+        if id.is_nil() || !request.bounded() || !parent.matches_source(source) {
             return Err(RuntimeStoreError::Fenced);
         }
         let evidence = json!({"source":source,"request":request});

@@ -14,7 +14,10 @@ fn withdrawal_name(value: QueuedWindowWithdrawal) -> &'static str {
     }
 }
 
-async fn queued(tx: &mut SqliteConnection, row: &SqliteRow) -> Result<ExecutionWindowQueued> {
+pub(super) async fn queued(
+    tx: &mut SqliteConnection,
+    row: &SqliteRow,
+) -> Result<ExecutionWindowQueued> {
     let state = match row.get::<&str, _>("state") {
         "queued" => QueuedWindowState::Queued,
         "dispatched" => QueuedWindowState::Dispatched,
@@ -165,15 +168,9 @@ impl Store {
         if let Some(conversation) = conversation {
             crate::runtime::scope(&mut tx, &owner, conversation).await?;
         }
-        let rows = sqlx::query("SELECT * FROM execution_window_queue WHERE owner_id=? AND state='queued' AND (? IS NULL OR conversation_id=?) ORDER BY position LIMIT ?")
-            .bind(owner.to_string())
-            .bind(conversation.map(|c| c.to_string())).bind(conversation.map(|c| c.to_string()))
-            .bind(i64::from(MAX_QUEUED_WINDOW_REQUESTS))
-            .fetch_all(&mut *tx).await.map_err(db)?;
-        let mut result = Vec::with_capacity(rows.len());
-        for row in &rows {
-            result.push(queued(&mut tx, row).await?);
-        }
+        let result = self
+            .queue_entries_snapshot(&mut tx, &owner, conversation)
+            .await?;
         tx.commit().await.map_err(db)?;
         Ok(result)
     }
@@ -184,11 +181,9 @@ impl Store {
     pub async fn live_execution_windows_authenticated(&self, credential: &str) -> Result<u32> {
         let mut tx = self.pool.begin().await.map_err(db)?;
         let owner = browser_owner(self, &mut tx, credential).await?;
-        let clock = now(&mut tx).await?;
-        let count: i64 = sqlx::query_scalar("SELECT count(*) FROM execution_windows WHERE owner_id=? AND state IN ('opening','active','retiring') AND expires_at_ms>?")
-            .bind(owner.to_string()).bind(clock).fetch_one(&mut *tx).await.map_err(db)?;
+        let count = self.live_windows_snapshot(&mut tx, &owner).await?;
         tx.commit().await.map_err(db)?;
-        u32::try_from(count).map_err(db)
+        Ok(count)
     }
 
     /// Latest unfinished window of every owner conversation, for cold-start sweep.
