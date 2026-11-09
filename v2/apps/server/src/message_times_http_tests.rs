@@ -3,6 +3,8 @@ use crate::conversation_resources_http::tests::{case, send};
 use crate::sidebar_v1::{export_receipts, receipts};
 use orkestr_v2_application::IntakeStore;
 use serde_json::json;
+#[path = "message_times_refresh_tests.rs"]
+mod refresh;
 
 #[test]
 fn receipts_are_only_what_v1_recorded() {
