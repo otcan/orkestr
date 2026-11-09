@@ -128,7 +128,7 @@ async fn mounted_capabilities_keep_configuration_separate_from_live_role_authori
     assert_eq!(capabilities.conversation_id, conversation);
     assert!(
         capabilities.deep.configured
-            && capabilities.fast.configured
+            && !capabilities.fast.configured
             && capabilities.worker.configured
     );
     assert!(
@@ -142,11 +142,11 @@ async fn mounted_capabilities_keep_configuration_separate_from_live_role_authori
             capabilities.fast.max_parallel,
             capabilities.worker.max_parallel
         ),
-        (1, 1, 4)
+        (1, 0, 4)
     );
     assert!(
         capabilities.worker.accept
-            && capabilities.fast.accept
+            && !capabilities.fast.accept
             && !capabilities.worker.steer
             && !capabilities.fast.steer
     );

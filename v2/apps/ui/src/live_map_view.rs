@@ -178,9 +178,6 @@ fn view_node(row: &ViewRow<'_>, now: i64) -> Element {
                     li { class: "live-node live-thread",
                         span { class: "live-label", "Thread" }
                         span { class: "live-id", title: "{view.thread_id.clone().unwrap_or_default()}", "{short_id(view.thread_id.as_deref().unwrap_or(\"none\"))}" }
-                        if let Some(fast) = &view.fast_layer {
-                            span { class: "live-meta", "Fast layer: {fast}" }
-                        }
                     }
                     if let Some(delegation) = delegated {
                         li { class: "live-node live-conversation",
@@ -277,8 +274,7 @@ fn conversation_node(conversation: &LiveConversation, now: i64) -> Element {
                     {badge("live-off", "none")}
                 }
             }
-            {role("Fast", conversation.fast.as_ref())}
-            {role("Deep", conversation.deep.as_ref())}
+            {role("Agent", conversation.deep.as_ref())}
         }
         if !conversation.workers.is_empty() {
             ul { class: "live-tree",

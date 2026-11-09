@@ -32,6 +32,11 @@ pub(crate) struct BetaConfig {
     pub supervisor_key: String,
     #[serde(default)]
     pub roles: Option<roles::Roles>,
+    /// Deprecated operator-only composition for historical qualification and
+    /// controlled migrations. Configured conversations otherwise run one
+    /// native agent; retained role inventory does not enable a companion.
+    #[serde(default)]
+    pub legacy_companions: bool,
     #[serde(default)]
     pub workspace_exec: Option<workspace_exec::WorkspaceExecConfig>,
     /// Further conversations with their own project and workspace, each with
@@ -355,6 +360,23 @@ mod tests {
                 serde_json::from_value::<BetaConfig>(value).is_err(),
                 "{name}"
             );
+        }
+    }
+    #[test]
+    fn configured_conversations_default_to_one_agent_with_explicit_transitional_legacy_only() {
+        let config: BetaConfig = serde_json::from_value(input()).unwrap();
+        assert!(!config.legacy_companions);
+        let mut value = input();
+        value["legacy_companions"] = serde_json::json!(true);
+        let config: BetaConfig = serde_json::from_value(value.clone()).unwrap();
+        assert!(config.legacy_companions);
+        for invalid in [
+            serde_json::json!("true"),
+            serde_json::json!(1),
+            serde_json::Value::Null,
+        ] {
+            value["legacy_companions"] = invalid;
+            assert!(serde_json::from_value::<BetaConfig>(value.clone()).is_err());
         }
     }
     #[test]

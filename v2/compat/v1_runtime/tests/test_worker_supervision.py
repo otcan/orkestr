@@ -103,7 +103,7 @@ class WorkerLedgerOutageTests(unittest.TestCase):
         self.ledger = Ledger(Path(self.temp.name) / "ledger.sqlite3", {"test_scope": "one"})
 
     def test_unopenable_ledger_is_retried_not_fatal(self):
-        worker = Worker(None, self.ledger)
+        worker = Worker(None, self.ledger, legacy_companions=True)
         stop, calls = Signal(), []
 
         def run_once(_stop):

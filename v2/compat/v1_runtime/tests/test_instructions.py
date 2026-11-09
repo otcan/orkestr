@@ -27,7 +27,7 @@ class RulesTests(unittest.TestCase):
         self.rules.write_text("Answer in English.\n")
         self.ledger = Ledger(Path(self.temp.name) / "ledger.sqlite3", SCOPE)
         self.peer = Peer()
-        self.worker = Worker(self.peer, self.ledger)
+        self.worker = Worker(self.peer, self.ledger, legacy_companions=True)
         self.worker.instructions_path = str(self.rules)
 
     def inbound(self, public_id, text="[WhatsApp: Owner]\n\nhello"):

@@ -68,6 +68,7 @@ class ClaudeWindowCase(ServiceRolesCase):
         beta["claude"] = {"launcher": str(launcher), "launcher_sha256": digest(launcher),
                           "workspace": str(self.claude_workspace), "default": False,
                           "fast": True}
+        beta["legacy_companions"] = True  # Explicit historical dual-role fixture.
         (f.package / "beta.json").write_bytes(packager.encoded(beta))
         (f.package / "beta.json").chmod(0o640)
         manifest = json.loads((f.package / "manifest.json").read_bytes())

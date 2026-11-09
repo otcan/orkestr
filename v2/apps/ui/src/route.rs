@@ -16,12 +16,13 @@ pub enum Tab {
     Tracker,
     Memory,
     LiveMap,
+    VirtualDesks,
     Host,
     Settings,
 }
 
 impl Tab {
-    pub const ALL: [Tab; 10] = [
+    pub const ALL: [Tab; 11] = [
         Tab::Chat,
         Tab::Work,
         Tab::History,
@@ -30,6 +31,7 @@ impl Tab {
         Tab::Tracker,
         Tab::Memory,
         Tab::LiveMap,
+        Tab::VirtualDesks,
         Tab::Host,
         Tab::Settings,
     ];
@@ -43,6 +45,7 @@ impl Tab {
             Tab::Tracker => "Job tracker",
             Tab::Memory => "Memory",
             Tab::LiveMap => "Live map",
+            Tab::VirtualDesks => "Virtual desks",
             Tab::Host => "Host resources",
             Tab::Settings => "Settings",
         }
@@ -57,6 +60,7 @@ impl Tab {
             Tab::Tracker => "tracker",
             Tab::Memory => "memory",
             Tab::LiveMap => "live-map",
+            Tab::VirtualDesks => "virtual-desks",
             Tab::Host => "host",
             Tab::Settings => "settings",
         }

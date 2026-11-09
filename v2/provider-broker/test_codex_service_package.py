@@ -79,6 +79,15 @@ class PackageTests(unittest.TestCase):
         self.assertFalse(package.endpoint.exists())
         self.assertEqual(list(self.fixture.account.iterdir()), [])
 
+    def test_legacy_companion_switch_is_explicit_boolean_and_not_implied_by_inventory(self):
+        self.assertFalse(Package(self.root).beta.get("legacy_companions", False))
+        self.fixture.alter("beta.json", lambda value: value.update(legacy_companions=True))
+        self.assertTrue(Package(self.root).beta["legacy_companions"])
+        for invalid in ("true", 1, None):
+            self.fixture.alter("beta.json", lambda value: value.update(legacy_companions=invalid))
+            with self.assertRaisesRegex(Refused, "beta_legacy_companions"):
+                Package(self.root)
+
     def test_optional_maintenance_marker_is_external_root_controlled_and_not_inventory(self):
         directory = self.fixture.root / "operator-maintenance"
         directory.mkdir(mode=0o755)

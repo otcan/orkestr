@@ -190,7 +190,7 @@ class ParticipantWorkerTests(unittest.TestCase):
                                       text=HEADER + "what is next?"),
                                  {"role": "member", "id": LID, "phone": PHONE, "label": "Ayse", "labelled": True})
         peer = Peer()
-        Worker(peer, ledger).step(data)
+        Worker(peer, ledger, legacy_companions=True).step(data)
         [intake] = [body for route, body in peer.mutations if route == "/messages"]
         self.assertTrue(intake["text"].startswith(HEADER + "Ayse: what is next?\n\n[This message is from Ayse, a group member"))
         finals = [m for m in ledger.messages() if m["role"] == "assistant"]

@@ -6,6 +6,7 @@ import { A, C, V1_INSTANCE_REF, V1_LINKS, V1_WORKER, createState, startMock } fr
 import { mkdir } from 'node:fs/promises';
 import { providerHandoff } from './headless-provider-handoff.mjs';
 import { trackerScenario } from './headless-tracker.mjs';
+import { virtualDesksAndAccountSettings } from './headless-virtual-desks-settings.mjs';
 
 assert.equal(process.env.CI, 'true', 'Run only in isolated CI');
 assert.ok(process.env.UI_BUNDLE_DIR, 'UI_BUNDLE_DIR is required');
@@ -85,6 +86,16 @@ const transcript = () => page.$eval('.conversation-pane > .conversation-scroll',
   ({ gap: el.scrollHeight - el.scrollTop - el.clientHeight, pinned: el.dataset.pinned, scrollable: el.scrollHeight > el.clientHeight + 100 }));
 
 export const scenarios = [
+  ['single-agent', async () => {
+    await page.waitForSelector('[aria-label="Agent and workers"] .intelligence-summary');
+    const summary = await text('.intelligence-summary');
+    assert.match(summary, /Agent/);
+    assert.match(summary, /Workers/);
+    assert.doesNotMatch(summary, /Fast|Deep/);
+    assert.equal(await page.$('[aria-label="Fast reply"]'), null);
+    assert.equal(await page.$eval('.intelligence-tools', el => [...el.querySelectorAll('summary')]
+      .some(s => s.textContent.includes('Fast'))), false);
+  }],
   ['tracker-guided', async label => trackerScenario({page,state,conversation:A,label,screenshot})],
   ['composer-tools', async label => {
     await page.waitForSelector('#composer');
@@ -103,17 +114,33 @@ export const scenarios = [
     // Attach an image through the file picker and paste long text as a file.
     const file = '/tmp/orkestr-v2-synthetic-pixel.png';
     await import('node:fs/promises').then(fs => fs.writeFile(file, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==', 'base64')));
+    state.holdEncryptedAttachment=true;
     const [chooser] = await Promise.all([page.waitForFileChooser(), page.click('.message-composer .tool-button')]);
     await chooser.accept([file]);
+    await page.waitForFunction(()=>document.querySelector('.upload-progress-stage')?.textContent.includes('preparing attachment'));
+    assert.equal(await page.$eval('.upload-progress progress',p=>p.value),100,'acknowledged transfer is complete');
+    assert.match(await text('.upload-progress-bytes'),/100%.*transferred/);
+    assert.equal(await page.$('.attachment-chip'),null,'no attachment before the preparation receipt');
+    await screenshot(label,'encrypted-upload-progress');
+    assert.equal(typeof state.releaseEncryptedAttachment,'function');
+    state.holdEncryptedAttachment=false;state.releaseEncryptedAttachment();
+
     await page.waitForFunction(() => document.querySelector('.attachment-chip .chip-name')?.textContent === 'orkestr-v2-synthetic-pixel.png');
+    assert.match(await text('.attachment-limit'), /1 GB per file/);
     await clickText('Paste text');
-    await page.type('#paste-text', 'Synthetic long pasted text');
+    // Above the old 16 MiB limit; exercise the real mounted Rust -> JS path.
+    const longText = 'ü'.repeat(9 * 1024 * 1024);
+    await page.$eval('.paste-panel textarea', (node, value) => {
+      node.value = value;
+      node.dispatchEvent(new Event('input', {bubbles: true}));
+    }, longText);
     await clickText('Attach as text file');
-    await page.waitForFunction(() => document.querySelectorAll('.attachment-chip').length === 2);
-    assert.match(await text('.composer-tools'), /pasted-text-\d{14}\.txt/);
+    await page.waitForFunction(() => document.querySelectorAll('.attachment-chip').length === 2, {timeout: 90000});
+    assert.match(await text('.composer-tools'), /pasted-text-\d{14}-[0-9a-f]{8}\.txt/);
     const uploads = state.uploads.filter(u => u.target === A);
     assert.equal(uploads.at(-2).files[0].media_type, 'image/png');
-    assert.equal(Buffer.from(uploads.at(-1).files[0].content_base64, 'base64').toString(), 'Synthetic long pasted text');
+    assert.equal(uploads.at(-1).encrypted, true, 'native pasted text uses ciphertext chunks, not legacy JSON/base64');
+    assert.equal(Buffer.from(uploads.at(-1).files[0].content_base64, 'base64').toString(), longText);
     await screenshot(label, 'composer-attachments');
     await page.focus('#composer');
     await page.keyboard.press('Enter');
@@ -492,6 +519,7 @@ export const scenarios = [
     await openDrawer(label);
     await choose('Assistant');
     await page.waitForSelector('#composer');
+    await virtualDesksAndAccountSettings({page,state,conversation:A,clickText,clickWithin,waitText,screenshot,label});
     await clickText('Settings');
     await page.waitForSelector('#settings-model');
     assert.equal(await page.$eval('#settings-model', n => n.value), 'synthetic-model');
@@ -779,6 +807,8 @@ try {
       stage = `${label}:${name}`;
       await run(label);
     }
+    assert.equal(state.requests.some(request => request.includes('/fast/execution')), false,
+      'the single-agent interface never polls a second execution role');
     stage = `${label}:layout`;
     await noHorizontalScroll();
     stage = `${label}:dark`;
