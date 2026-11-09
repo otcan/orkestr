@@ -59,6 +59,8 @@ mod source_continuation;
 mod source_intake;
 mod source_receipts;
 #[cfg(test)]
+mod sqlite_security_tests;
+#[cfg(test)]
 mod test_template;
 pub use production_runtime::{
     auto_accept_request_key, AutomaticReplyConsumption, AutomaticReplyDelivery,
