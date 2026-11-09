@@ -83,6 +83,29 @@ class DependencyInputsTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'regular in-repository'):
                 self.snapshot('outside')
 
+    def test_local_path_patch_is_available_without_copying_real_source(self):
+        vendor = self.root / 'v2/vendor/patched'
+        source = vendor / 'src/lib.rs'
+        source.parent.mkdir(parents=True)
+        source.write_text('pub fn original() {}')
+        manifest = vendor / 'Cargo.toml'
+        manifest.write_text('[package]\nname="patched"\nversion="0.1.0"\n')
+        (self.root / 'v2/Cargo.toml').write_text(
+            '[workspace]\n[patch.crates-io]\npatched={path="vendor/patched"}\n')
+        # The real --no-deps metadata has no patched package entry.
+        before = self.snapshot('patched-before')
+        self.assertEqual(before['v2/vendor/patched/Cargo.toml'], manifest.read_bytes())
+        self.assertEqual(before['v2/vendor/patched/src/lib.rs'], b'')
+        source.write_text('pub fn changed() { panic!("source is not a download input"); }')
+        self.assertEqual(before, self.snapshot('patched-source-changed'))
+        manifest.write_text(manifest.read_text() + '[dependencies]\nserde="1"\n')
+        self.assertNotEqual(before, self.snapshot('patched-manifest-changed'))
+        actual = manifest.with_suffix('.actual')
+        manifest.rename(actual)
+        manifest.symlink_to(actual)
+        with self.assertRaisesRegex(ValueError, 'regular in-repository'):
+            self.snapshot('patched-symlink')
+
     def test_existing_output_is_never_reused_as_dependency_input(self):
         self.snapshot('existing')
         with self.assertRaises(FileExistsError):
