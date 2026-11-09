@@ -124,8 +124,17 @@ class ServiceOnlyTests(unittest.TestCase):
         self.assertEqual(failed.exception.outcome,'unknown')
         self.assertEqual(sum(path.endswith('/posts') for _,path,_ in self.peer.calls),1)
 
+    def test_shorter_operation_deadline_does_not_inherit_the_session_budget(self):
+        client=self.client();client.options['timeout_s']=2
+        self.peer.command({'set':{'post_delay':1.0}})
+        with self.assertRaises(m.ServiceError) as failed:
+            client.request('POST',PREFIX+'/posts',{},allowed=(201,),timeout_s=0.5)
+        self.assertEqual(failed.exception.outcome,'unknown')
+        self.assertEqual(sum(path.endswith('/posts') for _,path,_ in self.peer.calls),1)
+        self.assertEqual(client.options['timeout_s'],2)
+
     def test_invalid_operation_deadline_refuses_before_network(self):
-        for timeout in (True,0,-1,121,float('nan'),float('inf'),'110'):
+        for timeout in (True,False,0,-1,120.001,121,float('nan'),float('inf'),float('-inf'),'110'):
             with self.subTest(timeout=timeout),self.assertRaisesRegex(m.ServiceError,'deadline_refused'):
                 self.client().request('POST',PREFIX+'/posts',{},timeout_s=timeout)
         self.assertEqual(self.peer.calls,[])
