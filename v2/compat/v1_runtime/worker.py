@@ -32,6 +32,7 @@ from .activity import observe as observe_activity, waiting as waiting_heartbeat
 from .input_activity import record as record_transport_activity
 from .intake import admit as admit_input, window as admit_window
 from .acceptance_retry import reconcile as reconcile_acceptance
+from .foreground import drive as drive_foreground
 from . import journal as shared_journal
 from .intake_fast import (EVENT_WAIT_S, isolated as isolated_fast,
                           drive as drive_intake_fast)
@@ -903,14 +904,17 @@ class Worker:
                 return
         # Legacy bindings wait for both proposals. Isolated owner Fast has its
         # own guarded acceptance; neither path accepts another source's run.
+        # Canonical results observed in this pass only; never a cross-pass cache.
+        observed_results = {}
         for role in (("deep",) if deep_only else ("fast", "deep")):
             if role not in accepted:
-                if not self.accept_role(data, role, ids):
+                if not self.accept_role(data, role, ids, statuses.get(role), observed_results):
                     return
         # Confirm the canonical accepted-results view, including frozen payload.
         deep = accepted["deep"]
-        matches, after = [], data["intake"]["sequence"]
-        for _ in range(10):
+        retained = observed_results.get("deep")
+        matches, after = ([retained] if retained is not None else []), data["intake"]["sequence"]
+        for _ in range(0 if retained is not None else 10):
             history = self.call("GET", "/accepted-results?limit=50&after_sequence=" + str(after))
             matches.extend(row for row in history.get("results", []) if row.get("acceptance_event_id") == deep["acceptance_event_id"])
             cursor = history.get("next_after_sequence")
@@ -919,7 +923,7 @@ class Worker:
             if type(cursor) is not int or cursor <= after:
                 raise Refused("history_cursor")
             after = cursor
-        if len(matches) != 1 or matches[0].get("payload_removed") is not False or any(matches[0].get(k) != deep[k] for k in ("run_id", "completion_event_id")) or matches[0].get("payload_id") != data["deep_payload"]["payload_id"]:
+        if len(matches) != 1 or matches[0].get("payload_removed") is not False or any(matches[0].get(k) != deep[k] for k in ("run_id", "completion_event_id", "acceptance_event_id")) or matches[0].get("payload_id") != data["deep_payload"]["payload_id"]:
             raise Refused("accepted_history_mismatch")
         text = self.timer_final(data, data["deep_payload"]["text"])
         if not single and parallel_watch.deferred(self, data, deep, text, statuses.get("deep")):
@@ -936,7 +940,10 @@ class Worker:
             self.ledger.save(data)
         reply = {"id": deep["acceptance_event_id"], "role": "assistant", "state": "completed",
                  "phase": "final_answer", "source": "rust-v2-pilot", "parentMessageId": data["remote_id"], "text": text}
-        reply.update(self.provider_identity(run_id=deep["run_id"]))
+        identity_status = statuses.get("deep")
+        if not isinstance(identity_status, dict) or identity_status.get("run_id") != deep["run_id"]:
+            identity_status = None
+        reply.update(self.provider_identity(run_id=deep["run_id"], status=identity_status))
         # The Quick of this input for the one footer layer line (V1 #389).
         try:
             if not single:
@@ -1035,14 +1042,19 @@ class Worker:
         self.ledger.save(data)
         return True
 
-    def accept_role(self, data, role, ids):
+    def accept_role(self, data, role, ids, status=None, observed_results=None):
         """Freeze, then accept, this input's own proposal of one role."""
         accepted = data.setdefault("accepted", {})
         frozen_key = role + "_accept_request"
         if frozen_key not in data:
-            value = self.role_status(data, role, ids) or {}
+            # Completed evidence is immutable and adoption still reads Core's
+            # canonical receipt. A proposal needs a fresh revision, especially
+            # after a legacy companion acceptance advanced that revision.
+            value = status if self.accepted_elsewhere(status, ids) else self.role_status(data, role, ids) or {}
             if self.accepted_elsewhere(value, ids):
-                self.adopt_acceptance(data, role, value["run_id"], ids)
+                result = self.adopt_acceptance(data, role, value["run_id"], ids)
+                if observed_results is not None:
+                    observed_results[role] = result
                 return True
             if value.get("run_id") not in ids or value.get("phase") != "awaiting_acceptance":
                 raise Refused("proposal_replaced")
@@ -1115,6 +1127,7 @@ class Worker:
             "outcome": "succeeded", "run_id": run_id, "completion_event_id": row["completion_event_id"],
             "acceptance_event_id": row["acceptance_event_id"], "adopted": True}
         self.ledger.save(data)
+        return row
 
     def deadline_stopped(self, data):
         """Whether this input's window ran out of work time (not an owner stop,
@@ -1418,6 +1431,11 @@ class Worker:
             self._fast_since = None
         elif self._fast_since is None:
             self._fast_since = time.monotonic()
+        # The existing foreground head must publish its ready result before
+        # unrelated discovery can wait on Core or a shared web watch.
+        data = self.ledger.next_input()
+        if data:
+            drive_foreground(self, data, stop)
         if self._due(self._timers_checked, TIMER_POLL_S):
             self._timers_checked = time.monotonic()
             try:
@@ -1458,42 +1476,9 @@ class Worker:
                 self.drive_web()
             except Exception:
                 pass
-        data = self.ledger.next_input()
         if not data:
-            return fast_pending
-        if data.get("blocked"):
-            # Written by an earlier adapter version: close it visibly so the
-            # inputs behind it proceed.
-            self.ledger.refuse(data, data["blocked"])
-            return True
-        try:
-            self.step(data)
-        except Refused as error:
-            # A definite refusal is terminal for this input only: the owner gets
-            # a notice and later inputs proceed. Health keeps it for review.
-            # A timer occurrence has no sender who could resend it, so its
-            # refusal (a failed, lost or never started run) also alerts the operator.
-            timer = data.get("origin") == "timer"
-            if self.ledger.refuse(data, str(error), alert=timer) and timer:
-                cause = failure_cause.cause(data, data["refused"]["reason"])
-                print("ALERT orkestr-v2-wa-adapter input_failed conversation=%s input=%s phase=%s reason=%s%s"
-                      % (getattr(self.client, "conversation", "?"), data["remote_id"],
-                         data["refused"].get("phase"), data["refused"]["reason"], " cause=" + cause if cause else ""),
-                      file=sys.stderr, flush=True)
-        except Exception as error:
-            # Transient failures retry the same frozen request (bounded by the
-            # input age limit until a window is open). Definite upstream
-            # refusals are terminal like any other refusal.
-            if not transient(error):
-                self.ledger.refuse(data, refusal_reason(error), alert=data.get("origin") == "timer")
-            elif before_send_refused(error):
-                alert_held(self, data, error)
-            elif getattr(error, "code", None) == "session_revoked" and not self._revoked_alerted:
-                # Retried, but never silently: nothing reaches Rust until an
-                # operator restores the owner session.
-                self._revoked_alerted = True
-                print("ALERT orkestr-v2-wa-adapter session_revoked conversation=%s input=%s"
-                      % (getattr(self.client, "conversation", "?"), data["remote_id"]),
-                      file=sys.stderr, flush=True)
-            stop.wait(4)
-        return True
+            # Discovery may have queued a new timer/post/web input this pass.
+            data = self.ledger.next_input()
+            if data:
+                drive_foreground(self, data, stop)
+        return bool(data) or fast_pending
