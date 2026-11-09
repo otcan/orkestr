@@ -15,6 +15,7 @@ use std::{
 };
 use tokio::sync::{watch, Semaphore};
 use uuid::Uuid;
+mod monitor;
 mod output;
 
 const CONCURRENT: usize = 4;
@@ -229,9 +230,11 @@ impl OfflinePythonDispatcher {
             tokio::select! {
                 result = &mut work => break result,
                 _ = interval.tick(), if refusal.is_none() => {
-                    let check = tokio::time::timeout(Duration::from_millis(50),self.store.check_offline_python(&self.credential,&launch)).await;
-                    let error = match check { Ok(Ok(())) => None, Ok(Err(error)) => Some(error), Err(_) => Some(RuntimeStoreError::Unavailable) };
-                    if let Some(error) = error { refusal=Some(error); cancellation.cancel(); }
+                    match monitor::observe(&mut work, self.store.check_offline_python(&self.credential,&launch)).await {
+                        monitor::Observation::Completed(result) => break result,
+                        monitor::Observation::Authority(Ok(())) => {},
+                        monitor::Observation::Authority(Err(error)) => { refusal=Some(error); cancellation.cancel(); }
+                    }
                 }
             }
         };
