@@ -56,6 +56,9 @@ mod intelligence_http;
 pub mod live_map;
 mod memory_service;
 pub mod message_attachments;
+mod message_receipt_observer;
+#[cfg(test)]
+mod message_receipt_test_support;
 mod message_times_http;
 pub mod observability;
 pub mod offline_python;
@@ -124,6 +127,7 @@ pub struct AppState {
     live_map: Option<Arc<std::path::PathBuf>>,
     desktop_broker: Option<Arc<desktop_broker::Broker>>,
     sidebar_v1: sidebar_v1::V1Cache,
+    message_receipts: message_receipt_observer::Observer,
     v1_uploads: message_attachments::V1Uploads,
     attachment_export: Option<Arc<message_attachments::ExportDir>>,
     attachment_ingest: Option<Arc<encrypted_upload_ingest::Ingest>>,
@@ -359,6 +363,7 @@ impl AppState {
             live_map: None,
             desktop_broker: None,
             sidebar_v1: sidebar_v1::V1Cache::default(),
+            message_receipts: message_receipt_observer::Observer::default(),
             v1_uploads: Default::default(),
             attachment_export: None,
             attachment_ingest: None,

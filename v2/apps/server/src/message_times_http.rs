@@ -31,20 +31,28 @@ async fn v1_thread(
     owner: &OwnerId,
     credential: &str,
     id: &ConversationId,
-) -> Option<String> {
-    let list = state
+) -> Result<Option<String>, Error> {
+    Ok(state
         .store
-        .sidebar_conversations(credential, owner)
+        .conversation_v1_link(credential, owner, id)
         .await
-        .ok()?;
-    let row = list
-        .conversations
-        .into_iter()
-        .find(|c| &c.conversation_id == id)?;
-    row.lineage
-        .map(|l| l.source_thread_id)
-        .or(row.source_thread_id)
-        .filter(|t| valid_v1_thread_id(t))
+        .map_err(failure)?
+        .filter(|thread| valid_v1_thread_id(thread)))
+}
+
+fn failure(error: ResourceError) -> Error {
+    match error {
+        ResourceError::Unauthorized => unauthorized(),
+        ResourceError::NotFound => {
+            Error(StatusCode::NOT_FOUND, "not_found", "Conversation not found")
+        }
+        ResourceError::Invalid => invalid(),
+        _ => Error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "store_unavailable",
+            "Message times unavailable",
+        ),
+    }
 }
 
 pub(crate) async fn read(
@@ -69,28 +77,27 @@ pub(crate) async fn read(
         .store
         .message_times(&credential, &owner, &conversation, after, limit)
         .await
-        .map_err(|error| match error {
-            ResourceError::Unauthorized => unauthorized(),
-            ResourceError::NotFound => {
-                Error(StatusCode::NOT_FOUND, "not_found", "Conversation not found")
-            }
-            ResourceError::Invalid => invalid(),
-            _ => Error(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "store_unavailable",
-                "Message times unavailable",
-            ),
-        })?;
+        .map_err(failure)?;
     // Receipts exist only where V1 recorded them for an exported reply.
     let mut receipts = std::collections::HashMap::new();
     if rows.iter().any(|r| r.reply) {
-        if let (Some(broker), Some(thread)) = (
-            state.desktop_broker.clone(),
-            v1_thread(&state, &owner, &credential, &conversation).await,
-        ) {
-            let path = format!("/api/threads/{thread}/messages?limit=200");
-            if let Ok((200, value)) = broker.read(&path, 4 * 1024 * 1024).await {
-                receipts = crate::sidebar_v1::export_receipts(&value);
+        if let Some(broker) = state.desktop_broker.clone() {
+            if let Some(thread) = v1_thread(&state, &owner, &credential, &conversation).await? {
+                let observed = state
+                    .message_receipts
+                    .observe(&owner, &conversation, &thread, broker.clone())
+                    .await;
+                // Cached data and in-flight responses never replace current
+                // owner, conversation, link, or broker authority.
+                let current = v1_thread(&state, &owner, &credential, &conversation).await?;
+                if current.as_deref() == Some(thread.as_str())
+                    && state
+                        .desktop_broker
+                        .as_ref()
+                        .is_some_and(|b| std::sync::Arc::ptr_eq(b, &broker))
+                {
+                    receipts = observed;
+                }
             }
         }
     }
