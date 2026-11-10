@@ -5,6 +5,19 @@ use crate::Store;
 mod credentials;
 
 pub(crate) async fn downgrade_empty(store: &Store) {
+    // Migration 96 down: only an empty audit table, so no owner change is lost.
+    let revisions: i64 = sqlx::query_scalar("SELECT count(*) FROM message_revisions")
+        .fetch_one(&store.pool)
+        .await
+        .unwrap();
+    assert_eq!(revisions, 0, "historical fixture must not erase revisions");
+    sqlx::raw_sql(
+        "DROP TABLE message_revisions;
+         DELETE FROM _sqlx_migrations WHERE version=96;",
+    )
+    .execute(&store.pool)
+    .await
+    .unwrap();
     // Migration 95 down: remove the derived lookup indexes and their ledger
     // entry together. Every older fixture must remain an exact schema prefix.
     sqlx::raw_sql(
