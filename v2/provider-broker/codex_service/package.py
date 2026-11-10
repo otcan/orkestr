@@ -65,6 +65,11 @@ CLAUDE_BROKER = ("claude_connector.py", "claude_protocol.py", "claude_control.py
                  "claude_policy.py", "claude_telemetry.py", "claude_quota.py", "claude_resume.py", "claude_bootstrap.py",
                  "startup_diagnostics.py")
 CLAUDE_FILES = {"launcher-claude.py", "claude-private.json"} | {"broker/" + name for name in CLAUDE_BROKER}
+# Keep source modules identical across provider configurations so code evidence
+# remains bound to the same bytes. Launchers, accounts and runtime bindings stay
+# optional and are still required together by _bind_claude.
+SERVICE_BROKER += CLAUDE_BROKER
+FILES |= {"broker/" + name for name in CLAUDE_BROKER}
 DEPENDENCIES = ("/usr/bin/python3", "/usr/bin/bwrap", "/usr/bin/prlimit",
                 "/etc/ssl/certs/ca-certificates.crt")
 

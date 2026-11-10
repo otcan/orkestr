@@ -43,6 +43,17 @@ class ClaudeCustodyTests(identity_tests.SplitPackageTests):
 
     def validate(self,package):package._bind_claude(self.fixture.account,self.fixture.auth)
 
+    def test_provider_configuration_preserves_exact_qualification_code_subject(self):
+        from codex_service.qualification import code_subject
+        codex_only = Package(self.fixture.package)
+        before = code_subject(codex_only)
+        self.assertIsNone(codex_only.claude)
+        self.assertFalse((codex_only.root/'launcher-claude.py').exists())
+        self.assertFalse((codex_only.root/'claude-private.json').exists())
+        enabled, _ = self.prepare_claude()
+        self.assertIsNotNone(enabled.claude)
+        self.assertEqual(code_subject(enabled), before)
+
     def test_root_requires_immutable_native_and_protected_ancestry(self):
         package,native=self.prepare_claude();self.validate(package)
         os.chown(native,self.uid,self.gid)
