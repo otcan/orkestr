@@ -43,6 +43,7 @@ mod desktop_broker;
 mod desktop_http;
 mod desktop_inventory_http;
 mod desktop_open_http;
+mod desktop_owner_actions_http;
 mod encrypted_upload_http;
 pub mod encrypted_upload_ingest;
 mod execution;
@@ -588,7 +589,7 @@ fn desktop_slow_path(path: &str) -> bool {
             "desktops",
             _,
             "acquire" | "heartbeat" | "reset"
-        ]
+        ] | ["api", "v2", "desktops", _, "start" | "stop" | "link"]
     )
 }
 
@@ -672,6 +673,7 @@ pub fn router_with_google_catalog(
         .merge(host_metrics::router())
         .merge(desktop_http::router())
         .merge(desktop_inventory_http::router())
+        .merge(desktop_owner_actions_http::router())
         .merge(desktop_open_http::router())
         .merge(sidebar_http::router())
         .merge(message_attachments::router())

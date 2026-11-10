@@ -105,6 +105,10 @@ fn upstream_routes_never_carry_ids_or_queries() {
         route_template("POST", "/api/desktops/office-pc/acquire"),
         "POST /api/desktops/{id}/acquire"
     );
+    assert_eq!(
+        route_template("POST", "/api/browsers/office-pc/stop"),
+        "POST /api/browsers/{id}/stop"
+    );
 }
 
 #[test]

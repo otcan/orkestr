@@ -352,8 +352,8 @@ pub(crate) fn route_template(method: &str, path: &str) -> String {
     let segments: Vec<&str> = path
         .split('/')
         .map(|segment| {
-            let keep =
-                !matches!(previous, "threads" | "desktops" | "sessions") || segment == "summary";
+            let keep = !matches!(previous, "threads" | "desktops" | "sessions" | "browsers")
+                || segment == "summary";
             previous = segment;
             if keep {
                 segment

@@ -245,6 +245,19 @@ test('global desk discovery and scoped lease actions use fixed cookie and CSRF p
         await assert.rejects(execute({recv:async()=>({...base,method,path})},()=>assert.fail('fetch must not run')),/Invalid API path/);
 });
 
+test('owner desk actions use only the fixed verbs with cookie and CSRF',async()=>{
+    for(const action of ['start','stop','link']) {
+        const path=`/api/v2/desktops/desk-a/${action}`;
+        await execute({recv:async()=>({...base,method:'POST',path,csrf:'synthetic-csrf',body:{}})},async(actual,options)=>{
+            assert.equal(actual,path);assert.equal(options.credentials,'same-origin');
+            assert.equal(options.headers['x-orkestr-csrf'],'synthetic-csrf');
+            assert.equal(options.headers.Authorization,undefined);return Response.json({ok:true});
+        });
+    }
+    for(const [method,path] of [['GET','/api/v2/desktops/desk-a/start'],['POST','/api/v2/desktops/desk-a/restart'],['POST','/api/v2/desktops/desk-a/cleanup'],['POST','/api/v2/desktops/../start'],['POST','/api/v2/desktops/desk-a/stop?force=true'],['POST','/api/v2/desktops/desk-a/link/extra'],['POST','/api/v2/desktops/UPPER/stop']])
+        await assert.rejects(execute({recv:async()=>({...base,method,path})},()=>assert.fail('fetch must not run')),/Invalid API path/);
+});
+
 test('build identity read is restricted to the exact same-origin health GET', async () => {
     await execute({recv:async()=>({...base,method:'GET',path:'/api/v2/health',body:null})}, async(path, options)=>{
         assert.equal(path,'/api/v2/health');
