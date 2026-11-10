@@ -98,3 +98,67 @@ export function quotaTooltip(provider: QuotaProvider, entry: ProviderQuotaEntry 
     ...(entry.limited ? ["Account is currently rate limited"] : []),
   ].join("\n");
 }
+
+// Host-page quota view ---------------------------------------------------
+// The Host page shows a fuller card per provider than the compact header
+// chip. These framework-free helpers classify each provider into exactly one
+// of three states and format countdown/freshness strings so the view never
+// invents a 0% or 100% when telemetry is absent or stale.
+
+export type QuotaState = "normal" | "limited" | "unknown";
+
+function numericRemaining(entry: ProviderQuotaEntry): number[] {
+  return [entry.fiveHourRemainingPct, entry.weeklyRemainingPct]
+    .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+}
+
+// "unknown" when no telemetry is present or the newest reading is stale;
+// "limited" when the account is rate limited or any window is fully consumed;
+// "normal" otherwise. Stale readings are treated as unknown so the view does
+// not present an aged number as the current state.
+export function quotaState(entry: ProviderQuotaEntry | null | undefined): QuotaState {
+  if (!entry) return "unknown";
+  const hasData = entry.observedAt !== null
+    || entry.fiveHourRemainingPct !== null
+    || entry.weeklyRemainingPct !== null
+    || Boolean(entry.limited);
+  if (!hasData || entry.stale) return "unknown";
+  if (entry.limited) return "limited";
+  const values = numericRemaining(entry);
+  if (values.length && Math.min(...values) <= 0) return "limited";
+  return "normal";
+}
+
+export function quotaStateLabel(state: QuotaState): string {
+  if (state === "limited") return "At limit";
+  if (state === "unknown") return "No data";
+  return "Available";
+}
+
+// Time until a window resets: "2d23h", "1h30", "45m"; empty when unknown.
+export function quotaCountdownLabel(resetsAt: string | null | undefined, now: number = Date.now()): string {
+  const at = resetsAt ? Date.parse(resetsAt) : NaN;
+  if (!Number.isFinite(at)) return "";
+  const minutes = Math.max(0, Math.round((at - now) / 60_000));
+  const days = Math.floor(minutes / 1440);
+  const hours = Math.floor((minutes % 1440) / 60);
+  const mins = minutes % 60;
+  if (days > 0) return `${days}d${hours}h`;
+  if (hours > 0) return `${hours}h${String(mins).padStart(2, "0")}`;
+  return `${mins}m`;
+}
+
+// How long ago the telemetry was observed: "just now", "12m ago", "3h ago",
+// "2d ago"; "never" when the provider has never reported.
+export function quotaFreshnessLabel(entry: ProviderQuotaEntry | null | undefined, now: number = Date.now()): string {
+  const observedAt = entry?.observedAt;
+  if (!observedAt) return "never";
+  const at = Date.parse(observedAt);
+  if (!Number.isFinite(at)) return "unknown";
+  const minutes = Math.max(0, Math.round((now - at) / 60_000));
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.floor(hours / 24)}d ago`;
+}

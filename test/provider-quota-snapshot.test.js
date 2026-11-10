@@ -84,6 +84,38 @@ test("snapshot marks old observations stale and unknown providers as null", () =
   assert.equal(snapshot.claude.observedAt, null);
 });
 
+test("a refreshed expired or empty record cannot erase a usable older quota", () => {
+  const usable = codexThread({ codexRateLimitsObservedAt: iso(now - 7 * hour) });
+  const expired = codexThread({
+    updatedAt: iso(now), codexRateLimitsObservedAt: undefined,
+    codexRateLimits: { primary: { used_percent: 89, window_minutes: 10080,
+      resets_at: Math.floor((now - hour) / 1000) }, secondary: null },
+  });
+  for (const limits of [expired.codexRateLimits, {}]) {
+    const freshEmpty = { ...expired, codexRateLimits: limits };
+    for (const threads of [[usable, freshEmpty], [freshEmpty, usable]]) {
+      const snapshot = providerQuotaFromThreads(threads, { now, staleMs: 6 * hour });
+      assert.equal(snapshot.codex.weeklyRemainingPct, 80);
+      assert.equal(snapshot.codex.observedAt, usable.codexRateLimitsObservedAt);
+      assert.equal(snapshot.codex.stale, true, "thread activity never freshens the usable observation");
+      assert.deepEqual(mergeThreadIntoProviderQuota(snapshot, freshEmpty, { now }).codex, snapshot.codex);
+    }
+    const onlyEmpty = providerQuotaFromThreads([freshEmpty], { now });
+    assert.equal(onlyEmpty.codex.weeklyRemainingPct, null);
+    assert.equal(onlyEmpty.codex.observedAt, null);
+  }
+});
+
+test("zero remaining and a partially usable provider observation remain meaningful", () => {
+  const snapshot = providerQuotaFromThreads([codexThread({ codexRateLimits: {
+    primary: { used_percent: 12, window_minutes: 300, resets_at: Math.floor((now - hour) / 1000) },
+    secondary: { used_percent: 100, window_minutes: 10080, resets_at: futureSeconds(hour) },
+  } })], { now });
+  assert.equal(snapshot.codex.fiveHourRemainingPct, null);
+  assert.equal(snapshot.codex.weeklyRemainingPct, 0);
+  assert.notEqual(snapshot.codex.observedAt, null);
+});
+
 test("fresh stamped telemetry beats legacy thread records and leftover executor data gets no age", () => {
   const legacyClaudeLeftover = claudeThread({
     id: "was-codex",
@@ -154,7 +186,7 @@ test("Codex footer always shows both providers with reset countdowns and leaves 
     whatsAppDebugProviderQuota: providerQuotaFromThreads([claudeThread({ claudeRateLimitsObservedAt: iso(Date.now() - 60_000) })]),
   };
   const text = appendWhatsAppDebugFooter("Done", { env: footerEnv, message: { source: "codex-app-server" }, thread });
-  assert.match(text, /\n\ndbg: codex\/gpt-test\/h · rt:api · msg:\*final\*\ncodex 5h: 62% \(\d+d\d+h\) wk: 80% \(\d+d\d+h\)\nclaude 5h: 41% \(\d+d\d+h\) wk: 77% \(\d+d\d+h\)\nq:0 · load:\d+% · api:\d+% · help:\/help$/);
+  assert.match(text, /\n\n⚡ Quick: — · 🧠 Deep: codex gpt-test\/h · ▶ Deep\ncodex 5h: 62% \(\d+d\d+h\) wk: 80% \(\d+d\d+h\)\nclaude 5h: 41% \(\d+d\d+h\) wk: 77% \(\d+d\d+h\)\nq:0 · load:\d+% · api:\d+% · help:\/help$/);
   assert.doesNotMatch(text, /mode-switch:|rt-switch:|switch:\/claude|model:\/model|effort:\/effort|fast:\/fast/);
   assert.equal(stripWhatsAppDebugFooter(text), "Done");
 });
@@ -163,7 +195,7 @@ test("Claude footer always shows both providers, hides Codex controls and marks 
   const staleCodex = codexThread({ codexRateLimitsObservedAt: iso(Date.now() - 7 * hour) });
   const thread = { ...claudeThread({ claudeRateLimitsObservedAt: undefined }), whatsAppDebugProviderQuota: providerQuotaFromThreads([staleCodex]) };
   const text = appendWhatsAppDebugFooter("Done", { env: footerEnv, message: { source: "claude-code" }, thread });
-  assert.match(text, /\n\ndbg: claude\/sonnet\/m · rt:claude · msg:\*final\*\ncodex 5h: \d+% \(\d+d\d+h\) wk: \d+% \(\d+d\d+h\) \(stale\)\nclaude 5h: 41% \(\d+d\d+h\) wk: 77% \(\d+d\d+h\)\nq:0 · /);
+  assert.match(text, /\n\n⚡ Quick: — · 🧠 Deep: claude sonnet\/m · ▶ Deep\ncodex 5h: \d+% \(\d+d\d+h\) wk: \d+% \(\d+d\d+h\) \(stale\)\nclaude 5h: 41% \(\d+d\d+h\) wk: 77% \(\d+d\d+h\)\nq:0 · /);
   assert.match(text, / · help:\/help$/);
   assert.doesNotMatch(text, /fast:|mode:|mode-switch:|rt-switch:|switch:\/codex|model:\/model/);
   assert.equal(stripWhatsAppDebugFooter(text), "Done");

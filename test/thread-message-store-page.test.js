@@ -69,9 +69,11 @@ async function withSqliteHome(t) {
 }
 
 async function assertSamePages(thread, queries) {
-  for (const query of queries) {
-    const expected = threadMessagePage(thread, await listThreadMessageRows(thread.id), query, null);
-    assert.deepEqual(await storedThreadMessagePage(thread, query, null), expected, JSON.stringify(query));
+  for (const options of [{}, { includeNoReply: true }]) {
+    for (const query of queries) {
+      const expected = threadMessagePage(thread, await listThreadMessageRows(thread.id), query, null, options);
+      assert.deepEqual(await storedThreadMessagePage(thread, query, null, options), expected, JSON.stringify({ query, options }));
+    }
   }
 }
 
@@ -147,4 +149,25 @@ test("stored thread message page defers to the full list for the JSON store", as
   await withSqliteHome(t);
   process.env.ORKESTR_THREAD_MESSAGE_STORE = "json";
   assert.equal(await storedThreadMessagePage({ id: "thread-json" }, {}, null), null);
+});
+
+test("NO_REPLY finals appear only when the server opts in, never from the raw query", async (t) => {
+  await withSqliteHome(t);
+  const thread = { id: "thread-store-page-no-reply", state: "sleeping" };
+  const at = (index) => new Date(Date.UTC(2026, 0, 1) + index * 1000).toISOString();
+  await replaceThreadMessageRecords(thread.id, [
+    { id: "u", role: "user", text: "hello", cursor: 1, timestamp: at(1) },
+    { id: "silent", role: "assistant", phase: "final_answer", state: "completed", text: "NO_REPLY", visibility: "silent", silentReason: "no_reply", parentMessageId: "u", cursor: 2, timestamp: at(2) },
+    { id: "internal", role: "assistant", phase: "final_answer", text: "hidden", visibility: "internal", cursor: 3, timestamp: at(3) },
+  ]);
+  const rows = await listThreadMessageRows(thread.id);
+  for (const query of [{}, { includeNoReply: "1" }]) {
+    assert.deepEqual((await storedThreadMessagePage(thread, query, null)).messages.map((m) => m.id), ["u"]);
+    assert.deepEqual(threadMessagePage(thread, rows, query, null).messages.map((m) => m.id), ["u"]);
+  }
+  const stored = await storedThreadMessagePage(thread, {}, null, { includeNoReply: true });
+  assert.deepEqual(stored.messages.map((m) => m.id), ["u", "silent"]);
+  assert.equal(stored.includeNoReply, true);
+  assert.deepEqual(threadMessagePage(thread, rows, {}, null, { includeNoReply: true }).messages.map((m) => m.id), ["u", "silent"]);
+  assert.equal((await storedThreadMessagePage(thread, {}, null)).includeNoReply, undefined);
 });

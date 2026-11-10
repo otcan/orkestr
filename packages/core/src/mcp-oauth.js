@@ -115,6 +115,16 @@ function redirectAllowed(uri, env) {
   return parsed.protocol === "https:" && hosts.some((host) => parsed.hostname === host || parsed.hostname.endsWith(`.${host}`));
 }
 
+function redirectMatches(registered, requested, env) {
+  if (registered === requested) return true;
+  if (env.ORKESTR_MCP_OAUTH_ALLOW_LOOPBACK !== "1") return false;
+  // RFC 8252 section 7.3: native clients choose their loopback port at runtime.
+  // Strip only that port; retain exact matching of the host, path and query.
+  const authority = /^(http:\/\/(?:localhost|127\.0\.0\.1))(?::[0-9]+)?(?=\/|[?#]|$)/;
+  if (!authority.test(registered) || !authority.test(requested) || !redirectAllowed(requested, env)) return false;
+  return registered.replace(authority, "$1") === requested.replace(authority, "$1");
+}
+
 // Client ID Metadata Documents: an HTTPS client_id names a JSON document the
 // client hosts. Fetched without redirects to public addresses only, cached.
 const metadataCache = new Map();
@@ -219,7 +229,7 @@ export async function validateAuthorizeRequest(query = {}, env = process.env, fe
   const client = await resolveMcpClient(query.client_id, env, fetchImpl);
   if (!client) throw oauthError("invalid_client", "Unknown client_id.", 400);
   const redirectUri = clean(query.redirect_uri);
-  if (!client.redirectUris.includes(redirectUri)) throw oauthError("invalid_request", "redirect_uri is not registered for this client.", 400);
+  if (!client.redirectUris.some((registered) => redirectMatches(registered, redirectUri, env))) throw oauthError("invalid_request", "redirect_uri is not registered for this client.", 400);
   if (clean(query.response_type) !== "code") throw oauthError("unsupported_response_type", "Only response_type=code is supported.");
   if (clean(query.code_challenge_method) !== "S256" || !/^[A-Za-z0-9_-]{43,128}$/.test(clean(query.code_challenge))) {
     throw oauthError("invalid_request", "PKCE with S256 is required.");

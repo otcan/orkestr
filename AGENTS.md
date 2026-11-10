@@ -134,3 +134,13 @@ CPU and tens of GiB of disk.
   in the PR.
 - Remove a worktree's `target/` directory when the work is done. Shared hosts
   may prune target directories that have not been touched for a few hours.
+## Grant Application Workflows
+
+When a task concerns grant or funding applications, follow
+[the grant application workflow](docs/grant-applications.md). Keep each
+application's canonical section Markdown files and Git history in its authorized
+private repository. Pin portal-verified content separately from later drafts;
+never infer submission from a local commit. Use a permission-aware, metadata-only
+catalog for coordination between parent and application threads. This public
+repository contains generic guidance only, not real application records, private
+catalog entries, evidence, or private repository/thread links.

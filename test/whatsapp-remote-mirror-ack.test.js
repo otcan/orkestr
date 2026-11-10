@@ -227,14 +227,20 @@ test("only explicitly remote progress changes mirror policy", () => {
 test("a mirrored reply keeps the remote provider and model for the debug footer", async t => {
   const f = await fixture(t);
   await f.route();
-  f.exportRow({ id: "example-model-final", phase: "final_answer", text: "Answer.", provider: "codex", model: "example-model-1" });
+  f.exportRow({ id: "example-model-final", phase: "final_answer", text: "Answer.", provider: "codex", model: "example-model-1", identitySource: "run", observedReasoningEffort: "low", sourceInputId: "example-remote-user", runId: "example-run",
+    quickProvider: "codex", quickModel: "example-mini", quickObservedReasoningEffort: "low" });
   await deliver(f);
   const reply = (await listThreadMessages("example-thread", f.env)).find((row) => row.role === "assistant");
   assert.equal(reply.remoteProvider, "codex");
   assert.equal(reply.remoteModel, "example-model-1");
+  assert.equal(reply.remoteLayer, "deep");
+  assert.equal(reply.remoteIdentitySource, "run");
+  assert.equal(reply.remoteObservedReasoningEffort, "low");
+  assert.equal(reply.remoteOriginalInputId, "example-remote-user");
+  assert.equal(reply.remoteRunId, "example-run");
   const footer = whatsappDebugFooter({ message: reply, thread: {}, messages: [], deliveryType: "final", env: {} });
   assert.equal(reply.remoteBackend, "example");
-  assert.match(footer, /^🤖 codex example-model-1 · msg:\*final\*/);
+  assert.match(footer, /^🤖 codex example-model-1 low · msg:\*final\*/);
 });
 
 // Counts full reads of one thread's message list (listThreadMessageRows).

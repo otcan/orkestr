@@ -46,11 +46,16 @@ export function quotaResetCountdown(resetsAt = "", now = Date.now()) {
   return `${mins}m`;
 }
 
-function quotaWindowText(label, pct, status, resetsAt, now) {
-  const hasValue = Number.isFinite(pct) || status === "allowed";
-  if (!hasValue && !resetsAt) return "";
+// "5h: 90% (1h30)"; a rate-limited window without a remaining percentage reads
+// "5h: limited (resets 59m)". A window with no known value is left out.
+function quotaWindowText(label, pct, status, resetsAt, now, limited = false) {
   const countdown = quotaResetCountdown(resetsAt, now);
-  return `${label}: ${windowValue(pct, status)}${countdown ? ` (${countdown})` : ""}`;
+  if (!Number.isFinite(pct) && (status === "rejected" || (limited && !status && resetsAt))) {
+    return `${label}: limited${countdown ? ` (resets ${countdown})` : ""}`;
+  }
+  const value = Number.isFinite(pct) ? `${pct}%` : status === "allowed" ? "ok" : status === "allowed_warning" ? "low" : "";
+  if (!value) return "";
+  return `${label}: ${value}${countdown ? ` (${countdown})` : ""}`;
 }
 
 // One footer line per provider, e.g. "claude 5h: 90% (1h30) wk: 99% (1d23h)".
@@ -59,10 +64,11 @@ function quotaWindowText(label, pct, status, resetsAt, now) {
 export function providerQuotaLine(quota = null, provider = "codex", now = Date.now()) {
   const entry = quota || {};
   const windows = [
-    quotaWindowText("5h", entry.fiveHourRemainingPct, entry.fiveHourStatus, entry.fiveHourResetsAt, now),
-    quotaWindowText("wk", entry.weeklyRemainingPct, entry.weeklyStatus, entry.weeklyResetsAt, now),
+    quotaWindowText("5h", entry.fiveHourRemainingPct, entry.fiveHourStatus, entry.fiveHourResetsAt, now, entry.limited),
+    quotaWindowText("wk", entry.weeklyRemainingPct, entry.weeklyStatus, entry.weeklyResetsAt, now, entry.limited),
   ].filter(Boolean);
-  const flags = [entry.limited ? "(limited)" : "", entry.stale ? "(stale)" : ""].filter(Boolean);
+  const shownLimited = windows.some((text) => text.includes(": limited"));
+  const flags = [entry.limited && !shownLimited ? "(limited)" : "", entry.stale ? "(stale)" : ""].filter(Boolean);
   return [windows.length ? `${provider} ${windows.join(" ")}` : `${provider}: no data`, ...flags].join(" ");
 }
 

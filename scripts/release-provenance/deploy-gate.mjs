@@ -17,7 +17,7 @@ import { parseArgs } from "node:util";
 import { isMainModule } from "../main-module.mjs";
 import { buildContentManifest, manifestSummary } from "./content-manifest.mjs";
 import { createGithubClient, githubTokenFromEnv, parseGithubRepository } from "./github-api.mjs";
-import { ghAttestationVerifier } from "./gh-attestation.mjs";
+import { ghAttestationVerifier, ghUnavailableReason } from "./gh-attestation.mjs";
 import { describeAttestation, describeRunArtifacts, loadReleasePolicy, verifyArtifactContent, verifyRequiredChecks } from "./verify.mjs";
 
 export const GATE_REJECTED_EXIT_CODE = 77;
@@ -83,13 +83,30 @@ export async function runPreGate({ repoUrl, sha, env = process.env, fetchImpl = 
     record.ci = compactChecks(checks);
     if (modes.checks !== "off" && !checks.ok) checkReasons.push(...checks.reasons);
     if (modes.artifact !== "off") {
-      const artifacts = await describeRunArtifacts({ owner, repo, runId: checks.runId, sha, policy: effectivePolicy, client });
+      // CI attests push and dispatch builds only. A pull_request run that passed
+      // for the same commit has an artifact nobody signed, so among the runs that
+      // passed, take the artifact from one that has an attestation.
+      let artifacts = null;
+      for (const runId of new Set([checks.runId, ...(checks.passedRunIds || [])])) {
+        const described = await describeRunArtifacts({ owner, repo, runId, sha, policy: effectivePolicy, client });
+        const attestation = described.runtime?.digest ? await describeAttestation({ owner, repo, digest: described.runtime.digest, client }) : null;
+        const attested = attestation?.status === "attestation_present_unverified";
+        if (!artifacts || attested) {
+          artifacts = described;
+          record.attestation = attestation || { status: "attestation_unverified" };
+        }
+        if (attested) break;
+      }
       record.artifact = { runId: artifacts.runId, runtime: artifacts.runtime, manifest: artifacts.manifest, problems: artifacts.problems };
       artifactReasons.push(...artifacts.problems);
-      if (artifacts.runtime?.digest) {
-        record.attestation = await describeAttestation({ owner, repo, digest: artifacts.runtime.digest, client });
-        if (record.attestation.status === "attestation_missing") artifactReasons.push("attestation_missing");
+      if (record.attestation.status === "attestation_missing") {
+        artifactReasons.push("attestation_missing");
+        // The run that would attest this commit may simply not have finished yet.
+        if (checks.incompleteRunIds?.length) artifactReasons.push("attestation_run_pending");
       }
+      // A lookup that could not be made says nothing about the artifact, so an
+      // enforcing gate stops instead of reading it as "nothing wrong found".
+      if (modes.artifact === "enforce" && record.attestation.status === "attestation_unverified" && record.attestation.reason && record.attestation.reason !== "digest_unknown") artifactReasons.push("attestation_lookup_failed");
       if (modes.artifact === "enforce" && !token) artifactReasons.push("github_token_required_for_download");
     }
   }
@@ -98,7 +115,7 @@ export async function runPreGate({ repoUrl, sha, env = process.env, fetchImpl = 
   return record;
 }
 
-export async function runPostGate({ releaseDir, provenance, env = process.env, fetchImpl = globalThis.fetch, policy, ghVerify } = {}) {
+export async function runPostGate({ releaseDir, provenance, env = process.env, fetchImpl = globalThis.fetch, policy, ghVerify, spawn } = {}) {
   const modes = gateModes(env);
   const record = { ...provenance, gate: { ...(provenance?.gate || {}), reasons: [...(provenance?.gate?.reasons || [])] } };
   const distManifest = await buildContentManifest(path.join(releaseDir, "dist"), { label: "dist" });
@@ -108,23 +125,37 @@ export async function runPostGate({ releaseDir, provenance, env = process.env, f
   };
   const repository = parseGithubRepository(record.repository || "");
   const token = githubTokenFromEnv(env);
-  if (modes.artifact !== "off" && repository && record.artifact?.runtime?.id && token) {
+  if (modes.artifact === "off") return record;
+  const verifier = ghVerify === undefined ? ghAttestationVerifier({ env, spawn }) : ghVerify;
+  if (repository && record.artifact?.runtime?.id && token) {
     const content = await verifyArtifactContent({
       owner: repository.owner,
       repo: repository.repo,
+      sha: record.commit,
       artifacts: record.artifact,
       localManifest: distManifest,
       policy: policy || await loadReleasePolicy(),
       client: createGithubClient({ fetchImpl, token, apiBase: env.ORKESTR_GITHUB_API_URL }),
       token,
-      ghVerify: ghVerify === undefined ? ghAttestationVerifier({ env }) : ghVerify,
+      ghVerify: verifier,
     });
     record.artifact = { ...record.artifact, verification: { ok: content.ok, problems: content.problems, digestMatch: content.digestMatch, contentMatch: content.contentMatch, ciManifestMatch: content.ciManifestMatch, comparison: content.comparison || null } };
-    if (content.attestation) record.attestation = { ...record.attestation, ...content.attestation };
+    // The verification result supersedes whatever the pre-gate lookup reported.
+    if (content.attestation) record.attestation = { ...record.attestation, reason: undefined, ...content.attestation };
     if (!content.ok) {
       record.gate.reasons = [...new Set([...record.gate.reasons, ...content.problems])];
       if (modes.artifact === "enforce") record.gate.result = "rejected";
       else if (record.gate.result === "passed") record.gate.result = "warned";
+    }
+  }
+  // Enforce means the signature was checked and matched. No verifier, or a
+  // verification that never ran, is not a pass; warn records why and continues.
+  if (!["attestation_verified", "attestation_failed"].includes(record.attestation?.status)) {
+    const reason = typeof verifier === "function" ? "attestation_not_verified" : ghUnavailableReason({ env, spawn }) || "attestation_verifier_unavailable";
+    record.attestation = { status: "attestation_unverified", ...record.attestation, reason: record.attestation?.reason || reason };
+    if (modes.artifact === "enforce") {
+      record.gate.reasons = [...new Set([...record.gate.reasons, reason])];
+      record.gate.result = "rejected";
     }
   }
   return record;
@@ -147,6 +178,7 @@ function report(record, stderr) {
   const ci = record.ci?.runUrl ? ` CI run ${record.ci.runUrl}.` : "";
   if (gate.result === "rejected") {
     stderr.write(`Release provenance gate rejected ${record.commit} (checks=${gate.requireChecks}, artifact=${gate.artifactProvenance}): ${gate.reasons.join(", ")}.${ci}\n`);
+    if (gate.reasons.includes("attestation_run_pending")) stderr.write("Another CI run for this commit has not finished, and only push and dispatch runs attest the artifact. Retry when it has completed.\n");
     stderr.write("Fix CI for this exact commit, or set ORKESTR_DEPLOY_REQUIRE_CHECKS / ORKESTR_DEPLOY_ARTIFACT_PROVENANCE to warn for an explicitly accepted exception.\n");
   } else if (gate.result === "warned") {
     stderr.write(`Release provenance warning for ${record.commit}: ${gate.reasons.join(", ")} (continuing; checks=${gate.requireChecks}, artifact=${gate.artifactProvenance}).${ci}\n`);

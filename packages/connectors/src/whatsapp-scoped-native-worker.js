@@ -1,10 +1,11 @@
+import {createParticipantRecoveryPolicy,readProtectedParticipantGrant} from './whatsapp-participant-recovery.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import {createScopedGroupTransport} from './whatsapp-scoped-group-transport.js';
 import {createScopedPairingPermit} from './whatsapp-scoped-pairing.js';
 import {scopedRouteMembership} from './whatsapp-scoped-route-membership.js';
 import {createScopedDirectSender,validateScopedDirectChats} from './whatsapp-scoped-direct-chats.js';
-import {SCOPED_SEND_MAX_TEXT_LENGTH, validReplyDocument} from './whatsapp-scoped-group-formatting.js';
+import {SCOPED_SEND_MAX_TEXT_LENGTH, validQuotedMessageId, validReplyDocument} from './whatsapp-scoped-group-formatting.js';
 import {validReplyFileShape} from './whatsapp-scoped-reply-files.js';
 import {validateOperatorNotifications, operatorNoticeBodyValid} from './whatsapp-scoped-operator-notices.js';
 import {createScopedGroupCreator, scopedGroupCreateRequest, validateScopedGroupCreate} from './whatsapp-scoped-group-create.js';
@@ -16,7 +17,8 @@ const fail=()=>{throw Object.assign(new Error('scoped_worker_operation_denied'),
 export function observeFailureCode(error) {
  return String(error?.message || error || 'unknown').replace(/\d{6,}/g,'#').slice(0,160);
 }
-export function createScopedNativeWorkerPolicy(config,{createTransport=createScopedGroupTransport,createDirectSender=createScopedDirectSender,createGroupCreator=createScopedGroupCreator,report=entry=>console.error(JSON.stringify(entry)),now=Date.now}={}) {
+export function createScopedNativeWorkerPolicy(config,{createTransport=createScopedGroupTransport,createDirectSender=createScopedDirectSender,createGroupCreator=createScopedGroupCreator,report=entry=>console.error(JSON.stringify(entry)),now=Date.now,readRecoveryGrant=readProtectedParticipantGrant}={}) {
+ const recovery=createParticipantRecoveryPolicy(config,{now,readGrant:readRecoveryGrant});
  const threads=scopedRouteMembership(config),groups=config.groups || [];
  if(!config.workerAccountId || !threads || !groups.length || groups.length!==threads.size
      || new Set(groups.map(g=>g.chatId)).size!==groups.length
@@ -34,7 +36,7 @@ export function createScopedNativeWorkerPolicy(config,{createTransport=createSco
  const pairing=createScopedPairingPermit(config);
  const get=accountId=>{
   if(accountId!==config.workerAccountId)fail();
-  return transport ||= createTransport({config,token:'native-private-socket-policy',base:{}});
+  return transport ||= createTransport({config,token:'native-private-socket-policy',base:{},now,readRecoveryGrant});
  };
  return {
   accountId:config.workerAccountId,
@@ -76,10 +78,16 @@ export function createScopedNativeWorkerPolicy(config,{createTransport=createSco
       && Number(url.searchParams.get('limit')||30)>0 && Number(url.searchParams.get('limit')||30)<=50)return;
    if(method==='GET' && historyChat && groupAllowed(historyChat) && url.pathname===`/accounts/${a}/chats/${encodeURIComponent(historyChat)}/history` && (!url.searchParams.has('mark_seen') || url.searchParams.get('mark_seen')==='false')
       && Number(url.searchParams.get('limit')||30)>0 && Number(url.searchParams.get('limit')||30)<=50)return;
+   if(method==='POST' && !url.search) {
+    const match=/^\/accounts\/([^/]+)\/chats\/([^/]+)\/recover-participant-message$/.exec(url.pathname);
+    if(match && match[1]===a){let chat;try{chat=decodeURIComponent(match[2]);}catch{fail();}
+     if(chats.has(chat) && recovery.request(chat,body))return;}
+   }
    if(method==='POST' && url.pathname==='/chats' && scopedGroupCreateRequest(groupCreate,config.workerAccountId,body))return;
    if(method==='POST' && url.pathname==='/send-text' && body.accountId===config.workerAccountId && groupAllowed(body.to)
       && typeof body.text==='string' && body.text.length<=SCOPED_SEND_MAX_TEXT_LENGTH && typeof body.requestId==='string' && typeof body.parentId==='string'
-      && Object.keys(body).every(k=>['accountId','to','text','requestId','parentId','notificationId'].includes(k)))return;
+      && (body.quotedMessageId===undefined || validQuotedMessageId(body.quotedMessageId))
+      && Object.keys(body).every(k=>['accountId','to','text','requestId','parentId','notificationId','quotedMessageId'].includes(k)))return;
    if(method==='POST' && url.pathname==='/send-text' && operatorNoticeBodyValid(operator,body,config.workerAccountId))return;
    if(method==='POST' && url.pathname==='/send-text' && ownsDirect(body.to,body.threadId) && body.accountId===config.workerAccountId
       && typeof body.text==='string' && body.text.length<=3000 && typeof body.requestId==='string'
@@ -105,6 +113,11 @@ export function createScopedNativeWorkerPolicy(config,{createTransport=createSco
     return false;
    };
    try {return Promise.resolve(get(accountId).observe(client,message)).catch(failed);} catch(error) {return Promise.resolve(failed(error));}
+  },
+  recoverParticipantMessage(accountId,client,chatId,body){
+   if(accountId!==config.workerAccountId || !chats.has(chatId))fail();
+   recovery.request(chatId,body);
+   return get(accountId).recoverParticipantMessage(client,chatId,body);
   },
   observeFailures:()=>({...failures}),
   send(accountId,client,chatId,text,request){

@@ -80,6 +80,18 @@ test("quotaResetCountdown formats days, hours and minutes until reset", () => {
   assert.equal(quotaResetCountdown(undefined, now), "");
 });
 
+test("a rate-limited window reads limited with its reset, never a question mark", () => {
+  const now = Date.parse("2026-10-26T12:00:00Z");
+  const resets = new Date(now + 59 * 60_000).toISOString();
+  assert.equal(providerQuotaLine({ fiveHourStatus: "rejected", fiveHourResetsAt: resets, weeklyRemainingPct: 87, limited: true }, "claude", now),
+    "claude 5h: limited (resets 59m) wk: 87%");
+  assert.equal(providerQuotaLine({ fiveHourResetsAt: resets, weeklyRemainingPct: 87, limited: true }, "claude", now),
+    "claude 5h: limited (resets 59m) wk: 87%");
+  assert.equal(providerQuotaLine({ fiveHourResetsAt: resets, weeklyRemainingPct: 87 }, "claude", now), "claude wk: 87%",
+    "an unknown window without a limit is left out");
+  assert.doesNotMatch(providerQuotaLine({ fiveHourStatus: "rejected", fiveHourResetsAt: resets }, "claude", now), /\?/);
+});
+
 test("providerQuotaLine shows reported windows with countdowns and omits missing ones", () => {
   assert.equal(providerQuotaLine({
     fiveHourRemainingPct: 90,

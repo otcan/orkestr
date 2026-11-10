@@ -6,7 +6,7 @@ import test from "node:test";
 import { buildContentManifest } from "../scripts/release-provenance/content-manifest.mjs";
 import { GATE_REJECTED_EXIT_CODE, gateModes, main, runPostGate, runPreGate } from "../scripts/release-provenance/deploy-gate.mjs";
 import { loadReleasePolicy } from "../scripts/release-provenance/verify.mjs";
-import { API, REPO_URL, SHA, artifact, digestOf, fakeFetch, githubRoutes, makeZip, passingRuns } from "./helpers/release-provenance-fixtures.mjs";
+import { API, OTHER_SHA, REPO_URL, REQUIRED, SHA, artifact, checkRun, digestOf, fakeFetch, githubRoutes, makeZip, passingRuns } from "./helpers/release-provenance-fixtures.mjs";
 
 const policy = await loadReleasePolicy();
 const env = (extra = {}) => ({ ORKESTR_GITHUB_API_URL: API, ...extra });
@@ -84,6 +84,49 @@ test("pre gate artifact enforce rejects a missing attestation", async () => {
   assert.equal(record.gate.result, "rejected");
 });
 
+test("pre gate artifact enforce rejects an attestation lookup that could not be made; warn continues as before", async () => {
+  const routes = { ...githubRoutes({ artifacts: goodArtifacts }), [`/repos/example-org/example-repo/attestations/${goodArtifacts[0].digest}`]: () => new Response("", { status: 503 }) };
+  const enforce = await runPreGate({ repoUrl: REPO_URL, sha: SHA, env: env({ ORKESTR_DEPLOY_ARTIFACT_PROVENANCE: "enforce", GITHUB_TOKEN: "t" }), fetchImpl: fakeFetch(routes).fetchImpl, policy });
+  assert.equal(enforce.gate.result, "rejected");
+  assert.deepEqual(enforce.gate.reasons, ["attestation_lookup_failed"]);
+  const warn = await runPreGate({ repoUrl: REPO_URL, sha: SHA, env: env(), fetchImpl: fakeFetch(routes).fetchImpl, policy });
+  assert.equal(warn.gate.result, "passed");
+  assert.deepEqual(warn.attestation, { status: "attestation_unverified", reason: "github_api_error" });
+});
+
+// A commit that reached main without a new SHA has two CI runs: the pull_request
+// run, which never attests, and the push run, which does.
+const BASE = "/repos/example-org/example-repo";
+const unattested = artifact("runtime-dist", { id: 11, digest: `sha256:${"c".repeat(64)}` });
+const attested = artifact("runtime-dist", { id: 21, digest: `sha256:${"d".repeat(64)}` });
+const secondRun = (overrides) => REQUIRED.map((name) => checkRun(name, { runId: 901, ...overrides }));
+
+test("pre gate names a still-running CI run when the passed run has no attestation", async () => {
+  const routes = githubRoutes({ checkRuns: [...passingRuns(), ...secondRun({ status: "in_progress" })], artifacts: [unattested], attestations: [] });
+  const enforce = await runPreGate({ repoUrl: REPO_URL, sha: SHA, env: env({ ORKESTR_DEPLOY_ARTIFACT_PROVENANCE: "enforce", GITHUB_TOKEN: "t" }), fetchImpl: fakeFetch(routes).fetchImpl, policy });
+  assert.equal(enforce.ci.runId, "900");
+  assert.equal(enforce.gate.result, "rejected");
+  assert.deepEqual(enforce.gate.reasons, ["attestation_missing", "attestation_run_pending"]);
+  const warn = await runPreGate({ repoUrl: REPO_URL, sha: SHA, env: env(), fetchImpl: fakeFetch(routes).fetchImpl, policy });
+  assert.equal(warn.gate.result, "warned");
+  const alone = await runPreGate({ repoUrl: REPO_URL, sha: SHA, env: env(), fetchImpl: fakeFetch(githubRoutes({ artifacts: [unattested], attestations: [] })).fetchImpl, policy });
+  assert.deepEqual(alone.gate.reasons, ["attestation_missing"]);
+});
+
+test("pre gate takes the artifact from the passed run that is attested, not the newest one", async () => {
+  const routes = {
+    ...githubRoutes({ checkRuns: [...passingRuns(), ...secondRun({})], artifacts: [attested] }),
+    [`${BASE}/actions/runs/901/artifacts`]: { total_count: 1, artifacts: [unattested] },
+    [`${BASE}/attestations/${unattested.digest}`]: { attestations: [] },
+  };
+  const record = await runPreGate({ repoUrl: REPO_URL, sha: SHA, env: env({ ORKESTR_DEPLOY_ARTIFACT_PROVENANCE: "enforce", GITHUB_TOKEN: "t" }), fetchImpl: fakeFetch(routes).fetchImpl, policy });
+  assert.equal(record.ci.runId, "901");
+  assert.equal(record.artifact.runId, "900");
+  assert.equal(record.artifact.runtime.digest, attested.digest);
+  assert.equal(record.attestation.status, "attestation_present_unverified");
+  assert.equal(record.gate.result, "passed");
+});
+
 async function releaseDir(dist) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-prov-release-"));
   for (const [rel, content] of Object.entries(dist)) {
@@ -97,24 +140,101 @@ async function releaseDir(dist) {
   return dir;
 }
 
-test("post gate records installed-tree digests and verifies downloaded artifact content", async () => {
+// A release whose artifact matches the local build, ready for the post gate.
+async function builtRelease() {
   const dist = { "server/app.js": "server", "launcher/index.html": "launcher", "web/main.js": "web" };
   const dir = await releaseDir(dist);
   const zip = makeZip(dist);
   const routes = githubRoutes({ artifacts: [], archives: { 11: zip } });
   const pre = { schemaVersion: 1, repository: "example-org/example-repo", commit: SHA, gate: { requireChecks: "enforce", artifactProvenance: "enforce", result: "passed", reasons: [] }, artifact: { runtime: { id: 11, digest: digestOf(zip) } }, attestation: { status: "attestation_present_unverified" } };
-  const record = await runPostGate({ releaseDir: dir, provenance: pre, env: env({ ORKESTR_DEPLOY_ARTIFACT_PROVENANCE: "enforce", GITHUB_TOKEN: "t" }), fetchImpl: fakeFetch(routes).fetchImpl, policy, ghVerify: null });
+  return { dir, routes, pre };
+}
+const verified = async () => ({ status: "attestation_verified", verifier: "gh" });
+
+test("post gate records installed-tree digests and verifies downloaded artifact content", async () => {
+  const { dir, routes, pre } = await builtRelease();
+  const record = await runPostGate({ releaseDir: dir, provenance: pre, env: env({ ORKESTR_DEPLOY_ARTIFACT_PROVENANCE: "enforce", GITHUB_TOKEN: "t" }), fetchImpl: fakeFetch(routes).fetchImpl, policy, ghVerify: verified });
   assert.equal(record.gate.result, "passed", record.gate.reasons.join(","));
   assert.equal(record.installedTree.dist.treeDigest, (await buildContentManifest(path.join(dir, "dist"))).treeDigest);
   assert.equal(record.installedTree.release.fileCount, 4, "node_modules and release-manifest.json are excluded");
   assert.equal(record.artifact.verification.digestMatch, true);
 
   const badDigest = { ...pre, artifact: { runtime: { id: 11, digest: `sha256:${"0".repeat(64)}` } } };
-  const enforce = await runPostGate({ releaseDir: dir, provenance: badDigest, env: env({ ORKESTR_DEPLOY_ARTIFACT_PROVENANCE: "enforce", GITHUB_TOKEN: "t" }), fetchImpl: fakeFetch(routes).fetchImpl, policy, ghVerify: null });
+  const enforce = await runPostGate({ releaseDir: dir, provenance: badDigest, env: env({ ORKESTR_DEPLOY_ARTIFACT_PROVENANCE: "enforce", GITHUB_TOKEN: "t" }), fetchImpl: fakeFetch(routes).fetchImpl, policy, ghVerify: verified });
   assert.equal(enforce.gate.result, "rejected");
   assert.ok(enforce.gate.reasons.includes("artifact_digest_mismatch"));
-  const warn = await runPostGate({ releaseDir: dir, provenance: { ...badDigest, gate: { ...badDigest.gate, artifactProvenance: "warn" } }, env: env({ GITHUB_TOKEN: "t" }), fetchImpl: fakeFetch(routes).fetchImpl, policy, ghVerify: null });
+  const warn = await runPostGate({ releaseDir: dir, provenance: { ...badDigest, gate: { ...badDigest.gate, artifactProvenance: "warn" } }, env: env({ GITHUB_TOKEN: "t" }), fetchImpl: fakeFetch(routes).fetchImpl, policy, ghVerify: verified });
   assert.equal(warn.gate.result, "warned");
+});
+
+// Stand-ins for the GitHub CLI: `gh --version`, then `gh attestation verify`.
+const ghCertificate = (commit, ref = "refs/heads/main") => JSON.stringify([{ verificationResult: { signature: { certificate: { sourceRepositoryDigest: commit, sourceRepositoryRef: ref } } } }]);
+const ghAnswering = (verify) => (_command, args) => (args[0] === "--version" ? { status: 0 } : verify);
+const ghNotInstalled = () => ({ status: null, error: new Error("spawn gh ENOENT") });
+const ghMustNotRun = () => { throw new Error("gh was run although it is disabled"); };
+const postGate = ({ dir, routes, pre }, mode, { spawn, extraEnv = {} }) => runPostGate({
+  releaseDir: dir,
+  provenance: { ...pre, gate: { ...pre.gate, artifactProvenance: mode } },
+  env: env({ ORKESTR_DEPLOY_ARTIFACT_PROVENANCE: mode, GITHUB_TOKEN: "t", ...extraEnv }),
+  fetchImpl: fakeFetch(routes).fetchImpl,
+  policy,
+  spawn,
+});
+
+test("post gate enforce passes only an attestation verified for the deployed commit on an allowed ref", async () => {
+  const release = await builtRelease();
+  const record = await postGate(release, "enforce", { spawn: ghAnswering({ status: 0, stdout: ghCertificate(SHA) }) });
+  assert.equal(record.gate.result, "passed", record.gate.reasons.join(","));
+  assert.deepEqual(record.attestation, { status: "attestation_verified", reason: undefined, verifier: "gh", sourceCommit: SHA, sourceRef: "refs/heads/main" });
+});
+
+for (const [name, verify, reason] of [
+  ["an attestation for a different commit", { status: 0, stdout: ghCertificate(OTHER_SHA) }, "attestation_commit_mismatch"],
+  ["an attestation from a ref the policy does not allow", { status: 0, stdout: ghCertificate(SHA, "refs/heads/feature") }, "attestation_ref_not_allowed"],
+  ["verifier output without a signing identity", { status: 0, stdout: "[]" }, "attestation_identity_unreadable"],
+  ["a signature gh does not accept", { status: 1, stdout: "" }, "attestation_failed"],
+]) {
+  test(`post gate: ${name} rejects in enforce and warns in warn`, async () => {
+    const release = await builtRelease();
+    const enforce = await postGate(release, "enforce", { spawn: ghAnswering(verify) });
+    assert.equal(enforce.gate.result, "rejected");
+    assert.deepEqual(enforce.gate.reasons, [...new Set(["attestation_failed", reason])]);
+    assert.equal(enforce.attestation.status, "attestation_failed");
+    const warn = await postGate(release, "warn", { spawn: ghAnswering(verify) });
+    assert.equal(warn.gate.result, "warned");
+    assert.ok(warn.gate.reasons.includes(reason), warn.gate.reasons.join(","));
+  });
+}
+
+for (const [name, options, reason] of [
+  ["gh is not installed", { spawn: ghNotInstalled }, "attestation_verifier_unavailable"],
+  ["gh is disabled", { spawn: ghMustNotRun, extraEnv: { ORKESTR_DEPLOY_ATTESTATION_GH: "0" } }, "attestation_verifier_disabled"],
+]) {
+  test(`post gate: when ${name}, enforce rejects and warn continues with the reason recorded`, async () => {
+    const release = await builtRelease();
+    const enforce = await postGate(release, "enforce", options);
+    assert.equal(enforce.gate.result, "rejected");
+    assert.deepEqual(enforce.gate.reasons, [reason]);
+    const warn = await postGate(release, "warn", options);
+    assert.equal(warn.gate.result, "passed");
+    assert.deepEqual(warn.gate.reasons, []);
+    assert.equal(warn.attestation.status, "attestation_unverified");
+    assert.equal(warn.attestation.reason, reason);
+  });
+}
+
+test("post gate enforce rejects when verification could not run at all; warn and off are unchanged", async () => {
+  const release = await builtRelease();
+  const spawn = ghAnswering({ status: 0, stdout: ghCertificate(SHA) });
+  const enforce = await postGate(release, "enforce", { spawn, extraEnv: { GITHUB_TOKEN: "" } });
+  assert.equal(enforce.gate.result, "rejected");
+  assert.deepEqual(enforce.gate.reasons, ["attestation_not_verified"]);
+  const warn = await postGate(release, "warn", { spawn, extraEnv: { GITHUB_TOKEN: "" } });
+  assert.equal(warn.gate.result, "passed");
+  assert.equal(warn.attestation.status, "attestation_present_unverified");
+  const off = await postGate(release, "off", { spawn: ghMustNotRun });
+  assert.equal(off.gate.result, "passed");
+  assert.deepEqual(off.attestation, release.pre.attestation);
 });
 
 test("gate CLI exits 77 on rejection, 2 on bad config, writes the record, and never logs the token", async () => {
