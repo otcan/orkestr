@@ -1,6 +1,9 @@
 use dioxus::prelude::*;
 use orkestr_v2_contracts::{DesktopLeaseGranted, DesktopResource, DesktopResourceBinding};
-use orkestr_v2_ui::{desk_presentation::Availability, session_scope::SessionScope};
+use orkestr_v2_ui::{
+    desk_presentation::{held_by, Availability},
+    session_scope::SessionScope,
+};
 use serde_json::{json, Value};
 
 #[component]
@@ -28,30 +31,49 @@ pub fn DesktopResourceRow(
     let mut confirm = use_signal(|| false);
     let mut link_generation = use_signal(|| 0_u64);
     let mut status = use_signal(String::new);
+    let mut chat_open = use_signal(|| false);
+    let owner_actions = crate::desk_owner_actions::use_owner_actions(observed_at_ms);
+    let runtime_state = owner_actions.runtime_state(&desk.state);
+    // A held reservation keeps its controls open, so Release cannot be hidden.
+    let chat_shown = !bindings.is_empty() && (chat_open() || token().is_some());
+    let show_detail =
+        chat_shown || owner_actions.has_notice() || !status().is_empty() || uncertain();
+    let chat_panel = format!("desk-chat-{}", desk.slug);
     rsx! {
-        li { class: "desk-row", hidden: !visible, "aria-label": "Desk {desk.slug}",
-            div { class: "desk-name",
-                h4 { "{desk.label}" }
-                p { class: "desk-id", "{desk.slug}" }
-            }
-            div { class: "desk-statuses",
-                span { "data-availability": availability.token(), "{availability.label()}" }
-                span { "Runtime: {desk.state}" }
-            }
-            crate::desk_owner_actions::DeskOwnerActions { desk: desk.clone(), csrf: csrf.clone(), session_scope, onexpired, onchanged, observed_at_ms }
-            div { class: "desk-details",
-            if availability != Availability::Available { p { class: "field-help", "{availability.explanation()}" } }
-            if desk.holder.is_some() || desk.expires_at.is_some() {
-                dl {
-                    if let Some(holder) = &desk.holder { dt { "Reserved by" } dd { "{holder}" } }
-                    if let Some(expiry) = &desk.expires_at { dt { "Reservation expires" } dd { "{expiry}" } }
+        tbody { class: "desk-row", role: "rowgroup", hidden: !visible, "aria-label": "Desk {desk.slug}",
+            tr { class: "desk-main", role: "row",
+                th { "scope": "row", role: "rowheader", "data-label": "Desk",
+                    span { class: "desk-label", "{desk.label}" }
+                    span { class: "desk-id", "{desk.slug}" }
+                }
+                td { role: "cell", "data-label": "Reservation",
+                    span { class: "desk-badge", "data-availability": availability.token(), title: availability.explanation(), "{availability.label()}" }
+                }
+                td { class: "desk-runtime", role: "cell", "data-label": "Runtime", "{runtime_state}" }
+                td { class: "desk-holder", role: "cell", "data-label": "Held by",
+                    span { class: "desk-holder-value",
+                        span { {held_by(&desk.lease_state, desk.holder.as_deref())} }
+                        if let Some(expiry) = &desk.expires_at { span { class: "desk-expiry", "until {expiry}" } }
+                    }
+                }
+                td { class: "desk-actions-cell", role: "cell", "data-label": "Actions",
+                    div { class: "desk-action-bar",
+                    crate::desk_owner_actions::DeskOwnerButtons { actions: owner_actions, desk: desk.clone(), runtime_state: runtime_state.clone(), csrf: csrf.clone(), session_scope, onexpired, onchanged }
+                    if !bindings.is_empty() {
+                        button { r#type: "button", class: "desk-chat-toggle", title: "Reserve from a connected chat",
+                            "aria-expanded": if chat_shown { "true" } else { "false" }, "aria-controls": "{chat_panel}",
+                            disabled: token().is_some(), onclick: move |_| chat_open.toggle(),
+                            "Reserve…"
+                        }
+                    }
+                    }
                 }
             }
-            if bindings.is_empty() {
-                p { class: "field-help", "Not connected to a chat. Connect it in that chat’s Settings to reserve it." }
-            } else {
-                details { class: "desk-chat", open: token().is_some(),
-                summary { "Reserve from a chat" }
+            tr { class: "desk-detail", role: "row", hidden: !show_detail,
+                td { role: "cell", "colspan": "5",
+                crate::desk_owner_actions::DeskOwnerNotices { actions: owner_actions, desk: desk.clone(), runtime_state: runtime_state.clone(), csrf: csrf.clone(), session_scope, onexpired, onchanged }
+            if !bindings.is_empty() {
+                div { class: "desk-chat", id: "{chat_panel}", hidden: !chat_shown,
                 label { "Use with chat"
                     select { value: "{selected}", disabled: busy() || token().is_some() || uncertain(), onchange: move |e| {selected.set(e.value());confirm.set(false);},
                         option { value: "", "Choose a chat…" }
@@ -126,8 +148,14 @@ pub fn DesktopResourceRow(
                 }
                 }
             }
-            if !status().is_empty() {p {role:"status","{status}"}}
+            if !status().is_empty() {
+                div { class: "desk-notice",
+                    p {role:"status","{status}"}
+                    button { r#type: "button", class: "desk-dismiss", "aria-label": "Dismiss the reservation message for {desk.label}", onclick: move |_| status.set(String::new()), "Dismiss" }
+                }
+            }
             if uncertain() {p {class:"field-help","The action’s outcome needs checking. Automatic retries are disabled; refresh the inventory and inspect the reservation before continuing."}}
+                }
             }
         }
     }
