@@ -5,7 +5,7 @@ on:
     branches: [v2/rust-rewrite]
     paths: ['v2/**', '.github/workflows/v2-rust.yml', 'scripts/security/cargo-*', 'scripts/security/dependency-*']
   pull_request:
-    branches: ['v2/**']
+    branches: ['v2/**', integration]
     paths: ['v2/**', '.github/workflows/v2-rust.yml', 'scripts/security/cargo-*', 'scripts/security/dependency-*']
   workflow_dispatch:
 

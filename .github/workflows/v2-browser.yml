@@ -4,7 +4,7 @@ on:
     branches: ['v2/rust-rewrite']
     paths: ['v2/**', '.github/workflows/v2-browser.yml', 'package-lock.json']
   pull_request:
-    branches: ['v2/**']
+    branches: ['v2/**', integration]
     paths: ['v2/**', '.github/workflows/v2-browser.yml', 'package-lock.json']
   workflow_dispatch:
 
