@@ -90,6 +90,7 @@ impl Store {
                     text: row.get("text"),
                     reply_to: None,
                     origin: None,
+                    revisions: None,
                 });
             }
             let mut native_delta = HistoryImportRequest {

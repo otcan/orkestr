@@ -3,7 +3,7 @@ import {createParticipantInput,recordScopedInputAdmission} from './whatsapp-scop
 import {wrapperErrorCode} from './whatsapp-scoped-wrapper-errors.js';
 import {createParticipantRecoveryPolicy,readProtectedParticipantGrant} from './whatsapp-participant-recovery.js';
 import {readGroupInputs} from './scoped-group-inbox.js';
-import {createScopedInputAdmission} from './scoped-group-input-intake.js';
+import {createScopedInputAdmission, forwardInputRevisions} from './scoped-group-input-intake.js';
 import {buildReplyTo} from './scoped-group-reply-quote.js';
 import {createScopedAcknowledgements} from './scoped-group-acknowledgements.js';
 import {acknowledgementActivity} from './scoped-acknowledgement-activity.js';
@@ -446,8 +446,7 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
     }
   }
 
-  const admitNewInputs = createScopedInputAdmission({inbox, db, groups, heldInputIds, routeInput,
-    blocked: deliveryBlocked, errors, errorCode, log});
+  const admitNewInputs = createScopedInputAdmission({inbox, db, groups, heldInputIds, routeInput, blocked: deliveryBlocked, errors, errorCode, log});
   return {
     admitNewInputs,
     scheduleAcknowledgements() {
@@ -488,6 +487,7 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
       }
       if (!inbox.prepare("SELECT 1 FROM group_send WHERE state IN ('sending','uncertain') LIMIT 1").get())
         await deliverLateReplies(inputs);
+      await forwardInputRevisions({inbox, db, api, log, errorCode});
       return {ok: errors.size === 0, groups: groups.size, received: inputs.length,
         configuredHolds: heldInputIds.size, held, excluded,
         routed: db.prepare('SELECT count(*) n FROM routed').get().n,

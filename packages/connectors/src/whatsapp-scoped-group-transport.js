@@ -17,6 +17,7 @@ import {validateCoordinatorConfig, coordinatorTokenMatches, createCoordinatorAcc
 import {validateDelegatesConfig, delegateForBearer, createDelegateAccess} from './whatsapp-scoped-delegates.js';
 import {DYNAMIC_GROUPS_TABLE, createDynamicGroupView, validateDynamicGroups} from './whatsapp-scoped-dynamic-groups.js';
 import {encodeReplyFile, readReplyFile} from './whatsapp-scoped-reply-files.js';
+import {createInputRevisionObserver} from './whatsapp-scoped-input-revisions.js';
 
 const fail=code=>{throw new Error(`group_transport_${code}`);};
 const hash=value=>crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -128,6 +129,7 @@ export function createScopedGroupTransport({config,token,base,dbPath=config.jour
   const uncertain=()=>Boolean(db.prepare("SELECT 1 FROM group_send WHERE state='uncertain' LIMIT 1").get());
   const assertClient=client=>{if(client?.info?.wid?._serialized!==config.ownChatId)fail('account_mismatch');};
   // Owner-authorized coordinator: its own bearer, routes, and send journal table.
+  const inputRevisions=createInputRevisionObserver({db,groups,now,report});
   const coordinatorAccess=coordinator ? createCoordinatorAccess({config,coordinator,db,serial,now,lookupDelayMs:sendLookupDelayMs}) : null;
   const delegateAccess=delegates ? createDelegateAccess({config,delegates,db,serial,now,lookupDelayMs:sendLookupDelayMs}) : null;
   return {
@@ -287,6 +289,13 @@ export function createScopedGroupTransport({config,token,base,dbPath=config.jour
           db.exec('COMMIT');
           return Boolean(result.changes);
         } catch(error) {db.exec('ROLLBACK');throw error;}
+      });
+    },
+    // The owner changed an input already journaled: record the evidence only.
+    observeRevision(client,message,change={}) {
+      return serial(async()=>{
+        assertClient(client);
+        return inputRevisions.record(message,change);
       });
     },
     sendText(client,to,text,accountId,request={}) {

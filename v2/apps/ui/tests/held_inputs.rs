@@ -88,6 +88,7 @@ fn preview_uses_only_exact_loaded_conversation_message_and_unicode_bound() {
             text: "é".repeat(200),
             reply_to: None,
             origin: None,
+            revisions: None,
         },
     );
     let message = &projection.messages[&1].message_id;

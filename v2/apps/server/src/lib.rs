@@ -62,6 +62,7 @@ pub mod message_attachments;
 mod message_receipt_observer;
 #[cfg(test)]
 mod message_receipt_test_support;
+mod message_revisions_http;
 mod message_times_http;
 pub mod observability;
 pub mod offline_python;
@@ -623,7 +624,7 @@ pub fn router_with_google_catalog(
     catalog: google_registry_metadata::RegistryCatalog,
 ) -> Router {
     Router::new()
-        .route("/api/v2/health",get(|| async { Json(serde_json::json!({"status":"ok","product":"orkestr-v2","contract_version":0,"fixture_mode":false,"features":["message_author","thread_asks","agent_timers","source_receipts_v1","root_intake_v1","fast_run_receipts_v1","provider_quotas_v1","provider_sign_in_v1"],"build":build_identity::identity(),"deployment":deployment_identity::identity()})) }))
+        .route("/api/v2/health",get(|| async { Json(serde_json::json!({"status":"ok","product":"orkestr-v2","contract_version":0,"fixture_mode":false,"features":["message_author","message_revisions_v1","thread_asks","agent_timers","source_receipts_v1","root_intake_v1","fast_run_receipts_v1","provider_quotas_v1","provider_sign_in_v1"],"build":build_identity::identity(),"deployment":deployment_identity::identity()})) }))
         .route("/api/v2/setup",get(auth::setup_status).post(auth::setup))
         .route("/api/v2/session",post(auth::session))
         .route("/api/v2/machine/session",post(auth::session))
@@ -664,6 +665,7 @@ pub fn router_with_google_catalog(
         .route("/api/v2/conversations/{id}/held-inputs",get(held_inputs::read))
         .route("/api/v2/conversations/{id}/inputs/{input}/retire",post(retired_inputs::retire))
         .route("/api/v2/conversations/{id}/messages",post(routes::message))
+        .route("/api/v2/conversations/{id}/messages/{message}/revisions",get(message_revisions_http::history).post(message_revisions_http::revise))
         .route("/api/v2/conversations/{id}/events",get(routes::events))
         .merge(timer_http::routes(state.timers.clone()))
         .nest("/api/v2",attachment_transfer::router())

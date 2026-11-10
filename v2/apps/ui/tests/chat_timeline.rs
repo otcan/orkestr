@@ -13,6 +13,7 @@ fn input(sequence: i64) -> Input {
         actor: "owner".into(),
         text: "Question".into(),
         reply_to: None,
+        revisions: Default::default(),
     }
 }
 #[test]
@@ -64,6 +65,7 @@ fn a_quoted_reply_shows_as_a_bubble_without_the_duplicate_relay_line() {
         text: "[WhatsApp: Group]\n\n[Replying to Orkestr message from 21:50: \"Should I look…\"]\n\nno need".into(),
         reply_to: Some(quote.clone()),
         origin: None,
+        revisions: None,
     };
     let input = Input::from(&message);
     assert_eq!(input.text, "[WhatsApp: Group]\n\nno need");
@@ -146,6 +148,7 @@ fn the_adapter_chat_rules_line_is_hidden_from_the_owner_bubble() {
         text: format!("{rules}\n\n[WhatsApp: Group]\n\nhello"),
         reply_to: None,
         origin: None,
+        revisions: None,
     };
     assert_eq!(Input::from(&message).text, "[WhatsApp: Group]\n\nhello");
     assert_eq!(

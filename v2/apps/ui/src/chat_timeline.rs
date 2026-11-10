@@ -1,7 +1,10 @@
 //! Display canonical input and accepted results in event order without inventing messages.
 //! Conversation posts (assistant-side messages from outside a run) follow the
 //! event they were written after, ordered by creation time among themselves.
-use orkestr_v2_contracts::{AcceptedResult, ConversationPost, Message, ReplyTo};
+use orkestr_v2_contracts::{
+    AcceptedResult, ConversationPost, Message, MessageRevisionKind, MessageRevisionNotice,
+    MessageRevisionSource, ReplyTo,
+};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Keep a bounded inline history. Only a removal tombstone may change a known row.
@@ -38,6 +41,44 @@ pub struct Input {
     pub actor: String,
     pub text: String,
     pub reply_to: Option<ReplyTo>,
+    pub revisions: InputRevisions,
+}
+/// How an input was edited or removed. `Input::text` already shows the result.
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct InputRevisions {
+    /// The server would accept an edit or removal of this message.
+    pub can_revise: bool,
+    /// The revision the owner is looking at (0: the original).
+    pub revision: i64,
+    pub edited_from: Option<MessageRevisionSource>,
+    pub deleted: bool,
+    /// Set on a row that only announces a change to another message.
+    pub notice: Option<MessageRevisionNotice>,
+}
+/// The compact line a notice row shows instead of a message.
+pub fn notice_line(notice: &MessageRevisionNotice) -> &'static str {
+    match (notice.change.kind, notice.change.source) {
+        // A web change reaches the assistant, not a copy already on WhatsApp.
+        (MessageRevisionKind::Edit, MessageRevisionSource::Web) => {
+            "You edited a message. The assistant was told. A copy already sent to WhatsApp stays as it was."
+        }
+        (MessageRevisionKind::Edit, MessageRevisionSource::Whatsapp) => {
+            "You edited a message in WhatsApp. The assistant was told."
+        }
+        (MessageRevisionKind::Delete, MessageRevisionSource::Web) => {
+            "You deleted a message. The assistant was told. A copy already sent to WhatsApp stays as it was."
+        }
+        (MessageRevisionKind::Delete, MessageRevisionSource::Whatsapp) => {
+            "You deleted a message in WhatsApp. The assistant was told."
+        }
+    }
+}
+/// The label on an edited message.
+pub fn edited_label(source: MessageRevisionSource) -> &'static str {
+    match source {
+        MessageRevisionSource::Web => "Edited",
+        MessageRevisionSource::Whatsapp => "Edited in WhatsApp",
+    }
 }
 /// Drop the relay's `[Replying to ...]` line from the displayed text: the same
 /// context is shown as a quoted bubble instead. The model still reads the line.
@@ -172,8 +213,18 @@ pub fn split_reply_line(text: &str) -> Option<(String, String, String)> {
 }
 impl From<&Message> for Input {
     fn from(value: &Message) -> Self {
-        let text = without_rules_line(&value.text);
-        let text = if value.reply_to.is_some() {
+        let state = value.revisions.as_ref();
+        let latest = state.and_then(|state| state.latest.as_ref());
+        let deleted = latest.is_some_and(|latest| latest.kind == MessageRevisionKind::Delete);
+        // `Message::text` is the immutable original; the latest change shows over it.
+        let shown = latest
+            .filter(|latest| latest.kind == MessageRevisionKind::Edit)
+            .and_then(|latest| latest.text.as_deref())
+            .unwrap_or(&value.text);
+        let text = without_rules_line(shown);
+        let text = if deleted {
+            String::new()
+        } else if value.reply_to.is_some() {
             without_reply_line(&text)
         } else {
             text
@@ -184,6 +235,15 @@ impl From<&Message> for Input {
             actor: value.actor_kind.clone(),
             text,
             reply_to: value.reply_to.clone(),
+            revisions: InputRevisions {
+                can_revise: state.is_some_and(|state| state.can_revise) && !deleted,
+                revision: latest.map_or(0, |latest| latest.revision),
+                edited_from: latest
+                    .filter(|latest| latest.kind == MessageRevisionKind::Edit)
+                    .map(|latest| latest.source),
+                deleted,
+                notice: state.and_then(|state| state.notice_for.clone()),
+            },
         }
     }
 }
@@ -207,6 +267,22 @@ impl Row {
         match self {
             Self::Post(row) => (row.after_sequence, 1, row.created_ms),
             _ => (self.sequence(), 0, 0),
+        }
+    }
+    /// A row that only announces a change to another message.
+    pub fn is_notice(&self) -> bool {
+        matches!(self, Self::Input(row) if row.revisions.notice.is_some())
+    }
+    /// A removal the agent never saw leaves nothing worth a line in the chat.
+    pub fn is_silent_notice(&self) -> bool {
+        matches!(self, Self::Input(row) if row.revisions.notice.as_ref().is_some_and(|notice| !notice.agent_notified))
+    }
+    /// Whether the owner can reply to this row.
+    pub fn is_replyable(&self) -> bool {
+        match self {
+            Self::Input(row) => row.revisions.notice.is_none() && !row.revisions.deleted,
+            Self::Reply(_) => true,
+            Self::Post(_) => false,
         }
     }
     /// Whether a suppressed reply hides this row: only the reply itself, never

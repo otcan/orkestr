@@ -1,6 +1,8 @@
 //! Version 0 HTTP contracts. No storage or provider dependencies.
 mod accepted_results;
 pub use accepted_results::*;
+mod message_revisions;
+pub use message_revisions::*;
 mod source_receipts;
 pub use source_receipts::*;
 mod source_intake;
@@ -269,6 +271,10 @@ pub struct Message {
     /// exports and history imports, so their canonical bytes are unchanged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<String>,
+    /// Edit and removal state. `text` above is always the immutable original.
+    /// Absent in exports and history imports, like `origin`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revisions: Option<MessageRevisionState>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConversationSnapshot {

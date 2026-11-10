@@ -137,6 +137,26 @@ export async function updateRemoteWhatsAppThreadInput({ thread, message, revisio
   };
 }
 
+// The owner edited or deleted a WhatsApp message already forwarded as input.
+export async function reviseRemoteWhatsAppThreadInput({ thread, message, revision = {}, scope = {} } = {}, env = process.env, fetchImpl = fetch) {
+  const remote = remoteWhatsAppRuntimeBinding(thread, env);
+  if (!remote) return null;
+  const backend = backendForBinding(remote.binding, env);
+  const payload = await remoteJson(backend, `threads/${encodeURIComponent(remote.remoteThreadId)}/input-revision`, fetchImpl, {
+    method: "POST",
+    body: JSON.stringify({
+      ...scope,
+      ...revision,
+      role: "user",
+      source: "whatsapp_inbound",
+      connector: "whatsapp",
+      publicThreadId: thread?.id || "",
+      publicMessageId: message?.id || "",
+    }),
+  });
+  return { ...remote, backend, payload, duplicate: payload?.duplicate === true };
+}
+
 async function fetchRemoteThreadMessages(remote, env = process.env, fetchImpl = fetch, signal = null) {
   const backend = backendForBinding(remote.binding, env);
   const payload = await remoteJson(
