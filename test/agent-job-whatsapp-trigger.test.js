@@ -6,7 +6,7 @@ import test from "node:test";
 import { dispatchWhatsAppJobTriggers } from "../packages/connectors/src/whatsapp-job-triggers.js";
 import { listApprovals } from "../packages/core/src/agent-job-ledger.js";
 import { driveRun } from "../packages/core/src/agent-job-runner.js";
-import { getRun, listRuns, listTriggerAudit, registerJobSpec } from "../packages/core/src/agent-job-store.js";
+import { getRun, listRuns, listTriggerAudit, openAgentJobDb, registerJobSpec } from "../packages/core/src/agent-job-store.js";
 import { makeSpec, prScript, pullRequests, tempEnv } from "./fixtures/agent-job-fixtures.js";
 
 const GROUP = "120363000000000001@g.us";
@@ -66,19 +66,48 @@ test("the optional match pattern filters messages", async () => {
   assert.equal(command.admitted.length, 1);
 });
 
-test("allowlisted senders can approve in the group; others cannot", async () => {
-  const env = await setup({ script: prScript });
-  const { admitted } = await dispatchWhatsAppJobTriggers(message(), env);
-  const parked = await driveRun(admitted[0].runId, {}, env);
-  assert.equal(parked.state, "awaiting_approval");
-  const denied = await dispatchWhatsAppJobTriggers(message({ eventId: "wamid-0020", from: "15550100099@c.us", text: `approve ${parked.approvalId}` }), env);
-  assert.equal(denied.decided, false);
-  const approved = await dispatchWhatsAppJobTriggers(message({ eventId: "wamid-0021", from: "15550100002@s.whatsapp.net", text: `approve ${parked.approvalId}` }), env);
-  assert.equal(approved.decided, true);
-  assert.equal((await listApprovals({ runId: admitted[0].runId }, env))[0].decidedBy, "whatsapp:phone:15550100002");
-  assert.equal((await driveRun(admitted[0].runId, {}, env)).state, "succeeded");
-  assert.equal((await pullRequests(env))[0].merges, 1);
-  assert.equal((await listRuns({ job: "wa-job" }, env)).length, 1, "approval replies are not triggers");
+for (const approvalId of ["apr_fixture12345", "apr_fixture1234-", "apr_fixture1234_"]) {
+  for (const command of ["approve", "deny"]) {
+    test(`allowlisted senders can ${command} ${approvalId} in the group; others cannot`, async () => {
+      const env = await setup({ script: prScript });
+      const { admitted } = await dispatchWhatsAppJobTriggers(message(), env);
+      const parked = await driveRun(admitted[0].runId, {}, env);
+      assert.equal(parked.state, "awaiting_approval");
+      // Base64url IDs may end in "-"; cover each final-character class.
+      const db = await openAgentJobDb(env);
+      assert.equal(db.prepare("update approvals set id = ? where id = ?").run(approvalId, parked.approvalId).changes, 1);
+      const unauthorized = await dispatchWhatsAppJobTriggers(message({ eventId: "wamid-0020", from: "15550100099@c.us", text: `${command} ${approvalId}` }), env);
+      assert.equal(unauthorized.decided, false);
+      const decided = await dispatchWhatsAppJobTriggers(message({ eventId: "wamid-0021", from: "15550100002@s.whatsapp.net", text: `${command} ${approvalId}` }), env);
+      assert.equal(decided.decided, true);
+      assert.equal(decided.approvalId, approvalId);
+      assert.equal(decided.decision, command === "approve" ? "approved" : "denied");
+      assert.equal((await listApprovals({ runId: admitted[0].runId }, env))[0].decidedBy, "whatsapp:phone:15550100002");
+      assert.equal((await driveRun(admitted[0].runId, {}, env)).state, "succeeded");
+      assert.equal((await pullRequests(env))[0].merges, command === "approve" ? 1 : 0);
+      assert.equal((await listRuns({ job: "wa-job" }, env)).length, 1, "approval replies are not triggers");
+    });
+  }
+}
+
+test("approval replies reject overlong IDs and accept punctuation or trailing explanations", async () => {
+  for (const [index, suffix] of [". reviewed", " reviewed"].entries()) {
+    const env = await setup({ triggers: [{ ...trigger, match: "^/fix\\b" }] });
+    const { admitted } = await dispatchWhatsAppJobTriggers(message({ eventId: `wamid-limit-${index}` }), env);
+    const parked = await driveRun(admitted[0].runId, {}, env);
+    assert.equal(parked.state, "awaiting_approval");
+    const approvalId = `apr_${String(index).repeat(64)}`;
+    const db = await openAgentJobDb(env);
+    assert.equal(db.prepare("update approvals set id = ? where id = ?").run(approvalId, parked.approvalId).changes, 1);
+
+    // The 65th base64url character must not turn this into approval of a prefix.
+    const overlong = await dispatchWhatsAppJobTriggers(message({ eventId: `wamid-overlong-${index}`, text: `approve ${approvalId}-` }), env);
+    assert.deepEqual(overlong.admitted, []);
+    assert.equal((await listApprovals({ runId: admitted[0].runId }, env))[0].state, "pending");
+    const valid = await dispatchWhatsAppJobTriggers(message({ eventId: `wamid-valid-${index}`, text: `approve ${approvalId}${suffix}` }), env);
+    assert.equal(valid.decided, true);
+    assert.equal(valid.approvalId, approvalId);
+  }
 });
 
 test("a WhatsApp trigger for a provider that is not connected is rejected and audited", async () => {

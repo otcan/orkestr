@@ -9,6 +9,9 @@ use sqlx::{
 use std::{path::Path, time::Duration};
 use uuid::Uuid;
 mod intake;
+mod paths;
+mod preflight;
+mod runtime;
 
 #[derive(Clone)]
 pub struct Store {
@@ -25,13 +28,19 @@ fn parse(s: String) -> Result<Uuid> {
 }
 impl Store {
     pub async fn open(path: &Path) -> Result<Self> {
+        paths::validate(path)?;
+        let created = preflight::prepare(path).await?;
         let options = SqliteConnectOptions::new()
             .filename(path)
-            .create_if_missing(true)
+            .create_if_missing(false)
             .foreign_keys(true)
-            .journal_mode(SqliteJournalMode::Wal)
             .synchronous(SqliteSynchronous::Full)
             .busy_timeout(Duration::from_secs(5));
+        let options = if created {
+            options.journal_mode(SqliteJournalMode::Wal)
+        } else {
+            options
+        };
         let pool = SqlitePoolOptions::new()
             .max_connections(6)
             .connect_with(options)
@@ -101,6 +110,15 @@ impl Store {
         sqlx::query("INSERT INTO auth_sessions(token_hash,owner_id,expires_at) VALUES (?,?,unixepoch()+43200)")
             .bind(digest(token)).bind(owner.to_string()).execute(&mut *tx).await.map_err(db)?;
         tx.commit().await.map_err(db)?;
+        Ok(())
+    }
+    /// Revoke one exact hashed session; browser and machine tokens use distinct inputs.
+    pub async fn revoke_session(&self, token: &str) -> Result<()> {
+        sqlx::query("DELETE FROM auth_sessions WHERE token_hash=?")
+            .bind(digest(token))
+            .execute(&self.pool)
+            .await
+            .map_err(db)?;
         Ok(())
     }
     pub async fn authenticate(&self, token: &str) -> Result<Option<OwnerId>> {

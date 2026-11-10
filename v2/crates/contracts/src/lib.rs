@@ -24,7 +24,8 @@ id!(
     EventId,
     EffectId,
     ApprovalId,
-    ResourceId
+    ResourceId,
+    PayloadId
 );
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

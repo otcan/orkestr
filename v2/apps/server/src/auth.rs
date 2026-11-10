@@ -81,9 +81,26 @@ pub async fn setup(
 }
 pub async fn session(
     State(state): State<AppState>,
+    headers: HeaderMap,
     body: Result<Json<Credentials>, JsonRejection>,
 ) -> Result<Json<SessionResponse>, Error> {
-    rate_limit(&state).await?;
+    machine_request(&headers)?;
+    let owner = verify_credentials(&state, body).await?;
+    let token = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
+    state.store.save_session(&token, &owner).await?;
+    Ok(Json(SessionResponse {
+        token,
+        token_type: "Bearer".into(),
+        expires_in: 43200,
+        global_conversation_id: state.store.global(&owner).await?,
+    }))
+}
+
+pub(crate) async fn verify_credentials(
+    state: &AppState,
+    body: Result<Json<Credentials>, JsonRejection>,
+) -> Result<OwnerId, Error> {
+    rate_limit(state).await?;
     let c = credentials(body)?;
     let record = state.store.credentials(&c.username).await?;
     // Unknown usernames still pay a password verification cost.
@@ -105,12 +122,5 @@ pub async fn session(
         return Err(unauthorized());
     }
     let (owner, _) = record.ok_or_else(unauthorized)?;
-    let token = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
-    state.store.save_session(&token, &owner).await?;
-    Ok(Json(SessionResponse {
-        token,
-        token_type: "Bearer".into(),
-        expires_in: 43200,
-        global_conversation_id: state.store.global(&owner).await?,
-    }))
+    Ok(owner)
 }

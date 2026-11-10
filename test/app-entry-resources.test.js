@@ -40,16 +40,25 @@ test("optional setup panels update separately when another connector hangs or fa
   await done;
 });
 
-async function shellHarness() {
+async function setupLoader() {
+  return (await compile("apps/web/src/app/app-setup-refresh.ts", name => {
+    if (name === "rxjs") return rxjs;
+    throw new Error(name);
+  })).startAppSetupRefresh;
+}
+
+async function shellHarness(firstRunPath) {
   const source = await fs.readFile("apps/web/src/app/app.component.ts", "utf8");
   const file = ts.createSourceFile("app.ts", source, ts.ScriptTarget.Latest, true);
   const declaration = file.statements.find(node => ts.isClassDeclaration(node) && node.name?.text === "AppComponent");
-  const refresh = declaration.members.find(node => node.name?.getText(file) === "refresh").getText(file);
+  const methods = ["refresh", ...(firstRunPath ? ["shouldAutoOpenFirstRunWizard", "openFirstRunWizard"] : [])];
+  const refresh = declaration.members.filter(node => methods.includes(node.name?.getText(file))).map(node => node.getText(file)).join("\n");
   const compiled = ts.transpileModule(`class Harness { ${refresh} }; exports.Harness = Harness;`, {
     compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
   }).outputText;
   const exports = {};
-  vm.runInNewContext(compiled, { exports, firstValueFrom: rxjs.firstValueFrom, refreshAppExtras: await extrasLoader() });
+  const location = { pathname: firstRunPath || "/", search: "" };
+  vm.runInNewContext(compiled, { exports, location, history: { replaceState: (_state, _title, url) => { location.pathname = url; } }, firstValueFrom: rxjs.firstValueFrom, refreshAppExtras: await extrasLoader(), startAppSetupRefresh: await setupLoader() });
   const pending = new rxjs.Subject();
   const app = Object.assign(new exports.Harness(), {
     api: {
@@ -60,7 +69,7 @@ async function shellHarness() {
       systemSummary: () => pending, timers: () => pending, whatsappStatus: () => pending, version: () => pending,
     },
     sharedAppActive: () => false, publicAppsActive: () => false, connectorLoginActive: () => false,
-    ownerLoginChecked: true, refreshClaudeRuntimeReady: async () => {}, runtimeGateActive: () => false,
+    refreshGeneration: 0, ownerLoginChecked: true, refreshClaudeRuntimeReady: async () => {}, runtimeGateActive: () => false,
     loadInstanceAccounts: () => {}, isPairingRequiredFromSetup: () => false,
     bootstrapAttachmentEncryption: async () => {}, redirectPairedBrowserFromPairingPath: async () => false,
     uiRuntimeReady: () => true, applyThreadListMeta: () => {}, trackThreadActivity: () => {},
@@ -69,9 +78,22 @@ async function shellHarness() {
     defaultInstanceRootToLauncher: () => false, isRouteLevelUserPanel: () => true, selectedThread: () => null,
     syncThreadMetaDraft: () => {}, syncThreadBindingDraft: () => {}, syncThreadTextState: () => {},
     loadSelectedThread: async () => {}, updateDocumentTitle: () => {}, connectSummaryStream: () => {},
+    isPairingRequiredError: error => error?.message === "browser_pairing_required",
     renderNow: () => {}, errorText: error => String(error), enterPairingRequired: () => { app.pairingRequired = true; },
   });
-  return { app, pending };
+  if (firstRunPath) {
+    delete app.shouldAutoOpenFirstRunWizard;
+    Object.assign(app, {
+      onboardingActive: true, threads: [],
+      isUserMode: () => false, canCreateThreadFromSidebar: () => true,
+      codexStatusAuthoritative: () => Boolean(app.setupStatus?.connectors?.some(item => item.id === "codex")),
+      agentRuntimeReady: () => false, codexAgentReady: () => false,
+      readOnboardingFlag: () => false,
+      locationPathParts: () => location.pathname.split("/").filter(Boolean), appPath: value => value,
+      runtimeGateActive: () => Boolean(app.appReady && app.setupStatus && !app.pairingRequired),
+    });
+  }
+  return { app, pending, location };
 }
 
 test("conversations render before optional requests, preserving the attachment setup gate", async () => {
@@ -160,4 +182,160 @@ test("System and other instance screens keep their own URL when a conversation w
     app.activePanel = panel;
     assert.equal(app.canonicalizeCurrentThreadRoute(), false, panel);
   }
+});
+
+test("authenticated conversation and messages display while setup probes are still pending", async () => {
+  const { app, pending } = await shellHarness();
+  const setup = new rxjs.Subject();
+  app.api.setupStatus = () => setup;
+  let loaded = false;
+  app.loadSelectedThread = async () => { loaded = true; };
+  const refresh = app.refresh();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(app.appReady, true);
+  assert.equal(app.threads[0].id, "example");
+  assert.equal(loaded, true);
+  assert.equal(app.setupStatus, undefined);
+  assert.equal(app.busy, false);
+  setup.next({ agentRuntime: { ready: true } });
+  await refresh;
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(app.setupStatus.agentRuntime.ready, true);
+  pending.complete();
+});
+
+test("setup failure does not discard authenticated conversation data", async () => {
+  const { app, pending } = await shellHarness();
+  app.api.setupStatus = () => rxjs.throwError(() => new Error("diagnostics unavailable"));
+  await app.refresh();
+  assert.equal(app.threads[0].id, "example");
+  assert.equal(app.appReady, true);
+  assert.equal(app.error, "");
+  pending.complete();
+});
+
+test("delayed setup opens the first-run wizard from bare /setup while explicit sections remain Setup", async () => {
+  for (const path of ["/setup", "/setup/system"]) {
+    const { app, pending, location } = await shellHarness(path);
+    const setup = new rxjs.Subject();
+    app.api.setupStatus = () => setup;
+    await app.refresh();
+    assert.equal(app.onboardingActive, true, "core response alone cannot decide first-run state");
+    setup.next({ connectors: [{ id: "codex", state: "partial" }], agentRuntime: { ready: false } });
+    await new Promise(resolve => setImmediate(resolve));
+    pending.complete();
+    assert.equal(app.onboardingActive, path !== "/setup");
+    assert.equal(location.pathname, path === "/setup" ? "/" : path);
+    assert.equal(app.threadWizardOpen, true);
+  }
+});
+
+test("first-run setup arriving during owner login waits for entry and cannot override a denial", async () => {
+  for (const denied of [false, true]) {
+    const { app, pending, location } = await shellHarness("/setup");
+    const setup = new rxjs.Subject();
+    let finishOwner;
+    app.appReady = true; // A prior render must not authorize this refresh's transition.
+    app.ownerLoginChecked = false;
+    app.loadOwnerLoginStatus = () => new Promise(resolve => { finishOwner = resolve; });
+    app.api.setupStatus = () => setup;
+    const refresh = app.refresh();
+    await new Promise(resolve => setImmediate(resolve));
+    setup.next({ connectors: [{ id: "codex", state: "partial" }], agentRuntime: { ready: false } });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(app.onboardingActive, true);
+    assert.notEqual(app.threadWizardOpen, true);
+    assert.equal(location.pathname, "/setup");
+    // The protected entry check also rejects a setup denial received as data.
+    if (denied) app.isPairingRequiredFromSetup = () => true;
+    finishOwner(); await refresh;
+    pending.complete();
+    assert.equal(location.pathname, denied ? "/setup" : "/");
+    assert.equal(app.onboardingActive, denied);
+    if (denied) {
+      assert.equal(app.pairingRequired, true);
+      assert.notEqual(app.threadWizardOpen, true);
+    } else {
+      assert.equal(app.threadWizardOpen, true);
+    }
+  }
+});
+
+test("rejected protected thread or user requests cannot open conversations before setup", async () => {
+  for (const denied of ["threads", "currentUser"]) {
+    const { app, pending } = await shellHarness();
+    const setup = new rxjs.Subject();
+    app.api.setupStatus = () => setup;
+    app.api[denied] = () => rxjs.throwError(() => new Error("browser_pairing_required"));
+    await app.refresh();
+    assert.equal(app.pairingRequired, true);
+    assert.equal(app.threads, undefined);
+    assert.equal(pending.observed, false);
+    app.cancelSetupRefresh();
+  }
+});
+
+test("replacement refresh cancels setup and late stale core responses cannot overwrite current threads", async () => {
+  const { app, pending } = await shellHarness();
+  const setup = new rxjs.Subject(), threads = new rxjs.Subject();
+  app.api.setupStatus = () => setup;
+  app.api.threads = () => threads;
+  const stale = app.refresh();
+  app.api.setupStatus = () => rxjs.of({ agentRuntime: { ready: true } });
+  app.api.threads = () => rxjs.of({ threads: [{ id: "new" }] });
+  await app.refresh();
+  assert.equal(setup.observed, false);
+  threads.next({ threads: [{ id: "old" }] });
+  await stale;
+  assert.equal(app.threads[0].id, "new");
+  assert.equal(app.busy, false);
+  pending.complete();
+});
+
+test("setup cancellation suppresses late asynchronous failures and timeout is handled", async () => {
+  const start = await setupLoader();
+  let fail, failures = 0;
+  const cancel = start(rxjs.of({}), {
+    apply: () => new Promise((resolve, reject) => { fail = reject; }),
+    failed: () => { failures++; },
+  });
+  cancel(); fail(new Error("late"));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(failures, 0);
+  await new Promise(resolve => {
+    start(rxjs.NEVER, { apply: async () => assert.fail("unexpected result"), failed: () => { failures++; resolve(); } }, 10);
+  });
+  assert.equal(failures, 1);
+});
+
+test("a late pairing denial during owner-status loading cannot be cleared by the core refresh", async () => {
+  const { app, pending } = await shellHarness();
+  const setup = new rxjs.Subject();
+  let finishOwner;
+  app.ownerLoginChecked = false;
+  app.loadOwnerLoginStatus = () => new Promise(resolve => { finishOwner = resolve; });
+  app.api.setupStatus = () => setup;
+  app.appReady = true;
+  app.threads = [{ id: "cached-thread" }];
+  let enrollments = 0, messageLoads = 0, revealedAfterDenial = false, denied = false;
+  app.bootstrapAttachmentEncryption = async () => { enrollments++; };
+  app.loadSelectedThread = async () => { messageLoads++; };
+  app.renderNow = () => {
+    if (denied && app.appReady && !app.pairingRequired) revealedAfterDenial = true;
+  };
+  // The template gives pairing precedence even when previously loaded data exists.
+  const template = await fs.readFile("apps/web/src/app/app.component.html", "utf8");
+  assert.match(template, /^@if \(pairingRequired\)/);
+  const refresh = app.refresh();
+  await new Promise(resolve => setImmediate(resolve));
+  denied = true;
+  setup.error(new Error("browser_pairing_required"));
+  assert.equal(app.pairingRequired, true);
+  finishOwner(); await refresh;
+  assert.equal(app.pairingRequired, true);
+  assert.equal(enrollments, 0, "denial prevents attachment enrollment");
+  assert.equal(messageLoads, 0);
+  assert.equal(revealedAfterDenial, false, "cached threads stay behind the pairing gate");
+  assert.equal(app.threads[0].id, "cached-thread", "denied continuation never applies fetched threads");
+  assert.equal(pending.observed, false);
 });

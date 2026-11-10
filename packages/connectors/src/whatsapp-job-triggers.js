@@ -17,7 +17,7 @@ import { agentJobDbPath, getRegisteredJob, getRun, listRegisteredJobs, recordTri
 import { readWhatsAppBindingRecords } from "./whatsapp-binding-registry.js";
 import { comparableParticipantId, isWhatsAppGroupChatId } from "./whatsapp-inbound-routing.js";
 
-const APPROVAL_RE = /^\s*(approve|deny)\s+(apr_[A-Za-z0-9_-]{4,64})\b/i;
+const APPROVAL_RE = /^\s*(approve|deny)\s+(apr_[A-Za-z0-9_-]{4,64})(?![A-Za-z0-9_-])/i;
 
 function pick(...values) {
   for (const value of values) {

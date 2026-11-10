@@ -46,8 +46,9 @@ belong to Core. The coordinator integrates workspace membership and lock changes
 
 The domain imports no adapters. Application exposes the transactional port;
 store-sqlite implements it; server composes them. Shared web-safe DTOs live in
-`crates/contracts`; examples live in `fixtures`. The previous in-memory demo is
-removed rather than represented as proof of runtime behavior.
+`crates/contracts`; examples live in `fixtures`. The in-memory domain demo is
+preserved as an offline reducer smoke check; it does not prove runtime behavior
+or durable acceptance.
 
 Builds and tests are evidence for this increment only. No deployment, migration,
 external connection, live-provider verification or production readiness is implied.

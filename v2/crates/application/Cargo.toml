@@ -6,3 +6,4 @@ license.workspace = true
 
 [dependencies]
 orkestr-v2-contracts = { path = "../contracts" }
+async-trait = "=0.1.89"

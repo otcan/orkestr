@@ -23,6 +23,7 @@ import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { appHome } from "../../storage/src/paths.js";
+import { recordObservedExit } from "./claude-code-detached-turn-exit.js";
 
 const POSIX = process.platform !== "win32";
 const STDERR_TAIL_BYTES = 8192;
@@ -353,6 +354,7 @@ function createTailFacade({ record, child = null, resumeOffset = 0, pollMs = 50,
       const exit = await readDetachedTurnExit(record);
       if (exit) return await finish(exitStatusFromShellCode(exit.code));
       if (childExit) {
+        await recordObservedExit(record, childExit, () => readDetachedTurnExit(record)).catch(() => {});
         return await finish(childExit.code !== null ? exitStatusFromShellCode(childExit.code) : { code: null, signal: childExit.signal });
       }
       if (!child && !detachedTurnProcessAlive(record)) return await finish({ code: null, signal: "SIGKILL" });

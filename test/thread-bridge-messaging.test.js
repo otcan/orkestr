@@ -287,3 +287,18 @@ test("a prolonged wait with a live signal leaves no abort listeners behind", asy
   assert.equal(result.status, "still_working");
   assert.equal(getEventListeners(controller.signal, "abort").length, 0);
 });
+
+test("status counts full pending input queue outside transcript tail and separates executor delivery", async t => {
+  const env = await fixture(t);
+  for (const state of ["queued", "pending_delivery", "awaiting_ack", "delivering", "claimed"]) {
+    await appendThreadMessage("thread-a", { role: "user", source: "cli", text: state, state }, env);
+  }
+  for (let i = 0; i < 205; i++) await appendThreadMessage("thread-a", { role: "assistant", text: `history ${i}`, phase: "final_answer" }, env);
+  await appendThreadMessage("thread-a", { role: "user", text: "accepted input", state: "completed", deliveryState: "delivered" }, env);
+  await updateThread("thread-a", { runtime: { activeTurnId: "live-turn" } }, env);
+  const status = await bridgeThreadStatus("thread-a", principal, env);
+  assert.equal(status.queuedMessages, 5);
+  assert.equal(status.state, "working", "accepted input is not a completed task while runtime is active");
+  await updateThread("thread-a", { runtime: { activeTurnId: null } }, env);
+  assert.equal((await bridgeThreadStatus("thread-a", principal, env)).state, "queued");
+});

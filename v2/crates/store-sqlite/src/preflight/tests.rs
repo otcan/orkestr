@@ -1,0 +1,168 @@
+use super::*;
+use crate::Store;
+use std::collections::BTreeMap;
+
+struct Directory(PathBuf);
+impl Directory {
+    fn new() -> Self {
+        let root = PathBuf::from(std::env::var_os("ORKESTR_V2_HOME").expect("isolated test home"))
+            .join(format!("preflight-test-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        Self(root.canonicalize().unwrap())
+    }
+    fn db(&self) -> PathBuf {
+        self.0.join("test.sqlite3")
+    }
+    fn files(&self) -> BTreeMap<PathBuf, Vec<u8>> {
+        fs::read_dir(&self.0)
+            .unwrap()
+            .map(|entry| {
+                let entry = entry.unwrap();
+                assert!(
+                    entry.file_type().unwrap().is_file(),
+                    "scratch directory leaked"
+                );
+                (entry.file_name().into(), fs::read(entry.path()).unwrap())
+            })
+            .collect()
+    }
+}
+impl Drop for Directory {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+async fn raw(path: &Path) -> SqliteConnection {
+    SqliteConnection::connect_with(
+        &SqliteConnectOptions::new()
+            .filename(path)
+            .create_if_missing(true),
+    )
+    .await
+    .unwrap()
+}
+async fn refused_unchanged(dir: &Directory) {
+    let before = dir.files();
+    assert!(Store::open(&dir.db()).await.is_err());
+    assert_eq!(dir.files(), before, "refusal changed database/sidecars");
+}
+
+#[tokio::test]
+async fn existing_empty_foreign_and_orphan_sidecars_are_preserved() {
+    for setup in [
+        "",
+        "CREATE TABLE foreign_data(value TEXT); INSERT INTO foreign_data VALUES ('synthetic');",
+    ] {
+        let dir = Directory::new();
+        let mut conn = raw(&dir.db()).await;
+        if !setup.is_empty() {
+            sqlx::raw_sql(setup).execute(&mut conn).await.unwrap();
+        }
+        conn.close().await.unwrap();
+        refused_unchanged(&dir).await;
+    }
+    let dir = Directory::new();
+    fs::write(dir.db(), []).unwrap();
+    refused_unchanged(&dir).await;
+    for suffix in ["-wal", "-shm", "-journal"] {
+        let dir = Directory::new();
+        fs::write(sidecar(&dir.db(), suffix), b"synthetic orphan").unwrap();
+        refused_unchanged(&dir).await;
+    }
+}
+
+#[tokio::test]
+async fn future_changed_checksum_and_altered_schema_are_preserved() {
+    for sql in [
+        "INSERT INTO _sqlx_migrations(version,description,success,checksum,execution_time) VALUES (999,'future',1,X'00',0)",
+        "UPDATE _sqlx_migrations SET checksum=X'00' WHERE version=1",
+        "ALTER TABLE messages ADD COLUMN unexpected TEXT",
+        "CREATE TRIGGER unexpected AFTER INSERT ON owners BEGIN SELECT 1; END",
+    ] {
+        let dir = Directory::new();
+        let store = Store::open(&dir.db()).await.unwrap();
+        store.close().await;
+        let mut conn = raw(&dir.db()).await;
+        sqlx::raw_sql(sql).execute(&mut conn).await.unwrap();
+        conn.close().await.unwrap();
+        refused_unchanged(&dir).await;
+    }
+}
+
+#[tokio::test]
+async fn future_migration_only_in_live_wal_is_refused_without_source_writes() {
+    let dir = Directory::new();
+    let store = Store::open(&dir.db()).await.unwrap();
+    store.close().await;
+    let main_before = fs::read(dir.db()).unwrap();
+    let mut conn = raw(&dir.db()).await;
+    sqlx::query("PRAGMA wal_autocheckpoint=0")
+        .execute(&mut conn)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO _sqlx_migrations(version,description,success,checksum,execution_time) VALUES (999,'future',1,X'00',0)")
+        .execute(&mut conn).await.unwrap();
+    assert_eq!(
+        fs::read(dir.db()).unwrap(),
+        main_before,
+        "future version must remain WAL-only"
+    );
+    assert!(fs::metadata(sidecar(&dir.db(), "-wal")).unwrap().len() > 32);
+    refused_unchanged(&dir).await;
+    conn.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn foreign_live_wal_is_refused_without_source_writes() {
+    let dir = Directory::new();
+    let mut conn = SqliteConnection::connect_with(
+        &SqliteConnectOptions::new()
+            .filename(dir.db())
+            .create_if_missing(true)
+            .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal),
+    )
+    .await
+    .unwrap();
+    sqlx::query("PRAGMA wal_autocheckpoint=0")
+        .execute(&mut conn)
+        .await
+        .unwrap();
+    sqlx::raw_sql(
+        "CREATE TABLE foreign_data(value TEXT); INSERT INTO foreign_data VALUES ('synthetic');",
+    )
+    .execute(&mut conn)
+    .await
+    .unwrap();
+    refused_unchanged(&dir).await;
+    conn.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn supported_earlier_migration_prefix_is_identified_then_upgraded() {
+    let dir = Directory::new();
+    let mut conn = SqliteConnection::connect_with(
+        &SqliteConnectOptions::new()
+            .filename(dir.db())
+            .create_if_missing(true)
+            .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal),
+    )
+    .await
+    .unwrap();
+    conn.ensure_migrations_table().await.unwrap();
+    let migrator = sqlx::migrate!("./migrations");
+    let first = migrator.iter().next().unwrap();
+    sqlx::raw_sql(&first.sql).execute(&mut conn).await.unwrap();
+    sqlx::query("INSERT INTO _sqlx_migrations(version,description,success,checksum,execution_time) VALUES (?,?,1,?,0)")
+        .bind(first.version).bind(first.description.as_ref()).bind(first.checksum.as_ref())
+        .execute(&mut conn).await.unwrap();
+    conn.close().await.unwrap();
+    let store = Store::open(&dir.db()).await.unwrap();
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM _sqlx_migrations")
+        .fetch_one(&store.pool)
+        .await
+        .unwrap();
+    assert_eq!(count as usize, migrator.iter().count());
+    store.close().await;
+    let reopened = Store::open(&dir.db()).await.unwrap();
+    reopened.close().await;
+}

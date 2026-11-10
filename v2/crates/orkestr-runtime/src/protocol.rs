@@ -3,6 +3,7 @@
 use crate::ports::{Blocker, ProviderEvent};
 use serde_json::Value;
 const MAX_FRAME: usize = 64 * 1024;
+const MAX_PROGRESS: usize = 8 * 1024;
 
 fn frame(line: &str) -> Result<Value, Blocker> {
     if line.len() > MAX_FRAME {
@@ -37,7 +38,12 @@ pub fn codex_event(line: &str, thread: &str, turn: &str) -> Result<Option<Provid
         if text(p, "turnId")? != turn {
             return Err(Blocker::StaleLease);
         }
-        return Ok(Some(ProviderEvent::Progress(text(p, "delta")?.to_owned())));
+        if text(p, "delta")?.len() > MAX_PROGRESS {
+            return Err(Blocker::Protocol);
+        }
+        // No payload store exists yet. Never fabricate a PayloadId or journal
+        // raw provider text as metadata; the caller must surface this blocker.
+        return Err(Blocker::PayloadUnavailable);
     }
     let t = p.get("turn").ok_or(Blocker::Protocol)?;
     if text(t, "id")? != turn {
@@ -46,7 +52,7 @@ pub fn codex_event(line: &str, thread: &str, turn: &str) -> Result<Option<Provid
     let status = text(t, "status")?;
     Ok(Some(match (method, status) {
         ("turn/started", "inProgress") => ProviderEvent::Started,
-        ("turn/completed", "completed") => ProviderEvent::Completed { synthetic: false },
+        ("turn/completed", "completed") => ProviderEvent::CompletedProposal { synthetic: false },
         ("turn/completed", "failed") => ProviderEvent::Failed,
         ("turn/completed", "interrupted") => ProviderEvent::Stopped,
         _ => return Err(Blocker::Protocol),
@@ -68,15 +74,31 @@ pub fn claude_event(line: &str, session: &str) -> Result<Option<ProviderEvent>, 
         "system" if value.get("subtype").and_then(Value::as_str) == Some("init") => {
             Some(ProviderEvent::Started)
         }
-        "assistant" => None, // content may include tools; never flatten into trusted commands
+        "assistant" => {
+            // Bound candidate content without interpreting tools as commands.
+            if value
+                .get("message")
+                .is_some_and(|message| message.to_string().len() > MAX_PROGRESS)
+            {
+                return Err(Blocker::Protocol);
+            }
+            None
+        }
         "result" => {
+            if value
+                .get("result")
+                .and_then(Value::as_str)
+                .is_some_and(|text| text.len() > MAX_PROGRESS)
+            {
+                return Err(Blocker::Protocol);
+            }
             let subtype = text(&value, "subtype")?;
             let error = value
                 .get("is_error")
                 .and_then(Value::as_bool)
                 .ok_or(Blocker::Protocol)?;
             Some(if subtype == "success" && !error {
-                ProviderEvent::Completed { synthetic: false }
+                ProviderEvent::CompletedProposal { synthetic: false }
             } else {
                 ProviderEvent::Failed
             })

@@ -171,7 +171,7 @@ export async function cancelThreadWatch(watchId, { principal = null, reason = "c
 export async function ensureWorkerParentWatch(worker, env = process.env) {
   if (!worker?.id || !worker.parentThreadId || env.ORKESTR_WORKER_AUTO_WATCH === "0") return null;
   const existing = (await readThreadWatches(env)).find((watch) =>
-    watch.status === "active" && watch.auto === "worker" && watch.targetThreadId === worker.id && watch.watcherThreadId === worker.parentThreadId);
+    ["active", "cancelled"].includes(watch.status) && watch.auto === "worker" && watch.targetThreadId === worker.id && watch.watcherThreadId === worker.parentThreadId);
   if (existing) return existing;
   return createThreadWatch({
     watcherThreadId: worker.parentThreadId,
@@ -198,4 +198,18 @@ export async function ensureExistingWorkerWatches(env = process.env) {
     await ensureWorkerParentWatch(worker, env).catch(() => null);
   }
   return { created: (await readThreadWatches(env)).length - before };
+}
+
+// Operator recovery preserves the old cursor/fire ledger, including rate limits.
+export async function restoreThreadWatch(watchId, env = process.env) {
+  let restored;
+  await mutateThreadWatches(watches => watches.map(watch => {
+    if (watch.id !== watchId) return watch;
+    if (!["cancelled", "active"].includes(watch.status)) throw httpError("watch_not_restorable", 409);
+    restored = { ...watch, status: "active", closedAt: null, closeReason: null };
+    return restored;
+  }), env);
+  if (!restored) throw httpError("thread_watch_not_found", 404);
+  await appendEvent({ type: "thread_watch_restored", threadId: restored.watcherThreadId, watchId }, env);
+  return restored;
 }

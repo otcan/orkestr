@@ -1,0 +1,6 @@
+[application]
+name = "orkestr-v2-ui"
+default_platform = "web"
+
+[web.app]
+title = "Orkestr"

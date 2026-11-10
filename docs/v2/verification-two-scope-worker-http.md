@@ -1,0 +1,9 @@
+# Two-scope Worker HTTP source and receipt review
+
+Reviewed exact harness `5ccee1442c7f56ad2293bea938fb42988d51adfc`, including inherited request, group-scope and cleanup helpers. No blocking source finding for the stated synthetic HTTP gate.
+
+Independently verified receipt SHA256 `ee16e96de08711f117dd388744406808214317faabe966dd46f55ef7c2a94d18`, its harness hash against the exact committed file, and every recorded Python dependency hash against that commit. All 72 recorded actual/expected pairs match. The receipt reports passing execution and all three cleanup indicators true. Syntax was independently parsed. This review did not rerun the server or independently rehash its executable; the recorded server hash is author execution evidence.
+
+The assertions cover two configured conversations under one owner, exact create/Stop receipt replay, cross-parent/run/task refusals, mutation cookie/Origin/CSRF refusals, foreign-installation cookie refusal, known-unconfigured versus unknown scope, unchanged task listings through refusal checks, independent Worker Stop preserving parent/sibling, and payload tombstones. Inherited setup verifies distinct native PIDs and PID namespaces; cleanup waits for tracked native disappearance after server shutdown. Foreign installation credentials are not evidence of multiple owners within one installation.
+
+Evidence limits: zero interrupts is asserted before valid Stops and for the untouched sibling after the first Stop. Final traces assert no extra turns, but do not assert exactly one interrupt per stopped Worker after all receipt retries. Thus this harness alone does not prove the stronger final interrupt-count claim. The initial expected-503/actual-404 foreign-parent oracle mismatch remains documented; it is not a product defect. Browser rendering, real providers and release qualification remain outside scope.

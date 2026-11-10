@@ -1,0 +1,9 @@
+# Sealed Codex steering Runtime source review
+
+Independently reviewed exact `c368b524f11b0377e9309a8122365f6e08ac5d35`: no blocking source finding for this bounded transport leaf. This is source review, with no independent Cargo execution or native/HTTP qualification.
+
+The issuer is compared with the pump's complete admission and bound to its channel-observed active turn. A consumed capability moves by value into one immutable frame. Broker preparation uses the existing private lineage; preparation alone authorizes no provider bytes. Each bounded actual-writer suffix checks the original admission, native thread, owned scope and lineage and runs inside Core's dedicated steering fence. Current Stop or session revocation therefore fences further suffixes. Uncertainty quarantines the child rather than reconstructing a reusable delivery.
+
+Channel correlation permits existing-turn notifications while preparing/writing but keeps correlated acknowledgements behind Written and validates the exact request and turn. Acknowledgement is persisted through Core before further provider polling; it does not imply terminal completion. Pending steering prevents lease refresh and session transfer. Stop while unresolved quarantines rather than relabelling the consumed steering frame as an interrupt.
+
+Inspected the four supplied tests: channel phase/foreign/duplicate guards and actual sole-writer synthetic child bytes, including zero bytes after prior Stop/revocation and no suffix after a seven-byte prefix followed by revocation. These tests do not exercise a complete ordinary HTTP/native steering pipeline, and their reported passes remain author evidence. The reported broader 147-pass/two-failure reuse PID result and the reported baseline reproduction are not independently executed or cleared here. Core complete schema-34 ancestry plus getter `6d155881a`, and the matching Isolation broker leaf remain required composition dependencies.

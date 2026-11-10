@@ -1,0 +1,15 @@
+# Worker tool result authority source review
+
+Exact checkpoint: `75cee9838cb45f7274c615b02e9457e58cc2def5`, including leaf `bbd5d9df3fbd0b723df4833daaee7eefeca0396f`.
+
+No blocking finding in the bounded Store authority, additive migration32 and registration source review. No build or supplied tests were rerun; author tool24/preflight9/lint counts remain author evidence. Helper retains orchestration ownership. Sandbox, actual native routing and HTTP qualification are separate gates.
+
+Native request kind and call/thread/turn identities are bounded data. Current authenticated consumed Worker lineage and exact native thread authorize atomic correlation plus delegation; both unique keys prevent rebinding and 32 calls bound each run. A failed result insertion rolls back the delegation. Public correlation fields do not attest the pending native turn: trusted orchestration must borrow Runtime's sealed call and select the fixed tool/profile.
+
+Preparation requires a genuine spent launch, current parent/Worker authority and expiry, and exact complete-output digest. Rendered text is bounded independently of raw evidence. Historical preparation returns reconciliation rather than recreating a private reservation. Consumption commits delivery_unknown and removes the grant hash before returning a non-Clone delivery capability. Concurrent/reopened replay cannot recreate delivery authority.
+
+Every suffix holds BEGIN IMMEDIATE across current machine/context/run/parent/Stop/lease/delegation validation, exact local/durable offset and bounded callback. Maximum offered suffix is 16 KiB; whole frame is bounded at 64 KiB. Known zero-byte success retains the capability, while callback errors, stale offsets, refusal or post-effect persistence uncertainty poison it before returning. The durable unknown state precedes these effects. Finish consumes the capability and records transport delivery only, not Worker completion/acceptance.
+
+Runtime remains responsible for matching actual pending child/call/parent/source, closed response encoding, genuine process termination before supplying output, nonblocking bounded writes and quarantining unknown effects. The Store cannot establish those facts from public output bytes or callback byte counts. Pending result state must prevent unsafe session transfer/renewal; unseen orchestration is not cleared by this review.
+
+Reviewed supplied oracles distinguish deferred foreign-key COMMIT failure after callback from update-trigger failure, lost consumption reply from process crash, and synthetic callback bytes from actual provider stdin. Their scope does not establish real sandbox/native execution. Refusal tests cover Worker/parent Stop, terminal parent, revocation, expiry and substituted authority. Populated31 upgrade preserves legacy receipt and creates no retrospective native call/result grant. Preflight now explicitly checks the new table empty while preserving prior populated rows/FKs, with migration count32. No standalone33 or later schema adoption is implied.

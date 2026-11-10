@@ -1,3 +1,4 @@
+import { ThreadQueueController } from "./thread-queue.controller.js";
 import { ThreadBridgeController } from "./thread-bridge.controller.js";
 import { Module } from "@nestjs/common";
 import {
@@ -24,7 +25,7 @@ import { ThreadStandingMissionController } from "./thread-standing-mission.contr
 import { ThreadExecutorController } from "./thread-executor.controller.js";
 
 @Module({
-  controllers: [ThreadBridgeController, ThreadBridgeMcpController, ThreadsController, ThreadRuntimeController, ThreadBindingController, ThreadWorkersController, ThreadTaskAgentsController, ThreadTimersController, ThreadWatchesController, ThreadMessagesController, ThreadResourceController, ThreadStandingMissionController, ThreadExecutorController],
+  controllers: [ThreadQueueController, ThreadBridgeController, ThreadBridgeMcpController, ThreadsController, ThreadRuntimeController, ThreadBindingController, ThreadWorkersController, ThreadTaskAgentsController, ThreadTimersController, ThreadWatchesController, ThreadMessagesController, ThreadResourceController, ThreadStandingMissionController, ThreadExecutorController],
   providers: [
     ThreadBindingService,
     ThreadActionSanitizerService,

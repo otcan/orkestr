@@ -2,14 +2,20 @@ name: Orkestr 2.0 intake checks
 
 on:
   push:
-    branches: [v2/rust-rewrite, v2/s0-core]
+    branches: [v2/rust-rewrite]
     paths: ['v2/**', '.github/workflows/v2-rust.yml']
   pull_request:
+    branches: ['v2/**']
     paths: ['v2/**', '.github/workflows/v2-rust.yml']
   workflow_dispatch:
 
 permissions:
   contents: read
+
+# Only superseded PR checks cancel; manual and integration push runs stay independent.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   rust-v2:
@@ -43,3 +49,5 @@ jobs:
         run: cargo +1.99.1 build --locked --workspace
       - name: Unit and HTTP process-failure tests (requires Python 3)
         run: cargo +1.99.1 test --locked --workspace
+      - name: Offline domain demo smoke check
+        run: cargo +1.99.1 run --locked -p orkestr-v2-demo

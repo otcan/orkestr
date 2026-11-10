@@ -1,5 +1,11 @@
 # Runtime store contract proposal: follow-up to intake
 
+Historical internal v0 proposal, superseded by
+[runtime port v1](runtime-port-agreement.md) and the canonical Rust definitions.
+The native-future signatures and lifecycle names below are archival design
+context, not the current adapter contract. No SQLite adapter was implemented
+against this proposal.
+
 Status: proposed port only. The intake SQLite adapter does **not** implement
 these methods yet. No runtime durability, cancellation or effect fence has been
 verified by the intake PR. Runtime can implement offline adapters against this
