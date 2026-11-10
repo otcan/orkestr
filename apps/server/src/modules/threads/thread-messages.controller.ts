@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import { syncRemoteWhatsAppThreadMessages } from "../../../../../packages/connectors/src/whatsapp-remote-runtime.js";
+import { scopedRelayRemoteReplyFiles } from "../../../../../packages/connectors/src/whatsapp-scoped-relay-remote-files.js";
 import { createReadStream } from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -88,6 +89,8 @@ export class ThreadMessagesController {
   // The scoped group relay sends the files of an assistant reply from their
   // plaintext outbound snapshots. Only snapshots V1 staged itself qualify:
   // the path, display name, type and the digest the worker must re-verify.
+  // Files of a remote-runtime reply are fetched from its backend and staged
+  // as such snapshots first (whatsapp-scoped-relay-remote-files.js).
   @Get(":threadId/messages/:messageId/scoped-relay-files")
   async scopedRelayFiles(
     @Req() request: any,
@@ -112,7 +115,7 @@ export class ThreadMessagesController {
         sha256,
       }];
     });
-    return { ok: true, files };
+    return { ok: true, files: [...files, ...await scopedRelayRemoteReplyFiles({ thread, message })] };
   }
 
   @Patch(":threadId/messages/:messageId/whatsapp-inbound-revision")
