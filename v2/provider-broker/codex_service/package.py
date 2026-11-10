@@ -18,7 +18,7 @@ MODULES_SERVICE = ("__init__.py", "contract.py", "ledger.py", "budget.py", "cust
                    "claude_broker.py", "identity.py", "launch.py", "launch_child.py", "proxy.py", "attachment_exports.py",
                    "password_recovery.py", "managed_resume.py", "managed_host.py", "native_io.py", "desk_operations.py", "desk_anchor.py", "provider_login.py", "provider_login_files.py", "provider_login_anchor.py",
     "workspace_custody.py", "workspace_setup.py", "workspace_environment.py", "workspace_cgroup.py", "workspace_anchor.py", "workspace_command.py", "workspace_ops.py", "workspace_acl.py",
-                   "managed_ingress.py", "managed_workers.py", "managed_worker_reply.py", "managed_control.py", "managed_client.py", "managed_native.py", "managed_runs.py",
+                   "managed_ingress.py", "managed_journal.py", "managed_workers.py", "managed_worker_reply.py", "managed_control.py", "managed_client.py", "managed_native.py", "managed_runs.py",
                    "managed_socket_owner.py", "managed_http.py", "managed_advertisement.py", "managed_capabilities.py", "managed_context.py",
                    "qualification.py", "qualification_publish.py", "fast_sampler.py", "fast_sample_kernel.py", "fast_sample_evidence.py")
 # Shared with the server and packager: room for many per-conversation
