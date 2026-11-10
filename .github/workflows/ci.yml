@@ -3,6 +3,8 @@ name: CI
 on:
   workflow_dispatch:
   pull_request:
+    # ready_for_review starts the full run when a draft is marked ready.
+    types: [opened, synchronize, reopened, ready_for_review]
   merge_group:
   push:
     branches: [integration]
@@ -13,11 +15,13 @@ on:
 permissions:
   contents: read
 
-# Replace stale PR checks without cancelling exact-source or publication runs.
+# A newer run replaces an older one for the same PR, and a newer push to
+# integration replaces the older integration run. Tags, merge groups, schedules
+# and manual runs keep a unique group and are never cancelled.
 # PR numbers also keep identically named branches from different forks separate.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ${{ github.workflow }}-${{ (github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number)) || (github.event_name == 'push' && github.ref == 'refs/heads/integration' && format('push-{0}', github.ref)) || format('run-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/integration') }}
 
 jobs:
   dependency-advisories:
@@ -159,9 +163,49 @@ jobs:
       - name: OSS boundary and fixture secret check
         run: node scripts/oss-boundary-check.mjs
 
+  changes:
+    # Says whether a pull request changes only documentation: files under docs/
+    # and Markdown files. Every other event reports false. Heavy jobs skip only
+    # on an explicit "true", so a failure here never skips them.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      docs-only: ${{ steps.classify.outputs.docs-only }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        if: ${{ github.event_name == 'pull_request' }}
+        with:
+          # Commits and trees only: listing changed paths reads no file contents.
+          fetch-depth: 0
+          filter: blob:none
+          sparse-checkout: .github
+          persist-credentials: false
+      - name: Classify the changed files
+        id: classify
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          docs_only=false
+          if [ "$EVENT" = pull_request ]; then
+            # Same file set as the PR's "Files changed" tab: merge base to head.
+            if changed=$(git diff --name-only --no-renames "$BASE...$HEAD"); then
+              printf '%s\n' "$changed"
+              other=$(printf '%s\n' "$changed" | grep -Ev '^docs/|\.md$' || true)
+              if [ -n "$changed" ] && [ -z "$other" ]; then docs_only=true; fi
+            else
+              echo "::warning::Could not list the changed files; running the full suite."
+            fi
+          fi
+          echo "docs-only=$docs_only" | tee -a "$GITHUB_OUTPUT"
+
   build:
-    needs: dependency-policy
-    if: ${{ github.event_name != 'schedule' }}
+    needs: [dependency-policy, changes]
+    # Heavy: not run by the nightly scan, for draft PRs or for docs-only PRs.
+    # test, smoke and provenance need build, so they skip with it.
+    if: ${{ github.event_name != 'schedule' && github.event.pull_request.draft != true && needs.changes.outputs.docs-only != 'true' }}
     runs-on: ubuntu-latest
     env:
       ORKESTR_BROWSER_LAUNCH_DISABLED: "1"
@@ -290,9 +334,10 @@ jobs:
 
   tests:
     # Stable required-check name aggregating every test shard and the smoke
-    # run, so branch protection does not track per-shard matrix names.
-    if: ${{ always() && !cancelled() && github.event_name != 'schedule' }}
-    needs: [build, test, smoke]
+    # run, so branch protection does not track per-shard matrix names. Reports
+    # skipped (not failed) when build is skipped on purpose: draft or docs-only PR.
+    if: ${{ always() && !cancelled() && github.event_name != 'schedule' && github.event.pull_request.draft != true && needs.changes.outputs.docs-only != 'true' }}
+    needs: [changes, build, test, smoke]
     runs-on: ubuntu-latest
     steps:
       - name: Require build, all test shards and smoke to succeed
@@ -342,8 +387,8 @@ jobs:
   image:
     # Unprivileged: builds and smoke-tests the runtime image from the candidate
     # tree with the default read-only token, then hands it off as an artifact.
-    needs: dependency-policy
-    if: ${{ github.event_name != 'schedule' }}
+    needs: [dependency-policy, changes]
+    if: ${{ github.event_name != 'schedule' && github.event.pull_request.draft != true && needs.changes.outputs.docs-only != 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:

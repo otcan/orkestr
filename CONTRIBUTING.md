@@ -25,6 +25,15 @@ selects the tested integration commit for `prod`; successful production
 acceptance advances `main` to that exact source. See
 [the release train runbook](docs/release-train.md).
 
+Open PRs as draft; mark them ready when local and builder checks pass. A draft
+runs only the cheap checks (syntax, secret scan, dependency and Cargo
+advisory policy); the Node, Rust, browser and image builds and tests skip.
+Marking the PR ready for review starts the full run. A PR that changes only
+`docs/**` and Markdown files skips the build and test jobs of the main `CI`
+workflow; they report skipped, so the PR can still merge. A newer push to a
+PR, or a newer merge into `integration`, cancels the older run. See
+[CI workflow policy](docs/ci-workflow-policy.md#draft-and-docs-only-pull-requests).
+
 V2 is the primary application. Start with the [V2 quick start](v2/README.md)
 and the Rust workspace guidance below. Node commands apply to the legacy
 bridge and compatibility components.
@@ -72,8 +81,8 @@ The Rust rewrite lives in `v2/` and builds with the toolchain pinned in
 `v2/rust-toolchain.toml`. GitHub Actions is the default place for full suites:
 
 - `v2-rust.yml` (rust-v2) runs on every push to `integration` and on PRs into `integration`
-  (or transitional `v2/**` bases): format, clippy, the locked workspace build, the HTTP
-  scenarios and `cargo test --locked --workspace`.
+  (or transitional `v2/**` bases) that are ready for review: format, clippy, the locked
+  workspace build, the HTTP scenarios and `cargo test --locked --workspace`.
   The parts run as parallel jobs (`lint`, `service`, `http` and eight `unit`
   shards of the workspace tests); `rust-v2` is the one check that needs them
   all. A new test that takes more than a few seconds belongs in
@@ -83,7 +92,8 @@ The Rust rewrite lives in `v2/` and builds with the toolchain pinned in
   anything. A vulnerable or unsound crate fails it until the crate is updated
   or `scripts/security/cargo-policy.json` carries a dated exception (at most
   seven days, with a rationale and a ticket).
-- `v2-browser.yml` runs the headless-rendering checks.
+- `v2-browser.yml` runs the headless-rendering checks. On a draft PR, it and
+  every Rust job except the advisory scan skip until the PR is marked ready.
 - Both restore a dependency build cache (`Swatinem/rust-cache`) saved from
   `integration`, so PR runs recompile only workspace crates.
 
