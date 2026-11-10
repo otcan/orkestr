@@ -54,7 +54,6 @@ class Manager:
         self.failed = self.closed = False
         self.launcher = None
         self.desk = None
-        self.provider_login = None
         self.workspace_projects = None
         self.workspace_commands = None
         self.managed = None
@@ -213,16 +212,13 @@ class Manager:
         guard(self, operation)
         self._capture_orphans()
         require(not getattr(self,'custody_fault',False) or operation in ('status','drain','uncertain','desk_login_poll','desk_login_cancel','managed_poll','managed_cancel','managed_run_close',
-                    'workspace_command_receipt','workspace_command_cancel','provider_login_status','provider_login_cancel'),
+                    'workspace_command_receipt','workspace_command_cancel'),
                 'manager_custody_fault')
         if operation == "status":
             return {"ok": True, "receipt": self.ledger.status(request["conversation_id"])}
         if operation == 'workspace_attest':
             from .workspace_setup import dispatch
             return dispatch(self,request,descriptors)
-        if operation.startswith('provider_'):
-            from .provider_login import dispatch
-            return dispatch(self,request)
         if operation == "admit":
             self._package_preflight()
             receipt, fresh = self.ledger.admit(request)
@@ -362,7 +358,6 @@ class Manager:
             known.update((h.broker['pid'],h.broker['start']) for h in self.launcher.children.values())
         if getattr(self,'desk',None):known.update((h['identity']['pid'],h['identity']['start']) for h in self.desk.active.values() if h['identity'])
         if getattr(self,'workspace_commands',None):known.update((h['identity']['pid'],h['identity']['start']) for h in self.workspace_commands.active.values() if h['identity'])
-        if getattr(self,'provider_login',None):known.update(self.provider_login.children())
         return known
 
     def _desk_window_active(self,window_id,generation):
@@ -393,7 +388,6 @@ class Manager:
             self.qualification.observe(self.identity)
         if getattr(self,'workspace_commands',None):self.workspace_commands.tick(self._desk_window_active)
         if getattr(self,'desk',None):self.desk.tick(self._desk_window_active)
-        if getattr(self,'provider_login',None):self.provider_login.tick()
         if getattr(self,'managed',None):
             from .managed_control import tick
             tick(self.managed);self.managed.tick()

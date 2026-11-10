@@ -141,28 +141,6 @@ or owned-process cleanup. Synthetic server tests prove handoff, parent-only
 writes and stop-before-write zero delivery; real Store fence race coverage and
 ordinary HTTP composition are separate Runtime gates, not claimed here.
 
-### Provider sign-in (one install-wide login per provider)
-
-Owner-only web routes (`/api/v2/provider-sign-in`, cookie session plus the usual
-Origin and CSRF checks; a Bearer service or chat credential is refused) forward
-five closed operations to the Root manager over the existing control socket.
-`codex_service/provider_login.py` holds them; each sign-in runs under a
-per-operation Root anchor (`provider_login_anchor.py`) that starts the installed
-CLI as the executor (no supplementary groups, `no_new_privs`) with a private
-temporary home, so nothing touches the working credential until the CLI has
-finished and its result is validated. Root, Core and the browser receive fixed
-state words, the sign-in link (exact provider host, https) and the one-time
-device code; credential bytes stay in executor-identity children.
-
-On success the executor rewrites `profile.auth_file` (Codex) or the
-`claude-private.json` account directory (Claude). A `resource_namespace` bind
-mount refuses rename and pins the old inode, so that case rewrites the file in
-place; other installs get an atomic rename. Sign-out keeps a valid Codex file
-because a bound source must stay present and non-empty; `codex login status`
-cannot judge that shape, so status reads the credential file itself.
-Claude needs a `claude` section in the sealed package; without one the provider
-is reported as `not_configured` and offers no actions.
-
 ### Worker role transport metadata
 
 The Codex OpenOwnedSession role whitelist is exactly `fast`, `deep`, `worker`.

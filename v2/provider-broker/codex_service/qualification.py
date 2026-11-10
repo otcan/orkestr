@@ -25,7 +25,7 @@ CONSUMERS = frozenset(('root-posts', 'v2-canary', 'claude-canary', 'timer-handof
     'new-chat', 'root-source', 'agent-timer-grants', 'wa-adapter'))
 NEGATIVE = frozenset(('status', 'drain', 'uncertain', 'retire', 'reconcile', 'desk_login_poll', 'desk_login_cancel',
     'managed_poll', 'managed_cancel', 'managed_run_close', 'workspace_command_receipt',
-    'workspace_command_cancel', 'workspace_attest', 'provider_login_status', 'provider_login_cancel'))
+    'workspace_command_cancel', 'workspace_attest'))
 
 
 def sha(value):

@@ -17,12 +17,9 @@ mod launch_wire;
 mod managed_launch;
 #[path = "manager_operations.rs"]
 mod managed_operations;
-#[path = "manager_sign_in.rs"]
-mod sign_in;
 #[path = "manager_workers.rs"]
 mod workers;
 pub(crate) use managed_operations::ObservedManagedRequest;
-pub(crate) use sign_in::SignInCommand;
 #[path = "manager_client_wire.rs"]
 mod wire;
 #[path = "manager_workspace.rs"]
