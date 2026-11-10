@@ -5,6 +5,7 @@ const row = '[aria-label="Codex sign-in"]';
 
 export async function providerSignIn({page, state, clickWithin, waitText, screenshot, label}) {
     await waitText('Provider sign-in');
+    await waitText("V1's Codex uses the same Codex sign-in.");
     await waitText('Not enabled on this server.');
     assert.equal(await page.$('[aria-label="Claude sign-in"] button'), null, 'an unconfigured provider offers no actions');
     await page.waitForFunction(selector => document.querySelector(selector)?.textContent.includes('Not signed in.'), {}, row);
@@ -38,6 +39,9 @@ export async function providerSignIn({page, state, clickWithin, waitText, screen
     const posts = state.signInPosts.length;
     await clickWithin(row, 'Sign out');
     await waitText('Sign out of Codex for this whole server?');
+    const warning = await page.$eval(`${row} [role="alert"]`, n => n.textContent);
+    assert.match(warning, /also signs out V1's Codex/);
+    assert.match(warning, /next release cannot deploy \(provider_credentials_not_ready\)/);
     assert.equal(state.signInPosts.length, posts, 'asking for confirmation has no effect');
     await clickWithin(row, 'Keep signed in');
     await page.waitForFunction(selector => [...document.querySelectorAll(`${selector} button`)].some(b => b.textContent === 'Sign out'), {}, row);

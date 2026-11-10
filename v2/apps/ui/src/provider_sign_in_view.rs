@@ -67,6 +67,16 @@ fn status_line(provider: &ProviderSignIn) -> String {
     }
 }
 
+fn sign_out_warning(provider: SignInProvider) -> String {
+    let label = provider.label();
+    match provider {
+        // V1's Codex reads the same credential file, and the release
+        // preflight refuses a signed-out credential.
+        SignInProvider::Codex => "Sign out of Codex for this whole server? This also signs out V1's Codex (same credential file). Chats that use Codex stop working, and the next release cannot deploy (provider_credentials_not_ready), until someone signs in again.".into(),
+        SignInProvider::Claude => format!("Sign out of {label} for this whole server? Chats that use {label} stop working until someone signs in again."),
+    }
+}
+
 fn outcome_line(attempt: &SignInAttempt) -> Option<String> {
     match attempt.state {
         SignInState::Succeeded => Some("Sign-in finished.".into()),
@@ -161,7 +171,7 @@ pub fn ProviderSignInSection(
     rsx! {
         section { class: "provider-sign-in", "aria-label": "Provider sign-in",
             h2 { "Provider sign-in" }
-            p { "One sign-in per provider for this whole server. Every chat that uses the provider uses this account." }
+            p { "One sign-in per provider for this whole server. Every chat that uses the provider uses this account. V1's Codex uses the same Codex sign-in." }
             if rows.is_empty() { p { role: "status", "Checking provider sign-in…" } }
             for provider in rows {
                 ProviderRow {
@@ -284,7 +294,7 @@ fn ProviderRow(props: RowProps) -> Element {
                 }
             } else if provider.available {
                 if confirming_sign_out() {
-                    p { role: "alert", "Sign out of {label} for this whole server? Chats that use {label} stop working until someone signs in again." }
+                    p { role: "alert", "{sign_out_warning(name)}" }
                     div { class: "provider-sign-in-actions",
                         button { r#type: "button", disabled: busy(), onclick: {
                             let mut submit = submit.clone();
@@ -371,6 +381,14 @@ mod tests {
         });
         assert_eq!(interval(Some(&value)), ACTIVE_MS);
         assert_eq!(interval(None), ACTIVE_MS);
+    }
+
+    #[test]
+    fn codex_sign_out_names_v1_and_the_release_block() {
+        let codex = sign_out_warning(SignInProvider::Codex);
+        assert!(codex.contains("V1's Codex") && codex.contains("provider_credentials_not_ready"));
+        let claude = sign_out_warning(SignInProvider::Claude);
+        assert!(!claude.contains("V1") && claude.starts_with("Sign out of Claude"));
     }
 
     #[test]
