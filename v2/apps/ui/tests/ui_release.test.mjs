@@ -6,7 +6,7 @@ import {mkdtemp,mkdir,readFile,readdir,realpath,rm,writeFile,symlink,link,trunca
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
-import {compatible,encoded,LIMITS,sha,validateManifest} from '../scripts/release_contract.mjs';
+import {compatible,encoded,LIMITS,requirements,sha,validateManifest} from '../scripts/release_contract.mjs';
 import {createManifest,prepareSnapshot} from '../scripts/ui_release.mjs';
 
 const SOURCE='a'.repeat(40),BACKEND='b'.repeat(40);
@@ -111,4 +111,11 @@ test('CLI rejects noncanonical or duplicate-key manifests and never selects a re
   await assert.rejects(promisify(execFile)(process.execPath,args),/canonical UI manifest/);
   await writeFile(manifest,encoded(f.manifest));
   const {stdout}=await promisify(execFile)(process.execPath,args);assert.equal(JSON.parse(stdout).selected,false);
+});
+
+test('the checked-in release requirements pass the release contract (sorted, unique, known fields)',async()=>{
+  const file=fileURLToPath(new URL('../release_requirements.json',import.meta.url));
+  const value=JSON.parse(await readFile(file,'utf8'));
+  assert.doesNotThrow(()=>requirements(value));
+  assert.deepEqual(value.required_server_features,[...value.required_server_features].sort());
 });

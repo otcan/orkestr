@@ -197,6 +197,8 @@ impl Store {
             binding: binding.clone(),
             parent_run: None,
             resume: None,
+            #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+            setup_workspace: Default::default(),
         };
         #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
         let workspace = self.check_binding_before_writer(binding).await?;
