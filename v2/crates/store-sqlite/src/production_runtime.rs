@@ -66,7 +66,7 @@ pub use parallel_deep_turns::{
 };
 mod fence;
 mod held_inputs;
-mod retired_inputs;
+pub(crate) mod retired_inputs;
 pub use fast::FastAdmissionInput;
 mod fast_source;
 pub use fast_source::FastSource;
