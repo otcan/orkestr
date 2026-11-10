@@ -95,7 +95,7 @@ async fn scoped_projection_and_revocation_during_the_read() {
             if revoke {
                 store.revoke_session(&token).await.unwrap();
             }
-            let body = r#"{"quota":{"codex":{"fiveHourRemainingPct":42,"observedAt":"2026-01-01T00:00:00Z","account_ref":"private"},"claude":{"weeklyRemainingPct":0}}}"#;
+            let body = r#"{"quota":{"codex":{"fiveHourRemainingPct":42,"observedAt":"2026-01-01T00:00:00Z","account_ref":"private"},"claude":{"weeklyRemainingPct":0,"weeklyStatus":"allowed"}},"staleAfterMs":120000}"#;
             socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).as_bytes()).await.unwrap();
         });
         let cookie = format!("Cookie: orkestr_v2_session={}", c.cookie);
@@ -106,6 +106,8 @@ async fn scoped_projection_and_revocation_during_the_read() {
         if !revoke {
             assert_eq!(value["quota"]["codex"]["fiveHourRemainingPct"], 42.0);
             assert_eq!(value["quota"]["claude"]["weeklyRemainingPct"], 0.0);
+            assert_eq!(value["quota"]["claude"]["weeklyStatus"], "allowed");
+            assert_eq!(value["staleAfterMs"], 120000);
             assert!(!value.to_string().contains("private"));
         }
         c.finish().await;

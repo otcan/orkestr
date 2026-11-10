@@ -250,8 +250,8 @@ async function api(state, req, res, url) {
   }
   if (path === '/api/v2/live-map' && req.method === 'GET') return json(res, 200, liveMap());
   if (path === '/api/v2/provider-quotas' && req.method === 'GET') {
-    const window = {fiveHourRemainingPct:75,weeklyRemainingPct:40,fiveHourResetsAt:new Date(Date.now()+3600000).toISOString(),weeklyResetsAt:new Date(Date.now()+86400000).toISOString(),observedAt:new Date().toISOString(),stale:false,limited:false};
-    return json(res,200,{quota:{codex:window,claude:{...window,weeklyRemainingPct:8,stale:true}}});
+    const window = {fiveHourRemainingPct:null,weeklyRemainingPct:40,fiveHourResetsAt:null,weeklyResetsAt:new Date(Date.now()+86400000).toISOString(),observedAt:new Date().toISOString(),stale:false,limited:false};
+    return json(res,200,{quota:{codex:window,claude:{...window,weeklyRemainingPct:null,weeklyStatus:'allowed'}},staleAfterMs:21600000});
   }
   if (path === '/api/v2/host-metrics' && req.method === 'GET') return json(res, 200, hostSummary());
   if (path === '/api/v2/host-metrics/consumers' && req.method === 'GET') return json(res, 200, hostConsumers());
