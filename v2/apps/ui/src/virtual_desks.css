@@ -1,0 +1,18 @@
+/* Inventory separates viewing access, reservation and runtime health. */
+.desk-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,22rem),1fr)); gap:1rem; margin-top:1rem; }
+.desk-card { min-width:0; border:1px solid var(--border); border-radius:.8rem; padding:1rem; background:var(--surface); }
+.desk-card h4 { margin:0; font-size:1.05rem; }
+.desk-card .desk-id { margin:.25rem 0 .75rem; color:var(--muted); font-size:.78rem; overflow-wrap:anywhere; }
+.desk-statuses { display:flex; flex-wrap:wrap; gap:.5rem; margin:.5rem 0; }
+.desk-statuses span { border:1px solid var(--border); border-radius:1rem; padding:.2rem .6rem; font-size:.8rem; }
+.desk-card dl { display:grid; grid-template-columns:auto minmax(0,1fr); gap:.25rem .75rem; font-size:.85rem; }
+.desk-card dt { color:var(--muted); } .desk-card dd { margin:0; overflow-wrap:anywhere; }
+.desk-card label { display:grid; gap:.3rem; margin:.75rem 0; }
+.desk-card select { width:100%; min-width:0; }
+.desk-actions { display:flex; flex-wrap:wrap; gap:.5rem; margin:.75rem 0; }
+.desk-viewing { list-style:none; padding:0; margin:.75rem 0; }
+.desk-viewing li { display:flex; flex-wrap:wrap; align-items:center; gap:.5rem; }
+.desk-advanced { margin-top:.75rem; border-top:1px solid var(--border); padding-top:.75rem; }
+.desk-advanced summary { cursor:pointer; color:var(--muted); }
+.desk-summary { display:flex; flex-wrap:wrap; gap:.4rem 1rem; padding:.5rem 0; }
+@media(max-width:600px) { .desk-actions button, .desk-viewing button, .desk-viewing a { flex:1 1 100%; text-align:center; } .desk-card { padding:.8rem; } }
