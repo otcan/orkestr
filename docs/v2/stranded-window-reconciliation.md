@@ -58,6 +58,16 @@ Observations, payloads, messages and receipts are kept. Nothing is dispatched ag
 
   Core needs the owner's credential for every mutation, so there is no
   credential-less boot hook.
+
+  When the manager refuses step 3 for a window (for example
+  `owned_cleanup_uncertain`), automatic attempts of that exact window wait 1 s,
+  then 2, 4, 8 and 16 s, then 30 s between attempts, instead of running again on
+  every status poll and dispatcher pass (ORK-781: 798 attempts in ten minutes,
+  each holding the opening lock). The first refusal logs one line:
+  `ALERT orkestr-v2-server window_reconcile_backoff conversation=… window=…
+  generation=… cause=… retry_ms=… max_retry_ms=…`. The first success after
+  refusals logs `window_reconcile_backoff_cleared … refused_attempts=…`. Owner
+  decisions do not wait.
 - **Owner (`owner`).** Use `POST /api/v2/conversations/{id}/window/reconcile` with
   `{"window_id", "generation", "decision"}`. The decision is either:
   - `abandon_unaccepted`: allowed before the deadline as an explicit owner choice.

@@ -6,6 +6,8 @@ use orkestr_v2_store_sqlite::{
     ManagedOperationParent, ManagedOperationSetup,
 };
 use std::time::Instant;
+#[path = "managed_pace.rs"]
+mod pace;
 #[path = "managed_workers.rs"]
 mod workers;
 
@@ -45,6 +47,8 @@ pub(super) struct ManagedTools {
     operation: Option<ConsumedManagedOperation>,
     run_closed: bool,
     workers: workers::NativeWorkers,
+    /// Spacing of `managed_pending` checks while no managed call waits.
+    pending_pace: pace::PendingPace,
 }
 impl ConfiguredExecution {
     fn managed_enabled(&self) -> bool {
@@ -122,6 +126,7 @@ impl ConfiguredExecution {
             context,
             operation: None,
             run_closed: false,
+            pending_pace: pace::PendingPace::new(Instant::now()),
             workers: workers::NativeWorkers::new(
                 self.tasks.clone(),
                 consumed.provider().run.clone(),
@@ -182,6 +187,11 @@ impl ManagedTools {
             self.poll_native_worker().await?;
         }
         if self.operation.is_none() {
+            // Root serves every window's control requests one at a time; an
+            // idle Deep window checks at most once a second (`managed_pace`).
+            if !self.pending_pace.due(Instant::now()) {
+                return Ok(());
+            }
             let started = Instant::now();
             let result = async {
                 let deadline = super::managed_observation::deadline(
@@ -197,8 +207,10 @@ impl ManagedTools {
             let Some(request) = observed_rpc(ManagedRpc::Pending, started, result)
                 .map_err(|_| "managed Root source unavailable")?
             else {
+                self.pending_pace.idle(Instant::now());
                 return Ok(());
             };
+            self.pending_pace.found(Instant::now());
             if request.request.is_native_worker() {
                 self.begin_native_worker(request).await?;
                 return self.poll_native_worker().await;
