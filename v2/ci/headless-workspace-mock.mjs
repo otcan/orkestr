@@ -364,6 +364,11 @@ async function api(state, req, res, url) {
   if (path === '/api/v2/conversations' && req.method === 'GET') return json(res, 200, {
     conversations: [A, B, C].map((id, i) => ({ conversation_id: id, name: names[id], scope: { kind: 'global' }, last_sequence: state.messages[id].length + i })),
     next_cursor: null });
+  const timerRead = /^\/api\/v2\/timers\/([0-9a-f-]{36})$/.exec(path);
+  if (timerRead && req.method === 'GET') return json(res, 200, { namespace: timerRead[1], source_digest: 'synthetic-calendar',
+    schedule: { kind: 'calendar', timezone: 'Europe/Berlin', weekdays: [1, 2, 3, 4, 5], start_minute: 480, end_minute: 1140, every_hours: 1, minutes: [0], summary: 'Hourly at :00, Mon\u2013Fri, 08:00\u201319:00 Europe/Berlin' },
+    conversation_id: A, state: 'enabled', dormant_reason: null, revision: 2, generation: 1, next_due_ms: Date.now() + 1800000, controller_armed: true, controller_hold: null,
+    instruction: `Synthetic timer instruction: read the synthetic runbook.\nThen report what changed. ${'A long unbroken word '.repeat(3)}${'x'.repeat(400)}` });
   const calendar = /^\/api\/v2\/timers\/(calendar(?:\/preview)?|[0-9a-f-]{36}\/(?:pause|policy|schedule))$/.exec(path);
   if (calendar) {
     if (req.headers['x-orkestr-csrf'] !== 'synthetic-csrf') return json(res, 403, { code: 'csrf', message: 'CSRF required' });

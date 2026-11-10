@@ -77,6 +77,30 @@ fn malformed_scope_schedule_unknown_fields_and_dormancy_refuse() {
     assert!(serde_json::from_value::<Detail>(json!({"namespace":ID,"claim":"forbidden"})).is_err());
 }
 #[test]
+fn the_single_timer_read_carries_the_instruction_and_a_listing_row_does_not() {
+    // The detail view shows this text; an import never enabled here has none.
+    let base = json!({"namespace":ID,"source_digest":"synthetic-digest","schedule":{"kind":"interval","every_ms":60000},"conversation_id":ID,"state":"enabled","dormant_reason":null,"revision":2,"generation":1,"next_due_ms":5,"controller_armed":true,"controller_hold":null});
+    let bare: Detail = serde_json::from_value(base.clone()).unwrap();
+    assert!(bare.instruction.is_none() && bare.valid_for(ID));
+    let mut read = base.clone();
+    read["instruction"] = json!("Synthetic instruction text");
+    let read: Detail = serde_json::from_value(read).unwrap();
+    assert_eq!(
+        read.instruction.as_deref(),
+        Some("Synthetic instruction text")
+    );
+    assert!(read.valid_for(ID));
+    for bad in [String::new(), "x".repeat(32769)] {
+        let mut d = bare.clone();
+        d.instruction = Some(bad);
+        assert!(!d.valid_for(ID));
+    }
+    let listing =
+        orkestr_v2_ui::timers::full_listing(&json!({"conversation_id":ID,"timers":[base]}), ID)
+            .unwrap();
+    assert!(listing.rows[0].detail.instruction.is_none());
+}
+#[test]
 fn old_or_foreign_success_does_not_clear_draft() {
     let mut e = Editor::default();
     e.edit("keep".into());

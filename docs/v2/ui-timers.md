@@ -1,9 +1,16 @@
 # Timer web controls
 
-The Timers navigation item opens a saved timer by its import-receipt ID. There
-is no guessed list endpoint. Schedule, next due time and timezone labels come
-from server metadata; displayed times use explicit UTC. No client clock,
-generation, due claim, imported instruction or native authority is submitted.
+The Timers tab lists the conversation's timers. **Details** opens a timer in its
+own card with its schedule, next run and instruction text; its controls stay in
+a collapsed section there. A timer that is not listed can still be opened by
+its ID under the Advanced section at the bottom. Schedule, next due time and
+timezone labels come from server metadata; the panel shows explicit UTC times.
+No client clock, generation, due claim, imported instruction or native
+authority is submitted.
+
+The instruction shown is the text of the timer's latest durable grant, returned
+only by the owner's single-timer read (`GET /api/v2/timers/{namespace}`), never
+by a listing. An import that was never enabled in V2 has none.
 
 The strict browser adapter follows server DTOs at
 `1a92f5450cac9a3d896e242cbe38d7d3469aec34` and

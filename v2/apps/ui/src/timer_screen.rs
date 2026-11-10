@@ -85,6 +85,13 @@ pub fn Timers(
     let chat_paused = chat_pause.is_some_and(|until| until > now_ms());
     let pause_chat_path = format!("/api/v2/conversations/{conversation}/timer-pause");
     let resume_chat_path = pause_chat_path.clone();
+    // A timer listed above opens in its own card; only one that is not listed
+    // here (opened by ID) shows its details in the section at the bottom.
+    let selected_listed = timers.read().as_ref().is_some_and(|l| {
+        l.rows
+            .iter()
+            .any(|row| row.detail.namespace == *selected.read())
+    });
     rsx! {
         section { class: "timers-screen", "aria-label":"Timers", h2 { "Timers" }
             if let Some(listing) = timers() {
@@ -99,10 +106,17 @@ pub fn Timers(
                 if listing.rows.is_empty() { p { class: "field-help", "This chat has no timers yet." } }
                 ul { class: "timer-list timer-cards",
                     for row in listing.rows.clone() {
-                        crate::timer_card_view::TimerCard { key: "{row.detail.namespace}", row: row.clone(), chat_pause_ms: chat_pause, chat_pause_local: chat_local.clone(), now_ms: now_ms(), busy: busy(),
+                        crate::timer_card_view::TimerCard { key: "{row.detail.namespace}", row: row.clone(), chat_pause_ms: chat_pause, chat_pause_local: chat_local.clone(), now_ms: now_ms(), busy: busy(), selected: selected() == row.detail.namespace,
                             onpause: move |(namespace, until): (String, Option<i64>)| write.call(("POST", format!("/api/v2/timers/{namespace}/pause"), pause_body(until), if until.is_some() { "Timer paused." } else { "Timer resumed." })),
                             onedit: move |row: Listed| editor.set(Some(RuleForm::from_listed(&row))),
-                            onadvanced: move |namespace: String| selected.set(namespace) }
+                            onadvanced: move |namespace: String| {
+                                let open = *selected.read() == namespace;
+                                selected.set(if open { String::new() } else { namespace });
+                            },
+                            if selected() == row.detail.namespace {
+                                TimerPanel { key:"{selected()}-{conversation}-{session_scope.read().generation()}", namespace:selected(), conversation: conversation.clone(), csrf: csrf.clone(), session_scope, onexpired }
+                            }
+                        }
                     }
                 }
                 if !listing.digests.is_empty() {
@@ -126,14 +140,14 @@ pub fn Timers(
             } else {
                 button { r#type: "button", class: "timer-new", onclick: move |_| editor.set(Some(RuleForm::default())), "New timer" }
             }
-            details { class: "timer-advanced", summary { "Advanced: turn a timer off, stop it, or re-enable it" }
-                p { "Select a timer with Details above, or open a saved timer by its ID. These controls disable, stop or roll back the schedule and re-enable it with fresh instructions." }
+            details { class: "timer-advanced", summary { "Advanced: open a saved timer by its ID" }
+                p { "Details on a timer above shows its instructions and its controls. A timer that is not listed here can be opened by its ID." }
                 form { onsubmit:move |event| {event.prevent_default();if valid_namespace(&entered()) {selected.set(entered().to_ascii_lowercase());}},
                     label { r#for:"timer-id", "Saved timer ID" }
                     input { id:"timer-id", value:"{entered}", oninput:move |event|entered.set(event.value()), required:true }
                     button { disabled:!valid_namespace(&entered()), "Open timer" }
                 }
-                if !selected().is_empty() {
+                if !selected().is_empty() && !selected_listed {
                     TimerPanel { key:"{selected()}-{conversation}-{session_scope.read().generation()}", namespace:selected(), conversation, csrf, session_scope, onexpired }
                 }
             }
