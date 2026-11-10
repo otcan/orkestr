@@ -175,6 +175,17 @@ test('sidebar, read marks and linked V1 history are the only new paths',async()=
     }
 });
 
+test('a message revision is an exact allowed path',async()=>{
+    const conversation='/api/v2/conversations/00000000-0000-4000-8000-00000000000a';
+    const path=`${conversation}/messages/00000000-0000-4000-8000-000000000101/revisions`;
+    for(const method of ['POST','GET']) {
+        await execute({recv:async()=>({...base,method,path,body:method==='POST'?{}:null,csrf:'synthetic-csrf'})},async(seen)=>{assert.equal(seen,path);return new Response('{}');});
+    }
+    for(const bad of [`${conversation}/messages/not-a-uuid/revisions`,`${path}/extra`,`${path}?limit=1`,`${conversation}/messages/../revisions`]) {
+        await assert.rejects(execute({recv:async()=>({...base,path:bad})},()=>assert.fail('fetch must not run')),/Invalid API path/);
+    }
+});
+
 test('message attachments and V1 uploads are allowed paths',async()=>{
     for(const path of ['/api/v2/conversations/00000000-0000-4000-8000-00000000000a/message-attachments','/api/v2/v1-threads/synthetic-group/uploads']) {
         await execute({recv:async()=>({...base,method:'POST',path,body:{},csrf:'synthetic-csrf'})},async(seen,options)=>{assert.equal(seen,path);assert.equal(options.headers['x-orkestr-csrf'],'synthetic-csrf');return new Response('{}');});
