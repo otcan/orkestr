@@ -18,7 +18,7 @@ export async function virtualDesksAndAccountSettings({page, state, conversation,
         'click details must show the separately observed full backend source');
     await screenshot(label, 'build-version-details');
     await page.click(`${badge} button`);
-    assert.equal(await page.$(`${badge} .build-badge-details`), null);
+    await page.waitForFunction(selector => !document.querySelector(selector), {}, `${badge} .build-badge-details`);
     assert.equal(await page.$('.owner-password'), null, 'password form must not appear under the chat');
     await clickText('Virtual desks');
     await waitText('All desk resources.');
