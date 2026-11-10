@@ -182,9 +182,19 @@ pub fn AcceptedReplies(
         if let Ok(rows) = rows {
             if inline && rows.is_empty() && !busy() { p { class: "empty-conversation", "Start a conversation. Your messages and accepted replies will appear here." } }
             ol { class: if inline { "chat-messages" } else { "messages" },
-                for row in rows.into_iter().filter(|row| !row.is_silenced(&silent.read())) {
-                    li { key: "{row.key()}", hidden: matches!(&row, Row::Reply(reply) if live_rows.covers(&reply.run_id)), class: match &row { Row::Input(_) => "user-message", Row::Reply(_) => "assistant-message", Row::Post(_) => "assistant-message post-message" }, "data-replyable": "{inline && !matches!(row, Row::Post(_))}",
+                for row in rows.into_iter().filter(|row| !row.is_silenced(&silent.read()) && !row.is_silent_notice()) {
+                    li { key: "{row.key()}", hidden: matches!(&row, Row::Reply(reply) if live_rows.covers(&reply.run_id)), class: match &row { _ if row.is_notice() => "revision-notice-row", Row::Input(_) => "user-message", Row::Reply(_) => "assistant-message", Row::Post(_) => "assistant-message post-message" }, "data-replyable": "{inline && row.is_replyable()}",
                         match &row {
+                            Row::Input(input) if input.revisions.notice.is_some() => rsx! {
+                                if let Some(notice) = &input.revisions.notice { p { class: "revision-notice", role: "status", "{chat_timeline::notice_line(notice)}" } }
+                            },
+                            Row::Input(input) if input.revisions.deleted => rsx! { article { "data-message-id": "{input.id}",
+                                strong { if input.actor == "owner" { "You" } else { "{input.actor}" } }
+                                p { class: "message-removed", "You deleted this message." }
+                                if inline {
+                                    if let Some(context) = &live { crate::message_actions_view::RevisionHistory { conversation: id.clone(), message_id: input.id.clone(), csrf: context.csrf.clone(), onexpired } }
+                                }
+                            } },
                             Row::Input(input) => rsx! { article { "data-message-id": "{input.id}",
                                 strong { if input.actor == "owner" { "You" } else { "{input.actor}" } }
                                 if let Some(quote) = &input.reply_to {
@@ -194,9 +204,18 @@ pub fn AcceptedReplies(
                                     }
                                 }
                                 crate::rich_text_view::RichText { text: input.text.clone() }
+                                if let Some(source) = input.revisions.edited_from {
+                                    small { class: "message-edited", "{chat_timeline::edited_label(source)}" }
+                                    if inline {
+                                        if let Some(context) = &live { crate::message_actions_view::RevisionHistory { conversation: id.clone(), message_id: input.id.clone(), csrf: context.csrf.clone(), onexpired } }
+                                    }
+                                }
                                 if inline {
                                     crate::outbox_view::ReplyButton { draft_key: id.clone(), composer: "composer", message_id: input.id.clone(),
                                         author: if input.actor == "owner" { chat_timeline::QuoteAuthor::Owner } else { chat_timeline::QuoteAuthor::Other }, text: input.text.clone() }
+                                    if input.revisions.can_revise {
+                                        if let Some(context) = &live { crate::message_actions_view::MessageActions { key: "{input.id}-{input.revisions.revision}", conversation: id.clone(), message_id: input.id.clone(), text: input.text.clone(), revision: input.revisions.revision, csrf: context.csrf.clone(), onexpired } }
+                                    }
                                 }
                                 crate::outbox_view::TimelineDelivery { message_id: input.id.clone() }
                             } },
@@ -206,7 +225,7 @@ pub fn AcceptedReplies(
                         }
                         if let Row::Post(post) = &row {
                             crate::message_time_view::MessageTime { at_ms: post.created_ms, now_ms: now() }
-                        } else if let Some(time) = times_now.get(&row.sequence()) {
+                        } else if let (false, Some(time)) = (row.is_notice(), times_now.get(&row.sequence())) {
                             crate::message_time_view::MessageTime { at_ms: time.at_ms, now_ms: now(), receipts: time.receipts.clone() }
                         }
                     }

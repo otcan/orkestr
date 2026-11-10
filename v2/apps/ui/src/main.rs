@@ -37,6 +37,7 @@ mod local_setup;
 mod memory_export_guard;
 mod memory_transport;
 mod memory_view;
+mod message_actions_view;
 mod message_time_view;
 mod new_whatsapp_chat;
 mod outbox_driver;

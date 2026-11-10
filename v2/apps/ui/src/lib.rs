@@ -116,14 +116,48 @@ impl Projection {
         }
         self.scope = Some(page.scope);
         self.conversation_id = Some(page.conversation_id.to_string());
+        let notices: Vec<_> = page
+            .messages
+            .iter()
+            .filter_map(|message| message.revisions.as_ref()?.notice_for.clone())
+            .collect();
         for message in page.messages {
             self.messages.insert(message.sequence, message);
             while self.messages.len() > WINDOW {
                 self.messages.pop_first();
             }
         }
+        // A catch-up page holds only new rows. An edit or removal of an older
+        // message arrives as a notice row, so it updates the row it names here.
+        for notice in notices {
+            self.announce(notice);
+        }
         self.watermark = self.watermark.max(page.last_sequence);
         Ok(())
+    }
+}
+
+impl Projection {
+    fn announce(&mut self, notice: orkestr_v2_contracts::MessageRevisionNotice) {
+        let Some(target) = self
+            .messages
+            .values_mut()
+            .find(|message| message.message_id == notice.target_message_id)
+        else {
+            return;
+        };
+        let state = target.revisions.get_or_insert_with(Default::default);
+        if state
+            .latest
+            .as_ref()
+            .is_some_and(|latest| latest.revision >= notice.change.revision)
+        {
+            return;
+        }
+        if notice.change.kind == orkestr_v2_contracts::MessageRevisionKind::Delete {
+            state.can_revise = false;
+        }
+        state.latest = Some(notice.change);
     }
 }
 
