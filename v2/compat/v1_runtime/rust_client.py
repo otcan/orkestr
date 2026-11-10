@@ -122,7 +122,7 @@ class RustSession:
     """One owner login shared by every binding. Never pinned to a conversation."""
 
     def __init__(self, *, origin, loopback_url, credentials_path, expected_owner,
-                 expected_source, timeout_s=5, peer_descriptor_path=None):
+                 expected_source, timeout_s=5, peer_descriptor_path=None, outbound_gate=None):
         try:
             public, local = urlsplit(origin), urlsplit(loopback_url)
             require(public.scheme in ("http", "https") and public.hostname and
@@ -149,6 +149,7 @@ class RustSession:
                 Path(peer_descriptor_path).is_absolute() and '..' not in Path(peer_descriptor_path).parts,
                 'peer_descriptor_path_refused')
         self.peer_descriptor_path = peer_descriptor_path
+        self.outbound_gate = outbound_gate
         self._service_credentials = False
         self._cookie = self._csrf = None
         self.features = frozenset()
@@ -196,13 +197,22 @@ class RustSession:
                 'service_peer_descriptor_required')
         connection = None
         started, timer, response = time.monotonic(), None, None
+        permit = None
         raw = bytearray()
         try:
+            deadline = started + transport_timeout_s
+            if self.outbound_gate is not None:
+                permit = self.outbound_gate.acquire(deadline)
+                if permit is None:
+                    raise ClientError('outbound_capacity_refused', outcome='refused')
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise ClientError('outbound_capacity_refused', outcome='refused')
             connection = (PeerConnection(self.host,self.port,descriptor_path=self.peer_descriptor_path,
-                          owner=self.owner,source=self.source,timeout=transport_timeout_s,
-                          deadline=started+transport_timeout_s)
+                          owner=self.owner,source=self.source,timeout=remaining,
+                          deadline=deadline)
                           if self.peer_descriptor_path is not None else
-                          http.client.HTTPConnection(self.host,self.port,timeout=transport_timeout_s))
+                          http.client.HTTPConnection(self.host,self.port,timeout=remaining))
             connection.connect()
             retained_socket = connection.sock
             def expire():
@@ -295,12 +305,21 @@ class RustSession:
         finally:
             # HTTP/1.0/Connection:close detaches the response from the connection.
             # Rejected statuses must close its unread body/socket explicitly.
-            if response is not None:
-                response.close()
-            if connection is not None:connection.close()
-            if timer:
-                timer.cancel()
-                timer.join()
+            try:
+                try:
+                    if response is not None:
+                        response.close()
+                finally:
+                    try:
+                        if connection is not None:
+                            connection.close()
+                    finally:
+                        if timer:
+                            timer.cancel()
+                            timer.join()
+            finally:
+                if permit is not None:
+                    permit.release()
 
     def _health(self):
         _, value, _ = self._wire("GET", "/api/v2/health")

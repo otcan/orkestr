@@ -89,6 +89,7 @@ class BurstTests(unittest.TestCase):
         self.assertEqual(self.intakes(), ["only one"])
 
     def test_inputs_from_another_chat_or_author_or_already_sent_never_join(self):
+        self.peer = Peer(unique_acceptances=True)
         self.ledger.enqueue(body("a", "owner one"))
         self.ledger.enqueue(body("b", "other chat", chatId="chat-2"))
         self.ledger.enqueue(body("c", "owner two"))
@@ -100,6 +101,9 @@ class BurstTests(unittest.TestCase):
         worker.step(self.ledger.next_input())
         worker.step(self.ledger.next_input())
         self.assertEqual(self.intakes()[1:], ["other chat", "owner two"])
+        finals = self.finals()
+        self.assertEqual(len(finals), 3, "every processed input must actually export its answer")
+        self.assertEqual(len({message["id"] for message in finals}), 3)
 
     def test_attachments_of_every_absorbed_input_are_imported_and_named(self):
         imports = []

@@ -1,3 +1,4 @@
+import {acceptedRustFinal, completedLateRoutes, lateReplyCandidates} from './whatsapp-scoped-late-replies.js';
 import {readGroupInputs} from './scoped-group-inbox.js';
 import {buildReplyTo} from './scoped-group-reply-quote.js';
 import {createScopedAcknowledgements} from './scoped-group-acknowledgements.js';
@@ -15,10 +16,6 @@ import {createProgressBudget, progressPhases, progressPolicy} from './scoped-gro
 import {createDynamicGroupRegistry, createDynamicGroupView, eligibleGroups, validateDynamicGroups} from './whatsapp-scoped-dynamic-groups.js';
 
 const key = value => crypto.createHash('sha256').update(value).digest('hex');
-// Replies posted after the turn ended (a bound api-session) and parented by V1
-// to the latest relay-routed input. Delivered once, within a bounded window.
-const lateSources = new Set(['api-session']);
-const finalPhases = new Set(['final_answer', 'final']);
 const LATE_REPLY_WINDOW_MS = 6 * 60 * 60 * 1000;
 const LATE_REPLY_POLL_MS = 10_000;
 // How often the relay reconciles registered groups with V1's thread registry.
@@ -211,11 +208,12 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
     throw new Error('group_reply_history_incomplete');
   }
 
-  const deliverAnswer = (input, group, answer, messages) => outboundSerial('send', async () => {
+  const deliverAnswer = (input, group, answer, messages, verify) => outboundSerial('send', async () => {
     if (deliveryBlocked()) throw new Error('group_delivery_requires_review');
-    return deliverAnswerOnce(input, group, answer, messages);
+    await verify?.();
+    return deliverAnswerOnce(input, group, answer, messages, verify);
   });
-  async function deliverAnswerOnce(input, group, answer, messages) {
+  async function deliverAnswerOnce(input, group, answer, messages, verify) {
     const text = String(answer.text || '').trim();
     if (text === 'NO_REPLY') acknowledgements.mark(input.id, 'no_reply');
     if (!text || text === 'NO_REPLY') return;
@@ -241,6 +239,7 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
       const requestId = `reply:${key(`${input.id}:${answer.id}:${index}`)}`;
       if (db.prepare("SELECT 1 FROM replies WHERE id=? AND state='sent'").get(requestId)) continue;
       await inputThread(input, group);
+      await verify?.();
       // An entry is a text or, for a reply over the budget, its full-text document.
       const entry = chunks[index];
       if (deliveryBlocked()) throw new Error('group_delivery_requires_review');
@@ -257,7 +256,9 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
         db.prepare('INSERT OR IGNORE INTO reply_sent_text VALUES(?,?,?,?)').run(providerId, requestId, sentText, new Date().toISOString());
       log({event: 'reply_delivered', threadId: group.threadId, messageId: answer.id});
     }
-    await replyFiles.deliver(input, group, answer, () => inputThread(input, group));
+    await replyFiles.deliver(input, group, answer, async () => {
+      const view = await inputThread(input, group); await verify?.(); return view;
+    });
     // A mirrored remote-runtime reply: report the confirmed send so V1 can
     // acknowledge it to the runtime. A failed report retries on the next
     // poll without resending (every chunk above is already 'sent').
@@ -402,41 +403,44 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
     }
   }
 
-  // A reply posted after the turn completed (a bound api-session answer, which V1
-  // parents to the latest relay-routed input) is delivered once through the same
-  // durable payload/receipt journal. Only each group's newest completed input
-  // inside the window is watched, polled at most every LATE_REPLY_POLL_MS.
+  // Explicit accepted-run lineage permits a later Rust final without reopening
+  // the original completed route. API-session replies retain newest-input scope.
   const lastLatePoll = new Map();
   async function deliverLateReplies(inputs, immediate = false) {
-    const latest = new Map();
-    for (const input of inputs) if (!heldInputIds.has(input.id) && groups.has(input.chat_id)) latest.set(input.chat_id, input);
-    for (const [chatId, input] of latest) {
-      const group = groups.get(chatId);
-      const at = Date.parse(input.created_at);
-      if (!Number.isFinite(at) || now() - at > LATE_REPLY_WINDOW_MS) continue;
-      const route = db.prepare('SELECT * FROM routed WHERE id=? AND completed=1').get(input.id);
-      if (!route || (!immediate && now() - (lastLatePoll.get(chatId) || 0) < LATE_REPLY_POLL_MS)) continue;
-      if (routeFence && fencedGroup(group)) {
-        const active = routeFence.current();
-        if (active?.route !== config.routeControl.routeId || at < Date.parse(active.since)) continue;
-      }
+    const byChat = new Map();
+    for (const input of inputs) if (!heldInputIds.has(input.id) && groups.has(input.chat_id)) {
+      if (!byChat.has(input.chat_id)) byChat.set(input.chat_id, []);
+      byChat.get(input.chat_id).push(input);
+    }
+    for (const [chatId, chatInputs] of byChat) {
+      const group = groups.get(chatId), newest = chatInputs.at(-1);
+      if (!immediate && now() - (lastLatePoll.get(chatId) || 0) < LATE_REPLY_POLL_MS) continue;
+      const candidates = completedLateRoutes({inputs: chatInputs, threadId: group.threadId, now, windowMs: LATE_REPLY_WINDOW_MS,
+        readRoute: id => db.prepare('SELECT * FROM routed WHERE id=? AND completed=1').get(id),
+        fence: routeFence && fencedGroup(group) ? {read: () => routeFence.current(), routeId: config.routeControl.routeId} : null});
+      if (!candidates.length) continue;
       lastLatePoll.set(chatId, now());
       try {
-        await inputSerial(input.id, async () => {
         if (deliveryBlocked()) throw new Error('group_delivery_requires_review');
-        const page = await api(`/api/threads/${encodeURIComponent(group.threadId)}/messages?limit=50`);
-        const messages = page.messages || [];
-        const late = messages.filter(m => m.role === 'assistant' && m.state === 'completed' && finalPhases.has(m.phase)
-            && lateSources.has(m.source) && m.parentMessageId === route.message_id
-            && Date.parse(m.createdAt) >= at && Date.parse(m.createdAt) - at <= LATE_REPLY_WINDOW_MS)
-          .sort((a, b) => Number(a.cursor || 0) - Number(b.cursor || 0));
-        for (const answer of late) await deliverAnswer(input, group, answer, messages);
+        const thread = await threadFor(group);
+        const {messages = []} = await api(`/api/threads/${encodeURIComponent(group.threadId)}/messages?limit=50`);
+        for (const {input, at, route} of candidates) await inputSerial(input.id, async () => {
+          const parent = messages.find(m => m.id === route.message_id);
+          const late = lateReplyCandidates({messages, parent, thread, route, at, windowMs: LATE_REPLY_WINDOW_MS, newest: input === newest});
+          for (const answer of late) {
+            const verify = answer.source === 'rust-v2-pilot' ? async () => {
+              const current = db.prepare('SELECT * FROM routed WHERE id=?').get(input.id);
+              if (!current?.completed || current.thread_id !== group.threadId || current.message_id !== route.message_id
+                  || !acceptedRustFinal(answer, parent, await threadFor(group))) throw new Error('group_remote_final_binding_changed');
+            } : undefined;
+            await deliverAnswer(input, group, answer, messages, verify);
+          }
+          errors.delete(`late:${input.id}`);
         });
-        errors.delete(`late:${input.id}`);
       } catch (error) {
-        const code = errorCode(error);
-        if (errors.get(`late:${input.id}`) !== code) log({event: 'group_relay_error', threadId: group.threadId, code});
-        errors.set(`late:${input.id}`, code);
+        const code = errorCode(error), id = candidates[0].input.id;
+        if (errors.get(`late:${id}`) !== code) log({event: 'group_relay_error', threadId: group.threadId, code});
+        errors.set(`late:${id}`, code);
       }
     }
   }
