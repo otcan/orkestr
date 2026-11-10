@@ -483,6 +483,7 @@ async fn populated_payload_prefix_upgrade_preserves_all_rows_and_foreign_links()
         "deep_desk_operations",
         "managed_operations",
         "deep_desk_results",
+        "agent_timer_instruction_updates",
     ] {
         expected.insert(table.into(), Vec::new());
     }

@@ -7,9 +7,10 @@ pub struct TimerDetail {
     pub durable_authority: bool,
     pub schedule: TimerSchedule,
     pub conversation_id: Option<ConversationId>,
-    /// The instruction of the timer's latest durable grant, for the owner's
-    /// single-timer read only (never listings). `None` when the timer never
-    /// held a durable grant here, such as an import not yet enabled in V2.
+    /// What the timer's next firing receives under its latest durable grant,
+    /// for the owner's single-timer read only (never listings). `None` when
+    /// the timer never held a durable grant here, such as an import not yet
+    /// enabled in V2.
     pub instruction: Option<String>,
 }
 pub(super) async fn detail_in(
@@ -42,14 +43,22 @@ impl Store {
         let mut tx = self.history_transaction(credential, owner, false).await?;
         let row = row(&mut tx, owner, namespace).await?;
         let mut detail = detail_in(&mut tx, owner, &row).await?;
-        detail.instruction = sqlx::query_scalar(
-            "SELECT instruction FROM durable_timer_authorities WHERE owner_id=? AND namespace=? ORDER BY generation DESC LIMIT 1",
+        let latest: Option<(String, i64)> = sqlx::query_as(
+            "SELECT instruction,generation FROM durable_timer_authorities WHERE owner_id=? AND namespace=? ORDER BY generation DESC LIMIT 1",
         )
         .bind(owner.to_string())
         .bind(namespace.to_string())
         .fetch_optional(&mut *tx)
         .await
         .map_err(unavailable)?;
+        if let Some((granted, generation)) = latest {
+            detail.instruction = Some(
+                super::instruction_update::effective_in(
+                    &mut tx, owner, namespace, generation, granted,
+                )
+                .await?,
+            );
+        }
         tx.commit().await.map_err(unavailable)?;
         Ok(detail)
     }

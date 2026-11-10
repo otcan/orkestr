@@ -5,6 +5,22 @@ use crate::Store;
 mod credentials;
 
 pub(crate) async fn downgrade_empty(store: &Store) {
+    // Migration 96 down: only with no recorded instruction update.
+    let updates: i64 = sqlx::query_scalar("SELECT count(*) FROM agent_timer_instruction_updates")
+        .fetch_one(&store.pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        updates, 0,
+        "historical fixture must not erase timer instruction updates"
+    );
+    sqlx::raw_sql(
+        "DROP TABLE agent_timer_instruction_updates;
+         DELETE FROM _sqlx_migrations WHERE version=96;",
+    )
+    .execute(&store.pool)
+    .await
+    .unwrap();
     // Migration 95 down: remove the derived lookup indexes and their ledger
     // entry together. Every older fixture must remain an exact schema prefix.
     sqlx::raw_sql(

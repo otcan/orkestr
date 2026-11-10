@@ -81,7 +81,7 @@ pub(crate) fn failure(error: ResourceError) -> Error {
                 ),
                 "agent_timer_busy" => (
                     StatusCode::CONFLICT,
-                    "That timer's run is in progress: keep the same text to move it, or try again after this run",
+                    "That timer needs a fresh start after a Stop but one of its runs is unfinished: try again after that run",
                 ),
                 "agent_timer_timer_turn" => (
                     StatusCode::FORBIDDEN,

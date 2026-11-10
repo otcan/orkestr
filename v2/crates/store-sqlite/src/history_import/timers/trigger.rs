@@ -114,6 +114,9 @@ pub(crate) async fn admit_pending_in_transaction(
     {
         return Err(HistoryError::Conflict);
     }
+    let instruction =
+        instruction_update::effective_in(tx, owner, namespace, timer.generation, instruction)
+            .await?;
     let conversation: String = current.get("conversation_id");
     let decoded = schedule::decode(current.get("schedule_json"))?;
     let supp = policy_pause::load(tx, owner, namespace, &decoded, Some(&conversation)).await?;

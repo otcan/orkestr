@@ -456,8 +456,9 @@ async fn retained_run_indexes_upgrade_schema94_without_history_changes() {
         .unwrap();
     unrelated_history(&f, &prior.run.run_id).await;
     let before = fixtures::snapshot(&f.store).await;
-    // An exact schema-94 fixture: version 95 adds only these two indexes.
-    sqlx::raw_sql("DROP INDEX production_runs_context_lookup; DROP INDEX production_runs_session_generation; DELETE FROM _sqlx_migrations WHERE version=95;")
+    // An exact schema-94 fixture: version 95 adds only these two indexes and
+    // version 96 only an empty table.
+    sqlx::raw_sql("DROP TABLE agent_timer_instruction_updates; DELETE FROM _sqlx_migrations WHERE version=96; DROP INDEX production_runs_context_lookup; DROP INDEX production_runs_session_generation; DELETE FROM _sqlx_migrations WHERE version=95;")
         .execute(&f.store.pool).await.unwrap();
     let upgraded = Store::open(&f.root.join("core.sqlite3")).await.unwrap();
     assert_eq!(fixtures::snapshot(&upgraded).await, before);
@@ -466,7 +467,7 @@ async fn retained_run_indexes_upgrade_schema94_without_history_changes() {
             .fetch_one(&upgraded.pool)
             .await
             .unwrap();
-    assert_eq!(version, 95);
+    assert_eq!(version, 96);
 }
 
 #[cfg(all(target_os = "linux", target_pointer_width = "64"))]

@@ -81,11 +81,17 @@ The design is the thread-ask grant's (#341, migration 78), with its own grant:
   and arming a fired one-shot again counts toward the live timer cap. With the
   same text and no Stop since the timer was enabled, the schedule is edited in
   place in the same timer generation, which is safe from the timer's own
-  running turn. A new text needs a new generation (instructions are immutable
-  per generation), and a new generation fences the old one's unfinished runs,
-  so it is refused with `409 agent_timer_busy` while one of the timer's runs is
-  queued or running. A cancelled, stopped or rolled back timer is never
-  revived; an upsert then creates a new one.
+  running turn. A new text normally starts a new generation, but a new
+  generation would fence the old one's unfinished runs. So while one of the
+  timer's runs is queued or running (typically the timer's own turn setting
+  its follow-up), the new text is recorded against the current generation and
+  the next firing uses it; the running turn keeps the text it started with,
+  the newest recorded text wins, and retrying a key applies nothing twice. A
+  text-only change keeps the planned next run. Only after a Stop since the
+  timer was enabled does a new text still need a new generation, which is
+  refused with `409 agent_timer_busy` while one of the timer's runs is
+  unfinished. A cancelled, stopped or rolled back timer is never revived; an
+  upsert then creates a new one.
 
 ## Caps
 

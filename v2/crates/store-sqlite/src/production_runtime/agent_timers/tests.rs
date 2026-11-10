@@ -1277,13 +1277,6 @@ async fn a_timer_turn_re_arms_its_own_watcher_without_fencing_itself() {
     let p = next_turn(&f, &c, "timer-turn").await;
     let fired = f.store.agent_timers(&g, &c).await.unwrap();
     assert_eq!(fired.timers[0].state, "exhausted");
-    // A new text would need a new generation, which would fence this run.
-    assert_eq!(
-        f.store
-            .upsert_agent_timer(&g, &c, &upsert("w1", "Watcher", now_ms() + DAY, "Other."))
-            .await,
-        refused("agent_timer_busy")
-    );
     // The same text re-arms the same timer in the same generation.
     let armed = f
         .store
@@ -1303,3 +1296,6 @@ async fn a_timer_turn_re_arms_its_own_watcher_without_fencing_itself() {
     assert_eq!(held, 0, "the running timer turn is not fenced");
     super::super::thread_asks::tests::finish(&f, &c, &p, "Checked.", "timer-turn").await;
 }
+
+#[path = "upsert_text_tests.rs"]
+mod upsert_text_tests;
