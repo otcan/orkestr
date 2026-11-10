@@ -1,8 +1,7 @@
 """A busy ledger delays custody housekeeping; it no longer stops the service.
 
-2026-11-03: under host CPU/IO starvation one housekeeping pass failed, main()
-swallowed the cause, close() interrupted the server and the whole service
-exited 2 with only "timer controller failed during shutdown" in the log.
+main() used to end the service with exit 2 and no logged cause for any manager
+failure, a busy ledger included.
 Synthetic objects only; no account, provider or network.
 """
 import contextlib

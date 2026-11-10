@@ -25,11 +25,9 @@ from .package import Package
 # deadlines) runs at most once per TICK_S instead of on every 50 ms accept
 # timeout, which kept the manager at a quarter of a core while idle.
 TICK_S = 0.25
-# A busy ledger (sqlite "database is locked" past its 0.5 s timeout, seen when
-# the host is starved of CPU/IO) only delays custody housekeeping: every pass
-# re-reads the ledger and repeats idempotently. It is tolerated this long
-# before the manager stops as before (2026-11-03: one such pass under load
-# tore the whole service down with exit 2 and no logged cause).
+# A busy ledger (sqlite "database is locked" past its 0.5 s timeout) only delays
+# custody housekeeping: the next pass re-reads the ledger and repeats. It is
+# tolerated this long before the manager stops as before.
 TICK_BUSY_GRACE_S = 30.0
 MANAGED_REPLY_SECONDS = 5
 
