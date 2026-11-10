@@ -4,6 +4,12 @@ use orkestr_v2_contracts::{
     ConversationId, ExecutionCapabilities, ExecutionPhase, ExecutionStatus, RunId,
 };
 
+/// The failure class of a run's terminal failure. CROSS JOIN fixes the join
+/// order (the run's few classes, then each one's observation by key): left to
+/// choose, the planner walks every observation of every run, once per read of
+/// a failed or cancelled conversation.
+const FAILURE_CLASS: &str = "SELECT f.class FROM production_failure_classes f CROSS JOIN production_observations o ON o.event_id=f.event_id WHERE f.run_id=? AND o.kind='failed' AND (? OR f.class='policy') ORDER BY o.run_sequence DESC LIMIT 1";
+
 impl Store {
     #[allow(
         clippy::too_many_arguments,
@@ -127,16 +133,16 @@ impl Store {
             None
         };
         let failure = match (&run_id, phase) {
-            (Some(run), ExecutionPhase::Failed | ExecutionPhase::Cancelled) => sqlx::query_scalar::<_, String>(
-                "SELECT f.class FROM production_failure_classes f JOIN production_observations o ON o.event_id=f.event_id WHERE f.run_id=? AND o.kind='failed' AND (? OR f.class='policy') ORDER BY o.run_sequence DESC LIMIT 1",
-            )
-            .bind(run.to_string())
-            .bind(phase == ExecutionPhase::Failed)
-            .fetch_optional(&mut *tx)
-            .await
-            .map_err(db)?
-            .and_then(|class| super::observations::failure_class(&class))
-            .map(|class| orkestr_v2_contracts::ExecutionFailure { class }),
+            (Some(run), ExecutionPhase::Failed | ExecutionPhase::Cancelled) => {
+                sqlx::query_scalar::<_, String>(FAILURE_CLASS)
+                    .bind(run.to_string())
+                    .bind(phase == ExecutionPhase::Failed)
+                    .fetch_optional(&mut *tx)
+                    .await
+                    .map_err(db)?
+                    .and_then(|class| super::observations::failure_class(&class))
+                    .map(|class| orkestr_v2_contracts::ExecutionFailure { class })
+            }
             _ => None,
         };
         let control_revision = if let Some(run) = &run_id {
@@ -204,5 +210,34 @@ impl Store {
             },
         };
         Ok(Some(status))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::production_runtime::tests::setup;
+
+    #[tokio::test]
+    async fn failure_class_starts_from_the_runs_own_rows() {
+        let f = setup().await;
+        let plan: Vec<String> = sqlx::query(&format!("EXPLAIN QUERY PLAN {FAILURE_CLASS}"))
+            .bind("run")
+            .bind(true)
+            .fetch_all(&f.store.pool)
+            .await
+            .unwrap()
+            .iter()
+            .map(|row| row.get("detail"))
+            .collect();
+        assert!(
+            plan.iter()
+                .any(|step| step.starts_with("SEARCH o") && step.contains("event_id=?")),
+            "observations must be read by key: {plan:?}"
+        );
+        assert!(
+            !plan.iter().any(|step| step.starts_with("SCAN o")),
+            "observations must not be walked: {plan:?}"
+        );
     }
 }
