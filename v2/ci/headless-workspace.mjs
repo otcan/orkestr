@@ -101,6 +101,7 @@ export const scenarios = [
   ['tracker-guided', async label => trackerScenario({page,state,conversation:A,label,screenshot})],
   ['composer-tools', async label => {
     await page.waitForSelector('#composer');
+    assert.equal(await page.$('.message-files'),null,'plain messages must not show attachment loading placeholders');
     // Enter sends; Shift+Enter inserts a newline; IME composition never sends.
     const posts = () => Object.keys(state.intake).length;
     const before = posts();
@@ -152,6 +153,18 @@ export const scenarios = [
     assert.match(sent, /^Synthetic first line\nsecond line\n\n\[File attached in the Orkestr app/);
     assert.match(sent, /orkestr-v2-synthetic-pixel\.png \(image\/png, \d+ bytes.*local file \/synthetic\/attachments\//);
     assert.equal(await page.$$eval('.attachment-chip', n => n.length), 0, 'Sent attachments leave the composer');
+    await page.waitForSelector('.message-file-card button');
+    const fileCards=await page.$$('.message-file-card');
+    assert.equal(fileCards.length,2,'both message attachments expose scoped file controls');
+    await fileCards[0].$eval('button',button=>button.click());
+    await page.waitForFunction(()=>document.querySelector('.message-file-card strong')?.textContent==='orkestr-v2-synthetic-pixel.png');
+    await clickWithin('.message-file-card','Preview');
+    await page.waitForSelector('.message-file-card img');
+    assert.match(await page.$eval('.message-file-card img',node=>node.src),/^blob:/);
+    await clickWithin('.message-file-card','Close preview');
+    assert.equal(await page.$('.message-file-card img'),null);
+    assert.ok((await text('.message-file-card')).includes('Download'));
+    await screenshot(label,'message-file-preview-controls');
     // Oversized ordinary Send takes the encrypted attachment path automatically.
     const oversized='\r\n'+'界'.repeat(10923)+'  \n';
     const uploadsBefore=state.uploads.length;
