@@ -6,17 +6,21 @@ on:
   pull_request:
     branches: [integration, 'v2/**']
     paths: ['v2/**', '.github/workflows/v2-browser.yml', 'package-lock.json']
+    # Draft PRs skip the job; ready_for_review starts the full run.
+    types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
 
 permissions:
   contents: read
-# Only superseded PR checks cancel; manual and integration push runs stay independent.
+# A newer run replaces an older one for the same PR, and a newer push to
+# integration replaces the older integration run. Manual runs stay independent.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ${{ github.workflow }}-${{ (github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number)) || (github.event_name == 'push' && github.ref == 'refs/heads/integration' && format('push-{0}', github.ref)) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/integration') }}
 
 jobs:
   headless-rendering:
+    if: ${{ github.event.pull_request.draft != true }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:

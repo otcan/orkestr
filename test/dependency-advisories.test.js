@@ -172,7 +172,7 @@ test("workflow gates installs on advisory publication and uses trusted base poli
   assert.match(yaml, /POLICY_REF:.*pull_request.base.sha.*merge_group.base_sha/);
   assert.match(yaml, /if-no-files-found: error/); assert.match(yaml, /needs: dependency-advisories/);
   assert.match(yaml, /test "\$RESULT" = success/); assert.match(yaml, /test -n "\$EVIDENCE_DIGEST"/);
-  assert.match(yaml, /build:\n    needs: dependency-policy/);
+  assert.match(yaml, /build:\n    needs: \[dependency-policy, changes\]/);
   assert.equal((yaml.match(/npm ci --ignore-scripts --no-audit/g) || []).length, 3);
   assert.equal((yaml.match(/dependency-lifecycle.mjs --root . --installed/g) || []).length, 3);
   assert.equal((yaml.match(/sparse-checkout: scripts\/security\/dependency-\*/g) || []).length, 3);

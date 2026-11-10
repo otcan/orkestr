@@ -3,18 +3,24 @@ on:
   pull_request:
     branches: [integration, 'v2/**']
     paths: ['v2/**', '.github/workflows/v2-image.yml']
+    # Draft PRs skip both image builds; ready_for_review starts the full run.
+    types: [opened, synchronize, reopened, ready_for_review]
   push:
     branches: [integration, 'ci/image-cache/**']
     paths: ['v2/**', '.github/workflows/v2-image.yml']
   workflow_dispatch:
 permissions:
   contents: read
+# A newer run replaces an older one for the same PR, and a newer push to
+# integration replaces the older integration run. Manual runs and the
+# ci/image-cache/** branches keep a unique group and are never cancelled.
 concurrency:
-  group: v2-image-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: v2-image-${{ (github.event_name == 'pull_request' && github.event.pull_request.number) || (github.event_name == 'push' && github.ref == 'refs/heads/integration' && format('push-{0}', github.ref)) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/integration') }}
 jobs:
   linux-image-amd64:
     # Native builds only (no QEMU); runners stay literal for the workflow policy.
+    if: ${{ github.event.pull_request.draft != true }}
     runs-on: ubuntu-latest
     timeout-minutes: 75
     permissions:
@@ -219,6 +225,7 @@ jobs:
           retention-days: 7
   linux-image-arm64:
     # Native builds only (no QEMU); runners stay literal for the workflow policy.
+    if: ${{ github.event.pull_request.draft != true }}
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 75
     permissions:
