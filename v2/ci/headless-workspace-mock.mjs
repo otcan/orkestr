@@ -6,6 +6,7 @@ import { extname, join, normalize } from 'node:path';
 import { trackerApi } from './headless-tracker-mock.mjs';
 import { encryptedUploadMock } from './headless-encrypted-uploads.mjs';
 import { liveAnswerApi } from './headless-live-answer.mjs';
+import { agentAttachmentApi } from './headless-agent-attachments.mjs';
 
 export const A = '00000000-0000-4000-8000-00000000000a';
 export const B = '00000000-0000-4000-8000-00000000000b';
@@ -427,6 +428,7 @@ async function api(state, req, res, url) {
   if (!m || !names[m[1]]) return missing(res);
   const [, id, rest = ''] = m;
   if (state.live?.conversation === id && await liveAnswerApi(state, req, res, rest, { json, q })) return;
+  if (state.agentAttachments === id && agentAttachmentApi(state, req, res, rest, { json })) return;
   if (rest === '/intelligence' && req.method === 'GET') {
     const role = (configured, steer, max) => ({ configured, available: false, stop: configured,
       steer: configured && steer, accept: configured, max_parallel: configured ? max : 0 });

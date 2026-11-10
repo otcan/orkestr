@@ -11,6 +11,7 @@ import { providerSignIn } from './headless-provider-sign-in.mjs';
 import { silentReplies } from './headless-silent-replies.mjs';
 import { liveAnswer } from './headless-live-answer.mjs';
 import { messageRevisions } from './headless-message-revisions.mjs';
+import { agentAttachments } from './headless-agent-attachments.mjs';
 
 assert.equal(process.env.CI, 'true', 'Run only in isolated CI');
 assert.ok(process.env.UI_BUNDLE_DIR, 'UI_BUNDLE_DIR is required');
@@ -842,6 +843,7 @@ export const scenarios = [
     await page.reload({ waitUntil: 'domcontentloaded' });
   }],
   ['silent-replies', label => silentReplies({ page, state, origin, conversation: C, returnConversation: A, worker: V1_WORKER, screenshot, label })],
+  ['agent-reply-attachment', label => agentAttachments({ page, state, origin, conversation: C, returnConversation: A, screenshot, label })],
   ['message-revisions', label => messageRevisions({ page, state, origin, conversation: B, returnConversation: A, screenshot, label })],
   ['live-answer-handover', label => liveAnswer({ page, state, origin, conversation: B, returnConversation: A, screenshot, label })],
   ['live-catch-up', async label => {

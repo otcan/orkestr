@@ -12,6 +12,7 @@ from . import failure_cause
 from .attachment_files import MEDIA_EXTENSIONS, attachment_export_settings, export_attachment
 from . import execution_mode, intake_ahead
 from . import instructions
+from . import reply_files
 from . import continuation_guard
 from . import auto_steer
 from . import recovery
@@ -687,7 +688,8 @@ class Worker:
         text = self.render_final(payload["text"])
         if text is None:
             return self.web_dropped(watch, "no_reply")
-        self.ledger.complete_web(watch, text, self.provider_identity(run_id=run_id))
+        text, files = reply_files.prepare(self, text)
+        self.ledger.complete_web(watch, text, self.provider_identity(run_id=run_id), attachments=files)
 
     def finish_digest(self, data):
         digest = data["digest"]
@@ -962,6 +964,11 @@ class Worker:
         if text is None:
             # V1 never transports an exact NO_REPLY; it acknowledges it as no_reply.
             reply.update(text="NO_REPLY", noReply=True)
+        else:
+            # Files the turn attached with the reply-attach tool go with this reply.
+            reply["text"], files = reply_files.prepare(self, text)
+            if files:
+                reply["attachments"] = files
         self.ledger.complete(data, reply)
 
     def own_statuses(self, ids, roles=None):

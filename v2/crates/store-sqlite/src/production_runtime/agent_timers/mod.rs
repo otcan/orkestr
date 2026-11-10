@@ -47,6 +47,9 @@ use orkestr_v2_contracts::{
     AGENT_TIMER_HOURLY_CREATES_MAX, AGENT_TIMER_REFUSALS_MAX,
 };
 use sqlx::{sqlite::SqliteRow, Acquire, Sqlite, Transaction};
+mod attachments;
+#[cfg(test)]
+mod attachments_tests;
 mod grant;
 mod limits;
 pub(crate) use limits::daily_cap;

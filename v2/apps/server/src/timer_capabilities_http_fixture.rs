@@ -12,7 +12,8 @@ use orkestr_v2_store_sqlite::ExecutionConsumption;
 use std::time::Duration;
 use uuid::Uuid;
 
-pub(super) async fn running(timer_origin: bool) -> Case {
+/// A conversation with a running Deep turn (also used by agent attachment tests).
+pub(crate) async fn running(timer_origin: bool) -> Case {
     let case = case().await;
     let store = &case.state.store;
     let owner = store

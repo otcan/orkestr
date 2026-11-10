@@ -17,6 +17,7 @@ import uuid
 
 from .export_changes import ExportConnection
 from .outbound_text import scrub_local_paths
+from .reply_files import strip as strip_attachment_markers
 from . import failure_cause, notices
 
 SCHEMA = "2"
@@ -544,7 +545,7 @@ class Ledger:
             watch.setdefault("progress", []).append(payload_id)
             db.execute("UPDATE web_watch SET data=? WHERE message_id=?", (json.dumps(watch), message_id))
 
-    def complete_web(self, watch, text, identity=None):
+    def complete_web(self, watch, text, identity=None, attachments=None):
         """Export the accepted answer to a web message and stop awaiting it."""
         message_id = watch["message_id"]
         remote_id = str(uuid.uuid5(WEB_NAMESPACE, "answer:" + message_id))
@@ -552,6 +553,8 @@ class Ledger:
                  "state": "completed", "phase": "final_answer", "source": "rust-v2-pilot",
                  "parentMessageId": remote_id, "text": text}
         reply.update({k: v for k, v in (identity or {}).items() if k in IDENTITY_FIELDS and v})
+        if attachments:
+            reply["attachments"] = attachments
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
             self._pseudo_timer(db, remote_id, watch_label(watch, "answer"), int(time.time() * 1000),
@@ -782,9 +785,13 @@ class Ledger:
     # Exports -----------------------------------------------------------
     def scrub(self, message):
         """Shared chats: replace server-local file references, in place, before
-        the message is stored anywhere, so every replay carries the same text."""
-        if self.scrub_paths and isinstance(message, dict) and isinstance(message.get("text"), str):
-            message["text"] = scrub_local_paths(message["text"])
+        the message is stored anywhere, so every replay carries the same text.
+        Reply attachment markers never reach the chat as text (reply_files.py
+        turns a final's markers into attachments before it gets here)."""
+        if isinstance(message, dict) and isinstance(message.get("text"), str):
+            message["text"] = strip_attachment_markers(message["text"])
+            if self.scrub_paths:
+                message["text"] = scrub_local_paths(message["text"])
         return message
 
     def _export(self, db, data, kind, source_key, message):

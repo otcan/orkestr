@@ -46,6 +46,129 @@ fn validate(request: &AttachmentImportRequest) -> Result<()> {
     }
     Ok(())
 }
+/// An import request whose shape, byte digests and target scope were checked
+/// (outside any write transaction: hashing 16 MiB must not hold the lock).
+pub(crate) struct ValidImport<'a> {
+    request: &'a AttachmentImportRequest,
+    owner: &'a OwnerId,
+    conversation: &'a ConversationId,
+}
+pub(crate) fn validate_import<'a>(
+    request: &'a AttachmentImportRequest,
+    owner: &'a OwnerId,
+    conversation: &'a ConversationId,
+) -> Result<ValidImport<'a>> {
+    validate(request)?;
+    if request.target_manifest.owner_id != *owner
+        || request.target_manifest.conversation_id != *conversation
+    {
+        return Err(AttachmentError::NotFound);
+    }
+    Ok(ValidImport {
+        request,
+        owner,
+        conversation,
+    })
+}
+/// One import inside the caller's write transaction, which already
+/// authenticated the caller for the import's owner and conversation. Returns
+/// the receipt and whether it replays an earlier import of the same request
+/// key. The caller commits.
+pub(crate) async fn import_in(
+    tx: &mut Transaction<'_, Sqlite>,
+    valid: ValidImport<'_>,
+) -> Result<(AttachmentImportReceipt, bool)> {
+    let ValidImport {
+        request,
+        owner,
+        conversation,
+    } = valid;
+    let fingerprint = crate::digest(&serde_json::to_string(request).map_err(db)?);
+    let old=sqlx::query("SELECT request_digest,receipt_json FROM attachment_imports WHERE owner_id=? AND conversation_id=? AND request_key=?")
+        .bind(owner.to_string()).bind(conversation.to_string()).bind(&request.request_key).fetch_optional(&mut **tx).await.map_err(db)?;
+    if let Some(old) = old {
+        if old.try_get::<String, _>("request_digest").map_err(db)? != fingerprint {
+            return Err(AttachmentError::Conflict);
+        }
+        let receipt = serde_json::from_str(&old.try_get::<String, _>("receipt_json").map_err(db)?)
+            .map_err(db)?;
+        return Ok((receipt, true));
+    }
+    let collision: i64 = sqlx::query_scalar("SELECT count(*) FROM attachment_manifests WHERE id=?")
+        .bind(request.target_manifest.manifest_id.to_string())
+        .fetch_one(&mut **tx)
+        .await
+        .map_err(db)?;
+    if collision != 0 {
+        return Err(AttachmentError::Conflict);
+    }
+    for r in &request.target_manifest.references {
+        let count: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM attachment_objects WHERE reference_id=?")
+                .bind(r.reference_id.to_string())
+                .fetch_one(&mut **tx)
+                .await
+                .map_err(db)?;
+        if count != 0 {
+            return Err(AttachmentError::Conflict);
+        }
+    }
+    // Recipient snapshot for this import, read inside the write transaction.
+    let recipients = super::keys::active_recipients(tx, owner).await?;
+    let carries_bytes = request.mapping.iter().any(|m| {
+        request
+            .source
+            .contents
+            .iter()
+            .any(|c| c.reference_id == m.source_reference_id)
+    });
+    if recipients.is_empty() && carries_bytes && super::keys::required(tx, owner).await? {
+        return Err(AttachmentError::EncryptionKeyRequired);
+    }
+    sqlx::query("INSERT INTO attachment_manifests(id,owner_id,conversation_id,manifest_json) VALUES(?,?,?,?)")
+        .bind(request.target_manifest.manifest_id.to_string()).bind(owner.to_string()).bind(conversation.to_string()).bind(serde_json::to_string(&request.target_manifest).map_err(db)?)
+        .execute(&mut **tx).await.map_err(db)?;
+    for m in &request.mapping {
+        let target = request
+            .target_manifest
+            .references
+            .iter()
+            .find(|r| r.reference_id == m.target_reference_id)
+            .ok_or(AttachmentError::Invalid)?;
+        let bytes = request
+            .source
+            .contents
+            .iter()
+            .find(|c| c.reference_id == m.source_reference_id)
+            .map(|c| c.bytes.as_slice());
+        // With an active recipient only ciphertext is stored (bytes stay NULL).
+        let plaintext = if recipients.is_empty() { bytes } else { None };
+        sqlx::query("INSERT INTO attachment_objects(reference_id,manifest_id,bytes,removed) VALUES(?,?,?,?)")
+            .bind(m.target_reference_id.to_string()).bind(request.target_manifest.manifest_id.to_string()).bind(plaintext).bind(i64::from(target.state==AttachmentState::Removed))
+            .execute(&mut **tx).await.map_err(db)?;
+        if let (false, Some(bytes)) = (recipients.is_empty(), bytes) {
+            super::keys::insert_sealed(
+                tx,
+                &m.target_reference_id.to_string(),
+                &recipients,
+                &target.filename,
+                &target.media_type,
+                bytes,
+            )
+            .await?;
+        }
+    }
+    let receipt = AttachmentImportReceipt {
+        import_id: Uuid::new_v4(),
+        manifest: request.target_manifest.clone(),
+        source_manifest_id: request.source.manifest.manifest_id,
+        mapping: request.mapping.clone(),
+    };
+    sqlx::query("INSERT INTO attachment_imports(id,owner_id,conversation_id,request_key,request_digest,manifest_id,source_manifest_json,receipt_json) VALUES(?,?,?,?,?,?,?,?)")
+        .bind(receipt.import_id.to_string()).bind(owner.to_string()).bind(conversation.to_string()).bind(&request.request_key).bind(fingerprint)
+        .bind(receipt.manifest.manifest_id.to_string()).bind(serde_json::to_string(&request.source.manifest).map_err(db)?).bind(serde_json::to_string(&receipt).map_err(db)?).execute(&mut **tx).await.map_err(db)?;
+    Ok((receipt, false))
+}
 impl Store {
     pub async fn import_attachment_bundle_authenticated(
         &self,
@@ -54,102 +177,15 @@ impl Store {
         conversation: &ConversationId,
         request: &AttachmentImportRequest,
     ) -> Result<AttachmentImportReceipt> {
-        validate(request)?;
-        if request.target_manifest.owner_id != *owner
-            || request.target_manifest.conversation_id != *conversation
-        {
-            return Err(AttachmentError::NotFound);
-        }
-        let fingerprint = crate::digest(&serde_json::to_string(request).map_err(db)?);
+        let valid = validate_import(request, owner, conversation)?;
         let mut tx = self
             .attachment_transaction(credential, owner, conversation, true)
             .await?;
-        let old=sqlx::query("SELECT request_digest,receipt_json FROM attachment_imports WHERE owner_id=? AND conversation_id=? AND request_key=?")
-            .bind(owner.to_string()).bind(conversation.to_string()).bind(&request.request_key).fetch_optional(&mut *tx).await.map_err(db)?;
-        if let Some(old) = old {
-            if old.try_get::<String, _>("request_digest").map_err(db)? != fingerprint {
-                return Err(AttachmentError::Conflict);
-            }
-            let receipt =
-                serde_json::from_str(&old.try_get::<String, _>("receipt_json").map_err(db)?)
-                    .map_err(db)?;
+        let (receipt, replayed) = import_in(&mut tx, valid).await?;
+        if replayed {
             tx.commit().await.map_err(db)?;
             return Ok(receipt);
         }
-        let collision: i64 =
-            sqlx::query_scalar("SELECT count(*) FROM attachment_manifests WHERE id=?")
-                .bind(request.target_manifest.manifest_id.to_string())
-                .fetch_one(&mut *tx)
-                .await
-                .map_err(db)?;
-        if collision != 0 {
-            return Err(AttachmentError::Conflict);
-        }
-        for r in &request.target_manifest.references {
-            let count: i64 =
-                sqlx::query_scalar("SELECT count(*) FROM attachment_objects WHERE reference_id=?")
-                    .bind(r.reference_id.to_string())
-                    .fetch_one(&mut *tx)
-                    .await
-                    .map_err(db)?;
-            if count != 0 {
-                return Err(AttachmentError::Conflict);
-            }
-        }
-        // Recipient snapshot for this import, read inside the write transaction.
-        let recipients = super::keys::active_recipients(&mut tx, owner).await?;
-        let carries_bytes = request.mapping.iter().any(|m| {
-            request
-                .source
-                .contents
-                .iter()
-                .any(|c| c.reference_id == m.source_reference_id)
-        });
-        if recipients.is_empty() && carries_bytes && super::keys::required(&mut tx, owner).await? {
-            return Err(AttachmentError::EncryptionKeyRequired);
-        }
-        sqlx::query("INSERT INTO attachment_manifests(id,owner_id,conversation_id,manifest_json) VALUES(?,?,?,?)")
-            .bind(request.target_manifest.manifest_id.to_string()).bind(owner.to_string()).bind(conversation.to_string()).bind(serde_json::to_string(&request.target_manifest).map_err(db)?)
-            .execute(&mut *tx).await.map_err(db)?;
-        for m in &request.mapping {
-            let target = request
-                .target_manifest
-                .references
-                .iter()
-                .find(|r| r.reference_id == m.target_reference_id)
-                .ok_or(AttachmentError::Invalid)?;
-            let bytes = request
-                .source
-                .contents
-                .iter()
-                .find(|c| c.reference_id == m.source_reference_id)
-                .map(|c| c.bytes.as_slice());
-            // With an active recipient only ciphertext is stored (bytes stay NULL).
-            let plaintext = if recipients.is_empty() { bytes } else { None };
-            sqlx::query("INSERT INTO attachment_objects(reference_id,manifest_id,bytes,removed) VALUES(?,?,?,?)")
-                .bind(m.target_reference_id.to_string()).bind(request.target_manifest.manifest_id.to_string()).bind(plaintext).bind(i64::from(target.state==AttachmentState::Removed))
-                .execute(&mut *tx).await.map_err(db)?;
-            if let (false, Some(bytes)) = (recipients.is_empty(), bytes) {
-                super::keys::insert_sealed(
-                    &mut tx,
-                    &m.target_reference_id.to_string(),
-                    &recipients,
-                    &target.filename,
-                    &target.media_type,
-                    bytes,
-                )
-                .await?;
-            }
-        }
-        let receipt = AttachmentImportReceipt {
-            import_id: Uuid::new_v4(),
-            manifest: request.target_manifest.clone(),
-            source_manifest_id: request.source.manifest.manifest_id,
-            mapping: request.mapping.clone(),
-        };
-        sqlx::query("INSERT INTO attachment_imports(id,owner_id,conversation_id,request_key,request_digest,manifest_id,source_manifest_json,receipt_json) VALUES(?,?,?,?,?,?,?,?)")
-            .bind(receipt.import_id.to_string()).bind(owner.to_string()).bind(conversation.to_string()).bind(&request.request_key).bind(fingerprint)
-            .bind(receipt.manifest.manifest_id.to_string()).bind(serde_json::to_string(&request.source.manifest).map_err(db)?).bind(serde_json::to_string(&receipt).map_err(db)?).execute(&mut *tx).await.map_err(db)?;
         #[cfg(feature = "fixture-test-controls")]
         self.production_checkpoint("attachment-import-before-commit")
             .await
@@ -161,6 +197,8 @@ impl Store {
             .map_err(db)?;
         Ok(receipt)
     }
+}
+impl Store {
     pub async fn remove_attachment_authenticated(
         &self,
         credential: &str,
