@@ -21,6 +21,7 @@ function fixture(t, footer = false, progress = false, extraConfig = {}) {
   Object.assign(config, relayConfig);
   const state = {posts: [], uploads: [], sent: [], reports: [], failReport: false, suppressUpdates: false, messageReads: 0, pages: {}, retired: new Set(), failReply: false,
     suppressFooter: false, quotaFails: false, quotaCalls: 0, uploadFailures,
+    threadOverride: {}, bindingOverride: {},
     quota: {codex: {fiveHourRemainingPct: 73}, claude: {weeklyRemainingPct: 64}}};
   const api = async (url, options) => {
     if (url.startsWith('/api/quota/providers')) {
@@ -43,17 +44,18 @@ function fixture(t, footer = false, progress = false, extraConfig = {}) {
       state.posts.push({url, ...options});
       return {message: {id: `input-${threadId}`}};
     }
-    if (url.includes('/messages')) { state.messageReads++; return state.pages[url] || {messages: []}; }
-    return {thread: {ownerUserId: config.ownerUserId, codexModel: 'example-model', retired: state.retired.has(threadId),
-      binding: {chatId: groupId, enabled: true, suppressWhatsAppDebugFooter: state.suppressFooter, suppressWhatsAppUpdates: state.suppressUpdates}}};
+    if (url.includes('/messages')) { state.messageReads++; state.afterMessageRead?.(url); return state.pages[url] || {messages: []}; }
+    return {thread: {...state.threadOverride, ownerUserId: state.threadOverride.ownerUserId || config.ownerUserId, codexModel: 'example-model', retired: state.retired.has(threadId),
+      binding: {chatId: groupId, enabled: true, suppressWhatsAppDebugFooter: state.suppressFooter, suppressWhatsAppUpdates: state.suppressUpdates, ...state.bindingOverride}}};
   };
-  const relay = createScopedGroupRelay({config, inboxDb, relayDb, api, formatter, env: {}, readMediaFile, now, send: async payload => {
+  const makeRelay = () => createScopedGroupRelay({config, inboxDb, relayDb, api, formatter, env: {}, readMediaFile, now, send: async payload => {
     state.sent.push(payload);
     if (state.failReply) throw new Error('transport_disconnected');
     return {ok: true, ids: ['sent-1']};
   }});
+  const relay = makeRelay();
   t.after(() => {inboxDb.close(); relayDb.close();});
-  return {relay, state, inboxDb, relayDb, config};
+  return {relay, state, inboxDb, relayDb, config, makeRelay};
 }
 
 test('staged media read failure is visible and still routes caption', async t => {
@@ -572,4 +574,71 @@ test('without a media root, reply files are not sent', async t => {
   state.pages['/api/threads/thread-1/messages?limit=200'] = {messages: [{...answer('final'), attachments: [{id: 'att-1'}]}]};
   await relay.tick();
   assert.deepEqual(state.sent.map(s => s.text), ['agent: answer']);
+});
+
+const rustThread = '11111111-1111-4111-8111-111111111111';
+const rustInput = '22222222-2222-4222-8222-222222222222';
+const rustParent = {id: 'input-thread-1', role: 'user', remoteBackend: 'rust-v2', remoteThreadId: rustThread, remoteMessageId: rustInput};
+function rustAcceptedFinal() {
+  return {...answer('accepted-final'), source: 'rust-v2-pilot', createdAt: '2026-01-01T00:01:10Z',
+    remoteBackend: 'rust-v2', remoteThreadId: rustThread,
+    remoteMessageId: '33333333-3333-4333-8333-333333333333', remoteExportSequence: '248',
+    remoteParentMessageId: rustInput, remoteOriginalInputId: rustInput,
+    remoteLayer: 'deep', remoteIdentitySource: 'run', remoteRunId: '44444444-4444-4444-8444-444444444444'};
+}
+async function completedRustNotice(t) {
+  let clock = Date.parse('2026-01-01T00:01:00Z');
+  const f = fixture(t, false, false, {now: () => clock});
+  f.state.bindingOverride = {remoteBackend: 'rust-v2', remoteThreadId: rustThread, mirrorToWhatsApp: false};
+  f.inboxDb.exec("UPDATE group_input SET created_at='2026-01-01T00:00:00Z'");
+  const notice = {...answer('old-notice'), source: 'rust-v2-adapter', kind: 'notice', refusal: 'transport_unconfirmed', text: 'An earlier technical notice'};
+  f.state.pages['/api/threads/thread-1/messages?limit=200'] = {messages: [rustParent, notice]};
+  assert.equal((await f.relay.tick()).completed, 1);assert.equal(f.state.sent.length, 1);
+  f.state.pages['/api/threads/thread-1/messages?limit=50'] = {messages: [rustParent, notice, rustAcceptedFinal()]};
+  return {...f, advance() {clock += 20_000;}};
+}
+test('completed notice route delivers the later typed accepted Rust final once and reports ACK', async t => {
+  const f = await completedRustNotice(t);f.advance();
+  assert.equal((await f.relay.tick()).ok, true);assert.equal(f.state.sent.length, 2);
+  assert.equal(f.state.reports.length, 1);assert.match(f.state.reports[0].url, /accepted-final\/scoped-relay-delivery$/);
+  assert.deepEqual(f.state.reports[0].body.connectorMessageIds, ['sent-1']);
+  assert.equal(f.relayDb.prepare("SELECT completed FROM routed WHERE id='wa-1'").get().completed, 1);
+  f.relay.close();const restarted = f.makeRelay();await restarted.deliverThreads(['thread-1']);
+  assert.equal(f.state.sent.length, 2);assert.equal(f.state.reports.length, 1);
+  assert.equal(f.state.posts.length, 1, 'original input was never rerouted');restarted.close();
+});
+test('an explicitly parented accepted Rust final is not hidden by a newer completed input', async t => {
+  const f = await completedRustNotice(t);
+  f.inboxDb.exec("INSERT INTO group_input(id,chat_id,body,created_at) VALUES('wa-new','group-1','newer input','2026-01-01T00:01:05Z')");
+  f.relayDb.exec("INSERT INTO routed VALUES('wa-new','thread-1','newer-parent',1)");f.advance();
+  await f.relay.tick();assert.equal(f.state.sent.length, 2);assert.equal(f.state.sent[1].parentId, 'wa-1');
+});
+test('typed Rust late final rejects missing lineage and foreign or rebound remote metadata', async t => {
+  const f = await completedRustNotice(t);const page = '/api/threads/thread-1/messages?limit=50';
+  for (const patch of [{remoteBackend: 'foreign'}, {remoteThreadId: 'foreign'}, {remoteParentMessageId: 'foreign'}, {remoteOriginalInputId: 'foreign'}, {remoteRunId: ''}, {remoteLayer: 'fast'}, {remoteIdentitySource: 'settings'}, {remoteExportSequence: '0'}, {remoteMessageId: ''}]) {
+    f.state.pages[page] = {messages: [rustParent, {...rustAcceptedFinal(), ...patch}]};f.advance();await f.relay.tick();
+  }
+  assert.equal(f.state.sent.length, 1);assert.equal(f.state.reports.length, 0);
+  f.state.pages[page] = {messages: [rustParent, rustAcceptedFinal()]};f.state.bindingOverride.remoteThreadId = 'changed';f.advance();await f.relay.tick();
+  assert.equal(f.state.sent.length, 1);f.state.bindingOverride.remoteThreadId = rustThread;
+  f.state.threadOverride.ownerUserId = 'other-owner';f.advance();assert.equal((await f.relay.deliverThreads(['thread-1'])).ok, false);assert.equal(f.state.sent.length, 1);
+});
+test('a confirmed late Rust send retries only its ACK report after restart', async t => {
+  const f = await completedRustNotice(t);f.state.failReport = true;f.advance();assert.equal((await f.relay.tick()).ok, false);
+  assert.equal(f.state.sent.length, 2);assert.equal(f.state.reports.length, 1);f.relay.close();
+  f.state.failReport = false;const restarted = f.makeRelay();assert.equal((await restarted.deliverThreads(['thread-1'])).ok, true);
+  assert.equal(f.state.sent.length, 2);assert.equal(f.state.reports.length, 2);restarted.close();
+});
+test('an uncertain transport keeps a late accepted Rust final held across restart', async t => {
+  const f = await completedRustNotice(t);f.inboxDb.exec("INSERT INTO group_send VALUES('uncertain')");f.relay.close();
+  const restarted = f.makeRelay();assert.equal((await restarted.deliverThreads(['thread-1'])).error, 'group_delivery_requires_review');
+  assert.equal(f.state.sent.length, 1);assert.equal(f.state.reports.length, 0);restarted.close();
+});
+
+test('a remote rebind after listing is refused immediately before the late send', async t => {
+  const f = await completedRustNotice(t);
+  f.state.afterMessageRead = url => { if (url.endsWith('limit=50')) f.state.bindingOverride.remoteThreadId = 'rebound-thread'; };
+  f.advance();const status = await f.relay.tick();
+  assert.equal(status.ok, false);assert.ok(status.errors.includes('group_remote_final_binding_changed'));
+  assert.equal(f.state.sent.length, 1);assert.equal(f.state.reports.length, 0);
 });

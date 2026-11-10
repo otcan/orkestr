@@ -16,6 +16,7 @@ from .config import load
 from .ledger import MAX_ATTACHMENT_BYTES, OUTCOMES, Conflict
 from .registry import Registry
 from .rust_client import RustClient, RustSession
+from .outbound_gate import OutboundGate
 
 MAX_INPUT_BYTES = 65536
 MAX_UPLOAD_BYTES = 4 * (MAX_ATTACHMENT_BYTES // 3 + 1) + 4096
@@ -304,7 +305,7 @@ def main():
     config, static = load(args.config)
     session = RustSession(**{key: config[key] for key in
                              ("origin", "loopback_url", "credentials_path", "expected_owner", "expected_source")},
-                          peer_descriptor_path=config.get("peer_descriptor_path"))
+                          peer_descriptor_path=config.get("peer_descriptor_path"), outbound_gate=OutboundGate())
     registry = Registry(config, lambda conversation: RustClient(conversation_id=conversation, session=session), static)
     registry.reload()
     stop, wake = threading.Event(), threading.Event()
