@@ -29,6 +29,7 @@ async fn owner_binding_and_cookie_authority_are_checked_before_remote_read() {
         broker: Broker::new("http://127.0.0.1:9", "a".repeat(24)).unwrap(),
         owner: OwnerId(uuid::Uuid::new_v4()),
         legacy_owner: "synthetic-other".into(),
+        cache: cache::Cache::default(),
     }));
     assert_eq!(
         send(&c.state, "GET", "/api/v2/provider-quotas", &[&cookie], "")
@@ -71,6 +72,7 @@ async fn scoped_projection_and_revocation_during_the_read() {
             .unwrap(),
             owner,
             legacy_owner: "legacy-owner".into(),
+            cache: cache::Cache::default(),
         }));
         let store = c.state.store.clone();
         let token = format!("browser:{}", c.cookie);
@@ -109,6 +111,25 @@ async fn scoped_projection_and_revocation_during_the_read() {
             assert_eq!(value["quota"]["claude"]["weeklyStatus"], "allowed");
             assert_eq!(value["staleAfterMs"], 120000);
             assert!(!value.to_string().contains("private"));
+            // The upstream has closed. A second request uses the validated cache,
+            // while revocation must still deny that same cached response.
+            assert_eq!(
+                send(&c.state, "GET", "/api/v2/provider-quotas", &[&cookie], "")
+                    .await
+                    .0,
+                200
+            );
+            c.state
+                .store
+                .revoke_session(&format!("browser:{}", c.cookie))
+                .await
+                .unwrap();
+            assert_eq!(
+                send(&c.state, "GET", "/api/v2/provider-quotas", &[&cookie], "")
+                    .await
+                    .0,
+                401
+            );
         }
         c.finish().await;
     }
