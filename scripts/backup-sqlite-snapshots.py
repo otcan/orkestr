@@ -103,6 +103,28 @@ def positive(name, default):
     return value
 
 
+def copy_snapshot(source, target, progress):
+    """Pin a WAL read snapshot while copying, release it before verification.
+
+    External writers otherwise cause the incremental backup to restart. WAL
+    readers do not block commits, but pin checkpoint history: keep the existing
+    global deadline and release the read transaction on every error path.
+    Rollback-journal databases retain the original per-step locking behavior.
+    """
+    if source.in_transaction:
+        raise ValueError('snapshot source already has a transaction')
+    pinned = source.execute('PRAGMA journal_mode').fetchone()[0].lower() == 'wal'
+    try:
+        if pinned:
+            source.execute('BEGIN')
+            source.execute('SELECT rootpage FROM sqlite_schema LIMIT 1').fetchall()
+        source.backup(target, pages=128, progress=progress, sleep=0.01)
+    finally:
+        if pinned and source.in_transaction:
+            source.rollback()
+    return pinned
+
+
 def prepare(home, stage):
     if home.is_symlink():
         raise ValueError('state home must be a directory, not a symlink')
@@ -134,6 +156,13 @@ def prepare(home, stage):
     total = 0
     seen = set()
     for default, variable in CANONICAL.items():
+        started = time.monotonic()
+        cpu_started = time.process_time()
+        def report(phase, **fields):
+            print(json.dumps({'kind': 'sqlite_snapshot', 'database': default, 'phase': phase,
+                              'elapsed_seconds': round(time.monotonic() - started, 3),
+                              'cpu_seconds': round(time.process_time() - cpu_started, 3), **fields}),
+                  file=sys.stderr, flush=True)
         path = canonical_path(home, default, variable)
         relative = path.relative_to(home).as_posix()
         if any(p == '..' for p in Path(relative).parts):
@@ -162,26 +191,39 @@ def prepare(home, stage):
         if remaining <= 0:
             raise ValueError('SQLite snapshot byte budget exhausted')
         resource.setrlimit(resource.RLIMIT_FSIZE, (remaining, resource.getrlimit(resource.RLIMIT_FSIZE)[1]))
+        last_report = [time.monotonic()]
         def progress(_status, _remaining, _pages):
             if time.monotonic() >= deadline:
                 raise TimeoutError('SQLite snapshot deadline exceeded')
             if destination.stat().st_size > remaining:
                 raise ValueError('SQLite snapshot byte budget exceeded')
+            if time.monotonic() - last_report[0] >= 10:
+                report('copy_progress', remaining_pages=_remaining, total_pages=_pages,
+                       sqlite_status=_status, snapshot_bytes=destination.stat().st_size)
+                last_report[0] = time.monotonic()
         with closing(sqlite3.connect(path.as_uri() + '?mode=ro', uri=True, timeout=1)) as source:
             with closing(sqlite3.connect(destination)) as target:
                 target.set_progress_handler(lambda: int(time.monotonic() >= deadline), 10000)
-                source.backup(target, pages=128, progress=progress, sleep=0.01)
+                report('copy_start', source_bytes=path.stat().st_size,
+                       logical_pages=source.execute('PRAGMA page_count').fetchone()[0],
+                       page_size=source.execute('PRAGMA page_size').fetchone()[0])
+                pinned = copy_snapshot(source, target, progress)
+                report('copy_complete', wal_read_snapshot=pinned, source_transaction_released=not source.in_transaction)
+                report('integrity_start')
                 if target.execute('PRAGMA integrity_check').fetchall() != [('ok',)]:
                     raise ValueError('snapshot integrity check failed')
+                report('integrity_complete')
         size = destination.stat().st_size
         total += size
         if total > budget:
             raise ValueError('SQLite snapshot byte budget exceeded')
         digest = hashlib.sha256()
+        report('hash_start', snapshot_bytes=size)
         with destination.open('rb') as stream:
             for block in iter(lambda: stream.read(1024 * 1024), b''):
                 digest.update(block)
         digest = digest.hexdigest()
+        report('complete', snapshot_bytes=size)
         records.append({'original_relative_path': relative, 'bytes': size, 'sha256': digest, 'complete': True})
     # The caller applies --anchored --no-wildcards only to these exclusions.
     (stage / 'excludes.nul').write_bytes(b''.join((home.name + '/' + p).encode() + b'\0' for p in exclusions))

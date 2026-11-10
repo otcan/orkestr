@@ -17,6 +17,9 @@ Rules:
 - Do not add enterprise/team/plugin abstractions until the V1 onboarding loop is reliable.
 - Keep the install path boring: clone/install/start, open setup wizard, connect
   the first capability, create a thread or timer.
+- V2 is the primary application. Feature PRs target `integration`; the release
+  train selects an exact candidate on `prod` and advances `main` only after
+  production acceptance. Branch updates alone do not start a deployment.
 - Release, tag, merge-to-main, and deploy work must follow
   `docs/release-train.md`. Worker and parent threads may commit and push their
   own branches, but deployments must go through the release train.
@@ -134,3 +137,13 @@ CPU and tens of GiB of disk.
   in the PR.
 - Remove a worktree's `target/` directory when the work is done. Shared hosts
   may prune target directories that have not been touched for a few hours.
+## Grant Application Workflows
+
+When a task concerns grant or funding applications, follow
+[the grant application workflow](docs/grant-applications.md). Keep each
+application's canonical section Markdown files and Git history in its authorized
+private repository. Pin portal-verified content separately from later drafts;
+never infer submission from a local commit. Use a permission-aware, metadata-only
+catalog for coordination between parent and application threads. This public
+repository contains generic guidance only, not real application records, private
+catalog entries, evidence, or private repository/thread links.

@@ -11,6 +11,7 @@ import {
   messageTimestampMs,
   threadMessagePagePayload,
   threadMessagePageQuery,
+  type ThreadMessagePageOptions,
 } from "./thread-message-page.js";
 
 // Messages fetched per round trip while walking a thread newest first.
@@ -94,7 +95,7 @@ function threadSummary(store: any): ThreadSummary {
 }
 
 // Visibility of a message depends only on itself and on other messages of the same turn.
-function visibleMessages(store: any, turns: Map<string, any[]>, messages: any[]) {
+function visibleMessages(store: any, turns: Map<string, any[]>, messages: any[], includeNoReply = false) {
   const turnIds = [...new Set(messages.filter(runtimeInterruptedMessage).map(messageTurnId).filter(Boolean))];
   const missing = turnIds.filter((turnId) => !turns.has(turnId));
   for (const turnId of missing) turns.set(turnId, []);
@@ -102,11 +103,12 @@ function visibleMessages(store: any, turns: Map<string, any[]>, messages: any[])
     // Only exact turn matches matter; the store query is a substring superset.
     turns.get(messageTurnId(message))?.push(message);
   }
-  return new Set(visibleThreadMessages([...messages, ...turnIds.flatMap((turnId) => turns.get(turnId) || [])]));
+  return new Set(visibleThreadMessages([...messages, ...turnIds.flatMap((turnId) => turns.get(turnId) || [])], { includeNoReply }));
 }
 
 // Yields visible messages newest first, loading bodies in bounded chunks.
-function* visibleNewestFirst(store: any, summary: ThreadSummary, loaded: Map<number, any>, include: (entry: Entry) => boolean) {
+function* visibleNewestFirst(store: any, summary: ThreadSummary, loaded: Map<number, any>, include: (entry: Entry) => boolean,
+  includeNoReply = false) {
   const { ordered } = summary;
   let end = ordered.length;
   while (end > 0) {
@@ -118,7 +120,7 @@ function* visibleNewestFirst(store: any, summary: ThreadSummary, loaded: Map<num
     const missing = chunk.map((entry) => entry.position).filter((position) => !loaded.has(position));
     for (const row of store.messagesAt(missing)) loaded.set(row.position, row.message);
     const messages = chunk.map((entry) => ({ ...loaded.get(entry.position), cursor: entry.cursor }));
-    const visible = visibleMessages(store, summary.turns, messages);
+    const visible = visibleMessages(store, summary.turns, messages, includeNoReply);
     for (let offset = 0; offset < chunk.length; offset += 1) {
       if (visible.has(messages[offset])) yield { message: messages[offset], index: chunk[offset].index };
     }
@@ -141,14 +143,15 @@ export function pendingQuestionForSummary(store: any, summary: ThreadSummary) {
 
 // Same payload as threadMessagePage(thread, await listThreadMessages(...)) without parsing every message.
 // Returns null when the thread message store is not sqlite so callers fall back to the full list.
-export async function storedThreadMessagePage(thread: any, query: Record<string, unknown> = {}, status: any = null) {
+export async function storedThreadMessagePage(thread: any, query: Record<string, unknown> = {}, status: any = null,
+  options: ThreadMessagePageOptions = {}) {
   return readThreadMessageStore(thread.id, (store: any) => {
     const summary = threadSummary(store);
-    const pageQuery = threadMessagePageQuery(query);
+    const pageQuery = threadMessagePageQuery(query, options);
     const loaded = new Map<number, any>();
     const page: Array<{ message: any; index: number }> = [];
     const inRange = (entry: Entry) => pageQuery.includes({ cursor: entry.cursor, text: "x" });
-    for (const item of visibleNewestFirst(store, summary, loaded, inRange)) {
+    for (const item of visibleNewestFirst(store, summary, loaded, inRange, pageQuery.includeNoReply)) {
       if (!pageQuery.includes(item.message)) continue;
       page.unshift(item);
       if (page.length >= pageQuery.limit) break;

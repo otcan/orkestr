@@ -300,7 +300,7 @@ test("demo VM contract is private, WhatsApp-number driven, and part of smoke scr
     fs.readFile("charts/orkestr/templates/deployment.yaml", "utf8"),
     fs.readFile("scripts/smoke-k3s-oss-demo.mjs", "utf8"),
     fs.readFile("package.json", "utf8"),
-    fs.readFile("README.md", "utf8"),
+    fs.readFile("README.v1.md", "utf8"),
   ]);
 
   assert.match(entrypoint, /ORKESTR_DEMO_WHATSAPP_NUMBER/);

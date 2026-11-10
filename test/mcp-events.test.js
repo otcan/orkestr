@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
+import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -70,6 +71,43 @@ test("outbound fetches refuse private, local and non-HTTPS targets", async () =>
   assert.throws(() => assertPublicHttpsUrl("http://example.com/cb"), /url_must_be_public_https/);
   assert.throws(() => assertPublicHttpsUrl("https://127.0.0.1/cb"), /url_address_not_public/);
   await assert.rejects(safePublicFetch("https://internal.example/cb", { lookup: async () => [{ address: "10.0.0.5", family: 4 }] }), /url_address_not_public/);
+});
+
+test("outbound fetches refuse IPv4-translated and local-use NAT64 IPv6 targets before the transport", async () => {
+  let transportCalls = 0;
+  const request = () => { transportCalls += 1; throw new Error("transport_reached"); };
+  for (const address of ["::ffff:0:7f00:1", "::ffff:0:127.0.0.1", "0:0:0:0:ffff:0:a00:1", "64:ff9b:1::1", "64:ff9b:1::7f00:1"]) {
+    assert.equal(publicAddress(address), false, address);
+    assert.throws(() => assertPublicHttpsUrl(`https://[${address}]/cb`), /url_address_not_public/, address);
+    await assert.rejects(safePublicFetch(`https://[${address}]/cb`, { request }), /url_address_not_public/, address);
+    await assert.rejects(safePublicFetch("https://translated.example/cb", { lookup: async () => [{ address, family: 6 }], request }), /url_address_not_public/, address);
+  }
+  for (const address of ["::ffff:0:7f00:1", "64:ff9b:1::1"]) {
+    const lookup = async () => [{ address: "2606:4700:4700::1111", family: 6 }, { address, family: 6 }];
+    await assert.rejects(safePublicFetch("https://mixed.example/cb", { lookup, request }), /url_address_not_public/, address);
+  }
+  assert.equal(transportCalls, 0);
+});
+
+test("outbound fetches still reach an ordinary global IPv6 address", async () => {
+  const connected = [];
+  const request = (options, onResponse) => {
+    const req = new EventEmitter();
+    req.write = () => {};
+    req.destroy = (error) => req.emit("error", error);
+    req.end = () => {
+      options.lookup(options.hostname, {}, (_error, address, family) => connected.push({ address, family }));
+      const res = Object.assign(new EventEmitter(), { statusCode: 204, headers: {} });
+      onResponse(res);
+      res.emit("end");
+    };
+    return req;
+  };
+  assert.equal(publicAddress("2606:4700:4700::1111"), true);
+  assert.equal(assertPublicHttpsUrl("https://[2606:4700:4700::1111]/cb").hostname, "[2606:4700:4700::1111]");
+  const response = await safePublicFetch("https://global.example/cb", { lookup: async () => [{ address: "2606:4700:4700::1111", family: 6 }], request });
+  assert.equal(response.status, 204);
+  assert.deepEqual(connected, [{ address: "2606:4700:4700::1111", family: 6 }]);
 });
 
 test("MCP 2.0 requests are validated against their headers and version", async (t) => {

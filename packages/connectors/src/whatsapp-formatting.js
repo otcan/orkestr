@@ -1,4 +1,5 @@
 import os from "node:os";
+import { noticeMessage } from "./whatsapp-footer-audience.js";
 import { singleAgentFooter } from "./whatsapp-agent-footer.js";
 import { dualProviderQuotaLines } from "./whatsapp-quota-footer.js";
 import { threadQuotaProvider } from "../../core/src/provider-quota-snapshot.js";
@@ -102,7 +103,7 @@ function footerEnabled(env = process.env) {
 
 // Matches the multi-line footer ("dbg: ..." then provider quota lines and the
 // queue/load line) and the older single-line "dbg: m:..." footer.
-const WHATSAPP_DEBUG_FOOTER_PATTERN = /\s*\n(?:dbg:|🤖 |⚡ Quick:|🧠 (?:Deep|Coordinator):)[^\n]*(?:\n(?:codex|claude)\b[^\n]*){0,2}(?:\n(?:q|queue):[^\n]*)?\s*$/i;
+const WHATSAPP_DEBUG_FOOTER_PATTERN = /\s*(?:\n(?:dbg:|🤖 |⚡ Quick:|🧠 (?:Deep|Coordinator):)[^\n]*(?:\n(?:codex|claude)\b[^\n]*){0,2}(?:\n(?:q|queue):[^\n]*)?|\n(?:(?:codex|claude)\b[^\n]*\n){0,2}(?:q|queue):[^\n]*help:\/help)\s*$/i;
 
 export function stripWhatsAppDebugFooter(text) {
   let current = String(text || "");
@@ -146,7 +147,7 @@ function codexModelDebugLabel(message = {}, thread = {}, env = process.env) {
     metadata.codexModel,
     env.ORKESTR_DEFAULT_CODEX_MODEL,
     env.OPENAI_MODEL,
-    "unknown",
+    "?",
   );
   const effort = shortReasoningEffort(
     pickString(
@@ -170,7 +171,7 @@ function claudeModelDebugLabel(message = {}, thread = {}) {
     metadata.claudeModel,
     thread.claudeModelResolved,
     metadata.claudeModelResolved,
-    "unknown",
+    "?",
   );
   const effort = shortReasoningEffort(
     pickString(
@@ -352,9 +353,10 @@ export function shouldAppendWhatsAppDebugFooter(message = {}, env = process.env,
   if (!footerEnabled(env)) return false;
   if (thread && threadRequiresTenantIsolation(thread, env)) return false;
   if (thread && threadSuppressesWhatsAppDebugFooter(thread, message?.chatId, env)) return false;
+  if (noticeMessage(message, deliveryType)) return true;
   if (codexAssistantSource(message) || message.source === "claude-code" || message.source === "orkestr_runtime") return true;
   if (remoteRuntimeReply(message, env)) return true;
-  return ["delivery_error", "mode_queued", "queue_notice", "router_update"].includes(String(deliveryType || "").trim());
+  return ["timer_reply", "delivery_error", "mode_queued", "queue_notice", "router_update"].includes(String(deliveryType || "").trim());
 }
 
 function footerMessageType(deliveryType = "") {
@@ -371,7 +373,6 @@ export function whatsappDebugFooter({ message = {}, thread = {}, messages = [], 
   const agent = threadQuotaProvider(thread) || "api-agent";
   const mode = codexModeDebugValue(message, thread);
   const runtimeSurface = runtimeSurfaceDebugValue(thread);
-  const queueNotice = String(deliveryType || "").trim() === "queue_notice";
   const identity = remoteRuntimeReply(message, env) ? [
     singleAgentFooter(message),
     `msg:*${footerMessageType(deliveryType)}*`,
@@ -383,15 +384,25 @@ export function whatsappDebugFooter({ message = {}, thread = {}, messages = [], 
     // WhatsApp renders *text* bold, so the message type stands out.
     `msg:*${footerMessageType(deliveryType)}*`,
   ];
-  const load = [
+  const quota = whatsappNoticeFooter({ message, thread, messages, deliveryType, env });
+  return noticeMessage(message, deliveryType) ? quota : [identity.join(" · "), quota].join("\n");
+}
+
+function queueLoadLine(message, messages, deliveryType) {
+  const queueNotice = String(deliveryType || "").trim() === "queue_notice";
+  return [
     ...(queueNotice
       ? [`queue:${queueNoticeDebugCount(messages, message)}`, `reason:${queueNoticeDebugReason(message)}`]
       : [`q:${queueDebugCount(messages, message)}`]),
     `load:${loadDebugPercent()}%`,
     `api:${processCpuDebugPercent()}%`,
     "help:/help",
-  ];
-  return [identity.join(" · "), ...dualProviderQuotaLines(thread, env), load.join(" · ")].join("\n");
+  ].join(" · ");
+}
+
+// System notices have no model run; retain main's compact quota/load form.
+export function whatsappNoticeFooter({ message = {}, thread = {}, messages = [], deliveryType = "", env = process.env } = {}) {
+  return [...dualProviderQuotaLines(thread, env), queueLoadLine(message, messages, deliveryType)].join("\n");
 }
 
 export function appendWhatsAppDebugFooter(text, options = {}) {

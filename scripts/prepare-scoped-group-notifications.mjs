@@ -1,3 +1,4 @@
+import {scopedRuntimeFiles} from './scoped-group-runtime-files.mjs';
 // Upgrade only an inactive copy of an existing scoped group runtime. No services,
 // credentials or session data are read or changed by this preparation helper.
 import fs from 'node:fs';
@@ -15,8 +16,7 @@ const replacements=[
  ["JSON.stringify({to,text,accountId:'main',requestId,parentId})","JSON.stringify({to,text,accountId:'main',requestId,parentId,...(command==='group-notify'?{notificationId:requestId}:{})})"],
 ];
 for(const [from,to] of replacements){if(wrapper.split(from).length!==2)throw new Error('notification_wrapper_source_mismatch');wrapper=wrapper.replace(from,to);}
-const modules=['whatsapp-scoped-group-relay','whatsapp-scoped-group-formatting','whatsapp-scoped-group-transport','whatsapp-group-owner-author','whatsapp-scoped-timer-notifications','whatsapp-scoped-remote-timer-replies','whatsapp-timer-notification-proof','whatsapp-delivery-route-fence'];
-const files=[...modules.map(m=>`packages/connectors/src/${m}.js`),'scripts/scoped-group-relay.mjs','apps/cli/src/api-client.js'];
+const files=scopedRuntimeFiles;
 const bridgePath=path.join(target,'scripts/wa_web_bridge.mjs');
 let bridge=fs.readFileSync(bridgePath,'utf8');
 if(!bridge.includes('createScopedGroupTransport'))throw new Error('notification_bridge_source_mismatch');
