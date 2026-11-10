@@ -119,9 +119,11 @@ class Ingress:
         protected(self.directory,True)
         require(stat.S_IMODE(self.directory.stat().st_mode)==0o700,'managed_journal_custody')
         # A restarted manager cannot reconstruct original caller pidfd proof
-        # from disk. Preserve the claims, but never redispatch an old request.
-        from .managed_journal import Journal
-        self.journal=Journal.open(self.directory)
+        # from disk. Preserve all claims, but never redispatch an old request.
+        for path in self.directory.glob('*.json'):
+            record=metadata(protected(path),32768)
+            if record['state'] not in ('completed','unknown','cancelled'):
+                record['state']='unknown';atomic(path,record)
         self.socket=OwnedSocket(manager.package.control.parent/'managed.sock',manager.package.gid,manager.ledger,'managed',0)
         self.socket.socket.setsockopt(socket.SOL_SOCKET,socket.SO_PASSCRED,1)
         self.socket.socket.setblocking(False)
@@ -149,16 +151,16 @@ class Ingress:
             if value['operation'] in ('worker_capability','worker_submit','worker_status','worker_wait'):
                 require(record['source']==peer.source,'managed_worker_original_caller_required')
         else:
-            require(self.journal.count(peer.source['window_id'])<MAX_WINDOW_REQUESTS,'managed_window_bound')
+            count=sum(1 for p in self.directory.glob('*.json')
+                      if metadata(p,32768)['source']['window_id']==peer.source['window_id'])
+            require(count<MAX_WINDOW_REQUESTS,'managed_window_bound')
             record={'request_id':request,'source':peer.source,'request':value,'payload_sha256':payload,
                     'created_at_ms':time.time_ns()//1000000,'state':'pending'}
-            self.journal.add(request,peer.source['window_id'])
             atomic(path,record)
         peer.path=path;peer.request=request
 
     def tick(self):
         self.natives.prune()
-        self.journal.prune(set(getattr(self.manager,'windows',())),{p.request for p in self.peers if getattr(p,'request',None)})
         while len(self.peers)<MAX_CONNECTIONS:
             try:connection,_=self.socket.socket.accept()
             except BlockingIOError:break
@@ -226,14 +228,11 @@ class Ingress:
                 if hasattr(p,'authenticate'):p.authenticate()
             except Exception:continue
             live[p.request]=p.source
-        # Only live callers' own claims can be pending here: read those, never
-        # the whole journal (every Deep window polls this; see managed_journal).
         result=[]
-        for request,scope in live.items():
-            try:record=metadata(self.journal.path(request),32768)
-            except FileNotFoundError:continue
-            if (record['request_id']==request and record['source']==scope and scope['window_id']==window
-                    and scope['window_generation']==generation and record['state']=='pending'):result.append(record)
+        for path in self.directory.glob('*.json'):
+            record=metadata(path,32768);scope=record['source']
+            if (live.get(record['request_id'])==scope and scope['window_id']==window and scope['window_generation']==generation
+                    and record['state']=='pending'):result.append(record)
         return sorted(result,key=lambda r:(r['created_at_ms'],r['request_id']))[:1]
 
     def close(self):
