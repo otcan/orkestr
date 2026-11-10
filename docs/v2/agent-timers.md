@@ -190,9 +190,10 @@ nor world-writable (created 0700 if missing). The generated chat rules then
 carry "Timers of this chat (agent timer tool)" with this conversation's
 command instead of "ask Root". The group is created with the owner's numbers
 only, so the chat is owner-only when the grant is issued, and its daily
-create cap is set to `owner_only` unless the owner already chose one. Revoke
-the grant (and set the cap back to `default`) if other members are added
-later. Without `agent_timers` nothing changes.
+create cap is set to `owner_only` unless the owner already chose one. Every
+thread keeps its timer access when other members are added later: do not
+revoke the grant, only set the daily cap back to `default` so the owner-only
+allowance no longer applies. Without `agent_timers` nothing changes.
 Older servers refuse the key (`deny_unknown_fields`): add it only after the
 release with this change is live.
 
