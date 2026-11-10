@@ -51,3 +51,19 @@ test('a batch for other conversations is ignored; expiry ends the round at once'
  const expired = await conversationStatusRequest({conversations:[a]}, async () => new Response('{}', {status:401}));
  assert.deepEqual(expired, [{id:a, execution:{status:401, text:''}, queue:{status:401, text:''}}]);
 });
+test('a failed batch is retried once and never fans out to per-conversation reads', async () => {
+ const seen = [];
+ const result = await conversationStatusRequest({conversations:[a, b]}, async path => { seen.push(path); return new Response('{}', {status:503}); });
+ assert.deepEqual(seen, [`/api/v2/conversation-status?ids=${a},${b}`, `/api/v2/conversation-status?ids=${a},${b}`]);
+ assert.deepEqual(result, [a, b].map(id => ({id, execution:{status:0, text:''}, queue:{status:0, text:''}})));
+});
+test('a network failure uses the single retry before giving up', async () => {
+ let reads = 0;
+ const result = await conversationStatusRequest({conversations:[a]}, async () => {
+  reads++;
+  if (reads === 1) throw Error('offline');
+  return new Response(JSON.stringify({rows:[{id:a, execution:{status:200, body:{phase:'running'}}, queue:{status:204, body:null}}]}));
+ });
+ assert.equal(reads, 2);
+ assert.deepEqual(result, [{id:a, execution:{status:200, text:'{"phase":"running"}'}, queue:{status:204, text:''}}]);
+});

@@ -40,13 +40,19 @@ export async function conversationStatusRequest({conversations, signal}, fetcher
  if (!Array.isArray(conversations) || conversations.length > 50 || new Set(conversations).size !== conversations.length
   || !conversations.every(id => typeof id === 'string' && uuid.test(id))) throw Error('Invalid conversation list');
  // One request for the whole list. A server without the batch endpoint (404)
- // or an unexpected reply falls back to two reads per conversation.
- const batch = await readOne(`/api/v2/conversation-status?ids=${conversations.join(',')}`, signal, fetcher, 1048576);
+ // or an unexpected reply falls back to two reads per conversation. A batch
+ // that failed is retried once and never fans out: on an unhealthy server 100
+ // sequential reads would only add load, and the next round polls again.
+ const path = `/api/v2/conversation-status?ids=${conversations.join(',')}`;
+ const failed = read => read.status === 0 || read.status >= 500;
+ let batch = await readOne(path, signal, fetcher, 1048576);
+ if (failed(batch)) batch = await readOne(path, signal, fetcher, 1048576);
  if (batch.status === 200) {
   const rows = batchRows(batch.text, conversations);
   if (rows) return rows;
  }
  if (batch.status === 401) return conversations.map(id => ({id, execution:{status:401, text:''}, queue:{status:401, text:''}}));
+ if (failed(batch)) return conversations.map(id => ({id, execution:{status:0, text:''}, queue:{status:0, text:''}}));
  const results = [];
  for (const id of conversations) {
   const execution = await readOne(`/api/v2/conversations/${id}/execution`, signal, fetcher);
