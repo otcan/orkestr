@@ -5,10 +5,12 @@ import os
 from pathlib import Path
 import signal
 import socket
+import sqlite3
 import sys
 import subprocess
 import threading
 import time
+import traceback
 
 from codex_bounded.trust import exists, process
 from .channel import ServerPeer, bind_deadline, receive, receive_control, respond
@@ -23,10 +25,25 @@ from .package import Package
 # deadlines) runs at most once per TICK_S instead of on every 50 ms accept
 # timeout, which kept the manager at a quarter of a core while idle.
 TICK_S = 0.25
+# A busy ledger (sqlite "database is locked" past its 0.5 s timeout, seen when
+# the host is starved of CPU/IO) only delays custody housekeeping: every pass
+# re-reads the ledger and repeats idempotently. It is tolerated this long
+# before the manager stops as before (2026-11-03: one such pass under load
+# tore the whole service down with exit 2 and no logged cause).
+TICK_BUSY_GRACE_S = 30.0
 MANAGED_REPLY_SECONDS = 5
 
 
+def report(event, error):
+    """One operator line plus the traceback; never request values."""
+    sys.stderr.write("manager %s: %s: %s\n" % (event, type(error).__name__, str(error)[:200]))
+    traceback.print_exception(error, file=sys.stderr)
+    sys.stderr.flush()
+
+
 class Manager:
+    tick_busy_since = None  # Monotonic start of consecutive busy-ledger passes.
+    tick_busy_passes = 0
     ticked = None  # Monotonic time of the last custody housekeeping pass.
 
     def __init__(self, root, expected):
@@ -423,9 +440,32 @@ class Manager:
         self.ticked = now
         return True
 
+    def guarded_tick(self, now=None):
+        """tick(), tolerating a busy ledger for TICK_BUSY_GRACE_S. Every other
+        failure (an unexpected server exit included) still stops the manager."""
+        now = time.monotonic() if now is None else now
+        try:
+            self.tick()
+        except sqlite3.OperationalError as error:
+            if self.tick_busy_since is None:
+                self.tick_busy_since, self.tick_busy_passes = now, 0
+                report("tick deferred (ledger busy)", error)
+            self.tick_busy_passes += 1
+            if now - self.tick_busy_since >= TICK_BUSY_GRACE_S:
+                sys.stderr.write("manager tick failed: ledger busy for %.1fs over %d passes\n" %
+                                 (now - self.tick_busy_since, self.tick_busy_passes))
+                sys.stderr.flush()
+                raise
+            return
+        if self.tick_busy_since is not None:
+            sys.stderr.write("manager tick recovered: ledger busy for %.1fs over %d passes\n" %
+                             (now - self.tick_busy_since, self.tick_busy_passes))
+            sys.stderr.flush()
+            self.tick_busy_since = None
+
     def once(self):
         if self.due():
-            self.tick()
+            self.guarded_tick()
         try:
             connection, _ = self.control.socket.accept()
         except socket.timeout:
@@ -489,13 +529,17 @@ def main(root, expected):
         manager.start()
         while not stopped.is_set():
             manager.once()
-    except Exception:
+    except Exception as error:
+        # The cause of an unplanned stop: without it every crash read only as
+        # the server's "timer controller failed during shutdown".
+        report("stopping after", error)
         failed = True
     finally:
         if manager is not None:
             try:
                 failed = not manager.close() or failed
-            except Exception:
+            except Exception as error:
+                report("close failed", error)
                 failed = True
         print(json.dumps({"service_stopped": True, "clean_shutdown": not failed}))
         for number, handler in previous.items():
