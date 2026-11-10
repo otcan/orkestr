@@ -51,21 +51,6 @@ test('provider handoff and receipt keep scoped cookie paths and mutation CSRF', 
         await assert.rejects(execute({recv:async()=>({...base,path})},()=>assert.fail('fetch must not run')),/Invalid API path/);
 });
 
-test('provider sign-in uses fixed paths with CSRF on every action', async () => {
-    const root='/api/v2/provider-sign-in';
-    const allowed=[['GET',root],...['codex','claude'].flatMap(p=>['start','code','cancel','sign-out'].map(a=>['POST',`${root}/${p}/${a}`]))];
-    for(const [method,path] of allowed) {
-        await execute({recv:async()=>({...base,method,path,csrf:'synthetic-csrf',body:method==='POST'?{}:null})},async(actual,options)=>{
-            assert.equal(actual,path);assert.equal(options.credentials,'same-origin');
-            assert.equal(options.headers['x-orkestr-csrf'],method==='POST'?'synthetic-csrf':undefined);
-            assert.equal(options.headers.Authorization,undefined);return Response.json({ok:true});
-        });
-    }
-    for(const [method,path] of [['POST',root],['GET',root+'/codex/start'],['POST',root+'/openai/start'],['POST',root+'/codex/../start'],
-        ['POST',root+'/codex/start?next=https://example.invalid'],['DELETE',root+'/codex/sign-out']])
-        await assert.rejects(execute({recv:async()=>({...base,method,path})},()=>assert.fail('fetch must not run')),/Invalid API path/);
-});
-
 test('login credentials use JSON and same-origin cookies without caching', async () => {
     const input = {...base,bootstrap:'synthetic-bootstrap'};
     const result = await execute({recv:async()=>input},async(path, options)=>{

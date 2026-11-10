@@ -59,7 +59,6 @@ def close(self):
         self._uncertain_all("manager_stopped")
         if getattr(self,'managed',None):self.managed.close()
         if getattr(self,'desk',None) and not self.desk.close():errors.append('desk_cleanup')
-        if getattr(self,'provider_login',None) and not self.provider_login.close():errors.append('provider_login_cleanup')
         if getattr(self,'workspace_commands',None) and not self.workspace_commands.close():errors.append('workspace_cleanup')
         if not self._terminate_all():
             errors.append("window_cleanup")

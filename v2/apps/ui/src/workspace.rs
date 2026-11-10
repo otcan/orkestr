@@ -293,13 +293,7 @@ pub fn Workspace(
                             section { "aria-label": "Account settings",
                                 h2 { "Account settings" }
                                 crate::owner_password_view::OwnerPassword {
-                                    key: "password-{session_scope.read().generation()}", csrf: csrf.clone(), session_scope, onexpired,
-                                }
-                            }
-                            div {
-                                crate::provider_sign_in_view::ProviderSignInSection {
-                                    key: "provider-sign-in-{session_scope.read().generation()}",
-                                    csrf: csrf.clone(), session_scope, onexpired,
+                                    key: "password-{session_scope.read().generation()}", csrf, session_scope, onexpired,
                                 }
                             }
                             crate::beta_settings::BetaSettings {}

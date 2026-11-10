@@ -242,54 +242,6 @@ Any of the following refuses the reconciliation and changes nothing:
 - A window the manager never admitted. No credential is issued without a
   manager acknowledgement, and the manager's own generation must stay in step.
 
-## Uncertain cleanup: operator release (ORK-781)
-
-Sometimes a window's emergency cleanup is uncertain: its descendant walk failed,
-for example on a descendant running as another uid, and its tree was
-force-killed. The manager that holds such a window then refuses step 3 with
-`owned_cleanup_uncertain` for the rest of its life. Its journal names the
-window once:
-`manager window cleanup refused: window=… generation=… reason=… forced=…`.
-Repeated refusals log `manager refused reconcile: …` once per window, code and
-10 minutes, with a `repeated=` count. Before ORK-781 only a restart of the
-service cleared such a window, and that restart cancelled every other running
-window.
-
-When the operator has checked that nothing of the window still runs, they ask
-the running manager to check again. They create an empty root-owned file named
-`<window_id>.<generation>` in the Root-only `operator-releases` directory of the
-manager's `ledger_directory` (from the selected plan's `service.json`):
-
-```sh
-sudo install -m 600 /dev/null <ledger_directory>/operator-releases/<window_id>.<generation>
-```
-
-Within about a second the manager does the following, and fails closed on every
-check:
-
-- This manager holds the window at that generation, its relay is closed, and
-  the manager is not custody-faulted.
-- Every broker of the window was launched by this manager (identity split).
-  An orphan of its tree can therefore only be re-parented to the manager, which
-  is its subreaper.
-- The descendant walk of whatever is still alive succeeds.
-- Every recorded identity of the window is gone. Identities are compared by pid
-  and start time, whatever the uid, so a zombie or a reused pid does not pass.
-- Every identity that the failed walk saw but could not record is gone in the
-  same way.
-- The manager has no unassigned adopted child.
-
-If all checks pass, the window's custody counts as released, and the next
-reconciliation attempt closes the window normally (steps 3 and 4). Any failed
-check changes nothing. Either way the manager removes the request, writes
-`<window_id>.<generation>.receipt` (JSON with `outcome` and a closed `reason`
-code), and logs one line:
-`ALERT orkestr-v2-manager operator_window_release window=… generation=…
-outcome=released|refused reason=…`.
-
-A released window is still never retired as graceful: retirement keeps refusing
-uncertain cleanup.
-
 ## Clean stop with an unresolved window
 
 Stopping a window task whose window cannot be retired, for example because proposals
