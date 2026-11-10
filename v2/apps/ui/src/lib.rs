@@ -139,6 +139,10 @@ impl Projection {
 
 impl Projection {
     fn announce(&mut self, notice: orkestr_v2_contracts::MessageRevisionNotice) {
+        // One merged WhatsApp message changed; the text shown here did not.
+        if notice.part {
+            return;
+        }
         let Some(target) = self
             .messages
             .values_mut()

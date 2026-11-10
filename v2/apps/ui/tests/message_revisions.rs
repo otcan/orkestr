@@ -136,6 +136,23 @@ fn a_page_replayed_with_a_revision_is_not_a_conflict() {
 }
 
 #[test]
+fn a_change_to_one_merged_part_leaves_the_shown_text_alone() {
+    let mut view = Projection::default();
+    view.page(page(vec![row(1, "merged", json!({"can_revise": true}))], 1))
+        .unwrap();
+    let part = row(
+        2,
+        "[Message corrected] synthetic",
+        json!({"can_revise": false, "notice_for": {"target_message_id": id(1), "change": change(1, "delete", None), "agent_notified": true, "agent_saw_earlier_text": true, "part": true}}),
+    );
+    view.page(page(vec![part], 2)).unwrap();
+    let target = shown(&view, 1);
+    assert_eq!(target.text, "merged");
+    assert!(!target.revisions.deleted);
+    assert!(target.revisions.can_revise);
+}
+
+#[test]
 fn only_a_removal_the_agent_never_saw_is_left_out_of_the_chat() {
     let told = Input::from(&message(notice(2, 1, change(1, "delete", None), true)));
     let silent = Input::from(&message(notice(3, 1, change(1, "delete", None), false)));
