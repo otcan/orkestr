@@ -56,9 +56,7 @@ export function mountMessageFiles({conversation,files,root},{client=encryptedUpl
           const pre=document.createElement('pre');pre.textContent=await new Blob(parts).text();active();body.append(pre);
         }else{
           previewUrl=blobUrl(parts,metadata.file.media_type);
-          const node=document.createElement(kind==='image'?'img':'iframe');
-          if(kind==='image'){node.alt=metadata.file.filename;node.style.maxWidth='100%';}
-          else{node.setAttribute('sandbox','');node.title=`Preview ${metadata.file.filename}`;node.style.width='100%';node.style.height='28rem';}
+          const node=document.createElement('img');node.alt=metadata.file.filename;node.style.maxWidth='100%';
           node.src=previewUrl;body.append(node);
         }
         if(!closeButton)closeButton=button('Close preview',closePreview);closeButton.hidden=false;status.textContent='Verified preview. Previewing does not send the file.';

@@ -26,9 +26,12 @@ test('verified image URL is revoked on close and no raw HTML preview is offered'
   await f.root.find('Preview').click();f.view.close();assert.deepEqual(f.revoked,f.made);
   const html=fixture('text/html');await html.root.find('View file details').click();assert.equal(html.root.find('Preview'),undefined);html.view.close();
 });
-test('PDF is sandboxed without script or same-origin permissions',async()=>{
-  const f=fixture('application/pdf');await f.root.find('View file details').click();await f.root.find('Preview').click();
-  const frame=f.root.all().find(n=>n.tag==='iframe');assert.equal(frame.attrs.sandbox,'');f.view.close();
+test('PDF is download-only: no preview button and no frame, Download stays offered',async()=>{
+  const f=fixture('application/pdf');await f.root.find('View file details').click();
+  assert.equal(f.root.find('Preview'),undefined);assert.ok(f.root.find('Download'));
+  assert.equal(f.root.all().find(n=>n.tag==='iframe'),undefined);
+  assert.ok(f.root.all().some(n=>/Preview unavailable for this type or size\. Use Download\./.test(n.textContent||'')),'download-only notice');
+  f.view.close();
 });
 test('closing while save picker is pending never opens a writable destination',async()=>{
   let resolve,opened=0;

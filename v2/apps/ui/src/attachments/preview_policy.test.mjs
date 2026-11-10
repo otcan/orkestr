@@ -7,7 +7,9 @@ test('only passive bounded types receive previews; unsafe types download inertly
   }
   assert.equal(previewKind('image/png',PREVIEW_LIMIT),'image');
   assert.equal(previewKind('image/png',PREVIEW_LIMIT+1),null);
-  assert.equal(previewKind('application/pdf',10),'pdf');
+  assert.equal(previewKind('application/pdf',10),null,'PDF is download-only');
+  assert.equal(downloadType('application/pdf'),'application/pdf');
+  assert.equal(downloadType('image/png'),'image/png');
   assert.equal(previewKind('text/plain',TEXT_PREVIEW_LIMIT),'text');
   assert.equal(previewKind('text/plain',TEXT_PREVIEW_LIMIT+1),null);
 });

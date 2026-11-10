@@ -319,3 +319,4 @@ fn App() -> Element {
 }
 
 mod message_files_view;
+mod oversized_composer;
