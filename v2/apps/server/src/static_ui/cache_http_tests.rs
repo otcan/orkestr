@@ -81,6 +81,18 @@ async fn full_router_revalidates_public_assets_and_keeps_api_uncacheable() {
     let app = with_static_ui(router(state), &dist).unwrap();
     let task = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     let result = tokio::task::spawn_blocking(move || {
+        let health = request(address, "GET", "/api/v2/health", None);
+        assert_eq!(health.code, 200);
+        let health: serde_json::Value = serde_json::from_slice(&health.body).unwrap();
+        assert!(health["features"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| v == "provider_quotas_v1"));
+        assert_eq!(
+            request(address, "GET", "/api/v2/provider-quotas", None).code,
+            401
+        );
         let page = request(address, "GET", "/virtual-desks", None);
         assert_eq!(page.code, 200);
         assert_eq!(page.body, b"<html>public UI</html>");

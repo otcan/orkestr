@@ -229,6 +229,10 @@ function v1History(state, thread) {
 async function api(state, req, res, url) {
   const path = url.pathname, q = url.searchParams;
   state.requests.push(`${req.method} ${path.replace(/[0-9a-f-]{36}/g, ':id')}`);
+  if (path === '/api/v2/health' && req.method === 'GET') return json(res, 200, {
+    status: 'ok', product: 'orkestr-v2', build: {format: 'orkestr-v2-build-identity-v1',
+      component: 'server', version: '9.8.7-test', source_commit: 'f'.repeat(40)},
+  });
   if (await trackerApi(state, req, res, url, { json, body })) return;
   if (path === '/api/v2/desktops' && req.method === 'GET') return json(res,200,{
     schema_version:1, observed_at_ms:Date.now(), resources:[
