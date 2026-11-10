@@ -100,6 +100,7 @@ impl Fixture {
                     text: text.map(str::to_owned),
                     source: MessageRevisionSource::Web,
                     expected_revision: None,
+                    part: false,
                 },
             )
             .await
@@ -197,6 +198,85 @@ async fn every_live_notice_has_a_queued_window_and_a_withdrawn_removal_has_none(
     let delete = f.revise(&removed, "delete-1", None).await.unwrap();
     assert!(!delete.agent_notified);
     assert_eq!(windows(delete.notice_event_id.to_string()).await, 0);
+}
+
+#[tokio::test]
+async fn one_merged_part_tells_the_agent_but_leaves_the_merged_text() {
+    let f = fixture().await;
+    let message = f.owner_message("burst").await;
+    f.set_inbox_state(&message, "consumed").await;
+    let part = |key: &'static str, text: Option<&'static str>| MessageRevisionRequest {
+        request_key: key.into(),
+        kind: if text.is_some() {
+            MessageRevisionKind::Edit
+        } else {
+            MessageRevisionKind::Delete
+        },
+        text: text.map(str::to_owned),
+        source: MessageRevisionSource::Whatsapp,
+        expected_revision: None,
+        part: true,
+    };
+    let edited = f
+        .store
+        .revise_owner_message(
+            CREDENTIAL,
+            &f.owner,
+            &f.conversation,
+            &message,
+            &part("part-1", Some("fixed part")),
+        )
+        .await
+        .unwrap();
+    assert!(edited.agent_notified);
+    let notice = f.text(&edited.notice_message_id).await;
+    assert!(
+        notice.contains("one of the messages they sent together"),
+        "{notice}"
+    );
+    assert!(notice.ends_with("Corrected text:\nfixed part"), "{notice}");
+    // The merged message itself is unchanged and stays editable.
+    let row = f.snapshot_row(&message).await;
+    assert_eq!(row.text, "synthetic original of burst");
+    let state = row.revisions.unwrap();
+    assert!(state.latest.is_none());
+    assert!(state.can_revise);
+    let marker = f
+        .snapshot_row(&edited.notice_message_id)
+        .await
+        .revisions
+        .unwrap();
+    assert!(marker.notice_for.unwrap().part);
+    // Deleting a part does not delete the whole message, and numbers stay unique.
+    let removed = f
+        .store
+        .revise_owner_message(
+            CREDENTIAL,
+            &f.owner,
+            &f.conversation,
+            &message,
+            &part("part-2", None),
+        )
+        .await
+        .unwrap();
+    assert_eq!(removed.revision, 2);
+    assert!(f
+        .revise(&message, "edit-whole", Some("whole"))
+        .await
+        .is_ok());
+    let history = f
+        .store
+        .message_revision_history(&f.owner, &f.conversation, &message)
+        .await
+        .unwrap();
+    assert_eq!(
+        history
+            .revisions
+            .iter()
+            .map(|entry| entry.part)
+            .collect::<Vec<_>>(),
+        [true, true, false]
+    );
 }
 
 #[tokio::test]
@@ -448,6 +528,7 @@ async fn a_message_in_another_conversation_is_not_found() {
                 text: None,
                 source: MessageRevisionSource::Web,
                 expected_revision: None,
+                part: false,
             },
         )
         .await;
@@ -510,6 +591,7 @@ async fn deleted_stale_and_unchanged_revisions_are_refused() {
                 text: Some("late".into()),
                 source: MessageRevisionSource::Web,
                 expected_revision: Some(0),
+                part: false,
             },
         )
         .await;

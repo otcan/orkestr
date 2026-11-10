@@ -105,6 +105,9 @@ fn notice_text(
     sequence: i64,
     agent_saw_earlier_text: bool,
 ) -> Option<String> {
+    if request.part {
+        return Some(part_notice(request, sequence));
+    }
     match (request.kind, agent_saw_earlier_text) {
         (MessageRevisionKind::Delete, false) => None,
         (MessageRevisionKind::Delete, true) => Some(format!(
@@ -125,11 +128,26 @@ fn notice_text(
     }
 }
 
+/// One of several WhatsApp messages merged into this one changed. Nothing about
+/// the merged text says which part it was, so the agent is told in words.
+fn part_notice(request: &MessageRevisionRequest, sequence: i64) -> String {
+    match request.kind {
+        MessageRevisionKind::Delete => format!(
+            "[Message removed] The owner deleted one of the messages they sent together as message #{sequence} in this conversation. Disregard that one and do not act on it further. If you already acted on it, tell the owner what was done."
+        ),
+        MessageRevisionKind::Edit => format!(
+            "[Message corrected] The owner edited one of the messages they sent together as message #{sequence} in this conversation. The corrected text below replaces that one message. If you already acted on the earlier version, check whether anything needs to change, and tell the owner if it does.\n\nCorrected text:\n{}",
+            request.text.as_deref().unwrap_or_default(),
+        ),
+    }
+}
+
 fn request_digest(message: &MessageId, request: &MessageRevisionRequest) -> String {
     digest(&format!(
-        "{message}\n{}\n{}\n{}",
+        "{message}\n{}\n{}\n{}\n{}",
         request.kind.as_str(),
         request.source.as_str(),
+        request.part,
         request.text.as_deref().unwrap_or_default()
     ))
 }
@@ -154,7 +172,7 @@ async fn replay(
 }
 
 async fn latest(tx: &mut SqliteConnection, message: &MessageId) -> Result<Option<SqliteRow>> {
-    sqlx::query("SELECT revision,kind,text,notice_message_id,agent_saw_earlier_text FROM message_revisions WHERE target_message_id=? ORDER BY revision DESC LIMIT 1")
+    sqlx::query("SELECT revision,kind,text,notice_message_id,agent_saw_earlier_text FROM message_revisions WHERE target_message_id=? AND part=0 ORDER BY revision DESC LIMIT 1")
         .bind(message.to_string())
         .fetch_optional(&mut *tx)
         .await
@@ -212,27 +230,40 @@ impl Store {
         if !revisable(&request_key, author.as_deref(), origin_session.as_deref()) {
             return Err(E::NotOwnMessage);
         }
-        let prior = latest(&mut tx, message).await?;
+        // A merged part says nothing about the message's own text or state.
+        let prior = if request.part {
+            None
+        } else {
+            latest(&mut tx, message).await?
+        };
         if prior
             .as_ref()
             .is_some_and(|row| row.get::<String, _>("kind") == "delete")
         {
             return Err(E::AlreadyDeleted);
         }
-        let current_revision = prior
+        let shown_revision = prior
             .as_ref()
             .map_or(0, |row| row.get::<i64, _>("revision"));
         if request
             .expected_revision
-            .is_some_and(|expected| expected != current_revision)
+            .is_some_and(|expected| expected != shown_revision)
         {
             return Err(E::Stale);
         }
+        let next_revision: i64 = sqlx::query_scalar(
+            "SELECT COALESCE(max(revision),0)+1 FROM message_revisions WHERE target_message_id=?",
+        )
+        .bind(message.to_string())
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(db)?;
         let earlier = prior
             .as_ref()
             .and_then(|row| row.get::<Option<String>, _>("text"))
             .unwrap_or_else(|| original.clone());
-        if request.kind == MessageRevisionKind::Edit
+        if !request.part
+            && request.kind == MessageRevisionKind::Edit
             && request.text.as_deref().map(str::trim) == Some(earlier.trim())
         {
             return Err(E::Unchanged);
@@ -256,7 +287,9 @@ impl Store {
         // A connector still drives the input it admitted (window, reply
         // tracking), so withdrawing that one here would strand its delivery.
         // It stays, and the agent gets the correction as a notice instead.
-        let head_outcome = if prior.is_some() || origin_session.as_deref() == Some("browser") {
+        let head_outcome = if request.part {
+            InputRetirement::NotRetirable
+        } else if prior.is_some() || origin_session.as_deref() == Some("browser") {
             retire_if_unstarted(&mut tx, owner, conversation, &head, &head_key, reason)
                 .await
                 .map_err(runtime)?
@@ -344,7 +377,7 @@ impl Store {
             revision_id,
             conversation_id: conversation.clone(),
             message_id: message.clone(),
-            revision: current_revision + 1,
+            revision: next_revision,
             kind: request.kind,
             notice_message_id: notice_id.clone(),
             notice_event_id: admission.receipt.event_id.clone(),
@@ -354,11 +387,11 @@ impl Store {
             created_at_ms: clock,
             duplicate: false,
         };
-        sqlx::query("INSERT INTO message_revisions(id,owner_id,conversation_id,target_message_id,revision,kind,text,source,request_key,payload_digest,notice_message_id,agent_notified,agent_saw_earlier_text,credential_hash,session_kind,created_at_ms,receipt_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+        sqlx::query("INSERT INTO message_revisions(id,owner_id,conversation_id,target_message_id,revision,kind,text,source,request_key,payload_digest,notice_message_id,part,agent_notified,agent_saw_earlier_text,credential_hash,session_kind,created_at_ms,receipt_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
             .bind(revision_id.to_string()).bind(owner.to_string()).bind(conversation.to_string())
             .bind(message.to_string()).bind(receipt.revision).bind(request.kind.as_str())
             .bind(&request.text).bind(request.source.as_str()).bind(&request.request_key).bind(&payload)
-            .bind(notice_id.to_string()).bind(i64::from(agent_notified)).bind(i64::from(agent_saw_earlier_text))
+            .bind(notice_id.to_string()).bind(i64::from(request.part)).bind(i64::from(agent_notified)).bind(i64::from(agent_saw_earlier_text))
             .bind(&hash).bind(&session_kind).bind(clock)
             .bind(serde_json::to_string(&receipt).map_err(db)?)
             .execute(&mut *tx).await.map_err(db)?;
@@ -383,7 +416,7 @@ impl Store {
         .await
         .map_err(db)?
         .ok_or(E::NotFound)?;
-        let rows = sqlx::query("SELECT id,revision,kind,text,source,notice_message_id,agent_notified,agent_saw_earlier_text,created_at_ms FROM message_revisions WHERE target_message_id=? AND conversation_id=? AND owner_id=? ORDER BY revision")
+        let rows = sqlx::query("SELECT id,revision,kind,text,source,notice_message_id,part,agent_notified,agent_saw_earlier_text,created_at_ms FROM message_revisions WHERE target_message_id=? AND conversation_id=? AND owner_id=? ORDER BY revision")
             .bind(message.to_string()).bind(conversation.to_string()).bind(owner.to_string())
             .fetch_all(&self.pool).await.map_err(db)?;
         let revisions = rows
@@ -404,6 +437,7 @@ impl Store {
                     agent_notified: row.get::<i64, _>("agent_notified") == 1,
                     agent_saw_earlier_text: row.get::<i64, _>("agent_saw_earlier_text") == 1,
                     created_at_ms: row.get("created_at_ms"),
+                    part: row.get::<i64, _>("part") == 1,
                 })
             })
             .collect::<Result<Vec<_>>>()?;
@@ -420,8 +454,8 @@ impl Store {
 /// request source; both subqueries are bounded unique-index lookups.
 pub(crate) const SNAPSHOT_COLUMNS: &str = "a.author AS revision_author,s.session_kind AS revision_session,
  (SELECT json_object('revision',v.revision,'kind',v.kind,'text',v.text,'source',v.source,'revised_at_ms',v.created_at_ms)
-  FROM message_revisions v WHERE v.target_message_id=m.id ORDER BY v.revision DESC LIMIT 1) AS revision_latest,
- (SELECT json_object('target_message_id',n.target_message_id,'change',json_object('revision',n.revision,'kind',n.kind,'text',n.text,'source',n.source,'revised_at_ms',n.created_at_ms),'agent_notified',json(iif(n.agent_notified=1,'true','false')),'agent_saw_earlier_text',json(iif(n.agent_saw_earlier_text=1,'true','false')))
+  FROM message_revisions v WHERE v.target_message_id=m.id AND v.part=0 ORDER BY v.revision DESC LIMIT 1) AS revision_latest,
+ (SELECT json_object('target_message_id',n.target_message_id,'change',json_object('revision',n.revision,'kind',n.kind,'text',n.text,'source',n.source,'revised_at_ms',n.created_at_ms),'agent_notified',json(iif(n.agent_notified=1,'true','false')),'agent_saw_earlier_text',json(iif(n.agent_saw_earlier_text=1,'true','false')),'part',json(iif(n.part=1,'true','false')))
   FROM message_revisions n WHERE n.notice_message_id=m.id) AS revision_notice";
 pub(crate) const SNAPSHOT_JOINS: &str = "LEFT JOIN message_authors a ON a.message_id=m.id LEFT JOIN message_request_sources s ON s.message_id=m.id AND s.owner_id=m.owner_id";
 

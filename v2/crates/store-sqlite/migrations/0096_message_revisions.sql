@@ -14,6 +14,9 @@ CREATE TABLE message_revisions (
  request_key TEXT NOT NULL,
  payload_digest TEXT NOT NULL,
  notice_message_id TEXT NOT NULL UNIQUE REFERENCES messages(id),
+ -- 1: changes one source message merged into this one. It tells the agent but
+ -- cannot be shown over the merged text, so it is audit and notice only.
+ part INTEGER NOT NULL DEFAULT 0 CHECK(part IN (0,1)),
  -- 1: the notice is a live input the agent will receive.
  agent_notified INTEGER NOT NULL CHECK(agent_notified IN (0,1)),
  -- 0: the agent never received any earlier text of this message.
