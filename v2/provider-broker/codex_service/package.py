@@ -13,7 +13,7 @@ MAX_RUNTIME_WINDOWS = 12
 from .role_profiles import ROLE_FILES, bind as bind_roles
 
 MODULES_SERVICE = ("__init__.py", "contract.py", "ledger.py", "budget.py", "custody.py",
-                   "channel.py", "package.py", "ownership.py", "egress.py", "manager.py", "manager_shutdown.py", "manager_uncertain.py", "resource_contract.py", "resource_namespace.py", "resource_receipt.py", "resource_probe.py", "resource_mount.py", "resource_projects.py", "resource_timers.py",
+                   "channel.py", "package.py", "ownership.py", "egress.py", "manager.py", "manager_shutdown.py", "resource_contract.py", "resource_namespace.py", "resource_receipt.py", "resource_probe.py", "resource_mount.py", "resource_projects.py", "resource_timers.py",
                    "server_child.py", "manager_service_peer.py", "broker.py", "profile.py", "entry.py", "role_profiles.py",
                    "claude_broker.py", "identity.py", "launch.py", "launch_child.py", "proxy.py", "attachment_exports.py",
                    "password_recovery.py", "managed_resume.py", "managed_host.py", "native_io.py", "desk_operations.py", "desk_anchor.py", "provider_login.py", "provider_login_files.py", "provider_login_anchor.py",

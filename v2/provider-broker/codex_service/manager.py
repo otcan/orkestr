@@ -435,9 +435,6 @@ class Manager:
                 if not window.egress_closed:
                     self._uncertain(window.window, window.generation, "cleanup_unknown")
             self._terminate_all()
-        # Operator release of an uncertain window whose tree is proven gone.
-        from .manager_uncertain import release_requests
-        release_requests(self)
 
     def due(self, now=None):
         """Whether custody housekeeping is due; requests never wait for it."""
@@ -505,10 +502,8 @@ class Manager:
                 # needs the reason a retirement or custody check refused.
                 operation = request.get("operation") if isinstance(request, dict) else None
                 if operation in ("retire", "reconcile", "extend", "uncertain", "bind_child"):
-                    # Once per window, operation and code per period: a
-                    # retried refusal (uncertain cleanup) logged every attempt.
-                    from .manager_uncertain import refusal_notice
-                    refusal_notice(self, operation, request, error)
+                    sys.stderr.write("manager refused %s: %s\n" % (operation, str(error)[:64]))
+                    sys.stderr.flush()
                 answer = {"ok": False, "code": "control_refused", "receipt": self.ledger.status()}
             except (OSError, ValueError):
                 answer = {"ok": False, "code": "control_unavailable"}
