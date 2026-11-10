@@ -7,6 +7,7 @@ import { mkdir } from 'node:fs/promises';
 import { providerHandoff } from './headless-provider-handoff.mjs';
 import { trackerScenario } from './headless-tracker.mjs';
 import { virtualDesksAndAccountSettings } from './headless-virtual-desks-settings.mjs';
+import { silentReplies } from './headless-silent-replies.mjs';
 
 assert.equal(process.env.CI, 'true', 'Run only in isolated CI');
 assert.ok(process.env.UI_BUNDLE_DIR, 'UI_BUNDLE_DIR is required');
@@ -779,6 +780,7 @@ export const scenarios = [
     await page.goto(`${origin}/#conversation/${A}`, { waitUntil: 'domcontentloaded' });
     await page.reload({ waitUntil: 'domcontentloaded' });
   }],
+  ['silent-replies', label => silentReplies({ page, state, origin, conversation: C, returnConversation: A, worker: V1_WORKER, screenshot, label })],
   ['live-catch-up', async label => {
     await page.waitForSelector('#composer');
     await page.waitForFunction(() => document.querySelectorAll('.chat-messages .user-message').length > 0);
