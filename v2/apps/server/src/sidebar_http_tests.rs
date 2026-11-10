@@ -645,6 +645,43 @@ fn fake_inbound(
     }
 }
 
+thread_local! {
+    /// Per-conversation live reads made by this thread's sidebar requests.
+    pub(crate) static LIVE_ROW_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[tokio::test]
+async fn sidebar_reads_live_state_only_for_open_windows() {
+    let case = case().await;
+    let credential = format!("browser:{}", case.cookie);
+    for n in 0..3 {
+        case.state
+            .store
+            .create_conversation_authenticated(
+                &credential,
+                &orkestr_v2_contracts::ConversationInput {
+                    client_request_id: format!("sidebar-batch-{n}"),
+                    name: format!("Synthetic {n}"),
+                },
+            )
+            .await
+            .unwrap();
+    }
+    LIVE_ROW_READS.with(|reads| reads.set(0));
+    let auth = case.auth();
+    let (status, page) = send(&case.state, "GET", "/api/v2/sidebar", &[&auth], "").await;
+    assert_eq!(status, 200, "{page}");
+    assert_eq!(page["entries"].as_array().unwrap().len(), 4);
+    assert!(page["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|entry| entry["activity"]["deep"] == json!(false)));
+    // No conversation has an open window, so none needs its own live read.
+    assert_eq!(LIVE_ROW_READS.with(|reads| reads.get()), 0);
+    case.finish().await;
+}
+
 #[tokio::test]
 async fn sidebar_lists_linked_v1_threads_reads_history_and_keeps_marks() {
     let mut case = case().await;
