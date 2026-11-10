@@ -1,5 +1,5 @@
 use super::*;
-/// Current-auth, single-cut owner metadata. No prompt, credential or native binding.
+/// Current-auth, single-cut owner metadata. No credential or native binding.
 #[derive(Clone, Debug)]
 pub struct TimerDetail {
     pub receipt: TimerReceipt,
@@ -7,6 +7,10 @@ pub struct TimerDetail {
     pub durable_authority: bool,
     pub schedule: TimerSchedule,
     pub conversation_id: Option<ConversationId>,
+    /// The instruction of the timer's latest durable grant, for the owner's
+    /// single-timer read only (never listings). `None` when the timer never
+    /// held a durable grant here, such as an import not yet enabled in V2.
+    pub instruction: Option<String>,
 }
 pub(super) async fn detail_in(
     tx: &mut Transaction<'_, Sqlite>,
@@ -25,6 +29,7 @@ pub(super) async fn detail_in(
             .map(|s| Uuid::parse_str(&s).map(ConversationId))
             .transpose()
             .map_err(unavailable)?,
+        instruction: None,
     })
 }
 impl Store {
@@ -36,7 +41,15 @@ impl Store {
     ) -> Result<TimerDetail> {
         let mut tx = self.history_transaction(credential, owner, false).await?;
         let row = row(&mut tx, owner, namespace).await?;
-        let detail = detail_in(&mut tx, owner, &row).await?;
+        let mut detail = detail_in(&mut tx, owner, &row).await?;
+        detail.instruction = sqlx::query_scalar(
+            "SELECT instruction FROM durable_timer_authorities WHERE owner_id=? AND namespace=? ORDER BY generation DESC LIMIT 1",
+        )
+        .bind(owner.to_string())
+        .bind(namespace.to_string())
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(unavailable)?;
         tx.commit().await.map_err(unavailable)?;
         Ok(detail)
     }

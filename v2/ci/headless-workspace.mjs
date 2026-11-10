@@ -152,6 +152,25 @@ export const scenarios = [
     assert.match(sent, /^Synthetic first line\nsecond line\n\n\[File attached in the Orkestr app/);
     assert.match(sent, /orkestr-v2-synthetic-pixel\.png \(image\/png, \d+ bytes.*local file \/synthetic\/attachments\//);
     assert.equal(await page.$$eval('.attachment-chip', n => n.length), 0, 'Sent attachments leave the composer');
+    // Oversized ordinary Send takes the encrypted attachment path automatically.
+    const oversized='\r\n'+'界'.repeat(10923)+'  \n';
+    const uploadsBefore=state.uploads.length;
+    await page.$eval('#composer',(node,value)=>{node.value=value;node.dispatchEvent(new Event('input',{bubbles:true}));},oversized);
+    // A textarea normalizes CRLF to LF when its value is set, so the text a user
+    // actually has in the box (and the upload must carry) is the LF form.
+    const typedValue=await page.$eval('#composer',node=>node.value);
+    assert.equal(typedValue,oversized.replace(/\r\n/g,'\n'),'browser textarea newline normalization');
+    await page.focus('#composer');
+    await page.keyboard.press('Enter');
+    await until(()=>posts()===before+2,'oversized draft admitted as one message');
+    assert.equal(state.uploads.length,uploadsBefore+1,'one encrypted text upload');
+    const auto=state.uploads.at(-1);
+    assert.equal(auto.encrypted,true,'automatic text attachment never uses plaintext upload');
+    assert.equal(Buffer.from(auto.files[0].content_base64,'base64').toString(),typedValue,'full original UTF-8 content and whitespace');
+    assert.match(state.messages[A].at(-1).text,/My full message is in the attached text file/);
+    assert.ok(Buffer.byteLength(state.messages[A].at(-1).text)<=32768);
+    assert.equal(await page.$eval('#composer',node=>node.value),'');
+
   }],
   ['drop-attachments', async label => {
     // Files dragged onto the conversation highlight it and attach on drop;
@@ -551,7 +570,7 @@ export const scenarios = [
     await waitText('other-desk');
     await screenshot(label, 'chat-settings');
     await noHorizontalScroll();
-    // Timers of the chat are listed; selecting one opens its controls.
+    // Timers of the chat are listed; Details opens one in place.
     await clickText('Timers');
     await waitText('Synthetic morning brief');
     // Calendar timer: rule in plain words, next run, last result, silent-run count.
@@ -563,6 +582,21 @@ export const scenarios = [
     await waitText('Recent digests (1)');
     await screenshot(label, 'timers');
     await noHorizontalScroll();
+    // Details opens the timer in its own card (not in a closed section) with
+    // schedule, next run and instruction text, and closes again.
+    await clickWithin('.timer-card', 'Details');
+    await waitText('Synthetic timer instruction: read the synthetic runbook.');
+    await waitText('Next scheduled time:');
+    await page.waitForFunction(() => {
+      const panel = document.querySelector('.timer-card section[aria-label="Timer details"]');
+      const text = document.querySelector('.timer-card .timer-instruction');
+      return panel && text && !panel.closest('details:not([open])') && !text.closest('details:not([open])') &&
+        panel.getBoundingClientRect().height > 0 && text.getBoundingClientRect().height > 0;
+    });
+    await screenshot(label, 'timer-details');
+    await noHorizontalScroll();
+    await clickWithin('.timer-card', 'Hide details');
+    await page.waitForFunction(() => !document.querySelector('[aria-label="Timer details"]'));
     // Pause the timer for an hour, see it paused, resume it.
     await page.evaluate(() => [...document.querySelectorAll('.timer-card summary')].find(n => n.textContent.startsWith('Pause Synthetic triage')).click());
     await clickWithin('.timer-card', '1 hour');

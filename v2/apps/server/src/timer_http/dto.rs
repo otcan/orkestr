@@ -37,6 +37,10 @@ pub struct Detail {
     pub next_due_ms: Option<i64>,
     pub controller_armed: bool,
     pub controller_hold: Option<&'static str>,
+    /// What the timer's runs receive. Only the single-timer read carries it;
+    /// listings omit the key, and so does a timer with no durable grant.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub instruction: Option<String>,
 }
 
 #[derive(Default, Deserialize)]

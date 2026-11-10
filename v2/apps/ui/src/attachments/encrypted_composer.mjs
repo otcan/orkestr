@@ -8,6 +8,7 @@ import {browserStorage} from './browser_storage.mjs';
 export function nativePaste(config, element, options) {
   return uploadPastedText(element, nativeDescribe(config, options), {
     scope: `${config.conversation}:${config.csrf}`,
+    retainSuccess: options?.retainSuccess === true,
   });
 }
 

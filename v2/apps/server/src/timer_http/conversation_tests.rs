@@ -149,6 +149,14 @@ async fn thread_timers_import_list_enable_fire_once_and_relay_listing() {
     assert_eq!(status, 200, "{enabled}");
     assert_eq!(enabled["state"], "enabled");
     assert_eq!(enabled["controller_armed"], true);
+    assert_eq!(enabled["instruction"], "Synthetic hourly work");
+    // The instruction is for the single-timer read only, never the listing.
+    let (_, listed) = request(address, "GET", &listing_path, &token, Value::Null).await;
+    assert!(listed["timers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|t| t.get("instruction").is_none()));
 
     // Simulate downtime: many missed hours, then one scheduler pass.
     sql(

@@ -89,18 +89,22 @@ pub fn TimerDetail(
                 if let Some(due)=current.next_due_ms {p {"Next scheduled time: {utc_time(due)}"}} else {p {"No next scheduled time supplied."}}
                 if let Some(reason)=held_reason(current.dormant_reason.as_deref()){p {"{reason}"}}
                 p {"{controller_notice(current.state.as_str(),current.controller_armed,current.controller_hold.as_deref())}"}
-                label {r#for:"timer-owner-text","Fresh instructions for the selected conversation"}
-                textarea {id:"timer-owner-text",value:"{editor.read().text}",oninput:move |event|editor.write().edit(event.value())}
-                p {"Imported instructions are not copied. Changing this text does not change an uncertain request."}
-                button {disabled:disabled||current.dormant_reason.is_some()||matches!(current.state,State::Enabled|State::Stopped|State::RolledBack),onclick:move |_|submit.call(None),"Enable timer"}
-                for (action,label) in [(Action::Disable,"Disable timer"),(Action::Stop,"Stop timer schedule"),(Action::Rollback,"Roll back timer schedule")] {
-                    button {disabled,onclick:move |_|submit.call(Some(action)),"{label}"}
+                h4 {"Instructions"}
+                if let Some(text)=current.instruction.as_deref() {pre {class:"timer-instruction","{text}"}} else {p {class:"field-help","No instructions are stored in Orkestr V2 for this timer. An imported timer gets its instructions when it is enabled here."}}
+                details {class:"timer-controls",summary {"Turn this timer off, stop it, or re-enable it"}
+                    label {r#for:"timer-owner-text","Fresh instructions for the selected conversation"}
+                    textarea {id:"timer-owner-text",value:"{editor.read().text}",oninput:move |event|editor.write().edit(event.value())}
+                    p {"Imported instructions are not copied. Changing this text does not change an uncertain request."}
+                    button {disabled:disabled||current.dormant_reason.is_some()||matches!(current.state,State::Enabled|State::Stopped|State::RolledBack),onclick:move |_|submit.call(None),"Enable timer"}
+                    for (action,label) in [(Action::Disable,"Disable timer"),(Action::Stop,"Stop timer schedule"),(Action::Rollback,"Roll back timer schedule")] {
+                        button {disabled,onclick:move |_|submit.call(Some(action)),"{label}"}
+                    }
+                    p {"These controls change the schedule. They do not confirm interruption of work already started."}
+                    if editor.read().pending().is_some()&&!editor.read().needs_review(){button {disabled:busy()||!cfg!(feature="execution-controls"),onclick:move |_|submit.call(None),"Retry original timer request"}}
+                    if editor.read().needs_review(){button {disabled:busy(),onclick:move |_|{editor.write().review();fresh.set(false);epoch+=1;},"Review current timer before next change"}}
+                    if !cfg!(feature="execution-controls"){p {"Timer changes are unavailable in this build."}}
+                    if let Some(message)=editor.read().notice{p {role:"status","{message}"}}
                 }
-                p {"These controls change the schedule. They do not confirm interruption of work already started."}
-                if editor.read().pending().is_some()&&!editor.read().needs_review(){button {disabled:busy()||!cfg!(feature="execution-controls"),onclick:move |_|submit.call(None),"Retry original timer request"}}
-                if editor.read().needs_review(){button {disabled:busy(),onclick:move |_|{editor.write().review();fresh.set(false);epoch+=1;},"Review current timer before next change"}}
-                if !cfg!(feature="execution-controls"){p {"Timer changes are unavailable in this build."}}
-                if let Some(message)=editor.read().notice{p {role:"status","{message}"}}
                 details {summary {"Timer provenance"}p {"{current.namespace}"}p {"Source: {current.source_digest}"}p {"Revision {current.revision}; generation {current.generation}"}}
             }
             p {role:"status","{notice}"}

@@ -3,7 +3,7 @@
 // session/local storage or the Rust bridge.
 const drafts = new WeakMap();
 
-export async function uploadPastedText(element, describe, {scope = ''} = {}) {
+export async function uploadPastedText(element, describe, {scope = '', retainSuccess = false} = {}) {
   if (!element || typeof element.value !== 'string' || !element.value.length) {
     return {error: 'Enter text to attach first.'};
   }
@@ -18,11 +18,15 @@ export async function uploadPastedText(element, describe, {scope = ''} = {}) {
     }
     drafts.set(element, draft);
   }
+  if (draft.result) return draft.result;
   if (draft.pending) return draft.pending;
   const pending = (async () => {
     try {
       const result = await describe([draft.file]);
-      if (!result.error && drafts.get(element) === draft) drafts.delete(element);
+      if (!result.error && drafts.get(element) === draft) {
+        if (retainSuccess) draft.result = result;
+        else drafts.delete(element);
+      }
       return result;
     } catch (error) {
       return {error: error.message || 'Text upload interrupted. Retry to resume.'};

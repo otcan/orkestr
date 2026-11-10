@@ -105,6 +105,8 @@ async fn timer_loopback_enable_due_input_disable_held_and_refusals() {
     assert_eq!(status, 200);
     assert_eq!(read["state"], "paused");
     assert_eq!(read["controller_armed"], false);
+    // An import that never held a durable grant here has no instruction key.
+    assert!(read.get("instruction").is_none(), "{read}");
     let enable = serde_json::json!({"expected_revision":1,"request_key":"synthetic-enable","conversation_id":conversation,"text":"Synthetic fresh owner work"});
     let mut injected = enable.clone();
     injected["now_ms"] = NOW.into();
@@ -198,6 +200,9 @@ async fn timer_loopback_enable_due_input_disable_held_and_refusals() {
         .0,
         200
     );
+    let (status, read) = request(address, "GET", &path, &token, serde_json::Value::Null).await;
+    assert_eq!(status, 200);
+    assert_eq!(read["instruction"], "Synthetic fresh owner work");
     let (status, enabled) = request(
         address,
         "POST",
