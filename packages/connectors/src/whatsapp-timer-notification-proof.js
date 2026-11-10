@@ -29,6 +29,30 @@ export function notificationScope(config) {
   const single = p.threadId !== undefined ? {threadId: p.threadId, chatId: threads.get(p.threadId)} : {};
   return {...p, ...single, threads, maxAgeMs: 900000, allowsChat: chatId => chats.has(chatId)};
 }
+// With `allGroups: true` and dynamicGroups, a group registered at runtime is a
+// configured group too: its timer runs and V2 timer/post replies are scoped to
+// it like a static group. `groups` is the live dynamic group view of the
+// transport journal (createDynamicGroupView). Each registered thread still only
+// notifies its own registered chat; a static thread or chat always wins.
+// An explicit `threadId`/`threadIds` scope never grows.
+export function liveNotificationScope(scope, groups) {
+  if (!scope || scope.allGroups !== true || typeof groups?.dynamic !== 'function') return scope;
+  const statics = scope.threads;
+  const staticChats = new Set(statics.values());
+  const registered = () => new Map(groups.dynamic()
+    .filter(g => g.threadId && g.chatId && !statics.has(g.threadId) && !staticChats.has(g.chatId))
+    .map(g => [g.threadId, g.chatId]));
+  const threads = {
+    has: id => statics.has(id) || registered().has(id),
+    get: id => statics.has(id) ? statics.get(id) : registered().get(id),
+    keys: () => [...statics.keys(), ...registered().keys()],
+    values: () => [...statics.values(), ...registered().values()],
+    entries: () => [...statics.entries(), ...registered().entries()],
+    get size() { return statics.size + registered().size; },
+  };
+  const allowsChat = chatId => scope.allowsChat(chatId) || [...registered().values()].includes(chatId);
+  return {...scope, threads, allowsChat};
+}
 export function createTimerNotificationProofStore({path, db: supplied, readOnly = false, now = Date.now}) {
   const db = supplied || new DatabaseSync(path, {readOnly});
   if (!readOnly) db.exec(`PRAGMA journal_mode=WAL;

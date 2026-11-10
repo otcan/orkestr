@@ -168,7 +168,7 @@ test("CLI error is minimized and cannot echo invalid credential-bearing input", 
 
 test("workflow gates installs on advisory publication and uses trusted base policy with pinned new actions", async () => {
   const yaml = await fs.readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
-  assert.match(yaml, /pull_request:/); assert.match(yaml, /branches: \[main\]/); assert.match(yaml, /schedule:/); assert.match(yaml, /merge_group:/);
+  assert.match(yaml, /pull_request:/); assert.match(yaml, /branches: \[integration\]/); assert.match(yaml, /schedule:/); assert.match(yaml, /merge_group:/);
   assert.match(yaml, /POLICY_REF:.*pull_request.base.sha.*merge_group.base_sha/);
   assert.match(yaml, /if-no-files-found: error/); assert.match(yaml, /needs: dependency-advisories/);
   assert.match(yaml, /test "\$RESULT" = success/); assert.match(yaml, /test -n "\$EVIDENCE_DIGEST"/);

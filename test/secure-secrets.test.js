@@ -112,7 +112,7 @@ test("secure secret connector resolution creates metadata-only missing requests"
   const admin = adminPrincipal("admin");
   const alice = userPrincipal({ id: "alice", role: "user" });
 
-  const missing = await resolveSecureSecretReference("secret://user/openai/api-key", {
+  const missing = await resolveSecureSecretReference("secret://user/alice/openai/api-key", {
     ownerUserId: "alice",
     connector: "openai",
     threadId: "thread-alice",
@@ -160,6 +160,78 @@ test("secure secret handles do not allow cross-user resolution by default", asyn
     () => parseSecureSecretReference("secret://user/bob/gmail/client-secret", { ownerUserId: "alice" }),
     /secure_secret_owner_mismatch/,
   );
+});
+
+test("secure secret handles read the owner for flat and nested names", () => {
+  const flat = parseSecureSecretReference("secret://user/admin/example.service.can.password");
+  assert.equal(flat.ownerUserId, "admin");
+  assert.equal(flat.name, "example.service.can.password");
+  assert.equal(flat.handle, "secret://user/admin/example.service.can.password");
+
+  const flatForOwner = parseSecureSecretReference("secret://user/alice/example_api_key", { ownerUserId: "alice" });
+  assert.equal(flatForOwner.ownerUserId, "alice");
+  assert.equal(flatForOwner.name, "example_api_key");
+  assert.throws(
+    () => parseSecureSecretReference("secret://user/bob/example_api_key", { ownerUserId: "alice" }),
+    /secure_secret_owner_mismatch/,
+  );
+
+  const nested = parseSecureSecretReference("secret://user/alice/gmail/client-secret");
+  assert.equal(nested.ownerUserId, "alice");
+  assert.equal(nested.name, "gmail/client-secret");
+  assert.equal(nested.handle, "secret://user/alice/gmail/client-secret");
+
+  // A single segment is shorthand for a name owned by the requesting owner.
+  const shorthand = parseSecureSecretReference("secret://user/example_api_key", { ownerUserId: "alice" });
+  assert.equal(shorthand.ownerUserId, "alice");
+  assert.equal(shorthand.name, "example_api_key");
+});
+
+test("secure secret handles reject path tricks and owner-less nested names for another owner", () => {
+  // The undocumented owner-less nested form now names owner "openai", so it is
+  // refused for any other requesting owner instead of resolving silently.
+  assert.throws(
+    () => parseSecureSecretReference("secret://user/openai/api-key", { ownerUserId: "alice" }),
+    /secure_secret_owner_mismatch/,
+  );
+  for (const handle of ["secret://user/../alice/key", "secret://user/./key", "secret://user/../key"]) {
+    assert.throws(() => parseSecureSecretReference(handle), /secure_secret_owner_invalid/, handle);
+    assert.throws(() => parseSecureSecretReference(handle, { ownerUserId: "alice" }), /secure_secret_owner_(invalid|mismatch)/, handle);
+  }
+  const emptyOwner = parseSecureSecretReference("secret://user//key", { ownerUserId: "alice" });
+  assert.equal(emptyOwner.ownerUserId, "alice");
+  assert.equal(emptyOwner.name, "key");
+  assert.equal(parseSecureSecretReference("secret://user/ALICE/key", { ownerUserId: "alice" }).ownerUserId, "alice");
+  assert.throws(
+    () => parseSecureSecretReference("secret://user/bob%2Falice/key", { ownerUserId: "alice" }),
+    /secure_secret_owner_mismatch/,
+  );
+  const traversalName = parseSecureSecretReference("secret://user/alice/../bob/key", { ownerUserId: "alice" });
+  assert.equal(traversalName.ownerUserId, "alice");
+});
+
+test("secure secret handles printed by list resolve back to the same secret", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-secure-secret-roundtrip-"));
+  const env = { ORKESTR_HOME: home, ORKESTR_ADMIN_USER_ID: "admin" };
+  const admin = adminPrincipal("admin");
+  await setSecureSecret({ scope: "user", name: "example.service.can.password", value: "synthetic-flat-value" }, admin, env);
+  await setSecureSecret({ scope: "user", name: "example/nested-key", value: "synthetic-nested-value" }, admin, env);
+
+  const listed = await listSecureSecrets({ scope: "user" }, admin, env);
+  const handles = listed.secrets.map((secret) => secret.handle).sort();
+  assert.deepEqual(handles, [
+    "secret://user/admin/example.service.can.password",
+    "secret://user/admin/example/nested-key",
+  ]);
+  const expected = {
+    "secret://user/admin/example.service.can.password": "synthetic-flat-value",
+    "secret://user/admin/example/nested-key": "synthetic-nested-value",
+  };
+  for (const handle of handles) {
+    const resolved = await resolveSecureSecretReference(handle, { ownerUserId: "admin", createRequest: false }, env);
+    assert.equal(resolved?.value, expected[handle], handle);
+    assert.equal(resolved.secret.handle, handle);
+  }
 });
 
 test("secure secret handles normalize names without exposing values", () => {

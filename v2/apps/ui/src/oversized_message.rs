@@ -9,23 +9,39 @@ mod tests {
     fn exact_utf8_boundary_and_context_overhead() {
         let exact = "a".repeat(32768);
         assert!(!needs_attachment(&exact, &exact));
-        assert!(needs_attachment(&(exact.clone() + "a"), &(exact.clone() + "a")));
+        assert!(needs_attachment(
+            &(exact.clone() + "a"),
+            &(exact.clone() + "a")
+        ));
         let unicode = "ü".repeat(16384);
         assert!(!needs_attachment(&unicode, &unicode));
-        assert!(needs_attachment(&(unicode.clone() + "界"), &(unicode + "界")));
-        assert!(needs_attachment(&exact, &(exact.clone() + "\nAttachment note")));
+        assert!(needs_attachment(
+            &(unicode.clone() + "界"),
+            &(unicode + "界")
+        ));
+        assert!(needs_attachment(
+            &exact,
+            &(exact.clone() + "\nAttachment note")
+        ));
         assert!(!needs_attachment("  ", &" ".repeat(40000)));
         assert!(needs_attachment("invalid\0", &"a".repeat(40000)));
     }
 }
 
-
 #[derive(Debug, PartialEq, Eq)]
-pub enum CommitState { DraftChanged, AttachmentLimit, Ready }
+pub enum CommitState {
+    DraftChanged,
+    AttachmentLimit,
+    Ready,
+}
 pub fn commit_state(draft_unchanged: bool, existing: usize, incoming: usize) -> CommitState {
-    if !draft_unchanged { CommitState::DraftChanged }
-    else if existing.saturating_add(incoming) > 8 { CommitState::AttachmentLimit }
-    else { CommitState::Ready }
+    if !draft_unchanged {
+        CommitState::DraftChanged
+    } else if existing.saturating_add(incoming) > 8 {
+        CommitState::AttachmentLimit
+    } else {
+        CommitState::Ready
+    }
 }
 #[cfg(test)]
 mod commit_tests {

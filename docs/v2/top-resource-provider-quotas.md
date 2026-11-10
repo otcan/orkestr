@@ -1,10 +1,13 @@
 # Top resource bar provider quotas (ORK-717)
 
 The authenticated Rust UI independently reads `/api/v2/provider-quotas` every
-30 seconds, after its previous request completes. It shows OpenAI / Codex and
-Claude five-hour and weekly remaining percentages, reset times, observation
-freshness and limited status. Expired windows, invalid numbers and unknown or
-future observation times are unknown, never inferred as free quota. A transport
+30 seconds, after its previous request completes. It integrates OpenAI / Codex and
+Claude into the CPU/RAM/disk resource navbar. Only reported quota windows appear;
+absent short-window limits are omitted. The compact summary shows numeric remaining
+percentages or explicit provider-reported availability (available / near limit /
+limited). Expand a provider with mouse or keyboard for reset times and observation
+freshness. A connected account does not imply a quota observation. Expired or missing
+telemetry is labeled explicitly rather than displaying question marks or free quota. A transport
 failure clears the previous display to unavailable. Quota polling does not block
 the CPU/RAM/disk summary or spend provider allowance.
 
@@ -39,7 +42,9 @@ remain responsible for collecting account-wide numeric telemetry.
 Validation: JS model/request tests cover both providers, zero quota, resets,
 stale/limited states, expired/future/invalid/unknown observations, fixed cookie
 transport and oversized/malformed replies. Rust tests cover safe-field stripping,
-invalid numeric/text rejection, browser versus machine authority, explicit owner
+invalid numeric/text/status rejection, preservation of status-only Claude windows and
+bounded producer staleAfterMs policy (up to seven days), browser versus machine authority, explicit owner
 mapping, requested-owner refusal and revocation during remote reads. The browser
-scenario checks actual WASM cards, reset details and stale rendering at desktop
+scenario checks actual WASM navbar items, omitted absent short windows, status-only Claude, and
+keyboard-accessible expanded reset details at desktop
 and phone widths. Rust/browser CI execution is required before release.

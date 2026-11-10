@@ -83,6 +83,8 @@ export function evaluateCheckRuns(checkRuns = [], { sha, policy, owner = "", rep
     headShaMatch: chosen.checks.length > 0 && chosen.headMismatch.length === 0,
     runId: runId || null,
     runIds: evaluated.map((group) => group.runId).filter((id) => id && id !== "unknown"),
+    passedRunIds: evaluated.filter((group) => group.ok && group.runId !== "unknown").map((group) => group.runId),
+    incompleteRunIds: evaluated.filter((group) => !group.ok && group.runId !== "unknown" && !group.failed.length && !group.headMismatch.length).map((group) => group.runId),
     runUrl: runId && owner && repo ? `https://github.com/${owner}/${repo}/actions/runs/${runId}` : null,
     required: { checks: policy.requiredChecks, prefixes: policy.requiredCheckPrefixes || [] },
     checks: chosen.checks,
@@ -164,7 +166,7 @@ const sha256 = (buffer) => `sha256:${crypto.createHash("sha256").update(buffer).
 // against the API metadata, rebuilds its content manifest and compares it with
 // the locally built tree. Optionally cross-checks the CI manifest artifact and
 // runs an injected attestation verifier on the downloaded bytes.
-export async function verifyArtifactContent({ owner, repo, artifacts, localManifest, policy, fetchImpl, token = "", apiBase, client, ghVerify = null } = {}) {
+export async function verifyArtifactContent({ owner, repo, sha, artifacts, localManifest, policy, fetchImpl, token = "", apiBase, client, ghVerify = null } = {}) {
   const effectivePolicy = policy || await loadReleasePolicy();
   const subtrees = effectivePolicy.artifacts?.compareSubtrees || [];
   const api = client || createGithubClient({ fetchImpl, token, apiBase });
@@ -209,11 +211,11 @@ export async function verifyArtifactContent({ owner, repo, artifacts, localManif
   }
   if (typeof ghVerify === "function") {
     try {
-      result.attestation = await ghVerify(archive, { owner, repo });
+      result.attestation = await ghVerify(archive, { owner, repo, sha, allowedRefs: effectivePolicy.attestation?.sourceRefs || [] });
     } catch {
       result.attestation = { status: "attestation_failed" };
     }
-    if (result.attestation.status === "attestation_failed") result.problems.push("attestation_failed");
+    if (result.attestation.status === "attestation_failed") result.problems.push(...new Set(["attestation_failed", result.attestation.reason || "attestation_failed"]));
   }
   result.ok = result.problems.length === 0;
   return result;

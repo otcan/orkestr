@@ -1,9 +1,6 @@
 use dioxus::prelude::*;
 use orkestr_v2_ui::{
-    composer_attachments::Attached,
-    outbox::Outbox,
-    session_scope::SessionScope,
-    Draft,
+    composer_attachments::Attached, outbox::Outbox, session_scope::SessionScope, Draft,
 };
 use std::collections::BTreeMap;
 

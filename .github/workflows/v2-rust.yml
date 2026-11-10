@@ -2,10 +2,10 @@ name: Orkestr 2.0 intake checks
 
 on:
   push:
-    branches: [v2/rust-rewrite]
+    branches: [integration]
     paths: ['v2/**', '.github/workflows/v2-rust.yml', 'scripts/security/cargo-*', 'scripts/security/dependency-*']
   pull_request:
-    branches: ['v2/**']
+    branches: [integration, 'v2/**']
     paths: ['v2/**', '.github/workflows/v2-rust.yml', 'scripts/security/cargo-*', 'scripts/security/dependency-*']
   workflow_dispatch:
 
@@ -52,7 +52,7 @@ jobs:
         with:
           workspaces: v2 -> ../../orkestr-v2-target
           # Only the integration branch saves; PRs restore its dependency build.
-          save-if: ${{ github.ref == 'refs/heads/v2/rust-rewrite' }}
+          save-if: ${{ github.ref == 'refs/heads/integration' }}
       - name: Rust format
         run: cargo +1.99.1 fmt --all -- --check
       - name: Rust lint
@@ -93,7 +93,7 @@ jobs:
         with:
           workspaces: v2 -> ../../orkestr-v2-target
           # Only the integration branch saves; PRs restore its dependency build.
-          save-if: ${{ github.ref == 'refs/heads/v2/rust-rewrite' }}
+          save-if: ${{ github.ref == 'refs/heads/integration' }}
       - name: Architecture boundaries
         run: python3 tests/check_boundaries.py
       - name: Workspace test split regressions
@@ -108,6 +108,7 @@ jobs:
           python3 -I -S -B -m unittest discover -s provider-broker -p test_codex_service_process.py -v
           python3 -I -S -B -m unittest discover -s provider-broker -p test_codex_service_ownership_scale.py -v
           python3 -I -S -B -m unittest discover -s provider-broker -p test_codex_service_thread_children.py -v
+          python3 -I -S -B -m unittest discover -s provider-broker -p test_codex_service_manager_busy.py -v
           python3 -I -S -B -m unittest discover -s provider-broker -p test_codex_service_boundaries.py -v
           python3 -I -S -B -m unittest discover -s provider-broker -p test_codex_service_bind_deadline.py -v
           python3 -I -S -B -m unittest discover -s provider-broker -p test_codex_service_observation_deadline.py -v
@@ -247,7 +248,7 @@ jobs:
         with:
           workspaces: v2 -> ../../orkestr-v2-target
           # Only the integration branch saves; PRs restore its dependency build.
-          save-if: ${{ github.ref == 'refs/heads/v2/rust-rewrite' }}
+          save-if: ${{ github.ref == 'refs/heads/integration' }}
       - name: Locked build
         run: cargo +1.99.1 build --locked --workspace
       - name: Privileged password recovery over actual local socket and Core
@@ -373,7 +374,7 @@ jobs:
           workspaces: v2 -> ../../orkestr-v2-target
           shared-key: rust-v2
           # Only the integration branch saves, from one shard; every shard builds the same set.
-          save-if: ${{ github.ref == 'refs/heads/v2/rust-rewrite' && matrix.shard == 3 }}
+          save-if: ${{ github.ref == 'refs/heads/integration' && matrix.shard == 3 }}
       - name: Build the workspace tests
         run: cargo +1.99.1 test --locked --workspace --no-run
       - name: Select this shard's tests

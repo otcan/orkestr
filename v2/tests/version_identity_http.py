@@ -2,6 +2,7 @@
 import json
 import subprocess
 import tomllib
+import time
 from pathlib import Path
 from owned_execution_http import Case, binary
 
@@ -16,6 +17,8 @@ try:
     identity = json.loads(output.stdout)
     assert identity["version"] == version
     assert identity["component"] == "server" and "error" not in identity
+    assert isinstance(identity["compiled_at_unix"], int)
+    assert 0 < identity["compiled_at_unix"] <= int(time.time()), "timestamp must be artifact build time"
     for arguments in [["--version", "--unknown"], ["--unknown"], ["--json"]]:
         refused = subprocess.run([str(binary), *arguments], env=environment,
                                  capture_output=True, timeout=3)
@@ -31,6 +34,8 @@ try:
     assert code == 200 and headers["Cache-Control"] == "no-store"
     assert health["status"] == "ok" and health["fixture_mode"] is False
     assert health["build"] == identity
+    assert health["deployment"]["format"] == "orkestr-v2-deployment-times-v1"
+    assert set(health["deployment"]) == {"format", "web", "server"}
     assert not (case.home / "owned-execution").exists()
 finally:
     case.cleanup()

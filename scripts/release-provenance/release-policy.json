@@ -18,5 +18,8 @@
     "runtime": "runtime-dist",
     "manifest": "runtime-dist-manifest",
     "compareSubtrees": ["server", "launcher"]
+  },
+  "attestation": {
+    "sourceRefs": ["refs/heads/integration", "refs/heads/main"]
   }
 }

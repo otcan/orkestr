@@ -10,6 +10,9 @@ export const SCOPED_ATTACHED_MARKER = '… (full reply attached)';
 // Largest single WhatsApp text the scoped send path accepts (String#length):
 // the reply budget plus the attachment marker and the footer.
 export const SCOPED_SEND_MAX_TEXT_LENGTH = 65000;
+// Shape of a serialized WhatsApp message id a text may quote (reply-to).
+// Only the shape: the transport checks it names an input of the same group.
+export const validQuotedMessageId = value => typeof value === 'string' && /^[\w@.:-]{1,256}$/.test(value);
 export const SCOPED_DOCUMENT_MIMETYPE = 'text/markdown';
 export const SCOPED_DOCUMENT_MAX_CHARS = 2_000_000;
 export const SCOPED_DOCUMENT_NAME = /^reply-[0-9a-f]{10}\.md$/;
@@ -48,7 +51,14 @@ export function validReplyDocument(document) {
 // Named sources reuse the timer transport for ordinary conversation replies.
 // Their transport metadata belongs in the audit rather than a reply heading.
 export const POST_TIMER_SOURCE_ID = 'post';
+export const FAST_TIMER_SOURCE_ID = 'fast';
 const oneLine = value => String(value || '').replace(/[\r\n]/g, ' ').trim().slice(0, 120);
+
+export function scopedReplyDeliveryType({label, timerId, postAuthor} = {}) {
+  const author = String(postAuthor || '').trim().toLowerCase() ||
+    ({operator: 'operator', system: 'operator'})[oneLine(label).toLowerCase()];
+  return timerId === POST_TIMER_SOURCE_ID && author === 'operator' ? 'router_update' : 'timer_reply';
+}
 
 export function scopedReplyHeader({label, timerId} = {}) {
   const source = String(timerId || '').trim();
@@ -141,7 +151,7 @@ export function scopedGroupReplyChunks({text, message, thread, messages, config,
   const limit = scopedGroupReplyLimit(config, env);
   const footerEnv = config.appendDebugFooter === true ? {...env, ORKESTR_WHATSAPP_DEBUG_FOOTER: '1'} : env;
   let suffix = '';
-  if (formatter && config.appendDebugFooter !== false && formatter.shouldAppendWhatsAppDebugFooter(message, footerEnv, deliveryType, thread)) {
+  if (formatter && config.appendDebugFooter !== false && formatter.shouldAppendWhatsAppDebugFooter(message, footerEnv, deliveryType, thread, messages)) {
     const footer = formatter.whatsappDebugFooter({message, thread, messages, deliveryType, env: footerEnv});
     if (footer.length > SCOPED_FOOTER_MAX_CHARS) throw new Error('group_footer_too_large');
     suffix = `\n\n${footer}`;

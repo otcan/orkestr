@@ -10,6 +10,9 @@ use orkestr_v2_contracts::OwnerId;
 use serde::{Deserialize, Serialize};
 use std::{os::unix::fs::MetadataExt, path::Path};
 
+#[path = "provider_quota_cache.rs"]
+mod cache;
+
 pub const CONFIG_ENV: &str = "ORKESTR_V2_PROVIDER_QUOTA_CONFIG";
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -23,6 +26,7 @@ pub(crate) struct Source {
     broker: Broker,
     owner: OwnerId,
     legacy_owner: String,
+    cache: cache::Cache,
 }
 impl Source {
     pub fn load(path: &Path) -> Result<Self, &'static str> {
@@ -51,8 +55,17 @@ impl Source {
             broker: Broker::new(&cfg.v1_url, cfg.bearer_token)?,
             owner: cfg.owner_id,
             legacy_owner: cfg.legacy_owner_id,
+            cache: cache::Cache::default(),
         })
     }
+}
+// Closed, non-sensitive provider status. A login connection is not quota telemetry.
+#[derive(Clone, Copy, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum WindowStatus {
+    Allowed,
+    AllowedWarning,
+    Rejected,
 }
 #[derive(Clone, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -62,6 +75,8 @@ struct Provider {
     five_hour_resets_at: Option<String>,
     weekly_resets_at: Option<String>,
     observed_at: Option<String>,
+    five_hour_status: Option<WindowStatus>,
+    weekly_status: Option<WindowStatus>,
     #[serde(default)]
     stale: bool,
     #[serde(default)]
@@ -88,14 +103,23 @@ impl Provider {
             })
     }
 }
-#[derive(Default, Deserialize, Serialize)]
+#[derive(Clone, Default, Deserialize, Serialize)]
 struct Quotas {
     codex: Provider,
     claude: Provider,
 }
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct Snapshot {
     quota: Quotas,
+    stale_after_ms: Option<u64>,
+}
+impl Snapshot {
+    fn valid(&self) -> bool {
+        self.quota.codex.valid()
+            && self.quota.claude.valid()
+            && self.stale_after_ms.is_none_or(|ms| ms <= 604_800_000)
+    }
 }
 fn unavailable() -> Error {
     Error(
@@ -123,22 +147,8 @@ pub(crate) async fn read(
         .as_ref()
         .filter(|s| s.owner == owner)
         .ok_or_else(unavailable)?;
-    let (status, value) = source
-        .broker
-        .read(
-            &format!("/api/quota/providers?ownerUserId={}", source.legacy_owner),
-            16384,
-        )
-        .await
-        .map_err(|_| unavailable())?;
-    if status != 200 {
-        return Err(unavailable());
-    }
-    let snapshot: Snapshot = serde_json::from_value(value).map_err(|_| unavailable())?;
-    if !snapshot.quota.codex.valid() || !snapshot.quota.claude.valid() {
-        return Err(unavailable());
-    }
-    // Revalidate after the bounded remote read, including session revocation.
+    let snapshot = source.snapshot().await.map_err(|_| unavailable())?;
+    // Revalidate after any wait, including session revocation on cache hits.
     if browser::owner(&state, &headers).await? != owner {
         return Err(crate::unauthorized());
     }
@@ -161,6 +171,32 @@ mod tests {
         assert!(snapshot.quota.codex.valid());
         let text = serde_json::to_string(&snapshot).unwrap();
         assert!(!text.contains("private") && !text.contains("source"));
+    }
+    #[test]
+    fn projection_preserves_status_only_claude_and_owner_freshness_policy() {
+        let value = serde_json::json!({"quota":{"codex":{},"claude":{"weeklyStatus":"allowed","weeklyRemainingPct":null}},"staleAfterMs":90000});
+        let snapshot: Snapshot = serde_json::from_value(value).unwrap();
+        assert!(snapshot.valid());
+        let projected = serde_json::to_value(snapshot).unwrap();
+        assert_eq!(projected["quota"]["claude"]["weeklyStatus"], "allowed");
+        assert!(projected["quota"]["claude"]["fiveHourStatus"].is_null());
+        assert_eq!(projected["staleAfterMs"], 90000);
+        for status in ["connected", "https://example.invalid/private", "ALLOWED"] {
+            assert!(
+                serde_json::from_value::<Provider>(serde_json::json!({"weeklyStatus":status}))
+                    .is_err()
+            );
+        }
+    }
+    #[test]
+    fn producer_freshness_policy_is_bounded() {
+        for (age, valid) in [(0, true), (604_800_000, true), (604_800_001, false)] {
+            let snapshot: Snapshot = serde_json::from_value(
+                serde_json::json!({"quota":{"codex":{},"claude":{}},"staleAfterMs":age}),
+            )
+            .unwrap();
+            assert_eq!(snapshot.valid(), valid);
+        }
     }
     #[test]
     fn projection_rejects_invalid_numeric_and_text_fields() {

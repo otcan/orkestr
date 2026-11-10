@@ -284,7 +284,7 @@ async function runConversation(input, auth, env) {
     payload = {
       ready: page?.ready !== false,
       source: page?.source || input.source || "chats",
-      [page?.contacts ? "contacts" : "chats"]: items,
+      [page?.contacts || (page?.source || input.source) === "contacts" ? "contacts" : "chats"]: items,
       hasMore: page?.hasMore === true,
       nextCursor: page?.nextCursor || null,
       total: Number(page?.total || 0),

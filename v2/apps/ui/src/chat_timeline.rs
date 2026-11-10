@@ -2,7 +2,7 @@
 //! Conversation posts (assistant-side messages from outside a run) follow the
 //! event they were written after, ordered by creation time among themselves.
 use orkestr_v2_contracts::{AcceptedResult, ConversationPost, Message, ReplyTo};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Keep a bounded inline history. Only a removal tombstone may change a known row.
 pub fn merge_replies(
@@ -208,6 +208,11 @@ impl Row {
             Self::Post(row) => (row.after_sequence, 1, row.created_ms),
             _ => (self.sequence(), 0, 0),
         }
+    }
+    /// Whether a suppressed reply hides this row: only the reply itself, never
+    /// a post that follows it and so reports the same event sequence.
+    pub fn is_silenced(&self, silent: &BTreeSet<i64>) -> bool {
+        matches!(self, Self::Reply(row) if silent.contains(&row.acceptance_sequence))
     }
     pub fn key(&self) -> String {
         match self {

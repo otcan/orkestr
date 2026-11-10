@@ -1,21 +1,31 @@
-// Display-only passive quota model. No provider requests or account selectors.
+// Display-only passive quota model. Login status never implies quota availability.
 export function quotaCards(snapshot, now = Date.now()) {
- const ageLimit = 6 * 60 * 60 * 1000;
+ const configuredAge = snapshot?.staleAfterMs;
+ const ageLimit = Number.isSafeInteger(configuredAge) && configuredAge >= 0 && configuredAge <= 604800000 ? configuredAge : 21600000;
  const epoch = x => typeof x === 'string' && x.length <= 40 ? Date.parse(x) : NaN;
  const countdown = at => { const m = Math.max(1, Math.ceil((at - now) / 60000)); return m >= 1440 ? `${Math.floor(m/1440)}d ${Math.floor((m%1440)/60)}h` : m >= 60 ? `${Math.floor(m/60)}h ${m%60}m` : `${m}m`; };
+ const statusLabel = {allowed:'available',allowed_warning:'near limit',rejected:'limited'};
  return [['codex','OpenAI / Codex'],['claude','Claude']].map(([key,name]) => {
   const q = snapshot?.quota?.[key];
   const observed = epoch(q?.observedAt);
   const knownObservation = Number.isFinite(observed) && observed > 0 && observed <= now;
   const stale = q?.stale === true || (knownObservation && now - observed > ageLimit);
-  const windows = [['fiveHour','5h'],['weekly','wk']].map(([prefix,label]) => {
-   const n = q?.[`${prefix}RemainingPct`], at = epoch(q?.[`${prefix}ResetsAt`]);
+  const reported = [['fiveHour','5h'],['weekly','week']].flatMap(([prefix,label]) => {
+   const n = q?.[`${prefix}RemainingPct`], rawReset = q?.[`${prefix}ResetsAt`], at = epoch(rawReset);
+   const status = Object.hasOwn(statusLabel,q?.[`${prefix}Status`]) ? statusLabel[q[`${prefix}Status`]] : null;
+   // Null/absent windows are not subscription limits. Do not invent a 5h row.
+   if (n == null && rawReset == null && !status) return [];
    const expired = Number.isFinite(at) && at <= now;
-   const valid = knownObservation && !expired && typeof n === 'number' && Number.isFinite(n) && n >= 0 && n <= 100;
-   return {label: `${label} ${valid ? `${Math.round(n)}%` : '?'}`, detail: `${label}: ${expired ? 'expired observation; waiting for new telemetry' : valid ? `${Math.round(n)}% remaining` : 'unknown'}${Number.isFinite(at) && !expired ? `; resets in ${countdown(at)} (${new Date(at).toISOString()})` : '; reset time unknown'}`, reset: `${label} ↻ ${Number.isFinite(at) && !expired ? countdown(at) : '?'}`, valid};
+   const numeric = typeof n === 'number' && Number.isFinite(n) && n >= 0 && n <= 100;
+   const valid = knownObservation && !expired && (numeric || status !== null);
+   const value = numeric ? `${Math.round(n)}%` : status;
+   return [{label: `${label} ${value}`, detail: `${label}: ${expired ? 'expired observation; waiting for passive telemetry' : valid ? `${value}${numeric ? ' remaining' : ''}` : 'no verified quota observation'}${Number.isFinite(at) && !expired ? `; resets in ${countdown(at)} (${new Date(at).toISOString()})` : '; reset time unavailable'}`, reset: Number.isFinite(at) && !expired ? `${label} resets in ${countdown(at)}` : '', valid, expired}];
   });
-  const status = !q ? 'unavailable' : !windows.some(w=>w.valid) ? 'unknown' : stale ? 'stale' : 'current';
-  return {name, label: windows.map(w=>w.label).join(' · '), status: `${status}${q?.limited === true ? ' · limited' : ''}`, reset: windows.map(w=>w.reset).join(' · '), detail: [...windows.map(w=>w.detail), knownObservation ? `Observed ${new Date(observed).toISOString()}` : 'No verified observation time'].join(' · ')};
+  const windows = reported.filter(w => w.valid);
+  const expired = reported.some(w => w.expired);
+  const limited = q?.limited === true || windows.some(w => w.label.endsWith(' limited'));
+  const state = windows.length ? stale ? 'stale' : 'current' : expired ? 'expired' : 'unavailable';
+  return {name, label: windows.length ? windows.map(w=>w.label).join(' · ') : expired ? 'Telemetry expired' : 'Quota unavailable', status: `${state}${limited ? ' · limited' : ''}`, reset: windows.map(w=>w.reset).filter(Boolean).join(' · '), detail: [!reported.length ? 'No passive quota telemetry. Account connection is separate from quota reporting.' : '', ...reported.map(w=>w.detail), knownObservation ? `Observed ${new Date(observed).toISOString()}${stale ? ' (stale)' : ''}` : 'No verified observation time'].filter(Boolean).join(' · ')};
  });
 }
 export async function providerQuotaRequest(signal, fetcher = fetch, now = () => Date.now()) {

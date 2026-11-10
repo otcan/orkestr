@@ -1,6 +1,7 @@
 """Negative manager shutdown always retains and reaps the original Core child."""
 import os
 import signal
+import sys
 import time
 from codex_bounded.trust import exists, process
 from .contract import require
@@ -88,6 +89,9 @@ def close(self):
                 item.close()
             except Exception:
                 errors.append("state_cleanup")
+    if errors:
+        sys.stderr.write("manager close errors: %s\n" % ",".join(sorted(set(errors))))
+        sys.stderr.flush()
     self.failed = self.failed or bool(errors)
     return not self.failed
 
