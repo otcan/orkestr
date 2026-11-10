@@ -9,6 +9,7 @@ mod beta_bridge;
 mod beta_discovery;
 mod beta_settings;
 mod beta_window_view;
+mod build_badge;
 mod chat_settings_view;
 mod composer;
 mod composer_tools;
@@ -227,7 +228,7 @@ fn App() -> Element {
         style { "{include_str!(\"style.css\")}" }
         style { "{include_str!(\"host_metrics.css\")}" }
         main { class: "app-shell",
-            header { class: "app-heading", h1 { "Orkestr" } span { "Rust workspace · beta" }
+            header { class: "app-heading", h1 { "Orkestr" } build_badge::BuildBadge {}
                 if !csrf().is_empty() && !current().is_empty() {
                     div { key: "{session_scope.read().generation()}", style: "display: contents",
                         host_metrics_panel::HostMetricsPanel { session_scope, onexpired: expired,
