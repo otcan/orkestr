@@ -96,22 +96,33 @@ pub fn link_grant(expires_at: Option<&str>, lease_state: &str) -> String {
     )
 }
 
-/// The outcome of a Stop, including anything that went wrong around it.
-pub fn stop_outcome(
-    runtime: &str,
-    reservation_verified: bool,
-    interrupted: Option<&str>,
-) -> String {
+/// The outcome of a Stop, including anything that went wrong around it. The
+/// runtime itself is shown in the row, never restated here.
+pub fn stop_outcome(reservation_verified: bool, interrupted: Option<&str>) -> String {
     match interrupted {
         Some(holder) => format!(
-            "Desk stopped (runtime: {runtime}), but {holder} reserved it while it was stopping and has been interrupted. Check that chat."
+            "Desk stopped, but {holder} reserved it while it was stopping and has been interrupted. Check that chat."
         ),
-        None if !reservation_verified => format!(
-            "Desk stopped (runtime: {runtime}). Its reservation could not be verified afterwards; refresh before relying on it."
-        ),
-        None => format!("Desk stopped. Runtime: {runtime}."),
+        None if !reservation_verified => {
+            "Desk stopped. Its reservation could not be verified afterwards; refresh before relying on it.".into()
+        }
+        None => "Desk stopped.".into(),
     }
 }
+
+/// The "Held by" cell. Only a desk known to be free shows a dash; an
+/// unverified one says so, so it can never read as free.
+pub fn held_by(lease_state: &str, holder: Option<&str>) -> String {
+    match (holder, Availability::from_lease(lease_state)) {
+        (Some(holder), _) => holder.to_owned(),
+        (None, Availability::Available) => "—".into(),
+        (None, Availability::Reserved) => "A chat".into(),
+        (None, _) => "Not verified".into(),
+    }
+}
+
+/// One line above the table, so the rows themselves stay short.
+pub const LEGEND: &str = "Available: no reservation at the last refresh. Reserved: a chat holds the desk. Not verified or needs checking: it could not be confirmed, which does not mean the desk is free. Hover a status for details.";
 
 #[cfg(test)]
 mod tests {
@@ -167,10 +178,22 @@ mod tests {
     }
     #[test]
     fn a_stop_outcome_never_hides_an_interruption() {
-        assert!(stop_outcome("inactive", true, None).starts_with("Desk stopped."));
-        let interrupted = stop_outcome("inactive", true, Some("Chat two"));
+        assert_eq!(stop_outcome(true, None), "Desk stopped.");
+        let interrupted = stop_outcome(true, Some("Chat two"));
         assert!(interrupted.contains("Chat two") && interrupted.contains("interrupted"));
-        assert!(stop_outcome("inactive", false, None).contains("could not be verified"));
+        assert!(stop_outcome(false, None).contains("could not be verified"));
+        // The Runtime cell is the only place the runtime is shown.
+        assert!(!stop_outcome(true, None).contains("Runtime"));
+    }
+    #[test]
+    fn only_a_known_free_desk_is_held_by_nobody() {
+        assert_eq!(held_by("unreserved", None), "—");
+        assert_eq!(held_by("reserved", Some("Chat one")), "Chat one");
+        assert_eq!(held_by("reserved", None), "A chat");
+        for lease in ["unknown", "stale", "expired", "", "future-state"] {
+            assert_eq!(held_by(lease, None), "Not verified", "{lease}");
+        }
+        assert!(LEGEND.contains("does not mean the desk is free"));
     }
     #[test]
     fn only_a_free_desk_gets_the_available_style() {

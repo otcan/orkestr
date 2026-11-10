@@ -1,6 +1,9 @@
 use dioxus::prelude::*;
 use orkestr_v2_contracts::DesktopInventory;
-use orkestr_v2_ui::{desk_presentation::Availability, session_scope::SessionScope};
+use orkestr_v2_ui::{
+    desk_presentation::{Availability, LEGEND},
+    session_scope::SessionScope,
+};
 use serde_json::Value;
 
 /// Owner-wide inventory; entering this view never acquires or restarts a desk.
@@ -90,7 +93,18 @@ pub fn VirtualDesks(
                     p {role:"status","No desks match your search."}
                 }
                 if value.resources.is_empty() { p { "No desk resources are available." } }
-                ul {class:"desk-list", "aria-label":"Desks",
+                p { class: "field-help desk-legend", "{LEGEND}" }
+                div { class: "desk-inventory",
+                table {class:"desk-table", role:"table", "aria-label":"Desks",
+                thead { role: "rowgroup",
+                    tr { role: "row",
+                        th { "scope": "col", role: "columnheader", "Desk" }
+                        th { "scope": "col", role: "columnheader", "Reservation" }
+                        th { "scope": "col", role: "columnheader", "Runtime" }
+                        th { "scope": "col", role: "columnheader", "Held by" }
+                        th { "scope": "col", role: "columnheader", "Actions" }
+                    }
+                }
                 for desk in value.resources {
                     crate::desktop_resource_row::DesktopResourceRow {
                         key: "{desk.slug}:{owner}",
@@ -100,6 +114,7 @@ pub fn VirtualDesks(
                         onchanged: move |_| reload += 1,
                         observed_at_ms: value.observed_at_ms,
                     }
+                }
                 }
                 }
             } else if loading() { p { role: "status", "Loading all desk resources…" } }

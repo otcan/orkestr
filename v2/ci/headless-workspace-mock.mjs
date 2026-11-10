@@ -55,7 +55,7 @@ export function createState() {
     // Chat settings, desktops and timers of conversation A.
     settings: { schema_version: 1, conversation_id: A, revision: 2, provider: 'codex', model: 'synthetic-model', reasoning_effort: 'medium',
       honor_no_reply: true, reply_prefix: 'synthetic:', reply_footer: null, provider_generation: 0, updated_at_ms: 1 },
-    desktopActions: [], deskReserved: false, deskRuntime: { 'idle-desk': 'inactive', 'held-desk': 'active' }, deskOwnerActions: [], deskStopConflict: false, deskStartFailure: false, settingsPuts: [], bindingPuts: [], desktopBindings: {}, timerCalls: [], timerPause: null, chatTimerPause: null,
+    desktopActions: [], deskReserved: false, deskRuntime: { 'idle-desk': 'inactive', 'held-desk': 'active', 'unbound-desk': 'unknown' }, deskOwnerActions: [], deskStopConflict: false, deskStartFailure: false, settingsPuts: [], bindingPuts: [], desktopBindings: {}, timerCalls: [], timerPause: null, chatTimerPause: null,
     // Linked V1 chat management (synthetic V1 state behind the server).
     v1Model: { model: 'synthetic-model', effort: 'low' }, v1Calls: [],
     v1Timers: [{ id: 'timer-1', label: 'Synthetic digest', cadence: 'daily', time: '08:00', every: null, timezone: 'Europe/Berlin',
@@ -261,7 +261,7 @@ async function api(state, req, res, url) {
     schema_version:1, observed_at_ms:Date.now(), resources:[
       {slug:'synthetic-desk',label:'Synthetic desk',state:'running',lease_state:state.deskReserved?'reserved':'unreserved',holder:state.deskReserved?'Assistant':null,expires_at:null},
       {slug:'research-desk',label:'Research desk',state:'stopped',lease_state:'unknown',holder:null,expires_at:null},
-      {slug:'unbound-desk',label:'Unbound desk',state:'unknown',lease_state:'unknown',holder:null,expires_at:null},
+      {slug:'unbound-desk',label:'Unbound desk',state:state.deskRuntime['unbound-desk'],lease_state:'unknown',holder:null,expires_at:null},
       {slug:'idle-desk',label:'Idle desk',state:state.deskRuntime['idle-desk'],lease_state:'unreserved',holder:null,expires_at:null},
       {slug:'held-desk',label:'Held desk',state:state.deskRuntime['held-desk'],lease_state:'reserved',holder:'Worker chat',expires_at:'2026-01-01T02:00:00Z'}],
     bindings:[{conversation_id:A,name:'Assistant',desktop_slugs:['synthetic-desk']},{conversation_id:B,name:'Research notes',desktop_slugs:['research-desk']}],
