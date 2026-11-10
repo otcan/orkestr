@@ -7,6 +7,8 @@ use orkestr_v2_contracts::{
     ConversationId, ConversationLineage, OwnerId, SidebarAuthor, SidebarKey, SIDEBAR_MAX_ENTRIES,
 };
 use sqlx::{Row, Sqlite, Transaction};
+#[path = "sidebar_link.rs"]
+mod link;
 
 type Result<T> = std::result::Result<T, ResourceError>;
 

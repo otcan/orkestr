@@ -180,7 +180,11 @@ impl Store {
         }
         Ok(result)
     }
-    async fn task_run_current_in(&self, tx: &mut SqliteConnection, run: &RunId) -> Result<()> {
+    pub(in crate::production_runtime) async fn task_run_current_in(
+        &self,
+        tx: &mut SqliteConnection,
+        run: &RunId,
+    ) -> Result<()> {
         let context = self.context()?;
         let row = sqlx::query("SELECT * FROM production_runs WHERE id=? AND owner_id=? AND context_id=? AND incarnation_id=? AND role='worker'")
             .bind(run.to_string()).bind(context.owner.to_string()).bind(&context.id).bind(&context.incarnation)

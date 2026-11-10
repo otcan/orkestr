@@ -7,7 +7,7 @@ impl Store {
         binding: &Binding,
         predecessor: &str,
         project: Uuid,
-        installation: WorkspaceInstallation,
+        installation: &WorkspaceInstallation,
     ) -> Result<WorkspaceGrant> {
         let c = self.context()?;
         c.validate(tx).await?;
@@ -53,7 +53,7 @@ impl Store {
                 .map_err(db)?,
             conversation: binding.conversation_id.clone(),
             context: c.clone(),
-            installation: installation.inner,
+            installation: installation.inner.clone(),
         })
     }
 }

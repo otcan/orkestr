@@ -415,6 +415,12 @@ impl Controller {
             .map(Some)
     }
 
+    /// Called only after Core's batch snapshot authenticated a valid queue row.
+    pub(crate) fn queue_snapshot_capacity(&self, browser: &str) -> u32 {
+        self.queue.remember(browser);
+        self.capacity
+    }
+
     pub(crate) async fn queue_status(
         &self,
         browser: &str,

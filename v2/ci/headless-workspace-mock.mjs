@@ -54,7 +54,7 @@ export function createState() {
     // Chat settings, desktops and timers of conversation A.
     settings: { schema_version: 1, conversation_id: A, revision: 2, provider: 'codex', model: 'synthetic-model', reasoning_effort: 'medium',
       honor_no_reply: true, reply_prefix: 'synthetic:', reply_footer: null, provider_generation: 0, updated_at_ms: 1 },
-    settingsPuts: [], bindingPuts: [], desktopBindings: {}, timerCalls: [], timerPause: null, chatTimerPause: null,
+    desktopActions: [], deskReserved: false, settingsPuts: [], bindingPuts: [], desktopBindings: {}, timerCalls: [], timerPause: null, chatTimerPause: null,
     // Linked V1 chat management (synthetic V1 state behind the server).
     v1Model: { model: 'synthetic-model', effort: 'low' }, v1Calls: [],
     v1Timers: [{ id: 'timer-1', label: 'Synthetic digest', cadence: 'daily', time: '08:00', every: null, timezone: 'Europe/Berlin',
@@ -225,6 +225,13 @@ async function api(state, req, res, url) {
   const path = url.pathname, q = url.searchParams;
   state.requests.push(`${req.method} ${path.replace(/[0-9a-f-]{36}/g, ':id')}`);
   if (await trackerApi(state, req, res, url, { json, body })) return;
+  if (path === '/api/v2/desktops' && req.method === 'GET') return json(res,200,{
+    schema_version:1, observed_at_ms:Date.now(), resources:[
+      {slug:'synthetic-desk',label:'Synthetic desk',state:'running',lease_state:state.deskReserved?'reserved':'unreserved',holder:state.deskReserved?'Assistant':null,expires_at:null},
+      {slug:'research-desk',label:'Research desk',state:'stopped',lease_state:'unknown',holder:null,expires_at:null},
+      {slug:'unbound-desk',label:'Unbound desk',state:'unknown',lease_state:'unknown',holder:null,expires_at:null}],
+    bindings:[{conversation_id:A,name:'Assistant',desktop_slugs:['synthetic-desk']},{conversation_id:B,name:'Research notes',desktop_slugs:['research-desk']}],
+  });
   if (path === '/api/v2/browser/session' && req.method === 'GET') return json(res, 200, { csrf_token: 'synthetic-csrf', global_conversation_id: A });
   if (path === '/api/v2/beta') {
     const id = q.get('conversation_id') ?? A;
@@ -233,6 +240,10 @@ async function api(state, req, res, url) {
       controls: { stop: true, steer: true, accept: true }, limits: LIMITS, window: state.window[id] });
   }
   if (path === '/api/v2/live-map' && req.method === 'GET') return json(res, 200, liveMap());
+  if (path === '/api/v2/provider-quotas' && req.method === 'GET') {
+    const window = {fiveHourRemainingPct:75,weeklyRemainingPct:40,fiveHourResetsAt:new Date(Date.now()+3600000).toISOString(),weeklyResetsAt:new Date(Date.now()+86400000).toISOString(),observedAt:new Date().toISOString(),stale:false,limited:false};
+    return json(res,200,{quota:{codex:window,claude:{...window,weeklyRemainingPct:8,stale:true}}});
+  }
   if (path === '/api/v2/host-metrics' && req.method === 'GET') return json(res, 200, hostSummary());
   if (path === '/api/v2/host-metrics/consumers' && req.method === 'GET') return json(res, 200, hostConsumers());
   if (path === '/api/v2/host-metrics/disks' && req.method === 'GET') return json(res, 200, hostDisks());
@@ -241,7 +252,11 @@ async function api(state, req, res, url) {
     if (!HOST_STEPS[range]) return json(res, 400, { code: 'invalid_range', message: 'Range', request_id: 'synthetic', retryable: false });
     return json(res, 200, hostHistory(range));
   }
-  if (path === '/api/v2/sidebar' && req.method === 'GET') return json(res, 200, sidebar(state));
+  if (path === '/api/v2/sidebar' && req.method === 'GET') {
+    state.sidebarReads = (state.sidebarReads ?? 0) + 1;
+    if (state.sidebarDelayMs) await new Promise(resolve => setTimeout(resolve, state.sidebarDelayMs));
+    return json(res, 200, sidebar(state));
+  }
   if (path === '/api/v2/sidebar/read' && req.method === 'PUT') {
     if (req.headers['x-orkestr-csrf'] !== 'synthetic-csrf') return json(res, 403, { code: 'csrf', message: 'CSRF required' });
     const mark = JSON.parse(await body(req));
@@ -422,6 +437,20 @@ async function api(state, req, res, url) {
     state.settings = { ...state.settings, ...fields, revision: state.settings.revision + 1 };
     return json(res, 200, state.settings);
   }
+  const deskAction = /^\/desktops\/synthetic-desk\/(acquire|release|reset)$/.exec(rest);
+  if(deskAction && req.method==='POST') {
+    if(req.headers['x-orkestr-csrf']!=='synthetic-csrf')return json(res,403,{code:'csrf',message:'CSRF required'});
+    const request=JSON.parse(await body(req)), action=deskAction[1];
+    state.desktopActions.push({action,conversation:id,...request});
+    if(action==='acquire') {
+      state.deskReserved=true;
+      return json(res,201,{fencing_token:'synthetic-fence-token',lease:{conversation_id:id,desktop_slug:'synthetic-desk',v1_thread_id:'synthetic-thread',v1_lease_id:'lease-1',fencing_version:1,state:'active',expires_at:null,acquired_at_ms:1,heartbeat_at_ms:2,ended_at_ms:null,end_reason:null}});
+    }
+    if(request.fencing_token!=='synthetic-fence-token'||!state.deskReserved)return json(res,409,{code:'lost',message:'Reservation lost'});
+    if(action==='reset'&&request.confirm!==true)return json(res,400,{code:'confirmation',message:'Confirmation required'});
+    if(action==='release')state.deskReserved=false;
+    return json(res,200,{ok:true});
+  }
   if (rest === '/desktops/synthetic-desk/open' && req.method === 'POST') {
     const request = JSON.parse(await body(req));
     if (Object.keys(request).length || req.headers['x-orkestr-csrf'] !== 'synthetic-csrf')
@@ -481,7 +510,7 @@ export async function startMock(bundle, state = createState()) {
     if (url.pathname.startsWith('/api/')) return api(state, req, res, url);
     const deep = /^\/instance\/(ins_[A-Za-z0-9_-]{22})\/thread\/(thr_[A-Za-z0-9_-]{22})$/.exec(url.pathname);
     if (deep) { res.writeHead(303, { location: `/#v1-link/${deep[1]}/${deep[2]}`, 'cache-control': 'no-store' }); return res.end(); }
-    const file = normalize(url.pathname === '/' ? '/index.html' : url.pathname);
+    const file = normalize(['/','/virtual-desks','/virtual-desks/'].includes(url.pathname) ? '/index.html' : url.pathname);
     if (file.includes('..')) return missing(res);
     try {
       const body = await readFile(join(bundle, file));

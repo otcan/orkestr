@@ -90,7 +90,15 @@ impl WorkerPolicy {
             .zip(self.broker_launcher_sha256.as_deref())
     }
 
-    pub(super) fn owner_tasks(&self) -> bool {
+    /// The sealed owner selection narrows the existing scheduler ceiling.
+    pub(crate) fn native_execution_budget(&self, owner_ms: u32) -> Option<u32> {
+        self.execution_budget
+            .as_ref()
+            .filter(|_| self.owner_tasks())
+            .map(|budget| owner_ms.min(budget.max_run_ms))
+    }
+
+    pub(crate) fn owner_tasks(&self) -> bool {
         self.mode == "owner-tasks-v1"
     }
 
@@ -107,6 +115,21 @@ impl WorkerPolicy {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn native_owner_budget_never_expands_the_host_policy() {
+        assert_eq!(
+            WorkerPolicy::window_owner_tasks().native_execution_budget(300_000),
+            Some(300_000)
+        );
+        assert_eq!(
+            WorkerPolicy::window_trusted_workspace_tasks(120_000).native_execution_budget(300_000),
+            Some(120_000)
+        );
+        let legacy: WorkerPolicy =
+            serde_json::from_value(json!({"mode":"owner-tasks-v1","lifetime_ms":30000})).unwrap();
+        assert_eq!(legacy.native_execution_budget(300_000), None);
+    }
 
     #[test]
     fn only_explicit_bounded_server_policy_is_accepted() {

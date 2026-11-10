@@ -6,6 +6,8 @@ use orkestr_v2_store_sqlite::{
     ManagedOperationParent, ManagedOperationSetup,
 };
 use std::time::Instant;
+#[path = "managed_workers.rs"]
+mod workers;
 
 #[derive(Clone, Copy, Debug)]
 enum ManagedRpc {
@@ -42,6 +44,7 @@ pub(super) struct ManagedTools {
     context: std::sync::Arc<crate::window_runtime::context::Context>,
     operation: Option<ConsumedManagedOperation>,
     run_closed: bool,
+    workers: workers::NativeWorkers,
 }
 impl ConfiguredExecution {
     fn managed_enabled(&self) -> bool {
@@ -96,6 +99,22 @@ impl ConfiguredExecution {
         .await;
         observed_rpc(ManagedRpc::RunOpen, started, result)
             .map_err(|_| "managed run observation uncertain")?;
+        let selected_budget = std::env::var("ORKESTR_V2_MANAGED_WORKER_EXECUTION_BUDGET_MS")
+            .ok()
+            .map(|value| {
+                value
+                    .parse::<u32>()
+                    .ok()
+                    .filter(|ms| (30_000..=3_600_000).contains(ms))
+                    .ok_or("native Worker budget refused")
+            })
+            .transpose()?;
+        let worker_budget = selected_budget.and_then(|ms| {
+            self.config
+                .worker
+                .as_ref()
+                .and_then(|policy| policy.native_execution_budget(ms))
+        });
         Ok(Some(ManagedTools {
             store: self.store.clone(),
             credential: self.token.clone(),
@@ -103,6 +122,16 @@ impl ConfiguredExecution {
             context,
             operation: None,
             run_closed: false,
+            workers: workers::NativeWorkers::new(
+                self.tasks.clone(),
+                consumed.provider().run.clone(),
+                self.config
+                    .worker
+                    .as_ref()
+                    .is_some_and(|policy| policy.owner_tasks())
+                    && std::env::var("ORKESTR_V2_MANAGED_WORKERS_ENABLED").as_deref() == Ok("1"),
+                worker_budget,
+            ),
         }))
     }
 }
@@ -149,6 +178,9 @@ impl ManagedTools {
             .map_err(|_| "managed parent lease transfer refused")
     }
     pub(super) async fn poll(&mut self) -> Result<(), &'static str> {
+        if self.workers.pending() {
+            self.poll_native_worker().await?;
+        }
         if self.operation.is_none() {
             let started = Instant::now();
             let result = async {
@@ -167,6 +199,10 @@ impl ManagedTools {
             else {
                 return Ok(());
             };
+            if request.request.is_native_worker() {
+                self.begin_native_worker(request).await?;
+                return self.poll_native_worker().await;
+            }
             let consumed = self
                 .store
                 .consume_managed_operation(

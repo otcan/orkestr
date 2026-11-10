@@ -18,11 +18,14 @@ pub(super) mod provider_handoff;
 #[cfg(test)]
 pub(super) mod provider_handoff_migration_fixture;
 pub use bootstrap::ExecutionWindowBootstrap;
+mod conversation_status;
 mod credential;
 mod fast_metadata;
 mod guard;
 mod lifecycle;
 mod queue;
+mod queue_snapshot;
+pub use conversation_status::{ConversationStatusSnapshot, WindowQueueSnapshot};
 pub(super) use queue::enqueue_timer_intent;
 pub(crate) use queue::enqueue_trusted_intent;
 pub(super) mod operator_policy;

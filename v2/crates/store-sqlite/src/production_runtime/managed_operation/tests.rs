@@ -142,7 +142,7 @@ async fn fixture_with_renewal() -> (
     let renewal = bound.authorize_running_renewal(&consumed).await.unwrap();
     (f, bound, grant.credential().into(), parent, source, renewal)
 }
-async fn fixture() -> (
+pub(super) async fn fixture() -> (
     Case,
     Store,
     String,

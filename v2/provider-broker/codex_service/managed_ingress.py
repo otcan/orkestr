@@ -42,6 +42,9 @@ def packet(raw):
         for field,cap in (('action',256),('resource',512),('summary',4096)):
             text=arguments[field]
             require(type(text) is str and 0<len(text.encode())<=cap and '\0' not in text,'managed_submit_text')
+    elif value['operation'] in ('worker_capability','worker_submit','worker_status','worker_wait'):
+        from .managed_workers import validate
+        validate(value['operation'],arguments)
     else:require(False,'managed_operation')
     return value
 
@@ -145,6 +148,8 @@ class Ingress:
         if path.exists():
             record=metadata(path,32768);require(record['payload_sha256']==payload,'managed_replay_conflict')
             require(record['state']!='pending' or record['source']==peer.source,'managed_original_caller_required')
+            if value['operation'] in ('worker_capability','worker_submit','worker_status','worker_wait'):
+                require(record['source']==peer.source,'managed_worker_original_caller_required')
         else:
             count=sum(1 for p in self.directory.glob('*.json')
                       if metadata(p,32768)['source']['window_id']==peer.source['window_id'])

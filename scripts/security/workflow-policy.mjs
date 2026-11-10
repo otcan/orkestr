@@ -12,6 +12,8 @@ export const actionPins = Object.freeze({
   "actions/download-artifact": "d3f86a106a0bac45b974a628896c90dbdf5c8093", // v4.3.0
   "actions/attest-build-provenance": "4d101475d8b20a2381f78447822ac1eab6504dd8", // v4.2.2
   "Swatinem/rust-cache": "d1527c8f67ef9af357290475d4af4b0fab8f12e0", // v2.9.3
+  "docker/setup-buildx-action": "f87e5991a6d7451dcb8d9637bfbc97413f497069", // v4.4.1
+  "docker/build-push-action": "c3c9e263c25d99ce0380d002d59b67737d91b0dc", // v7.4.0
 });
 const attestAction = "actions/attest-build-provenance";
 // Only these actions may run in a job that holds OIDC/attestation write
@@ -23,6 +25,15 @@ const record = value => value !== null && typeof value === "object" && !Array.is
 const requirePolicy = (condition, code) => { if (!condition) throw new Error(code); };
 function permissions(value) {
   requirePolicy(record(value) && Object.keys(value).every(key => key === "contents") && value.contents === "read", "workflow_permissions");
+}
+// Image cache admission reads aggregate repository usage. It never holds
+// actions:write and never changes storage limits or deletes other caches.
+function imageCacheReadPermissions(job, filename) {
+  const value = job.permissions;
+  if (filename !== "v2-image.yml" || !record(value) || !("actions" in value)) return false;
+  requirePolicy(Object.keys(value).sort().join(",") === "actions,contents" &&
+    value.contents === "read" && value.actions === "read", "workflow_permissions");
+  return true;
 }
 // Job-level attestation permissions: exactly contents:read + id-token:write +
 // attestations:write, only for an attestation job gated to trusted events that
@@ -142,7 +153,8 @@ export function validateWorkflow(source, filename = "") {
   for (const job of Object.values(workflow.jobs)) {
     requirePolicy(record(job) && (githubHostedRunners.has(job["runs-on"]) || (iosSimulator && job["runs-on"] === "macos-15")), "workflow_runner");
     requirePolicy(!["uses", "secrets", "container", "services", "environment"].some(key => key in job), "workflow_privileged_job");
-    if ("permissions" in job && (iosSimulator || (!attestationJob(job) && !publishJob(job, filename)))) permissions(job.permissions);
+    if ("permissions" in job && (iosSimulator || (!attestationJob(job) && !publishJob(job, filename) &&
+        !imageCacheReadPermissions(job, filename)))) permissions(job.permissions);
     requirePolicy(!job["continue-on-error"], "workflow_ignored_failure");
     requirePolicy(Array.isArray(job.steps) && job.steps.length > 0, "workflow_steps");
     for (const step of job.steps) {

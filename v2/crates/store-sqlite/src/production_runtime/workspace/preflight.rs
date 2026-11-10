@@ -19,8 +19,11 @@ pub(crate) struct WorkspaceCheck {
     deadline: Option<Instant>,
     physical_deadline: Instant,
     alive: AtomicBool,
-    effect: AtomicBool,
+    effect: Arc<AtomicBool>,
     stamp_changed: AtomicBool,
+    handoff_expired: Arc<AtomicBool>,
+    #[cfg(test)]
+    forced_handoff_expiry: AtomicBool,
     context: Option<(String, String, i64)>,
     retained: Option<super::filesystem::RetainedStamp>,
 }
@@ -44,6 +47,44 @@ impl Drop for WorkspacePreflight {
     }
 }
 impl WorkspacePreflight {
+    #[cfg(test)]
+    pub(in crate::production_runtime) fn expire_terminal_handoff_for_test(&self) {
+        self.proof
+            .forced_handoff_expiry
+            .store(true, Ordering::SeqCst);
+    }
+
+    pub(in crate::production_runtime) fn terminal_handoff_refresh_eligible(&self) -> bool {
+        self.owns
+            && self.proof.alive.load(Ordering::SeqCst)
+            && !self.proof.effect.load(Ordering::SeqCst)
+            && self.proof.handoff_expired.load(Ordering::SeqCst)
+            && Instant::now() < self.proof.physical_deadline
+    }
+
+    /// Terminal takeover may cross its short handoff while validating durable
+    /// predecessor evidence. The caller must first confirm SQL rollback. Only
+    /// this owned, untouched proof can repeat the complete Root check, using
+    /// the original physical budget and exact retained installation.
+    pub(in crate::production_runtime) async fn refresh_terminal_handoff(
+        self,
+        store: &Store,
+    ) -> Result<Option<Self>> {
+        let deadline = self.proof.physical_deadline;
+        let eligible = self.terminal_handoff_refresh_eligible();
+        let owner = self.proof.owner.clone();
+        let conversation = self.proof.conversation.clone();
+        let installation = self.proof.installation.clone();
+        drop(self);
+        if !eligible {
+            return Ok(None);
+        }
+        store
+            .check_workspace_before_writer_until(&owner, &conversation, installation, deadline)
+            .await
+            .map(Some)
+    }
+
     /// A changed directory stamp can be ordinary command output. It is never
     /// accepted as authority: discard this owned proof and repeat the complete
     /// Root check outside the writer, within the original physical budget.
@@ -96,8 +137,11 @@ impl WorkspacePreflight {
             physical_deadline: self.proof.physical_deadline,
             retained: self.proof.retained,
             alive: AtomicBool::new(true),
-            effect: AtomicBool::new(false),
+            effect: self.proof.effect.clone(),
             stamp_changed: AtomicBool::new(false),
+            handoff_expired: self.proof.handoff_expired.clone(),
+            #[cfg(test)]
+            forced_handoff_expiry: AtomicBool::new(false),
             context: Some((
                 context.id.clone(),
                 context.incarnation.clone(),
@@ -116,11 +160,24 @@ impl WorkspacePreflight {
 
 impl WorkspaceCheck {
     fn current(&self) -> Result<()> {
-        if !self.alive.load(Ordering::SeqCst)
-            || self
-                .deadline
-                .is_some_and(|deadline| Instant::now() >= deadline)
-        {
+        if !self.alive.load(Ordering::SeqCst) {
+            return Err(RuntimeStoreError::Fenced);
+        }
+        #[cfg(test)]
+        let handoff_now =
+            crate::production_runtime::terminal_restart::handoff_test_control::handoff_clock(
+                &self.conversation,
+            )
+            .unwrap_or_else(Instant::now);
+        #[cfg(not(test))]
+        let handoff_now = Instant::now();
+        let expired = self
+            .deadline
+            .is_some_and(|deadline| handoff_now >= deadline);
+        #[cfg(test)]
+        let expired = expired || self.forced_handoff_expiry.load(Ordering::SeqCst);
+        if expired {
+            self.handoff_expired.store(true, Ordering::SeqCst);
             return Err(RuntimeStoreError::Fenced);
         }
         if let Some(installation) = &self.installation {
@@ -284,8 +341,11 @@ impl Store {
             physical_deadline: deadline,
             installation,
             alive: AtomicBool::new(true),
-            effect: AtomicBool::new(false),
+            effect: Arc::new(AtomicBool::new(false)),
             stamp_changed: AtomicBool::new(false),
+            handoff_expired: Arc::new(AtomicBool::new(false)),
+            #[cfg(test)]
+            forced_handoff_expiry: AtomicBool::new(false),
             retained,
             context: self
                 .authority

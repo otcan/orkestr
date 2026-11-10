@@ -295,6 +295,8 @@ transition adapter (`v2/compat/v1_runtime`). Set the binding's `remoteBackend`,
   from an admitted non-owner participant.
 - A transient backend failure returns 502. The relay retries the same
   idempotent input, and the backend deduplicates it by public message ID.
+  An explicit adapter `409` with `error: "binding_capacity_reached"` uses
+  this same bounded retry; other `409` conflicts remain definite refusals.
   Retries stop once the input is older than `ORKESTR_REMOTE_RELAY_INPUT_MAX_AGE_MS`
   (default 30 minutes, at least one minute). A paused or refused binding
   answers 503, for example. The input is then closed like a definite refusal

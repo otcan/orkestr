@@ -43,6 +43,7 @@ pub fn ConversationSidebar(
     let mut page = use_signal(|| None::<SidebarPage>);
     let mut tick = use_signal(|| 0_u64);
     let mut writing = use_signal(|| None::<document::Eval>);
+    let mut waiting = use_signal(|| None::<document::Eval>);
     let mut notice = use_signal(String::new);
     let mut create = use_signal(Creation::default);
     let mut open = use_signal(|| false);
@@ -60,17 +61,18 @@ pub fn ConversationSidebar(
     let slots = use_signal(|| None::<orkestr_v2_ui::conversation_status::Slots>);
     use_drop(move || {
         mounted.set(false);
+        if let Some(channel) = waiting() {
+            let _ = channel.send(json!({"stop":true}));
+        }
         if let Some(channel) = writing() {
             let _ = channel.send(json!({"stop":true}));
         }
     });
-    use_future(move || async move {
-        loop {
-            crate::transport::sleep(POLL_MS).await;
-            if !mounted() || !session_scope.read().is_current(owner) {
-                return;
-            }
-            tick += 1;
+    // Manual refresh wakes a sleeping poll, without cancelling an active read.
+    use_effect(move || {
+        let _ = tick();
+        if let Some(channel) = waiting.peek().as_ref() {
+            let _ = channel.send(json!({"refresh":true}));
         }
     });
     // Props do not re-run hooks: follow the selection and refresh at once.
@@ -82,51 +84,70 @@ pub fn ConversationSidebar(
         }
     }));
     let csrf_for_marks = csrf.clone();
-    use_resource(move || {
-        let _ = tick();
-        let selected = current_key.peek().clone();
-        let csrf = csrf_for_marks.clone();
+    // Completion-paced polling: reactive resources restart when tick changes,
+    // discarding reads slower than POLL_MS and leaving their JS fetch alive.
+    // Keep exactly one read; a refresh during it requests one subsequent read.
+    use_future(move || {
+        let csrf_for_marks = csrf_for_marks.clone();
         async move {
-            let result = crate::transport::request::<SidebarPage>(
-                "GET",
-                "/api/v2/sidebar?include_hidden=true",
-                Value::Null,
-                "",
-                "",
-            )
-            .await;
-            if !mounted() || !session_scope.read().is_current(owner) {
-                return;
-            }
-            match result {
-                Ok(value) if sidebar::valid(&value) => {
-                    onloaded.call(value.entries.clone());
-                    let mark = value
-                        .entries
-                        .iter()
-                        .find(|e| e.key == selected)
-                        .map(|e| (e.key.clone(), e.read_marker, e.unread));
-                    page.set(Some(value));
-                    notice.set(String::new());
-                    // The open conversation is read up to what this poll saw.
-                    if let Some((key, marker, unread)) = mark {
-                        let known = marked.peek().get(&key).copied();
-                        if known.is_none_or(|k| marker > k) || unread > 0 {
-                            marked.write().insert(key.clone(), marker);
-                            let _ = crate::transport::request::<Value>(
-                                "PUT",
-                                "/api/v2/sidebar/read",
-                                json!({"key": key, "marker": marker}),
-                                &csrf,
-                                "",
-                            )
-                            .await;
+            loop {
+                if !mounted() || !session_scope.read().is_current(owner) {
+                    return;
+                }
+                let revision = *tick.peek();
+                let result = crate::transport::request::<SidebarPage>(
+                    "GET",
+                    "/api/v2/sidebar?include_hidden=true",
+                    Value::Null,
+                    "",
+                    "",
+                )
+                .await;
+                if !mounted() || !session_scope.read().is_current(owner) {
+                    return;
+                }
+                match result {
+                    Ok(value) if sidebar::valid(&value) => {
+                        onloaded.call(value.entries.clone());
+                        let mark = value
+                            .entries
+                            .iter()
+                            .find(|e| e.key == *current_key.peek())
+                            .map(|e| (e.key.clone(), e.read_marker, e.unread));
+                        page.set(Some(value));
+                        notice.set(String::new());
+                        // The open conversation is read up to what this poll saw.
+                        if let Some((key, marker, unread)) = mark {
+                            let known = marked.peek().get(&key).copied();
+                            if known.is_none_or(|k| marker > k) || unread > 0 {
+                                marked.write().insert(key.clone(), marker);
+                                let _ = crate::transport::request::<Value>(
+                                    "PUT",
+                                    "/api/v2/sidebar/read",
+                                    json!({"key": key, "marker": marker}),
+                                    &csrf_for_marks,
+                                    "",
+                                )
+                                .await;
+                            }
                         }
                     }
+                    Ok(_) => notice.set("Conversation list could not be verified.".into()),
+                    Err(error) if error.status == 401 => {
+                        onexpired.call(());
+                        return;
+                    }
+                    Err(_) => notice.set("Conversations unavailable. Retrying…".into()),
                 }
-                Ok(_) => notice.set("Conversation list could not be verified.".into()),
-                Err(error) if error.status == 401 => onexpired.call(()),
-                Err(_) => notice.set("Conversations unavailable. Retrying…".into()),
+                if *tick.peek() != revision {
+                    continue;
+                }
+                let channel = document::eval(&format!(
+                    "let timer; await Promise.race([new Promise(r => {{ timer=setTimeout(r,{POLL_MS}); }}), dioxus.recv()]); clearTimeout(timer); return null;"
+                ));
+                waiting.set(Some(channel));
+                let _ = channel.join::<Value>().await;
+                waiting.set(None);
             }
         }
     });

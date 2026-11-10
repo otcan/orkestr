@@ -1,1 +1,1 @@
-{"api_contract_version":0,"required_server_features":[]}
+{"api_contract_version":0,"required_server_features":["provider_quotas_v1"]}

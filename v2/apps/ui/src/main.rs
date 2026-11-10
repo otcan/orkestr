@@ -17,6 +17,7 @@ mod conversation_posts_view;
 mod conversation_sidebar;
 mod conversation_status_poll;
 mod desktop_open_view;
+mod desktop_resource_card;
 mod execution_panel;
 mod execution_poll;
 mod held_inputs_poll;
@@ -44,6 +45,7 @@ mod page_memory_bridge;
 mod progress_view;
 mod projects_view;
 mod provider_handoff_view;
+mod provider_quota_panel;
 mod restricted_view;
 mod rich_text_view;
 mod scroll_pin;
@@ -227,8 +229,11 @@ fn App() -> Element {
         main { class: "app-shell",
             header { class: "app-heading", h1 { "Orkestr" } span { "Rust workspace · beta" }
                 if !csrf().is_empty() && !current().is_empty() {
-                    host_metrics_panel::HostMetricsPanel { key: "{session_scope.read().generation()}", session_scope, onexpired: expired,
-                        onopen: move |_| { let mut open = open_metrics.0; open += 1; } }
+                    div { key: "{session_scope.read().generation()}", style: "display: contents",
+                        host_metrics_panel::HostMetricsPanel { session_scope, onexpired: expired,
+                            onopen: move |_| { let mut open = open_metrics.0; open += 1; } }
+                        provider_quota_panel::ProviderQuotaPanel { session_scope, onexpired: expired }
+                    }
                 }
             }
             if csrf().is_empty() || notice().contains("not confirmed") {

@@ -40,6 +40,7 @@ pub mod deploy_drain;
 mod deploy_maintenance;
 mod desktop_broker;
 mod desktop_http;
+mod desktop_inventory_http;
 mod desktop_open_http;
 mod encrypted_upload_http;
 pub mod encrypted_upload_ingest;
@@ -56,6 +57,9 @@ mod intelligence_http;
 pub mod live_map;
 mod memory_service;
 pub mod message_attachments;
+mod message_receipt_observer;
+#[cfg(test)]
+mod message_receipt_test_support;
 mod message_times_http;
 pub mod observability;
 pub mod offline_python;
@@ -68,6 +72,7 @@ mod provider_payload;
 mod provider_policy;
 #[cfg(test)]
 mod provider_policy_http_tests;
+pub mod provider_quota_http;
 mod resource_health;
 mod response_shaping;
 pub mod restricted_http;
@@ -84,6 +89,7 @@ pub mod stop_execution;
 mod thread_asks_http;
 pub mod thread_icons;
 pub mod timer_bootstrap;
+mod timer_capabilities_http;
 pub mod timer_http;
 mod timer_lifecycle;
 mod tracker_actions_http;
@@ -118,10 +124,12 @@ pub struct AppState {
     authority: Arc<String>,
     auth_window: Arc<Mutex<(Instant, u32)>>,
     resources: resource_health::ResourceSampler,
+    provider_quota: Option<Arc<provider_quota_http::Source>>,
     timers: timer_http::DurableOwnerController,
     live_map: Option<Arc<std::path::PathBuf>>,
     desktop_broker: Option<Arc<desktop_broker::Broker>>,
     sidebar_v1: sidebar_v1::V1Cache,
+    message_receipts: message_receipt_observer::Observer,
     v1_uploads: message_attachments::V1Uploads,
     attachment_export: Option<Arc<message_attachments::ExportDir>>,
     attachment_ingest: Option<Arc<encrypted_upload_ingest::Ingest>>,
@@ -267,6 +275,13 @@ impl AppState {
         )?));
         Ok(self)
     }
+    pub fn with_provider_quota_file(
+        mut self,
+        path: &std::path::Path,
+    ) -> Result<Self, &'static str> {
+        self.provider_quota = Some(Arc::new(provider_quota_http::Source::load(path)?));
+        Ok(self)
+    }
     /// Trusted startup only: the private V1 desktop broker client configuration.
     pub fn with_desktop_broker_file(
         mut self,
@@ -346,9 +361,11 @@ impl AppState {
             authority: Arc::new(authority),
             auth_window: Arc::new(Mutex::new((Instant::now(), 0))),
             resources: resource_health::ResourceSampler::new(),
+            provider_quota: None,
             live_map: None,
             desktop_broker: None,
             sidebar_v1: sidebar_v1::V1Cache::default(),
+            message_receipts: message_receipt_observer::Observer::default(),
             v1_uploads: Default::default(),
             attachment_export: None,
             attachment_ingest: None,
@@ -569,7 +586,7 @@ fn desktop_slow_path(path: &str) -> bool {
             _,
             "desktops",
             _,
-            "acquire" | "heartbeat"
+            "acquire" | "heartbeat" | "reset"
         ]
     )
 }
@@ -610,6 +627,7 @@ pub fn router_with_google_catalog(
         .route("/api/v2/machine/service-session",post(service_credentials::exchange))
         .route("/api/v2/projects",get(routes::projects).post(routes::create_project))
         .route("/api/v2/resources",get(resource_health::resources))
+        .route("/api/v2/provider-quotas",get(provider_quota_http::read))
         .route("/api/v2/live-map",get(live_map::read))
         .route("/api/v2/conversations/{id}",get(routes::snapshot))
         .route("/api/v2/conversations",get(conversations_http::list).post(conversations_http::create))
@@ -652,6 +670,7 @@ pub fn router_with_google_catalog(
         .merge(conversation_status_http::router())
         .merge(host_metrics::router())
         .merge(desktop_http::router())
+        .merge(desktop_inventory_http::router())
         .merge(desktop_open_http::router())
         .merge(sidebar_http::router())
         .merge(message_attachments::router())
@@ -665,6 +684,7 @@ pub fn router_with_google_catalog(
         .merge(thread_icons::router())
         .merge(thread_asks_http::router())
         .merge(agent_timers_http::router())
+        .merge(timer_capabilities_http::router())
         .merge(v1_links::router())
         .merge(v1_manage_http::router())
         .merge(v1_workers_http::router())

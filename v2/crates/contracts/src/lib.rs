@@ -31,6 +31,8 @@ mod desktop_leases;
 mod thread_asks;
 pub use desktop_leases::*;
 pub use thread_asks::*;
+mod agent_timer_discovery;
+pub use agent_timer_discovery::*;
 mod agent_timers;
 pub use agent_timers::*;
 mod legacy_workers;
@@ -373,3 +375,6 @@ pub use execution_window_queue::*;
 
 mod execution_window_reconciliation;
 pub use execution_window_reconciliation::*;
+
+mod desktop_inventory;
+pub use desktop_inventory::*;
