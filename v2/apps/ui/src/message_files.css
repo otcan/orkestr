@@ -1,0 +1,6 @@
+.message-files { margin-top:.6rem; min-width:0; }
+.message-file-card { border:1px solid var(--border); border-radius:.6rem; padding:.65rem; margin:.4rem 0; background:var(--surface); color:var(--text); overflow-wrap:anywhere; }
+.message-file-card button { margin:.2rem .4rem .2rem 0; }
+.message-file-card p { font-size:.8rem; margin:.35rem 0; }
+.message-file-card pre { white-space:pre-wrap; overflow:auto; max-height:24rem; padding:.5rem; background:var(--surface-2); }
+.message-file-card img { display:block; max-height:32rem; object-fit:contain; }
