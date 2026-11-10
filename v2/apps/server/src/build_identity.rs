@@ -36,9 +36,11 @@ fn source(record: &str, version: &str) -> Result<Option<String>, &'static str> {
 }
 
 pub fn identity() -> serde_json::Value {
+    let compiled_at_unix = option_env!("ORKESTR_V2_COMPILED_AT_UNIX")
+        .and_then(orkestr_v2_contracts::build_times::timestamp);
     match source(RECORD, VERSION) {
         Ok(source) => {
-            serde_json::json!({"format":"orkestr-v2-build-identity-v1", "component":"server", "version":VERSION, "source_commit":source})
+            serde_json::json!({"format":"orkestr-v2-build-identity-v1", "component":"server", "version":VERSION, "source_commit":source,"compiled_at_unix":compiled_at_unix})
         }
         Err(error) => {
             serde_json::json!({"format":"orkestr-v2-build-identity-v1", "component":"server", "version":VERSION, "source_commit":null, "error":error})
