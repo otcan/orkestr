@@ -38,10 +38,10 @@ export function createDeliveryRouteFence({dbPath, db: supplied, now = Date.now})
         const r = assertActive(route), prior = db.prepare('SELECT * FROM delivery_attempt WHERE id=?').get(id);
         if (prior) {
           if (prior.hash !== hash) fail('payload_conflict');
-          if (prior.state !== 'sent') fail('delivery_unresolved');
+          if (prior.state !== 'sent') fail('attempt_unresolved');
           db.exec('COMMIT'); return {duplicate:true,providerId:prior.provider_id};
         }
-        if (blocked()) fail('delivery_unresolved');
+        if (blocked()) fail('blocked_before_reservation');
         if (!Number.isFinite(Date.parse(createdAt)) || Date.parse(createdAt) < Date.parse(r.since)) fail('before_cutover');
         db.prepare("INSERT INTO delivery_attempt VALUES(?,?,?,?, 'sending',NULL)").run(id,hash,route,r.epoch);
         db.exec('COMMIT'); return {duplicate:false};

@@ -155,7 +155,7 @@ test("WhatsApp debug footer reports Claude Code model, runtime, and usage withou
     thread,
     messages: [],
   });
-  assert.match(waking, /^Waking this thread\.\n\ndbg: claude\/sonnet\/h · rt:claude · msg:\*update\*\ncodex: no data\nclaude 5h: 80% wk: 65%\nqueue:1 · reason:waking · load:\d+% · api:\d+% · help:\/help$/);
+  assert.match(waking, /^Waking this thread\.\n\ncodex: no data\nclaude 5h: 80% wk: 65%\nqueue:1 · reason:waking · load:\d+% · api:\d+% · help:\/help$/);
   assert.doesNotMatch(waking, /mode-switch:|rt-switch:|switch:\//);
   assert.equal(stripWhatsAppDebugFooter(waking), "Waking this thread.");
 });

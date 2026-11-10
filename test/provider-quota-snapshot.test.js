@@ -84,6 +84,38 @@ test("snapshot marks old observations stale and unknown providers as null", () =
   assert.equal(snapshot.claude.observedAt, null);
 });
 
+test("a refreshed expired or empty record cannot erase a usable older quota", () => {
+  const usable = codexThread({ codexRateLimitsObservedAt: iso(now - 7 * hour) });
+  const expired = codexThread({
+    updatedAt: iso(now), codexRateLimitsObservedAt: undefined,
+    codexRateLimits: { primary: { used_percent: 89, window_minutes: 10080,
+      resets_at: Math.floor((now - hour) / 1000) }, secondary: null },
+  });
+  for (const limits of [expired.codexRateLimits, {}]) {
+    const freshEmpty = { ...expired, codexRateLimits: limits };
+    for (const threads of [[usable, freshEmpty], [freshEmpty, usable]]) {
+      const snapshot = providerQuotaFromThreads(threads, { now, staleMs: 6 * hour });
+      assert.equal(snapshot.codex.weeklyRemainingPct, 80);
+      assert.equal(snapshot.codex.observedAt, usable.codexRateLimitsObservedAt);
+      assert.equal(snapshot.codex.stale, true, "thread activity never freshens the usable observation");
+      assert.deepEqual(mergeThreadIntoProviderQuota(snapshot, freshEmpty, { now }).codex, snapshot.codex);
+    }
+    const onlyEmpty = providerQuotaFromThreads([freshEmpty], { now });
+    assert.equal(onlyEmpty.codex.weeklyRemainingPct, null);
+    assert.equal(onlyEmpty.codex.observedAt, null);
+  }
+});
+
+test("zero remaining and a partially usable provider observation remain meaningful", () => {
+  const snapshot = providerQuotaFromThreads([codexThread({ codexRateLimits: {
+    primary: { used_percent: 12, window_minutes: 300, resets_at: Math.floor((now - hour) / 1000) },
+    secondary: { used_percent: 100, window_minutes: 10080, resets_at: futureSeconds(hour) },
+  } })], { now });
+  assert.equal(snapshot.codex.fiveHourRemainingPct, null);
+  assert.equal(snapshot.codex.weeklyRemainingPct, 0);
+  assert.notEqual(snapshot.codex.observedAt, null);
+});
+
 test("fresh stamped telemetry beats legacy thread records and leftover executor data gets no age", () => {
   const legacyClaudeLeftover = claudeThread({
     id: "was-codex",

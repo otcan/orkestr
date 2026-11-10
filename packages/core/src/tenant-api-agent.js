@@ -21,6 +21,7 @@ import { completeRuntimeLiveness, recordRuntimeLiveness } from "./runtime-livene
 import { markRuntimeFinalDeliveryPending } from "./runtime-final-delivery.js";
 import { injectRuntimeFault, runtimeNowMs, runtimeStopPhaseFor } from "./runtime-fault-injection.js";
 import { recordRuntimeControlMetric } from "./observability.js";
+import { refuseV1ExecutionIfRetired } from "./v1-execution-retired.js";
 
 export const API_AGENT_RUNTIME_KIND = "api-agent";
 
@@ -2697,6 +2698,10 @@ export async function processApiAgentThreadInput(threadId, env = process.env, op
     throw error;
   }
   if (!threadUsesApiAgent(thread, env)) return { ok: false, skipped: true, reason: "not_api_agent" };
+  // V1 execution retired: refuse before any model call (WhatsApp, API, voice
+  // and connector callers all reach this directly).
+  const retired = await refuseV1ExecutionIfRetired(thread, env, { entryPoint: "api_agent" });
+  if (retired) return { ok: false, skipped: true, reason: retired.reason };
   const messages = await listThreadMessages(thread.id, env);
   const stopMessage = messages.find((message) =>
     lower(message.role) === "user" &&

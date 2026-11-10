@@ -74,7 +74,7 @@ for (const [name, before, after] of [
   ["unpinned attestation action", actionPins["actions/attest-build-provenance"], "v4"],
 ]) test(`rejects ${name}`, () => assert.throws(() => validateWorkflow(attestFixture.replace(before, after)), /workflow_/));
 
-const publishGate = "${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (github.ref == 'refs/heads/main' || (startsWith(github.ref, 'refs/tags/v') && !startsWith(github.ref, 'refs/tags/v2.'))) }}";
+const publishGate = "${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && (startsWith(github.ref, 'refs/tags/v') && !startsWith(github.ref, 'refs/tags/v2.')) }}";
 const publishFixture = `on: [pull_request, push]
 permissions: {contents: read}
 jobs:
@@ -110,7 +110,7 @@ for (const [name, before, after] of [
   ["publish job custom shell", "      - run: docker load", "      - shell: python {0}\n        run: docker load"],
   ["publish on pull requests", "github.event_name == 'push' || ", "github.event_name == 'pull_request' || "],
   ["publish without event gate", `    if: ${publishGate}\n`, ""],
-  ["publish from any branch", "github.ref == 'refs/heads/main'", "startsWith(github.ref, 'refs/heads/')"],
+  ["publish from main", "startsWith(github.ref, 'refs/tags/v')", "github.ref == 'refs/heads/main'"],
   ["publish on V2 tags", " && !startsWith(github.ref, 'refs/tags/v2.')", ""],
   ["publish with extra permissions", "      packages: write", "      packages: write\n      id-token: write"],
   ["publish with contents write", "      contents: read\n      packages", "      contents: write\n      packages"],
@@ -196,11 +196,11 @@ test("CI builds, smoke-tests and publishes the runtime image to GHCR only after 
   assert.ok(publish.steps.every(step => !step.uses || step.uses.startsWith("actions/download-artifact@")));
   const runs = publish.steps.map(step => step.run || "").join("\n");
   assert.match(runs, /docker login ghcr\.io --username "\$GITHUB_ACTOR" --password-stdin/);
-  assert.match(runs, /:main"/);
-  assert.match(runs, /:sha-\$\{GITHUB_SHA::12\}"/);
+  assert.doesNotMatch(runs, /:main"/);
+  assert.doesNotMatch(runs, /:sha-\$\{GITHUB_SHA::12\}"/);
   assert.match(runs, /:\$GITHUB_REF_NAME"/);
   assert.match(runs, /:latest"/);
-  assert.equal(publish.steps.find(step => step.name === "Push main image").if, "${{ github.ref == 'refs/heads/main' }}");
+  assert.equal(publish.steps.find(step => step.name === "Push main image"), undefined);
   assert.equal(publish.steps.find(step => step.name === "Push release image").if, "${{ startsWith(github.ref, 'refs/tags/v') }}");
 });
 

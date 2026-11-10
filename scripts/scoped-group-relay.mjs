@@ -6,14 +6,16 @@ import {execFile} from 'node:child_process';
 import {requestJson} from '../apps/cli/src/api-client.js';
 import {createScopedTimerNotifications} from '../packages/connectors/src/whatsapp-scoped-timer-notifications.js';
 import {createScopedGroupRelay} from '../packages/connectors/src/whatsapp-scoped-group-relay.js';
-import {wrapperRejection} from '../packages/connectors/src/whatsapp-scoped-wrapper-errors.js';
+import {createInputJournalWake} from '../packages/connectors/src/scoped-group-input-intake.js';
+import {sendWithQuoteFallback} from '../packages/connectors/src/whatsapp-scoped-wrapper-errors.js';
 
 // A text keeps the wrapper's argv contract. A reply document, or a text too
-// large for one argument (Linux allows 128 KiB), goes as JSON on stdin.
+// large for one argument (Linux allows 128 KiB), goes as JSON on stdin, as does
+// a text that quotes the input it answers (`quotedMessageId`).
 const ARGV_TEXT_MAX_BYTES = 100_000;
 const serializeTransport = createKeyedSerial();
 const execute = payload => serializeTransport('transport', () => new Promise((resolve, reject) => {
-  const viaArgv = payload.document === undefined && payload.file === undefined && Buffer.byteLength(payload.text || '') <= ARGV_TEXT_MAX_BYTES;
+  const viaArgv = payload.document === undefined && payload.file === undefined && payload.quotedMessageId === undefined && Buffer.byteLength(payload.text || '') <= ARGV_TEXT_MAX_BYTES;
   const args = viaArgv
     ? [config.wrapperPath, payload.kind === 'notify' ? 'group-notify' : 'group-reply', payload.to, payload.requestId, payload.parentId, payload.text]
     : [config.wrapperPath, 'group-send'];
@@ -32,22 +34,21 @@ const relay = createScopedGroupRelay({
   config,
   formatter,
   api: (url, options = {}) => requestJson(url, {timeoutMs: 15000, ...options}),
-  send: async ({chatId, requestId, parentId, text, document, file}) => {
-    const {stdout} = await execute({kind: 'reply', to: chatId, requestId, parentId, text, document, file});
+  // A grouped Deep final may quote its burst's last input (group-send on stdin).
+  send: async ({chatId, requestId, parentId, text, document, file, quotedMessageId}) => {
+    const {stdout} = await execute({kind: 'reply', to: chatId, requestId, parentId, text, document, file,
+      ...(quotedMessageId ? {quotedMessageId} : {})});
     return JSON.parse(stdout);
   },
   log,
 });
 const notifications = createScopedTimerNotifications({config,formatter,minIntervalMs:10000,
   api:(url,options={})=>requestJson(url,{timeoutMs:15000,...options}),
-  send:async({chatId,requestId,parentId,text,document})=>{
-    try {
-      const {stdout}=await execute({kind:'notify',to:chatId,requestId,parentId,text,document});
-      return JSON.parse(stdout);
-    } catch (error) {
-      throw wrapperRejection(error);
-    }
-  },
+  // A quoted send that fails retries once unquoted (same requestId), never lost.
+  send:({chatId,requestId,parentId,text,document,quotedMessageId})=>sendWithQuoteFallback(async quoted=>{
+    const {stdout}=await execute({kind:'notify',to:chatId,requestId,parentId,text,document,...(quoted?{quotedMessageId:quoted}:{})});
+    return JSON.parse(stdout);
+  },quotedMessageId),
 });
 const remoteWatch = startScopedRemoteWatch({
   api: (url, options = {}) => requestJson(url, options), log,
@@ -58,11 +59,17 @@ const remoteWatch = startScopedRemoteWatch({
     if (notificationsResult.errors && Object.keys(notificationsResult.errors).length) throw new Error('remote_notification_delivery_failed');
   },
 });
-// SQLite WAL writes wake deadline scheduling even during an unrelated API scan.
+const intakeWake = createInputJournalWake({admit: options => relay.admitNewInputs(options), log});
+// SQLite WAL writes wake new text admission as well as deadline scheduling,
+// independently of unrelated reply scans or transport sends.
 const journalWatch = config.journalPath ? fs.watch(path.dirname(config.journalPath), (_event, filename) => {
-  if (!filename || String(filename).startsWith(path.basename(config.journalPath))) relay.scheduleAcknowledgements();
+  if (!filename || String(filename).startsWith(path.basename(config.journalPath))) {
+    relay.scheduleAcknowledgements();
+    intakeWake.signal();
+  }
 }) : null;
 relay.scheduleAcknowledgements();
+intakeWake.signal();
 let stopped = false;
 for (const signal of ['SIGTERM', 'SIGINT']) process.once(signal, () => { stopped = true; });
 log({event: 'group_relay_started', groups: config.groups.length});
@@ -81,6 +88,7 @@ while (!stopped) {
   await new Promise(resolve => setTimeout(resolve, 3000));
 }
 journalWatch?.close();
+await intakeWake.close();
 await remoteWatch.close();
 relay.close();
 notifications.close();

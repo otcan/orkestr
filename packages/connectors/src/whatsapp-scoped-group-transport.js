@@ -1,3 +1,5 @@
+import {hasParticipantRecoveryAdmission} from './whatsapp-participant-recovery-admission.js';
+import {createParticipantRecoveryPolicy,readProtectedParticipantGrant} from './whatsapp-participant-recovery.js';
 import crypto from 'node:crypto';
 import {createGroupParticipantPolicy} from './whatsapp-group-participant-author.js';
 import fs from 'node:fs/promises';
@@ -5,10 +7,10 @@ import os from 'node:os';
 import path from 'node:path';
 import {createGroupOwnerAuthorPolicy} from './whatsapp-group-owner-author.js';
 import {scopedRouteMembership} from './whatsapp-scoped-route-membership.js';
-import {SCOPED_SEND_MAX_TEXT_LENGTH, encodeReplyEntry, validReplyDocument} from './whatsapp-scoped-group-formatting.js';
+import {SCOPED_SEND_MAX_TEXT_LENGTH, encodeReplyEntry, validQuotedMessageId, validReplyDocument} from './whatsapp-scoped-group-formatting.js';
 import {DatabaseSync} from 'node:sqlite';
 import {createDeliveryRouteFence} from './whatsapp-delivery-route-fence.js';
-import {notificationScope, createTimerNotificationProofStore} from './whatsapp-timer-notification-proof.js';
+import {notificationScope, liveNotificationScope, createTimerNotificationProofStore} from './whatsapp-timer-notification-proof.js';
 import {OPERATOR_NOTICE_PARENT, validateOperatorNotifications, operatorNoticeRequestValid, operatorNoticeBodyValid} from './whatsapp-scoped-operator-notices.js';
 import {downloadScopedGroupMedia} from './whatsapp-scoped-group-media.js';
 import {validateCoordinatorConfig, coordinatorTokenMatches, createCoordinatorAccess} from './whatsapp-scoped-coordinator.js';
@@ -18,6 +20,7 @@ import {encodeReplyFile, readReplyFile} from './whatsapp-scoped-reply-files.js';
 
 const fail=code=>{throw new Error(`group_transport_${code}`);};
 const hash=value=>crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
+export const scopedGroupContract=config=>hash([config.ownChatId,config.activatedAt,config.groups]);
 const IMAGE_MIME_EXTENSIONS=new Map([['image/jpeg','.jpg'],['image/png','.png'],['image/gif','.gif'],['image/webp','.webp']]);
 const MAX_GROUP_MEDIA_BYTES=10*1024*1024;
 // Types that can never become an image attachment: skip the download so a large
@@ -59,13 +62,13 @@ export async function captureQuote(message) {
 // keeps its legacy router disabled; only explicitly authorized, fresh group input enters.
 // Pure contract validation: no files are opened. Shared by the transport and
 // the deploy preflight, so a release that rejects a live config is never activated.
-export function validateScopedGroupConfig(config,now=Date.now) {
+export function validateScopedGroupConfig(config,now=Date.now,recovery) {
   if(!/^\d+@c\.us$/.test(config?.ownChatId || '') || !Number.isFinite(Date.parse(config.activatedAt))
       || !Array.isArray(config.groups) || !config.groups.length)fail('configuration_invalid');
   const groups=new Map(config.groups.map(g=>[g.chatId,g]));
   if(groups.size!==config.groups.length || [...groups].some(([id,g])=>!/^\d+(?:-\d+)?@g\.us$/.test(id) || !g.threadId))fail('configuration_invalid');
   const authors=createGroupOwnerAuthorPolicy(config,now);
-  const participants=createGroupParticipantPolicy(config,now);
+  const participants=createGroupParticipantPolicy(config,now,recovery);
   const scope=notificationScope(config);
   const fencedThreads=scopedRouteMembership(config);
   if(fencedThreads && [...fencedThreads].some(id=>!config.groups.some(g=>g.threadId===id)))fail('route_thread_invalid');
@@ -78,17 +81,20 @@ export function validateScopedGroupConfig(config,now=Date.now) {
 }
 
 export function createScopedGroupTransport({config,token,base,dbPath=config.journalPath,now=Date.now,routeFence: suppliedFence,proofStore: suppliedProof,sendLookupDelayMs=1000,
-    report=entry=>console.error(JSON.stringify(entry)),mediaDownloadOptions={}}) {
+    report=entry=>console.error(JSON.stringify(entry)),mediaDownloadOptions={},readRecoveryGrant=readProtectedParticipantGrant}) {
   if(!token)fail('configuration_invalid');
   // Validate the whole contract before opening durable state: a build that
   // rejects the live configuration must leave the journal untouched.
-  const {groups: staticGroups,authors,participants,scope,fencedThreads,coordinator,delegates,dynamic,operator}=validateScopedGroupConfig(config,now);
+  const recovery=createParticipantRecoveryPolicy(config,{now,readGrant:readRecoveryGrant});
+  const historicalObservation=Symbol();
+  const {groups: staticGroups,authors,participants,scope: staticScope,fencedThreads,coordinator,delegates,dynamic,operator}=validateScopedGroupConfig(config,now,recovery);
   // The coordinator bearer must be a dedicated credential, never the transport token.
   if(coordinatorTokenMatches(coordinator,token) || delegateForBearer(delegates,token))fail('configuration_invalid');
   const db=new DatabaseSync(dbPath);db.exec(`PRAGMA journal_mode=WAL;
     CREATE TABLE IF NOT EXISTS group_input(id TEXT PRIMARY KEY,chat_id TEXT NOT NULL,body TEXT NOT NULL,created_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS group_send(id TEXT PRIMARY KEY,hash TEXT NOT NULL,chat_id TEXT NOT NULL,parent_id TEXT NOT NULL,state TEXT NOT NULL,provider_id TEXT,created_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS group_input_author(id TEXT PRIMARY KEY,proof TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS group_input_participant_recovery(id TEXT PRIMARY KEY,receipt TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS group_meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);
     ${MEDIA_TABLE};
     ${QUOTE_TABLE};`);
@@ -96,10 +102,12 @@ export function createScopedGroupTransport({config,token,base,dbPath=config.jour
   // contract below stays the static one, so enabling this needs no migration.
   if(dynamic)db.exec(DYNAMIC_GROUPS_TABLE);
   const groups=dynamic ? createDynamicGroupView(db,{static:staticGroups,now}) : staticGroups;
+  // allGroups timer notifications cover registered groups as well (same view).
+  const scope=dynamic ? liveNotificationScope(staticScope,groups) : staticScope;
   const mediaDir=path.resolve(config.mediaDir || (dbPath===':memory:'
     ? path.join(os.tmpdir(),`orkestr-scoped-group-media-${process.pid}`)
     : `${dbPath}.media`));
-  const contract=hash([config.ownChatId,config.activatedAt,config.groups]);  // static groups only
+  const contract=scopedGroupContract(config);  // static groups only
   const prior=db.prepare('SELECT value FROM group_meta WHERE key=?').get('contract');
   if(prior && prior.value!==contract)fail('configuration_changed');
   db.prepare('INSERT OR IGNORE INTO group_meta VALUES(?,?)').run('contract',contract);
@@ -152,7 +160,8 @@ export function createScopedGroupTransport({config,token,base,dbPath=config.jour
         const b=req.body || {};
         allowed=groups.has(b.to) && b.accountId==='main' && typeof b.text==='string' && b.text.trim() && b.text.length<=SCOPED_SEND_MAX_TEXT_LENGTH
           && ((typeof b.requestId==='string' && typeof b.parentId==='string'
-          && Object.keys(b).every(k=>['to','text','accountId','requestId','parentId','notificationId'].includes(k))
+          && (b.quotedMessageId===undefined || validQuotedMessageId(b.quotedMessageId))
+          && Object.keys(b).every(k=>['to','text','accountId','requestId','parentId','notificationId','quotedMessageId'].includes(k))
           && (b.notificationId===undefined || (scope?.allowsChat(b.to) && b.notificationId===b.requestId)))
             || operatorNoticeBodyValid(operator,b,'main'));
       }
@@ -175,24 +184,45 @@ export function createScopedGroupTransport({config,token,base,dbPath=config.jour
       }
       return {recorded,failed};
     },
-    observe(client,message) {
+    async recoverParticipantMessage(client,chatId,request) {
+      assertClient(client);
+      const grant=recovery.request(chatId,request);
+      const original=db.prepare('SELECT receipt FROM group_input_participant_recovery WHERE id=?').get(grant.messageId);
+      if(original){
+        const receipt=JSON.parse(original.receipt),fields=['messageId','chatId','threadId','createdAt','authorId','phoneId','bodySha256','grantSha256'];
+        if(Object.keys(receipt).length!==fields.length || !fields.every(k=>receipt[k]===grant[k]))fail('participant_recovery_receipt_conflict');
+        return {ok:true,duplicate:true,receipt};
+      }
+      if(db.prepare('SELECT 1 FROM group_input WHERE id=?').get(grant.messageId))fail('participant_recovery_receipt_missing');
+      if(typeof client.getMessageById!=='function')fail('participant_recovery_unavailable');
+      let timer;
+      const message=await Promise.race([client.getMessageById(grant.messageId),
+        new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('participant_recovery_lookup_timeout')),5000);})]).finally(()=>clearTimeout(timer));
+      recovery.message(grant,message,chatId);
+      const inserted=await this.observe(client,message,{[historicalObservation]:grant});
+      const saved=db.prepare('SELECT receipt FROM group_input_participant_recovery WHERE id=?').get(grant.messageId);
+      if(!saved)fail('participant_recovery_unconfirmed');
+      return {ok:true,duplicate:!inserted,receipt:JSON.parse(saved.receipt)};
+    },
+    observe(client,message,internal={}) {
       return serial(async()=>{
         assertClient(client);
         const id=message?.id?._serialized,chatId=message?.fromMe===true?message?.to:message?.from;
         const ts=Number(message?.timestamp)*1000;
         const hasMedia=message?.hasMedia===true;
         const group=groups.get(chatId);
+        const historical=internal[historicalObservation];
         if(!group || typeof id!=='string' || !id || id.startsWith('summary:')
             || typeof message.body!=='string' || (!message.body.trim()&&!hasMedia) || message.body.length>32000
-            || !Number.isFinite(ts) || ts<=Date.parse(config.activatedAt) || ts>now()+5000)return false;
+            || !Number.isFinite(ts) || (!historical && ts<=Date.parse(config.activatedAt)) || ts>now()+5000)return false;
         // A registered group starts at its registration: older history is never imported.
         if(group.dynamic && (ts<=Date.parse(group.registeredAt) || ts<=dynamic.since))return false;
         if(db.prepare('SELECT 1 FROM group_input WHERE id=?').get(id))return false;
         const remote=message?.id?.remote?._serialized || message?.id?.remote;
         if(remote && remote!==chatId)return false;
         let participant=null;
-        if(message?.fromMe!==true && !await authors.accepts(client,message)) {
-          participant=await participants.identify(client,message,chatId);
+        if(historical || (message?.fromMe!==true && !await authors.accepts(client,message))) {
+          participant=await participants.identify(client,message,chatId,historical);
           if(!participant)return false;
         }
         if(fenced(chatId)) {
@@ -235,6 +265,11 @@ export function createScopedGroupTransport({config,token,base,dbPath=config.jour
         }
         // Input and participant evidence commit together; a crash cannot turn a
         // participant input into a legacy owner input on the next relay poll.
+        if(historical) {
+          recovery.message(historical,message,chatId);
+          if(!participants.allows(participant,{id,chat_id:chatId,body,created_at:new Date(ts).toISOString()}))
+            fail('participant_recovery_expired_or_changed');
+        }
         db.exec('BEGIN IMMEDIATE');
         try {
           const result=db.prepare('INSERT OR IGNORE INTO group_input(id,chat_id,body,created_at) VALUES(?,?,?,?)')
@@ -244,6 +279,11 @@ export function createScopedGroupTransport({config,token,base,dbPath=config.jour
           if(result.changes && quote) db.prepare('INSERT OR IGNORE INTO group_input_quote(id,quoted_id,author,sent_at,body,from_me,resolved) VALUES(?,?,?,?,?,?,?)')
             .run(id,quote.quotedId,quote.author,quote.sentAt,quote.body||null,quote.fromMe?1:0,quote.resolved?1:0);
           if(result.changes && participant) db.prepare('INSERT INTO group_input_author VALUES(?,?)').run(id,JSON.stringify(participant));
+          if(result.changes && historical) {
+            const receipt={messageId:id,chatId,threadId:participant.threadId,createdAt:participant.createdAt,
+              authorId:participant.authorId,phoneId:participant.phoneId,bodySha256:historical.bodySha256,grantSha256:historical.grantSha256};
+            db.prepare('INSERT INTO group_input_participant_recovery(id,receipt) VALUES(?,?)').run(id,JSON.stringify(receipt));
+          }
           db.exec('COMMIT');
           return Boolean(result.changes);
         } catch(error) {db.exec('ROLLBACK');throw error;}
@@ -251,7 +291,7 @@ export function createScopedGroupTransport({config,token,base,dbPath=config.jour
     },
     sendText(client,to,text,accountId,request={}) {
       const valid=typeof text==='string' && Boolean(text.trim()) && text.length<=SCOPED_SEND_MAX_TEXT_LENGTH;
-      return deliver(client,to,valid ? text : '',accountId,request,()=>client.sendMessage(to,text,{sendSeen:false}),valid,
+      return deliver(client,to,valid ? text : '',accountId,request,quoted=>client.sendMessage(to,text,{sendSeen:false,...(quoted?{quotedMessageId:quoted}:{})}),valid,
         message=>message?.type==='chat' && message.body===text);
     },
     // The full text of a long reply as one Markdown document. It is one more
@@ -309,6 +349,17 @@ export function createScopedGroupTransport({config,token,base,dbPath=config.jour
     }
     return null;
   }
+  // A text may quote (reply-to) an input of the same group. The quote is
+  // presentation only: it is not part of the hashed, proof-authorized payload.
+  // One naming no input of this group is dropped, not rejected: rejecting before
+  // dispatch would close the reply undelivered over a cosmetic detail.
+  function quotedInput(to,request) {
+    const id=request.quotedMessageId;
+    if(id===undefined || id===null || id==='')return null;
+    if(validQuotedMessageId(id) && db.prepare('SELECT 1 FROM group_input WHERE id=? AND chat_id=?').get(id,to))return id;
+    report({event:'group_send_quote_dropped',chatId:to,requestId:request.requestId});
+    return null;
+  }
   function deliver(client,to,text,accountId,request,dispatch,valid,matches) {
       return serial(async()=>{
         assertClient(client);
@@ -326,7 +377,11 @@ export function createScopedGroupTransport({config,token,base,dbPath=config.jour
           parent=db.prepare('SELECT * FROM group_input WHERE id=? AND chat_id=?').get(request.parentId,to);
           if(!parent)fail('reply_parent_required');
           const author=db.prepare('SELECT proof FROM group_input_author WHERE id=?').get(parent.id);
-          if(author && !participants.allows(JSON.parse(author.proof),parent))fail('participant_reply_denied');
+          if(author) {
+            const proof=JSON.parse(author.proof);
+            if(!participants.allows(proof,parent) && !(proof.recoveryGrantSha256 && participants.allowsRoutedRecovery(proof,parent)
+                && hasParticipantRecoveryAdmission(config,parent,author.proof,groups.get(to).threadId)))fail('participant_reply_denied');
+          }
         }
         const material=hash([to,text,request.parentId]);
         const previous=db.prepare('SELECT * FROM group_send WHERE id=?').get(request.requestId);
@@ -338,6 +393,7 @@ export function createScopedGroupTransport({config,token,base,dbPath=config.jour
         if(uncertain())fail('delivery_uncertain');
         if(parent.id===OPERATOR_NOTICE_PARENT && db.prepare('SELECT count(*) n FROM group_send WHERE parent_id=? AND created_at>=?')
             .get(OPERATOR_NOTICE_PARENT,new Date(now()-3600000).toISOString()).n>=operator.maxPerHour)fail('operator_notice_rate_limited');
+        const quoted=quotedInput(to,request);
         const routed=fenced(to);
         const shared=routed ? routeFence.reserve({id:request.requestId,hash:material,route:config.routeControl.routeId,createdAt:parent.run_at || parent.created_at}) : null;
         if(shared?.duplicate)return {ok:true,ids:[shared.providerId],duplicate:true};
@@ -352,7 +408,7 @@ export function createScopedGroupTransport({config,token,base,dbPath=config.jour
         try {
           let sent=null;
           try {
-            sent=await Promise.race([dispatch(),new Promise((_,reject)=>{
+            sent=await Promise.race([dispatch(quoted),new Promise((_,reject)=>{
               timer=setTimeout(()=>reject(new Error('send_timeout')),30000);
             })]);
           } catch { /* the outcome is unknown; confirmed or left uncertain below */ }

@@ -7893,6 +7893,18 @@ export async function createLocalWhatsAppScopedGroup({ request = {}, env = proce
   return scoped.createGroup(selectedAccountId, runtime.client, request);
 }
 
+// Explicit one-message participant recovery. No account start/reconnect/history scan.
+export async function recoverLocalWhatsAppScopedParticipantMessage({accountId = "", chatId = "", request = {}, env = process.env} = {}) {
+  const scoped = scopedNativeWorker(env);
+  if (!scoped) throw Object.assign(new Error("scoped_worker_required"), {statusCode: 403});
+  const selectedAccountId = await normalizeManagedAccountId(accountId, env);
+  const runtime = selectedAccountId ? runtimes.get(selectedAccountId) : null;
+  const state = selectedAccountId ? accountStates.get(selectedAccountId) : null;
+  if (!runtime?.client || !state?.ready || state?.runtimeUsable === false)
+    throw Object.assign(new Error("whatsapp_local_bridge_not_ready"), {statusCode: 400});
+  return scoped.recoverParticipantMessage(selectedAccountId, runtime.client, chatId, request);
+}
+
 // Scoped native workers only: send the full text of a long group reply as one
 // Markdown document through the scoped transport's journaled send.
 export async function sendLocalWhatsAppScopedDocument({ chatId = "", accountId = "", document = {}, env = process.env, scopedRequest = {} } = {}) {

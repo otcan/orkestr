@@ -1,8 +1,10 @@
 #!/usr/bin/env node
 // Deploy preflight: check that this release accepts every live scoped WhatsApp
-// group configuration before any connector service is stopped. Pure validation:
-// no journal, route fence or proof database is opened. Prints codes only.
+// group configuration before any connector service is stopped. Existing input
+// journals are opened read-only for their static contract; absent/initial journals
+// stay absent/initial. No schema or route/proof state is written. Prints codes only.
 import fs from 'node:fs';
+import {validateScopedGroupJournal} from '../packages/connectors/src/whatsapp-scoped-journal-preflight.js';
 import { validateScopedGroupConfig } from '../packages/connectors/src/whatsapp-scoped-group-transport.js';
 import { validateScopedDirectChats } from '../packages/connectors/src/whatsapp-scoped-direct-chats.js';
 import { scopedRouteMembership } from '../packages/connectors/src/whatsapp-scoped-route-membership.js';
@@ -15,6 +17,7 @@ export function preflightScopedGroupConfigs(paths, { readFile = file => fs.readF
       validateScopedGroupConfig(config);
       // Owner-approved direct chats are validated exactly as the worker does at startup.
       validateScopedDirectChats(config, scopedRouteMembership(config) || new Set((config.groups || []).map(group => group.threadId)));
+      validateScopedGroupJournal(config);
       return { file, ok: true };
     } catch (error) {
       const code = String(error?.message || 'unknown');
