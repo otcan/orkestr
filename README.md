@@ -2,6 +2,8 @@
 
 Orkestr V2 is the primary application: a self-hosted Rust runtime for persistent
 agent conversations, browser desktops, schedules and provider integrations.
+It is a local-first workstation for running persistent coding and
+operations agents, with persistent threads and WhatsApp routing.
 Use your own Codex CLI login; Claude is optional. State stays on your machine.
 
 The current published image is **2.0.0-beta.6**, a pre-release. The `main`
@@ -44,4 +46,4 @@ V1 and its Node bridge remain in this repository for compatibility. Its
 [documentation](README.v1.md) and `:latest` image are legacy; use the explicit
 V2 image tag above for the primary application.
 
-[MIT license](LICENSE) · [Security policy](SECURITY.md)
+[OSS vs managed](docs/oss-managed-boundary.md) · [MIT license](LICENSE) · [Security policy](SECURITY.md)
