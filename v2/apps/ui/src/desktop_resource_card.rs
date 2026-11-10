@@ -1,6 +1,6 @@
 use dioxus::prelude::*;
 use orkestr_v2_contracts::{DesktopLeaseGranted, DesktopResource, DesktopResourceBinding};
-use orkestr_v2_ui::session_scope::SessionScope;
+use orkestr_v2_ui::{desk_presentation::Availability, session_scope::SessionScope};
 use serde_json::{json, Value};
 
 #[component]
@@ -11,9 +11,12 @@ pub fn DesktopResourceCard(
     session_scope: Signal<SessionScope>,
     onexpired: EventHandler<()>,
     onchanged: EventHandler<()>,
+    #[props(default = true)] visible: bool,
 ) -> Element {
     let owner = session_scope.read().generation();
-    let mut selected = use_signal(String::new);
+    let initial = if bindings.len() == 1 { bindings[0].conversation_id.to_string() } else { String::new() };
+    let mut selected = use_signal(|| initial);
+    let availability = Availability::from_lease(&desk.lease_state);
     let mut token = use_signal(|| None::<String>);
     let mut busy = use_signal(|| false);
     let mut uncertain = use_signal(|| false);
@@ -21,15 +24,22 @@ pub fn DesktopResourceCard(
     let mut link_generation = use_signal(|| 0_u64);
     let mut status = use_signal(String::new);
     rsx! {
-        article { class: "settings-form", "aria-label": "Desk {desk.slug}",
+        article { class: "desk-card", hidden: !visible, "aria-label": "Desk {desk.slug}",
             h4 { "{desk.label}" }
-            p { "{desk.slug} · Runtime: {desk.state} · Reservation: {desk.lease_state}" }
-            if let Some(holder) = &desk.holder { p { "Holder: {holder}" } }
-            if let Some(expiry) = &desk.expires_at { p { "Expires: {expiry}" } }
+            p { class: "desk-id", "{desk.slug}" }
+            div { class: "desk-statuses",
+                span { "{availability.label()}" }
+                span { "Runtime: {desk.state}" }
+            }
+            p { class: "field-help", "{availability.explanation()}" }
+            dl {
+                if let Some(holder) = &desk.holder { dt { "Reserved by" } dd { "{holder}" } }
+                if let Some(expiry) = &desk.expires_at { dt { "Reservation expires" } dd { "{expiry}" } }
+            }
             if bindings.is_empty() {
                 p { class: "field-help", "Connect this desk to a chat in that chat’s Settings to reserve or manage it." }
             } else {
-                label { "Manage for chat"
+                label { "Use with chat"
                     select { value: "{selected}", disabled: busy() || token().is_some() || uncertain(), onchange: move |e| {selected.set(e.value());confirm.set(false);},
                         option { value: "", "Choose a chat…" }
                         for binding in bindings {
@@ -38,10 +48,12 @@ pub fn DesktopResourceCard(
                     }
                 }
                 if !selected().is_empty() {
-                    ul { class: "lease-list",
-                        crate::desktop_open_view::DesktopOpen {key: "{selected()}:{desk.slug}:{owner}:{link_generation}", conversation:selected(),slug:desk.slug.clone(),csrf:csrf.clone(),session_scope,onexpired}
+                    p {class:"field-help","Viewing a desk does not reserve it or start agent work."}
+                    ul { class: "desk-viewing",
+                        crate::desktop_open_view::DesktopOpen {key: "{selected()}:{desk.slug}:{owner}:{link_generation}", conversation:selected(),slug:desk.slug.clone(),csrf:csrf.clone(),session_scope,onexpired,compact:true}
                     }
                 }
+                div {class:"desk-actions",
                 button { r#type:"button",disabled:busy() || uncertain() || selected().is_empty() || token().is_some(),onclick:{
                     let (slug,csrf)=(desk.slug.clone(),csrf.clone());
                     move |_| {
@@ -60,7 +72,7 @@ pub fn DesktopResourceCard(
                             }
                         });
                     }
-                }, "Reserve for 10 minutes" }
+                }, "{availability.reserve_label()}" }
                 if let Some(fence)=token() {
                     button {r#type:"button",disabled:busy() || uncertain(),onclick:{
                         let (slug,csrf,fence)=(desk.slug.clone(),csrf.clone(),fence.clone());
@@ -75,6 +87,8 @@ pub fn DesktopResourceCard(
                             });
                         }
                     }, "Release reservation" }
+                    details {class:"desk-advanced",
+                    summary {"Advanced: restart desk"}
                     button {r#type:"button",disabled:busy() || uncertain(),onclick:move |_|confirm.set(true),"Reset runtime…"}
                     if confirm() {
                         p { "Restart this reserved desk? This interrupts its browser session; saved profile data is preserved." }
@@ -94,6 +108,8 @@ pub fn DesktopResourceCard(
                         }, "Confirm reset" }
                         button {r#type:"button",onclick:move |_|confirm.set(false),"Cancel"}
                     }
+                    }
+                }
                 }
             }
             if !status().is_empty() {p {role:"status","{status}"}}

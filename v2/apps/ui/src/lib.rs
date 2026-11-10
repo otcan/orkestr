@@ -269,3 +269,5 @@ pub mod send_intent;
 pub mod sidebar;
 
 pub mod upload_progress;
+
+pub mod desk_presentation;
