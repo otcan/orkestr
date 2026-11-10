@@ -73,6 +73,8 @@ impl Store {
                 prior_run: prior_run.clone(),
                 terminal_event: EventId(terminal.parse().map_err(db)?),
             }),
+            #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+            setup_workspace: Default::default(),
         };
         let link = grant.resume.as_ref().ok_or(RuntimeStoreError::Fenced)?;
         let existing: i64 = sqlx::query_scalar(
@@ -182,14 +184,18 @@ impl Store {
         tx: &mut SqliteConnection,
         grant: &BoundSessionMetadata,
     ) -> Result<()> {
-        self.validate_accepted_binding(tx, grant).await?;
+        use super::fence_reason::{because, fenced};
+        because(
+            self.validate_accepted_binding(tx, grant).await,
+            "resume_binding",
+        )?;
         let link = grant.resume.as_ref().ok_or(RuntimeStoreError::Fenced)?;
         let valid:i64 = sqlx::query_scalar("SELECT count(*) FROM production_resume_metadata WHERE id=? AND prior_run_id=? AND terminal_event_id=? AND context_id=? AND incarnation_id=? AND session_id=? AND binding_generation=? AND state='issued'")
             .bind(&link.id).bind(link.prior_run.to_string()).bind(link.terminal_event.to_string()).bind(&grant.context.id).bind(&grant.context.incarnation)
             .bind(grant.binding.session_id.to_string()).bind(i64::try_from(grant.binding.generation).map_err(db)?)
             .fetch_one(&mut *tx).await.map_err(db)?;
         if valid != 1 {
-            return Err(RuntimeStoreError::Fenced);
+            return Err(fenced("resume_grant_not_issued"));
         }
         Ok(())
     }

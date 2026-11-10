@@ -50,6 +50,7 @@ mod progress_view;
 mod projects_view;
 mod provider_handoff_view;
 mod provider_quota_panel;
+mod provider_sign_in_view;
 mod restricted_view;
 mod rich_text_view;
 mod scroll_pin;

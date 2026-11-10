@@ -1,5 +1,9 @@
 //! Bounded, operation-scoped physical checks before taking a writer.
 use super::*;
+use crate::production_runtime::fence_reason::{because, fenced};
+#[path = "setup_attestation.rs"]
+mod setup_attestation;
+pub(crate) use setup_attestation::SetupAttestation;
 use std::{
     ops::Deref,
     sync::atomic::{AtomicBool, Ordering},
@@ -161,7 +165,7 @@ impl WorkspacePreflight {
 impl WorkspaceCheck {
     fn current(&self) -> Result<()> {
         if !self.alive.load(Ordering::SeqCst) {
-            return Err(RuntimeStoreError::Fenced);
+            return Err(fenced("workspace_proof_released"));
         }
         #[cfg(test)]
         let handoff_now =
@@ -178,10 +182,10 @@ impl WorkspaceCheck {
         let expired = expired || self.forced_handoff_expiry.load(Ordering::SeqCst);
         if expired {
             self.handoff_expired.store(true, Ordering::SeqCst);
-            return Err(RuntimeStoreError::Fenced);
+            return Err(fenced("workspace_handoff_expired"));
         }
         if let Some(installation) = &self.installation {
-            installation.check_retained()?;
+            because(installation.check_retained(), "workspace_retained_changed")?;
             let current = installation.retained_stamp()?;
             if Some(current) != self.retained {
                 if self.retained.as_ref().is_some_and(|expected| {
@@ -192,7 +196,7 @@ impl WorkspaceCheck {
                 }) {
                     self.stamp_changed.store(true, Ordering::SeqCst);
                 }
-                return Err(RuntimeStoreError::Fenced);
+                return Err(fenced("workspace_stamp_changed"));
             }
         }
         Ok(())
@@ -224,11 +228,11 @@ impl Store {
     ) -> Result<WorkspacePreflight> {
         if let Some(proof) = &self.workspace_check {
             if &proof.owner != owner || &proof.conversation != conversation {
-                return Err(RuntimeStoreError::Fenced);
+                return Err(fenced("workspace_scope"));
             }
             self.workspace_check_current()?;
             if proof.effect.load(Ordering::SeqCst) {
-                return Err(RuntimeStoreError::Fenced);
+                return Err(fenced("workspace_effect_used"));
             }
             return Ok(WorkspacePreflight {
                 store: self.clone(),
@@ -248,7 +252,7 @@ impl Store {
                 return Ok(checked);
             }
         }
-        Err(RuntimeStoreError::Fenced)
+        Err(fenced("workspace_changed_during_check"))
     }
 
     async fn workspace_preflight_attempt(
@@ -295,7 +299,7 @@ impl Store {
                         .map_err(db)?
                         .get(id)
                         .cloned()
-                        .ok_or(RuntimeStoreError::Fenced)
+                        .ok_or_else(|| fenced("workspace_unretained"))
                 })
                 .transpose()?,
         };
@@ -315,10 +319,13 @@ impl Store {
                     let _ = ready.send(retained.check());
                 })
                 .map_err(|_| RuntimeStoreError::Unavailable)?;
-            tokio::time::timeout_at(deadline.into(), response)
-                .await
-                .map_err(|_| RuntimeStoreError::Unavailable)?
-                .map_err(|_| RuntimeStoreError::Unavailable)??;
+            because(
+                tokio::time::timeout_at(deadline.into(), response)
+                    .await
+                    .map_err(|_| RuntimeStoreError::Unavailable)?
+                    .map_err(|_| RuntimeStoreError::Unavailable)?,
+                "workspace_root_check",
+            )?;
         }
         let retained = installation
             .as_ref()
@@ -396,7 +403,7 @@ impl Store {
             .as_ref()
             .is_some_and(|expected| Arc::ptr_eq(expected, installation))
         {
-            return Err(RuntimeStoreError::Fenced);
+            return Err(fenced("workspace_installation"));
         }
         self.workspace_check_current()
     }
@@ -412,7 +419,7 @@ impl Store {
                 .as_ref()
                 .is_none_or(|(id, _, _)| id != project)
             {
-                return Err(RuntimeStoreError::Fenced);
+                return Err(fenced("workspace_installation"));
             }
             // An explicit grant can retain different descriptors from a
             // reopened pool. Use the exact installation freshly verified for
@@ -442,7 +449,7 @@ impl Store {
                     .map(|(id, generation, identity)| (id.as_str(), *generation, identity.as_str()))
                     != project
             {
-                return Err(RuntimeStoreError::Fenced);
+                return Err(fenced("workspace_project_row"));
             }
             self.workspace_check_current()?;
         }
@@ -457,7 +464,7 @@ impl Store {
                     .as_ref()
                     .map(|c| (c.id.clone(), c.incarnation.clone(), c.generation))
             {
-                return Err(RuntimeStoreError::Fenced);
+                return Err(fenced("workspace_context"));
             }
             proof.current()?;
         }
@@ -471,7 +478,7 @@ impl Store {
             .as_ref()
             .is_some_and(|proof| proof.effect.swap(true, Ordering::SeqCst))
         {
-            return Err(RuntimeStoreError::Fenced);
+            return Err(fenced("workspace_effect_used"));
         }
         Ok(())
     }

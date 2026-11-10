@@ -77,6 +77,7 @@ mod provider_policy;
 #[cfg(test)]
 mod provider_policy_http_tests;
 pub mod provider_quota_http;
+mod provider_sign_in_http;
 mod resource_health;
 mod response_shaping;
 pub mod restricted_http;
@@ -129,6 +130,7 @@ pub struct AppState {
     auth_window: Arc<Mutex<(Instant, u32)>>,
     resources: resource_health::ResourceSampler,
     provider_quota: Option<Arc<provider_quota_http::Source>>,
+    provider_sign_in: Option<Arc<dyn provider_sign_in_http::Port>>,
     timers: timer_http::DurableOwnerController,
     live_map: Option<Arc<std::path::PathBuf>>,
     desktop_broker: Option<Arc<desktop_broker::Broker>>,
@@ -231,6 +233,9 @@ impl AppState {
             manager_pid,
         )
         .map_err(|_| "beta manager identity refused")?;
+        self.provider_sign_in = Some(Arc::new(provider_sign_in_http::ManagerPort(
+            manager.clone(),
+        )));
         let controller = Arc::new(
             window_runtime::Controller::new(
                 config.clone(),
@@ -366,6 +371,7 @@ impl AppState {
             auth_window: Arc::new(Mutex::new((Instant::now(), 0))),
             resources: resource_health::ResourceSampler::new(),
             provider_quota: None,
+            provider_sign_in: None,
             live_map: None,
             desktop_broker: None,
             sidebar_v1: sidebar_v1::V1Cache::default(),
@@ -619,7 +625,7 @@ pub fn router_with_google_catalog(
     catalog: google_registry_metadata::RegistryCatalog,
 ) -> Router {
     Router::new()
-        .route("/api/v2/health",get(|| async { Json(serde_json::json!({"status":"ok","product":"orkestr-v2","contract_version":0,"fixture_mode":false,"features":["message_author","message_revisions_v1","thread_asks","agent_timers","source_receipts_v1","root_intake_v1","fast_run_receipts_v1","provider_quotas_v1"],"build":build_identity::identity(),"deployment":deployment_identity::identity()})) }))
+        .route("/api/v2/health",get(|| async { Json(serde_json::json!({"status":"ok","product":"orkestr-v2","contract_version":0,"fixture_mode":false,"features":["message_author","message_revisions_v1","thread_asks","agent_timers","source_receipts_v1","root_intake_v1","fast_run_receipts_v1","provider_quotas_v1","provider_sign_in_v1"],"build":build_identity::identity(),"deployment":deployment_identity::identity()})) }))
         .route("/api/v2/setup",get(auth::setup_status).post(auth::setup))
         .route("/api/v2/session",post(auth::session))
         .route("/api/v2/machine/session",post(auth::session))
@@ -672,6 +678,7 @@ pub fn router_with_google_catalog(
         .merge(fast_run_receipt_http::router())
         .merge(conversation_resources_http::router())
         .merge(fast_role_settings_http::router())
+        .merge(provider_sign_in_http::router())
         .merge(conversation_status_http::router())
         .merge(host_metrics::router())
         .merge(desktop_http::router())

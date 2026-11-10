@@ -30,6 +30,9 @@ impl WorkspaceOperatorAllowlist {
     /// Only the authenticated original Root manager can supply these handles.
     /// The callback above remains retained and is invoked for EVERY existing
     /// Store installation/metadata/command fence, including initial bootstrap.
+    /// One exception: the repeated fences of one metadata setup share the
+    /// setup's fresh check for at most SETUP_ATTESTATION, after local checks,
+    /// and readiness confirmation checks afresh (setup_attestation.rs).
     /// No Unix owner, traversal permission, project generation or fingerprint
     /// is rewritten. Historical rows still require exact fresh correspondence.
     pub fn installation_from_root(
