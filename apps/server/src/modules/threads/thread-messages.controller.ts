@@ -19,7 +19,7 @@ import { hydrateEncryptedPublishedAttachmentPaths, validateEncryptedPublishedAtt
 import { reissueEncryptedThreadAttachment } from "../../../../../packages/core/src/encrypted-attachment-reissue.js";
 import { publicEncryptedAttachment } from "../../../../../packages/core/src/encrypted-attachment-projection.js";
 import { storedThreadMessagePage } from "./thread-message-store-page.js";
-import { recordScopedRelayRemoteDelivery } from "../../../../../packages/connectors/src/whatsapp-scoped-relay-remote.js";
+import { forwardScopedRelayRevision, recordScopedRelayRemoteDelivery } from "../../../../../packages/connectors/src/whatsapp-scoped-relay-remote.js";
 import { ThreadActionSanitizerService } from "./thread-application.services.js";
 import {
   scheduleNativeCodexHistorySync,
@@ -80,6 +80,26 @@ export class ThreadMessagesController {
       if (synced.results.some((row: any) => row.error || row.acks?.rejected)) throw httpError('remote_delivery_ack_pending', 502);
       return { ok: true, threadId: thread.id, duplicate: result.duplicate, messageId: result.message.id,
         deliveryState: result.message.deliveryState };
+    } catch (error: any) {
+      throw httpError(error.message, error.statusCode || 500);
+    }
+  }
+
+  // The scoped group relay reports the owner editing or deleting a WhatsApp
+  // input it already forwarded; the runtime records it as a revision.
+  @Post(":threadId/messages/:messageId/scoped-relay-revision")
+  @HttpCode(200)
+  async scopedRelayRevision(
+    @Req() request: any,
+    @Param("threadId") threadId: string,
+    @Param("messageId") messageId: string,
+    @Body() body: Record<string, unknown> = {},
+  ) {
+    const thread = await getThreadForPrincipal(threadId, requestPrincipal(request));
+    if (!thread) throw httpError("thread_not_found", 404);
+    try {
+      const result = await forwardScopedRelayRevision({ thread, messageId, body });
+      return { ok: true, threadId: thread.id, duplicate: result.duplicate };
     } catch (error: any) {
       throw httpError(error.message, error.statusCode || 500);
     }
