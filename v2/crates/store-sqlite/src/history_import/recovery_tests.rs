@@ -208,6 +208,7 @@ async fn crash_child() {
             text: "Synthetic crash history".into(),
             reply_to: None,
             origin: None,
+            revisions: None,
         }],
     };
     request.source_digest = history_source_digest(&request).unwrap();
