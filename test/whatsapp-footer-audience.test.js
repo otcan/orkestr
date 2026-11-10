@@ -17,12 +17,12 @@ const footerPattern = /⚡|🧠|▶|codex wk|claude|q:\d|load:|api:|help:\/help/
 
 test("an owner-only chat gets the compact footer with the observed Quick model and effort", () => {
   const text = appendWhatsAppDebugFooter("Answer", { env, thread: ownerOnly, message: fast, messages: [ownerInput, fast] });
-  assert.match(text, /^Answer\n\n⚡ Quick: codex example-luna\/low · 🧠 Deep: pending · ▶ Quick\n/);
+  assert.match(text, /^Answer\n\n🤖 codex example-luna low · msg:\*final\*\n/);
   assert.match(text, /\nq:0 · load:\d+% · api:\d+% · help:\/help$/);
   assert.doesNotMatch(text, /unknown/);
 });
 
-const FULL = /^Answer\n\n⚡ Quick: codex example-luna\/low · 🧠 Deep: pending · ▶ Quick\n(?:codex|claude)[^\n]*\n(?:codex|claude)[^\n]*\nq:0 · load:\d+% · api:\d+% · help:\/help$/;
+const FULL = /^Answer\n\n🤖 codex example-luna low · msg:\*final\*\n(?:codex|claude)[^\n]*\n(?:codex|claude)[^\n]*\nq:0 · load:\d+% · api:\d+% · help:\/help$/;
 
 test("a chat with non-owner members gets the same full footer (owner decision 2026-10-28)", () => {
   assert.equal(threadHasNonOwnerMembers(shared), true);
@@ -56,7 +56,7 @@ test("owner identities follow inbound security: authorized, sender and aliases, 
     additionalParticipantsEnabled: false, additionalParticipantIds: ["490000000777@c.us"],
   } };
   assert.equal(threadHasNonOwnerMembers(festival), false, "disabled additional participants are not members");
-  assert.match(appendWhatsAppDebugFooter("Answer", { env, thread: festival, message: fast, messages: [ownerInput] }), /\n\n⚡ Quick: codex example-luna\/low/);
+  assert.match(appendWhatsAppDebugFooter("Answer", { env, thread: festival, message: fast, messages: [ownerInput] }), /\n\n🤖 codex example-luna low/);
   const enabled = { ...festival, binding: { ...festival.binding, additionalParticipantsEnabled: true, additionalParticipantIds: ["+490000000681", "490000000099@c.us"] } };
   assert.equal(threadHasNonOwnerMembers(enabled), false, "an owner listed as participant in another spelling is still the owner");
   const explicitOwner = { id: "t-explicit", binding: { chatId: "group-d@g.us", inboundSecurity: { ownerParticipantIds: ["12345@lid"] },
@@ -116,11 +116,11 @@ test("notices in a shared chat or answering a member carry the compact footer to
 test("the local (V1-native) layer line never prints unknown", () => {
   const local = { role: "assistant", source: "codex-app-server", phase: "final_answer" };
   const text = appendWhatsAppDebugFooter("Done", { env, thread: ownerOnly, message: local });
-  assert.match(text, /\n\n⚡ Quick: — · 🧠 Deep: codex [^\n]* · ▶ Deep\n/);
+  assert.match(text, /\n\ndbg: codex\/[^\n]* · msg:\*final\*\n/);
   assert.doesNotMatch(text, /unknown/);
   const claude = appendWhatsAppDebugFooter("Done", { env, thread: { ...ownerOnly, runtimeKind: "claude-code" }, message: { ...local, source: "claude-code" } });
   assert.doesNotMatch(claude, /unknown/);
-  assert.match(appendWhatsAppDebugFooter("Done", { env, thread: { ...ownerOnly, codexModel: "example-model", codexReasoningEffort: "high" }, message: local }), /\n\n⚡ Quick: — · 🧠 Deep: codex example-model\/h · ▶ Deep\n/);
+  assert.match(appendWhatsAppDebugFooter("Done", { env, thread: { ...ownerOnly, codexModel: "example-model", codexReasoningEffort: "high" }, message: local }), /\n\ndbg: codex\/example-model\/h · msg:\*final\*\n/);
 });
 
 test("remote notices and delivery failures get the compact footer in an owner-only chat", () => {
@@ -131,14 +131,14 @@ test("remote notices and delivery failures get the compact footer in an owner-on
   noticeFooter(appendWhatsAppDebugFooter("Delivery failed.", { env, thread: ownerOnly, message: failure, deliveryType: "delivery_error" }), "Delivery failed.");
   // Regular replies keep their full footer with the layer line.
   assert.match(appendWhatsAppDebugFooter("Answer", { env, thread: quotaThread, message: fast, messages: [ownerInput, fast] }),
-    /^Answer\n\n⚡ Quick: codex example-luna\/low · 🧠 Deep: pending · ▶ Quick\ncodex wk: 80% [^\n]*\nclaude 5h: 90% wk: 70%\nq:0 · /);
+    /^Answer\n\n🤖 codex example-luna low · msg:\*final\*\ncodex wk: 80% [^\n]*\nclaude 5h: 90% wk: 70%\nq:0 · /);
 });
 
 test("the scoped group relay applies the same audience rules", () => {
   const chunk = (thread, message, messages, config = { appendDebugFooter: true }) => scopedGroupReplyChunks({ text: "Done", deliveryType: "final", message: { ...message, chatId: "group-a@g.us" },
     thread, messages, config, formatter, env: {} });
   for (const [thread, message, messages] of [[ownerOnly, fast, [ownerInput]], [shared, fast, [ownerInput]], [ownerOnly, fast, [memberInput]]]) {
-    assert.match(chunk(thread, message, messages)[0], /^Done\n\n⚡ Quick: codex example-luna\/low/);
+    assert.match(chunk(thread, message, messages)[0], /^Done\n\n🤖 codex example-luna low/);
   }
   for (const thread of [ownerOnly, shared]) {
     const [notice] = chunk(thread, { ...scope, remoteLayer: "notice" }, []);

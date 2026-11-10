@@ -67,7 +67,9 @@ checks for the changed surfaces and record what was tested or skipped and why.
 
 Full V2 workspace and browser suites run in GitHub Actions. Locally run only
 affected crate checks through the host's build wrapper when available. Node
-bridge changes need their relevant Node tests. Do not run a second full local
+bridge changes need their relevant Node tests. Changes to tenant or connector
+isolation also require `npm run test:tenant-isolation` and the
+[tenant isolation release checklist](tenant-isolation-release-checklist.md). Do not run a second full local
 Rust build on a shared host.
 
 Require successful applicable Rust, browser, dependency, secret, packaging and

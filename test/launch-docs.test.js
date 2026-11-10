@@ -7,7 +7,11 @@ async function read(path) {
 }
 
 test("public launch docs expose the minimum launch surface", async () => {
-  const readme = await read("README.md");
+  const primary = await read("README.md");
+  assert.match(primary, /V2 is the primary application/);
+  assert.match(primary, /127\.0\.0\.1:19822:19823/);
+  assert.match(primary, /README\.v1\.md/);
+  const readme = await read("README.v1.md");
   const contributing = await read("CONTRIBUTING.md");
   const security = await read("SECURITY.md");
   const roadmap = await read("ROADMAP.md");

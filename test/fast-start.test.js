@@ -31,7 +31,7 @@ test("npm start builds the server once on a fresh clone and npm ci skips puppete
 });
 
 test("README copy-paste shell blocks have no # comment lines (zsh treats them as commands)", async () => {
-  const readme = await fs.readFile("README.md", "utf8");
+  const readme = await fs.readFile("README.v1.md", "utf8");
   const start = readme.slice(readme.indexOf("### Start Orkestr"), readme.indexOf("### What works today"));
   assert.match(start, /npm ci\nnpm start\n/);
   for (const block of start.matchAll(/```bash\n([\s\S]*?)```/g)) {

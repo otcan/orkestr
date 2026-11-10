@@ -67,7 +67,7 @@ test('a registered group receives its V2 post reply once, through the transport 
   const {notifier, state} = fixture(t);
   assert.equal((await notifier.tick()).sent, 1);
   assert.deepEqual(state.sent.map(s => s.to), [newChat]);
-  assert.equal(state.sent[0].text, '🤖 Coordinator:\nThis chat is connected.');
+  assert.equal(state.sent[0].text, 'This chat is connected.');
   assert.equal(state.reports.length, 1);
   assert.match(state.reports[0].url, /\/api\/threads\/thread-new\/messages\/answer1\/scoped-relay-delivery$/);
   await notifier.tick();

@@ -6,7 +6,7 @@ import { normalizedDeliveryText } from "../packages/connectors/src/whatsapp-deli
 
 // One footer spec for every model reply (see whatsappDebugFooter):
 //   ⚡ Quick: <provider model | —> · 🧠 Deep|Coordinator: <provider model | pending | —> · ▶ <writer>
-const LAYER_LINE = /^⚡ Quick: [^·\n]+ · 🧠 (?:Deep|Coordinator): [^·\n]+ · ▶ (?:Quick|Deep|Coordinator|Post)$/;
+const LAYER_LINE = /^(?:🤖 |dbg: )[^\n]+$/;
 const env = { ORKESTR_WHATSAPP_DEBUG_FOOTER: "1" };
 const quotaThread = { whatsAppDebugProviderQuota: {
   codex: { weeklyRemainingPct: 80 },
@@ -31,12 +31,12 @@ function assertSpec(lines, layerLine) {
 }
 
 test("Quick reply: its own identity, Deep pending, writer Quick", () => {
-  assertSpec(footerLines(fast), "⚡ Quick: codex gpt-example-mini/low · 🧠 Deep: pending · ▶ Quick");
-  assertSpec(footerLines(fast, [fast, deep]), "⚡ Quick: codex gpt-example-mini/low · 🧠 Deep: codex gpt-example/high · ▶ Quick");
+  assertSpec(footerLines(fast), "🤖 codex gpt-example-mini low · msg:*final*");
+  assertSpec(footerLines(fast, [fast, deep]), "🤖 codex gpt-example-mini low · msg:*final*");
 });
 
 test("Deep final: the input's Quick and its own identity, writer Deep", () => {
-  assertSpec(footerLines(deep, [fast, deep]), "⚡ Quick: codex gpt-example-mini/low · 🧠 Deep: codex gpt-example/high · ▶ Deep");
+  assertSpec(footerLines(deep, [fast, deep]), "🤖 codex gpt-example high · msg:*final*");
 });
 
 test("Deep final whose Quick V1 cannot correlate uses the adapter-reported Quick", () => {
@@ -47,25 +47,25 @@ test("Deep final whose Quick V1 cannot correlate uses the adapter-reported Quick
   assert.deepEqual(imported, { remoteLayer: "deep", remoteOriginalInputId: "input-last", remoteQuickProvider: "codex",
     remoteQuickModel: "gpt-example-mini", remoteQuickEffort: "low", remoteQuoteSource: true });
   const grouped = { ...deep, ...imported };
-  assertSpec(footerLines(grouped, [fast]), "⚡ Quick: codex gpt-example-mini/low · 🧠 Deep: codex gpt-example/high · ▶ Deep");
+  assertSpec(footerLines(grouped, [fast]), "🤖 codex gpt-example high · msg:*final*");
 });
 
 test("Deep final with no Quick run (timer, health probe, Fast off) keeps the Quick slot as —", () => {
   const timer = { ...deep, ...remoteLayerMetadata({ layer: "deep", phase: "final_answer", quick: "none" }) };
   assert.equal(timer.remoteQuickState, "none");
-  assertSpec(footerLines(timer, [fast]), "⚡ Quick: — · 🧠 Deep: codex gpt-example/high · ▶ Deep");
+  assertSpec(footerLines(timer, [fast]), "🤖 codex gpt-example high · msg:*final*");
   // An older adapter without the field: no correlated Quick also reads —.
-  assertSpec(footerLines({ ...deep, remoteOriginalInputId: undefined }, [fast]), "⚡ Quick: — · 🧠 Deep: codex gpt-example/high · ▶ Deep");
+  assertSpec(footerLines({ ...deep, remoteOriginalInputId: undefined }, [fast]), "🤖 codex gpt-example high · msg:*final*");
 });
 
 test("timer answer delivered as timer_reply carries the same model-reply footer", () => {
   const timer = { ...deep, remoteQuickState: "none" };
-  assertSpec(footerLines(timer, [], quotaThread, "timer_reply"), "⚡ Quick: — · 🧠 Deep: codex gpt-example/high · ▶ Deep");
+  assertSpec(footerLines(timer, [], quotaThread, "timer_reply"), "🤖 codex gpt-example high · msg:*final*");
 });
 
 test("coordinator post: its declared post identity, never the native Deep", () => {
-  assertSpec(footerLines(coordinator, [fast, deep, coordinator]), "⚡ Quick: codex gpt-example-mini/low · 🧠 Coordinator: claude opus-5.5 · ▶ Coordinator");
-  assertSpec(footerLines({ ...coordinator, remoteOriginalInputId: undefined }), "⚡ Quick: — · 🧠 Coordinator: claude opus-5.5 · ▶ Coordinator");
+  assertSpec(footerLines(coordinator, [fast, deep, coordinator]), "🤖 claude opus-5.5 · msg:*final*");
+  assertSpec(footerLines({ ...coordinator, remoteOriginalInputId: undefined }), "🤖 claude opus-5.5 · msg:*final*");
   const old = { ...coordinator, remoteIdentitySource: undefined, remoteProvider: "codex", remoteModel: "unreported" };
   assert.equal(remoteLayerFooter(old, [fast, deep]), "⚡ Quick: codex gpt-example-mini/low · 🧠 Coordinator: — · ▶ Coordinator");
   assert.deepEqual(remoteLayerMetadata({ provider: "codex", model: "unreported" }, { postAuthor: "coordinator" }), { remoteLayer: "coordinator", remoteProvider: null, remoteModel: null });
@@ -83,7 +83,7 @@ test("a native question is the Deep run's own post; any other post is writer Pos
 test("a provider without a reported model keeps the slot shape and never prints unknown or settings", () => {
   const message = { ...deep, remoteModel: "unreported", remoteObservedReasoningEffort: undefined, model: "configured-wrong", codexReasoningEffort: "xhigh" };
   const footer = whatsappDebugFooter({ message, thread: { codexModel: "thread-wrong", codexReasoningEffort: "xhigh" }, env: { OPENAI_MODEL: "env-wrong" } });
-  assert.match(footer, /^⚡ Quick: — · 🧠 Deep: codex \? · ▶ Deep\n/);
+  assert.match(footer, /^🤖 codex · msg:\*final\*\n/);
   assert.doesNotMatch(footer, /unknown|configured-wrong|thread-wrong|env-wrong|xhigh/);
   assert.equal(remoteLayerFooter({ ...scope, remoteLayer: "deep" }), "⚡ Quick: — · 🧠 Deep: — · ▶ Deep");
 });
@@ -117,7 +117,7 @@ test("foreign inputs/runtime scopes and conflicting peer evidence cannot fill a 
 test("V1-native reply uses the same layer line with Quick —", () => {
   const local = { role: "assistant", source: "codex-app-server", phase: "final_answer" };
   const lines = footerLines(local, [], { ...quotaThread, codexModel: "gpt-example", codexReasoningEffort: "low" });
-  assertSpec(lines, "⚡ Quick: — · 🧠 Deep: codex gpt-example/l · ▶ Deep");
+  assertSpec(lines, "dbg: codex/gpt-example/l · msg:*final*");
 });
 
 test("footers strip idempotently and every model reply has exactly one layer line", () => {
@@ -125,7 +125,7 @@ test("footers strip idempotently and every model reply has exactly one layer lin
   const text = appendWhatsAppDebugFooter("Answer", options);
   assert.equal(stripWhatsAppDebugFooter(text), "Answer");
   assert.equal(normalizedDeliveryText(text), "Answer");
-  assert.equal((appendWhatsAppDebugFooter(text, options).match(/⚡ Quick:/g) || []).length, 1);
+  assert.equal((appendWhatsAppDebugFooter(text, options).match(/^🤖 /gm) || []).length, 1);
   assert.match(text, /\nq:0 · load:\d+% · api:\d+% · help:\/help$/);
 });
 

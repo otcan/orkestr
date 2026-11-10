@@ -90,7 +90,7 @@ test('a burst Quick reply quotes the WhatsApp input it answers', async t => {
   assert.equal((await notifier.tick()).sent, 1);
   assert.equal(state.payloads[0].quotedMessageId, waInput);
   assert.deepEqual(state.sent[0].options, {sendSeen: false, quotedMessageId: waInput});
-  assert.match(state.sent[0].text, /^⚡ Quick reply\nOn it\./);
+  assert.match(state.sent[0].text, /^On it\./);
   assert.equal(state.reports.length, 1);
 });
 
