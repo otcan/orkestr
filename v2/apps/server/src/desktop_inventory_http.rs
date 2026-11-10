@@ -156,11 +156,18 @@ async fn reset(
         .await
         .map_err(failure)?;
     let broker = state.desktop_broker.as_ref().ok_or_else(unavailable)?;
-    if !broker
-        .granted_slugs(&fence.v1_thread_id)
+    let shared = state
+        .store
+        .desktop_sharing(&credential, &owner)
         .await
-        .map_err(|_| unavailable())?
-        .contains(&slug)
+        .map_err(failure)?
+        .share_all_desks;
+    if !shared
+        && !broker
+            .granted_slugs(&fence.v1_thread_id)
+            .await
+            .map_err(|_| unavailable())?
+            .contains(&slug)
     {
         return Err(Error(
             StatusCode::FORBIDDEN,

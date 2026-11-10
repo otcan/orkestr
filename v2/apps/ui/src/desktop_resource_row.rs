@@ -1,7 +1,7 @@
 use dioxus::prelude::*;
 use orkestr_v2_contracts::{DesktopLeaseGranted, DesktopResource, DesktopResourceBinding};
 use orkestr_v2_ui::{
-    desk_presentation::{held_by, Availability},
+    desk_presentation::{held_by, Availability, DeskSharing},
     session_scope::SessionScope,
 };
 use serde_json::{json, Value};
@@ -16,6 +16,7 @@ pub fn DesktopResourceRow(
     onchanged: EventHandler<()>,
     observed_at_ms: i64,
     #[props(default = true)] visible: bool,
+    #[props(default)] shared: bool,
 ) -> Element {
     let owner = session_scope.read().generation();
     let initial = if bindings.len() == 1 {
@@ -60,7 +61,7 @@ pub fn DesktopResourceRow(
                     div { class: "desk-action-bar",
                     crate::desk_owner_actions::DeskOwnerButtons { actions: owner_actions, desk: desk.clone(), runtime_state: runtime_state.clone(), csrf: csrf.clone(), session_scope, onexpired, onchanged }
                     if !bindings.is_empty() {
-                        button { r#type: "button", class: "desk-chat-toggle", title: "Reserve from a connected chat",
+                        button { r#type: "button", class: "desk-chat-toggle", title: DeskSharing::reserve_title(shared),
                             "aria-expanded": if chat_shown { "true" } else { "false" }, "aria-controls": "{chat_panel}",
                             disabled: token().is_some(), onclick: move |_| chat_open.toggle(),
                             "Reserve…"

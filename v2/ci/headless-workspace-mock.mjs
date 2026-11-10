@@ -55,7 +55,8 @@ export function createState() {
     // Chat settings, desktops and timers of conversation A.
     settings: { schema_version: 1, conversation_id: A, revision: 2, provider: 'codex', model: 'synthetic-model', reasoning_effort: 'medium',
       honor_no_reply: true, reply_prefix: 'synthetic:', reply_footer: null, provider_generation: 0, updated_at_ms: 1 },
-    desktopActions: [], deskReserved: false, deskRuntime: { 'idle-desk': 'inactive', 'held-desk': 'active', 'unbound-desk': 'unknown' }, deskOwnerActions: [], deskStopConflict: false, deskStartFailure: false, settingsPuts: [], bindingPuts: [], desktopBindings: {}, timerCalls: [], timerPause: null, chatTimerPause: null,
+    desktopActions: [], deskReserved: false, deskRuntime: { 'idle-desk': 'inactive', 'held-desk': 'active', 'unbound-desk': 'unknown' }, deskOwnerActions: [], deskStopConflict: false, deskStartFailure: false,
+    deskSharing: { schema_version: 1, share_all_desks: false, revision: 0, updated_at_ms: null }, sharingPuts: [], settingsPuts: [], bindingPuts: [], desktopBindings: {}, timerCalls: [], timerPause: null, chatTimerPause: null,
     // Linked V1 chat management (synthetic V1 state behind the server).
     v1Model: { model: 'synthetic-model', effort: 'low' }, v1Calls: [],
     v1Timers: [{ id: 'timer-1', label: 'Synthetic digest', cadence: 'daily', time: '08:00', every: null, timezone: 'Europe/Berlin',
@@ -266,6 +267,14 @@ async function api(state, req, res, url) {
       {slug:'held-desk',label:'Held desk',state:state.deskRuntime['held-desk'],lease_state:'reserved',holder:'Worker chat',expires_at:'2026-01-01T02:00:00Z'}],
     bindings:[{conversation_id:A,name:'Assistant',desktop_slugs:['synthetic-desk']},{conversation_id:B,name:'Research notes',desktop_slugs:['research-desk']}],
   });
+  if (path === '/api/v2/desktop-sharing' && req.method === 'GET') return json(res, 200, state.deskSharing);
+  if (path === '/api/v2/desktop-sharing' && req.method === 'PUT') {
+    if (req.headers['x-orkestr-csrf'] !== 'synthetic-csrf') return json(res, 403, { code: 'csrf', message: 'CSRF required' });
+    const request = JSON.parse(await body(req)); state.sharingPuts.push(request);
+    if (request.expected_revision !== state.deskSharing.revision) return json(res, 409, { code: 'desktop_sharing_revision_mismatch', message: 'Desk sharing was changed elsewhere. Reload and try again.' });
+    state.deskSharing = { schema_version: 1, share_all_desks: request.share_all_desks, revision: state.deskSharing.revision + 1, updated_at_ms: 1 };
+    return json(res, 200, state.deskSharing);
+  }
   const ownerDesk = /^\/api\/v2\/desktops\/([a-z0-9_-]+)\/(start|stop|link)$/.exec(path);
   if (ownerDesk && req.method === 'POST') {
     if (req.headers['x-orkestr-csrf'] !== 'synthetic-csrf') return json(res, 403, { code: 'csrf', message: 'CSRF required' });
@@ -522,7 +531,7 @@ async function api(state, req, res, url) {
       return json(res, 403, {code:'desktop_open_denied',message:'Synthetic desktop owner verification failed.'});
     return json(res, 200, {url:'https://desktop.example.test/desktop-share/synthetic?key=fixture',challenge_required:true});
   }
-  if (rest === '/desktops' && req.method === 'GET') return json(res, 200, { schema_version: 1, conversation_id: id,
+  if (rest === '/desktops' && req.method === 'GET') return json(res, 200, { schema_version: 1, conversation_id: id, shared_with_all_chats: state.deskSharing.share_all_desks,
     binding: state.desktopBindings[id] ?? { schema_version: 1, conversation_id: id, revision: 1, v1_thread_id: 'synthetic-thread', desktop_slugs: ['synthetic-desk'], grant_issued: false, grant_generation: 0 },
     leases: [{ conversation_id: id, desktop_slug: 'synthetic-desk', v1_thread_id: 'synthetic-thread', v1_lease_id: 'lease-1', fencing_version: 1,
       state: 'active', expires_at: '2026-01-01T00:10:00Z', acquired_at_ms: 1, heartbeat_at_ms: 2, ended_at_ms: null, end_reason: null }] });

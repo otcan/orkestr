@@ -86,6 +86,11 @@ async fn open(
         .desktop_binding(&credential, &owner, &conversation(&id)?)
         .await
         .map_err(failure)?;
+    let sharing_before = state
+        .store
+        .desktop_sharing(&credential, &owner)
+        .await
+        .map_err(failure)?;
     let prepared = state
         .store
         .prepare_desktop_acquire(
@@ -157,7 +162,12 @@ async fn open(
         .desktop_binding(&credential, &owner, &conversation(&id)?)
         .await
         .map_err(failure)?;
-    if binding_after != binding_before {
+    let sharing_after = state
+        .store
+        .desktop_sharing(&credential, &owner)
+        .await
+        .map_err(failure)?;
+    if binding_after != binding_before || sharing_after != sharing_before {
         return Err(Error(
             StatusCode::CONFLICT,
             "desktop_binding_changed",

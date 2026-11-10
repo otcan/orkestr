@@ -5,6 +5,20 @@ use crate::Store;
 mod credentials;
 
 pub(crate) async fn downgrade_empty(store: &Store) {
+    // Migration 97 down: only the owner's desk sharing switch; a historical
+    // fixture never sets it, so dropping it loses no owner decision.
+    let sharing: i64 = sqlx::query_scalar("SELECT count(*) FROM desktop_sharing")
+        .fetch_one(&store.pool)
+        .await
+        .unwrap();
+    assert_eq!(sharing, 0, "historical fixture must not erase desk sharing");
+    sqlx::raw_sql(
+        "DROP TABLE desktop_sharing;
+         DELETE FROM _sqlx_migrations WHERE version=97;",
+    )
+    .execute(&store.pool)
+    .await
+    .unwrap();
     // Migration 96 down: only an empty audit table, so no owner change is lost.
     let revisions: i64 = sqlx::query_scalar("SELECT count(*) FROM message_revisions")
         .fetch_one(&store.pool)

@@ -385,4 +385,7 @@ pub use execution_window_reconciliation::*;
 mod desktop_inventory;
 pub use desktop_inventory::*;
 
+mod desktop_sharing;
+pub use desktop_sharing::*;
+
 pub mod build_times;

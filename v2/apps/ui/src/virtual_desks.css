@@ -35,6 +35,9 @@
 .desk-advanced { margin-top:.5rem; border-top:1px solid var(--border); padding-top:.5rem; }
 .desk-advanced summary { cursor:pointer; color:var(--muted); }
 .desk-summary { display:flex; flex-wrap:wrap; gap:.4rem 1rem; padding:.5rem 0; }
+.desk-sharing { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:.4rem .8rem; border:1px solid var(--border); border-radius:.5rem; padding:.45rem .7rem; margin:.5rem 0; background:var(--surface-2); }
+.desk-sharing[data-shared="true"] { border-color:var(--success,#26946d); }
+.desk-sharing p { margin:0; flex:1 1 16rem; min-width:0; }
 /* Narrow containers: each desk becomes a labelled block, never a wide table. */
 @container desks (max-width: 680px) {
   .desk-table, .desk-table tbody, .desk-table tr, .desk-table th, .desk-table td { display:block; width:auto; }

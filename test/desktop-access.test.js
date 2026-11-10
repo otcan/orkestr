@@ -152,6 +152,41 @@ test("scoped enforcement protects both sides of an exact thread and desktop bind
   assert.equal(desktopAccessMode(env, { threadId: threadB.id, desktopSlug: "pa" }), "enforce");
 });
 
+// ORK-773: with all desks shared, Orkestr V2 stops requiring a per-thread
+// grant and forwards the acquire as is. V1's rollout mode must still admit an
+// ungranted same-owner thread, keep one fenced holder per desk, and keep a
+// protected binding enforced on both sides.
+test("rollout mode admits an ungranted thread to a shared desk and keeps the protected binding", async () => {
+  const { env, principal, threadA, threadB } = await fixture();
+  const ungranted = await createThread({ id: "thread-ungranted", ownerUserId: "admin", name: "Ungranted", cwd: path.join(env.ORKESTR_HOME, "c") }, env);
+  await advanceDesktopResourceGeneration("added-later", "admin", { reason: "fixture_desktop_lifecycle_registered" }, env);
+  const resource = (await readThreadResourcePolicy(env)).resources.find((item) => item.resourceType === "desktop" && item.resourceKey === "linkedin");
+  env.ORKESTR_DESKTOP_ACCESS_MODE = "shadow";
+  env.ORKESTR_DESKTOP_ENFORCED_BINDINGS_JSON = JSON.stringify([{ threadId: threadA.id, resourceId: resource.id }]);
+  assert.deepEqual((await listThreadDesktopGrants(ungranted.id, principal, env)).grants, []);
+
+  const held = await acquireDesktopLease("added-later", { threadId: ungranted.id, ttlMs: 600000 }, env, { principal });
+  assert.equal(held.ok, true);
+  assert.equal(held.lease.threadId, ungranted.id);
+  assert.match(held.lease.fencingToken, /^[0-9a-f-]{36}$/i);
+  const other = await acquireDesktopLease("added-later", { threadId: threadB.id, ttlMs: 600000 }, env, { principal });
+  assert.equal(other.ok, false, "one holder per desk");
+  assert.equal((await heartbeatDesktopLease("added-later", ungranted.id, env, { principal, fencingToken: "00000000-0000-4000-8000-000000000000" })).ok, false);
+  assert.equal((await heartbeatDesktopLease("added-later", ungranted.id, env, { principal, fencingToken: held.lease.fencingToken })).ok, true);
+  assert.equal((await releaseDesktopLease("added-later", { threadId: ungranted.id, principal, fencingToken: held.lease.fencingToken }, env)).ok, true);
+
+  // The protected desk is refused to every other thread, and the protected
+  // thread is refused every other desk, sharing or not.
+  await assert.rejects(
+    () => acquireDesktopLease("linkedin", { threadId: ungranted.id, ttlMs: 600000 }, env, { principal }),
+    /desktop_grant_required/,
+  );
+  await assert.rejects(
+    () => acquireDesktopLease("added-later", { threadId: threadA.id, ttlMs: 600000 }, env, { principal }),
+    /desktop_grant_required/,
+  );
+});
+
 test("desktop enforce grants require lifecycle registration while rollout modes retain catalog compatibility", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-desktop-grant-registration-"));
   const env = testEnv(home);

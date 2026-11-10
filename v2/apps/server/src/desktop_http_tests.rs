@@ -503,3 +503,5 @@ fn broker_url_must_be_ipv4_loopback_http() {
 
 #[path = "desktop_inventory_integration_tests.rs"]
 mod inventory_tests;
+#[path = "desktop_sharing_http_tests.rs"]
+mod sharing_tests;
