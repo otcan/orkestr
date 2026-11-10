@@ -200,7 +200,10 @@ mod tests {
     #[test]
     fn producer_freshness_policy_is_bounded() {
         for (age, valid) in [(0, true), (604_800_000, true), (604_800_001, false)] {
-            let snapshot: Snapshot = serde_json::from_value(serde_json::json!({"quota":{"codex":{},"claude":{}},"staleAfterMs":age})).unwrap();
+            let snapshot: Snapshot = serde_json::from_value(
+                serde_json::json!({"quota":{"codex":{},"claude":{}},"staleAfterMs":age}),
+            )
+            .unwrap();
             assert_eq!(snapshot.valid(), valid);
         }
     }
