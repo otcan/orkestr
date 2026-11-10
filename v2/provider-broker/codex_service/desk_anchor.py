@@ -14,7 +14,7 @@ import subprocess
 import time
 from codex_bounded.trust import digest,exists,process,protected
 from .contract import require
-from .ownership import Adopted,Process,Vanished,MAX_CHILDREN
+from .ownership import Adopted,Process,Vanished
 
 
 class Tree(Adopted):
@@ -34,7 +34,6 @@ class Tree(Adopted):
         # helper legitimately drops UID. No same-UID or caller-PID discovery.
         key=(identity['pid'],identity['start'])
         if key not in self.records:
-            require(len(self.records)<MAX_CHILDREN,'desk_child_bound')
             try:self.records[key]=Process(identity,any_uid=True)
             except Vanished:return False
             return True

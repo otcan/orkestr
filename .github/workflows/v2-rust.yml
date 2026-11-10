@@ -106,6 +106,8 @@ jobs:
           python3 -I -S -B -m unittest discover -s provider-broker -p test_codex_service_windows.py -v
           python3 -I -S -B -m unittest discover -s provider-broker -p test_codex_service_clock.py -v
           python3 -I -S -B -m unittest discover -s provider-broker -p test_codex_service_process.py -v
+          python3 -I -S -B -m unittest discover -s provider-broker -p test_codex_service_ownership_scale.py -v
+          python3 -I -S -B -m unittest discover -s provider-broker -p test_codex_service_thread_children.py -v
           python3 -I -S -B -m unittest discover -s provider-broker -p test_codex_service_boundaries.py -v
           python3 -I -S -B -m unittest discover -s provider-broker -p test_codex_service_bind_deadline.py -v
           python3 -I -S -B -m unittest discover -s provider-broker -p test_codex_service_observation_deadline.py -v
