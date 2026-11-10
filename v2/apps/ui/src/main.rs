@@ -317,3 +317,5 @@ fn App() -> Element {
         }
     }
 }
+
+mod oversized_composer;
