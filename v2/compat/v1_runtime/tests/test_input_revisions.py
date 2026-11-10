@@ -97,6 +97,13 @@ class DriveTests(unittest.TestCase):
         self.assertEqual(len(client.calls), 1)
         self.assertEqual(self.state(), [("done", "notice")])
 
+    def test_an_ordinary_change_is_not_marked_as_a_part(self):
+        self.input()
+        input_revisions.accept(self.ledger, change(), Conflict)
+        client = Client()
+        input_revisions.drive(self.worker(client))
+        self.assertNotIn("part", client.calls[0][2])
+
     def test_a_deletion_carries_no_text(self):
         self.input()
         input_revisions.accept(self.ledger, change(kind="delete"), Conflict)
@@ -126,7 +133,7 @@ class DriveTests(unittest.TestCase):
         input_revisions.drive(self.worker(client))
         self.assertEqual(self.state(), [("done", "message_revision_unchanged")])
 
-    def test_one_part_of_a_merged_burst_reaches_the_agent_as_a_notice(self):
+    def test_one_part_of_a_merged_burst_is_a_part_revision_of_its_head(self):
         head = self.input(public_id="head")
         part, _ = self.ledger.enqueue(dict(publicMessageId="part", publicThreadId="v1-thread", chatId="chat@g.us",
                                            accountId="account", text="second part"), OWNER_AUTHOR)
@@ -136,10 +143,9 @@ class DriveTests(unittest.TestCase):
         client = Client()
         input_revisions.drive(self.worker(client))
         method, route, body = client.calls[0]
-        self.assertEqual((method, route), ("POST", "/messages"))
-        self.assertIn("Corrected text:\ncorrected", body["text"])
-        self.assertEqual(body["author"], "owner")
-        self.assertEqual(self.state(), [("done", "burst_part_notice")])
+        self.assertEqual((method, route), ("POST", "/messages/%s/revisions" % CORE_MESSAGE))
+        self.assertEqual((body["part"], body["kind"], body["text"], body["source"]), (True, "edit", "corrected", "whatsapp"))
+        self.assertEqual(self.state(), [("done", "notice")])
 
     def test_nothing_is_sent_to_a_server_without_the_feature(self):
         self.input()

@@ -88,7 +88,7 @@ def input_for(ledger, public_id):
 
 
 def merged(data):
-    """A burst was admitted to Core as one message, so one part has no message of its own."""
+    """A burst was admitted to Core as one message, so one part has no row of its own."""
     return bool(data.get("absorbed_into") or data.get("burst"))
 
 
@@ -114,23 +114,6 @@ def _log(worker, record, outcome):
           % (getattr(worker.client, "conversation", "?"), record["kind"], outcome), file=sys.stderr, flush=True)
 
 
-def part_notice(record):
-    """For one part of a merged burst: the agent is told, as an ordinary input."""
-    if record["kind"] == "delete":
-        return ("[Message removed] The owner deleted one of the messages they sent together just before this. "
-                "Disregard that one and do not act on it further. If you already acted on it, tell the owner what was done.")
-    return ("[Message corrected] The owner edited one of the messages they sent together just before this. "
-            "The corrected text below replaces it. If you already acted on the earlier version, check whether "
-            "anything needs to change, and tell the owner if it does.\n\nCorrected text:\n" + record["text"])
-
-
-def _notify_part(worker, record):
-    request = {"client_message_id": request_key(record), "text": part_notice(record), "author": "owner"}
-    worker.client.request("POST", "/messages", body=request, allowed=(200, 202))
-    settle(worker.ledger, record, "done", "burst_part_notice")
-    _log(worker, record, "burst_part_notice")
-
-
 def drive(worker, now=None):
     """Forward waiting changes. Raises nothing for a change Core has refused."""
     if not supported(worker.client):
@@ -150,13 +133,12 @@ def drive(worker, now=None):
                 settle(worker.ledger, record, "expired", "input_never_admitted")
                 _log(worker, record, "input_never_admitted")
             continue
-        if merged(data):
-            _notify_part(worker, record)
-            continue
         body = {"request_key": request_key(record), "kind": record["kind"], "source": "whatsapp"}
+        if merged(data):
+            body["part"] = True
         if record["kind"] == "edit":
             body["text"] = record["text"]
-        status, value = worker.client.request("POST", "/messages/%s/revisions" % data["intake"]["message_id"],
+        status, value = worker.client.request("POST", "/messages/%s/revisions" % admitted["intake"]["message_id"],
                                               body=body, allowed=(200, 201, 403, 404, 409))
         if status in (200, 201):
             settle(worker.ledger, record, "done", value.get("notice_message_id") if isinstance(value, dict) else None)
