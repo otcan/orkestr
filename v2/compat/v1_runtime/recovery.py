@@ -1,11 +1,12 @@
-"""One guarded re-admission of a stranded chat input, or one honest notice.
+"""Guarded re-admissions of a stranded chat input, or one honest notice.
 
 An input whose attempt ended for good (a terminal Deep, or a window that ended
 before its Deep started) settles instead of staying `running`. It is retried
-automatically, once and silently, only when Core itself proves that nothing of
-the original ran or can still run: the adapter first retires the original Core
-input through the owner route `POST /inputs/<message>/retire`. Core allows that
-only while the inbox row is still queued, no run (Fast or Deep) references
+automatically and silently, with backoff (RETRY_BACKOFF_S), only when Core
+itself proves that nothing of the original ran or can still run: the adapter
+first retires the original Core input through the owner route
+`POST /inputs/<message>/retire`. Core allows that only while the inbox row is
+still queued, no run (Fast or Deep) references
 the message, it is in no open window and no window intent is queued for it
 (store-sqlite `retired_inputs.rs`). That one gate also covers an input Core
 handed to a successor window, an input an owner stop moved to the held
@@ -14,13 +15,23 @@ successful retirement is the input admitted again under fresh keys:
 
 * younger than MAX_AGE_S from its original `arrived_at` (rows written before
   this field existed are treated as possibly started and never retried);
-* no final or uncertain export, no accepted Deep, never retried before, not a
-  deadline continuation, and the journal read through Core's current head
-  (a non-streaming snapshot read, not a bounded stream read);
+* no final or uncertain export, no accepted Deep, fewer than
+  len(RETRY_BACKOFF_S) re-admissions so far, not a deadline continuation, and
+  the journal read through Core's current head (a non-streaming snapshot read,
+  not a bounded stream read);
 * never a timer occurrence: Core owns timer retries (`stranded_open.rs`), so
   the adapter only reports a failed occurrence;
 * the original public and remote IDs stay; the retired Core message, window
-  and runs are kept in `readmitted.previous` and in `own_messages`.
+  and runs are kept in `readmitted.previous` (earlier attempts in
+  `readmissions`) and in `own_messages`.
+
+A window that ended before anything of the input ran is usually a transient
+start-up failure (a host under load misses a setup deadline). Retry n waits
+RETRY_BACKOFF_S[n-1] after the previous attempt's failure was decided; with
+each attempt's own window (about 1.5 minutes) the retries span roughly 15
+minutes. The chat sees nothing meanwhile. When they are used up, the input
+closes with one plain notice that says why (`setup_unavailable`, no reason
+code) and one operator ALERT (ORK-770).
 
 When Core refuses the retirement it still owns the input (for example in a
 successor window): the adapter keeps matching and waiting, at most
@@ -48,6 +59,11 @@ LEGACY_CONTINUED_MARGIN_S = 5 * 3600
 # An operator request that cannot be decided within this time is refused.
 REQUEST_MAX_PENDING_S = 600
 REQUESTS_PER_PASS = 4
+# Wait before automatic re-admission n+1 (index n = re-admissions so far),
+# counted from the pass that found attempt n failed. Its length is the most
+# automatic re-admissions an input gets. Each wait stays well below the
+# 10-minute "no running task" status notice of activity.py.
+RETRY_BACKOFF_S = (0, 60, 120, 240)
 
 
 def initialize(db):
@@ -70,6 +86,16 @@ def arrival(data):
 def too_old(data, now):
     since = arrival(data)
     return since is None or now - since >= MAX_AGE_S
+
+
+def readmissions(data):
+    """Re-admissions this input already had. A row written before ORK-770
+    records no count and had at most one."""
+    record = data.get("readmitted")
+    if not record:
+        return 0
+    attempt = record.get("attempt") if isinstance(record, dict) else None
+    return attempt if type(attempt) is int and attempt > 0 else 1
 
 
 def log(worker, event, data, alert=False, **fields):
@@ -98,9 +124,13 @@ def readmit(worker, data, trigger, reason, request_key=None, operator=None):
                 "window_id": (window.get("status") or {}).get("window_id") or window.get("window_id"),
                 "runs": list(data.get("matched_runs") or []),
                 "phase": data.get("phase")}
-    record = {"at": time.time(), "trigger": trigger, "reason": reason, "previous": previous}
+    attempt = readmissions(data) + 1
+    record = {"at": time.time(), "trigger": trigger, "reason": reason, "previous": previous, "attempt": attempt}
     if request_key:
         record.update(request_key=request_key, operator=operator)
+    if data.get("readmitted"):
+        # Every retired attempt stays on record, oldest first.
+        data.setdefault("readmissions", []).append(data["readmitted"])
     if data.get("continued"):
         record["continued"] = data.pop("continued")
     data.pop("continuation_guard", None)
@@ -110,7 +140,7 @@ def readmit(worker, data, trigger, reason, request_key=None, operator=None):
     if "arrived_at" not in data and arrival(data) is not None:
         data["arrived_at"] = arrival(data)
     for key in RESET_KEYS + ("deep_missing_since", "unstarted_since", "terminal_since", "retry_wait_since", "ended_seen_at", "closed",
-                "journal_behind_logged"):
+                "journal_behind_logged", "retry_due_at"):
         data.pop(key, None)
     for key in ("message", "window", "fast", "deep"):
         data["keys"][key] = str(uuid.uuid4())
@@ -121,11 +151,11 @@ def readmit(worker, data, trigger, reason, request_key=None, operator=None):
         # The previous attempt's Fast follow-up is over; its exports stay.
         db.execute("UPDATE fast_watch SET closed=1 WHERE input_id=? AND closed=0", (data["remote_id"],))
     log(worker, "input_readmitted", data, trigger=trigger, reason=reason,
-        previous_message=previous["message_id"] or "none")
+        previous_message=previous["message_id"] or "none", attempt=attempt)
 
 
 def recover(worker, data, reason, started=False):
-    """The input's attempt ended for good. Retry it once, or close it.
+    """The input's attempt ended for good. Retry it (with backoff), or close it.
 
     `started`: a Deep run of this input exists or may have acted. Returns True
     when handled (retried, briefly waiting, or settled); raises the worker's
@@ -149,8 +179,26 @@ def recover(worker, data, reason, started=False):
         raise Refused(reason)
     if timer:
         raise Refused(reason)  # Core retries timer occurrences itself.
-    if data.get("readmitted") or data.get("continued") or blocking_export(worker.ledger, data):
+    if data.get("continued") or blocking_export(worker.ledger, data):
         raise Refused(reason)
+    done = readmissions(data)
+    if done >= len(RETRY_BACKOFF_S):
+        if reason == "window_setup_failed":
+            # No run of any attempt ever existed: say so plainly, once.
+            data["setup_retries_exhausted"] = {"attempts": done + 1,
+                                               "minutes": max(1, int((now - (arrival(data) or now)) // 60))}
+        raise Refused(reason)
+    if done:
+        # Back off before the next attempt. Only cheap checks run meanwhile;
+        # every proof below is taken again once the wait is over.
+        due = data.get("retry_due_at")
+        if not isinstance(due, (int, float)):
+            data["retry_due_at"] = due = now + RETRY_BACKOFF_S[done]
+            worker.ledger.save(data)
+            log(worker, "input_retry_scheduled", data, reason=reason, attempt=done + 1,
+                wait_s=RETRY_BACKOFF_S[done])
+        if now < due:
+            return True
     caught = journal_caught_up(worker, data)
     if caught == "unreadable":
         # Core's head is ahead but its stream shows nothing more: no catch-up
