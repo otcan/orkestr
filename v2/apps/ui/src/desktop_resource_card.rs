@@ -14,7 +14,11 @@ pub fn DesktopResourceCard(
     #[props(default = true)] visible: bool,
 ) -> Element {
     let owner = session_scope.read().generation();
-    let initial = if bindings.len() == 1 { bindings[0].conversation_id.to_string() } else { String::new() };
+    let initial = if bindings.len() == 1 {
+        bindings[0].conversation_id.to_string()
+    } else {
+        String::new()
+    };
     let mut selected = use_signal(|| initial);
     let availability = Availability::from_lease(&desk.lease_state);
     let mut token = use_signal(|| None::<String>);

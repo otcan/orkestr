@@ -44,7 +44,10 @@ mod tests {
     use super::*;
     #[test]
     fn only_explicit_unreserved_means_available() {
-        assert_eq!(Availability::from_lease("unreserved"), Availability::Available);
+        assert_eq!(
+            Availability::from_lease("unreserved"),
+            Availability::Available
+        );
         for state in ["unknown", "running", "ready", "", "future-state"] {
             assert_eq!(Availability::from_lease(state), Availability::Unknown);
         }
@@ -56,6 +59,8 @@ mod tests {
     #[test]
     fn unknown_reservations_have_explicit_check_action() {
         assert_eq!(Availability::Unknown.reserve_label(), "Check & reserve");
-        assert!(Availability::Unknown.explanation().contains("does not mean the desk is free"));
+        assert!(Availability::Unknown
+            .explanation()
+            .contains("does not mean the desk is free"));
     }
 }

@@ -47,8 +47,24 @@ pub fn VirtualDesks(
     });
     let inventory = list();
     let desks = inventory.as_ref().map(|v| v.resources.len()).unwrap_or(0);
-    let available = inventory.as_ref().map(|v| v.resources.iter().filter(|d| Availability::from_lease(&d.lease_state) == Availability::Available).count()).unwrap_or(0);
-    let reserved = inventory.as_ref().map(|v| v.resources.iter().filter(|d| Availability::from_lease(&d.lease_state) == Availability::Reserved).count()).unwrap_or(0);
+    let available = inventory
+        .as_ref()
+        .map(|v| {
+            v.resources
+                .iter()
+                .filter(|d| Availability::from_lease(&d.lease_state) == Availability::Available)
+                .count()
+        })
+        .unwrap_or(0);
+    let reserved = inventory
+        .as_ref()
+        .map(|v| {
+            v.resources
+                .iter()
+                .filter(|d| Availability::from_lease(&d.lease_state) == Availability::Reserved)
+                .count()
+        })
+        .unwrap_or(0);
     let unchecked = desks - available - reserved;
     rsx! {
         section { class: "settings-section", "aria-label": "Virtual desks",
