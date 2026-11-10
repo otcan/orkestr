@@ -186,6 +186,7 @@ async fn a_request_without_a_session_is_refused_and_the_history_needs_one_too() 
             text: None,
             source: MessageRevisionSource::Web,
             expected_revision: None,
+            part: false,
         })),
     )
     .await
