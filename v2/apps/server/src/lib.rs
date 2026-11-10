@@ -279,7 +279,9 @@ impl AppState {
         mut self,
         path: &std::path::Path,
     ) -> Result<Self, &'static str> {
-        self.provider_quota = Some(Arc::new(provider_quota_http::Source::load(path)?));
+        let source = Arc::new(provider_quota_http::Source::load(path)?);
+        source.prewarm();
+        self.provider_quota = Some(source);
         Ok(self)
     }
     /// Trusted startup only: the private V1 desktop broker client configuration.

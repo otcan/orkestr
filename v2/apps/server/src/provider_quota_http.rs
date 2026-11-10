@@ -10,6 +10,9 @@ use orkestr_v2_contracts::OwnerId;
 use serde::{Deserialize, Serialize};
 use std::{os::unix::fs::MetadataExt, path::Path};
 
+#[path = "provider_quota_cache.rs"]
+mod cache;
+
 pub const CONFIG_ENV: &str = "ORKESTR_V2_PROVIDER_QUOTA_CONFIG";
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -23,6 +26,7 @@ pub(crate) struct Source {
     broker: Broker,
     owner: OwnerId,
     legacy_owner: String,
+    cache: cache::Cache,
 }
 impl Source {
     pub fn load(path: &Path) -> Result<Self, &'static str> {
@@ -51,6 +55,7 @@ impl Source {
             broker: Broker::new(&cfg.v1_url, cfg.bearer_token)?,
             owner: cfg.owner_id,
             legacy_owner: cfg.legacy_owner_id,
+            cache: cache::Cache::default(),
         })
     }
 }
@@ -98,12 +103,12 @@ impl Provider {
             })
     }
 }
-#[derive(Default, Deserialize, Serialize)]
+#[derive(Clone, Default, Deserialize, Serialize)]
 struct Quotas {
     codex: Provider,
     claude: Provider,
 }
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Snapshot {
     quota: Quotas,
@@ -142,22 +147,8 @@ pub(crate) async fn read(
         .as_ref()
         .filter(|s| s.owner == owner)
         .ok_or_else(unavailable)?;
-    let (status, value) = source
-        .broker
-        .read(
-            &format!("/api/quota/providers?ownerUserId={}", source.legacy_owner),
-            16384,
-        )
-        .await
-        .map_err(|_| unavailable())?;
-    if status != 200 {
-        return Err(unavailable());
-    }
-    let snapshot: Snapshot = serde_json::from_value(value).map_err(|_| unavailable())?;
-    if !snapshot.valid() {
-        return Err(unavailable());
-    }
-    // Revalidate after the bounded remote read, including session revocation.
+    let snapshot = source.snapshot().await.map_err(|_| unavailable())?;
+    // Revalidate after any wait, including session revocation on cache hits.
     if browser::owner(&state, &headers).await? != owner {
         return Err(crate::unauthorized());
     }
