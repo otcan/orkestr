@@ -273,4 +273,5 @@ pub mod upload_progress;
 
 pub mod deployment_times;
 pub mod desk_presentation;
+pub mod message_file_refs;
 pub mod oversized_message;

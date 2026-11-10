@@ -34,6 +34,7 @@ async function fixture(size=UPLOAD_CHUNK_BYTES+7){
     if(options.method==='POST'&&part==='attachment'){
       assert.equal(status.complete,true);return reply({manifest_id:status.file.upload_id,attachments:[{attachment_id:status.file.upload_id,filename:status.file.filename,media_type:status.file.media_type,byte_length:status.file.plaintext_size}],note:'Verified local provider file'});
     }
+    if(options.method==='GET'&&part===id)return reply(status);
     const index=Number(part);
     if(options.method==='PUT'){
       maxBody=Math.max(maxBody,options.body.length);assert.ok(options.body.length<=UPLOAD_CIPHER_MAX);assert.equal(options.headers['Content-Type'],'application/octet-stream');
@@ -106,4 +107,22 @@ test('progress counts only acknowledged chunks despite lost replies and stays bo
   assert.ok(phases.includes('encrypting'));assert.ok(phases.includes('uploading'));assert.equal(phases.at(-1),'finalizing');
   const resumed=[];await f.client.upload(f.file,id,{phase:p=>resumed.push(p)});
   assert.ok(resumed.includes('checking'));assert.equal(resumed.includes('encrypting'),false);
+});
+
+
+test('status discovery is scoped and validates authenticated metadata',async()=>{
+  const f=await fixture(3);await f.client.upload(f.file,id);
+  assert.deepEqual(await f.client.status(id),f.status);
+  f.status.conversation_id=owner;
+  await assert.rejects(f.client.status(id),/identity mismatch/);
+});
+test('abort during the final sink write never commits the destination',async()=>{
+  const f=await fixture(3),status=await f.client.upload(f.file,id),controller=new AbortController();
+  let closed=false,aborted=false;
+  await assert.rejects(f.client.download(status,{async write(){controller.abort();},async close(){closed=true;},async abort(){aborted=true;}},{signal:controller.signal}),{name:'AbortError'});
+  assert.equal(closed,false);assert.equal(aborted,true);
+});
+test('read-only client rejects mutation before network access',async()=>{
+  const client=encryptedUploadClient({conversation,readOnly:true,subtle,fetcher(){assert.fail('Mutation reached network');}});
+  await assert.rejects(client.upload({name:'x',type:'text/plain',size:1},id),/Read-only/);
 });

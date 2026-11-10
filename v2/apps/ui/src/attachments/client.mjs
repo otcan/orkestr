@@ -12,9 +12,9 @@ export const ATTACHMENT_RECEIPT_JSON_LIMIT = ATTACHMENT_MANIFEST_JSON_LIMIT + 12
 // Sealed objects (application/age) are opened by `open(ciphertext)`, which
 // returns the decoded V1 payload {filename,mimetype,bytes}; the bytes are then
 // verified against the manifest like a plaintext download.
-export function createAttachmentClient({owner,conversation,csrf,current,fetcher=fetch,random=()=>crypto.randomUUID(),hash=bytes=>crypto.subtle.digest('SHA-256',bytes),open=async()=>{throw new Error('File decryption unavailable');}}) {
+export function createAttachmentClient({owner,conversation,csrf,current,readOnly=false,fetcher=fetch,random=()=>crypto.randomUUID(),hash=bytes=>crypto.subtle.digest('SHA-256',bytes),open=async()=>{throw new Error('File decryption unavailable');}}) {
  const uuid=/^(?!00000000-0000-0000-0000-000000000000$)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
- if((owner!=null&&!uuid.test(owner))||!uuid.test(conversation)||!csrf)throw new Error('File session unavailable');
+ if((owner!=null&&!uuid.test(owner))||!uuid.test(conversation)||(!csrf&&!readOnly))throw new Error('File session unavailable');
  const canonical=value=>JSON.stringify(value,(_,v)=>v&&typeof v==='object'&&!Array.isArray(v)?Object.fromEntries(Object.entries(v).sort(([a],[b])=>a.localeCompare(b))):v);
  const root=`/api/v2/conversations/${conversation}`;
  let closed=false,revision=0,pending=null;const active=new Set();
@@ -22,7 +22,7 @@ export function createAttachmentClient({owner,conversation,csrf,current,fetcher=
  const scope=m=>({owner_id:owner,conversation_id:conversation,manifest_id:m.manifest_id});
  const identifier=id=>{if(!uuid.test(id))throw new Error('Invalid file reference');return id;};
  async function request(path,{method='GET',body,raw=false,limit=ATTACHMENT_RECEIPT_JSON_LIMIT}={}){
-  check();const controller=new AbortController();active.add(controller);const timer=setTimeout(()=>controller.abort(),30000);
+  check();if(readOnly&&method!=='GET')throw new Error('Read-only attachment client');const controller=new AbortController();active.add(controller);const timer=setTimeout(()=>controller.abort(),30000);
   try{
    const encoded=body===undefined?undefined:JSON.stringify(body);
    if(encoded!==undefined&&new TextEncoder().encode(encoded).length>68*1024*1024)throw new Error('File copy exceeds transfer limit');
