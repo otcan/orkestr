@@ -4,6 +4,7 @@ All IDs, texts and peers are synthetic; nothing here reaches a provider or
 WhatsApp.
 """
 import contextlib
+import copy
 import io
 import json
 from pathlib import Path
@@ -514,6 +515,60 @@ class TransientSetupRetryTests(Base):
         self.assertIn("attempt=2", log)
         self.assertAlmostEqual(data["retry_due_at"] - time.time(), recovery.RETRY_BACKOFF_S[1], delta=5)
         self.assertEqual(self.retires(), [])
+
+
+class DistinctMessagesPeer(NoRunPeer):
+    """Core gives each admission its own message, and links re-admissions."""
+
+    def __init__(self, features=("message_retries_v1",)):
+        super().__init__()
+        self.features = list(features)
+        self.admitted = 0
+
+    def request(self, method, route, body=None, allowed=(200,)):
+        if method == "POST" and route == "/messages":
+            self.mutations.append((route, copy.deepcopy(body)))
+            self.admitted += 1
+            return 202, dict(status="accepted", message_id="message-%d" % self.admitted,
+                             event_id="event-%d" % self.admitted, sequence=1)
+        return super().request(method, route, body=body, allowed=allowed)
+
+
+class RetryLinkTests(Base):
+    """ORK-780: every re-admission names the attempt Core retired for it, so
+    the web chat shows the input once."""
+    peer_class = DistinctMessagesPeer
+    strand = TransientSetupRetryTests.strand
+    fail_attempt = TransientSetupRetryTests.fail_attempt
+
+    def setUp(self):
+        super().setUp()
+        self.peer.retire_state = "retired"
+
+    def admissions(self):
+        return [body for route, body in self.peer.mutations if route == "/messages"]
+
+    def test_each_readmission_names_the_attempt_it_retired(self):
+        for _ in range(3):
+            self.fail_attempt()
+        self.passes(1)  # The fourth attempt is admitted.
+        bodies = self.admissions()
+        self.assertEqual(len(bodies), 4)
+        self.assertNotIn("retry_of", bodies[0], "the first attempt replaces nothing")
+        self.assertEqual([b["retry_of"] for b in bodies[1:]], ["message-1", "message-2", "message-3"])
+        self.assertEqual(self.retires(), ["/inputs/message-%d/retire" % n for n in (1, 2, 3)])
+        order = [r if r == "/messages" else "retire" for r, _ in self.peer.mutations
+                 if r == "/messages" or r.endswith("/retire")]
+        self.assertEqual(order, ["/messages", "retire"] * 3 + ["/messages"],
+                         "each attempt is retired before the one that names it")
+
+    def test_a_server_without_the_link_gets_the_old_request(self):
+        self.peer.features = []  # Its body refuses unknown fields.
+        self.fail_attempt()
+        self.passes(1)
+        bodies = self.admissions()
+        self.assertEqual(len(bodies), 2)
+        self.assertNotIn("retry_of", bodies[1])
 
 
 class FastOnlyPeer(QueuePeer):

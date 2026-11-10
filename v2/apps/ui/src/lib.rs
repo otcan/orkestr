@@ -121,11 +121,23 @@ impl Projection {
             .iter()
             .filter_map(|message| message.revisions.as_ref()?.notice_for.clone())
             .collect();
+        // A re-admitted input names the earlier attempt it replaces (ORK-780):
+        // the chat keeps one message for it, even when the earlier attempt is
+        // already shown or arrives in this same page.
+        let replaced: Vec<_> = page
+            .messages
+            .iter()
+            .filter_map(|message| message.retry_of.clone())
+            .collect();
         for message in page.messages {
             self.messages.insert(message.sequence, message);
             while self.messages.len() > WINDOW {
                 self.messages.pop_first();
             }
+        }
+        if !replaced.is_empty() {
+            self.messages
+                .retain(|_, message| !replaced.contains(&message.message_id));
         }
         // A catch-up page holds only new rows. An edit or removal of an older
         // message arrives as a notice row, so it updates the row it names here.

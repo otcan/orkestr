@@ -13,6 +13,7 @@ fn canonical_byte_count_matches_ascii_escaping_for_unicode_and_controls() {
             reply_to: None,
             origin: None,
             revisions: None,
+            retry_of: None,
         }],
         last_sequence: 1,
         next_cursor: None,
