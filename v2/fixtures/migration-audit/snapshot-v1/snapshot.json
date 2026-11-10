@@ -1,0 +1,277 @@
+{
+  "version": 1,
+  "source_instance": "fixture-instance",
+  "snapshot_id": "fixture-snapshot",
+  "source_version": "fixture-source-v1",
+  "schema_versions": {
+    "fixture": "1"
+  },
+  "origin": "legacy",
+  "consistency": {
+    "method": "synthetic",
+    "watermark": "fixture-watermark",
+    "segments": {
+      "registry": "fixture-watermark",
+      "history": "fixture-watermark",
+      "jobs": "fixture-watermark",
+      "resources": "fixture-watermark"
+    },
+    "export_receipt": "fixture-only-not-a-live-export"
+  },
+  "records": [
+    {
+      "kind": "project",
+      "key": [
+        "fixture-project"
+      ],
+      "owner": "fixture-owner",
+      "scope": "fixture-project",
+      "source_state": null,
+      "references": [],
+      "payload": {}
+    },
+    {
+      "kind": "thread",
+      "key": [
+        "fixture-root"
+      ],
+      "owner": "fixture-owner",
+      "scope": "fixture-project",
+      "source_state": null,
+      "references": [],
+      "payload": {}
+    },
+    {
+      "kind": "thread",
+      "key": [
+        "fixture-worker"
+      ],
+      "owner": "fixture-owner",
+      "scope": "fixture-project",
+      "source_state": null,
+      "references": [
+        {
+          "relation": "parent",
+          "kind": "thread",
+          "key": [
+            "fixture-root"
+          ]
+        }
+      ],
+      "payload": {}
+    },
+    {
+      "kind": "message",
+      "key": [
+        "fixture-root",
+        "fixture-message-1"
+      ],
+      "owner": "fixture-owner",
+      "scope": "fixture-project",
+      "source_state": null,
+      "references": [],
+      "payload": {
+        "position": 1,
+        "cursor": 7,
+        "text": "Synthetic request"
+      }
+    },
+    {
+      "kind": "message",
+      "key": [
+        "fixture-root",
+        "fixture-message-2"
+      ],
+      "owner": "fixture-owner",
+      "scope": "fixture-project",
+      "source_state": null,
+      "references": [
+        {
+          "relation": "parent",
+          "kind": "message",
+          "key": [
+            "fixture-root",
+            "fixture-message-1"
+          ]
+        }
+      ],
+      "payload": {
+        "position": 2,
+        "cursor": 11,
+        "text": "Synthetic reply"
+      }
+    },
+    {
+      "kind": "task",
+      "key": [
+        "fixture-task"
+      ],
+      "owner": "fixture-owner",
+      "scope": "fixture-project",
+      "source_state": "needs_approval",
+      "references": [
+        {
+          "relation": "thread",
+          "kind": "thread",
+          "key": [
+            "fixture-worker"
+          ]
+        }
+      ],
+      "payload": {}
+    },
+    {
+      "kind": "run",
+      "key": [
+        "fixture-run"
+      ],
+      "owner": "fixture-owner",
+      "scope": "fixture-project",
+      "source_state": "awaiting_approval",
+      "references": [],
+      "payload": {}
+    },
+    {
+      "kind": "result",
+      "key": [
+        "fixture-result"
+      ],
+      "owner": "fixture-owner",
+      "scope": "fixture-project",
+      "source_state": null,
+      "references": [
+        {
+          "relation": "run",
+          "kind": "run",
+          "key": [
+            "fixture-run"
+          ]
+        }
+      ],
+      "payload": {}
+    },
+    {
+      "kind": "resource",
+      "key": [
+        "fixture-type",
+        "fixture-resource"
+      ],
+      "owner": "fixture-owner",
+      "scope": "fixture-project",
+      "source_state": null,
+      "references": [],
+      "payload": {}
+    },
+    {
+      "kind": "artifact",
+      "key": [
+        "fixture-artifact"
+      ],
+      "owner": "fixture-owner",
+      "scope": "fixture-project",
+      "source_state": null,
+      "references": [],
+      "payload": {
+        "path": "artifacts/example.txt"
+      }
+    },
+    {
+      "kind": "timer",
+      "key": [
+        "fixture-timer"
+      ],
+      "owner": "fixture-owner",
+      "scope": "fixture-project",
+      "source_state": "enabled",
+      "references": [],
+      "payload": {}
+    },
+    {
+      "kind": "route",
+      "key": [
+        "fixture-route"
+      ],
+      "owner": "fixture-owner",
+      "scope": "fixture-project",
+      "source_state": "active",
+      "references": [],
+      "payload": {}
+    },
+    {
+      "kind": "approval",
+      "key": [
+        "fixture-approval"
+      ],
+      "owner": "fixture-owner",
+      "scope": "fixture-project",
+      "source_state": "approved",
+      "references": [],
+      "payload": {}
+    },
+    {
+      "kind": "effect",
+      "key": [
+        "fixture-effect"
+      ],
+      "owner": "fixture-owner",
+      "scope": "fixture-project",
+      "source_state": "unknown",
+      "references": [
+        {
+          "relation": "run",
+          "kind": "run",
+          "key": [
+            "fixture-run"
+          ]
+        }
+      ],
+      "payload": {}
+    },
+    {
+      "kind": "automation",
+      "key": [
+        "fixture-automation"
+      ],
+      "owner": "fixture-owner",
+      "scope": "fixture-project",
+      "source_state": "enabled",
+      "references": [],
+      "payload": {}
+    },
+    {
+      "kind": "job",
+      "key": [
+        "fixture-job"
+      ],
+      "owner": "fixture-owner",
+      "scope": "fixture-project",
+      "source_state": "registered",
+      "references": [],
+      "payload": {}
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "artifacts/example.txt",
+      "bytes": 20,
+      "sha256": "70dd3fa4834a24f765733ac5357a367af35126a7831dce3fe5c3b5508164ae84"
+    }
+  ],
+  "counts": {
+    "project": 1,
+    "thread": 2,
+    "message": 2,
+    "task": 1,
+    "run": 1,
+    "result": 1,
+    "resource": 1,
+    "artifact": 1,
+    "timer": 1,
+    "route": 1,
+    "approval": 1,
+    "effect": 1,
+    "automation": 1,
+    "job": 1
+  },
+  "digest": "f8482e38d740818237ed228c5cd1c933e32940f67c9770c020f27d914b861c42"
+}
