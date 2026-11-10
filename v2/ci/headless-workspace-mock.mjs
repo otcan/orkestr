@@ -55,7 +55,7 @@ export function createState() {
     // Chat settings, desktops and timers of conversation A.
     settings: { schema_version: 1, conversation_id: A, revision: 2, provider: 'codex', model: 'synthetic-model', reasoning_effort: 'medium',
       honor_no_reply: true, reply_prefix: 'synthetic:', reply_footer: null, provider_generation: 0, updated_at_ms: 1 },
-    desktopActions: [], deskReserved: false, settingsPuts: [], bindingPuts: [], desktopBindings: {}, timerCalls: [], timerPause: null, chatTimerPause: null,
+    desktopActions: [], deskReserved: false, deskRuntime: { 'idle-desk': 'inactive', 'held-desk': 'active' }, deskOwnerActions: [], deskStopConflict: false, deskStartFailure: false, settingsPuts: [], bindingPuts: [], desktopBindings: {}, timerCalls: [], timerPause: null, chatTimerPause: null,
     // Linked V1 chat management (synthetic V1 state behind the server).
     v1Model: { model: 'synthetic-model', effort: 'low' }, v1Calls: [],
     v1Timers: [{ id: 'timer-1', label: 'Synthetic digest', cadence: 'daily', time: '08:00', every: null, timezone: 'Europe/Berlin',
@@ -240,9 +240,32 @@ async function api(state, req, res, url) {
     schema_version:1, observed_at_ms:Date.now(), resources:[
       {slug:'synthetic-desk',label:'Synthetic desk',state:'running',lease_state:state.deskReserved?'reserved':'unreserved',holder:state.deskReserved?'Assistant':null,expires_at:null},
       {slug:'research-desk',label:'Research desk',state:'stopped',lease_state:'unknown',holder:null,expires_at:null},
-      {slug:'unbound-desk',label:'Unbound desk',state:'unknown',lease_state:'unknown',holder:null,expires_at:null}],
+      {slug:'unbound-desk',label:'Unbound desk',state:'unknown',lease_state:'unknown',holder:null,expires_at:null},
+      {slug:'idle-desk',label:'Idle desk',state:state.deskRuntime['idle-desk'],lease_state:'unreserved',holder:null,expires_at:null},
+      {slug:'held-desk',label:'Held desk',state:state.deskRuntime['held-desk'],lease_state:'reserved',holder:'Worker chat',expires_at:'2026-01-01T02:00:00Z'}],
     bindings:[{conversation_id:A,name:'Assistant',desktop_slugs:['synthetic-desk']},{conversation_id:B,name:'Research notes',desktop_slugs:['research-desk']}],
   });
+  const ownerDesk = /^\/api\/v2\/desktops\/([a-z0-9_-]+)\/(start|stop|link)$/.exec(path);
+  if (ownerDesk && req.method === 'POST') {
+    if (req.headers['x-orkestr-csrf'] !== 'synthetic-csrf') return json(res, 403, { code: 'csrf', message: 'CSRF required' });
+    const [, slug, action] = ownerDesk;
+    state.deskOwnerActions.push({ action, slug, ...JSON.parse(await body(req)) });
+    if (action === 'link') return json(res, 200, { url: `https://desktop.example.test/desktop-share/${slug}?key=fixture`, challenge_required: true, expires_at: '2026-01-01T01:00:00Z' });
+    if (action === 'stop') {
+      if (state.deskStopConflict) {
+        state.deskStopConflict = false;
+        return json(res, 409, { code: 'desktop_reservation_changed', message: "This desk's reservation changed since the list was loaded; review it and confirm again" });
+      }
+      state.deskRuntime[slug] = 'inactive';
+      return json(res, 200, { stopped: true, state: 'inactive', reservation_after_verified: true, interrupted_holder: null });
+    }
+    if (state.deskStartFailure) {
+      state.deskStartFailure = false;
+      return json(res, 503, { code: 'desktop_action_unknown', message: 'The outcome is unknown; refresh before taking another action' });
+    }
+    state.deskRuntime[slug] = 'active';
+    return json(res, 200, { started: true, state: 'active' });
+  }
   if (path === '/api/v2/browser/session' && req.method === 'GET') return json(res, 200, { csrf_token: 'synthetic-csrf', global_conversation_id: A });
   if (path === '/api/v2/beta') {
     const id = q.get('conversation_id') ?? A;

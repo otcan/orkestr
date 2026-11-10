@@ -4,13 +4,14 @@ use orkestr_v2_ui::{desk_presentation::Availability, session_scope::SessionScope
 use serde_json::{json, Value};
 
 #[component]
-pub fn DesktopResourceCard(
+pub fn DesktopResourceRow(
     desk: DesktopResource,
     bindings: Vec<DesktopResourceBinding>,
     csrf: String,
     session_scope: Signal<SessionScope>,
     onexpired: EventHandler<()>,
     onchanged: EventHandler<()>,
+    observed_at_ms: i64,
     #[props(default = true)] visible: bool,
 ) -> Element {
     let owner = session_scope.read().generation();
@@ -28,21 +29,29 @@ pub fn DesktopResourceCard(
     let mut link_generation = use_signal(|| 0_u64);
     let mut status = use_signal(String::new);
     rsx! {
-        article { class: "desk-card", hidden: !visible, "aria-label": "Desk {desk.slug}",
-            h4 { "{desk.label}" }
-            p { class: "desk-id", "{desk.slug}" }
+        li { class: "desk-row", hidden: !visible, "aria-label": "Desk {desk.slug}",
+            div { class: "desk-name",
+                h4 { "{desk.label}" }
+                p { class: "desk-id", "{desk.slug}" }
+            }
             div { class: "desk-statuses",
-                span { "{availability.label()}" }
+                span { "data-availability": availability.token(), "{availability.label()}" }
                 span { "Runtime: {desk.state}" }
             }
-            p { class: "field-help", "{availability.explanation()}" }
-            dl {
-                if let Some(holder) = &desk.holder { dt { "Reserved by" } dd { "{holder}" } }
-                if let Some(expiry) = &desk.expires_at { dt { "Reservation expires" } dd { "{expiry}" } }
+            crate::desk_owner_actions::DeskOwnerActions { desk: desk.clone(), csrf: csrf.clone(), session_scope, onexpired, onchanged, observed_at_ms }
+            div { class: "desk-details",
+            if availability != Availability::Available { p { class: "field-help", "{availability.explanation()}" } }
+            if desk.holder.is_some() || desk.expires_at.is_some() {
+                dl {
+                    if let Some(holder) = &desk.holder { dt { "Reserved by" } dd { "{holder}" } }
+                    if let Some(expiry) = &desk.expires_at { dt { "Reservation expires" } dd { "{expiry}" } }
+                }
             }
             if bindings.is_empty() {
-                p { class: "field-help", "Connect this desk to a chat in that chat’s Settings to reserve or manage it." }
+                p { class: "field-help", "Not connected to a chat. Connect it in that chat’s Settings to reserve it." }
             } else {
+                details { class: "desk-chat", open: token().is_some(),
+                summary { "Reserve from a chat" }
                 label { "Use with chat"
                     select { value: "{selected}", disabled: busy() || token().is_some() || uncertain(), onchange: move |e| {selected.set(e.value());confirm.set(false);},
                         option { value: "", "Choose a chat…" }
@@ -115,9 +124,11 @@ pub fn DesktopResourceCard(
                     }
                 }
                 }
+                }
             }
             if !status().is_empty() {p {role:"status","{status}"}}
             if uncertain() {p {class:"field-help","The action’s outcome needs checking. Automatic retries are disabled; refresh the inventory and inspect the reservation before continuing."}}
+            }
         }
     }
 }

@@ -1,18 +1,35 @@
-/* Inventory separates viewing access, reservation and runtime health. */
-.desk-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,22rem),1fr)); gap:1rem; margin-top:1rem; }
-.desk-card { min-width:0; border:1px solid var(--border); border-radius:.8rem; padding:1rem; background:var(--surface); }
-.desk-card h4 { margin:0; font-size:1.05rem; }
-.desk-card .desk-id { margin:.25rem 0 .75rem; color:var(--muted); font-size:.78rem; overflow-wrap:anywhere; }
-.desk-statuses { display:flex; flex-wrap:wrap; gap:.5rem; margin:.5rem 0; }
-.desk-statuses span { border:1px solid var(--border); border-radius:1rem; padding:.2rem .6rem; font-size:.8rem; }
-.desk-card dl { display:grid; grid-template-columns:auto minmax(0,1fr); gap:.25rem .75rem; font-size:.85rem; }
-.desk-card dt { color:var(--muted); } .desk-card dd { margin:0; overflow-wrap:anywhere; }
-.desk-card label { display:grid; gap:.3rem; margin:.75rem 0; }
-.desk-card select { width:100%; min-width:0; }
-.desk-actions { display:flex; flex-wrap:wrap; gap:.5rem; margin:.75rem 0; }
-.desk-viewing { list-style:none; padding:0; margin:.75rem 0; }
+/* One row per desk. Reservation, runtime and actions stay visually separate. */
+.desk-list { list-style:none; margin:1rem 0 0; padding:0; border:1px solid var(--border); border-radius:.8rem; background:var(--surface); }
+.desk-row { display:grid; grid-template-columns:minmax(0,1.3fr) minmax(0,1.3fr) minmax(max-content,auto); gap:.4rem 1rem; align-items:center; padding:.75rem 1rem; }
+.desk-row[hidden] { display:none; }
+.desk-row + .desk-row { border-top:1px solid var(--border); }
+.desk-name { min-width:0; }
+.desk-name h4 { margin:0; font-size:1rem; overflow-wrap:anywhere; }
+.desk-id { margin:.1rem 0 0; color:var(--muted); font-size:.78rem; overflow-wrap:anywhere; }
+.desk-statuses { display:flex; flex-wrap:wrap; gap:.35rem; min-width:0; }
+.desk-statuses span { border:1px solid var(--border); border-radius:1rem; padding:.15rem .55rem; font-size:.78rem; }
+.desk-statuses [data-availability="available"] { border-color:var(--success,#26946d); color:var(--success,#26946d); }
+.desk-statuses [data-availability="reserved"] { border-color:var(--warning,#b58a35); color:var(--warning,#b58a35); }
+.desk-statuses [data-availability="needs-check"], .desk-statuses [data-availability="unknown"] { border-style:dashed; border-color:var(--border-strong); color:var(--muted); }
+.desk-owner-buttons { display:flex; flex-wrap:wrap; justify-content:flex-end; gap:.4rem; }
+.desk-owner-result, .desk-details { grid-column:1 / -1; min-width:0; }
+.desk-owner-result p, .desk-details p { margin:.25rem 0; }
+.desk-confirm { border:1px solid var(--danger-border); background:var(--danger-soft); color:var(--danger-text); border-radius:.6rem; padding:.6rem .75rem; }
+.desk-confirm-actions { display:flex; flex-wrap:wrap; gap:.4rem; margin-top:.5rem; }
+.desk-link a { overflow-wrap:anywhere; }
+.desk-details dl { display:grid; grid-template-columns:auto minmax(0,1fr); gap:.15rem .75rem; margin:.25rem 0; font-size:.85rem; }
+.desk-details dt { color:var(--muted); } .desk-details dd { margin:0; overflow-wrap:anywhere; }
+.desk-details label { display:grid; gap:.3rem; margin:.5rem 0; }
+.desk-details select { width:100%; min-width:0; }
+.desk-chat > summary { cursor:pointer; color:var(--muted); }
+.desk-actions { display:flex; flex-wrap:wrap; gap:.5rem; margin:.5rem 0; }
+.desk-viewing { list-style:none; padding:0; margin:.5rem 0; }
 .desk-viewing li { display:flex; flex-wrap:wrap; align-items:center; gap:.5rem; }
-.desk-advanced { margin-top:.75rem; border-top:1px solid var(--border); padding-top:.75rem; }
+.desk-advanced { margin-top:.5rem; border-top:1px solid var(--border); padding-top:.5rem; }
 .desk-advanced summary { cursor:pointer; color:var(--muted); }
 .desk-summary { display:flex; flex-wrap:wrap; gap:.4rem 1rem; padding:.5rem 0; }
-@media(max-width:600px) { .desk-actions button, .desk-viewing button, .desk-viewing a { flex:1 1 100%; text-align:center; } .desk-card { padding:.8rem; } }
+@media(max-width:700px) {
+  .desk-row { grid-template-columns:minmax(0,1fr); padding:.7rem .8rem; }
+  .desk-owner-buttons { justify-content:flex-start; }
+  .desk-owner-buttons button, .desk-confirm-actions button, .desk-actions button, .desk-viewing button, .desk-viewing a { flex:1 1 auto; text-align:center; }
+}
