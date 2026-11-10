@@ -189,17 +189,13 @@ async fn icon(
         .find(|t| t.id == thread)
         .cloned()
         .ok_or_else(not_found)?;
-    let list = state
+    // A page load asks for every icon at once: this check stays a keyed read
+    // rather than a full sidebar projection per icon.
+    let imported = state
         .store
-        .sidebar_conversations(&credential, &owner)
+        .v1_thread_linked(&credential, &owner, &record.id)
         .await
         .map_err(|_| unauthorized())?;
-    let imported = list.conversations.iter().any(|c| {
-        c.source_thread_id.as_deref() == Some(record.id.as_str())
-            || c.lineage
-                .as_ref()
-                .is_some_and(|l| l.source_thread_id == record.id)
-    });
     let listed = crate::sidebar_v1::listed(&threads, &|_| false)
         .iter()
         .any(|t| t.id == record.id);
@@ -299,6 +295,17 @@ mod tests {
             })
             .unwrap_or_default();
         (status, kind, raw[split + 4..].to_vec())
+    }
+
+    /// A sidebar page requests every icon at once; each must stay a keyed
+    /// lookup, never a full sidebar projection per icon.
+    #[test]
+    fn icon_access_does_not_project_the_whole_sidebar() {
+        let handler = include_str!("thread_icons.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap();
+        assert!(!handler.contains(concat!("sidebar_", "conversations(")));
     }
 
     #[tokio::test]
