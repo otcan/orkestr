@@ -1,9 +1,6 @@
 use dioxus::prelude::*;
 use orkestr_v2_ui::{
-    composer_attachments::Attached,
-    outbox::{Outbox, Target},
-    session_scope::SessionScope,
-    Draft,
+    composer_attachments::Attached, outbox::Outbox, session_scope::SessionScope, Draft,
 };
 use std::collections::BTreeMap;
 
@@ -23,6 +20,8 @@ pub fn Composer(
     let owner = session_scope.read().generation();
     let outbox = use_context::<Signal<Outbox>>();
     let status = use_signal(String::new);
+    let preparing = use_signal(|| false);
+    let send_csrf = csrf.clone();
     let attached = use_signal(Vec::<Attached>::new);
     let text = drafts
         .read()
@@ -37,16 +36,16 @@ pub fn Composer(
         form { class: "message-composer", onsubmit: move |event| {
             event.prevent_default();
             if !session_scope.read().is_current(owner) { return; }
-            crate::outbox_view::submit(Target::Native(id.clone()), drafts, attached, outbox, status);
+            crate::oversized_composer::submit(id.clone(), send_csrf.clone(), session_scope, preparing, drafts, attached, outbox, status);
         },
             label { r#for: "composer", "Message" }
-            textarea { id: "composer", rows: 3, value: "{text}", "aria-describedby": "composer-help",
+            textarea { id: "composer", disabled: preparing(), rows: 3, value: "{text}", "aria-describedby": "composer-help",
                 oninput: move |event| { if session_scope.read().is_current(owner) { drafts.write().entry(input_id.clone()).or_default().edit(event.value()); } }
             }
-            crate::composer_tools::AttachTools { target: crate::composer_tools::AttachTarget::Native(attach_id.clone()), csrf: csrf.clone(), attached, disabled: false }
+            crate::composer_tools::AttachTools { target: crate::composer_tools::AttachTarget::Native(attach_id.clone()), csrf: csrf.clone(), attached, disabled: preparing() }
             crate::composer_tools::EnterSend { id: "composer" }
             p { id: "composer-help", "Enter sends · Shift+Enter adds a new line. You can keep sending; each message shows its own state." }
-            button { r#type: "submit", "Send" }
+            button { r#type: "submit", disabled: preparing(), if preparing() { "Preparing attachment…" } else { "Send" } }
             if !status().is_empty() { p { class: "composer-notice", role: "status", "{status}" } }
         }
     }
