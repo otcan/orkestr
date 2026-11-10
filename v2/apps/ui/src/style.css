@@ -56,6 +56,8 @@ details[open] > summary { margin-bottom: .4rem; }
 .build-badge > button { cursor: pointer; padding: .3rem .4rem; border: 1px solid var(--border); border-radius: .4rem; background: transparent; color: inherit; font-size: inherit; }
 .build-badge > button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .build-badge-details { position: fixed; top: 3.6rem; left: 1rem; z-index: 100; width: min(30rem, calc(100vw - 2rem)); max-height: 75dvh; overflow: auto; padding: 1rem; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); overflow-wrap: anywhere; }
+/* Keep the toggle above its fixed panel: where the header wraps, the panel can cover it. */
+.build-badge > button { position: relative; z-index: 101; }
 .build-badge-details h2 { font-size: 1rem; }
 .build-badge-details p { margin: .5rem 0; }
 @media (max-width: 600px) { .build-badge-source { display: none; } }
@@ -462,7 +464,9 @@ li[data-replyable="true"]:hover .reply-action, li[data-replyable="true"]:focus-w
 .upload-progress-bytes { font-size:.75rem; color:var(--muted); font-variant-numeric:tabular-nums; }
 
 /* Release metadata belongs at the header's right edge, after resource summaries. */
-.app-heading > .build-badge { order: 3; margin-left: auto; }
+@media (min-width: 701px) {
+ .app-heading > .build-badge { order: 3; margin-left: auto; }
+}
 .deployment-times { display: block; white-space: pre-line; font-size: .62rem; line-height: 1.15; max-width: 15rem; }
 @media (max-width: 700px) {
  .app-heading > .build-badge { max-width: 9rem; }
