@@ -1,0 +1,55 @@
+//! Capability-scoped, bounded Linux child transport. This is not an OS sandbox.
+//! Runtime owns provider protocols and the private consumed-turn adapter.
+mod environment;
+mod framing;
+mod process;
+mod scope;
+mod sys;
+
+pub use environment::ChildDirectories;
+pub use framing::{Flush, Output, TransportBounds};
+pub use process::{Exit, OwnedChild, Signal};
+pub use scope::{Authority, DispatchFence, ExecutionScope, Executor, SubscriptionHandle};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Error {
+    InvalidScope,
+    WrongScope,
+    Revoked,
+    AuthorityProtocol,
+    Unsupported,
+    InvalidPath,
+    InvalidBounds,
+    InvalidFrame,
+    FrameTooLarge,
+    Backpressure,
+    Capacity,
+    PipeClosed,
+    TruncatedFrame,
+    Io,
+}
+
+/// Implement ONLY on Runtime's private non-Clone wrapper around Core's consumed
+/// provider dispatch. No production implementation/default is supplied here.
+/// Scope, native binding and text must come exclusively from that capability.
+#[allow(
+    dead_code,
+    reason = "Runtime consumed-capability adapter is registered separately"
+)]
+pub(crate) trait ConsumedTurn {
+    fn into_submission(self) -> (ExecutionScope, Vec<u8>);
+}
+
+/// The consumed capability is never returned, even if no bytes were written.
+/// Runtime must persist delivery-unknown/reconciliation; never auto-resubmit.
+#[derive(Debug)]
+#[allow(
+    dead_code,
+    reason = "Runtime consumed-capability adapter is registered separately"
+)]
+pub(crate) struct TurnFailure {
+    pub cause: Error,
+}
+
+#[cfg(test)]
+mod tests;

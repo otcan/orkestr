@@ -1,0 +1,7 @@
+{
+  "codex_executable": "/opt/example-provider/bin/codex",
+  "codex_home": "/srv/example-provider/canonical-account",
+  "workspace": "/srv/example-provider/workspace",
+  "home": "/srv/example-provider/disposable-home",
+  "temporary": "/srv/example-provider/tmp"
+}
