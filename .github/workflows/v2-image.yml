@@ -1,10 +1,10 @@
 name: V2 public-source Linux image
 on:
   pull_request:
-    branches: ['v2/**']
+    branches: [integration, 'v2/**']
     paths: ['v2/**', '.github/workflows/v2-image.yml']
   push:
-    branches: [v2/rust-rewrite, 'ci/image-cache/**']
+    branches: [integration, v2/rust-rewrite, 'ci/image-cache/**']
     paths: ['v2/**', '.github/workflows/v2-image.yml']
   workflow_dispatch:
 permissions:

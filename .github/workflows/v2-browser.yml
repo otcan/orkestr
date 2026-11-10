@@ -1,10 +1,10 @@
 name: V2 CI headless rendering
 on:
   push:
-    branches: ['v2/rust-rewrite']
+    branches: [integration, v2/rust-rewrite]
     paths: ['v2/**', '.github/workflows/v2-browser.yml', 'package-lock.json']
   pull_request:
-    branches: ['v2/**']
+    branches: [integration, 'v2/**']
     paths: ['v2/**', '.github/workflows/v2-browser.yml', 'package-lock.json']
   workflow_dispatch:
 
@@ -43,7 +43,7 @@ jobs:
         with:
           workspaces: v2 -> ../../v2-target
           cache-directories: ${{ runner.temp }}/bindgen
-          save-if: ${{ github.ref == 'refs/heads/v2/rust-rewrite' }}
+          save-if: ${{ github.ref == 'refs/heads/integration' }}
       - name: Install wasm-bindgen CLI
         run: |
           if ! "$RUNNER_TEMP/bindgen/bin/wasm-bindgen" --version 2>/dev/null | grep -qx 'wasm-bindgen 0.2.129'; then

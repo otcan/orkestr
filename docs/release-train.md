@@ -6,6 +6,36 @@ across a parent thread and multiple worker branches.
 Use this runbook when the user says "release train", "prepare release", "cut a
 release", or "collect workers and release".
 
+## Branch flow
+
+Feature PRs target `integration`. The train freezes an exact integrated source
+commit and reuses its successful CI build and qualification evidence. It
+fast-forwards `prod` to that commit before the rollout, then fast-forwards
+`main` to the same commit only after production acceptance. `prod` identifies
+the selected candidate; `main` identifies the last accepted source.
+
+Production acceptance includes the restart watchdog being disarmed, the
+current Core process identity, adapter and public UI source agreement,
+consumer and binding checks, the chat receipt and released admission control.
+A failed or unverified rollout never promotes `main`. A GitHub failure after
+acceptance records a pending promotion without undoing healthy production;
+reconcile the remote refs and revalidate live acceptance before any retry.
+
+All updates use normal fast-forward pushes. Preserve both histories when
+bootstrapping V2 from the former `v2/rust-rewrite` branch into `integration`.
+Never force `main` onto a divergent V2 branch. Newer integration commits can
+arrive while a frozen candidate is deploying; they wait for the next train.
+Serialize trains. Stop if `prod` or `main` moves incompatibly.
+
+Before acceptance, rollback restores the previous runtime and leaves `main`
+unchanged. An emergency rollback after acceptance must be recorded separately;
+restore the fix through a new revert/recovery release rather than rewinding
+shared branch history. Avoid merging into `main` by hand.
+
+Build and test candidate changes on `integration`; moving the same commit to
+`prod` and `main` does not rebuild the image. Published version tags remain a
+separate, explicit release action. Branch names do not themselves deploy.
+
 ## Ownership
 
 - Worker threads may commit and push their own worker branches.
@@ -39,7 +69,7 @@ release", or "collect workers and release".
 
 Before changing branches, identify:
 
-- Target branch: usually `main`.
+- Integration target: `integration`; candidate pointer: `prod`; accepted source: `main`.
 - Parent feature branch: the root branch for this release train.
 - Worker branches: branches belonging to the same Orkestr parent thread.
 - Release kind: untagged main release, prerelease tag, patch tag, minor tag, or
