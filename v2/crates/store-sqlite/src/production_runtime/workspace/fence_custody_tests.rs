@@ -5,6 +5,8 @@ mod cross_pool;
 mod execution_handoff;
 #[path = "fence_custody_tests/mutable_workspace.rs"]
 mod mutable_workspace;
+#[path = "fence_custody_tests/setup_attestation.rs"]
+mod setup_attestation;
 #[path = "fence_custody_tests/terminal_history.rs"]
 mod terminal_history;
 use super::*;

@@ -190,6 +190,8 @@ async fn attachment_checks_consumed_durable_parent_even_with_identical_ready_bin
                     parent.run.run_id.clone()
                 }),
                 resume: None,
+                #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+                setup_workspace: Default::default(),
             },
             ready,
         };

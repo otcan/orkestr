@@ -336,5 +336,6 @@ mod claude_identity_tests;
 mod steering;
 pub use steering::*;
 
+mod fence_reason;
 mod metadata_diagnostics;
 pub use metadata_diagnostics::MetadataFenceDiagnostics;

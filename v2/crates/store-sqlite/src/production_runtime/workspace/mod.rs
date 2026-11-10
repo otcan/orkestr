@@ -19,6 +19,7 @@ mod restart;
 #[cfg(test)]
 mod tests;
 mod validation;
+pub(crate) use preflight::SetupAttestation;
 pub(crate) use preflight::WorkspaceCheck;
 pub use preflight::WorkspacePreflight;
 
