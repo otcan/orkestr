@@ -1,10 +1,15 @@
 import {acceptedRustFinal, completedLateRoutes, lateReplyCandidates} from './whatsapp-scoped-late-replies.js';
+import {createParticipantInput,recordScopedInputAdmission} from './whatsapp-scoped-participant-input.js';
+import {wrapperErrorCode} from './whatsapp-scoped-wrapper-errors.js';
+import {createParticipantRecoveryPolicy,readProtectedParticipantGrant} from './whatsapp-participant-recovery.js';
 import {readGroupInputs} from './scoped-group-inbox.js';
+import {createScopedInputAdmission} from './scoped-group-input-intake.js';
 import {buildReplyTo} from './scoped-group-reply-quote.js';
 import {createScopedAcknowledgements} from './scoped-group-acknowledgements.js';
+import {acknowledgementActivity} from './scoped-acknowledgement-activity.js';
 import {createKeyedSerial} from './scoped-relay-serial.js';
 import crypto from 'node:crypto';
-import {createGroupParticipantPolicy, participantInputMetadata} from './whatsapp-group-participant-author.js';
+import {createGroupParticipantPolicy} from './whatsapp-group-participant-author.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import {createDeliveryRouteFence} from './whatsapp-delivery-route-fence.js';
@@ -12,7 +17,10 @@ import {scopedRouteMembership} from './whatsapp-scoped-route-membership.js';
 import {DatabaseSync} from 'node:sqlite';
 import {isReplyDocument, scopedGroupReplyChunks} from './whatsapp-scoped-group-formatting.js';
 import {createRelayReplyFiles} from './whatsapp-scoped-relay-reply-files.js';
+import {quotedGroupInput, relayQuoteLookups, sendQuotedOnce} from './whatsapp-scoped-deep-quote.js'; // Grouped V2 Deep finals.
 import {createProgressBudget, progressPhases, progressPolicy} from './scoped-group-progress.js';
+import {createRouteAge} from './scoped-group-route-age.js';
+import {createMessagePageReader, isSilentNoReply} from './scoped-group-message-pages.js';
 import {createDynamicGroupRegistry, createDynamicGroupView, eligibleGroups, validateDynamicGroups} from './whatsapp-scoped-dynamic-groups.js';
 
 const key = value => crypto.createHash('sha256').update(value).digest('hex');
@@ -31,13 +39,14 @@ const threadSuppressesUpdates = (thread = {}) => {
     || ['mirrorWhatsAppUpdates', 'mirrorWhatsAppProgress', 'mirrorUpdateMessages', 'whatsappMirrorUpdates']
       .some(k => Object.hasOwn(b, k) && flagOff(b[k]));
 };
-const errorCode = error => /^[a-z_]+$/.test(error.message) ? error.message : 'operation_failed';
+export const scopedRelayErrorCode = error => /^[a-z_]{1,120}$/.test(error?.message || '') ? error.message : wrapperErrorCode(error) || 'operation_failed';
+const errorCode = scopedRelayErrorCode;
 const GROUP_IMAGE_MIMES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp']);
 const GROUP_MEDIA_MAX_BYTES = 10 * 1024 * 1024;
-
 export {buildReplyTo} from './scoped-group-reply-quote.js';
 
 export function createScopedGroupRelay({config, api, send, log = () => {}, inboxDb, relayDb, formatter, env = process.env, readMediaFile = fs.readFile, now = Date.now,
+    readRecoveryGrant = readProtectedParticipantGrant,
     openRegistry = path => createDynamicGroupRegistry(path, {now, staticGroups: config.groups})}) {
   // Operator holds are exclusions, not delivery/completion receipts. Validate
   // before opening either journal and snapshot the policy for this process.
@@ -45,7 +54,7 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
   if (!Array.isArray(heldIds) || heldIds.some(id => typeof id !== 'string' || !id.trim()))
     throw new Error('group_held_inputs_invalid');
   const heldInputIds = new Set(heldIds);
-  const participants = createGroupParticipantPolicy(config);
+  const participants = createGroupParticipantPolicy(config,now,createParticipantRecoveryPolicy(config,{now,readGrant:readRecoveryGrant}));
   const fencedThreads = scopedRouteMembership(config);
   if (config.appendDebugFooter === true && !['shouldAppendWhatsAppDebugFooter', 'stripWhatsAppDebugFooter', 'whatsappDebugFooter'].every(k => typeof formatter?.[k] === 'function'))
     throw new Error('group_footer_formatter_required');
@@ -56,6 +65,7 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
   const db = relayDb || new DatabaseSync(config.relayJournalPath);
   db.exec(`PRAGMA journal_mode=WAL;
     CREATE TABLE IF NOT EXISTS routed(id TEXT PRIMARY KEY,thread_id TEXT NOT NULL,message_id TEXT NOT NULL,completed INTEGER NOT NULL DEFAULT 0);
+    CREATE TABLE IF NOT EXISTS participant_recovery_admissions(id TEXT PRIMARY KEY,thread_id TEXT NOT NULL,message_id TEXT NOT NULL,proof TEXT NOT NULL,body_sha256 TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS replies(id TEXT PRIMARY KEY,state TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS reply_payloads(id TEXT PRIMARY KEY,chunks TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS input_media_uploads(id TEXT PRIMARY KEY,attachments TEXT NOT NULL,created_at TEXT NOT NULL);
@@ -85,12 +95,12 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
       }
       const {thread} = await inputThread(input, group);
       if (threadSuppressesUpdates(thread)) return false;
-      if (!route) return true;
+      if (!route) return {active:false};
       const {messages} = await answersFor(group, route, false);
-      if (messages.some(m => m.parentMessageId === route.message_id && String(m.text || '').trim() === 'NO_REPLY')) {
+      if (messages.some(m => m.parentMessageId === route.message_id && isSilentNoReply(m))) {
         acknowledgements.mark(input.id, 'no_reply'); return false;
       }
-      return true;
+      return acknowledgementActivity({api,group,thread,route,messages,now});
     }});
   const replyFiles = createRelayReplyFiles({config, db, api, send, log, key});
 
@@ -163,20 +173,9 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
     return t;
   }
 
-  async function inputThread(input, group) {
-    const thread = await threadFor(group);
-    const hasAuthors = inbox.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='group_input_author'").get();
-    if (participants.count && !hasAuthors) throw new Error('group_participant_journal_required');
-    const author = hasAuthors ? inbox.prepare('SELECT proof FROM group_input_author WHERE id=?').get(input.id) : null;
-    const metadata = author ? participantInputMetadata({proof: JSON.parse(author.proof), input, group, thread, policy: participants}) : {};
-    if (author) {
-      const check = await api(`/api/threads/${encodeURIComponent(group.threadId)}/whatsapp-participant-check`, {method: 'POST', body: {...metadata, text: input.body}});
-      if (check.allowed !== true) throw new Error('group_participant_security_denied');
-    }
-    return {thread, metadata};
-  }
+  const inputThread = createParticipantInput({inbox,db,participants,api,threadFor});
 
-  const progressBudget = createProgressBudget(db, now);
+  const progressBudget = createProgressBudget(db, now), routeAge = createRouteAge(db, now), readPage = createMessagePageReader({api, now, log});
   async function answersFor(group, route, suppressUpdates = false) {
     // Walk older pages until the parent is found, so a long-running turn cannot
     // lose its final answer merely because another turn produced many messages.
@@ -184,7 +183,7 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
     const answers = new Map();
     const context = new Map();
     for (let pageNumber = 0; pageNumber < 100; pageNumber++) {
-      const page = await api(`/api/threads/${encodeURIComponent(group.threadId)}/messages?limit=200${before ? `&before=${before}` : ''}`);
+      const page = await readPage(group.threadId, {limit: 200, before});
       const messages = page.messages || [];
       for (const message of messages) {
         context.set(message.id, message);
@@ -215,8 +214,7 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
   });
   async function deliverAnswerOnce(input, group, answer, messages, verify) {
     const text = String(answer.text || '').trim();
-    if (text === 'NO_REPLY') acknowledgements.mark(input.id, 'no_reply');
-    if (!text || text === 'NO_REPLY') return;
+    if (!text || isSilentNoReply(answer)) return void (text && acknowledgements.mark(input.id, 'no_reply')); // Silent: never sent.
     const payloadId = key(`${input.id}:${answer.id}`);
     let saved = db.prepare('SELECT chunks FROM reply_payloads WHERE id=?').get(payloadId);
     if (!saved) {
@@ -244,8 +242,8 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
       const entry = chunks[index];
       if (deliveryBlocked()) throw new Error('group_delivery_requires_review');
       acknowledgements.mark(input.id, 'real_send_attempt');
-      const result = await send({chatId: input.chat_id, requestId, parentId: input.id,
-        ...(isReplyDocument(entry) ? {document: entry.document} : {text: entry})});
+      const result = await sendQuotedOnce(send, {chatId: input.chat_id, requestId, parentId: input.id, ...(isReplyDocument(entry) ? {document: entry.document} : {text: entry})},
+        index === 0 && !isReplyDocument(entry) ? quotedGroupInput({answer, messages, input, group, ...relayQuoteLookups(db, inbox)}) : '', () => log({event: 'reply_quote_fallback', threadId: group.threadId, messageId: answer.id}));
       if (result.ok !== true || !result.ids?.length) throw new Error('group_reply_unconfirmed');
       db.prepare("INSERT OR REPLACE INTO replies VALUES(?,'sent')").run(requestId);
       db.prepare('INSERT OR REPLACE INTO reply_receipts VALUES(?,?)').run(requestId, JSON.stringify(result.ids.map(String)));
@@ -287,17 +285,17 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
     return receipts.some(row => JSON.parse(row.provider_ids || '[]').some(p => p === id || (suffix && String(p).endsWith(suffix)))) ? {text: ''} : null;
   }
 
-  const routeInput = (input, group) => inputSerial(input.id, async () => {
+  const routeInput = (input, group, admissionOnly = false) => inputSerial(input.id, async () => {
     if (deliveryBlocked()) throw new Error('group_delivery_requires_review');
-    return routeInputOnce(input, group);
+    return routeInputOnce(input, group, admissionOnly);
   });
-  async function routeInputOnce(input, group) {
+  async function routeInputOnce(input, group, admissionOnly) {
     if (routeFence && fencedGroup(group)) {
       const active = routeFence.current();
       if (active?.route !== config.routeControl.routeId || !Number.isFinite(Date.parse(input.created_at)) || Date.parse(input.created_at) < Date.parse(active.since)) return;
     }
     let route = db.prepare('SELECT * FROM routed WHERE id=?').get(input.id);
-    if (route?.completed) return;
+    if (route?.completed || (admissionOnly && route) || (route && routeAge.expired(input))) return;
     const {metadata, thread: routeThread} = await inputThread(input, group);
     if (!route) {
       let attachments = [];
@@ -380,17 +378,20 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
       const own = input.quote_row ? ownReplyFor(input.quote_id) : null;
       const quoted = buildReplyTo(input, {own: own ? {text: own.text || input.quote_body || '', sentAt: own.sentAt || null} : null,
         ownChatId: config.ownChatId, timeZone: config.timeZone || env.ORKESTR_TIMEZONE || 'Europe/Berlin'});
+      const current = metadata.scopedParticipant?.recoveryGrantSha256 ? await inputThread(input, group) : {metadata};
       const response = await api(`/api/threads/${encodeURIComponent(group.threadId)}/input`, {method: 'POST', body: {
-        ...metadata, text: `[WhatsApp: ${group.name}]\n\n${quoted ? `${quoted.line}\n\n` : ''}${inputBody}`,
+        ...current.metadata, text: `[WhatsApp: ${group.name}]\n\n${quoted ? `${quoted.line}\n\n` : ''}${inputBody}`,
         ...(quoted ? {replyTo: quoted.replyTo} : {}), ...(attachments.length ? {attachments} : {}), source: 'whatsapp_group_relay',
         parseCommands: false, controlAllowed: false, idempotencyKey: `group:${key(input.id)}`,
       }});
       const messageId = response.message?.id || response.messageId;
       if (!messageId) throw new Error('group_input_unacknowledged');
-      db.prepare('INSERT OR IGNORE INTO routed(id,thread_id,message_id) VALUES(?,?,?)').run(input.id, group.threadId, messageId);
+      recordScopedInputAdmission({db,inbox,input,group,messageId,metadata:current.metadata});
+      routeAge.routed(input.id);
       route = db.prepare('SELECT * FROM routed WHERE id=?').get(input.id);
       log({event: 'input_routed', threadId: group.threadId, messageId});
     }
+    if (admissionOnly) return;
     const suppressUpdates = threadSuppressesUpdates(routeThread);
     const {answers, messages} = await answersFor(group, route, suppressUpdates);
     const localCommentary = answers.filter(m => m.phase === 'commentary' && m.source !== 'rust-v2-adapter');
@@ -399,7 +400,7 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
       if (localCommentary.includes(answer) && answer !== progress) continue;
       await deliverAnswer(input, group, answer, messages);
       if (answer === progress) progressBudget.delivered(input.id, answer, localCommentary);
-      if (['final_answer', 'final'].includes(answer.phase)) db.prepare('UPDATE routed SET completed=1 WHERE id=?').run(input.id);
+      routeAge.answered(input.id, answer);
     }
   }
 
@@ -445,7 +446,10 @@ export function createScopedGroupRelay({config, api, send, log = () => {}, inbox
     }
   }
 
+  const admitNewInputs = createScopedInputAdmission({inbox, db, groups, heldInputIds, routeInput,
+    blocked: deliveryBlocked, errors, errorCode, log});
   return {
+    admitNewInputs,
     scheduleAcknowledgements() {
       const inputs = readGroupInputs(inbox).filter(input => !heldInputIds.has(input.id) && groups.has(input.chat_id));
       acknowledgements.schedule(inputs);

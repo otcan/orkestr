@@ -18,7 +18,18 @@ Use this order when you are trying to understand or change the project:
 The repo has several automation paths. Prefer the documented scripts below
 instead of inventing a new manual sequence.
 
-## Local Setup
+## Branches
+
+Use a feature branch and open its PR against `integration`. The release train
+selects the tested integration commit for `prod`; successful production
+acceptance advances `main` to that exact source. See
+[the release train runbook](docs/release-train.md).
+
+V2 is the primary application. Start with the [V2 quick start](v2/README.md)
+and the Rust workspace guidance below. Node commands apply to the legacy
+bridge and compatibility components.
+
+## Legacy Node Setup
 
 ```bash
 npm ci
@@ -60,8 +71,8 @@ and `scripts/update-watch.sh` for versioned release/update work.
 The Rust rewrite lives in `v2/` and builds with the toolchain pinned in
 `v2/rust-toolchain.toml`. GitHub Actions is the default place for full suites:
 
-- `v2-rust.yml` (rust-v2) runs on every push to `v2/rust-rewrite` and on PRs
-  into `v2/**`: format, clippy, the locked workspace build, the HTTP
+- `v2-rust.yml` (rust-v2) runs on every push to `integration` and on PRs into `integration`
+  (or transitional `v2/**` bases): format, clippy, the locked workspace build, the HTTP
   scenarios and `cargo test --locked --workspace`.
   The parts run as parallel jobs (`lint`, `service`, `http` and eight `unit`
   shards of the workspace tests); `rust-v2` is the one check that needs them
@@ -74,7 +85,7 @@ The Rust rewrite lives in `v2/` and builds with the toolchain pinned in
   seven days, with a rationale and a ticket).
 - `v2-browser.yml` runs the headless-rendering checks.
 - Both restore a dependency build cache (`Swatinem/rust-cache`) saved from
-  `v2/rust-rewrite`, so PR runs recompile only workspace crates.
+  `integration`, so PR runs recompile only workspace crates.
 
 Locally, check only the crates you touched:
 

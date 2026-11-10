@@ -111,6 +111,15 @@ const messageStringFields = [
   "remoteExportSequence",
   "remoteProvider",
   "remoteModel",
+  "remoteLayer",
+  "remoteObservedReasoningEffort",
+  "remoteQuickState",
+  "remoteQuickProvider",
+  "remoteQuickModel",
+  "remoteQuickEffort",
+  "remoteOriginalInputId",
+  "remoteRunId",
+  "remoteIdentitySource",
   "remoteRoutedAt",
   "remoteSyncedAt",
   "publicThreadId",
@@ -886,6 +895,8 @@ export async function appendThreadMessage(threadId, input, env = process.env) {
     const replyTo = normalizeReplyTo(input.replyTo);
     if (replyTo) nextMessage.replyTo = replyTo;
     if (input.ownerSelfChatDedicatedTransport === true) nextMessage.ownerSelfChatDedicatedTransport = true;
+    // V2 Quick reply to one input of a burst: the relay quotes that input.
+    if (input.remoteQuoteSource === true) nextMessage.remoteQuoteSource = true;
     if (input.bridgeWhatsAppReply === true || input.bridgeWhatsAppReply === false) {
       nextMessage.bridgeWhatsAppReply = input.bridgeWhatsAppReply;
     }

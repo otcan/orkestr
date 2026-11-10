@@ -1,5 +1,7 @@
+import {DatabaseSync} from 'node:sqlite';
 import {createKeyedSerial} from './scoped-relay-serial.js';
-import {notificationScope,notificationKey,createTimerNotificationProofStore} from './whatsapp-timer-notification-proof.js';
+import {notificationScope,liveNotificationScope,notificationKey,createTimerNotificationProofStore} from './whatsapp-timer-notification-proof.js';
+import {createDynamicGroupView,validateDynamicGroups} from './whatsapp-scoped-dynamic-groups.js';
 import {createDeliveryRouteFence} from './whatsapp-delivery-route-fence.js';
 import {encodeReplyEntry, replyEntrySendFields, scopedGroupReplyChunks, scopedReplyHeader} from './whatsapp-scoped-group-formatting.js';
 import {createRemoteTimerReplies,remoteTimerEventEligible,remoteTimerParentEvent} from './whatsapp-scoped-remote-timer-replies.js';
@@ -28,12 +30,40 @@ export function timerRunEligible(timer,event,owner,threadId) {
 // scheduler ran it in, and nowhere else. Proof chain: scheduler `timer_due`
 // event (server receipt) -> its user message id -> the thread's final answer
 // whose parentMessageId is that id -> the thread's own bound chat.
-export function createScopedTimerNotifications({config,api,send,formatter,env=process.env,now=Date.now,proofStore:suppliedProof,routeFence:suppliedFence,minIntervalMs=0}) {
-  const scope=notificationScope(config);
-  if(!scope)return {tick:async()=>({enabled:false}),close(){}};
+// The relay-routed WhatsApp input id for a local relay message, read from the
+// relay's own journal (read-only, opened on first use). Exactly one routed row
+// in this thread, else ''. Never throws: a missing journal only drops a quote.
+export function createRoutedInputLookup(relayJournalPath) {
+  let db=null;
+  return {
+    lookup(threadId,messageId) {
+      if(!relayJournalPath || !threadId || !messageId)return '';
+      try {
+        db ||= new DatabaseSync(relayJournalPath,{readOnly:true});
+        const rows=db.prepare('SELECT id FROM routed WHERE thread_id=? AND message_id=? LIMIT 2').all(threadId,messageId);
+        return rows.length===1 && typeof rows[0].id==='string' ? rows[0].id : '';
+      } catch {return '';}
+    },
+    close(){try{db?.close();}catch{}db=null;},
+  };
+}
+// Groups the relay registered at runtime (dynamicGroups), read live from the
+// transport journal, so an allGroups scope also covers chats created after start.
+function dynamicGroupView(config,now) {
+  if(!validateDynamicGroups(config) || !config.journalPath || config.journalPath===':memory:')return {view:null,close(){}};
+  let db=null;
+  try {db=new DatabaseSync(config.journalPath,{readOnly:true});}
+  catch {return {view:null,close(){}};}
+  return {view:createDynamicGroupView(db,{now}),close(){try{db.close();}catch{}}};
+}
+export function createScopedTimerNotifications({config,api,send,formatter,env=process.env,now=Date.now,proofStore:suppliedProof,routeFence:suppliedFence,minIntervalMs=0,routedInput:suppliedRouted,groups:suppliedGroups}) {
+  const staticScope=notificationScope(config);
+  if(!staticScope)return {tick:async()=>({enabled:false}),close(){}};
+  const dynamicGroups=suppliedGroups ? {view:suppliedGroups,close(){}} : dynamicGroupView(config,now);
+  const scope=liveNotificationScope(staticScope,dynamicGroups.view);
   const proofs=suppliedProof || createTimerNotificationProofStore({path:scope.proofDbPath,now});
   const fence=suppliedFence || createDeliveryRouteFence({dbPath:config.routeControl.dbPath,now});
-  const legacySingle=scope.threads.size===1;
+  const legacySingle=staticScope.threads.size===1;
   let lastTick=-Infinity,lastStatus=null;
   const threadSerial=createKeyedSerial();
   const allowedTimer=(timer,event,threadId)=>event.type==='thread_signal_appended'
@@ -61,7 +91,9 @@ export function createScopedTimerNotifications({config,api,send,formatter,env=pr
     }
     throw new Error('timer_notification_history_incomplete');
   }
-  const remoteReplies=createRemoteTimerReplies({config,api,send,formatter,env,now,proofs,fence,scope,thread,runTtlMs:RUN_TTL_MS});
+  const routed=suppliedRouted ? null : createRoutedInputLookup(config.relayJournalPath);
+  const routedInput=suppliedRouted || routed.lookup;
+  const remoteReplies=createRemoteTimerReplies({config,api,send,formatter,env,now,proofs,fence,scope,thread,runTtlMs:RUN_TTL_MS,routedInput});
   async function deliverThread(threadId,allRuns,since,eligible) {
     const chatId=scope.threads.get(threadId);
     const t=await thread(threadId);
@@ -105,7 +137,7 @@ export function createScopedTimerNotifications({config,api,send,formatter,env=pr
       } else {
         let current=t;
         try{const {quota}=await api(`/api/quota/providers?ownerUserId=${encodeURIComponent(config.ownerUserId)}`,{timeoutMs:1000});if(quota)current={...current,whatsAppDebugProviderQuota:quota};}catch{}
-        chunks=scopedGroupReplyChunks({text:`${scopedReplyHeader({label:timer.label})}\n${answer.text}`,message:{...answer,chatId},thread:current,messages,config,formatter,env,deliveryType:'router_update'});
+        chunks=scopedGroupReplyChunks({text:`${scopedReplyHeader({label:timer.label})}\n${answer.text}`,message:{...answer,chatId},thread:current,messages,config,formatter,env,deliveryType:'timer_reply'});
         proofs.prepareBatch(chunks.map((entry,i)=>({id:baseId+':'+i,threadId,chatId,timerId:timer.id,parentId:parent.id,answerId:answer.id,text:encodeReplyEntry(entry),createdAt:answer.createdAt,runAt:event.ts,expiresAt:new Date(Date.parse(answer.createdAt)+scope.maxAgeMs).toISOString()})));
       }
       for(let i=0;i<chunks.length;i++) {
@@ -135,7 +167,7 @@ export function createScopedTimerNotifications({config,api,send,formatter,env=pr
     return sent;
   }
   return {
-    close(){if(!suppliedProof)proofs.close();if(!suppliedFence)fence.close();},
+    close(){if(!suppliedProof)proofs.close();if(!suppliedFence)fence.close();routed?.close();dynamicGroups.close();},
     async tick({threadIds} = {}) {
       if(!threadIds && lastStatus && now()-lastTick<minIntervalMs)return lastStatus;
       lastTick=now();

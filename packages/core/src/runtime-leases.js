@@ -72,6 +72,7 @@ import { persistObservedCodexMetadata } from "./codex-observed-metadata.js";
 import { completeThreadSecurityApproveCommand, threadSecurityApproveChallengeId } from "./security-thread-command.js";
 import { threadUsesContainedUserPolicy } from "./tenant-policy.js";
 import { apiAgentRuntimeStatus, processApiAgentThreadInput, threadUsesApiAgent } from "./tenant-api-agent.js";
+import { refuseV1ExecutionIfRetired } from "./v1-execution-retired.js";
 import { appendTurnLifecycleEvent, turnLifecycleFromRuntimeStatus } from "./turn-lifecycle.js";
 import { withRuntimeLeaseLock } from "./runtime-lease-lock.js";
 import {
@@ -3961,6 +3962,9 @@ export async function deliverPendingThreadInputs(threadId, env = process.env, op
   }
   const executorCommands = await processQueuedExecutorCommands(thread, env).catch(() => []);
   if (executorCommands.length) thread = await getThread(thread.id, env) || thread;
+  // V1 execution retired: no model turn starts here unless allowlisted. The
+  // input stays queued and audited (see v1-execution-retired.js).
+  if (await refuseV1ExecutionIfRetired(thread, env, { entryPoint: "deliver_pending_thread_inputs" })) return [];
   if (threadUsesApiAgent(thread, env)) {
     if (options.processApiAgent !== true) {
       await appendEvent({ type: "thread_input_delivery_skipped", threadId: thread.id, reason: "api_agent_thread" }, env).catch(() => null);
@@ -4689,6 +4693,10 @@ function shouldSyncDetachedRollout(thread = {}, activeLeaseThreadIds = new Set()
   if (!threadUsesNativeCodexRuntime(thread)) return false;
   if (threadUsesContainedUserPolicy(thread)) return false;
   if (String(thread?.binding?.connector || "").trim().toLowerCase() !== "whatsapp") return false;
+  // A delegated thread never runs a turn here (deliverPendingThreadInputs
+  // forwards its input), so its local Codex rollout cannot grow, while asking
+  // Codex for its state costs two sqlite3 spawns per thread on every pass.
+  if (remoteWhatsAppRuntimeBinding(thread, env)) return false;
   return Boolean(codexThreadId(thread) || codexRolloutPathForThread(thread, env));
 }
 

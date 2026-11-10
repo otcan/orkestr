@@ -10,7 +10,7 @@ test("host update watcher replaces external VPS deploy automation", async () => 
   const watcher = await fs.readFile("scripts/update-watch.sh", "utf8");
   const install = await fs.readFile("scripts/install.sh", "utf8");
   const docs = await fs.readFile("docs/framework-deployment.md", "utf8");
-  const readme = await fs.readFile("README.md", "utf8");
+  const readme = await fs.readFile("README.v1.md", "utf8");
 
   await execFileAsync("bash", ["-n", "scripts/update-watch.sh"]);
   await execFileAsync("bash", ["scripts/update-watch.sh", "--check-only"]);

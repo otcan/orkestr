@@ -1,3 +1,4 @@
+import {scopedRuntimeFiles} from './scoped-group-runtime-files.mjs';
 // Apply the group extension to a private COPY of the preserving self-chat bridge.
 // This changes files only. Service installation and account configuration remain
 // deployment concerns; never run this against a live runtime directory.
@@ -43,34 +44,7 @@ wrapper = replaceOnce(wrapper, "  if (command === 'send-text') {", `  if(command
     return;
   }
   if (command === 'send-text') {`);
-const files = ['packages/connectors/src/whatsapp-scoped-group-transport.js',
-  'packages/connectors/src/whatsapp-scoped-route-membership.js',
-  'packages/connectors/src/whatsapp-group-owner-author.js',
-  'packages/connectors/src/whatsapp-group-participant-author.js',
-  'packages/connectors/src/whatsapp-scoped-group-formatting.js',
-  'packages/connectors/src/whatsapp-scoped-timer-notifications.js',
-  'packages/connectors/src/whatsapp-scoped-remote-timer-replies.js',
-  'packages/connectors/src/whatsapp-timer-notification-proof.js',
-  'packages/connectors/src/whatsapp-delivery-route-fence.js',
-  'packages/connectors/src/whatsapp-scoped-group-media.js',
-  'packages/connectors/src/whatsapp-inbound-media-browser.js',
-  'packages/connectors/src/whatsapp-inbound-media-diagnostics.js',
-  'packages/connectors/src/whatsapp-media-self-decrypt.js',
-  'packages/connectors/src/whatsapp-scoped-coordinator.js',
-  'packages/connectors/src/whatsapp-scoped-delegates.js',
-  'packages/connectors/src/whatsapp-scoped-dynamic-groups.js',
-  'packages/connectors/src/whatsapp-scoped-reply-files.js',
-  'packages/connectors/src/whatsapp-scoped-relay-reply-files.js',
-  'packages/connectors/src/whatsapp-scoped-late-replies.js',
-  'packages/connectors/src/whatsapp-scoped-operator-notices.js',
-  'packages/connectors/src/whatsapp-scoped-direct-chats.js',
-  'packages/connectors/src/scoped-group-progress.js',
-  'packages/connectors/src/scoped-group-inbox.js',
-  'packages/connectors/src/scoped-group-reply-quote.js',
-  'packages/connectors/src/scoped-group-acknowledgements.js',
-  'packages/connectors/src/scoped-relay-serial.js',
-  'packages/connectors/src/whatsapp-scoped-remote-watch.js',
-  'packages/connectors/src/whatsapp-scoped-group-relay.js', 'scripts/scoped-group-relay.mjs', 'apps/cli/src/api-client.js'];
+const files = scopedRuntimeFiles;
 const buildHash = crypto.createHash('sha256').update(bridge.replace(/const transportOnlyBuildHash = '[a-f0-9]+';/, '')).update(wrapper);
 for (const relative of files) buildHash.update(fs.readFileSync(path.join(source, relative)));
 bridge = bridge.replace(/const transportOnlyBuildHash = '[a-f0-9]+';/, `const transportOnlyBuildHash = '${buildHash.digest('hex')}';`);
