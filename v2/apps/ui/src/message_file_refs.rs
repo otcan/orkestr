@@ -47,6 +47,12 @@ pub fn references(text: &str) -> Vec<FileRef> {
     result.dedup();
     result
 }
+pub fn display_text(text: &str) -> String {
+    text.split("\n\n")
+        .filter(|block| references(block).is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -71,11 +77,4 @@ mod tests {
                 .is_empty()
         );
     }
-}
-
-pub fn display_text(text: &str) -> String {
-    text.split("\n\n")
-        .filter(|block| references(block).is_empty())
-        .collect::<Vec<_>>()
-        .join("\n\n")
 }
