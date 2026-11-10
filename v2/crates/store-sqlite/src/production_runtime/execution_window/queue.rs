@@ -193,8 +193,11 @@ impl Store {
     ) -> Result<Vec<ExecutionWindowStatus>> {
         let mut tx = self.pool.begin().await.map_err(db)?;
         let owner = browser_owner(self, &mut tx, credential).await?;
-        let rows = sqlx::query("SELECT * FROM execution_windows w WHERE w.owner_id=? AND w.state IN ('opening','active','retiring') AND w.generation=(SELECT max(l.generation) FROM execution_windows l WHERE l.owner_id=w.owner_id AND l.conversation_id=w.conversation_id) ORDER BY w.rowid LIMIT 1024")
-            .bind(owner.to_string()).fetch_all(&mut *tx).await.map_err(db)?;
+        let rows = sqlx::query(UNRESOLVED_WINDOWS)
+            .bind(owner.to_string())
+            .fetch_all(&mut *tx)
+            .await
+            .map_err(db)?;
         let result = rows.iter().map(status).collect::<Result<Vec<_>>>()?;
         tx.commit().await.map_err(db)?;
         Ok(result)

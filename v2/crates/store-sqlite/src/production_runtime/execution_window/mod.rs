@@ -80,6 +80,13 @@ fn status(row: &SqliteRow) -> Result<ExecutionWindowStatus> {
         limits: ExecutionWindowLimits::default(),
     })
 }
+/// `state!='closed'` is what lets the planner read only the unresolved windows
+/// (the partial index `execution_window_unresolved`); `state IN (...)` alone
+/// walks every window the owner ever opened.
+pub(super) const LIVE_WINDOWS: &str = "SELECT count(*) FROM execution_windows WHERE owner_id=? AND state!='closed' AND state IN ('opening','active','retiring') AND expires_at_ms>?";
+pub(super) const OTHER_LIVE_WINDOWS: &str = "SELECT count(*) FROM execution_windows WHERE owner_id=? AND conversation_id!=? AND state!='closed' AND state IN ('opening','active','retiring') AND expires_at_ms>?";
+pub(super) const UNRESOLVED_WINDOWS: &str = "SELECT * FROM execution_windows w WHERE w.owner_id=? AND w.state!='closed' AND w.state IN ('opening','active','retiring') AND w.generation=(SELECT max(l.generation) FROM execution_windows l WHERE l.owner_id=w.owner_id AND l.conversation_id=w.conversation_id) ORDER BY w.rowid LIMIT 1024";
+
 async fn browser_owner(
     store: &Store,
     tx: &mut SqliteConnection,
@@ -136,6 +143,8 @@ async fn window_in(
         .ok_or(RuntimeStoreError::NotFound)
 }
 
+#[cfg(test)]
+mod live_window_plan_tests;
 #[cfg(test)]
 mod terminal_tests;
 
