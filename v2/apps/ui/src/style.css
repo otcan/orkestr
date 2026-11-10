@@ -53,8 +53,8 @@ details[open] > summary { margin-bottom: .4rem; }
 .app-heading { flex: none; height: 3.25rem; display: flex; align-items: center; gap: .8rem; padding: .5rem 7rem .5rem 1.1rem; border-bottom: 1px solid var(--border); background: var(--surface); }
 .app-heading span { color: var(--muted); font-size: .8rem; }
 .build-badge { position: relative; flex-shrink: 0; font-size: .75rem; color: var(--muted); }
-.build-badge > summary { cursor: pointer; padding: .3rem .4rem; border: 1px solid var(--border); border-radius: .4rem; }
-.build-badge > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.build-badge > button { cursor: pointer; padding: .3rem .4rem; border: 1px solid var(--border); border-radius: .4rem; background: transparent; color: inherit; font-size: inherit; }
+.build-badge > button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .build-badge-details { position: fixed; top: 3.6rem; left: 1rem; z-index: 100; width: min(30rem, calc(100vw - 2rem)); max-height: 75dvh; overflow: auto; padding: 1rem; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); overflow-wrap: anywhere; }
 .build-badge-details h2 { font-size: 1rem; }
 .build-badge-details p { margin: .5rem 0; }
