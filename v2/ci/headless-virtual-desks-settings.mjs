@@ -49,7 +49,7 @@ export async function virtualDesksAndAccountSettings({page, state, conversation,
         'viewing and preparing a link must not change grants/settings or start work');
     await screenshot(label, 'virtual-desks');
     const viewport=page.viewport();
-    await page.setViewport({width:390,height:844});
+    await page.setViewport({...viewport,width:390,height:844});
     assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),'desk inventory fits narrow screens');
     await screenshot(label,'virtual-desks-mobile');
     await page.setViewport(viewport);
