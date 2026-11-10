@@ -15,6 +15,7 @@ fn request() -> HistoryImportRequest {
             reply_to: None,
             origin: None,
             revisions: None,
+            retry_of: None,
         }],
     };
     request.source_digest = history_source_digest(&request).unwrap();

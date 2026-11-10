@@ -43,6 +43,7 @@ pub(super) async fn verified(
             reply_to: None,
             origin: None,
             revisions: None,
+            retry_of: None,
         });
     }
     let conversation: String = row.get("source_conversation_id");
