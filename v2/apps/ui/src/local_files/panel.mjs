@@ -119,53 +119,66 @@ export function mountLocalFiles({conversation, csrf, root}, {
     render();
   }
 
-  let drawn = '', activityOpen = false;
+  // Polls report every two seconds. The controls and the activity log are
+  // drawn separately, and each only when it changed, so a button the owner
+  // is about to press is never replaced by a log update.
+  const controls = make('div', {class: 'local-folder-controls'}), log = make('div', {class: 'local-folder-log'});
+  root.replaceChildren(controls, log);
+  let drawnControls = '', drawnLog = '', activityOpen = false;
   function render() {
     if (!live) return;
     const view = relay?.snapshot();
     const connected = view && ['connected', 'connecting', 'retrying'].includes(view.state);
     title.set(Boolean(connected));
     if (view?.state === 'signed_out') message = 'Sign in again to connect the folder.';
-    // Polls report every two seconds; redraw only what changed, so a button
-    // the owner is about to press is never replaced under the pointer.
-    const signature = JSON.stringify([view?.state, view?.folder, message, saved?.name ?? null, [...confirmations.keys()],
-      view?.pending?.map(p => p.request_id), view?.activity?.map(a => [a.id, a.outcome])]);
-    if (signature === drawn) return;
-    drawn = signature;
+    const controlState = JSON.stringify([view?.state, view?.folder, message, saved?.name ?? null, [...confirmations.keys()]]);
+    if (controlState !== drawnControls) {
+      drawnControls = controlState;
+      controls.replaceChildren(...controlNodes(view, connected));
+    }
+    const working = (view?.pending ?? []).filter(item => !confirmations.has(item.request_id));
+    const logState = JSON.stringify([working.map(p => p.request_id), (view?.activity ?? []).map(a => [a.id, a.outcome])]);
+    if (logState !== drawnLog) {
+      drawnLog = logState;
+      log.replaceChildren(...logNodes(working, view?.activity ?? []));
+    }
+  }
+  function controlNodes(view, connected) {
     const nodes = [];
     if (connected) {
       nodes.push(make('span', {class: 'local-folder-live', role: 'status', 'aria-live': 'polite',
-        text: `${MARK}Folder “${view.folder}” connected${view.state === 'retrying' ? ' (reconnecting…)' : ''}. Read-only; writes ask you first.`}));
-      nodes.push(make('button', {type: 'button', onclick: () => void disconnect(), text: 'Disconnect folder'}));
+        text: `${MARK}Folder \u201c${view.folder}\u201d connected${view.state === 'retrying' ? ' (reconnecting\u2026)' : ''}. Read-only; writes ask you first.`}));
+      nodes.push(make('button', {type: 'button', class: 'local-folder-disconnect', onclick: () => void disconnect(), text: 'Disconnect folder'}));
     } else if (view?.state === 'elsewhere') {
       nodes.push(make('span', {class: 'local-folder-note', role: 'status', text: 'This folder is connected in another tab.'}));
       nodes.push(make('button', {type: 'button', onclick: () => void start(handle, true), text: 'Use this tab'}));
-      nodes.push(make('button', {type: 'button', onclick: () => void disconnect(), text: 'Disconnect folder'}));
+      nodes.push(make('button', {type: 'button', class: 'local-folder-disconnect', onclick: () => void disconnect(), text: 'Disconnect folder'}));
     } else {
-      nodes.push(make('button', {type: 'button', class: 'local-folder-connect', onclick: () => void connect(), text: 'Connect folder…'}));
-      if (saved?.handle) nodes.push(make('button', {type: 'button', onclick: () => void reconnect(), text: `Reconnect “${saved.name}”`}));
+      nodes.push(make('button', {type: 'button', class: 'local-folder-connect', onclick: () => void connect(), text: 'Connect folder\u2026'}));
+      if (saved?.handle) nodes.push(make('button', {type: 'button', onclick: () => void reconnect(), text: `Reconnect \u201c${saved.name}\u201d`}));
     }
     if (message) nodes.push(make('span', {class: 'local-folder-note', role: 'status', text: message}));
     for (const entry of confirmations.values()) {
       const {request, bytes} = entry;
       const card = make('section', {class: 'local-folder-confirm', role: 'alertdialog', 'aria-label': 'Confirm write'},
         make('strong', {text: 'The thread wants to change a file'}),
-        make('p', {text: `Write ${bytes.length} bytes to “${request.path}” in “${view?.folder ?? 'the folder'}”. This creates the file or replaces it.`}));
+        make('p', {text: `Write ${bytes.length} bytes to \u201c${request.path}\u201d in \u201c${view?.folder ?? 'the folder'}\u201d. This creates the file or replaces it.`}));
       if (entry.preview !== null) card.append(make('pre', {text: entry.preview || '(empty file)'}));
       else card.append(make('p', {text: `Binary content, SHA-256 ${request.content_sha256}.`}));
       card.append(make('button', {type: 'button', class: 'local-folder-allow', onclick: () => void entry.allow(), text: 'Allow write'}),
         make('button', {type: 'button', class: 'local-folder-refuse', onclick: () => entry.refuse(), text: 'Refuse'}));
       nodes.push(card);
     }
-    if (view?.activity?.length || view?.pending?.length) {
-      const log = make('ul', {class: 'local-folder-activity', 'aria-label': 'Recent folder requests'});
-      for (const item of view.pending) if (!confirmations.has(item.request_id)) log.append(make('li', {text: `${item.operation} ${item.path ?? item.paths.join(', ')}: working…`}));
-      for (const item of view.activity.slice(0, 5)) log.append(make('li', {text: `${item.operation} ${item.path}: ${item.outcome}`}));
-      const details = make('details', activityOpen ? {open: ''} : {}, make('summary', {text: 'Folder activity'}), log);
-      details.ontoggle = () => { activityOpen = details.open; };
-      nodes.push(details);
-    }
-    root.replaceChildren(...nodes);
+    return nodes;
+  }
+  function logNodes(working, activity) {
+    if (!working.length && !activity.length) return [];
+    const list = make('ul', {class: 'local-folder-activity', 'aria-label': 'Recent folder requests'});
+    for (const item of working) list.append(make('li', {text: `${item.operation} ${item.path ?? item.paths.join(', ')}: working\u2026`}));
+    for (const item of activity.slice(0, 5)) list.append(make('li', {text: `${item.operation} ${item.path}: ${item.outcome}`}));
+    const details = make('details', activityOpen ? {open: ''} : {}, make('summary', {text: 'Folder activity'}), list);
+    details.ontoggle = () => { activityOpen = details.open; };
+    return [details];
   }
 
   void remembered(indexedDB, key).then(value => {

@@ -45,6 +45,14 @@ async function served(id, label) {
   for (let i = 0; i < 400; i++) { if (lf.results.has(id)) return lf.results.get(id); await new Promise(r => setTimeout(r, 25)); }
   throw Error(`No result for ${label}`);
 }
+// Dioxus and the panel redraw asynchronously: a click on a node replaced in
+// between is retried on the current node, never reported as passed.
+async function press(page, selector) {
+  for (let attempt = 0; ; attempt++) {
+    try { await page.waitForSelector(selector); await page.click(selector); return; }
+    catch (error) { if (attempt >= 4 || !/detached|not clickable|not an Element/i.test(error.message)) throw error; await new Promise(r => setTimeout(r, 100)); }
+  }
+}
 const screenshots = async (page, name) => {
   if (!process.env.SCREENSHOT_DIR) return;
   await mkdir(process.env.SCREENSHOT_DIR, {recursive: true});
@@ -61,7 +69,7 @@ try {
   await page.goto(`${origin}/#conversation/${A}`, {waitUntil: 'domcontentloaded'});
   await page.waitForSelector('.local-folder-connect');
   assert.equal(lf.polls, 0, 'nothing is served before the owner connects a folder');
-  await page.click('.local-folder-connect');
+  await press(page, '.local-folder-connect');
   await page.waitForFunction(() => document.querySelector('.local-folder-live')?.textContent.includes('Synthetic folder'));
   assert.deepEqual(await page.evaluate(() => window.__pickerCalls), [{id: 'orkestr-local-folder', mode: 'read'}], 'the picker asks for read access only');
   assert.ok((await page.title()).startsWith('● '), 'the tab title shows the connection');
@@ -94,21 +102,20 @@ try {
   assert.equal(lf.results.has(write), false, 'nothing is written before the owner answers');
   assert.equal(await page.evaluate(() => window.__syntheticFolder.fake.text('docs/plan.md')), '# Plan\n');
   await screenshots(page, 'confirm-write');
-  await page.click('.local-folder-allow');
+  await press(page, '.local-folder-allow');
   assert.deepEqual((await served(write, 'write')).written, {bytes_written: 10, sha256: sha('# Plan v2\n'), created: false});
   assert.equal(await page.evaluate(() => window.__syntheticFolder.fake.text('docs/plan.md')), '# Plan v2\n');
   assert.ok(await page.evaluate(() => window.__syntheticFolder.fake.calls.some(c => c[0] === 'requestPermission' && c[1] === 'readwrite')));
   await page.waitForFunction(() => !document.querySelector('.local-folder-confirm'));
   const refused = lf.enqueue('write', {path: 'a.txt', content: 'overwritten'});
   await page.waitForSelector('.local-folder-confirm');
-  await page.click('.local-folder-refuse');
+  await press(page, '.local-folder-refuse');
   assert.equal((await served(refused, 'refused write')).error, 'refused_by_owner');
   assert.equal(await page.evaluate(() => window.__syntheticFolder.fake.text('a.txt')), 'alpha');
 
   // Revoking stops serving the folder at once.
-  const disconnect = await page.$$eval('.local-folder button', buttons => buttons.findIndex(b => b.textContent === 'Disconnect folder'));
-  assert.ok(disconnect >= 0);
-  await (await page.$$('.local-folder button'))[disconnect].click();
+  await page.waitForFunction(() => document.querySelector('.local-folder-activity')?.textContent.includes('refused_by_owner'));
+  await press(page, '.local-folder-disconnect');
   await page.waitForSelector('.local-folder-connect');
   assert.equal(lf.tab, null);
   assert.equal(lf.disconnects, 1);
@@ -125,7 +132,7 @@ try {
   await phone.evaluateOnNewDocument(install);
   await phone.goto(`${origin}/#conversation/${A}`, {waitUntil: 'domcontentloaded'});
   await phone.waitForSelector('.local-folder-connect');
-  await phone.click('.local-folder-connect');
+  await press(phone, '.local-folder-connect');
   await phone.waitForSelector('.local-folder-live');
   lf.enqueue('write', {path: 'a.txt', content: 'phone'});
   await phone.waitForSelector('.local-folder-confirm');

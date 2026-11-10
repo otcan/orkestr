@@ -5,6 +5,27 @@ use crate::Store;
 mod credentials;
 
 pub(crate) async fn downgrade_empty(store: &Store) {
+    // Migration 98 down: only empty local folder tables (no grant, tab or
+    // request is lost).
+    let local: i64 = sqlx::query_scalar(
+        "SELECT (SELECT count(*) FROM local_file_grants)+(SELECT count(*) FROM local_file_connections)+(SELECT count(*) FROM local_file_requests)",
+    )
+    .fetch_one(&store.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        local, 0,
+        "historical fixture must not erase local file requests"
+    );
+    sqlx::raw_sql(
+        "DROP TABLE local_file_requests;
+         DROP TABLE local_file_connections;
+         DROP TABLE local_file_grants;
+         DELETE FROM _sqlx_migrations WHERE version=98;",
+    )
+    .execute(&store.pool)
+    .await
+    .unwrap();
     // Migration 96 down: only an empty audit table, so no owner change is lost.
     let revisions: i64 = sqlx::query_scalar("SELECT count(*) FROM message_revisions")
         .fetch_one(&store.pool)
