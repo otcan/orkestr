@@ -60,13 +60,18 @@ pub fn ProviderQuotaPanel(
         }
     });
     rsx! { div { class: "provider-quota-panel", "aria-label": "Provider quotas remaining",
-        if cards.read().is_empty() { span { "OpenAI / Codex: unknown · Claude: unknown" } }
+        if cards.read().is_empty() { span { "Loading provider quotas…" } }
         for card in cards.read().iter() {
-            div { class: "provider-quota-item", title: "{card.detail}",
-                strong { "{card.name}" }
-                span { "{card.label}" }
-                small { "{card.status}" }
-                span { class: "quota-reset-detail", "{card.reset}" }
+            details { class: "provider-quota-item", title: "{card.detail}",
+                summary {
+                    span { class: "quota-provider", "{card.name}" }
+                    strong { "{card.label}" }
+                    if card.status != "current" { small { class: "quota-state", "{card.status}" } }
+                }
+                div { class: "quota-detail", role: "note",
+                    p { "{card.detail}" }
+                    if !card.reset.is_empty() { p { class: "quota-reset-detail", "{card.reset}" } }
+                }
             }
         }
     } }

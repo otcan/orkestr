@@ -645,10 +645,20 @@ export const scenarios = [
   ['host-metrics', async label => {
     // The heading panel is always visible and opens the host overview.
     await page.waitForFunction(() => document.querySelector('.host-metrics-panel')?.textContent.includes('32%'), { timeout: 20000 });
-    await page.waitForFunction(() => document.querySelector('.provider-quota-panel')?.textContent.includes('5h 75% · wk 40%'), {timeout:20000});
+    await page.waitForFunction(() => document.querySelector('.resource-bar .provider-quota-panel')?.textContent.includes('week 40%'), {timeout:20000});
     assert.equal(await page.$$eval('.provider-quota-item', cards => cards.length), 2);
-    assert.match(await text('.provider-quota-panel'), /Claude.*wk 8%.*stale/s);
-    assert.match(await page.$eval('.provider-quota-item', card => card.title), /resets in/);
+    assert.equal(await page.$eval('.resource-bar', bar => bar.contains(document.querySelector('.host-metrics-panel')) && bar.contains(document.querySelector('.provider-quota-panel'))), true);
+    assert.match(await text('.provider-quota-panel'), /Claude.*week available/s);
+    const summaries = await page.$$eval('.provider-quota-item summary', items => items.map(n => n.textContent).join(' '));
+    assert.doesNotMatch(summaries, /5h|\?|unknown/);
+    assert.equal(await page.$eval('.provider-quota-item', card => card.hasAttribute('open')), false);
+    await page.focus('.provider-quota-item summary');
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(() => document.querySelector('.provider-quota-item')?.open);
+    assert.match(await text('.provider-quota-item[open] .quota-detail'), /Observed.*week resets in/s);
+    await screenshot(label, 'quota-details');
+    await noHorizontalScroll();
+    await page.click('.provider-quota-item summary');
     await page.click('.host-metrics-panel');
     await page.waitForFunction(() => location.hash === '#host');
     await waitText('Top consumers');
