@@ -157,7 +157,7 @@ async fn invalid_refresh_preserves_last_good_data_and_backs_off() {
                 .is_err()
         );
     });
-    source.prewarm();
+    source.refresh_if_due();
     done.await.unwrap();
     tokio::time::timeout(Duration::from_secs(1), async {
         while source.cache.refresh.lock().unwrap().running {

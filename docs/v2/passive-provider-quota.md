@@ -3,8 +3,8 @@
 ## V2 HTTP response latency
 
 The owner-bound `/api/v2/provider-quotas` projection keeps a validated snapshot
-in memory. Startup warms it when an async runtime is available; requests trigger
-one shared background refresh after 30 seconds. Warm requests return immediately
+in memory. Only authenticated owner requests trigger the first read and a shared
+background refresh after 30 seconds. Warm requests return immediately
 while refresh runs. A snapshot retained beyond 30 seconds is explicitly stale;
 after five minutes it is unavailable. Provider observation and reset timestamps
 remain unchanged, so refreshing the cache cannot make old telemetry fresh.
@@ -18,6 +18,8 @@ are logged without quota data, owner identifiers or credentials.
 The cache belongs to the explicitly configured owner binding. Cookie authority,
 query rejection, session revocation and `Cache-Control: no-store` still apply
 to every response; browser and intermediary caches are not enabled.
+
+## Passive projection
 
 The service broker can project quota from already-running Claude sessions into
 the existing V1 `/api/quota/providers` snapshot and WhatsApp footer. It creates

@@ -54,7 +54,7 @@ impl Drop for RefreshGuard {
     }
 }
 impl Source {
-    pub(crate) fn prewarm(self: &Arc<Self>) {
+    pub(super) fn refresh_if_due(self: &Arc<Self>) {
         let Ok(runtime) = tokio::runtime::Handle::try_current() else {
             return;
         };
@@ -113,7 +113,7 @@ impl Source {
             .as_ref()
             .is_none_or(|v| v.received.elapsed() >= REFRESH_AFTER)
         {
-            self.prewarm();
+            self.refresh_if_due();
         }
         if let Some(snapshot) = cached.and_then(Cached::usable) {
             return Ok(snapshot);
