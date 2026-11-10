@@ -7,15 +7,18 @@ on:
   pull_request:
     branches: [integration, 'v2/**']
     paths: ['v2/**', '.github/workflows/v2-rust.yml', 'scripts/security/cargo-*', 'scripts/security/dependency-*']
+    # Draft PRs run only the advisory scan; ready_for_review starts the full run.
+    types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
 
 permissions:
   contents: read
 
-# Only superseded PR checks cancel; manual and integration push runs stay independent.
+# A newer run replaces an older one for the same PR, and a newer push to
+# integration replaces the older integration run. Manual runs stay independent.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ${{ github.workflow }}-${{ (github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number)) || (github.event_name == 'push' && github.ref == 'refs/heads/integration' && format('push-{0}', github.ref)) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/integration') }}
 
 # One job used to run everything in sequence and took 30 to 47 minutes, most of
 # it in `cargo test --workspace`. The same steps now run side by side: lint,
@@ -29,8 +32,12 @@ concurrency:
 # Dependency caches: every job except `unit` keeps its own (keyed by job name),
 # because `-p` selections build other feature sets than `--workspace` does. The
 # `unit` shards share the `rust-v2` cache the single job used to save.
+#
+# Draft PRs skip every job that builds or tests Rust (lint, service, http, unit
+# and the `rust-v2` summary); the Cargo advisory scan still runs.
 jobs:
   lint:
+    if: ${{ github.event.pull_request.draft != true }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     defaults:
@@ -59,6 +66,7 @@ jobs:
         run: cargo +1.99.1 clippy --locked --workspace --all-targets -- -D warnings
 
   service:
+    if: ${{ github.event.pull_request.draft != true }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     defaults:
@@ -215,6 +223,7 @@ jobs:
         run: cargo +1.99.1 run --locked -p orkestr-v2-demo
 
   http:
+    if: ${{ github.event.pull_request.draft != true }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     defaults:
@@ -328,6 +337,7 @@ jobs:
           retention-days: 7
 
   unit:
+    if: ${{ github.event.pull_request.draft != true }}
     runs-on: ubuntu-latest
     # Process-failure tests exercise real deadlines; allow every shard to finish.
     timeout-minutes: 45
@@ -408,7 +418,9 @@ jobs:
 
   rust-v2:
     # Runs even when a part failed, so the check reports failure instead of "skipped".
-    if: ${{ always() }}
+    # It does not run for a cancelled (superseded) run or a draft PR: no runner
+    # is spent on it, and it reports cancelled or skipped instead.
+    if: ${{ always() && !cancelled() && github.event.pull_request.draft != true }}
     needs: [lint, service, http, unit]
     runs-on: ubuntu-latest
     timeout-minutes: 10
