@@ -589,6 +589,7 @@ class Ledger:
                         reason in WITHHELD_REASONS)
             # The raw code is for logs and the `refusal` field; the chat gets its cause.
             shown = failure_cause.owner_reason(data, reason, lang)
+            exhausted = data.get("setup_retries_exhausted")
             message = {"id": str(uuid.uuid5(NOTICE_NAMESPACE, data["remote_id"])), "role": "assistant", "state": "completed",
                        "phase": "final_answer", "kind": "notice", "source": "rust-v2-adapter",
                        "parentMessageId": data["remote_id"], "refusal": reason,
@@ -606,6 +607,10 @@ class Ledger:
                 message["text"] = notices.render(lang, "timer_interrupted" if withheld else
                                                  "timer_failure", label=(data.get("timer") or {}).get("label")
                                                  or "Scheduled task", reason=shown)
+            elif isinstance(exhausted, dict) and not withheld:
+                # recovery.py retried a window that never started: plain words, no code.
+                message["text"] = notices.render(lang, "setup_unavailable", minutes=exhausted["minutes"],
+                                                 attempts=exhausted["attempts"])
             if data.get("steered"):
                 # Messages steered into this turn settle with this notice; say so.
                 message["text"] += notices.render(lang, "steered", count=len(data["steered"]))
@@ -621,9 +626,10 @@ class Ledger:
         # (timer refusals keep their own `input_failed` alert in the worker).
         if data.get("origin") != "timer":
             # `level` INFO: an expected close the owner already has an answer for.
-            print("%s orkestr-v2-wa-adapter input_refused thread=%s input=%s reason=%s language=%s%s"
+            print("%s orkestr-v2-wa-adapter input_refused thread=%s input=%s reason=%s language=%s%s%s"
                 % (level, self.scope.get("remote_thread_id", "?"), data["remote_id"], reason, lang,
-                   " cause=" + failure_cause.cause(data, reason) if failure_cause.cause(data, reason) else ""),
+                   " cause=" + failure_cause.cause(data, reason) if failure_cause.cause(data, reason) else "",
+                   " attempts=%d" % exhausted["attempts"] if isinstance(exhausted, dict) else ""),
                 file=sys.stderr, flush=True)
         return message
 

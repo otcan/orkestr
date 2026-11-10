@@ -291,7 +291,8 @@ class OrphanedFollowUpTests(Case):
         data = self.orphan()
         later, _ = self.ledger.enqueue(dict(publicMessageId="later", publicThreadId="thread", chatId="chat",
                                             accountId="account", text="next"))
-        data["readmitted"] = {"at": time.time(), "trigger": "automatic"}  # Its one retry was used.
+        data["readmitted"] = {"at": time.time(), "trigger": "automatic",  # Its retries were used.
+                              "attempt": len(recovery.RETRY_BACKOFF_S)}
         self.end_window(data)
         self.worker.run_once(_Stop())
         self.worker.run_once(_Stop())
@@ -308,7 +309,7 @@ class OrphanedFollowUpTests(Case):
     def test_legacy_requeued_input_is_not_cloned_again_after_restart(self):
         data = self.orphan()
         data["requeued"] = {"previous_message_id": "legacy", "at": 1}
-        data["readmitted"] = {"at": time.time(), "trigger": "automatic"}
+        data["readmitted"] = {"at": time.time(), "trigger": "automatic", "attempt": len(recovery.RETRY_BACKOFF_S)}
         self.end_window(data)
         restarted = Worker(self.peer, Ledger(Path(self.temp.name) / "ledger.sqlite3", {"test_scope": "one"}), legacy_companions=True)
         with self.assertRaisesRegex(Refused, "window_setup_failed"):
@@ -317,7 +318,7 @@ class OrphanedFollowUpTests(Case):
 
     def test_missing_window_refuses_after_grace(self):
         data = self.orphan()
-        data["readmitted"] = {"at": time.time(), "trigger": "automatic"}
+        data["readmitted"] = {"at": time.time(), "trigger": "automatic", "attempt": len(recovery.RETRY_BACKOFF_S)}
         self.end_window(data)
         self.peer.current = None
         with self.assertRaisesRegex(Refused, "window_setup_failed"):
