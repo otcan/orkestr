@@ -116,3 +116,10 @@ test('sealed download and export are opened locally and verified against the man
  const none=createAttachmentClient({conversation:id(2),csrf:'synthetic-csrf',current:()=>true,hash,fetcher:async p=>p.includes('?')?json(base.page()):p.includes('/attachments/')?age():json(base.manifest)});
  await none.list();await assert.rejects(none.download(base.manifest,id(4)),/decryption unavailable/);
 });
+
+test('read-only message viewer refuses mutations before network access',async()=>{
+ const f=await fixture();
+ const client=createAttachmentClient({owner:f.manifest.owner_id,conversation:f.manifest.conversation_id,readOnly:true,current:()=>true,fetcher(){assert.fail('Read-only mutation reached network');}});
+ await assert.rejects(client.remove(f.manifest,f.ref.reference_id),/Read-only/);
+ client.close();
+});

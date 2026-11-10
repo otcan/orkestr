@@ -67,18 +67,28 @@ async function openChunk(status,receipt,ciphertext,options) {
   return content;
 }
 
-export function encryptedUploadClient({conversation,csrf,fetcher=fetch,subtle=crypto.subtle,storage=browserStorage('localStorage'),random}={}) {
-  if(!uuid(conversation)||!csrf)fail('Conversation and browser authorization required.');
+export function encryptedUploadClient({conversation,csrf,fetcher=fetch,subtle=crypto.subtle,storage=browserStorage('localStorage'),random,readOnly=false}={}) {
+  if(!uuid(conversation)||(!csrf&&!readOnly))fail('Conversation and browser authorization required.');
   const root=`/api/v2/conversations/${conversation}/encrypted-uploads`;
   const request=async(method,path,body,raw=false,digest='',signal)=>{
     signal?.throwIfAborted();
+    if(readOnly&&method!=='GET')fail('Read-only attachment client.');
     const response=await fetcher(path,{method,credentials:'same-origin',cache:'no-store',redirect:'error',...(signal?{signal}:{}),headers:{...(method==='GET'?{}:{'x-orkestr-csrf':csrf} ),...(body?{'Content-Type':raw?'application/octet-stream':'application/json'}:{}),...(digest?{'x-orkestr-ciphertext-sha256':digest}:{})},...(body?{body:raw?body:JSON.stringify(body)}:{})});
-    if(!response.ok)fail(`Encrypted upload failed (${response.status}); reselect the file to resume.`);
+    if(!response.ok)fail(method==='GET'?(response.status===401?'Sign in again to access this file.':`Encrypted file unavailable (${response.status}).`):`Encrypted upload failed (${response.status}); reselect the file to resume.`);
     const binaryResponse=raw&&method==='GET',bytes=await readBounded(response,binaryResponse?UPLOAD_CIPHER_MAX:192*1024);
     return binaryResponse?bytes:JSON.parse(new TextDecoder().decode(bytes));
   };
   const read=async(status,receipt,signal)=>openChunk(status,receipt,await request('GET',`${root}/${status.file.upload_id}/chunks/${receipt.index}`,null,true,'',signal),{subtle,storage});
   return {
+    async status(uploadId,{signal}={}) {
+      if(!uuid(uploadId))fail('Invalid encrypted file reference.');
+      const status=await request('GET',`${root}/${uploadId}`,null,false,'',signal);
+      if(!status?.file)fail('Encrypted file metadata missing.');
+      const descriptor=validateUploadFile({name:status.file.filename,type:status.file.media_type,size:status.file.plaintext_size},uploadId);
+      validateStatus(status,descriptor,conversation);
+      if(!status.complete)fail('File upload is not complete.');
+      return status;
+    },
     async attach(status,{signal}={}) {
       validateStatus(status,status.file,conversation);
       if(!status.complete||!status.ingest_recipient||!status.recipients.includes(status.ingest_recipient))fail('This encrypted file cannot be prepared for the assistant on this server.');
@@ -130,7 +140,10 @@ export function encryptedUploadClient({conversation,csrf,fetcher=fetch,subtle=cr
     async download(status,sink,{signal}={}) {
       validateStatus(status,status.file,conversation);
       if(!status.complete)fail('File upload is not complete.');
-      try {for(const receipt of status.chunks){signal?.throwIfAborted();await sink.write(await read(status,receipt,signal));}await sink.close();}
+      try {for(const receipt of status.chunks){signal?.throwIfAborted();const bytes=await read(status,receipt,signal);signal?.throwIfAborted();await sink.write(bytes);signal?.throwIfAborted();}signal?.throwIfAborted();
+        const latest=validateStatus(await request('GET',`${root}/${status.file.upload_id}`,null,false,'',signal),status.file,conversation);
+        if(!latest.complete||latest.owner_id!==status.owner_id||!same(latest.chunks,status.chunks)||!same(latest.recipients,status.recipients))fail('Encrypted file changed before download completed.');
+        signal?.throwIfAborted();await sink.close();}
       catch(error){await sink.abort?.(error);throw error;}
     },
   };

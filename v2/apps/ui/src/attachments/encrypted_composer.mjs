@@ -44,3 +44,5 @@ export function nativeDescribe({conversation,csrf},{drafts=browserStorage('sessi
     return{receipts};
   };
 }
+
+export {mountMessageFiles} from "./message_files.mjs";
