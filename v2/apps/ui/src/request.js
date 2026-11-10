@@ -7,8 +7,10 @@ const manage = /^\/api\/v2\/conversations\/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-f
 const sidebar = /^\/api\/v2\/(?:sidebar(?:\/read|\?include_hidden=true)?|v1-threads\/[A-Za-z0-9._:-]{1,200}\/(?:messages(?:\?before=[0-9]{1,18})?|uploads)|v1-links\/thr_[A-Za-z0-9_-]{22}\?instance=ins_[A-Za-z0-9_-]{22}|whatsapp-chats|v1-threads\/[A-Za-z0-9._:-]{1,200}\/(?:settings|whatsapp|desktops|timers(?:\/[A-Za-z0-9._:-]{1,200}(?:\/(?:pause|resume))?)?))$/;
 const security = /^\/api\/v2\/browser\/(?:security|password|service-credentials(?:\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})?)$/;
 // Owner-wide discovery; lease mutations retain an explicit conversation scope,
-// and only the fixed owner lifecycle verbs apply to a desk without one.
+// and only the fixed owner lifecycle verbs apply to a desk without one. The
+// owner's desk sharing switch is one fixed path, read and replaced whole.
 const deskRequest = (input.method === 'GET' && input.path === '/api/v2/desktops') ||
+    (['GET', 'PUT'].includes(input.method) && input.path === '/api/v2/desktop-sharing') ||
     (input.method === 'POST' && /^\/api\/v2\/conversations\/[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}\/desktops\/[a-z0-9][a-z0-9_-]{0,63}\/(?:acquire|release|reset)$/.test(input.path)) ||
     (input.method === 'POST' && /^\/api\/v2\/desktops\/[a-z0-9][a-z0-9_-]{0,63}\/(?:start|stop|link)$/.test(input.path));
 const health = input.path === "/api/v2/health" && input.method === "GET";
