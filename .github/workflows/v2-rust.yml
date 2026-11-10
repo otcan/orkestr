@@ -2,7 +2,7 @@ name: Orkestr 2.0 intake checks
 
 on:
   push:
-    branches: [integration, v2/rust-rewrite]
+    branches: [integration]
     paths: ['v2/**', '.github/workflows/v2-rust.yml', 'scripts/security/cargo-*', 'scripts/security/dependency-*']
   pull_request:
     branches: [integration, 'v2/**']

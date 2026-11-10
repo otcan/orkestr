@@ -17,6 +17,9 @@ Rules:
 - Do not add enterprise/team/plugin abstractions until the V1 onboarding loop is reliable.
 - Keep the install path boring: clone/install/start, open setup wizard, connect
   the first capability, create a thread or timer.
+- V2 is the primary application. Feature PRs target `integration`; the release
+  train selects an exact candidate on `prod` and advances `main` only after
+  production acceptance. Branch updates alone do not start a deployment.
 - Release, tag, merge-to-main, and deploy work must follow
   `docs/release-train.md`. Worker and parent threads may commit and push their
   own branches, but deployments must go through the release train.

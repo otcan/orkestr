@@ -71,8 +71,8 @@ and `scripts/update-watch.sh` for versioned release/update work.
 The Rust rewrite lives in `v2/` and builds with the toolchain pinned in
 `v2/rust-toolchain.toml`. GitHub Actions is the default place for full suites:
 
-- `v2-rust.yml` (rust-v2) runs on every push to `integration` (and the transitional
-  `v2/rust-rewrite` branch) and on PRs into either integration branch: format, clippy, the locked workspace build, the HTTP
+- `v2-rust.yml` (rust-v2) runs on every push to `integration` and on PRs into `integration`
+  (or transitional `v2/**` bases): format, clippy, the locked workspace build, the HTTP
   scenarios and `cargo test --locked --workspace`.
   The parts run as parallel jobs (`lint`, `service`, `http` and eight `unit`
   shards of the workspace tests); `rust-v2` is the one check that needs them

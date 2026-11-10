@@ -4,7 +4,7 @@ on:
     branches: [integration, 'v2/**']
     paths: ['v2/**', '.github/workflows/v2-image.yml']
   push:
-    branches: [integration, v2/rust-rewrite, 'ci/image-cache/**']
+    branches: [integration, 'ci/image-cache/**']
     paths: ['v2/**', '.github/workflows/v2-image.yml']
   workflow_dispatch:
 permissions:
