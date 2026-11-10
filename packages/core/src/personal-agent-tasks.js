@@ -1,5 +1,6 @@
 import { newId, nowIso, openAgentJobDb, stableStringify, tx } from "./agent-job-store.js";
 import { personalAgentFeature } from "./personal-agent-feature.js";
+import { dispatchPersonalAgentEvents, queuePersonalAgentEvent } from "./personal-agent-events.js";
 
 export const PERSONAL_AGENT_TASK_STATES = Object.freeze([
   "queued", "running", "blocked", "needs_approval", "succeeded", "failed", "cancelled",
@@ -130,7 +131,7 @@ export async function createPersonalAgentTask(input, env = process.env) {
   const actor = normalizeActor(input.actor ?? { kind: "owner", id: null, origin: "api" });
   const threadId = input.threadId == null ? null : nonEmpty(input.threadId, "personal_agent_task_thread_invalid");
   const db = await openAgentJobDb(env);
-  return tx(db, () => {
+  const result = tx(db, () => {
     if (!db.prepare("select 1 from personal_agent_projects where id = ?").get(projectId)) fail("personal_agent_project_not_found", 404);
     if (idempotencyKey) {
       const existing = db.prepare("select * from personal_agent_tasks where project_id = ? and idempotency_key = ?").get(projectId, idempotencyKey);
@@ -160,8 +161,22 @@ export async function createPersonalAgentTask(input, env = process.env) {
       (task_id, seq, from_state, to_state, actor_json, reason, evidence_json, request_json, idempotency_key, created_at)
       values (?, 1, null, 'queued', ?, 'task_created', ?, ?, ?, ?)`)
       .run(id, JSON.stringify(actor), JSON.stringify({ contractValidated: true }), JSON.stringify({ threadId }), idempotencyKey ? `create:${idempotencyKey}` : null, now);
+    queuePersonalAgentEvent(db, {
+      type: "task.created",
+      occurredAt: now,
+      actor,
+      projectId,
+      taskId: id,
+      threadId,
+      idempotencyKey: `task-created:${id}`,
+      data: { state: "queued" },
+    }, { source: "personal_agent.task", env });
     return { task: taskFromRow(taskRow(db, id)), created: true };
   });
+  // Committed; the outbox is the recovery path, so journal trouble must not
+  // turn a durable mutation into a reported failure (and an unsafe retry).
+  await dispatchPersonalAgentEvents(env).catch(() => {});
+  return result;
 }
 
 export async function getPersonalAgentTask(taskId, env = process.env) {
@@ -206,7 +221,7 @@ export async function transitionPersonalAgentTask(input, env = process.env) {
   const request = { completion: input.completion ?? null, nextAction: input.nextAction ?? null };
   const db = await openAgentJobDb(env);
 
-  return tx(db, () => {
+  const result = tx(db, () => {
     const row = taskRow(db, taskId);
     if (!row) fail("personal_agent_task_not_found", 404);
     if (idempotencyKey) {
@@ -262,8 +277,25 @@ export async function transitionPersonalAgentTask(input, env = process.env) {
       (task_id, seq, from_state, to_state, actor_json, reason, evidence_json, request_json, idempotency_key, created_at)
       values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
       .run(taskId, seq, row.state, nextState, JSON.stringify(actor), reason, JSON.stringify(evidence), JSON.stringify(request), idempotencyKey, now);
+    // Correlate with the row as just written, including any admission links.
+    queuePersonalAgentEvent(db, {
+      type: "task.state_changed",
+      occurredAt: now,
+      actor,
+      projectId: row.project_id,
+      taskId,
+      threadId: admission?.threadId ?? row.thread_id,
+      runId: admission?.runId ?? row.run_id,
+      causationId: input.causationId ?? null,
+      idempotencyKey: `task-transition:${taskId}:${seq}`,
+      data: { from: row.state, to: nextState, transition: seq },
+    }, { source: "personal_agent.task", env });
     return { task: taskFromRow(taskRow(db, taskId)), replayed: false };
   });
+  // Committed; the outbox is the recovery path, so journal trouble must not
+  // turn a durable mutation into a reported failure (and an unsafe retry).
+  await dispatchPersonalAgentEvents(env).catch(() => {});
+  return result;
 }
 
 export async function listPersonalAgentTaskTransitions(taskId, env = process.env) {

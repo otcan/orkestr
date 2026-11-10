@@ -1,0 +1,257 @@
+import assert from "node:assert/strict";
+import fs from "node:fs/promises";
+import fsSync from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import test from "node:test";
+import { closeAgentJobDbs, openAgentJobDb, tx } from "../packages/core/src/agent-job-store.js";
+import { dataPaths } from "../packages/storage/src/paths.js";
+import {
+  dispatchPersonalAgentEvents,
+  listPersonalAgentEvents,
+  queuePersonalAgentEvent,
+} from "../packages/core/src/personal-agent-events.js";
+
+// Outbox → journal recovery and feed paging. Synthetic events only.
+
+async function fixture(t) {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "orkestr-pa-events-recovery-"));
+  const env = { ORKESTR_HOME: home, ORKESTR_PERSONAL_AGENT_ENABLED: "1" };
+  t.after(async () => {
+    await closeAgentJobDbs();
+    await fs.rm(home, { recursive: true, force: true });
+  });
+  return env;
+}
+
+const eventInput = (key) => ({
+  type: "message.received",
+  actor: { kind: "owner", id: "owner-fixture", origin: "web" },
+  projectId: "prj_fixture",
+  taskId: null,
+  threadId: "thread-fixture",
+  runId: null,
+  causationId: null,
+  idempotencyKey: `message:fixture:${key}`,
+  data: { messageId: `message-${key}`, phase: "accepted" },
+});
+
+// Queue without dispatching, as if the process stopped right after commit.
+async function queueOnly(env, count) {
+  const db = await openAgentJobDb(env);
+  const queued = [];
+  tx(db, () => {
+    for (let index = 1; index <= count; index += 1) queued.push(queuePersonalAgentEvent(db, eventInput(index), { env }));
+  });
+  return queued;
+}
+
+test("a partial journal record from an interrupted append is fenced off before redispatch", async (t) => {
+  const env = await fixture(t);
+  const [first] = await queueOnly(env, 1);
+  const db = await openAgentJobDb(env);
+  const payload = db.prepare("select payload_json from personal_agent_event_outbox where event_id = ?").get(first.eventId).payload_json;
+  const journal = dataPaths(env).events;
+  await fs.mkdir(path.dirname(journal), { recursive: true });
+  // The original append died halfway through this event's record.
+  await fs.writeFile(journal, payload.slice(0, Math.floor(payload.length / 2)));
+
+  await dispatchPersonalAgentEvents(env);
+  const feed = await listPersonalAgentEvents({}, env);
+  assert.equal(feed.resetRequired, false);
+  assert.deepEqual(feed.events.map((event) => event.eventId), [first.eventId]);
+});
+
+test("an event is acknowledged only once it can be read back from the journal", async (t) => {
+  const env = await fixture(t);
+  const [first] = await queueOnly(env, 1);
+  const journal = dataPaths(env).events;
+  await fs.mkdir(path.dirname(journal), { recursive: true });
+  await fs.writeFile(journal, "{\"unterminated\":");
+  await dispatchPersonalAgentEvents(env);
+  const db = await openAgentJobDb(env);
+  const row = db.prepare("select dispatched_at from personal_agent_event_outbox where event_id = ?").get(first.eventId);
+  assert.ok(row.dispatched_at, "the readable event is acknowledged");
+  const lines = (await fs.readFile(journal, "utf8")).split("\n").filter(Boolean);
+  assert.ok(lines.some((line) => { try { return JSON.parse(line).eventId === first.eventId; } catch { return false; } }));
+});
+
+test("hasMore stays true while undispatched outbox events remain beyond one dispatch batch", async (t) => {
+  const env = await fixture(t);
+  const queued = await queueOnly(env, 201);
+  const seen = [];
+  let cursor = null;
+  for (let page = 0; page < 10; page += 1) {
+    const feed = await listPersonalAgentEvents({ afterCursor: cursor, limit: 200 }, env);
+    assert.equal(feed.resetRequired, false, `page ${page} must not demand a reset`);
+    seen.push(...feed.events.map((event) => event.eventId));
+    cursor = feed.cursor;
+    if (!feed.hasMore) break;
+  }
+  assert.deepEqual(seen, queued.map((event) => event.eventId), "following hasMore reaches every queued event in order");
+});
+
+test("the feed reads its high-water mark and first pending row from one snapshot", async (t) => {
+  const env = await fixture(t);
+  const { DatabaseSync } = await import("node:sqlite");
+  const { agentJobDbPath } = await import("../packages/core/src/agent-job-store.js");
+  await queueOnly(env, 1);
+  await dispatchPersonalAgentEvents(env);
+  const db = await openAgentJobDb(env);
+  const other = new DatabaseSync(await agentJobDbPath(env));
+  t.after(() => other.close());
+  const journal = dataPaths(env).events;
+  const prepare = db.prepare;
+  let interleaved = false;
+  // After the feed's first outbox aggregate, another process publishes seq 2
+  // and queues seq 3 before any further feed query runs.
+  db.prepare = function (sql) {
+    const statement = prepare.call(this, sql);
+    if (interleaved || !/max\(seq\)/.test(sql)) return statement;
+    return { get: (...args) => {
+      const row = statement.get(...args);
+      interleaved = true;
+      const published = queuePersonalAgentEvent(other, eventInput(2), { env });
+      const payload = other.prepare("select payload_json from personal_agent_event_outbox where event_id = ?").get(published.eventId).payload_json;
+      fsSync.appendFileSync(journal, `${payload}\n`);
+      other.prepare("update personal_agent_event_outbox set dispatched_at = 'now', payload_json = null where event_id = ?").run(published.eventId);
+      queuePersonalAgentEvent(other, eventInput(3), { env });
+      return row;
+    }, all: (...args) => statement.all(...args), run: (...args) => statement.run(...args) };
+  };
+  t.after(() => { db.prepare = prepare; });
+  const feed = await listPersonalAgentEvents({}, env);
+  db.prepare = prepare;
+  assert.ok(interleaved, "the interleaving ran");
+  const seq = (cursor) => Number.parseInt(cursor.split(".")[1], 36);
+  assert.ok(seq(feed.cursor) <= seq(feed.currentCursor), "the cursor never runs ahead of the snapshot");
+  assert.ok(feed.events.every((event) => seq(event.cursor) <= seq(feed.currentCursor)));
+});
+
+test("a committed task is returned even when journal dispatch fails afterwards", async (t) => {
+  const env = await fixture(t);
+  const { createPersonalAgentTask, transitionPersonalAgentTask } = await import("../packages/core/src/personal-agent-tasks.js");
+  const db = await openAgentJobDb(env);
+  db.prepare("insert into personal_agent_projects (id, title, created_at, updated_at) values ('prj_fixture', 'fixture', 'now', 'now')").run();
+  const journal = dataPaths(env).events;
+  await fs.mkdir(journal, { recursive: true }); // the journal cannot be read or appended
+  const created = await createPersonalAgentTask({
+    projectId: "prj_fixture", title: "fixture task", outcome: "fixture outcome", nextAction: "fixture next action", acceptanceCriteria: ["verified"],
+    scope: { permissions: [], resources: [] }, dependencies: [], budget: { maxAttempts: 1, maxRuntimeMs: 1000 },
+  }, env);
+  assert.equal(created.created, true);
+  const moved = await transitionPersonalAgentTask({ taskId: created.task.id, to: "running",
+    actor: { kind: "system", id: "controller-fixture", origin: "agent_job" }, evidence: { admission: { runId: "run-fixture" } } }, env);
+  assert.equal(moved.task.state, "running");
+  assert.equal(db.prepare("select count(*) as count from personal_agent_event_outbox where dispatched_at is null").get().count, 2, "events stay queued for recovery");
+  await fs.rm(journal, { recursive: true });
+  await dispatchPersonalAgentEvents(env);
+  assert.deepEqual((await listPersonalAgentEvents({}, env)).events.map((event) => event.type), ["task.created", "task.state_changed"]);
+});
+
+test("a lost newest journal file is reported as a reset, not a complete page", async (t) => {
+  const env = await fixture(t);
+  const { rotateEvents } = await import("../packages/storage/src/store.js");
+  await queueOnly(env, 2);
+  await dispatchPersonalAgentEvents(env);
+  await rotateEvents(env, { force: true, compress: false });
+  const db = await openAgentJobDb(env);
+  tx(db, () => queuePersonalAgentEvent(db, eventInput(3), { env }));
+  await dispatchPersonalAgentEvents(env);
+  await fs.rm(dataPaths(env).events); // archive keeps 1-2; dispatched 3 is gone
+  const feed = await listPersonalAgentEvents({ limit: 200 }, env);
+  assert.equal(feed.resetRequired, true);
+  assert.equal(feed.hasMore, false);
+});
+
+test("an event larger than the configured journal limit is refused before it is queued", async (t) => {
+  const env = await fixture(t);
+  env.ORKESTR_EVENTS_MAX_EVENT_BYTES = "2048";
+  const db = await openAgentJobDb(env);
+  const big = { ...eventInput("big"), data: { note: "x".repeat(3000) } };
+  assert.throws(() => tx(db, () => queuePersonalAgentEvent(db, big, { env })), { code: "personal_agent_event_too_large" });
+  assert.equal(db.prepare("select count(*) as count from personal_agent_event_outbox").get().count, 0);
+  tx(db, () => queuePersonalAgentEvent(db, eventInput("small"), { env }));
+  await dispatchPersonalAgentEvents(env);
+  assert.equal((await listPersonalAgentEvents({}, env)).events.length, 1);
+});
+
+test("an archive being compressed is never listed under its final .gz name", async (t) => {
+  const env = await fixture(t);
+  const { listEventArchives, rotateEvents } = await import("../packages/storage/src/store.js");
+  const { gunzipSync } = await import("node:zlib");
+  const { randomBytes } = await import("node:crypto");
+  const journal = dataPaths(env).events;
+  await fs.mkdir(path.dirname(journal), { recursive: true });
+  // Incompressible content keeps gzip busy long enough to observe the window.
+  const line = () => `${JSON.stringify({ type: "fixture", blob: randomBytes(3072).toString("base64") })}\n`;
+  await fs.writeFile(journal, Array.from({ length: 1200 }, line).join(""));
+  await rotateEvents(env, { force: true, compress: true, waitForCompression: false });
+  const dir = path.dirname(journal);
+  const partial = [];
+  const deadline = Date.now() + 15_000;
+  while (Date.now() < deadline) {
+    const archives = await listEventArchives(env);
+    for (const archive of archives.filter((entry) => entry.compressed)) {
+      const bytes = await fs.readFile(path.join(dir, archive.name)).catch(() => null);
+      if (!bytes) continue;
+      try { gunzipSync(bytes); } catch { partial.push(archive.name); }
+    }
+    if (partial.length || (archives.length && archives.every((entry) => entry.compressed))) break;
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  assert.deepEqual(partial, [], "no listed .gz archive is ever incomplete");
+});
+
+test("a listed archive replaced by its .gz while scanning is read from the replacement", async (t) => {
+  const env = await fixture(t);
+  const { readRetainedArchive } = await import("../packages/core/src/personal-agent-events.js");
+  const { gzipSync } = await import("node:zlib");
+  const dir = path.dirname(dataPaths(env).events);
+  await fs.mkdir(dir, { recursive: true });
+  const listed = path.join(dir, "events-20261018-000000-1.jsonl");
+  await fs.writeFile(`${listed}.gz`, gzipSync(`${JSON.stringify({ eventId: "evt_replaced" })}\n`));
+  const seen = [];
+  for await (const event of readRetainedArchive(listed, false)) seen.push(event.eventId);
+  assert.deepEqual(seen, ["evt_replaced"]);
+});
+
+test("dispatch does not scan retained archives of the shared journal", async (t) => {
+  const env = await fixture(t);
+  const dir = path.dirname(dataPaths(env).events);
+  await fs.mkdir(dir, { recursive: true });
+  // An unreadable older archive: a scan of every retained archive would fail
+  // on it. Only the newest archive (readable here) is consulted.
+  await fs.writeFile(path.join(dir, "events-20261018-000000-1.jsonl.gz"), "not gzip");
+  await fs.writeFile(path.join(dir, "events-20261018-000001-2.jsonl"), "");
+  const [first] = await queueOnly(env, 1);
+  const result = await dispatchPersonalAgentEvents(env);
+  assert.equal(result.dispatched, 1);
+  const db = await openAgentJobDb(env);
+  assert.ok(db.prepare("select dispatched_at from personal_agent_event_outbox where event_id = ?").get(first.eventId).dispatched_at);
+});
+
+test("an event journaled before a crash and redispatched appears once in the feed", async (t) => {
+  const env = await fixture(t);
+  const [first] = await queueOnly(env, 1);
+  const db = await openAgentJobDb(env);
+  const payload = db.prepare("select payload_json from personal_agent_event_outbox where event_id = ?").get(first.eventId).payload_json;
+  const journal = dataPaths(env).events;
+  await fs.mkdir(path.dirname(journal), { recursive: true });
+  await fs.writeFile(journal, `${payload}\n`); // appended, then the process died before acknowledging
+  await dispatchPersonalAgentEvents(env);
+  const feed = await listPersonalAgentEvents({}, env);
+  assert.deepEqual(feed.events.map((event) => event.eventId), [first.eventId]);
+  assert.equal(feed.resetRequired, false);
+});
+
+test("the feed reads events from a compressed archive", async (t) => {
+  const env = await fixture(t);
+  const { rotateEvents } = await import("../packages/storage/src/store.js");
+  const queued = await queueOnly(env, 2);
+  await dispatchPersonalAgentEvents(env);
+  await rotateEvents(env, { force: true, compress: true, waitForCompression: true });
+  const feed = await listPersonalAgentEvents({}, env);
+  assert.equal(feed.resetRequired, false);
+  assert.deepEqual(feed.events.map((event) => event.eventId), queued.map((event) => event.eventId));
+});

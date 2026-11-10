@@ -204,6 +204,39 @@ not contain credentials or unnecessary message bodies. OP-05 owns the final
 envelope normalization and cursor semantics; lanes must not introduce another
 event schema or event bus.
 
+OP-05 uses a feature-gated transactional dispatch outbox in the existing Agent
+Job SQLite store. Task creation and state transitions enqueue their event in
+the same transaction as the task mutation; dispatch appends the envelope to
+`events.jsonl` and its existing rotations. A replay after append-before-ack
+recognizes the stable `eventId`; the outbox enforces `(source, idempotencyKey)`
+uniqueness and drops the payload after journal acknowledgement while retaining
+only cursor/idempotency metadata. This is a delivery index, not a second event
+journal. External effects continue to use the Agent Job effect ledger and its
+reconciliation rules.
+
+The migration is additive and runs only with `personalAgentFeature(env)`;
+flag-off databases and older binaries remain compatible. Rollback is code-only:
+revert the event-feed code and leave the outbox table and journal intact. Do
+not drop event metadata or journal lines during rollback because consumers may
+already hold cursors referencing them.
+
+The owner-only `GET /api/personal-agent/events?cursor=<opaque>&limit=<n>` feed
+drains pending internal events, then pages the retained JSONL journal. Its
+cursor is an opaque `pa1.<base36-sequence>` token allocated transactionally;
+clients must not parse or increment it. Replaying a cursor returns only later
+logical events, with duplicate `eventId`s collapsed. If retention has removed
+the cursor's continuation, the response sets `resetRequired: true` rather than
+silently claiming a complete replay. The feed is disabled with the Personal
+Agent flag and requires the authenticated owner context.
+
+This first integration emits task lifecycle events through the common feed.
+Existing message, worker, connector, tool, and artifact producers are not
+implicitly rewritten by this change; they need explicit adapters that preserve
+their source-specific actor and delivery semantics. In particular, connector
+request/accepted/delivered states must remain distinct when those adapters are
+added. Existing effect-ledger reconciliation remains authoritative for
+uncertain external effects; an event replay is never permission to repeat one.
+
 ### Approval binding
 
 Every approval decision is bound to the exact proposed `action`, canonical
