@@ -1,9 +1,9 @@
 //! ORK-756: a timer's own turn (or any turn while one of its runs is
 //! unfinished) can change the text of its next firing, without fencing that
 //! run, without moving the planned occurrence and without duplicating runs.
+use super::super::super::observation_tests::input;
 use super::super::super::thread_asks::tests::{finish, owner_input};
 use super::*;
-use orkestr_v2_contracts::ExecutionControlRequest;
 
 async fn fire(f: &Case, namespace: Uuid, due_ms: i64) {
     sqlx::query("UPDATE dormant_timers SET next_due_ms=? WHERE namespace=?")
@@ -277,22 +277,21 @@ async fn a_stop_still_refuses_new_text_while_a_run_is_unfinished() {
     let watcher = armed_watcher(&f, &c, &g).await;
     let stopped = owner_turn(&f, &c, "stopped").await;
     fire(&f, watcher, 1).await;
-    let status = f
-        .store
-        .execution_status(&f.owner, &c)
+    // The owner's Stop ends that turn and holds the fired input behind it.
+    let cancel = f
+        .handle
+        .request_cancel(&f.owner, &stopped.run.run_id, "stop")
         .await
-        .unwrap()
         .unwrap();
+    let control = ProviderAdmission {
+        run: cancel.new_fenced_admission,
+        binding: stopped.binding.clone(),
+    };
     f.handle
-        .stop_execution(
+        .append_provider_event(
             &f.owner,
-            &c,
-            &ExecutionControlRequest {
-                expected_control_revision: None,
-                run_id: stopped.run.run_id.clone(),
-                expected_revision: status.revision,
-                request_key: "stop".into(),
-            },
+            &control,
+            &input(&control, 1, ProviderEvent::Stopped),
         )
         .await
         .unwrap();
