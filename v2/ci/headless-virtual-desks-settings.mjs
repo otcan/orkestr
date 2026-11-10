@@ -93,6 +93,7 @@ export async function virtualDesksAndAccountSettings({page, state, conversation,
     assert.equal(state.deskOwnerActions.length, beforeStop, 'cancelling does nothing');
     await clickWithin(row('held-desk'), 'Stop');
     await page.waitForSelector(confirmation('held-desk'));
+    await page.$eval(row('held-desk'), el => el.scrollIntoView({block:'center'}));
     await screenshot(label, 'virtual-desks-stop-confirmation');
     // A refusal from the server shows why and leaves the desk running.
     state.deskStopConflict = true;
@@ -130,6 +131,10 @@ export async function virtualDesksAndAccountSettings({page, state, conversation,
     assert.match(await page.$eval(`${row('synthetic-desk')} .desk-link`, el => el.textContent), /full control.*until 2026-01-01T01:00:00Z/s);
     assert.deepEqual(state.deskOwnerActions.at(-1), {action:'link',slug:'synthetic-desk'});
     assert.deepEqual(await buttons('synthetic-desk'), ['Stop'], 'the link is already on the row');
+    // Collapse the chat controls again: the list view, and below, the reserve
+    // flow must reopen them by itself so Release can never be hidden.
+    await page.click(`${row('synthetic-desk')} details.desk-chat > summary`);
+    await page.waitForFunction(selector => document.querySelector(selector)?.open === false, {}, `${row('synthetic-desk')} details.desk-chat`);
     await page.$eval('.desk-list', el => el.scrollIntoView());
     await screenshot(label, 'virtual-desks');
     const viewport=page.viewport();
@@ -146,9 +151,12 @@ export async function virtualDesksAndAccountSettings({page, state, conversation,
     assert.equal(narrow.stacked,true,'rows stack on narrow screens');
     await page.$eval('.desk-list', el => el.scrollIntoView());
     await screenshot(label,'virtual-desks-mobile');
+    await page.$eval(row('unbound-desk'), el => el.scrollIntoView());
+    await screenshot(label,'virtual-desks-mobile-rows');
     await page.setViewport(viewport);
     await clickWithin('[aria-label="Desk synthetic-desk"]','Reserve for 10 minutes');
     await waitText('Reserved for 10 minutes.');
+    await page.waitForFunction(selector => document.querySelector(selector)?.open === true, {}, `${row('synthetic-desk')} details.desk-chat`);
     await page.type('[aria-label="Virtual desks"] input[type="search"]','research');
     await page.waitForFunction(()=>document.querySelector('[aria-label="Desk synthetic-desk"]').hidden);
     await page.$eval('[aria-label="Virtual desks"] input[type="search"]',el=>{el.value='';el.dispatchEvent(new Event('input',{bubbles:true}));});
