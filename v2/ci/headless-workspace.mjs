@@ -2,12 +2,13 @@
 // Exercises the real WASM bundle at desktop and phone widths; no provider runs.
 import assert from 'node:assert/strict';
 import puppeteer from 'puppeteer';
-import { A, C, V1_INSTANCE_REF, V1_LINKS, V1_WORKER, createState, startMock } from './headless-workspace-mock.mjs';
+import { A, B, C, V1_INSTANCE_REF, V1_LINKS, V1_WORKER, createState, startMock } from './headless-workspace-mock.mjs';
 import { mkdir } from 'node:fs/promises';
 import { providerHandoff } from './headless-provider-handoff.mjs';
 import { trackerScenario } from './headless-tracker.mjs';
 import { virtualDesksAndAccountSettings } from './headless-virtual-desks-settings.mjs';
 import { silentReplies } from './headless-silent-replies.mjs';
+import { liveAnswer } from './headless-live-answer.mjs';
 
 assert.equal(process.env.CI, 'true', 'Run only in isolated CI');
 assert.ok(process.env.UI_BUNDLE_DIR, 'UI_BUNDLE_DIR is required');
@@ -781,6 +782,7 @@ export const scenarios = [
     await page.reload({ waitUntil: 'domcontentloaded' });
   }],
   ['silent-replies', label => silentReplies({ page, state, origin, conversation: C, returnConversation: A, worker: V1_WORKER, screenshot, label })],
+  ['live-answer-handover', label => liveAnswer({ page, state, origin, conversation: B, returnConversation: A, screenshot, label })],
   ['live-catch-up', async label => {
     await page.waitForSelector('#composer');
     await page.waitForFunction(() => document.querySelectorAll('.chat-messages .user-message').length > 0);

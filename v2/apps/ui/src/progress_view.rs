@@ -1,7 +1,24 @@
 use dioxus::prelude::*;
-use orkestr_v2_contracts::{ExecutionStatus, ProviderPayload};
+use orkestr_v2_contracts::{ExecutionStatus, ProviderPayload, RunId};
 use orkestr_v2_ui::{execution::Execution, session_scope::SessionScope};
 use serde_json::{json, Value};
+/// An unfinished answer, drawn like any other assistant message.
+#[component]
+pub fn LiveBubble(text: Option<String>, #[props(default)] state: &'static str) -> Element {
+    if text.is_none() && state.is_empty() {
+        return rsx! {};
+    }
+    rsx! {
+        article { class: "assistant-message live-answer", "aria-label": "Assistant answer",
+            strong { "Assistant" }
+            if let Some(text) = text {
+                crate::rich_text_view::RichText { text }
+            }
+            if !state.is_empty() { p { class: "reply-state", "{state}" } }
+        }
+    }
+}
+
 #[component]
 pub fn ProgressView(
     status: ExecutionStatus,
@@ -13,6 +30,13 @@ pub fn ProgressView(
     /// controls or provider wording.
     #[props(default)]
     plain: bool,
+    /// Chat view: the run's newest text so far, shown until this payload's
+    /// own text arrives, so a new update never blanks the bubble.
+    #[props(default)]
+    retained: Option<String>,
+    /// Chat view: text read for the run (`None` when it was removed).
+    #[props(default)]
+    onobserved: Option<EventHandler<(RunId, Option<String>)>>,
 ) -> Element {
     let phase = status.phase;
     let mut output = use_signal(orkestr_v2_ui::payload::Output::default);
@@ -83,6 +107,15 @@ pub fn ProgressView(
                                     .into(),
                                 );
                                 output.write().observed(payload.text);
+                                if let Some(onobserved) = onobserved {
+                                    let shown = output.read().text.clone().filter(|text| {
+                                        !orkestr_v2_ui::payload::silent_assistant_reply(text)
+                                    });
+                                    // A suppression marker reports nothing: it is never shown.
+                                    if shown.is_some() || output.read().removed() {
+                                        onobserved.call((payload.run_id.clone(), shown));
+                                    }
+                                }
                             }
                             _ => {
                                 output.write().unavailable();
@@ -107,16 +140,13 @@ pub fn ProgressView(
             Failed | Blocked => "Not finished",
             AwaitingAcceptance | Completed => "",
         };
-        let text = output.read().text.clone();
-        return rsx! {
-            article { class: "assistant-message live-answer", "aria-label": "Assistant answer",
-                strong { "Assistant" }
-                if let Some(text) = text {
-                    crate::rich_text_view::RichText { text }
-                }
-                if !state.is_empty() { p { class: "reply-state", "{state}" } }
-            }
-        };
+        let text = output
+            .read()
+            .text
+            .clone()
+            .filter(|text| !orkestr_v2_ui::payload::silent_assistant_reply(text))
+            .or(retained.filter(|_| !output.read().removed()));
+        return rsx! { LiveBubble { text, state } };
     }
     rsx! {
         section { "aria-label":"Provider output",
