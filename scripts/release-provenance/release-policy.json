@@ -20,6 +20,6 @@
     "compareSubtrees": ["server", "launcher"]
   },
   "attestation": {
-    "sourceRefs": ["refs/heads/main"]
+    "sourceRefs": ["refs/heads/integration", "refs/heads/main"]
   }
 }

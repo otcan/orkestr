@@ -188,6 +188,16 @@ test("post gate enforce passes only an attestation verified for the deployed com
   assert.deepEqual(record.attestation, { status: "attestation_verified", reason: undefined, verifier: "gh", sourceCommit: SHA, sourceRef: "refs/heads/main" });
 });
 
+test("post gate accepts the integration-built candidate before main promotion", async () => {
+  const release = await builtRelease();
+  const record = await postGate(release, "enforce", {
+    spawn: ghAnswering({ status: 0, stdout: ghCertificate(SHA, "refs/heads/integration") }),
+  });
+  assert.equal(record.gate.result, "passed", record.gate.reasons.join(","));
+  assert.equal(record.attestation.sourceRef, "refs/heads/integration");
+  assert.equal(record.attestation.sourceCommit, SHA);
+});
+
 for (const [name, verify, reason] of [
   ["an attestation for a different commit", { status: 0, stdout: ghCertificate(OTHER_SHA) }, "attestation_commit_mismatch"],
   ["an attestation from a ref the policy does not allow", { status: 0, stdout: ghCertificate(SHA, "refs/heads/feature") }, "attestation_ref_not_allowed"],

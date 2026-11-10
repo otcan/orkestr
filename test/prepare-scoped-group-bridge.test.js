@@ -43,7 +43,7 @@ test('prepared standalone group bridge includes its complete transport import gr
     .replace("if(command==='group-reply' || command==='group-notify')","if(command==='group-reply')")
     .replace("JSON.stringify({to,text,accountId:'main',requestId,parentId,...(command==='group-notify'?{notificationId:requestId}:{})})","JSON.stringify({to,text,accountId:'main',requestId,parentId})");
   fs.writeFileSync(wrapperPath,wrapper);
-  for(const name of ['whatsapp-participant-recovery','whatsapp-participant-recovery-admission','whatsapp-scoped-participant-input','whatsapp-scoped-wrapper-errors'])
+  for(const name of ['whatsapp-participant-recovery','whatsapp-participant-recovery-admission','whatsapp-scoped-participant-input','whatsapp-scoped-wrapper-errors','scoped-group-input-intake','scoped-group-route-age','scoped-group-message-pages','scoped-acknowledgement-activity','whatsapp-scoped-deep-quote'])
     fs.unlinkSync(path.join(dir,'packages/connectors/src',name+'.js'));
   const upgrade=fileURLToPath(new URL('../scripts/prepare-scoped-group-notifications.mjs',import.meta.url));
   const upgraded=spawnSync(process.execPath,[upgrade,dir],options);
