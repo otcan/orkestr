@@ -67,6 +67,10 @@ pub struct MessageRevisionRequest {
     /// another change landed first, and this one is refused.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expected_revision: Option<i64>,
+    /// The change is to one WhatsApp message that was merged with others into
+    /// this one. The agent is told, but the merged text stays as shown.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub part: bool,
 }
 impl MessageRevisionRequest {
     pub fn is_valid(&self) -> bool {
@@ -83,7 +87,8 @@ impl MessageRevisionRequest {
             (MessageRevisionKind::Delete, None) => true,
             _ => false,
         };
-        key_valid && text_valid && self.expected_revision.is_none_or(|n| n >= 0)
+        let part_valid = !self.part || self.source == MessageRevisionSource::Whatsapp;
+        key_valid && text_valid && part_valid && self.expected_revision.is_none_or(|n| n >= 0)
     }
 }
 
@@ -127,6 +132,9 @@ pub struct MessageRevisionNotice {
     pub change: MessageRevisionSummary,
     pub agent_notified: bool,
     pub agent_saw_earlier_text: bool,
+    /// It changes one merged source message, so the target's text stays.
+    #[serde(default)]
+    pub part: bool,
 }
 
 /// Revision facts of one snapshot row. `Message.text` stays the immutable
@@ -156,6 +164,8 @@ pub struct MessageRevisionEntry {
     pub agent_notified: bool,
     pub agent_saw_earlier_text: bool,
     pub created_at_ms: i64,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub part: bool,
 }
 
 /// The audit record of one message: the original and every change, oldest first.
@@ -179,6 +189,7 @@ mod tests {
             text: text.map(str::to_owned),
             source: MessageRevisionSource::Web,
             expected_revision: None,
+            part: false,
         }
     }
 
@@ -193,6 +204,15 @@ mod tests {
         assert!(remove.is_valid());
         remove.text = Some("no".into());
         assert!(!remove.is_valid());
+    }
+
+    #[test]
+    fn only_a_whatsapp_change_can_name_one_merged_part() {
+        let mut request = edit(Some("x"));
+        request.part = true;
+        assert!(!request.is_valid());
+        request.source = MessageRevisionSource::Whatsapp;
+        assert!(request.is_valid());
     }
 
     #[test]
