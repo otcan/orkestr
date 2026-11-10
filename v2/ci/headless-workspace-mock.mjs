@@ -378,7 +378,8 @@ async function api(state, req, res, url) {
   }
   if (rest === '' && req.method === 'GET') {
     const after = Number(q.get('after') ?? 0), rows = state.messages[id].filter(x => x.sequence > after);
-    return json(res, 200, { conversation_id: id, scope: { kind: 'global' }, messages: rows, last_sequence: state.messages[id].length, next_cursor: null });
+    const last = Math.max(0, ...state.messages[id].map(x => x.sequence));
+    return json(res, 200, { conversation_id: id, scope: { kind: 'global' }, messages: rows, last_sequence: last, next_cursor: null });
   }
   // Accepted answers: Queued errands has 25 (more than one 20-row page), so
   // the chat must follow the pages to show the newest answer.
