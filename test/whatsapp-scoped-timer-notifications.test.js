@@ -40,7 +40,7 @@ function fixture(t) {
 test('only scheduler-verified thread notification is labeled, delivered once and not echoed',async t=>{
  const {notifier,state,options}=fixture(t);
  assert.equal((await notifier.tick()).sent,1);
- assert.equal(state.sent.length,1);assert.match(state.sent[0].text,/⏰ Example check/);assert.match(state.sent[0].text,/msg:\*update\*/);
+ assert.equal(state.sent.length,1);assert.match(state.sent[0].text,/⏰ Example check/);assert.match(state.sent[0].text,/\ndbg: codex\/example · msg:\*final\*\n/);
  assert.deepEqual(await Promise.all(state.echoes),[false]);
  await notifier.tick();const resumed=createScopedTimerNotifications(options);await resumed.tick();resumed.close();
  assert.equal(state.sent.length,1);assert.ok(state.apiCalls.every(x=>!x.includes('thread-2')));
@@ -251,7 +251,7 @@ test('a long timer reply goes out as one message with its footer through the gro
  assert.equal((await notifier.tick()).sent,1);
  assert.equal(state.sent.length,1);
  assert.ok(state.sent[0].text.length>3000 && state.sent[0].text.length<=4000);
- assert.match(state.sent[0].text,/^⏰ Example check\nitem0 [\s\S]*\n\ndbg:/);
+ assert.match(state.sent[0].text,/^⏰ Example check\nitem0 [\s\S]*\n\ndbg: /);
 });
 test('a timer reply over the budget is one message plus a journaled Markdown document',async t=>{
  const {state,options}=fixture(t);
@@ -262,7 +262,7 @@ test('a timer reply over the budget is one message plus a journaled Markdown doc
  t.after(()=>notifier.close());
  assert.equal((await notifier.tick()).sent,2);
  assert.equal(state.sent.length,2);
- assert.match(state.sent[0].text,/^⏰ Example check\nitem0 [\s\S]*\n\n… \(full reply attached\)\n\ndbg:/);
+ assert.match(state.sent[0].text,/^⏰ Example check\nitem0 [\s\S]*\n\n… \(full reply attached\)\n\ndbg: /);
  const {media}=state.sent[1].text;
  assert.equal(media.mimetype,'text/markdown');
  assert.match(media.filename,/^reply-[0-9a-f]{10}\.md$/);
@@ -277,4 +277,25 @@ test('a timer answer with trailing whitespace and no footer still matches its pr
  state.messages[1].text='All clear.  \n';
  assert.equal((await notifier.tick()).sent,1);
  assert.equal(state.sent[0].text,'⏰ Example check\nAll clear.');
+});
+
+test('closed pre-dispatch wrapper rejections revoke a timer proof without poisoning the shared fence',async t=>{
+ const {wrapperRejection}=await import('../packages/connectors/src/whatsapp-scoped-wrapper-errors.js');
+ const {notificationKey}=await import('../packages/connectors/src/whatsapp-timer-notification-proof.js');
+ for(const code of ['group_transport_configuration_changed','delivery_route_blocked_before_reservation']) {
+  const f=fixture(t);
+  const notifier=createScopedTimerNotifications({...f.options,send:async()=>{throw wrapperRejection({stderr:JSON.stringify({ok:false,error:code})});}});
+  t.after(()=>notifier.close());
+  await assert.rejects(notifier.tick(),/send_rejected/);
+  const id='timer:'+notificationKey(['thread-1','parent1'])+':0';
+  assert.equal(f.proofs.get(id).state,'revoked');assert.equal(f.proofs.finished('parent1'),'rejected');
+  assert.equal(f.fence.blocked(),false);assert.equal(f.state.sent.length,0);
+ }
+});
+
+test('ambiguous wrapper/provider failure still creates durable uncertainty and blocks future sends',async t=>{
+ const {wrapperRejection}=await import('../packages/connectors/src/whatsapp-scoped-wrapper-errors.js');
+ const f=fixture(t),notifier=createScopedTimerNotifications({...f.options,send:async()=>{throw wrapperRejection({stderr:JSON.stringify({ok:false,error:'whatsapp_worker_timeout'})});}});
+ t.after(()=>notifier.close());await assert.rejects(notifier.tick(),/delivery_unresolved/);
+ assert.equal(f.fence.blocked(),true);
 });

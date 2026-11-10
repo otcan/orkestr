@@ -91,6 +91,7 @@ import { recordRuntimeControlMetric } from "./observability.js";
 import { recordCodexInputDelivery, recordCodexUserInputRequest } from "./codex-input-observability.js";
 import { bindCodexVaultTurnToken, issueCodexVaultTurnToken, revokeCodexVaultTurnToken } from "./vault-codex-turn-tokens.js";
 import { settleCodexStartNotifications } from "./codex-start-notifications.js";
+import { refuseV1ExecutionIfRetired, v1ExecutionDecision } from "./v1-execution-retired.js";
 
 const appServerDeliveryTimers = new Map();
 const appServerHistorySyncTimes = new Map();
@@ -1758,6 +1759,7 @@ export async function deliverCodexAppServerPendingInputs(thread, env = process.e
     delivered = await withThreadQueueBoundary(lockKey, async () => {
       const current = await getThread(lockKey, env);
       if (current?.queueDispatchHold?.paused || remoteWhatsAppRuntimeBinding(current || thread, env)) return [];
+      if (await refuseV1ExecutionIfRetired(current || thread, env, { entryPoint: "codex_app_server_delivery" })) return [];
       return deliverCodexAppServerPendingInputsUnlocked(current || thread, env);
     }, env);
   } finally {
@@ -1772,6 +1774,7 @@ export async function deliverCodexAppServerPendingInputs(thread, env = process.e
   }
   const currentThread = await getThread(lockKey, env).catch(() => null) || thread;
   if (currentThread?.queueDispatchHold?.paused || remoteWhatsAppRuntimeBinding(currentThread, env)) return delivered;
+  if (!(await v1ExecutionDecision(currentThread, env)).allowed) return delivered;
   if (!threadReadyForInputRetry(currentThread) || !pendingInputEligibleForReadyRetry(pending)) return delivered;
   const attempt = Math.max(0, Number(pending.deliveryReadyRetryAttempt || 0)) + 1;
   const maxAttempts = codexAppServerReadyRetryMax(env);

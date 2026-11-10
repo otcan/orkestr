@@ -83,6 +83,17 @@ function inboundSecurityPolicy(binding = {}, env = process.env) {
   };
 }
 
+// Owner and trusted-participant identities exactly as inbound security
+// classifies senders, normalized for comparison. The debug footer audience
+// check uses the same classification.
+export function whatsappBindingParticipantSets(binding = {}, env = process.env) {
+  const policy = inboundSecurityPolicy(binding || {}, env);
+  return {
+    owners: comparableSet(policy.ownerParticipantIds),
+    trusted: comparableSet(policy.trustedParticipantIds),
+  };
+}
+
 function stateBlockedParticipantIds(state = {}, { binding = {}, chatId = "" } = {}) {
   const records = Array.isArray(state?.inboundSecurity?.blockedParticipants)
     ? state.inboundSecurity.blockedParticipants

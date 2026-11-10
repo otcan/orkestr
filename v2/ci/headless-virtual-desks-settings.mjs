@@ -18,19 +18,29 @@ export async function virtualDesksAndAccountSettings({page, state, conversation,
         'click details must show the separately observed full backend source');
     await screenshot(label, 'build-version-details');
     await page.click(`${badge} button`);
-    assert.equal(await page.$(`${badge} .build-badge-details`), null);
+    await page.waitForFunction(selector => !document.querySelector(selector), {}, `${badge} .build-badge-details`);
     assert.equal(await page.$('.owner-password'), null, 'password form must not appear under the chat');
     await clickText('Virtual desks');
     await waitText('All desk resources.');
     await waitText('Research desk');
     await waitText('Unbound desk');
-    await waitText('Reservation: unknown');
+    await waitText('Availability not verified');
+    await waitText('1 available to reserve');
+    await waitText('2 need checking');
+    assert.ok((await page.$eval('[aria-label="Desk research-desk"]', el => el.textContent)).includes('does not mean the desk is free'));
+    assert.equal(await page.$('[aria-label="Desk unbound-desk"] button'),null,'unbound inventory must not offer scoped actions');
     assert.equal(new URL(page.url()).pathname, '/virtual-desks');
     assert.equal(new URL(page.url()).hash, '');
     assert.equal(state.desktopActions.length,0,'inventory must have no effects');
-    await page.select('[aria-label="Desk synthetic-desk"] select',conversation);
+    await page.type('[aria-label="Virtual desks"] input[type="search"]','research');
+    await page.waitForFunction(()=>document.querySelectorAll('.desk-card:not([hidden])').length===1);
+    assert.equal(await page.$eval('[aria-label="Desk synthetic-desk"]',el=>el.hidden),true);
+    await page.$eval('[aria-label="Virtual desks"] input[type="search"]',el=>{el.value='';el.dispatchEvent(new Event('input',{bubbles:true}));});
+    await page.waitForFunction(()=>document.querySelectorAll('.desk-card:not([hidden])').length===3);
+    assert.equal(state.desktopActions.length,0,'search has no desk effects');
+    assert.equal(await page.$eval('[aria-label="Desk synthetic-desk"] select',el=>el.value),conversation,'sole connected chat is selected without creating any effects');
     assert.equal(await page.$('.owner-password'), null, 'password form belongs only in Settings');
-    await clickWithin('[aria-label="Virtual desks"]', 'Open desktop');
+    await clickWithin('[aria-label="Desk synthetic-desk"]', 'Get viewing link');
     await page.waitForSelector('[aria-label="Virtual desks"] a[target="_blank"]');
     assert.deepEqual(await page.$eval('[aria-label="Virtual desks"] a', a => ({href:a.href,rel:a.rel})), {
         href:'https://desktop.example.test/desktop-share/synthetic?key=fixture', rel:'noopener noreferrer',
@@ -38,8 +48,21 @@ export async function virtualDesksAndAccountSettings({page, state, conversation,
     assert.deepEqual({bindings:state.bindingPuts.length, settings:state.settingsPuts.length, windows:state.windowPosts.length}, before,
         'viewing and preparing a link must not change grants/settings or start work');
     await screenshot(label, 'virtual-desks');
+    const viewport=page.viewport();
+    await page.setViewport({...viewport,width:390,height:844});
+    assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),'desk inventory fits narrow screens');
+    await screenshot(label,'virtual-desks-mobile');
+    await page.setViewport(viewport);
     await clickWithin('[aria-label="Desk synthetic-desk"]','Reserve for 10 minutes');
     await waitText('Reserved for 10 minutes.');
+    await page.type('[aria-label="Virtual desks"] input[type="search"]','research');
+    await page.waitForFunction(()=>document.querySelector('[aria-label="Desk synthetic-desk"]').hidden);
+    await page.$eval('[aria-label="Virtual desks"] input[type="search"]',el=>{el.value='';el.dispatchEvent(new Event('input',{bubbles:true}));});
+    await page.waitForFunction(()=>!document.querySelector('[aria-label="Desk synthetic-desk"]').hidden);
+    assert.ok((await page.$eval('[aria-label="Desk synthetic-desk"]',el=>el.textContent)).includes('Release reservation'),'search must retain the current fencing token and release action');
+    assert.equal(await page.$eval('[aria-label="Desk synthetic-desk"] details',el=>el.open),false,'restart stays secondary and collapsed');
+    await page.click('[aria-label="Desk synthetic-desk"] details summary');
+    assert.equal(await page.$eval('[aria-label="Desk synthetic-desk"] details',el=>el.open),true,'advanced restart opens on request');
     await clickWithin('[aria-label="Desk synthetic-desk"]','Reset runtime…');
     assert.equal(state.desktopActions.filter(a=>a.action==='reset').length,0,'confirmation must precede reset');
     await clickWithin('[aria-label="Desk synthetic-desk"]','Confirm reset');

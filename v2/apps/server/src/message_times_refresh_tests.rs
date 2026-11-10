@@ -98,13 +98,19 @@ async fn revocation_during_refresh_and_before_cache_hit_never_serves_receipts() 
     let f = Fixture::new().await;
     let request = f.request();
     f.peer.started(1).await;
+    // The foreground read finishes while its background refresh is blocked.
+    // Await it before revoking; remote-start notification does not order the
+    // foreground authorization check relative to this test's revocation.
+    let (status, page) = request.await.unwrap();
+    assert_eq!(status, 200);
+    assert!(receipts(&page).is_empty());
     f.case
         .state
         .store
         .revoke_session(&f.case.bearer)
         .await
         .unwrap();
-    let (status, _) = request.await.unwrap();
+    let (status, _) = f.request().await.unwrap();
     assert_eq!(status, 401);
     f.release().await;
     let (status, _) = f.request().await.unwrap();

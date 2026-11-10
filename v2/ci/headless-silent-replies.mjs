@@ -12,11 +12,12 @@ export async function silentReplies({ page, state, origin, conversation, returnC
     await page.reload({ waitUntil: 'domcontentloaded' });
     await page.waitForFunction(() => {
       const replies = [...document.querySelectorAll('.chat-messages .accepted-output')];
-      return replies.length === 27 && replies.some(n => n.textContent.trim() === 'Why does NO_REPLY appear?');
+      return replies.length === 27 && replies.some(n => n.textContent.trim() === 'Why does NO_REPLY appear?')
+        && [...document.querySelectorAll('.post-message .rich-text')].some(n => n.textContent.trim() === 'Synthetic post after a suppressed reply');
     }, { timeout: 20000 });
     const native = await page.evaluate(() => ({
       replies: [...document.querySelectorAll('.chat-messages .assistant-message .accepted-output')].map(n => n.textContent.trim()),
-      bubbles: document.querySelectorAll('.chat-messages > .assistant-message').length,
+      bubbles: document.querySelectorAll('.chat-messages > .assistant-message:not(.post-message)').length,
       owner: [...document.querySelectorAll('.chat-messages .user-message .rich-text')].some(n => n.textContent.trim() === 'NO_REPLY'),
     }));
     assert.equal(native.owner, true, 'owner-authored marker remains visible');

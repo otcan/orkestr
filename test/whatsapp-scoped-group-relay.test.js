@@ -6,6 +6,7 @@ import path from 'node:path';
 import test from 'node:test';
 import {DatabaseSync} from 'node:sqlite';
 import {createScopedGroupRelay} from '../packages/connectors/src/whatsapp-scoped-group-relay.js';
+import {createMessagePageReader} from '../packages/connectors/src/scoped-group-message-pages.js';
 import * as formatter from '../packages/connectors/src/whatsapp-formatting.js';
 
 function fixture(t, footer = false, progress = false, extraConfig = {}) {
@@ -44,7 +45,16 @@ function fixture(t, footer = false, progress = false, extraConfig = {}) {
       state.posts.push({url, ...options});
       return {message: {id: `input-${threadId}`}};
     }
-    if (url.includes('/messages')) { state.messageReads++; state.afterMessageRead?.(url); return state.pages[url] || {messages: []}; }
+    if (url.includes('/messages')) {
+      state.messageReads++; state.afterMessageRead?.(url);
+      // Pages hold what V1 stores. A plain read hides NO_REPLY finals like V1 does;
+      // includeNoReply=1 keeps them, and an old V1 rejects the unknown flag.
+      const flagged = url.endsWith('&includeNoReply=1');
+      if (flagged) state.flaggedReads = (state.flaggedReads || 0) + 1;
+      if (flagged && state.oldServer) throw Object.assign(new Error('query.includeNoReply is not allowed'), {status: 400});
+      const page = state.pages[flagged ? url.slice(0, -'&includeNoReply=1'.length) : url] || {messages: []};
+      return flagged ? page : {...page, messages: (page.messages || []).filter(m => !(m.role === 'assistant' && String(m.text || '').trim() === 'NO_REPLY'))};
+    }
     return {thread: {...state.threadOverride, ownerUserId: state.threadOverride.ownerUserId || config.ownerUserId, codexModel: 'example-model', retired: state.retired.has(threadId),
       binding: {chatId: groupId, enabled: true, suppressWhatsAppDebugFooter: state.suppressFooter, suppressWhatsAppUpdates: state.suppressUpdates, ...state.bindingOverride}}};
   };
@@ -230,7 +240,7 @@ test('shared footer includes model, both provider quotas and queue context once'
   state.pages['/api/threads/thread-1/messages?limit=200'] = {messages: [answer('final')]};
   assert.equal((await relay.tick()).completed, 1);
   const text = state.sent[0].text;
-  assert.match(text, /dbg: codex\/example-model/);
+  assert.match(text, /dbg: codex\/example-model.*msg:\*final\*\n/);
   assert.match(text, /codex 5h: 73%/); assert.match(text, /claude wk: 64%/);
   assert.match(text, /q:0.*load:.*help:\/help/);
   assert.equal(text.match(/dbg:/g).length, 1);
@@ -337,12 +347,12 @@ test('opted-in progress arrives once, keeps turn open and labels footer as updat
   state.pages['/api/threads/thread-1/messages?limit=200'] = {messages: [update('progress')]};
   assert.equal((await relay.tick()).completed, 0);
   assert.equal(state.sent.length, 1);
-  assert.match(state.sent[0].text, /msg:\*update\*/);
+  assert.match(state.sent[0].text, /msg:\*update\*\n/);
   await relay.tick(); assert.equal(state.sent.length, 1);
   state.pages['/api/threads/thread-1/messages?limit=200'].messages.push(answer('final'));
   assert.equal((await relay.tick()).completed, 1);
   assert.equal(state.sent.length, 2);
-  assert.match(state.sent[1].text, /msg:\*final\*/);
+  assert.match(state.sent[1].text, /msg:\*final\*\n/);
   assert.equal(relayDb.prepare('SELECT count(*) n FROM reply_payloads').get().n, 2);
 });
 
@@ -519,6 +529,107 @@ test('a late api-session reply to the newest completed input is sent once, withi
   state.pages[late].messages.push({...coordinator, id: 'too-late', createdAt: new Date(clock).toISOString()});
   await relay.tick();
   assert.equal(state.sent.length, 2, 'outside the window nothing is sent');
+});
+
+test('an open route past the late-reply window is no longer re-read on every pass', async t => {
+  let clock = Date.parse('2026-01-01T00:00:00Z') + 60_000;
+  const {relay, state, inboxDb, relayDb} = fixture(t, false, false, {now: () => clock});
+  const page = '/api/threads/thread-1/messages?limit=200';
+  // A turn that never produced a final for its own input keeps its route open.
+  state.pages[page] = {messages: [answer('other', 'elsewhere')]};
+  assert.equal((await relay.tick()).routed, 1);
+  let reads = state.messageReads;
+  clock += 5 * 60 * 60 * 1000;
+  await relay.tick();
+  assert.ok(state.messageReads > reads, 'inside the window the open route is still watched');
+  clock += 60 * 60 * 1000 + 1;
+  reads = state.messageReads;
+  inboxDb.exec(`INSERT INTO group_input(id,chat_id,body,created_at) VALUES('wa-new','group-1','new','${new Date(clock).toISOString()}')`);
+  state.pages[page] = {messages: [{id: 'input-thread-1', role: 'user'}, answer('final')]};
+  const status = await relay.tick();
+  assert.equal(state.posts.length, 2, 'a new input is still routed');
+  // The new route reads the history once and the late-reply poll once; the stale route is not read.
+  assert.equal(state.messageReads - reads, 2);
+  assert.equal(status.completed, 1);
+  // The age counts from routing, not from the WhatsApp time of a late-arriving message.
+  inboxDb.exec(`INSERT INTO group_input(id,chat_id,body,created_at) VALUES('wa-offline','group-2','queued on a phone','2025-12-01T00:00:00.000Z')`);
+  await relay.tick();
+  const opened = relayDb.prepare("SELECT opened_ms FROM route_opened WHERE id='wa-offline'").get();
+  assert.equal(Number(opened.opened_ms), clock);
+});
+
+test('a NO_REPLY final closes its route at once and is never sent', async t => {
+  const {relay, state, relayDb} = fixture(t);
+  const page = '/api/threads/thread-1/messages?limit=200';
+  state.pages[page] = {messages: [{id: 'input-thread-1', role: 'user'}, {...answer('silent-final'), text: 'NO_REPLY', visibility: 'silent', silentReason: 'no_reply'}]};
+  const status = await relay.tick();
+  assert.equal(status.completed, 1);
+  assert.ok(state.flaggedReads > 0, 'the relay reads pages with includeNoReply');
+  assert.equal(state.sent.length, 0);
+  assert.equal(relayDb.prepare("SELECT completed FROM routed WHERE id='wa-1'").get().completed, 1);
+  const reads = state.messageReads;
+  await relay.tick();
+  assert.equal(state.messageReads, reads, 'a closed route is not re-read');
+});
+
+test('a silent no_reply final is never sent even when its text is not the token', async t => {
+  const {relay, state} = fixture(t);
+  state.pages['/api/threads/thread-1/messages?limit=200'] = {messages: [{...answer('silent-final'), text: 'internal reasoning', visibility: 'silent', silentReason: 'no_reply'}]};
+  assert.equal((await relay.tick()).completed, 1);
+  assert.equal(state.sent.length, 0);
+});
+
+test('a V1 without includeNoReply keeps the previous behaviour and is probed again later', async t => {
+  let clock = Date.parse('2026-01-01T00:00:00Z') + 60_000;
+  const {relay, state} = fixture(t, false, false, {now: () => clock});
+  state.oldServer = true;
+  const page = '/api/threads/thread-1/messages?limit=200';
+  state.pages[page] = {messages: [{id: 'input-thread-1', role: 'user'}, {...answer('silent-final'), text: 'NO_REPLY'}]};
+  let status = await relay.tick();
+  assert.equal(status.routed, 1);
+  assert.equal(status.completed, 0, 'the hidden NO_REPLY leaves the route open, as before');
+  assert.equal(state.sent.length, 0);
+  const flagged = state.flaggedReads;
+  clock += 60_000; await relay.tick();
+  assert.equal(state.flaggedReads, flagged, 'the rejected flag is not retried on every pass');
+  state.oldServer = false; clock += 10 * 60 * 1000;
+  status = await relay.tick();
+  assert.equal(status.completed, 1, 'once V1 supports the flag the route closes');
+  assert.equal(state.sent.length, 0);
+});
+
+test('only the includeNoReply schema rejection falls back to the plain page', async () => {
+  const calls = [];
+  const reject = message => Object.assign(new Error(message), {status: 400, payload: {error: message}});
+  let failure = reject('query.limit must be string');
+  const readPage = createMessagePageReader({api: async url => {
+    calls.push(url);
+    if (url.endsWith('&includeNoReply=1') && failure) throw failure;
+    return {messages: []};
+  }});
+  await assert.rejects(readPage('t'), /query.limit/);
+  assert.deepEqual(calls, ['/api/threads/t/messages?limit=200&includeNoReply=1'], 'another 400 is not treated as an old V1');
+  failure = reject('query.includeNoReply is not allowed');
+  calls.length = 0;
+  await readPage('t');
+  assert.deepEqual(calls, ['/api/threads/t/messages?limit=200&includeNoReply=1', '/api/threads/t/messages?limit=200']);
+});
+
+test('a question on an open route restarts its late-reply window', async t => {
+  const start = Date.parse('2026-01-01T00:00:00Z') + 60_000;
+  let clock = start;
+  const {relay, state} = fixture(t, false, false, {now: () => clock});
+  const page = '/api/threads/thread-1/messages?limit=200';
+  await relay.tick();
+  clock += 5 * 60 * 60 * 1000;
+  // The turn asks the owner and waits on the answer.
+  state.pages[page] = {messages: [{...answer('question', 'input-thread-1', 'question'), createdAt: new Date(clock).toISOString()}]};
+  await relay.tick();
+  assert.equal(state.sent.length, 1, 'the question is delivered');
+  clock += 5 * 60 * 60 * 1000;
+  state.pages[page].messages.push({...answer('final'), createdAt: new Date(clock).toISOString()});
+  assert.equal((await relay.tick()).completed, 1, 'its final, 10 h after routing but 5 h after the question, is still delivered');
+  assert.equal(state.sent.length, 2);
 });
 
 test('a late reply is not sent while any transport delivery is uncertain', async t => {

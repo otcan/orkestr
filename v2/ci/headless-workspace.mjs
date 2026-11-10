@@ -2,12 +2,13 @@
 // Exercises the real WASM bundle at desktop and phone widths; no provider runs.
 import assert from 'node:assert/strict';
 import puppeteer from 'puppeteer';
-import { A, C, V1_INSTANCE_REF, V1_LINKS, V1_WORKER, createState, startMock } from './headless-workspace-mock.mjs';
+import { A, B, C, V1_INSTANCE_REF, V1_LINKS, V1_WORKER, createState, startMock } from './headless-workspace-mock.mjs';
 import { mkdir } from 'node:fs/promises';
 import { providerHandoff } from './headless-provider-handoff.mjs';
 import { trackerScenario } from './headless-tracker.mjs';
 import { virtualDesksAndAccountSettings } from './headless-virtual-desks-settings.mjs';
 import { silentReplies } from './headless-silent-replies.mjs';
+import { liveAnswer } from './headless-live-answer.mjs';
 
 assert.equal(process.env.CI, 'true', 'Run only in isolated CI');
 assert.ok(process.env.UI_BUNDLE_DIR, 'UI_BUNDLE_DIR is required');
@@ -659,10 +660,20 @@ export const scenarios = [
   ['host-metrics', async label => {
     // The heading panel is always visible and opens the host overview.
     await page.waitForFunction(() => document.querySelector('.host-metrics-panel')?.textContent.includes('32%'), { timeout: 20000 });
-    await page.waitForFunction(() => document.querySelector('.provider-quota-panel')?.textContent.includes('5h 75% · wk 40%'), {timeout:20000});
+    await page.waitForFunction(() => document.querySelector('.resource-bar .provider-quota-panel')?.textContent.includes('week 40%'), {timeout:20000});
     assert.equal(await page.$$eval('.provider-quota-item', cards => cards.length), 2);
-    assert.match(await text('.provider-quota-panel'), /Claude.*wk 8%.*stale/s);
-    assert.match(await page.$eval('.provider-quota-item', card => card.title), /resets in/);
+    assert.equal(await page.$eval('.resource-bar', bar => bar.contains(document.querySelector('.host-metrics-panel')) && bar.contains(document.querySelector('.provider-quota-panel'))), true);
+    assert.match(await text('.provider-quota-panel'), /Claude.*week available/s);
+    const summaries = await page.$$eval('.provider-quota-item summary', items => items.map(n => n.textContent).join(' '));
+    assert.doesNotMatch(summaries, /5h|\?|unknown/);
+    assert.equal(await page.$eval('.provider-quota-item', card => card.hasAttribute('open')), false);
+    await page.focus('.provider-quota-item summary');
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(() => document.querySelector('.provider-quota-item')?.open);
+    assert.match(await text('.provider-quota-item[open] .quota-detail'), /Observed.*week resets in/s);
+    await screenshot(label, 'quota-details');
+    await noHorizontalScroll();
+    await page.click('.provider-quota-item summary');
     await page.click('.host-metrics-panel');
     await page.waitForFunction(() => location.hash === '#host');
     await waitText('Top consumers');
@@ -795,6 +806,7 @@ export const scenarios = [
     await page.reload({ waitUntil: 'domcontentloaded' });
   }],
   ['silent-replies', label => silentReplies({ page, state, origin, conversation: C, returnConversation: A, worker: V1_WORKER, screenshot, label })],
+  ['live-answer-handover', label => liveAnswer({ page, state, origin, conversation: B, returnConversation: A, screenshot, label })],
   ['live-catch-up', async label => {
     await page.waitForSelector('#composer');
     await page.waitForFunction(() => document.querySelectorAll('.chat-messages .user-message').length > 0);
@@ -832,6 +844,14 @@ try {
     assert.equal(state.sidebarReads, 1, 'slow initial sidebar request is not cancelled or overlapped');
     assert.equal(await page.$eval('.conversation-sidebar', n => n.textContent.includes('Conversations unavailable')), false);
     state.sidebarDelayMs = 0;
+    await page.waitForFunction(() => document.querySelector('.deployment-times')?.textContent.includes('Server deployed: 2023-11-14 22:18:20 UTC'));
+    assert.ok(await page.$eval('.deployment-times', node => node.textContent.includes('Web deployed: Not recorded')), 'missing web receipt never borrows server deployment');
+    await page.click('[aria-label="Build version details"]');
+    await page.waitForFunction(() => document.querySelector('#header-build-details')?.textContent.includes('Server compiled: 2023-11-14 22:13:20 UTC'));
+    assert.ok(await page.$eval('#header-build-details',node=>node.textContent.includes('Web compiled:')), 'web compilation is independently displayed');
+    await screenshot(label, 'build-deployment-times');
+    await page.click('[aria-label="Build version details"]');
+
     for (const [name, run] of scenarios) {
       stage = `${label}:${name}`;
       await run(label);

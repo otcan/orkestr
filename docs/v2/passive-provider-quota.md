@@ -1,5 +1,26 @@
 # Passive Claude quota projection
 
+## V2 HTTP response latency
+
+The owner-bound `/api/v2/provider-quotas` projection keeps a validated snapshot
+in memory. Only authenticated owner requests trigger the first read and a shared
+background refresh after 30 seconds. Warm requests return immediately
+while refresh runs. A snapshot retained beyond 30 seconds is explicitly stale;
+after five minutes it is unavailable. Provider observation and reset timestamps
+remain unchanged, so refreshing the cache cannot make old telemetry fresh.
+
+Cold or expired requests wait at most 250 ms for the shared refresh, then return
+503 if no valid snapshot is available. The bounded upstream read continues in
+the background. Failed or invalid reads preserve the last good snapshot within
+the retention limit, with a 30-second retry interval. Refresh timing and success
+are logged without quota data, owner identifiers or credentials.
+
+The cache belongs to the explicitly configured owner binding. Cookie authority,
+query rejection, session revocation and `Cache-Control: no-store` still apply
+to every response; browser and intermediary caches are not enabled.
+
+## Passive projection
+
 The service broker can project quota from already-running Claude sessions into
 the existing V1 `/api/quota/providers` snapshot and WhatsApp footer. It creates
 no provider request, canary, thread, run, message or execution authority.

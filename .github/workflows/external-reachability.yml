@@ -1,0 +1,93 @@
+# External reachability probe for the public Orkestr endpoints.
+#
+# This runs on GitHub's network, not on the Orkestr host, so it keeps working
+# when the host is up but cannot answer the internet (lost route, firewall,
+# proxy or certificate failure). A failed run means an endpoint below gave no
+# healthy answer from outside in any of its attempts.
+#
+# The alert is GitHub's own failure notification. It goes to the account that
+# last changed the schedule in this file, through that account's notification
+# settings for Actions, and uses nothing on the Orkestr host.
+#
+# Limits: GitHub starts scheduled runs late under load and can skip them, and
+# it disables schedules in a repository that has had no activity for 60 days.
+# Read a failure as "unreachable for several minutes", not as an outage time.
+name: External reachability
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '3-59/10 * * * *'
+  # Exercise the probe itself whenever this file changes.
+  pull_request:
+    paths:
+      - .github/workflows/external-reachability.yml
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - name: Probe public endpoints from outside the host
+        run: |
+          set -u
+          attempts=3
+          pause=10
+
+          # probe NAME URL "ALLOWED HTTP CODES" [BODY REGEX]
+          # Redirects are not followed: the answer of this host is what counts.
+          probe() {
+            local name=$1 url=$2 allowed=$3 marker=${4:-} observed="" code try body errors
+            body=$(mktemp)
+            errors=$(mktemp)
+            for try in $(seq 1 "$attempts"); do
+              if code=$(curl --silent --show-error --output "$body" --write-out '%{http_code}' \
+                  --connect-timeout 8 --max-time 15 "$url" 2>"$errors"); then
+                if [[ " $allowed " != *" $code "* ]]; then
+                  observed="HTTP $code"
+                elif [[ -n $marker ]] && ! grep -Eq -- "$marker" "$body"; then
+                  observed="HTTP $code without the expected health marker in the body"
+                else
+                  echo "ok    $name: HTTP $code (attempt $try)"
+                  return 0
+                fi
+              else
+                observed=$(tr '\n' ' ' <"$errors")
+                observed=${observed:-no answer}
+              fi
+              echo "retry $name: $observed (attempt $try of $attempts)"
+              if [[ $try -lt $attempts ]]; then sleep "$pause"; fi
+            done
+            echo "::error title=$name is not healthy from outside::$url gave: $observed. Expected HTTP $allowed."
+            return 1
+          }
+
+          api=0; site=0; app=0
+          probe "API health" https://orkestr.de/api/health "200" '"ok"[[:space:]]*:[[:space:]]*true' || api=1
+          probe "Public site" https://orkestr.de/ "200" || site=1
+          # The app answers visitors without a session by sending them to sign in.
+          probe "App sign-in entry" https://app.orkestr.de/ "200 301 302 303 307 308 401 403" || app=1
+
+          # Not a health criterion: it only tells a dead host from a dead web proxy.
+          if timeout 10 bash -c 'exec 3<>/dev/tcp/orkestr.de/22 && IFS= read -r -t 6 banner <&3 && [[ $banner == SSH-* ]]' 2>/dev/null; then
+            host="answers on TCP port 22"
+          else
+            host="does not answer on TCP port 22"
+          fi
+          echo "info  orkestr.de $host"
+
+          if [[ $((api + site + app)) -eq 0 ]]; then
+            echo "All public endpoints answered healthily."
+            exit 0
+          fi
+          if [[ $((api + site + app)) -eq 3 ]]; then
+            echo "::error::Nothing healthy on port 443, and the host $host. Answering on port 22 points at the web proxy or its certificates; no answer there points at the host or its public route."
+          elif [[ $site -eq 0 && $api -eq 1 ]]; then
+            echo "::error::The public site answers but the API health check does not: the application behind the proxy is the likely cause."
+          else
+            echo "::error::Some endpoints are not healthy; see the lines above. The host $host."
+          fi
+          exit 1

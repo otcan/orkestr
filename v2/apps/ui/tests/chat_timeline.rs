@@ -230,3 +230,16 @@ mod web_replies {
         assert!(split_reply_line("[Note]\n\ntext").is_none());
     }
 }
+
+#[test]
+fn a_suppressed_reply_hides_only_itself_and_not_the_post_after_it() {
+    use orkestr_v2_contracts::ConversationPost;
+    use std::collections::BTreeSet;
+    let post: ConversationPost = serde_json::from_value(json!({"id":"00000000-0000-4000-8000-000000000005","conversation_id":"00000000-0000-4000-8000-000000000006","request_key":"synthetic-post","author":"coordinator","label":"Coordinator","provider":null,"model":null,"text":"Synthetic post","after_sequence":5,"created_ms":1000,"delivered_ms":null})).unwrap();
+    let rows = ordered(&[], &[reply(5)], &[post]).unwrap();
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0].sequence(), rows[1].sequence());
+    let silent = BTreeSet::from([5]);
+    assert!(rows[0].is_silenced(&silent));
+    assert!(!rows[1].is_silenced(&silent));
+}
