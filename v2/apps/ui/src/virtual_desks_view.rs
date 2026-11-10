@@ -70,7 +70,7 @@ pub fn VirtualDesks(
         section { class: "settings-section", "aria-label": "Virtual desks",
             style { "{include_str!(\"virtual_desks.css\")}" }
             h3 { "Virtual desks" }
-            p { class: "field-help", "All desk resources. View a desktop, or reserve it for work in a connected chat." }
+            p { class: "field-help", "All desk resources. Start, stop or link a desk here, or reserve it from a connected chat." }
             button { r#type: "button", disabled: loading(), onclick: move |_| reload += 1,
                 if loading() { "Refreshing…" } else { "Refresh" }
             }
@@ -90,14 +90,15 @@ pub fn VirtualDesks(
                     p {role:"status","No desks match your search."}
                 }
                 if value.resources.is_empty() { p { "No desk resources are available." } }
-                div {class:"desk-grid",
+                ul {class:"desk-list", "aria-label":"Desks",
                 for desk in value.resources {
-                    crate::desktop_resource_card::DesktopResourceCard {
+                    crate::desktop_resource_row::DesktopResourceRow {
                         key: "{desk.slug}:{owner}",
                         visible: format!("{} {}",desk.label,desk.slug).to_lowercase().contains(&search().trim().to_lowercase()),
                         bindings: value.bindings.iter().filter(|b| b.desktop_slugs.contains(&desk.slug)).cloned().collect::<Vec<_>>(),
                         desk, csrf: csrf.clone(), session_scope, onexpired,
                         onchanged: move |_| reload += 1,
+                        observed_at_ms: value.observed_at_ms,
                     }
                 }
                 }

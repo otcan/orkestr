@@ -25,21 +25,43 @@ export async function virtualDesksAndAccountSettings({page, state, conversation,
     await waitText('Research desk');
     await waitText('Unbound desk');
     await waitText('Availability not verified');
-    await waitText('1 available to reserve');
+    await waitText('2 available to reserve');
+    await waitText('1 reserved');
     await waitText('2 need checking');
-    assert.ok((await page.$eval('[aria-label="Desk research-desk"]', el => el.textContent)).includes('does not mean the desk is free'));
-    assert.equal(await page.$('[aria-label="Desk unbound-desk"] button'),null,'unbound inventory must not offer scoped actions');
+    const row = slug => `[aria-label="Desk ${slug}"]`;
+    const rowText = slug => page.$eval(row(slug), el => el.textContent);
+    const rowHas = (slug, snippet) => page.waitForFunction((selector, s) => document.querySelector(selector)?.textContent.includes(s), {timeout:15000}, row(slug), snippet);
+    const buttons = slug => page.$$eval(`${row(slug)} .desk-owner-buttons button`, nodes => nodes.map(n => n.textContent.trim()));
+    const confirmation = slug => `${row(slug)} .desk-confirm`;
+    assert.equal(await page.$('.desk-grid, .desk-card'), null, 'the card grid is gone');
+    assert.equal(await page.$eval('.desk-list', el => el.tagName), 'UL', 'desks are a real list');
+    assert.deepEqual(await page.$$eval('.desk-list > li.desk-row h4', nodes => nodes.map(n => n.textContent)),
+        ['Synthetic desk', 'Research desk', 'Unbound desk', 'Idle desk', 'Held desk'], 'one row per desk');
+    if (label === 'desktop')
+        assert.equal(await page.$eval('.desk-row', el => getComputedStyle(el).gridTemplateColumns.split(' ').length), 3, 'name, status and actions share one line');
+    assert.ok((await rowText('research-desk')).includes('does not mean the desk is free'));
+    assert.equal(await page.$eval(`${row('unbound-desk')} [data-availability]`, el => el.dataset.availability), 'unknown', 'unknown never takes the available style');
+    assert.equal(await page.$eval(`${row('idle-desk')} [data-availability]`, el => el.dataset.availability), 'available');
+    assert.deepEqual(await buttons('idle-desk'), ['Start'], 'a stopped desk can only be started');
+    assert.deepEqual(await buttons('research-desk'), ['Start']);
+    assert.deepEqual(await buttons('held-desk'), ['Stop', 'Link'], 'a running desk can be stopped or linked');
+    assert.deepEqual(await buttons('unbound-desk'), ['Stop'], 'an unverified runtime is neither startable nor shareable');
+    assert.equal(await page.$(`${row('unbound-desk')} select`), null, 'an unconnected desk has no chat controls');
+    assert.ok((await rowText('unbound-desk')).includes('Not connected to a chat'));
     assert.equal(new URL(page.url()).pathname, '/virtual-desks');
     assert.equal(new URL(page.url()).hash, '');
     assert.equal(state.desktopActions.length,0,'inventory must have no effects');
+    assert.equal(state.deskOwnerActions.length,0,'rendering the list must not act on a desk');
     await page.type('[aria-label="Virtual desks"] input[type="search"]','research');
-    await page.waitForFunction(()=>document.querySelectorAll('.desk-card:not([hidden])').length===1);
+    await page.waitForFunction(()=>document.querySelectorAll('.desk-row:not([hidden])').length===1);
     assert.equal(await page.$eval('[aria-label="Desk synthetic-desk"]',el=>el.hidden),true);
     await page.$eval('[aria-label="Virtual desks"] input[type="search"]',el=>{el.value='';el.dispatchEvent(new Event('input',{bubbles:true}));});
-    await page.waitForFunction(()=>document.querySelectorAll('.desk-card:not([hidden])').length===3);
+    await page.waitForFunction(()=>document.querySelectorAll('.desk-row:not([hidden])').length===5);
     assert.equal(state.desktopActions.length,0,'search has no desk effects');
     assert.equal(await page.$eval('[aria-label="Desk synthetic-desk"] select',el=>el.value),conversation,'sole connected chat is selected without creating any effects');
     assert.equal(await page.$('.owner-password'), null, 'password form belongs only in Settings');
+    assert.equal(await page.$eval(`${row('synthetic-desk')} details.desk-chat`, el => el.open), false, 'chat reservation stays secondary in the list');
+    await page.click(`${row('synthetic-desk')} details.desk-chat > summary`);
     await clickWithin('[aria-label="Desk synthetic-desk"]', 'Get viewing link');
     await page.waitForSelector('[aria-label="Virtual desks"] a[target="_blank"]');
     assert.deepEqual(await page.$eval('[aria-label="Virtual desks"] a', a => ({href:a.href,rel:a.rel})), {
@@ -47,22 +69,103 @@ export async function virtualDesksAndAccountSettings({page, state, conversation,
     });
     assert.deepEqual({bindings:state.bindingPuts.length, settings:state.settingsPuts.length, windows:state.windowPosts.length}, before,
         'viewing and preparing a link must not change grants/settings or start work');
+
+    // Owner actions on desks that no chat is connected to.
+    await clickWithin(row('idle-desk'), 'Start');
+    await rowHas('idle-desk', 'Desk started. Runtime: active.');
+    assert.deepEqual(state.deskOwnerActions.at(-1), {action:'start',slug:'idle-desk'});
+    await page.waitForFunction(selector => document.querySelector(selector)?.textContent.includes('Stop'), {}, `${row('idle-desk')} .desk-owner-buttons`);
+    assert.deepEqual(await buttons('idle-desk'), ['Stop', 'Link'], 'the row follows the new runtime');
+    await clickWithin(row('idle-desk'), 'Stop');
+    await rowHas('idle-desk', 'Desk stopped. Runtime: inactive.');
+    assert.equal(await page.$(confirmation('idle-desk')), null, 'a free desk stops without a prompt');
+    assert.deepEqual(state.deskOwnerActions.at(-1), {action:'stop',slug:'idle-desk',expected_lease_state:'unreserved',expected_holder:null,confirm_interruption:false});
+
+    // A desk a chat has reserved is never stopped without naming that chat.
+    const beforeStop = state.deskOwnerActions.length;
+    await clickWithin(row('held-desk'), 'Stop');
+    await page.waitForSelector(confirmation('held-desk'));
+    assert.match(await page.$eval(confirmation('held-desk'), el => el.textContent), /Worker chat has Held desk reserved until 2026-01-01T02:00:00Z.*interrupts/s);
+    assert.equal(await page.$eval(confirmation('held-desk'), el => el.getAttribute('role')), 'alert', 'the warning is announced');
+    assert.equal(state.deskOwnerActions.length, beforeStop, 'nothing happens before confirmation');
+    await clickWithin(row('held-desk'), 'Keep it running');
+    await page.waitForFunction(selector => !document.querySelector(selector), {}, confirmation('held-desk'));
+    assert.equal(state.deskOwnerActions.length, beforeStop, 'cancelling does nothing');
+    await clickWithin(row('held-desk'), 'Stop');
+    await page.waitForSelector(confirmation('held-desk'));
+    await page.$eval(row('held-desk'), el => el.scrollIntoView({block:'center'}));
+    await screenshot(label, 'virtual-desks-stop-confirmation');
+    // A refusal from the server shows why and leaves the desk running.
+    state.deskStopConflict = true;
+    await clickWithin(row('held-desk'), 'Stop and interrupt');
+    await rowHas('held-desk', 'reservation changed since the list was loaded');
+    assert.equal(state.deskRuntime['held-desk'], 'active', 'a refused stop changes nothing');
+    await clickWithin(row('held-desk'), 'Stop');
+    await page.waitForSelector(confirmation('held-desk'));
+    await clickWithin(row('held-desk'), 'Stop and interrupt');
+    await rowHas('held-desk', 'Desk stopped.');
+    assert.deepEqual(state.deskOwnerActions.at(-1), {action:'stop',slug:'held-desk',expected_lease_state:'reserved',expected_holder:'Worker chat',confirm_interruption:true});
+
+    // Unknown reservation and runtime need the same confirmation as reserved.
+    await clickWithin(row('unbound-desk'), 'Stop');
+    await page.waitForSelector(confirmation('unbound-desk'));
+    assert.match(await page.$eval(confirmation('unbound-desk'), el => el.textContent), /could not be verified, so a chat may be using it/);
+    await clickWithin(row('unbound-desk'), 'Stop and interrupt');
+    await rowHas('unbound-desk', 'Desk stopped.');
+    assert.deepEqual(state.deskOwnerActions.at(-1), {action:'stop',slug:'unbound-desk',expected_lease_state:'unknown',expected_holder:null,confirm_interruption:true});
+
+    // An unknown outcome blocks that row until the list has been refreshed.
+    state.deskStartFailure = true;
+    await clickWithin(row('idle-desk'), 'Start');
+    await rowHas('idle-desk', 'outcome needs checking');
+    assert.equal(await page.$eval(`${row('idle-desk')} .desk-owner-buttons button`, el => el.disabled), true, 'no retry while the outcome is unknown');
+    await clickWithin('[aria-label="Virtual desks"]', 'Refresh');
+    await page.waitForFunction(selector => document.querySelector(selector)?.disabled === false, {}, `${row('idle-desk')} .desk-owner-buttons button`);
+
+    // Link: a validated URL, and a clear statement of what it hands over.
+    await clickWithin(row('synthetic-desk'), 'Link');
+    await page.waitForSelector(`${row('synthetic-desk')} .desk-link a`);
+    assert.deepEqual(await page.$eval(`${row('synthetic-desk')} .desk-link a`, a => ({href:a.href,rel:a.rel,target:a.target})), {
+        href:'https://desktop.example.test/desktop-share/synthetic-desk?key=fixture', rel:'noopener noreferrer', target:'_blank',
+    });
+    assert.match(await page.$eval(`${row('synthetic-desk')} .desk-link`, el => el.textContent), /full control.*until 2026-01-01T01:00:00Z/s);
+    assert.deepEqual(state.deskOwnerActions.at(-1), {action:'link',slug:'synthetic-desk'});
+    assert.deepEqual(await buttons('synthetic-desk'), ['Stop'], 'the link is already on the row');
+    // Collapse the chat controls again: the list view, and below, the reserve
+    // flow must reopen them by itself so Release can never be hidden.
+    await page.click(`${row('synthetic-desk')} details.desk-chat > summary`);
+    await page.waitForFunction(selector => document.querySelector(selector)?.open === false, {}, `${row('synthetic-desk')} details.desk-chat`);
+    await page.$eval('.desk-list', el => el.scrollIntoView());
     await screenshot(label, 'virtual-desks');
     const viewport=page.viewport();
     await page.setViewport({...viewport,width:390,height:844});
-    assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),'desk inventory fits narrow screens');
+    await page.waitForFunction(()=>window.innerWidth===390);
+    const narrow = await page.evaluate(()=>{
+        const rows=[...document.querySelectorAll('.desk-row:not([hidden])')];
+        return {scroll:document.documentElement.scrollWidth, width:window.innerWidth,
+            overflowing:rows.filter(row=>row.getBoundingClientRect().right>window.innerWidth+1).map(row=>row.getAttribute('aria-label')),
+            stacked:rows.every(row=>getComputedStyle(row).gridTemplateColumns.split(' ').length===1)};
+    });
+    assert.ok(narrow.scroll<=narrow.width,`desk list fits narrow screens (${narrow.scroll}px in ${narrow.width}px)`);
+    assert.deepEqual(narrow.overflowing,[],'no desk row overflows');
+    assert.equal(narrow.stacked,true,'rows stack on narrow screens');
+    await page.$eval('.desk-list', el => el.scrollIntoView());
     await screenshot(label,'virtual-desks-mobile');
+    await page.$eval(row('unbound-desk'), el => el.scrollIntoView());
+    await screenshot(label,'virtual-desks-mobile-rows');
     await page.setViewport(viewport);
     await clickWithin('[aria-label="Desk synthetic-desk"]','Reserve for 10 minutes');
     await waitText('Reserved for 10 minutes.');
+    await page.waitForFunction(selector => document.querySelector(selector)?.open === true, {}, `${row('synthetic-desk')} details.desk-chat`);
     await page.type('[aria-label="Virtual desks"] input[type="search"]','research');
     await page.waitForFunction(()=>document.querySelector('[aria-label="Desk synthetic-desk"]').hidden);
     await page.$eval('[aria-label="Virtual desks"] input[type="search"]',el=>{el.value='';el.dispatchEvent(new Event('input',{bubbles:true}));});
     await page.waitForFunction(()=>!document.querySelector('[aria-label="Desk synthetic-desk"]').hidden);
     assert.ok((await page.$eval('[aria-label="Desk synthetic-desk"]',el=>el.textContent)).includes('Release reservation'),'search must retain the current fencing token and release action');
-    assert.equal(await page.$eval('[aria-label="Desk synthetic-desk"] details',el=>el.open),false,'restart stays secondary and collapsed');
-    await page.click('[aria-label="Desk synthetic-desk"] details summary');
-    assert.equal(await page.$eval('[aria-label="Desk synthetic-desk"] details',el=>el.open),true,'advanced restart opens on request');
+    assert.equal(await page.$eval('[aria-label="Desk synthetic-desk"] details.desk-chat',el=>el.open),true,'the release control stays visible while a reservation is held');
+    assert.equal(await page.$eval('[aria-label="Desk synthetic-desk"] details.desk-advanced',el=>el.open),false,'restart stays secondary and collapsed');
+    await page.click('[aria-label="Desk synthetic-desk"] details.desk-advanced summary');
+    assert.equal(await page.$eval('[aria-label="Desk synthetic-desk"] details.desk-advanced',el=>el.open),true,'advanced restart opens on request');
     await clickWithin('[aria-label="Desk synthetic-desk"]','Reset runtime…');
     assert.equal(state.desktopActions.filter(a=>a.action==='reset').length,0,'confirmation must precede reset');
     await clickWithin('[aria-label="Desk synthetic-desk"]','Confirm reset');
@@ -74,6 +177,8 @@ export async function virtualDesksAndAccountSettings({page, state, conversation,
     await waitText('All desk resources.');
     assert.equal(new URL(page.url()).pathname,'/virtual-desks','clean URL must survive direct refresh');
     assert.equal(state.desktopActions.length,3,'refresh must not repeat effects');
+    assert.equal(state.deskOwnerActions.at(-1).action,'link','refresh must not repeat owner actions');
+    assert.equal(state.deskOwnerActions.filter(a=>a.action==='link').length,1,'refresh must not mint another link');
     await clickText('Settings');
     await page.waitForSelector('#settings-model');
     await page.waitForSelector('[aria-label="Account settings"] .owner-password');
