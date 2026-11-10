@@ -34,6 +34,7 @@ mod host_metrics_view;
 mod host_overview;
 mod intelligence_view;
 mod live_map_view;
+mod local_files_view;
 mod local_setup;
 mod memory_export_guard;
 mod memory_transport;

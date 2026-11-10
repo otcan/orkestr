@@ -39,6 +39,8 @@ mod agent_timer_discovery;
 pub use agent_timer_discovery::*;
 mod agent_timers;
 pub use agent_timers::*;
+mod local_files;
+pub use local_files::*;
 mod legacy_workers;
 pub use legacy_workers::*;
 mod sidebar;

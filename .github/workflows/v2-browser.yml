@@ -70,6 +70,8 @@ jobs:
         run: node v2/ci/headless-local-account.mjs
       - name: Bounded encrypted upload and composer tests
         run: node --test v2/apps/ui/src/attachments/encrypted_upload.test.mjs v2/apps/ui/src/attachments/encrypted_composer.test.mjs v2/apps/ui/tests/composer_tools.test.mjs v2/apps/ui/tests/pasted_text.test.mjs v2/ci/headless-encrypted-uploads.test.mjs
+      - name: Local folder worker with a synthetic directory handle
+        run: node --test v2/apps/ui/src/local_files/folder.test.mjs v2/apps/ui/src/local_files/relay.test.mjs
       - name: UI release inventory and backend compatibility contract
         run: node --test v2/apps/ui/tests/ui_release.test.mjs v2/apps/ui/tests/asset_base.test.mjs
       - name: Mounted UI promotion and rollback with retained assets
@@ -80,6 +82,10 @@ jobs:
         env:
           SCREENSHOT_DIR: ${{ runner.temp }}/v2-screenshots
         run: node v2/ci/headless-attachment-picker.mjs
+      - name: Mounted local folder control with an injected synthetic folder
+        env:
+          SCREENSHOT_DIR: ${{ runner.temp }}/v2-screenshots
+        run: node v2/ci/headless-local-files.mjs
       - name: CI headless rendering with synthetic data
         run: node v2/ci/headless-rendering.mjs
       - name: CI configured workspace rendering against a synthetic API
