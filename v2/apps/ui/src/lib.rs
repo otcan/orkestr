@@ -231,6 +231,7 @@ pub fn is_replay_item(item: &StreamItem) -> bool {
 }
 
 pub mod held_inputs;
+pub mod live_answer;
 pub mod live_stream;
 
 pub mod timer_labels;

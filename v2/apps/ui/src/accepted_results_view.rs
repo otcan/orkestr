@@ -1,9 +1,13 @@
 use crate::accepted_results_bridge::start;
 use dioxus::prelude::*;
-use orkestr_v2_contracts::{AcceptedResult, AcceptedResults, ConversationPost, ProviderPayload};
+use orkestr_v2_contracts::{
+    AcceptedResult, AcceptedResults, ConversationPost, ExecutionStatus, ProviderPayload, RunId,
+};
 use orkestr_v2_ui::chat_timeline::{self, Input, Row};
 use orkestr_v2_ui::{
     accepted_results::{bound_payload, next_chat_page, refresh_cursor, valid_page, CHAT_PAGES},
+    execution::Execution,
+    live_answer::LiveAnswer,
     payload::Output,
     session_scope::SessionScope,
 };
@@ -14,6 +18,14 @@ use std::{
     rc::Rc,
 };
 
+/// The current run, for the answer drawn below the settled messages.
+#[derive(Clone, PartialEq)]
+pub struct LiveContext {
+    pub status: Option<ExecutionStatus>,
+    pub csrf: String,
+    pub execution: Signal<Execution>,
+}
+
 #[component]
 pub fn AcceptedReplies(
     id: String,
@@ -21,6 +33,7 @@ pub fn AcceptedReplies(
     #[props(default)] posts: Vec<ConversationPost>,
     #[props(default)] update: Option<Signal<i64>>,
     #[props(default)] inline: bool,
+    #[props(default)] live: Option<LiveContext>,
     session_scope: Signal<SessionScope>,
     onexpired: EventHandler<()>,
 ) -> Element {
@@ -32,6 +45,7 @@ pub fn AcceptedReplies(
     let mut page = use_signal(|| None::<AcceptedResults>);
     let mut collected = use_signal(BTreeMap::<i64, AcceptedResult>::new);
     let mut silent = use_signal(BTreeSet::<i64>::new);
+    let mut answer = use_signal(LiveAnswer::default);
     let revision = use_hook(|| Rc::new(Cell::new(0_i64)));
     let read_ticket = use_hook(|| Rc::new(Cell::new(0_u64)));
     let mut notice = use_signal(String::new);
@@ -154,14 +168,22 @@ pub fn AcceptedReplies(
     if *window_start.peek() != first {
         window_start.set(first);
     }
+    let status_now = live.as_ref().and_then(|live| live.status.clone());
+    use_effect(use_reactive((&status_now,), move |(status,)| {
+        let ended = status.and_then(|status| answer.peek().newly_unanswered(&status));
+        if let Some(run) = ended {
+            answer.write().unanswered(&run);
+        }
+    }));
+    let live_rows = answer.read().rows(status_now.as_ref());
     let times_now = times.read();
     rsx! { section { class: if inline { "chat-transcript" } else { "accepted-history" }, "aria-label":"Accepted replies",
         if !inline { h2 { "Accepted replies" } }
         if let Ok(rows) = rows {
             if inline && rows.is_empty() && !busy() { p { class: "empty-conversation", "Start a conversation. Your messages and accepted replies will appear here." } }
             ol { class: if inline { "chat-messages" } else { "messages" },
-                for row in rows.into_iter().filter(|row| !silent.read().contains(&row.sequence())) {
-                    li { key: "{row.key()}", class: match &row { Row::Input(_) => "user-message", Row::Reply(_) => "assistant-message", Row::Post(_) => "assistant-message post-message" }, "data-replyable": "{inline && !matches!(row, Row::Post(_))}",
+                for row in rows.into_iter().filter(|row| !row.is_silenced(&silent.read())) {
+                    li { key: "{row.key()}", hidden: matches!(&row, Row::Reply(reply) if live_rows.covers(&reply.run_id)), class: match &row { Row::Input(_) => "user-message", Row::Reply(_) => "assistant-message", Row::Post(_) => "assistant-message post-message" }, "data-replyable": "{inline && !matches!(row, Row::Post(_))}",
                         match &row {
                             Row::Input(input) => rsx! { article { "data-message-id": "{input.id}",
                                 strong { if input.actor == "owner" { "You" } else { "{input.actor}" } }
@@ -178,7 +200,8 @@ pub fn AcceptedReplies(
                                 }
                                 crate::outbox_view::TimelineDelivery { message_id: input.id.clone() }
                             } },
-                            Row::Reply(reply) => rsx! { AcceptedReply { conversation:id.clone(), row:reply.clone(), session_scope, onexpired, onsilent: move |sequence| { silent.write().insert(sequence); } } },
+                            Row::Reply(reply) => rsx! { AcceptedReply { conversation:id.clone(), row:reply.clone(), session_scope, onexpired, onsilent: move |sequence| { silent.write().insert(sequence); },
+                                onready: move |run: RunId| { if !answer.peek().is_settled(&run) { answer.write().settle(&run); } } } },
                             Row::Post(post) => rsx! { crate::conversation_posts_view::PostBubble { post: post.clone() } },
                         }
                         if let Row::Post(post) = &row {
@@ -192,6 +215,24 @@ pub fn AcceptedReplies(
         } else { p { role: "alert", "Conversation order could not be verified. Reload history." } }
         if inline {
             crate::outbox_view::OutboxBubbles { target: orkestr_v2_ui::outbox::Target::Native(id.clone()), shown: messages.iter().map(|m| m.id.clone()).collect::<Vec<_>>() }
+            if let Some(shown) = live_rows.finishing.clone() {
+                div { key: "finishing-{shown.run}", class: "chat-messages live-answer-row",
+                    crate::progress_view::LiveBubble { text: Some(shown.text) }
+                }
+            }
+            if let (Some(current), Some(context)) = (live_rows.writing.clone(), live.as_ref()) {
+                div { key: "writing-{current.run_id.as_ref().map(ToString::to_string).unwrap_or_default()}", class: "chat-messages live-answer-row",
+                    // A key only takes effect at the root of a block: each payload is read afresh.
+                    if let Some(progress) = current.progress.clone() {
+                        crate::progress_view::ProgressView { key: "{progress.payload_id}",
+                            retained: current.run_id.as_ref().and_then(|run| answer.read().text(run).map(str::to_owned)),
+                            onobserved: move |(run, text): (RunId, Option<String>)| {
+                                if answer.peek().text(&run) != text.as_deref() { answer.write().observed(&run, text); }
+                            },
+                            status: current.clone(), csrf: context.csrf.clone(), execution: context.execution, session_scope, onexpired, plain: true }
+                    }
+                }
+            }
         }
         if !inline { details { class: "transcript-pages",
             summary { "Reply history pages" }
@@ -207,6 +248,9 @@ fn AcceptedReply(
     conversation: String,
     row: AcceptedResult,
     onsilent: EventHandler<i64>,
+    /// The reply can show itself (or has nothing to show), so a live row
+    /// that stands in for it may go.
+    onready: EventHandler<RunId>,
     session_scope: Signal<SessionScope>,
     onexpired: EventHandler<()>,
 ) -> Element {
@@ -237,6 +281,7 @@ fn AcceptedReply(
         let conversation = conversation.clone();
         async move {
             if row.payload_removed || row.payload_id.is_none() {
+                onready.call(row.run_id.clone());
                 return;
             }
             loop {
@@ -266,9 +311,11 @@ fn AcceptedReply(
                                     .is_some_and(orkestr_v2_ui::payload::silent_assistant_reply)
                                 {
                                     onsilent.call(row.acceptance_sequence);
+                                    onready.call(row.run_id.clone());
                                     return;
                                 }
                                 output.write().observed(payload.text);
+                                onready.call(row.run_id.clone());
                                 notice.set(
                                     if output.read().removed() {
                                         "Answer text removed."
@@ -284,6 +331,7 @@ fn AcceptedReply(
                             _ => {
                                 output.write().unavailable();
                                 notice.set("This answer could not be loaded.".into());
+                                onready.call(row.run_id.clone());
                             }
                         }
                     }
