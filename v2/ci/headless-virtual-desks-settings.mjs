@@ -61,7 +61,8 @@ export async function virtualDesksAndAccountSettings({page, state, conversation,
     await page.waitForFunction(()=>!document.querySelector('[aria-label="Desk synthetic-desk"]').hidden);
     assert.ok((await page.$eval('[aria-label="Desk synthetic-desk"]',el=>el.textContent)).includes('Release reservation'),'search must retain the current fencing token and release action');
     assert.equal(await page.$eval('[aria-label="Desk synthetic-desk"] details',el=>el.open),false,'restart stays secondary and collapsed');
-    await clickWithin('[aria-label="Desk synthetic-desk"]','Advanced: restart desk');
+    await page.click('[aria-label="Desk synthetic-desk"] details summary');
+    assert.equal(await page.$eval('[aria-label="Desk synthetic-desk"] details',el=>el.open),true,'advanced restart opens on request');
     await clickWithin('[aria-label="Desk synthetic-desk"]','Reset runtime…');
     assert.equal(state.desktopActions.filter(a=>a.action==='reset').length,0,'confirmation must precede reset');
     await clickWithin('[aria-label="Desk synthetic-desk"]','Confirm reset');
