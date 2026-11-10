@@ -140,6 +140,7 @@ async fn detail(controller: &DurableOwnerController, value: TimerDetail) -> dto:
         } else {
             None
         },
+        instruction: value.instruction,
     }
 }
 async fn read(

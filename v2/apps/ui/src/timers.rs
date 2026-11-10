@@ -222,6 +222,9 @@ pub struct Detail {
     pub next_due_ms: Option<i64>,
     pub controller_armed: bool,
     pub controller_hold: Option<String>,
+    /// What the timer's runs receive; only the single-timer read carries it.
+    #[serde(default)]
+    pub instruction: Option<String>,
 }
 impl Detail {
     pub fn valid_for(&self, namespace: &str) -> bool {
@@ -236,6 +239,10 @@ impl Detail {
                 .as_ref()
                 .is_none_or(|id| !id.0.is_nil())
             && self.next_due_ms.is_none_or(|due| due > 0)
+            && self
+                .instruction
+                .as_deref()
+                .is_none_or(|text| !text.is_empty() && text.len() <= 32768)
             && self.controller_hold.as_deref().is_none_or(|hold| {
                 matches!(
                     hold,

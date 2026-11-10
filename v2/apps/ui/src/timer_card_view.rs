@@ -15,9 +15,12 @@ pub fn TimerCard(
     chat_pause_local: Option<String>,
     now_ms: i64,
     busy: bool,
+    /// This card's details are open; `children` then holds them.
+    selected: bool,
     onpause: EventHandler<(String, Option<i64>)>,
     onedit: EventHandler<Listed>,
     onadvanced: EventHandler<String>,
+    children: Element,
 ) -> Element {
     let label = row.label.clone().unwrap_or_else(|| "Timer".to_owned());
     let status = run_status(&row, chat_pause_ms, chat_pause_local.as_deref(), now_ms);
@@ -93,8 +96,9 @@ pub fn TimerCard(
                     }
                 }
                 if editable { button { r#type: "button", disabled: busy, onclick: { let row = row.clone(); move |_| onedit.call(row.clone()) }, "Edit" } }
-                button { r#type: "button", class: "quiet", onclick: { let ns = namespace.clone(); move |_| onadvanced.call(ns.clone()) }, "Details" }
+                button { r#type: "button", class: "quiet", "aria-expanded": "{selected}", onclick: { let ns = namespace.clone(); move |_| onadvanced.call(ns.clone()) }, if selected { "Hide details" } else { "Details" } }
             }
+            {children}
         }
     }
 }

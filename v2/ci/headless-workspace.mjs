@@ -551,7 +551,7 @@ export const scenarios = [
     await waitText('other-desk');
     await screenshot(label, 'chat-settings');
     await noHorizontalScroll();
-    // Timers of the chat are listed; selecting one opens its controls.
+    // Timers of the chat are listed; Details opens one in place.
     await clickText('Timers');
     await waitText('Synthetic morning brief');
     // Calendar timer: rule in plain words, next run, last result, silent-run count.
@@ -563,6 +563,21 @@ export const scenarios = [
     await waitText('Recent digests (1)');
     await screenshot(label, 'timers');
     await noHorizontalScroll();
+    // Details opens the timer in its own card (not in a closed section) with
+    // schedule, next run and instruction text, and closes again.
+    await clickWithin('.timer-card', 'Details');
+    await waitText('Synthetic timer instruction: read the synthetic runbook.');
+    await waitText('Next scheduled time:');
+    await page.waitForFunction(() => {
+      const panel = document.querySelector('.timer-card section[aria-label="Timer details"]');
+      const text = document.querySelector('.timer-card .timer-instruction');
+      return panel && text && !panel.closest('details:not([open])') && !text.closest('details:not([open])') &&
+        panel.getBoundingClientRect().height > 0 && text.getBoundingClientRect().height > 0;
+    });
+    await screenshot(label, 'timer-details');
+    await noHorizontalScroll();
+    await clickWithin('.timer-card', 'Hide details');
+    await page.waitForFunction(() => !document.querySelector('[aria-label="Timer details"]'));
     // Pause the timer for an hour, see it paused, resume it.
     await page.evaluate(() => [...document.querySelectorAll('.timer-card summary')].find(n => n.textContent.startsWith('Pause Synthetic triage')).click());
     await clickWithin('.timer-card', '1 hour');
