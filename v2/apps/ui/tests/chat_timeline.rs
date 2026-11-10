@@ -13,6 +13,7 @@ fn input(sequence: i64) -> Input {
         actor: "owner".into(),
         text: "Question".into(),
         reply_to: None,
+        revisions: Default::default(),
     }
 }
 #[test]

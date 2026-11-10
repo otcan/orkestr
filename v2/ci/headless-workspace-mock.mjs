@@ -131,6 +131,27 @@ async function intake(state, req, res, id) {
   return json(res, 202, wire);
 }
 
+// The server's revision contract, enough for the chat to show its effect.
+async function revisions(state, req, res, id, target) {
+  const rows = state.messages[id], row = rows.find(m => m.message_id === target);
+  if (!row) return missing(res);
+  state.revisionHistory ??= {};
+  const history = state.revisionHistory[target] ??= [];
+  if (req.method === 'GET') return json(res, 200, { conversation_id: id, message_id: target, original_text: row.text, revisions: history });
+  if (req.headers['x-orkestr-csrf'] !== 'synthetic-csrf') return json(res, 403, { code: 'csrf', message: 'CSRF required' });
+  const request = JSON.parse(await body(req));
+  (state.revisionPosts ??= []).push({ conversation: id, target, ...request });
+  if (state.revisionRefuse) return json(res, 403, { code: 'not_owner_message', message: 'Only your own messages can be edited or deleted' });
+  const revision = history.length + 1, sequence = Math.max(...rows.map(m => m.sequence)) + 1, n = 9500 + rows.length * 2;
+  const change = { revision, kind: request.kind, ...(request.text ? { text: request.text } : {}), source: 'web', revised_at_ms: 1 };
+  history.push({ revision_id: uuid(n + 900), revision, kind: request.kind, ...(request.text ? { text: request.text } : {}), source: 'web', notice_message_id: uuid(n), agent_notified: true, agent_saw_earlier_text: true, created_at_ms: 1 });
+  row.revisions = { can_revise: request.kind === 'edit', latest: change };
+  rows.push({ message_id: uuid(n), sequence, actor_kind: 'owner', origin: 'revision', text: '[Message corrected] synthetic notice',
+    revisions: { can_revise: false, notice_for: { target_message_id: target, change, agent_notified: true, agent_saw_earlier_text: true } } });
+  return json(res, 201, { revision_id: uuid(n + 900), conversation_id: id, message_id: target, revision, kind: request.kind, notice_message_id: uuid(n),
+    notice_event_id: uuid(n + 1), notice_sequence: sequence, agent_notified: true, agent_saw_earlier_text: true, created_at_ms: 1, duplicate: false });
+}
+
 async function admit(state, req, res, id) {
   if (req.headers['x-orkestr-csrf'] !== 'synthetic-csrf') return json(res, 403, { code: 'csrf', message: 'CSRF required' });
   const request = JSON.parse(await body(req));
@@ -534,6 +555,8 @@ async function api(state, req, res, url) {
     state.chatTimerPause = request.until_ms; return json(res, 200, { pause_until_ms: request.until_ms });
   }
   if (rest === '/messages' && req.method === 'POST') return intake(state, req, res, id);
+  const revisionRoute = /^\/messages\/([0-9a-f-]{36})\/revisions$/.exec(rest);
+  if (revisionRoute) return revisions(state, req, res, id, revisionRoute[1]);
   if (rest === '/window' && req.method === 'POST') return admit(state, req, res, id);
   if (rest === '/window' && req.method === 'GET') {
     if (!state.window[id]) { res.writeHead(204, { 'cache-control': 'no-store' }); return res.end(); }
