@@ -141,6 +141,12 @@ agent_timer.py instructions
 A timer is named by its ID or exact label. The default create key comes from
 the label, schedule and text, so a retried create is the same timer.
 
+When the conversation has no installed grant file the tool stops with
+`grant_file_missing` (a file that is present but unusable stays
+`grant_missing_or_invalid` or `grant_file_must_be_private`). The agent tells
+the owner plainly that the timer was not set and files no repair or Root
+request; provisioning gaps are the operator's to detect.
+
 ## Provisioning
 
 `v2/tools/agent_timer_provision.py --v2-url URL --credentials FILE --grant-dir

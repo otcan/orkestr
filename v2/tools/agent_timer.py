@@ -84,6 +84,11 @@ For recurring checks, keep ONE watcher: use `agent_timer.py upsert --label
 Write the timer text so a later turn can act on it without this chat. Report
 to the owner exactly what the tool printed. If it refuses (too soon, too
 frequent, too many timers), tell the owner instead of retrying in a loop.
+
+If it reports grant_file_missing, this thread's timer access is not set up.
+Tell the owner in one plain line that the timer was not set. Do not file a
+repair or Root request and do not look for another way to set it: the operator
+is alerted automatically.
 """
 
 
@@ -100,6 +105,9 @@ def read_grant(path=None, environ=os.environ):
             if not stat.S_ISREG(info.st_mode) or info.st_mode & 0o077 or info.st_uid != os.getuid():
                 raise TimerError(0, 'grant_file_must_be_private')
             value = path.read_text().strip()
+        except FileNotFoundError:
+            # No grant installed for this chat: a setup gap, not a bad grant.
+            raise TimerError(0, 'grant_file_missing') from None
         except (OSError, UnicodeError):
             # Filesystem and decoding errors can include private paths or
             # grant bytes. Keep them inside the CLI's structured boundary.
