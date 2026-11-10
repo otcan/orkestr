@@ -1,4 +1,5 @@
 [package]
+build = "../../build_stamp.rs"
 name = "orkestr-v2-ui"
 version.workspace = true
 edition.workspace = true

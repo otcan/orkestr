@@ -460,3 +460,11 @@ li[data-replyable="true"]:hover .reply-action, li[data-replyable="true"]:focus-w
 .upload-progress-stage { margin:.15rem 0; font-size:.8rem; overflow-wrap:anywhere; }
 .upload-progress progress { display:block; width:100%; height:.65rem; accent-color:var(--accent, #4f7cff); }
 .upload-progress-bytes { font-size:.75rem; color:var(--muted); font-variant-numeric:tabular-nums; }
+
+/* Release metadata belongs at the header's right edge, after resource summaries. */
+.app-heading > .build-badge { order: 3; margin-left: auto; }
+.deployment-times { display: block; white-space: pre-line; font-size: .62rem; line-height: 1.15; max-width: 15rem; }
+@media (max-width: 700px) {
+ .app-heading > .build-badge { max-width: 9rem; }
+ .deployment-times { font-size: .55rem; }
+}

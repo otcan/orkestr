@@ -818,6 +818,14 @@ try {
     assert.equal(state.sidebarReads, 1, 'slow initial sidebar request is not cancelled or overlapped');
     assert.equal(await page.$eval('.conversation-sidebar', n => n.textContent.includes('Conversations unavailable')), false);
     state.sidebarDelayMs = 0;
+    await page.waitForFunction(() => document.querySelector('.deployment-times')?.textContent.includes('Server deployed: 2023-11-14 22:18:20 UTC'));
+    assert.ok(await page.$eval('.deployment-times', node => node.textContent.includes('Web deployed: Not recorded')), 'missing web receipt never borrows server deployment');
+    await page.click('[aria-label="Build version details"]');
+    await page.waitForFunction(() => document.querySelector('#header-build-details')?.textContent.includes('Server compiled: 2023-11-14 22:13:20 UTC'));
+    assert.ok(await page.$eval('#header-build-details',node=>node.textContent.includes('Web compiled:')), 'web compilation is independently displayed');
+    await screenshot(label, 'build-deployment-times');
+    await page.click('[aria-label="Build version details"]');
+
     for (const [name, run] of scenarios) {
       stage = `${label}:${name}`;
       await run(label);
