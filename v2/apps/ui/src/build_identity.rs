@@ -45,7 +45,8 @@ pub fn parse<'a>(record: &'a str, version: &'a str) -> Identity<'a> {
 }
 
 pub fn compiled_at() -> Option<u64> {
-    option_env!("ORKESTR_V2_COMPILED_AT_UNIX").and_then(orkestr_v2_contracts::build_times::timestamp)
+    option_env!("ORKESTR_V2_COMPILED_AT_UNIX")
+        .and_then(orkestr_v2_contracts::build_times::timestamp)
 }
 
 pub fn identity() -> Identity<'static> {
@@ -89,6 +90,9 @@ pub fn server_identity(health: &serde_json::Value) -> Option<ServerIdentity> {
     Some(ServerIdentity {
         version: version.into(),
         source_commit,
-        compiled_at_unix: build.get("compiled_at_unix").and_then(|v| v.as_u64()).filter(|v| orkestr_v2_contracts::build_times::display_timestamp(*v).is_some()),
+        compiled_at_unix: build
+            .get("compiled_at_unix")
+            .and_then(|v| v.as_u64())
+            .filter(|v| orkestr_v2_contracts::build_times::display_timestamp(*v).is_some()),
     })
 }

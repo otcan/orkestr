@@ -1,5 +1,4 @@
 [package]
-build = "../../build_stamp.rs"
 name = "orkestr-v2-server"
 version.workspace = true
 edition.workspace = true

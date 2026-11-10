@@ -6,12 +6,31 @@ pub fn BuildBadge() -> Element {
     let mut expanded = use_signal(|| false);
     let mut deployment = use_signal(|| None::<String>);
     use_resource(move || async move {
-        let result = crate::transport::request::<serde_json::Value>("GET", "/api/v2/health", serde_json::Value::Null, "", "").await.ok();
-        let value = result.as_ref().and_then(|health| {
-            let server = orkestr_v2_ui::build_identity::server_identity(health)?;
-            let times = orkestr_v2_ui::deployment_times::parse(health, identity().source_commit, server.source_commit.as_deref());
-            Some(format!("Web deployed: {}\nServer deployed: {}", orkestr_v2_ui::deployment_times::label(times.web),orkestr_v2_ui::deployment_times::label(times.server)))
-        }).unwrap_or_else(|| "Deployment times unavailable".into());
+        let result = crate::transport::request::<serde_json::Value>(
+            "GET",
+            "/api/v2/health",
+            serde_json::Value::Null,
+            "",
+            "",
+        )
+        .await
+        .ok();
+        let value = result
+            .as_ref()
+            .and_then(|health| {
+                let server = orkestr_v2_ui::build_identity::server_identity(health)?;
+                let times = orkestr_v2_ui::deployment_times::parse(
+                    health,
+                    identity().source_commit,
+                    server.source_commit.as_deref(),
+                );
+                Some(format!(
+                    "Web deployed: {}\nServer deployed: {}",
+                    orkestr_v2_ui::deployment_times::label(times.web),
+                    orkestr_v2_ui::deployment_times::label(times.server)
+                ))
+            })
+            .unwrap_or_else(|| "Deployment times unavailable".into());
         deployment.set(Some(value));
     });
     let build = identity();

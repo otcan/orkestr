@@ -16,16 +16,30 @@ pub fn About() -> Element {
             "",
             "",
         )
-        .await.ok();
+        .await
+        .ok();
         let result = response.as_ref().and_then(server_identity).ok_or(());
-        deployments.set(response.as_ref().map(|health| orkestr_v2_ui::deployment_times::parse(health,
-            identity().source_commit,result.as_ref().ok().and_then(|server|server.source_commit.as_deref())))
-            .unwrap_or_default());
+        deployments.set(
+            response
+                .as_ref()
+                .map(|health| {
+                    orkestr_v2_ui::deployment_times::parse(
+                        health,
+                        identity().source_commit,
+                        result
+                            .as_ref()
+                            .ok()
+                            .and_then(|server| server.source_commit.as_deref()),
+                    )
+                })
+                .unwrap_or_default(),
+        );
         backend.set(Some(result));
     });
     let build = identity();
     let source = build.source_commit.unwrap_or("Unknown (unpinned build)");
-    let web_compiled = orkestr_v2_ui::deployment_times::label(orkestr_v2_ui::build_identity::compiled_at());
+    let web_compiled =
+        orkestr_v2_ui::deployment_times::label(orkestr_v2_ui::build_identity::compiled_at());
     let web_deployed = orkestr_v2_ui::deployment_times::label(deployments().web);
     let server_deployed = orkestr_v2_ui::deployment_times::label(deployments().server);
     rsx! {

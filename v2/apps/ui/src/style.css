@@ -466,5 +466,6 @@ li[data-replyable="true"]:hover .reply-action, li[data-replyable="true"]:focus-w
 .deployment-times { display: block; white-space: pre-line; font-size: .62rem; line-height: 1.15; max-width: 15rem; }
 @media (max-width: 700px) {
  .app-heading > .build-badge { max-width: 9rem; }
- .deployment-times { font-size: .55rem; }
+ /* Two extra lines push the badge under its fixed details panel; About still shows them. */
+ .deployment-times { display: none; }
 }
