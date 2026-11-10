@@ -8,7 +8,11 @@ use orkestr_v2_ui::{
     session_scope::SessionScope,
 };
 use serde_json::{json, Value};
-use std::{cell::Cell, collections::BTreeMap, rc::Rc};
+use std::{
+    cell::Cell,
+    collections::{BTreeMap, BTreeSet},
+    rc::Rc,
+};
 
 #[component]
 pub fn AcceptedReplies(
@@ -27,6 +31,7 @@ pub fn AcceptedReplies(
     let mut reload = use_signal(|| 0_u64);
     let mut page = use_signal(|| None::<AcceptedResults>);
     let mut collected = use_signal(BTreeMap::<i64, AcceptedResult>::new);
+    let mut silent = use_signal(BTreeSet::<i64>::new);
     let revision = use_hook(|| Rc::new(Cell::new(0_i64)));
     let read_ticket = use_hook(|| Rc::new(Cell::new(0_u64)));
     let mut notice = use_signal(String::new);
@@ -155,7 +160,7 @@ pub fn AcceptedReplies(
         if let Ok(rows) = rows {
             if inline && rows.is_empty() && !busy() { p { class: "empty-conversation", "Start a conversation. Your messages and accepted replies will appear here." } }
             ol { class: if inline { "chat-messages" } else { "messages" },
-                for row in rows {
+                for row in rows.into_iter().filter(|row| !silent.read().contains(&row.sequence())) {
                     li { key: "{row.key()}", class: match &row { Row::Input(_) => "user-message", Row::Reply(_) => "assistant-message", Row::Post(_) => "assistant-message post-message" }, "data-replyable": "{inline && !matches!(row, Row::Post(_))}",
                         match &row {
                             Row::Input(input) => rsx! { article { "data-message-id": "{input.id}",
@@ -173,7 +178,7 @@ pub fn AcceptedReplies(
                                 }
                                 crate::outbox_view::TimelineDelivery { message_id: input.id.clone() }
                             } },
-                            Row::Reply(reply) => rsx! { AcceptedReply { conversation:id.clone(), row:reply.clone(), session_scope, onexpired } },
+                            Row::Reply(reply) => rsx! { AcceptedReply { conversation:id.clone(), row:reply.clone(), session_scope, onexpired, onsilent: move |sequence| { silent.write().insert(sequence); } } },
                             Row::Post(post) => rsx! { crate::conversation_posts_view::PostBubble { post: post.clone() } },
                         }
                         if let Row::Post(post) = &row {
@@ -201,6 +206,7 @@ pub fn AcceptedReplies(
 fn AcceptedReply(
     conversation: String,
     row: AcceptedResult,
+    onsilent: EventHandler<i64>,
     session_scope: Signal<SessionScope>,
     onexpired: EventHandler<()>,
 ) -> Element {
@@ -254,6 +260,14 @@ fn AcceptedReply(
                         );
                         match payload {
                             Ok(payload) if bound_payload(&row, &conversation, &payload) => {
+                                if payload
+                                    .text
+                                    .as_deref()
+                                    .is_some_and(orkestr_v2_ui::payload::silent_assistant_reply)
+                                {
+                                    onsilent.call(row.acceptance_sequence);
+                                    return;
+                                }
                                 output.write().observed(payload.text);
                                 notice.set(
                                     if output.read().removed() {

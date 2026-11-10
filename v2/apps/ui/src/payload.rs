@@ -18,3 +18,8 @@ impl Output {
         self.removed
     }
 }
+
+/// Suppression markers are control output only when they are the whole assistant reply.
+pub fn silent_assistant_reply(text: &str) -> bool {
+    orkestr_v2_contracts::is_no_reply(text)
+}

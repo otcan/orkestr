@@ -128,7 +128,7 @@ pub fn V1ThreadView(
                     }, if loading() { "Loading…" } else { "Load older messages" } }
                 }
                 ol { class: "chat-messages",
-                    for message in messages.read().iter() {
+                    for message in messages.read().iter().filter(|message| message.author != SidebarAuthor::Assistant || !orkestr_v2_ui::payload::silent_assistant_reply(&message.text)) {
                         li { key: "{message.cursor}", class: match message.author { SidebarAuthor::Owner => "user-message", _ => "assistant-message" },
                             "data-phase": message.phase.clone().unwrap_or_default(), "data-replyable": "true",
                             article {

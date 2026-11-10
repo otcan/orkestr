@@ -205,6 +205,11 @@ function v1History(state, thread) {
     { message_id: 'v1-w2', author: 'participant', text: FORMATTED.whatsapp, created_at_ms: Date.now() - 2 * 3600000, phase: null, cursor: 2 },
     { message_id: 'v1-w3', author: 'assistant', text: FORMATTED.markdown, created_at_ms: Date.now() - 3600000, phase: 'final_answer', cursor: 3 },
   ] : [];
+  if (state.silentReplies && thread === V1_WORKER) messages.push(
+    { message_id: 'v1-silent-owner', author: 'owner', text: 'NO_REPLY', phase: null, cursor: 4 },
+    { message_id: 'v1-silent-assistant', author: 'assistant', text: '  NO_REPLY\n', phase: 'final_answer', cursor: 5 },
+    { message_id: 'v1-marker-example', author: 'assistant', text: 'Why does NO_REPLY appear?', phase: 'final_answer', cursor: 6 },
+  );
   // After owner input from the app: V1 works for two polls, then the
   // coordinator's reply appears.
   const inputs = state.v1Inputs.filter(x => x.thread === thread);
@@ -373,13 +378,14 @@ async function api(state, req, res, url) {
   }
   if (rest === '' && req.method === 'GET') {
     const after = Number(q.get('after') ?? 0), rows = state.messages[id].filter(x => x.sequence > after);
-    return json(res, 200, { conversation_id: id, scope: { kind: 'global' }, messages: rows, last_sequence: state.messages[id].length, next_cursor: null });
+    const last = Math.max(0, ...state.messages[id].map(x => x.sequence));
+    return json(res, 200, { conversation_id: id, scope: { kind: 'global' }, messages: rows, last_sequence: last, next_cursor: null });
   }
   // Accepted answers: Queued errands has 25 (more than one 20-row page), so
   // the chat must follow the pages to show the newest answer.
   if (rest === '/accepted-results' && req.method === 'GET') {
     const after = Number(q.get('after_sequence') ?? 0), limit = Number(q.get('limit') ?? 20);
-    const all = id === C ? Array.from({ length: 25 }, (_, i) => ({ run_id: uuid(7001 + i), completion_event_id: uuid(7101 + i),
+    const all = id === C ? Array.from({ length: state.silentReplies ? 28 : 25 }, (_, i) => ({ run_id: uuid(7001 + i), completion_event_id: uuid(7101 + i),
       acceptance_event_id: uuid(7201 + i), acceptance_sequence: i + 1, payload_id: uuid(7301 + i), payload_removed: false, auto_accepted: true })) : [];
     const rows = all.filter(r => r.acceptance_sequence > after).slice(0, limit);
     const more = all.some(r => r.acceptance_sequence > (rows.at(-1)?.acceptance_sequence ?? after));
@@ -388,7 +394,8 @@ async function api(state, req, res, url) {
   const answer = /^\/payloads\/([0-9a-f-]{36})$/.exec(rest);
   if (answer && req.method === 'GET' && id === C) {
     const n = Number(answer[1].slice(-4)) - 7300;
-    if (n >= 1 && n <= 25) return json(res, 200, { payload_id: answer[1], conversation_id: C, run_id: uuid(7000 + n), text: `Synthetic answer ${n}` });
+    const markers = { 26: '  NO_REPLY\n', 27: '`NO_REPLY`', 28: 'Why does NO_REPLY appear?' };
+    if (n >= 1 && n <= (state.silentReplies ? 28 : 25)) return json(res, 200, { payload_id: answer[1], conversation_id: C, run_id: uuid(7000 + n), text: markers[n] ?? `Synthetic answer ${n}` });
   }
   if (rest === '/events') {
     res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store' });
