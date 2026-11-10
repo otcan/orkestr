@@ -230,7 +230,7 @@ fn App() -> Element {
         main { class: "app-shell",
             header { class: "app-heading", h1 { "Orkestr" } build_badge::BuildBadge {}
                 if !csrf().is_empty() && !current().is_empty() {
-                    div { key: "{session_scope.read().generation()}", style: "display: contents",
+                    div { key: "{session_scope.read().generation()}", class: "resource-bar", role: "group", "aria-label": "Host resources and provider quotas",
                         host_metrics_panel::HostMetricsPanel { session_scope, onexpired: expired,
                             onopen: move |_| { let mut open = open_metrics.0; open += 1; } }
                         provider_quota_panel::ProviderQuotaPanel { session_scope, onexpired: expired }

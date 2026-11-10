@@ -5,6 +5,7 @@ import { readFile } from 'node:fs/promises';
 import { extname, join, normalize } from 'node:path';
 import { trackerApi } from './headless-tracker-mock.mjs';
 import { encryptedUploadMock } from './headless-encrypted-uploads.mjs';
+import { liveAnswerApi } from './headless-live-answer.mjs';
 
 export const A = '00000000-0000-4000-8000-00000000000a';
 export const B = '00000000-0000-4000-8000-00000000000b';
@@ -251,8 +252,8 @@ async function api(state, req, res, url) {
   }
   if (path === '/api/v2/live-map' && req.method === 'GET') return json(res, 200, liveMap());
   if (path === '/api/v2/provider-quotas' && req.method === 'GET') {
-    const window = {fiveHourRemainingPct:75,weeklyRemainingPct:40,fiveHourResetsAt:new Date(Date.now()+3600000).toISOString(),weeklyResetsAt:new Date(Date.now()+86400000).toISOString(),observedAt:new Date().toISOString(),stale:false,limited:false};
-    return json(res,200,{quota:{codex:window,claude:{...window,weeklyRemainingPct:8,stale:true}}});
+    const window = {fiveHourRemainingPct:null,weeklyRemainingPct:40,fiveHourResetsAt:null,weeklyResetsAt:new Date(Date.now()+86400000).toISOString(),observedAt:new Date().toISOString(),stale:false,limited:false};
+    return json(res,200,{quota:{codex:window,claude:{...window,weeklyRemainingPct:null,weeklyStatus:'allowed'}},staleAfterMs:21600000});
   }
   if (path === '/api/v2/host-metrics' && req.method === 'GET') return json(res, 200, hostSummary());
   if (path === '/api/v2/host-metrics/consumers' && req.method === 'GET') return json(res, 200, hostConsumers());
@@ -375,6 +376,7 @@ async function api(state, req, res, url) {
   const m = /^\/api\/v2\/conversations\/([0-9a-f-]{36})(\/.*)?$/.exec(path);
   if (!m || !names[m[1]]) return missing(res);
   const [, id, rest = ''] = m;
+  if (state.live?.conversation === id && await liveAnswerApi(state, req, res, rest, { json, q })) return;
   if (rest === '/intelligence' && req.method === 'GET') {
     const role = (configured, steer, max) => ({ configured, available: false, stop: configured,
       steer: configured && steer, accept: configured, max_parallel: configured ? max : 0 });
@@ -422,7 +424,9 @@ async function api(state, req, res, url) {
     return json(res, 200, { conversation_id: id, times, next_after: null });
   }
   // Conversation posts: none in the synthetic workspace.
-  if (rest === '/posts' && req.method === 'GET') return json(res, 200, { conversation_id: id, posts: [] });
+  if (rest === '/posts' && req.method === 'GET') return json(res, 200, { conversation_id: id, posts: id === C && state.silentReplies ? [
+    { id: uuid(7401), conversation_id: id, request_key: 'synthetic-post', author: 'coordinator', label: 'Coordinator', provider: null, model: null,
+      text: 'Synthetic post after a suppressed reply', after_sequence: 26, created_ms: 1000, delivered_ms: 2000 }] : [] });
   // V1 workers of the linked V1 thread (Research notes only): one working
   // worker, one nested idle worker and one retired worker.
   if (rest === '/v1-workers' && req.method === 'GET') {
