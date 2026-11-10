@@ -5,12 +5,13 @@ import crypto from 'node:crypto';
 const BATCH = 16;
 const definite = status => status >= 400 && status < 500 && ![401, 403, 408, 425, 429].includes(status);
 
-export function createInputRevisionForwarder({inbox, db, api, log = () => {}, errorCode = error => String(error?.message || 'unknown')}) {
-  db.exec('CREATE TABLE IF NOT EXISTS input_revisions_forwarded(id TEXT PRIMARY KEY,outcome TEXT NOT NULL)');
-  // An older worker has no such table yet, and a read-only inbox cannot create it.
-  const available = () => Boolean(inbox.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='group_input_revision'").get());
-  return async function forwardInputRevisions() {
-    if (!available()) return 0;
+// Runs from the relay tick after routing, so a change never overtakes its
+// input. Never throws: a failure is logged and the change is retried later.
+export async function forwardInputRevisions({inbox, db, api, log = () => {}, errorCode = error => String(error?.message || 'unknown')}) {
+  try {
+    db.exec('CREATE TABLE IF NOT EXISTS input_revisions_forwarded(id TEXT PRIMARY KEY,outcome TEXT NOT NULL)');
+    // An older worker has no such table yet, and a read-only inbox cannot create it.
+    if (!inbox.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='group_input_revision'").get()) return 0;
     let forwarded = 0;
     for (const row of inbox.prepare('SELECT * FROM group_input_revision ORDER BY created_at,rowid').all()) {
       if (forwarded >= BATCH) break;
@@ -32,5 +33,8 @@ export function createInputRevisionForwarder({inbox, db, api, log = () => {}, er
       }
     }
     return forwarded;
-  };
+  } catch (error) {
+    log({event: 'input_revision_error', code: errorCode(error)});
+    return 0;
+  }
 }

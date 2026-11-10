@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {DatabaseSync} from 'node:sqlite';
 import {createInputRevisionObserver, revisedInputCandidates} from '../packages/connectors/src/whatsapp-scoped-input-revisions.js';
-import {createInputRevisionForwarder} from '../packages/connectors/src/scoped-group-input-revisions.js';
+import {forwardInputRevisions} from '../packages/connectors/src/scoped-group-input-revisions.js';
 import {handleInboundRevision} from '../packages/connectors/src/whatsapp-local-bridge.js';
 
 const GROUP = '120000000001@g.us';
@@ -78,7 +78,7 @@ function relay(t, respond = async () => ({ok: true})) {
   t.after(() => db.close());
   db.exec('CREATE TABLE routed(id TEXT PRIMARY KEY,thread_id TEXT NOT NULL,message_id TEXT NOT NULL,completed INTEGER NOT NULL DEFAULT 0)');
   const calls = [];
-  const forward = createInputRevisionForwarder({inbox, db, api: async (url, options) => { calls.push({url, options}); return respond(); }});
+  const forward = () => forwardInputRevisions({inbox, db, api: async (url, options) => { calls.push({url, options}); return respond(); }});
   return {inbox, db, calls, forward};
 }
 const routeInput = db => db.prepare('INSERT INTO routed(id,thread_id,message_id) VALUES(?,?,?)').run('owner-1', 'thread-1', 'public-1');
@@ -113,8 +113,7 @@ test('a failure retries and a definite refusal does not', async t => {
 test('a journal from an older worker has nothing to forward', async t => {
   const inbox = journal(t), db = new DatabaseSync(':memory:');
   t.after(() => db.close());
-  const forward = createInputRevisionForwarder({inbox, db, api: async () => assert.fail('no call')});
-  assert.equal(await forward(), 0);
+  assert.equal(await forwardInputRevisions({inbox, db, api: async () => assert.fail('no call')}), 0);
 });
 
 test('the legacy router leaves a change alone', async () => {
