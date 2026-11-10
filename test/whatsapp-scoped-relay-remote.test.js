@@ -6,6 +6,7 @@ import test from "node:test";
 import { deliverWhatsAppReplies } from "../packages/connectors/src/whatsapp.js";
 import {
   forwardScopedRelayInputToRemote,
+  forwardScopedRelayRevision,
   recordScopedRelayRemoteDelivery,
   scopedRelayRemoteBinding,
 } from "../packages/connectors/src/whatsapp-scoped-relay-remote.js";
@@ -62,6 +63,10 @@ async function fixture(t, { binding = {} } = {}) {
       };
       return Response.json({ ok: true, message: { id: runtime.user.id, state: "delivered", deliveryState: "delivered" } }, { status: 202 });
     }
+    if (parsed.pathname.endsWith("/input-revision")) {
+      (runtime.revisions ||= []).push(body);
+      return Response.json({ ok: true, duplicate: false }, { status: 202 });
+    }
     if (parsed.pathname.endsWith("/mirror-acks")) {
       runtime.acks.push(body);
       const row = runtime.exports.find((item) => item.id === body.remoteMessageId);
@@ -78,6 +83,15 @@ async function fixture(t, { binding = {} } = {}) {
     role: "user", state: "queued", source: "whatsapp_group_relay", text, clientMessageId: "group:example-input",
   }, env);
   return { env, runtime, fetchImpl, relayInput };
+}
+
+// One relay input the runtime has already accepted.
+async function forwardedInput(t) {
+  const { env, runtime, fetchImpl, relayInput } = await fixture(t);
+  const thread = await getThread("example-thread", env);
+  const remote = scopedRelayRemoteBinding(thread, relayBody, env);
+  const { message } = await forwardScopedRelayInputToRemote({ thread, message: await relayInput(), remote }, env, fetchImpl);
+  return { env, runtime, fetchImpl, thread, message };
 }
 
 test("relay input on a delegated thread requires the legacy mirror off and a verified author", async (t) => {
@@ -448,4 +462,27 @@ test("a quoted-reply context is stored on the V1 message and forwarded to the re
   assert.deepEqual(runtime.inputs[0].replyTo, message.replyTo);
   const plain = await appendThreadMessage("example-thread", { role: "user", state: "queued", source: "whatsapp_group_relay", text: "hi", clientMessageId: "group:plain", replyTo: "nope" }, env);
   assert.equal(plain.replyTo, undefined);
+});
+
+test("the owner's WhatsApp edit reaches the runtime in the input's exact scope", async (t) => {
+  const { env, fetchImpl, runtime, thread, message } = await forwardedInput(t);
+  const result = await forwardScopedRelayRevision({ thread, messageId: message.id,
+    body: { revisionId: "wa:one", kind: "edit", text: "corrected" } }, env, fetchImpl);
+  assert.deepEqual(result, { duplicate: false });
+  const [sent] = runtime.revisions;
+  assert.equal(sent.publicMessageId, message.id);
+  assert.equal(sent.publicThreadId, thread.id);
+  assert.deepEqual([sent.chatId, sent.accountId, sent.source, sent.connector, sent.role, sent.kind, sent.text, sent.revisionId],
+    ["example-group@g.us", "example-account", "whatsapp_inbound", "whatsapp", "user", "edit", "corrected", "wa:one"]);
+});
+
+test("a revision that is malformed or names no forwarded input is refused", async (t) => {
+  const { env, fetchImpl, runtime, thread, message } = await forwardedInput(t);
+  const send = (messageId, body) => forwardScopedRelayRevision({ thread, messageId, body }, env, fetchImpl);
+  await assert.rejects(send(message.id, { revisionId: "wa:one", kind: "pin" }), { message: "scoped_relay_revision_invalid" });
+  await assert.rejects(send(message.id, { revisionId: "wa:one", kind: "edit", text: "  " }), { message: "scoped_relay_revision_invalid" });
+  await assert.rejects(send("unknown", { revisionId: "wa:one", kind: "delete" }), { message: "message_not_found" });
+  const local = await appendThreadMessage(thread.id, { role: "user", text: "not forwarded", source: "web" }, env);
+  await assert.rejects(send(local.id, { revisionId: "wa:one", kind: "delete" }), { message: "scoped_relay_revision_target_invalid" });
+  assert.equal(runtime.revisions, undefined);
 });

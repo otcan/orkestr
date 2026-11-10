@@ -50,7 +50,7 @@ def watch_label(watch, kind):
     """Parent label of a web-watch export. A returned thread-ask answer's turn
     reads "↩ from <thread name>"; a web message keeps its web labels."""
     if watch.get("internal_context"):
-        return "Task update"
+        return watch.get("excerpt") or "Task update"
     source = watch.get("thread_name")
     if watch.get("thread_ask") and source:
         return "\u21a9 from %s%s" % (source, " (progress)" if kind == "progress" else "")
@@ -176,6 +176,8 @@ class Ledger:
             initialize_fast_watch(db)
             from .recovery import initialize as initialize_recovery
             initialize_recovery(db)
+            from .input_revisions import initialize as initialize_input_revisions
+            initialize_input_revisions(db)
             version = db.execute("SELECT value FROM ledger_meta WHERE key='schema'").fetchone()
             if version is None:
                 # Pilot ledgers (schema 1) kept the accepted reply inside the input row.
@@ -505,15 +507,15 @@ class Ledger:
             rows = db.execute("SELECT data FROM web_watch ORDER BY rowid LIMIT ?", (limit,)).fetchall()
         return [json.loads(raw) for (raw,) in rows]
 
-    def await_internal_context(self, message):
+    def await_internal_context(self, message, excerpt="Task update"):
         """Keep the ordinary exact-source Deep answer; never export tool input.
 
-        The Root registry was checked before this call. No window, run, or
+        The caller checked that this input is internal. No window, run, or
         acceptance is created, and duplicate scans cannot duplicate a reply.
         """
         watch = {"message_id": message["message_id"], "sequence": message["sequence"],
                  "cursor": message["sequence"] - 1, "since": time.time(),
-                 "excerpt": "Task update", "runs": [], "progress": [], "internal_context": True}
+                 "excerpt": excerpt, "runs": [], "progress": [], "internal_context": True}
         with self.connect() as db:
             return db.execute("INSERT OR IGNORE INTO web_watch VALUES (?,?)",
                               (message["message_id"], json.dumps(watch))).rowcount == 1

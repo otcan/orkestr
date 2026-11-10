@@ -319,6 +319,14 @@ class ClientTests(unittest.TestCase):
                                ("POST", "/inputs/%s/retire" % RUN)):
             self.assertTrue(self.client._path(method, suffix).endswith(suffix))
 
+    def test_message_revision_route_is_exact(self):
+        for method, suffix in (("GET", "/messages/%s/revisions" % RUN), ("POST", "/messages/not-a-uuid/revisions"),
+                               ("POST", "/messages/%s/revisions?limit=1" % RUN), ("POST", "/messages/%s" % RUN)):
+            with self.subTest(method=method, suffix=suffix), self.assertRaises(ClientError):
+                self.client._path(method, suffix)
+        suffix = "/messages/%s/revisions" % RUN
+        self.assertTrue(self.client._path("POST", suffix).endswith(suffix))
+
     def test_redirect_scope_type_and_body_bounds_are_refused(self):
         self.client.ensure_login()
         original = self.respond

@@ -483,7 +483,9 @@ class RustClient:
                     re.fullmatch(r"[A-Za-z0-9:._-]{1,128}", path.path[10:]))
         retire = (method == "POST" and path.path.startswith("/inputs/") and path.path.endswith("/retire") and
                   identity(path.path[8:-7]))
-        require((method == "GET" and (path.path in read or payload or steering)) or digest_ack or post_ack or retire or
+        revision = (method == "POST" and path.path.startswith("/messages/") and path.path.endswith("/revisions") and
+                    identity(path.path[10:-10]))
+        require((method == "GET" and (path.path in read or payload or steering)) or digest_ack or post_ack or retire or revision or
                 (method == "POST" and path.path in ("/messages", "/window", "/accept", "/settings/render",
                                                     "/timer-outcomes", "/timer-triggers", "/steer")), "route_refused")
         try:

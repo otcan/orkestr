@@ -114,6 +114,13 @@ export function createScopedNativeWorkerPolicy(config,{createTransport=createSco
    };
    try {return Promise.resolve(get(accountId).observe(client,message)).catch(failed);} catch(error) {return Promise.resolve(failed(error));}
   },
+  observeRevision(accountId,client,message,change){
+   if(accountId!==config.workerAccountId)fail();
+   return Promise.resolve(get(accountId).observeRevision(client,message,change)).catch(error=>{
+    report({event:'scoped_group_revision_failed',accountId,code:observeFailureCode(error)});
+    return false;
+   });
+  },
   recoverParticipantMessage(accountId,client,chatId,body){
    if(accountId!==config.workerAccountId || !chats.has(chatId))fail();
    recovery.request(chatId,body);
