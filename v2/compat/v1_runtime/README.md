@@ -86,7 +86,13 @@ crashing starts that ladder again. A ledger that cannot be opened or stays
 locked (`sqlite3.OperationalError`, e.g. a full fd table) does not crash the
 worker: the pass is retried after 1, 2, 4 ... 30 s, with a `WARN ...
 ledger_unavailable` line on the first failure and an `ALERT ... ledger_unavailable`
-line after 5. Every ledger connection is closed when its `with` block ends.
+line after 5. A binding worker keeps one ledger connection for its passes and
+closes it when its run loop ends; every other ledger connection (HTTP requests,
+the registry) is closed when its `with` block ends. The filters a pass and V1's
+listing use (inputs not completed, inputs not settled, exports by input,
+unreported exports) read partial indexes that the adapter creates in each
+ledger at start, so a chat's finished history is not read again on every pass
+(ORK-772).
 
 `GET /health` reports `workers`: `expected` (bindings with a worker thread,
 paused ones included), `alive`, `enabledAlive`, total `crashes` and `notAlive`
