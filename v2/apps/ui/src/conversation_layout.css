@@ -64,6 +64,13 @@
 .run-state .execution-model, .run-state .stop-notice { flex: 1 1 100%; font-size: .72rem; color: var(--muted); }
 @media (prefers-reduced-motion: reduce) { .run-state .execution-summary::before { animation: none !important; } }
 
+/* A Markdown link to a file on the agent's machine: named, never a download. */
+.rich-text .rt-file-unavailable { display: inline-flex; flex-wrap: wrap; align-items: center; gap: .25rem .35rem; max-width: 100%; padding: .05rem .5rem; border: 1px dashed var(--border-strong); border-radius: .5rem; background: var(--surface-2); color: var(--text); vertical-align: baseline; }
+.rt-file-icon { flex: none; color: var(--muted); }
+.rt-file-label { min-width: 0; overflow-wrap: anywhere; font-weight: 600; }
+.rt-file-badge { flex: none; font-size: .68rem; line-height: 1.5; padding: 0 .45rem; border-radius: 1rem; background: var(--warn-soft); color: var(--warn-text); }
+.rt-file-unavailable[data-attached=true] .rt-file-badge { background: var(--info-soft); color: var(--info-text); }
+
 /* Files & context drawer. */
 .native-conversation > .files-drawer { grid-area: transcript; z-index: 5; align-self: start; justify-self: end; display: flex; flex-direction: column; gap: .2rem; width: min(30rem, calc(100% - 1rem)); max-height: calc(100% - 1rem); margin: .5rem; overflow: auto; overscroll-behavior: contain; padding: .2rem .9rem .8rem; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); box-shadow: var(--shadow); }
 .native-conversation > .files-drawer[hidden] { display: none; }

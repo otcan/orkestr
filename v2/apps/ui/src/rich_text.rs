@@ -3,6 +3,11 @@
 //! `_italic_`, `~strike~`, "•" bullets, ``` code). Parsing only: the view
 //! turns this tree into elements and text nodes, so message text is never
 //! interpreted as HTML and only http(s)/mailto links are produced.
+//!
+//! A Markdown link to a file on the agent's machine (`sandbox:`, `file:`, an
+//! absolute or relative path) is never a link: nothing here can download it.
+//! It becomes `LocalFile`, shown as an unavailable file (ORK-786); only an
+//! attachment record (its own card) is a working download.
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Inline {
@@ -11,7 +16,15 @@ pub enum Inline {
     Em(Vec<Inline>),
     Strike(Vec<Inline>),
     Code(String),
-    Link { href: String, label: Vec<Inline> },
+    Link {
+        href: String,
+        label: Vec<Inline>,
+    },
+    /// A link target on the agent's machine; `name` is its last path part.
+    LocalFile {
+        name: String,
+        label: Vec<Inline>,
+    },
     Break,
 }
 
@@ -420,14 +433,27 @@ pub fn inlines(line: &str, depth: usize) -> Vec<Inline> {
             continue;
         }
         if c == '[' {
-            if let Some((label, href, next)) = markdown_link(&chars, i) {
+            if let Some((label, target, next)) = markdown_link(&chars, i) {
                 flush(&mut text, &mut out);
-                let label = if depth < INLINE_DEPTH {
+                let label = if label.trim().is_empty() {
+                    Vec::new()
+                } else if depth < INLINE_DEPTH {
                     inlines(&label, depth + 1)
                 } else {
                     vec![Inline::Text(label)]
                 };
-                out.push(Inline::Link { href, label });
+                out.push(match target {
+                    Target::Web(href) => Inline::Link { href, label },
+                    Target::Local(path) => {
+                        let name = file_name(&path);
+                        let label = if label.is_empty() {
+                            vec![Inline::Text(name.clone())]
+                        } else {
+                            label
+                        };
+                        Inline::LocalFile { name, label }
+                    }
+                });
                 i = next;
                 continue;
             }
@@ -441,6 +467,19 @@ pub fn inlines(line: &str, depth: usize) -> Vec<Inline> {
                         out.push(Inline::Link {
                             href,
                             label: vec![Inline::Text(inner)],
+                        });
+                        i += end + 2;
+                        continue;
+                    }
+                    let lower = inner.to_ascii_lowercase();
+                    if (lower.starts_with("sandbox:") || lower.starts_with("file:"))
+                        && local_file_target(&inner)
+                    {
+                        flush(&mut text, &mut out);
+                        let name = file_name(&inner);
+                        out.push(Inline::LocalFile {
+                            label: vec![Inline::Text(name.clone())],
+                            name,
                         });
                         i += end + 2;
                         continue;
@@ -549,7 +588,12 @@ fn emphasis(chars: &[char], i: usize, depth: usize) -> Option<(Inline, usize)> {
     None
 }
 
-fn markdown_link(chars: &[char], i: usize) -> Option<(String, String, usize)> {
+enum Target {
+    Web(String),
+    Local(String),
+}
+
+fn markdown_link(chars: &[char], i: usize) -> Option<(String, Target, usize)> {
     let mut depth = 0;
     let mut close = None;
     for (k, &c) in chars.iter().enumerate().skip(i) {
@@ -588,9 +632,62 @@ fn markdown_link(chars: &[char], i: usize) -> Option<(String, String, usize)> {
     let target: String = chars[close + 2..end].iter().collect();
     let url = target.split_whitespace().next().unwrap_or("");
     let url = url.trim_start_matches('<').trim_end_matches('>');
-    let href = safe_href(url)?;
+    let target = match safe_href(url) {
+        Some(href) => Target::Web(href),
+        None if local_file_target(url) => Target::Local(url.to_owned()),
+        None => return None,
+    };
     let label: String = chars[i + 1..close].iter().collect();
-    Some((label, href, end + 1))
+    Some((label, target, end + 1))
+}
+
+/// A link target that names a file on the agent's machine rather than a web
+/// address: `sandbox:` or `file:` URLs, drive paths, and scheme-less absolute
+/// or relative paths. Other schemes (`javascript:`, `data:`, …) and page
+/// anchors are not files; they stay plain text.
+pub fn local_file_target(url: &str) -> bool {
+    if url.is_empty() || url.chars().any(char::is_control) {
+        return false;
+    }
+    let lower = url.to_ascii_lowercase();
+    if let Some(rest) = lower
+        .strip_prefix("sandbox:")
+        .or_else(|| lower.strip_prefix("file:"))
+    {
+        return !rest.trim_start_matches('/').is_empty();
+    }
+    let bytes = url.as_bytes();
+    if bytes.len() > 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && matches!(bytes[2], b'\\' | b'/')
+    {
+        return true;
+    }
+    if url.starts_with(['#', '?']) || url.starts_with("//") {
+        return false;
+    }
+    match (url.find(':'), url.find(['/', '\\'])) {
+        // `scheme:` before any path separator: some other kind of URL.
+        (Some(colon), slash) if slash.is_none_or(|s| colon < s) => false,
+        _ => !file_name(url).is_empty(),
+    }
+}
+
+/// The last part of a path, for naming a file that is not available.
+pub fn file_name(path: &str) -> String {
+    let lower = path.to_ascii_lowercase();
+    let path = if lower.starts_with("sandbox:") {
+        &path[8..]
+    } else if lower.starts_with("file:") {
+        &path[5..]
+    } else {
+        path
+    };
+    path.split(['/', '\\'])
+        .rfind(|part| !part.is_empty())
+        .unwrap_or("")
+        .to_owned()
 }
 
 /// Length of a bare http(s) URL, without trailing punctuation.
@@ -640,7 +737,7 @@ pub fn plain(content: &[Inline]) -> String {
         .map(|node| match node {
             Inline::Text(t) | Inline::Code(t) => t.clone(),
             Inline::Strong(c) | Inline::Em(c) | Inline::Strike(c) => plain(c),
-            Inline::Link { label, .. } => plain(label),
+            Inline::Link { label, .. } | Inline::LocalFile { label, .. } => plain(label),
             Inline::Break => "\n".into(),
         })
         .collect()

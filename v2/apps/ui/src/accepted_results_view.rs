@@ -203,7 +203,7 @@ pub fn AcceptedReplies(
                                         if !quote.unavailable { p { "{quote.text}" } }
                                     }
                                 }
-                                crate::rich_text_view::RichText { text: orkestr_v2_ui::message_file_refs::display_text(&input.text) }
+                                crate::rich_text_view::RichText { text: orkestr_v2_ui::message_file_refs::display_text(&input.text), attachments: !orkestr_v2_ui::message_file_refs::references(&input.text).is_empty() }
                                 crate::message_files_view::MessageFiles {key: "files-{input.id}", conversation:id.clone(),message:input.id.clone(),text:input.text.clone(),session_scope}
                                 if let Some(source) = input.revisions.edited_from {
                                     small { class: "message-edited", "{chat_timeline::edited_label(source)}" }
@@ -384,7 +384,7 @@ fn AcceptedReply(
         "data-payload-id": "{payload_id}",
         strong { "Assistant" }
         span { class: "reply-state", if row.payload_removed { "Answer text removed." } else { "{notice}" } }
-        if !row.payload_removed { if let Some(text)=output.read().text.clone(){div { class: "accepted-output", "data-accepted-output": "true", crate::rich_text_view::RichText { text: orkestr_v2_ui::message_file_refs::display_text(&text) }
+        if !row.payload_removed { if let Some(text)=output.read().text.clone(){div { class: "accepted-output", "data-accepted-output": "true", crate::rich_text_view::RichText { text: orkestr_v2_ui::message_file_refs::display_text(&text), attachments: !orkestr_v2_ui::message_file_refs::references(&text).is_empty() }
             crate::message_files_view::MessageFiles {key: "files-{row.completion_event_id}",conversation:reply_conversation.clone(),message:row.completion_event_id.to_string(),text,session_scope}
         }} }
         if !row.payload_removed { if let Some(text)=output.read().text.clone(){

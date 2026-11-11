@@ -245,3 +245,77 @@ fn deep_nesting_is_bounded() {
     let quotes = ">".repeat(200) + " x";
     let _ = parse(&quotes);
 }
+
+#[test]
+fn local_and_sandbox_paths_are_unavailable_files_never_links() {
+    use orkestr_v2_ui::rich_text::{file_name, local_file_target};
+    let file = |name: &str, label: &str| Inline::LocalFile {
+        name: name.into(),
+        label: vec![text(label)],
+    };
+    // Agent Markdown pointing at its own machine: not a link, not raw Markdown.
+    assert_eq!(
+        inlines("See [report.pdf](sandbox:/mnt/data/report.pdf) now", 0),
+        vec![text("See "), file("report.pdf", "report.pdf"), text(" now")]
+    );
+    assert_eq!(
+        inlines("[the plan](/workspace/out/plan.md)", 0),
+        vec![file("plan.md", "the plan")]
+    );
+    assert_eq!(
+        inlines("[](file:///home/agent/x.csv)", 0),
+        vec![file("x.csv", "x.csv")]
+    );
+    assert_eq!(
+        inlines(
+            "[notes](./notes/today.txt) and [win](C:\\Users\\a\\b.docx)",
+            0
+        ),
+        vec![
+            file("today.txt", "notes"),
+            text(" and "),
+            file("b.docx", "win")
+        ]
+    );
+    assert_eq!(
+        inlines("<sandbox:/mnt/data/chart.png>", 0),
+        vec![file("chart.png", "chart.png")]
+    );
+    // Web links are unchanged; other schemes and anchors stay text.
+    assert_eq!(
+        inlines("[site](https://ex.com/a.pdf)", 0),
+        vec![Inline::Link {
+            href: "https://ex.com/a.pdf".into(),
+            label: vec![text("site")]
+        }]
+    );
+    assert_eq!(
+        inlines(
+            "[x](javascript:alert(1)) [top](#top) [d](data:text/html,hi)",
+            0
+        ),
+        vec![text(
+            "[x](javascript:alert(1)) [top](#top) [d](data:text/html,hi)"
+        )]
+    );
+    assert_eq!(plain(&inlines("[r](sandbox:/a/r.zip)", 0)), "r");
+    for (target, local) in [
+        ("sandbox:/mnt/data/a.txt", true),
+        ("file:///tmp/a", true),
+        ("/abs/path.txt", true),
+        ("relative/dir/file.md", true),
+        ("D:/data/x.bin", true),
+        ("sandbox:/", false),
+        ("https://ex.com", false),
+        ("mailto:a@b.c", false),
+        ("javascript:alert(1)", false),
+        ("#anchor", false),
+        ("//host/share", false),
+        ("", false),
+    ] {
+        assert_eq!(local_file_target(target), local, "{target}");
+    }
+    assert_eq!(file_name("sandbox:/mnt/data/report.pdf"), "report.pdf");
+    assert_eq!(file_name("C:\\dir\\x.txt"), "x.txt");
+    assert_eq!(file_name("out/dir/"), "dir");
+}

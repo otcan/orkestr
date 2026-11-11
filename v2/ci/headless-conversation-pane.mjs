@@ -121,3 +121,44 @@ export async function runStates({page, state, conversation, label, screenshot}) 
   await wait('idle');
 }
 
+// Markdown links to the agent's own machine are named as unavailable files,
+// never links; a real attachment record is a card with name, size and type.
+export async function unavailableFiles({page, state, conversation, label, screenshot}) {
+  const suffix = label === 'phone' ? '2' : '1';
+  const upload = `00000000-0000-4000-8000-00000000007${suffix}`;
+  const add = (n, text) => state.messages[conversation].push({message_id: `00000000-0000-4000-8000-000000007b${n}${suffix}`,
+    sequence: state.messages[conversation].length + 1, actor_kind: 'owner', text});
+  add(1, 'Synthetic report: [report.pdf](sandbox:/mnt/data/report.pdf), see also [the site](https://example.invalid/report)');
+  add(2, `Synthetic plan, also at [notes.txt](/workspace/out/notes.txt)\n\n[File attached in the Orkestr app, encrypted upload ${upload}: notes.txt (text/plain, 1200 bytes), SHA-256 0000, local file /synthetic/attachments/notes.txt]`);
+  await page.evaluate(() => window.dispatchEvent(new Event('orkestr-stream-retry')));
+  await page.waitForFunction(() => document.querySelectorAll('.chat-messages .rt-file-unavailable').length >= 2, {timeout: 15000});
+  const view = await page.evaluate(() => {
+    const rows = [...document.querySelectorAll('.chat-messages > li')].filter(li => li.textContent.includes('Synthetic report') || li.textContent.includes('Synthetic plan'));
+    const chip = row => row.querySelector('.rt-file-unavailable');
+    return {count: rows.length,
+      chips: rows.map(row => ({name: chip(row)?.dataset.fileName, attached: chip(row)?.dataset.attached, badge: chip(row)?.querySelector('.rt-file-badge')?.textContent,
+        link: chip(row)?.closest('a') !== null || !!chip(row)?.querySelector('a')})),
+      localLinks: [...document.querySelectorAll('.chat-messages a')].filter(a => !/^(https?:|mailto:)/.test(a.getAttribute('href') ?? '')).length,
+      webLink: [...document.querySelectorAll('.chat-messages a')].some(a => a.getAttribute('href') === 'https://example.invalid/report'),
+      raw: rows.some(row => /\]\((sandbox:|\/workspace)/.test(row.textContent)),
+      card: (() => { const card = rows[1]?.querySelector('.message-file-card'); return card && {title: card.querySelector('strong')?.textContent,
+        status: card.querySelector('[role=status]')?.textContent, buttons: [...card.querySelectorAll('button')].map(b => b.textContent), verified: card.getAttribute('data-verified')}; })()};
+  });
+  assert.equal(view.count, 2);
+  assert.deepEqual(view.chips, [
+    {name: 'report.pdf', attached: 'false', badge: 'Unavailable file', link: false},
+    {name: 'notes.txt', attached: 'true', badge: 'Not linked · see attached files', link: false},
+  ]);
+  assert.equal(view.localLinks, 0, 'no local or sandbox path is a link');
+  assert.equal(view.webLink, true, 'web links stay links');
+  assert.equal(view.raw, false, 'no raw Markdown path is shown');
+  await page.waitForFunction(() => [...document.querySelectorAll('.message-file-card strong')].some(n => n.textContent === 'notes.txt'), {timeout: 15000});
+  const card = await page.evaluate(() => {
+    const node = [...document.querySelectorAll('.message-file-card')].find(c => c.querySelector('strong')?.textContent === 'notes.txt');
+    return {status: node.querySelector('[role=status]').textContent, buttons: [...node.querySelectorAll('button')].map(b => b.textContent), verified: node.getAttribute('data-verified')};
+  });
+  assert.deepEqual(card, {status: '2 KB · text/plain', buttons: ['Preview', 'Download'], verified: 'false'});
+  await page.evaluate(() => [...document.querySelectorAll('.chat-messages > li')].find(li => li.textContent.includes('Synthetic report'))?.scrollIntoView({block: 'center'}));
+  await screenshot(label, 'attachments-and-unavailable-files');
+}
+

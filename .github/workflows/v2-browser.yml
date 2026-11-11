@@ -75,7 +75,7 @@ jobs:
       - name: Local account first-run form and existing-owner sign-in
         run: node v2/ci/headless-local-account.mjs
       - name: Bounded encrypted upload and composer tests
-        run: node --test v2/apps/ui/src/attachments/encrypted_upload.test.mjs v2/apps/ui/src/attachments/encrypted_composer.test.mjs v2/apps/ui/tests/composer_tools.test.mjs v2/apps/ui/tests/pasted_text.test.mjs v2/ci/headless-encrypted-uploads.test.mjs
+        run: node --test v2/apps/ui/src/attachments/encrypted_upload.test.mjs v2/apps/ui/src/attachments/encrypted_composer.test.mjs v2/apps/ui/src/attachments/message_files.test.mjs v2/apps/ui/tests/composer_tools.test.mjs v2/apps/ui/tests/pasted_text.test.mjs v2/ci/headless-encrypted-uploads.test.mjs
       - name: Local folder worker with a synthetic directory handle
         run: node --test v2/apps/ui/src/local_files/folder.test.mjs v2/apps/ui/src/local_files/relay.test.mjs v2/apps/ui/src/local_files/panel.test.mjs
       - name: UI release inventory and backend compatibility contract
