@@ -30,6 +30,7 @@ pub fn Workspace(
         Some(Route::Conversation { tab, .. }) => *tab,
         Some(Route::Host { .. }) => Tab::Host,
         Some(Route::VirtualDesks) => Tab::VirtualDesks,
+        Some(Route::OrkestrSettings) => Tab::OrkestrSettings,
         _ => Tab::Chat,
     });
     let mut host_charts = use_signal(|| matches!(initial, Some(Route::Host { charts: true, .. })));
@@ -90,6 +91,21 @@ pub fn Workspace(
         Some(Route::V1Thread { thread }) => Some(thread.clone()),
         _ => None,
     });
+    // The header's Settings button opens Orkestr settings (ORK-789). It also
+    // drops a V1 chat the URL named but the list has not shown yet, so that
+    // chat cannot replace the settings page when it appears.
+    let open_settings = global_views.settings;
+    let mut seen_settings = use_signal(|| *open_settings.peek());
+    use_effect(move || {
+        let requested = open_settings();
+        if requested != *seen_settings.peek() {
+            seen_settings.set(requested);
+            wanted.set(None);
+            linked.set(None);
+            execution.write().select(&current.peek(), "");
+            tab.set(Tab::OrkestrSettings);
+        }
+    });
     // The URL follows the view: each change the owner makes is a history entry.
     let mut shown = use_signal(|| None::<Route>);
     use_effect(move || {
@@ -99,6 +115,7 @@ pub fn Workspace(
                 None => return,
             },
             None if tab() == Tab::VirtualDesks => Route::VirtualDesks,
+            None if tab() == Tab::OrkestrSettings => Route::OrkestrSettings,
             None if tab() == Tab::Host => Route::Host {
                 charts: host_charts(),
                 range: host_range(),
@@ -145,6 +162,11 @@ pub fn Workspace(
                 Route::VirtualDesks => {
                     linked.set(None);
                     tab.set(Tab::VirtualDesks);
+                }
+                Route::OrkestrSettings => {
+                    wanted.set(None);
+                    linked.set(None);
+                    tab.set(Tab::OrkestrSettings);
                 }
                 Route::Host { charts, range } => {
                     linked.set(None);
@@ -353,24 +375,11 @@ pub fn Workspace(
                             }
                         } else if tab() == Tab::Host {
                             crate::host_dashboard::HostDashboard { key: "{session_scope.read().generation()}", session_scope, charts: host_charts, range: host_range, onexpired }
+                        } else if tab() == Tab::OrkestrSettings {
+                            // Account and server-wide controls: never mounted under a chat (ORK-789).
+                            crate::orkestr_settings_view::OrkestrSettings { key: "orkestr-settings-{session_scope.read().generation()}", csrf, session_scope, onexpired }
                         } else {
-                            crate::chat_settings_view::ChatSettings { key: "settings-{current()}-{session_scope.read().generation()}", conversation: current(), csrf: csrf.clone(), session_scope, onexpired }
-                            section { "aria-label": "Account settings",
-                                h2 { "Account settings" }
-                                crate::owner_password_view::OwnerPassword {
-                                    key: "password-{session_scope.read().generation()}", csrf: csrf.clone(), session_scope, onexpired,
-                                }
-                                crate::vault_view::Vault {
-                                    key: "vault-{session_scope.read().generation()}", csrf: csrf.clone(), session_scope, onexpired,
-                                }
-                            }
-                            div {
-                                crate::provider_sign_in_view::ProviderSignInSection {
-                                    key: "provider-sign-in-{session_scope.read().generation()}",
-                                    csrf: csrf.clone(), session_scope, onexpired,
-                                }
-                            }
-                            crate::beta_settings::BetaSettings {}
+                            crate::chat_settings_view::ChatSettings { key: "settings-{current()}-{session_scope.read().generation()}", conversation: current(), csrf, session_scope, onexpired }
                         }
                     }
                 }
