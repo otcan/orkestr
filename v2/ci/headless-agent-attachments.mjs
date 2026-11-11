@@ -54,7 +54,11 @@ export async function agentAttachments({ page, state, origin, conversation, retu
     assert.equal(view.cards, 1, 'one attachment card for the one attached file');
     assert.equal(view.text, `Synthetic answer ${ANSWER}`, 'the marker line is not shown as text');
     assert.ok(!view.page.includes('orkestr-attachment'), 'no marker text anywhere in the chat');
+    // ORK-786: the card names its file before any request; opening verifies it.
+    assert.equal(await page.$eval(`${card} strong`, n => n.textContent), NAME);
+    assert.equal(await page.$eval(card, n => n.getAttribute('data-verified')), 'false');
     await page.$eval(`${card} button`, button => button.click());
+    await page.waitForFunction(selector => document.querySelector(selector)?.getAttribute('data-verified') === 'true', { timeout: 15000 }, card);
     await page.waitForFunction((selector, name) => document.querySelector(`${selector} strong`)?.textContent === name,
       { timeout: 15000 }, card, NAME);
     assert.match(await page.$eval(card, n => n.textContent), /Download/);

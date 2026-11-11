@@ -1,4 +1,7 @@
 //! Extract opaque attachment identities from known message notes, never paths.
+//! The note's file name, type and size come along as display hints for the
+//! card (ORK-786); they are never authority: preview and download still load
+//! and verify the conversation-scoped metadata and bytes.
 use serde::Serialize;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct FileRef {
@@ -6,6 +9,41 @@ pub struct FileRef {
     pub id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reference: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub media_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size: Option<u64>,
+}
+/// `name (type, N bytes` → hints. The name may itself contain " (".
+fn hints(described: &str) -> (Option<String>, Option<String>, Option<u64>) {
+    let Some((name, inner)) = described.rsplit_once(" (") else {
+        return (None, None, None);
+    };
+    let mut parts = inner.splitn(2, ", ");
+    let media_type = parts.next().filter(|t| t.contains('/') && t.len() <= 255);
+    let size = parts
+        .next()
+        .and_then(|n| n.strip_suffix(" bytes"))
+        .and_then(|n| n.parse::<u64>().ok());
+    let name = Some(name.trim()).filter(|n| !n.is_empty() && n.len() <= 255);
+    match (name, media_type, size) {
+        (Some(name), Some(media_type), Some(size)) => (
+            Some(name.to_owned()),
+            Some(media_type.to_owned()),
+            Some(size),
+        ),
+        _ => (None, None, None),
+    }
+}
+/// The quoted `name="…"` of an agent marker line, if any.
+fn marker_name(line: &str) -> Option<String> {
+    let start = line.find(" name=\"")? + 7;
+    let end = line.rfind("\"]")?;
+    (end > start)
+        .then(|| line[start..end].to_owned())
+        .filter(|n| n.len() <= 255)
 }
 fn identifier(value: &str) -> Option<String> {
     let id = value.get(..36)?;
@@ -29,6 +67,9 @@ fn agent_marker(line: &str) -> Option<FileRef> {
         kind: "manifest",
         id: manifest.hyphenated().to_string(),
         reference: Some(reference.hyphenated().to_string()),
+        name: marker_name(line.trim()),
+        media_type: None,
+        size: None,
     })
 }
 pub fn references(text: &str) -> Vec<FileRef> {
@@ -36,14 +77,21 @@ pub fn references(text: &str) -> Vec<FileRef> {
     for block in text.split("\n\n") {
         let block = block.trim();
         if let Some(rest)=block.strip_prefix("[File attached in the Orkestr app, encrypted upload ") {
-            if let Some(id)=identifier(rest) {result.push(FileRef{kind:"encrypted",id,reference:None});}
+            if let Some(id)=identifier(rest) {
+                let described = rest.get(36..).and_then(|t| t.strip_prefix(": ")).and_then(|t| t.split_once(" bytes)")).map(|(head, _)| format!("{head} bytes"));
+                let (name, media_type, size) = described.as_deref().map_or((None, None, None), hints);
+                result.push(FileRef{kind:"encrypted",id,reference:None,name,media_type,size});
+            }
         } else if let Some(rest)=block.strip_prefix("[Files attached in the Orkestr app, manifest ")
             .or_else(||block.strip_prefix("[Files attached in the Orkestr app, stored in this conversation's attachment store, manifest "))
             .or_else(||block.strip_prefix("[WhatsApp attachments imported into this conversation's attachment store, manifest ")) {
             if let Some(id)=identifier(rest) {
                 for line in rest.lines().skip(1) {
-                    if let Some((_,tail))=line.split_once(", reference ") {
-                        if let Some(reference)=identifier(tail){result.push(FileRef{kind:"manifest",id:id.clone(),reference:Some(reference)});}
+                    if let Some((head,tail))=line.split_once(", reference ") {
+                        if let Some(reference)=identifier(tail){
+                            let (name, media_type, size) = hints(head.trim_start().trim_start_matches("- "));
+                            result.push(FileRef{kind:"manifest",id:id.clone(),reference:Some(reference),name,media_type,size});
+                        }
                     }
                 }
             }
@@ -110,6 +158,44 @@ mod tests {
             references("[File attached in the Orkestr app, encrypted upload ../../secret]")
                 .is_empty()
         );
+    }
+    #[test]
+    fn notes_carry_name_type_and_size_hints_but_never_paths() {
+        let id = "00000000-0000-4000-8000-000000000001";
+        let reference = "00000000-0000-4000-8000-000000000002";
+        let manifest = format!("[Files attached in the Orkestr app, stored in this conversation's attachment store, manifest {id}:\n- Q3 (final) report.pdf (application/pdf, 2048 bytes, reference {reference}, local file /private/x.pdf)]");
+        let file = &references(&manifest)[0];
+        assert_eq!(file.name.as_deref(), Some("Q3 (final) report.pdf"));
+        assert_eq!(file.media_type.as_deref(), Some("application/pdf"));
+        assert_eq!(file.size, Some(2048));
+        let encrypted = references(&format!("[File attached in the Orkestr app, encrypted upload {id}: a, b (text/plain, 2 bytes), SHA-256 digest, local file /x/y]"));
+        assert_eq!(encrypted[0].name.as_deref(), Some("a, b"));
+        assert_eq!(encrypted[0].media_type.as_deref(), Some("text/plain"));
+        assert_eq!(encrypted[0].size, Some(2));
+        let marker = references(&format!(
+            "Done.\n[orkestr-attachment manifest={id} reference={reference} name=\"Checklist.md\"]"
+        ));
+        assert_eq!(marker[0].name.as_deref(), Some("Checklist.md"));
+        assert_eq!(
+            (marker[0].media_type.as_ref(), marker[0].size),
+            (None, None)
+        );
+        let unnamed = references(&format!(
+            "[orkestr-attachment manifest={id} reference={reference}]"
+        ));
+        assert_eq!(unnamed[0].name, None);
+        // A note without a recognisable description gives no hints at all.
+        let bare = references(&format!(
+            "[File attached in the Orkestr app, encrypted upload {id}]"
+        ));
+        assert_eq!((bare[0].name.as_ref(), bare[0].size), (None, None));
+        for refs in [references(&manifest), encrypted] {
+            let json = serde_json::to_string(&refs).unwrap();
+            assert!(
+                !json.contains("/private") && !json.contains("/x/y"),
+                "{json}"
+            );
+        }
     }
     #[test]
     fn agent_reply_markers_become_attachment_cards_and_leave_the_text() {

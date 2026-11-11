@@ -13,14 +13,14 @@ V1 then fetches the bytes from this adapter
 them with the reply through the chat's own reply route, like its text. The
 adapter serves only files of its binding's unsettled exports, read from Core's
 delivery copy (`$ORKESTR_V2_ADAPTER_CORE_EXPORT_DIR/<conversation>/<sha256>.<ext>`)
-and checked against Core's digest. It never sends WhatsApp itself. A file it
-cannot verify is named "<name> (not attached)" in the text instead.
+and checked against Core's digest. It never sends WhatsApp itself.
 
-Sending is off unless `ORKESTR_V2_ADAPTER_REPLY_FILES=on`: a V1 that predates
-remote reply files (ORK-779, V1 side) cannot import a reply that carries
-attachments while it requires attachment encryption, and would lose the reply.
-While off, the markers still leave the text and each file is named
-"<name> (attached in the Orkestr app)", where the web chat shows it.
+This is the one way an assistant's file reaches a chat (ORK-787): the web chat
+shows the card, and WhatsApp gets the file with the same reply. A file
+WhatsApp cannot carry, or that cannot be verified, is named in the text
+instead, plainly: "Not sent on WhatsApp: <name> (<reason>). It is in the
+Orkestr app." Sending is on unless an operator pauses it with
+`ORKESTR_V2_ADAPTER_REPLY_FILES=off`; then every file gets that line.
 """
 import hashlib
 import os
@@ -29,6 +29,7 @@ import stat
 
 EXPORT_DIR_ENV = "ORKESTR_V2_ADAPTER_CORE_EXPORT_DIR"
 SWITCH_ENV = "ORKESTR_V2_ADAPTER_REPLY_FILES"
+NOT_SENT = "Not sent on WhatsApp: %s (%s). It is in the Orkestr app."
 MAX_FILES = 8
 MAX_BYTES = 16 * 1024 * 1024
 # Exactly the types the WhatsApp worker sends (whatsapp-scoped-reply-files.js).
@@ -122,38 +123,46 @@ def read_export(conversation, sha256, size, environ=os.environ):
 
 
 def _descriptor(reference):
-    """The descriptor of one available, sendable store reference, or None."""
+    """(descriptor, None) for one available store reference WhatsApp can
+    carry, else (None, the reason it is not sent)."""
     if not isinstance(reference, dict) or reference.get("state") != "available":
-        return None
+        return None, "unavailable"
     name, media, size, digest = (reference.get(k) for k in ("filename", "media_type", "byte_length", "sha256"))
     if (not isinstance(name, str) or not 0 < len(name.encode()) <= 255 or any(c in name for c in "/\\\0\n\r")
-            or media not in MEDIA_TYPES or type(size) is not int or not 0 < size <= MAX_BYTES
-            or not isinstance(digest, str) or not SHA256.match(digest)):
-        return None
-    return {"id": reference.get("reference_id"), "filename": name, "mimetype": media, "size": size, "sha256": digest}
+            or type(size) is not int or size <= 0 or not isinstance(digest, str) or not SHA256.match(digest)):
+        return None, "unavailable"
+    if media not in MEDIA_TYPES:
+        return None, "type not supported"
+    if size > MAX_BYTES:
+        return None, "over 16 MB"
+    return {"id": reference.get("reference_id"), "filename": name, "mimetype": media, "size": size,
+            "sha256": digest}, None
 
 
 def enabled(environ=os.environ):
-    return environ.get(SWITCH_ENV, "").strip() == "on"
+    """On unless an operator paused sending files (`off`)."""
+    return environ.get(SWITCH_ENV, "").strip().lower() != "off"
 
 
 def prepare(worker, text):
     """(text for the chat, attachment descriptors) of one reply.
 
     Transient Core failures propagate, so the step is retried with the same
-    reply; anything definite only drops that file, never the reply."""
+    reply; anything definite only keeps that file off WhatsApp, never the reply."""
     clean, found = split(text)
     if not found:
         return text, []
-    if not enabled():
-        names = [n if isinstance(n, str) and n.strip() else "file" for _, _, n in found]
-        return (clean + "\n\n" if clean else "") + "\n".join(
-            "%s (attached in the Orkestr app)" % n for n in names), []
     conversation = str(getattr(worker.client, "conversation", ""))
-    manifests, attachments, missing, total = {}, [], [], 0
+    manifests, attachments, not_sent, total = {}, [], [], 0
     for manifest, reference, name in found:
-        descriptor = None
-        if getattr(worker, "attachments", False) and len(attachments) < MAX_FILES:
+        descriptor, reason = None, "unavailable"
+        if not enabled():
+            reason = "sending files is paused"
+        elif not getattr(worker, "attachments", False):
+            reason = "this chat takes no files"
+        elif len(attachments) >= MAX_FILES:
+            reason = "more than %d files" % MAX_FILES
+        else:
             if manifest not in manifests:
                 from .rust_client import ClientError
                 try:
@@ -168,16 +177,19 @@ def prepare(worker, text):
                     and value.get("manifest_id") == manifest and isinstance(value.get("references"), list)):
                 match = next((r for r in value["references"]
                               if isinstance(r, dict) and r.get("reference_id") == reference), None)
-                descriptor = _descriptor(match)
-                name = descriptor["filename"] if descriptor else (match or {}).get("filename") or name
-        if (descriptor and total + descriptor["size"] <= MAX_BYTES
-                and read_export(conversation, descriptor["sha256"], descriptor["size"]) is not None):
+                descriptor, reason = _descriptor(match)
+                name = (match or {}).get("filename") or name
+                if descriptor and total + descriptor["size"] > MAX_BYTES:
+                    descriptor, reason = None, "over 16 MB"
+                if descriptor and read_export(conversation, descriptor["sha256"], descriptor["size"]) is None:
+                    descriptor, reason = None, "unavailable"
+        if descriptor:
             total += descriptor["size"]
             attachments.append(descriptor)
         else:
-            missing.append(name if isinstance(name, str) and name.strip() else "file")
-    if missing:
-        clean = (clean + "\n\n" if clean else "") + "\n".join("%s (not attached)" % n for n in missing)
+            not_sent.append(NOT_SENT % (name if isinstance(name, str) and name.strip() else "file", reason))
+    if not_sent:
+        clean = (clean + "\n\n" if clean else "") + "\n".join(not_sent)
     return clean, attachments
 
 

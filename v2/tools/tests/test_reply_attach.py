@@ -142,15 +142,25 @@ class ReplyAttachTest(unittest.TestCase):
             self.assertEqual(out, '')
         self.assertEqual(FakeV2.calls, [], 'nothing was uploaded')
 
-    def test_whatsapp_types_and_sizes_only(self):
+    def test_any_file_the_store_takes_but_never_a_secret_or_too_much(self):
         (self.workspace / 'page.html').write_text('<p>synthetic</p>')
+        code, out, err = self.run_tool('attach', 'page.html')
+        self.assertEqual(code, 0, err)
+        self.assertEqual(FakeV2.calls[-1]['files'][0]['media_type'], 'text/html')
+        (self.workspace / 'blob.unknownext').write_bytes(b'\x00synthetic')
+        self.run_tool('attach', 'blob.unknownext')
+        self.assertEqual(FakeV2.calls[-1]['files'][0]['media_type'], 'application/octet-stream')
+        FakeV2.calls = []
         (self.workspace / 'empty.pdf').write_bytes(b'')
         (self.workspace / 'folder.pdf').mkdir()
+        for name in ('server.pem', 'id_rsa', 'credentials.json'):
+            (self.workspace / name).write_text('synthetic')
         big = self.workspace / 'big.pdf'
         with big.open('wb') as handle:
             handle.truncate(ATTACH.MAX_BYTES + 1)
-        for path, expected in [('page.html', 'file_type_unsupported'), ('empty.pdf', 'file_size_refused'),
-                               ('big.pdf', 'file_size_refused'), ('folder.pdf', 'file_not_regular')]:
+        for path, expected in [('empty.pdf', 'file_size_refused'), ('big.pdf', 'file_size_refused'),
+                               ('folder.pdf', 'file_not_regular'), ('server.pem', 'file_refused'),
+                               ('id_rsa', 'file_refused'), ('credentials.json', 'file_refused')]:
             code, _, err = self.run_tool('attach', path)
             self.assertEqual((code, json.loads(err)['code']), (2, expected), path)
         code, _, err = self.run_tool('attach', *(['CHECKLIST.md'] * 9))

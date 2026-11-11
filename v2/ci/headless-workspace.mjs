@@ -13,6 +13,7 @@ import { liveAnswer } from './headless-live-answer.mjs';
 import { messageRevisions } from './headless-message-revisions.mjs';
 import { agentAttachments } from './headless-agent-attachments.mjs';
 import { messageRetries } from './headless-message-retries.mjs';
+import { messageMenu, readableColumn, runStates, unavailableFiles } from './headless-conversation-pane.mjs';
 
 assert.equal(process.env.CI, 'true', 'Run only in isolated CI');
 assert.ok(process.env.UI_BUNDLE_DIR, 'UI_BUNDLE_DIR is required');
@@ -81,6 +82,11 @@ const replyTo = async (label, rowSelector, snippet) => {
     await page.touchscreen.touchStart(box.x + 5, box.y + box.height / 2);
     await new Promise(r => setTimeout(r, 750));
     await page.touchscreen.touchEnd();
+  } else if (await row.$('.message-menu-toggle')) {
+    // ORK-786: Reply is in the message's actions menu, not a hover control.
+    await row.$eval('.message-menu-toggle', b => b.click());
+    await page.waitForFunction(r => r.querySelector('.message-menu-list'), {}, row);
+    await row.$$eval('.message-menu-item', items => items.find(b => b.textContent.trim() === 'Reply').click());
   } else {
     await row.hover();
     assert.ok(await row.$eval('.reply-action', b => getComputedStyle(b).opacity !== '0'), 'Reply shows on hover');
@@ -804,31 +810,58 @@ export const scenarios = [
     await page.waitForSelector('#composer');
     await page.evaluate(() => { try { localStorage.removeItem('orkestr.v2.conversationDetailsOpen'); } catch {} });
     await page.reload({ waitUntil: 'domcontentloaded' });
-    await page.waitForSelector('.details-toggle');
-    // Technical panels start hidden and never sit inside the transcript.
+    await page.waitForSelector('.files-drawer-toggle');
+    // ORK-786: no floating toolbar. A labelled "Files & context" control in
+    // the composer opens the drawer; technical panels never sit in the transcript.
     const drawer = () => page.evaluate(() => {
       const aside = document.querySelector('.conversation-details');
-      return { shown: !!aside && getComputedStyle(aside).display !== 'none', expanded: document.querySelector('.details-toggle').getAttribute('aria-expanded'),
-        inTranscript: !!document.querySelector('.conversation-scroll .conversation-tools'),
+      const toggle = document.querySelector('.files-drawer-toggle');
+      return { shown: !!aside && getComputedStyle(aside).display !== 'none', expanded: toggle.getAttribute('aria-expanded'),
+        controls: toggle.getAttribute('aria-controls') === aside.id, label: toggle.textContent.trim(), inComposer: !!toggle.closest('.message-composer'),
+        inTranscript: !!document.querySelector('.conversation-scroll .conversation-tools'), toolbar: !!document.querySelector('.conversation-toolbar'),
         stored: (() => { try { return localStorage.getItem('orkestr.v2.conversationDetailsOpen'); } catch { return 'unavailable'; } })() };
     });
-    assert.deepEqual(await drawer(), { shown: false, expanded: 'false', inTranscript: false, stored: null });
+    assert.deepEqual(await drawer(), { shown: false, expanded: 'false', controls: true, label: 'Files & context', inComposer: true, inTranscript: false, toolbar: false, stored: null });
     assert.ok(!(await page.evaluate(() => document.querySelector('.conversation-pane').innerText)).includes('Thread files'), 'Thread files are hidden in the chat');
     assert.ok(!(await page.evaluate(() => document.body.textContent)).includes('Result accepted'), 'no acceptance jargon');
     await screenshot(label, 'chat-details-closed');
-    // Details opens a drawer and remembers it for this viewer.
-    await page.click('.details-toggle');
+    // The control opens the drawer from the keyboard, focus moves into it,
+    // and it is remembered for this viewer.
+    await page.focus('.files-drawer-toggle');
+    await page.keyboard.press('Enter');
     await page.waitForFunction(() => getComputedStyle(document.querySelector('.conversation-details')).display !== 'none');
-    assert.deepEqual(await drawer(), { shown: true, expanded: 'true', inTranscript: false, stored: '1' });
+    assert.deepEqual(await drawer(), { shown: true, expanded: 'true', controls: true, label: 'Files & context', inComposer: true, inTranscript: false, toolbar: false, stored: '1' });
+    await page.waitForFunction(() => document.activeElement?.classList.contains('files-drawer-close'));
     await waitText('Thread files');
+    // The drawer never covers the composer.
+    const overlap = await page.evaluate(() => {
+      const a = document.querySelector('.conversation-details').getBoundingClientRect(), c = document.querySelector('.composer-dock').getBoundingClientRect();
+      return Math.max(0, Math.min(a.bottom, c.bottom) - Math.max(a.top, c.top)) * Math.max(0, Math.min(a.right, c.right) - Math.max(a.left, c.left));
+    });
+    assert.equal(overlap, 0, 'the drawer does not cover the composer');
     await screenshot(label, 'chat-details-open');
     await noHorizontalScroll();
+    // Escape closes it and returns focus to its control.
+    await page.keyboard.press('Escape');
+    await page.waitForFunction(() => getComputedStyle(document.querySelector('.conversation-details')).display === 'none');
+    await page.waitForFunction(() => document.activeElement?.classList.contains('files-drawer-toggle'));
+    assert.equal((await drawer()).stored, '0');
+    await page.click('.files-drawer-toggle');
+    await page.waitForFunction(() => getComputedStyle(document.querySelector('.conversation-details')).display !== 'none');
     await page.reload({ waitUntil: 'domcontentloaded' });
-    await page.waitForFunction(() => document.querySelector('.details-toggle')?.getAttribute('aria-expanded') === 'true', { timeout: 15000 });
-    await page.click('.details-toggle');
+    await page.waitForFunction(() => document.querySelector('.files-drawer-toggle')?.getAttribute('aria-expanded') === 'true', { timeout: 15000 });
+    await page.click('.files-drawer-close');
     await page.waitForFunction(() => getComputedStyle(document.querySelector('.conversation-details')).display === 'none');
     assert.equal((await drawer()).stored, '0');
   }],
+  ['readable-column', async label => {
+    await page.goto(`${origin}/#conversation/${A}`, { waitUntil: 'domcontentloaded' });
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await readableColumn({ page, label, screenshot });
+  }],
+  ['run-state', label => runStates({ page, state, conversation: A, label, screenshot })],
+  ['unavailable-files', label => unavailableFiles({ page, state, conversation: A, label, screenshot })],
+  ['message-menu', label => messageMenu({ page, label, screenshot })],
   ['every-answer-inline', async label => {
     // 25 accepted answers span two pages; all show inline, newest included,
     // as plain messages without paging or acceptance wording.
