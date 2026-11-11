@@ -1,5 +1,9 @@
 use orkestr_v2_contracts::*;
-use orkestr_v2_ui::sidebar::{activity_label, relative_time, rows, shown, unread_label};
+use orkestr_v2_ui::conversation_status::{RowStatus, Tone};
+use orkestr_v2_ui::sidebar::{
+    activity_label, channel, relative_time, rows, shown, unread_label, work_state, ChannelKind,
+    Row, WorkState,
+};
 use std::collections::BTreeSet;
 
 fn entry(key: &str, parent: Option<&str>, at: Option<i64>, unread: u32) -> SidebarEntry {
@@ -138,4 +142,91 @@ fn hidden_system_chats_are_left_out_unless_shown_or_open() {
     let grouped = rows(&visible, &BTreeSet::new(), "");
     assert_eq!(grouped.len(), 1);
     assert_eq!(grouped[0].hidden_unread, 0);
+}
+
+fn row(entry: SidebarEntry) -> Row {
+    Row {
+        entry,
+        depth: 0,
+        descendants: 0,
+        group_activity_ms: None,
+        hidden_unread: 0,
+        hidden_activity: false,
+        expanded: false,
+    }
+}
+
+fn status(label: &str, tone: Tone) -> RowStatus {
+    RowStatus {
+        label: label.into(),
+        tone,
+    }
+}
+
+#[test]
+fn a_row_shows_at_most_one_work_state_and_the_owner_need_comes_first() {
+    let idle = row(entry(A, None, Some(1), 0));
+    assert_eq!(work_state(&idle, None), None, "idle rows show nothing");
+    let mut busy = row(entry(A, None, Some(1), 0));
+    busy.entry.activity.deep = true;
+    busy.entry.activity.workers = 1;
+    // Live activity says more than the run phase it duplicates.
+    assert_eq!(
+        work_state(&busy, Some(&status("Working", Tone::Working))),
+        Some(WorkState {
+            label: "thinking… · 1 worker".into(),
+            tone: Tone::Working
+        })
+    );
+    // A ready reply or a failure needs the owner: it wins over activity.
+    for label in ["Reply ready", "Needs attention", "Failed"] {
+        assert_eq!(
+            work_state(&busy, Some(&status(label, Tone::Attention))),
+            Some(WorkState {
+                label: label.into(),
+                tone: Tone::Attention
+            })
+        );
+    }
+    assert_eq!(
+        work_state(&idle, Some(&status("Queued #2", Tone::Queued))),
+        Some(WorkState {
+            label: "Queued #2".into(),
+            tone: Tone::Queued
+        })
+    );
+    let mut parent = row(entry("v1:parent", None, Some(1), 0));
+    parent.hidden_activity = true;
+    assert_eq!(
+        work_state(&parent, None).map(|s| s.label),
+        Some("sub-chat thinking…".into())
+    );
+}
+
+#[test]
+fn the_channel_is_one_small_icon_with_the_badge_text_as_its_label() {
+    assert_eq!(
+        channel(&entry(A, None, None, 0)),
+        None,
+        "native chats need no icon"
+    );
+    let mut group = entry("v1:group", None, None, 0);
+    group.coordinator = true;
+    let v1 = channel(&group).unwrap();
+    assert_eq!(v1.kind, ChannelKind::V1);
+    assert_eq!(v1.label, "On V1 · coordinator attached");
+    let mut whatsapp = entry(A, None, None, 0);
+    whatsapp.whatsapp = Some("Synthetic family".into());
+    let wa = channel(&whatsapp).unwrap();
+    assert_eq!(wa.kind, ChannelKind::WhatsApp);
+    assert_eq!(wa.label, "WhatsApp group: Synthetic family");
+    whatsapp.whatsapp = Some(whatsapp.name.clone());
+    assert_eq!(channel(&whatsapp).unwrap().label, "WhatsApp group");
+    group.whatsapp = Some("Synthetic group chat".into());
+    let both = channel(&group).unwrap();
+    assert_eq!(both.kind, ChannelKind::WhatsApp);
+    assert_eq!(
+        both.label,
+        "WhatsApp group: Synthetic group chat · on V1 · coordinator attached"
+    );
 }

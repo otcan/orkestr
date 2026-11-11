@@ -1,12 +1,12 @@
 //! Always-visible host summary: CPU, RAM and `/` disk with sparklines and a
-//! live / stale / collecting state. One small revalidating GET every 10 s;
-//! selecting it opens the details view.
+//! collecting / live / stale / disconnected state. One small revalidating GET
+//! every 10 s; selecting it opens the owner-wide host resources view.
 use crate::host_metrics_chart::Sparkline;
 use crate::host_metrics_fetch::{clock, sleep, start, Reply};
 use dioxus::prelude::*;
 use orkestr_v2_contracts::HostMetricsSummary;
 use orkestr_v2_ui::{
-    host_metrics::{self as model, Freshness, SUMMARY_REFRESH_MS},
+    host_metrics::{self as model, SummaryState, SUMMARY_REFRESH_MS},
     session_scope::SessionScope,
 };
 use serde_json::json;
@@ -18,6 +18,9 @@ pub struct OpenHostMetrics(pub Signal<u64>);
 #[component]
 pub fn HostMetricsPanel(
     session_scope: Signal<SessionScope>,
+    /// The host resources view is open.
+    #[props(default)]
+    active: bool,
     onopen: EventHandler<()>,
     onexpired: EventHandler<()>,
 ) -> Element {
@@ -84,13 +87,11 @@ pub fn HostMetricsPanel(
         }
     });
     let current = summary.read().clone();
-    let state = model::freshness(current.as_ref(), now(), received());
-    let (badge, badge_class) = match (state, failed()) {
-        (_, true) if current.is_none() => ("unavailable", "stale"),
-        (Freshness::Collecting, _) => ("collecting…", "collecting"),
-        (Freshness::Stale, _) | (_, true) => ("stale", "stale"),
-        (Freshness::Live, _) => ("live", "live"),
-    };
+    let state = SummaryState::of(
+        model::freshness(current.as_ref(), now(), received()),
+        failed(),
+    );
+    let (badge, badge_class) = (state.label(), state.class());
     let updated = current
         .as_ref()
         .and_then(|s| s.observed_at_ms)
@@ -102,10 +103,6 @@ pub fn HostMetricsPanel(
         interval_ms: 5000,
         ..Default::default()
     });
-    let cpu = s
-        .cpu_percent
-        .map(|v| model::percent(v.into()))
-        .unwrap_or_else(|| "…".into());
     let memory_share = model::share(s.memory_used_bytes, s.memory_total_bytes);
     let memory = match (s.memory_used_bytes, s.memory_total_bytes) {
         (Some(used), Some(total)) => format!(
@@ -123,25 +120,36 @@ pub fn HostMetricsPanel(
         Some(free) => format!("{} free", model::bytes(free as f64)),
         None => "…".into(),
     };
-    let title = format!("Host metrics · {updated} · open details");
+    let cpu_share = s.cpu_percent.map(|v| model::percent(v.into()));
+    let memory_text = memory_share.map(model::percent);
+    let disk_text = disk_share.map(model::percent);
+    let spoken = |value: Option<String>| value.unwrap_or_else(|| "not yet sampled".into());
+    let title = format!(
+        "Host resources: CPU {}, RAM {}, disk {}. {} · {updated}. Open host resources",
+        spoken(cpu_share.clone()),
+        spoken(memory_text.clone()),
+        spoken(disk_text.clone()),
+        state.sentence()
+    );
     rsx! {
         button { class: "host-metrics-panel", r#type: "button", title: "{title}", "aria-label": "{title}",
+            "data-state": "{badge_class}", "aria-current": if active { "page" } else { "false" },
             onclick: move |_| onopen.call(()),
             span { class: "hm-state {badge_class}", "{badge}" }
             span { class: "hm-item",
                 span { class: "hm-label", "CPU" }
-                strong { "{cpu}" }
+                strong { {cpu_share.unwrap_or_else(|| "…".into())} }
                 Sparkline { values: s.spark_cpu.clone(), class: "series-1" }
             }
             span { class: "hm-item",
                 span { class: "hm-label", "RAM" }
-                strong { title: "{memory}", {memory_share.map(model::percent).unwrap_or_else(|| "…".into())} }
+                strong { title: "{memory}", {memory_text.unwrap_or_else(|| "…".into())} }
                 span { class: "hm-detail", "{memory}" }
                 Sparkline { values: s.spark_memory.clone(), class: "series-2" }
             }
             span { class: "hm-item",
                 span { class: "hm-label", "Disk /" }
-                strong { {disk_share.map(model::percent).unwrap_or_else(|| "…".into())} }
+                strong { {disk_text.unwrap_or_else(|| "…".into())} }
                 span { class: "hm-detail", "{disk}" }
                 Sparkline { values: s.spark_disk.clone(), class: "series-3" }
             }

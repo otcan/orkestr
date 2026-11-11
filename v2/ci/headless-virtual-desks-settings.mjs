@@ -22,6 +22,12 @@ export async function virtualDesksAndAccountSettings({page, state, conversation,
     assert.equal(await page.$('.owner-password'), null, 'password form must not appear under the chat');
     await clickText('Virtual desks');
     await waitText('All desk resources.');
+    // Desks are owner-wide (ORK-786): opened from the global header, shown
+    // with a global heading and no conversation tabs.
+    assert.equal(await page.$eval('.global-nav .global-link', el => el.getAttribute('aria-current')), 'page');
+    assert.equal(await page.$eval('.conversation-heading', el => el.dataset.scope), 'global');
+    assert.equal(await page.$('.conversation-nav'), null, 'no conversation tabs on a global view');
+    assert.equal(new URL(page.url()).pathname, '/virtual-desks');
     await waitText('Research desk');
     await waitText('Unbound desk');
     await waitText('Availability not verified');
@@ -253,12 +259,19 @@ export async function virtualDesksAndAccountSettings({page, state, conversation,
     assert.equal(state.deskOwnerActions.at(-1).action,'link','refresh must not repeat owner actions');
     assert.equal(state.deskOwnerActions.filter(a=>a.action==='link').length,1,'refresh must not mint another link');
     await deskSharing({page,state,clickText,waitText,screenshot,label,row});
-    await clickText('Settings');
+    await conversationTab(page, clickText, 'Settings');
     await page.waitForSelector('#settings-model');
     await page.waitForSelector('[aria-label="Account settings"] .owner-password');
     assert.equal(new URL(page.url()).hash, `#conversation/${conversation}/settings`);
     assert.equal(await page.$$eval('.owner-password', nodes => nodes.length), 1);
     assert.equal(await page.$eval('.owner-password summary', n => n.textContent.trim()), 'Change password');
+}
+
+// From a global view, back to the conversation, then one of its tabs.
+async function conversationTab(page, clickText, tab) {
+    await clickText('Back to chat');
+    await page.waitForFunction(label => [...document.querySelectorAll('.conversation-nav button')].some(b => b.textContent.trim() === label), {timeout:15000}, tab);
+    await clickText(tab);
 }
 
 // ORK-773: the owner shares all desks with all chats. The page and the chat's
@@ -284,7 +297,7 @@ async function deskSharing({page,state,clickText,waitText,screenshot,label,row})
     assert.equal(await page.$eval('.desk-sharing', el => el.dataset.shared), 'true');
     assert.deepEqual(effects(), before, 'sharing reserves, starts and binds nothing');
     await screenshot(label, 'virtual-desks-shared');
-    await clickText('Settings');
+    await conversationTab(page, clickText, 'Settings');
     await page.waitForSelector('#settings-model');
     await page.waitForFunction(() => document.querySelector('.desk-sharing-help')?.textContent.startsWith('All desks are shared with all chats: workers of this chat may reserve any desk'), {timeout:15000});
     assert.ok(!(await page.$eval('body', el => el.textContent)).includes('Every desktop must be granted to the V1 thread in V1.'));

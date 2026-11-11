@@ -8,6 +8,8 @@ use orkestr_v2_ui::{
 };
 use std::collections::BTreeMap;
 
+const SIDEBAR_COLLAPSED_KEY: &str = "orkestr.v2.sidebarCollapsed";
+
 /// Navigation changes presentation only. Work admission remains an explicit action.
 #[component]
 pub fn Workspace(
@@ -53,6 +55,35 @@ pub fn Workspace(
             execution.write().select(&current.peek(), "");
             host_charts.set(false);
             tab.set(Tab::Host);
+        }
+    });
+    // The header's Virtual desks button opens the owner-wide desks view, and
+    // the header marks whichever global view is open (ORK-786).
+    let global_views = use_context::<crate::GlobalViews>();
+    let open_desks = global_views.desks;
+    let mut seen_desks = use_signal(|| *open_desks.peek());
+    use_effect(move || {
+        let requested = open_desks();
+        if requested != *seen_desks.peek() {
+            seen_desks.set(requested);
+            linked.set(None);
+            execution.write().select(&current.peek(), "");
+            tab.set(Tab::VirtualDesks);
+        }
+    });
+    let mut shown_global = global_views.shown;
+    use_effect(move || {
+        let open = Some(tab()).filter(|t| t.is_global() && linked().is_none());
+        if *shown_global.peek() != open {
+            shown_global.set(open);
+        }
+    });
+    use_drop(move || shown_global.set(None));
+    // Desktop: the conversation list can be collapsed, remembered per viewer.
+    let mut collapsed = use_signal(|| false);
+    use_future(move || async move {
+        if let Some(value) = crate::transport::stored_flag(SIDEBAR_COLLAPSED_KEY).await {
+            collapsed.set(value);
         }
     });
     let mut wanted = use_signal(|| match &initial {
@@ -183,11 +214,13 @@ pub fn Workspace(
         None => format!("v2:{}", current()),
     };
     let header = live();
+    let global = linked().is_none() && tab().is_global();
+    let list_shown = !collapsed();
     let activity = header
         .as_ref()
         .and_then(|e| orkestr_v2_ui::sidebar::activity_label(&e.activity));
     rsx! {
-        div { class: "workspace", "data-sidebar-open": "{sidebar}",
+        div { class: "workspace", "data-sidebar-open": "{sidebar}", "data-sidebar-collapsed": "{collapsed}",
             crate::conversation_sidebar::ConversationSidebar {
                 selected: selected.clone(), csrf: csrf.clone(), session_scope, onexpired,
                 onloaded: move |rows: Vec<SidebarEntry>| {
@@ -222,32 +255,58 @@ pub fn Workspace(
                     reload += 1;
                 }
             }
+            if !collapsed() { crate::sidebar_resize::SidebarResize {} }
             if sidebar() { button { class: "drawer-scrim", r#type: "button", "aria-label": "Close conversations", onclick: move |_| sidebar.set(false) } }
             div { class: "workspace-main",
                 if !link_notice().is_empty() { p { class: "app-notice link-notice", role: "status", "{link_notice}" } }
-                header { class: "conversation-heading",
-                    button { class: "threads-toggle", "aria-expanded": "{sidebar}", "aria-label": "Conversations", onclick: move |_| sidebar.set(!sidebar()), span { "aria-hidden": "true", "☰" } }
-                    if let Some(entry) = header.as_ref().filter(|_| tab() != Tab::VirtualDesks) {
-                        crate::conversation_sidebar::Avatar { key: "{entry.key}", name: entry.name.clone(), thread: entry.v1_thread_id.clone() }
-                    }
-                    div { class: "heading-title",
-                        h2 { if tab() == Tab::VirtualDesks { "Virtual desks" } else { "{title}" } }
-                        if let Some(label) = activity.clone().filter(|_| tab() != Tab::VirtualDesks) {
-                            p { class: "heading-activity", role: "status", "{label}" }
-                        } else if let Some(entry) = header.as_ref().filter(|e| e.read_only) {
-                            p { class: "heading-meta", if entry.coordinator { "On V1 · coordinator attached" } else { "On V1 · read-only" } }
+                header { class: "conversation-heading", "data-scope": if global { "global" } else { "conversation" },
+                    button { class: "threads-toggle", r#type: "button", "aria-expanded": "{sidebar}", "aria-controls": "conversation-sidebar", "aria-label": "Conversations", onclick: move |_| sidebar.set(!sidebar()), span { "aria-hidden": "true", "☰" } }
+                    button { class: "sidebar-collapse", r#type: "button", "aria-expanded": "{list_shown}", "aria-controls": "conversation-sidebar",
+                        "aria-label": if collapsed() { "Show conversation list" } else { "Hide conversation list" },
+                        title: if collapsed() { "Show conversation list" } else { "Hide conversation list" },
+                        onclick: move |_| {
+                            let next = !collapsed();
+                            collapsed.set(next);
+                            crate::transport::store_flag(SIDEBAR_COLLAPSED_KEY, next);
+                        },
+                        svg { "aria-hidden": "true", view_box: "0 0 20 20", width: "20", height: "20",
+                            rect { x: "2.5", y: "3.5", width: "15", height: "13", rx: "2", fill: "none", stroke: "currentColor", stroke_width: "1.5" }
+                            line { x1: "7.5", y1: "3.5", x2: "7.5", y2: "16.5", stroke: "currentColor", stroke_width: "1.5" }
                         }
                     }
-                    if linked().is_none() { nav { "aria-label": "Main",
-                        for name in Tab::ALL {
-                            button { "aria-current": if tab() == name { "page" } else { "false" }, onclick: move |_| {
+                    if global {
+                        // An owner-wide view: named as such, with no conversation tabs.
+                        div { class: "heading-title",
+                            h2 { "{tab().label()}" }
+                            p { class: "heading-meta heading-scope", "Global · shared by all conversations" }
+                        }
+                        button { class: "back-to-chat", r#type: "button", title: "Back to {title}",
+                            onclick: move |_| {
+                                execution.write().select(&current(), "");
+                                tab.set(Tab::Chat);
+                            },
+                            "Back to chat"
+                        }
+                    } else {
+                        if let Some(entry) = header.as_ref() {
+                            crate::conversation_sidebar::Avatar { key: "{entry.key}", name: entry.name.clone(), thread: entry.v1_thread_id.clone() }
+                        }
+                        div { class: "heading-title",
+                            h2 { "{title}" }
+                            if let Some(label) = activity.clone() {
+                                p { class: "heading-activity", role: "status", "{label}" }
+                            } else if let Some(entry) = header.as_ref().filter(|e| e.read_only) {
+                                p { class: "heading-meta", if entry.coordinator { "On V1 · coordinator attached" } else { "On V1 · read-only" } }
+                            }
+                        }
+                        if linked().is_none() {
+                            ConversationNav { tab: tab(), onpick: move |name: Tab| {
                                 if tab() == name { return; }
                                 execution.write().select(&current(), "");
-                                if name == Tab::Host { host_charts.set(false); }
                                 tab.set(name);
-                            }, "{name.label()}" }
+                            } }
                         }
-                    } }
+                    }
                 }
                 if let Some(entry) = linked() {
                     crate::v1_thread_view::V1ThreadView { key: "{entry.key}-{session_scope.read().generation()}", entry, csrf: csrf.clone(), session_scope, drafts, onexpired }
@@ -260,6 +319,8 @@ pub fn Workspace(
                     div { class: "workspace-page",
                         if tab() == Tab::Work {
                             crate::work_view::WorkView { key: "{current()}-{session_scope.read().generation()}", id: current(), csrf, session_scope, execution, onexpired }
+                        } else if tab() == Tab::Files {
+                            crate::files_view::FilesPage { key: "{current()}-{session_scope.read().generation()}", id: current(), csrf, session_scope, onexpired }
                         } else if tab() == Tab::History {
                             crate::history::History { key: "{current()}", id: current(), csrf, session_scope, onexpired }
                         } else if tab() == Tab::Projects {
@@ -338,5 +399,59 @@ fn SelectedConversation(
                 button { onclick: move |_| retry += 1, "Check conversation again" }
             }
         }
+    }
+}
+
+/// A conversation's destinations (ORK-786): Chat, Work and Files, and the
+/// rest under "More". A disclosure, not an ARIA menu: Tab moves through the
+/// items, Escape closes and returns to "More", and picking closes it. The
+/// items stay in the document while closed (hidden), so every destination
+/// keeps one stable control.
+#[component]
+fn ConversationNav(tab: Tab, onpick: EventHandler<Tab>) -> Element {
+    let mut open = use_signal(|| false);
+    let in_more = tab.in_more();
+    let mut close = move |refocus: bool| {
+        open.set(false);
+        if refocus {
+            let _ =
+                document::eval("document.getElementById('more-tabs-toggle')?.focus();return null;");
+        }
+    };
+    rsx! {
+        nav { class: "conversation-nav", "aria-label": "Conversation",
+            onkeydown: move |event| {
+                if event.key() == Key::Escape && open() {
+                    close(true);
+                }
+            },
+            for name in Tab::PRIMARY {
+                button { r#type: "button", class: "nav-tab", "aria-current": if tab == name { "page" } else { "false" },
+                    onclick: move |_| { close(false); onpick.call(name); },
+                    "{name.label()}"
+                }
+            }
+            div { class: "more-tabs",
+                button { id: "more-tabs-toggle", r#type: "button", class: "nav-tab more-toggle",
+                    "aria-expanded": "{open}", "aria-controls": "more-tabs-list",
+                    "aria-current": if in_more { "page" } else { "false" },
+                    onclick: move |_| open.set(!open()),
+                    "More"
+                    if in_more { span { class: "more-current", ": {tab.label()}" } }
+                    span { class: "more-caret", "aria-hidden": "true", "▾" }
+                }
+                ul { id: "more-tabs-list", class: "more-list", hidden: !open(),
+                    for name in Tab::MORE {
+                        li { key: "{name.slug()}",
+                            button { r#type: "button", class: "more-item", "aria-current": if tab == name { "page" } else { "false" },
+                                onclick: move |_| { close(false); onpick.call(name); },
+                                "{name.label()}"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if open() { div { class: "menu-scrim", "aria-hidden": "true", onclick: move |_| close(false) } }
     }
 }

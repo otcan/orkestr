@@ -4,12 +4,19 @@
 //! - `#conversation/<id>` (chat) or `#conversation/<id>/<tab>`
 //! - `#v1/<thread>`: a linked V1 chat
 //! - `#host` (overview) and `#host/details?range=15m|1h|24h|7d`
+//! - `/virtual-desks`: owner-wide desks (old `#conversation/<id>/virtual-desks`
+//!   links open it too)
+//!
+//! Navigation groups (ORK-786): a conversation shows [`Tab::PRIMARY`] and
+//! keeps the rest under "More" ([`Tab::MORE`]); [`Tab::GLOBAL`] views belong
+//! to the app header and never take a conversation's scope.
 use orkestr_v2_contracts::HostMetricsRange;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tab {
     Chat,
     Work,
+    Files,
     History,
     Projects,
     Timers,
@@ -22,9 +29,10 @@ pub enum Tab {
 }
 
 impl Tab {
-    pub const ALL: [Tab; 11] = [
+    pub const ALL: [Tab; 12] = [
         Tab::Chat,
         Tab::Work,
+        Tab::Files,
         Tab::History,
         Tab::Projects,
         Tab::Timers,
@@ -35,10 +43,33 @@ impl Tab {
         Tab::Host,
         Tab::Settings,
     ];
+    /// Always visible in a conversation's heading.
+    pub const PRIMARY: [Tab; 3] = [Tab::Chat, Tab::Work, Tab::Files];
+    /// A conversation's other destinations, listed under "More".
+    pub const MORE: [Tab; 7] = [
+        Tab::History,
+        Tab::Projects,
+        Tab::Timers,
+        Tab::Tracker,
+        Tab::Memory,
+        Tab::LiveMap,
+        Tab::Settings,
+    ];
+    /// Owner-wide views, opened from the app header.
+    pub const GLOBAL: [Tab; 2] = [Tab::VirtualDesks, Tab::Host];
+
+    /// An owner-wide view: its route carries no conversation.
+    pub fn is_global(self) -> bool {
+        Tab::GLOBAL.contains(&self)
+    }
+    pub fn in_more(self) -> bool {
+        Tab::MORE.contains(&self)
+    }
     pub fn label(self) -> &'static str {
         match self {
             Tab::Chat => "Chat",
             Tab::Work => "Work",
+            Tab::Files => "Files",
             Tab::History => "History",
             Tab::Projects => "Projects",
             Tab::Timers => "Timers",
@@ -54,6 +85,7 @@ impl Tab {
         match self {
             Tab::Chat => "chat",
             Tab::Work => "work",
+            Tab::Files => "files",
             Tab::History => "history",
             Tab::Projects => "projects",
             Tab::Timers => "timers",

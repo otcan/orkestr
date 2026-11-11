@@ -73,7 +73,7 @@ try {
     else {
       await page.waitForFunction(() => document.body.textContent.includes('Models are not connected yet. Open Connect models'));
       assert.equal(await page.$('#composer'), null, 'Unconfigured beta exposed composer');
-      assert.equal(await page.$('nav[aria-label="Main"]'), null, 'Unconfigured beta exposed scoped navigation');
+      assert.equal(await page.$('nav[aria-label="Conversation"]'), null, 'Unconfigured beta exposed scoped navigation');
     }
     return mode;
   };
