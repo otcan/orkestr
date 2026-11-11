@@ -4,6 +4,7 @@ use orkestr_v2_contracts::{
 };
 use orkestr_v2_ui::{
     chat_settings::{slugs, SettingsForm},
+    desk_presentation::DeskSharing,
     session_scope::SessionScope,
 };
 use serde_json::{json, Value};
@@ -189,6 +190,12 @@ fn Desktops(
         .and_then(|l| l.binding.as_ref())
         .map(|binding| binding.desktop_slugs.clone())
         .unwrap_or_default();
+    // All desks shared: the binding only names the V1 thread; slugs are optional.
+    let shared = list
+        .read()
+        .as_ref()
+        .is_some_and(|l| l.shared_with_all_chats);
+    let bound = list.read().as_ref().is_some_and(|l| l.binding.is_some());
     let save_csrf = csrf.clone();
     rsx! {
         form { class: "settings-form", "aria-label": "Desktops", onsubmit: move |event| {
@@ -217,12 +224,12 @@ fn Desktops(
                     }
                 }
             }
-            p { class: "field-help", "Workers of this chat may lease these V1 desktops. Every desktop must be granted to the V1 thread in V1." }
+            p { class: "field-help desk-sharing-help", "{DeskSharing::chat_help(shared, bound)}" }
             label { r#for: "desktop-thread", "V1 thread (grant holder)" }
             input { id: "desktop-thread", value: "{thread}", oninput: move |e| thread.set(e.value()) }
-            label { r#for: "desktop-slugs", "Desktops" }
+            label { r#for: "desktop-slugs", "{DeskSharing::slugs_label(shared)}" }
             input { id: "desktop-slugs", value: "{slug_text}", placeholder: "slug, slug", oninput: move |e| slug_text.set(e.value()) }
-            button { r#type: "submit", disabled: busy() || thread().trim().is_empty() || slugs(&slug_text()).is_empty(), if busy() { "Saving…" } else { "Save desktops" } }
+            button { r#type: "submit", disabled: busy() || thread().trim().is_empty() || (!shared && slugs(&slug_text()).is_empty()), if busy() { "Saving…" } else { "Save desktops" } }
             h4 { "Leases" }
             if leases.is_empty() { p { class: "field-help", "No leases." } }
             ul { class: "lease-list",

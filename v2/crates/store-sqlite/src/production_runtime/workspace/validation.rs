@@ -61,12 +61,16 @@ impl Store {
             || row.try_get::<String, _>("context_id").ok().as_deref() != Some(&c.id)
             || row.try_get::<String, _>("incarnation_id").ok().as_deref() != Some(&c.incarnation)
         {
-            return Err(RuntimeStoreError::Fenced);
+            return Err(crate::production_runtime::fence_reason::fenced(
+                "workspace_project_binding",
+            ));
         }
         let id: String = row.get("id");
         let installation = self.checked_workspace_installation(&id)?;
         if installation.fingerprint() != row.get::<String, _>("identity_json") {
-            return Err(RuntimeStoreError::Fenced);
+            return Err(crate::production_runtime::fence_reason::fenced(
+                "workspace_fingerprint",
+            ));
         }
         self.check_workspace_installation(&installation)
     }

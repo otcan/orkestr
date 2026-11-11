@@ -5,6 +5,7 @@ import { readFile } from 'node:fs/promises';
 import { extname, join, normalize } from 'node:path';
 import { trackerApi } from './headless-tracker-mock.mjs';
 import { encryptedUploadMock } from './headless-encrypted-uploads.mjs';
+import { localFilesMock } from './headless-local-files-mock.mjs';
 import { liveAnswerApi } from './headless-live-answer.mjs';
 
 export const A = '00000000-0000-4000-8000-00000000000a';
@@ -55,7 +56,8 @@ export function createState() {
     // Chat settings, desktops and timers of conversation A.
     settings: { schema_version: 1, conversation_id: A, revision: 2, provider: 'codex', model: 'synthetic-model', reasoning_effort: 'medium',
       honor_no_reply: true, reply_prefix: 'synthetic:', reply_footer: null, provider_generation: 0, updated_at_ms: 1 },
-    desktopActions: [], deskReserved: false, settingsPuts: [], bindingPuts: [], desktopBindings: {}, timerCalls: [], timerPause: null, chatTimerPause: null,
+    desktopActions: [], deskReserved: false, deskRuntime: { 'idle-desk': 'inactive', 'held-desk': 'active', 'unbound-desk': 'unknown' }, deskOwnerActions: [], deskStopConflict: false, deskStartFailure: false,
+    deskSharing: { schema_version: 1, share_all_desks: false, revision: 0, updated_at_ms: null }, sharingPuts: [], settingsPuts: [], bindingPuts: [], signInPosts: [], signIn: { codex: { signed_in: false, method: null, login: null } }, desktopBindings: {}, timerCalls: [], timerPause: null, chatTimerPause: null,
     // Linked V1 chat management (synthetic V1 state behind the server).
     v1Model: { model: 'synthetic-model', effort: 'low' }, v1Calls: [],
     v1Timers: [{ id: 'timer-1', label: 'Synthetic digest', cadence: 'daily', time: '08:00', every: null, timezone: 'Europe/Berlin',
@@ -129,6 +131,27 @@ async function intake(state, req, res, id) {
   if (state.intakeLoseNext) { state.intakeLoseNext = false; return json(res, 504, { code: 'unavailable', message: 'Synthetic lost answer' }); }
   const { conversation, request, ...wire } = receipt;
   return json(res, 202, wire);
+}
+
+// The server's revision contract, enough for the chat to show its effect.
+async function revisions(state, req, res, id, target) {
+  const rows = state.messages[id], row = rows.find(m => m.message_id === target);
+  if (!row) return missing(res);
+  state.revisionHistory ??= {};
+  const history = state.revisionHistory[target] ??= [];
+  if (req.method === 'GET') return json(res, 200, { conversation_id: id, message_id: target, original_text: row.text, revisions: history });
+  if (req.headers['x-orkestr-csrf'] !== 'synthetic-csrf') return json(res, 403, { code: 'csrf', message: 'CSRF required' });
+  const request = JSON.parse(await body(req));
+  (state.revisionPosts ??= []).push({ conversation: id, target, ...request });
+  if (state.revisionRefuse) return json(res, 403, { code: 'not_owner_message', message: 'Only your own messages can be edited or deleted' });
+  const revision = history.length + 1, sequence = Math.max(...rows.map(m => m.sequence)) + 1, n = 9500 + rows.length * 2;
+  const change = { revision, kind: request.kind, ...(request.text ? { text: request.text } : {}), source: 'web', revised_at_ms: 1 };
+  history.push({ revision_id: uuid(n + 900), revision, kind: request.kind, ...(request.text ? { text: request.text } : {}), source: 'web', notice_message_id: uuid(n), agent_notified: true, agent_saw_earlier_text: true, created_at_ms: 1 });
+  row.revisions = { can_revise: request.kind === 'edit', latest: change };
+  rows.push({ message_id: uuid(n), sequence, actor_kind: 'owner', origin: 'revision', text: '[Message corrected] synthetic notice',
+    revisions: { can_revise: false, notice_for: { target_message_id: target, change, agent_notified: true, agent_saw_earlier_text: true } } });
+  return json(res, 201, { revision_id: uuid(n + 900), conversation_id: id, message_id: target, revision, kind: request.kind, notice_message_id: uuid(n),
+    notice_event_id: uuid(n + 1), notice_sequence: sequence, agent_notified: true, agent_saw_earlier_text: true, created_at_ms: 1, duplicate: false });
 }
 
 async function admit(state, req, res, id) {
@@ -240,9 +263,40 @@ async function api(state, req, res, url) {
     schema_version:1, observed_at_ms:Date.now(), resources:[
       {slug:'synthetic-desk',label:'Synthetic desk',state:'running',lease_state:state.deskReserved?'reserved':'unreserved',holder:state.deskReserved?'Assistant':null,expires_at:null},
       {slug:'research-desk',label:'Research desk',state:'stopped',lease_state:'unknown',holder:null,expires_at:null},
-      {slug:'unbound-desk',label:'Unbound desk',state:'unknown',lease_state:'unknown',holder:null,expires_at:null}],
+      {slug:'unbound-desk',label:'Unbound desk',state:state.deskRuntime['unbound-desk'],lease_state:'unknown',holder:null,expires_at:null},
+      {slug:'idle-desk',label:'Idle desk',state:state.deskRuntime['idle-desk'],lease_state:'unreserved',holder:null,expires_at:null},
+      {slug:'held-desk',label:'Held desk',state:state.deskRuntime['held-desk'],lease_state:'reserved',holder:'Worker chat',expires_at:'2026-01-01T02:00:00Z'}],
     bindings:[{conversation_id:A,name:'Assistant',desktop_slugs:['synthetic-desk']},{conversation_id:B,name:'Research notes',desktop_slugs:['research-desk']}],
   });
+  if (path === '/api/v2/desktop-sharing' && req.method === 'GET') return json(res, 200, state.deskSharing);
+  if (path === '/api/v2/desktop-sharing' && req.method === 'PUT') {
+    if (req.headers['x-orkestr-csrf'] !== 'synthetic-csrf') return json(res, 403, { code: 'csrf', message: 'CSRF required' });
+    const request = JSON.parse(await body(req)); state.sharingPuts.push(request);
+    if (request.expected_revision !== state.deskSharing.revision) return json(res, 409, { code: 'desktop_sharing_revision_mismatch', message: 'Desk sharing was changed elsewhere. Reload and try again.' });
+    state.deskSharing = { schema_version: 1, share_all_desks: request.share_all_desks, revision: state.deskSharing.revision + 1, updated_at_ms: 1 };
+    return json(res, 200, state.deskSharing);
+  }
+  const ownerDesk = /^\/api\/v2\/desktops\/([a-z0-9_-]+)\/(start|stop|link)$/.exec(path);
+  if (ownerDesk && req.method === 'POST') {
+    if (req.headers['x-orkestr-csrf'] !== 'synthetic-csrf') return json(res, 403, { code: 'csrf', message: 'CSRF required' });
+    const [, slug, action] = ownerDesk;
+    state.deskOwnerActions.push({ action, slug, ...JSON.parse(await body(req)) });
+    if (action === 'link') return json(res, 200, { url: `https://desktop.example.test/desktop-share/${slug}?key=fixture`, challenge_required: true, expires_at: '2026-01-01T01:00:00Z' });
+    if (action === 'stop') {
+      if (state.deskStopConflict) {
+        state.deskStopConflict = false;
+        return json(res, 409, { code: 'desktop_reservation_changed', message: "This desk's reservation changed since the list was loaded; review it and confirm again" });
+      }
+      state.deskRuntime[slug] = 'inactive';
+      return json(res, 200, { stopped: true, state: 'inactive', reservation_after_verified: true, interrupted_holder: null });
+    }
+    if (state.deskStartFailure) {
+      state.deskStartFailure = false;
+      return json(res, 503, { code: 'desktop_action_unknown', message: 'The outcome is unknown; refresh before taking another action' });
+    }
+    state.deskRuntime[slug] = 'active';
+    return json(res, 200, { started: true, state: 'active' });
+  }
   if (path === '/api/v2/browser/session' && req.method === 'GET') return json(res, 200, { csrf_token: 'synthetic-csrf', global_conversation_id: A });
   if (path === '/api/v2/beta') {
     const id = q.get('conversation_id') ?? A;
@@ -255,6 +309,7 @@ async function api(state, req, res, url) {
     const window = {fiveHourRemainingPct:null,weeklyRemainingPct:40,fiveHourResetsAt:null,weeklyResetsAt:new Date(Date.now()+86400000).toISOString(),observedAt:new Date().toISOString(),stale:false,limited:false};
     return json(res,200,{quota:{codex:window,claude:{...window,weeklyRemainingPct:null,weeklyStatus:'allowed'}},staleAfterMs:21600000});
   }
+  if (path.startsWith('/api/v2/provider-sign-in')) return providerSignIn(req, res, path, state);
   if (path === '/api/v2/host-metrics' && req.method === 'GET') return json(res, 200, hostSummary());
   if (path === '/api/v2/host-metrics/consumers' && req.method === 'GET') return json(res, 200, hostConsumers());
   if (path === '/api/v2/host-metrics/disks' && req.method === 'GET') return json(res, 200, hostDisks());
@@ -478,7 +533,7 @@ async function api(state, req, res, url) {
       return json(res, 403, {code:'desktop_open_denied',message:'Synthetic desktop owner verification failed.'});
     return json(res, 200, {url:'https://desktop.example.test/desktop-share/synthetic?key=fixture',challenge_required:true});
   }
-  if (rest === '/desktops' && req.method === 'GET') return json(res, 200, { schema_version: 1, conversation_id: id,
+  if (rest === '/desktops' && req.method === 'GET') return json(res, 200, { schema_version: 1, conversation_id: id, shared_with_all_chats: state.deskSharing.share_all_desks,
     binding: state.desktopBindings[id] ?? { schema_version: 1, conversation_id: id, revision: 1, v1_thread_id: 'synthetic-thread', desktop_slugs: ['synthetic-desk'], grant_issued: false, grant_generation: 0 },
     leases: [{ conversation_id: id, desktop_slug: 'synthetic-desk', v1_thread_id: 'synthetic-thread', v1_lease_id: 'lease-1', fencing_version: 1,
       state: 'active', expires_at: '2026-01-01T00:10:00Z', acquired_at_ms: 1, heartbeat_at_ms: 2, ended_at_ms: null, end_reason: null }] });
@@ -511,6 +566,8 @@ async function api(state, req, res, url) {
     state.chatTimerPause = request.until_ms; return json(res, 200, { pause_until_ms: request.until_ms });
   }
   if (rest === '/messages' && req.method === 'POST') return intake(state, req, res, id);
+  const revisionRoute = /^\/messages\/([0-9a-f-]{36})\/revisions$/.exec(rest);
+  if (revisionRoute) return revisions(state, req, res, id, revisionRoute[1]);
   if (rest === '/window' && req.method === 'POST') return admit(state, req, res, id);
   if (rest === '/window' && req.method === 'GET') {
     if (!state.window[id]) { res.writeHead(204, { 'cache-control': 'no-store' }); return res.end(); }
@@ -523,11 +580,42 @@ async function api(state, req, res, url) {
   return missing(res);
 }
 
+function signInOverview(state, result = 'status') {
+  const codex = state.signIn.codex;
+  return { result, providers: [
+    { provider: 'codex', available: true, signed_in: codex.signed_in, method: codex.method, account: null, subscription: null, checked_at_ms: 1, login: codex.login },
+    { provider: 'claude', available: false, reason: 'not_configured' },
+  ] };
+}
+async function providerSignIn(req, res, path, state) {
+  if (path === '/api/v2/provider-sign-in' && req.method === 'GET') return json(res, 200, signInOverview(state));
+  const match = path.match(/^\/api\/v2\/provider-sign-in\/(codex|claude)\/(start|code|cancel|sign-out)$/);
+  if (!match || req.method !== 'POST') return json(res, 404, { code: 'not_found', message: 'Not found' });
+  const request = JSON.parse(await body(req) || '{}');
+  state.signInPosts.push({ provider: match[1], action: match[2], request });
+  const codex = state.signIn.codex;
+  if (match[2] === 'start') {
+    codex.login = { state: 'waiting', link: state.signInLink ?? 'https://auth.openai.com/codex/device', code: 'ABCD-EFGH1', expires_in_s: 899 };
+    return json(res, 202, signInOverview(state, 'started'));
+  }
+  if (match[2] === 'cancel') {
+    codex.login = { state: 'cancelled' };
+    return json(res, 200, signInOverview(state, 'accepted'));
+  }
+  if (match[2] === 'sign-out') {
+    codex.signed_in = false; codex.method = null; codex.login = null;
+    return json(res, 202, signInOverview(state, 'started'));
+  }
+  return json(res, 400, { code: 'provider_sign_in_code_refused', message: 'That code was not accepted' });
+}
+
 export async function startMock(bundle, state = createState()) {
   const encrypted = await encryptedUploadMock(state);
+  const localFiles = localFilesMock(state);
   const server = createServer(async (req, res) => {
     const url = new URL(req.url, 'http://127.0.0.1');
     if (await encrypted(req,res,url.pathname)) return;
+    if (await localFiles(req,res,url.pathname)) return;
     if (url.pathname.startsWith('/api/')) return api(state, req, res, url);
     const deep = /^\/instance\/(ins_[A-Za-z0-9_-]{22})\/thread\/(thr_[A-Za-z0-9_-]{22})$/.exec(url.pathname);
     if (deep) { res.writeHead(303, { location: `/#v1-link/${deep[1]}/${deep[2]}`, 'cache-control': 'no-store' }); return res.end(); }

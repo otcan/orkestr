@@ -4,6 +4,7 @@ All IDs, texts and peers are synthetic; nothing here reaches a provider or
 WhatsApp.
 """
 import contextlib
+import copy
 import io
 import json
 from pathlib import Path
@@ -399,6 +400,175 @@ class UnstartedInputTests(Base):
         self.assertNotIn("readmitted", data)
         self.assertEqual(self.notices(), [])
         self.assertIn("ALERT orkestr-v2-wa-adapter input_failed_too_old", log)
+
+
+class TransientSetupRetryTests(Base):
+    """ORK-770: a window that could not start is retried silently with backoff;
+    only when every retry failed does the chat get one plain notice."""
+    peer_class = NoRunPeer
+
+    def setUp(self):
+        super().setUp()
+        self.peer.retire_state = "retired"
+
+    def strand(self):
+        """Admit the current attempt; its window ends before anything of it ran."""
+        self.passes(1)
+        data = self.ledger.next_input()
+        data["unstarted_since"] -= worker_module.ORPHAN_GRACE_S + 1
+        self.ledger.save(data)
+
+    def fail_attempt(self):
+        """The current attempt fails and its backoff (if any) elapses."""
+        self.strand()
+        log = self.passes(1)
+        data = self.ledger.next_input()
+        if data and data.get("retry_due_at"):
+            data["retry_due_at"] -= recovery.RETRY_BACKOFF_S[-1] + 1
+            self.ledger.save(data)
+            log += self.passes(1)
+        return log
+
+    def attempt(self):
+        return recovery.readmissions(self.ledger.next_input())
+
+    def core_writes(self):
+        return [r if r == "/messages" else "retire" for r, _ in self.peer.mutations
+                if r == "/messages" or r.endswith("/retire")]
+
+    def test_transient_failures_back_off_and_retry_without_any_owner_message(self):
+        log = self.fail_attempt()
+        self.assertEqual(self.attempt(), 1, "the first retry is immediate")
+        self.strand()
+        log += self.passes(1)
+        data = self.ledger.next_input()
+        self.assertEqual(self.attempt(), 1, "the second retry waits")
+        self.assertAlmostEqual(data["retry_due_at"] - time.time(), recovery.RETRY_BACKOFF_S[1], delta=5)
+        self.assertIn("input_retry_scheduled", log)
+        log += self.passes(3)
+        self.assertEqual(self.attempt(), 1, "nothing is retried before the backoff ends")
+        self.assertEqual(self.retires(), ["/inputs/message/retire"])
+        data = self.ledger.next_input()
+        data["retry_due_at"] -= recovery.RETRY_BACKOFF_S[1] + 1
+        self.ledger.save(data)
+        log += self.passes(1)
+        data = self.ledger.next_input()
+        self.assertEqual(data["readmitted"]["attempt"], 2)
+        self.assertEqual([r["attempt"] for r in data["readmissions"]], [1], "earlier attempts stay on record")
+        self.assertNotIn("retry_due_at", data)
+        self.peer.foreign, self.peer.current = False, None  # Load is gone: the next attempt runs.
+        log += self.passes(2)
+        self.assertEqual(self.ledger.messages()[-1]["text"], "deep result")
+        self.assertEqual(self.notices(), [], "the chat never heard about the failed starts")
+        self.assertNotIn("ALERT", log)
+        self.assertEqual(self.core_writes(), ["/messages", "retire", "/messages", "retire", "/messages"],
+                         "each failed attempt is retired in Core before the next is admitted")
+        keys = [b["client_message_id"] for r, b in self.peer.mutations if r == "/messages"]
+        self.assertEqual(len(set(keys)), 3, "one Core message per attempt, none sent twice")
+
+    def test_exhausted_retries_close_with_one_plain_notice_and_one_alert(self):
+        log = ""
+        for _ in recovery.RETRY_BACKOFF_S:
+            log += self.fail_attempt()
+        self.assertEqual(self.attempt(), len(recovery.RETRY_BACKOFF_S))
+        self.assertEqual(self.notices(), [])
+        self.assertNotIn("ALERT", log)
+        log = self.fail_attempt()
+        data = self.ledger.input(self.data["remote_id"])
+        self.assertEqual(data["phase"], "completed")
+        self.assertEqual(data["refused"]["reason"], "window_setup_failed")
+        attempts = len(recovery.RETRY_BACKOFF_S) + 1
+        [notice] = self.notices()
+        self.assertEqual(notice["text"], notices.render("tr", "setup_unavailable", minutes=1, attempts=attempts))
+        self.assertNotIn("window_setup_failed", notice["text"])
+        self.assertEqual(notice["refusal"], "window_setup_failed", "the code stays in the export field")
+        self.assertEqual(log.count("ALERT"), 1)
+        self.assertIn("ALERT orkestr-v2-wa-adapter input_refused", log)
+        self.assertIn("attempts=%d" % attempts, log)
+        log = self.passes(3)
+        self.assertEqual(len(self.notices()), 1)
+        self.assertNotIn("ALERT", log)
+        self.assertEqual(self.messages_sent(), attempts, "one Core message per attempt, never another")
+        self.assertEqual(len(self.retires()), attempts - 1)
+
+    def test_the_owner_gets_the_same_plain_notice_without_a_code(self):
+        owner, _ = self.ledger.enqueue(dict(publicMessageId="owner-msg", publicThreadId="thread", chatId="chat",
+            accountId="account", text="Please update the profile today, thanks"),
+            author=dict(role="owner", id="synthetic-owner", label="Owner"))
+        self.ledger.finish_silently(self.ledger.input(self.data["remote_id"]), "suppressed")
+        data = self.ledger.input(owner["remote_id"])
+        data["setup_retries_exhausted"] = {"attempts": 5, "minutes": 14}
+        with quiet():
+            message = self.ledger.refuse(data, "window_setup_failed")
+        self.assertEqual(message["text"], notices.render("en", "setup_unavailable", minutes=14, attempts=5))
+        self.assertNotIn("window_setup_failed", message["text"])
+        self.assertNotIn("Technical failure", message["text"])
+
+    def test_a_row_from_before_the_change_counts_its_one_retry(self):
+        self.strand()
+        data = self.ledger.next_input()
+        data["readmitted"] = {"at": time.time(), "trigger": "automatic"}  # No attempt count recorded.
+        self.ledger.save(data)
+        log = self.passes(1)
+        data = self.ledger.next_input()
+        self.assertIn("input_retry_scheduled", log)
+        self.assertIn("attempt=2", log)
+        self.assertAlmostEqual(data["retry_due_at"] - time.time(), recovery.RETRY_BACKOFF_S[1], delta=5)
+        self.assertEqual(self.retires(), [])
+
+
+class DistinctMessagesPeer(NoRunPeer):
+    """Core gives each admission its own message, and links re-admissions."""
+
+    def __init__(self, features=("message_retries_v1",)):
+        super().__init__()
+        self.features = list(features)
+        self.admitted = 0
+
+    def request(self, method, route, body=None, allowed=(200,)):
+        if method == "POST" and route == "/messages":
+            self.mutations.append((route, copy.deepcopy(body)))
+            self.admitted += 1
+            return 202, dict(status="accepted", message_id="message-%d" % self.admitted,
+                             event_id="event-%d" % self.admitted, sequence=1)
+        return super().request(method, route, body=body, allowed=allowed)
+
+
+class RetryLinkTests(Base):
+    """ORK-780: every re-admission names the attempt Core retired for it, so
+    the web chat shows the input once."""
+    peer_class = DistinctMessagesPeer
+    strand = TransientSetupRetryTests.strand
+    fail_attempt = TransientSetupRetryTests.fail_attempt
+
+    def setUp(self):
+        super().setUp()
+        self.peer.retire_state = "retired"
+
+    def admissions(self):
+        return [body for route, body in self.peer.mutations if route == "/messages"]
+
+    def test_each_readmission_names_the_attempt_it_retired(self):
+        for _ in range(3):
+            self.fail_attempt()
+        self.passes(1)  # The fourth attempt is admitted.
+        bodies = self.admissions()
+        self.assertEqual(len(bodies), 4)
+        self.assertNotIn("retry_of", bodies[0], "the first attempt replaces nothing")
+        self.assertEqual([b["retry_of"] for b in bodies[1:]], ["message-1", "message-2", "message-3"])
+        self.assertEqual(self.retires(), ["/inputs/message-%d/retire" % n for n in (1, 2, 3)])
+        order = [r if r == "/messages" else "retire" for r, _ in self.peer.mutations
+                 if r == "/messages" or r.endswith("/retire")]
+        self.assertEqual(order, ["/messages", "retire"] * 3 + ["/messages"],
+                         "each attempt is retired before the one that names it")
+
+    def test_a_server_without_the_link_gets_the_old_request(self):
+        self.peer.features = []  # Its body refuses unknown fields.
+        self.fail_attempt()
+        self.passes(1)
+        bodies = self.admissions()
+        self.assertEqual(len(bodies), 2)
+        self.assertNotIn("retry_of", bodies[1])
 
 
 class FastOnlyPeer(QueuePeer):

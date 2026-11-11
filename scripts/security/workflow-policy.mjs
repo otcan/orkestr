@@ -77,6 +77,31 @@ const publishCommands = new Set(["docker", "echo", "set", "test", "[["]);
 const publishDockerCommands = new Set(["load", "login", "logout", "tag", "push"]);
 // GitHub-hosted runners only; the arm64 runner builds the Apple Silicon image.
 const githubHostedRunners = new Set(["ubuntu-latest", "ubuntu-24.04-arm"]);
+// Ephemeral AWS runners (ORK-774, docs/ci-workflow-policy.md): one exact
+// selection per architecture, only in the V2 build and test workflows, only in
+// read-only jobs. The selection routes only trusted events to them (pushes to
+// integration and tags, schedules, manual runs, and pull requests whose head
+// is this repository, never a fork) and only while the repository variable
+// ORKESTR_AWS_RUNNERS is "on". Everything else gets the GitHub-hosted runner
+// named last.
+const awsTrustedEvent = "vars.ORKESTR_AWS_RUNNERS == 'on' && github.repository == 'otcan/orkestr' && " +
+  "((github.event_name == 'push' && (github.ref == 'refs/heads/integration' || startsWith(github.ref, 'refs/tags/'))) || " +
+  "github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || " +
+  "(github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == 'otcan/orkestr'))";
+export const awsRunnerSelections = Object.freeze({
+  x64: `\${{ ${awsTrustedEvent} && fromJSON('["self-hosted","orkestr-aws-x64"]') || 'ubuntu-latest' }}`,
+  arm64: `\${{ ${awsTrustedEvent} && fromJSON('["self-hosted","orkestr-aws-arm64"]') || 'ubuntu-24.04-arm' }}`,
+});
+const awsRunnerFiles = new Set(["v2-rust.yml", "v2-image.yml", "v2-browser.yml"]);
+const awsRunnerSelection = runner => Object.values(awsRunnerSelections).includes(runner);
+function awsRunnerJob(job, filename) {
+  if (!awsRunnerSelection(job["runs-on"])) return false;
+  requirePolicy(awsRunnerFiles.has(filename), "workflow_runner");
+  requirePolicy(!("permissions" in job) || (record(job.permissions) &&
+    Object.entries(job.permissions).every(([key, value]) => ["contents", "actions"].includes(key) && value === "read")),
+  "workflow_aws_runner_permissions");
+  return true;
+}
 const ownImageRef = /^"\$IMAGE:[A-Za-z0-9._{}:$-]+"$/;
 function imagetoolsArgsAllowed(args) {
   let sources = 0;
@@ -151,10 +176,12 @@ export function validateWorkflow(source, filename = "") {
   }
   let actions = 0;
   for (const job of Object.values(workflow.jobs)) {
-    requirePolicy(record(job) && (githubHostedRunners.has(job["runs-on"]) || (iosSimulator && job["runs-on"] === "macos-15")), "workflow_runner");
+    requirePolicy(record(job), "workflow_runner");
     requirePolicy(!["uses", "secrets", "container", "services", "environment"].some(key => key in job), "workflow_privileged_job");
     if ("permissions" in job && (iosSimulator || (!attestationJob(job) && !publishJob(job, filename) &&
         !imageCacheReadPermissions(job, filename)))) permissions(job.permissions);
+    requirePolicy(githubHostedRunners.has(job["runs-on"]) || (iosSimulator && job["runs-on"] === "macos-15") ||
+      awsRunnerJob(job, filename), "workflow_runner");
     requirePolicy(!job["continue-on-error"], "workflow_ignored_failure");
     requirePolicy(Array.isArray(job.steps) && job.steps.length > 0, "workflow_steps");
     for (const step of job.steps) {

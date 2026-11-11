@@ -38,6 +38,9 @@ pub use conversation_export::{
 pub mod history_import;
 pub use history_import::{history_source_digest, HistoryError};
 mod intake;
+mod message_retries;
+mod message_revisions;
+pub use message_revisions::MessageRevisionError;
 pub mod owner_password;
 mod paths;
 mod preflight;
@@ -305,3 +308,6 @@ pub mod attachment_integrity;
 pub mod attachment_store;
 
 pub mod memory;
+
+/// Owner credential vault (ORK-784).
+pub mod vault;

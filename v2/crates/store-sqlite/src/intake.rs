@@ -324,8 +324,17 @@ impl IntakeStore for Store {
             return Err(StoreError::Invalid);
         }
         let limit = limit.clamp(1, 100);
-        let mut rows = sqlx::query("SELECT m.id,m.sequence,m.actor_kind,m.text,m.request_key,r.reply_to FROM messages m LEFT JOIN message_reply_to r ON r.message_id=m.id WHERE m.conversation_id=? AND m.owner_id=? AND m.sequence>? AND m.sequence<=? ORDER BY m.sequence LIMIT ?")
-            .bind(conversation.to_string()).bind(owner.to_string()).bind(after).bind(last_sequence).bind(limit+1).fetch_all(&self.pool).await.map_err(db)?;
+        // An attempt retired for re-admission is shown once, as its successor.
+        let sql = format!("SELECT m.id,m.sequence,m.actor_kind,m.text,m.request_key,r.reply_to,{},{} FROM messages m LEFT JOIN message_reply_to r ON r.message_id=m.id {} WHERE m.conversation_id=? AND m.owner_id=? AND m.sequence>? AND m.sequence<=? AND {} ORDER BY m.sequence LIMIT ?", crate::message_revisions::SNAPSHOT_COLUMNS, crate::message_retries::COLUMN, crate::message_revisions::SNAPSHOT_JOINS, crate::message_retries::VISIBLE);
+        let mut rows = sqlx::query(&sql)
+            .bind(conversation.to_string())
+            .bind(owner.to_string())
+            .bind(after)
+            .bind(last_sequence)
+            .bind(limit + 1)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(db)?;
         let more = rows.len() > limit as usize;
         rows.truncate(limit as usize);
         let messages = rows
@@ -340,6 +349,11 @@ impl IntakeStore for Store {
                         .get::<Option<String>, _>("reply_to")
                         .and_then(|json| serde_json::from_str(&json).ok()),
                     origin: Some(message_origin(r.get("request_key")).into()),
+                    revisions: crate::message_revisions::snapshot_state(r),
+                    retry_of: r
+                        .get::<Option<String>, _>("retry_of")
+                        .map(|id| parse(id).map(MessageId))
+                        .transpose()?,
                 })
             })
             .collect::<Result<Vec<_>>>()?;
@@ -443,7 +457,8 @@ mod reply_to_tests;
 /// admissions use fixed prefixes; the web composer sends a bare UUID; anything
 /// else came through the owner messages API (helpers, relays, scripts).
 pub(crate) fn message_origin(request_key: &str) -> &'static str {
-    const SYSTEM: [(&str, &str); 5] = [
+    const SYSTEM: [(&str, &str); 6] = [
+        (crate::message_revisions::NOTICE_KEY_PREFIX, "revision"),
         ("timer:", "timer"),
         ("timer-window:", "timer"),
         ("steering:", "steering"),
@@ -486,5 +501,6 @@ mod message_origin_tests {
         assert_eq!(message_origin("steering:id"), "steering");
         assert_eq!(message_origin("thread-ask:ask"), "thread_ask");
         assert_eq!(message_origin("thread-ask-reply:id"), "thread_ask");
+        assert_eq!(message_origin("message-revision:id"), "revision");
     }
 }

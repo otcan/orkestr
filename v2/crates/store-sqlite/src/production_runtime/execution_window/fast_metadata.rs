@@ -69,6 +69,8 @@ impl Store {
                 binding: binding.clone(),
                 parent_run: None,
                 resume: None,
+                #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+                setup_workspace: Default::default(),
             };
             store.validate_metadata(&mut tx, &grant).await?;
             tx.commit().await.map_err(db)?;

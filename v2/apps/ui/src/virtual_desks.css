@@ -1,18 +1,55 @@
-/* Inventory separates viewing access, reservation and runtime health. */
-.desk-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,22rem),1fr)); gap:1rem; margin-top:1rem; }
-.desk-card { min-width:0; border:1px solid var(--border); border-radius:.8rem; padding:1rem; background:var(--surface); }
-.desk-card h4 { margin:0; font-size:1.05rem; }
-.desk-card .desk-id { margin:.25rem 0 .75rem; color:var(--muted); font-size:.78rem; overflow-wrap:anywhere; }
-.desk-statuses { display:flex; flex-wrap:wrap; gap:.5rem; margin:.5rem 0; }
-.desk-statuses span { border:1px solid var(--border); border-radius:1rem; padding:.2rem .6rem; font-size:.8rem; }
-.desk-card dl { display:grid; grid-template-columns:auto minmax(0,1fr); gap:.25rem .75rem; font-size:.85rem; }
-.desk-card dt { color:var(--muted); } .desk-card dd { margin:0; overflow-wrap:anywhere; }
-.desk-card label { display:grid; gap:.3rem; margin:.75rem 0; }
-.desk-card select { width:100%; min-width:0; }
-.desk-actions { display:flex; flex-wrap:wrap; gap:.5rem; margin:.75rem 0; }
-.desk-viewing { list-style:none; padding:0; margin:.75rem 0; }
+/* A compact table, one row per desk. Explanations live in the legend and in
+   each status's title; notices appear in a detail row only while they apply. */
+.desk-inventory { container-type:inline-size; container-name:desks; margin-top:.5rem; }
+.desk-legend { margin:.25rem 0 .5rem; }
+.desk-table { width:100%; border-collapse:collapse; font-size:.9rem; border:1px solid var(--border); border-radius:.6rem; background:var(--surface); }
+.desk-table [hidden] { display:none !important; }
+.desk-table thead th { text-align:left; font-size:.72rem; font-weight:600; letter-spacing:.03em; text-transform:uppercase; color:var(--muted); padding:.45rem .6rem; border-bottom:1px solid var(--border-strong); }
+.desk-main > th, .desk-main > td { padding:.4rem .6rem; vertical-align:middle; text-align:left; border-top:1px solid var(--border); }
+.desk-row:first-of-type .desk-main > * { border-top:0; }
+.desk-main > th { font-weight:600; min-width:0; overflow-wrap:anywhere; }
+.desk-id { display:block; font-weight:400; font-size:.74rem; color:var(--muted); }
+.desk-runtime { white-space:nowrap; }
+.desk-expiry { display:block; font-size:.74rem; color:var(--muted); }
+.desk-badge { display:inline-block; border:1px solid var(--border); border-radius:1rem; padding:.1rem .5rem; font-size:.76rem; white-space:nowrap; cursor:help; }
+.desk-badge[data-availability="available"] { border-color:var(--success,#26946d); color:var(--success,#26946d); }
+.desk-badge[data-availability="reserved"] { border-color:var(--warning,#b58a35); color:var(--warning,#b58a35); }
+.desk-badge[data-availability="needs-check"], .desk-badge[data-availability="unknown"] { border-style:dashed; border-color:var(--border-strong); color:var(--muted); }
+.desk-action-bar, .desk-owner-buttons { display:flex; flex-wrap:wrap; justify-content:flex-end; align-items:center; gap:.35rem; }
+.desk-owner-buttons button, .desk-chat-toggle { padding:.25rem .6rem; font-size:.84rem; }
+.desk-detail > td { padding:0 .6rem .6rem; }
+.desk-detail > td > * + * { margin-top:.4rem; }
+.desk-notice { display:flex; align-items:flex-start; justify-content:space-between; gap:.5rem; border:1px solid var(--border); border-radius:.5rem; padding:.4rem .6rem; background:var(--surface-2); }
+.desk-notice p { margin:0; }
+.desk-dismiss { flex:none; padding:.15rem .5rem; font-size:.78rem; }
+.desk-link a { overflow-wrap:anywhere; }
+.desk-confirm { border:1px solid var(--danger-border); background:var(--danger-soft); color:var(--danger-text); border-radius:.5rem; padding:.5rem .7rem; }
+.desk-confirm p { margin:0; }
+.desk-confirm-actions { display:flex; flex-wrap:wrap; gap:.4rem; margin-top:.5rem; }
+.desk-chat { border-top:1px dashed var(--border); padding-top:.4rem; }
+.desk-chat label { display:grid; gap:.3rem; margin:.4rem 0; max-width:28rem; }
+.desk-chat select { width:100%; min-width:0; }
+.desk-actions { display:flex; flex-wrap:wrap; gap:.5rem; margin:.5rem 0; }
+.desk-viewing { list-style:none; padding:0; margin:.5rem 0; }
 .desk-viewing li { display:flex; flex-wrap:wrap; align-items:center; gap:.5rem; }
-.desk-advanced { margin-top:.75rem; border-top:1px solid var(--border); padding-top:.75rem; }
+.desk-advanced { margin-top:.5rem; border-top:1px solid var(--border); padding-top:.5rem; }
 .desk-advanced summary { cursor:pointer; color:var(--muted); }
 .desk-summary { display:flex; flex-wrap:wrap; gap:.4rem 1rem; padding:.5rem 0; }
-@media(max-width:600px) { .desk-actions button, .desk-viewing button, .desk-viewing a { flex:1 1 100%; text-align:center; } .desk-card { padding:.8rem; } }
+.desk-sharing { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:.4rem .8rem; border:1px solid var(--border); border-radius:.5rem; padding:.45rem .7rem; margin:.5rem 0; background:var(--surface-2); }
+.desk-sharing[data-shared="true"] { border-color:var(--success,#26946d); }
+.desk-sharing p { margin:0; flex:1 1 16rem; min-width:0; }
+/* Narrow containers: each desk becomes a labelled block, never a wide table. */
+@container desks (max-width: 680px) {
+  .desk-table, .desk-table tbody, .desk-table tr, .desk-table th, .desk-table td { display:block; width:auto; }
+  .desk-table thead { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
+  .desk-row + .desk-row { border-top:1px solid var(--border); }
+  .desk-main { padding:.55rem .7rem .3rem; }
+  .desk-main > th, .desk-main > td { border-top:0; padding:.15rem 0; }
+  .desk-main > td { display:grid; grid-template-columns:6.5rem minmax(0,1fr); align-items:center; gap:.5rem; }
+  .desk-main > td::before { content:attr(data-label); color:var(--muted); font-size:.75rem; }
+  .desk-main > td > * { justify-self:start; min-width:0; }
+  .desk-main > th { font-size:1rem; padding-bottom:.3rem; }
+  .desk-action-bar, .desk-owner-buttons { justify-content:flex-start; }
+  .desk-detail > td { padding:0 .7rem .6rem; }
+  .desk-confirm-actions button, .desk-actions button { flex:1 1 auto; }
+}

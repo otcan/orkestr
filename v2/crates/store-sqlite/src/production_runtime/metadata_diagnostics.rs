@@ -19,6 +19,8 @@ pub(super) enum Stage {
 struct Event {
     stage: Stage,
     outcome: &'static str,
+    /// The check that fenced (fence_reason.rs), only for a `fenced` outcome.
+    reason: Option<&'static str>,
     elapsed_us: u128,
 }
 
@@ -29,6 +31,8 @@ pub struct MetadataFenceDiagnostics {
 }
 impl MetadataFenceDiagnostics {
     pub(super) fn new(role: Role) -> Self {
+        // A code left by an earlier, unrelated operation is never this fence's.
+        let _ = super::fence_reason::take();
         Self {
             events: [None; 5],
             role,
@@ -52,6 +56,8 @@ impl MetadataFenceDiagnostics {
             Err(RuntimeStoreError::Expired) => "expired",
             Err(RuntimeStoreError::Unavailable) => "unavailable",
         };
+        let reason = super::fence_reason::take()
+            .filter(|_| matches!(result, Err(RuntimeStoreError::Fenced)));
         self.events[match stage {
             Stage::RuntimeMultiThread | Stage::RuntimeCurrentThread | Stage::RuntimeBuild => 0,
             #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
@@ -62,6 +68,7 @@ impl MetadataFenceDiagnostics {
         }] = Some(Event {
             stage,
             outcome,
+            reason,
             elapsed_us: started.elapsed().as_micros(),
         });
         result
@@ -71,18 +78,22 @@ impl MetadataFenceDiagnostics {
         self.emit_to(&mut std::io::stderr().lock());
     }
 
-    fn emit_to(&self, sink: &mut impl Write) {
+    pub(in crate::production_runtime) fn emit_to(&self, sink: &mut impl Write) {
         for event in self.events.iter().flatten() {
             let Event {
                 stage,
                 outcome,
+                reason,
                 elapsed_us,
             } = event;
             #[cfg(test)]
             EVENTS.with(|events| events.borrow_mut().push((*stage, *outcome)));
+            let reason = reason
+                .map(|reason| format!(" reason={reason}"))
+                .unwrap_or_default();
             let _ = writeln!(
                 sink,
-                "owned_metadata_fence stage={stage:?} role={:?} outcome={outcome} elapsed_us={elapsed_us}", self.role
+                "owned_metadata_fence stage={stage:?} role={:?} outcome={outcome}{reason} elapsed_us={elapsed_us}", self.role
             );
         }
     }

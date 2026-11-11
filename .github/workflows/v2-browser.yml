@@ -6,18 +6,28 @@ on:
   pull_request:
     branches: [integration, 'v2/**']
     paths: ['v2/**', '.github/workflows/v2-browser.yml', 'package-lock.json']
+    # Draft PRs skip the job; ready_for_review starts the full run.
+    types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
 
 permissions:
   contents: read
-# Only superseded PR checks cancel; manual and integration push runs stay independent.
+# A newer run replaces an older one for the same PR, and a newer push to
+# integration replaces the older integration run. Manual runs stay independent.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ${{ github.workflow }}-${{ (github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number)) || (github.event_name == 'push' && github.ref == 'refs/heads/integration' && format('push-{0}', github.ref)) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/integration') }}
 
 jobs:
   headless-rendering:
-    runs-on: ubuntu-latest
+    if: ${{ github.event.pull_request.draft != true }}
+    # Ephemeral AWS runner for trusted events, GitHub-hosted otherwise (ORK-774).
+    runs-on: >-
+      ${{ vars.ORKESTR_AWS_RUNNERS == 'on' && github.repository == 'otcan/orkestr' &&
+      ((github.event_name == 'push' && (github.ref == 'refs/heads/integration' || startsWith(github.ref, 'refs/tags/'))) ||
+      github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == 'otcan/orkestr')) &&
+      fromJSON('["self-hosted","orkestr-aws-x64"]') || 'ubuntu-latest' }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
@@ -61,11 +71,13 @@ jobs:
           cargo +1.99.1 build --offline --locked -p orkestr-v2-server
           bash apps/ui/scripts/bundle.sh
       - name: Browser tracker recovery and request boundary unit tests
-        run: node --test v2/apps/ui/tests/tracker_client.test.mjs v2/apps/ui/tests/selected_conversation.test.mjs v2/apps/ui/tests/request.test.mjs v2/apps/ui/tests/local_setup.test.mjs v2/ci/headless-login.test.mjs v2/ci/headless-logout.test.mjs
+        run: node --test v2/apps/ui/tests/tracker_client.test.mjs v2/apps/ui/tests/selected_conversation.test.mjs v2/apps/ui/tests/request.test.mjs v2/apps/ui/tests/vault_reveal.test.mjs v2/apps/ui/tests/local_setup.test.mjs v2/ci/headless-login.test.mjs v2/ci/headless-logout.test.mjs
       - name: Local account first-run form and existing-owner sign-in
         run: node v2/ci/headless-local-account.mjs
       - name: Bounded encrypted upload and composer tests
         run: node --test v2/apps/ui/src/attachments/encrypted_upload.test.mjs v2/apps/ui/src/attachments/encrypted_composer.test.mjs v2/apps/ui/tests/composer_tools.test.mjs v2/apps/ui/tests/pasted_text.test.mjs v2/ci/headless-encrypted-uploads.test.mjs
+      - name: Local folder worker with a synthetic directory handle
+        run: node --test v2/apps/ui/src/local_files/folder.test.mjs v2/apps/ui/src/local_files/relay.test.mjs
       - name: UI release inventory and backend compatibility contract
         run: node --test v2/apps/ui/tests/ui_release.test.mjs v2/apps/ui/tests/asset_base.test.mjs
       - name: Mounted UI promotion and rollback with retained assets
@@ -76,6 +88,10 @@ jobs:
         env:
           SCREENSHOT_DIR: ${{ runner.temp }}/v2-screenshots
         run: node v2/ci/headless-attachment-picker.mjs
+      - name: Mounted local folder control with an injected synthetic folder
+        env:
+          SCREENSHOT_DIR: ${{ runner.temp }}/v2-screenshots
+        run: node v2/ci/headless-local-files.mjs
       - name: CI headless rendering with synthetic data
         run: node v2/ci/headless-rendering.mjs
       - name: CI configured workspace rendering against a synthetic API

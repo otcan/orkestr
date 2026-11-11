@@ -51,6 +51,21 @@ test('provider handoff and receipt keep scoped cookie paths and mutation CSRF', 
         await assert.rejects(execute({recv:async()=>({...base,path})},()=>assert.fail('fetch must not run')),/Invalid API path/);
 });
 
+test('provider sign-in uses fixed paths with CSRF on every action', async () => {
+    const root='/api/v2/provider-sign-in';
+    const allowed=[['GET',root],...['codex','claude'].flatMap(p=>['start','code','cancel','sign-out'].map(a=>['POST',`${root}/${p}/${a}`]))];
+    for(const [method,path] of allowed) {
+        await execute({recv:async()=>({...base,method,path,csrf:'synthetic-csrf',body:method==='POST'?{}:null})},async(actual,options)=>{
+            assert.equal(actual,path);assert.equal(options.credentials,'same-origin');
+            assert.equal(options.headers['x-orkestr-csrf'],method==='POST'?'synthetic-csrf':undefined);
+            assert.equal(options.headers.Authorization,undefined);return Response.json({ok:true});
+        });
+    }
+    for(const [method,path] of [['POST',root],['GET',root+'/codex/start'],['POST',root+'/openai/start'],['POST',root+'/codex/../start'],
+        ['POST',root+'/codex/start?next=https://example.invalid'],['DELETE',root+'/codex/sign-out']])
+        await assert.rejects(execute({recv:async()=>({...base,method,path})},()=>assert.fail('fetch must not run')),/Invalid API path/);
+});
+
 test('login credentials use JSON and same-origin cookies without caching', async () => {
     const input = {...base,bootstrap:'synthetic-bootstrap'};
     const result = await execute({recv:async()=>input},async(path, options)=>{
@@ -175,6 +190,17 @@ test('sidebar, read marks and linked V1 history are the only new paths',async()=
     }
 });
 
+test('a message revision is an exact allowed path',async()=>{
+    const conversation='/api/v2/conversations/00000000-0000-4000-8000-00000000000a';
+    const path=`${conversation}/messages/00000000-0000-4000-8000-000000000101/revisions`;
+    for(const method of ['POST','GET']) {
+        await execute({recv:async()=>({...base,method,path,body:method==='POST'?{}:null,csrf:'synthetic-csrf'})},async(seen)=>{assert.equal(seen,path);return new Response('{}');});
+    }
+    for(const bad of [`${conversation}/messages/not-a-uuid/revisions`,`${path}/extra`,`${path}?limit=1`,`${conversation}/messages/../revisions`]) {
+        await assert.rejects(execute({recv:async()=>({...base,path:bad})},()=>assert.fail('fetch must not run')),/Invalid API path/);
+    }
+});
+
 test('message attachments and V1 uploads are allowed paths',async()=>{
     for(const path of ['/api/v2/conversations/00000000-0000-4000-8000-00000000000a/message-attachments','/api/v2/v1-threads/synthetic-group/uploads']) {
         await execute({recv:async()=>({...base,method:'POST',path,body:{},csrf:'synthetic-csrf'})},async(seen,options)=>{assert.equal(seen,path);assert.equal(options.headers['x-orkestr-csrf'],'synthetic-csrf');return new Response('{}');});
@@ -245,6 +271,32 @@ test('global desk discovery and scoped lease actions use fixed cookie and CSRF p
         await assert.rejects(execute({recv:async()=>({...base,method,path})},()=>assert.fail('fetch must not run')),/Invalid API path/);
 });
 
+test('the desk sharing switch is one fixed path, read and replaced with CSRF',async()=>{
+    const path='/api/v2/desktop-sharing';
+    for(const method of ['GET','PUT']) {
+        await execute({recv:async()=>({...base,method,path,csrf:'synthetic-csrf',body:method==='GET'?null:{expected_revision:0,share_all_desks:true}})},async(actual,options)=>{
+            assert.equal(actual,path);assert.equal(options.method,method);assert.equal(options.credentials,'same-origin');
+            assert.equal(options.headers['x-orkestr-csrf'],method==='PUT'?'synthetic-csrf':undefined);
+            assert.equal(options.headers.Authorization,undefined);return Response.json({schema_version:1,share_all_desks:true,revision:1,updated_at_ms:1});
+        });
+    }
+    for(const [method,path] of [['POST','/api/v2/desktop-sharing'],['DELETE','/api/v2/desktop-sharing'],['GET','/api/v2/desktop-sharing?owner=other'],['PUT','/api/v2/desktop-sharing/extra'],['PUT','/api/v2/desktop-sharing/../desktops']])
+        await assert.rejects(execute({recv:async()=>({...base,method,path})},()=>assert.fail('fetch must not run')),/Invalid API path/);
+});
+
+test('owner desk actions use only the fixed verbs with cookie and CSRF',async()=>{
+    for(const action of ['start','stop','link']) {
+        const path=`/api/v2/desktops/desk-a/${action}`;
+        await execute({recv:async()=>({...base,method:'POST',path,csrf:'synthetic-csrf',body:{}})},async(actual,options)=>{
+            assert.equal(actual,path);assert.equal(options.credentials,'same-origin');
+            assert.equal(options.headers['x-orkestr-csrf'],'synthetic-csrf');
+            assert.equal(options.headers.Authorization,undefined);return Response.json({ok:true});
+        });
+    }
+    for(const [method,path] of [['GET','/api/v2/desktops/desk-a/start'],['POST','/api/v2/desktops/desk-a/restart'],['POST','/api/v2/desktops/desk-a/cleanup'],['POST','/api/v2/desktops/../start'],['POST','/api/v2/desktops/desk-a/stop?force=true'],['POST','/api/v2/desktops/desk-a/link/extra'],['POST','/api/v2/desktops/UPPER/stop']])
+        await assert.rejects(execute({recv:async()=>({...base,method,path})},()=>assert.fail('fetch must not run')),/Invalid API path/);
+});
+
 test('build identity read is restricted to the exact same-origin health GET', async () => {
     await execute({recv:async()=>({...base,method:'GET',path:'/api/v2/health',body:null})}, async(path, options)=>{
         assert.equal(path,'/api/v2/health');
@@ -255,4 +307,17 @@ test('build identity read is restricted to the exact same-origin health GET', as
     for (const [method,path] of [['POST','/api/v2/health'],['GET','/api/v2/health?url=https://example.invalid'],['GET','/api/v2/health/extra']]) {
         await assert.rejects(execute({recv:async()=>({...base,method,path})},()=>assert.fail('fetch must not run')),/Invalid API path/);
     }
+});
+
+test('owner vault routes keep cookie and CSRF and never carry the sealed form', async () => {
+    const id = 'vi_0123456789abcdef0123456789abcdef';
+    for (const [method,path] of [['GET','/api/v2/vault'],['GET','/api/v2/vault/items'],['POST','/api/v2/vault/items'],['PATCH',`/api/v2/vault/items/${id}`],['DELETE',`/api/v2/vault/items/${id}`],['PUT',`/api/v2/vault/items/${id}/login`],['PUT',`/api/v2/vault/items/${id}/grants`],['POST','/api/v2/vault/import'],['GET','/api/v2/vault/audit']]) {
+        await execute({recv:async()=>({...base,method,path,csrf:'synthetic-csrf',body:method==='GET'||method==='DELETE'?null:{}})},async(actual,options)=>{
+            assert.equal(actual,path);assert.equal(options.credentials,'same-origin');
+            assert.equal(options.headers['x-orkestr-csrf'],method==='GET'?undefined:'synthetic-csrf');
+            assert.equal(options.headers.Authorization,undefined);return Response.json({ok:true});
+        });
+    }
+    for (const path of [`/api/v2/vault/items/${id}/sealed`,'/api/v2/vault/stored-login',`/api/v2/vault/items/${id}/../login`,'/api/v2/vault/items/not-an-id','/api/v2/vault/audit?limit=5','/api/v2/vault/items/vi_x'])
+        await assert.rejects(execute({recv:async()=>({...base,method:'GET',path})},()=>assert.fail('fetch must not run')),/Invalid API path/);
 });

@@ -1,4 +1,5 @@
 import {readGroupInputs} from './scoped-group-inbox.js';
+export {forwardInputRevisions} from './scoped-group-input-revisions.js';
 
 // Route only new text inputs through the existing authenticated path. Reply
 // scans and sends retain their separate serial journal and delivery barriers.

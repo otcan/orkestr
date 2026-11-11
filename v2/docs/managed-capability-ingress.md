@@ -22,6 +22,14 @@ are bounded; every window has a durable claim bound. An exact retry finds the
 same claim; changed content conflicts. Loss of the caller or manager produces
 an unknown outcome. Journal files alone never reconstruct live caller proof.
 
+Root indexes the claim journal (`managed-requests`) in memory: a pending poll
+reads only the live callers' own claims, and per-window checks read only that
+window's claims, so poll cost does not grow with the journal. A completed,
+unknown or cancelled claim of a window the manager no longer holds is removed
+seven days after its last change (at most 256 per pass, checked hourly). Claims
+of held windows, live callers and unfinished claims are kept. No later caller
+can replay a removed claim: its key includes the window and original broker.
+
 Migration 0093 records a durable one-use operation only after Core verifies the
 currently consumed canonical Deep dispatch, original metadata setup (including
 the exact resume setup locator), and active execution window, context,

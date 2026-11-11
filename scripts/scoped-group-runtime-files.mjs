@@ -1,6 +1,7 @@
 // Shared closed file inventory for both inactive scoped-runtime preparation paths.
 export const scopedRuntimeFiles = Object.freeze([
   'packages/connectors/src/whatsapp-scoped-group-transport.js',
+  'packages/connectors/src/whatsapp-scoped-input-revisions.js',
   'packages/connectors/src/whatsapp-scoped-route-membership.js',
   'packages/connectors/src/whatsapp-group-owner-author.js',
   'packages/connectors/src/whatsapp-group-participant-author.js',
@@ -31,6 +32,7 @@ export const scopedRuntimeFiles = Object.freeze([
   'packages/connectors/src/scoped-group-message-pages.js',
   'packages/connectors/src/scoped-group-inbox.js',
   'packages/connectors/src/scoped-group-input-intake.js',
+  'packages/connectors/src/scoped-group-input-revisions.js',
   'packages/connectors/src/scoped-group-reply-quote.js',
   'packages/connectors/src/acknowledgement-language.js',
   'packages/connectors/src/scoped-group-acknowledgements.js',

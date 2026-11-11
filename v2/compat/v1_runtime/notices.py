@@ -37,6 +37,21 @@ TEMPLATES = {
         "de": "Technischer Fehler (%(reason)s): Diese Nachricht wurde nicht verarbeitet. Der Betreiber wurde "
               "benachrichtigt; sende sie erneut, falls es dringend ist.",
     },
+    # Every automatic retry of an input whose window could not start failed
+    # (recovery.RETRY_BACKOFF_S): nothing of it ran. One plain text for every
+    # audience: no reason codes, no request to resend.
+    "setup_unavailable": {
+        "en": "Your message is still unanswered: the assistant could not be started for %(minutes)d minutes "
+              "(the server is busy or a start-up step kept failing), although I tried %(attempts)d times. "
+              "Nothing of it has run. I have reported it to the operator.",
+        "tr": "Mesajınız hâlâ yanıtsız: asistan %(minutes)d dakika boyunca başlatılamadı (sunucu yoğun ya da bir "
+              "başlatma adımı başarısız olmaya devam etti); %(attempts)d kez denedim. Mesajınızın hiçbir kısmı "
+              "çalıştırılmadı; konuyu operatöre ilettim.",
+        "de": "Deine Nachricht ist noch unbeantwortet: Der Assistent konnte %(minutes)d Minuten lang nicht "
+              "gestartet werden (der Server ist ausgelastet oder ein Startschritt schlug immer wieder fehl), "
+              "obwohl ich es %(attempts)d-mal versucht habe. Davon wurde nichts ausgeführt. Ich habe es an den "
+              "Betreiber weitergegeben.",
+    },
     # A run that may already have acted (or needs review): never retried.
     "interrupted_owner": {
         "en": "The task was interrupted before it finished (%(reason)s). It may already have done part of the "
