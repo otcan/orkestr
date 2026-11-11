@@ -1,6 +1,7 @@
-// The page a desktop share link opens (served by static-fallback.ts). Its
-// owner opens it with their Orkestr session in one click; other recipients
-// approve the browser's one-time challenge from the chat.
+// The page a desktop share link opens (served by static-fallback.ts). A
+// browser signed in to Orkestr as its owner opens the desktop without a
+// click; other recipients approve the browser's one-time challenge from the
+// chat.
 import { escapeHtml } from "./browser-page-security.js";
 export function serveDesktopSharePage(response: any, appUrl = "") {
   let appOrigin = "";
@@ -172,33 +173,53 @@ export function serveDesktopSharePage(response: any, appUrl = "") {
         statusNode.className = 'error';
       }
     }
-    // The signed-in owner opens their own link with one click: their Orkestr
-    // session approves this browser's attempt (no challenge to copy). On
-    // another host the session is not available, so offer the same link on
-    // the Orkestr app host; signed-out owners are sent through sign-in.
+    // On the link host (a host of its own, e.g. connect.<domain>) the Orkestr
+    // session cookie, which belongs to the app host, is never sent. Ask the
+    // app host with a credentialed, read-only same-site check whether this
+    // browser is signed in there as the link's owner. It approves nothing.
+    async function ownerSignedInOnAppHost() {
+      try {
+        const response = await fetch(appOrigin + api('owner-session'), { credentials: 'include', headers: { accept: 'application/json' } });
+        const body = await response.json().catch(() => ({}));
+        return response.ok && body.ok === true && body.owner === true;
+      } catch (error) {
+        return false;
+      }
+    }
+    // The signed-in owner opens their own link without a click: their Orkestr
+    // session approves this browser's attempt (no challenge to copy). On the
+    // link host that session is only checked, then the same link continues on
+    // the Orkestr app host, which approves it there. Without a verified owner
+    // session the page offers that move as a button; signed-out owners are
+    // sent through sign-in. Returns true when the page is navigating away.
     async function approveAsOwner() {
-      if (tenantVmId) return;
+      if (tenantVmId) return false;
       const here = location.pathname + location.search;
       if (appOrigin && location.origin !== appOrigin) {
+        if (await ownerSignedInOnAppHost()) {
+          location.replace(appOrigin + here);
+          return true;
+        }
         owner.href = appOrigin + here;
         owner.hidden = false;
         summary.textContent = 'Open this desktop with your Orkestr login.';
-        return;
+        return false;
       }
       const response = await fetch(api('approve-as-owner'), { method: 'POST', credentials: 'same-origin', headers: { accept: 'application/json' } }).catch(() => null);
       if (response && response.ok) {
         summary.textContent = 'Opening the desktop…';
-        return;
+        return false;
       }
       if (response && response.status === 401) {
         owner.textContent = 'Sign in to open';
         owner.href = '/auth/login?return=' + encodeURIComponent(here);
         owner.hidden = false;
         summary.textContent = 'Sign in to Orkestr to open this desktop.';
-        return;
+        return false;
       }
       summary.textContent = 'This desktop link needs approval from the Orkestr chat.';
       chatApproval.open = true;
+      return false;
     }
     async function start() {
       try {
@@ -206,7 +227,7 @@ export function serveDesktopSharePage(response: any, appUrl = "") {
         renderLifecycle(body);
         const value = body.attempt && body.attempt.challenge ? body.attempt.challenge : '';
         challenge.textContent = 'orkestr desktop approve ' + value;
-        if (!body.approved) await approveAsOwner();
+        if (!body.approved && await approveAsOwner()) return;
         poll();
       } catch (error) {
         if (showExpired(error)) return;

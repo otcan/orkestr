@@ -14,17 +14,28 @@ function approvalError(message, statusCode) {
   return Object.assign(new Error(message), { statusCode });
 }
 
-export async function approveDesktopShareAsOwner({
+// The checks owner approval rests on, approving nothing: a sign-in session
+// (401 without one), a live link (key, subdomain, expiry, revocation and
+// current desktop grant, as desktopShareStatus checks them) and that session
+// belonging to the link's owner or an admin (403 otherwise).
+export async function verifyDesktopShareOwnerSession({
   shareId = "", key = "", browserToken = "", subdomain = "",
   principal = null, securitySession = null, env = process.env,
 } = {}) {
   const owner = assertOidcDesktopSession(principal, securitySession);
-  // Validates the share (active, key, subdomain, current desktop grant) and
-  // finds the attempt this browser opened.
   const status = await desktopShareStatus({ shareId, key, browserToken, subdomain, env });
   if (!isAdminPrincipal(owner) && normalizeUserId(status.share?.ownerUserId) !== normalizeUserId(owner.userId)) {
     throw approvalError("desktop_share_owner_mismatch", 403);
   }
+  return status;
+}
+
+export async function approveDesktopShareAsOwner({
+  shareId = "", key = "", browserToken = "", subdomain = "",
+  principal = null, securitySession = null, env = process.env,
+} = {}) {
+  // Also finds the attempt this browser opened.
+  const status = await verifyDesktopShareOwnerSession({ shareId, key, browserToken, subdomain, principal, securitySession, env });
   if (!status.attempt) throw approvalError("desktop_share_attempt_required", 409);
   if (status.approved) return { ok: true, approved: true, desktopUrl: status.desktopUrl };
   const state = await readDesktopShareState(env);
