@@ -102,6 +102,11 @@ TEMPLATES = {
         "de": "Es geht in einem neuen Durchgang weiter: Der vorherige Durchgang hat sein Zeitlimit "
               "erreicht, bevor er fertig war.",
     },
+    "release_continue": {
+        "en": "Orkestr was updated while this task was running. Continuing it in a new turn.",
+        "tr": "Bu görev çalışırken Orkestr güncellendi. Yeni bir turda devam ediliyor.",
+        "de": "Orkestr wurde aktualisiert, während diese Aufgabe lief. Es geht in einem neuen Durchgang weiter.",
+    },
     "steer_unknown": {
         "en": "Your message went to the running task, but I could not confirm that it arrived. The operator "
               "was alerted; if the reply does not cover it, resend it.",

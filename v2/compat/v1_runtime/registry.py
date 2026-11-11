@@ -17,6 +17,7 @@ from . import config as config_module
 from .export_changes import ExportChanges
 from .ledger import Ledger
 from .auto_steer import default_mode as auto_steer_mode
+from . import release_interruption
 from .worker import DEFAULT_BURST_QUIET_S, Signal, Worker, attachment_export_settings
 
 UNIQUE_KEYS = ("remote_thread_id", "conversation_id", "public_thread_id", "chat_id")
@@ -207,6 +208,7 @@ class Registry:
         binding.worker.max_input_age_s = binding.config["max_input_age_seconds"]
         binding.worker.instructions_path = binding.config["instructions_path"]
         binding.worker.internal_context_dir = self.service.get("internal_context_dir")
+        binding.worker.release_interruption_dir = release_interruption.configured(self.service)
         if binding.thread is None and self.workers:
             binding.thread = threading.Thread(target=self._supervise, args=(binding,),
                                               daemon=True, name="binding-" + binding.remote_thread_id[:8])

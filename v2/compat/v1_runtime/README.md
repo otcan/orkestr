@@ -662,6 +662,20 @@ the source run's Deep session binding is still current and the provider
 generation unchanged (`store-sqlite/src/intake.rs`). A refused or unproven
 continuation closes with the "interrupted, nothing is retried" notice.
 
+A release interruption gets the same one-time continuation
+(`release_interruption.py`). The release train writes one Root record per Deep
+run it stops, before the stop: `<release_interruption_dir>/<run id>.json`,
+root-owned, mode 0400, single link, with exactly `format`
+(`orkestr-release-interruption-v1`), `conversation_id`, `run_id`,
+`release_source` (40-hex commit) and `interrupted_at_ms`. A stop of exactly
+that run in exactly that conversation continues once with the release wording
+(prefix and the `release_continue` notice, English, Turkish or German) and no
+alert; grouped messages are carried as for a deadline. The service keys
+`release_interruption_dir` (an absolute, root-owned 0700 directory) and
+`release_interruption_enabled: true` must both be set; without either key,
+without a record, or with a record that is not exactly valid, a stop keeps
+today's meaning. Removing or disabling a key is the kill switch.
+
 ### Operator re-admission
 
 Run as the adapter service user (the ledger's owner), never as another user
