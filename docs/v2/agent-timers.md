@@ -147,6 +147,12 @@ agent_timer.py instructions
 A timer is named by its ID or exact label. The default create key comes from
 the label, schedule and text, so a retried create is the same timer.
 
+When the conversation has no installed grant file the tool stops with
+`grant_file_missing` (a file that is present but unusable stays
+`grant_missing_or_invalid` or `grant_file_must_be_private`). The agent tells
+the owner plainly that the timer was not set and files no repair or Root
+request; provisioning gaps are the operator's to detect.
+
 ## Provisioning
 
 `v2/tools/agent_timer_provision.py --v2-url URL --credentials FILE --grant-dir
@@ -190,9 +196,10 @@ nor world-writable (created 0700 if missing). The generated chat rules then
 carry "Timers of this chat (agent timer tool)" with this conversation's
 command instead of "ask Root". The group is created with the owner's numbers
 only, so the chat is owner-only when the grant is issued, and its daily
-create cap is set to `owner_only` unless the owner already chose one. Revoke
-the grant (and set the cap back to `default`) if other members are added
-later. Without `agent_timers` nothing changes.
+create cap is set to `owner_only` unless the owner already chose one. Every
+thread keeps its timer access when other members are added later: do not
+revoke the grant, only set the daily cap back to `default` so the owner-only
+allowance no longer applies. Without `agent_timers` nothing changes.
 Older servers refuse the key (`deny_unknown_fields`): add it only after the
 release with this change is live.
 

@@ -40,3 +40,10 @@ fn native_reader_has_the_same_closed_shell_path_boundary() {
         assert!(!timers(Some(bad)).valid(), "{bad}");
     }
 }
+
+#[test]
+fn a_missing_grant_is_reported_plainly_without_a_repair_request() {
+    let rules = timer_rules("synthetic", &timers(None));
+    assert!(rules.contains("`grant_file_missing`"));
+    assert!(rules.contains("Do not file a\nrepair or Root request"));
+}

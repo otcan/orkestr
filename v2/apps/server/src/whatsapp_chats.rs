@@ -414,6 +414,11 @@ minutes, pauses at most 60 days, 12 creates or upserts per hour, a daily
 create cap the owner sets (24 per 24 hours by default, 200 in an owner-only
 chat), 32 live agent-created timers. If the tool refuses, tell the owner the code in
 one line, do not retry in a loop, and never fall back to V1.
+
+If the tool reports `grant_file_missing`, this chat's timer access is not set
+up. Tell the owner in one plain line that the timer was not set. Do not file a
+repair or Root request and do not look for another way to set it: the operator
+is alerted automatically.
 "#
     )
 }

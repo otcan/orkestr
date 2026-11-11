@@ -6,8 +6,8 @@
 //! agent grant; machine requests only, never with a cookie, bearer or
 //! Origin), only while the conversation has a running Deep turn:
 //! - `POST /api/v2/conversations/{id}/agent-attachments`: store up to 8 files
-//!   (16 MiB in all; only the document and image types WhatsApp is sent) in
-//!   this conversation's attachment store, like an owner upload. 201 with one
+//!   (16 MiB in all; any type the store takes, never a hidden or secret-looking
+//!   file) in this conversation's attachment store, like an owner upload. 201 with one
 //!   marker line per file for the reply, 200 for a replay of the same
 //!   request key. A plaintext copy goes to the attachment export directory,
 //!   where the WhatsApp adapter reads the bytes it sends.
@@ -50,8 +50,15 @@ fn invalid() -> Error {
 fn refused_type() -> Error {
     Error(
         StatusCode::UNSUPPORTED_MEDIA_TYPE,
-        "agent_attachment_type_refused",
-        "Only PDF, Word, Excel, PowerPoint, CSV, text, Markdown, PNG, JPEG, WebP and ZIP files can be attached",
+        "agent_attachment_type_mismatch",
+        "A file's type must match its extension (a .pdf is application/pdf)",
+    )
+}
+fn refused_name() -> Error {
+    Error(
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "agent_attachment_name_refused",
+        "Hidden or secret-looking files (keys, credentials) cannot be attached",
     )
 }
 fn too_large() -> Error {
@@ -107,7 +114,12 @@ async fn upload(
     let mut contents = Vec::with_capacity(upload.files.len());
     let mut total = 0usize;
     for file in &upload.files {
-        agent_attachment_type(&file.filename, Some(&file.media_type)).ok_or_else(refused_type)?;
+        if !agent_attachment_name_allowed(&file.filename) {
+            return Err(refused_name());
+        }
+        if !agent_attachment_type_consistent(&file.filename, &file.media_type) {
+            return Err(refused_type());
+        }
         let bytes = decode_base64(&file.content_base64)
             .filter(|bytes| !bytes.is_empty())
             .ok_or_else(invalid)?;

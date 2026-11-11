@@ -54,6 +54,8 @@ owner's tab ── poll every 2 s ─► POST /local-files/poll ────┘ 
 - **Agent side.** A per-conversation local-files grant, the same design as
   the agent-timer grant: shown once, stored as a hash, rotated by a new
   issue, revoked at once. It is separate from thread-ask and timer grants.
+  The operator may issue it with the owner's dedicated service credential
+  (as for agent-timer grants); a revoked or expired credential cannot.
   It is sent as `x-orkestr-local-files-grant` with no cookie, bearer or
   Origin, and only works while the conversation has a dispatched Deep run,
   which every request is pinned to. Fast never gets the tool.
@@ -96,7 +98,7 @@ owner's tab ── poll every 2 s ─► POST /local-files/poll ────┘ 
 
 | Route | Caller | Effect |
 |---|---|---|
-| `GET\|PUT\|DELETE /api/v2/conversations/{id}/local-files-grant` | owner (browser + CSRF, or machine bearer) | read, issue/rotate (shown once), revoke the grant; revoking fails open requests |
+| `GET\|PUT\|DELETE /api/v2/conversations/{id}/local-files-grant` | owner (browser + CSRF, machine bearer, or the owner's live service credential) | read, issue/rotate (shown once), revoke the grant; revoking fails open requests |
 | `POST .../local-files/requests` | grant holder | queue `{"request_key","operation","path"?,"paths"?,"content_base64"?,"timeout_ms"?}`; 202, or 200 for a replay of the key |
 | `GET .../local-files/requests/{request}` | grant holder | state (`queued`, `working`, `done`, `failed`), error, result, `status_text` |
 | `POST .../local-files/poll` | owner's tab | `{"connection_id","folder_name","takeover"?}`: heartbeat, returns the requests this tab holds |
@@ -161,6 +163,10 @@ answer, rerun with `--request-key KEY` to get the same request.
 2. Provision the grant, like the timer grant, in its own directory:
    `local_files_provision.py --v2-url URL --credentials FILE --grant-dir DIR
    --conversation <uuid> --chown <deep agent user>` (`--revoke` to remove).
+   If the Deep agent can only read the agent-timer grant directory, install
+   the grant there as `<conversation>.local-files.grant` and pass that file
+   with `--grant-file`. Never run the provisioning tool with `--grant-dir` on
+   that directory: it writes `<conversation>.grant`, the timer grant's name.
 3. Give that conversation's Deep agent the tool:
    `ORKESTR_V2_LOCAL_FILES_GRANT_DIR=DIR`, `ORKESTR_V2_URL`,
    `ORKESTR_V2_CONVERSATION`, and the text of `local_files.py instructions`

@@ -72,9 +72,13 @@ impl Store {
         } else {
             // Past its hard deadline a window holds no egress or live provider
             // (e.g. stuck awaiting acceptance): it never occupies a slot.
-            let other: i64 = sqlx::query_scalar("SELECT count(*) FROM execution_windows WHERE owner_id=? AND conversation_id!=? AND state IN ('opening','active','retiring') AND expires_at_ms>?")
-                .bind(owner.to_string()).bind(conversation.to_string()).bind(clock)
-                .fetch_one(&mut *tx).await.map_err(db)?;
+            let other: i64 = sqlx::query_scalar(OTHER_LIVE_WINDOWS)
+                .bind(owner.to_string())
+                .bind(conversation.to_string())
+                .bind(clock)
+                .fetch_one(&mut *tx)
+                .await
+                .map_err(db)?;
             if other >= i64::from(capacity) {
                 return Err(RuntimeStoreError::Busy);
             }

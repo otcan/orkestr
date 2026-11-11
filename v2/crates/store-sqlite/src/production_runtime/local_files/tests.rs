@@ -136,13 +136,46 @@ async fn grant_turn_and_tab_authority() {
             .await,
         Err(ResourceError::Unauthorized)
     );
-    sqlx::query("INSERT INTO auth_sessions(token_hash,owner_id,expires_at,kind) VALUES(?,?,unixepoch()+600,'service_browser')")
-        .bind(crate::digest("browser:service")).bind(f.owner.to_string())
+    sqlx::query("INSERT INTO service_credentials(id,owner_id,label,token_hash,expires_at) VALUES('service-1',?,'synthetic grants',?,unixepoch()+600)")
+        .bind(f.owner.to_string()).bind(crate::digest("synthetic-service-key"))
         .execute(&f.store.pool).await.unwrap();
+    for (token, credential) in [
+        ("browser:service", Some("service-1")),
+        ("browser:dangling", None),
+    ] {
+        sqlx::query("INSERT INTO auth_sessions(token_hash,owner_id,expires_at,kind,service_credential_id) VALUES(?,?,unixepoch()+600,'service_browser',?)")
+            .bind(crate::digest(token)).bind(f.owner.to_string()).bind(credential)
+            .execute(&f.store.pool).await.unwrap();
+    }
     assert_eq!(
         f.store
             .poll_local_files("browser:service", &f.owner, &c, &poll(tab))
             .await,
+        Err(ResourceError::Unauthorized)
+    );
+    // The owner's dedicated service credential may provision the grant (as
+    // for agent timers), but only while the credential itself is live.
+    let read = f
+        .store
+        .local_file_grant("browser:service", &f.owner, &c)
+        .await
+        .unwrap();
+    assert!(read.issued && read.generation == 1);
+    assert_eq!(
+        f.store
+            .local_file_grant("browser:dangling", &f.owner, &c)
+            .await,
+        Err(ResourceError::Unauthorized)
+    );
+    sqlx::query("UPDATE service_credentials SET revoked=1 WHERE id='service-1'")
+        .execute(&f.store.pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        f.store
+            .issue_local_file_grant("browser:service", &f.owner, &c)
+            .await
+            .map(|_| ()),
         Err(ResourceError::Unauthorized)
     );
     let credential = browser(&f).await;

@@ -47,6 +47,37 @@ async fn accepted_reply(case: &Case, conversation: &ConversationId, sequence: i6
         .unwrap();
 }
 
+/// The sidebar shows the time of the conversation's newest event (its
+/// highest sequence), read directly instead of walking all its events.
+#[tokio::test]
+async fn last_event_time_is_the_newest_events_own_time() {
+    let case = Case::new().await;
+    let conversation = case.conversation("synthetic-last-event").await;
+    accepted_reply(&case, &conversation, 1).await;
+    accepted_reply(&case, &conversation, 2).await;
+    for (sequence, at) in [
+        (1, "2030-01-01T00:00:00.000Z"),
+        (2, "2026-01-02T00:00:00.000Z"),
+    ] {
+        sqlx::query("UPDATE events SET occurred_at=? WHERE conversation_id=? AND sequence=?")
+            .bind(at)
+            .bind(conversation.to_string())
+            .bind(sequence)
+            .execute(&case.store.pool)
+            .await
+            .unwrap();
+    }
+    let list = case
+        .store
+        .sidebar_conversations(&case.token, &case.owner)
+        .await
+        .unwrap();
+    assert_eq!(
+        find(&list, &conversation).last_event_at.as_deref(),
+        Some("2026-01-02T00:00:00.000Z")
+    );
+}
+
 fn find<'a>(list: &'a SidebarConversations, id: &ConversationId) -> &'a SidebarConversation {
     list.conversations
         .iter()

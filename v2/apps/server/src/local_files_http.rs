@@ -1,7 +1,8 @@
 //! Local folder relay (ORK-750, proof of concept). See
 //! `docs/v2/local-files.md`.
 //!
-//! Owner (browser cookie with CSRF, or machine bearer), for provisioning:
+//! Owner (browser cookie with CSRF, machine bearer, or the owner's live
+//! service credential), for provisioning:
 //! - `GET|PUT|DELETE /api/v2/conversations/{id}/local-files-grant`: read,
 //!   issue/rotate (shown once) or revoke the conversation's grant.
 //!
