@@ -109,6 +109,28 @@ class CommandTests(unittest.TestCase):
         shared = [load for group, load in zip(groups, loads) if len(group) > 1]
         self.assertLess(max(shared) - min(shared), 2.0)
 
+    def test_the_checked_in_weights_cover_the_long_tests_measured_in_ci(self):
+        # Seconds each test added to its shard in the unit job logs of 2026-11-11
+        # (ORK-791). A long test without a weight counts default_seconds and can
+        # land beside other long tests: that shard ran a minute past the others.
+        measured = {
+            "owner_worker_budgets_preserve_deadlines_stop_and_tool_lineage": 152,
+            "production_runtime::process_tests::actual_process_crashes_preserve_atomic_ack_and_never_reissue_dispatch": 54,
+            "ordinary_durable_timer_binary_logout_restart_crash_and_revocation": 71,
+            "same_owned_process_survives_natural_lease_and_original_control_still_stops": 59,
+            "steering_is_scoped_durable_and_never_replayed_after_uncertainty": 61,
+            "containment::tests::durable_races::natural_store_deadline_expiry_fences_owned_child_without_clock_override": 54,
+            "worker_original_reap_proofs_survive_parent_lifecycle": 45,
+            "ordinary_fast_presentation_continuation_stop_restart_and_revocation": 43,
+            "ordinary_http_dispatch_progress_acceptance_and_revocation": 43,
+            "claude_stop_requires_terminal_reap_and_preserves_held_inputs": 34,
+            "preflight::tests::schema36_edges::populated_prefixes_copy_first_edges_to_50_preserve_rows_and_rollback_source": 25,
+            "http_and_crash_recovery": 24,
+        }
+        _, weights = shards.load_weights(Path(__file__).with_name("ci_test_weights.json"))
+        for name, seconds in measured.items():
+            self.assertGreaterEqual(weights.get(name, 0), 0.8 * seconds, name)
+
 
 if __name__ == "__main__":
     unittest.main()
