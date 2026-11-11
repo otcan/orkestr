@@ -98,8 +98,11 @@ jobs:
           echo "CARGO_TARGET_DIR=$(dirname "$GITHUB_WORKSPACE")/orkestr-v2-target" >> "$GITHUB_ENV"
       - name: Install namespace test prerequisite
         run: |
-          sudo apt-get update
-          sudo apt-get install --no-install-recommends -y bubblewrap apparmor
+          # The AWS runner image has both packages; a hosted runner installs them.
+          if [ "$(dpkg-query -W -f='${db:Status-Status} ' bubblewrap apparmor 2>/dev/null)" != 'installed installed ' ]; then
+            sudo apt-get update
+            sudo apt-get install --no-install-recommends -y bubblewrap apparmor
+          fi
       - name: Qualify hosted-runner lifetime namespace policy
         run: |
           python3 -B -m unittest discover -s tests -p test_ci_lifetime_namespace.py -v
@@ -260,8 +263,11 @@ jobs:
           echo "CARGO_TARGET_DIR=$(dirname "$GITHUB_WORKSPACE")/orkestr-v2-target" >> "$GITHUB_ENV"
       - name: Install namespace test prerequisite
         run: |
-          sudo apt-get update
-          sudo apt-get install --no-install-recommends -y bubblewrap apparmor
+          # The AWS runner image has both packages; a hosted runner installs them.
+          if [ "$(dpkg-query -W -f='${db:Status-Status} ' bubblewrap apparmor 2>/dev/null)" != 'installed installed ' ]; then
+            sudo apt-get update
+            sudo apt-get install --no-install-recommends -y bubblewrap apparmor
+          fi
       - name: Qualify hosted-runner lifetime namespace policy
         run: |
           python3 -B -m unittest discover -s tests -p test_ci_lifetime_namespace.py -v
@@ -392,8 +398,11 @@ jobs:
           echo "CARGO_TARGET_DIR=$(dirname "$GITHUB_WORKSPACE")/orkestr-v2-target" >> "$GITHUB_ENV"
       - name: Install namespace test prerequisite
         run: |
-          sudo apt-get update
-          sudo apt-get install --no-install-recommends -y bubblewrap apparmor
+          # The AWS runner image has both packages; a hosted runner installs them.
+          if [ "$(dpkg-query -W -f='${db:Status-Status} ' bubblewrap apparmor 2>/dev/null)" != 'installed installed ' ]; then
+            sudo apt-get update
+            sudo apt-get install --no-install-recommends -y bubblewrap apparmor
+          fi
       - name: Qualify hosted-runner lifetime namespace policy
         run: |
           python3 -B -m unittest discover -s tests -p test_ci_lifetime_namespace.py -v
