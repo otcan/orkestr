@@ -1,7 +1,7 @@
 use super::*;
 use crate::conversation_resources_http::tests::{case, send};
 #[path = "timer_capabilities_http_fixture.rs"]
-mod fixture;
+pub(crate) mod fixture;
 
 #[tokio::test]
 async fn timer_capability_http_running_turn_tracks_scheduler_and_revocation() {

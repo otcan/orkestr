@@ -22,6 +22,15 @@ fn identifier(value: &str) -> Option<String> {
         None
     }
 }
+/// A marker line the agent's reply-attach tool printed (ORK-779).
+fn agent_marker(line: &str) -> Option<FileRef> {
+    let (manifest, reference) = orkestr_v2_contracts::agent_attachment_ref(line)?;
+    Some(FileRef {
+        kind: "manifest",
+        id: manifest.hyphenated().to_string(),
+        reference: Some(reference.hyphenated().to_string()),
+    })
+}
 pub fn references(text: &str) -> Vec<FileRef> {
     let mut result = Vec::new();
     for block in text.split("\n\n") {
@@ -38,6 +47,8 @@ pub fn references(text: &str) -> Vec<FileRef> {
                     }
                 }
             }
+        } else {
+            result.extend(block.lines().filter_map(agent_marker));
         }
         if result.len() >= 8 {
             break;
@@ -49,9 +60,32 @@ pub fn references(text: &str) -> Vec<FileRef> {
 }
 pub fn display_text(text: &str) -> String {
     text.split("\n\n")
-        .filter(|block| references(block).is_empty())
+        .filter(|block| !legacy_note(block))
+        .filter_map(|block| {
+            if !block.lines().any(|line| agent_marker(line).is_some()) {
+                return Some(block.to_owned());
+            }
+            let kept: Vec<&str> = block
+                .lines()
+                .filter(|line| agent_marker(line).is_none())
+                .collect();
+            (!kept.iter().all(|line| line.trim().is_empty())).then(|| kept.join("\n"))
+        })
         .collect::<Vec<_>>()
         .join("\n\n")
+}
+/// A whole note block the app or the WhatsApp adapter appended to a message.
+fn legacy_note(block: &str) -> bool {
+    let block = block.trim();
+    [
+        "[File attached in the Orkestr app, encrypted upload ",
+        "[Files attached in the Orkestr app, manifest ",
+        "[Files attached in the Orkestr app, stored in this conversation's attachment store, manifest ",
+        "[WhatsApp attachments imported into this conversation's attachment store, manifest ",
+    ]
+    .iter()
+    .any(|prefix| block.starts_with(prefix))
+        && !references(block).is_empty()
 }
 #[cfg(test)]
 mod tests {
@@ -75,6 +109,33 @@ mod tests {
         assert!(
             references("[File attached in the Orkestr app, encrypted upload ../../secret]")
                 .is_empty()
+        );
+    }
+    #[test]
+    fn agent_reply_markers_become_attachment_cards_and_leave_the_text() {
+        let id = "00000000-0000-4000-8000-000000000001";
+        let first = "00000000-0000-4000-8000-000000000002";
+        let second = "00000000-0000-4000-8000-000000000003";
+        let text = format!("The October package is ready.\nTwo files below.\n[orkestr-attachment manifest={id} reference={first} name=\"October.zip\"]\n[orkestr-attachment manifest={id} reference={second} name=\"Checklist.md\"]");
+        let files = references(&text);
+        assert_eq!(files.len(), 2);
+        assert_eq!((files[0].kind, files[0].id.as_str()), ("manifest", id));
+        assert_eq!(files[0].reference.as_deref(), Some(first));
+        assert_eq!(files[1].reference.as_deref(), Some(second));
+        assert_eq!(
+            display_text(&text),
+            "The October package is ready.\nTwo files below."
+        );
+        let alone = format!("Done.\n\n[orkestr-attachment manifest={id} reference={first}]");
+        assert_eq!(references(&alone).len(), 1);
+        assert_eq!(display_text(&alone), "Done.");
+        // A marker quoted inside prose is not an attachment, and plain text is untouched.
+        let quoted = format!("Use [orkestr-attachment manifest={id} reference={first}] later");
+        assert!(references(&quoted).is_empty());
+        assert_eq!(display_text(&quoted), quoted);
+        assert_eq!(
+            display_text("Line one\n\nLine two\n"),
+            "Line one\n\nLine two\n"
         );
     }
 }
