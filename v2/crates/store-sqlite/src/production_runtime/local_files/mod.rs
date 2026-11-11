@@ -56,8 +56,10 @@ fn uuid(value: &str) -> R<Uuid> {
 fn grant_hash(grant: &str) -> String {
     crate::digest(&format!("orkestr-v2-local-files-grant:{grant}"))
 }
-/// Session kinds that may manage the grant (owner browser or machine login).
-const OWNER_KINDS: &[&str] = &["browser", "machine"];
+/// Session kinds that may manage the grant: the owner's browser or machine
+/// login, or a live, unrevoked service credential of the owner (operator
+/// provisioning, like agent-timer grants). Never the folder tab itself.
+const OWNER_KINDS: &[&str] = &["browser", "machine", "service_browser"];
 /// Session kinds that may act as the folder tab: an interactive browser only.
 const BROWSER_KINDS: &[&str] = &["browser"];
 const RECENT_WINDOW_MS: i64 = 10 * 60_000;
@@ -181,8 +183,10 @@ impl Store {
             .begin_with(if write { "BEGIN IMMEDIATE" } else { "BEGIN" })
             .await
             .map_err(unavailable)?;
+        // A service session counts only while its credential is live; any
+        // other kind never carries a service credential.
         let kind: Option<String> = sqlx::query_scalar(
-            "SELECT kind FROM auth_sessions WHERE token_hash=? AND owner_id=? AND expires_at>unixepoch() AND service_credential_id IS NULL",
+            "SELECT s.kind FROM auth_sessions s LEFT JOIN service_credentials k ON k.id=s.service_credential_id AND k.owner_id=s.owner_id WHERE s.token_hash=? AND s.owner_id=? AND s.expires_at>unixepoch() AND ((s.kind='service_browser' AND k.revoked=0 AND k.expires_at>unixepoch()) OR (s.kind<>'service_browser' AND s.service_credential_id IS NULL))",
         )
         .bind(crate::digest(credential))
         .bind(owner.to_string())
