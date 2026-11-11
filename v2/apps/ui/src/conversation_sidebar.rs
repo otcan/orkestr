@@ -32,6 +32,9 @@ const POLL_MS: u32 = 4000;
 #[component]
 pub fn ConversationSidebar(
     selected: String,
+    /// An owner-wide view is open: no row is shown as the current page.
+    #[props(default)]
+    global_view: bool,
     csrf: String,
     session_scope: Signal<SessionScope>,
     onselect: EventHandler<SidebarEntry>,
@@ -202,7 +205,7 @@ pub fn ConversationSidebar(
         .unwrap_or_default();
     // A list item, so a changed page always remounts the poller with its new ids.
     let poll_key = format!("{owner}-{}", ids.join(","));
-    rsx! { aside { class:"conversation-sidebar", "aria-label":"Conversations",
+    rsx! { aside { id:"conversation-sidebar", class:"conversation-sidebar", "aria-label":"Conversations",
         div { class:"sidebar-heading",
             h2 {"Chats"}
             div { class:"new-actions",
@@ -266,7 +269,7 @@ pub fn ConversationSidebar(
         nav { class:"conversation-list", "aria-label":"Conversation list",
             for row in visible {
                 SidebarRow {
-                    key:"{row.entry.key}", row: row.clone(), now, selected: row.entry.key == selected,
+                    key:"{row.entry.key}", row: row.clone(), now, selected: row.entry.key == selected && !global_view,
                     status: row.entry.conversation_id.as_ref().and_then(|id| statuses.read().get(&id.to_string()).cloned()),
                     ontoggle: move |key: String| { let mut set = expanded.write(); if !set.remove(&key) { set.insert(key); } },
                     onselect: move |entry: SidebarEntry| { if session_scope.read().is_current(owner) { onselect.call(entry); } },
@@ -285,6 +288,9 @@ pub fn ConversationSidebar(
     }}
 }
 
+/// One row (ORK-786): name, last activity, one preview line, unread count
+/// and at most one work-state indicator. The channel is a small icon on the
+/// avatar; what the old badges said is its label.
 #[component]
 fn SidebarRow(
     row: sidebar::Row,
@@ -296,10 +302,8 @@ fn SidebarRow(
 ) -> Element {
     let entry = row.entry.clone();
     let time = sidebar::relative_time(now, row.group_activity_ms);
-    let activity = sidebar::activity_label(&entry.activity).or_else(|| {
-        row.hidden_activity
-            .then(|| "sub-chat thinking…".to_string())
-    });
+    let work = sidebar::work_state(&row, status.as_ref());
+    let channel = sidebar::channel(&entry);
     let unread = sidebar::unread_label(if selected {
         row.hidden_unread
     } else {
@@ -317,33 +321,31 @@ fn SidebarRow(
     rsx! {
         div { class: "conversation-row", "data-depth": "{row.depth}", "data-source": if v1 { "v1" } else { "v2" },
             "data-unread": if unread.is_some() { "true" } else { "false" },
+            "data-system": if entry.hidden { "true" } else { "false" },
             button { class: "conversation-choice", r#type: "button", "aria-current": if selected { "page" } else { "false" },
                 onclick: { let entry = entry.clone(); move |_| onselect.call(entry.clone()) },
-                Avatar { name: entry.name.clone(), thread: entry.v1_thread_id.clone() }
+                span { class: "avatar-wrap",
+                    Avatar { name: entry.name.clone(), thread: entry.v1_thread_id.clone() }
+                    if let Some(channel) = channel.clone() {
+                        ChannelIcon { channel }
+                    }
+                }
                 span { class: "choice-body",
                     span { class: "choice-top",
                         span { class: "conversation-name", "{entry.name}" }
+                        if entry.hidden { span { class: "visually-hidden", ", hidden system thread" } }
                         if !time.is_empty() { time { class: "choice-time", "{time}" } }
                     }
                     span { class: "choice-bottom",
-                        if let Some(label) = activity.clone() {
-                            span { class: "choice-activity", "{label}" }
-                        } else if let Some(text) = preview.clone() {
+                        if let Some(state) = work.clone() {
+                            span { class: "work-state {state.tone.class()}", "{state.label}" }
+                        }
+                        if let Some(text) = preview.clone() {
                             span { class: "choice-preview", "{text}" }
-                        } else {
+                        } else if work.is_none() {
                             span { class: "choice-preview choice-empty", if v1 { "Linked V1 chat" } else { "No messages yet" } }
                         }
                         if let Some(count) = unread.clone() { span { class: "unread-badge", "aria-label": "{count} unread", "{count}" } }
-                    }
-                    span { class: "choice-badges",
-                        if let Some(group) = entry.whatsapp.clone() {
-                            span { class: "source-badge whatsapp-badge", title: "WhatsApp group: {group}", "aria-label": "WhatsApp group {group}",
-                                if group == entry.name { "WhatsApp" } else { "WhatsApp · {group}" } }
-                        }
-                        if v1 { span { class: "source-badge", "On V1" } }
-                        if entry.hidden { span { class: "source-badge system-badge", title: "Hidden system thread", "System" } }
-                        if entry.coordinator { span { class: "source-badge coordinator-badge", "Coordinator" } }
-                        if let Some(status) = status.clone() { span { class: "conversation-status {status.tone.class()}", "{status.label}" } }
                     }
                 }
             }
@@ -353,6 +355,28 @@ fn SidebarRow(
                     onclick: move |_| ontoggle.call(key.clone()),
                     span { class: "toggle-count", "{row.descendants}" } span { "aria-hidden": "true", if row.expanded { " ▾" } else { " ▸" } }
                 }
+            }
+        }
+    }
+}
+
+/// The row's channel as a small mark on its avatar, labelled for screen
+/// readers and the tooltip.
+#[component]
+fn ChannelIcon(channel: sidebar::Channel) -> Element {
+    let kind = match channel.kind {
+        sidebar::ChannelKind::WhatsApp => "whatsapp",
+        sidebar::ChannelKind::V1 => "v1",
+    };
+    rsx! {
+        span { class: "channel-icon", "data-channel": "{kind}", role: "img", "aria-label": "{channel.label}", title: "{channel.label}",
+            match channel.kind {
+                sidebar::ChannelKind::WhatsApp => rsx! {
+                    svg { "aria-hidden": "true", view_box: "0 0 16 16", width: "10", height: "10",
+                        path { d: "M8 1.6a6.2 6.2 0 0 0-5.4 9.3L1.7 14.4l3.6-.9A6.2 6.2 0 1 0 8 1.6z", fill: "currentColor" }
+                    }
+                },
+                sidebar::ChannelKind::V1 => rsx! { span { "aria-hidden": "true", "V1" } },
             }
         }
     }

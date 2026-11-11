@@ -105,3 +105,18 @@ test('automatic-send receipt survives a lost bridge response without a second up
   await uploadPastedText(element,upload,{...options,scope:'different-session'});
   assert.equal(uploads,3,'another owner/session cannot reuse the receipt');
 });
+
+test('a retained receipt the caller no longer accepts starts a fresh upload', async () => {
+  const element = {value: 'synthetic text'}, files = [];
+  let accepted = true;
+  const describe = async batch => { files.push(batch[0]); return {receipts: [{manifest_id: `synthetic-${files.length}`}]}; };
+  const options = {scope: 'synthetic', retainSuccess: true, reusable: () => accepted};
+  const first = await uploadPastedText(element, describe, options);
+  assert.equal(await uploadPastedText(element, describe, options), first);
+  assert.equal(files.length, 1);
+  accepted = false;
+  const second = await uploadPastedText(element, describe, options);
+  assert.notEqual(second, first);
+  assert.equal(files.length, 2);
+  assert.notEqual(files[0].name, files[1].name, 'a new file identity, not the removed upload');
+});

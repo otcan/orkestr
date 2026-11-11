@@ -51,21 +51,17 @@ details[open] > summary { margin-bottom: .4rem; }
 /* Shell */
 .app-shell { height: 100vh; height: 100dvh; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 .app-heading { flex: none; height: 3.25rem; display: flex; align-items: center; gap: .8rem; padding: .5rem 7rem .5rem 1.1rem; border-bottom: 1px solid var(--border); background: var(--surface); }
-.app-heading span { color: var(--muted); font-size: .8rem; }
 .build-badge { position: relative; flex-shrink: 0; font-size: .75rem; color: var(--muted); }
 .build-badge > button { cursor: pointer; padding: .3rem .4rem; border: 1px solid var(--border); border-radius: .4rem; background: transparent; color: inherit; font-size: inherit; }
 .build-badge > button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.build-badge-details { position: fixed; top: 3.6rem; left: 1rem; z-index: 100; width: min(30rem, calc(100vw - 2rem)); max-height: 75dvh; overflow: auto; padding: 1rem; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); overflow-wrap: anywhere; }
 /* Keep the toggle above its fixed panel: where the header wraps, the panel can cover it. */
 .build-badge > button { position: relative; z-index: 101; }
 .build-badge-details h2 { font-size: 1rem; }
 .build-badge-details p { margin: .5rem 0; }
 @media (max-width: 600px) { .build-badge-source { display: none; } }
-.sign-out { position: absolute; right: .8rem; top: .3rem; font-size: .8rem; min-height: 2.5rem; }
 .app-notice { padding: .6rem 1rem; color: var(--muted); }
 .app-shell > form { width: min(28rem, calc(100% - 2rem)); padding: 1.5rem; margin: 2rem auto; overflow: auto; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); }
 .app-shell > form > * + * { margin-top: .7rem; }
-.workspace { flex: 1; min-height: 0; display: grid; grid-template-columns: 21rem minmax(0, 1fr); }
 
 /* Sidebar: messaging-style chat list */
 .conversation-sidebar { min-height: 0; display: flex; flex-direction: column; gap: .55rem; padding: .85rem .55rem; background: var(--surface); border-right: 1px solid var(--border); overflow: auto; }
@@ -118,7 +114,6 @@ details[open] > summary { margin-bottom: .4rem; }
 .group-toggle[aria-expanded=true] { color: var(--accent-text); background: var(--accent-soft); border-color: transparent; }
 .conversation-choice { flex: 1; min-width: 0; display: flex; align-items: center; gap: .7rem; text-align: left; padding: .55rem .65rem; border: 0; border-radius: .8rem; background: transparent; min-height: 3.6rem; }
 .conversation-choice:hover:not(:disabled) { background: var(--surface-2); }
-.conversation-choice[aria-current=page] { background: var(--accent-soft); color: inherit; }
 .avatar { flex: none; width: 2.75rem; height: 2.75rem; border-radius: 50%; display: grid; place-items: center; font-weight: 650; font-size: 1.05rem; color: #fff; background: var(--avatar); }
 .conversation-row[data-source=v1] .avatar { background: var(--avatar-v1); }
 .avatar-icon { object-fit: cover; background: #061006; }
@@ -127,19 +122,11 @@ details[open] > summary { margin-bottom: .4rem; }
 .choice-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: .08rem; }
 .choice-top, .choice-bottom { display: flex; align-items: center; gap: .45rem; min-width: 0; }
 .conversation-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; font-size: .93rem; }
-.choice-time { flex: none; font-size: .72rem; color: var(--faint); font-variant-numeric: tabular-nums; }
 .conversation-row[data-unread=true] .choice-time { color: var(--accent-text); font-weight: 650; }
 .conversation-row[data-unread=true] .choice-preview { color: var(--text); }
-.choice-preview, .choice-activity { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .83rem; color: var(--muted); }
 .choice-empty { font-style: italic; color: var(--faint); }
-.choice-activity { color: var(--accent-text); font-style: italic; }
 .unread-badge { flex: none; min-width: 1.3rem; height: 1.3rem; padding: 0 .38rem; border-radius: .65rem; display: grid; place-items: center; font-size: .68rem; font-weight: 700; color: var(--accent-contrast); background: var(--accent); }
-.choice-badges { display: flex; flex-wrap: wrap; gap: .25rem; margin-top: .1rem; }
-.choice-badges:empty { display: none; }
 .source-badge { font-size: .62rem; line-height: 1.5; padding: 0 .45rem; border-radius: 1rem; border: 1px solid var(--border-strong); color: var(--muted); white-space: nowrap; }
-.coordinator-badge { border-color: var(--info-border); background: var(--info-soft); color: var(--info-text); }
-.whatsapp-badge { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-text); max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
-.conversation-status { flex: none; font-size: .62rem; line-height: 1.5; padding: 0 .45rem; border-radius: 1rem; border: 1px solid transparent; }
 .status-working { background: var(--accent-soft); color: var(--accent-text); border-color: transparent; }
 .status-queued { background: var(--warn-soft); color: var(--warn-text); border-color: var(--warn-border); }
 .status-attention { background: var(--danger-soft); color: var(--danger-text); border-color: var(--danger-border); }
@@ -148,7 +135,6 @@ details[open] > summary { margin-bottom: .4rem; }
 .sidebar-notice:empty { display: none; }
 .system-toggle { align-self: flex-start; margin: .25rem .5rem; padding: .2rem .55rem; font-size: .72rem; color: var(--muted); background: none; border: 1px dashed var(--border-strong); border-radius: 1rem; cursor: pointer; }
 .system-toggle[aria-pressed="true"] { border-style: solid; }
-.system-badge { border-style: dashed; }
 
 /* Conversation */
 .workspace-main { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--bg); }
@@ -160,9 +146,6 @@ details[open] > summary { margin-bottom: .4rem; }
 .heading-activity::before { content: ""; display: inline-block; width: .45rem; height: .45rem; margin-right: .35rem; border-radius: 50%; background: var(--accent); vertical-align: .05rem; animation: pulse 1.4s ease-in-out infinite; }
 @keyframes pulse { 50% { opacity: .3; } }
 @media (prefers-reduced-motion: reduce) { .heading-activity::before { animation: none; } }
-.conversation-heading nav { display: flex; gap: .2rem; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
-.conversation-heading nav button { flex: none; font-size: .8rem; padding-inline: .7rem; min-height: 2.3rem; border-color: transparent; background: transparent; border-radius: 1.2rem; color: var(--muted); }
-.conversation-heading nav button[aria-current=page] { background: var(--accent-soft); color: var(--accent-text); }
 .threads-toggle, .drawer-scrim { display: none; }
 .conversation-loading, .workspace-page { padding: 1.25rem; overflow: auto; }
 .workspace-page { flex: 1; background: var(--surface); }
@@ -234,7 +217,10 @@ details[open] > summary { margin-bottom: .4rem; }
 .attachment-chip { display: inline-flex; align-items: center; gap: .35rem; max-width: 100%; min-width: 0; padding: .15rem .25rem .15rem .65rem; border-radius: 1rem; background: var(--accent-soft); color: var(--accent-text); font-size: .76rem; }
 .chip-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 14rem; }
 .chip-size { flex: none; opacity: .75; }
-.message-composer .chip-remove { grid-row: auto; grid-column: auto; min-height: 1.5rem; min-width: 1.5rem; width: 1.5rem; padding: 0; border-radius: 50%; font-size: .85rem; line-height: 1; background: transparent; color: inherit; border: 0; }
+/* Cancel (still uploading) and Remove (attached, not sent) are one control. */
+.message-composer .upload-control { grid-row: auto; grid-column: auto; flex: none; min-height: 1.75rem; min-width: 0; padding: .15rem .65rem; border-radius: .9rem; font-size: .74rem; font-weight: 600; line-height: 1.1; background: var(--surface); color: var(--text); border: 1px solid var(--border); }
+.message-composer .upload-control:hover:not(:disabled) { background: var(--surface-3); }
+.message-composer .chip-remove { min-height: 1.5rem; padding: .1rem .55rem; }
 .tool-icon { margin-right: .3rem; vertical-align: -.15rem; }
 .tool-status { font-size: .74rem; color: var(--muted); }
 .attachment-limit { font-size: .72rem; color: var(--faint); }
@@ -478,20 +464,11 @@ li[data-replyable="true"]:hover .reply-action, li[data-replyable="true"]:focus-w
 .message-history-label { font-size: .68rem; font-weight: 600; opacity: .75; }
 
 /* Upload progress remains readable on a narrow composer. */
-.upload-progress { flex-basis:100%; min-width:0; padding:.35rem 0; }
-.upload-progress-stage { margin:.15rem 0; font-size:.8rem; overflow-wrap:anywhere; }
-.upload-progress progress { display:block; width:100%; height:.65rem; accent-color:var(--accent, #4f7cff); }
-.upload-progress-bytes { font-size:.75rem; color:var(--muted); font-variant-numeric:tabular-nums; }
-
-/* Release metadata belongs at the header's right edge, after resource summaries. */
-@media (min-width: 701px) {
- .app-heading > .build-badge { order: 3; margin-left: auto; }
-}
-.deployment-times { display: block; white-space: pre-line; font-size: .62rem; line-height: 1.15; max-width: 15rem; }
-@media (max-width: 700px) {
- .app-heading > .build-badge { max-width: 9rem; }
- .deployment-times { font-size: .55rem; }
-}
+.upload-progress { flex-basis:100%; min-width:0; padding:.35rem 0; display:flex; flex-wrap:wrap; align-items:center; gap:.2rem .5rem; }
+.upload-progress-stage { flex:1 1 10rem; min-width:0; margin:.15rem 0; font-size:.8rem; overflow-wrap:anywhere; }
+.upload-progress progress { flex-basis:100%; display:block; width:100%; height:.65rem; accent-color:var(--accent, #4f7cff); }
+.upload-progress-bytes { flex-basis:100%; font-size:.75rem; color:var(--muted); font-variant-numeric:tabular-nums; }
+@media (max-width: 52rem), (pointer: coarse) { .message-composer .composer-tools .upload-control { min-height: 44px; } }
 
 .provider-sign-in-row { margin: .9rem 0; padding: .8rem 1rem; border: 1px solid var(--border); border-radius: .7rem; overflow-wrap: anywhere; }
 .provider-sign-in-row h3 { margin: 0 0 .25rem; }

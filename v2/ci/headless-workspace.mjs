@@ -377,11 +377,15 @@ export const scenarios = [
   }],
   ['conversation-list', async label => {
     await openDrawer(label);
-    await page.waitForFunction(() => document.querySelectorAll('.conversation-status').length >= 2, { timeout: 20000 });
+    // One work-state indicator per row (ORK-786): live activity says more than
+    // "Working", and a queue position shows when nothing is running.
+    await page.waitForFunction(() => [...document.querySelectorAll('.conversation-choice')].some(r =>
+      r.querySelector('.conversation-name')?.textContent === 'Queued errands' && r.querySelector('.work-state')?.textContent === 'Queued #2'), { timeout: 20000 });
     const badges = await page.$$eval('.conversation-choice', rows => Object.fromEntries(rows.map(r =>
-      [r.querySelector('.conversation-name')?.textContent, r.querySelector('.conversation-status')?.textContent ?? ''])));
-    assert.equal(badges['Research notes'], 'Working');
-    assert.equal(badges['Queued errands'], 'Queued #2');
+      [r.querySelector('.conversation-name')?.textContent, [...r.querySelectorAll('.work-state')].map(n => n.textContent)])));
+    assert.deepEqual(badges['Research notes'], ['thinking… · 1 worker']);
+    assert.deepEqual(badges['Queued errands'], ['Queued #2']);
+    for (const [name, states] of Object.entries(badges)) assert.ok(states.length <= 1, `${name}: at most one work state`);
     assert.equal(await page.$('.slot-summary'), null, 'Work slot usage is not part of the chat UI');
     assert.ok(!(await page.evaluate(() => document.querySelector('.conversation-sidebar').textContent)).includes('work slots'));
     await page.evaluate(() => [...document.querySelectorAll('.conversation-choice')].find(b => b.textContent.includes('Research notes')).click());
@@ -439,7 +443,10 @@ export const scenarios = [
     assert.deepEqual(order, ['Synthetic group', 'Research notes', 'Assistant', 'Queued errands']);
     assert.equal(await rowText('Synthetic group', '.choice-time'), '1m');
     assert.equal(await rowText('Assistant', '.choice-time'), '1d');
-    assert.match(await rowText('Synthetic group', '.choice-badges'), /On V1.*Coordinator/);
+    // The channel is a small labelled icon, not a row of text badges.
+    assert.equal(await page.$('.conversation-sidebar .source-badge, .conversation-sidebar .choice-badges'), null);
+    assert.equal(await page.$eval('.conversation-row[data-source=v1] .channel-icon', n => n.getAttribute('aria-label')), 'On V1 · coordinator attached');
+    assert.equal(await page.$$eval('.conversation-row[data-source=v2] .channel-icon', n => n.length), 0, 'native chats need no channel icon');
     assert.match(await rowText('Synthetic group', '.group-toggle'), /^1 ▸$/);
     // A parent with sub-chats stays aligned with every other top-level chat:
     // nothing indents it under the chat above.
@@ -450,7 +457,8 @@ export const scenarios = [
     assert.equal(await page.$$eval('.conversation-row[data-source=v2] img.avatar-icon', n => n.length), 0);
     const lefts = await page.$$eval('.conversation-row[data-depth="0"] .avatar', n => [...new Set(n.map(a => Math.round(a.getBoundingClientRect().left)))]);
     assert.equal(lefts.length, 1, `top-level avatars misaligned: ${lefts}`);
-    assert.equal(await rowText('Research notes', '.choice-activity'), 'thinking… · 1 worker');
+    assert.equal(await rowText('Research notes', '.work-state'), 'thinking… · 1 worker');
+    assert.equal(await rowText('Research notes', '.choice-preview'), 'You: Synthetic research question', 'the preview stays beside the work state');
     // Unread replies until viewed; the open conversation (from Projects) is read.
     assert.equal(await rowText('Synthetic group', '.unread-badge'), '1');
     assert.equal(await rowText('Assistant', '.unread-badge'), null, 'Viewed at load');
@@ -564,10 +572,12 @@ export const scenarios = [
     await choose('Assistant');
     await page.waitForSelector('#composer');
     await virtualDesksAndAccountSettings({page,state,conversation:A,clickText,clickWithin,waitText,screenshot,label});
-    await clickText('Chat settings');
-    await page.waitForSelector('#settings-model');
-    await clickText('Orkestr settings');
+    // Provider sign-in is shared by the whole server, so it is in Orkestr settings (ORK-789).
+    await page.$eval('.global-settings', b => b.click());
+    await page.waitForSelector('.orkestr-settings .provider-sign-in');
     await providerSignIn({page,state,clickWithin,waitText,screenshot,label});
+    await clickText('Back to chat');
+    await page.waitForFunction(() => [...document.querySelectorAll('.conversation-nav button')].some(b => b.textContent.trim() === 'Chat settings'), {timeout:15000});
     await clickText('Chat settings');
     await page.waitForSelector('#settings-model');
     assert.equal(await page.$eval('#settings-model', n => n.value), 'synthetic-model');
@@ -921,9 +931,11 @@ try {
     assert.equal(state.sidebarReads, 1, 'slow initial sidebar request is not cancelled or overlapped');
     assert.equal(await page.$eval('.conversation-sidebar', n => n.textContent.includes('Conversations unavailable')), false);
     state.sidebarDelayMs = 0;
-    await page.waitForFunction(() => document.querySelector('.deployment-times')?.textContent.includes('Server deployed: 2023-11-14 22:18:20 UTC'));
-    assert.ok(await page.$eval('.deployment-times', node => node.textContent.includes('Web deployed: Not recorded')), 'missing web receipt never borrows server deployment');
+    // The header keeps a compact version; build, commit and times are in its panel (ORK-786).
+    assert.equal(await page.$('.app-heading .deployment-times'), null, 'deployment times are not header clutter');
     await page.click('[aria-label="Build version details"]');
+    await page.waitForFunction(() => document.querySelector('#header-build-details')?.textContent.includes('Server deployed: 2023-11-14 22:18:20 UTC'));
+    assert.ok(await page.$eval('#header-build-details', node => node.textContent.includes('Web deployed: Not recorded')), 'missing web receipt never borrows server deployment');
     await page.waitForFunction(() => document.querySelector('#header-build-details')?.textContent.includes('Server compiled: 2023-11-14 22:13:20 UTC'));
     assert.ok(await page.$eval('#header-build-details',node=>node.textContent.includes('Web compiled:')), 'web compilation is independently displayed');
     await screenshot(label, 'build-deployment-times');

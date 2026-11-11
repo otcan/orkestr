@@ -23,6 +23,7 @@ mod desktop_open_view;
 mod desktop_resource_row;
 mod execution_panel;
 mod execution_poll;
+mod files_view;
 mod held_inputs_poll;
 mod held_inputs_view;
 mod history;
@@ -56,6 +57,7 @@ mod provider_sign_in_view;
 mod restricted_view;
 mod rich_text_view;
 mod scroll_pin;
+mod sidebar_resize;
 mod steering_view;
 mod stop_button;
 mod timer_bridge;
@@ -98,6 +100,17 @@ fn main() {
 #[derive(Clone, Copy)]
 pub struct InitialRoute(pub Signal<Option<orkestr_v2_ui::route::Route>>);
 
+/// Owner-wide views opened from the app header (ORK-786). The workspace shows
+/// them; `shown` tells the header which one is open.
+#[derive(Clone, Copy)]
+pub struct GlobalViews {
+    /// Bumped by the header's Virtual desks button.
+    pub desks: Signal<u64>,
+    /// Bumped by the header's Settings button (Orkestr settings, ORK-789).
+    pub settings: Signal<u64>,
+    pub shown: Signal<Option<orkestr_v2_ui::route::Tab>>,
+}
+
 /// `(instance ref, thread ref)` of an old V1 deep link.
 #[derive(Clone, PartialEq)]
 pub struct V1Link(pub (String, String));
@@ -128,6 +141,11 @@ fn App() -> Element {
     let mut execution = use_signal(orkestr_v2_ui::execution::Execution::default);
     let mut host_resources = use_signal(orkestr_v2_ui::host_resources::HostResources::default);
     let open_metrics = use_context_provider(|| host_metrics_panel::OpenHostMetrics(Signal::new(0)));
+    let global_views = use_context_provider(|| GlobalViews {
+        desks: Signal::new(0),
+        settings: Signal::new(0),
+        shown: Signal::new(None),
+    });
     // The view named by the URL at load; the workspace opens it once mounted.
     let mut initial_route = use_context_provider(|| InitialRoute(Signal::new(None)));
     let mut held_inputs = use_signal(orkestr_v2_ui::held_inputs::HeldInputs::default);
@@ -234,14 +252,69 @@ fn App() -> Element {
     rsx! {
         style { "{include_str!(\"style.css\")}" }
         style { "{include_str!(\"host_metrics.css\")}" }
+        style { "{include_str!(\"shell_layout.css\")}" }
         main { class: "app-shell",
-            header { class: "app-heading", h1 { "Orkestr" } build_badge::BuildBadge {}
+            // Global header: owner-wide resources only, never a conversation's views.
+            header { class: "app-heading", h1 { class: "app-brand", "Orkestr" }
+                if !csrf().is_empty() && !current().is_empty() {
+                    nav { class: "global-nav", "aria-label": "Global",
+                        button { r#type: "button", class: "global-link",
+                            "aria-current": if (global_views.shown)() == Some(orkestr_v2_ui::route::Tab::VirtualDesks) { "page" } else { "false" },
+                            onclick: move |_| { let mut desks = global_views.desks; desks += 1; },
+                            "Virtual desks"
+                        }
+                        // Account and server-wide settings; a chat's own settings stay under its More menu.
+                        button { r#type: "button", class: "global-link global-settings", title: "Orkestr settings: account, vault, provider sign-in and this installation",
+                            "aria-current": if (global_views.shown)() == Some(orkestr_v2_ui::route::Tab::OrkestrSettings) { "page" } else { "false" },
+                            onclick: move |_| { let mut settings = global_views.settings; settings += 1; },
+                            svg { "aria-hidden": "true", view_box: "0 0 20 20", width: "18", height: "18",
+                                circle { cx: "10", cy: "10", r: "2.6", fill: "none", stroke: "currentColor", stroke_width: "1.5" }
+                                path { d: "M10 2.5v2.2M10 15.3v2.2M2.5 10h2.2M15.3 10h2.2M4.7 4.7l1.55 1.55M13.75 13.75l1.55 1.55M4.7 15.3l1.55-1.55M13.75 6.25l1.55-1.55", fill: "none", stroke: "currentColor", stroke_width: "1.5", stroke_linecap: "round" }
+                            }
+                            span { class: "global-link-label", "Settings" }
+                        }
+                    }
+                }
                 if !csrf().is_empty() && !current().is_empty() {
                     div { key: "{session_scope.read().generation()}", class: "resource-bar", role: "group", "aria-label": "Host resources and provider quotas",
                         host_metrics_panel::HostMetricsPanel { session_scope, onexpired: expired,
+                            active: (global_views.shown)() == Some(orkestr_v2_ui::route::Tab::Host),
                             onopen: move |_| { let mut open = open_metrics.0; open += 1; } }
                         provider_quota_panel::ProviderQuotaPanel { session_scope, onexpired: expired }
                     }
+                }
+                build_badge::BuildBadge {}
+                if !csrf().is_empty() {
+                    button { class: "sign-out", disabled: logging_out(), onclick: move |_| {
+                        if logging_out() { return; }
+                        logging_out.set(true);
+                        let secret = csrf();
+                        let generation = session_scope.read().generation();
+                        spawn(async move {
+                            let result = transport::request::<Value>("DELETE", "/api/v2/browser/session", Value::Null, &secret, "").await;
+                            if !session_scope.read().is_current(generation) { logging_out.set(false); return; }
+                            match result {
+                                Ok(_) => {
+                                    execution.write().authorization_lost();
+                                    saved_inputs.write().clear_owner();
+                                    window_intent.write().clear_scope();
+        outbox.write().clear_owner();
+                                    host_resources.write().clear_owner();
+                                    held_inputs.write().clear_owner();
+                                    task_drafts.write().clear_owner();
+                                    session_scope.write().invalidate();
+                                    if let Some(key) = memory_key.take() { page_memory_bridge::store(&key, None); }
+                                    global.set(String::new()); current.set(String::new()); refresh += 1;
+                                    requested_conversation.set(None); conversation_location::replace(None);
+                                    csrf.set(String::new());
+                                    notice.set("Signed out. Server session revoked; unsent drafts remain in this page.".into());
+                                }
+                                Err(error) if error.status == 401 => expired(()),
+                                Err(error) => notice.set(format!("Sign-out not confirmed. {}", error.message)),
+                            }
+                            logging_out.set(false);
+                        });
+                    }, if logging_out() { "Signing out…" } else { "Sign out" } }
                 }
             }
             if csrf().is_empty() || notice().contains("not confirmed") {
@@ -290,36 +363,6 @@ fn App() -> Element {
             }
             if !csrf().is_empty() {
                     attachment_keys_view::AttachmentKeyEnrollment { key: "keys-{session_scope.read().generation()}", csrf: csrf() }
-                    button { class: "sign-out", disabled: logging_out(), onclick: move |_| {
-                        if logging_out() { return; }
-                        logging_out.set(true);
-                        let secret = csrf();
-                        let generation = session_scope.read().generation();
-                        spawn(async move {
-                            let result = transport::request::<Value>("DELETE", "/api/v2/browser/session", Value::Null, &secret, "").await;
-                            if !session_scope.read().is_current(generation) { logging_out.set(false); return; }
-                            match result {
-                                Ok(_) => {
-                                    execution.write().authorization_lost();
-                                    saved_inputs.write().clear_owner();
-                                    window_intent.write().clear_scope();
-        outbox.write().clear_owner();
-                                    host_resources.write().clear_owner();
-                                    held_inputs.write().clear_owner();
-                                    task_drafts.write().clear_owner();
-                                    session_scope.write().invalidate();
-                                    if let Some(key) = memory_key.take() { page_memory_bridge::store(&key, None); }
-                                    global.set(String::new()); current.set(String::new()); refresh += 1;
-                                    requested_conversation.set(None); conversation_location::replace(None);
-                                    csrf.set(String::new());
-                                    notice.set("Signed out. Server session revoked; unsent drafts remain in this page.".into());
-                                }
-                                Err(error) if error.status == 401 => expired(()),
-                                Err(error) => notice.set(format!("Sign-out not confirmed. {}", error.message)),
-                            }
-                            logging_out.set(false);
-                        });
-                    }, if logging_out() { "Signing out…" } else { "Sign out" } }
             }
         }
     }

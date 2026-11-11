@@ -126,3 +126,54 @@ test('read-only client rejects mutation before network access',async()=>{
   const client=encryptedUploadClient({conversation,readOnly:true,subtle,fetcher(){assert.fail('Mutation reached network');}});
   await assert.rejects(client.upload({name:'x',type:'text/plain',size:1},id),/Read-only/);
 });
+test('Cancel lets registration land, aborts the chunk in flight once and sends nothing more',async()=>{
+  const identity=ageGenerateIdentity(random),recipient=await ageIdentityToRecipient(identity,subtle);
+  const seen=[];let register=null;
+  const fetcher=(path,options)=>{
+    seen.push({method:options.method,last:path.split('/').at(-1),signal:Boolean(options.signal)});
+    if(options.method==='POST'&&path.endsWith('/encrypted-uploads')){
+      const file=JSON.parse(options.body);
+      return new Promise(resolve=>{register=()=>resolve(new Response(JSON.stringify({format:'age-x25519-chunks-v1',file,owner_id:owner,conversation_id:conversation,recipients:[recipient],ingest_recipient:recipient,chunk_bytes:UPLOAD_CHUNK_BYTES,chunks:[],complete:false})));});
+    }
+    // A chunk in flight ends only when its own signal aborts it.
+    if(options.method==='PUT')return new Promise((_,reject)=>options.signal.addEventListener('abort',()=>reject(options.signal.reason),{once:true}));
+    assert.fail(`Unexpected ${options.method} ${path}`);
+  };
+  const until=async check=>{for(let i=0;i<2000&&!check();i++)await new Promise(r=>setTimeout(r,1));assert.ok(check());};
+  const client=encryptedUploadClient({conversation,csrf:'synthetic-csrf',fetcher,subtle,random});
+  const file={name:'file.bin',type:'application/octet-stream',size:UPLOAD_CHUNK_BYTES+7,slice:(start,end)=>({arrayBuffer:async()=>new Uint8Array(end-start).buffer})};
+  // Cancelled while registering: the registration reply still arrives first,
+  // so the discard that follows always finds the session.
+  const early=new AbortController(),first=client.upload(file,id,{signal:early.signal});
+  await until(()=>register);early.abort();
+  let settled=false;first.catch(()=>{}).finally(()=>{settled=true;});
+  await new Promise(r=>setTimeout(r,10));
+  assert.equal(settled,false,'registration is not aborted mid-flight');
+  register();register=null;
+  await assert.rejects(first,{name:'AbortError'});
+  assert.deepEqual(seen.map(s=>[s.method,s.signal]),[['POST',false]],'no chunk after the cancel');
+  // Cancelled mid-transfer: the chunk request aborts and is not retried.
+  seen.length=0;
+  const late=new AbortController(),second=client.upload(file,id,{signal:late.signal});
+  await until(()=>register);register();
+  await until(()=>seen.some(s=>s.method==='PUT'));
+  late.abort();
+  await assert.rejects(second,{name:'AbortError'});
+  await new Promise(r=>setTimeout(r,10));
+  assert.deepEqual(seen.map(s=>[s.method,s.last,s.signal]),[['POST','encrypted-uploads',false],['PUT','0',true]]);
+});
+test('discard deletes the upload with the browser token and treats already gone as done',async()=>{
+  const calls=[];let status=204;
+  const client=encryptedUploadClient({conversation,csrf:'synthetic-csrf',subtle,fetcher:async(path,options)=>{
+    calls.push([options.method,path,options.headers['x-orkestr-csrf'],options.credentials,options.redirect]);
+    return new Response(null,{status});
+  }});
+  await client.discard(id);
+  assert.deepEqual(calls,[['DELETE',`/api/v2/conversations/${conversation}/encrypted-uploads/${id}`,'synthetic-csrf','same-origin','error']]);
+  status=404;await client.discard(id);
+  status=503;await assert.rejects(client.discard(id),/could not be discarded \(503\)/);
+  await assert.rejects(client.discard('../attachment'),/Invalid encrypted file reference/);
+  assert.equal(calls.length,3,'an invalid id never reaches the network');
+  const readOnly=encryptedUploadClient({conversation,readOnly:true,subtle,fetcher(){assert.fail('Mutation reached network');}});
+  await assert.rejects(readOnly.discard(id),/Read-only/);
+});

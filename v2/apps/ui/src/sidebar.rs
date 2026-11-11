@@ -1,7 +1,8 @@
 //! Sidebar presentation: activity grouping of sub-chats, relative times and
 //! live activity labels. Pure functions over the server's observation; a
 //! row never admits work.
-use orkestr_v2_contracts::{SidebarActivity, SidebarEntry, SidebarPage};
+use crate::conversation_status::{RowStatus, Tone};
+use orkestr_v2_contracts::{SidebarActivity, SidebarEntry, SidebarPage, SidebarSource};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// One visible row: an entry, its nesting depth and its group summary.
@@ -248,4 +249,82 @@ pub fn unread_label(count: u32) -> Option<String> {
         1..=99 => Some(count.to_string()),
         _ => Some("99+".into()),
     }
+}
+
+/// The one work-state indicator a row shows (ORK-786).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WorkState {
+    pub label: String,
+    pub tone: Tone,
+}
+
+/// At most one indicator per row, the most useful first: something that
+/// needs the owner (a ready reply, a failure), then live activity
+/// (`typing…`, `thinking…`, a collapsed sub-chat working), then the
+/// queue or run phase. Idle rows show none.
+pub fn work_state(row: &Row, status: Option<&RowStatus>) -> Option<WorkState> {
+    if let Some(status) = status.filter(|s| s.tone == Tone::Attention) {
+        return Some(WorkState {
+            label: status.label.clone(),
+            tone: status.tone,
+        });
+    }
+    let live = activity_label(&row.entry.activity).or_else(|| {
+        row.hidden_activity
+            .then(|| "sub-chat thinking…".to_string())
+    });
+    if let Some(label) = live {
+        return Some(WorkState {
+            label,
+            tone: Tone::Working,
+        });
+    }
+    status.map(|s| WorkState {
+        label: s.label.clone(),
+        tone: s.tone,
+    })
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChannelKind {
+    WhatsApp,
+    V1,
+}
+
+/// A row's channel, shown as a small icon instead of text badges. The
+/// label carries what the badges said, for screen readers and the tooltip.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Channel {
+    pub kind: ChannelKind,
+    pub label: String,
+}
+
+pub fn channel(entry: &SidebarEntry) -> Option<Channel> {
+    let v1 = entry.source == SidebarSource::V1;
+    let mut parts = Vec::new();
+    if let Some(group) = &entry.whatsapp {
+        parts.push(if *group == entry.name {
+            "WhatsApp group".to_string()
+        } else {
+            format!("WhatsApp group: {group}")
+        });
+    }
+    if v1 {
+        parts.push("on V1".into());
+    }
+    if entry.coordinator {
+        parts.push("coordinator attached".into());
+    }
+    let kind = if entry.whatsapp.is_some() {
+        ChannelKind::WhatsApp
+    } else if v1 {
+        ChannelKind::V1
+    } else {
+        return None;
+    };
+    let mut label = parts.join(" · ");
+    if let Some(first) = label.get_mut(..1) {
+        first.make_ascii_uppercase();
+    }
+    Some(Channel { kind, label })
 }

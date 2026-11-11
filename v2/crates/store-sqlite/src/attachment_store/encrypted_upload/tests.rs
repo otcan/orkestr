@@ -353,3 +353,69 @@ async fn encryption_required_even_on_fresh_install_and_ids_cannot_be_rebound() {
         Err(AttachmentError::Conflict)
     );
 }
+
+#[tokio::test]
+async fn removing_a_partial_upload_drops_its_ciphertext_and_frees_its_open_slot_at_once() {
+    let (s, o, c, _d, mut file, key) = setup(ENCRYPTED_UPLOAD_CHUNK_BYTES + 3).await;
+    // Eight unfinished uploads fill the owner's open sessions.
+    let mut open = vec![];
+    for _ in 0..8 {
+        file.upload_id = Uuid::new_v4();
+        s.encrypted_upload_start(TOKEN, &o, &c, &file)
+            .await
+            .unwrap();
+        open.push(file.upload_id);
+    }
+    let (cancelled, other) = (open[0], open[1]);
+    let first = seal::encrypt(
+        std::slice::from_ref(&key),
+        &vec![7; ENCRYPTED_UPLOAD_CHUNK_BYTES as usize],
+    )
+    .unwrap();
+    let digest = seal::sha256_hex(&first);
+    for id in [cancelled, other] {
+        s.encrypted_upload_put(TOKEN, &o, &c, id, 0, &digest, &first)
+            .await
+            .unwrap();
+    }
+    file.upload_id = Uuid::new_v4();
+    assert_eq!(
+        s.encrypted_upload_start(TOKEN, &o, &c, &file).await,
+        Err(AttachmentError::Conflict)
+    );
+    s.encrypted_upload_remove(TOKEN, &o, &c, cancelled)
+        .await
+        .unwrap();
+    let chunks = |id: Uuid| {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM encrypted_upload_chunks WHERE upload_id=?",
+        )
+        .bind(id.to_string())
+        .fetch_one(&s.pool)
+    };
+    assert_eq!(
+        chunks(cancelled).await.unwrap(),
+        0,
+        "its ciphertext is gone"
+    );
+    assert_eq!(chunks(other).await.unwrap(), 1, "other uploads keep theirs");
+    // A chunk still in flight at Cancel cannot revive or finish it.
+    let last = seal::encrypt(&[key], b"end").unwrap();
+    assert_eq!(
+        s.encrypted_upload_put(TOKEN, &o, &c, cancelled, 1, &seal::sha256_hex(&last), &last)
+            .await,
+        Err(AttachmentError::NotFound)
+    );
+    assert_eq!(
+        s.encrypted_upload_finish(TOKEN, &o, &c, cancelled, &[])
+            .await,
+        Err(AttachmentError::NotFound)
+    );
+    assert_eq!(
+        s.encrypted_upload_remove(TOKEN, &o, &c, cancelled).await,
+        Err(AttachmentError::NotFound)
+    );
+    assert_eq!(chunks(cancelled).await.unwrap(), 0);
+    // Its open-session slot is free now, not after the 24 h expiry.
+    assert!(s.encrypted_upload_start(TOKEN, &o, &c, &file).await.is_ok());
+}
