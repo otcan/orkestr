@@ -25,6 +25,23 @@ fn descendants(pid: u32, output: &mut Vec<(u32, String)>) {
     }
 }
 
+/// Readiness is an event, not a time budget (ORK-778): read until `marker`
+/// arrives and fail only if the writer exits first. Every process these tests
+/// start ends by itself (`time.sleep(20)`), so the wait is bounded by that,
+/// and a loaded runner that is slow to start bwrap and Python is no failure.
+fn wait_for(pipe: &mut impl Read, marker: &[u8]) {
+    let (mut bytes, mut total) = (Vec::new(), 0);
+    while !bytes.windows(marker.len()).any(|part| part == marker) {
+        assert!(
+            !drain(pipe, &mut bytes, &mut total, 8192).unwrap(),
+            "exited before {}: {}",
+            String::from_utf8_lossy(marker),
+            String::from_utf8_lossy(&bytes)
+        );
+        std::thread::sleep(Duration::from_millis(2));
+    }
+}
+
 #[test]
 fn owned_drop_kills_only_its_known_tree_and_reaps_the_leader() {
     let _serial = serial();
@@ -42,17 +59,7 @@ fn owned_drop_kills_only_its_known_tree_and_reaps_the_leader() {
     drop(policy);
     let mut stdout = owned.0.as_mut().unwrap().stdout.take().unwrap();
     linux::nonblocking(&stdout).unwrap();
-    let started = Instant::now();
-    let mut bytes = Vec::new();
-    let mut total = 0;
-    while !bytes.ends_with(b"ready\n") {
-        assert!(started.elapsed() < Duration::from_secs(5));
-        assert!(
-            !drain(&mut stdout, &mut bytes, &mut total, 1024).unwrap(),
-            "worker exited before readiness"
-        );
-        std::thread::sleep(Duration::from_millis(2));
-    }
+    wait_for(&mut stdout, b"ready\n");
     let leader = owned.id();
     let mut tree = Vec::new();
     descendants(leader, &mut tree);
@@ -87,13 +94,7 @@ fn spawn_only_handle_retains_cleanup_before_any_wait_call() {
             &WorkerCancellation::default(),
         )
         .unwrap();
-    let (mut bytes, mut total) = (Vec::new(), 0);
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while !bytes.ends_with(b"ready\n") {
-        assert!(Instant::now() < deadline);
-        assert!(!drain(&mut process.stdout, &mut bytes, &mut total, 1024).unwrap());
-        std::thread::sleep(Duration::from_millis(2));
-    }
+    wait_for(&mut process.stdout, b"ready\n");
     let mut tree = Vec::new();
     descendants(process.owned.id(), &mut tree);
     assert!(tree.len() >= 2);
@@ -158,13 +159,7 @@ fn supervisor_sigkill_cannot_leave_an_owned_worker_running() {
         drop(policy);
         let mut stdout = owned.0.as_mut().unwrap().stdout.take().unwrap();
         linux::nonblocking(&stdout).unwrap();
-        let (mut bytes, mut total) = (Vec::new(), 0);
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while !bytes.ends_with(b"payload-ready\n") {
-            assert!(Instant::now() < deadline);
-            assert!(!drain(&mut stdout, &mut bytes, &mut total, 1024).unwrap());
-            std::thread::sleep(Duration::from_millis(2));
-        }
+        wait_for(&mut stdout, b"payload-ready\n");
         println!("supervisor-ready");
         std::io::stdout().flush().unwrap();
         // Parent deliberately SIGKILLs this helper: Owned::drop cannot run.
@@ -178,16 +173,7 @@ fn supervisor_sigkill_cannot_leave_an_owned_worker_running() {
     let mut helper = Owned(Some(command.spawn().unwrap()));
     let mut stdout = helper.0.as_mut().unwrap().stdout.take().unwrap();
     linux::nonblocking(&stdout).unwrap();
-    let (mut bytes, mut total) = (Vec::new(), 0);
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while !bytes
-        .windows(b"supervisor-ready".len())
-        .any(|part| part == b"supervisor-ready")
-    {
-        assert!(Instant::now() < deadline);
-        assert!(!drain(&mut stdout, &mut bytes, &mut total, 8192).unwrap());
-        std::thread::sleep(Duration::from_millis(2));
-    }
+    wait_for(&mut stdout, b"supervisor-ready");
     let mut tree = Vec::new();
     descendants(helper.id(), &mut tree);
     assert!(tree.len() >= 3);
