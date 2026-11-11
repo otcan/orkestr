@@ -1,6 +1,8 @@
 """Permit only the fixed lifetime launcher on an evidenced hosted Ubuntu runner.
 
 No production configuration, global sysctl, root test execution or test skipping.
+A self-hosted runner is only verified, never changed: its image must already
+carry the same per-executable attachment (the ORK-774 AWS runner image does).
 Ubuntu documents per-executable userns attachment profiles here:
 https://documentation.ubuntu.com/release-notes/24.04/#unprivileged-user-namespace-restrictions
 """
@@ -78,10 +80,11 @@ def audit_fields(before, after):
 
 
 def run():
+    environment = os.environ.get("RUNNER_ENVIRONMENT")
     require(os.environ.get("GITHUB_ACTIONS") == "true"
-            and os.environ.get("RUNNER_ENVIRONMENT") == "github-hosted"
+            and environment in ("github-hosted", "self-hosted")
             and os.environ.get("RUNNER_OS") == "Linux" and os.geteuid() != 0,
-            "only_unprivileged_github_hosted_runner_supported")
+            "only_unprivileged_github_actions_runner_supported")
     require(not Path("/.dockerenv").exists() and not Path("/run/systemd/container").exists(),
             "container_policy_is_not_a_host_profile_problem")
     require('ID=ubuntu' in Path("/etc/os-release").read_text().splitlines(), "ubuntu_runner_required")
@@ -89,6 +92,11 @@ def run():
     info = executable.stat()
     require(executable.resolve() == executable and info.st_uid == 0 and not info.st_mode & 0o022,
             "protected_fixed_bwrap_required")
+    if environment == "self-hosted":
+        # Not a disposable hosted VM this script may adjust: no kernel log
+        # read, no profile load. The image must provide the prerequisite.
+        require(ready(probe()), "self_hosted_runner_lacks_namespace_prerequisite")
+        return {"status": "ready", "profile_applied": False, "runner": "self-hosted", "test_uid": os.geteuid()}
     before = command(["sudo", "-n", "dmesg", "--raw"])
     first = probe()
     if ready(first):
