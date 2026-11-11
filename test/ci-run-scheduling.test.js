@@ -198,15 +198,24 @@ test("ci.yml: draft and docs-only PRs run only the cheap checks", () => {
   assert.deepEqual(runningJobs(workflow, events.schedule(7), docsOnly("false")), ciCheap);
 });
 
+// Pull requests build the amd64 image only; the arm64 image is built on every
+// other event, so each integration push still produces both (ORK-791).
+const prSkips = { "v2-image.yml": ["linux-image-arm64"] };
 for (const [name, cheap] of [["v2-rust.yml", ["cargo-advisories", "cargo-policy"]], ["v2-browser.yml", []], ["v2-image.yml", []]]) {
   test(`${name}: draft PRs skip every Rust, browser and image job`, () => {
     const workflow = load(name);
     const all = Object.keys(workflow.jobs).sort();
     assert.deepEqual(runningJobs(workflow, pr(true)), cheap);
-    assert.deepEqual(runningJobs(workflow, pr(false)), all);
-    assert.deepEqual(runningJobs(workflow, events.integration(7)), all);
+    assert.deepEqual(runningJobs(workflow, pr(false)), all.filter((job) => !(prSkips[name] || []).includes(job)));
+    for (const event of ["integration", "imageCache", "dispatch"]) assert.deepEqual(runningJobs(workflow, events[event](7)), all, event);
   });
 }
+
+test("v2-image.yml: pull requests build amd64 only, integration pushes both architectures", () => {
+  const workflow = load("v2-image.yml");
+  assert.deepEqual(runningJobs(workflow, pr(false)), ["linux-image-amd64"]);
+  assert.deepEqual(runningJobs(workflow, events.integration(7)), ["linux-image-amd64", "linux-image-arm64"]);
+});
 
 // The `changes` job's own script, run against a synthetic repository.
 const classifier = load("ci.yml").jobs.changes.steps.find((step) => step.id === "classify").run;
