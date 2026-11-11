@@ -7,7 +7,7 @@ import stat
 import uuid
 from urllib.parse import urlsplit
 
-from . import instructions, internal_context
+from . import instructions, internal_context, release_interruption
 
 SERVICE_FIELDS = {"origin", "loopback_url", "credentials_path", "expected_owner", "expected_source",
                   "token_path", "listen_port", "bindings_dir", "ledger_dir"}
@@ -76,6 +76,12 @@ def _service(value):
         if not selected.is_absolute() or '..' in selected.parts:raise ValueError('config_peer_descriptor')
     if 'internal_context_dir' in value:
         value['internal_context_dir'] = internal_context.directory(value['internal_context_dir'])
+    if 'release_interruption_enabled' in value and type(value['release_interruption_enabled']) is not bool:
+        raise ValueError('config_release_interruption')
+    if value.get('release_interruption_enabled') is True and 'release_interruption_dir' not in value:
+        raise ValueError('config_release_interruption')
+    if 'release_interruption_dir' in value:
+        value['release_interruption_dir'] = release_interruption.directory(value['release_interruption_dir'])
     return value
 
 
@@ -158,7 +164,8 @@ def binding(value, owner):
 def load(path):
     """Returns (service, static_bindings). A pilot file yields one static binding."""
     value = private_json(path)
-    optional_peer={key for key in ('peer_descriptor_path', 'internal_context_dir', 'legacy_companions') if key in value}
+    optional_peer={key for key in ('peer_descriptor_path', 'internal_context_dir', 'legacy_companions',
+                                   'release_interruption_dir', 'release_interruption_enabled') if key in value}
     if set(value) - optional_peer == PILOT_FIELDS:
         service = _service({k: value[k] for k in (PILOT_FIELDS - SCOPE_FIELDS - {"ledger_path", "enabled"}) | optional_peer})
         pinned = {k: value[k] for k in SCOPE_FIELDS}

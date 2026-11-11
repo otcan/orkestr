@@ -121,6 +121,13 @@ pub async fn message(
     let retry_of = request.retry_of.clone();
     let (input, reply_to) = request.into_parts();
     let conversation = conversation(id)?;
+    // ORK-792: a continuation of a run a Root-recorded release cut.
+    let released = match (&continuation_source_run_id, &s.release_interruptions) {
+        (Some(run), Some(records)) => {
+            records.grant(&conversation, run, crate::deploy_drain::now_ms())
+        }
+        _ => None,
+    };
     // Own admission and wake across a disconnected HTTP caller. Replays retain
     // their first durable intent; they never gain missing continuation evidence.
     let admitted = tokio::spawn(async move {
@@ -135,6 +142,7 @@ pub async fn message(
                 expected_provider_generation,
                 continuation_source_run_id.as_ref(),
                 author,
+                released.as_ref(),
             )
             .await?;
         if let Some(retry_of) = &retry_of {

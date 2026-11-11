@@ -80,6 +80,7 @@ mod provider_policy;
 mod provider_policy_http_tests;
 pub mod provider_quota_http;
 mod provider_sign_in_http;
+mod release_interruption;
 mod resource_health;
 mod response_shaping;
 pub mod restricted_http;
@@ -153,6 +154,8 @@ pub struct AppState {
     restricted: Option<Arc<restricted_http::RestrictedRuntime>>,
     /// Operator deploy drain shared by window admission and timer fires.
     deploy_drain: Arc<deploy_drain::DeployDrain>,
+    /// Root-recorded release interruptions (ORK-792); unconfigured by default.
+    release_interruptions: Option<Arc<release_interruption::ReleaseInterruptions>>,
     password_rotation_ready: bool,
     provider_policy: Option<beta_config::provider_routing::ProviderRouting>,
     /// Stored-login reader (trusted startup file); unconfigured by default.
@@ -224,6 +227,11 @@ impl AppState {
         // Root maintenance is installed before any dispatcher, timer or listener.
         self.deploy_drain
             .bind_maintenance(config.deploy_maintenance_marker.as_deref(), home)?;
+        self.release_interruptions = config
+            .release_interruption_dir
+            .as_deref()
+            .map(|dir| release_interruption::ReleaseInterruptions::bind(dir, home).map(Arc::new))
+            .transpose()?;
         self.provider_policy = config.provider_routing.clone();
         let initial = window_runtime::initial::InitialAuthority::new(config)?;
         let handles = window_runtime::handles::Handles::new(
@@ -393,6 +401,7 @@ impl AppState {
             claude_turns: false,
             restricted: None,
             deploy_drain: Arc::default(),
+            release_interruptions: None,
         })
     }
 }

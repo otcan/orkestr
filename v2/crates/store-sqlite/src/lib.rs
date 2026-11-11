@@ -59,6 +59,7 @@ pub use production_runtime::{
 };
 mod fast_run_receipt;
 mod source_context;
+pub use source_context::ReleasedContinuation;
 mod source_continuation;
 mod source_intake;
 mod source_receipts;

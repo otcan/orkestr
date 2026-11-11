@@ -96,6 +96,7 @@ impl Store {
             continuation_source_run_id,
             author,
             None,
+            None,
         )
         .await
     }
@@ -113,6 +114,7 @@ impl Store {
         expected_provider_generation: Option<i64>,
         continuation_source_run_id: Option<&orkestr_v2_contracts::RunId>,
         author: Option<InputAuthor>,
+        released: Option<&crate::source_context::ReleasedContinuation>,
     ) -> Result<Admission> {
         self.admit_with_request_source(
             owner,
@@ -123,6 +125,7 @@ impl Store {
             continuation_source_run_id,
             author,
             Some(credential),
+            released,
         )
         .await
     }
@@ -138,6 +141,7 @@ impl Store {
         continuation_source_run_id: Option<&orkestr_v2_contracts::RunId>,
         author: Option<InputAuthor>,
         credential: Option<&str>,
+        released: Option<&crate::source_context::ReleasedContinuation>,
     ) -> Result<Admission> {
         if expected_provider_generation.is_some_and(|generation| generation < 0) {
             return Err(StoreError::Invalid);
@@ -188,14 +192,32 @@ impl Store {
                 // Every provider handoff retires prior Fast/Deep bindings. This
                 // also fences an away-and-back handoff before the adapter froze
                 // the current generation: provider names alone cannot prove it.
-                if !crate::source_context::source_binding_is_current(
+                let current = crate::source_context::source_binding_is_current(
                     &mut tx,
                     owner,
                     conversation,
                     run,
                 )
-                .await?
-                {
+                .await?;
+                // ORK-792: one continuation of a run a recorded release cut.
+                let released = match released {
+                    Some(grant)
+                        if !current
+                            && &grant.source_run_id == run
+                            && Some(grant.provider_generation) == expected_provider_generation =>
+                    {
+                        crate::source_context::source_binding_released_once(
+                            &mut tx,
+                            owner,
+                            conversation,
+                            run,
+                            None,
+                        )
+                        .await?
+                    }
+                    _ => false,
+                };
+                if !current && !released {
                     return Err(StoreError::ProviderGenerationMismatch);
                 }
                 // This is original-transaction evidence, not a later adapter's

@@ -47,6 +47,7 @@ async fn admit(
             Some(query.expected_provider_generation),
             Some(&query.continuation_source_run_id),
             Some(query.author),
+            None,
         )
         .await
 }
@@ -436,3 +437,129 @@ mod completed_source_tests;
 
 #[path = "continuation_dispatch_tests.rs"]
 mod continuation_dispatch;
+
+// ORK-792: a run cut by a Root-recorded release interruption gets exactly one
+// continuation. Stop cancelled the run and released its binding to `ready`
+// one generation ahead (the state the live cut runs showed on 2026-11-11).
+async fn release_cut(f: &Case, source: &ProviderAdmission, binding_state: &str) {
+    sqlx::query("UPDATE production_runs SET state='cancelled' WHERE id=?")
+        .bind(source.run.run_id.to_string())
+        .execute(&f.store.pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE session_bindings SET state=?, generation=generation+1 WHERE id=?")
+        .bind(binding_state)
+        .bind(source.run.session_id.to_string())
+        .execute(&f.store.pool)
+        .await
+        .unwrap();
+}
+fn grant(run: &RunId, provider_generation: i64) -> crate::ReleasedContinuation {
+    crate::ReleasedContinuation {
+        source_run_id: run.clone(),
+        provider_generation,
+    }
+}
+async fn admit_released(
+    f: &Case,
+    message: &MessageInput,
+    query: &SourceReceiptQuery,
+    released: Option<&crate::ReleasedContinuation>,
+) -> crate::Result<orkestr_v2_application::Admission> {
+    f.store
+        .admit_authenticated_attributed(
+            &f.token,
+            &f.owner,
+            &f.conversation,
+            message,
+            None,
+            Some(query.expected_provider_generation),
+            Some(&query.continuation_source_run_id),
+            Some(query.author),
+            released,
+        )
+        .await
+}
+
+#[tokio::test]
+async fn release_record_allows_exactly_one_continuation_of_the_cut_run() {
+    let (f, source, message, query) = fixture().await;
+    release_cut(&f, &source, "ready").await;
+    // No record: today's refusal.
+    assert!(matches!(
+        admit(&f, &message, &query).await,
+        Err(StoreError::ProviderGenerationMismatch)
+    ));
+    let recorded = grant(&source.run.run_id, 0);
+    let first = admit_released(&f, &message, &query, Some(&recorded))
+        .await
+        .unwrap();
+    assert!(!first.duplicate);
+    let fences: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM source_admission_fences WHERE source_run_id=?")
+            .bind(source.run.run_id.to_string())
+            .fetch_one(&f.store.pool)
+            .await
+            .unwrap();
+    assert_eq!(fences, 1);
+    // The exact replay is the same input, not a second continuation.
+    assert!(
+        admit_released(&f, &message, &query, Some(&recorded))
+            .await
+            .unwrap()
+            .duplicate
+    );
+    // A second continuation of the same cut run is refused: the first consumed it.
+    let second = MessageInput {
+        client_message_id: "release-continuation-second".into(),
+        text: "Synthetic second continuation".into(),
+    };
+    assert!(matches!(
+        admit_released(&f, &second, &query, Some(&recorded)).await,
+        Err(StoreError::ProviderGenerationMismatch)
+    ));
+    close(f).await;
+}
+
+#[tokio::test]
+async fn release_record_must_name_the_exact_run_and_provider_generation() {
+    let (f, source, message, query) = fixture().await;
+    release_cut(&f, &source, "ready").await;
+    let other = grant(&RunId(Uuid::new_v4()), 0);
+    assert!(matches!(
+        admit_released(&f, &message, &query, Some(&other)).await,
+        Err(StoreError::ProviderGenerationMismatch)
+    ));
+    let generation = grant(&source.run.run_id, 1);
+    assert!(admit_released(&f, &message, &query, Some(&generation))
+        .await
+        .is_err());
+    close(f).await;
+}
+
+#[tokio::test]
+async fn release_record_is_refused_after_a_later_turn_used_the_session() {
+    let (f, source, message, query) = fixture().await;
+    // A later turn took the native session one generation ahead.
+    release_cut(&f, &source, "busy").await;
+    assert!(matches!(
+        admit_released(&f, &message, &query, Some(&grant(&source.run.run_id, 0))).await,
+        Err(StoreError::ProviderGenerationMismatch)
+    ));
+    close(f).await;
+}
+
+#[tokio::test]
+async fn release_record_never_applies_to_a_run_that_was_not_cut() {
+    let (f, source, message, query) = fixture().await;
+    sqlx::query("UPDATE session_bindings SET state='ready', generation=generation+1 WHERE id=?")
+        .bind(source.run.session_id.to_string())
+        .execute(&f.store.pool)
+        .await
+        .unwrap();
+    assert!(matches!(
+        admit_released(&f, &message, &query, Some(&grant(&source.run.run_id, 0))).await,
+        Err(StoreError::ProviderGenerationMismatch)
+    ));
+    close(f).await;
+}

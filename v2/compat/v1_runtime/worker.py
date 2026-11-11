@@ -15,6 +15,7 @@ from . import execution_mode, intake_ahead
 from . import instructions
 from . import reply_files
 from . import continuation_guard
+from . import release_interruption
 from . import auto_steer
 from . import recovery
 from . import thread_ask_relay
@@ -126,6 +127,12 @@ CONTINUE_NOTICE = TEMPLATES["continue"]["en"]
 CONTINUE_PREFIX = ("[The previous turn for this message reached its time limit and was stopped "
                    "before it finished. Continue the same task from where it stopped; do not "
                    "repeat steps that already succeeded.]\n\n")
+# A Root-recorded release interruption continues like a deadline stop (see
+# release_interruption.py), with its own wording.
+RELEASE_NOTICE = TEMPLATES["release_continue"]["en"]
+RELEASE_PREFIX = ("[The previous turn for this message was stopped by an Orkestr update before it "
+                  "finished. Continue the same task from where it stopped; do not repeat steps "
+                  "that already succeeded.]\n\n")
 
 
 class Refused(RuntimeError):
@@ -233,6 +240,8 @@ class Worker:
         # Binding flags: mirror web-UI owner messages; name their files (else count only).
         self.web_mirror = True
         self.internal_context_dir = None
+        # Root-recorded release interruptions continue once (off: None).
+        self.release_interruption_dir = None
         self.attachments = False
         self._timers_checked = None
         self._burst_due = None  # Wall time a waiting burst head may be sent.
@@ -1300,12 +1309,13 @@ class Worker:
         return recovery.recover(self, data, "window_setup_failed")
 
     def continue_after_deadline(self, data, statuses, ids):
-        """Re-queue an input once when a window deadline stopped its Deep turn.
+        """Re-queue an input once when a window deadline stopped its Deep turn,
+        or when Root recorded that exact Deep run as interrupted by a release.
 
         The owner's message is never dropped silently: it is sent again as a
         new turn of the same conversation, which resumes the same native
         session in the successor window, and the owner is told so. A second
-        deadline stop, an owner stop or any other failure still refuses.
+        stop, an owner stop or any other failure still refuses.
         Returns True when the input was re-queued.
         """
         deep = statuses.get("deep")
@@ -1316,7 +1326,9 @@ class Worker:
         if "deep_stop_seen_ms" not in data:
             data["deep_stop_seen_ms"] = int(time.time() * 1000)
             self.ledger.save(data)
-        if not self.deadline_stopped(data):
+        released = release_interruption.recorded(self.release_interruption_dir,
+                                                 getattr(self.client, "conversation", None), deep.get("run_id"))
+        if not released and not self.deadline_stopped(data):
             return False
         try:
             guard = continuation_guard.freeze(self.call, deep)
@@ -1337,9 +1349,12 @@ class Worker:
             data.pop(key, None)
         for key in ("message", "window", "fast", "deep"):
             data["keys"][key] = str(uuid.uuid4())
-        data.update(intake_text=CONTINUE_PREFIX + text, phase="queued", queued_at=time.time(),
-                    continued={"previous_message_id": previous, "at": time.time()}, continuation_guard=guard)
-        self.ledger.continue_notice(data, CONTINUE_NOTICE)
+        continued = {"previous_message_id": previous, "at": time.time()}
+        if released:
+            continued["cause"] = "release"
+        data.update(intake_text=(RELEASE_PREFIX if released else CONTINUE_PREFIX) + text, phase="queued",
+                    queued_at=time.time(), continued=continued, continuation_guard=guard)
+        self.ledger.continue_notice(data, RELEASE_NOTICE if released else CONTINUE_NOTICE)
         return True
 
     def provider_identity(self, run_id=None, status=None, fast=False):
