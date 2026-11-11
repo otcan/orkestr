@@ -396,26 +396,28 @@ pub(crate) fn apply_visibility(page: &mut SidebarPage, hidden: &BTreeSet<String>
     }
 }
 
+/// Conversations with an open window, read once for the page: windows are a
+/// tiny live set, and a read per listed conversation scaled with the sidebar.
+/// A failed read leaves every row idle for this response, as a failed
+/// per-conversation read did.
+async fn open_windows(state: &AppState, credential: &str) -> HashSet<ConversationId> {
+    state
+        .store
+        .unresolved_execution_windows_authenticated(credential)
+        .await
+        .map(|windows| windows.into_iter().map(|w| w.conversation_id).collect())
+        .unwrap_or_default()
+}
+
+/// Live state of a conversation with an open window (roles and Workers).
 async fn native_activity(
     state: &AppState,
     owner: &OwnerId,
     credential: &str,
     row: &SidebarConversation,
 ) -> SidebarActivity {
-    // One durable window read per conversation; roles only for open windows.
-    let open = matches!(
-        state
-            .store
-            .execution_window_status_authenticated(credential, &row.conversation_id)
-            .await,
-        Ok(Some(ref w)) if matches!(
-            w.state,
-            ExecutionWindowState::Opening | ExecutionWindowState::Active | ExecutionWindowState::Retiring
-        )
-    );
-    if !open {
-        return SidebarActivity::default();
-    }
+    #[cfg(test)]
+    tests::LIVE_ROW_READS.with(|reads| reads.set(reads.get() + 1));
     let summary = ConversationSummary {
         conversation_id: row.conversation_id.clone(),
         name: row.name.clone(),
@@ -479,9 +481,14 @@ pub(crate) async fn read(
         .map_err(failure)?;
     crate::observability::span("db_list", started);
     let started = std::time::Instant::now();
+    let open = open_windows(&state, &credential).await;
     let mut native = Vec::with_capacity(list.conversations.len());
     for row in list.conversations {
-        let activity = native_activity(&state, &owner, &credential, &row).await;
+        let activity = if open.contains(&row.conversation_id) {
+            native_activity(&state, &owner, &credential, &row).await
+        } else {
+            SidebarActivity::default()
+        };
         native.push(Native { row, activity });
     }
     crate::observability::span("db_activity", started);
