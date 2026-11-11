@@ -290,7 +290,9 @@ async function sidebarRows(label, phone) {
   assert.ok(rows.filter(r => !r.selected).every(r => r.background !== selected[0].background), 'the selected row stands out');
   await screenshot(label, 'sidebar');
   if (phone) {
-    await page.click('.drawer-scrim');
+    // Close by tapping the scrim beside the drawer (its centre can lie under the drawer).
+    const { w, h } = await page.evaluate(() => ({ w: innerWidth, h: innerHeight }));
+    await page.mouse.click(w - 8, Math.round(h / 2));
     await page.waitForFunction(() => document.querySelector('.workspace')?.dataset.sidebarOpen === 'false');
   }
 }
