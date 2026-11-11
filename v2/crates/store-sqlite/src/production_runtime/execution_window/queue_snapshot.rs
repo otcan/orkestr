@@ -37,8 +37,12 @@ impl Store {
             .global_live
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let clock = now(&mut *tx).await?;
-        let count: i64 = sqlx::query_scalar("SELECT count(*) FROM execution_windows WHERE owner_id=? AND state IN ('opening','active','retiring') AND expires_at_ms>?")
-            .bind(owner.to_string()).bind(clock).fetch_one(&mut *tx).await.map_err(db)?;
+        let count: i64 = sqlx::query_scalar(LIVE_WINDOWS)
+            .bind(owner.to_string())
+            .bind(clock)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(db)?;
         u32::try_from(count).map_err(db)
     }
 }
