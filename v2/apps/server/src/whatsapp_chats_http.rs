@@ -224,20 +224,20 @@ async fn create(
             // The agent timer grant before the rules that name it. Issued
             // once: a retry keeps an issued grant whose file is installed.
             if let Some(path) = chats::timer_grant_path(&config, &conversation) {
+                use crate::conversation_grants::{install, Grant, Revoked};
                 let refused = |_| (S::Group, StageError("agent_timer_grant_failed"));
-                let issued = state
-                    .store
-                    .agent_timer_grant(&credential, &owner, &provision.conversation_id)
-                    .await
-                    .map_err(refused)?
-                    .issued;
-                if !(issued && chats::timer_grant_installed(&path)) {
-                    let grant = state
-                        .store
-                        .issue_agent_timer_grant(&credential, &owner, &provision.conversation_id)
-                        .await
-                        .map_err(refused)?;
-                    chats::install_timer_grant(&path, &grant.grant).map_err(|e| (S::Group, e))?;
+                let grant = install(
+                    &state.store,
+                    &credential,
+                    &owner,
+                    &provision.conversation_id,
+                    &path,
+                    Revoked::Reissue,
+                )
+                .await
+                .map_err(|e| (S::Group, e))?;
+                if !matches!(grant, Grant::Present | Grant::Issued) {
+                    return Err((S::Group, StageError("agent_timer_grant_failed")));
                 }
                 // The new group holds only the owner's numbers: owner-only
                 // timer caps, unless the owner already chose a cap.

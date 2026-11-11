@@ -185,6 +185,22 @@ class ReplyAttachTest(unittest.TestCase):
         self.assertEqual((code, json.loads(err)['code']), (2, 'grant_file_must_be_private'))
         self.assertEqual(FakeV2.calls, [])
 
+    def test_a_grant_installed_for_the_agent_is_never_borrowed_by_root(self):
+        # ORK-794: a Root request ran the tool as root with --grant-file
+        # pointing at the server's grant (owned by the service user). It is
+        # refused with its own code, never read, and nothing is sent.
+        grant = self.grant_dir / f'{CONVERSATION}.grant'
+        for uid in (0, os.getuid() + 1):
+            with unittest.mock.patch.object(ATTACH.os, 'getuid', return_value=uid):
+                code, out, err = self.run_tool('--grant-file', str(grant), 'attach', 'CHECKLIST.md')
+            self.assertEqual((code, json.loads(err)['code']), (2, 'grant_file_wrong_owner'), uid)
+            self.assertEqual(out, '')
+        self.assertEqual(FakeV2.calls, [])
+        # The agent itself, the file's owner, attaches with the same file.
+        code, out, _ = self.run_tool('--grant-file', str(grant), 'attach', 'CHECKLIST.md')
+        self.assertEqual(code, 0)
+        self.assertIn('name="CHECKLIST.md"', out)
+
     def test_instructions_name_the_exact_command(self):
         code, out, _ = self.run_tool('instructions', '--grant-dir', '/srv/grants')
         self.assertEqual(code, 0)
@@ -193,6 +209,9 @@ class ReplyAttachTest(unittest.TestCase):
         self.assertIn(f'--workspace {self.workspace}', out)
         self.assertIn('set -- attach', out)
         self.assertIn('Never answer with a\nMarkdown link or a path', out)
+        # Run by the agent itself, never through root (ORK-794).
+        self.assertIn('Run it yourself in this turn, never through a Root request,\nsudo or another user', out)
+        self.assertNotIn('--grant-file', out)
 
 
 if __name__ == '__main__':

@@ -15,10 +15,16 @@ impl ClaudeInputCorrelation {
     }
 
     pub(super) fn frame(&self, cap: &ConsumedProviderDispatch) -> Value {
+        let binding = &cap.provider().binding;
+        let content = super::turn_text(
+            binding.role,
+            &binding.conversation_id.to_string(),
+            cap.text(),
+        );
         let mut frame = json!({"type":"user",
-            "session_id":cap.provider().binding.native_session_id,
+            "session_id":binding.native_session_id,
             "parent_tool_use_id":null,
-            "message":{"role":"user","content":super::turn_text(cap.provider().binding.role, cap.text())}});
+            "message":{"role":"user","content":content}});
         if let Some(input) = &self.0 {
             frame["uuid"] = json!(input);
         }

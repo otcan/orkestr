@@ -56,8 +56,16 @@ pub async fn create_project(
     headers: HeaderMap,
     body: Result<Json<ProjectInput>, JsonRejection>,
 ) -> Result<impl IntoResponse, Error> {
-    let owner = owner(&s, &headers).await?;
+    let (owner, credential) = crate::archived_history_http::owner_credential(&s, &headers).await?;
     let result = s.store.create_project(&owner, &json(body)?).await?;
+    // The project's conversation gets its agent grant at once (ORK-794).
+    let _ = crate::conversation_grants::ensure(
+        &s,
+        &credential,
+        &owner,
+        &result.project.conversation_id,
+    )
+    .await;
     Ok((
         if result.duplicate {
             StatusCode::OK
@@ -154,6 +162,10 @@ pub async fn message(
                 controller.wake_source_continuation(&credential);
             }
         }
+        // A conversation without its agent grant (created before ORK-794,
+        // or its file lost) gets it before its Deep turn needs it. Best
+        // effort: a failure is logged and never refuses the input.
+        let _ = crate::conversation_grants::ensure(&s, &credential, &owner, &conversation).await;
         Ok::<_, orkestr_v2_application::StoreError>(admitted)
     })
     .await
