@@ -9,6 +9,10 @@ pub struct BoundSessionMetadata {
     pub(super) binding: Binding,
     pub(super) parent_run: Option<RunId>,
     pub(super) resume: Option<super::resume_metadata::ResumeLink>,
+    /// This setup's one fresh Root project check, reused by its later fences
+    /// (workspace/setup_attestation.rs). Readiness confirmation checks afresh.
+    #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+    pub(super) setup_workspace: super::workspace::SetupAttestation,
 }
 impl BoundSessionMetadata {
     #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
@@ -81,22 +85,26 @@ impl Store {
         tx: &mut SqliteConnection,
         grant: &BoundSessionMetadata,
     ) -> Result<()> {
-        self.window_metadata_in(tx, &grant.binding).await?;
+        use super::fence_reason::{because, fenced};
+        because(self.window_metadata_in(tx, &grant.binding).await, "window")?;
         #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
-        self.validate_workspace_binding(tx, &grant.binding).await?;
+        because(
+            self.validate_workspace_binding(tx, &grant.binding).await,
+            "workspace_binding",
+        )?;
         if grant.resume.is_some() {
-            return self.validate_resume_metadata(tx, grant).await;
+            return because(self.validate_resume_metadata(tx, grant).await, "resume");
         }
         let c = self.context()?;
-        c.require_provider_context()?;
-        c.validate(tx).await?;
+        because(c.require_provider_context(), "context")?;
+        because(c.validate(tx).await, "context")?;
         if c.id != grant.context.id
             || c.incarnation != grant.context.incarnation
             || c.owner != grant.context.owner
             || c.namespace != grant.context.namespace
             || c.provider != grant.context.provider
         {
-            return Err(RuntimeStoreError::Fenced);
+            return Err(fenced("context"));
         }
         let row = sqlx::query("SELECT * FROM session_bindings WHERE id=? AND owner_id=?")
             .bind(grant.binding.session_id.to_string())
@@ -107,17 +115,23 @@ impl Store {
             .ok_or(RuntimeStoreError::NotFound)?;
         let current = crate::runtime::binding(&row)?;
         if current != grant.binding {
-            return Err(RuntimeStoreError::Fenced);
+            return Err(fenced("binding"));
         }
         if current.state != SessionState::Starting
             || current.native_session_id.is_some()
             || current.provider_kind != ProviderKind::Unconfigured
         {
-            return Err(RuntimeStoreError::Fenced);
+            return Err(fenced("binding_state"));
         }
         if current.role == Role::Worker {
-            let parent = grant.parent_run.as_ref().ok_or(RuntimeStoreError::Fenced)?;
-            let row = self.worker_parent_current_in(tx, parent).await?;
+            let parent = grant
+                .parent_run
+                .as_ref()
+                .ok_or_else(|| fenced("worker_parent"))?;
+            let row = because(
+                self.worker_parent_current_in(tx, parent).await,
+                "worker_parent",
+            )?;
             let parent_session: String = row.get("session_id");
             if current.parent_session_id.as_ref().map(ToString::to_string) != Some(parent_session)
                 || current.conversation_id.to_string() != row.get::<String, _>("conversation_id")
@@ -144,6 +158,8 @@ impl Store {
             binding: binding.clone(),
             parent_run: None,
             resume: None,
+            #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+            setup_workspace: Default::default(),
         };
         let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
         store.validate_metadata(&mut tx, &grant).await?;
@@ -173,6 +189,8 @@ impl Store {
             binding: binding.clone(),
             parent_run: Some(parent.clone()),
             resume: None,
+            #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+            setup_workspace: Default::default(),
         };
         let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
         store.validate_metadata(&mut tx, &grant).await?;
@@ -237,7 +255,8 @@ impl Store {
                     events.capture(
                         Stage::WorkspacePreflight,
                         started,
-                        self.check_binding_before_writer(&grant.binding).await,
+                        self.check_binding_for_setup(&grant.binding, &grant.setup_workspace)
+                            .await,
                     )?
                 };
                 #[cfg(all(target_os = "linux", target_pointer_width = "64"))]

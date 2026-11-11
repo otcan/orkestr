@@ -193,6 +193,13 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(path) = std::env::var_os(orkestr_v2_server::restricted_http::CONFIG_ENV) {
         state = state.with_restricted_config_file(&PathBuf::from(path))?;
     }
+    // Optional: a missing or refused file only turns stored-login reads off.
+    state = state.with_vault_stored_login(&home);
+    if let Some(reason) = state.vault_stored_login_rejection() {
+        eprintln!(
+            "vault: stored-login configuration refused ({reason}); stored-login reads are off"
+        );
+    }
     let listener = tokio::net::TcpListener::bind(bind).await?;
     let catalog = match std::env::var_os("ORKESTR_V2_GOOGLE_CATALOG") {
         Some(path) => {

@@ -30,6 +30,8 @@ async fn concurrent_import_reopen_and_logout_preserve_inert_ledger() {
             text: "Synthetic é history".into(),
             reply_to: None,
             origin: None,
+            revisions: None,
+            retry_of: None,
         }],
     };
     request.source_digest = history_source_digest(&request).unwrap();

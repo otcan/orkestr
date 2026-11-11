@@ -7,8 +7,12 @@ import { mkdir } from 'node:fs/promises';
 import { providerHandoff } from './headless-provider-handoff.mjs';
 import { trackerScenario } from './headless-tracker.mjs';
 import { virtualDesksAndAccountSettings } from './headless-virtual-desks-settings.mjs';
+import { providerSignIn } from './headless-provider-sign-in.mjs';
 import { silentReplies } from './headless-silent-replies.mjs';
 import { liveAnswer } from './headless-live-answer.mjs';
+import { messageRevisions } from './headless-message-revisions.mjs';
+import { agentAttachments } from './headless-agent-attachments.mjs';
+import { messageRetries } from './headless-message-retries.mjs';
 
 assert.equal(process.env.CI, 'true', 'Run only in isolated CI');
 assert.ok(process.env.UI_BUNDLE_DIR, 'UI_BUNDLE_DIR is required');
@@ -556,6 +560,7 @@ export const scenarios = [
     await virtualDesksAndAccountSettings({page,state,conversation:A,clickText,clickWithin,waitText,screenshot,label});
     await clickText('Settings');
     await page.waitForSelector('#settings-model');
+    await providerSignIn({page,state,clickWithin,waitText,screenshot,label});
     assert.equal(await page.$eval('#settings-model', n => n.value), 'synthetic-model');
     await page.select('#settings-effort', 'high');
     await page.$eval('#settings-prefix', n => { n.value = ''; });
@@ -839,6 +844,9 @@ export const scenarios = [
     await page.reload({ waitUntil: 'domcontentloaded' });
   }],
   ['silent-replies', label => silentReplies({ page, state, origin, conversation: C, returnConversation: A, worker: V1_WORKER, screenshot, label })],
+  ['agent-reply-attachment', label => agentAttachments({ page, state, origin, conversation: C, returnConversation: A, screenshot, label })],
+  ['message-revisions', label => messageRevisions({ page, state, origin, conversation: B, returnConversation: A, screenshot, label })],
+  ['message-retries', label => messageRetries({ page, state, origin, conversation: B, returnConversation: A, screenshot, label })],
   ['live-answer-handover', label => liveAnswer({ page, state, origin, conversation: B, returnConversation: A, screenshot, label })],
   ['live-catch-up', async label => {
     await page.waitForSelector('#composer');

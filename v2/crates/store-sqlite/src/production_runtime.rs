@@ -66,7 +66,7 @@ pub use parallel_deep_turns::{
 };
 mod fence;
 mod held_inputs;
-mod retired_inputs;
+pub(crate) mod retired_inputs;
 pub use fast::FastAdmissionInput;
 mod fast_source;
 pub use fast_source::FastSource;
@@ -124,6 +124,7 @@ mod worker_tasks;
 pub use worker::*;
 pub use worker_tasks::WorkerTaskClaim;
 mod agent_timers;
+mod local_files;
 mod thread_asks;
 mod timer_issuer;
 mod timer_schedule;
@@ -336,5 +337,6 @@ mod claude_identity_tests;
 mod steering;
 pub use steering::*;
 
+mod fence_reason;
 mod metadata_diagnostics;
 pub use metadata_diagnostics::MetadataFenceDiagnostics;

@@ -150,8 +150,8 @@ def publish(ingress,record):
 def tick(ingress):
     desk=ingress.manager.desk
     if desk is None:return
-    for path in ingress.directory.glob('*.json'):
-        record=metadata(path,32768)
+    # Only a claim that can still change state can be a consumed desk login.
+    for path,record in ingress.journal.unsettled_records():
         if record['state']!='consumed' or record['request']['operation']!='desk_login':continue
         receipt_path=desk.directory/(record['request_id']+'.json')
         receipt=desk.receipt(receipt_path)

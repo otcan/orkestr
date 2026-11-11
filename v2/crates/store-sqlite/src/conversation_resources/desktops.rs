@@ -1,6 +1,9 @@
 //! Conversation desktop bindings, grants and V1-lease fences. The server
 //! calls V1 between `prepare_desktop_acquire` and `record_desktop_acquired`;
-//! every later call is fenced by the hash of V1's fencing token.
+//! every later call is fenced by the hash of V1's fencing token. With desk
+//! sharing on ([`super::desktop_sharing`]) any desk may be prepared through a
+//! binding; the binding then only supplies the V1 thread and the grant.
+use super::desktop_sharing::shared;
 use super::{now_ms, owned, unavailable, ResourceError, Result};
 use crate::Store;
 use orkestr_v2_contracts::*;
@@ -19,6 +22,10 @@ pub enum DesktopCaller<'a> {
 pub struct PreparedAcquire {
     pub v1_thread_id: String,
     binding_revision: i64,
+    /// Authorized by the owner sharing all desks rather than by the binding's
+    /// slugs and V1's per-thread grants. The record is refused if sharing is
+    /// off by then.
+    pub shared: bool,
 }
 #[derive(Debug, Clone)]
 pub struct V1LeaseGrant {
@@ -39,7 +46,7 @@ pub struct DesktopFence {
 fn grant_hash(grant: &str) -> String {
     crate::digest(&format!("orkestr-v2-desktop-grant:{grant}"))
 }
-fn fence_hash(token: &str) -> String {
+pub(crate) fn fence_hash(token: &str) -> String {
     crate::digest(&format!("orkestr-v2-desktop-fence:{token}"))
 }
 fn binding_of(
@@ -283,8 +290,9 @@ impl Store {
         caller: DesktopCaller<'_>,
         conversation: &ConversationId,
     ) -> Result<DesktopLeaseList> {
-        let (mut tx, _) = self.desktop_scope(caller, conversation, false).await?;
+        let (mut tx, owner) = self.desktop_scope(caller, conversation, false).await?;
         let binding = binding(&mut tx, conversation).await?;
+        let shared_with_all_chats = shared(&mut tx, &owner).await?;
         let rows = sqlx::query(
             "SELECT * FROM desktop_leases WHERE conversation_id=? ORDER BY (state='active') DESC,row_sequence DESC LIMIT 50",
         )
@@ -299,10 +307,12 @@ impl Store {
             conversation_id: conversation.clone(),
             binding,
             leases,
+            shared_with_all_chats,
         })
     }
 
-    /// Checks binding, slug and V2-side exclusivity before contacting V1.
+    /// Checks binding, slug (unless all desks are shared) and V2-side
+    /// exclusivity before contacting V1.
     /// An active V2 row past its V2-observed expiry is marked lost; V1 still
     /// decides whether the desktop is free.
     pub async fn prepare_desktop_acquire(
@@ -318,7 +328,8 @@ impl Store {
         let binding = binding(&mut tx, conversation)
             .await?
             .ok_or(ResourceError::Conflict("desktop_binding_required"))?;
-        if !binding.desktop_slugs.iter().any(|s| s == slug) {
+        let shared = shared(&mut tx, &owner).await?;
+        if !shared && !binding.desktop_slugs.iter().any(|s| s == slug) {
             return Err(ResourceError::Conflict("desktop_not_granted"));
         }
         let now = now_ms();
@@ -344,6 +355,7 @@ impl Store {
         Ok(PreparedAcquire {
             v1_thread_id: binding.v1_thread_id,
             binding_revision: binding.revision,
+            shared,
         })
     }
 
@@ -367,6 +379,9 @@ impl Store {
         let current = binding(&mut tx, conversation).await?;
         if current.as_ref().map(|b| b.revision) != Some(prepared.binding_revision) {
             return Err(ResourceError::Conflict("binding_revision_mismatch"));
+        }
+        if prepared.shared && !shared(&mut tx, &owner).await? {
+            return Err(ResourceError::Conflict("desktop_sharing_changed"));
         }
         let now = now_ms();
         let inserted = sqlx::query(

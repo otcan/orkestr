@@ -158,7 +158,7 @@ fn namespace(value: &str) -> Result<Uuid, Error> {
         .ok_or_else(invalid)
 }
 /// Exactly one grant header and no browser or owner credential beside it.
-fn grant(headers: &HeaderMap) -> Result<String, Error> {
+pub(crate) fn grant(headers: &HeaderMap) -> Result<String, Error> {
     let mut grants = headers.get_all(AGENT_TIMER_GRANT_HEADER).iter();
     let value = grants.next().ok_or_else(unauthorized)?;
     if grants.next().is_some()

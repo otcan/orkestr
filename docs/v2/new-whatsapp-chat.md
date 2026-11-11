@@ -109,6 +109,11 @@ grant env file from `issue-desktop-grant.py` (root:<service group> 0640). The
 operator then adds the desktop section, with the hold template, to the chat's
 rules file.
 
+While the owner shares all desks with all chats
+([conversation resources](conversation-resources.md#sharing-all-desks-with-all-chats)),
+the V1 thread grant and the desk list are not needed: a binding with the chat's
+V1 thread and no slugs, plus its grant env file, reaches every desk.
+
 ## Archive
 
 `POST /api/v2/whatsapp-chats/{id}/archive` marks a provision archived. The row

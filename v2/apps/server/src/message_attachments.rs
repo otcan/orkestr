@@ -136,7 +136,7 @@ pub(crate) fn decode_base64(input: &str) -> Option<Vec<u8>> {
 
 /// Deterministic UUID (v4 layout) from a request key and a label, so a
 /// replayed upload names the same manifest and references.
-fn derived(key: &str, label: &str) -> Uuid {
+pub(crate) fn derived(key: &str, label: &str) -> Uuid {
     let digest = Sha256::digest(format!("orkestr-v2-message-attachment\0{key}\0{label}"));
     let mut bytes = [0u8; 16];
     bytes.copy_from_slice(&digest[..16]);

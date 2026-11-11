@@ -145,6 +145,32 @@ class WebMirrorTests(Base):
         self.assertEqual(self.replies()[-1]["text"], "Open the desk and enter the code.")
         self.assertEqual(self.ledger.health()["webAnswersAwaited"], 0)
 
+    def notice(self, agent_notified=True):
+        value = row(origin="revision", text="[Message corrected] synthetic notice")
+        value["revisions"] = {"can_revise": False, "notice_for": {"agent_notified": agent_notified}}
+        return value
+
+    def test_a_correction_is_never_mirrored_but_its_answer_reaches_the_group(self):
+        self.ledger.set_web_cursor(10)
+        self.peer.snapshot = [self.notice()]
+        self.peer.runs[WEB] = ["correction-deep"]
+        self.peer.deep["correction-deep"] = "running"
+        self.scan()
+        self.assertEqual(self.ledger.messages(), [], "the notice text is not sent to the group")
+        self.assertEqual([watch["message_id"] for watch in self.ledger.web_watches()], [WEB])
+        self.peer.answer("correction-deep", "Understood, using the corrected text.")
+        self.scan()
+        user, reply = self.ledger.messages()
+        self.assertEqual(user["text"], "Message correction")
+        self.assertEqual(reply["text"], "Understood, using the corrected text.")
+
+    def test_a_removal_the_agent_never_saw_has_no_answer_to_wait_for(self):
+        self.ledger.set_web_cursor(10)
+        self.peer.snapshot = [self.notice(agent_notified=False)]
+        self.scan()
+        self.assertEqual(self.ledger.messages(), [])
+        self.assertEqual(self.ledger.web_watches(), [])
+
     def test_replay_and_restart_adopt_nothing_new(self):
         self.ledger.set_web_cursor(10)
         self.peer.snapshot = [row()]

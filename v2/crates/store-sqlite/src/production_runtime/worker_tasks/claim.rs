@@ -10,6 +10,18 @@ impl Store {
     ) -> Result<Option<WorkerTaskClaim>> {
         self.worker_credential(credential)?;
         let context = self.context()?;
+        // Only a queued (claimable) or held (stopped parent) task needs the
+        // parent's authority and the physical project check below. A Worker
+        // scheduler polls every tick while its own delegated task may be
+        // writing into the project; that churn made the Root check fence an
+        // idle poll and paused the scheduler (ORK-771). Nothing to claim or
+        // report: no check, no writer, no change.
+        let pending: i64 = sqlx::query_scalar("SELECT count(*) FROM worker_tasks WHERE parent_run_id=? AND owner_id=? AND context_id=? AND incarnation_id=? AND state IN ('queued','held')")
+            .bind(parent.to_string()).bind(context.owner.to_string()).bind(&context.id).bind(&context.incarnation)
+            .fetch_one(&self.pool).await.map_err(db)?;
+        if pending == 0 {
+            return Ok(None);
+        }
         #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
         let workspace = self.check_run_workspace_before_writer(parent).await?;
         #[cfg(all(target_os = "linux", target_pointer_width = "64"))]

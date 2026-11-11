@@ -37,8 +37,14 @@ use orkestr_v2_store_sqlite::StrandedExecutionWindow;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use unadmitted::warn_refused;
 
+#[path = "stranded_backoff.rs"]
+pub(super) mod backoff;
 #[path = "stranded_unadmitted.rs"]
 mod unadmitted;
+
+/// The manager refused the reconciliation (for example uncertain cleanup).
+/// Automatic attempts of that window back off (`backoff`).
+const MANAGER_REFUSED: &str = "manager reconciliation refused";
 
 /// Which plans a reconciliation attempt may carry out.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -109,12 +115,19 @@ impl Controller {
             if self.live_owner(&window.conversation_id).await {
                 continue;
             }
+            // A window the manager refused waits for its spacing; owner
+            // decisions do not come through here.
+            if !self.reconcile_backoff.due(&window, Instant::now()) {
+                continue;
+            }
             if window.expires_at_ms > now {
                 // Before the deadline only a window whose task in this process
                 // already ended with every original child reaped: its provider
                 // is gone, so waiting for expiry only strands the conversation.
                 if self.custody_released(&window.conversation_id).await {
-                    if let Err(cause) = self.reconcile_released(browser, &window).await {
+                    let result = self.reconcile_released(browser, &window).await;
+                    self.note_automatic(&window, result.as_ref().err().copied());
+                    if let Err(cause) = result {
                         warn_refused("released", &window, cause);
                     }
                 }
@@ -122,17 +135,34 @@ impl Controller {
             }
             // A refused window remains blocked exactly as before; the owner can
             // still use the explicit endpoint once the cause is understood.
-            if let Err(cause) = self
+            let result = self
                 .reconcile_one(
                     browser,
                     &window,
                     Decision::AbandonUnaccepted,
                     Actor::Startup,
                 )
-                .await
-            {
+                .await;
+            self.note_automatic(&window, result.as_ref().err().copied());
+            if let Err(cause) = result {
                 warn_refused("deadline", &window, cause);
             }
+        }
+    }
+
+    /// Space the next automatic attempt after a manager refusal; forget the
+    /// window after a success. One line each, never one per attempt.
+    fn note_automatic(&self, window: &ExecutionWindowStatus, refused: Option<&'static str>) {
+        let line = match refused {
+            None => self.reconcile_backoff.settled(window, Instant::now()),
+            Some(MANAGER_REFUSED) => {
+                self.reconcile_backoff
+                    .refused(window, MANAGER_REFUSED, Instant::now())
+            }
+            Some(_) => None,
+        };
+        if let Some(line) = line {
+            eprintln!("{line}");
         }
     }
 
@@ -389,7 +419,7 @@ impl Controller {
                     Instant::now() + Duration::from_secs(5),
                 )
                 .await
-                .map_err(|_| "manager reconciliation refused")?;
+                .map_err(|_| MANAGER_REFUSED)?;
         }
         let receipt = match plan {
             StrandedExecutionWindow::Reconciled(receipt) => receipt,

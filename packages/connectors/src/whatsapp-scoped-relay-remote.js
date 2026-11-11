@@ -11,7 +11,7 @@
 import crypto from "node:crypto";
 import { appendEvent } from "../../storage/src/store.js";
 import { appendThreadMessage, getThreadMessage, updateThreadMessage } from "../../core/src/threads.js";
-import { enqueueRemoteWhatsAppThreadInput, remoteWhatsAppRuntimeBinding } from "./whatsapp-remote-runtime.js";
+import { enqueueRemoteWhatsAppThreadInput, remoteWhatsAppRuntimeBinding, reviseRemoteWhatsAppThreadInput } from "./whatsapp-remote-runtime.js";
 
 export const scopedRelaySource = "whatsapp_group_relay";
 export const scopedRelayRefusalSource = "remote-runtime-relay-refusal";
@@ -185,6 +185,39 @@ export async function forwardScopedRelayInputToRemote({ thread, message, remote 
     remoteBackend: remote.backendId, remoteThreadId: remote.remoteThreadId, remoteMessageId,
   }, env).catch(() => {});
   return { message: updated, forwarded: true };
+}
+
+const revisionKinds = new Set(["edit", "delete"]);
+
+// The owner edited or deleted a WhatsApp input the relay forwarded earlier.
+// Only an owner-authored input already held by the runtime can change, and
+// the runtime applies its own ownership check before anything reaches a model.
+export async function forwardScopedRelayRevision({ thread, messageId, body = {} }, env = process.env, fetchImpl = fetch) {
+  const remote = remoteWhatsAppRuntimeBinding(thread, env);
+  if (!remote) throw statusError("scoped_relay_revision_not_delegated", 409);
+  const kind = pickString(body.kind);
+  const revisionId = pickString(body.revisionId);
+  const text = kind === "edit" ? String(body.text ?? "") : null;
+  if (!revisionKinds.has(kind) || !/^[A-Za-z0-9:._-]{1,300}$/.test(revisionId) || (kind === "edit" && !text.trim())) {
+    throw statusError("scoped_relay_revision_invalid", 400);
+  }
+  const message = await getThreadMessage(thread.id, messageId, env);
+  if (!message) throw statusError("message_not_found", 404);
+  if (message.role !== "user" || !pickString(message.remoteMessageId) || message.remoteBackend !== remote.backendId
+      || message.remoteThreadId !== remote.remoteThreadId) {
+    throw statusError("scoped_relay_revision_target_invalid", 409);
+  }
+  const result = await reviseRemoteWhatsAppThreadInput({
+    thread,
+    message,
+    revision: { revisionId, kind, ...(kind === "edit" ? { text } : {}) },
+    scope: { chatId: pickString(remote.binding.chatId), accountId: scopedRelayRemoteAccountId(remote.binding) },
+  }, env, fetchImpl);
+  await appendEvent({
+    type: "whatsapp_scoped_relay_revision_forwarded", threadId: thread.id, messageId: message.id, kind,
+    remoteBackend: remote.backendId, remoteThreadId: remote.remoteThreadId, duplicate: result?.duplicate === true,
+  }, env).catch(() => {});
+  return { duplicate: result?.duplicate === true };
 }
 
 function receiptIds(value) {

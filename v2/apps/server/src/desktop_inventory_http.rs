@@ -14,21 +14,48 @@ pub(crate) fn router() -> Router<AppState> {
         post(reset),
     )
 }
-fn unavailable() -> Error {
+pub(crate) fn unavailable() -> Error {
     Error(
         StatusCode::SERVICE_UNAVAILABLE,
         "desktop_inventory_unavailable",
         "Desk inventory is unavailable; reservation state is unknown",
     )
 }
-fn text(value: &Value, key: &str) -> Option<String> {
+pub(crate) fn text(value: &Value, key: &str) -> Option<String> {
     value
         .get(key)
         .and_then(Value::as_str)
         .filter(|s| !s.is_empty() && s.len() <= 256 && !s.chars().any(char::is_control))
         .map(str::to_owned)
 }
-fn project(value: &Value) -> Result<Vec<DesktopResource>, Error> {
+/// Reservation as V1 reports it. A missing field is `unknown`, never free.
+pub(crate) struct LeaseView {
+    pub state: String,
+    pub holder: Option<String>,
+    pub expires_at: Option<String>,
+}
+pub(crate) fn lease_view(lease: Option<&Value>) -> LeaseView {
+    let state = match lease {
+        Some(Value::Null) => "unreserved",
+        Some(v) if v.is_object() && v.get("expired") == Some(&Value::Bool(true)) => "expired",
+        Some(v) if v.is_object() && v.get("stale") == Some(&Value::Bool(true)) => "stale",
+        Some(v)
+            if v.is_object()
+                && v.get("threadId")
+                    .and_then(Value::as_str)
+                    .is_some_and(|s| !s.is_empty()) =>
+        {
+            "reserved"
+        }
+        _ => "unknown",
+    };
+    LeaseView {
+        state: state.into(),
+        holder: lease.and_then(|v| text(v, "ownerThreadLabel").or_else(|| text(v, "threadId"))),
+        expires_at: lease.and_then(|v| text(v, "expiresAt")),
+    }
+}
+pub(crate) fn project(value: &Value) -> Result<Vec<DesktopResource>, Error> {
     if value.get("ok") != Some(&Value::Bool(true)) {
         return Err(unavailable());
     }
@@ -47,33 +74,16 @@ fn project(value: &Value) -> Result<Vec<DesktopResource>, Error> {
             if !seen.insert(slug.clone()) {
                 return Err(unavailable());
             }
-            let lease = s.get("lease");
-            let lease_state = match lease {
-                Some(Value::Null) => "unreserved",
-                Some(v) if v.is_object() && v.get("expired") == Some(&Value::Bool(true)) => {
-                    "expired"
-                }
-                Some(v) if v.is_object() && v.get("stale") == Some(&Value::Bool(true)) => "stale",
-                Some(v)
-                    if v.is_object()
-                        && v.get("threadId")
-                            .and_then(Value::as_str)
-                            .is_some_and(|s| !s.is_empty()) =>
-                {
-                    "reserved"
-                }
-                _ => "unknown",
-            };
+            let lease = lease_view(s.get("lease"));
             Ok(DesktopResource {
                 label: text(s, "label").unwrap_or_else(|| slug.clone()),
                 slug,
                 state: text(s, "status")
                     .or_else(|| text(s, "state"))
                     .unwrap_or_else(|| "unknown".into()),
-                lease_state: lease_state.into(),
-                holder: lease
-                    .and_then(|v| text(v, "ownerThreadLabel").or_else(|| text(v, "threadId"))),
-                expires_at: lease.and_then(|v| text(v, "expiresAt")),
+                lease_state: lease.state,
+                holder: lease.holder,
+                expires_at: lease.expires_at,
             })
         })
         .collect()
@@ -146,11 +156,18 @@ async fn reset(
         .await
         .map_err(failure)?;
     let broker = state.desktop_broker.as_ref().ok_or_else(unavailable)?;
-    if !broker
-        .granted_slugs(&fence.v1_thread_id)
+    let shared = state
+        .store
+        .desktop_sharing(&credential, &owner)
         .await
-        .map_err(|_| unavailable())?
-        .contains(&slug)
+        .map_err(failure)?
+        .share_all_desks;
+    if !shared
+        && !broker
+            .granted_slugs(&fence.v1_thread_id)
+            .await
+            .map_err(|_| unavailable())?
+            .contains(&slug)
     {
         return Err(Error(
             StatusCode::FORBIDDEN,

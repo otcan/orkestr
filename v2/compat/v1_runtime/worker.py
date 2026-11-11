@@ -1,4 +1,5 @@
 """Serial, restart-safe Rust intake for one binding. Only the matched Deep run is mirrored."""
+import contextlib
 import re
 import sqlite3
 import sys
@@ -12,10 +13,12 @@ from . import failure_cause
 from .attachment_files import MEDIA_EXTENSIONS, attachment_export_settings, export_attachment
 from . import execution_mode, intake_ahead
 from . import instructions
+from . import reply_files
 from . import continuation_guard
 from . import auto_steer
 from . import recovery
 from . import thread_ask_relay
+from . import input_revisions
 from . import deep_group
 from . import parallel_watch
 from .peer_observation import before_send_refused, alert_held
@@ -519,6 +522,12 @@ class Worker:
                 if (not isinstance(row, dict) or type(row.get("sequence")) is not int or row["sequence"] <= cursor or
                         not isinstance(row.get("message_id"), str) or not isinstance(row.get("text"), str)):
                     raise Refused("snapshot_shape")
+                notice = ((row.get("revisions") or {}).get("notice_for") or {}) if row.get("origin") == "revision" else {}
+                if notice.get("agent_notified") is True:
+                    # A correction is never mirrored as chat text (WhatsApp keeps
+                    # its own copy); the agent's answer to it still reaches the group.
+                    uuid.UUID(row["message_id"])
+                    self.ledger.await_internal_context(row, excerpt="Message correction")
                 if row.get("origin") in WEB_ORIGINS and row.get("actor_kind") == "owner" and row["text"].strip():
                     if own is None:
                         own = self.ledger.own_message_ids()
@@ -680,7 +689,8 @@ class Worker:
         text = self.render_final(payload["text"])
         if text is None:
             return self.web_dropped(watch, "no_reply")
-        self.ledger.complete_web(watch, text, self.provider_identity(run_id=run_id))
+        text, files = reply_files.prepare(self, text)
+        self.ledger.complete_web(watch, text, self.provider_identity(run_id=run_id), attachments=files)
 
     def finish_digest(self, data):
         digest = data["digest"]
@@ -955,6 +965,11 @@ class Worker:
         if text is None:
             # V1 never transports an exact NO_REPLY; it acknowledges it as no_reply.
             reply.update(text="NO_REPLY", noReply=True)
+        else:
+            # Files the turn attached with the reply-attach tool go with this reply.
+            reply["text"], files = reply_files.prepare(self, text)
+            if files:
+                reply["attachments"] = files
         self.ledger.complete(data, reply)
 
     def own_statuses(self, ids, roles=None):
@@ -1340,6 +1355,13 @@ class Worker:
         return value["text"]
 
     def run(self, stop, active=lambda: True):
+        # This thread's passes reuse one ledger connection, closed when the
+        # loop ends (ORK-772).
+        keep = getattr(self.ledger, "keep_connection", None)
+        with keep() if keep else contextlib.nullcontext():
+            self._run_loop(stop, active)
+
+    def _run_loop(self, stop, active):
         pause, unavailable = PASS_S, 0
         while not stop.wait(pause):
             try:
@@ -1462,6 +1484,11 @@ class Worker:
             except Exception:
                 # A missing route (older server) or a failure is retried at the next check.
                 pass
+        try:
+            # The owner's edits and deletions made in WhatsApp.
+            input_revisions.drive(self)
+        except Exception:
+            pass  # Retried next pass; never blocks the binding.
         # Web-UI owner messages: interactive, never queued behind WhatsApp input.
         if self.web_mirror and self._due(self._web_checked, WEB_POLL_S):
             self._web_checked = time.monotonic()

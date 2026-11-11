@@ -481,9 +481,15 @@ class RustClient:
                     path.path.endswith("/delivered") and identity(path.path[7:-10]))
         steering = (method == "GET" and path.path.startswith("/steering/") and
                     re.fullmatch(r"[A-Za-z0-9:._-]{1,128}", path.path[10:]))
+        # A file a Deep turn attached to its reply (reply_files.py).
+        agent_attachment = (method == "GET" and path.path.startswith("/agent-attachments/") and
+                            identity(path.path[19:]))
         retire = (method == "POST" and path.path.startswith("/inputs/") and path.path.endswith("/retire") and
                   identity(path.path[8:-7]))
-        require((method == "GET" and (path.path in read or payload or steering)) or digest_ack or post_ack or retire or
+        revision = (method == "POST" and path.path.startswith("/messages/") and path.path.endswith("/revisions") and
+                    identity(path.path[10:-10]))
+        require((method == "GET" and (path.path in read or payload or steering or agent_attachment)) or
+                digest_ack or post_ack or retire or revision or
                 (method == "POST" and path.path in ("/messages", "/window", "/accept", "/settings/render",
                                                     "/timer-outcomes", "/timer-triggers", "/steer")), "route_refused")
         try:

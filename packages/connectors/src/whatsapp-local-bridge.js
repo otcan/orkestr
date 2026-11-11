@@ -4279,6 +4279,13 @@ export function storeModelBodyText(model = null) {
   return String(model?.body || model?.caption || model?.pollName || model?.eventName || "");
 }
 
+export async function handleInboundRevision(accountId, message, change, env = process.env, options = {}) {
+  const scoped = scopedNativeWorker(env);
+  if (!scoped) return { skipped: "not_scoped" };
+  const client = options.client || runtimes.get(String(accountId))?.client;
+  return { scoped: true, recorded: await scoped.observeRevision(String(accountId), client, message, change) };
+}
+
 export async function handleInboundMessage(accountId, message, env = process.env, options = {}) {
   const scoped = scopedNativeWorker(env);
   if (scoped) return { scoped: true, recorded: await scoped.observe(String(accountId), options.client || runtimes.get(String(accountId))?.client, message) };
@@ -6605,6 +6612,18 @@ async function startLocalWhatsAppAccountOnce(normalized, env = process.env, opti
   client.on("message_create", (message) => {
     if (!ownsRuntime()) return;
     void handleInboundMessage(normalized, message, env, { ownOnly: true, client });
+  });
+
+  // The owner changing a message they already sent. Only the scoped transport
+  // records these; the legacy router has no input to correct.
+  client.on("message_edit", (message, newBody, prevBody) => {
+    if (!ownsRuntime()) return;
+    void handleInboundRevision(normalized, message, { kind: "edit", newBody, prevBody }, env, { client });
+  });
+
+  client.on("message_revoke_everyone", (message, revoked) => {
+    if (!ownsRuntime()) return;
+    void handleInboundRevision(normalized, message, { kind: "delete", revoked }, env, { client });
   });
 
   armPairingCodeUnhandledRejectionHandler();

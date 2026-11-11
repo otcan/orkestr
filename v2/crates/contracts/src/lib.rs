@@ -1,6 +1,8 @@
 //! Version 0 HTTP contracts. No storage or provider dependencies.
 mod accepted_results;
 pub use accepted_results::*;
+mod message_revisions;
+pub use message_revisions::*;
 mod source_receipts;
 pub use source_receipts::*;
 mod source_intake;
@@ -21,6 +23,8 @@ mod claude_native_reset;
 pub use claude_native_reset::*;
 mod provider_handoff;
 pub use provider_handoff::*;
+mod provider_sign_in;
+pub use provider_sign_in::*;
 mod model_policy;
 pub use model_policy::*;
 mod calendar_rule;
@@ -35,12 +39,16 @@ mod agent_timer_discovery;
 pub use agent_timer_discovery::*;
 mod agent_timers;
 pub use agent_timers::*;
+mod local_files;
+pub use local_files::*;
 mod legacy_workers;
 pub use legacy_workers::*;
 mod sidebar;
 pub use sidebar::*;
 mod message_attachments;
 pub use message_attachments::*;
+mod agent_attachments;
+pub use agent_attachments::*;
 mod message_times;
 pub use message_times::*;
 mod conversation_posts;
@@ -185,6 +193,11 @@ pub struct MessageRequest {
     /// accept it advertise `message_author` in `/api/v2/health` `features`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub author: Option<InputAuthor>,
+    /// The earlier attempt of this same input that Core retired for
+    /// re-admission (ORK-780). Message lists then show this message only.
+    /// Servers that accept it advertise `message_retries_v1`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_of: Option<MessageId>,
 }
 /// Verified author of an admitted input. Only `Owner` may command a thread ask.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -267,6 +280,15 @@ pub struct Message {
     /// exports and history imports, so their canonical bytes are unchanged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<String>,
+    /// Edit and removal state. `text` above is always the immutable original.
+    /// Absent in exports and history imports, like `origin`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revisions: Option<MessageRevisionState>,
+    /// The earlier attempt this re-admitted input replaces (ORK-780). A list
+    /// that shows the earlier attempt drops it; one message stays. Absent in
+    /// exports and history imports, like `origin`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_of: Option<MessageId>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConversationSnapshot {
@@ -378,5 +400,8 @@ pub use execution_window_reconciliation::*;
 
 mod desktop_inventory;
 pub use desktop_inventory::*;
+
+mod desktop_sharing;
+pub use desktop_sharing::*;
 
 pub mod build_times;

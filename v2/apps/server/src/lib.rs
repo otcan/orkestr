@@ -19,6 +19,7 @@ use std::{
 use tokio::sync::Mutex;
 use uuid::Uuid;
 mod accepted_results_http;
+mod agent_attachments_http;
 mod agent_timers_http;
 mod archived_history_http;
 pub mod attachment_keys_http;
@@ -43,6 +44,8 @@ mod desktop_broker;
 mod desktop_http;
 mod desktop_inventory_http;
 mod desktop_open_http;
+mod desktop_owner_actions_http;
+mod desktop_sharing_http;
 mod encrypted_upload_http;
 pub mod encrypted_upload_ingest;
 mod execution;
@@ -56,11 +59,13 @@ mod held_inputs;
 pub mod host_metrics;
 mod intelligence_http;
 pub mod live_map;
+mod local_files_http;
 mod memory_service;
 pub mod message_attachments;
 mod message_receipt_observer;
 #[cfg(test)]
 mod message_receipt_test_support;
+mod message_revisions_http;
 mod message_times_http;
 pub mod observability;
 pub mod offline_python;
@@ -74,6 +79,7 @@ mod provider_policy;
 #[cfg(test)]
 mod provider_policy_http_tests;
 pub mod provider_quota_http;
+mod provider_sign_in_http;
 mod resource_health;
 mod response_shaping;
 pub mod restricted_http;
@@ -102,6 +108,7 @@ pub mod tracker_scan_pool;
 mod v1_links;
 mod v1_manage_http;
 mod v1_workers_http;
+mod vault_http;
 pub mod whatsapp_chats;
 mod whatsapp_chats_http;
 mod window_http;
@@ -126,6 +133,7 @@ pub struct AppState {
     auth_window: Arc<Mutex<(Instant, u32)>>,
     resources: resource_health::ResourceSampler,
     provider_quota: Option<Arc<provider_quota_http::Source>>,
+    provider_sign_in: Option<Arc<dyn provider_sign_in_http::Port>>,
     timers: timer_http::DurableOwnerController,
     live_map: Option<Arc<std::path::PathBuf>>,
     desktop_broker: Option<Arc<desktop_broker::Broker>>,
@@ -147,6 +155,8 @@ pub struct AppState {
     deploy_drain: Arc<deploy_drain::DeployDrain>,
     password_rotation_ready: bool,
     provider_policy: Option<beta_config::provider_routing::ProviderRouting>,
+    /// Stored-login reader (trusted startup file); unconfigured by default.
+    vault_reader: Arc<vault_http::ReaderState>,
 }
 impl AppState {
     /// Trusted operator assertion after all unattended consumers use service credentials.
@@ -228,6 +238,9 @@ impl AppState {
             manager_pid,
         )
         .map_err(|_| "beta manager identity refused")?;
+        self.provider_sign_in = Some(Arc::new(provider_sign_in_http::ManagerPort(
+            manager.clone(),
+        )));
         let controller = Arc::new(
             window_runtime::Controller::new(
                 config.clone(),
@@ -363,6 +376,7 @@ impl AppState {
             auth_window: Arc::new(Mutex::new((Instant::now(), 0))),
             resources: resource_health::ResourceSampler::new(),
             provider_quota: None,
+            provider_sign_in: None,
             live_map: None,
             desktop_broker: None,
             sidebar_v1: sidebar_v1::V1Cache::default(),
@@ -374,6 +388,7 @@ impl AppState {
             whatsapp_chats: None,
             password_rotation_ready: false,
             provider_policy: None,
+            vault_reader: Arc::default(),
             v1_timers: Default::default(),
             claude_turns: false,
             restricted: None,
@@ -588,7 +603,7 @@ fn desktop_slow_path(path: &str) -> bool {
             "desktops",
             _,
             "acquire" | "heartbeat" | "reset"
-        ]
+        ] | ["api", "v2", "desktops", _, "start" | "stop" | "link"]
     )
 }
 
@@ -616,7 +631,7 @@ pub fn router_with_google_catalog(
     catalog: google_registry_metadata::RegistryCatalog,
 ) -> Router {
     Router::new()
-        .route("/api/v2/health",get(|| async { Json(serde_json::json!({"status":"ok","product":"orkestr-v2","contract_version":0,"fixture_mode":false,"features":["message_author","thread_asks","agent_timers","source_receipts_v1","root_intake_v1","fast_run_receipts_v1","provider_quotas_v1"],"build":build_identity::identity(),"deployment":deployment_identity::identity()})) }))
+        .route("/api/v2/health",get(|| async { Json(serde_json::json!({"status":"ok","product":"orkestr-v2","contract_version":0,"fixture_mode":false,"features":["message_author","message_revisions_v1","message_retries_v1","thread_asks","agent_timers","source_receipts_v1","root_intake_v1","fast_run_receipts_v1","provider_quotas_v1","provider_sign_in_v1","local_files_v1","vault_v1"],"build":build_identity::identity(),"deployment":deployment_identity::identity()})) }))
         .route("/api/v2/setup",get(auth::setup_status).post(auth::setup))
         .route("/api/v2/session",post(auth::session))
         .route("/api/v2/machine/session",post(auth::session))
@@ -657,6 +672,7 @@ pub fn router_with_google_catalog(
         .route("/api/v2/conversations/{id}/held-inputs",get(held_inputs::read))
         .route("/api/v2/conversations/{id}/inputs/{input}/retire",post(retired_inputs::retire))
         .route("/api/v2/conversations/{id}/messages",post(routes::message))
+        .route("/api/v2/conversations/{id}/messages/{message}/revisions",get(message_revisions_http::history).post(message_revisions_http::revise))
         .route("/api/v2/conversations/{id}/events",get(routes::events))
         .merge(timer_http::routes(state.timers.clone()))
         .nest("/api/v2",attachment_transfer::router())
@@ -668,11 +684,14 @@ pub fn router_with_google_catalog(
         .merge(fast_run_receipt_http::router())
         .merge(conversation_resources_http::router())
         .merge(fast_role_settings_http::router())
+        .merge(provider_sign_in_http::router())
         .merge(conversation_status_http::router())
         .merge(host_metrics::router())
         .merge(desktop_http::router())
         .merge(desktop_inventory_http::router())
+        .merge(desktop_owner_actions_http::router())
         .merge(desktop_open_http::router())
+        .merge(desktop_sharing_http::router())
         .merge(sidebar_http::router())
         .merge(message_attachments::router())
         .merge(encrypted_upload_http::router())
@@ -684,7 +703,9 @@ pub fn router_with_google_catalog(
         .merge(tracker_automation_http::router())
         .merge(thread_icons::router())
         .merge(thread_asks_http::router())
+        .merge(local_files_http::router())
         .merge(agent_timers_http::router())
+        .merge(agent_attachments_http::router())
         .merge(timer_capabilities_http::router())
         .merge(v1_links::router())
         .merge(v1_manage_http::router())
@@ -692,6 +713,7 @@ pub fn router_with_google_catalog(
         .merge(whatsapp_chats_http::router())
         .merge(restricted_http::router())
         .merge(google_registry_metadata::router(catalog))
+        .merge(vault_http::router())
         // Labels each matched request with its route template for logs and metrics.
         .route_layer(middleware::from_fn(observability::record_route))
         .fallback(|| async { Error(StatusCode::NOT_FOUND,"not_found","Endpoint not found") })

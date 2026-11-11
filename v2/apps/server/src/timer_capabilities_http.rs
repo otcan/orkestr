@@ -89,4 +89,4 @@ async fn read(
 
 #[cfg(test)]
 #[path = "timer_capabilities_http_tests.rs"]
-mod tests;
+pub(crate) mod tests;
