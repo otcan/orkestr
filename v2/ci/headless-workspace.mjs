@@ -564,9 +564,12 @@ export const scenarios = [
     await choose('Assistant');
     await page.waitForSelector('#composer');
     await virtualDesksAndAccountSettings({page,state,conversation:A,clickText,clickWithin,waitText,screenshot,label});
-    await clickText('Settings');
+    await clickText('Chat settings');
     await page.waitForSelector('#settings-model');
+    await clickText('Orkestr settings');
     await providerSignIn({page,state,clickWithin,waitText,screenshot,label});
+    await clickText('Chat settings');
+    await page.waitForSelector('#settings-model');
     assert.equal(await page.$eval('#settings-model', n => n.value), 'synthetic-model');
     await page.select('#settings-effort', 'high');
     await page.$eval('#settings-prefix', n => { n.value = ''; });

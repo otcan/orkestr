@@ -22,6 +22,7 @@ pub fn ChatSettings(
     rsx! {
         section { class: "chat-settings", "aria-label": "Chat settings",
             h2 { "Chat settings" }
+            p { "These settings apply only to this conversation. Shared provider logins, account security and the vault are in Orkestr settings." }
             ThreadSettings { conversation: conversation.clone(), csrf: csrf.clone(), session_scope, onexpired }
             crate::provider_handoff_view::ProviderHandoff { conversation: conversation.clone(), csrf: csrf.clone(), session_scope, onexpired }
             Desktops { conversation: conversation.clone(), csrf: csrf.clone(), session_scope, onexpired }

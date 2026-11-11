@@ -28,6 +28,7 @@ pub fn Workspace(
         Some(Route::Conversation { tab, .. }) => *tab,
         Some(Route::Host { .. }) => Tab::Host,
         Some(Route::VirtualDesks) => Tab::VirtualDesks,
+        Some(Route::Settings) => Tab::OrkestrSettings,
         _ => Tab::Chat,
     });
     let mut host_charts = use_signal(|| matches!(initial, Some(Route::Host { charts: true, .. })));
@@ -67,6 +68,7 @@ pub fn Workspace(
                 Some(thread) => Route::V1Thread { thread },
                 None => return,
             },
+            None if tab() == Tab::OrkestrSettings => Route::Settings,
             None if tab() == Tab::VirtualDesks => Route::VirtualDesks,
             None if tab() == Tab::Host => Route::Host {
                 charts: host_charts(),
@@ -110,6 +112,10 @@ pub fn Workspace(
                         reload += 1;
                     }
                     tab.set(wanted_tab);
+                }
+                Route::Settings => {
+                    linked.set(None);
+                    tab.set(Tab::OrkestrSettings);
                 }
                 Route::VirtualDesks => {
                     linked.set(None);
@@ -227,19 +233,19 @@ pub fn Workspace(
                 if !link_notice().is_empty() { p { class: "app-notice link-notice", role: "status", "{link_notice}" } }
                 header { class: "conversation-heading",
                     button { class: "threads-toggle", "aria-expanded": "{sidebar}", "aria-label": "Conversations", onclick: move |_| sidebar.set(!sidebar()), span { "aria-hidden": "true", "☰" } }
-                    if let Some(entry) = header.as_ref().filter(|_| tab() != Tab::VirtualDesks) {
+                    if let Some(entry) = header.as_ref().filter(|_| !matches!(tab(), Tab::VirtualDesks | Tab::OrkestrSettings)) {
                         crate::conversation_sidebar::Avatar { key: "{entry.key}", name: entry.name.clone(), thread: entry.v1_thread_id.clone() }
                     }
                     div { class: "heading-title",
-                        h2 { if tab() == Tab::VirtualDesks { "Virtual desks" } else { "{title}" } }
-                        if let Some(label) = activity.clone().filter(|_| tab() != Tab::VirtualDesks) {
+                        h2 { if tab() == Tab::OrkestrSettings { "Orkestr settings" } else if tab() == Tab::VirtualDesks { "Virtual desks" } else { "{title}" } }
+                        if let Some(label) = activity.clone().filter(|_| !matches!(tab(), Tab::VirtualDesks | Tab::OrkestrSettings)) {
                             p { class: "heading-activity", role: "status", "{label}" }
-                        } else if let Some(entry) = header.as_ref().filter(|e| e.read_only) {
+                        } else if let Some(entry) = header.as_ref().filter(|e| e.read_only && tab() != Tab::OrkestrSettings) {
                             p { class: "heading-meta", if entry.coordinator { "On V1 · coordinator attached" } else { "On V1 · read-only" } }
                         }
                     }
                     if linked().is_none() { nav { "aria-label": "Main",
-                        for name in Tab::ALL {
+                        for name in Tab::ALL.into_iter().filter(|name| *name != Tab::OrkestrSettings) {
                             button { "aria-current": if tab() == name { "page" } else { "false" }, onclick: move |_| {
                                 if tab() == name { return; }
                                 execution.write().select(&current(), "");
@@ -248,8 +254,19 @@ pub fn Workspace(
                             }, "{name.label()}" }
                         }
                     } }
+                    nav { "aria-label": "Orkestr",
+                        button { "aria-current": if tab() == Tab::OrkestrSettings { "page" } else { "false" }, onclick: move |_| {
+                            wanted.set(None);
+                            linked.set(None);
+                            tab.set(Tab::OrkestrSettings);
+                        }, "Orkestr settings" }
+                    }
                 }
-                if let Some(entry) = linked() {
+                if tab() == Tab::OrkestrSettings {
+                    div { class: "workspace-page",
+                        crate::orkestr_settings_view::OrkestrSettings { csrf: csrf.clone(), session_scope, onexpired }
+                    }
+                } else if let Some(entry) = linked() {
                     crate::v1_thread_view::V1ThreadView { key: "{entry.key}-{session_scope.read().generation()}", entry, csrf: csrf.clone(), session_scope, drafts, onexpired }
                 } else if tab() == Tab::Chat {
                     SelectedConversation {
@@ -290,22 +307,7 @@ pub fn Workspace(
                             crate::host_dashboard::HostDashboard { key: "{session_scope.read().generation()}", session_scope, charts: host_charts, range: host_range, onexpired }
                         } else {
                             crate::chat_settings_view::ChatSettings { key: "settings-{current()}-{session_scope.read().generation()}", conversation: current(), csrf: csrf.clone(), session_scope, onexpired }
-                            section { "aria-label": "Account settings",
-                                h2 { "Account settings" }
-                                crate::owner_password_view::OwnerPassword {
-                                    key: "password-{session_scope.read().generation()}", csrf: csrf.clone(), session_scope, onexpired,
-                                }
-                                crate::vault_view::Vault {
-                                    key: "vault-{session_scope.read().generation()}", csrf: csrf.clone(), session_scope, onexpired,
-                                }
-                            }
-                            div {
-                                crate::provider_sign_in_view::ProviderSignInSection {
-                                    key: "provider-sign-in-{session_scope.read().generation()}",
-                                    csrf: csrf.clone(), session_scope, onexpired,
-                                }
-                            }
-                            crate::beta_settings::BetaSettings {}
+
                         }
                     }
                 }

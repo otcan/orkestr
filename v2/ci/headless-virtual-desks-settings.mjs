@@ -253,10 +253,22 @@ export async function virtualDesksAndAccountSettings({page, state, conversation,
     assert.equal(state.deskOwnerActions.at(-1).action,'link','refresh must not repeat owner actions');
     assert.equal(state.deskOwnerActions.filter(a=>a.action==='link').length,1,'refresh must not mint another link');
     await deskSharing({page,state,clickText,waitText,screenshot,label,row});
-    await clickText('Settings');
+    await clickText('Chat settings');
     await page.waitForSelector('#settings-model');
-    await page.waitForSelector('[aria-label="Account settings"] .owner-password');
+    assert.equal(await page.$$eval('.owner-password, [aria-label="Account settings"]', nodes => nodes.length), 0);
     assert.equal(new URL(page.url()).hash, `#conversation/${conversation}/settings`);
+    await clickText('Orkestr settings');
+    await page.waitForSelector('[aria-label="Account settings"] .owner-password');
+    assert.equal(new URL(page.url()).hash, '#settings');
+    assert.equal(await page.$$eval('#settings-model', nodes => nodes.length), 0);
+    await page.goBack();
+    await page.waitForSelector('#settings-model');
+    assert.equal(await page.$('.owner-password'), null);
+    await page.goForward();
+    await page.waitForSelector('.owner-password');
+    await page.reload({waitUntil:'networkidle0'});
+    await page.waitForSelector('.owner-password');
+    assert.equal(new URL(page.url()).hash, '#settings');
     assert.equal(await page.$$eval('.owner-password', nodes => nodes.length), 1);
     assert.equal(await page.$eval('.owner-password summary', n => n.textContent.trim()), 'Change password');
 }
@@ -284,7 +296,7 @@ async function deskSharing({page,state,clickText,waitText,screenshot,label,row})
     assert.equal(await page.$eval('.desk-sharing', el => el.dataset.shared), 'true');
     assert.deepEqual(effects(), before, 'sharing reserves, starts and binds nothing');
     await screenshot(label, 'virtual-desks-shared');
-    await clickText('Settings');
+    await clickText('Chat settings');
     await page.waitForSelector('#settings-model');
     await page.waitForFunction(() => document.querySelector('.desk-sharing-help')?.textContent.startsWith('All desks are shared with all chats: workers of this chat may reserve any desk'), {timeout:15000});
     assert.ok(!(await page.$eval('body', el => el.textContent)).includes('Every desktop must be granted to the V1 thread in V1.'));

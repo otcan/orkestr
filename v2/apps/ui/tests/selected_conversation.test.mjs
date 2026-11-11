@@ -22,3 +22,5 @@ test('host, V1 and tab fragments survive reselecting the same conversation',()=>
  for(const hash of ['#host','#host/details?range=24h','#v1/group-a',`#conversation/${id}/timers`]) assert.equal(keepsFragment(hash,id),true,hash);
  for(const hash of ['',`#conversation/${id}`,`#conversation/00000000-0000-4000-8000-00000000000b/timers`,'#hostile']) assert.equal(keepsFragment(hash,id),false,hash);
 });
+
+test('global settings survive conversation selection', () => { assert.equal(keepsFragment('#settings', null), true); assert.equal(keepsFragment('#settings', '969f5efc-a8f6-4112-a84c-6224d4c38174'), true); });

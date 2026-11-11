@@ -45,6 +45,7 @@ mod message_time_view;
 mod new_whatsapp_chat;
 mod outbox_driver;
 mod outbox_view;
+mod orkestr_settings_view;
 mod owner_password_view;
 mod page_memory_bridge;
 mod progress_view;

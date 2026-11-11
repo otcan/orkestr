@@ -22,7 +22,7 @@ export function conversationFragment(id) {
 // conversation is (re)selected.
 export function keepsFragment(hash, id) {
  if (typeof hash !== 'string') return false;
- if (hash === '#virtual-desks') return true;
+ if (hash === '#settings' || hash === '#virtual-desks') return true;
  if (/^#host(?:[/?]|$)/.test(hash) || /^#v1\//.test(hash)) return true;
  return id !== null && selectedConversation(hash) === selectedConversation(`#conversation/${id}`) && hash.length > `#conversation/${id}`.length;
 }

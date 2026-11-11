@@ -19,6 +19,7 @@ fn every_view_round_trips_through_its_fragment() {
             tab: Tab::LiveMap,
         },
         Route::VirtualDesks,
+        Route::Settings,
         Route::V1Thread {
             thread: "group-coordinated".into(),
         },
@@ -105,4 +106,25 @@ fn desks_are_global_and_old_links_remain_compatible() {
     assert_eq!(Route::VirtualDesks.hash(), "/virtual-desks");
     assert_eq!(Route::parse("#conversation/not-a-uuid/virtual-desks"), None);
     assert_eq!(Route::parse("/virtual-desks/other"), None);
+}
+
+#[test]
+fn global_settings_are_distinct_from_conversation_settings() {
+    assert_eq!(Route::parse("#settings"), Some(Route::Settings));
+    assert_eq!(
+        Route::parse(&format!("#conversation/{ID}/settings")),
+        Some(Route::Conversation {
+            id: ID.into(),
+            tab: Tab::Settings
+        })
+    );
+    assert_eq!(
+        Route::parse(&format!("#conversation/{ID}/orkestr-settings")),
+        None
+    );
+    assert_eq!(Tab::from_label("Chat settings"), Some(Tab::Settings));
+    assert_eq!(
+        Tab::from_label("Orkestr settings"),
+        Some(Tab::OrkestrSettings)
+    );
 }

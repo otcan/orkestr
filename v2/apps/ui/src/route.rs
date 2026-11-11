@@ -19,10 +19,11 @@ pub enum Tab {
     VirtualDesks,
     Host,
     Settings,
+    OrkestrSettings,
 }
 
 impl Tab {
-    pub const ALL: [Tab; 11] = [
+    pub const ALL: [Tab; 12] = [
         Tab::Chat,
         Tab::Work,
         Tab::History,
@@ -34,6 +35,7 @@ impl Tab {
         Tab::VirtualDesks,
         Tab::Host,
         Tab::Settings,
+        Tab::OrkestrSettings,
     ];
     pub fn label(self) -> &'static str {
         match self {
@@ -47,7 +49,8 @@ impl Tab {
             Tab::LiveMap => "Live map",
             Tab::VirtualDesks => "Virtual desks",
             Tab::Host => "Host resources",
-            Tab::Settings => "Settings",
+            Tab::Settings => "Chat settings",
+            Tab::OrkestrSettings => "Orkestr settings",
         }
     }
     pub fn slug(self) -> &'static str {
@@ -63,6 +66,7 @@ impl Tab {
             Tab::VirtualDesks => "virtual-desks",
             Tab::Host => "host",
             Tab::Settings => "settings",
+            Tab::OrkestrSettings => "orkestr-settings",
         }
     }
     pub fn from_label(label: &str) -> Option<Tab> {
@@ -71,12 +75,13 @@ impl Tab {
     fn from_slug(slug: &str) -> Option<Tab> {
         Tab::ALL
             .into_iter()
-            .find(|t| t.slug() == slug && *t != Tab::Host)
+            .find(|t| t.slug() == slug && !matches!(*t, Tab::Host | Tab::OrkestrSettings))
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Route {
+    Settings,
     VirtualDesks,
     Conversation {
         id: String,
@@ -120,6 +125,7 @@ impl Route {
         let (path, query) = rest.split_once('?').unwrap_or((rest, ""));
         let parts: Vec<&str> = path.split('/').collect();
         match parts.as_slice() {
+            ["settings"] => Some(Route::Settings),
             ["conversation", id] => Some(Route::Conversation {
                 id: uuid(id)?,
                 tab: Tab::Chat,
@@ -157,6 +163,7 @@ impl Route {
 
     pub fn hash(&self) -> String {
         match self {
+            Route::Settings => "#settings".into(),
             Route::VirtualDesks => "/virtual-desks".into(),
             Route::Conversation { id, tab: Tab::Chat } => format!("#conversation/{id}"),
             Route::Conversation { id, tab } => format!("#conversation/{id}/{}", tab.slug()),
