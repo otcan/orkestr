@@ -470,7 +470,7 @@ class RustClient:
         require(not path.scheme and not path.netloc, "route_refused")
         read = {"": ("after", "limit"), "/window": (), "/execution": ("run_id",),
                 "/fast/execution": ("run_id",), "/accepted-results": ("after_sequence", "limit"),
-                "/intelligence": (), "/held-inputs": (), "/window/queue": (), "/events": ("after", "limit"),
+                "/intelligence": (), "/held-inputs": ("after_sequence", "limit", "message_id"), "/window/queue": (), "/events": ("after", "limit"),
                 "/timer-inputs": ("after_sequence", "limit"), "/settings": (),
                 "/timer-digests": ("limit",), "/posts": ("pending", "limit"),
                 "/thread-ask-inputs": ("after_sequence", "limit")}
@@ -500,7 +500,7 @@ class RustClient:
                 all(k in read.get(path.path, ()) for k, _ in query) and
                 (method == "GET" or not query), "query_refused")
         for key, value in query:
-            if key == "run_id":
+            if key in ("run_id", "message_id"):
                 identity(value)
             elif key == "pending":
                 require(value == "true", "query_refused")

@@ -654,6 +654,69 @@ class OwnerStopTests(Base):
         self.assertNotIn("readmitted", self.ledger.input(self.data["remote_id"]))
 
 
+class ManyHeldInputsTests(Base):
+    """ORK-795 (2026-11-11): an owner stop held 221 inputs in one chat, and a
+    clean-up later retired most of them (Core still lists a retired hold).
+    The first page of 50 could not tell whether a later message was held, so
+    a follow-up its window had released got "Technical failure
+    (window_setup_failed) ... resend it" (`hold_unknown`) instead of a
+    silent retry."""
+    peer_class = NoRunPeer
+    LOOKUP = frozenset({recovery.HELD_LOOKUP_FEATURE})
+
+    def setUp(self):
+        super().setUp()
+        self.peer.held = ["held-%d" % n for n in range(120)]
+
+    def stranded(self):
+        self.passes(1)
+        data = self.ledger.next_input()
+        data["unstarted_since"] -= 61
+        self.ledger.save(data)
+
+    def test_a_released_input_is_retried_silently_however_many_are_held(self):
+        for features in (self.LOOKUP, frozenset()):
+            with self.subTest(lookup=bool(features)):
+                self.setUp()
+                self.peer.features = features
+                self.stranded()
+                self.peer.retire_state = "retired"
+                log = self.passes(1)
+                data = self.ledger.input(self.data["remote_id"])
+                self.assertNotIn("refused", data, "withheld: %s" % data.get("retry_withheld"))
+                self.assertEqual(data["readmitted"]["trigger"], "automatic")
+                self.assertEqual(self.notices(), [])
+                self.assertNotIn("ALERT", log)
+
+    def test_a_held_message_past_the_first_page_still_honours_the_stop(self):
+        self.peer.held.insert(110, "message")
+        self.peer.features = self.LOOKUP
+        self.stranded()
+        self.peer.retire_state = "retired"  # Real Core would still retire it.
+        log = self.passes(1)
+        data = self.ledger.input(self.data["remote_id"])
+        self.assertNotIn("readmitted", data, "a held input is never retried")
+        self.assertEqual(data["settled"]["outcome"], "held")
+        self.assertEqual(self.retires(), [])
+        self.assertEqual(self.notices(), [])
+        self.assertIn("input_closed_owner_stop", log)
+
+    def test_classification_asks_for_the_message_and_never_answers_unknown(self):
+        def held(message):
+            return recovery.held(self.worker, {"intake": {"message_id": message}})
+        self.peer.features = self.LOOKUP
+        self.assertEqual(held("held-110"), "held")
+        self.assertEqual(held("held-119"), "held")
+        self.assertEqual(held("never-held"), "not_held")
+        self.assertEqual(self.peer.held_reads, [{"message_id": m} for m in ("held-110", "held-119", "never-held")])
+        # A server without the lookup is read page by page, to the end.
+        self.peer.features, self.peer.held_reads = frozenset(), []
+        self.assertEqual(held("held-110"), "held")
+        self.assertEqual(held("never-held"), "not_held")
+        self.assertEqual(self.peer.held_reads, [{"after_sequence": "0", "limit": "100"},
+                                                {"after_sequence": "100", "limit": "100"}] * 2)
+
+
 class RequeueGapTests(Base):
     """Core requeued the joined-but-unrun input for a successor window, but
     the dispatcher (1 s poll) has not opened it: /window reads the old window

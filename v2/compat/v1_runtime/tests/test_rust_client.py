@@ -277,7 +277,8 @@ class ClientTests(unittest.TestCase):
                        "/execution?run_id=" + RUN + "&run_id=" + RUN,
                        "/accepted-results?limit=101", "/payloads/%2e%2e",
                        "/timer-inputs?after=1", "/timer-inputs?limit=101", "/timer-inputs?after_sequence=-1",
-                       "/posts?pending=false", "/posts?pending=1", "/posts?after_ms=1", "/posts?limit=101"):
+                       "/posts?pending=false", "/posts?pending=1", "/posts?after_ms=1", "/posts?limit=101",
+                       "/held-inputs?message_id=bad", "/held-inputs?limit=101", "/held-inputs?run_id=" + RUN):
             with self.subTest(suffix=suffix), self.assertRaises(ClientError):
                 self.client.request("GET", suffix)
         self.assertEqual(self.server.observed, [])

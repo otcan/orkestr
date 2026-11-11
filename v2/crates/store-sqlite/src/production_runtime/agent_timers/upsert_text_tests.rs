@@ -269,12 +269,18 @@ async fn a_later_generation_never_uses_a_recorded_text() {
     assert!(texts[1].ends_with("\n\nFresh grant."), "{}", texts[1]);
 }
 
+/// ORK-795 (2026-11-11): the owner's Stop holds the fired input
+/// behind the stopped turn. That firing never runs, so it is not unfinished:
+/// it used to make every later reschedule `agent_timer_busy` for good. The
+/// Stop still invalidated this generation, so the change takes a new one; the
+/// held firing stays held and only the new generation's firing runs.
 #[tokio::test]
-async fn a_stop_still_refuses_new_text_while_a_run_is_unfinished() {
+async fn a_firing_held_by_a_stop_does_not_block_a_new_generation() {
     let f = setup().await;
     let c = conversation(&f, "text-stop").await;
     let g = grant(&f, &c).await;
     let watcher = armed_watcher(&f, &c, &g).await;
+    let first = generation(&f, watcher).await;
     let stopped = owner_turn(&f, &c, "stopped").await;
     fire(&f, watcher, 1).await;
     // The owner's Stop ends that turn and holds the fired input behind it.
@@ -295,15 +301,47 @@ async fn a_stop_still_refuses_new_text_while_a_run_is_unfinished() {
         )
         .await
         .unwrap();
-    // A later turn tries to move the timer; the Stop invalidated this
-    // generation and the fired input is still held, so no new generation.
-    let later = owner_turn(&f, &c, "later").await;
     assert_eq!(
-        f.store
-            .upsert_agent_timer(&g, &c, &upsert("w1", "Watcher", now_ms() + DAY, "New."))
-            .await,
-        refused("agent_timer_busy")
+        held_inputs(&f, watcher).await,
+        1,
+        "the Stop holds the firing"
     );
-    assert_eq!(updates(&f, watcher).await, 0);
+    let held: String =
+        sqlx::query_scalar("SELECT message_id FROM dormant_timer_inputs WHERE namespace=?")
+            .bind(watcher.to_string())
+            .fetch_one(&f.store.pool)
+            .await
+            .unwrap();
+    // A later turn moves the timer: a new generation with the new text.
+    let later = owner_turn(&f, &c, "later").await;
+    let moved = f
+        .store
+        .upsert_agent_timer(&g, &c, &upsert("w1", "Watcher", now_ms() + DAY, "New."))
+        .await
+        .unwrap();
+    assert!(moved.changed);
+    assert_eq!(moved.timer.namespace, watcher);
+    assert_eq!(moved.timer.state, "enabled");
+    assert!(generation(&f, watcher).await > first);
+    assert_eq!(
+        updates(&f, watcher).await,
+        0,
+        "a new generation, not a text"
+    );
+    assert_eq!(agent_rows(&f, &c).await, 1);
     finish(&f, &c, &later, "Done.", "later").await;
+    // The next firing carries the new text and runs; the stopped one never does.
+    fire(&f, watcher, 2).await;
+    let texts = fired_texts(&f, watcher).await;
+    assert_eq!(texts.len(), 2, "one input per firing: {texts:?}");
+    assert!(texts[1].ends_with("\n\nNew."), "{}", texts[1]);
+    let next = next_turn(&f, &c, "new-firing").await;
+    finish(&f, &c, &next, "Done.", "new-firing").await;
+    let runs: i64 = sqlx::query_scalar("SELECT count(*) FROM production_runs WHERE message_id=?")
+        .bind(&held)
+        .fetch_one(&f.store.pool)
+        .await
+        .unwrap();
+    assert_eq!(runs, 0, "a stopped firing is never re-run");
+    assert_eq!(held_inputs(&f, watcher).await, 1);
 }

@@ -338,7 +338,7 @@ pub(super) async fn commit(
         }
     }
     super::release_inputs(tx, &id, p.window_id, &plan.release, true).await?;
-    retry_timer_inputs(tx, p.window_id, &plan.release).await?;
+    retry_timer_inputs(tx, p.window_id, &plan.release, true).await?;
     // Revoke the lost private window credential: a surviving holder is fenced.
     if let Some(hash) = &plan.credential_hash {
         sqlx::query("DELETE FROM auth_sessions WHERE token_hash=?")
@@ -380,25 +380,35 @@ pub(super) async fn commit(
 }
 
 /// A timer occurrence has no sender who could send it again. When its window
-/// failed to open, nothing of it ran: Core proves no run of any role exists
-/// for its event, so its Deep turn has never executed and Fast (which only
-/// ever sees a fixed note for a timer, #246) never presented it either. Its
-/// dispatched queue intent goes back in line exactly once, and the dispatcher
-/// opens the next window for it. A second failed opening of the same input
-/// leaves it released: the adapter then refuses it with an operator alert.
+/// failed to open, or ended in a reconciliation (`stranded_commit.rs`)
+/// before its turn came, nothing of it ran: Core proves no run of any role
+/// exists for its event, so its Deep turn has never executed and Fast (which
+/// only ever sees a fixed note for a timer, #246) never presented it either.
+/// Its dispatched queue intent goes back in line exactly once, and the
+/// dispatcher opens the next window for it. A second release of the same
+/// input, by either path, leaves it released: only the original request key
+/// is ever requeued, and the adapter then refuses it with an operator alert.
 ///
 /// The retry is a new admission with its own request key (`…:retry1`): the
-/// manager keeps the failed window's admission as evidence under the original
-/// key, and re-admits the input only because that window retired as a failed
-/// open with no run.
-async fn retry_timer_inputs(
+/// manager keeps the ended window's admission as evidence under the original
+/// key, and re-admits the input only because that window retired with no run
+/// of it. `failed_open` names the archive this release was just written to.
+pub(super) async fn retry_timer_inputs(
     tx: &mut SqliteConnection,
     window: Uuid,
     release: &[String],
+    failed_open: bool,
 ) -> Result<()> {
     const FIRST_RETRY: u32 = 1;
+    // Closed constant SQL, never caller data: this one release is the only
+    // archived release of the event.
+    let released_once = if failed_open {
+        "(SELECT count(*) FROM execution_window_open_failure_inputs f WHERE f.event_id=?1)=1"
+    } else {
+        "(SELECT count(*) FROM execution_window_released_inputs f WHERE f.event_id=?1)=1 AND NOT EXISTS(SELECT 1 FROM execution_window_open_failure_inputs f WHERE f.event_id=?1)"
+    };
     for event in release {
-        let Some(row) = sqlx::query("SELECT message_id,input_request_key FROM execution_window_queue WHERE event_id=?1 AND window_id=?2 AND state='dispatched' AND request_key='timer-window:'||?1 AND EXISTS(SELECT 1 FROM dormant_timer_inputs t WHERE t.event_id=?1) AND NOT EXISTS(SELECT 1 FROM production_runs r WHERE r.event_id=?1) AND NOT EXISTS(SELECT 1 FROM ordinary_input_holds h WHERE h.event_id=?1) AND (SELECT count(*) FROM execution_window_open_failure_inputs f WHERE f.event_id=?1)=1")
+        let Some(row) = sqlx::query(&format!("SELECT message_id,input_request_key FROM execution_window_queue WHERE event_id=?1 AND window_id=?2 AND state='dispatched' AND request_key='timer-window:'||?1 AND EXISTS(SELECT 1 FROM dormant_timer_inputs t WHERE t.event_id=?1) AND NOT EXISTS(SELECT 1 FROM production_runs r WHERE r.event_id=?1) AND NOT EXISTS(SELECT 1 FROM ordinary_input_holds h WHERE h.event_id=?1) AND {released_once}"))
             .bind(event)
             .bind(window.to_string())
             .fetch_optional(&mut *tx)
