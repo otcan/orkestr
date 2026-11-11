@@ -3,11 +3,13 @@
 // session/local storage or the Rust bridge.
 const drafts = new WeakMap();
 
-export async function uploadPastedText(element, describe, {scope = '', retainSuccess = false} = {}) {
+export async function uploadPastedText(element, describe, {scope = '', retainSuccess = false, reusable = () => true} = {}) {
   if (!element || typeof element.value !== 'string' || !element.value.length) {
     return {error: 'Enter text to attach first.'};
   }
   let draft = drafts.get(element);
+  // A retained receipt whose upload was since removed starts a fresh file.
+  if (draft?.result && !reusable(draft.result)) draft = null;
   if (!draft || draft.text !== element.value || draft.scope !== scope) {
     const stamp = new Date().toISOString().slice(0, 19).replace(/[-:T]/g, '');
     const name = `pasted-text-${stamp}-${crypto.randomUUID().slice(0, 8)}.txt`;

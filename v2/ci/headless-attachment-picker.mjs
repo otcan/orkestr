@@ -6,6 +6,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import puppeteer from 'puppeteer';
 import {A,startMock} from './headless-workspace-mock.mjs';
+import {uploadCancel} from './headless-upload-cancel.mjs';
 
 assert.equal(process.env.CI,'true','Run only against the isolated synthetic API');
 assert.ok(process.env.UI_BUNDLE_DIR,'UI_BUNDLE_DIR is required');
@@ -65,6 +66,12 @@ try{
     await page.close();
     console.log(`Attachment picker: ${mode} passed`);
   }
+  await uploadCancel({browser,state,origin,scratch,screenshot:async(page,name)=>{
+    if(!process.env.SCREENSHOT_DIR)return;
+    await mkdir(process.env.SCREENSHOT_DIR,{recursive:true});
+    await page.screenshot({path:join(process.env.SCREENSHOT_DIR,`attachment-picker-${name}.png`)});
+  }});
+  console.log('Attachment picker: upload cancel and remove passed');
 }finally{
   await browser?.close();server.closeAllConnections();
   await new Promise(resolve=>server.close(resolve));

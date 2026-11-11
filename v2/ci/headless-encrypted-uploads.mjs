@@ -45,10 +45,25 @@ export async function encryptedUploadMock(state) {
         const entry=old??{data:new Map(),status:{format:'age-x25519-chunks-v1',file,owner_id:OWNER,conversation_id:conversation,recipients:[recipient,...[...keys.values()].filter(k=>k.status==='active').map(k=>k.recipient)],ingest_recipient:recipient,chunk_bytes:CHUNK,chunks:[],complete:false}};
         uploads.set(file.upload_id,entry);json(res,200,entry.status);return true;
       }
-      const entry=uploads.get(id);assert.ok(entry);assert.equal(entry.status.conversation_id,conversation);
+      // Like the server: an unknown (or discarded) upload is not found.
+      if(!uploads.has(id)){json(res,404,{error:'not_found'});return true;}
+      const entry=uploads.get(id);assert.equal(entry.status.conversation_id,conversation);
+      if(!operation&&req.method==='DELETE'){
+        uploads.delete(id);(state.discardedUploads??=[]).push(id);
+        res.writeHead(204,{'cache-control':'no-store'});res.end();return true;
+      }
       if(operation?.startsWith('chunks/')) {
         const index=Number(indexText);
         if(req.method==='GET'){res.writeHead(200,{'content-type':'application/octet-stream'});res.end(entry.data.get(index));return true;}
+        (state.chunkPuts??=[]).push({upload_id:id,index});
+        if(state.holdEncryptedChunk===index) {
+          // Keep this transfer open until the browser aborts it (Cancel). Drain
+          // the body: an unread socket is paused and its close goes unseen.
+          req.resume();
+          await new Promise(resolve=>res.on('close',resolve));
+          (state.abortedChunkPuts??=[]).push({upload_id:id,index});
+          return true;
+        }
         const bytes=await read(req),digest=hash(bytes);
         assert.equal(req.headers['content-type'],'application/octet-stream');
         assert.equal(req.headers['x-orkestr-ciphertext-sha256'],digest);

@@ -77,6 +77,26 @@ fn file_helper(call: &str, target: &AttachTarget, csrf: &str) -> String {
     }
 }
 
+/// Runs `call` against the loaded encrypted uploader (`encrypted_composer.mjs`).
+fn uploader_call(call: &str) -> String {
+    let assets = include_str!("asset_base.mjs").replace("export ", "");
+    format!("{assets}\nconst module=await import(uiAssetUrl('encrypted_upload.js'));return await module.{call};")
+}
+
+/// Stops one in-flight native upload; the uploader then discards it on the server.
+fn cancel_script(upload_id: &str) -> String {
+    uploader_call(&format!("cancelUpload({})", json!(upload_id)))
+}
+
+/// Discards an attached, unsent native upload on the server.
+fn discard_script(conversation: &str, csrf: &str, upload_id: &str) -> String {
+    let context = json!({"conversation":conversation,"csrf":csrf});
+    uploader_call(&format!("discardUpload({context},{})", json!(upload_id)))
+}
+
+/// Upload ids the owner cancelled in this composer, newest last.
+const CANCELLED_KEPT: usize = 16;
+
 fn paste_helper(target: &AttachTarget, csrf: &str, input: &str) -> String {
     match target {
         AttachTarget::V1(_) => helper("return {files:[pastedText(await dioxus.recv())]};"),
@@ -110,19 +130,59 @@ async fn pick_with_progress(
     Err(())
 }
 
+/// Verified receipts join the draft. A receipt can race the Cancel that
+/// stopped its upload: the owner's Cancel wins and that upload is discarded.
 fn accept_receipts(
     receipts: Vec<MessageAttachmentReceipt>,
     mut attached: Signal<Vec<Attached>>,
+    cancelled: Signal<Vec<String>>,
+    discard: Callback<String>,
 ) -> bool {
     if receipts.iter().any(|r| !r.is_valid()) {
         return false;
     }
+    let cancelled = cancelled.peek().clone();
     for receipt in receipts {
+        if let Some(file) = receipt
+            .attachments
+            .iter()
+            .find(|file| cancelled.contains(&file.attachment_id))
+        {
+            discard.call(file.attachment_id.clone());
+            continue;
+        }
         attached
             .write()
             .extend(composer_attachments::from_receipt(receipt));
     }
     true
+}
+
+/// The upload bar: the current file's progress (with Cancel), nothing once
+/// the owner cancelled that file, or a pending bar while a pick is prepared.
+fn upload_bar(
+    current: Option<UploadProgress>,
+    busy: bool,
+    cancelled: &[String],
+    oncancel: Callback<String>,
+) -> Element {
+    match current {
+        Some(value)
+            if value
+                .upload_id
+                .as_ref()
+                .is_some_and(|id| cancelled.contains(id)) =>
+        {
+            rsx! {}
+        }
+        Some(value) => rsx! {
+            crate::upload_progress_view::UploadProgressView { value, oncancel }
+        },
+        None if busy => rsx! {
+            progress { "aria-label": "Preparing file upload", class: "upload-progress-pending" }
+        },
+        None => rsx! {},
+    }
 }
 
 /// Attach (file picker) and Paste text (long text as a `.txt` file). Files
@@ -141,6 +201,36 @@ pub fn AttachTools(
     let mut pasted = use_signal(String::new);
     let mut mounted = use_signal(|| true);
     use_drop(move || mounted.set(false));
+    let mut cancelled = use_signal(Vec::<String>::new);
+    // Remove (an attached, unsent file): a native upload is also discarded on
+    // the server. A linked V1 chat keeps its upload; the chip just leaves.
+    let discard = {
+        let (target, csrf) = (target.clone(), csrf.clone());
+        use_callback(move |upload_id: String| {
+            if let AttachTarget::Native(conversation) = &target {
+                let script = discard_script(conversation, &csrf, &upload_id);
+                spawn(async move {
+                    let _ = document::eval(&script).await;
+                });
+            }
+        })
+    };
+    // Cancel (a file still uploading): its bar goes at once and its receipt
+    // is never accepted; the uploader aborts the transfer and discards it.
+    let cancel = use_callback(move |upload_id: String| {
+        {
+            let mut ids = cancelled.write();
+            if !ids.contains(&upload_id) {
+                ids.push(upload_id.clone());
+            }
+            let excess = ids.len().saturating_sub(CANCELLED_KEPT);
+            ids.drain(..excess);
+        }
+        let script = cancel_script(&upload_id);
+        spawn(async move {
+            let _ = document::eval(&script).await;
+        });
+    });
     let upload = {
         let target = target.clone();
         let csrf = csrf.clone();
@@ -247,7 +337,7 @@ pub fn AttachTools(
                         progress.set(None);
                         status.set(String::new());
                     }
-                    if !accept_receipts(picked.receipts.clone(), attached) {
+                    if !accept_receipts(picked.receipts.clone(), attached, cancelled, discard) {
                         progress.set(None);
                         status.set("Upload reply could not be verified.".into());
                         continue;
@@ -278,7 +368,7 @@ pub fn AttachTools(
                         let picked = pick_with_progress(&script,progress,mounted).await;
                         if !mounted() {return;}
                         busy.set(false);status.set(String::new());
-                        if let Ok(picked)=&picked {if !accept_receipts(picked.receipts.clone(),attached){progress.set(None);status.set("Upload reply could not be verified.".into());return;}}
+                        if let Ok(picked)=&picked {if !accept_receipts(picked.receipts.clone(),attached,cancelled,discard){progress.set(None);status.set("Upload reply could not be verified.".into());return;}}
                         match picked {
                             Ok(Picked { error: Some(error), .. }) => status.set(error),
                             Ok(Picked { files, .. }) if !files.is_empty() => upload(files),
@@ -298,14 +388,13 @@ pub fn AttachTools(
                 span { key: "{item.summary.attachment_id}", class: "attachment-chip",
                     span { class: "chip-name", "{item.summary.filename}" }
                     span { class: "chip-size", "{composer_attachments::size(item.summary.byte_length)}" }
-                    button { r#type: "button", class: "chip-remove", "aria-label": "Remove {item.summary.filename}",
-                        onclick: move |_| { let id = item.summary.attachment_id.clone(); attached.write().retain(|a| a.summary.attachment_id != id); }, "×" }
+                    button { r#type: "button", class: "chip-remove upload-control", "aria-label": "Remove {item.summary.filename}",
+                        onclick: move |_| { let id = item.summary.attachment_id.clone(); attached.write().retain(|a| a.summary.attachment_id != id); discard.call(id); }, "Remove" }
                 }
             }
             span { class: "drop-hint", "aria-hidden": "true", "or drop files here" }
             span { class: "attachment-limit", "{limit_hint}" }
-            if let Some(value)=progress() {crate::upload_progress_view::UploadProgressView {value}}
-            else if busy() {progress {"aria-label":"Preparing file upload",class:"upload-progress-pending"}}
+            {upload_bar(progress(), busy(), &cancelled.read(), cancel)}
             if !status().is_empty() { span { class: "tool-status", role: "status", "{status}" } }
         }
         if pasting() {
@@ -333,8 +422,10 @@ pub fn AttachTools(
                             busy.set(false);
                             progress.set(None);
                             match result {
-                                Ok(picked) if !accept_receipts(picked.receipts.clone(), attached) => status.set("Upload reply could not be verified.".into()),
+                                Ok(picked) if !accept_receipts(picked.receipts.clone(), attached, cancelled, discard) => status.set("Upload reply could not be verified.".into()),
                                 Ok(Picked { error: Some(error), .. }) => status.set(error),
+                                // Cancelled: keep the text for another try.
+                                Ok(Picked { files, receipts, .. }) if files.is_empty() && receipts.is_empty() => status.set(String::new()),
                                 Ok(Picked { files, .. }) => {
                                     status.set(String::new());
                                     if !files.is_empty() { upload(files); }
