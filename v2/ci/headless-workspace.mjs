@@ -13,6 +13,7 @@ import { liveAnswer } from './headless-live-answer.mjs';
 import { messageRevisions } from './headless-message-revisions.mjs';
 import { agentAttachments } from './headless-agent-attachments.mjs';
 import { messageRetries } from './headless-message-retries.mjs';
+import { readableColumn, runStates } from './headless-conversation-pane.mjs';
 
 assert.equal(process.env.CI, 'true', 'Run only in isolated CI');
 assert.ok(process.env.UI_BUNDLE_DIR, 'UI_BUNDLE_DIR is required');
@@ -840,6 +841,12 @@ export const scenarios = [
     await page.waitForFunction(() => getComputedStyle(document.querySelector('.conversation-details')).display === 'none');
     assert.equal((await drawer()).stored, '0');
   }],
+  ['readable-column', async label => {
+    await page.goto(`${origin}/#conversation/${A}`, { waitUntil: 'domcontentloaded' });
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await readableColumn({ page, label, screenshot });
+  }],
+  ['run-state', label => runStates({ page, state, conversation: A, label, screenshot })],
   ['every-answer-inline', async label => {
     // 25 accepted answers span two pages; all show inline, newest included,
     // as plain messages without paging or acceptance wording.

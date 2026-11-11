@@ -52,6 +52,9 @@ export function createState() {
   return { archived, messages, window, queued, trackers: {}, requests: [], intake: {}, intakePosts: [], intakeLoseNext: false, windowPosts: [], windowMode: 'accept', windowDelayMs: 0, marks: [],
     // v1Posts: every POST seen; v1Inputs: admitted once per key. The first post's answer is lost (504).
     v1Posts: [], v1Inputs: [], v1LoseFirst: true, v1Polls: 0, uploads: [],
+    // ORK-786: a conversation's execution status as the test sets it
+    // ({phase, run_id, revision, capabilities, ...}), or 'unavailable' (503).
+    execution: {},
     // "New WhatsApp chat": the first attempt stops at the adapter binding.
     chatPosts: [], chatStopFirst: true,
     // Chat settings, desktops and timers of conversation A.
@@ -503,6 +506,9 @@ async function api(state, req, res, url) {
       ] });
   }
   if (rest === '/execution' && req.method === 'GET') {
+    const set = state.execution?.[id];
+    if (set === 'unavailable') return json(res, 503, { code: 'synthetic_unavailable', message: 'Synthetic status unavailable.' });
+    if (set) return json(res, 200, { schema_version: 1, conversation_id: id, observed_at_ms: Date.now(), queue_age_ms: null, progress: null, resources: null, ...set });
     if (id !== B) { res.writeHead(204, { 'cache-control': 'no-store' }); return res.end(); }
     return json(res, 200, { schema_version: 1, conversation_id: B, run_id: uuid(204), revision: 3, observed_at_ms: Date.now(), phase: 'running',
       queue_age_ms: null, progress: null, resources: null, capabilities: { stop: true, steer: true } });
