@@ -80,91 +80,133 @@ impl ConfiguredExecution {
         if binding.state != SessionState::Ready {
             return Err("execution binding is not ready for another run");
         }
-        let claim = loop {
-            if *shutdown.borrow() || self.window.as_ref().is_some_and(|window| window.work_due()) {
+        'input: loop {
+            let claim = loop {
+                if *shutdown.borrow()
+                    || self.window.as_ref().is_some_and(|window| window.work_due())
+                {
+                    return Ok(None);
+                }
+                self.maintain(heartbeat).await?;
+                live()?;
+                if !self.provider_input_allowed(None).await? {
+                    return Ok(None);
+                }
+                match self
+                    .store
+                    .claim_next(
+                        &self.owner,
+                        conversation,
+                        &binding.session_id,
+                        Duration::from_secs(60),
+                    )
+                    .await
+                {
+                    Ok(Some(claim)) => break claim,
+                    // Busy means the writer was not acquired or an earlier
+                    // unconsumed claim still owns the FIFO head. Neither case
+                    // authorizes a provider turn. Wait under the same window and
+                    // supervisor checks instead of stranding an idle window.
+                    Ok(None) | Err(RuntimeStoreError::Busy) => {}
+                    Err(error) => {
+                        eprintln!("owned execution inbox claim refused: {error:?}");
+                        return Err("execution inbox claim refused");
+                    }
+                }
+                tokio::select! {
+                    _ = tokio::time::sleep(Duration::from_millis(100)) => {},
+                    _ = shutdown.changed() => return Ok(None),
+                }
+            };
+            self.current().await?;
+            self.store
+                .heartbeat_supervisor()
+                .await
+                .map_err(|_| "execution supervisor heartbeat refused")?;
+            *heartbeat = Instant::now();
+            // The FIFO head can change between the prospective read and claim
+            // (parallel slots). Re-evaluate the actual lease before any admission.
+            if let Some(proof) = self.provider_input_refusal(&claim.message_id).await? {
+                self.store
+                    .release_provider_policy_claim(&claim, &proof)
+                    .await
+                    .map_err(|_| "provider policy claim release refused")?;
                 return Ok(None);
             }
-            self.maintain(heartbeat).await?;
-            live()?;
-            if !self.provider_input_allowed(None).await? {
-                return Ok(None);
-            }
-            match self
+            let key = format!("http:{}", claim.message_id);
+            let admitted = match self
                 .store
-                .claim_next(
-                    &self.owner,
-                    conversation,
-                    &binding.session_id,
-                    Duration::from_secs(60),
-                )
+                .admit_run(&claim, &binding.session_id, binding.generation, &key)
                 .await
             {
-                Ok(Some(claim)) => break claim,
-                // Busy means the writer was not acquired or an earlier
-                // unconsumed claim still owns the FIFO head. Neither case
-                // authorizes a provider turn. Wait under the same window and
-                // supervisor checks instead of stranding an idle window.
-                Ok(None) | Err(RuntimeStoreError::Busy) => {}
-                Err(error) => {
-                    eprintln!("owned execution inbox claim refused: {error:?}");
-                    return Err("execution inbox claim refused");
+                Ok(admitted) => admitted,
+                Err(RuntimeStoreError::Fenced) => {
+                    // ORK-795: a source continuation (an automatic host result)
+                    // whose source run was superseded can never run. Core
+                    // retires exactly that input; the window keeps every other
+                    // input and claims the next one.
+                    if self.retire_superseded(&claim).await? {
+                        continue 'input;
+                    }
+                    return Err("execution admission refused");
                 }
+                Err(_) => return Err("execution admission refused"),
+            };
+            if admitted.disposition != AdmissionDisposition::FreshCandidate {
+                return Err("execution admission requires reconciliation");
             }
-            tokio::select! {
-                _ = tokio::time::sleep(Duration::from_millis(100)) => {},
-                _ = shutdown.changed() => return Ok(None),
-            }
-        };
-        self.current().await?;
-        self.store
-            .heartbeat_supervisor()
-            .await
-            .map_err(|_| "execution supervisor heartbeat refused")?;
-        *heartbeat = Instant::now();
-        // The FIFO head can change between the prospective read and claim
-        // (parallel slots). Re-evaluate the actual lease before any admission.
-        if let Some(proof) = self.provider_input_refusal(&claim.message_id).await? {
-            self.store
-                .release_provider_policy_claim(&claim, &proof)
+            let DispatchClaimResult::Reserved(reservation) = self
+                .store
+                .claim_provider_dispatch(&admitted, &key)
                 .await
-                .map_err(|_| "provider policy claim release refused")?;
-            return Ok(None);
+                .map_err(|_| "execution reservation refused")?
+            else {
+                return Err("execution reservation requires reconciliation");
+            };
+            self.current().await?;
+            // Core authenticates inside consumption and every transport fence. This
+            // preliminary current-session check is never the authority for a write.
+            let ExecutionConsumption::Dispatch(capability) = self
+                .store
+                .consume_execution(&reservation)
+                .await
+                .map_err(|_| "execution consumption refused")?
+            else {
+                return Err("execution delivery is uncertain; automatic replay refused");
+            };
+            return Ok(Some(capability));
         }
-        let key = format!("http:{}", claim.message_id);
-        let admitted = self
+    }
+
+    /// `true` only when Core retired this exact claim because its source fence
+    /// no longer holds. Anything else keeps the original admission refusal.
+    async fn retire_superseded(
+        &self,
+        claim: &orkestr_v2_application::runtime::InboxClaim,
+    ) -> Result<bool, &'static str> {
+        let retired = self
             .store
-            .admit_run(&claim, &binding.session_id, binding.generation, &key)
+            .retire_superseded_source_claim(claim)
             .await
             .map_err(|_| "execution admission refused")?;
-        if admitted.disposition != AdmissionDisposition::FreshCandidate {
-            return Err("execution admission requires reconciliation");
+        if retired {
+            // Identifiers only, never message text.
+            eprintln!(
+                "owned execution retired a superseded source continuation: message={}",
+                claim.message_id
+            );
         }
-        let DispatchClaimResult::Reserved(reservation) = self
-            .store
-            .claim_provider_dispatch(&admitted, &key)
-            .await
-            .map_err(|_| "execution reservation refused")?
-        else {
-            return Err("execution reservation requires reconciliation");
-        };
-        self.current().await?;
-        // Core authenticates inside consumption and every transport fence. This
-        // preliminary current-session check is never the authority for a write.
-        let ExecutionConsumption::Dispatch(capability) = self
-            .store
-            .consume_execution(&reservation)
-            .await
-            .map_err(|_| "execution consumption refused")?
-        else {
-            return Err("execution delivery is uncertain; automatic replay refused");
-        };
-        Ok(Some(capability))
+        Ok(retired)
     }
 }
 
 fn heartbeat_due(previous: Instant, now: Instant) -> bool {
     now.saturating_duration_since(previous) >= Duration::from_secs(10)
 }
+
+#[cfg(all(test, unix))]
+#[path = "superseded_source_tests.rs"]
+mod superseded_source_tests;
 
 #[cfg(test)]
 mod metadata_heartbeat_tests {
