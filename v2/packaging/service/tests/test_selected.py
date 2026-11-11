@@ -123,6 +123,23 @@ class Selected(unittest.TestCase):
             self.plan['deploy_maintenance_marker']=marker
             with self.subTest(marker=marker),self.assertRaises(RuntimeError):selected.prepare(self.plan)
             self.assertFalse((self.root/'release').exists())
+    def test_release_interruption_directory_is_emitted_only_as_beta_configuration(self):
+        # ORK-792: Core honours Root-recorded release interruptions from this directory.
+        self.current_source()
+        directory=self.root/'release-interruptions';directory.mkdir(mode=0o750)
+        self.plan['release_interruption_dir']=str(directory)
+        selected.prepare(self.plan)
+        package=self.root/'release/package'
+        self.assertEqual(json.loads((package/'beta.json').read_bytes())['release_interruption_dir'],str(directory))
+        self.assertNotIn('release_interruption_dir',json.loads((package/'service.json').read_bytes()))
+        self.assertEqual(list(directory.iterdir()),[],'packaging never writes records')
+
+    def test_release_interruption_alias_or_core_home_path_refuses_before_output(self):
+        for directory in ('relative',str(self.root/'home'/'records'),'/srv/example/../records','/srv/example//records',
+                          '/srv/records/',1):
+            self.plan['release_interruption_dir']=directory
+            with self.subTest(directory=directory),self.assertRaises(RuntimeError):selected.prepare(self.plan)
+            self.assertFalse((self.root/'release').exists())
     def test_attachment_export_bad_shape_or_scope_refused_before_output(self):
         for value in (True, None, '/', 'relative', '/a//b', '/a/../b',
                       self.plan['home'], self.plan['workspace']+'/export',
