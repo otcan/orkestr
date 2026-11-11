@@ -7,6 +7,7 @@ import { mkdir } from 'node:fs/promises';
 import { providerHandoff } from './headless-provider-handoff.mjs';
 import { trackerScenario } from './headless-tracker.mjs';
 import { virtualDesksAndAccountSettings } from './headless-virtual-desks-settings.mjs';
+import { providerSignIn } from './headless-provider-sign-in.mjs';
 import { silentReplies } from './headless-silent-replies.mjs';
 import { liveAnswer } from './headless-live-answer.mjs';
 import { messageRevisions } from './headless-message-revisions.mjs';
@@ -558,6 +559,7 @@ export const scenarios = [
     await virtualDesksAndAccountSettings({page,state,conversation:A,clickText,clickWithin,waitText,screenshot,label});
     await clickText('Settings');
     await page.waitForSelector('#settings-model');
+    await providerSignIn({page,state,clickWithin,waitText,screenshot,label});
     assert.equal(await page.$eval('#settings-model', n => n.value), 'synthetic-model');
     await page.select('#settings-effort', 'high');
     await page.$eval('#settings-prefix', n => { n.value = ''; });

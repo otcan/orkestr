@@ -23,6 +23,8 @@ mod claude_native_reset;
 pub use claude_native_reset::*;
 mod provider_handoff;
 pub use provider_handoff::*;
+mod provider_sign_in;
+pub use provider_sign_in::*;
 mod model_policy;
 pub use model_policy::*;
 mod calendar_rule;

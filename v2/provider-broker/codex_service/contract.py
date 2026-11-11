@@ -95,6 +95,11 @@ def decode(raw):
         "desk_login": {"window_id","generation","capability"},
         "desk_login_poll": {"window_id","generation","operation_id"},
         "desk_login_cancel": {"window_id","generation","operation_id"},
+        "provider_login_status": set(),
+        "provider_login_start": {"provider"},
+        "provider_login_code": {"provider", "code"},
+        "provider_login_cancel": {"provider"},
+        "provider_signout": {"provider"},
         "admit": {"window_id", "generation", "expected_generation", "input_message_id",
                   "input_event_id", "input_request_key", "predecessor_window_id",
                   "opened_at_ms", "work_deadline_ms", "expires_at_ms"},
@@ -167,6 +172,10 @@ def decode(raw):
         result_capability(value['result'])
     if operation in ('managed_poll','managed_cancel'):identifier(value['operation_id'])
     if operation in ('desk_login_poll','desk_login_cancel'):identifier(value['operation_id'])
+    if operation.startswith('provider_') and 'provider' in fields[operation]:
+        require(value['provider'] in ('codex','claude'),'provider_login_provider')
+    if operation=='provider_login_code':
+        require(type(value['code']) is str and 0<len(value['code'])<=1024,'provider_login_code')
     if operation == "bind_child":
         require(type(value["broker_pid"]) is int and 1 < value["broker_pid"] < 2**31,
                 "broker_pid")
