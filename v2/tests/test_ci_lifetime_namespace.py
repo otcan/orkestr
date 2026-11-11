@@ -89,12 +89,42 @@ class HostedPolicyTests(unittest.TestCase):
             self.assertIsInstance(result, str)
             self.assertFalse(any("apparmor_parser" in args for args, _ in commands))
 
-    def test_default_invocation_and_self_hosted_runner_refuse_before_commands(self):
-        for values in ({}, {"GITHUB_ACTIONS": "true", "RUNNER_ENVIRONMENT": "self-hosted", "RUNNER_OS": "Linux"}):
-            with patch.dict(os.environ, values, clear=True), patch.object(policy, "command") as command:
+    def test_default_invocation_and_unknown_runner_refuse_before_commands(self):
+        for values in ({}, {"GITHUB_ACTIONS": "true", "RUNNER_ENVIRONMENT": "other", "RUNNER_OS": "Linux"}):
+            with patch.dict(os.environ, values, clear=True), patch.object(policy, "command") as command, \
+                    patch.object(policy, "probe") as probe:
                 with self.assertRaises(policy.Refused):
                     policy.run()
                 command.assert_not_called()
+                probe.assert_not_called()
+
+    def self_hosted(self, first_ready):
+        ready = {"pid": 7, "code": 0, "output": "orkestr-lifetime-namespace-ready\n", "error": ""}
+        denied = {"pid": 7, "code": 1, "output": "", "error": "bwrap: setting up uid map: Permission denied"}
+        with patch.dict(os.environ, {"GITHUB_ACTIONS": "true", "RUNNER_ENVIRONMENT": "self-hosted",
+                                   "RUNNER_OS": "Linux"}, clear=True), \
+                patch.object(policy.os, "geteuid", return_value=1001), \
+                patch.object(Path, "exists", return_value=False), \
+                patch.object(Path, "resolve", lambda path: path), \
+                patch.object(Path, "stat", return_value=SimpleNamespace(st_uid=0, st_mode=0o100755)), \
+                patch.object(Path, "read_text", lambda path: "ID=ubuntu\n"), \
+                patch.object(policy, "command") as command, \
+                patch.object(policy, "probe", side_effect=[ready if first_ready else denied, ready]) as probe:
+            try:
+                return policy.run(), command, probe
+            except policy.Refused as error:
+                return str(error), command, probe
+
+    def test_self_hosted_runner_is_verified_never_changed(self):
+        result, command, probe = self.self_hosted(first_ready=True)
+        self.assertEqual(result["status"], "ready")
+        self.assertFalse(result["profile_applied"])
+        self.assertEqual(probe.call_count, 1)
+        command.assert_not_called()
+        result, command, probe = self.self_hosted(first_ready=False)
+        self.assertEqual(result, "self_hosted_runner_lacks_namespace_prerequisite")
+        self.assertEqual(probe.call_count, 1)
+        command.assert_not_called()
 
 
 if __name__ == "__main__":

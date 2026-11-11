@@ -142,6 +142,8 @@ async fn populated_prefixes_copy_first_edges_to_50_preserve_rows_and_rollback_so
             "tracker_action_digests",
             "encrypted_uploads",
             "encrypted_upload_chunks",
+            "local_file_grants",
+            "local_file_requests",
         ] {
             let count: i64 = sqlx::query_scalar(&format!("SELECT count(*) FROM {table}"))
                 .fetch_one(&mut upgraded)

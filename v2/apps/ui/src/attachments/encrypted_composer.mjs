@@ -47,3 +47,5 @@ export function nativeDescribe({conversation,csrf},{drafts=browserStorage('sessi
 }
 
 export {mountMessageFiles} from "./message_files.mjs";
+// The local folder control rides in the same bundled asset (encrypted_upload.js).
+export {mountLocalFiles} from "../local_files/panel.mjs";

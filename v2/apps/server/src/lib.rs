@@ -58,6 +58,7 @@ mod held_inputs;
 pub mod host_metrics;
 mod intelligence_http;
 pub mod live_map;
+mod local_files_http;
 mod memory_service;
 pub mod message_attachments;
 mod message_receipt_observer;
@@ -106,6 +107,7 @@ pub mod tracker_scan_pool;
 mod v1_links;
 mod v1_manage_http;
 mod v1_workers_http;
+mod vault_http;
 pub mod whatsapp_chats;
 mod whatsapp_chats_http;
 mod window_http;
@@ -152,6 +154,8 @@ pub struct AppState {
     deploy_drain: Arc<deploy_drain::DeployDrain>,
     password_rotation_ready: bool,
     provider_policy: Option<beta_config::provider_routing::ProviderRouting>,
+    /// Stored-login reader (trusted startup file); unconfigured by default.
+    vault_reader: Arc<vault_http::ReaderState>,
 }
 impl AppState {
     /// Trusted operator assertion after all unattended consumers use service credentials.
@@ -383,6 +387,7 @@ impl AppState {
             whatsapp_chats: None,
             password_rotation_ready: false,
             provider_policy: None,
+            vault_reader: Arc::default(),
             v1_timers: Default::default(),
             claude_turns: false,
             restricted: None,
@@ -625,7 +630,7 @@ pub fn router_with_google_catalog(
     catalog: google_registry_metadata::RegistryCatalog,
 ) -> Router {
     Router::new()
-        .route("/api/v2/health",get(|| async { Json(serde_json::json!({"status":"ok","product":"orkestr-v2","contract_version":0,"fixture_mode":false,"features":["message_author","message_revisions_v1","thread_asks","agent_timers","source_receipts_v1","root_intake_v1","fast_run_receipts_v1","provider_quotas_v1","provider_sign_in_v1"],"build":build_identity::identity(),"deployment":deployment_identity::identity()})) }))
+        .route("/api/v2/health",get(|| async { Json(serde_json::json!({"status":"ok","product":"orkestr-v2","contract_version":0,"fixture_mode":false,"features":["message_author","message_revisions_v1","message_retries_v1","thread_asks","agent_timers","source_receipts_v1","root_intake_v1","fast_run_receipts_v1","provider_quotas_v1","provider_sign_in_v1","local_files_v1","vault_v1"],"build":build_identity::identity(),"deployment":deployment_identity::identity()})) }))
         .route("/api/v2/setup",get(auth::setup_status).post(auth::setup))
         .route("/api/v2/session",post(auth::session))
         .route("/api/v2/machine/session",post(auth::session))
@@ -696,6 +701,7 @@ pub fn router_with_google_catalog(
         .merge(tracker_automation_http::router())
         .merge(thread_icons::router())
         .merge(thread_asks_http::router())
+        .merge(local_files_http::router())
         .merge(agent_timers_http::router())
         .merge(agent_attachments_http::router())
         .merge(timer_capabilities_http::router())
@@ -705,6 +711,7 @@ pub fn router_with_google_catalog(
         .merge(whatsapp_chats_http::router())
         .merge(restricted_http::router())
         .merge(google_registry_metadata::router(catalog))
+        .merge(vault_http::router())
         // Labels each matched request with its route template for logs and metrics.
         .route_layer(middleware::from_fn(observability::record_route))
         .fallback(|| async { Error(StatusCode::NOT_FOUND,"not_found","Endpoint not found") })

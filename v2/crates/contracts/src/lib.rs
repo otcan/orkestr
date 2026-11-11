@@ -39,6 +39,8 @@ mod agent_timer_discovery;
 pub use agent_timer_discovery::*;
 mod agent_timers;
 pub use agent_timers::*;
+mod local_files;
+pub use local_files::*;
 mod legacy_workers;
 pub use legacy_workers::*;
 mod sidebar;
@@ -191,6 +193,11 @@ pub struct MessageRequest {
     /// accept it advertise `message_author` in `/api/v2/health` `features`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub author: Option<InputAuthor>,
+    /// The earlier attempt of this same input that Core retired for
+    /// re-admission (ORK-780). Message lists then show this message only.
+    /// Servers that accept it advertise `message_retries_v1`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_of: Option<MessageId>,
 }
 /// Verified author of an admitted input. Only `Owner` may command a thread ask.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -277,6 +284,11 @@ pub struct Message {
     /// Absent in exports and history imports, like `origin`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub revisions: Option<MessageRevisionState>,
+    /// The earlier attempt this re-admitted input replaces (ORK-780). A list
+    /// that shows the earlier attempt drops it; one message stays. Absent in
+    /// exports and history imports, like `origin`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_of: Option<MessageId>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConversationSnapshot {

@@ -32,7 +32,7 @@ pub struct ImportedRecipient {
     pub verified_at: i64,
 }
 
-pub(super) fn base64(bytes: &[u8]) -> String {
+pub(crate) fn base64(bytes: &[u8]) -> String {
     const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
     for chunk in bytes.chunks(3) {
@@ -121,7 +121,7 @@ async fn record_by_id(
 }
 
 /// `(fingerprint, recipient)` of the owner's active recipients, in a stable order.
-pub(super) async fn active_recipients(
+pub(crate) async fn active_recipients(
     tx: &mut Transaction<'_, Sqlite>,
     owner: &OwnerId,
 ) -> Result<Vec<(String, String)>> {

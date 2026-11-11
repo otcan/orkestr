@@ -5,6 +5,56 @@ use crate::Store;
 mod credentials;
 
 pub(crate) async fn downgrade_empty(store: &Store) {
+    // Migration 99 down: only empty vault tables, so no credential is lost.
+    let vault: i64 = sqlx::query_scalar(
+        "SELECT (SELECT count(*) FROM vault_items)+(SELECT count(*) FROM vault_import_sources)+(SELECT count(*) FROM vault_audit)",
+    )
+    .fetch_one(&store.pool)
+    .await
+    .unwrap();
+    assert_eq!(vault, 0, "historical fixture must not erase vault items");
+    sqlx::raw_sql(
+        "DROP TABLE vault_audit; DROP TABLE vault_import_sources;
+         DROP TABLE vault_thread_grants; DROP TABLE vault_items;
+         DELETE FROM _sqlx_migrations WHERE version=99;",
+    )
+    .execute(&store.pool)
+    .await
+    .unwrap();
+    // Migration 98 down: only empty local folder tables (no grant, tab or
+    // request is lost).
+    let local: i64 = sqlx::query_scalar(
+        "SELECT (SELECT count(*) FROM local_file_grants)+(SELECT count(*) FROM local_file_connections)+(SELECT count(*) FROM local_file_requests)",
+    )
+    .fetch_one(&store.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        local, 0,
+        "historical fixture must not erase local file requests"
+    );
+    sqlx::raw_sql(
+        "DROP TABLE local_file_requests;
+         DROP TABLE local_file_connections;
+         DROP TABLE local_file_grants;
+         DELETE FROM _sqlx_migrations WHERE version=98;",
+    )
+    .execute(&store.pool)
+    .await
+    .unwrap();
+    // Migration 97 down: only an empty link table, so no message is lost.
+    let retries: i64 = sqlx::query_scalar("SELECT count(*) FROM message_retries")
+        .fetch_one(&store.pool)
+        .await
+        .unwrap();
+    assert_eq!(retries, 0, "historical fixture must not erase retry links");
+    sqlx::raw_sql(
+        "DROP TABLE message_retries;
+         DELETE FROM _sqlx_migrations WHERE version=97;",
+    )
+    .execute(&store.pool)
+    .await
+    .unwrap();
     // Migration 96 down: only an empty audit table, so no owner change is lost.
     let revisions: i64 = sqlx::query_scalar("SELECT count(*) FROM message_revisions")
         .fetch_one(&store.pool)
