@@ -5,7 +5,7 @@ import { dataPaths } from "../../storage/src/paths.js";
 import { readJson, writeSecretJson } from "../../storage/src/store.js";
 import { withStorageFileLock } from "../../storage/src/storage-lock.js";
 import { resourceOwnerUserId } from "./policy.js";
-import { classifyThreadAttachmentPath, resolveThreadAttachments } from "./thread-attachments.js";
+import { classifyThreadAttachmentPath, isRemoteThreadAttachmentDescriptor, resolveThreadAttachments } from "./thread-attachments.js";
 import { snapshotRoutedAttachments } from "./outbound-attachment-snapshots.js";
 import { publishThreadAttachmentsEncrypted } from "./encrypted-attachment-publication.js";
 
@@ -90,7 +90,16 @@ export async function prepareRoutedReplyAttachments({ thread, message, resolutio
   // pipeline. A remote namespace path is not a missing local producer file.
   if (message.remoteBackend && message.remoteMessageId) {
     const attachments = await snapshotRoutedAttachments({ thread, message, attachments: resolution.attachments, env });
-    return publishThreadAttachmentsEncrypted({ thread, attachments, env });
+    // A remote descriptor has no local bytes to publish (the backend serves
+    // them at send time). Publishing it under required encryption threw
+    // `attachment_encryption_source_path_required`, so the whole reply was
+    // never imported. Publish local files only and keep descriptors as they are.
+    const remote = attachments.filter(isRemoteThreadAttachmentDescriptor);
+    if (!remote.length) return publishThreadAttachmentsEncrypted({ thread, attachments, env });
+    const published = await publishThreadAttachmentsEncrypted({
+      thread, attachments: attachments.filter(item => !isRemoteThreadAttachmentDescriptor(item)), env,
+    });
+    return { ...published, attachments: [...published.attachments, ...remote] };
   }
   const missing = resolution.skipped.filter(item => item.reason === "attachment_path_missing" && item.path &&
     !sourceLineReference(item.path) && classifyThreadAttachmentPath(item.path, { thread, env }).ok)
