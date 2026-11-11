@@ -5,6 +5,22 @@ use crate::Store;
 mod credentials;
 
 pub(crate) async fn downgrade_empty(store: &Store) {
+    // Migration 99 down: only empty vault tables, so no credential is lost.
+    let vault: i64 = sqlx::query_scalar(
+        "SELECT (SELECT count(*) FROM vault_items)+(SELECT count(*) FROM vault_import_sources)+(SELECT count(*) FROM vault_audit)",
+    )
+    .fetch_one(&store.pool)
+    .await
+    .unwrap();
+    assert_eq!(vault, 0, "historical fixture must not erase vault items");
+    sqlx::raw_sql(
+        "DROP TABLE vault_audit; DROP TABLE vault_import_sources;
+         DROP TABLE vault_thread_grants; DROP TABLE vault_items;
+         DELETE FROM _sqlx_migrations WHERE version=99;",
+    )
+    .execute(&store.pool)
+    .await
+    .unwrap();
     // Migration 98 down: only empty local folder tables (no grant, tab or
     // request is lost).
     let local: i64 = sqlx::query_scalar(

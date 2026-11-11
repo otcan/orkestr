@@ -75,6 +75,7 @@ mod upload_progress_view;
 mod v1_manage_view;
 mod v1_thread_view;
 mod v1_workers_view;
+mod vault_view;
 mod views;
 mod virtual_desks_view;
 mod work_view;

@@ -71,7 +71,7 @@ jobs:
           cargo +1.99.1 build --offline --locked -p orkestr-v2-server
           bash apps/ui/scripts/bundle.sh
       - name: Browser tracker recovery and request boundary unit tests
-        run: node --test v2/apps/ui/tests/tracker_client.test.mjs v2/apps/ui/tests/selected_conversation.test.mjs v2/apps/ui/tests/request.test.mjs v2/apps/ui/tests/local_setup.test.mjs v2/ci/headless-login.test.mjs v2/ci/headless-logout.test.mjs
+        run: node --test v2/apps/ui/tests/tracker_client.test.mjs v2/apps/ui/tests/selected_conversation.test.mjs v2/apps/ui/tests/request.test.mjs v2/apps/ui/tests/vault_reveal.test.mjs v2/apps/ui/tests/local_setup.test.mjs v2/ci/headless-login.test.mjs v2/ci/headless-logout.test.mjs
       - name: Local account first-run form and existing-owner sign-in
         run: node v2/ci/headless-local-account.mjs
       - name: Bounded encrypted upload and composer tests
