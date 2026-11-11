@@ -5,6 +5,20 @@ use crate::Store;
 mod credentials;
 
 pub(crate) async fn downgrade_empty(store: &Store) {
+    // Migration 100 down: only the owner's desk sharing switch; a historical
+    // fixture never sets it, so dropping it loses no owner decision.
+    let sharing: i64 = sqlx::query_scalar("SELECT count(*) FROM desktop_sharing")
+        .fetch_one(&store.pool)
+        .await
+        .unwrap();
+    assert_eq!(sharing, 0, "historical fixture must not erase desk sharing");
+    sqlx::raw_sql(
+        "DROP TABLE desktop_sharing;
+         DELETE FROM _sqlx_migrations WHERE version=100;",
+    )
+    .execute(&store.pool)
+    .await
+    .unwrap();
     // Migration 99 down: only empty vault tables, so no credential is lost.
     let vault: i64 = sqlx::query_scalar(
         "SELECT (SELECT count(*) FROM vault_items)+(SELECT count(*) FROM vault_import_sources)+(SELECT count(*) FROM vault_audit)",

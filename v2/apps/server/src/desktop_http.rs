@@ -1,7 +1,10 @@
 //! Conversation desktop leases brokered by V1. The owner binds a
 //! conversation to one V1 thread and slugs and issues a conversation desktop
 //! grant for that conversation's Workers. Lease routes accept the owner or
-//! the grant (header `x-orkestr-desktop-grant`, machine requests only).
+//! the grant (header `x-orkestr-desktop-grant`, machine requests only). When
+//! the owner shares all desks with all chats, an acquire of any desk needs no
+//! slug in the binding and no V1 per-thread grant; V1 still decides the lease
+//! under its own access policy and stays the fencing authority.
 use super::*;
 use crate::archived_history_http::owner_credential;
 use crate::conversation_resources_http::{conversation, failure, invalid};
@@ -110,7 +113,8 @@ async fn binding(
     Ok(Json(value).into_response())
 }
 
-/// When V1 is reachable, every bound slug must be granted to the V1 thread.
+/// When V1 is reachable, the V1 thread must exist and every bound slug must
+/// be granted to it. An empty slug list binds only the thread.
 async fn bind(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -201,11 +205,12 @@ async fn acquire(
         .await
         .map_err(failure)?;
     let thread = prepared.v1_thread_id.clone();
-    if !broker
-        .granted_slugs(&thread)
-        .await
-        .map_err(broker_failure)?
-        .contains(&slug)
+    if !prepared.shared
+        && !broker
+            .granted_slugs(&thread)
+            .await
+            .map_err(broker_failure)?
+            .contains(&slug)
     {
         return Err(not_granted());
     }

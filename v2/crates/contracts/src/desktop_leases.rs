@@ -32,7 +32,11 @@ fn short_text(value: &Option<String>, max: usize) -> bool {
         .is_none_or(|v| v.len() <= max && !v.chars().any(char::is_control))
 }
 
-/// Owner binds a conversation to one V1 thread and its granted slugs.
+/// Owner binds a conversation to one V1 thread and its granted slugs. An
+/// empty slug list binds only the V1 thread: the chat then reaches no desk
+/// unless the owner shares all desks with all chats ([`DesktopSharing`]).
+///
+/// [`DesktopSharing`]: crate::DesktopSharing
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DesktopBindingRequest {
@@ -46,7 +50,6 @@ impl DesktopBindingRequest {
         let mut seen = std::collections::HashSet::new();
         self.expected_revision >= 0
             && v1_thread_id_valid(&self.v1_thread_id)
-            && !self.desktop_slugs.is_empty()
             && self.desktop_slugs.len() <= DESKTOP_SLUGS_MAX
             && self
                 .desktop_slugs
@@ -183,6 +186,10 @@ pub struct DesktopLeaseList {
     pub conversation_id: ConversationId,
     pub binding: Option<DesktopBinding>,
     pub leases: Vec<DesktopLeaseView>,
+    /// The owner shares every desk with every chat: any desk may be reserved
+    /// through this binding, not only the slugs it lists.
+    #[serde(default)]
+    pub shared_with_all_chats: bool,
 }
 
 #[cfg(test)]
@@ -196,8 +203,14 @@ mod tests {
             desktop_slugs: vec!["sales-nav".into(), "gmail_signal".into()],
         };
         assert!(ok.is_valid());
+        // The V1 thread alone: no desk unless all desks are shared.
+        let mut thread_only = ok.clone();
+        thread_only.desktop_slugs.clear();
+        assert!(thread_only.is_valid());
         for slugs in [
-            vec![],
+            (0..=DESKTOP_SLUGS_MAX)
+                .map(|i| format!("desk-{i}"))
+                .collect(),
             vec!["Sales".into()],
             vec!["a".into(), "a".into()],
             vec!["-x".into()],

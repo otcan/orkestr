@@ -18,6 +18,7 @@ mod conversation_posts_view;
 mod conversation_sidebar;
 mod conversation_status_poll;
 mod desk_owner_actions;
+mod desk_sharing_view;
 mod desktop_open_view;
 mod desktop_resource_row;
 mod execution_panel;

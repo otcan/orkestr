@@ -492,6 +492,7 @@ async fn populated_payload_prefix_upgrade_preserves_all_rows_and_foreign_links()
         "vault_thread_grants",
         "vault_import_sources",
         "vault_audit",
+        "desktop_sharing",
     ] {
         expected.insert(table.into(), Vec::new());
     }

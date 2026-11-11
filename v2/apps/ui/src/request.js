@@ -10,8 +10,10 @@ const security = /^\/api\/v2\/browser\/(?:security|password|service-credentials(
 // is fetched only by vault_reveal.js, never through this bridge.
 const vault = /^\/api\/v2\/vault(?:\/(?:items(?:\/vi_[A-Za-z0-9_-]{6,64}(?:\/(?:login|grants))?)?|import|audit))?$/;
 // Owner-wide discovery; lease mutations retain an explicit conversation scope,
-// and only the fixed owner lifecycle verbs apply to a desk without one.
+// and only the fixed owner lifecycle verbs apply to a desk without one. The
+// owner's desk sharing switch is one fixed path, read and replaced whole.
 const deskRequest = (input.method === 'GET' && input.path === '/api/v2/desktops') ||
+    (['GET', 'PUT'].includes(input.method) && input.path === '/api/v2/desktop-sharing') ||
     (input.method === 'POST' && /^\/api\/v2\/conversations\/[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}\/desktops\/[a-z0-9][a-z0-9_-]{0,63}\/(?:acquire|release|reset)$/.test(input.path)) ||
     (input.method === 'POST' && /^\/api\/v2\/desktops\/[a-z0-9][a-z0-9_-]{0,63}\/(?:start|stop|link)$/.test(input.path));
 const health = input.path === "/api/v2/health" && input.method === "GET";

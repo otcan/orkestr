@@ -271,6 +271,19 @@ test('global desk discovery and scoped lease actions use fixed cookie and CSRF p
         await assert.rejects(execute({recv:async()=>({...base,method,path})},()=>assert.fail('fetch must not run')),/Invalid API path/);
 });
 
+test('the desk sharing switch is one fixed path, read and replaced with CSRF',async()=>{
+    const path='/api/v2/desktop-sharing';
+    for(const method of ['GET','PUT']) {
+        await execute({recv:async()=>({...base,method,path,csrf:'synthetic-csrf',body:method==='GET'?null:{expected_revision:0,share_all_desks:true}})},async(actual,options)=>{
+            assert.equal(actual,path);assert.equal(options.method,method);assert.equal(options.credentials,'same-origin');
+            assert.equal(options.headers['x-orkestr-csrf'],method==='PUT'?'synthetic-csrf':undefined);
+            assert.equal(options.headers.Authorization,undefined);return Response.json({schema_version:1,share_all_desks:true,revision:1,updated_at_ms:1});
+        });
+    }
+    for(const [method,path] of [['POST','/api/v2/desktop-sharing'],['DELETE','/api/v2/desktop-sharing'],['GET','/api/v2/desktop-sharing?owner=other'],['PUT','/api/v2/desktop-sharing/extra'],['PUT','/api/v2/desktop-sharing/../desktops']])
+        await assert.rejects(execute({recv:async()=>({...base,method,path})},()=>assert.fail('fetch must not run')),/Invalid API path/);
+});
+
 test('owner desk actions use only the fixed verbs with cookie and CSRF',async()=>{
     for(const action of ['start','stop','link']) {
         const path=`/api/v2/desktops/desk-a/${action}`;
