@@ -11,7 +11,7 @@ import signal
 import threading
 from urllib.parse import parse_qs, urlsplit
 
-from . import input_revisions, instructions, local_inputs, participants, provisioning, switch_command
+from . import input_revisions, instructions, local_inputs, participants, provisioning, reply_files, switch_command
 from .config import load
 from .ledger import MAX_ATTACHMENT_BYTES, OUTCOMES, Conflict
 from .registry import Registry
@@ -101,6 +101,9 @@ class Handler(BaseHTTPRequestHandler):
                                          **self.server.registry.status()))
         if target.path == "/changes":
             return self.changes(target.query)
+        parts = target.path.split("/")
+        if len(parts) == 6 and not parts[0] and parts[1] == "threads" and parts[3] == "attachments" and parts[5] == "download":
+            return self.reply_file(parts[2], parts[4], target.query)
         binding, action = self.route(target.path)
         if binding is None or action not in ("messages", "health", "activity", "status"):
             return self.answer(404, {"ok": False, "error": "route_not_found"})
@@ -146,6 +149,30 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError:
             return self.answer(400, {"ok": False, "error": "invalid_limit"})
         return self.answer(200, dict(ok=True, **binding.ledger.listing(limit)))
+
+    def reply_file(self, remote, attachment_id, query):
+        """Bytes of a file a reply of this binding carries (reply_files.py).
+
+        Only an attachment of one of the binding's unsettled exports, read from
+        Core's delivery copy of the binding's own conversation and checked
+        against its digest. V1 sends it with that reply; nothing is sent here."""
+        binding = self.server.registry.get(remote)
+        if binding is None or query:
+            return self.answer(404, {"ok": False, "error": "route_not_found"})
+        if binding.state in ("revoked", "refused"):
+            return self.answer(410 if binding.state == "revoked" else 503,
+                               {"ok": False, "error": binding.error or "binding_revoked"})
+        descriptor = reply_files.exported(binding.ledger, attachment_id)
+        data = descriptor and reply_files.read_export(binding.config["conversation_id"], descriptor.get("sha256"),
+                                                      descriptor.get("size"))
+        if not data or descriptor.get("mimetype") not in reply_files.MEDIA_TYPES:
+            return self.answer(404, {"ok": False, "error": "attachment_not_found"})
+        self.send_response(200)
+        self.send_header("Content-Type", descriptor["mimetype"])
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
 
     def changes(self, raw_query):
         try:

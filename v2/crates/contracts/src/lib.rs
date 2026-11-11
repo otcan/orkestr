@@ -47,6 +47,8 @@ mod sidebar;
 pub use sidebar::*;
 mod message_attachments;
 pub use message_attachments::*;
+mod agent_attachments;
+pub use agent_attachments::*;
 mod message_times;
 pub use message_times::*;
 mod conversation_posts;
