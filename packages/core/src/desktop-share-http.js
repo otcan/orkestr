@@ -33,6 +33,23 @@ export function desktopShareUrl(share, key, env = process.env) {
   return `${base}/desktop-share/${encodeURIComponent(share.subdomain)}/${encodeURIComponent(share.id)}?key=${encodeURIComponent(key)}`;
 }
 
+// The origin of the fixed host ORKESTR_DESKTOP_SHARE_URL_TEMPLATE puts share
+// links on (for example a connect host beside the app host), when `origin` is
+// exactly that origin; otherwise "". Only that page may read the app host's
+// owner-session check across origins (ORK-793).
+export function desktopSharePageOrigin(origin = "", env = process.env) {
+  const template = String(env.ORKESTR_DESKTOP_SHARE_URL_TEMPLATE || "").trim();
+  const authority = template.replace(/^[a-z][a-z0-9+.-]*:\/\//i, "").split(/[/?#]/)[0];
+  if (!template || authority.includes("{")) return "";
+  try {
+    const page = new URL(template);
+    if (!["http:", "https:"].includes(page.protocol) || page.username || page.password) return "";
+    return String(origin || "").trim() === page.origin ? page.origin : "";
+  } catch {
+    return "";
+  }
+}
+
 export function desktopShareCookieName() {
   return shareCookieName;
 }
