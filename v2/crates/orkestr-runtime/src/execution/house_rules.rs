@@ -8,14 +8,18 @@
 //! note: no links to host paths, and this conversation's reply attachment
 //! command (`v2/tools/reply_attach.py`). A turn that carries chat rules is
 //! unchanged (its rules file has its own section), and so are Fast and Worker
-//! turns. The note is added only while the whole turn still fits the
-//! providers' 32 KiB input bound; a turn too large for it is sent without it.
+//! turns and read-only parallel Deep slots. The note is added only while the
+//! whole turn still fits the providers' 32 KiB input bound; a turn too large
+//! for it is sent without it.
 use std::sync::OnceLock;
 
 /// Largest turn input both provider brokers accept (bytes).
 pub const PROVIDER_INPUT_MAX: usize = 32_768;
 /// The adapter's chat rules line (`v2/compat/v1_runtime/instructions.py`).
 const CHAT_RULES: &str = "[Chat rules v";
+/// A read-only parallel Deep slot (`parallel_deep_turns::SLOT_NOTE`): it
+/// defers every action to the main turn, so it gets no attach command.
+const READ_ONLY_SLOT: &str = "[Parallel read-only turn.";
 
 /// The installed reply attachment tool and how it reaches this server. The
 /// server validates these (plain absolute paths, a loopback URL) before it
@@ -76,7 +80,7 @@ pub(crate) fn deep_text(rules: Option<&DeepHouseRules>, conversation: &str, text
     let Some(rules) = rules else {
         return text.to_owned();
     };
-    if carries_chat_rules(text) {
+    if carries_chat_rules(text) || text.starts_with(READ_ONLY_SLOT) {
         return text.to_owned();
     }
     let note = note(rules, conversation);
@@ -126,6 +130,8 @@ python3 -I -S -B /opt/synthetic/reply_attach.py --v2-url http://127.0.0.1:19822 
             format!("{line}\n\n[WhatsApp: synthetic]\n\nhello"),
             // Core puts handoff context or grouping notes before the line.
             format!("Historical context carried by Fast.\n\nCurrent input:\n{line}\n\nhello"),
+            // A read-only parallel slot defers actions to the main turn.
+            "[Parallel read-only turn. Another Deep turn is running.]\n\nhello".to_owned(),
         ] {
             assert_eq!(deep_text(Some(&rules()), CONVERSATION, &text), text);
         }
