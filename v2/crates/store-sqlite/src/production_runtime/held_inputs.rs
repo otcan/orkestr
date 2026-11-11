@@ -44,6 +44,7 @@ impl Store {
             after_sequence,
             limit,
             window_id.as_deref(),
+            None,
         )
         .await?;
         tx.commit().await.map_err(db)?;
@@ -53,6 +54,8 @@ impl Store {
 
 /// Shared immutable projection; callers authenticate their own boundary in this
 /// same transaction before entering. Reading a hold never releases inbox input.
+/// `message` narrows the page to that one message's hold (ORK-795).
+#[allow(clippy::too_many_arguments)]
 async fn projection(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     owner: &OwnerId,
@@ -60,6 +63,7 @@ async fn projection(
     after_sequence: i64,
     limit: u32,
     window: Option<&str>,
+    message: Option<&MessageId>,
 ) -> Result<HeldOwnerInputPage> {
     let revision =
         sqlx::query_scalar("SELECT revision FROM execution_revisions WHERE conversation_id=?")
@@ -70,8 +74,10 @@ async fn projection(
     let clock = now(tx).await?;
     let eligible:i64=sqlx::query_scalar("SELECT count(*) FROM reasoning_inbox i WHERE i.conversation_id=? AND i.state IN ('queued','claimed') AND NOT EXISTS(SELECT 1 FROM ordinary_input_holds h WHERE h.event_id=i.event_id) AND (? IS NULL OR EXISTS(SELECT 1 FROM execution_window_inputs wi WHERE wi.window_id=? AND wi.event_id=i.event_id))")
             .bind(conversation.to_string()).bind(window).bind(window).fetch_one(&mut **tx).await.map_err(db)?;
-    let rows=sqlx::query("SELECT h.*,b.run_id,b.through_scope_sequence FROM production_held_inputs h JOIN production_stop_boundaries b ON b.event_id=h.boundary_event_id WHERE h.conversation_id=? AND b.owner_id=? AND h.scope_sequence>? ORDER BY h.scope_sequence LIMIT ?")
-            .bind(conversation.to_string()).bind(owner.to_string()).bind(after_sequence).bind(i64::from(limit)+1).fetch_all(&mut **tx).await.map_err(db)?;
+    let message = message.map(|m| m.to_string());
+    let rows=sqlx::query("SELECT h.*,b.run_id,b.through_scope_sequence FROM production_held_inputs h JOIN production_stop_boundaries b ON b.event_id=h.boundary_event_id WHERE h.conversation_id=? AND b.owner_id=? AND h.scope_sequence>? AND (? IS NULL OR h.message_id=?) ORDER BY h.scope_sequence LIMIT ?")
+            .bind(conversation.to_string()).bind(owner.to_string()).bind(after_sequence)
+            .bind(&message).bind(&message).bind(i64::from(limit)+1).fetch_all(&mut **tx).await.map_err(db)?;
     let more = rows.len() > limit as usize;
     let mut held = Vec::new();
     for row in rows.iter().take(limit as usize) {
@@ -107,5 +113,7 @@ async fn projection(
 mod browser;
 #[cfg(test)]
 mod browser_tests;
+#[cfg(test)]
+mod lookup_tests;
 #[cfg(test)]
 mod tests;

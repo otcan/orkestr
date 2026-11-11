@@ -132,6 +132,47 @@ async fn held_route_retains_browser_auth_query_and_conversation_refusals() {
     f.state.store.close().await;
 }
 
+/// ORK-795: the adapter asks about one message, not a page of the first 50.
+#[tokio::test]
+async fn held_route_answers_for_one_exact_message() {
+    let f = retired().await;
+    let id = f.conversation.to_string();
+    let read = |query: String| {
+        let state = f.state.clone();
+        let id = id.clone();
+        async move { request(&state, &id, &query, headers(Some(COOKIE), AUTHORITY)).await }
+    };
+    let held = &f.expected.held[0];
+    for (message, expected) in [
+        (held.message_id.to_string(), vec![held.clone()]),
+        (Uuid::new_v4().to_string(), Vec::new()),
+    ] {
+        let response = read(format!("?message_id={message}")).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let page: HeldOwnerInputPage = serde_json::from_slice(
+            &axum::body::to_bytes(response.into_body(), 16_384)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(page.held, expected);
+        assert_eq!(page.next_after_sequence, None);
+    }
+    for query in [
+        "?message_id=bad".to_owned(),
+        "?message_id=00000000-0000-0000-0000-000000000000".to_owned(),
+        format!("?message_id={}&limit=1", held.message_id),
+        format!("?message_id={}&after_sequence=0", held.message_id),
+    ] {
+        assert_eq!(
+            read(query.clone()).await.status(),
+            StatusCode::BAD_REQUEST,
+            "{query}"
+        );
+    }
+    f.state.store.close().await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn mounted_http_route_reads_after_original_scope_removed() {
     let f = retired().await;

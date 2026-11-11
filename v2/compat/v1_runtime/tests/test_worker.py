@@ -8,6 +8,7 @@ import uuid
 
 import hashlib
 from unittest.mock import patch
+from urllib.parse import parse_qsl
 
 from v2.compat.v1_runtime import outbound_text, worker as worker_module
 from v2.compat.v1_runtime.ledger import Ledger
@@ -43,6 +44,23 @@ class Peer:
         return (str(uuid.uuid5(uuid.NAMESPACE_URL, "synthetic-acceptance:" + self.input_key + ":" + role + "-run"))
                 if getattr(self, "unique_acceptances", False) else role + "-accepted")
 
+    def held_page(self, route):
+        """Core's held inputs: one message's hold by id, or a page after a sequence."""
+        query = dict(parse_qsl(route.partition("?")[2]))
+        self.held_reads = getattr(self, "held_reads", []) + [query]
+        rows = [dict(message_id=m, scope_sequence=n + 1) for n, m in enumerate(self.held)]
+        more = None
+        if "message_id" in query:
+            rows = [row for row in rows if row["message_id"] == query["message_id"]]
+        else:
+            after, limit = int(query.get("after_sequence", 0)), int(query.get("limit", 50))
+            rows = [row for row in rows if row["scope_sequence"] > after]
+            if len(rows) > limit:
+                rows = rows[:limit]
+                more = rows[-1]["scope_sequence"]
+        return dict(schema_version=1, conversation_id=self.conversation, revision=1, observed_at_ms=1,
+                    held=rows, next_after_sequence=more, eligible_input_available=False)
+
     def window_request(self, intake, input_key, request_key, current):
         return dict(request_key=request_key, input_message_id=intake["message_id"], input_event_id=intake["event_id"],
                     input_request_key=input_key, expected_generation=0, window_id=None, predecessor_window_id=None)
@@ -72,10 +90,8 @@ class Peer:
         if method == "GET" and route == "/window/queue":
             return 200, dict(conversation_id=self.conversation, capacity=4, active=1,
                              queued_total=len(self.window_queue), entries=list(self.window_queue))
-        if method == "GET" and route == "/held-inputs":
-            return 200, dict(schema_version=1, conversation_id=self.conversation, revision=1, observed_at_ms=1,
-                             held=[dict(message_id=m) for m in self.held], next_after_sequence=None,
-                             eligible_input_available=False)
+        if method == "GET" and route.split("?", 1)[0] == "/held-inputs":
+            return 200, self.held_page(route)
         if method == "GET" and route == "":
             return 200, dict(conversation_id=self.conversation, last_sequence=getattr(self, "head", 3))
         if route == "/messages":

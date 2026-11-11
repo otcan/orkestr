@@ -50,6 +50,7 @@ import os
 import sqlite3
 import sys
 import time
+from urllib.parse import quote
 import uuid
 
 MAX_AGE_S = 24 * 3600
@@ -257,24 +258,58 @@ def wait_or_close(worker, data, now, reason, why):
     raise Refused(reason)
 
 
+# A server advertising this answers for one message by id (ORK-795).
+HELD_LOOKUP_FEATURE = "held_input_lookup_v1"
+# An older server is read page by page, at most this many pages of 100.
+HELD_PAGES = 100
+
+
 def held(worker, data):
-    """'held' / 'not_held' / 'unknown' from Core's held-input page."""
+    """'held' / 'not_held' / 'unknown': whether an owner stop holds this
+    input's own Core message. Asked by message id, so the answer does not
+    depend on how many other inputs are held (one chat had 221; the first
+    page of 50 left every later message 'unknown'). A held message whose
+    input was retired afterwards still reads 'held': it never runs."""
     message = (data.get("intake") or {}).get("message_id")
     if not message:
         return "not_held"
+    if not isinstance(message, str):
+        return "unknown"
+    from .intake import feature_supported
     try:
-        page = worker.call("GET", "/held-inputs")
+        if feature_supported(worker.client, HELD_LOOKUP_FEATURE):
+            page = worker.call("GET", "/held-inputs?message_id=" + quote(message, safe=""))
+            rows = page.get("held") if isinstance(page, dict) else None
+            if not isinstance(rows, list) or page.get("next_after_sequence") is not None:
+                return "unknown"
+            if any(not isinstance(row, dict) or row.get("message_id") != message for row in rows):
+                return "unknown"
+            return "held" if rows else "not_held"
+        return held_by_pages(worker, message)
     except Exception as error:
         from .worker import transient
         if transient(error):
             raise
         return "unknown"
-    rows = page.get("held") if isinstance(page, dict) else None
-    if not isinstance(rows, list):
-        return "unknown"
-    if any(isinstance(row, dict) and row.get("message_id") == message for row in rows):
-        return "held"
-    return "not_held" if page.get("next_after_sequence") is None else "unknown"
+
+
+def held_by_pages(worker, message):
+    """The same answer from a server without the lookup: every page."""
+    after = 0
+    for _ in range(HELD_PAGES):
+        page = worker.call("GET", "/held-inputs?after_sequence=%d&limit=100" % after)
+        rows = page.get("held") if isinstance(page, dict) else None
+        if not isinstance(rows, list):
+            return "unknown"
+        if any(isinstance(row, dict) and row.get("message_id") == message for row in rows):
+            return "held"
+        cursor = page.get("next_after_sequence")
+        if cursor is None:
+            return "not_held"
+        if type(cursor) is not int or cursor <= after:
+            return "unknown"
+        after = cursor
+    return "unknown"
 
 
 # Events between an input's cursor and Core's head checked in one decision.

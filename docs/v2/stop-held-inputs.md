@@ -22,6 +22,12 @@ after a fresh server process opens the same ledger. It creates no execution
 context, grant, window or hold-release authority. Cookie namespace and Host
 checks remain in the browser controller; Bearer credentials are refused there.
 
+`?message_id=<id>` (instead of `after_sequence`/`limit`) returns the hold of that
+one message, or none, through `Store::held_owner_input_for_browser`; servers
+that support it advertise `held_input_lookup_v1`. The V1 adapter asks this way,
+so its answer does not depend on how many other inputs are held (ORK-795). A
+hold whose input was retired afterwards is still listed: it never runs.
+
 `Store::held_owner_inputs_authenticated(credential, conversation, after_sequence,
 limit)` remains the separate machine-context eligibility read. It requires both
 current session auth and the bound supervisor's existing generation/lease fences.
