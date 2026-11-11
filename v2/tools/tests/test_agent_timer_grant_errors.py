@@ -20,6 +20,7 @@ CONVERSATION = '00000000-0000-4000-8000-00000000000a'
 GRANT = 'ab' * 32
 SETUP_ERROR = {'ok': False, 'status': 0, 'code': 'grant_missing_or_invalid'}
 PRIVATE_ERROR = {'ok': False, 'status': 0, 'code': 'grant_file_must_be_private'}
+MISSING_ERROR = {'ok': False, 'status': 0, 'code': 'grant_file_missing'}
 
 
 class GrantErrors(unittest.TestCase):
@@ -52,13 +53,20 @@ class GrantErrors(unittest.TestCase):
             env=env, text=True, capture_output=True, timeout=5)
 
     def test_missing_explicit_and_provisioned_grants_have_clean_cli_errors(self):
-        self.assert_cli_error(self.cli('--grant-file', str(self.path), 'list'), SETUP_ERROR)
+        self.assert_cli_error(self.cli('--grant-file', str(self.path), 'list'), MISSING_ERROR)
         self.assert_cli_error(self.cli('list', extra_env={
-            'ORKESTR_V2_AGENT_TIMER_GRANT_DIR': str(self.root)}), SETUP_ERROR)
+            'ORKESTR_V2_AGENT_TIMER_GRANT_DIR': str(self.root)}), MISSING_ERROR)
         # An explicitly selected missing grant must never fall back to an
         # otherwise valid environment grant.
         self.assert_cli_error(self.cli('--grant-file', str(self.path), 'list', extra_env={
-            'ORKESTR_V2_AGENT_TIMER_GRANT': GRANT}), SETUP_ERROR)
+            'ORKESTR_V2_AGENT_TIMER_GRANT': GRANT}), MISSING_ERROR)
+
+    def test_missing_grant_is_distinct_and_the_tool_says_how_to_report_it(self):
+        self.assert_cli_error(self.cli('--grant-file', str(self.root / 'absent' / 'x.grant'), 'list'), MISSING_ERROR)
+        out = subprocess.run([sys.executable, '-I', '-S', '-B', str(SCRIPT), 'instructions'],
+                             env={'PATH': os.defpath}, text=True, capture_output=True, timeout=5).stdout
+        self.assertIn('grant_file_missing', out)
+        self.assertIn('Do not file a\nrepair or Root request', out)
 
     def test_stat_and_read_failures_are_caught_before_constructing_a_client(self):
         self.private_file()
