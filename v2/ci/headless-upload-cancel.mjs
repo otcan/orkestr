@@ -46,8 +46,9 @@ export async function uploadCancel({browser,state,origin,scratch,screenshot=asyn
 
   // Keyboard: Enter on the focused Cancel stops the upload and sends nothing.
   await page.focus(cancel);await page.keyboard.press('Enter');
-  await until(()=>state.abortedChunkPuts?.some(p=>p.upload_id===largeId),'the browser aborting the transfer');
+  await page.waitForFunction(selector=>!document.querySelector(selector),{},cancel);
   await until(()=>state.discardedUploads?.includes(largeId),'the server discarding the partial upload');
+  await until(()=>state.abortedChunkPuts?.some(p=>p.upload_id===largeId),'the browser aborting the transfer');
   state.holdEncryptedChunk=undefined;
   // The rest of the batch still attaches; the cancelled file never does.
   await hasChip('synthetic-next.txt');

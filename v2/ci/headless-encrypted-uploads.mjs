@@ -57,7 +57,9 @@ export async function encryptedUploadMock(state) {
         if(req.method==='GET'){res.writeHead(200,{'content-type':'application/octet-stream'});res.end(entry.data.get(index));return true;}
         (state.chunkPuts??=[]).push({upload_id:id,index});
         if(state.holdEncryptedChunk===index) {
-          // Keep this transfer open until the browser aborts it (Cancel).
+          // Keep this transfer open until the browser aborts it (Cancel). Drain
+          // the body: an unread socket is paused and its close goes unseen.
+          req.resume();
           await new Promise(resolve=>res.on('close',resolve));
           (state.abortedChunkPuts??=[]).push({upload_id:id,index});
           return true;
