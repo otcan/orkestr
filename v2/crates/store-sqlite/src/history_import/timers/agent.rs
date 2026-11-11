@@ -305,7 +305,8 @@ pub(crate) async fn agent_timer_by_label(
 /// - otherwise the timer is disabled, edited and enabled again under a new
 ///   generation with the new instruction, which is refused (`Busy`) while
 ///   one of its runs is still queued or running (a Stop already invalidated
-///   this generation, so it cannot be edited in place).
+///   this generation, so it cannot be edited in place). A firing the Stop
+///   held is neither: it never runs, so it does not block the new generation.
 pub(crate) async fn agent_timer_reschedule(
     tx: &mut Transaction<'_, Sqlite>,
     owner: &OwnerId,
@@ -349,8 +350,11 @@ pub(crate) async fn agent_timer_reschedule(
     let stop: i64 = sqlx::query_scalar("SELECT COALESCE(max(e.sequence),0) FROM production_stop_boundaries b JOIN events e ON e.id=b.event_id WHERE b.owner_id=? AND b.conversation_id=?")
         .bind(owner.to_string()).bind(conversation.to_string())
         .fetch_one(&mut **tx).await.map_err(|_| AgentTimerRefusal::Unavailable)?;
-    // Runs of this timer still in progress, in any generation.
-    let queued: i64 = sqlx::query_scalar("SELECT count(*) FROM dormant_timer_inputs i JOIN reasoning_inbox r ON r.event_id=i.event_id WHERE i.owner_id=? AND i.namespace=? AND r.state IN ('queued','claimed')")
+    // Runs of this timer still in progress, in any generation. A held firing
+    // (an owner Stop, a retirement, a cancelled claim) never runs again, so it
+    // is not in progress: counting it made the timer busy for good (ORK-795).
+    // It stays held; a new generation never releases or re-runs it.
+    let queued: i64 = sqlx::query_scalar("SELECT count(*) FROM dormant_timer_inputs i JOIN reasoning_inbox r ON r.event_id=i.event_id WHERE i.owner_id=? AND i.namespace=? AND r.state IN ('queued','claimed') AND NOT EXISTS(SELECT 1 FROM ordinary_input_holds h WHERE h.event_id=i.event_id)")
         .bind(owner.to_string()).bind(namespace.to_string())
         .fetch_one(&mut **tx).await.map_err(|_| AgentTimerRefusal::Unavailable)?;
     let running: i64 = sqlx::query_scalar("SELECT count(*) FROM dormant_timer_inputs i JOIN production_runs r ON r.message_id=i.message_id WHERE i.owner_id=? AND i.namespace=? AND r.state IN ('starting','running')")
