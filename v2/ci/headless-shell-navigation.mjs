@@ -60,7 +60,8 @@ const navState = () => page.evaluate(() => {
     current: [...nav.querySelectorAll('button[aria-current=page]')].map(b => b.textContent.trim()),
     more: [...nav.querySelectorAll('.more-item')].map(b => b.textContent.trim()),
     open: document.getElementById('more-tabs-toggle')?.getAttribute('aria-expanded'),
-    toggle: document.getElementById('more-tabs-toggle')?.innerText.replace('▾', '').trim(),
+    // Visible text only (innerText), whitespace-normalized: flex items render on lines of their own.
+    toggle: document.getElementById('more-tabs-toggle')?.innerText.replace(/\s+/g, ' ').replace(' :', ':').trim(),
     listShown: shown(document.getElementById('more-tabs-list')),
   };
 });
