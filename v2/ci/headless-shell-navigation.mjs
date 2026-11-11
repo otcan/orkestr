@@ -89,6 +89,12 @@ async function headerAndBadge(label, phone) {
   assert.deepEqual(view.global, ['Virtual desks', 'Settings'], 'global resources live in the header');
   for (const global of ['Virtual desks', 'Host resources', 'Settings', 'Orkestr settings']) assert.ok(!view.inConversationNav.includes(global), `${global} is not a conversation tab`);
   if (!phone) assert.ok(view.height <= 64, `${label}: one compact header row, got ${view.height}px`);
+  // Settings (ORK-789) joins the header without wrapping its controls: desks,
+  // Settings, build and Sign out share one row at every width.
+  const rows = await page.evaluate(() => ['.global-link', '.global-settings', '.build-badge > button', '.app-heading > .sign-out']
+    .map(s => { const r = document.querySelector(s).getBoundingClientRect(); return [s, Math.round(r.top + r.height / 2)]; }));
+  const middles = rows.map(([, y]) => y);
+  assert.ok(Math.max(...middles) - Math.min(...middles) <= 6, `${label}: header controls on one row ${JSON.stringify(rows)}`);
   assert.ok(view.badgeTop < 60 && view.badgeRight > view.width * 0.55, `${label}: build badge at the top right`);
   assert.doesNotMatch(view.text, /unavailable/i, 'no "unavailable" wording in the header');
   assert.doesNotMatch(view.text, /deployed/i, 'deployment times live in the build panel');

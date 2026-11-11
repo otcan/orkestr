@@ -146,8 +146,15 @@
 @media (max-width: 52rem) {
  .settings-scope-note button { min-height: 44px; }
 }
-/* Narrow phones: the gear alone keeps the header on one row; the name stays for screen readers. */
-@media (max-width: 30rem) {
+/* Narrow phones and short screens (200% zoom): the gear alone, and "Desks"
+   on narrow phones, keep the header controls on one row. The full names stay
+   for screen readers. */
+@media (max-width: 30rem), (max-width: 52rem) and (max-height: 34rem) {
  .global-settings { justify-content: center; min-width: 44px; padding-inline: 0; }
  .global-settings .global-link-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+}
+@media (max-width: 30rem) {
+ .global-link-qualifier { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+ .global-link-noun { display: inline-block; }
+ .global-link-noun::first-letter { text-transform: uppercase; }
 }

@@ -261,7 +261,9 @@ fn App() -> Element {
                         button { r#type: "button", class: "global-link",
                             "aria-current": if (global_views.shown)() == Some(orkestr_v2_ui::route::Tab::VirtualDesks) { "page" } else { "false" },
                             onclick: move |_| { let mut desks = global_views.desks; desks += 1; },
-                            "Virtual desks"
+                            // "Desks" on narrow phones, so Settings fits on the same row.
+                            span { class: "global-link-qualifier", "Virtual " }
+                            span { class: "global-link-noun", "desks" }
                         }
                         // Account and server-wide settings; a chat's own settings stay under its More menu.
                         button { r#type: "button", class: "global-link global-settings", title: "Orkestr settings: account, vault, provider sign-in and this installation",
