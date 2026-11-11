@@ -13,6 +13,7 @@ pub use calendar::local_time_label;
 pub use detail::TimerDetail;
 mod import;
 pub mod input;
+mod instruction_update;
 pub mod outcome;
 pub mod policy;
 mod policy_pause;

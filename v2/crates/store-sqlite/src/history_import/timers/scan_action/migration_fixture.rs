@@ -5,6 +5,22 @@ use crate::Store;
 mod credentials;
 
 pub(crate) async fn downgrade_empty(store: &Store) {
+    // Migration 101 down: only with no recorded instruction update.
+    let updates: i64 = sqlx::query_scalar("SELECT count(*) FROM agent_timer_instruction_updates")
+        .fetch_one(&store.pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        updates, 0,
+        "historical fixture must not erase timer instruction updates"
+    );
+    sqlx::raw_sql(
+        "DROP TABLE agent_timer_instruction_updates;
+         DELETE FROM _sqlx_migrations WHERE version=101;",
+    )
+    .execute(&store.pool)
+    .await
+    .unwrap();
     // Migration 100 down: only the owner's desk sharing switch; a historical
     // fixture never sets it, so dropping it loses no owner decision.
     let sharing: i64 = sqlx::query_scalar("SELECT count(*) FROM desktop_sharing")

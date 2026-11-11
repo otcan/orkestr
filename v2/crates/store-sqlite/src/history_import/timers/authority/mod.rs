@@ -166,6 +166,14 @@ pub(crate) async fn admit_in_transaction(
     {
         return Err(HistoryError::Conflict);
     }
+    let instruction = super::instruction_update::effective_in(
+        tx,
+        owner,
+        namespace,
+        timer.generation,
+        instruction,
+    )
+    .await?;
     let due = timer.next_due_ms.ok_or(HistoryError::Conflict)?;
     // A pause or skip date set after the scheduler chose this occurrence wins.
     let conversation: String = current.get("conversation_id");
