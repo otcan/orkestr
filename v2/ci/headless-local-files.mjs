@@ -69,8 +69,21 @@ try {
   await page.goto(`${origin}/#conversation/${A}`, {waitUntil: 'domcontentloaded'});
   await page.waitForSelector('.local-folder-connect');
   assert.equal(lf.polls, 0, 'nothing is served before the owner connects a folder');
+  // ORK-786: the control sits in the composer's attach actions, not in a
+  // floating toolbar, and states its state in words.
+  const folderView = () => page.evaluate(() => {
+    const root = document.querySelector('.local-folder');
+    return {state: root?.dataset.folderState, text: root?.querySelector('.local-folder-state')?.textContent,
+      role: root?.querySelector('.local-folder-state')?.getAttribute('role'), inComposer: !!root?.closest('.message-composer .composer-context'),
+      toolbar: !!document.querySelector('.conversation-toolbar')};
+  });
+  await page.waitForFunction(() => document.querySelector('.local-folder')?.dataset.folderState === 'none');
+  assert.deepEqual(await folderView(), {state: 'none', text: 'No folder connected', role: 'status', inComposer: true, toolbar: false});
+  await screenshots(page, 'none');
   await press(page, '.local-folder-connect');
   await page.waitForFunction(() => document.querySelector('.local-folder-live')?.textContent.includes('Synthetic folder'));
+  assert.equal((await folderView()).state, 'ready');
+  assert.match((await folderView()).text, /Folder ready: “Synthetic folder” · read-only, writes ask you first/);
   assert.deepEqual(await page.evaluate(() => window.__pickerCalls), [{id: 'orkestr-local-folder', mode: 'read'}], 'the picker asks for read access only');
   assert.ok((await page.title()).startsWith('● '), 'the tab title shows the connection');
   assert.equal(lf.folder, 'Synthetic folder');
@@ -113,8 +126,17 @@ try {
   assert.equal((await served(refused, 'refused write')).error, 'refused_by_owner');
   assert.equal(await page.evaluate(() => window.__syntheticFolder.fake.text('a.txt')), 'alpha');
 
+  // The activity log is inspected in the Files & context drawer.
+  await page.waitForFunction(() => document.querySelector('.files-drawer .local-folder-activity')?.textContent.includes('refused_by_owner'));
+  assert.equal(await page.$('.composer-context .local-folder-activity'), null, 'the composer shows state, not the log');
+  // A tab that cannot reach the server says its folder worker is offline.
+  lf.failPolls = true;
+  await page.waitForFunction(() => document.querySelector('.local-folder')?.dataset.folderState === 'offline', {timeout: 10000});
+  assert.match((await folderView()).text, /^Folder worker offline: reconnecting “Synthetic folder”/);
+  await screenshots(page, 'offline');
+  lf.failPolls = false;
+  await page.waitForFunction(() => document.querySelector('.local-folder')?.dataset.folderState === 'ready', {timeout: 10000});
   // Revoking stops serving the folder at once.
-  await page.waitForFunction(() => document.querySelector('.local-folder-activity')?.textContent.includes('refused_by_owner'));
   await press(page, '.local-folder-disconnect');
   await page.waitForSelector('.local-folder-connect');
   assert.equal(lf.tab, null);
@@ -144,6 +166,8 @@ try {
   await plain.goto(`${origin}/#conversation/${A}`, {waitUntil: 'domcontentloaded'});
   await plain.waitForFunction(() => document.querySelector('.local-folder-note')?.textContent.includes('need Chrome or Edge'));
   assert.equal(await plain.$('.local-folder-connect'), null);
+  assert.equal(await plain.$eval('.local-folder', n => n.dataset.folderState), 'unsupported');
+  assert.equal(await plain.$eval('.local-folder-state', n => n.textContent), 'Folder access unavailable in this browser');
   await plain.close();
   console.log('Local folder control: connect, list, read, hash, package, confirmed and refused writes, disconnect passed');
 } finally {

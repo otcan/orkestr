@@ -1,0 +1,66 @@
+/* Conversation pane (ORK-786). The transcript and the composer share one
+   column. The Files & context drawer docks beside that column on a wide pane
+   and overlays the transcript, never the composer, on a narrow one. Scoped to
+   the native conversation pane; the linked V1 view keeps its own layout. */
+.conversation-pane.native-conversation {
+ --conversation-column: 52rem;
+ container: conversation-pane / inline-size;
+ display: grid;
+ grid-template-columns: minmax(0, 1fr) auto;
+ /* The composer takes what it needs up to about half the pane, then scrolls. */
+ grid-template-rows: minmax(0, 1fr) auto auto fit-content(52%);
+ grid-template-areas: "transcript drawer" "connection drawer" "jump drawer" "composer drawer";
+}
+.native-conversation > .conversation-scroll { grid-area: transcript; padding: 1.25rem max(1.1rem, calc((100% - var(--conversation-column)) / 2)); }
+.native-conversation > .connection-bar { grid-area: connection; }
+.native-conversation > .jump-latest-anchor { grid-area: jump; }
+.native-conversation .jump-latest { right: max(1rem, calc((100% - var(--conversation-column)) / 2)); }
+.native-conversation > .composer-dock { grid-area: composer; max-height: none; min-height: 0; padding: .6rem max(1.1rem, calc((100% - var(--conversation-column)) / 2)) max(.7rem, env(safe-area-inset-bottom)); }
+
+/* Composer actions: Attach and Paste text, then the conversation's context
+   (Connect folder with its state in words, Files & context). */
+.message-composer > .composer-actions { grid-column: 1 / -1; grid-row: 3; display: flex; flex-wrap: wrap; align-items: center; gap: .35rem .6rem; min-width: 0; }
+.composer-actions > .composer-tools { flex: 1 1 16rem; }
+.composer-actions > .paste-panel { flex-basis: 100%; order: 3; }
+.composer-context { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: .35rem; min-width: 0; margin-left: auto; }
+.message-composer .composer-context button { grid-row: auto; grid-column: auto; align-self: center; min-width: 0; min-height: 2.1rem; padding: .2rem .75rem; font-size: .78rem; font-weight: 600; border-radius: 1.05rem; background: var(--surface-2); color: var(--text); border: 1px solid var(--border); }
+.message-composer .composer-context button:hover:not(:disabled) { background: var(--surface-3); }
+.message-composer .composer-context p { grid-row: auto; grid-column: auto; font-size: .8rem; color: inherit; }
+.message-composer .composer-context .local-folder-allow { background: var(--accent); color: var(--accent-contrast); border-color: transparent; }
+.composer-context .local-folder { margin-right: 0; font-size: .78rem; }
+/* A write waiting for the owner's answer takes the composer's full width. */
+.composer-context:has(.local-folder-confirm), .composer-context .local-folder:has(.local-folder-confirm) { flex-basis: 100%; }
+.local-folder-state { display: inline-flex; align-items: center; gap: .35rem; padding: .2rem .65rem; border-radius: 1rem; background: var(--surface-2); color: var(--muted); font-weight: 600; overflow-wrap: anywhere; }
+.local-folder-state::before { content: ""; flex: none; width: .5rem; height: .5rem; border-radius: 50%; background: var(--faint); }
+.local-folder-state.local-folder-live { background: var(--accent-soft); color: var(--accent-text); }
+.local-folder-state.local-folder-live::before { display: none; }
+.local-folder-state[data-state=connecting]::before { background: var(--accent); }
+.local-folder-state[data-state=permission], .local-folder-state[data-state=offline] { background: var(--warn-soft); color: var(--warn-text); }
+.local-folder-state[data-state=permission]::before, .local-folder-state[data-state=offline]::before { background: var(--warn-text); }
+.message-composer .composer-context .files-drawer-toggle[aria-expanded=true] { background: var(--info-soft); border-color: var(--info-border); color: var(--info-text); }
+
+/* Files & context drawer. */
+.native-conversation > .files-drawer { grid-area: transcript; z-index: 5; align-self: start; justify-self: end; display: flex; flex-direction: column; gap: .2rem; width: min(30rem, calc(100% - 1rem)); max-height: calc(100% - 1rem); margin: .5rem; overflow: auto; overscroll-behavior: contain; padding: .2rem .9rem .8rem; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); box-shadow: var(--shadow); }
+.native-conversation > .files-drawer[hidden] { display: none; }
+.files-drawer-header { position: sticky; top: -.2rem; z-index: 1; display: flex; align-items: center; justify-content: space-between; gap: .5rem; padding: .5rem 0 .3rem; background: var(--surface); border-bottom: 1px solid var(--border); }
+.files-drawer-header h2 { font-size: .95rem; }
+.files-drawer-close { min-height: 2.2rem; padding: .2rem .8rem; font-size: .8rem; border-radius: 1.1rem; }
+.files-drawer h3 { font-size: .85rem; margin: .6rem 0 .2rem; }
+.files-drawer-header + .conversation-tools { border-top: 0; margin-top: 0; }
+.files-drawer-note { font-size: .78rem; color: var(--muted); }
+.files-drawer-folder-log:empty { display: none; }
+@container conversation-pane (min-width: 1180px) {
+ .native-conversation > .files-drawer { grid-area: drawer; align-self: stretch; width: 22rem; max-height: none; margin: 0; border-width: 0 0 0 1px; border-radius: 0; box-shadow: none; }
+}
+
+/* Narrow panes (tablet and phone): compact gutters, larger touch targets. */
+@container conversation-pane (max-width: 52rem) {
+ .native-conversation > .conversation-scroll { padding: .9rem .7rem; }
+ .native-conversation > .composer-dock { padding-inline: .6rem; }
+ .native-conversation .jump-latest { right: .8rem; }
+}
+@media (max-width: 52rem), (pointer: coarse) {
+ .conversation-pane.native-conversation { grid-template-rows: minmax(0, 1fr) auto auto fit-content(56%); }
+ .message-composer .composer-context button, .message-composer .composer-tools .tool-button, .files-drawer-close { min-height: 44px; }
+ .composer-context { justify-content: flex-start; margin-left: 0; }
+}

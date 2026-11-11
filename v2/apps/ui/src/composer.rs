@@ -8,6 +8,9 @@ use std::collections::BTreeMap;
 /// goes to the outbox (its own key, its own state in the timeline) and the
 /// composer is free for the next one at once. A message sent while a turn
 /// runs joins that turn as a follow-up input.
+///
+/// `children` are the conversation's context actions (Connect folder, the
+/// Files & context drawer), shown beside Attach and Paste text.
 #[component]
 pub fn Composer(
     id: String,
@@ -15,6 +18,7 @@ pub fn Composer(
     session_scope: Signal<SessionScope>,
     mut drafts: Signal<BTreeMap<String, Draft>>,
     onexpired: EventHandler<()>,
+    children: Element,
 ) -> Element {
     let _ = onexpired;
     let owner = session_scope.read().generation();
@@ -42,7 +46,10 @@ pub fn Composer(
             textarea { id: "composer", disabled: preparing(), rows: 3, value: "{text}", "aria-describedby": "composer-help",
                 oninput: move |event| { if session_scope.read().is_current(owner) { drafts.write().entry(input_id.clone()).or_default().edit(event.value()); } }
             }
-            crate::composer_tools::AttachTools { target: crate::composer_tools::AttachTarget::Native(attach_id.clone()), csrf: csrf.clone(), attached, disabled: preparing() }
+            div { class: "composer-actions",
+                crate::composer_tools::AttachTools { target: crate::composer_tools::AttachTarget::Native(attach_id.clone()), csrf: csrf.clone(), attached, disabled: preparing() }
+                div { class: "composer-context", role: "group", "aria-label": "Folder and conversation files", {children} }
+            }
             crate::composer_tools::EnterSend { id: "composer" }
             p { id: "composer-help", "Enter sends · Shift+Enter adds a new line. You can keep sending; each message shows its own state." }
             button { r#type: "submit", disabled: preparing(), if preparing() { "Preparing attachment…" } else { "Send" } }
