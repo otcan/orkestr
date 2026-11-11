@@ -10,7 +10,8 @@ const sha = bytes => createHash('sha256').update(bytes).digest('hex');
 const packageName = id => `selection-${id.replaceAll('-', '').slice(0, 12)}.tar`;
 
 export function localFilesMock(state) {
-  const lf = state.localFiles = {requests: [], results: new Map(), tab: null, folder: null, polls: 0, disconnects: 0,
+  // failPolls: answer polls 503, as when the tab cannot reach the server.
+  const lf = state.localFiles = {requests: [], results: new Map(), tab: null, folder: null, polls: 0, disconnects: 0, failPolls: false,
     enqueue(operation, {path = null, paths = [], content = null} = {}) {
       const bytes = content === null ? null : Buffer.from(content);
       const request = {request_id: randomUUID(), operation, path, paths, state: 'queued', error: null, bytes,
@@ -30,6 +31,7 @@ export function localFilesMock(state) {
     if (action === 'poll') {
       const body = JSON.parse(await read(req));
       lf.polls++;
+      if (lf.failPolls) { json(res, 503, {code: 'synthetic_unavailable'}); return true; }
       if (lf.tab && lf.tab !== body.connection_id && !body.takeover) { json(res, 409, {code: 'local_files_connected_elsewhere'}); return true; }
       if (lf.tab !== body.connection_id) for (const r of lf.requests) if (r.state === 'working') r.state = 'queued';
       lf.tab = body.connection_id; lf.folder = body.folder_name;

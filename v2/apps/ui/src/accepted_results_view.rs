@@ -192,7 +192,7 @@ pub fn AcceptedReplies(
                                 strong { if input.actor == "owner" { "You" } else { "{input.actor}" } }
                                 p { class: "message-removed", "You deleted this message." }
                                 if inline {
-                                    if let Some(context) = &live { crate::message_actions_view::RevisionHistory { conversation: id.clone(), message_id: input.id.clone(), csrf: context.csrf.clone(), onexpired } }
+                                    if let Some(context) = &live { crate::message_actions_view::MessageMenu { key: "menu-{input.id}", message_id: input.id.clone(), history: Some(crate::message_actions_view::History { conversation: id.clone(), csrf: context.csrf.clone() }), onexpired } }
                                 }
                             } },
                             Row::Input(input) => rsx! { article { "data-message-id": "{input.id}",
@@ -203,20 +203,20 @@ pub fn AcceptedReplies(
                                         if !quote.unavailable { p { "{quote.text}" } }
                                     }
                                 }
-                                crate::rich_text_view::RichText { text: orkestr_v2_ui::message_file_refs::display_text(&input.text) }
+                                crate::rich_text_view::RichText { text: orkestr_v2_ui::message_file_refs::display_text(&input.text), attachments: !orkestr_v2_ui::message_file_refs::references(&input.text).is_empty() }
                                 crate::message_files_view::MessageFiles {key: "files-{input.id}", conversation:id.clone(),message:input.id.clone(),text:input.text.clone(),session_scope}
                                 if let Some(source) = input.revisions.edited_from {
                                     small { class: "message-edited", "{chat_timeline::edited_label(source)}" }
-                                    if inline {
-                                        if let Some(context) = &live { crate::message_actions_view::RevisionHistory { conversation: id.clone(), message_id: input.id.clone(), csrf: context.csrf.clone(), onexpired } }
-                                    }
                                 }
                                 if inline {
-                                    crate::outbox_view::ReplyButton { draft_key: id.clone(), composer: "composer", message_id: input.id.clone(),
-                                        author: if input.actor == "owner" { chat_timeline::QuoteAuthor::Owner } else { chat_timeline::QuoteAuthor::Other }, text: input.text.clone() }
-                                    if input.revisions.can_revise {
-                                        if let Some(context) = &live { crate::message_actions_view::MessageActions { key: "{input.id}-{input.revisions.revision}", conversation: id.clone(), message_id: input.id.clone(), text: input.text.clone(), revision: input.revisions.revision, csrf: context.csrf.clone(), onexpired } }
-                                    }
+                                    // One actions menu: Reply, Copy text, and Edit, Delete, History where allowed.
+                                    crate::message_actions_view::MessageMenu { key: "menu-{input.id}-{input.revisions.revision}", message_id: input.id.clone(),
+                                        reply: Some(crate::message_actions_view::ReplyTarget { draft_key: id.clone(), composer: "composer".into(),
+                                            author: if input.actor == "owner" { chat_timeline::QuoteAuthor::Owner } else { chat_timeline::QuoteAuthor::Other }, text: input.text.clone() }),
+                                        copy: Some(orkestr_v2_ui::message_file_refs::display_text(&input.text)),
+                                        revise: live.as_ref().filter(|_| input.revisions.can_revise).map(|context| crate::message_actions_view::Revise { conversation: id.clone(), text: input.text.clone(), revision: input.revisions.revision, csrf: context.csrf.clone() }),
+                                        history: live.as_ref().filter(|_| input.revisions.edited_from.is_some()).map(|context| crate::message_actions_view::History { conversation: id.clone(), csrf: context.csrf.clone() }),
+                                        onexpired }
                                 }
                                 crate::outbox_view::TimelineDelivery { message_id: input.id.clone() }
                             } },
@@ -384,11 +384,14 @@ fn AcceptedReply(
         "data-payload-id": "{payload_id}",
         strong { "Assistant" }
         span { class: "reply-state", if row.payload_removed { "Answer text removed." } else { "{notice}" } }
-        if !row.payload_removed { if let Some(text)=output.read().text.clone(){div { class: "accepted-output", "data-accepted-output": "true", crate::rich_text_view::RichText { text: orkestr_v2_ui::message_file_refs::display_text(&text) }
+        if !row.payload_removed { if let Some(text)=output.read().text.clone(){div { class: "accepted-output", "data-accepted-output": "true", crate::rich_text_view::RichText { text: orkestr_v2_ui::message_file_refs::display_text(&text), attachments: !orkestr_v2_ui::message_file_refs::references(&text).is_empty() }
             crate::message_files_view::MessageFiles {key: "files-{row.completion_event_id}",conversation:reply_conversation.clone(),message:row.completion_event_id.to_string(),text,session_scope}
         }} }
         if !row.payload_removed { if let Some(text)=output.read().text.clone(){
-            crate::outbox_view::ReplyButton { draft_key: reply_conversation.clone(), composer: "composer", message_id: row.completion_event_id.to_string(), author: chat_timeline::QuoteAuthor::Assistant, text }
+            crate::message_actions_view::MessageMenu { message_id: row.completion_event_id.to_string(),
+                copy: Some(orkestr_v2_ui::message_file_refs::display_text(&text)),
+                reply: Some(crate::message_actions_view::ReplyTarget { draft_key: reply_conversation.clone(), composer: "composer".into(), author: chat_timeline::QuoteAuthor::Assistant, text }),
+                onexpired }
         } }
     } }
 }

@@ -48,6 +48,8 @@ pub struct Execution {
     pub acceptances: crate::acceptance::Acceptances,
     sample: Option<Sample>,
     connected: bool,
+    /// A status read answered (a run, or 204 no run) since selection.
+    observed: bool,
     generation: u64,
     scope: Option<(String, String)>,
     exact_run: Option<String>,
@@ -78,6 +80,7 @@ impl Execution {
         self.sample = None;
         self.received_ms = None;
         self.connected = false;
+        self.observed = false;
         self.authorized = false;
         self.control_error = None;
         self.generation
@@ -106,6 +109,7 @@ impl Execution {
         }
         self.sample = Some(sample);
         self.connected = true;
+        self.observed = true;
         self.received_ms = Some(now_ms);
         self.authorized = true;
         Ok(())
@@ -207,6 +211,7 @@ impl Execution {
         self.sample = Some(sample);
         self.received_ms = Some(received_ms);
         self.connected = true;
+        self.observed = true;
         self.authorized = true;
         self.canonical_received
             .insert(cache_key.clone(), received_ms);
@@ -222,12 +227,21 @@ impl Execution {
         self.sample = None;
         self.authorized = false;
         self.connected = true;
+        self.observed = true;
         self.received_ms = None;
         self.control_error = None;
         true
     }
     pub fn disconnected(&mut self) {
         self.connected = false;
+    }
+    /// The status stream is connected (a read answered and none failed since).
+    pub fn connected(&self) -> bool {
+        self.connected
+    }
+    /// A status read answered since this selection, even if it has since failed.
+    pub fn observed(&self) -> bool {
+        self.observed
     }
     pub fn authorization_lost(&mut self) {
         self.generation = self
@@ -244,6 +258,7 @@ impl Execution {
         self.exact_run = None;
         self.received_ms = None;
         self.connected = false;
+        self.observed = false;
         self.control_error = None;
     }
     /// A failed request is visible and retryable, never a successful stop.

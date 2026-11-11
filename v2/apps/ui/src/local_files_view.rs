@@ -1,8 +1,11 @@
-//! "Local folder" control in the conversation toolbar (ORK-750). The control
-//! lives in JavaScript (`local_files/panel.mjs`, bundled in
-//! `encrypted_upload.js`): folder handles, file bytes and the owner's write
-//! confirmations never cross the Dioxus bridge. Leaving the conversation, or
-//! the session changing, stops serving the folder in this tab.
+//! "Connect folder" control in the composer's attach actions (ORK-750,
+//! ORK-786). The control lives in JavaScript (`local_files/panel.mjs`,
+//! bundled in `encrypted_upload.js`): folder handles, file bytes and the
+//! owner's write confirmations never cross the Dioxus bridge. Its state is
+//! always written out (no folder, permission needed, worker offline, ready);
+//! its activity log goes to `log_root` (the Files & context drawer) when
+//! given. Leaving the conversation, or the session changing, stops serving
+//! the folder in this tab.
 use dioxus::prelude::*;
 use orkestr_v2_ui::session_scope::SessionScope;
 use serde_json::json;
@@ -12,6 +15,9 @@ pub fn LocalFolder(
     conversation: String,
     csrf: String,
     session_scope: Signal<SessionScope>,
+    /// Element id for the folder activity log; defaults to inside the control.
+    #[props(default)]
+    log_root: Option<String>,
 ) -> Element {
     let root = format!("local-folder-{conversation}");
     let container = root.clone();
@@ -30,14 +36,20 @@ pub fn LocalFolder(
         }
     });
     use_future(move || {
-        let (conversation, csrf, root) = (conversation.clone(), csrf.clone(), root.clone());
+        let (conversation, csrf, root, log_root) = (
+            conversation.clone(),
+            csrf.clone(),
+            root.clone(),
+            log_root.clone(),
+        );
         async move {
             if csrf.is_empty() || !session_scope.read().is_current(owner) {
                 return;
             }
             let assets = include_str!("asset_base.mjs").replace("export ", "");
-            let config = json!({"conversation":conversation,"csrf":csrf,"root_id":root});
-            let script = format!("{assets}\nconst config=await dioxus.recv();let stopped=false;const stop=dioxus.recv().then(()=>{{stopped=true;}});let root;for(let i=0;i<40;i++){{root=document.getElementById(config.root_id);if(root)break;await new Promise(r=>setTimeout(r,25));}}if(!root||stopped)return null;let module;try{{module=await import(uiAssetUrl('encrypted_upload.js'));}}catch{{root.textContent='Local folder controls unavailable. Reload to retry.';return null;}}if(stopped)return null;root.replaceChildren();const panel=module.mountLocalFiles({{conversation:config.conversation,csrf:config.csrf,root}});try{{await stop;}}finally{{panel.close();}}return null;");
+            let config =
+                json!({"conversation":conversation,"csrf":csrf,"root_id":root,"log_id":log_root});
+            let script = format!("{assets}\nconst config=await dioxus.recv();let stopped=false;const stop=dioxus.recv().then(()=>{{stopped=true;}});let root;for(let i=0;i<40;i++){{root=document.getElementById(config.root_id);if(root)break;await new Promise(r=>setTimeout(r,25));}}if(!root||stopped)return null;let module;try{{module=await import(uiAssetUrl('encrypted_upload.js'));}}catch{{root.textContent='Local folder controls unavailable. Reload to retry.';return null;}}if(stopped)return null;root.replaceChildren();const logRoot=config.log_id?document.getElementById(config.log_id):null;const panel=module.mountLocalFiles({{conversation:config.conversation,csrf:config.csrf,root,logRoot}});try{{await stop;}}finally{{panel.close();}}return null;");
             let eval = document::eval(&script);
             if eval.send(config).is_err() {
                 return;
@@ -48,6 +60,8 @@ pub fn LocalFolder(
     });
     rsx! {
         style { "{include_str!(\"local_files.css\")}" }
-        div { id: "{container}", class: "local-folder", "aria-label": "Local folder" }
+        div { id: "{container}", class: "local-folder", role: "group", "aria-label": "Local folder",
+            span { class: "local-folder-state", "data-state": "checking", "Checking folder access…" }
+        }
     }
 }

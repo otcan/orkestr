@@ -1,4 +1,3 @@
-.conversation-toolbar { gap:.5rem; align-items:center; flex-wrap:wrap; }
 .local-folder { display:flex; flex-wrap:wrap; align-items:center; gap:.4rem; min-width:0; margin-right:auto; font-size:.78rem; }
 .local-folder-controls { display:flex; flex-wrap:wrap; align-items:center; gap:.4rem; min-width:0; }
 .local-folder-log { flex-basis:100%; }

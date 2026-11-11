@@ -4,7 +4,11 @@
 // is asked for by the browser in the owner's Allow click of a write.
 // The folder handle may be remembered in this browser (IndexedDB) so the
 // owner can reconnect with one click; nothing is connected without a click.
+// The control lives in the composer's attach actions and always states its
+// state in words (folder_state.mjs); the activity log may live elsewhere
+// (`logRoot`, the conversation's Files & context drawer).
 import {encryptedUploadClient} from '../attachments/encrypted_upload.mjs';
+import {DENIED, folderState} from './folder_state.mjs';
 import {createRelay} from './relay.mjs';
 
 const DB = 'orkestr-local-folders', STORE = 'folders', MARK = '● ';
@@ -35,7 +39,7 @@ async function remembered(indexedDB, key, value) {
   } catch { return null; }
 }
 
-export function mountLocalFiles({conversation, csrf, root}, {
+export function mountLocalFiles({conversation, csrf, root, logRoot = null}, {
   picker = globalThis.showDirectoryPicker?.bind(globalThis), indexedDB = globalThis.indexedDB,
   uploader = encryptedUploadClient({conversation, csrf}), fetcher, document = globalThis.document,
   relayOptions = {},
@@ -50,9 +54,15 @@ export function mountLocalFiles({conversation, csrf, root}, {
     node.append(...children);
     return node;
   };
+  // The state line: one status element whose words say what the control can do.
+  const stateNode = ({state, text}) => make('span', {class: `local-folder-state${state === 'ready' ? ' local-folder-live' : ''}`,
+    'data-state': state, role: 'status', 'aria-live': 'polite', text: state === 'ready' ? `${MARK}${text}` : text});
   root.classList.add('local-folder');
   if (typeof picker !== 'function') {
-    root.replaceChildren(make('span', {class: 'local-folder-note', text: 'Local folders need Chrome or Edge on a computer.'}));
+    const unsupported = folderState({supported: false});
+    root.dataset.folderState = unsupported.state;
+    root.replaceChildren(stateNode(unsupported), make('span', {class: 'local-folder-note', text: 'Local folders need Chrome or Edge on a computer.'}));
+    logRoot?.replaceChildren();
     return {close() {}};
   }
   let live = true, relay = null, handle = null, saved = null, message = '';
@@ -104,7 +114,7 @@ export function mountLocalFiles({conversation, csrf, root}, {
     if (!saved?.handle) return;
     let permission = 'denied';
     try { permission = await saved.handle.requestPermission({mode: 'read'}); } catch { /* Treated as denied. */ }
-    if (permission !== 'granted') { message = 'The browser did not allow access to the folder. Connect it again.'; render(); return; }
+    if (permission !== 'granted') { message = DENIED; render(); return; }
     message = '';
     await start(saved.handle, true);
   }
@@ -123,18 +133,20 @@ export function mountLocalFiles({conversation, csrf, root}, {
   // drawn separately, and each only when it changed, so a button the owner
   // is about to press is never replaced by a log update.
   const controls = make('div', {class: 'local-folder-controls'}), log = make('div', {class: 'local-folder-log'});
-  root.replaceChildren(controls, log);
+  root.replaceChildren(controls);
+  (logRoot ?? root).append(log);
   let drawnControls = '', drawnLog = '', activityOpen = false;
   function render() {
     if (!live) return;
     const view = relay?.snapshot();
     const connected = view && ['connected', 'connecting', 'retrying'].includes(view.state);
     title.set(Boolean(connected));
-    if (view?.state === 'signed_out') message = 'Sign in again to connect the folder.';
     const controlState = JSON.stringify([view?.state, view?.folder, message, saved?.name ?? null, [...confirmations.keys()]]);
     if (controlState !== drawnControls) {
       drawnControls = controlState;
-      controls.replaceChildren(...controlNodes(view, connected));
+      const state = folderState({view, saved, message});
+      root.dataset.folderState = state.state;
+      controls.replaceChildren(stateNode(state), ...controlNodes(view, connected));
     }
     const working = (view?.pending ?? []).filter(item => !confirmations.has(item.request_id));
     const logState = JSON.stringify([working.map(p => p.request_id), (view?.activity ?? []).map(a => [a.id, a.outcome])]);
@@ -146,18 +158,15 @@ export function mountLocalFiles({conversation, csrf, root}, {
   function controlNodes(view, connected) {
     const nodes = [];
     if (connected) {
-      nodes.push(make('span', {class: 'local-folder-live', role: 'status', 'aria-live': 'polite',
-        text: `${MARK}Folder \u201c${view.folder}\u201d connected${view.state === 'retrying' ? ' (reconnecting\u2026)' : ''}. Read-only; writes ask you first.`}));
       nodes.push(make('button', {type: 'button', class: 'local-folder-disconnect', onclick: () => void disconnect(), text: 'Disconnect folder'}));
     } else if (view?.state === 'elsewhere') {
-      nodes.push(make('span', {class: 'local-folder-note', role: 'status', text: 'This folder is connected in another tab.'}));
       nodes.push(make('button', {type: 'button', onclick: () => void start(handle, true), text: 'Use this tab'}));
       nodes.push(make('button', {type: 'button', class: 'local-folder-disconnect', onclick: () => void disconnect(), text: 'Disconnect folder'}));
     } else {
-      nodes.push(make('button', {type: 'button', class: 'local-folder-connect', onclick: () => void connect(), text: 'Connect folder\u2026'}));
-      if (saved?.handle) nodes.push(make('button', {type: 'button', onclick: () => void reconnect(), text: `Reconnect \u201c${saved.name}\u201d`}));
+      if (saved?.handle) nodes.push(make('button', {type: 'button', class: 'local-folder-reconnect', onclick: () => void reconnect(), text: `Reconnect \u201c${saved.name}\u201d`}));
+      nodes.push(make('button', {type: 'button', class: 'local-folder-connect', onclick: () => void connect(), text: saved?.handle ? 'Choose another folder\u2026' : 'Connect folder\u2026'}));
     }
-    if (message) nodes.push(make('span', {class: 'local-folder-note', role: 'status', text: message}));
+    if (message && message !== DENIED) nodes.push(make('span', {class: 'local-folder-note', role: 'status', text: message}));
     for (const entry of confirmations.values()) {
       const {request, bytes} = entry;
       const card = make('section', {class: 'local-folder-confirm', role: 'alertdialog', 'aria-label': 'Confirm write'},
@@ -195,6 +204,7 @@ export function mountLocalFiles({conversation, csrf, root}, {
       relay = null;
       void current?.disconnect();
       title.set(false);
+      log.remove();
     },
   };
 }
