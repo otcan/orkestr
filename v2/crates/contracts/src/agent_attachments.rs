@@ -21,8 +21,10 @@ pub const AGENT_ATTACHMENT_FILES_MAX: usize = 8;
 /// What the WhatsApp worker sends (`whatsapp-scoped-reply-files.js`): 16 MiB.
 pub const AGENT_ATTACHMENT_BYTES_MAX: usize = 16 * 1024 * 1024;
 
-/// File types an agent may attach, by lowercase extension: exactly the types
-/// the WhatsApp worker sends as a document or image.
+/// File types WhatsApp carries, by lowercase extension: exactly the types the
+/// WhatsApp worker sends as a document or image. An agent may attach any other
+/// file the attachment store takes (ORK-787); it shows in the web chat, and the
+/// WhatsApp text names it as not sent.
 pub const AGENT_ATTACHMENT_TYPES: &[(&str, &str)] = &[
     ("pdf", "application/pdf"),
     (
@@ -58,6 +60,48 @@ pub fn agent_attachment_type(filename: &str, media_type: Option<&str>) -> Option
     media_type
         .is_none_or(|m| m == *expected)
         .then_some(*expected)
+}
+
+/// A file of a WhatsApp extension must carry that extension's type; any other
+/// file keeps the type it was uploaded with.
+pub fn agent_attachment_type_consistent(filename: &str, media_type: &str) -> bool {
+    let extension = filename
+        .rsplit_once('.')
+        .map(|(_, e)| e.to_ascii_lowercase());
+    match extension.and_then(|e| AGENT_ATTACHMENT_TYPES.iter().find(|(ext, _)| *ext == e)) {
+        Some((_, expected)) => *expected == media_type,
+        None => true,
+    }
+}
+
+/// Never a hidden file or a secret-looking one (keys, key stores, credentials).
+pub fn agent_attachment_name_allowed(filename: &str) -> bool {
+    let lower = filename.to_ascii_lowercase();
+    let secret_extension = [".pem", ".key", ".p12", ".pfx", ".kdbx"]
+        .iter()
+        .any(|e| lower.ends_with(e));
+    let secret_config = [
+        "credential",
+        "credentials",
+        "token",
+        "tokens",
+        "secret",
+        "secrets",
+    ]
+    .iter()
+    .any(|stem| {
+        ["json", "yaml", "yml", "toml", "ini"]
+            .iter()
+            .any(|ext| lower == format!("{stem}.{ext}"))
+    });
+    let ssh_key = ["id_rsa", "id_dsa", "id_ecdsa", "id_ed25519"]
+        .iter()
+        .any(|k| lower == *k || lower.starts_with(&format!("{k}.")));
+    !filename.starts_with('.')
+        && !secret_extension
+        && !secret_config
+        && !ssh_key
+        && lower != "kubeconfig"
 }
 
 /// The display name inside a marker: no quotes, brackets or control
@@ -169,5 +213,39 @@ mod tests {
         assert_eq!(agent_attachment_type("a.exe", None), None);
         assert_eq!(agent_attachment_type("noextension", None), None);
         assert_eq!(agent_attachment_type("a.html", Some("text/html")), None);
+    }
+
+    #[test]
+    fn any_store_file_but_consistent_types_and_no_secrets() {
+        assert!(agent_attachment_type_consistent("page.html", "text/html"));
+        assert!(agent_attachment_type_consistent(
+            "blob",
+            "application/octet-stream"
+        ));
+        assert!(agent_attachment_type_consistent("a.PDF", "application/pdf"));
+        assert!(!agent_attachment_type_consistent(
+            "a.pdf",
+            "application/zip"
+        ));
+        for name in [
+            "report.pdf",
+            "keyring-notes.md",
+            "tokens-2026.csv",
+            "page.html",
+        ] {
+            assert!(agent_attachment_name_allowed(name), "{name}");
+        }
+        for name in [
+            ".env",
+            "server.pem",
+            "TLS.KEY",
+            "id_rsa",
+            "id_ed25519.pub",
+            "credentials.json",
+            "secrets.yaml",
+            "kubeconfig",
+        ] {
+            assert!(!agent_attachment_name_allowed(name), "{name}");
+        }
     }
 }

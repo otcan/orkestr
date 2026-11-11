@@ -173,9 +173,10 @@ class WorkerOutboundTests(unittest.TestCase):
         text = "Done: [deck](/var/lib/orkestr-v2-pilot/workspace/a/deck.pptx)"
         self.assertEqual(self.final(text), "Done: deck: deck.pptx (not attached)")
 
-    def test_owner_only_chat_keeps_paths(self):
+    def test_owner_only_chat_keeps_bare_paths_but_never_a_file_link(self):
+        # ORK-787: a link to a host file is never a file the reply carries.
         text = "Done: [deck](/var/lib/orkestr-v2-pilot/workspace/a/deck.pptx) in /home/orkestr/work/"
-        self.assertEqual(self.final(text), text)
+        self.assertEqual(self.final(text), "Done: deck: deck.pptx (not attached) in /home/orkestr/work/")
 
     def test_shared_chat_folder_paths_are_rewritten(self):
         self.ledger.scrub_paths = True

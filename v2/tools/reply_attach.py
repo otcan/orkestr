@@ -15,8 +15,11 @@ nothing.
 * FILE is a path inside --workspace (relative to it, or absolute under it).
   `..`, hidden names, and symbolic links anywhere in the path are refused, as
   are secret-looking folders (.ssh, secrets, credentials, vault, tokens ...).
-* Types: pdf, docx, xlsx, xls, pptx, csv, txt, md, png, jpg/jpeg, webp, zip
-  (what WhatsApp is sent); 1 byte to 16 MiB in all, at most 8 files per reply.
+* Any file the attachment store takes: 1 byte to 16 MiB in all, at most 8 files
+  per reply. The web chat shows every file; WhatsApp gets the ones it can carry
+  (pdf, docx, xlsx, xls, pptx, csv, txt, md, png, jpg/jpeg, webp, zip) and the
+  reply names any other one plainly. Secret-looking files (.pem, .key, id_rsa,
+  credentials.json ...) are refused.
 * Idempotent: the request key comes from the conversation and the files'
   names and contents, so a retry stores nothing new and prints the same lines.
   After a failure, rerun the same command (or pass the printed --request-key).
@@ -31,6 +34,7 @@ import argparse
 import base64
 import hashlib
 import json
+import mimetypes
 import os
 from pathlib import Path
 import re
@@ -43,7 +47,8 @@ GRANT_HEADER = 'X-Orkestr-Agent-Timer-Grant'
 ERROR_EXIT = 2
 MAX_BYTES = 16 * 1024 * 1024
 MAX_FILES = 8
-# Exactly the types the WhatsApp worker sends (whatsapp-scoped-reply-files.js).
+# The types the WhatsApp worker sends (whatsapp-scoped-reply-files.js), by
+# extension; any other file gets its usual type and shows in the web chat only.
 TYPES = {
     'pdf': 'application/pdf',
     'xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
@@ -54,6 +59,9 @@ TYPES = {
     'png': 'image/png', 'jpg': 'image/jpeg', 'jpeg': 'image/jpeg', 'webp': 'image/webp',
     'zip': 'application/zip',
 }
+SECRET_NAME = re.compile(r'^(?:id_(?:rsa|dsa|ecdsa|ed25519)(?:\..*)?|(?:credentials?|tokens?|secrets?)\.(?:json|ya?ml|toml|ini)'
+                         r'|kubeconfig|.*\.(?:pem|key|p12|pfx|kdbx))$', re.I)
+MEDIA = re.compile(r'^[A-Za-z0-9!#$&^_.+-]{1,60}/[A-Za-z0-9!#$&^_.+-]{1,60}$')
 SECRET_PARTS = re.compile(r'^(?:secrets?|credentials?|vault|cookies?|tokens?|private[-_]?keys?)$', re.I)
 MARKER = re.compile(r'^\[orkestr-attachment manifest=[0-9a-f-]{36} reference=[0-9a-f-]{36}(?: [^\]\n]*)?\]$')
 
@@ -67,8 +75,7 @@ class AttachError(RuntimeError):
 RULES = """Files for the owner (reply attachment tool)
 
 When the owner should receive a file you made or found in this chat's
-workspace (PDF, Word, Excel, PowerPoint, CSV, text, Markdown, PNG, JPEG, WebP
-or ZIP), attach it to your reply with the command below. Never answer with a
+workspace, attach it to your reply with the command below. Never answer with a
 Markdown link or a path to a workspace file instead: the owner can open
 neither, on WhatsApp or in the web app.
 
@@ -90,7 +97,8 @@ The command prints one line per file, like
 `[orkestr-attachment manifest=... reference=... name="report.pdf"]`.
 End your reply with exactly those lines, unchanged, each on its own line
 (not in a code block, not translated). The web chat shows them as attachment
-cards and WhatsApp receives the files with your reply, in this chat only.
+cards and WhatsApp receives the files it can carry with your reply, in this
+chat only; the reply names any other file plainly.
 Mention the files by name in your text; do not add their paths.
 
 Only files inside the workspace (no `..`, hidden or secret folders, or
@@ -145,6 +153,13 @@ def relative_parts(workspace, raw):
     return parts
 
 
+def media_type(name):
+    """The WhatsApp type for its extensions, else the usual type, else bytes."""
+    extension = name.rsplit('.', 1)[-1].lower() if '.' in name else ''
+    guess = TYPES.get(extension) or mimetypes.guess_type(name, strict=False)[0]
+    return guess if guess and MEDIA.match(guess) else 'application/octet-stream'
+
+
 def read_file(workspace, raw):
     """(name, media type, bytes) of one regular file under the workspace,
     opened component by component without following any symbolic link."""
@@ -153,12 +168,11 @@ def read_file(workspace, raw):
         raise AttachError(0, 'workspace_invalid')
     parts = relative_parts(workspace, raw)
     name = parts[-1]
-    extension = name.rsplit('.', 1)[-1].lower() if '.' in name else ''
-    media = TYPES.get(extension)
-    if media is None:
-        raise AttachError(0, 'file_type_unsupported', supported=sorted(TYPES))
+    if SECRET_NAME.match(name):
+        raise AttachError(0, 'file_refused')
     if any(ord(c) < 32 or ord(c) == 127 for c in name) or len(name.encode()) > 255:
         raise AttachError(0, 'file_name_refused')
+    media = media_type(name)
     fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
     try:
         for part in parts[:-1]:
