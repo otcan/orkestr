@@ -572,9 +572,14 @@ export const scenarios = [
     await choose('Assistant');
     await page.waitForSelector('#composer');
     await virtualDesksAndAccountSettings({page,state,conversation:A,clickText,clickWithin,waitText,screenshot,label});
-    await clickText('Settings');
-    await page.waitForSelector('#settings-model');
+    // Provider sign-in is shared by the whole server, so it is in Orkestr settings (ORK-789).
+    await page.$eval('.global-settings', b => b.click());
+    await page.waitForSelector('.orkestr-settings .provider-sign-in');
     await providerSignIn({page,state,clickWithin,waitText,screenshot,label});
+    await clickText('Back to chat');
+    await page.waitForFunction(() => [...document.querySelectorAll('.conversation-nav button')].some(b => b.textContent.trim() === 'Chat settings'), {timeout:15000});
+    await clickText('Chat settings');
+    await page.waitForSelector('#settings-model');
     assert.equal(await page.$eval('#settings-model', n => n.value), 'synthetic-model');
     await page.select('#settings-effort', 'high');
     await page.$eval('#settings-prefix', n => { n.value = ''; });

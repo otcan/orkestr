@@ -27,3 +27,9 @@ test('host, V1 and tab fragments survive reselecting the same conversation',()=>
  for(const hash of ['#host','#host/details?range=24h','#v1/group-a',`#conversation/${id}/timers`]) assert.equal(keepsFragment(hash,id),true,hash);
  for(const hash of ['',`#conversation/${id}`,`#conversation/00000000-0000-4000-8000-00000000000b/timers`,'#hostile']) assert.equal(keepsFragment(hash,id),false,hash);
 });
+test('Orkestr settings are global: no conversation pointer, kept when the default conversation is selected (ORK-789)',()=>{
+ assert.equal(selectedConversation('#settings'),null);
+ for(const selected of [null,id]) assert.equal(keepsFragment('#settings',selected),true);
+ for(const hash of ['#settings/x','#settingsx',`#conversation/${id}/orkestr-settings`]) assert.equal(keepsFragment(hash,id),false,hash);
+ assert.equal(selectedConversation(`#conversation/${id}/orkestr-settings`),null);
+});

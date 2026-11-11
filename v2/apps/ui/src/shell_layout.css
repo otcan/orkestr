@@ -133,3 +133,28 @@
  .conversation-heading .conversation-nav { flex: none; }
  .conversation-nav .nav-tab, .more-tabs { flex: none; }
 }
+
+/* Orkestr settings (ORK-789): owner-wide, opened from the global header like
+   Virtual desks; a chat's own settings point here. */
+.global-settings { display: inline-flex; align-items: center; gap: .3rem; }
+.global-settings svg { flex: none; }
+.orkestr-settings { max-width: 44rem; }
+.settings-scope-intro, .settings-scope { color: var(--muted); }
+.settings-scope-note { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem .8rem; }
+.settings-scope-note p { flex: 1 1 18rem; margin: 0; color: var(--muted); }
+.settings-scope-note button { flex: none; margin: 0; }
+@media (max-width: 52rem) {
+ .settings-scope-note button { min-height: 44px; }
+}
+/* Narrow phones and short screens (200% zoom): the gear alone, and "Desks"
+   on narrow phones, keep the header controls on one row. The full names stay
+   for screen readers. */
+@media (max-width: 30rem), (max-width: 52rem) and (max-height: 34rem) {
+ .global-settings { justify-content: center; min-width: 44px; padding-inline: 0; }
+ .global-settings .global-link-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+}
+@media (max-width: 30rem) {
+ .global-link-qualifier { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+ .global-link-noun { display: inline-block; }
+ .global-link-noun::first-letter { text-transform: uppercase; }
+}
