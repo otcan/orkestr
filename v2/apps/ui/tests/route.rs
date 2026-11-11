@@ -184,3 +184,23 @@ fn conversation_destinations_stay_bookmarkable_and_global_ones_carry_no_conversa
         "an old conversation-scoped desks link opens the global view"
     );
 }
+
+#[test]
+fn the_reload_pointer_accepts_every_conversation_destination() {
+    // `selected_conversation.mjs` decides which fragments survive a reload;
+    // a tab missing from its pattern would fall back to Chat (ORK-786).
+    let pattern = include_str!("../src/selected_conversation.mjs")
+        .lines()
+        .next()
+        .expect("pattern line")
+        .to_owned();
+    for tab in Tab::ALL.into_iter().filter(|t| *t != Tab::Host) {
+        assert!(
+            pattern.contains(&format!("|{}|", tab.slug()))
+                || pattern.contains(&format!("(?:{}|", tab.slug()))
+                || pattern.contains(&format!("|{}))", tab.slug())),
+            "{} missing from the reload pattern",
+            tab.slug()
+        );
+    }
+}
