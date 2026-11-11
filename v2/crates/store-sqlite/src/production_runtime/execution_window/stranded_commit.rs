@@ -108,6 +108,9 @@ pub(super) async fn commit_turns(
             .execute(&mut *tx).await.map_err(db)?;
     }
     super::release_inputs(tx, &id, p.window_id, &plan.release, false).await?;
+    // ORK-795: a timer occurrence released here never ran either; it gets the
+    // same one retry as after a failed open, or it would be lost for good.
+    super::open::retry_timer_inputs(tx, p.window_id, &plan.release, false).await?;
     // Post-condition: the whole context is now canonically terminal.
     let unresolved: i64 = sqlx::query_scalar("SELECT count(*) FROM production_runs r WHERE r.context_id=? AND NOT EXISTS(SELECT 1 FROM production_terminal_evidence t WHERE t.run_id=r.id)")
         .bind(&plan.context).fetch_one(&mut *tx).await.map_err(db)?;
