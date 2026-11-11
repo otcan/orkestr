@@ -1,1 +1,1 @@
-{"api_contract_version":0,"required_server_features":["message_revisions_v1","provider_quotas_v1","provider_sign_in_v1"]}
+{"api_contract_version":0,"required_server_features":["local_files_v1","message_revisions_v1","provider_quotas_v1","provider_sign_in_v1"]}

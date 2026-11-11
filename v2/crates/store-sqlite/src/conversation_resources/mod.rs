@@ -3,7 +3,7 @@
 //! create effects; they are preferences, fences and lineage.
 mod desktop_inventory;
 pub(crate) mod desktop_sharing;
-mod desktops;
+pub(crate) mod desktops;
 pub(crate) mod fast_settings;
 mod legacy_workers;
 pub(crate) mod settings;
