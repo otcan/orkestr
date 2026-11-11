@@ -60,8 +60,7 @@ class ExportDir:
         self.exports = Path(temporary.name) / "core-exports"
         (self.exports / CONVERSATION).mkdir(parents=True)
         (self.exports / CONVERSATION / (SHA + ".zip")).write_bytes(ZIP)
-        patcher = mock.patch.dict(os.environ, {reply_files.EXPORT_DIR_ENV: str(self.exports),
-                                               reply_files.SWITCH_ENV: "on"})
+        patcher = mock.patch.dict(os.environ, {reply_files.EXPORT_DIR_ENV: str(self.exports)})
         patcher.start()
         self.addCleanup(patcher.stop)
 
@@ -86,32 +85,39 @@ class PrepareTests(ExportDir, unittest.TestCase):
         self.assertEqual(peer.manifest_reads, 1)
         self.assertEqual(reply_files.prepare(Fake(peer), "No files here."), ("No files here.", []))
 
-    def test_unverifiable_files_are_named_not_attached_and_never_sent(self):
+    def test_a_file_whatsapp_cannot_take_is_named_plainly_with_its_reason(self):
+        line = "Not sent on WhatsApp: October package.zip (%s). It is in the Orkestr app."
         cases = {
-            "owner upload or unknown manifest": dict(manifest=None),
-            "another conversation": dict(manifest=manifest(conversation=fixture.identity(9))),
-            "type WhatsApp is not sent": dict(manifest=manifest(media_type="text/html")),
-            "removed": dict(manifest=manifest(state="removed")),
-            "digest changed": dict(manifest=manifest(sha256="0" * 64)),
+            "owner upload or unknown manifest": (None, "unavailable"),
+            "another conversation": (manifest(conversation=fixture.identity(9)), "unavailable"),
+            "a type WhatsApp does not take": (manifest(media_type="text/html"), "type not supported"),
+            "too large for WhatsApp": (manifest(byte_length=16 * 1024 * 1024 + 1), "over 16 MB"),
+            "removed": (manifest(state="removed"), "unavailable"),
+            "digest changed": (manifest(sha256="0" * 64), "unavailable"),
         }
-        for label, change in cases.items():
+        for label, (value, reason) in cases.items():
             peer = AttachmentPeer()
-            peer.manifest = change["manifest"]
+            peer.manifest = value
             text, files = reply_files.prepare(Fake(peer), "Done.\n" + MARKER)
             self.assertEqual(files, [], label)
-            self.assertEqual(text, "Done.\n\nOctober package.zip (not attached)", label)
-        # A binding without attachments never sends files either.
+            self.assertEqual(text, "Done.\n\n" + line % reason, label)
+            self.assertNotIn("attached in the Orkestr app", text)
+        # A binding that takes no files never sends one either.
         text, files = reply_files.prepare(Fake(AttachmentPeer(), attachments=False), MARKER)
-        self.assertEqual((text, files), ("October package.zip (not attached)", []))
+        self.assertEqual((text, files), (line % "this chat takes no files", []))
         # Without Core's delivery copy nothing is attached.
         (self.exports / CONVERSATION / (SHA + ".zip")).unlink()
-        self.assertEqual(reply_files.prepare(Fake(AttachmentPeer()), MARKER)[1], [])
+        self.assertEqual(reply_files.prepare(Fake(AttachmentPeer()), MARKER),
+                         (line % "unavailable", []))
 
-    def test_switched_off_the_file_is_named_for_the_web_app_and_core_is_not_asked(self):
-        peer = AttachmentPeer()
+    def test_on_by_default_and_an_operator_pause_names_every_file(self):
         with mock.patch.dict(os.environ, {reply_files.SWITCH_ENV: ""}):
+            self.assertEqual(len(reply_files.prepare(Fake(AttachmentPeer()), MARKER)[1]), 1)
+        peer = AttachmentPeer()
+        with mock.patch.dict(os.environ, {reply_files.SWITCH_ENV: "off"}):
             text, files = reply_files.prepare(Fake(peer), "Done.\n" + MARKER)
-        self.assertEqual((text, files), ("Done.\n\nOctober package.zip (attached in the Orkestr app)", []))
+        self.assertEqual((text, files), ("Done.\n\nNot sent on WhatsApp: October package.zip (sending files is "
+                                         "paused). It is in the Orkestr app.", []))
         self.assertEqual(peer.manifest_reads, 0)
 
     def test_a_transient_core_failure_retries_the_reply_instead_of_dropping_the_file(self):

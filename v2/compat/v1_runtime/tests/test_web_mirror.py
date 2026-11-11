@@ -271,10 +271,20 @@ class WebMirrorTests(Base):
         text = ("see these\n\n[Files attached in the Orkestr app, stored in this conversation's attachment store, "
                 "manifest 1:\n- plan.pdf (application/pdf, 10 bytes, reference r1, local file /x/y)\n"
                 "- shot.png (image/png, 5 bytes, reference r2)]")
-        self.assertEqual(self.worker.web_text(text), "see these\n\n\U0001f4ce 2 file(s) attached in the app")
+        self.assertEqual(self.worker.web_text(text), "see these\n\n\U0001f4ce You shared 2 file(s) in the app")
         self.worker.attachments = True
-        self.assertEqual(self.worker.web_text(text), "see these\n\n\U0001f4ce plan.pdf, shot.png")
+        self.assertEqual(self.worker.web_text(text), "see these\n\n\U0001f4ce You shared in the app: plan.pdf, shot.png")
         self.assertTrue(self.worker.web_text("x" * 5000).endswith("…"))
+
+    def test_the_encrypted_upload_note_is_named_and_never_leaks_a_host_path(self):
+        self.worker.attachments = True
+        note = ("[File attached in the Orkestr app, encrypted upload 00000000-0000-4000-8000-000000000001: "
+                "a, b (1).txt (text/plain, 2 bytes), SHA-256 " + "ab" * 32 + ", local file /var/lib/synthetic/x.txt]")
+        text = self.worker.web_text("read this\n\n" + note)
+        self.assertEqual(text, "read this\n\n\U0001f4ce You shared in the app: a, b (1).txt")
+        # Any other note fragment never carries a host path to the chat.
+        odd = self.worker.web_text("odd [File attached in the Orkestr app, x, local file /var/lib/synthetic/y]")
+        self.assertNotIn("/var/lib", odd)
 
     def test_paused_binding_does_not_poll(self):
         self.ledger.set_web_cursor(10)

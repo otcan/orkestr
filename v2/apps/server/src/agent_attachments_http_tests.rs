@@ -110,11 +110,33 @@ async fn a_running_deep_turn_attaches_a_workspace_file_to_its_reply() {
         (status, value["code"].as_str()),
         (409, Some("agent_attachment_conflict"))
     );
-    // Only types the WhatsApp worker sends, with a matching extension.
-    for (name, media) in [
-        ("page.html", "text/html"),
-        ("report.pdf", "application/zip"),
-        ("tool.exe", "application/octet-stream"),
+    // Any type the store takes; a WhatsApp extension must carry its own type,
+    // and hidden or secret-looking files are refused.
+    let page = upload(
+        "00000000-0000-4000-8000-000000000a04",
+        &[("page.html", "text/html", b"<p>synthetic</p>")],
+    );
+    let (status, value) = send(&case.state, "POST", &path, &[&header], &page).await;
+    assert_eq!(status, 201, "{value}");
+    for (name, media, code, expected) in [
+        (
+            "report.pdf",
+            "application/zip",
+            "agent_attachment_type_mismatch",
+            415,
+        ),
+        (
+            "server.pem",
+            "application/x-pem-file",
+            "agent_attachment_name_refused",
+            422,
+        ),
+        (
+            "credentials.json",
+            "application/json",
+            "agent_attachment_name_refused",
+            422,
+        ),
     ] {
         let other = upload(
             "00000000-0000-4000-8000-000000000a02",
@@ -123,7 +145,7 @@ async fn a_running_deep_turn_attaches_a_workspace_file_to_its_reply() {
         let (status, value) = send(&case.state, "POST", &path, &[&header], &other).await;
         assert_eq!(
             (status, value["code"].as_str()),
-            (415, Some("agent_attachment_type_refused")),
+            (expected, Some(code)),
             "{name}"
         );
     }

@@ -16,7 +16,7 @@ import uuid
 
 from .ledger_connections import Connections
 from .ledger_indexes import OPEN_PHASE, OPEN_ROWS, initialize as initialize_indexes
-from .outbound_text import scrub_local_paths
+from .outbound_text import neutralise_local_links, scrub_local_paths
 from .reply_files import strip as strip_attachment_markers
 from . import failure_cause, notices
 
@@ -801,8 +801,7 @@ class Ledger:
         turns a final's markers into attachments before it gets here)."""
         if isinstance(message, dict) and isinstance(message.get("text"), str):
             message["text"] = strip_attachment_markers(message["text"])
-            if self.scrub_paths:
-                message["text"] = scrub_local_paths(message["text"])
+            message["text"] = (scrub_local_paths if self.scrub_paths else neutralise_local_links)(message["text"])
         return message
 
     def _export(self, db, data, kind, source_key, message):

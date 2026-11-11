@@ -77,6 +77,11 @@ WEB_ANSWER_MAX_S = 5 * 3600
 WEB_NO_RUN_GRACE_S = 120
 DEEP_TERMINAL_PHASES = ("failed", "lost", "cancelled", "blocked", "stopped", "interrupted")
 APP_FILES = re.compile(r"\n*\[Files attached in the Orkestr app[^\n]*:\n((?:- [^\n]*\n?)*)\]?", re.S)
+# The encrypted-upload note (one file): "[File attached in the Orkestr app,
+# encrypted upload <id>: <name> (<type>, <n> bytes), SHA-256 <hex>, local file <path>]".
+APP_FILE = re.compile(r"\n*\[File attached in the Orkestr app, encrypted upload [^:\n]+: (.+?) "
+                      r"\([^()\n]*, [0-9]+ bytes\), SHA-256 [0-9a-fA-F]+, local file [^\n]*\]")
+LOCAL_FILE = re.compile(r",? local file /[^\]\n]*")
 # Runtime marker of an asynchronous question (Codex `request_user_input_async`)
 # in a progress payload; must equal the runtime's ASYNC_QUESTION_PREFIX. Such a
 # question is sent at once as its own message, never as the input's final.
@@ -484,15 +489,21 @@ class Worker:
             self.client.request("POST", "/posts/%s/delivered" % row["id"], body={}, allowed=(200,))
 
     def web_text(self, text):
-        """The owner's web message for WhatsApp: app attachment notes become one
-        line (file names with `attachments`, else only the count); bounded."""
+        """The owner's web message for WhatsApp: app attachment notes (both
+        forms) become one line (file names with `attachments`, else only the
+        count) and never carry a host path; bounded. The owner's own uploads
+        are named, not sent: an assistant's files go with its reply (ORK-787)."""
         files = []
         def strip(match):
             files.extend(line[2:].split(" (", 1)[0] for line in match.group(1).splitlines() if line.startswith("- "))
             return ""
-        body = APP_FILES.sub(strip, text).strip()
+        def strip_one(match):
+            files.append(match.group(1))
+            return ""
+        body = LOCAL_FILE.sub("", APP_FILE.sub(strip_one, APP_FILES.sub(strip, text))).strip()
         if files:
-            note = ("\U0001f4ce " + ", ".join(files)) if self.attachments else "\U0001f4ce %d file(s) attached in the app" % len(files)
+            note = (("\U0001f4ce You shared in the app: " + ", ".join(files)) if self.attachments
+                    else "\U0001f4ce You shared %d file(s) in the app" % len(files))
             body = (body + "\n\n" + note) if body else note
         if len(body) > WEB_TEXT_LIMIT:
             body = body[:WEB_TEXT_LIMIT].rstrip() + " \u2026"

@@ -13,6 +13,11 @@ at once posted the final answer twice (biofuture, 2026-10-27 14:03Z). A
 snapshot is progress only once the run is still running after it settled; if
 the run completes first, the final is the only copy.
 
+Markdown links to local files or folders are neutralised in every chat
+(`neutralise_local_links`, ORK-787): the reply-attach tool is the one way a
+file reaches a chat, and a link to a host path is never a file the reply
+carries.
+
 Replies in a chat shared with other members (every chat whose binding is not
 marked `owner_only_verified` with no participants) may reference files on the host ("[Deck](/var/lib/.../deck.pptx)").
 WhatsApp cannot open such a link and the full path must not reach other
@@ -121,17 +126,33 @@ def _link(match):
 
 
 def _prose(text):
-    return _BARE.sub(_bare, _FOLDER_LINK.sub(_folder_link, _LINK.sub(_link, text)))
+    return _BARE.sub(_bare, _links(text))
 
 
-def scrub_local_paths(text):
-    """Replace server-local file references outside code with their file names."""
+def _links(text):
+    return _FOLDER_LINK.sub(_folder_link, _LINK.sub(_link, text))
+
+
+def _outside_code(text, rewrite):
     if not isinstance(text, str) or "/" not in text:
         return text
     parts, at = [], 0
     for code in _CODE.finditer(text):
-        parts.append(_prose(text[at:code.start()]))
+        parts.append(rewrite(text[at:code.start()]))
         parts.append(code.group(0))
         at = code.end()
-    parts.append(_prose(text[at:]))
+    parts.append(rewrite(text[at:]))
     return "".join(parts)
+
+
+def scrub_local_paths(text):
+    """Replace server-local file references outside code with their file names."""
+    return _outside_code(text, _prose)
+
+
+def neutralise_local_links(text):
+    """Every chat (ORK-787): a Markdown link to a server-local file or folder
+    becomes its name, so it never looks like a file the reply carries; files
+    reach the chat only through the reply-attach tool. Bare paths stay (a
+    verified owner-only chat works with paths on this host)."""
+    return _outside_code(text, _links)
