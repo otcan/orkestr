@@ -41,7 +41,7 @@ pub struct SidebarConversations {
 }
 
 const LIST: &str = "SELECT d.conversation_id,d.name,c.sequence,
- (SELECT max(e.occurred_at) FROM events e WHERE e.conversation_id=d.conversation_id AND e.owner_id=d.owner_id) AS last_event_at,
+ (SELECT e.occurred_at FROM events e WHERE e.conversation_id=d.conversation_id AND e.owner_id=d.owner_id ORDER BY e.sequence DESC LIMIT 1) AS last_event_at,
  (SELECT m.created_at FROM archived_history_messages m JOIN archived_history_sources s ON s.row_sequence=m.source_row
    WHERE s.conversation_id=d.conversation_id AND s.owner_id=d.owner_id AND m.created_at IS NOT NULL
    ORDER BY m.created_at DESC LIMIT 1) AS last_archived_at,
