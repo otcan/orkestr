@@ -169,12 +169,16 @@ async fn invalid_classified_event_holds_its_occurrence_and_other_timers_continue
         .iter()
         .any(|(n, r)| *n == namespace && *r == "tracker_scan_commit_refused"));
 
+    // Enabling a one-shot whose time has already passed is a Conflict. A due
+    // time only 100 ms ahead raced the import and enable write transactions
+    // (ORK-778), so enable it an hour ahead and then move the stored occurrence
+    // to the Store clock's past, as the scheduler would find it once due.
     let ordinary = Uuid::new_v4();
     let due = (std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_millis() as i64)
-        + 100;
+        + 3_600_000;
     case.state
         .store
         .import_dormant_timer(
@@ -207,7 +211,7 @@ async fn invalid_classified_event_holds_its_occurrence_and_other_timers_continue
         )
         .await
         .unwrap();
-    tokio::time::sleep(Duration::from_millis(110)).await;
+    make_due(&case.root.join("core.sqlite3"), ordinary);
     let mut admitted = 0;
     for _ in 0..3 {
         admitted += controller
@@ -222,6 +226,25 @@ async fn invalid_classified_event_holds_its_occurrence_and_other_timers_continue
     );
     case.state.shutdown_tracker_reads().await.unwrap();
     case.finish().await;
+}
+
+/// The clock stand-in for an enabled timer: its stored occurrence is moved one
+/// second into the Store clock's past, without waiting for real time to pass.
+fn make_due(database: &std::path::Path, namespace: Uuid) {
+    let status = std::process::Command::new("python3")
+        .arg("-c")
+        .arg(
+            "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); \
+             n=c.execute(\"UPDATE dormant_timers SET next_due_ms=\
+             CAST((julianday('now')-2440587.5)*86400000 AS INTEGER)-1000 \
+             WHERE namespace=? AND state='enabled'\",(sys.argv[2],)).rowcount; \
+             c.commit(); c.close(); sys.exit(n!=1)",
+        )
+        .arg(database)
+        .arg(namespace.to_string())
+        .status()
+        .unwrap();
+    assert!(status.success(), "exactly one enabled timer is made due");
 }
 
 #[tokio::test]
