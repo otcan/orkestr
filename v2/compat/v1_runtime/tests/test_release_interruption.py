@@ -9,25 +9,54 @@ from unittest.mock import patch
 
 from v2.compat.v1_runtime import config as config_module, notices, release_interruption
 from v2.compat.v1_runtime.notices import TEMPLATES
-from v2.compat.v1_runtime.worker import CONTINUE_PREFIX, RELEASE_NOTICE, RELEASE_PREFIX, Refused
-from v2.compat.v1_runtime.tests.test_window_continuation import Case
+from v2.compat.v1_runtime.worker import CONTINUE_PREFIX, RELEASE_NOTICE, RELEASE_PREFIX, Refused, Worker
+from v2.compat.v1_runtime.tests.test_window_continuation import Case, QueuePeer
 
 SOURCE = "c" * 40
+
+
+class CorePeer(QueuePeer):
+    """Models Core's continuation fence (store-sqlite source_binding_is_current and,
+    ORK-792, source_binding_released_once): a cut run's released binding admits one
+    fenced continuation only with a valid Root record, never after a later turn."""
+
+    def __init__(self):
+        super().__init__()
+        self.released, self.fenced, self.admitted = set(), set(), set()
+        self.later_turn = False
+        self.records_dir = None
+
+    def request(self, method, route, body=None, allowed=(200,)):
+        if method == "POST" and route == "/messages" and (body or {}).get("continuation_source_run_id"):
+            run, key = body["continuation_source_run_id"], body["client_message_id"]
+            if key not in self.admitted and run in self.released:
+                if (self.later_turn or run in self.fenced or
+                        not release_interruption.recorded(self.records_dir, self.conversation, run)):
+                    return 409, {"error": {"code": "provider_generation_mismatch"}}
+                self.fenced.add(run)
+            self.admitted.add(key)
+        return super().request(method, route, body=body, allowed=allowed)
 
 
 class Recorded(Case):
     def setUp(self):
         super().setUp()
+        self.peer = CorePeer()
+        self.worker = Worker(self.peer, self.ledger, legacy_companions=True)
         uid = patch.object(release_interruption, "OWNER_UID", os.geteuid())
         uid.start()
         self.addCleanup(uid.stop)
         self.records = Path(self.temp.name) / "release-interruptions"
-        self.records.mkdir(mode=0o700)
+        self.records.mkdir(mode=0o750)
+        self.records.chmod(0o750)
         self.worker.release_interruption_dir = str(self.records)
+        self.peer.records_dir = str(self.records)
 
-    def record(self, run_id="deep-run", conversation=None, mode=0o400, **change):
+    def record(self, run_id="deep-run", conversation=None, mode=0o440, **change):
+        now = int(time.time() * 1000)
         value = dict(format=release_interruption.FORMAT, conversation_id=conversation or self.peer.conversation,
-                     run_id=run_id, release_source=SOURCE, interrupted_at_ms=int(time.time() * 1000))
+                     run_id=run_id, release_source=SOURCE, interrupted_at_ms=now, provider_generation=0,
+                     expires_at_ms=now + 30 * 60_000)
         value.update(change)
         path = self.records / (run_id + ".json")
         path.write_text(json.dumps(value))
@@ -35,7 +64,9 @@ class Recorded(Case):
         return path
 
     def stop_before_deadline(self):
-        # The cut: Deep cancelled while the window still had work time left.
+        # The cut: Deep cancelled while the window still had work time left; the
+        # Stop released its binding, so only a recorded continuation is admitted.
+        self.peer.released.add("deep-run")
         self.peer.deep_phase = "cancelled"
         self.peer.current = dict(window_id="window", state="active", conversation_id="conversation",
                                  work_deadline_ms=int(time.time() * 1000) + 600_000)
@@ -97,6 +128,16 @@ class ReleaseContinuationTests(Recorded):
         self.assertIn("[2 owner messages were answered together by the stopped turn", text)
         self.assertTrue(text.endswith("\n\n2. follow-up"), text)
 
+    def test_core_refusal_after_a_later_turn_refuses_visibly(self):
+        # Taraftech on 2026-11-11: a later turn used the native session first.
+        self.record()
+        self.stop_before_deadline()
+        self.peer.later_turn = True
+        self.worker.step(self.data)
+        resumed = self.ledger.next_input()
+        with self.assertRaisesRegex(Refused, "continuation_admission_requires_review"):
+            self.worker.step(resumed)
+
     def test_the_notice_is_localized(self):
         self.assertEqual(set(TEMPLATES["release_continue"]), {"en", "tr", "de"})
         for lang in ("tr", "de"):
@@ -125,8 +166,10 @@ class TodaysBehaviourTests(Recorded):
         self.assert_todays_refusal()
 
     def test_invalid_records_are_ignored(self):
-        cases = [dict(mode=0o600), dict(format="other"), dict(release_source="short"),
-                 dict(interrupted_at_ms="1"), dict(extra=True)]
+        now = int(time.time() * 1000)
+        cases = [dict(mode=0o600), dict(mode=0o460), dict(format="other"), dict(release_source="short"),
+                 dict(interrupted_at_ms="1"), dict(extra=True), dict(provider_generation=-1),
+                 dict(expires_at_ms=now - 1), dict(expires_at_ms=now + release_interruption.MAX_WINDOW_MS + 60_000)]
         for change in cases:
             with self.subTest(change=change):
                 self.record(**change)
@@ -140,9 +183,9 @@ class TodaysBehaviourTests(Recorded):
         (self.records / "deep-run.json").unlink()
         self.record()
         self.assertTrue(release_interruption.recorded(str(self.records), self.peer.conversation, "deep-run"))
-        self.records.chmod(0o750)
+        self.records.chmod(0o770)
         self.assertFalse(release_interruption.recorded(str(self.records), self.peer.conversation, "deep-run"))
-        self.records.chmod(0o700)
+        self.records.chmod(0o750)
         for run in ("../deep-run", "deep run", "", None):
             self.assertFalse(release_interruption.recorded(str(self.records), self.peer.conversation, run))
 

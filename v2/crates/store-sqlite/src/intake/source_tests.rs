@@ -39,6 +39,7 @@ async fn admit(
             None,
             None,
             Some(InputAuthor::Owner),
+            None,
         )
         .await
 }
@@ -213,7 +214,8 @@ async fn provider_fence_rolls_back_input_and_authentication_proof_together() {
             None,
             Some(42),
             None,
-            Some(InputAuthor::Owner)
+            Some(InputAuthor::Owner),
+            None,
         )
         .await
         .is_err());

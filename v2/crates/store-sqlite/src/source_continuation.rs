@@ -74,7 +74,16 @@ pub(crate) async fn validate(
             != row.get::<String, _>("native_session_id")
         || row.get::<String, _>("source_provider") != row.get::<String, _>("provider_kind")
         || row.get::<i64, _>("source_binding_generation") != row.get::<i64, _>("binding_generation")
-        || !crate::source_context::source_binding_is_current(tx, owner, conversation, &run).await?
+        || !(crate::source_context::source_binding_is_current(tx, owner, conversation, &run).await?
+            // ORK-792: the one release continuation admitted for this cut run.
+            || crate::source_context::source_binding_released_once(
+                tx,
+                owner,
+                conversation,
+                &run,
+                Some(message),
+            )
+            .await?)
     {
         return Err(StoreError::ProviderGenerationMismatch);
     }

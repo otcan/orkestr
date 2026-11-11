@@ -20,6 +20,9 @@ pub(crate) struct BetaConfig {
     /// Root-controlled external admission hold, retained across process restarts.
     #[serde(default)]
     pub deploy_maintenance_marker: Option<PathBuf>,
+    /// Root-recorded release interruptions (ORK-792): one continuation each.
+    #[serde(default)]
+    pub release_interruption_dir: Option<PathBuf>,
     #[serde(default)]
     pub identity_split: Option<identity_split::IdentitySplit>,
     pub owner_id: OwnerId,
@@ -155,6 +158,13 @@ impl BetaConfig {
             .is_some_and(|path| !conversation_workspace_path(path))
         {
             return Err("invalid deploy maintenance path");
+        }
+        if self
+            .release_interruption_dir
+            .as_ref()
+            .is_some_and(|path| !conversation_workspace_path(path))
+        {
+            return Err("invalid release interruption path");
         }
         if let Some(identity) = &self.identity_split {
             identity.validate()?;

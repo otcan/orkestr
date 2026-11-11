@@ -72,6 +72,7 @@ impl Fixture {
                 None,
                 None,
                 Some(InputAuthor::Owner),
+                None,
             )
             .await
             .unwrap()
@@ -447,6 +448,7 @@ async fn a_correction_of_a_quoted_input_keeps_its_quote() {
             None,
             None,
             Some(InputAuthor::Owner),
+            None,
         )
         .await
         .unwrap()
@@ -620,6 +622,7 @@ async fn a_message_from_the_owners_browser_session_counts_without_an_author() {
                 client_message_id: Uuid::new_v4().to_string(),
                 text: "typed in the web composer".into(),
             },
+            None,
             None,
             None,
             None,
