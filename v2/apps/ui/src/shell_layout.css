@@ -119,3 +119,17 @@
  .resource-bar .provider-quota-item { flex: none; }
  .resource-bar .quota-detail { position: fixed; left: .5rem; right: .5rem; top: auto; width: auto; margin-top: .3rem; }
 }
+/* Short screens (200% zoom, small windows): header and heading take one row
+   each, so the composer and its actions stay on screen. */
+@media (max-width: 52rem) and (max-height: 34rem) {
+ .app-heading { flex-wrap: nowrap; }
+ .app-heading > .resource-bar { order: 0; flex: 1 1 0; min-width: 0; width: auto; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+ .resource-bar .host-metrics-panel, .resource-bar .provider-quota-panel, .resource-bar .provider-quota-item { flex: none; }
+ .resource-bar .provider-quota-panel { flex-wrap: nowrap; border-top: 0; border-left: 1px solid var(--border); }
+ .resource-bar .quota-detail { position: fixed; left: .5rem; right: .5rem; top: auto; width: auto; margin-top: .3rem; }
+ .app-heading > .resource-bar + .build-badge { margin-left: 0; }
+ .conversation-heading { flex-wrap: nowrap; }
+ .conversation-heading > .avatar { display: none; }
+ .conversation-heading .conversation-nav { flex: none; }
+ .conversation-nav .nav-tab, .more-tabs { flex: none; }
+}

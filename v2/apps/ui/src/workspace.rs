@@ -260,7 +260,11 @@ pub fn Workspace(
             div { class: "workspace-main",
                 if !link_notice().is_empty() { p { class: "app-notice link-notice", role: "status", "{link_notice}" } }
                 header { class: "conversation-heading", "data-scope": if global { "global" } else { "conversation" },
-                    button { class: "threads-toggle", r#type: "button", "aria-expanded": "{sidebar}", "aria-controls": "conversation-sidebar", "aria-label": "Conversations", onclick: move |_| sidebar.set(!sidebar()), span { "aria-hidden": "true", "☰" } }
+                    button { class: "threads-toggle", r#type: "button", "aria-expanded": "{sidebar}", "aria-controls": "conversation-sidebar", "aria-label": "Conversations", onclick: move |_| sidebar.set(!sidebar()),
+                        svg { "aria-hidden": "true", view_box: "0 0 20 20", width: "20", height: "20",
+                            path { d: "M3 5.5h14M3 10h14M3 14.5h14", fill: "none", stroke: "currentColor", stroke_width: "1.6", stroke_linecap: "round" }
+                        }
+                    }
                     button { class: "sidebar-collapse", r#type: "button", "aria-expanded": "{list_shown}", "aria-controls": "conversation-sidebar",
                         "aria-label": if collapsed() { "Show conversation list" } else { "Hide conversation list" },
                         title: if collapsed() { "Show conversation list" } else { "Hide conversation list" },
