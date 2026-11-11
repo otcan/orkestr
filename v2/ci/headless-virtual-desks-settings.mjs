@@ -252,10 +252,51 @@ export async function virtualDesksAndAccountSettings({page, state, conversation,
     assert.equal(state.desktopActions.length,3,'refresh must not repeat effects');
     assert.equal(state.deskOwnerActions.at(-1).action,'link','refresh must not repeat owner actions');
     assert.equal(state.deskOwnerActions.filter(a=>a.action==='link').length,1,'refresh must not mint another link');
+    await deskSharing({page,state,clickText,waitText,screenshot,label,row});
     await clickText('Settings');
     await page.waitForSelector('#settings-model');
     await page.waitForSelector('[aria-label="Account settings"] .owner-password');
     assert.equal(new URL(page.url()).hash, `#conversation/${conversation}/settings`);
     assert.equal(await page.$$eval('.owner-password', nodes => nodes.length), 1);
     assert.equal(await page.$eval('.owner-password summary', n => n.textContent.trim()), 'Change password');
+}
+
+// ORK-773: the owner shares all desks with all chats. The page and the chat's
+// Settings say so and stop asking to connect a desk to a chat; turning it off
+// restores the per-chat wording. Neither change reserves or acts on a desk.
+async function deskSharing({page,state,clickText,waitText,screenshot,label,row}) {
+    const effects = () => ({desk:state.desktopActions.length, owner:state.deskOwnerActions.length, bindings:state.bindingPuts.length});
+    const before = effects();
+    const sectionText = () => page.$eval('[aria-label="Virtual desks"]', el => el.textContent);
+    await waitText('Desks are not shared: each chat reaches only the desks listed in its Settings.');
+    assert.ok((await sectionText()).includes('reserve it from a connected chat'), 'off keeps the per-chat wording');
+    assert.equal(await page.$(`${row('unbound-desk')} .desk-chat-toggle`), null, 'off: a desk no chat lists cannot be reserved');
+    await waitText('Share all desks with all chats');
+    await clickText('Share all desks with all chats');
+    await waitText('All desks are shared with all chats. Any chat can reserve any desk');
+    assert.deepEqual(state.sharingPuts.at(-1), {expected_revision:0, share_all_desks:true});
+    await waitText('All desk resources, shared with all chats.');
+    await page.waitForSelector(`${row('unbound-desk')} .desk-chat-toggle`);
+    assert.equal(await page.$eval(`${row('unbound-desk')} .desk-chat-toggle`, el => el.title), 'Reserve for a chat');
+    assert.deepEqual(await page.$$eval(`${row('unbound-desk')} .desk-chat select option`, nodes => nodes.map(n => n.textContent)),
+        ['Choose a chat…', 'Assistant', 'Research notes'], 'every chat with a desk binding can reserve every desk');
+    assert.ok(!(await sectionText()).includes('connected chat'), 'shared: no request to connect a desk to a chat');
+    assert.equal(await page.$eval('.desk-sharing', el => el.dataset.shared), 'true');
+    assert.deepEqual(effects(), before, 'sharing reserves, starts and binds nothing');
+    await screenshot(label, 'virtual-desks-shared');
+    await clickText('Settings');
+    await page.waitForSelector('#settings-model');
+    await page.waitForFunction(() => document.querySelector('.desk-sharing-help')?.textContent.startsWith('All desks are shared with all chats: workers of this chat may reserve any desk'), {timeout:15000});
+    assert.ok(!(await page.$eval('body', el => el.textContent)).includes('Every desktop must be granted to the V1 thread in V1.'));
+    assert.equal(await page.$eval('label[for="desktop-slugs"]', el => el.textContent), 'Desktops (optional, all desks are shared)');
+    await page.$eval('.desk-sharing-help', el => el.scrollIntoView({block:'center'}));
+    await screenshot(label, 'chat-settings-shared');
+    await clickText('Virtual desks');
+    await waitText('Stop sharing desks with all chats');
+    await clickText('Stop sharing desks with all chats');
+    await waitText('Desks are not shared: each chat reaches only the desks listed in its Settings.');
+    assert.deepEqual(state.sharingPuts.at(-1), {expected_revision:1, share_all_desks:false});
+    await page.waitForFunction(selector => !document.querySelector(selector), {timeout:15000}, `${row('unbound-desk')} .desk-chat-toggle`);
+    await waitText('reserve it from a connected chat');
+    assert.deepEqual(effects(), before, 'turning sharing off acts on no desk');
 }

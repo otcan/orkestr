@@ -1,7 +1,7 @@
 use dioxus::prelude::*;
-use orkestr_v2_contracts::DesktopInventory;
+use orkestr_v2_contracts::{DesktopInventory, DesktopSharing};
 use orkestr_v2_ui::{
-    desk_presentation::{Availability, LEGEND},
+    desk_presentation::{Availability, DeskSharing, LEGEND},
     session_scope::SessionScope,
 };
 use serde_json::Value;
@@ -19,6 +19,7 @@ pub fn VirtualDesks(
     let mut loading = use_signal(|| true);
     let mut reload = use_signal(|| 0_u64);
     let mut search = use_signal(String::new);
+    let mut sharing = use_signal(|| None::<DesktopSharing>);
     use_resource(move || {
         let _ = reload();
         async move {
@@ -31,9 +32,20 @@ pub fn VirtualDesks(
                 "",
             )
             .await;
+            // Read on its own, so the switch works while V1 is unreachable. A
+            // server without it has no switch: each chat keeps its own desks.
+            let shared = crate::transport::request::<DesktopSharing>(
+                "GET",
+                "/api/v2/desktop-sharing",
+                Value::Null,
+                "",
+                "",
+            )
+            .await;
             if !session_scope.read().is_current(owner) {
                 return;
             }
+            sharing.set(shared.ok());
             loading.set(false);
             match result {
                 Ok(value) => {
@@ -69,11 +81,13 @@ pub fn VirtualDesks(
         })
         .unwrap_or(0);
     let unchecked = desks - available - reserved;
+    let shared = sharing().is_some_and(|s| s.share_all_desks);
     rsx! {
         section { class: "settings-section", "aria-label": "Virtual desks",
             style { "{include_str!(\"virtual_desks.css\")}" }
             h3 { "Virtual desks" }
-            p { class: "field-help", "All desk resources. Start, stop or link a desk here, or reserve it from a connected chat." }
+            p { class: "field-help", "{DeskSharing::inventory_help(shared)}" }
+            crate::desk_sharing_view::DeskSharingSwitch { sharing, csrf: csrf.clone(), session_scope, onexpired, onchanged: move |_| reload += 1 }
             button { r#type: "button", disabled: loading(), onclick: move |_| reload += 1,
                 if loading() { "Refreshing…" } else { "Refresh" }
             }
@@ -109,8 +123,9 @@ pub fn VirtualDesks(
                     crate::desktop_resource_row::DesktopResourceRow {
                         key: "{desk.slug}:{owner}",
                         visible: format!("{} {}",desk.label,desk.slug).to_lowercase().contains(&search().trim().to_lowercase()),
-                        bindings: value.bindings.iter().filter(|b| b.desktop_slugs.contains(&desk.slug)).cloned().collect::<Vec<_>>(),
-                        desk, csrf: csrf.clone(), session_scope, onexpired,
+                        // Shared: every chat with a desk binding may reserve every desk.
+                        bindings: value.bindings.iter().filter(|b| shared || b.desktop_slugs.contains(&desk.slug)).cloned().collect::<Vec<_>>(),
+                        shared, desk, csrf: csrf.clone(), session_scope, onexpired,
                         onchanged: move |_| reload += 1,
                         observed_at_ms: value.observed_at_ms,
                     }

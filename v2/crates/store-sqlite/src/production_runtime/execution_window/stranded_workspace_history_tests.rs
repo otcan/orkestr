@@ -457,7 +457,7 @@ async fn retained_run_indexes_upgrade_schema94_without_history_changes() {
     unrelated_history(&f, &prior.run.run_id).await;
     let before = fixtures::snapshot(&f.store).await;
     // An exact schema-94 fixture: version 95 adds only these two indexes.
-    sqlx::raw_sql("DROP TABLE message_revisions; DELETE FROM _sqlx_migrations WHERE version=96; DROP INDEX production_runs_context_lookup; DROP INDEX production_runs_session_generation; DELETE FROM _sqlx_migrations WHERE version=95;")
+    sqlx::raw_sql("DROP TABLE desktop_sharing; DELETE FROM _sqlx_migrations WHERE version=100; DROP TABLE vault_audit; DROP TABLE vault_import_sources; DROP TABLE vault_thread_grants; DROP TABLE vault_items; DELETE FROM _sqlx_migrations WHERE version=99; DROP TABLE local_file_requests; DROP TABLE local_file_connections; DROP TABLE local_file_grants; DELETE FROM _sqlx_migrations WHERE version=98; DROP TABLE message_retries; DELETE FROM _sqlx_migrations WHERE version=97; DROP TABLE message_revisions; DELETE FROM _sqlx_migrations WHERE version=96; DROP INDEX production_runs_context_lookup; DROP INDEX production_runs_session_generation; DELETE FROM _sqlx_migrations WHERE version=95;")
         .execute(&f.store.pool).await.unwrap();
     let upgraded = Store::open(&f.root.join("core.sqlite3")).await.unwrap();
     assert_eq!(fixtures::snapshot(&upgraded).await, before);

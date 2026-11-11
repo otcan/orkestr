@@ -79,7 +79,7 @@ export async function encryptedUploadMock(state) {
         const file=entry.status.file,bytes=Buffer.concat(parts);assert.equal(bytes.length,file.plaintext_size);
         if(!entry.receipt) {
           // Only synthetic tiny fixture files are retained here, for browser assertions.
-          state.uploads.push({target:conversation,encrypted:true,files:[{filename:file.filename,media_type:file.media_type,content_base64:bytes.toString('base64')} ]});
+          state.uploads.push({target:conversation,encrypted:true,upload_id:id,files:[{filename:file.filename,media_type:file.media_type,content_base64:bytes.toString('base64')} ]});
           entry.receipt={manifest_id:id,attachments:[{attachment_id:id,filename:file.filename,media_type:file.media_type,byte_length:bytes.length}],note:`[File attached in the Orkestr app, encrypted upload ${id}: ${file.filename} (${file.media_type}, ${bytes.length} bytes), SHA-256 ${hash(bytes)}, local file /synthetic/attachments/${id}]`};
         }
         json(res,200,entry.receipt);return true;

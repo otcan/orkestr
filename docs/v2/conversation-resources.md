@@ -87,6 +87,36 @@ Routes (`/api/v2/conversations/{id}/…`): `GET desktops`,
 `fencing_token` once), `POST desktops/{slug}/heartbeat {fencing_token,
 extend_ttl_ms?}`, `POST desktops/{slug}/release {fencing_token, reason?}`.
 
+### Sharing all desks with all chats
+
+`GET/PUT /api/v2/desktop-sharing` (owner Bearer or browser cookie + CSRF; a
+conversation desktop grant is refused) holds the owner's switch
+`{"share_all_desks": bool, "revision": n}`. `PUT` takes
+`{"expected_revision": n, "share_all_desks": bool}`; a stale revision is
+`409 desktop_sharing_revision_mismatch`. The Virtual Desks page shows it as
+"Share all desks with all chats".
+
+- **On**: any conversation with a desktop binding may acquire any desk. The
+  slug is not checked against the binding and V1's per-thread grant list is
+  not read, so desks added later need no binding or grant change and the
+  16-slug limit does not apply. The binding still supplies the V1 thread
+  (the holder V1 sees) and the conversation desktop grant. V1 still decides
+  every acquire under its own access policy (an enforced protected binding
+  is still refused there, `403 desktop_denied_by_v1`) and remains the
+  fencing authority. `GET …/desktops` reports `"shared_with_all_chats": true`.
+- **Off** (default, no row): exactly the per-conversation rules above.
+  Turning it off is refused with `409 desktop_shared_lease_active` while a
+  conversation holds a desk its binding does not list; release that lease
+  first. An acquire that started while it was on and is recorded after it
+  went off is refused (`409 desktop_sharing_changed`) and released at V1.
+- One holder per desk, fencing, heartbeat and release are the same either way.
+- A binding may list no slugs (`"desktop_slugs": []`): it then names only the
+  V1 thread, which is all a new conversation needs while sharing is on.
+- Stored-login typing (desk-login automatic grants) stays governed by its own
+  policy file; sharing a desk never widens which desks get stored logins.
+  Native desktop control keeps its per-conversation configuration and V1
+  operate grant.
+
 Fencing: V2 stores only a hash of V1's fencing token. A wrong token is refused
 by V2 (`409 desktop_fence_rejected`) before V1 is contacted. V1 heartbeat does
 not extend expiry, so `extend_ttl_ms` re-acquires for the same thread and must

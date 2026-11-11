@@ -10,6 +10,8 @@ from .participants import compose
 # Stored author role -> Core's verified input author. Only "owner" may command
 # a thread ask; a burst only ever merges inputs of one author.
 AUTHOR_FEATURE = "message_author"
+# The server links a re-admitted input to its retired attempt (ORK-780).
+RETRY_FEATURE = "message_retries_v1"
 AUTHORS = {"owner": "owner", "member": "member", "v1_owner": "v1_owner", "v1_agent": "v1_agent",
            "v1_external": "v1_external"}
 
@@ -17,13 +19,24 @@ AUTHORS = {"owner": "owner", "member": "member", "v1_owner": "v1_owner", "v1_age
 def author_supported(client):
     """Whether the server advertises `message_author`. Before the first
     identity check of this process, one (cached) check reads it."""
+    return feature_supported(client, AUTHOR_FEATURE)
+
+
+def feature_supported(client, feature):
     features = getattr(client, "features", None)
     if features is None:
         return False
     if not features and hasattr(client, "ensure_login"):
         client.ensure_login(mutation=False)
         features = client.features
-    return AUTHOR_FEATURE in features
+    return feature in features
+
+
+def retried_attempt(data):
+    """The Core message of this input's previous attempt, retired before this
+    re-admission (recovery.py), else None."""
+    previous = ((data.get("readmitted") or {}).get("previous") or {}).get("message_id")
+    return previous if isinstance(previous, str) and previous else None
 
 
 def verified_author(data):
@@ -77,6 +90,10 @@ def admit(worker, data, merge_burst=True):
             request["author"] = author
         if data.get("reply_to"):
             request["reply_to"] = data["reply_to"]
+        previous = retried_attempt(data)
+        if previous and feature_supported(worker.client, RETRY_FEATURE):
+            # The chat shows one message for the input, not one per attempt.
+            request["retry_of"] = previous
         if data.get("continued"):
             try:
                 request["expected_provider_generation"] = continuation_guard.generation(data)

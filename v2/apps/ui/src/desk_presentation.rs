@@ -121,6 +121,57 @@ pub fn held_by(lease_state: &str, holder: Option<&str>) -> String {
     }
 }
 
+/// The owner's "share all desks with all chats" switch, in the words used
+/// wherever the owner would otherwise be told to connect a desk to a chat.
+pub struct DeskSharing;
+impl DeskSharing {
+    pub fn summary(shared: bool) -> &'static str {
+        if shared {
+            "All desks are shared with all chats. Any chat can reserve any desk, one chat at a time, including desks added later."
+        } else {
+            "Desks are not shared: each chat reaches only the desks listed in its Settings."
+        }
+    }
+    pub fn switch_label(shared: bool) -> &'static str {
+        if shared {
+            "Stop sharing desks with all chats"
+        } else {
+            "Share all desks with all chats"
+        }
+    }
+    pub fn inventory_help(shared: bool) -> &'static str {
+        if shared {
+            "All desk resources, shared with all chats. Start, stop or link a desk here, or reserve it for any chat."
+        } else {
+            "All desk resources. Start, stop or link a desk here, or reserve it from a connected chat."
+        }
+    }
+    pub fn reserve_title(shared: bool) -> &'static str {
+        if shared {
+            "Reserve for a chat"
+        } else {
+            "Reserve from a connected chat"
+        }
+    }
+    /// A chat without a binding has no V1 thread to hold a desk with yet.
+    pub fn chat_help(shared: bool, bound: bool) -> &'static str {
+        if shared && !bound {
+            "All desks are shared with all chats. Save this chat's V1 thread below so its workers can reserve them."
+        } else if shared {
+            "All desks are shared with all chats: workers of this chat may reserve any desk, one chat at a time. Open or reserve any desk from Virtual desks. Listing desks here is optional."
+        } else {
+            "Workers of this chat may lease these V1 desktops. Every desktop must be granted to the V1 thread in V1."
+        }
+    }
+    pub fn slugs_label(shared: bool) -> &'static str {
+        if shared {
+            "Desktops (optional, all desks are shared)"
+        } else {
+            "Desktops"
+        }
+    }
+}
+
 /// One line above the table, so the rows themselves stay short.
 pub const LEGEND: &str = "Available: no reservation at the last refresh. Reserved: a chat holds the desk. Not verified or needs checking: it could not be confirmed, which does not mean the desk is free. Hover a status for details.";
 
@@ -200,6 +251,28 @@ mod tests {
         assert_eq!(Availability::from_lease("unreserved").token(), "available");
         assert_eq!(Availability::from_lease("nonsense").token(), "unknown");
         assert_eq!(Availability::from_lease("stale").token(), "needs-check");
+    }
+    #[test]
+    fn shared_desks_never_ask_to_connect_a_desk_to_a_chat() {
+        for text in [
+            DeskSharing::summary(true),
+            DeskSharing::inventory_help(true),
+            DeskSharing::reserve_title(true),
+            DeskSharing::chat_help(true, true),
+            DeskSharing::chat_help(true, false),
+            DeskSharing::slugs_label(true),
+        ] {
+            assert!(!text.contains("connected"), "{text}");
+            assert!(!text.contains("granted to the V1 thread"), "{text}");
+        }
+        assert!(DeskSharing::summary(true).contains("shared with all chats"));
+        assert!(DeskSharing::chat_help(true, true).contains("any desk"));
+        assert!(DeskSharing::chat_help(true, false).contains("V1 thread below"));
+        assert!(DeskSharing::chat_help(false, true).contains("granted to the V1 thread in V1"));
+        assert_ne!(
+            DeskSharing::switch_label(true),
+            DeskSharing::switch_label(false)
+        );
     }
     #[test]
     fn unknown_reservations_have_explicit_check_action() {
