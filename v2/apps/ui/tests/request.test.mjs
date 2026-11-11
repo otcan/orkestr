@@ -280,3 +280,16 @@ test('build identity read is restricted to the exact same-origin health GET', as
         await assert.rejects(execute({recv:async()=>({...base,method,path})},()=>assert.fail('fetch must not run')),/Invalid API path/);
     }
 });
+
+test('owner vault routes keep cookie and CSRF and never carry the sealed form', async () => {
+    const id = 'vi_0123456789abcdef0123456789abcdef';
+    for (const [method,path] of [['GET','/api/v2/vault'],['GET','/api/v2/vault/items'],['POST','/api/v2/vault/items'],['PATCH',`/api/v2/vault/items/${id}`],['DELETE',`/api/v2/vault/items/${id}`],['PUT',`/api/v2/vault/items/${id}/login`],['PUT',`/api/v2/vault/items/${id}/grants`],['POST','/api/v2/vault/import'],['GET','/api/v2/vault/audit']]) {
+        await execute({recv:async()=>({...base,method,path,csrf:'synthetic-csrf',body:method==='GET'||method==='DELETE'?null:{}})},async(actual,options)=>{
+            assert.equal(actual,path);assert.equal(options.credentials,'same-origin');
+            assert.equal(options.headers['x-orkestr-csrf'],method==='GET'?undefined:'synthetic-csrf');
+            assert.equal(options.headers.Authorization,undefined);return Response.json({ok:true});
+        });
+    }
+    for (const path of [`/api/v2/vault/items/${id}/sealed`,'/api/v2/vault/stored-login',`/api/v2/vault/items/${id}/../login`,'/api/v2/vault/items/not-an-id','/api/v2/vault/audit?limit=5','/api/v2/vault/items/vi_x'])
+        await assert.rejects(execute({recv:async()=>({...base,method:'GET',path})},()=>assert.fail('fetch must not run')),/Invalid API path/);
+});

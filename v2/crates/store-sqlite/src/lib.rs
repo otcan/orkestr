@@ -308,3 +308,6 @@ pub mod attachment_integrity;
 pub mod attachment_store;
 
 pub mod memory;
+
+/// Owner credential vault (ORK-784).
+pub mod vault;

@@ -485,6 +485,10 @@ async fn populated_payload_prefix_upgrade_preserves_all_rows_and_foreign_links()
         "deep_desk_results",
         "message_revisions",
         "message_retries",
+        "vault_items",
+        "vault_thread_grants",
+        "vault_import_sources",
+        "vault_audit",
     ] {
         expected.insert(table.into(), Vec::new());
     }
