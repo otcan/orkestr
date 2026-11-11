@@ -6,7 +6,7 @@
   "The values come from hosted-runner logs and match the AWS runner logs (ORK-774) within",
   "a few seconds; three were taken from the AWS logs of 2026-11-11 (ORK-791).",
   "The two store property tests carry their duration in the former single job, so that",
-  "each keeps a shard to itself; alone on a runner they take about four minutes (AWS: three)."
+  "each keeps a shard to itself; alone on a runner they take about four minutes (AWS: under three)."
  ],
  "default_seconds": 0.34,
  "tests": {
