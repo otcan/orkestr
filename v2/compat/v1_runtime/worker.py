@@ -1,4 +1,5 @@
 """Serial, restart-safe Rust intake for one binding. Only the matched Deep run is mirrored."""
+import contextlib
 import re
 import sqlite3
 import sys
@@ -1347,6 +1348,13 @@ class Worker:
         return value["text"]
 
     def run(self, stop, active=lambda: True):
+        # This thread's passes reuse one ledger connection, closed when the
+        # loop ends (ORK-772).
+        keep = getattr(self.ledger, "keep_connection", None)
+        with keep() if keep else contextlib.nullcontext():
+            self._run_loop(stop, active)
+
+    def _run_loop(self, stop, active):
         pause, unavailable = PASS_S, 0
         while not stop.wait(pause):
             try:

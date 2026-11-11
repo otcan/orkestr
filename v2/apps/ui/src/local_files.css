@@ -1,0 +1,14 @@
+.conversation-toolbar { gap:.5rem; align-items:center; flex-wrap:wrap; }
+.local-folder { display:flex; flex-wrap:wrap; align-items:center; gap:.4rem; min-width:0; margin-right:auto; font-size:.78rem; }
+.local-folder-controls { display:flex; flex-wrap:wrap; align-items:center; gap:.4rem; min-width:0; }
+.local-folder-log { flex-basis:100%; }
+.local-folder-log:empty { display:none; }
+.local-folder button { min-height:2rem; padding:.2rem .8rem; font-size:.78rem; border-radius:1rem; }
+.local-folder-note { color:var(--muted); overflow-wrap:anywhere; }
+.local-folder-live { color:var(--accent-text); background:var(--accent-soft); border-radius:1rem; padding:.3rem .7rem; font-weight:600; overflow-wrap:anywhere; }
+.local-folder-confirm { flex-basis:100%; border:1px solid var(--warn-border); background:var(--warn-soft); color:var(--warn-text); border-radius:.6rem; padding:.6rem .7rem; overflow-wrap:anywhere; }
+.local-folder-confirm p { margin:.35rem 0; }
+.local-folder-confirm pre { white-space:pre-wrap; max-height:12rem; overflow:auto; padding:.4rem; background:var(--surface); color:var(--text); border-radius:.4rem; }
+.local-folder-confirm button { margin:.2rem .4rem .2rem 0; }
+.local-folder-allow { background:var(--accent); color:var(--accent-contrast); border-color:transparent; font-weight:600; }
+.local-folder-activity { margin:.2rem 0; padding-left:1.1rem; color:var(--muted); overflow-wrap:anywhere; }

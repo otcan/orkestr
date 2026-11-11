@@ -46,7 +46,7 @@ pub struct DesktopFence {
 fn grant_hash(grant: &str) -> String {
     crate::digest(&format!("orkestr-v2-desktop-grant:{grant}"))
 }
-fn fence_hash(token: &str) -> String {
+pub(crate) fn fence_hash(token: &str) -> String {
     crate::digest(&format!("orkestr-v2-desktop-fence:{token}"))
 }
 fn binding_of(

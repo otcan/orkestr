@@ -66,6 +66,7 @@ fn a_quoted_reply_shows_as_a_bubble_without_the_duplicate_relay_line() {
         reply_to: Some(quote.clone()),
         origin: None,
         revisions: None,
+        retry_of: None,
     };
     let input = Input::from(&message);
     assert_eq!(input.text, "[WhatsApp: Group]\n\nno need");
@@ -149,6 +150,7 @@ fn the_adapter_chat_rules_line_is_hidden_from_the_owner_bubble() {
         reply_to: None,
         origin: None,
         revisions: None,
+        retry_of: None,
     };
     assert_eq!(Input::from(&message).text, "[WhatsApp: Group]\n\nhello");
     assert_eq!(

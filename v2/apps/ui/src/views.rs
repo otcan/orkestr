@@ -310,6 +310,7 @@ pub fn Conversation(
         section { class: "conversation-pane", "aria-label": "Conversation",
             crate::execution_poll::ExecutionPoll { key: "{id}-{generation}", id: id.clone(), csrf: csrf.clone(), session_scope, execution, worker_tasks: false, headless: true, clock: Some(now), onexpired }
             div { class: "conversation-toolbar",
+                crate::local_files_view::LocalFolder { key: "local-folder-{id}-{generation}", conversation: id.clone(), csrf: csrf.clone(), session_scope }
                 button { r#type: "button", class: "details-toggle", "aria-expanded": "{details_open}", "aria-controls": "conversation-details-{id}",
                     onclick: move |_| {
                         let open = !details_open();

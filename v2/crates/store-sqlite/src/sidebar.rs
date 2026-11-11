@@ -68,6 +68,7 @@ const NATIVE_PREVIEW: &str = "SELECT e.kind,m.text AS owner_text,
    WHERE a.event_id=e.id ORDER BY o.run_sequence DESC LIMIT 1) AS reply_text
  FROM events e LEFT JOIN messages m ON m.id=e.message_id AND m.owner_id=e.owner_id
  WHERE e.conversation_id=? AND e.owner_id=? AND e.kind IN ('message_accepted','execution_accepted')
+   AND NOT EXISTS(SELECT 1 FROM owner_input_retirements x WHERE x.message_id=e.message_id AND x.reason='adapter_readmit')
  ORDER BY e.sequence DESC LIMIT 1";
 
 /// Last message of the newest source that has any: the source first, then
