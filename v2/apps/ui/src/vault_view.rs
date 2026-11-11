@@ -174,7 +174,8 @@ pub fn Vault(
                 label { r#for: "vault-name", "Name" }
                 input { id: "vault-name", required: true, maxlength: "200", value: "{name}", oninput: move |e| name.set(e.value()) }
                 label { r#for: "vault-url", "Address" }
-                input { id: "vault-url", r#type: "url", placeholder: "https://example.com/login", value: "{url}", oninput: move |e| url.set(e.value()) }
+                input { id: "vault-url", r#type: "url", required: true, pattern: "[Hh][Tt][Tt][Pp][Ss]://.+", placeholder: "https://example.com/login", "aria-describedby": "vault-url-hint", value: "{url}", oninput: move |e| url.set(e.value()) }
+                small { id: "vault-url-hint", "Required. Must start with https://. A stored login is only used on the site it names." }
                 label { r#for: "vault-username", "Username" }
                 input { id: "vault-username", autocomplete: "off", value: "{username}", oninput: move |e| username.set(e.value()) }
                 label { r#for: "vault-password", "Password" }
@@ -294,6 +295,9 @@ fn VaultRow(
             strong { "{item_name}" }
             " "
             span { "{domain}" }
+            if domain.is_empty() {
+                small { class: "vault-no-address", " No address: this login cannot be used until you add one" }
+            }
             small {
                 if ready { " Stored login ready." } else { " Not available to stored login." }
                 if !grants_text.is_empty() { " Threads: {grants_text}." }
@@ -336,7 +340,7 @@ fn VaultRow(
                     }
                 },
                     p { "Replacing a login sets address, username, password and notes together." }
-                    label { "Address" input { r#type: "url", value: "{url}", oninput: move |e| url.set(e.value()) } }
+                    label { "Address" input { r#type: "url", required: true, pattern: "[Hh][Tt][Tt][Pp][Ss]://.+", placeholder: "https://example.com/login", value: "{url}", oninput: move |e| url.set(e.value()) } }
                     label { "Username" input { autocomplete: "off", value: "{username}", oninput: move |e| username.set(e.value()) } }
                     label { "Password" input { r#type: "password", autocomplete: "new-password", value: "{password}", oninput: move |e| password.set(e.value()) } }
                     label { "Notes" textarea { value: "{notes}", oninput: move |e| notes.set(e.value()) } }

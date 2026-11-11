@@ -45,6 +45,9 @@ pub(crate) fn router() -> Router<AppState> {
 
 pub(crate) fn failure(error: VaultError) -> Error {
     match error {
+        VaultError::Invalid(
+            code @ ("vault_address_required" | "vault_address_not_https" | "vault_address_invalid"),
+        ) => Error(StatusCode::UNPROCESSABLE_ENTITY, code, message(code)),
         VaultError::Invalid(code) => Error(StatusCode::BAD_REQUEST, code, message(code)),
         VaultError::Unauthorized => unauthorized(),
         VaultError::NotFound(code) => Error(StatusCode::NOT_FOUND, code, message(code)),
@@ -60,6 +63,11 @@ pub(crate) fn failure(error: VaultError) -> Error {
 fn message(code: &str) -> &'static str {
     match code {
         "vault_name_required" => "A name is required",
+        "vault_address_required" => {
+            "An address is required: a stored login is only used on the site it names"
+        }
+        "vault_address_not_https" => "The address must start with https://",
+        "vault_address_invalid" => "The address needs a valid web host, like https://example.com",
         "vault_url_invalid" => "The address is not a plain web address",
         "vault_item_changed" => "This login changed meanwhile; reload and try again",
         "vault_item_not_found" => "Login not found",
