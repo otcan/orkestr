@@ -15,14 +15,28 @@ const row = (page, id) => page.evaluate(id => {
   } : null;
 }, id);
 
+// ORK-786: Edit, Delete and History are items of the message's actions menu;
+// the edit form and the delete confirmation then show on the message.
+const menu = async (page, id) => {
+  const toggle = `article[data-message-id="${id}"] .message-menu-toggle`;
+  if (!(await page.$(`article[data-message-id="${id}"] .message-menu-list`))) await page.$eval(toggle, b => b.click());
+  await page.waitForSelector(`article[data-message-id="${id}"] .message-menu-list`);
+  return page.$$eval(`article[data-message-id="${id}"] .message-menu-item`, items => items.map(b => b.textContent.trim()));
+};
+const closeMenu = async (page, id) => {
+  if (await page.$(`article[data-message-id="${id}"] .message-menu-list`)) await page.$eval(`article[data-message-id="${id}"] .message-menu-toggle`, b => b.click());
+  await page.waitForFunction(id => !document.querySelector(`article[data-message-id="${id}"] .message-menu-list`), {}, id);
+};
 const press = async (page, id, label) => {
-  const found = await page.evaluate((id, label) => {
+  const visible = () => page.evaluate((id, label) => {
     const button = [...document.querySelectorAll(`article[data-message-id="${id}"] button`)]
-      .find(b => b.textContent.trim() === label && !b.disabled);
+      .find(b => b.textContent.trim() === label && !b.disabled && !b.hidden);
     if (!button) return false;
     button.click(); return true;
   }, id, label);
-  assert.ok(found, `Missing button on the message: ${label}`);
+  if (await visible()) return;
+  if (['Edit', 'Delete', 'History', 'Hide history', 'Reply', 'Copy text'].includes(label)) await menu(page, id);
+  assert.ok(await visible(), `Missing button on the message: ${label}`);
 };
 
 const revise = async (page, id, text) => {
@@ -55,9 +69,18 @@ export async function messageRevisions({ page, state, origin, conversation, retu
   try {
     await open();
     const first = await row(page, OWN);
-    assert.ok(first.buttons.includes('Edit') && first.buttons.includes('Delete'), 'own message offers edit and delete');
-    const member = await row(page, OTHER);
-    assert.equal(member.buttons.includes('Edit') || member.buttons.includes('Delete'), false, 'a member message offers neither');
+    assert.equal(first.buttons.includes('Edit') || first.buttons.includes('Delete'), false, 'no inline edit or delete controls');
+    assert.deepEqual(await menu(page, OWN), ['Reply', 'Copy text', 'Edit', 'Delete'], 'own message menu offers edit and delete');
+    // Keyboard: focus moves into the menu; Escape closes it and returns focus.
+    const focusIn = (id, selector) => page.waitForFunction((id, selector) => document.activeElement?.matches(selector)
+      && document.activeElement.closest('article')?.dataset.messageId === id, {}, id, selector);
+    await focusIn(OWN, '.message-menu-list .message-menu-item');
+    await page.keyboard.press('Escape');
+    await page.waitForFunction(id => !document.querySelector(`article[data-message-id="${id}"] .message-menu-list`), {}, OWN);
+    await focusIn(OWN, '.message-menu-toggle');
+    assert.deepEqual(await menu(page, OTHER), ['Reply', 'Copy text'], 'a member message offers neither edit nor delete');
+    await screenshot(label, 'message-menu');
+    await closeMenu(page, OTHER);
 
     await revise(page, OWN, 'Synthetic text, corrected');
     for (let i = 0; i < 100 && state.revisionPosts.length < 1; i++) await new Promise(r => setTimeout(r, 100));
@@ -94,6 +117,8 @@ export async function messageRevisions({ page, state, origin, conversation, retu
     assert.equal(removed.text, '', 'the removed text is not shown');
     assert.equal(removed.buttons.includes('Edit'), false);
     assert.equal(removed.buttons.includes('Reply'), false);
+    assert.deepEqual(await menu(page, OWN), ['History'], 'a removed message only offers its history');
+    await closeMenu(page, OWN);
     await screenshot(label, 'message-deleted');
 
     // The server decides. A refusal is shown, and nothing pretends it worked.

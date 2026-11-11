@@ -13,7 +13,7 @@ import { liveAnswer } from './headless-live-answer.mjs';
 import { messageRevisions } from './headless-message-revisions.mjs';
 import { agentAttachments } from './headless-agent-attachments.mjs';
 import { messageRetries } from './headless-message-retries.mjs';
-import { readableColumn, runStates, unavailableFiles } from './headless-conversation-pane.mjs';
+import { messageMenu, readableColumn, runStates, unavailableFiles } from './headless-conversation-pane.mjs';
 
 assert.equal(process.env.CI, 'true', 'Run only in isolated CI');
 assert.ok(process.env.UI_BUNDLE_DIR, 'UI_BUNDLE_DIR is required');
@@ -82,6 +82,11 @@ const replyTo = async (label, rowSelector, snippet) => {
     await page.touchscreen.touchStart(box.x + 5, box.y + box.height / 2);
     await new Promise(r => setTimeout(r, 750));
     await page.touchscreen.touchEnd();
+  } else if (await row.$('.message-menu-toggle')) {
+    // ORK-786: Reply is in the message's actions menu, not a hover control.
+    await row.$eval('.message-menu-toggle', b => b.click());
+    await page.waitForFunction(r => r.querySelector('.message-menu-list'), {}, row);
+    await row.$$eval('.message-menu-item', items => items.find(b => b.textContent.trim() === 'Reply').click());
   } else {
     await row.hover();
     assert.ok(await row.$eval('.reply-action', b => getComputedStyle(b).opacity !== '0'), 'Reply shows on hover');
@@ -848,6 +853,7 @@ export const scenarios = [
   }],
   ['run-state', label => runStates({ page, state, conversation: A, label, screenshot })],
   ['unavailable-files', label => unavailableFiles({ page, state, conversation: A, label, screenshot })],
+  ['message-menu', label => messageMenu({ page, label, screenshot })],
   ['every-answer-inline', async label => {
     // 25 accepted answers span two pages; all show inline, newest included,
     // as plain messages without paging or acceptance wording.

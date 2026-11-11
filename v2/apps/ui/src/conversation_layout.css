@@ -71,6 +71,19 @@
 .rt-file-badge { flex: none; font-size: .68rem; line-height: 1.5; padding: 0 .45rem; border-radius: 1rem; background: var(--warn-soft); color: var(--warn-text); }
 .rt-file-unavailable[data-attached=true] .rt-file-badge { background: var(--info-soft); color: var(--info-text); }
 
+/* One actions menu per message: always visible, never hover-only. */
+/* It floats at the bubble's bottom left, so it shares the line of the time. */
+.message-menu { position: relative; float: left; display: flex; margin: .15rem .4rem 0 -.35rem; }
+.message-menu ~ * { clear: left; }
+.message-menu .reply-action { display: none; }
+.message-menu-toggle { min-height: 1.9rem; min-width: 2.2rem; padding: 0 .55rem; border: 0; border-radius: .9rem; background: transparent; color: inherit; font-size: 1.05rem; line-height: 1; opacity: .75; }
+.message-menu-toggle:hover:not(:disabled), .message-menu-toggle:focus-visible, .message-menu-toggle[aria-expanded=true] { opacity: 1; background: rgba(127,127,127,.18); }
+.message-menu-list { position: absolute; z-index: 6; top: calc(100% + .2rem); left: 0; display: flex; flex-direction: column; min-width: 10rem; padding: .3rem; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius-sm); box-shadow: var(--shadow); }
+.message-menu-item { display: block; width: 100%; min-height: 2.4rem; text-align: left; border: 0; background: transparent; color: var(--text); border-radius: .4rem; padding: .35rem .7rem; font-size: .85rem; }
+.message-menu-item:hover:not(:disabled), .message-menu-item:focus-visible { background: var(--surface-3); }
+.message-menu-danger { color: var(--danger-text); }
+.message-menu-notice { margin: .15rem 0 0; font-size: .72rem; opacity: .8; }
+
 /* Files & context drawer. */
 .native-conversation > .files-drawer { grid-area: transcript; z-index: 5; align-self: start; justify-self: end; display: flex; flex-direction: column; gap: .2rem; width: min(30rem, calc(100% - 1rem)); max-height: calc(100% - 1rem); margin: .5rem; overflow: auto; overscroll-behavior: contain; padding: .2rem .9rem .8rem; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); box-shadow: var(--shadow); }
 .native-conversation > .files-drawer[hidden] { display: none; }
@@ -95,6 +108,7 @@
 }
 @media (max-width: 52rem), (pointer: coarse) {
  .conversation-pane.native-conversation { grid-template-rows: minmax(0, 1fr) auto auto fit-content(56%); }
- .message-composer .composer-context button, .message-composer .composer-tools .tool-button, .files-drawer-close, .run-state button, .run-state summary { min-height: 44px; }
+ .message-composer .composer-context button, .message-composer .composer-tools .tool-button, .files-drawer-close, .run-state button, .run-state summary, .message-menu-toggle, .message-menu-item { min-height: 44px; }
+ .message-menu-toggle { min-width: 44px; }
  .composer-context { justify-content: flex-start; margin-left: 0; }
 }

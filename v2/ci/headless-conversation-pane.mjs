@@ -162,3 +162,27 @@ export async function unavailableFiles({page, state, conversation, label, screen
   await screenshot(label, 'attachments-and-unavailable-files');
 }
 
+// One actions menu per message: visible without hover, reachable by keyboard,
+// big enough to tap on a phone, and Copy text reports what happened.
+export async function messageMenu({page, label, screenshot}) {
+  await page.waitForFunction(() => document.querySelectorAll('.chat-messages .message-menu-toggle').length > 0, {timeout: 15000});
+  const toggles = await page.$$eval('.chat-messages .message-menu-toggle', nodes => nodes.map(n => {
+    const style = getComputedStyle(n), box = n.getBoundingClientRect();
+    return {label: n.getAttribute('aria-label'), expanded: n.getAttribute('aria-expanded'), visible: style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity) > 0.3,
+      width: box.width, height: box.height};
+  }));
+  for (const toggle of toggles) {
+    assert.deepEqual([toggle.label, toggle.expanded, toggle.visible], ['Message actions', 'false', true], 'the menu button is labelled and shown without hover');
+    if (label === 'phone') assert.ok(toggle.width >= 44 && toggle.height >= 44, `touch target ${toggle.width}x${toggle.height}`);
+  }
+  assert.equal(await page.$$eval('.chat-messages .message-action', nodes => nodes.filter(n => n.textContent.trim() === 'Edit' || n.textContent.trim() === 'Delete').length), 0, 'no repeated inline edit/delete');
+  const row = await page.evaluateHandle(() => [...document.querySelectorAll('.chat-messages > li')].find(li => li.textContent.includes('Native synthetic message')));
+  await (await row.asElement().$('.message-menu-toggle')).focus();
+  await page.keyboard.press('Enter');
+  await page.waitForFunction(r => document.activeElement?.closest('.message-menu-list') && r.contains(document.activeElement), {timeout: 10000}, row);
+  assert.equal(await row.asElement().$eval('.message-menu-toggle', n => n.getAttribute('aria-expanded')), 'true');
+  await screenshot(label, 'message-menu-open');
+  await row.asElement().$$eval('.message-menu-item', items => items.find(b => b.textContent.trim() === 'Copy text').click());
+  await page.waitForFunction(r => /^(Copied\.|Copy unavailable)/.test(r.querySelector('.message-menu-notice')?.textContent ?? ''), {timeout: 10000}, row);
+  assert.equal(await row.asElement().$('.message-menu-list'), null, 'choosing an item closes the menu');
+}
