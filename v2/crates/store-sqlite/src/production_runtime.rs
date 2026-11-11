@@ -124,6 +124,7 @@ mod worker_tasks;
 pub use worker::*;
 pub use worker_tasks::WorkerTaskClaim;
 mod agent_timers;
+mod local_files;
 mod thread_asks;
 mod timer_issuer;
 mod timer_schedule;
