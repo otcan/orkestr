@@ -53,7 +53,8 @@ class Runs:
         scope=value['scope'];require(scope['window_id']==window and scope['window_generation']==generation,'managed_run_scope')
         if value['state']=='open':
             value['state']='closed';atomic(path,value);self.contexts.pop(key(scope),None)
-        for pending in self.ingress.directory.glob('*.json'):
+        # A run's claims carry its run id and therefore belong to its window.
+        for pending in self.ingress.journal.window_paths(window):
             record=metadata(pending,32768)
             if record['source'].get('run_id')==run and record['state'] in ('pending','worker_waiting'):
                 record['state']='cancelled';atomic(pending,record)

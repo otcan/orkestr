@@ -4,7 +4,6 @@ One SQLite file belongs to exactly one binding scope. Exported replies stay
 visible to V1 until V1 acknowledges their transport outcome; only then is the
 input settled and its text pruned. Nothing here sends or replays a message.
 """
-import contextlib
 import hashlib
 import json
 import os
@@ -15,7 +14,8 @@ import sys
 import time
 import uuid
 
-from .export_changes import ExportConnection
+from .ledger_connections import Connections
+from .ledger_indexes import OPEN_PHASE, OPEN_ROWS, initialize as initialize_indexes
 from .outbound_text import scrub_local_paths
 from . import failure_cause, notices
 
@@ -138,6 +138,7 @@ class Ledger:
         if not isinstance(scope, dict) or not scope:
             raise ValueError("ledger_scope_required")
         self.path = str(path)
+        self._connections = Connections(self.path)
         self.on_export = on_export
         self.scope = dict(scope)
         self.max_outstanding = max_outstanding
@@ -191,22 +192,31 @@ class Ledger:
                 db.execute("INSERT INTO ledger_meta VALUES ('schema',?)", (SCHEMA,))
             elif version[0] != SCHEMA:
                 raise ValueError("ledger_schema_unsupported")
+        # The ORK-772 indexes only make reads cheaper: their own transaction,
+        # and a failure (e.g. a full disk) leaves the ledger as it was, served
+        # by full scans, until the next adapter start tries again.
+        try:
+            with self.connect() as db:
+                db.execute("BEGIN IMMEDIATE")
+                initialize_indexes(db)
+        except sqlite3.Error as error:
+            print("WARN orkestr-v2-wa-adapter ledger_indexes_unavailable thread=%s error=%s"
+                  % (self.scope.get("remote_thread_id", "?"), type(error).__name__), file=sys.stderr, flush=True)
 
-    @contextlib.contextmanager
     def connect(self):
         """`with ledger.connect() as db:` commits on success, rolls back on an
-        error and always closes the connection. A bare sqlite3 connection's
-        `with` only commits, so each pass would leak a file descriptor until
-        garbage collection; 91 bindings starting at once then exhausted the
-        soft RLIMIT_NOFILE and killed binding workers (2026-10-29)."""
-        db = sqlite3.connect(self.path, timeout=5, factory=ExportConnection)
-        try:
-            db.on_export = self.on_export
-            db.execute("PRAGMA synchronous=FULL")
-            with db:
-                yield db
-        finally:
-            db.close()
+        error and closes the connection, unless this thread keeps one (see
+        keep_connection). A bare sqlite3 connection's `with` only commits, so
+        each pass would leak a file descriptor until garbage collection; 91
+        bindings starting at once then exhausted the soft RLIMIT_NOFILE and
+        killed binding workers (2026-10-29)."""
+        return self._connections.connect(self.on_export)
+
+    def keep_connection(self):
+        """`with ledger.keep_connection():` this thread's blocks reuse one
+        connection until the end of the `with` (the binding worker's run loop,
+        ORK-772); see ledger_connections.py."""
+        return self._connections.keep()
 
     # Binding lifecycle -------------------------------------------------
     def revoke(self):
@@ -656,8 +666,10 @@ class Ledger:
         now = time.time() if now is None else now
         expired = []
         with self.connect() as db:
-            rows = db.execute("SELECT rowid, data FROM inputs WHERE json_extract(data,'$.phase') IN (%s) ORDER BY rowid"
-                              % ",".join("?" * len(NOT_STARTED)), NOT_STARTED).fetchall()
+            # The open-phase term is implied (no NOT_STARTED phase is completed);
+            # it lets SQLite read the open-input index instead of every row.
+            rows = db.execute("SELECT rowid, data FROM inputs WHERE %s AND json_extract(data,'$.phase') IN (%s) ORDER BY rowid"
+                              % (OPEN_PHASE, ",".join("?" * len(NOT_STARTED))), NOT_STARTED).fetchall()
             live_head = self._live_head_rowid(db, now)
         for rowid, raw in rows:
             data = json.loads(raw)
@@ -690,8 +702,8 @@ class Ledger:
     def _live_head_rowid(db, now):
         """Rowid of the earliest running input whose own Deep run was last
         observed running within LIVE_HEAD_ACTIVITY_S, else None."""
-        for rowid, raw in db.execute("SELECT rowid, data FROM inputs WHERE json_extract(data,'$.phase')='running' "
-                                     "ORDER BY rowid LIMIT 8").fetchall():
+        for rowid, raw in db.execute("SELECT rowid, data FROM inputs WHERE %s AND json_extract(data,'$.phase')='running' "
+                                     "ORDER BY rowid LIMIT 8" % OPEN_PHASE).fetchall():
             data = json.loads(raw)
             activity = data.get("transport_activity") or {}
             observed = activity.get("observed_at_ms")
@@ -770,13 +782,12 @@ class Ledger:
     def pending_inputs(self):
         """A bounded FIFO snapshot for independent owner intake/Fast work."""
         with self.connect() as db:
-            rows = db.execute("SELECT data FROM inputs WHERE json_extract(data,'$.phase') != 'completed' "
-                              "ORDER BY rowid LIMIT 64").fetchall()
+            rows = db.execute("SELECT data FROM inputs WHERE %s ORDER BY rowid LIMIT 64" % OPEN_ROWS).fetchall()
         return [json.loads(row[0]) for row in rows]
 
     def next_input(self):
         with self.connect() as db:
-            row = db.execute("SELECT data FROM inputs WHERE json_extract(data,'$.phase') != 'completed' ORDER BY rowid LIMIT 1").fetchone()
+            row = db.execute("SELECT data FROM inputs WHERE %s ORDER BY rowid LIMIT 1" % OPEN_ROWS).fetchone()
         return json.loads(row[0]) if row else None
 
     # Exports -----------------------------------------------------------
@@ -990,8 +1001,8 @@ class Ledger:
             outstanding = db.execute("SELECT count(*) FROM inputs WHERE json_extract(data,'$.settled') IS NULL").fetchone()[0]
             cursor = self._acked_through(db)
             refused = db.execute("SELECT count(*) FROM inputs WHERE json_extract(data,'$.refused') IS NOT NULL").fetchone()[0]
-            stalled = db.execute("SELECT count(*) FROM inputs WHERE json_extract(data,'$.stalled') IS NOT NULL AND "
-                                 "json_extract(data,'$.phase') != 'completed'").fetchone()[0]
+            stalled = db.execute("SELECT count(*) FROM inputs WHERE %s AND json_extract(data,'$.stalled') IS NOT NULL"
+                                 % OPEN_ROWS).fetchone()[0]
             web = db.execute("SELECT count(*) FROM web_watch").fetchone()[0]
             recent = [json.loads(raw) for (raw,) in db.execute(
                 "SELECT data FROM inputs WHERE json_extract(data,'$.refused') IS NOT NULL ORDER BY rowid DESC LIMIT ?",

@@ -26,6 +26,19 @@ pub(crate) async fn downgrade_empty(store: &Store) {
     .execute(&store.pool)
     .await
     .unwrap();
+    // Migration 97 down: only an empty link table, so no message is lost.
+    let retries: i64 = sqlx::query_scalar("SELECT count(*) FROM message_retries")
+        .fetch_one(&store.pool)
+        .await
+        .unwrap();
+    assert_eq!(retries, 0, "historical fixture must not erase retry links");
+    sqlx::raw_sql(
+        "DROP TABLE message_retries;
+         DELETE FROM _sqlx_migrations WHERE version=97;",
+    )
+    .execute(&store.pool)
+    .await
+    .unwrap();
     // Migration 96 down: only an empty audit table, so no owner change is lost.
     let revisions: i64 = sqlx::query_scalar("SELECT count(*) FROM message_revisions")
         .fetch_one(&store.pool)

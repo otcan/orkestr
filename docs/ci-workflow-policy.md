@@ -11,7 +11,8 @@ download-artifact v4.3.0. Tag refs were resolved through the official GitHub
 `npm run security:workflows` parses every workflow with pinned YAML 2.9.1 and
 rejects duplicate keys, aliases/anchors/tags, mutable or unreviewed actions,
 credential persistence, elevated permissions, privileged triggers, self-hosted
-or dynamic runners, local/reusable actions and secret expressions. Build runs
+or dynamic runners (except the two exact AWS runner selections described
+below), local/reusable actions and secret expressions. Build runs
 the checker before compilation; ordinary test shards include policy fixtures.
 Fixtures are parsed only: no synthetic credential or untrusted action executes.
 
@@ -85,6 +86,47 @@ the exact commit, and a skipped job does not count as success. Some Node tests r
 (for example `test/launch-docs.test.js`), so a docs-only PR that breaks one is
 reported by that integration run rather than by the PR.
 
+## Ephemeral AWS runners for the heavy V2 jobs (ORK-774)
+
+Most CI time used to be spent queueing for a GitHub-hosted runner. The jobs
+that build or test Rust (`lint`, `service`, `http` and the `unit` shards in
+`v2-rust.yml`, both image builds in `v2-image.yml`, and headless rendering)
+can run on ephemeral self-hosted runners in the owner's AWS account instead.
+The policy accepts exactly two runner selections for them
+(`awsRunnerSelections` in `scripts/security/workflow-policy.mjs`), only in
+those three workflows and only in jobs that hold read permissions. Plain
+`self-hosted` labels, other expressions and every other workflow are still
+rejected; `v2-publish.yml` and the release gates never use these runners.
+
+A job goes to AWS only if all of these hold, otherwise it runs on the
+GitHub-hosted runner named at the end of the selection:
+
+- the repository variable `ORKESTR_AWS_RUNNERS` is `on` (set it to anything
+  else to send every job back to GitHub-hosted runners at once);
+- the run belongs to `otcan/orkestr`, so forks of the repository never wait
+  for runners they do not have;
+- the event is a push to `integration` or a tag, a schedule, a manual run, or
+  a pull request whose head branch is in this repository. Pull requests from
+  forks always use GitHub-hosted runners.
+
+A fork pull request could rewrite `runs-on` in its own copy of a workflow, so
+the selection is not the only barrier. The runner side, which lives in the
+private operations repository, checks the same rules twice more: the scaler
+starts a runner only for a queued job in a trusted run (allowed event, head
+repository is this repository), and on the instance a job-start hook fails
+any job whose event or head repository is not allowed before a single step
+runs. Each instance takes one just-in-time registration, runs one job and
+terminates. Instances have no cloud credentials, accept no inbound
+connections, cannot reach the production host, and are capped in number,
+size, lifetime and monthly spend.
+
+The runner image mirrors the hosted Ubuntu 24.04 paths (user `runner`,
+`/home/runner/work`, `/home/runner/.cargo`), so the Rust dependency caches
+are shared with GitHub-hosted runs. It ships the per-executable Bubblewrap
+user-namespace profile that `v2/tests/ci_lifetime_namespace.py` loads on
+hosted runners. On a self-hosted runner that script only verifies the
+prerequisite and never changes the host.
+
 ## Updating or reverting
 
 1. Review the official upstream action release and resolve its tag to the full
@@ -133,8 +175,9 @@ attach raw/redacted finding payloads to Jira or CI artifacts.
 ## V2 unsigned iOS runner exception
 
 Only `.github/workflows/v2-ios.yml` may use the exact GitHub-hosted image
-`macos-15`. Other workflows retain the Ubuntu-only runner allowlist. Floating,
-larger, self-hosted and dynamic runner selections remain rejected. This file
+`macos-15`. Other workflows retain the Ubuntu-only runner allowlist (plus the exact AWS
+runner selections in the V2 build and test workflows). Floating, larger,
+other self-hosted and dynamic runner selections remain rejected. This file
 must use only pull-request/push triggers with explicit `v2/` branch filters,
 read-only contents permissions and the existing reviewed immutable action pins;
 checkout must disable credential persistence. No secrets, signing, provisioning

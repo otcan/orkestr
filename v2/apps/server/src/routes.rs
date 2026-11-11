@@ -117,6 +117,8 @@ pub async fn message(
     // thread ask. Core records the authenticated request source separately;
     // a claimed owner author is never proof of a human browser origin.
     let author = request.author;
+    // A re-admitted input names its retired earlier attempt (ORK-780).
+    let retry_of = request.retry_of.clone();
     let (input, reply_to) = request.into_parts();
     let conversation = conversation(id)?;
     // Own admission and wake across a disconnected HTTP caller. Replays retain
@@ -135,6 +137,18 @@ pub async fn message(
                 author,
             )
             .await?;
+        if let Some(retry_of) = &retry_of {
+            // Also on a replay: the link is idempotent, and it only names an
+            // attempt Core itself retired for re-admission.
+            s.store
+                .link_message_retry(
+                    &owner,
+                    &conversation,
+                    &admitted.receipt.message_id,
+                    retry_of,
+                )
+                .await?;
+        }
         if continuation_source_run_id.is_some() {
             if let Some(controller) = &s.window_controller {
                 controller.wake_source_continuation(&credential);

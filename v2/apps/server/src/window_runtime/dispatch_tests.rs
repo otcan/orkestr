@@ -115,9 +115,12 @@ async fn fixture() -> Fixture {
 
 impl Fixture {
     fn controller(&self, capacity: u32) -> Controller {
+        self.controller_at(capacity, self.root.join("absent-manager.sock"))
+    }
+    fn controller_at(&self, capacity: u32, manager_socket: std::path::PathBuf) -> Controller {
         let config: BetaConfig = serde_json::from_value(serde_json::json!({
             "schema_version":1,"owner_id":self.owner,"conversation_id":self.home,
-            "manager_socket":self.root.join("absent-manager.sock"),"launcher":"/opt/synthetic/launcher",
+            "manager_socket":manager_socket,"launcher":"/opt/synthetic/launcher",
             "launcher_sha256":"a".repeat(64),"workspace":"/srv/synthetic/workspace",
             "namespace":"synthetic-native","supervisor_key":"synthetic-supervisor",
             "max_active_windows":capacity
@@ -450,3 +453,5 @@ fn queued_intent_is_rebuilt_against_current_window_state() {
 
 #[path = "expired_join_http_tests.rs"]
 mod expired_join_http_tests;
+#[path = "reconcile_backoff_tests.rs"]
+mod reconcile_backoff_tests;

@@ -43,6 +43,8 @@ pub(crate) struct Controller {
     pub(super) opening: tokio::sync::Mutex<()>,
     pub(super) queue: QueueState,
     pub(super) drain: Arc<crate::deploy_drain::DeployDrain>,
+    /// Spacing of automatic reconcile attempts the manager refused.
+    pub(super) reconcile_backoff: stranded::backoff::ReconcileBackoff,
 }
 
 impl Controller {
@@ -75,6 +77,7 @@ impl Controller {
             opening: tokio::sync::Mutex::new(()),
             queue: QueueState::default(),
             drain: Arc::default(),
+            reconcile_backoff: Default::default(),
         })
     }
 
