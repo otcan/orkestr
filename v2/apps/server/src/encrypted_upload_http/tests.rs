@@ -65,6 +65,7 @@ async fn call_with_timeout(
 }
 
 mod large_acceptance;
+mod partial_discard;
 
 #[tokio::test]
 async fn encrypted_upload_real_http_registration_limits_replay_and_auth() {

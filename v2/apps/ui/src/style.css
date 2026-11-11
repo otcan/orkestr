@@ -234,7 +234,10 @@ details[open] > summary { margin-bottom: .4rem; }
 .attachment-chip { display: inline-flex; align-items: center; gap: .35rem; max-width: 100%; min-width: 0; padding: .15rem .25rem .15rem .65rem; border-radius: 1rem; background: var(--accent-soft); color: var(--accent-text); font-size: .76rem; }
 .chip-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 14rem; }
 .chip-size { flex: none; opacity: .75; }
-.message-composer .chip-remove { grid-row: auto; grid-column: auto; min-height: 1.5rem; min-width: 1.5rem; width: 1.5rem; padding: 0; border-radius: 50%; font-size: .85rem; line-height: 1; background: transparent; color: inherit; border: 0; }
+/* Cancel (still uploading) and Remove (attached, not sent) are one control. */
+.message-composer .upload-control { grid-row: auto; grid-column: auto; flex: none; min-height: 1.75rem; min-width: 0; padding: .15rem .65rem; border-radius: .9rem; font-size: .74rem; font-weight: 600; line-height: 1.1; background: var(--surface); color: var(--text); border: 1px solid var(--border); }
+.message-composer .upload-control:hover:not(:disabled) { background: var(--surface-3); }
+.message-composer .chip-remove { min-height: 1.5rem; padding: .1rem .55rem; }
 .tool-icon { margin-right: .3rem; vertical-align: -.15rem; }
 .tool-status { font-size: .74rem; color: var(--muted); }
 .attachment-limit { font-size: .72rem; color: var(--faint); }
@@ -478,10 +481,11 @@ li[data-replyable="true"]:hover .reply-action, li[data-replyable="true"]:focus-w
 .message-history-label { font-size: .68rem; font-weight: 600; opacity: .75; }
 
 /* Upload progress remains readable on a narrow composer. */
-.upload-progress { flex-basis:100%; min-width:0; padding:.35rem 0; }
-.upload-progress-stage { margin:.15rem 0; font-size:.8rem; overflow-wrap:anywhere; }
-.upload-progress progress { display:block; width:100%; height:.65rem; accent-color:var(--accent, #4f7cff); }
-.upload-progress-bytes { font-size:.75rem; color:var(--muted); font-variant-numeric:tabular-nums; }
+.upload-progress { flex-basis:100%; min-width:0; padding:.35rem 0; display:flex; flex-wrap:wrap; align-items:center; gap:.2rem .5rem; }
+.upload-progress-stage { flex:1 1 10rem; min-width:0; margin:.15rem 0; font-size:.8rem; overflow-wrap:anywhere; }
+.upload-progress progress { flex-basis:100%; display:block; width:100%; height:.65rem; accent-color:var(--accent, #4f7cff); }
+.upload-progress-bytes { flex-basis:100%; font-size:.75rem; color:var(--muted); font-variant-numeric:tabular-nums; }
+@media (max-width: 52rem), (pointer: coarse) { .message-composer .composer-tools .upload-control { min-height: 44px; } }
 
 /* Release metadata belongs at the header's right edge, after resource summaries. */
 @media (min-width: 701px) {

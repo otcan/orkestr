@@ -102,7 +102,11 @@ export function encryptedUploadClient({conversation,csrf,fetcher=fetch,subtle=cr
     async upload(file,uploadId,{progress=()=>{},phase=()=>{},signal,requireIngest=false}={}) {
       const descriptor=validateUploadFile(file,uploadId);
       phase('preparing');
-      let status=validateStatus(await request('POST',root,descriptor,false,'',signal),descriptor,conversation);
+      // Registration is never aborted mid-flight: a Cancel waits for its small
+      // reply, so the discard that follows cannot race the session's creation.
+      signal?.throwIfAborted();
+      let status=validateStatus(await request('POST',root,descriptor),descriptor,conversation);
+      signal?.throwIfAborted();
       if(requireIngest&&(!status.ingest_recipient||!status.recipients.includes(status.ingest_recipient)))fail('Encrypted attachment preparation is not configured on this server.');
       const pinned={owner:status.owner_id,recipients:[...status.recipients]};
       const receipts=[];
@@ -134,6 +138,15 @@ export function encryptedUploadClient({conversation,csrf,fetcher=fetch,subtle=cr
       status=validateStatus(await request('POST',`${root}/${uploadId}/complete`,receipts,false,'',signal),descriptor,conversation);
       if(!status.complete||status.owner_id!==pinned.owner||!same(status.recipients,pinned.recipients)||!same(status.chunks,receipts))fail('Encrypted upload completion mismatch.');
       return status;
+    },
+    // A cancelled or removed (unsent) upload: the server deletes its
+    // ciphertext chunks and any prepared provider file. Already gone counts.
+    async discard(uploadId) {
+      if(!uuid(uploadId))fail('Invalid encrypted file reference.');
+      if(readOnly)fail('Read-only attachment client.');
+      const response=await fetcher(`${root}/${uploadId}`,{method:'DELETE',credentials:'same-origin',cache:'no-store',redirect:'error',headers:{'x-orkestr-csrf':csrf}});
+      void response.body?.cancel?.().catch(()=>{});
+      if(response.status!==204&&response.status!==404)fail(`Encrypted upload could not be discarded (${response.status}).`);
     },
     // sink must support bounded writes (e.g. FileSystemWritableFileStream).
     // Never accumulate the plaintext file in an array or Blob.
