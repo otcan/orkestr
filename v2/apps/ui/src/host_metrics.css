@@ -35,7 +35,8 @@
 .host-metrics-panel[data-state=stale] .hm-item strong, .host-metrics-panel[data-state=disconnected] .hm-item strong { color: var(--muted); font-weight: 500; }
 .sparkline { width: 3.2rem; height: 1.1rem; overflow: visible; }
 .sparkline polyline { fill: none; stroke: var(--c); stroke-width: 1.4; vector-effect: non-scaling-stroke; stroke-linejoin: round; }
-@media (max-width: 80rem) { .host-metrics-panel .hm-detail { display: none; } }
+/* Byte details fit the one-row header only on very wide screens; the Host view always has them. */
+@media (max-width: 110rem) { .host-metrics-panel .hm-detail { display: none; } }
 @media (max-width: 52rem) {
  .host-metrics-panel { gap: .45rem; padding: .15rem .5rem; min-height: 44px; }
  .host-metrics-panel .hm-state.live { display: none; }
