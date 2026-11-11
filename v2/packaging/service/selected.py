@@ -88,7 +88,7 @@ def pair_bytes(plan):
     return pair
 
 
-OPTIONAL = {'resource_namespace', 'agent_timer_grants', 'qualification_record', 'deploy_maintenance_marker', 'managed_host', 'operator_recovery', 'desk_login', 'managed_operations', 'managed_workers', 'managed_worker_execution_budget_ms', 'attachment_export_dir', 'password_rotation_ready', 'authority_uid', 'authority_gid', 'executor_uid', 'executor_gid', 'provider_home', 'roles', 'preserve_state', 'workspace_exec', 'additional_workspace_exec', 'max_active_windows', 'host_full_access',
+OPTIONAL = {'resource_namespace', 'agent_timer_grants', 'qualification_record', 'deploy_maintenance_marker', 'release_interruption_dir', 'managed_host', 'operator_recovery', 'desk_login', 'managed_operations', 'managed_workers', 'managed_worker_execution_budget_ms', 'attachment_export_dir', 'password_rotation_ready', 'authority_uid', 'authority_gid', 'executor_uid', 'executor_gid', 'provider_home', 'roles', 'preserve_state', 'workspace_exec', 'additional_workspace_exec', 'max_active_windows', 'host_full_access',
             'window_max_minutes', 'conversation_window_max_minutes', 'conversation_workspaces', 'provider_routing',
             'code_mode_host', 'code_mode_host_sha256', 'claude', 'claude_quota_projection', 'codex_quota_projection', 'live_map', 'desktop_broker', 'provider_quota', 'timer_config', 'whatsapp_chats', 'v1_chat_icons_dir', 'metrics_port'}
 CLAUDE_PATHS = ('executable', 'account', 'workspace', 'home', 'temporary')
@@ -153,6 +153,16 @@ def optional(plan):
         home = Path(plan['home'])
         require(Path(marker)!=home and home not in Path(marker).parents,
                 'deploy maintenance marker must be outside Core home')
+    if 'release_interruption_dir' in plan:
+        # ORK-792: Root-recorded release interruptions Core honours once each.
+        directory = plan['release_interruption_dir']
+        require(type(directory) is str and directory.startswith('/') and directory != '/'
+                and not directory.endswith('/') and not any(ord(c)<32 for c in directory)
+                and all(part not in ('','.','..') for part in directory.split('/')[1:]),
+                'normalized release interruption directory required')
+        home = Path(plan['home'])
+        require(Path(directory)!=home and home not in Path(directory).parents,
+                'release interruption directory must be outside Core home')
     if 'attachment_export_dir' in plan:
         value=plan['attachment_export_dir']
         require(type(value) is str and value.startswith('/') and 1<len(value)<=4096
@@ -419,7 +429,7 @@ def prepare(plan):
                 beta['additional_workspace_exec']=plan['additional_workspace_exec']
             if 'max_active_windows' in plan:
                 beta['max_active_windows']=plan['max_active_windows']
-            for key in ('deploy_maintenance_marker', 'window_max_minutes', 'conversation_window_max_minutes', 'conversation_workspaces', 'provider_routing'):
+            for key in ('deploy_maintenance_marker', 'release_interruption_dir', 'window_max_minutes', 'conversation_window_max_minutes', 'conversation_workspaces', 'provider_routing'):
                 if key in plan:
                     beta[key]=plan[key]
             for access_key in ('host_full_access', 'managed_host'):
