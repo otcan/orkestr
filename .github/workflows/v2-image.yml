@@ -233,7 +233,9 @@ jobs:
   linux-image-arm64:
     # Native builds only (no QEMU). The runner selection is one of the exact
     # expressions the workflow policy allows (scripts/security/workflow-policy.mjs).
-    if: ${{ github.event.pull_request.draft != true }}
+    # Pull requests build amd64 only; integration pushes, cache-warming pushes
+    # and manual runs build both architectures (ORK-791).
+    if: ${{ github.event_name != 'pull_request' }}
     # Ephemeral AWS runner for trusted events, GitHub-hosted otherwise (ORK-774).
     runs-on: >-
       ${{ vars.ORKESTR_AWS_RUNNERS == 'on' && github.repository == 'otcan/orkestr' &&

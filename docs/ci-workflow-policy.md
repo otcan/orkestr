@@ -89,9 +89,12 @@ reported by that integration run rather than by the PR.
 ## Ephemeral AWS runners for the heavy V2 jobs (ORK-774)
 
 Most CI time used to be spent queueing for a GitHub-hosted runner. The jobs
-that build or test Rust (`lint`, `service`, `http` and the `unit` shards in
-`v2-rust.yml`, both image builds in `v2-image.yml`, and headless rendering)
-can run on ephemeral self-hosted runners in the owner's AWS account instead.
+that build or test Rust (`http` and the `unit` shards in `v2-rust.yml`, both
+image builds in `v2-image.yml`, and headless rendering) can run on ephemeral
+self-hosted runners in the owner's AWS account instead. `lint` and `service`
+are short and stay on GitHub-hosted runners, which leaves the AWS runners for
+the longer jobs (ORK-791). Pull requests build only the amd64 image; the arm64
+image is built on integration pushes, cache-warming pushes and manual runs.
 The policy accepts exactly two runner selections for them
 (`awsRunnerSelections` in `scripts/security/workflow-policy.mjs`), only in
 those three workflows and only in jobs that hold read permissions. Plain
