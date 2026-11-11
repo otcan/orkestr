@@ -311,6 +311,7 @@ impl Store {
     ) -> Result<VaultItemView> {
         let name = name(&input.name)?;
         let tags = tags(&input.tags)?;
+        require_https_address(&input.url)?;
         let login = Login::new(&input.url, &input.username, &input.password, &input.notes)?;
         let mut tx = self.vault_tx(true).await?;
         let owner = browser_owner(&mut tx, credential).await?;
@@ -389,6 +390,7 @@ impl Store {
         id: &str,
         input: &LoginReplace,
     ) -> Result<VaultItemView> {
+        require_https_address(&input.url)?;
         let login = Login::new(&input.url, &input.username, &input.password, &input.notes)?;
         let mut tx = self.vault_tx(true).await?;
         let owner = browser_owner(&mut tx, credential).await?;

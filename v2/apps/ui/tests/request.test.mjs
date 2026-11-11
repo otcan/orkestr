@@ -321,3 +321,10 @@ test('owner vault routes keep cookie and CSRF and never carry the sealed form', 
     for (const path of [`/api/v2/vault/items/${id}/sealed`,'/api/v2/vault/stored-login',`/api/v2/vault/items/${id}/../login`,'/api/v2/vault/items/not-an-id','/api/v2/vault/audit?limit=5','/api/v2/vault/items/vi_x'])
         await assert.rejects(execute({recv:async()=>({...base,method:'GET',path})},()=>assert.fail('fetch must not run')),/Invalid API path/);
 });
+
+test('a refused vault address comes back as its 422 message for the form to show', async () => {
+    const message = 'An address is required: a stored login is only used on the site it names';
+    const result = await execute({recv:async()=>({...base,method:'POST',path:'/api/v2/vault/items',csrf:'synthetic-csrf',body:{name:'x',url:''}})},async()=>
+        Response.json({code:'vault_address_required',message},{status:422}));
+    assert.deepEqual([result.status,result.body.message],[422,message]);
+});
