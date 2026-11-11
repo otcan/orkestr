@@ -1,10 +1,12 @@
 {
  "about": [
-  "Seconds a test adds to its shard on a hosted runner; used only to balance the shards.",
+  "Seconds a test adds to its shard; used only to balance the shards.",
   "A test in a binary of its own adds its whole duration. A test inside a large binary runs",
   "beside its neighbours and adds less. Unlisted tests count default_seconds each.",
+  "The values come from hosted-runner logs and match the AWS runner logs (ORK-774) within",
+  "a few seconds; three were taken from the AWS logs of 2026-11-11 (ORK-791).",
   "The two store property tests carry their duration in the former single job, so that",
-  "each keeps a shard to itself; alone on a runner they take about four minutes."
+  "each keeps a shard to itself; alone on a runner they take about four minutes (AWS: under three)."
  ],
  "default_seconds": 0.34,
  "tests": {
@@ -14,14 +16,17 @@
   "ordinary_durable_timer_binary_logout_restart_crash_and_revocation": 72,
   "same_owned_process_survives_natural_lease_and_original_control_still_stops": 69,
   "steering_is_scoped_durable_and_never_replayed_after_uncertainty": 60,
+  "production_runtime::process_tests::actual_process_crashes_preserve_atomic_ack_and_never_reissue_dispatch": 55,
   "containment::tests::durable_races::natural_store_deadline_expiry_fences_owned_child_without_clock_override": 54,
   "worker_original_reap_proofs_survive_parent_lifecycle": 47,
   "ordinary_fast_presentation_continuation_stop_restart_and_revocation": 43,
   "ordinary_http_dispatch_progress_acceptance_and_revocation": 43,
   "worker_original_proofs_allow_only_fresh_stopped_continuation": 38,
   "claude_stop_requires_terminal_reap_and_preserves_held_inputs": 34,
+  "preflight::tests::schema36_edges::populated_prefixes_copy_first_edges_to_50_preserve_rows_and_rollback_source": 30,
   "owner_tasks_have_distinct_native_bindings_bounded_dispatch_and_durable_control": 30,
   "ordinary_fast_stopped_restart_and_unproven_restart_refusals": 29,
+  "http_and_crash_recovery": 24,
   "ordinary_claude_http_initialization_observation_acceptance_and_refusal": 23,
   "owned_worker_tools_preserve_parent_scope_and_require_terminal_evidence": 23,
   "revocation_reaps_the_renewed_child_without_fabricating_terminal_evidence": 23,
@@ -31,13 +36,10 @@
   "stop_and_clean_restart_admit_only_fresh_eligible_intent": 14,
   "configured_set_restart_requires_every_exact_terminal_predecessor": 11,
   "database_aliases_are_refused_without_mutation": 11,
-  "http_and_crash_recovery": 11,
   "idle_broker_loss_reaps_without_fabricating_durable_authority": 10,
-  "preflight::tests::schema36_edges::populated_prefixes_copy_first_edges_to_50_preserve_rows_and_rollback_source": 10,
   "parent_proposal_cleans_workers_without_acceptance_or_new_dispatch": 7,
   "two_live_parent_worker_tasks_preserve_scope_and_independent_control": 6,
   "authenticated_execution_projection": 5,
-  "production_runtime::process_tests::actual_process_crashes_preserve_atomic_ack_and_never_reissue_dispatch": 5,
   "mounted_worker_discovery_requires_current_cookie_and_exact_scope": 3,
   "resource_health_http": 3
  }
