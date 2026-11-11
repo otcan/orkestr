@@ -23,6 +23,7 @@ fn every_view_round_trips_through_its_fragment() {
             tab: Tab::Files,
         },
         Route::VirtualDesks,
+        Route::OrkestrSettings,
         Route::V1Thread {
             thread: "group-coordinated".into(),
         },
@@ -83,7 +84,10 @@ fn unknown_or_hostile_fragments_are_ignored() {
         "#conversation/not-a-uuid",
         "#conversation/00000000-0000-0000-0000-000000000000",
         &format!("#conversation/{ID}/host"),
+        &format!("#conversation/{ID}/orkestr-settings"),
         &format!("#conversation/{ID}/nope"),
+        "#settings/other",
+        "/settings",
         "#v1/../x",
         "#v1/a b",
         "#host/details?range=2h",
@@ -142,7 +146,7 @@ fn every_destination_has_exactly_one_place_in_the_navigation() {
             "Job tracker",
             "Memory",
             "Live map",
-            "Settings"
+            "Chat settings"
         ]
     );
     assert!(Tab::Timers.in_more() && !Tab::Files.in_more() && !Tab::Host.in_more());
@@ -194,7 +198,11 @@ fn the_reload_pointer_accepts_every_conversation_destination() {
         .next()
         .expect("pattern line")
         .to_owned();
-    for tab in Tab::ALL.into_iter().filter(|t| *t != Tab::Host) {
+    // Conversation destinations, plus old `#conversation/<id>/virtual-desks` links.
+    for tab in Tab::ALL
+        .into_iter()
+        .filter(|t| !t.is_global() || *t == Tab::VirtualDesks)
+    {
         assert!(
             pattern.contains(&format!("|{}|", tab.slug()))
                 || pattern.contains(&format!("(?:{}|", tab.slug()))
@@ -203,4 +211,39 @@ fn the_reload_pointer_accepts_every_conversation_destination() {
             tab.slug()
         );
     }
+}
+
+#[test]
+fn orkestr_settings_are_global_and_chat_settings_stay_with_the_chat() {
+    // ORK-789: account, vault, provider sign-in and About live at `#settings`,
+    // an owner-wide view opened from the header; a chat's settings stay under
+    // its More menu at the URL old bookmarks use.
+    assert_eq!(Route::parse("#settings"), Some(Route::OrkestrSettings));
+    assert_eq!(Route::OrkestrSettings.hash(), "#settings");
+    assert!(Tab::GLOBAL.contains(&Tab::OrkestrSettings));
+    assert!(Tab::OrkestrSettings.is_global() && !Tab::OrkestrSettings.in_more());
+    assert!(Tab::Settings.in_more() && !Tab::Settings.is_global());
+    assert_eq!(Tab::Settings.label(), "Chat settings");
+    assert_eq!(Tab::OrkestrSettings.label(), "Orkestr settings");
+    assert_eq!(
+        Route::parse(&format!("#conversation/{ID}/settings")),
+        Some(Route::Conversation {
+            id: ID.into(),
+            tab: Tab::Settings
+        }),
+        "an old chat settings bookmark still opens that chat's settings"
+    );
+    assert_eq!(
+        Route::Conversation {
+            id: ID.into(),
+            tab: Tab::Settings
+        }
+        .hash(),
+        format!("#conversation/{ID}/settings")
+    );
+    assert_eq!(
+        Route::parse(&format!("#conversation/{ID}/orkestr-settings")),
+        None,
+        "Orkestr settings never take a conversation's scope"
+    );
 }

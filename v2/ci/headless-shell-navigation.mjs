@@ -1,12 +1,13 @@
 // ORK-786 application shell against the synthetic API, in the real WASM
 // bundle: the compact global header, Chat / Work / Files with the rest under
-// More, global Virtual desks and host views, quota and host states, and the
-// collapsible, resizable conversation list. Five widths plus 200% zoom
-// (1280 x 860 at 2x = 640 x 430 CSS px). Synthetic data only; no provider.
+// More, global Virtual desks, host and Orkestr settings views (ORK-789), quota
+// and host states, and the collapsible, resizable conversation list. Five
+// widths plus 200% zoom (1280 x 860 at 2x = 640 x 430 CSS px). Synthetic data
+// only; no provider.
 import assert from 'node:assert/strict';
 import { mkdir } from 'node:fs/promises';
 import puppeteer from 'puppeteer';
-import { A, createState, startMock } from './headless-workspace-mock.mjs';
+import { A, V1_GROUP, createState, startMock } from './headless-workspace-mock.mjs';
 
 assert.equal(process.env.CI, 'true', 'Run only in isolated CI');
 assert.ok(process.env.UI_BUNDLE_DIR, 'UI_BUNDLE_DIR is required');
@@ -15,9 +16,11 @@ const errors = [];
 let browser, page, stage = 'startup';
 const failing = new Set();
 
-const MORE = ['History', 'Projects', 'Timers', 'Job tracker', 'Memory', 'Live map', 'Settings'];
+const MORE = ['History', 'Projects', 'Timers', 'Job tracker', 'Memory', 'Live map', 'Chat settings'];
 const SLUGS = { Chat: '', Work: '/work', Files: '/files', History: '/history', Projects: '/projects', Timers: '/timers',
-  'Job tracker': '/tracker', Memory: '/memory', 'Live map': '/live-map', Settings: '/settings' };
+  'Job tracker': '/tracker', Memory: '/memory', 'Live map': '/live-map', 'Chat settings': '/settings' };
+// Account and server-wide panels: only in Orkestr settings, never under a chat (ORK-789).
+const OWNER_PANELS = '.owner-password, .vault, .provider-sign-in, [aria-label="Account settings"], [aria-label="About Orkestr"]';
 const VIEWPORTS = [
   ['1280', { width: 1280, height: 860 }],
   ['1440', { width: 1440, height: 900 }],
@@ -83,9 +86,15 @@ async function headerAndBadge(label, phone) {
       global: [...h.querySelectorAll('nav[aria-label="Global"] button')].map(b => b.textContent.trim()),
       inConversationNav: [...document.querySelectorAll('nav[aria-label="Conversation"] button')].map(b => b.textContent.trim()) };
   });
-  assert.deepEqual(view.global, ['Virtual desks'], 'global resources live in the header');
-  for (const global of ['Virtual desks', 'Host resources']) assert.ok(!view.inConversationNav.includes(global), `${global} is not a conversation tab`);
+  assert.deepEqual(view.global, ['Virtual desks', 'Settings'], 'global resources live in the header');
+  for (const global of ['Virtual desks', 'Host resources', 'Settings', 'Orkestr settings']) assert.ok(!view.inConversationNav.includes(global), `${global} is not a conversation tab`);
   if (!phone) assert.ok(view.height <= 64, `${label}: one compact header row, got ${view.height}px`);
+  // Settings (ORK-789) joins the header without wrapping its controls: desks,
+  // Settings, build and Sign out share one row at every width.
+  const rows = await page.evaluate(() => ['.global-link', '.global-settings', '.build-badge > button', '.app-heading > .sign-out']
+    .map(s => { const r = document.querySelector(s).getBoundingClientRect(); return [s, Math.round(r.top + r.height / 2)]; }));
+  const middles = rows.map(([, y]) => y);
+  assert.ok(Math.max(...middles) - Math.min(...middles) <= 6, `${label}: header controls on one row ${JSON.stringify(rows)}`);
   assert.ok(view.badgeTop < 60 && view.badgeRight > view.width * 0.55, `${label}: build badge at the top right`);
   assert.doesNotMatch(view.text, /unavailable/i, 'no "unavailable" wording in the header');
   assert.doesNotMatch(view.text, /deployed/i, 'deployment times live in the build panel');
@@ -191,11 +200,20 @@ async function everyRouteBookmarkable() {
       .some(b => b.textContent.trim() === name), { timeout: 20000 }, name);
     assert.equal(await hash(), `#conversation/${A}${slug}`, `${name} keeps its URL`);
   }
-  for (const [path, title] of [['/virtual-desks', 'Virtual desks'], ['/#host', 'Host resources'], ['/#host/details?range=24h', 'Host resources']]) {
+  for (const [path, title] of [['/virtual-desks', 'Virtual desks'], ['/#host', 'Host resources'], ['/#host/details?range=24h', 'Host resources'], ['/#settings', 'Orkestr settings']]) {
     await page.goto(`${origin}${path}`, { waitUntil: 'domcontentloaded' });
     await page.waitForFunction(t => document.querySelector('.conversation-heading[data-scope=global] h2')?.textContent === t, { timeout: 20000 }, title);
     assert.equal(await page.$('nav[aria-label="Conversation"]'), null, `${path}: global, no conversation tabs`);
   }
+  // An old chat settings bookmark still opens that chat's settings, which
+  // now hold only chat controls and point to Orkestr settings (ORK-789).
+  await page.goto(`${origin}/#conversation/${A}/settings`, { waitUntil: 'domcontentloaded' });
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.waitForSelector('#settings-model', { timeout: 20000 });
+  assert.equal(await page.$$eval(OWNER_PANELS, n => n.length), 0, 'no account or server-wide panel under the chat');
+  await clickVisible('Open Orkestr settings');
+  await waitHash('#settings');
+  await page.waitForSelector('.orkestr-settings [aria-label="Account settings"] .owner-password');
   // An old conversation-scoped desks link opens the global view.
   await page.goto(`${origin}/#conversation/${A}/virtual-desks`, { waitUntil: 'domcontentloaded' });
   await page.waitForFunction(() => document.querySelector('.conversation-heading[data-scope=global] h2')?.textContent === 'Virtual desks', { timeout: 20000 });
@@ -222,6 +240,68 @@ async function globalViews(label) {
   assert.equal(await page.$eval('.conversation-heading h2', n => n.textContent), 'Host resources');
   await clickVisible('Back to chat');
   await page.waitForSelector('#composer');
+  await orkestrSettings(label);
+}
+
+// ORK-789: account, vault, provider sign-in and About are one global page,
+// opened from the header's Settings (a gear alone on narrow phones).
+async function orkestrSettings(label) {
+  const settings = await page.$eval('.global-settings', n => { const r = n.getBoundingClientRect(), s = getComputedStyle(n);
+    return { name: n.textContent.trim(), title: n.title, left: r.left, right: r.right, top: r.top, height: r.height, width: r.width, shown: r.width > 0 && s.visibility !== 'hidden' }; });
+  assert.ok(settings.shown && settings.left >= 0 && settings.right <= await page.evaluate(() => innerWidth) + 1, `${label}: Settings reachable in the header`);
+  assert.equal(settings.name, 'Settings', 'accessible name, also when only the gear shows');
+  assert.match(settings.title, /^Orkestr settings/);
+  await page.mouse.click((settings.left + settings.right) / 2, settings.top + settings.height / 2);
+  await waitHash('#settings');
+  await page.waitForSelector('.orkestr-settings [aria-label="Account settings"] .owner-password', { timeout: 15000 });
+  const view = () => page.evaluate(owner => ({
+    scope: document.querySelector('.conversation-heading')?.dataset.scope,
+    title: document.querySelector('.conversation-heading h2')?.textContent,
+    meta: document.querySelector('.heading-scope')?.textContent,
+    tabs: document.querySelectorAll('nav[aria-label="Conversation"]').length,
+    current: [...document.querySelectorAll('nav[aria-label="Global"] button[aria-current=page]')].map(b => b.textContent.trim()),
+    row: document.querySelectorAll('.conversation-choice[aria-current=page]').length,
+    chat: document.querySelectorAll('#settings-model, .chat-settings, #composer').length,
+    panels: document.querySelectorAll(`.orkestr-settings :is(${owner})`).length,
+  }), OWNER_PANELS);
+  const expected = { scope: 'global', title: 'Orkestr settings', meta: 'Global · shared by all conversations', tabs: 0, current: ['Settings'], row: 0, chat: 0, panels: 5 };
+  assert.deepEqual(await view(), expected);
+  await screenshot(label, 'orkestr-settings');
+  await noHorizontalScroll();
+  // Reload keeps the page; back returns to the chat, forward reopens it.
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.waitForSelector('.orkestr-settings [aria-label="Account settings"] .owner-password', { timeout: 20000 });
+  assert.equal(await hash(), '#settings');
+  assert.deepEqual(await view(), expected);
+  await page.goBack();
+  await waitHash(`#conversation/${A}`);
+  await page.waitForSelector('#composer');
+  assert.equal(await page.$$eval(OWNER_PANELS, n => n.length), 0);
+  await page.goForward();
+  await waitHash('#settings');
+  await page.waitForSelector('.orkestr-settings .owner-password');
+  await clickVisible('Back to chat');
+  await waitHash(`#conversation/${A}`);
+  await page.waitForSelector('#composer');
+}
+
+// From a linked read-only V1 chat, Settings opens Orkestr settings; back returns to that chat.
+async function settingsFromLinkedChat(phone) {
+  if (phone) {
+    await page.click('.threads-toggle');
+    await page.waitForFunction(() => document.querySelector('.workspace')?.dataset.sidebarOpen === 'true');
+  }
+  await page.evaluate(() => [...document.querySelectorAll('.conversation-choice')].find(b => b.querySelector('.conversation-name')?.textContent === 'Synthetic group').click());
+  await waitHash(`#v1/${V1_GROUP}`);
+  await page.waitForFunction(() => document.querySelector('.heading-meta')?.textContent === 'On V1 · coordinator attached', { timeout: 15000 });
+  await page.$eval('.global-settings', b => b.click());
+  await waitHash('#settings');
+  await page.waitForFunction(() => document.querySelector('.conversation-heading[data-scope=global] h2')?.textContent === 'Orkestr settings', { timeout: 15000 });
+  await page.waitForSelector('.orkestr-settings .owner-password');
+  assert.equal(await page.$('.v1-thread'), null, 'the linked chat is closed');
+  await page.goBack();
+  await waitHash(`#v1/${V1_GROUP}`);
+  await page.waitForFunction(() => document.querySelector('.heading-meta')?.textContent === 'On V1 · coordinator attached', { timeout: 15000 });
 }
 
 async function sidebarDesktop(label) {
@@ -320,7 +400,7 @@ async function compactLayout(label, phone) {
   }
   if (phone) for (const [name, height] of layout.targets) assert.ok(height >= 44, `${label}: ${name} is ${height}px tall (44px touch target)`);
   // Every action stays reachable: header and conversation controls are on screen.
-  for (const selector of ['.global-link', '#more-tabs-toggle', '.build-badge > button', '.app-heading > .sign-out', phone ? '.threads-toggle' : '.sidebar-collapse']) {
+  for (const selector of ['.global-link', '.global-settings', '#more-tabs-toggle', '.build-badge > button', '.app-heading > .sign-out', phone ? '.threads-toggle' : '.sidebar-collapse']) {
     const box = await page.$eval(selector, n => { const r = n.getBoundingClientRect(); return { left: r.left, right: r.right, width: r.width }; });
     assert.ok(box.width > 0 && box.left >= 0 && box.right <= await page.evaluate(() => innerWidth) + 1, `${label}: ${selector} reachable`);
   }
@@ -372,6 +452,12 @@ try {
     if (label === '1280' || label === '390') { stage = `${label}:quotas`; await quotasAndHost(label); }
     if (!phone) { stage = `${label}:resize`; await sidebarDesktop(label); }
     if (label === '1280' || label === '390') { stage = `${label}:routes`; await everyRouteBookmarkable(); }
+    if (label === '1280' || label === '390') {
+      stage = `${label}:linked-settings`;
+      await page.goto(`${origin}/#conversation/${A}`, { waitUntil: 'domcontentloaded' });
+      await page.waitForSelector('#composer');
+      await settingsFromLinkedChat(phone);
+    }
     stage = `${label}:dark`;
     await page.goto(`${origin}/#conversation/${A}`, { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('#composer');

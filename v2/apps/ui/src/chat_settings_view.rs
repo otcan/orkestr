@@ -19,9 +19,16 @@ pub fn ChatSettings(
     session_scope: Signal<SessionScope>,
     onexpired: EventHandler<()>,
 ) -> Element {
+    // Account and server-wide settings moved to Orkestr settings (ORK-789); an
+    // old bookmark of this page still finds them from here.
+    let open_settings = use_context::<crate::GlobalViews>().settings;
     rsx! {
         section { class: "chat-settings", "aria-label": "Chat settings",
             h2 { "Chat settings" }
+            div { class: "settings-scope-note",
+                p { "Applies only to this chat. Your password, vault, provider sign-in and installation details are shared by all chats and are in Orkestr settings." }
+                button { r#type: "button", onclick: move |_| { let mut open = open_settings; open += 1; }, "Open Orkestr settings" }
+            }
             ThreadSettings { conversation: conversation.clone(), csrf: csrf.clone(), session_scope, onexpired }
             crate::provider_handoff_view::ProviderHandoff { conversation: conversation.clone(), csrf: csrf.clone(), session_scope, onexpired }
             Desktops { conversation: conversation.clone(), csrf: csrf.clone(), session_scope, onexpired }

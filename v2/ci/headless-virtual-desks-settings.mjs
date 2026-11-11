@@ -259,12 +259,52 @@ export async function virtualDesksAndAccountSettings({page, state, conversation,
     assert.equal(state.deskOwnerActions.at(-1).action,'link','refresh must not repeat owner actions');
     assert.equal(state.deskOwnerActions.filter(a=>a.action==='link').length,1,'refresh must not mint another link');
     await deskSharing({page,state,clickText,waitText,screenshot,label,row});
-    await conversationTab(page, clickText, 'Settings');
+    await conversationTab(page, clickText, 'Chat settings');
     await page.waitForSelector('#settings-model');
-    await page.waitForSelector('[aria-label="Account settings"] .owner-password');
     assert.equal(new URL(page.url()).hash, `#conversation/${conversation}/settings`);
+    await orkestrSettings({page, conversation, clickText, screenshot, label});
+}
+
+// ORK-789: a chat's settings hold only that chat's controls. Password, vault,
+// provider sign-in and About are Orkestr settings (`#settings`), a global view
+// that the chat's page (an old bookmark) points to. Ends back on the chat's settings.
+async function orkestrSettings({page, conversation, clickText, screenshot, label}) {
+    const owner = '.owner-password, .vault, .provider-sign-in, [aria-label="Account settings"], [aria-label="About Orkestr"]';
+    assert.equal(await page.$$eval(owner, nodes => nodes.length), 0, 'account and server-wide settings are not under the chat');
+    await clickText('Open Orkestr settings');
+    await page.waitForSelector('[aria-label="Account settings"] .owner-password');
+    const shown = () => page.evaluate(() => ({
+        hash: location.hash,
+        scope: document.querySelector('.conversation-heading')?.dataset.scope,
+        title: document.querySelector('.conversation-heading h2')?.textContent,
+        meta: document.querySelector('.heading-scope')?.textContent,
+        tabs: document.querySelectorAll('nav[aria-label="Conversation"]').length,
+        header: document.querySelector('.global-settings')?.getAttribute('aria-current'),
+        chat: document.querySelectorAll('#settings-model, .chat-settings').length,
+        sections: ['Account settings', 'Provider sign-in', 'About Orkestr'].filter(l => document.querySelector(`.orkestr-settings [aria-label="${l}"]`)),
+        vault: document.querySelectorAll('.orkestr-settings [aria-label="Account settings"] .vault').length,
+    }));
+    const global = {hash: '#settings', scope: 'global', title: 'Orkestr settings', meta: 'Global · shared by all conversations', tabs: 0,
+        header: 'page', chat: 0, sections: ['Account settings', 'Provider sign-in', 'About Orkestr'], vault: 1};
+    assert.deepEqual(await shown(), global);
+    assert.equal(await page.$('.conversation-choice[aria-current=page]'), null, 'no conversation is the scope of Orkestr settings');
+    await screenshot(label, 'orkestr-settings');
+    // Back returns to the chat's settings, forward to Orkestr settings, and reload keeps it.
+    await page.goBack();
+    await page.waitForSelector('#settings-model');
+    assert.equal(await page.$$eval(owner, nodes => nodes.length), 0);
+    assert.equal(new URL(page.url()).hash, `#conversation/${conversation}/settings`);
+    await page.goForward();
+    await page.waitForSelector('[aria-label="Account settings"] .owner-password');
+    assert.deepEqual(await shown(), global);
+    await page.reload({waitUntil:'networkidle0'});
+    await page.waitForSelector('[aria-label="Account settings"] .owner-password');
+    assert.deepEqual(await shown(), global);
     assert.equal(await page.$$eval('.owner-password', nodes => nodes.length), 1);
     assert.equal(await page.$eval('.owner-password summary', n => n.textContent.trim()), 'Change password');
+    await page.goBack();
+    await page.waitForSelector('#settings-model');
+    assert.equal(new URL(page.url()).hash, `#conversation/${conversation}/settings`);
 }
 
 // From a global view, back to the conversation, then one of its tabs.
@@ -297,7 +337,7 @@ async function deskSharing({page,state,clickText,waitText,screenshot,label,row})
     assert.equal(await page.$eval('.desk-sharing', el => el.dataset.shared), 'true');
     assert.deepEqual(effects(), before, 'sharing reserves, starts and binds nothing');
     await screenshot(label, 'virtual-desks-shared');
-    await conversationTab(page, clickText, 'Settings');
+    await conversationTab(page, clickText, 'Chat settings');
     await page.waitForSelector('#settings-model');
     await page.waitForFunction(() => document.querySelector('.desk-sharing-help')?.textContent.startsWith('All desks are shared with all chats: workers of this chat may reserve any desk'), {timeout:15000});
     assert.ok(!(await page.$eval('body', el => el.textContent)).includes('Every desktop must be granted to the V1 thread in V1.'));

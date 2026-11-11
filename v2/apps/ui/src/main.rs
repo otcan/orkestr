@@ -44,6 +44,7 @@ mod memory_view;
 mod message_actions_view;
 mod message_time_view;
 mod new_whatsapp_chat;
+mod orkestr_settings_view;
 mod outbox_driver;
 mod outbox_view;
 mod owner_password_view;
@@ -105,6 +106,8 @@ pub struct InitialRoute(pub Signal<Option<orkestr_v2_ui::route::Route>>);
 pub struct GlobalViews {
     /// Bumped by the header's Virtual desks button.
     pub desks: Signal<u64>,
+    /// Bumped by the header's Settings button (Orkestr settings, ORK-789).
+    pub settings: Signal<u64>,
     pub shown: Signal<Option<orkestr_v2_ui::route::Tab>>,
 }
 
@@ -140,6 +143,7 @@ fn App() -> Element {
     let open_metrics = use_context_provider(|| host_metrics_panel::OpenHostMetrics(Signal::new(0)));
     let global_views = use_context_provider(|| GlobalViews {
         desks: Signal::new(0),
+        settings: Signal::new(0),
         shown: Signal::new(None),
     });
     // The view named by the URL at load; the workspace opens it once mounted.
@@ -257,7 +261,19 @@ fn App() -> Element {
                         button { r#type: "button", class: "global-link",
                             "aria-current": if (global_views.shown)() == Some(orkestr_v2_ui::route::Tab::VirtualDesks) { "page" } else { "false" },
                             onclick: move |_| { let mut desks = global_views.desks; desks += 1; },
-                            "Virtual desks"
+                            // "Desks" on narrow phones, so Settings fits on the same row.
+                            span { class: "global-link-qualifier", "Virtual " }
+                            span { class: "global-link-noun", "desks" }
+                        }
+                        // Account and server-wide settings; a chat's own settings stay under its More menu.
+                        button { r#type: "button", class: "global-link global-settings", title: "Orkestr settings: account, vault, provider sign-in and this installation",
+                            "aria-current": if (global_views.shown)() == Some(orkestr_v2_ui::route::Tab::OrkestrSettings) { "page" } else { "false" },
+                            onclick: move |_| { let mut settings = global_views.settings; settings += 1; },
+                            svg { "aria-hidden": "true", view_box: "0 0 20 20", width: "18", height: "18",
+                                circle { cx: "10", cy: "10", r: "2.6", fill: "none", stroke: "currentColor", stroke_width: "1.5" }
+                                path { d: "M10 2.5v2.2M10 15.3v2.2M2.5 10h2.2M15.3 10h2.2M4.7 4.7l1.55 1.55M13.75 13.75l1.55 1.55M4.7 15.3l1.55-1.55M13.75 6.25l1.55-1.55", fill: "none", stroke: "currentColor", stroke_width: "1.5", stroke_linecap: "round" }
+                            }
+                            span { class: "global-link-label", "Settings" }
                         }
                     }
                 }

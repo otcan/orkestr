@@ -30,7 +30,7 @@ export async function providerHandoff({ page, state, label, openDrawer, choose, 
   page.on('request', intercept);
   try {
     await openDrawer(label); await choose('Assistant');
-    await page.waitForSelector('#composer'); await clickText('Settings');
+    await page.waitForSelector('#composer'); await clickText('Chat settings');
     await clickText('Change provider with context');
     await page.waitForSelector('.provider-handoff textarea');
     await waitText(`Current provider: ${prior.settings.provider}`);
