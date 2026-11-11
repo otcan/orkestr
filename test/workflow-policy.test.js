@@ -3,7 +3,7 @@ import test from "node:test";
 import fs from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { parse } from "yaml";
-import { validateWorkflow, actionPins, checkWorkflows, publishRunAllowed } from "../scripts/security/workflow-policy.mjs";
+import { validateWorkflow, actionPins, awsRunnerSelections, checkWorkflows, publishRunAllowed } from "../scripts/security/workflow-policy.mjs";
 
 const fixture = `on: [pull_request, push]
 permissions: {contents: read}
@@ -296,4 +296,45 @@ for (const [name, before, after] of [
   ["secret", "echo fixture", "echo '${{ secrets.TOKEN }}'"],
 ]) test(`dedicated iOS workflow rejects ${name}`, () => {
   assert.throws(() => validateWorkflow(iosFixture.replace(before, after), "v2-ios.yml"), /workflow_/);
+});
+
+// ORK-774: ephemeral AWS runners only through the exact reviewed selections.
+const awsFixture = (selection) => fixture.replace("runs-on: ubuntu-latest", `runs-on: ${JSON.stringify(selection)}`);
+test("exact AWS runner selections pass only in the V2 build and test workflows", () => {
+  for (const selection of Object.values(awsRunnerSelections)) {
+    for (const filename of ["v2-rust.yml", "v2-image.yml", "v2-browser.yml"])
+      assert.deepEqual(validateWorkflow(awsFixture(selection), filename), { jobs: 1, actions: 1 }, filename);
+    for (const filename of ["", "ci.yml", "v2-publish.yml", "external-reachability.yml", "v2-rust.yaml"])
+      assert.throws(() => validateWorkflow(awsFixture(selection), filename), /workflow_runner/, filename);
+  }
+});
+test("AWS runner selections keep forks, other events and the kill switch on GitHub-hosted runners", () => {
+  const { x64, arm64 } = awsRunnerSelections;
+  for (const selection of [x64, arm64]) {
+    assert.match(selection, /^\$\{\{ vars\.ORKESTR_AWS_RUNNERS == 'on' && github\.repository == 'otcan\/orkestr' && /);
+    assert.match(selection, /github\.event_name == 'pull_request' && github\.event\.pull_request\.head\.repo\.full_name == 'otcan\/orkestr'/);
+    assert.doesNotMatch(selection, /pull_request_target|workflow_run|merge_group/);
+  }
+  assert.match(x64, /fromJSON\('\["self-hosted","orkestr-aws-x64"\]'\) \|\| 'ubuntu-latest' \}\}$/);
+  assert.match(arm64, /fromJSON\('\["self-hosted","orkestr-aws-arm64"\]'\) \|\| 'ubuntu-24.04-arm' \}\}$/);
+});
+for (const [name, before, after] of [
+  ["without the fork check", " && github.event.pull_request.head.repo.full_name == 'otcan/orkestr'", ""],
+  ["without the kill switch", "vars.ORKESTR_AWS_RUNNERS == 'on' && ", ""],
+  ["for every branch push", "(github.event_name == 'push' && (github.ref == 'refs/heads/integration' || startsWith(github.ref, 'refs/tags/')))", "github.event_name == 'push'"],
+  ["with another label", "orkestr-aws-x64", "orkestr-aws-gpu"],
+]) test(`rejects an AWS runner selection ${name}`, () => {
+  const changed = awsRunnerSelections.x64.replace(before, after);
+  assert.notEqual(changed, awsRunnerSelections.x64);
+  assert.throws(() => validateWorkflow(awsFixture(changed), "v2-rust.yml"), /workflow_runner/);
+});
+for (const runner of ["[self-hosted, orkestr-aws-x64]", "orkestr-aws-x64", "${{ fromJSON('[\"self-hosted\",\"orkestr-aws-x64\"]') }}"])
+  test(`rejects a direct AWS runner label ${runner}`, () => {
+    assert.throws(() => validateWorkflow(fixture.replace("runs-on: ubuntu-latest", `runs-on: ${runner}`), "v2-rust.yml"), /workflow_runner/);
+  });
+test("AWS runner jobs hold read permissions only", () => {
+  const job = awsFixture(awsRunnerSelections.x64);
+  assert.deepEqual(validateWorkflow(job.replace("    steps:", "    permissions: {contents: read, actions: read}\n    steps:"), "v2-image.yml"), { jobs: 1, actions: 1 });
+  for (const permissions of ["{contents: read, packages: write}", "{contents: read, id-token: write, attestations: write}", "write-all"])
+    assert.throws(() => validateWorkflow(job.replace("    steps:", `    permissions: ${permissions}\n    steps:`), "v2-image.yml"), /workflow_/);
 });
