@@ -124,6 +124,27 @@ pub fn normalize_domain(url: &str) -> Option<String> {
     valid.then_some(host)
 }
 
+/// Owner-entered logins (create, replace) must carry an `https://` address
+/// with a plain DNS host: the stored-login helper only uses a login whose
+/// domain matches the site, so an empty or non-https address is unusable.
+/// Imports are exempt (they keep unreadable V1 URLs).
+pub(crate) fn require_https_address(url: &str) -> Result<()> {
+    let text = url.trim();
+    if text.is_empty() {
+        return Err(VaultError::Invalid("vault_address_required"));
+    }
+    let https = text
+        .get(..8)
+        .is_some_and(|scheme| scheme.eq_ignore_ascii_case("https://"));
+    if !https {
+        return Err(VaultError::Invalid("vault_address_not_https"));
+    }
+    match normalize_domain(text) {
+        Some(domain) if domain.contains('.') => Ok(()),
+        _ => Err(VaultError::Invalid("vault_address_invalid")),
+    }
+}
+
 /// A host the helper may ask for: `[a-z0-9.-]`, 3 to 253 bytes.
 pub(crate) fn site_valid(site: &str) -> bool {
     (3..=253).contains(&site.len())

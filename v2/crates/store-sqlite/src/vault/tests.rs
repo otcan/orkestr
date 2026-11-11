@@ -743,3 +743,23 @@ async fn the_stored_login_read_needs_the_lease_and_one_matching_login() {
     assert!(rows.iter().all(|(r,)| !r.contains(SECRET)));
     case.finish().await;
 }
+
+#[test]
+fn owner_addresses_must_be_https_with_a_dotted_host() {
+    for ok in ["https://example.com", " HTTPS://App.Example.com/login "] {
+        assert!(require_https_address(ok).is_ok(), "{ok}");
+    }
+    for (bad, code) in [
+        ("", "vault_address_required"),
+        ("http://example.com", "vault_address_not_https"),
+        ("example.com", "vault_address_not_https"),
+        ("https://", "vault_address_invalid"),
+        ("https://localhost", "vault_address_invalid"),
+        ("https://exämple.com", "vault_address_invalid"),
+    ] {
+        assert!(
+            matches!(require_https_address(bad), Err(VaultError::Invalid(c)) if c == code),
+            "{bad}"
+        );
+    }
+}

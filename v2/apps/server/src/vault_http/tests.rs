@@ -301,7 +301,7 @@ async fn owner_routes_need_a_password_browser_session_and_csrf() {
     assert!(!refused.contains(SECRET), "{refused}");
     let bad_url = serde_json::json!({"name": "x", "url": format!("https://{SECRET} host/"), "password": SECRET}).to_string();
     let (status, refused) = case.call("POST", path, &browser(true), &bad_url).await;
-    assert_eq!((status, refused.contains(SECRET)), (400, false));
+    assert_eq!((status, refused.contains(SECRET)), (422, false));
     let (status, audit) = case
         .call("GET", "/api/v2/vault/audit", &browser(false), "")
         .await;
@@ -325,6 +325,76 @@ async fn owner_routes_need_a_password_browser_session_and_csrf() {
             status_body["items"].as_i64()
         ),
         (200, Some("ready"), Some(0))
+    );
+    case.finish().await;
+}
+
+#[tokio::test]
+async fn a_login_needs_an_https_address_on_create_and_replace() {
+    let case = Case::new(true).await;
+    let path = "/api/v2/vault/items";
+    for (url, code) in [
+        ("", "vault_address_required"),
+        ("   ", "vault_address_required"),
+        ("http://example.com", "vault_address_not_https"),
+        ("example.com", "vault_address_not_https"),
+        ("https://", "vault_address_invalid"),
+        ("https://localhost", "vault_address_invalid"),
+    ] {
+        let (status, refused) = case.owner("POST", path, &item("x", url)).await;
+        assert_eq!(
+            (status, refused["code"].as_str()),
+            (422, Some(code)),
+            "{url}"
+        );
+        assert!(!refused.to_string().contains(SECRET), "{refused}");
+    }
+    assert_eq!(
+        case.store_count("SELECT count(*) FROM vault_items").await,
+        0
+    );
+    let (status, created) = case
+        .owner(
+            "POST",
+            path,
+            &item("Synthetic Mail", "https://mail.example.com/login"),
+        )
+        .await;
+    assert_eq!(
+        (status, created["domain"].as_str()),
+        (201, Some("mail.example.com"))
+    );
+    let id = created["id"].as_str().unwrap().to_owned();
+    let login_path = format!("{path}/{id}/login");
+    let replace = |url: &str, revision: i64| {
+        serde_json::json!({"expected_revision": revision, "url": url, "username": "u", "password": SECRET, "notes": ""}).to_string()
+    };
+    let revision = created["revision"].as_i64().unwrap();
+    for (url, code) in [
+        ("", "vault_address_required"),
+        ("http://example.com", "vault_address_not_https"),
+        ("https://bad host/", "vault_address_invalid"),
+    ] {
+        let (status, refused) = case
+            .owner("PUT", &login_path, &replace(url, revision))
+            .await;
+        assert_eq!(
+            (status, refused["code"].as_str()),
+            (422, Some(code)),
+            "{url}"
+        );
+        assert!(!refused.to_string().contains(SECRET), "{refused}");
+    }
+    let (status, replaced) = case
+        .owner(
+            "PUT",
+            &login_path,
+            &replace("https://new.example.com", revision),
+        )
+        .await;
+    assert_eq!(
+        (status, replaced["domain"].as_str()),
+        (200, Some("new.example.com"))
     );
     case.finish().await;
 }
