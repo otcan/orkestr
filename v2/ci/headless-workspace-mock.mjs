@@ -5,6 +5,7 @@ import { readFile } from 'node:fs/promises';
 import { extname, join, normalize } from 'node:path';
 import { trackerApi } from './headless-tracker-mock.mjs';
 import { encryptedUploadMock } from './headless-encrypted-uploads.mjs';
+import { localFilesMock } from './headless-local-files-mock.mjs';
 import { liveAnswerApi } from './headless-live-answer.mjs';
 
 export const A = '00000000-0000-4000-8000-00000000000a';
@@ -55,7 +56,7 @@ export function createState() {
     // Chat settings, desktops and timers of conversation A.
     settings: { schema_version: 1, conversation_id: A, revision: 2, provider: 'codex', model: 'synthetic-model', reasoning_effort: 'medium',
       honor_no_reply: true, reply_prefix: 'synthetic:', reply_footer: null, provider_generation: 0, updated_at_ms: 1 },
-    desktopActions: [], deskReserved: false, deskRuntime: { 'idle-desk': 'inactive', 'held-desk': 'active', 'unbound-desk': 'unknown' }, deskOwnerActions: [], deskStopConflict: false, deskStartFailure: false, settingsPuts: [], bindingPuts: [], desktopBindings: {}, timerCalls: [], timerPause: null, chatTimerPause: null,
+    desktopActions: [], deskReserved: false, deskRuntime: { 'idle-desk': 'inactive', 'held-desk': 'active', 'unbound-desk': 'unknown' }, deskOwnerActions: [], deskStopConflict: false, deskStartFailure: false, settingsPuts: [], bindingPuts: [], signInPosts: [], signIn: { codex: { signed_in: false, method: null, login: null } }, desktopBindings: {}, timerCalls: [], timerPause: null, chatTimerPause: null,
     // Linked V1 chat management (synthetic V1 state behind the server).
     v1Model: { model: 'synthetic-model', effort: 'low' }, v1Calls: [],
     v1Timers: [{ id: 'timer-1', label: 'Synthetic digest', cadence: 'daily', time: '08:00', every: null, timezone: 'Europe/Berlin',
@@ -299,6 +300,7 @@ async function api(state, req, res, url) {
     const window = {fiveHourRemainingPct:null,weeklyRemainingPct:40,fiveHourResetsAt:null,weeklyResetsAt:new Date(Date.now()+86400000).toISOString(),observedAt:new Date().toISOString(),stale:false,limited:false};
     return json(res,200,{quota:{codex:window,claude:{...window,weeklyRemainingPct:null,weeklyStatus:'allowed'}},staleAfterMs:21600000});
   }
+  if (path.startsWith('/api/v2/provider-sign-in')) return providerSignIn(req, res, path, state);
   if (path === '/api/v2/host-metrics' && req.method === 'GET') return json(res, 200, hostSummary());
   if (path === '/api/v2/host-metrics/consumers' && req.method === 'GET') return json(res, 200, hostConsumers());
   if (path === '/api/v2/host-metrics/disks' && req.method === 'GET') return json(res, 200, hostDisks());
@@ -569,11 +571,42 @@ async function api(state, req, res, url) {
   return missing(res);
 }
 
+function signInOverview(state, result = 'status') {
+  const codex = state.signIn.codex;
+  return { result, providers: [
+    { provider: 'codex', available: true, signed_in: codex.signed_in, method: codex.method, account: null, subscription: null, checked_at_ms: 1, login: codex.login },
+    { provider: 'claude', available: false, reason: 'not_configured' },
+  ] };
+}
+async function providerSignIn(req, res, path, state) {
+  if (path === '/api/v2/provider-sign-in' && req.method === 'GET') return json(res, 200, signInOverview(state));
+  const match = path.match(/^\/api\/v2\/provider-sign-in\/(codex|claude)\/(start|code|cancel|sign-out)$/);
+  if (!match || req.method !== 'POST') return json(res, 404, { code: 'not_found', message: 'Not found' });
+  const request = JSON.parse(await body(req) || '{}');
+  state.signInPosts.push({ provider: match[1], action: match[2], request });
+  const codex = state.signIn.codex;
+  if (match[2] === 'start') {
+    codex.login = { state: 'waiting', link: state.signInLink ?? 'https://auth.openai.com/codex/device', code: 'ABCD-EFGH1', expires_in_s: 899 };
+    return json(res, 202, signInOverview(state, 'started'));
+  }
+  if (match[2] === 'cancel') {
+    codex.login = { state: 'cancelled' };
+    return json(res, 200, signInOverview(state, 'accepted'));
+  }
+  if (match[2] === 'sign-out') {
+    codex.signed_in = false; codex.method = null; codex.login = null;
+    return json(res, 202, signInOverview(state, 'started'));
+  }
+  return json(res, 400, { code: 'provider_sign_in_code_refused', message: 'That code was not accepted' });
+}
+
 export async function startMock(bundle, state = createState()) {
   const encrypted = await encryptedUploadMock(state);
+  const localFiles = localFilesMock(state);
   const server = createServer(async (req, res) => {
     const url = new URL(req.url, 'http://127.0.0.1');
     if (await encrypted(req,res,url.pathname)) return;
+    if (await localFiles(req,res,url.pathname)) return;
     if (url.pathname.startsWith('/api/')) return api(state, req, res, url);
     const deep = /^\/instance\/(ins_[A-Za-z0-9_-]{22})\/thread\/(thr_[A-Za-z0-9_-]{22})$/.exec(url.pathname);
     if (deep) { res.writeHead(303, { location: `/#v1-link/${deep[1]}/${deep[2]}`, 'cache-control': 'no-store' }); return res.end(); }

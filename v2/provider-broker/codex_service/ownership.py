@@ -111,6 +111,12 @@ class Children:
         self.families = {}
         self.forced = self.uncertain = False
         self.uncertainty_reason = None
+        # Descendants a failed walk saw but could not record, by pid+start:
+        # an operator release (manager_uncertain) must prove them gone too.
+        self.unrecorded = {}
+        self.unrecorded_overflow = False
+        # Set only by a proven operator release of an uncertain window.
+        self.operator_released = False
         self.lock = threading.RLock()
         self.next_prune = time.monotonic() + 1
 
@@ -253,7 +259,9 @@ class Children:
                     child = process(pid)
                     if child is None or child["ppid"] != parent["pid"]:
                         continue
-                    require(self.allow_uid_change or child["uid"] == self.package.uid, "owned_child_identity")
+                    if not (self.allow_uid_change or child["uid"] == self.package.uid):
+                        self._unrecorded(child)
+                        raise Refused("owned_child_identity")
                     try:
                         self.remember(child)
                     except Vanished:
@@ -268,6 +276,13 @@ class Children:
         except BaseException as error:
             self._observation_failed(error)
             raise
+
+    def _unrecorded(self, identity):
+        key = (identity["pid"], identity["start"])
+        if key not in self.unrecorded and len(self.unrecorded) >= 64:
+            self.unrecorded_overflow = True
+            return
+        self.unrecorded.setdefault(key, dict(identity))
 
     def _observation_failed(self, error):
         """Persist a closed diagnostic; never expose raw exception text/paths."""
@@ -294,10 +309,11 @@ class Children:
 
     @serialized
     def released(self):
-        """Every original identity reaped and cleanup certain. Not graceful proof."""
+        """Every original identity reaped and cleanup certain (or an operator
+        release proved the uncertain tree gone). Not graceful proof."""
         self.observe()
         live = self._log_live()
-        return not self.uncertain and not live
+        return (not self.uncertain or self.operator_released) and not live
 
     @serialized
     def released_broker(self,identity):

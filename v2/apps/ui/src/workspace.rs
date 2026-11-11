@@ -296,7 +296,13 @@ pub fn Workspace(
                                     key: "password-{session_scope.read().generation()}", csrf: csrf.clone(), session_scope, onexpired,
                                 }
                                 crate::vault_view::Vault {
-                                    key: "vault-{session_scope.read().generation()}", csrf, session_scope, onexpired,
+                                    key: "vault-{session_scope.read().generation()}", csrf: csrf.clone(), session_scope, onexpired,
+                                }
+                            }
+                            div {
+                                crate::provider_sign_in_view::ProviderSignInSection {
+                                    key: "provider-sign-in-{session_scope.read().generation()}",
+                                    csrf: csrf.clone(), session_scope, onexpired,
                                 }
                             }
                             crate::beta_settings::BetaSettings {}
