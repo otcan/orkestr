@@ -32,6 +32,9 @@ const POLL_MS: u32 = 4000;
 #[component]
 pub fn ConversationSidebar(
     selected: String,
+    /// An owner-wide view is open: no row is shown as the current page.
+    #[props(default)]
+    global_view: bool,
     csrf: String,
     session_scope: Signal<SessionScope>,
     onselect: EventHandler<SidebarEntry>,
@@ -266,7 +269,7 @@ pub fn ConversationSidebar(
         nav { class:"conversation-list", "aria-label":"Conversation list",
             for row in visible {
                 SidebarRow {
-                    key:"{row.entry.key}", row: row.clone(), now, selected: row.entry.key == selected,
+                    key:"{row.entry.key}", row: row.clone(), now, selected: row.entry.key == selected && !global_view,
                     status: row.entry.conversation_id.as_ref().and_then(|id| statuses.read().get(&id.to_string()).cloned()),
                     ontoggle: move |key: String| { let mut set = expanded.write(); if !set.remove(&key) { set.insert(key); } },
                     onselect: move |entry: SidebarEntry| { if session_scope.read().is_current(owner) { onselect.call(entry); } },

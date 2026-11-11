@@ -31,7 +31,7 @@ pub fn BuildBadge() -> Element {
                 onclick: move |_| expanded.set(!expanded()),
                 "v{build.version}"
                 span { class: "build-badge-source", " · {short}" }
-                span { class: "build-badge-caret", "aria-hidden": "true", "▾" }
+                crate::workspace::Chevron {}
             }
             if expanded() {
                 div { id: "header-build-details", class: "build-badge-details", role: "region",

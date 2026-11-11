@@ -222,7 +222,7 @@ pub fn Workspace(
     rsx! {
         div { class: "workspace", "data-sidebar-open": "{sidebar}", "data-sidebar-collapsed": "{collapsed}",
             crate::conversation_sidebar::ConversationSidebar {
-                selected: selected.clone(), csrf: csrf.clone(), session_scope, onexpired,
+                selected: selected.clone(), global_view: global, csrf: csrf.clone(), session_scope, onexpired,
                 onloaded: move |rows: Vec<SidebarEntry>| {
                     rows_seen.set(rows.clone());
                     let pending = wanted.peek().clone();
@@ -438,7 +438,7 @@ fn ConversationNav(tab: Tab, onpick: EventHandler<Tab>) -> Element {
                     onclick: move |_| open.set(!open()),
                     "More"
                     if in_more { span { class: "more-current", ": {tab.label()}" } }
-                    span { class: "more-caret", "aria-hidden": "true", "▾" }
+                    Chevron {}
                 }
                 ul { id: "more-tabs-list", class: "more-list", hidden: !open(),
                     for name in Tab::MORE {
@@ -453,5 +453,15 @@ fn ConversationNav(tab: Tab, onpick: EventHandler<Tab>) -> Element {
             }
         }
         if open() { div { class: "menu-scrim", "aria-hidden": "true", onclick: move |_| close(false) } }
+    }
+}
+
+/// A small down chevron drawn as SVG (font-independent).
+#[component]
+pub fn Chevron() -> Element {
+    rsx! {
+        svg { class: "chevron", "aria-hidden": "true", view_box: "0 0 10 10", width: "10", height: "10",
+            path { d: "M2 3.5l3 3 3-3", fill: "none", stroke: "currentColor", stroke_width: "1.5", stroke_linecap: "round", stroke_linejoin: "round" }
+        }
     }
 }

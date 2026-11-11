@@ -207,6 +207,7 @@ async function globalViews(label) {
   const view = await page.evaluate(() => ({ current: document.querySelector('.global-link').getAttribute('aria-current'),
     meta: document.querySelector('.heading-scope')?.textContent, tabs: document.querySelector('nav[aria-label="Conversation"]') }));
   assert.deepEqual(view, { current: 'page', meta: 'Global · shared by all conversations', tabs: null });
+  assert.equal(await page.$('.conversation-choice[aria-current=page]'), null, 'no conversation is shown as the scope of a global view');
   await page.waitForFunction(() => document.body.textContent.includes('All desk resources'), { timeout: 15000 });
   await screenshot(label, 'virtual-desks');
   await noHorizontalScroll();

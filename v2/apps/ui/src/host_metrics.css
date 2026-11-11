@@ -168,7 +168,7 @@
 .provider-quota-item { position: relative; min-width: 0; }
 .provider-quota-item summary { display: flex; align-items: center; flex-wrap: wrap; gap: .3rem; min-height: 2.1rem; padding: .3rem .45rem; border-radius: .7rem; cursor: pointer; list-style: none; color: var(--text); }
 .provider-quota-item summary::-webkit-details-marker { display: none; }
-.provider-quota-item summary::after { content: "▾"; color: var(--muted); font-size: .65rem; }
+.provider-quota-item summary::after { content: ""; width: .32rem; height: .32rem; margin: 0 .15rem .15rem .1rem; border-right: 1.5px solid var(--muted); border-bottom: 1.5px solid var(--muted); transform: rotate(45deg); }
 .provider-quota-item summary:hover, .provider-quota-item[open] summary { background: var(--surface-3); }
 .provider-quota-item summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .provider-quota-item strong { font-size: .74rem; font-variant-numeric: tabular-nums; font-weight: 600; }

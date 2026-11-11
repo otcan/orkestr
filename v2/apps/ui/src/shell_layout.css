@@ -12,7 +12,7 @@
 .app-heading > .resource-bar + .build-badge { margin-left: 0; }
 .build-badge > button { display: inline-flex; align-items: center; gap: .2rem; min-height: 2.3rem; padding: .2rem .6rem; border-radius: 1.15rem; font-variant-numeric: tabular-nums; }
 .build-badge-source { color: var(--muted); }
-.build-badge-caret { color: var(--muted); font-size: .65rem; }
+.build-badge .chevron { color: var(--muted); }
 .build-badge-details { position: fixed; top: 3.4rem; right: 1rem; z-index: 100; width: min(30rem, calc(100vw - 2rem)); max-height: 75dvh; overflow: auto; padding: 1rem; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); overflow-wrap: anywhere; font-size: .85rem; }
 .build-badge-close { margin-top: .6rem; }
 /* Sign out sits in the header's flow, so a narrow header wraps instead of overlapping it. */
@@ -42,7 +42,7 @@
 .more-tabs { position: relative; z-index: 8; }
 .more-toggle { display: inline-flex; align-items: center; gap: .25rem; }
 .conversation-nav .more-toggle[aria-expanded=true] { background: var(--surface-3); color: var(--text); }
-.more-caret { font-size: .65rem; }
+.more-toggle .chevron { flex: none; }
 .more-list { position: absolute; right: 0; top: calc(100% + .35rem); min-width: 12.5rem; margin: 0; padding: .3rem; list-style: none; display: grid; gap: 2px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); box-shadow: var(--shadow); }
 .more-list[hidden] { display: none; }
 .conversation-nav .more-item { width: 100%; min-height: 2.5rem; text-align: left; border: 0; border-radius: .45rem; background: transparent; font-size: .88rem; }
@@ -76,6 +76,7 @@
 
 /* Phones and narrow tablets: the list is a drawer; touch targets are 44px. */
 @media (max-width: 52rem) {
+ .workspace { grid-template-columns: minmax(0, 1fr); }
  .app-heading { min-height: 3rem; padding: .2rem .75rem; gap: .3rem .45rem; }
  .app-brand { font-size: 1rem; }
  .global-link, .build-badge > button, .app-heading > .sign-out, .back-to-chat { min-height: 44px; }
@@ -104,6 +105,10 @@
  .conversation-heading .conversation-nav { flex: none; }
  .conversation-nav .nav-tab, .more-tabs { flex: none; }
  .more-current { display: inline; }
+}
+/* Narrow phones: the brand stays for screen readers; its row holds the controls. */
+@media (max-width: 30rem) {
+ .app-brand { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 }
 @media (max-width: 40rem) {
  .build-badge-source { display: none; }
