@@ -149,7 +149,8 @@ the label, schedule and text, so a retried create is the same timer.
 
 When the conversation has no installed grant file the tool stops with
 `grant_file_missing` (a file that is present but unusable stays
-`grant_missing_or_invalid` or `grant_file_must_be_private`). The agent tells
+`grant_missing_or_invalid` or `grant_file_must_be_private`; the reply
+attachment tool reports a file of another user as `grant_file_wrong_owner`). The agent tells
 the owner plainly that the timer was not set and files no repair or Root
 request; provisioning gaps are the operator's to detect.
 
@@ -202,6 +203,37 @@ revoke the grant, only set the daily cap back to `default` so the owner-only
 allowance no longer applies. Without `agent_timers` nothing changes.
 Older servers refuse the key (`deny_unknown_fields`): add it only after the
 release with this change is live.
+
+### Every conversation (ORK-794)
+
+The same grant authenticates the reply attachment tool
+(`v2/tools/reply_attach.py`), so with `agent_timers` configured the server
+makes sure of a grant for every conversation, not only new WhatsApp chats
+(`apps/server/src/conversation_grants.rs`):
+
+- "New conversation" in the web app and a new project issue and install it
+  at creation; a replayed creation keeps it.
+- After each admitted input the server checks it again, so a conversation
+  created before this change gets its grant with its next message, and a
+  lost grant file is replaced by a new grant.
+- A grant the owner or an operator revoked stays revoked; restricted and
+  archived conversations get none. No grant is issued while the grant
+  directory is unusable. A failure is logged and never refuses the creation
+  or the input.
+
+A Deep turn that carries no chat rules line (a conversation without a
+WhatsApp binding, or the owner writing in the web app) starts with a short
+house rules note (`crates/orkestr-runtime/src/execution/house_rules.rs`):
+never answer with a link or path to a host file, and this conversation's
+reply attachment command. Generated chat rules of a new WhatsApp chat carry
+the same text as "Files for the owner (reply attachment tool)". The tool path
+is `agent_timers.reply_attach_tool`, by default
+`/usr/local/libexec/orkestr-reply-attach/reply_attach.py`. The note is left out
+when the turn would no longer fit the 32 KiB provider input bound.
+
+The agent runs the tool itself. A grant file owned by another user is refused
+with `grant_file_wrong_owner`, so root (through a Root request or sudo) never
+borrows the agent's grant to read files with more rights than the agent has.
 
 ### Separate Core and native users
 

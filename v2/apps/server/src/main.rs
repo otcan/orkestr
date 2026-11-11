@@ -190,6 +190,11 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(path) = std::env::var_os(orkestr_v2_server::whatsapp_chats::CONFIG_ENV) {
         state = state.with_whatsapp_chats_file(&PathBuf::from(path))?;
     }
+    // Deep turns without chat rules (web-created conversations) learn the
+    // reply attachment command and never link host paths (ORK-794).
+    if let Some(rules) = state.deep_house_rules() {
+        orkestr_runtime::execution::house_rules::set(rules);
+    }
     if let Some(path) = std::env::var_os(orkestr_v2_server::restricted_http::CONFIG_ENV) {
         state = state.with_restricted_config_file(&PathBuf::from(path))?;
     }

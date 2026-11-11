@@ -7,6 +7,7 @@ mod claude_pump;
 mod claude_session;
 mod desk_result;
 mod fence;
+pub mod house_rules;
 mod lease_refresh;
 mod model_evidence;
 mod offline_pump;
@@ -88,16 +89,29 @@ pub const FAST_TURN_NOTE: &str = "[Fast reply: give a useful, concise first answ
 - If the input lists attachments, open each listed local file before answering (use your image viewing tool for images). Never say you cannot see an attachment that is listed unless opening it failed.
 - Reply in the language of the owner's message: the language the current message itself is written in, not the language of the history, the chat rules, attachments, screenshots, quoted or pasted text, or the sender's name or phone number. Chat rules about the language of messages to other people apply to drafts for them, not to this reply. Use at most three short sentences.]";
 
-pub(crate) fn turn_text(role: orkestr_v2_contracts::runtime::Role, text: &str) -> String {
+/// Fast gets its role note; a Deep turn without chat rules gets the house
+/// rules once configured (`house_rules`); Worker input is sent unchanged.
+pub(crate) fn turn_text(
+    role: orkestr_v2_contracts::runtime::Role,
+    conversation: &str,
+    text: &str,
+) -> String {
     match role {
         orkestr_v2_contracts::runtime::Role::Fast => format!("{FAST_TURN_NOTE}\n\n{text}"),
-        _ => text.to_owned(),
+        orkestr_v2_contracts::runtime::Role::Deep => {
+            house_rules::deep_text(house_rules::configured(), conversation, text)
+        }
+        orkestr_v2_contracts::runtime::Role::Worker => text.to_owned(),
     }
 }
 
 fn turn_frame(capability: &ConsumedProviderDispatch, request_id: u64) -> serde_json::Value {
     let provider = capability.provider();
-    let text = turn_text(provider.binding.role, capability.text());
+    let text = turn_text(
+        provider.binding.role,
+        &provider.binding.conversation_id.to_string(),
+        capability.text(),
+    );
     let mut frame = json!({"id":request_id,"method":"turn/start","params":{
         "threadId":provider.binding.native_session_id,
         "clientUserMessageId":capability.message_id().to_string(),
@@ -191,6 +205,9 @@ mod fast_contract_tests {
     use super::{turn_text, FAST_TURN_NOTE};
     use orkestr_v2_contracts::runtime::Role;
 
+    // No house rules are configured in this test binary: Deep is unchanged.
+    const C: &str = "00000000-0000-4000-8000-00000000000a";
+
     #[test]
     fn largest_fast_input_still_fits_after_role_note_injection() {
         // Structural transport checks, not an English prompt-quality oracle.
@@ -198,12 +215,12 @@ mod fast_contract_tests {
         assert!(FAST_TURN_NOTE.starts_with('[') && FAST_TURN_NOTE.ends_with(']'));
         assert!(FAST_TURN_NOTE.len() + 2 <= orkestr_v2_store_sqlite::FAST_NOTE_RESERVE);
         let input = "x".repeat(orkestr_v2_store_sqlite::FAST_INPUT_BUDGET);
-        let fast = turn_text(Role::Fast, &input);
+        let fast = turn_text(Role::Fast, C, &input);
         assert!(fast.len() <= 32_768);
         let prefix = format!("{FAST_TURN_NOTE}\n\n");
         assert_eq!(fast.strip_prefix(&prefix), Some(input.as_str()));
-        assert_eq!(turn_text(Role::Deep, &input), input);
-        assert_eq!(turn_text(Role::Worker, &input), input);
+        assert_eq!(turn_text(Role::Deep, C, &input), input);
+        assert_eq!(turn_text(Role::Worker, C, &input), input);
     }
 
     #[test]
@@ -212,8 +229,8 @@ mod fast_contract_tests {
 [WhatsApp attachments imported into this conversation's attachment store, manifest 00000000-0000-4000-8000-000000000001:\n\
 - image.jpg (image/jpeg, 1024 bytes, reference 00000000-0000-4000-8000-000000000002, local file /synthetic/media/0000.jpg)\n\
 Open the local file to see an attachment (for an image use your image viewing tool).]";
-        let deep = turn_text(Role::Deep, input);
-        let fast = turn_text(Role::Fast, input);
+        let deep = turn_text(Role::Deep, C, input);
+        let fast = turn_text(Role::Fast, C, input);
         assert_eq!(deep, input);
         assert_eq!(fast, format!("{FAST_TURN_NOTE}\n\n{input}"));
         // The whole input, including every attachment reference, follows the
@@ -223,6 +240,6 @@ Open the local file to see an attachment (for an image use your image viewing to
             deep
         );
         assert!(fast.contains("local file /synthetic/media/0000.jpg"));
-        assert_eq!(turn_text(Role::Worker, input), input);
+        assert_eq!(turn_text(Role::Worker, C, input), input);
     }
 }

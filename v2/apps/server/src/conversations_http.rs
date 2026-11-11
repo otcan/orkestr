@@ -38,7 +38,7 @@ pub(crate) async fn create(
     headers: HeaderMap,
     body: Result<Json<ConversationInput>, JsonRejection>,
 ) -> Result<Response, Error> {
-    browser::owner(&state, &headers).await?;
+    let owner = browser::owner(&state, &headers).await?;
     browser::guard(
         &state,
         &axum::http::Method::POST,
@@ -53,6 +53,15 @@ pub(crate) async fn create(
         .create_conversation_authenticated(&credential, &input)
         .await
         .map_err(store_error)?;
+    // Its agent grant from the start, so its Deep turns can attach files
+    // (ORK-794); a replay repairs a missed one. Never refuses the creation.
+    let _ = crate::conversation_grants::ensure(
+        &state,
+        &credential,
+        &owner,
+        &conversation.conversation_id,
+    )
+    .await;
     Ok((
         if duplicate {
             StatusCode::OK

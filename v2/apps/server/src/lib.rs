@@ -33,6 +33,7 @@ pub mod build_identity;
 pub mod claude_execution;
 pub mod control_dispatch;
 pub mod control_registry;
+mod conversation_grants;
 mod conversation_posts_http;
 mod conversation_resources_http;
 mod conversation_status_http;
@@ -320,6 +321,14 @@ impl AppState {
     ) -> Result<Self, &'static str> {
         self.whatsapp_chats = Some(Arc::new(whatsapp_chats::WhatsAppChats::load(path)?));
         Ok(self)
+    }
+    /// The Deep house rules (ORK-794) from the configured agent grants: the
+    /// reply attachment command for turns that carry no chat rules. The server
+    /// binary installs them once at startup.
+    pub fn deep_house_rules(
+        &self,
+    ) -> Option<orkestr_runtime::execution::house_rules::DeepHouseRules> {
+        Some(self.whatsapp_chats.as_ref()?.agent_timers()?.house_rules())
     }
     /// Trusted startup only: the Claude execution path for conversation turns
     /// is installed, so owners may select Claude in conversation settings.

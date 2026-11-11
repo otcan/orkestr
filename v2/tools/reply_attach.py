@@ -28,6 +28,11 @@ nothing.
 The grant is the conversation's agent grant (the agent timer grant): from
 --grant-file, ORKESTR_V2_AGENT_TIMER_GRANT, or
 ORKESTR_V2_AGENT_TIMER_GRANT_DIR/<conversation>.grant. It is never printed.
+A grant file must be a private regular file of the user running the tool:
+the agent, which sees the server's grant directory as its own read-only copy.
+Run as anyone else (root through a Root request or sudo, for example) the tool
+refuses with grant_file_wrong_owner: it never reads files with more rights
+than the agent has (ORK-794).
 Exit status: 0 done, 2 refused or failed (one JSON line on stderr).
 """
 import argparse
@@ -103,8 +108,10 @@ Mention the files by name in your text; do not add their paths.
 
 Only files inside the workspace (no `..`, hidden or secret folders, or
 symbolic links), at most 8 files and 16 MiB per reply, and only while this
-Deep turn runs. If it refuses, tell the owner the code in one line instead of
-retrying in a loop. A retry of the same command never stores a file twice.
+Deep turn runs. Run it yourself in this turn, never through a Root request,
+sudo or another user: the grant works only for you. If it refuses, tell the
+owner the code in one line instead of retrying in a loop, and do not file a
+repair or Root request. A retry of the same command never stores a file twice.
 """
 
 
@@ -118,8 +125,12 @@ def read_grant(path=None, environ=os.environ):
         path = Path(path)
         try:
             info = path.lstat()
-            if not stat.S_ISREG(info.st_mode) or info.st_mode & 0o077 or info.st_uid != os.getuid():
+            if not stat.S_ISREG(info.st_mode) or info.st_mode & 0o077:
                 raise AttachError(0, 'grant_file_must_be_private')
+            if info.st_uid != os.getuid():
+                # Installed for another identity (the agent's): never borrowed
+                # by root or another user, who would read files as themselves.
+                raise AttachError(0, 'grant_file_wrong_owner')
             value = path.read_text().strip()
         except FileNotFoundError:
             raise AttachError(0, 'grant_file_missing') from None

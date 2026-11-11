@@ -88,7 +88,15 @@ pub(crate) struct AgentTimers {
     pub tool: String,
     /// Loopback V2 URL the tool calls (`http://127.0.0.1:<port>`).
     pub v2_url: String,
+    /// The installed `reply_attach.py` (ORK-794); defaults to
+    /// `DEFAULT_REPLY_ATTACH_TOOL`. The same grant authenticates it.
+    #[serde(default)]
+    pub reply_attach_tool: Option<String>,
 }
+
+/// Where `v2/tools/reply_attach.py` is installed unless configured.
+pub(crate) const DEFAULT_REPLY_ATTACH_TOOL: &str =
+    "/usr/local/libexec/orkestr-reply-attach/reply_attach.py";
 
 /// Paths and the URL go into a shell command of the rules file: plain
 /// absolute paths only.
@@ -113,7 +121,23 @@ impl AgentTimers {
         shell_path(&self.grant_dir)
             && self.native_grant_dir.as_deref().is_none_or(shell_path)
             && shell_path(&self.tool)
+            && self.reply_attach_tool.as_deref().is_none_or(shell_path)
             && loopback_url(&self.v2_url)
+    }
+    /// The reply attachment command's settings, with the agent's view of the
+    /// grant directory: the Deep house rules and a new chat's files section.
+    pub(crate) fn house_rules(&self) -> orkestr_runtime::execution::house_rules::DeepHouseRules {
+        orkestr_runtime::execution::house_rules::DeepHouseRules {
+            reply_attach_tool: self
+                .reply_attach_tool
+                .clone()
+                .unwrap_or_else(|| DEFAULT_REPLY_ATTACH_TOOL.into()),
+            v2_url: self.v2_url.clone(),
+            grant_dir: self
+                .native_grant_dir
+                .clone()
+                .unwrap_or_else(|| self.grant_dir.clone()),
+        }
     }
 }
 fn default_outstanding() -> u32 {
@@ -168,6 +192,10 @@ pub(crate) struct WhatsAppChats {
 }
 
 impl WhatsAppChats {
+    /// The agent grant and tool settings, when configured.
+    pub(crate) fn agent_timers(&self) -> Option<&AgentTimers> {
+        self.agent_timers.as_ref()
+    }
     /// A private 0600 regular file owned by the service user.
     pub(crate) fn load(path: &Path) -> Result<Self, &'static str> {
         use std::os::unix::fs::MetadataExt;
@@ -306,8 +334,8 @@ pub(crate) fn group_body(chats: &WhatsAppChats, thread_id: &str, name: &str) -> 
 /// file" line on every intake, so a new chat starts with the same onboarding
 /// rules as a hand-provisioned one. Operators extend it (desktop, desk-login,
 /// business rules); a retry never overwrites it. With `timers` the Timers
-/// section is the agent timer tool of this conversation, otherwise Root
-/// changes timers.
+/// section is the agent timer tool of this conversation and a Files section
+/// its reply attachment tool (same grant), otherwise Root changes timers.
 pub(crate) fn rules_text(
     name: &str,
     conversation: &str,
@@ -316,6 +344,16 @@ pub(crate) fn rules_text(
     timers: Option<&AgentTimers>,
 ) -> String {
     let name: String = name.chars().filter(|c| !c.is_control()).collect();
+    // The reply attachment tool uses the same grant (ORK-794).
+    let files = timers.map_or_else(String::new, |timers| {
+        format!(
+            "\nFiles for the owner (reply attachment tool)\n\n{}\n",
+            orkestr_runtime::execution::house_rules::files_rules(
+                &timers.house_rules(),
+                conversation
+            )
+        )
+    });
     let timers = match timers {
         Some(timers) => timer_rules(conversation, timers),
         None => "Timers\n\
@@ -346,7 +384,7 @@ Desktop and logins\n\
 - Login pages: use desk-login only after Root has added it to this file for a\n\
   granted desktop. Never type, print or ask for passwords.\n\
 \n\
-{timers}"
+{timers}{files}"
     )
 }
 
@@ -358,6 +396,7 @@ pub(crate) fn timer_rules(conversation: &str, timers: &AgentTimers) -> String {
         native_grant_dir,
         tool,
         v2_url,
+        ..
     } = timers;
     let grant_dir = native_grant_dir.as_ref().unwrap_or(grant_dir);
     format!(
@@ -455,12 +494,11 @@ pub(crate) fn timer_grant_installed(path: &Path) -> bool {
         })
 }
 
-/// Installs the grant atomically (0600, replacing an unusable file). The
-/// directory is created 0700 when missing; an existing one must be the
-/// service user's and neither group- nor world-writable.
-pub(crate) fn install_timer_grant(path: &Path, grant: &str) -> Result<(), StageError> {
-    use std::io::Write;
-    use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt};
+/// The grant file's directory, created 0700 when missing; an existing one
+/// must be the service user's and neither group- nor world-writable. Checked
+/// before a grant is issued, so none is issued that cannot be installed.
+pub(crate) fn timer_grant_dir(path: &Path) -> Result<&Path, StageError> {
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt};
     let failed = StageError("agent_timer_grant_failed");
     let dir = path.parent().ok_or(failed)?;
     if !dir.exists() {
@@ -473,6 +511,16 @@ pub(crate) fn install_timer_grant(path: &Path, grant: &str) -> Result<(), StageE
     if !meta.file_type().is_dir() || meta.uid() != service_uid() || meta.mode() & 0o022 != 0 {
         return Err(failed);
     }
+    Ok(dir)
+}
+
+/// Installs the grant atomically (0600, replacing an unusable file) in its
+/// checked directory (`timer_grant_dir`).
+pub(crate) fn install_timer_grant(path: &Path, grant: &str) -> Result<(), StageError> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let failed = StageError("agent_timer_grant_failed");
+    let dir = timer_grant_dir(path)?;
     let temp = dir.join(format!(".grant-{}.tmp", uuid::Uuid::new_v4()));
     let written = (|| -> std::io::Result<()> {
         let mut file = std::fs::OpenOptions::new()
@@ -828,6 +876,7 @@ impl WhatsAppChats {
             native_grant_dir: None,
             tool: "/usr/local/libexec/orkestr-agent-timer/agent_timer.py".into(),
             v2_url: "http://127.0.0.1:19822".into(),
+            reply_attach_tool: None,
         });
         self
     }
@@ -928,8 +977,18 @@ mod onboarding_tests {
             native_grant_dir: None,
             tool: "/opt/agent_timer.py".into(),
             v2_url: "http://127.0.0.1:19822".into(),
+            reply_attach_tool: None,
         };
         let rules = rules_text("n", "conv-1", "t", "g@g.us", Some(&timers));
+        // Files for the owner: this conversation's reply attachment command
+        // with the default tool, never a link to a host path (ORK-794).
+        assert!(rules.contains(
+            "\nFiles for the owner (reply attachment tool)\n\n- Never answer with a Markdown link"
+        ));
+        assert!(rules.contains(
+            "python3 -I -S -B /usr/local/libexec/orkestr-reply-attach/reply_attach.py --v2-url http://127.0.0.1:19822 --conversation conv-1 --workspace \"$PWD\" attach"
+        ));
+        assert!(!plain.contains("Files for the owner"), "no grant, no tool");
         assert!(rules.contains("Timers of this chat (agent timer tool)"));
         assert!(rules.contains("ORKESTR_V2_AGENT_TIMER_GRANT_DIR=/srv/grants \\\n"));
         assert!(rules.contains("    /opt/agent_timer.py \\\n"));
