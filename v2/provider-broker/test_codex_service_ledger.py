@@ -401,9 +401,11 @@ class LedgerTests(unittest.TestCase):
         threads = [threading.Thread(target=reserve) for _ in range(8)]
         for thread in threads:
             thread.start()
+        # Each thread ends by itself: refused at the limit or after 520 tries.
+        # Filling the window is ~4,100 fsync'd commits, 4-13 s on CI runners,
+        # so a join timeout measured disk speed, not the limit (ORK-778).
         for thread in threads:
-            thread.join(10)
-        self.assertFalse(any(thread.is_alive() for thread in threads))
+            thread.join()
         self.assertFalse(errors)
         self.assertEqual(self.ledger.status()["reserved_bytes"], contract.MAX_BYTES)
 
