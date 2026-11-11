@@ -77,6 +77,28 @@ fn freshness_says_collecting_live_or_stale() {
 }
 
 #[test]
+fn header_summary_names_each_state_once() {
+    use SummaryState::*;
+    assert_eq!(SummaryState::of(Freshness::Collecting, false), Collecting);
+    assert_eq!(SummaryState::of(Freshness::Live, false), Live);
+    assert_eq!(SummaryState::of(Freshness::Stale, false), Stale);
+    // A failed read is disconnected whatever was shown before; old numbers
+    // never read as live or merely stale.
+    for freshness in [Freshness::Collecting, Freshness::Live, Freshness::Stale] {
+        assert_eq!(SummaryState::of(freshness, true), Disconnected);
+    }
+    let labels: Vec<&str> = [Collecting, Live, Stale, Disconnected]
+        .into_iter()
+        .map(SummaryState::label)
+        .collect();
+    assert_eq!(labels, ["collecting…", "live", "stale", "disconnected"]);
+    for state in [Collecting, Live, Stale, Disconnected] {
+        assert!(!state.label().contains("unavailable"));
+        assert!(!state.sentence().contains("unavailable"));
+    }
+}
+
+#[test]
 fn chart_geometry_follows_time_and_breaks_at_gaps() {
     assert_eq!(
         (

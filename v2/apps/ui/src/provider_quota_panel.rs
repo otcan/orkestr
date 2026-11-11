@@ -6,8 +6,13 @@ use serde_json::json;
 #[derive(Clone, Deserialize)]
 struct Card {
     name: String,
+    short: String,
+    /// current, stale, expired, unknown or disconnected (`provider_quota.mjs`).
+    state: String,
     label: String,
-    status: String,
+    /// Stale and/or limited, when the label does not already say it.
+    chip: String,
+    note: String,
     detail: String,
     reset: String,
 }
@@ -59,20 +64,35 @@ pub fn ProviderQuotaPanel(
             }
         }
     });
-    rsx! { div { class: "provider-quota-panel", "aria-label": "Provider quotas remaining",
-        if cards.read().is_empty() { span { "Loading provider quotas…" } }
+    rsx! { div { class: "provider-quota-panel", role: "group", "aria-label": "Provider quotas remaining",
+        if cards.read().is_empty() { span { class: "quota-loading", "Reading quotas…" } }
         for card in cards.read().iter() {
-            details { class: "provider-quota-item", title: "{card.detail}",
+            details { key: "{card.short}", class: "provider-quota-item", "data-state": "{card.state}", "name": "header-popover",
+                onkeydown: move |event| {
+                    if event.key() == Key::Escape {
+                        close_open_popover();
+                    }
+                },
                 summary {
-                    span { class: "quota-provider", "{card.name}" }
-                    strong { "{card.label}" }
-                    if card.status != "current" { small { class: "quota-state", "{card.status}" } }
+                    span { class: "quota-provider", "{card.short}" }
+                    span { class: "visually-hidden", " quota:" }
+                    strong { class: "quota-label", "{card.label}" }
+                    if !card.chip.is_empty() { small { class: "quota-state", "{card.chip}" } }
                 }
                 div { class: "quota-detail", role: "note",
+                    h3 { "{card.name}" }
+                    p { class: "quota-note", "{card.note}" }
                     p { "{card.detail}" }
                     if !card.reset.is_empty() { p { class: "quota-reset-detail", "{card.reset}" } }
                 }
             }
         }
     } }
+}
+
+/// Escape closes the open header popover and returns focus to its summary.
+pub fn close_open_popover() {
+    let _ = document::eval(
+        "const open=document.activeElement?.closest('details[open]');if(open){open.open=false;open.querySelector('summary')?.focus();}return null;",
+    );
 }

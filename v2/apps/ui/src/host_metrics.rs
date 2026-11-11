@@ -128,6 +128,59 @@ pub fn freshness(
     }
 }
 
+/// What the header's host summary says about its numbers (ORK-786): each
+/// state has one word, so "unavailable" is never repeated and old numbers
+/// never read as live.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SummaryState {
+    /// No sample has arrived yet.
+    Collecting,
+    Live,
+    /// Read, but older than [`STALE_MS`].
+    Stale,
+    /// The last read failed; any numbers shown are from before.
+    Disconnected,
+}
+
+impl SummaryState {
+    pub fn of(freshness: Freshness, failed: bool) -> SummaryState {
+        match (freshness, failed) {
+            (_, true) => SummaryState::Disconnected,
+            (Freshness::Collecting, false) => SummaryState::Collecting,
+            (Freshness::Stale, false) => SummaryState::Stale,
+            (Freshness::Live, false) => SummaryState::Live,
+        }
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            SummaryState::Collecting => "collecting…",
+            SummaryState::Live => "live",
+            SummaryState::Stale => "stale",
+            SummaryState::Disconnected => "disconnected",
+        }
+    }
+    /// CSS class (and `data-state`) of the summary.
+    pub fn class(self) -> &'static str {
+        match self {
+            SummaryState::Collecting => "collecting",
+            SummaryState::Live => "live",
+            SummaryState::Stale => "stale",
+            SummaryState::Disconnected => "disconnected",
+        }
+    }
+    /// Sentence for the accessible name and tooltip.
+    pub fn sentence(self) -> &'static str {
+        match self {
+            SummaryState::Collecting => "Waiting for the first sample",
+            SummaryState::Live => "Live",
+            SummaryState::Stale => "Stale: no recent sample",
+            SummaryState::Disconnected => {
+                "Disconnected: the last read failed, numbers are from before"
+            }
+        }
+    }
+}
+
 /// Used share in percent; `None` without a total.
 pub fn share(used: Option<u64>, whole: Option<u64>) -> Option<f64> {
     let whole = whole.filter(|w| *w > 0)? as f64;

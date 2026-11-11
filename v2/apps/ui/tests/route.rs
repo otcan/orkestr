@@ -18,6 +18,10 @@ fn every_view_round_trips_through_its_fragment() {
             id: ID.into(),
             tab: Tab::LiveMap,
         },
+        Route::Conversation {
+            id: ID.into(),
+            tab: Tab::Files,
+        },
         Route::VirtualDesks,
         Route::V1Thread {
             thread: "group-coordinated".into(),
@@ -105,4 +109,98 @@ fn desks_are_global_and_old_links_remain_compatible() {
     assert_eq!(Route::VirtualDesks.hash(), "/virtual-desks");
     assert_eq!(Route::parse("#conversation/not-a-uuid/virtual-desks"), None);
     assert_eq!(Route::parse("/virtual-desks/other"), None);
+}
+
+#[test]
+fn every_destination_has_exactly_one_place_in_the_navigation() {
+    // Chat, Work and Files first; the conversation's other views under More;
+    // owner-wide views in the app header. Nothing is lost or listed twice.
+    assert_eq!(Tab::PRIMARY, [Tab::Chat, Tab::Work, Tab::Files]);
+    let mut placed: Vec<Tab> = Tab::PRIMARY
+        .into_iter()
+        .chain(Tab::MORE)
+        .chain(Tab::GLOBAL)
+        .collect();
+    assert_eq!(placed.len(), Tab::ALL.len());
+    for tab in Tab::ALL {
+        assert_eq!(
+            placed.iter().filter(|t| **t == tab).count(),
+            1,
+            "{}",
+            tab.label()
+        );
+    }
+    placed.dedup();
+    assert_eq!(placed.len(), Tab::ALL.len());
+    let more: Vec<&str> = Tab::MORE.iter().map(|t| t.label()).collect();
+    assert_eq!(
+        more,
+        [
+            "History",
+            "Projects",
+            "Timers",
+            "Job tracker",
+            "Memory",
+            "Live map",
+            "Settings"
+        ]
+    );
+    assert!(Tab::Timers.in_more() && !Tab::Files.in_more() && !Tab::Host.in_more());
+}
+
+#[test]
+fn conversation_destinations_stay_bookmarkable_and_global_ones_carry_no_conversation() {
+    for tab in Tab::PRIMARY.into_iter().chain(Tab::MORE) {
+        assert!(!tab.is_global(), "{}", tab.label());
+        let route = Route::Conversation { id: ID.into(), tab };
+        assert_eq!(
+            Route::parse(&route.hash()),
+            Some(route.clone()),
+            "{}",
+            route.hash()
+        );
+        assert!(route.hash().starts_with(&format!("#conversation/{ID}")));
+    }
+    assert_eq!(
+        Route::parse(&format!("#conversation/{ID}/files")),
+        Some(Route::Conversation {
+            id: ID.into(),
+            tab: Tab::Files
+        })
+    );
+    assert_eq!(Tab::from_label("Files"), Some(Tab::Files));
+    // Owner-wide views: their own locations, never a conversation's.
+    assert!(Tab::VirtualDesks.is_global() && Tab::Host.is_global());
+    assert!(!Route::VirtualDesks.hash().contains(ID));
+    let host = Route::Host {
+        charts: false,
+        range: HostMetricsRange::Hour1,
+    };
+    assert_eq!(host.hash(), "#host");
+    assert_eq!(Route::parse(&format!("#conversation/{ID}/host")), None);
+    assert_eq!(
+        Route::parse(&format!("#conversation/{ID}/virtual-desks")),
+        Some(Route::VirtualDesks),
+        "an old conversation-scoped desks link opens the global view"
+    );
+}
+
+#[test]
+fn the_reload_pointer_accepts_every_conversation_destination() {
+    // `selected_conversation.mjs` decides which fragments survive a reload;
+    // a tab missing from its pattern would fall back to Chat (ORK-786).
+    let pattern = include_str!("../src/selected_conversation.mjs")
+        .lines()
+        .next()
+        .expect("pattern line")
+        .to_owned();
+    for tab in Tab::ALL.into_iter().filter(|t| *t != Tab::Host) {
+        assert!(
+            pattern.contains(&format!("|{}|", tab.slug()))
+                || pattern.contains(&format!("(?:{}|", tab.slug()))
+                || pattern.contains(&format!("|{}))", tab.slug())),
+            "{} missing from the reload pattern",
+            tab.slug()
+        );
+    }
 }

@@ -8,6 +8,11 @@ test('only an exact canonical conversation presentation pointer survives reload'
  assert.equal(selectedConversation(`#conversation/${id}/timers`),id);
  assert.equal(selectedConversation(`#conversation/${id}/tracker`),id);
  assert.equal(keepsFragment(`#conversation/${id}/tracker`,id),true);
+ // Every conversation destination keeps its own URL across reload (ORK-786 adds Files).
+ for(const slug of ['chat','work','files','history','projects','timers','tracker','memory','live-map','settings']){
+  assert.equal(selectedConversation(`#conversation/${id}/${slug}`),id,slug);
+  assert.equal(keepsFragment(`#conversation/${id}/${slug}`,id),true,slug);
+ }
  for(const hash of ['',`#conversation/${id}/extra`,`#conversation/${id}/host`,`#conversation/${id}?owner=x`,`#conversation/%30${id.slice(1)}`,'#conversation/00000000-0000-0000-0000-000000000000','https://elsewhere.invalid/#conversation/'+id]) assert.equal(selectedConversation(hash),null);
 });
 test('old V1 deep links are read only in their exact redirected form',()=>{
