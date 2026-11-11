@@ -351,6 +351,44 @@ fn export_name(status: &EncryptedUploadStatus) -> String {
         crate::message_attachments::extension(&status.file.media_type, &status.file.filename)
     )
 }
+/// The receipt of an upload that `materialize` already verified and
+/// published, with its provider file path, without decrypting anything
+/// again. None when it was not prepared (or its file changed since).
+pub(crate) fn prepared_receipt(
+    state: &AppState,
+    status: &EncryptedUploadStatus,
+) -> Option<(MessageAttachmentReceipt, std::path::PathBuf)> {
+    let ingest = state.attachment_ingest.as_ref()?;
+    let export = state.attachment_export.as_deref()?;
+    if !status.complete || status.ingest_recipient.as_deref() != Some(&ingest.recipient) {
+        return None;
+    }
+    let folder = export.dir.join(status.conversation_id.to_string());
+    let folder_fd = private_fs::directory(&folder, false).ok()?;
+    let name = export_name(status);
+    let receipt = ingest.prepared.cached(status, &folder_fd, &name)?;
+    Some((receipt, folder.join(name)))
+}
+/// The whole-file SHA-256 named in a receipt note written by `materialize`.
+pub(crate) fn note_sha256(note: &str) -> Option<String> {
+    // The filename comes first and may itself contain the marker.
+    let (_, rest) = note.rsplit_once(", SHA-256 ")?;
+    let digest = rest.get(..64)?;
+    digest
+        .bytes()
+        .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+        .then(|| digest.to_owned())
+}
+#[test]
+fn note_sha256_reads_the_materialized_receipt_format() {
+    let digest = "ab".repeat(32);
+    let note = format!("[File attached in the Orkestr app, encrypted upload x: a, b (text/plain, 2 bytes), SHA-256 {digest}, local file /x/y]");
+    assert_eq!(note_sha256(&note), Some(digest.clone()));
+    let tricky = format!("[File attached, encrypted upload x: a, SHA-256 {} (text/plain, 2 bytes), SHA-256 {digest}, local file /x/y]", "0".repeat(64));
+    assert_eq!(note_sha256(&tricky), Some(digest));
+    assert_eq!(note_sha256("[no digest]"), None);
+    assert_eq!(note_sha256("x, SHA-256 zz"), None);
+}
 pub(crate) fn remove_export(
     state: &AppState,
     status: &EncryptedUploadStatus,
