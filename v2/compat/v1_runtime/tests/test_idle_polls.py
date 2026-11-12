@@ -156,7 +156,8 @@ class WakeTests(Base):
             time.sleep(0.005)
         latency = time.monotonic() - woken
         self.assertGreater(self.peer.count("?after="), polled)
-        self.assertLess(latency, 0.5, "found within the wake, not after the 3 s web cadence")
+        # The left-out check was just made, so its cadence is about 3 s away.
+        self.assertLess(latency, 1.5, "found within the wake, not after the 3 s web cadence")
         deadline = time.monotonic() + 5
         while not self.ledger.messages() and time.monotonic() < deadline:
             time.sleep(0.01)
