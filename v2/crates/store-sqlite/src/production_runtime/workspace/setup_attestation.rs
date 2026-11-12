@@ -19,6 +19,16 @@
 //! content inside `.git`) is seen at the next fresh check: at most
 //! SETUP_ATTESTATION later, and always at readiness confirmation, which keeps
 //! its own fresh Root check (`confirm_metadata_session`).
+//!
+//! A fence's short handoff (`HANDOFF`) starts once the fence holds Core's
+//! writer (`under_writer`), not before it queues for it (ORK-770, again).
+//! Core has one SQLite writer. When several windows open at once, their
+//! setups poll every 10 ms, and each poll is a write transaction. A fence
+//! then waited over 100 ms for `BEGIN IMMEDIATE` alone, its proof expired
+//! before the first durable check (`workspace_handoff_expired`), and the
+//! whole setup failed as `setup_incomplete`. The proof that runs under the
+//! writer is derived from the same attested evidence with the same local
+//! checks, so the time spent queueing no longer counts against the handoff.
 use super::*;
 use std::sync::Mutex;
 
@@ -142,5 +152,38 @@ impl Store {
         let fresh = self.check_binding_before_writer(binding).await?;
         attestation.record(&fresh);
         Ok(fresh)
+    }
+
+    /// The proof one setup fence uses once it holds Core's writer.
+    ///
+    /// An owned, unused proof with a handoff deadline is replaced by a new
+    /// per-operation proof derived from the setup's attested evidence, after
+    /// the same local checks as at the start of a fence (`from_evidence`).
+    /// Its handoff therefore starts now. No Root call and no pool connection
+    /// is taken here, because the caller holds the writer.
+    ///
+    /// Anything else keeps `checked` and decides exactly as before: a
+    /// borrowed proof, a proof without a handoff (no Root-attested project),
+    /// an attestation that has lapsed, or any local difference.
+    pub(in crate::production_runtime) fn under_writer(
+        &self,
+        checked: WorkspacePreflight,
+        binding: &Binding,
+        attestation: &SetupAttestation,
+    ) -> WorkspacePreflight {
+        if self.workspace_check.is_some()
+            || !checked.owns
+            || checked.proof.deadline.is_none()
+            || checked.proof.effect.load(Ordering::SeqCst)
+        {
+            return checked;
+        }
+        let Some(evidence) = attestation.current() else {
+            return checked;
+        };
+        // On a local difference the original proof fences at the next check.
+        // The reason recorded here (for example `workspace_stamp_changed`)
+        // stays, so the fence names the change and not the lapsed handoff.
+        WorkspacePreflight::from_evidence(self, &evidence, binding).unwrap_or(checked)
     }
 }
