@@ -107,7 +107,8 @@ pub(crate) async fn retire_if_unstarted(
     )
 }
 
-async fn inbox_row(
+/// The exact owner-actor inbox row of `message` in this owner's conversation.
+pub(super) async fn inbox_row(
     tx: &mut sqlx::SqliteConnection,
     owner: &OwnerId,
     conversation: &ConversationId,

@@ -205,3 +205,6 @@ async fn released_results_of_an_abandoned_turn_are_retired_not_stranded() {
         0
     );
 }
+
+#[path = "stale_input_settlement_tests.rs"]
+mod stale_settlement;
