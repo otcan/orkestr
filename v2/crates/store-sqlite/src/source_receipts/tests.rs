@@ -441,6 +441,9 @@ mod continuation_dispatch;
 #[path = "superseded_source_tests.rs"]
 mod superseded_source;
 
+#[path = "continuation_group_tests.rs"]
+mod continuation_groups;
+
 // ORK-792: a run cut by a Root-recorded release interruption gets exactly one
 // continuation. Stop cancelled the run and released its binding to `ready`
 // one generation ahead (the state the live cut runs showed on 2026-11-11).
