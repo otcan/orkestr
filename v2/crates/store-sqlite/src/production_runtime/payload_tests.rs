@@ -258,3 +258,100 @@ async fn progress_byte_bounds_and_forged_envelope_do_not_spend_sequence() {
         .await
         .unwrap();
 }
+#[tokio::test]
+async fn batch_read_is_scoped_ordered_bounded_and_keeps_removal() {
+    let f = setup().await;
+    let p = consumed(&f).await;
+    for (sequence, event) in [
+        (1, ProviderEvent::Started),
+        (2, ProviderEvent::Progress("first synthetic answer".into())),
+        (3, ProviderEvent::Progress("second synthetic answer".into())),
+    ] {
+        f.handle
+            .append_provider_event(&f.owner, &p, &input(&p, sequence, event))
+            .await
+            .unwrap();
+    }
+    let ids: Vec<String> = sqlx::query_scalar(
+        "SELECT p.id FROM production_payloads p JOIN production_observations o ON o.event_id=p.event_id ORDER BY o.run_sequence",
+    )
+    .fetch_all(&f.store.pool)
+    .await
+    .unwrap();
+    let [first, second] = [&ids[0], &ids[1]].map(|id| PayloadId(id.parse().unwrap()));
+    let unknown = PayloadId(Uuid::new_v4());
+    // Requested order, unknown IDs left out, the same bytes as a single read.
+    let read = f
+        .store
+        .provider_payloads(
+            &f.owner,
+            &f.conversation,
+            &[second.clone(), unknown.clone(), first.clone()],
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        read.iter()
+            .map(|p| p.payload_id.clone())
+            .collect::<Vec<_>>(),
+        [second.clone(), first.clone()]
+    );
+    for payload in &read {
+        let single = f
+            .store
+            .provider_payload(&f.owner, &f.conversation, &payload.payload_id)
+            .await
+            .unwrap();
+        assert_eq!(payload.text, single.text);
+        assert_eq!(payload.run_id, single.run_id);
+        assert_eq!(payload.conversation_id, f.conversation);
+    }
+    assert_eq!(read[0].text.as_deref(), Some("second synthetic answer"));
+    // Another owner or conversation reads nothing, exactly like a single read.
+    assert!(matches!(
+        f.store
+            .provider_payloads(
+                &OwnerId(Uuid::new_v4()),
+                &f.conversation,
+                std::slice::from_ref(&first)
+            )
+            .await,
+        Err(RuntimeStoreError::NotFound)
+    ));
+    assert!(matches!(
+        f.store
+            .provider_payloads(
+                &f.owner,
+                &orkestr_v2_contracts::ConversationId(Uuid::new_v4()),
+                std::slice::from_ref(&first)
+            )
+            .await,
+        Err(RuntimeStoreError::NotFound)
+    ));
+    // Bounded: no empty or oversized batch.
+    assert!(matches!(
+        f.store
+            .provider_payloads(&f.owner, &f.conversation, &[])
+            .await,
+        Err(RuntimeStoreError::InvalidInput)
+    ));
+    let many = vec![unknown.clone(); orkestr_v2_contracts::PROVIDER_PAYLOAD_BATCH + 1];
+    assert!(matches!(
+        f.store
+            .provider_payloads(&f.owner, &f.conversation, &many)
+            .await,
+        Err(RuntimeStoreError::InvalidInput)
+    ));
+    // A removed payload stays removed in a batch.
+    f.store
+        .remove_provider_payload(&f.owner, &f.conversation, &first)
+        .await
+        .unwrap();
+    let after = f
+        .store
+        .provider_payloads(&f.owner, &f.conversation, &[first.clone(), second.clone()])
+        .await
+        .unwrap();
+    assert!(after[0].text.is_none());
+    assert_eq!(after[1].text.as_deref(), Some("second synthetic answer"));
+}

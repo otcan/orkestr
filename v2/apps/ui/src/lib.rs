@@ -1,5 +1,6 @@
 //! Client presentation only. Accepted input is not model completion.
 pub mod acceptance;
+pub mod accepted_payloads;
 pub mod accepted_results;
 pub mod archived_history;
 pub mod payload;

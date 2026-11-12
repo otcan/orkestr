@@ -18,3 +18,15 @@ impl std::fmt::Debug for ProviderPayload {
             .finish_non_exhaustive()
     }
 }
+
+/// Payload IDs one batch read may name.
+pub const PROVIDER_PAYLOAD_BATCH: usize = 50;
+
+/// Several payloads of one conversation in one read. A requested payload that
+/// is missing here was not found or did not fit; the reader asks for it alone.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderPayloads {
+    pub conversation_id: ConversationId,
+    pub payloads: Vec<ProviderPayload>,
+}

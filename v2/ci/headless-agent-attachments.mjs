@@ -16,14 +16,20 @@ const manifest = conversation => ({ schema_version: 1, manifest_id: MANIFEST, ow
   references: [{ reference_id: REFERENCE, message_id: null, filename: NAME, media_type: 'application/zip',
     byte_length: BYTES.length, sha256: createHash('sha256').update(BYTES).digest('hex'), state: 'available' }] });
 
+/** The marked answer's payload while this scenario runs, or null. */
+export function markedPayload(state, conversation, payload) {
+  if (state.agentAttachments !== conversation || Number(payload.slice(-4)) - 7300 !== ANSWER) return null;
+  return { payload_id: payload, conversation_id: conversation, run_id: id(7000 + ANSWER), text: `Synthetic answer ${ANSWER}\n\n${MARKER}` };
+}
+
 /** The marked answer and its manifest; false leaves a request to the workspace mock. */
 export function agentAttachmentApi(state, req, res, rest, { json }) {
   const conversation = state.agentAttachments;
   if (req.method !== 'GET') return false;
   const payload = /^\/payloads\/([0-9a-f-]{36})$/.exec(rest);
-  if (payload && Number(payload[1].slice(-4)) - 7300 === ANSWER) {
-    json(res, 200, { payload_id: payload[1], conversation_id: conversation, run_id: id(7000 + ANSWER),
-      text: `Synthetic answer ${ANSWER}\n\n${MARKER}` });
+  const marked = payload && markedPayload(state, conversation, payload[1]);
+  if (marked) {
+    json(res, 200, marked);
     return true;
   }
   if (rest === '/attachment-manifests') {
