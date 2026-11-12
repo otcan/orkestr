@@ -339,6 +339,8 @@ pub(super) async fn commit(
     }
     super::release_inputs(tx, &id, p.window_id, &plan.release, true).await?;
     retry_timer_inputs(tx, p.window_id, &plan.release, true).await?;
+    // ORK-783: an automatic result released here gets the same one retry.
+    super::continuation::retry_continuation_inputs(tx, p.window_id, &plan.release, true).await?;
     // Revoke the lost private window credential: a surviving holder is fenced.
     if let Some(hash) = &plan.credential_hash {
         sqlx::query("DELETE FROM auth_sessions WHERE token_hash=?")

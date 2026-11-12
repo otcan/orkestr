@@ -214,12 +214,27 @@ impl Store {
         let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
         let owner = browser_owner(self, &mut tx, credential).await?;
         crate::runtime::scope(&mut tx, &owner, conversation).await?;
-        sqlx::query("UPDATE execution_window_queue SET state='withdrawn',withdrawal=? WHERE owner_id=? AND conversation_id=? AND request_key=? AND state='queued'")
+        let withdrawn = sqlx::query("UPDATE execution_window_queue SET state='withdrawn',withdrawal=? WHERE owner_id=? AND conversation_id=? AND request_key=? AND state='queued'")
             .bind(withdrawal_name(reason)).bind(owner.to_string()).bind(conversation.to_string()).bind(request_key)
-            .execute(&mut *tx).await.map_err(db)?;
+            .execute(&mut *tx).await.map_err(db)?.rows_affected();
         let row = by_key(&mut tx, &owner, conversation, request_key)
             .await?
             .ok_or(RuntimeStoreError::NotFound)?;
+        // ORK-783: a source continuation dropped here because its fence no
+        // longer holds is retired with a receipt instead of staying queued
+        // with nothing left that could ever claim it.
+        if withdrawn == 1
+            && reason == QueuedWindowWithdrawal::InputUnavailable
+            && request_key.starts_with(SOURCE_CONTINUATION_KEY)
+        {
+            crate::production_runtime::superseded_source::retire_superseded_queued_in(
+                &mut tx,
+                &owner,
+                conversation,
+                row.get::<&str, _>("event_id"),
+            )
+            .await?;
+        }
         let result = queued(&mut tx, &row).await?;
         tx.commit().await.map_err(db)?;
         Ok(result)
@@ -238,6 +253,29 @@ pub(super) async fn mark_dispatched(
         .bind(input.input_event_id.to_string()).bind(&input.request_key)
         .execute(tx).await.map_err(db)?;
     Ok(())
+}
+
+/// Prefix of a source continuation's queue key (`source_continuation::enqueue`
+/// writes `source-continuation:<event>`).
+pub(crate) const SOURCE_CONTINUATION_KEY: &str = "source-continuation:";
+
+/// A source continuation's queue intent for its retry after the window it
+/// was dispatched to ended without running it (`…:retry<n>`), like a timer's.
+pub(super) fn continuation_retry_intent(
+    input_message_id: MessageId,
+    input_event_id: EventId,
+    input_request_key: &str,
+    retry: u32,
+) -> ExecutionWindowRequest {
+    ExecutionWindowRequest {
+        request_key: format!("{SOURCE_CONTINUATION_KEY}{}:retry{retry}", input_event_id.0),
+        input_message_id,
+        input_event_id,
+        input_request_key: input_request_key.to_owned(),
+        expected_generation: 0,
+        window_id: None,
+        predecessor_window_id: None,
+    }
 }
 
 /// A timer occurrence's queued window intent. Attempt 0 keeps the original

@@ -9,7 +9,9 @@
 //! receipt (reason `source_superseded`), and the window takes its next input.
 //! Nothing is replayed, no run is created and the source fence is unchanged.
 use super::*;
-use orkestr_v2_contracts::{OwnerInputRetirementReceipt, OwnerInputRetirementState};
+use orkestr_v2_contracts::{
+    ConversationId, EventId, MessageId, OwnerInputRetirementReceipt, OwnerInputRetirementState,
+};
 
 pub(crate) const SUPERSEDED_SOURCE_REASON: &str = "source_superseded";
 
@@ -53,26 +55,15 @@ impl Store {
             Err(crate::StoreError::ProviderGenerationMismatch) => {}
             Err(_) => return Err(RuntimeStoreError::Unavailable),
         }
-        let clock = now(&mut tx).await?;
-        let receipt = OwnerInputRetirementReceipt {
-            retirement_id: Uuid::new_v4(),
-            conversation_id: claim.conversation_id.clone(),
-            message_id: claim.message_id.clone(),
-            event_id: claim.event_id.clone(),
-            scope_sequence: claim.scope_sequence,
-            reason: SUPERSEDED_SOURCE_REASON.to_owned(),
-            state: OwnerInputRetirementState::Retired,
-            retired_at_ms: clock,
-            duplicate: false,
-        };
-        sqlx::query("INSERT INTO owner_input_retirements(id,owner_id,conversation_id,message_id,event_id,scope_sequence,request_key,reason,retired_at_ms,receipt_json) VALUES(?,?,?,?,?,?,?,?,?,?)")
-            .bind(receipt.retirement_id.to_string()).bind(c.owner.to_string())
-            .bind(claim.conversation_id.to_string()).bind(claim.message_id.to_string())
-            .bind(claim.event_id.to_string()).bind(claim.scope_sequence)
-            .bind(format!("source-superseded:{}", claim.event_id.0))
-            .bind(SUPERSEDED_SOURCE_REASON).bind(clock)
-            .bind(serde_json::to_string(&receipt).map_err(db)?)
-            .execute(&mut *tx).await.map_err(db)?;
+        receipt_in(
+            &mut tx,
+            &c.owner,
+            &claim.conversation_id,
+            &claim.message_id,
+            &claim.event_id,
+            claim.scope_sequence,
+        )
+        .await?;
         let changed = sqlx::query("UPDATE reasoning_inbox SET state='retired',claimant_session_id=NULL,claim_deadline_ms=NULL WHERE conversation_id=? AND sequence=? AND event_id=? AND state='claimed' AND claimant_session_id=? AND claim_generation=?")
             .bind(claim.conversation_id.to_string()).bind(claim.scope_sequence)
             .bind(claim.event_id.to_string()).bind(claim.consumer_session_id.to_string())
@@ -84,4 +75,74 @@ impl Store {
         tx.commit().await.map_err(db)?;
         Ok(true)
     }
+}
+
+/// The immutable `source_superseded` retirement receipt of one input.
+async fn receipt_in(
+    tx: &mut SqliteConnection,
+    owner: &OwnerId,
+    conversation: &ConversationId,
+    message: &MessageId,
+    event: &EventId,
+    sequence: i64,
+) -> Result<()> {
+    let clock = now(&mut *tx).await?;
+    let receipt = OwnerInputRetirementReceipt {
+        retirement_id: Uuid::new_v4(),
+        conversation_id: conversation.clone(),
+        message_id: message.clone(),
+        event_id: event.clone(),
+        scope_sequence: sequence,
+        reason: SUPERSEDED_SOURCE_REASON.to_owned(),
+        state: OwnerInputRetirementState::Retired,
+        retired_at_ms: clock,
+        duplicate: false,
+    };
+    sqlx::query("INSERT INTO owner_input_retirements(id,owner_id,conversation_id,message_id,event_id,scope_sequence,request_key,reason,retired_at_ms,receipt_json) VALUES(?,?,?,?,?,?,?,?,?,?)")
+        .bind(receipt.retirement_id.to_string()).bind(owner.to_string())
+        .bind(conversation.to_string()).bind(message.to_string())
+        .bind(event.to_string()).bind(sequence)
+        .bind(format!("source-superseded:{}", event.0))
+        .bind(SUPERSEDED_SOURCE_REASON).bind(clock)
+        .bind(serde_json::to_string(&receipt).map_err(db)?)
+        .execute(&mut *tx).await.map_err(db)?;
+    Ok(())
+}
+
+/// ORK-783: the window dispatcher drops a queued source continuation whose
+/// fence no longer holds (`source_in` refuses it, and its queue intent is
+/// withdrawn as `input_unavailable`). Nothing else would ever claim that
+/// input: it stayed queued for good, with no run and no receipt (about 130
+/// such host results on 2026-11-12). Called in that withdrawal transaction,
+/// this retires it with the same receipt as a superseded claim, and only an
+/// input that is still queued, unclaimed, unheld, outside every window and
+/// without any run, whose fence really fails. `Ok(false)` changes nothing.
+pub(crate) async fn retire_superseded_queued_in(
+    tx: &mut SqliteConnection,
+    owner: &OwnerId,
+    conversation: &ConversationId,
+    event: &str,
+) -> Result<bool> {
+    let row = sqlx::query("SELECT i.sequence,i.message_id,i.event_id FROM reasoning_inbox i JOIN messages m ON m.id=i.message_id JOIN source_admission_fences f ON f.message_id=m.id WHERE i.conversation_id=? AND i.event_id=? AND i.state='queued' AND i.claimant_session_id IS NULL AND i.admitted_run_id IS NULL AND i.admitted_fixture_run_id IS NULL AND m.owner_id=? AND m.conversation_id=i.conversation_id AND NOT EXISTS(SELECT 1 FROM ordinary_input_holds h WHERE h.event_id=i.event_id) AND NOT EXISTS(SELECT 1 FROM execution_window_inputs wi WHERE wi.event_id=i.event_id) AND NOT EXISTS(SELECT 1 FROM production_runs r WHERE r.event_id=i.event_id OR r.message_id=i.message_id) AND NOT EXISTS(SELECT 1 FROM fixture_runs r WHERE r.event_id=i.event_id OR r.message_id=i.message_id)")
+        .bind(conversation.to_string()).bind(event).bind(owner.to_string())
+        .fetch_optional(&mut *tx).await.map_err(db)?;
+    let Some(row) = row else {
+        return Ok(false);
+    };
+    let message = MessageId(Uuid::parse_str(row.get("message_id")).map_err(db)?);
+    let event = EventId(Uuid::parse_str(row.get("event_id")).map_err(db)?);
+    let sequence: i64 = row.get("sequence");
+    match crate::source_continuation::validate(&mut *tx, owner, conversation, &message).await {
+        Ok(()) => return Ok(false),
+        Err(crate::StoreError::ProviderGenerationMismatch) => {}
+        Err(_) => return Err(RuntimeStoreError::Unavailable),
+    }
+    receipt_in(tx, owner, conversation, &message, &event, sequence).await?;
+    let changed = sqlx::query("UPDATE reasoning_inbox SET state='retired' WHERE conversation_id=? AND sequence=? AND event_id=? AND state='queued' AND claimant_session_id IS NULL")
+        .bind(conversation.to_string()).bind(sequence).bind(event.to_string())
+        .execute(&mut *tx).await.map_err(db)?.rows_affected();
+    if changed != 1 {
+        return Err(RuntimeStoreError::Fenced);
+    }
+    Ok(true)
 }

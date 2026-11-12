@@ -482,6 +482,9 @@ mod failures;
 #[path = "stranded_timer_retry_tests.rs"]
 mod timer_retry;
 
+#[path = "stranded_continuation_retry_tests.rs"]
+mod continuation_retry;
+
 #[path = "native_reset_tests.rs"]
 mod native_reset_tests;
 #[path = "provider_handoff_tests.rs"]

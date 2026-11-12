@@ -3,6 +3,8 @@
 //! owner follow-up. The first handback runs as its own turn, so the second is
 //! fenced for good. That used to end the loop with "execution admission
 //! refused", which aborts the execution window and releases the follow-up.
+//! (The second is too large to join the first one's continuation turn; a
+//! smaller one would be answered in that same turn, ORK-783.)
 use super::*;
 use orkestr_v2_application::runtime::{
     NativeSessionConfirmation, ProviderAdmission, ProviderEvent, ProviderEventInput, RuntimeStore,
@@ -156,7 +158,11 @@ async fn a_superseded_handback_does_not_end_the_loop_and_the_follow_up_runs() {
                     &conversation,
                     &message(
                         &format!("automatic-host-result-synthetic-{n}"),
-                        &format!("Synthetic host result {n}"),
+                        &format!("Synthetic host result {n} ").repeat(if n == 1 {
+                            1
+                        } else {
+                            1024
+                        }),
                     ),
                     None,
                     Some(0),
@@ -197,6 +203,107 @@ async fn a_superseded_handback_does_not_end_the_loop_and_the_follow_up_runs() {
         .expect("the owner follow-up is the next input");
     assert_eq!(next.message_id(), &follow_up.message_id);
     assert_ne!(next.message_id(), &handbacks[1].message_id);
+    execution.store.close().await;
+    drop(execution);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+/// ORK-783: the same turn with two ordinary-sized results. Both are answered
+/// by one continuation turn (which may stay silent, NO_REPLY), so no second
+/// result turn runs and nothing is retired unseen; the follow-up is next.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn results_of_one_turn_share_one_continuation_and_the_follow_up_runs() {
+    let (execution, store, root) = execution().await;
+    let owner = execution.owner.clone();
+    let conversation = execution.config.conversation_id.clone();
+    let (_sender, mut shutdown) = watch::channel(false);
+    let mut heartbeat = Instant::now();
+    let message = |key: &str, text: &str| MessageInput {
+        client_message_id: key.into(),
+        text: text.into(),
+    };
+    store
+        .admit(
+            &owner,
+            &conversation,
+            &message("owner-turn", "Synthetic owner turn"),
+        )
+        .await
+        .unwrap();
+    let turn = execution
+        .next(&mut shutdown, &mut heartbeat)
+        .await
+        .unwrap()
+        .unwrap()
+        .provider()
+        .clone();
+    let mut results = Vec::new();
+    for n in 1..=2 {
+        results.push(
+            store
+                .admit_authenticated_attributed(
+                    TOKEN,
+                    &owner,
+                    &conversation,
+                    &message(
+                        &format!("automatic-host-result-synthetic-{n}"),
+                        &format!("Synthetic host result {n}"),
+                    ),
+                    None,
+                    Some(0),
+                    Some(&turn.run.run_id),
+                    Some(InputAuthor::V1Agent),
+                    None,
+                )
+                .await
+                .unwrap()
+                .receipt,
+        );
+    }
+    let follow_up = store
+        .admit(
+            &owner,
+            &conversation,
+            &message("owner-follow-up", "Synthetic owner follow-up"),
+        )
+        .await
+        .unwrap()
+        .receipt;
+    accept(&execution, &store, &turn).await;
+
+    let continuation = execution
+        .next(&mut shutdown, &mut heartbeat)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(continuation.message_id(), &results[0].message_id);
+    assert!(continuation
+        .text()
+        .starts_with("[Automatic results: 2 result(s) "));
+    let group = store
+        .deep_run_group_authenticated(
+            TOKEN,
+            &owner,
+            &conversation,
+            &continuation.provider().run.run_id,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        group
+            .iter()
+            .map(|(message, _, _)| message.clone())
+            .collect::<Vec<_>>(),
+        vec![results[0].message_id.clone(), results[1].message_id.clone()]
+    );
+    accept(&execution, &store, continuation.provider()).await;
+
+    let next = execution
+        .next(&mut shutdown, &mut heartbeat)
+        .await
+        .unwrap()
+        .expect("the owner follow-up is the next input");
+    assert_eq!(next.message_id(), &follow_up.message_id);
     execution.store.close().await;
     drop(execution);
     std::fs::remove_dir_all(root).unwrap();

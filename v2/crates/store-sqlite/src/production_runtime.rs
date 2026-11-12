@@ -47,6 +47,7 @@ pub use managed_operation::{
 };
 pub(crate) mod deep_groups;
 pub use deep_groups::{DEFAULT_DEEP_BURST_QUIET_MS, MAX_DEEP_BURST_QUIET_MS};
+mod continuation_groups;
 #[cfg(test)]
 mod deep_groups_tests;
 mod dispatch;

@@ -3,7 +3,9 @@
 //! is accepted, which moves the source session on, so the second can never
 //! run. Admission refuses it (that refusal used to end the whole window and
 //! release the follow-up); now Core retires exactly that input and the
-//! follow-up behind it is admitted.
+//! follow-up behind it is admitted. (The second is too large to join the
+//! first one's continuation turn, see `continuation_groups`; a smaller one
+//! would be answered in that same turn.)
 use super::*;
 use orkestr_v2_application::{
     runtime::{InboxClaim, RunAdmissionResult},
@@ -104,7 +106,7 @@ async fn a_superseded_handback_is_retired_alone_and_the_follow_up_is_admitted() 
     let first = admit(&f, &message, &query).await.unwrap();
     let late = MessageInput {
         client_message_id: "automatic-host-result-synthetic-2".into(),
-        text: "Second synthetic host result".into(),
+        text: "Second synthetic host result ".repeat(1024),
     };
     let late_query = SourceReceiptQuery {
         client_message_id: late.client_message_id.clone(),

@@ -286,10 +286,15 @@ impl Store {
             .await
             .map_err(db)?,
         };
-        // A grouped Deep turn answers every input it consumed, numbered.
-        let text = match super::deep_groups::text(&mut tx, &row).await? {
-            Some(grouped) => grouped,
-            None => text,
+        // A continuation of an accepted turn lists its results under one note
+        // (continuation_groups); a grouped Deep turn answers every input it
+        // consumed, numbered.
+        let text = match super::continuation_groups::text(&mut tx, &row).await? {
+            Some(results) => results,
+            None => match super::deep_groups::text(&mut tx, &row).await? {
+                Some(grouped) => grouped,
+                None => text,
+            },
         };
         // A read-only parallel slot turn gets its note; the writer's turn the
         // parallel answers accepted since its previous one. Unchanged while

@@ -206,6 +206,17 @@ impl Store {
             self.deep_burst_quiet_ms,
         )
         .await?;
+        // The other queued results of the head's accepted source turn join
+        // its one continuation turn (see continuation_groups).
+        super::continuation_groups::form(
+            &mut tx,
+            &claim.conversation_id,
+            claim.scope_sequence,
+            &claim.message_id.to_string(),
+            window.as_deref(),
+            &run_id.to_string(),
+        )
+        .await?;
         sqlx::query("UPDATE session_bindings SET state='busy' WHERE id=?")
             .bind(binding_id.to_string())
             .execute(&mut *tx)
