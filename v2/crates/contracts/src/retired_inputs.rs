@@ -23,6 +23,28 @@ impl OwnerInputRetirementRequest {
     }
 }
 
+/// Receipt reason of an operator settlement (ORK-798): an automatic result
+/// that sits in a closed window and can never run.
+pub const STALE_INPUT_SETTLEMENT_REASON: &str = "operator_settled_stale";
+
+/// Owner/operator settlement of one exact stale automatic result. The reason
+/// is fixed ([`STALE_INPUT_SETTLEMENT_REASON`]); the receipt is the ordinary
+/// immutable [`OwnerInputRetirementReceipt`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StaleInputSettlementRequest {
+    pub request_key: String,
+}
+impl StaleInputSettlementRequest {
+    pub fn is_valid(&self) -> bool {
+        OwnerInputRetirementRequest {
+            request_key: self.request_key.clone(),
+            reason: STALE_INPUT_SETTLEMENT_REASON.into(),
+        }
+        .is_valid()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OwnerInputRetirementState {

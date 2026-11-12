@@ -690,6 +690,7 @@ pub fn router_with_google_catalog(
         .route("/api/v2/conversations/{id}/payloads/{payload}",get(provider_payload::read).delete(provider_payload::remove))
         .route("/api/v2/conversations/{id}/held-inputs",get(held_inputs::read))
         .route("/api/v2/conversations/{id}/inputs/{input}/retire",post(retired_inputs::retire))
+        .route("/api/v2/conversations/{id}/inputs/{input}/settle-stale",post(retired_inputs::settle_stale))
         .route("/api/v2/conversations/{id}/messages",post(routes::message))
         .route("/api/v2/conversations/{id}/messages/{message}/revisions",get(message_revisions_http::history).post(message_revisions_http::revise))
         .route("/api/v2/conversations/{id}/events",get(routes::events))

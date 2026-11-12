@@ -3,6 +3,13 @@
 This is a negative disposition, not a delivery acknowledgement. It preserves
 the complete input and export text and never calls Core, V1 or a provider.
 Invoke with python3 -I -S -B; inspect is read-only and is the default action.
+
+A final whose input still has pending progress exports is refused unless
+the operator opts in with --supersede-pending-progress (ORK-798): those
+progress exports are then marked `superseded` in the same transaction, the
+same outcome the ledger records when V1 settles a final itself, and the
+audit receipt lists their ids. It still refuses when any other pending
+export of the input is a final, or is uncertain (it may have been sent).
 """
 import argparse
 import hashlib
@@ -53,14 +60,24 @@ def selected(db, export_id):
     return scope[0], row, item
 
 
+def other_pending(db, input_id, export_id):
+    """The input's other exports V1 has not settled, oldest first."""
+    return db.execute("SELECT export_id,seq,kind,outcome,ack FROM exports WHERE input_id=? AND export_id!=? "
+                      "AND (outcome IS NULL OR outcome='uncertain') ORDER BY seq", (input_id, export_id)).fetchall()
+
+
 def inspect(path, export_id):
     with connect(path) as db:
         db.execute("BEGIN")
         scope, row, item = selected(db, export_id)
+        others = [{"export_id": o['export_id'], "sequence": o['seq'], "kind": o['kind'],
+                   "outcome": o['outcome'], "ack_present": o['ack'] is not None}
+                  for o in other_pending(db, row['input_id'], row['export_id'])]
         return {"read_only": True, "export_id": row['export_id'], "sequence": row['seq'],
                 "input_id": row['input_id'], "kind": row['kind'], "outcome": row['outcome'],
                 "ack_present": row['ack'] is not None, "phase": json.loads(item['data']).get('phase'),
-                "scope_sha256": digest(scope), "message_sha256": digest(row['message'])}
+                "scope_sha256": digest(scope), "message_sha256": digest(row['message']),
+                "other_pending_exports": others}
 
 
 def audit_schema(db):
@@ -77,8 +94,9 @@ def audit_schema(db):
 
 
 def suppress(path, export_id, *, input_id, scope_sha256, message_sha256,
-             request_key, reason, confirm_never_transported=False):
+             request_key, reason, confirm_never_transported=False, supersede_pending_progress=False):
     require(confirm_never_transported is True, "never_transported_confirmation_required")
+    require(supersede_pending_progress in (True, False), "invalid_supersede_flag")
     require(isinstance(request_key, str) and re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", request_key), "invalid_request_key")
     require(isinstance(reason, str) and 1 <= len(reason.strip()) <= 2000 and '\0' not in reason, "invalid_reason")
     require(all(isinstance(x, str) and re.fullmatch(r"[a-f0-9]{64}", x)
@@ -86,6 +104,10 @@ def suppress(path, export_id, *, input_id, scope_sha256, message_sha256,
     decision = {"export_id": export_id, "input_id": input_id, "scope_sha256": scope_sha256,
                 "message_sha256": message_sha256, "request_key": request_key,
                 "reason": reason, "confirm_never_transported": True}
+    if supersede_pending_progress:
+        # Only an opted-in decision carries the key, so every earlier
+        # decision keeps its exact semantic digest and replays unchanged.
+        decision["supersede_pending_progress"] = True
     semantic = digest(json.dumps(decision, sort_keys=True, separators=(',', ':')))
     with connect(path, writable=True) as db:
         db.execute("BEGIN IMMEDIATE")
@@ -98,26 +120,45 @@ def suppress(path, export_id, *, input_id, scope_sha256, message_sha256,
         if previous:
             require(previous['semantic_digest'] == semantic, "request_key_conflict")
             require(row['outcome'] == 'suppressed' and row['ack'] is None, "disposition_changed")
-            return dict(json.loads(previous['receipt_json']), duplicate=True)
+            receipt = json.loads(previous['receipt_json'])
+            for progress_id in receipt.get('superseded_progress_export_ids', ()):
+                # A late V1 report keeps `superseded` (Ledger.acknowledge).
+                kept = db.execute("SELECT outcome FROM exports WHERE export_id=? AND input_id=? AND kind='progress'",
+                                  (progress_id, input_id)).fetchone()
+                require(kept is not None and kept['outcome'] == 'superseded', "disposition_changed")
+            return dict(receipt, duplicate=True)
         data = json.loads(item['data'])
         require(row['kind'] == 'final' and data.get('phase') == 'completed', "completed_final_required")
         require(row['outcome'] is None and row['ack'] is None and not data.get('settled'), "transport_or_disposition_already_recorded")
         require(not data.get('burst') and not data.get('absorbed_into'), "batched_input_refused")
-        other = db.execute("SELECT count(*) FROM exports WHERE input_id=? AND export_id!=? AND (outcome IS NULL OR outcome='uncertain')",
-                           (input_id, export_id)).fetchone()[0]
-        require(other == 0, "other_pending_exports")
+        others = other_pending(db, input_id, export_id)
+        if not supersede_pending_progress:
+            require(not others, "other_pending_exports")
+        # Opted in: only never-reported progress may be superseded. Another
+        # final, or anything uncertain (V1 may have sent it), still refuses.
+        require(all(o['kind'] == 'progress' for o in others), "other_pending_final")
+        require(all(o['outcome'] is None and o['ack'] is None for o in others), "other_uncertain_export")
+        progress_ids = [o['export_id'] for o in others]
         audit_schema(db)
         at = int(time.time() * 1000)
         receipt = {"ok": True, "duplicate": False, "disposition": "suppressed",
                    "export_id": export_id, "input_id": input_id, "sequence": row['seq'],
                    "request_key": request_key, "reason": reason, "disposed_at_ms": at,
                    "acknowledged": False, "send_triggered": False, "full_text_retained": True}
+        if supersede_pending_progress:
+            receipt["superseded_progress_export_ids"] = progress_ids
         db.execute("INSERT INTO export_admin_dispositions VALUES(?,?,?,?,?,?,?,?,?,?,?)",
                    (request_key, semantic, export_id, input_id, scope, row['message'], item['data'],
                     reason, os.geteuid(), at, json.dumps(receipt, sort_keys=True)))
         changed = db.execute("UPDATE exports SET outcome='suppressed' WHERE export_id=? AND outcome IS NULL AND ack IS NULL",
                              (export_id,)).rowcount
         require(changed == 1, "export_changed")
+        for progress_id in progress_ids:
+            # Message text is kept; ACK stays NULL. Never a transport report.
+            changed = db.execute("UPDATE exports SET outcome='superseded' WHERE export_id=? AND input_id=? "
+                                 "AND kind='progress' AND outcome IS NULL AND ack IS NULL",
+                                 (progress_id, input_id)).rowcount
+            require(changed == 1, "export_changed")
         # Do not call the transport settlement/pruning path. Both the current
         # records and immutable audit retain complete text; ACK stays NULL.
         data['settled'] = {"outcome": "suppressed", "atMs": at, "admin_request_key": request_key}
@@ -136,6 +177,8 @@ def main():
     parser.add_argument('--request-key')
     parser.add_argument('--reason')
     parser.add_argument('--confirm-never-transported', action='store_true')
+    parser.add_argument('--supersede-pending-progress', action='store_true',
+                        help="also mark the input's never-reported progress exports superseded")
     args = parser.parse_args()
     try:
         if args.action == 'inspect':
@@ -144,7 +187,8 @@ def main():
             result = suppress(args.ledger, args.export_id, input_id=args.input_id,
                               scope_sha256=args.scope_sha256, message_sha256=args.message_sha256,
                               request_key=args.request_key, reason=args.reason,
-                              confirm_never_transported=args.confirm_never_transported)
+                              confirm_never_transported=args.confirm_never_transported,
+                              supersede_pending_progress=args.supersede_pending_progress)
     except (Refused, sqlite3.Error, ValueError, OSError):
         # Never include private SQL, paths, payloads or values in an error.
         parser.exit(1, 'export_disposition_refused\n')
