@@ -13,6 +13,7 @@ from urllib.parse import parse_qs, urlsplit
 
 from . import input_revisions, instructions, local_inputs, participants, provisioning, reply_files, switch_command
 from .config import load
+from .conversation_watch import ConversationWatch
 from .ledger import MAX_ATTACHMENT_BYTES, OUTCOMES, Conflict
 from .registry import Registry
 from .rust_client import RustClient, RustSession
@@ -359,12 +360,19 @@ def main():
     session = RustSession(**{key: config[key] for key in
                              ("origin", "loopback_url", "credentials_path", "expected_owner", "expected_source")},
                           peer_descriptor_path=config.get("peer_descriptor_path"), outbound_gate=OutboundGate())
-    registry = Registry(config, lambda conversation: RustClient(conversation_id=conversation, session=session), static)
+    # One listing of every conversation's sequence spares idle bindings their
+    # own polls (ORK-782); `"conversation_watch": false` restores them.
+    watch = ConversationWatch(session.conversations_page) if config["conversation_watch"] else None
+    registry = Registry(config, lambda conversation: RustClient(conversation_id=conversation, session=session), static,
+                        watch=watch)
     registry.reload()
     stop, wake = threading.Event(), threading.Event()
     server = Server(config, registry)
     reloader = threading.Thread(target=registry.run, args=(stop, wake), daemon=True)
     reloader.start()
+    if watch is not None:
+        threading.Thread(target=watch.run, args=(stop, registry.wake_conversations), daemon=True,
+                         name="conversation-watch").start()
     def shutdown(*_):
         registry.changes.close()
         stop.set()

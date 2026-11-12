@@ -38,6 +38,7 @@ from .intake import admit as admit_input, window as admit_window
 from .acceptance_retry import reconcile as reconcile_acceptance
 from .foreground import drive as drive_foreground
 from . import journal as shared_journal
+from .idle_polls import DIGEST_IDLE_POLL_S, POST_IDLE_POLL_S, Polls
 from .intake_fast import (EVENT_WAIT_S, isolated as isolated_fast,
                           drive as drive_intake_fast)
 
@@ -47,7 +48,8 @@ TIMER_PAGE = 50
 # Pass cadence. While an input is in flight a binding steps it every second;
 # an idle binding sleeps until its next Rust poll is due (at most IDLE_PASS_S)
 # and a new inbound input wakes it at once (see Signal). One host serves
-# dozens of bindings, so idle polling dominates the adapter and server CPU.
+# dozens of bindings, so idle polling dominates the adapter and server CPU;
+# idle_polls.py leaves out the polls that cannot find anything (ORK-782).
 PASS_S = 1
 IDLE_PASS_S = 5
 # While an owner Fast reply is in flight, its proposal is picked up, accepted
@@ -253,6 +255,8 @@ class Worker:
         # Events read once serve every input, Fast watch and web watch of
         # this binding; each still keeps its own cursor (see journal.py).
         self.journal = shared_journal.Journal()
+        # Which discovery polls can be left out (the registry sets its watch).
+        self.polls = Polls(getattr(client, "conversation", None))
 
     def import_attachments(self, data):
         if "attachment_request" not in data:
@@ -395,9 +399,11 @@ class Worker:
 
         The first scan only records the current position: occurrences admitted
         before this adapter relayed timers are never replayed to WhatsApp.
+        Returns whether Rust listed any new occurrence.
         """
         cursor = self.ledger.timer_cursor()
         start = cursor or 0
+        found = False
         while True:
             rows = self.timer_inputs(start)
             for row in rows:
@@ -405,11 +411,13 @@ class Worker:
                     self.ledger.enqueue_timer(row)
                 start = row["sequence"]
             if rows:
+                found = True
                 self.ledger.set_timer_cursor(start)
             if len(rows) < TIMER_PAGE:
                 break
         if cursor is None:
             self.ledger.set_timer_cursor(start)
+        return found
 
     def timer_final(self, data, raw):
         """Final text to deliver, or None when silent. A timer run's answer is
@@ -450,7 +458,8 @@ class Worker:
 
     def discover_digests(self):
         """Adopt digests Rust created for this conversation and acknowledge them
-        once the ledger holds them; the ledger exports each as a normal reply."""
+        once the ledger holds them; the ledger exports each as a normal reply.
+        Returns whether Rust listed any."""
         value = self.call("GET", "/timer-digests?limit=20")
         rows = value.get("digests") if isinstance(value, dict) else None
         if not isinstance(rows, list) or len(rows) > 20:
@@ -460,6 +469,7 @@ class Worker:
                 raise Refused("timer_digests_shape")
             self.ledger.enqueue_digest(row)
             self.client.request("POST", "/timer-digests/%s/delivered" % row["id"], body={}, allowed=(200,))
+        return bool(rows)
 
     def with_rules(self, data, text):
         """Prefix the binding's chat rules line, frozen with the input on first
@@ -482,7 +492,8 @@ class Worker:
     def discover_posts(self):
         """Adopt conversation posts (assistant-side messages from outside a run)
         and acknowledge each once the ledger holds it. Adoption exports the post
-        text unchanged as a final reply; V1 adds its own prefix and footer."""
+        text unchanged as a final reply; V1 adds its own prefix and footer.
+        Returns whether Rust listed any."""
         value = self.call("GET", "/posts?pending=true&limit=%d" % POST_PAGE)
         rows = value.get("posts") if isinstance(value, dict) else None
         if not isinstance(rows, list) or len(rows) > POST_PAGE:
@@ -496,6 +507,7 @@ class Worker:
             uuid.UUID(row["id"])
             self.ledger.enqueue_post(row)
             self.client.request("POST", "/posts/%s/delivered" % row["id"], body={}, allowed=(200,))
+        return bool(rows)
 
     def web_text(self, text):
         """The owner's web message for WhatsApp: app attachment notes (both
@@ -524,20 +536,23 @@ class Worker:
         Only snapshot rows the server marks `origin: "web"` or `"api"` qualify
         (timer, steering and thread-ask rows never do), and never a
         message this adapter admitted itself (no echo of WhatsApp input). The
-        first scan of a ledger only records the current position."""
+        first scan of a ledger only records the current position. Returns
+        whether the snapshot had any message after the cursor."""
         cursor = self.ledger.web_cursor()
         if cursor is None:
             value = self.call("GET", "")
             if not isinstance(value, dict) or type(value.get("last_sequence")) is not int:
                 raise Refused("snapshot_shape")
             self.ledger.set_web_cursor(value["last_sequence"])
-            return
+            return False
         own, identity = None, None
+        found = False
         for _ in range(WEB_PAGES):
             value = self.call("GET", "?after=%d&limit=%d" % (cursor, WEB_PAGE))
             rows = value.get("messages") if isinstance(value, dict) else None
             if not isinstance(rows, list) or len(rows) > WEB_PAGE:
                 raise Refused("snapshot_shape")
+            found = found or bool(rows)
             for row in rows:
                 if (not isinstance(row, dict) or type(row.get("sequence")) is not int or row["sequence"] <= cursor or
                         not isinstance(row.get("message_id"), str) or not isinstance(row.get("text"), str)):
@@ -570,6 +585,7 @@ class Worker:
                 self.ledger.set_web_cursor(cursor)
             if value.get("next_cursor") is None:
                 break
+        return found
 
     def web_dropped(self, watch, reason):
         self.ledger.drop_web_watch(watch["message_id"])
@@ -1430,9 +1446,11 @@ class Worker:
     def idle_pause(self, now=None):
         """Seconds until the next Rust poll is due, between PASS_S and IDLE_PASS_S."""
         now = time.monotonic() if now is None else now
+        polls = self.polls
         due = [checked + interval - now for checked, interval in
-               ((self._timers_checked, TIMER_POLL_S), (self._posts_checked, POST_POLL_S),
-                (self._digest_checked, DIGEST_POLL_S)) if checked is not None]
+               ((self._timers_checked, TIMER_POLL_S),
+                (self._posts_checked, polls.interval(POST_POLL_S, POST_IDLE_POLL_S, now)),
+                (self._digest_checked, polls.interval(DIGEST_POLL_S, DIGEST_IDLE_POLL_S, now))) if checked is not None]
         if self.web_mirror and self._web_checked is not None:
             due.append(self._web_checked + WEB_POLL_S - now)
         return max(PASS_S, min([IDLE_PASS_S] + due))
@@ -1441,6 +1459,19 @@ class Worker:
     def _due(checked, interval):
         # A pause ends at the due time; a few ms of early wakeup still counts.
         return checked is None or time.monotonic() - checked >= interval - 0.05
+
+    def _discover(self, source, discover, forced):
+        """One sequenced discovery poll, unless `polls` shows that it cannot
+        find anything new (idle_polls.py). Never raises."""
+        if not self.polls.begin(source, force=forced):
+            return
+        try:
+            found = discover()
+        except Exception:
+            # Discovery is retried at the next check; it never blocks existing inputs.
+            self.polls.failed(source)
+        else:
+            self.polls.done(source, bool(found))
 
     def expire_stale(self):
         try:
@@ -1486,27 +1517,32 @@ class Worker:
             drive_foreground(self, data, stop)
             if getattr(stop, "is_set", lambda: False)():
                 return True  # A stopped foreground never starts new discovery.
-        if self._due(self._timers_checked, TIMER_POLL_S):
-            self._timers_checked = time.monotonic()
-            try:
-                self.discover_timers()
-            except Exception:
-                # Discovery is retried at the next check; it never blocks existing inputs.
-                pass
-        # Digests are due a few times a day: look every DIGEST_POLL_S, not every pass.
-        if self._due(self._digest_checked, DIGEST_POLL_S):
+        polls = self.polls
+        # Timer occurrences, web messages and thread-ask answers advance the
+        # conversation's sequence: a poll that cannot find anything is left
+        # out, and a changed sequence makes it due at once (idle_polls.py).
+        # A cleared check time (a fired trigger, a new worker) always polls.
+        if polls.due(("timers",), self._timers_checked, TIMER_POLL_S):
+            forced, self._timers_checked = self._timers_checked is None, time.monotonic()
+            self._discover("timers", self.discover_timers, forced)
+        # Digests are due a few times a day: look every DIGEST_POLL_S, not every
+        # pass (DIGEST_IDLE_POLL_S while the binding is idle).
+        if self._due(self._digest_checked, polls.interval(DIGEST_POLL_S, DIGEST_IDLE_POLL_S)):
             self._digest_checked = time.monotonic()
             try:
-                self.discover_digests()
+                if self.discover_digests():
+                    polls.touch()
             except Exception:
                 # A missing route (older server) or a failure is retried at the next check.
                 pass
-        # Posts are interactive: look every POST_POLL_S. A paused binding (run()
-        # skips run_once) leaves them pending in Rust until it is enabled again.
-        if self._due(self._posts_checked, POST_POLL_S):
+        # Posts are interactive: look every POST_POLL_S (POST_IDLE_POLL_S while
+        # the binding is idle). A paused binding (run() skips run_once) leaves
+        # them pending in Rust until it is enabled again.
+        if self._due(self._posts_checked, polls.interval(POST_POLL_S, POST_IDLE_POLL_S)):
             self._posts_checked = time.monotonic()
             try:
-                self.discover_posts()
+                if self.discover_posts():
+                    polls.touch()
             except Exception:
                 # A missing route (older server) or a failure is retried at the next check.
                 pass
@@ -1516,17 +1552,11 @@ class Worker:
         except Exception:
             pass  # Retried next pass; never blocks the binding.
         # Web-UI owner messages: interactive, never queued behind WhatsApp input.
-        if self.web_mirror and self._due(self._web_checked, WEB_POLL_S):
-            self._web_checked = time.monotonic()
-            try:
-                self.discover_web()
-            except Exception:
-                pass
-            try:
-                # Returned thread-ask answers: their turns ride the same watch.
-                thread_ask_relay.discover(self)
-            except Exception:
-                pass
+        if self.web_mirror and polls.due(("web", "thread_ask"), self._web_checked, WEB_POLL_S):
+            forced, self._web_checked = self._web_checked is None, time.monotonic()
+            self._discover("web", self.discover_web, forced)
+            # Returned thread-ask answers: their turns ride the same watch.
+            self._discover("thread_ask", lambda: thread_ask_relay.discover(self), forced)
             try:
                 self.drive_web()
             except Exception:
@@ -1536,4 +1566,7 @@ class Worker:
             data = self.ledger.next_input()
             if data:
                 drive_foreground(self, data, stop)
-        return bool(data) or fast_pending
+        busy = bool(data) or fast_pending
+        if busy:
+            polls.touch()
+        return busy

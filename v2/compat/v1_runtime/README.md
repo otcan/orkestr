@@ -110,11 +110,28 @@ sockets): run it with `LimitNOFILE=65536:524288` (systemd's soft default of
 
 A binding with an input in flight steps it every second. An idle binding
 sleeps until its next Rust poll is due (timer occurrences and posts every 5 s,
-digests every 30 s, at most 5 s per pass); a new inbound input wakes its
+web messages every 3 s, digests every 30 s, at most 5 s per pass); a new inbound input wakes its
 worker at once. A single plain text message is admitted immediately. A queued
 burst or attachment under the legacy policy waits until its chat has been quiet for 3 s (each new message of the burst restarts the
-wait), and the worker wakes exactly then rather than up to a pass later. With dozens of bindings this keeps idle polling to roughly
-about `0.43 x bindings` requests per second.
+wait), and the worker wakes exactly then rather than up to a pass later.
+
+Every Core request opens a new connection and proves Core's identity from the
+kernel's socket table, about 15-50 ms of CPU each, so idle polling of 68
+bindings (about 1.1 requests per binding per second) cost about 2.2 cores and
+kept the outbound gate full (ORK-782). One shared conversation watch
+(`conversation_watch.py`) now reads `last_sequence` of every conversation with
+`GET /api/v2/conversations` every 2 s and wakes the binding of each
+conversation that changed. Web-UI messages, returned thread-ask answers and
+timer occurrences are written in the transaction that advances that sequence,
+so a binding leaves out those polls while its sequence is the one seen before
+its last empty poll; a change makes them due at once, and each is still polled
+about every 2 minutes as a safety net (`idle_polls.py`). Posts and digests
+change no sequence: a binding with no input, find or conversation change for
+10 minutes polls them every 15 s and 60 s instead of 5 s and 30 s. Without a
+fresh listing (Core down, the request refused) every binding polls at the old
+cadence; `"conversation_watch": false` in the service file switches the watch
+off. An idle binding then costs about 0.12 requests per second instead of 1.1.
+Paused and revoked bindings never ask Core anything.
 
 ## Quoted replies
 
@@ -836,7 +853,8 @@ are delivered after it is enabled again (the same as digests).
 
 The owner may also type in the V2 web UI of a bound conversation. Those
 messages and their answers are mirrored to the group, so WhatsApp shows the
-whole conversation. Every 3 s (while the binding is enabled) the worker reads
+whole conversation. Every 3 s (while the binding is enabled, and while the
+conversation watch shows a change; see Pacing) the worker reads
 the conversation snapshot (`GET /api/v2/conversations/<id>?after=<cursor>`)
 and adopts each row with `origin: "web"` and `actor_kind: "owner"` that this
 adapter did not admit itself:

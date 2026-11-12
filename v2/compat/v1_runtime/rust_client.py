@@ -22,6 +22,8 @@ LIMITS = dict(duration_ms=900000, attempts=32, bytes=67108864,
               cleanup_ms=30000, cleanup_attempts=4, cleanup_bytes=1048576)
 SESSION = "/api/v2/browser/session"
 SERVICE_SESSION = "/api/v2/machine/service-session"
+# The owner's conversation directory, read by the shared watch (ORK-782).
+CONVERSATIONS = "/api/v2/conversations"
 # Matches the server JSON limit for raw-octet attachment bundles.
 ATTACHMENT_MAX_JSON = 68 * 1024 * 1024
 # Reads reuse a server identity + session check this recent. Every mutation
@@ -161,7 +163,7 @@ class RustSession:
         self._lock = threading.RLock()
 
     def _wire(self, method, path, body=None, allowed=(200,), events=False,
-              max_request=32768, timeout_s=None, frames=1):
+              max_request=32768, timeout_s=None, frames=1, revoke=True):
         try:
             data = None if body is None else json.dumps(body, allow_nan=False, separators=(",", ":")).encode()
         except (TypeError, ValueError, UnicodeError):
@@ -225,6 +227,10 @@ class RustSession:
             timer.start()
             connection.request(method, path, body=data, headers=headers)
             response = connection.getresponse()
+            if response.status == 401 and not revoke:
+                # A read that is only a hint (the conversation watch) never
+                # revokes every binding's session; their own requests would.
+                raise ClientError("unexpected_status", 401)
             if response.status == 401:
                 with self._lock:
                     if self._cookie != cookie:
@@ -398,6 +404,15 @@ class RustSession:
             self.generation += 1
             self._verified_at = self._logged_in_at = time.monotonic()
             return self.generation
+
+    def conversations_page(self, after, limit):
+        """One page of the owner's conversation directory (`last_sequence` of
+        each conversation) for the shared watch (conversation_watch.py).
+        Read-only; the only request not pinned to one conversation."""
+        require(integer(after) and type(limit) is int and 1 <= limit <= 100, "cursor_refused")
+        self.login(mutation=False)
+        _, value, _ = self._wire("GET", f"{CONVERSATIONS}?after={after}&limit={limit}", revoke=False)
+        return value
 
 
 class RustClient:

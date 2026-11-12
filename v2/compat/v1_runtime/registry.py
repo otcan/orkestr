@@ -85,10 +85,12 @@ def scrubs_paths(config):
 
 
 class Registry:
-    def __init__(self, service, client_factory, static=(), workers=True):
+    def __init__(self, service, client_factory, static=(), workers=True, watch=None):
         self.service, self.client_factory, self.workers = service, client_factory, workers
         self.static = list(static)
         self.changes = ExportChanges()
+        # The shared conversation watch (conversation_watch.py), or None.
+        self.watch = watch
         self.bindings = {}
         self.file_errors = {}
         self._lock = threading.RLock()
@@ -96,6 +98,17 @@ class Registry:
     def get(self, remote_thread_id):
         with self._lock:
             return self.bindings.get(remote_thread_id)
+
+    def wake_conversations(self, conversations):
+        """The watch saw these conversations change: their enabled workers
+        look at once instead of after their idle pause. Paused bindings are
+        not woken; they never poll Core."""
+        with self._lock:
+            woken = [b for b in self.bindings.values()
+                     if b.state == "enabled" and b.config["conversation_id"] in conversations]
+        for binding in woken:
+            binding.stop.wake()
+        return len(woken)
 
     def _documents(self):
         """(source, value-or-error) for every binding document."""
@@ -198,6 +211,9 @@ class Registry:
             binding.worker = Worker(client, binding.ledger, attachment_dir=directory, attachment_gid=gid,
                                     burst_quiet_s=DEFAULT_BURST_QUIET_S,
                                     legacy_companions=self.service.get("legacy_companions", False))
+        polls = getattr(binding.worker, "polls", None)
+        if polls is not None:
+            polls.watch = getattr(self, "watch", None)
         binding.worker.progress_updates = binding.config["progress_updates"]
         binding.worker.deep_heartbeat = binding.config.get("deep_heartbeat", True) is not False
         binding.worker.fast_reply_policy = binding.config["fast_reply_policy"]
@@ -278,8 +294,11 @@ class Registry:
         unloaded = [source for source in self.file_errors if source not in sources]
         workers = {b.remote_thread_id: b.worker_status() for b in self.bindings.values() if b.thread is not None}
         enabled = [r for r, b in self.bindings.items() if b.state == "enabled" and r in workers]
+        watch = getattr(self, "watch", None)
         return {"bindings": len(states), "enabled": states.count("enabled"), "disabled": states.count("disabled"),
                 "revoked": states.count("revoked"), "refused": states.count("refused") + len(unloaded),
+                # `fresh: false` (or no watch): every binding polls Core at its old cadence (ORK-782).
+                "conversationWatch": watch.status() if watch is not None else {"enabled": False},
                 # Worker liveness: `alive == expected` means every binding thread
                 # is stepping; `notAlive` names the rest (dead or backing off).
                 "workers": {"expected": len(workers), "alive": sum(w["alive"] for w in workers.values()),
