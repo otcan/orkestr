@@ -269,6 +269,13 @@ impl Store {
                     started,
                     store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db),
                 )?;
+                // The handoff starts here, not before the fence queued for
+                // Core's single writer (ORK-770, setup_attestation.rs).
+                #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+                let workspace =
+                    self.under_writer(workspace, &grant.binding, &grant.setup_workspace);
+                #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+                let store = &*workspace;
                 let started = Instant::now();
                 events.capture(
                     if grant.resume.is_some() {

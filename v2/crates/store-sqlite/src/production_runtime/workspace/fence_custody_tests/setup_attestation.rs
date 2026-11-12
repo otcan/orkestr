@@ -25,6 +25,112 @@ fn checks(check: &RootCheck) -> usize {
     check.physical_checks.load(Ordering::SeqCst)
 }
 
+/// Other windows of a burst opening at the same moment: each holds Core's
+/// single SQLite writer for one transaction, back to back, from its own
+/// connection. Returns once the first transaction holds the writer.
+/// `while_held` runs at the end of each transaction, before its commit.
+fn core_writer_burst(
+    f: &Case,
+    windows: usize,
+    hold: Duration,
+    while_held: impl Fn() + Send + 'static,
+) -> std::thread::JoinHandle<()> {
+    let database = f.root.join("core.sqlite3");
+    let (held, holding) = std::sync::mpsc::channel();
+    let burst = std::thread::spawn(move || {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async {
+                let options = SqliteConnectOptions::new()
+                    .filename(database)
+                    .busy_timeout(Duration::from_secs(5));
+                let mut connection = SqliteConnection::connect_with(&options).await.unwrap();
+                for window in 0..windows {
+                    let transaction = connection.begin_with("BEGIN IMMEDIATE").await.unwrap();
+                    if window == 0 {
+                        held.send(()).unwrap();
+                    }
+                    std::thread::sleep(hold);
+                    while_held();
+                    transaction.commit().await.unwrap();
+                }
+            });
+    });
+    holding.recv().unwrap();
+    burst
+}
+
+/// One setup fence with its diagnostics: (succeeded, action ran, output).
+fn observed_fence(f: &Case, metadata: &BoundSessionMetadata) -> (bool, bool, String) {
+    let mut called = false;
+    let (result, diagnostics) = f.handle.with_metadata_fence_diagnostics(metadata, || {
+        called = true;
+        Ok::<_, ()>(())
+    });
+    let mut output = Vec::new();
+    diagnostics.emit_to(&mut output);
+    (
+        matches!(result, Ok(Ok(()))),
+        called,
+        String::from_utf8(output).unwrap(),
+    )
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_setup_fence_queued_behind_a_burst_of_opening_windows_still_runs() {
+    let f = setup().await;
+    let (metadata, check) = prepared(&f).await;
+    // The setup's first fence takes its fresh Root check, as live.
+    assert_eq!(fence(&f, &metadata), (true, true));
+    let before = checks(&check);
+    // Three windows open together and keep the writer for 150 ms each: far
+    // longer, in total, than one 100 ms handoff.
+    let burst = core_writer_burst(&f, 3, Duration::from_millis(150), || {});
+    let started = Instant::now();
+    let (ok, called, output) = observed_fence(&f, &metadata);
+    let waited = started.elapsed();
+    burst.join().unwrap();
+    assert!(
+        waited >= Duration::from_millis(100),
+        "the fence did not queue behind the burst ({waited:?})"
+    );
+    assert!(
+        ok && called,
+        "a setup fence failed only because it queued for Core's writer: {output}"
+    );
+    assert_eq!(
+        checks(&check),
+        before,
+        "no Root check was taken for, or under, the writer"
+    );
+    // The setup goes on as usual once the burst is over.
+    assert_eq!(fence(&f, &metadata), (true, true));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_project_change_while_the_fence_queues_still_fences() {
+    let f = setup().await;
+    let (metadata, _) = prepared(&f).await;
+    assert_eq!(fence(&f, &metadata), (true, true));
+    // The project changes while the fence waits for the writer.
+    let project = f.root.with_extension("project");
+    let burst = core_writer_burst(&f, 1, Duration::from_millis(300), move || {
+        std::fs::write(project.join("written-while-queued"), b"output").unwrap();
+    });
+    let (ok, called, output) = observed_fence(&f, &metadata);
+    burst.join().unwrap();
+    assert!(
+        !ok && !called,
+        "a change made while the fence queued was accepted: {output}"
+    );
+    assert!(
+        output.contains("outcome=fenced reason=workspace_stamp_changed"),
+        "{output}"
+    );
+}
+
 fn confirmation(metadata: &BoundSessionMetadata) -> NativeSessionConfirmation {
     NativeSessionConfirmation {
         session_id: metadata.binding().session_id.clone(),
