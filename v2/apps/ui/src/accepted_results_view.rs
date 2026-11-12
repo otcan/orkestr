@@ -1,14 +1,15 @@
+use crate::accepted_payloads_view::Reader;
 use crate::accepted_results_bridge::start;
 use dioxus::prelude::*;
 use orkestr_v2_contracts::{
-    AcceptedResult, AcceptedResults, ConversationPost, ExecutionStatus, ProviderPayload, RunId,
+    AcceptedResult, AcceptedResults, ConversationPost, ExecutionStatus, RunId,
 };
 use orkestr_v2_ui::chat_timeline::{self, Input, Row};
 use orkestr_v2_ui::{
-    accepted_results::{bound_payload, next_chat_page, refresh_cursor, valid_page, CHAT_PAGES},
+    accepted_payloads::{adds_work, Answer, HINT_AFTER_MS},
+    accepted_results::{next_chat_page, refresh_cursor, valid_page, CHAT_PAGES},
     execution::Execution,
     live_answer::LiveAnswer,
-    payload::Output,
     session_scope::SessionScope,
 };
 use serde_json::{json, Value};
@@ -44,7 +45,7 @@ pub fn AcceptedReplies(
     let mut reload = use_signal(|| 0_u64);
     let mut page = use_signal(|| None::<AcceptedResults>);
     let mut collected = use_signal(BTreeMap::<i64, AcceptedResult>::new);
-    let mut silent = use_signal(BTreeSet::<i64>::new);
+    let silent = use_signal(BTreeSet::<i64>::new);
     let mut answer = use_signal(LiveAnswer::default);
     let revision = use_hook(|| Rc::new(Cell::new(0_i64)));
     let read_ticket = use_hook(|| Rc::new(Cell::new(0_u64)));
@@ -53,10 +54,37 @@ pub fn AcceptedReplies(
     let mut window_start = use_signal(|| 0_i64);
     let now = crate::message_time_view::use_now();
     let times = crate::message_time_view::use_message_times(id.clone(), window_start);
+    // Answer texts (ORK-797): read in batches, kept for the page, never polled.
+    let loaded = use_signal(|| 0_u64);
+    let failed = use_signal(BTreeSet::<String>::new);
+    let mut reading = use_signal(Vec::<AcceptedResult>::new);
+    let payload_channel = use_signal(|| None::<document::Eval>);
+    let reader = Reader {
+        generation: owner,
+        mounted,
+        session_scope,
+        channel: payload_channel,
+        loaded,
+        failed,
+        silent,
+        answer,
+        onexpired,
+    };
     use_drop(move || {
         mounted.set(false);
         if let Some(eval) = channel.read().as_ref() {
             let _ = eval.send(json!({"stop":true}));
+        }
+        reader.stop();
+    });
+    let reader_id = id.clone();
+    use_resource(move || {
+        let rows = reading();
+        let conversation = reader_id.clone();
+        async move {
+            if !rows.is_empty() {
+                reader.read(conversation, rows).await;
+            }
         }
     });
     let read_id = id.clone();
@@ -147,6 +175,19 @@ pub fn AcceptedReplies(
                 }
             }
             busy.set(false);
+            // Texts read before show at once; only new answers start a read.
+            let shown: Vec<AcceptedResult> = if inline {
+                collected.peek().values().cloned().collect()
+            } else {
+                page.peek()
+                    .as_ref()
+                    .map(|p| p.results.clone())
+                    .unwrap_or_default()
+            };
+            let todo = reader.plan(&id, &shown);
+            if adds_work(&reading.peek(), &todo) {
+                reading.set(todo);
+            }
         }
     });
     let next = page.read().as_ref().and_then(|p| p.next_after_sequence);
@@ -158,6 +199,8 @@ pub fn AcceptedReplies(
             .map(|p| p.results.clone())
             .unwrap_or_default()
     };
+    let _ = loaded();
+    let answers = crate::accepted_payloads_view::answers(owner, &id, &results, &failed.read());
     let rows = chat_timeline::ordered(&messages, &results, &posts);
     // Times start just before the oldest row on screen.
     let first = rows
@@ -220,8 +263,8 @@ pub fn AcceptedReplies(
                                 }
                                 crate::outbox_view::TimelineDelivery { message_id: input.id.clone() }
                             } },
-                            Row::Reply(reply) => rsx! { AcceptedReply { conversation:id.clone(), row:reply.clone(), session_scope, onexpired, onsilent: move |sequence| { silent.write().insert(sequence); },
-                                onready: move |run: RunId| { if !answer.peek().is_settled(&run) { answer.write().settle(&run); } } } },
+                            Row::Reply(reply) => rsx! { AcceptedReply { conversation:id.clone(), row:reply.clone(), session_scope, onexpired,
+                                answer: answers.get(&reply.acceptance_sequence).cloned().unwrap_or(Answer::Loading) } },
                             Row::Post(post) => rsx! { crate::conversation_posts_view::PostBubble { post: post.clone() } },
                         }
                         if let Row::Post(post) = &row {
@@ -267,111 +310,39 @@ pub fn AcceptedReplies(
 fn AcceptedReply(
     conversation: String,
     row: AcceptedResult,
-    onsilent: EventHandler<i64>,
-    /// The reply can show itself (or has nothing to show), so a live row
-    /// that stands in for it may go.
-    onready: EventHandler<RunId>,
+    /// What the chat has read for this reply (ORK-797). Text once read stays.
+    answer: Answer,
     session_scope: Signal<SessionScope>,
     onexpired: EventHandler<()>,
 ) -> Element {
-    let owner = session_scope.read().generation();
-    let mut mounted = use_signal(|| true);
-    let mut output = use_signal(Output::default);
-    let mut notice = use_signal(|| {
-        if row.payload_removed {
-            "Answer text removed."
-        } else if row.payload_id.is_none() {
-            "No text was recorded for this answer."
-        } else {
-            "Loading…"
-        }
-        .to_string()
-    });
-    let mut channel = use_signal(|| None::<document::Eval>);
-    use_drop(move || {
-        mounted.set(false);
-        if let Some(eval) = channel.read().as_ref() {
-            let _ = eval.send(json!({"stop":true}));
+    let waiting = answer == Answer::Loading && !row.payload_removed && row.payload_id.is_some();
+    // A quiet hint, and only when no text has come for a few seconds.
+    let mut slow = use_signal(|| false);
+    let waited = use_hook(|| waiting);
+    use_future(move || async move {
+        if waited {
+            crate::transport::sleep(HINT_AFTER_MS).await;
+            slow.set(true);
         }
     });
+    let notice = if row.payload_removed || answer == Answer::Read(None) {
+        "Answer text removed."
+    } else if row.payload_id.is_none() {
+        "No text was recorded for this answer."
+    } else if answer == Answer::Failed {
+        "This answer could not be loaded."
+    } else {
+        ""
+    };
+    let shown = match &answer {
+        Answer::Read(Some(text))
+            if !row.payload_removed && !orkestr_v2_ui::payload::silent_assistant_reply(text) =>
+        {
+            Some(text.clone())
+        }
+        _ => None,
+    };
     let reply_conversation = conversation.clone();
-    let load_row = row.clone();
-    use_future(move || {
-        let row = load_row.clone();
-        let conversation = conversation.clone();
-        async move {
-            if row.payload_removed || row.payload_id.is_none() {
-                onready.call(row.run_id.clone());
-                return;
-            }
-            loop {
-                if !mounted() || !session_scope.read().is_current(owner) {
-                    return;
-                }
-                let eval = start(
-                    json!({"conversation":conversation,"payload":row.payload_id.as_ref().unwrap().to_string()}),
-                    true,
-                );
-                channel.set(Some(eval));
-                let result = eval.join::<Value>().await;
-                if !mounted() || !session_scope.read().is_current(owner) {
-                    return;
-                }
-                channel.set(None);
-                match result {
-                    Ok(value) if value["status"] == 200 => {
-                        let payload = serde_json::from_str::<ProviderPayload>(
-                            value["text"].as_str().unwrap_or(""),
-                        );
-                        match payload {
-                            Ok(payload) if bound_payload(&row, &conversation, &payload) => {
-                                if payload
-                                    .text
-                                    .as_deref()
-                                    .is_some_and(orkestr_v2_ui::payload::silent_assistant_reply)
-                                {
-                                    onsilent.call(row.acceptance_sequence);
-                                    onready.call(row.run_id.clone());
-                                    return;
-                                }
-                                output.write().observed(payload.text);
-                                onready.call(row.run_id.clone());
-                                notice.set(
-                                    if output.read().removed() {
-                                        "Answer text removed."
-                                    } else {
-                                        ""
-                                    }
-                                    .into(),
-                                );
-                                if output.read().removed() {
-                                    return;
-                                }
-                            }
-                            _ => {
-                                output.write().unavailable();
-                                notice.set("This answer could not be loaded.".into());
-                                onready.call(row.run_id.clone());
-                            }
-                        }
-                    }
-                    Ok(value) if matches!(value["status"].as_u64(), Some(401 | 403)) => {
-                        output.write().unavailable();
-                        onexpired.call(());
-                        return;
-                    }
-                    _ => {
-                        output.write().unavailable();
-                        notice.set("Loading this answer again…".into());
-                    }
-                }
-                let _ = document::eval(
-                    "await new Promise(resolve => setTimeout(resolve, 5000)); return null;",
-                )
-                .await;
-            }
-        }
-    });
     let payload_id = row
         .payload_id
         .as_ref()
@@ -383,15 +354,16 @@ fn AcceptedReply(
         "data-acceptance-event-id": "{row.acceptance_event_id}",
         "data-payload-id": "{payload_id}",
         strong { "Assistant" }
-        span { class: "reply-state", if row.payload_removed { "Answer text removed." } else { "{notice}" } }
-        if !row.payload_removed { if let Some(text)=output.read().text.clone(){div { class: "accepted-output", "data-accepted-output": "true", crate::rich_text_view::RichText { text: orkestr_v2_ui::message_file_refs::display_text(&text), attachments: !orkestr_v2_ui::message_file_refs::references(&text).is_empty() }
+        span { class: "reply-state", "{notice}" }
+        if waiting && slow() { span { class: "reply-loading", role: "status", "aria-label": "Loading answer" } }
+        if let Some(text)=shown.clone(){div { class: "accepted-output", "data-accepted-output": "true", crate::rich_text_view::RichText { text: orkestr_v2_ui::message_file_refs::display_text(&text), attachments: !orkestr_v2_ui::message_file_refs::references(&text).is_empty() }
             crate::message_files_view::MessageFiles {key: "files-{row.completion_event_id}",conversation:reply_conversation.clone(),message:row.completion_event_id.to_string(),text,session_scope}
-        }} }
-        if !row.payload_removed { if let Some(text)=output.read().text.clone(){
+        }}
+        if let Some(text)=shown{
             crate::message_actions_view::MessageMenu { message_id: row.completion_event_id.to_string(),
                 copy: Some(orkestr_v2_ui::message_file_refs::display_text(&text)),
                 reply: Some(crate::message_actions_view::ReplyTarget { draft_key: reply_conversation.clone(), composer: "composer".into(), author: chat_timeline::QuoteAuthor::Assistant, text }),
                 onexpired }
-        } }
+        }
     } }
 }

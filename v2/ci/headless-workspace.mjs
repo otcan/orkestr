@@ -9,6 +9,7 @@ import { trackerScenario } from './headless-tracker.mjs';
 import { virtualDesksAndAccountSettings } from './headless-virtual-desks-settings.mjs';
 import { providerSignIn } from './headless-provider-sign-in.mjs';
 import { silentReplies } from './headless-silent-replies.mjs';
+import { answerLoading } from './headless-answer-loading.mjs';
 import { liveAnswer } from './headless-live-answer.mjs';
 import { messageRevisions } from './headless-message-revisions.mjs';
 import { agentAttachments } from './headless-agent-attachments.mjs';
@@ -889,6 +890,7 @@ export const scenarios = [
     await page.goto(`${origin}/#conversation/${A}`, { waitUntil: 'domcontentloaded' });
     await page.reload({ waitUntil: 'domcontentloaded' });
   }],
+  ['answer-loading', label => answerLoading({ page, state, origin, conversation: C, returnConversation: A, screenshot, label })],
   ['silent-replies', label => silentReplies({ page, state, origin, conversation: C, returnConversation: A, worker: V1_WORKER, screenshot, label })],
   ['agent-reply-attachment', label => agentAttachments({ page, state, origin, conversation: C, returnConversation: A, screenshot, label })],
   ['message-revisions', label => messageRevisions({ page, state, origin, conversation: B, returnConversation: A, screenshot, label })],

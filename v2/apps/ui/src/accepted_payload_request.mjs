@@ -1,7 +1,7 @@
 // Protected accepted-reply bytes; provenance is validated by the typed caller.
-export async function acceptedPayload({conversation, payload, signal}, fetcher = fetch) {
-    const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-    if (!uuid.test(conversation) || !uuid.test(payload)) throw new Error('Invalid reply identity');
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+async function boundedRead(path, signal, fetcher, limit, maxReads) {
     const controller = new AbortController();
     const abort = () => controller.abort();
     signal?.addEventListener('abort', abort, {once: true});
@@ -9,7 +9,7 @@ export async function acceptedPayload({conversation, payload, signal}, fetcher =
     const timeout = setTimeout(abort, 10000);
     let reader;
     try {
-        const response = await fetcher(`/api/v2/conversations/${conversation}/payloads/${payload}`, {
+        const response = await fetcher(path, {
             credentials: 'same-origin', cache: 'no-store', redirect: 'error', signal: controller.signal,
         });
         if (response.status !== 200) {
@@ -19,11 +19,11 @@ export async function acceptedPayload({conversation, payload, signal}, fetcher =
         reader = response.body.getReader();
         const decoder = new TextDecoder('utf-8', {fatal: true});
         let bytes = 0, text = '';
-        for (let reads = 0; reads < 4096; reads++) {
+        for (let reads = 0; reads < maxReads; reads++) {
             const {done, value} = await reader.read();
             if (done) return {status: 200, text: text + decoder.decode()};
             bytes += value.byteLength;
-            if (bytes > 1048576) throw new Error('Reply exceeds limit');
+            if (bytes > limit) throw new Error('Reply exceeds limit');
             text += decoder.decode(value, {stream: true});
         }
         throw new Error('Reply read limit exceeded');
@@ -33,4 +33,17 @@ export async function acceptedPayload({conversation, payload, signal}, fetcher =
         controller.abort();
         await reader?.cancel().catch(() => {});
     }
+}
+
+export async function acceptedPayload({conversation, payload, signal}, fetcher = fetch) {
+    if (!UUID.test(conversation) || !UUID.test(payload)) throw new Error('Invalid reply identity');
+    return boundedRead(`/api/v2/conversations/${conversation}/payloads/${payload}`, signal, fetcher, 1048576, 4096);
+}
+
+// Several replies in one read (ORK-797); the server leaves out what it cannot send.
+export async function acceptedPayloads({conversation, payloads, signal}, fetcher = fetch) {
+    if (!UUID.test(conversation) || !Array.isArray(payloads) || payloads.length < 1 || payloads.length > 50
+        || !payloads.every(payload => typeof payload === 'string' && UUID.test(payload))
+        || new Set(payloads.map(payload => payload.toLowerCase())).size !== payloads.length) throw new Error('Invalid reply identity');
+    return boundedRead(`/api/v2/conversations/${conversation}/payloads?ids=${payloads.join(',')}`, signal, fetcher, 2097152, 8192);
 }

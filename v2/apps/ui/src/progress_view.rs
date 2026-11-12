@@ -106,6 +106,13 @@ pub fn ProgressView(
                                     }
                                     .into(),
                                 );
+                                if payload.text.is_none() {
+                                    // Removed elsewhere: the chat's reply never shows it again.
+                                    crate::accepted_payloads_view::removed(
+                                        &payload.conversation_id.to_string(),
+                                        &payload.payload_id.to_string(),
+                                    );
+                                }
                                 output.write().observed(payload.text);
                                 if let Some(onobserved) = onobserved {
                                     let shown = output.read().text.clone().filter(|text| {
@@ -172,7 +179,7 @@ pub fn ProgressView(
                         if !session_scope.read().is_current(owner) || execution.read().selection_generation()!=selection {return;}
                         busy.set(false);channel.set(None);
                         match response {
-                            Ok(value) if value["status"]==204=>{output.write().observed(None);notice.set("Provider output removed.".into());}
+                            Ok(value) if value["status"]==204=>{output.write().observed(None);crate::accepted_payloads_view::removed(&status.conversation_id.to_string(),&progress.payload_id.to_string());notice.set("Provider output removed.".into());}
                             Ok(value) if matches!(value["status"].as_u64(),Some(401|403))=>onexpired.call(()),
                             _=>notice.set("Removal not confirmed. Retry keeps the same output selected.".into()),
                         }

@@ -164,6 +164,9 @@ details[open] > summary { margin-bottom: .4rem; }
 .reply-state { font-size: .72rem; color: var(--faint); }
 .post-badge { margin-left: .4rem; font-size: .62rem; line-height: 1.5; padding: 0 .45rem; border-radius: 1rem; border: 1px solid var(--info-border); background: var(--info-soft); color: var(--info-text); white-space: nowrap; vertical-align: middle; }
 .reply-state:empty { display: none; }
+/* An answer slow to load shows a quiet pulsing dot, never a sentence (ORK-797). */
+.reply-loading { display: inline-block; width: .45rem; height: .45rem; border-radius: 50%; background: var(--faint); animation: pulse 1.4s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .reply-loading { animation: none; } }
 .live-answer-row { margin-top: .7rem; }
 .live-answer .reply-state { margin-top: .3rem; }
 .chat-messages details, .transcript-pages, .conversation-tools { font-size: .8rem; }

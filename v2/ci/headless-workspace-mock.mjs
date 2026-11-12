@@ -7,7 +7,7 @@ import { trackerApi } from './headless-tracker-mock.mjs';
 import { encryptedUploadMock } from './headless-encrypted-uploads.mjs';
 import { localFilesMock } from './headless-local-files-mock.mjs';
 import { liveAnswerApi } from './headless-live-answer.mjs';
-import { agentAttachmentApi } from './headless-agent-attachments.mjs';
+import { agentAttachmentApi, markedPayload } from './headless-agent-attachments.mjs';
 
 export const A = '00000000-0000-4000-8000-00000000000a';
 export const B = '00000000-0000-4000-8000-00000000000b';
@@ -55,6 +55,8 @@ export function createState() {
     // ORK-786: a conversation's execution status as the test sets it
     // ({phase, run_id, revision, capabilities, ...}), or 'unavailable' (503).
     execution: {},
+    // ORK-797: this many payload reads of Queued errands answer 503 first.
+    payloadBusy: 0,
     // "New WhatsApp chat": the first attempt stops at the adapter binding.
     chatPosts: [], chatStopFirst: true,
     // Chat settings, desktops and timers of conversation A.
@@ -252,6 +254,14 @@ function v1History(state, thread) {
   return { thread_id: thread, name: thread === V1_GROUP ? 'Synthetic group' : 'Synthetic group / Worker 1',
     coordinator: thread === V1_GROUP, messages, before_cursor: null, latest_cursor: messages.at(-1)?.cursor ?? 0,
     writable: true, working };
+}
+
+// The text of Queued errands' answer `payload`, or null.
+function answerPayload(state, payload) {
+  const n = Number(payload.slice(-4)) - 7300;
+  const markers = { 26: '  NO_REPLY\n', 27: '`NO_REPLY`', 28: 'Why does NO_REPLY appear?' };
+  if (n < 1 || n > (state.silentReplies ? 28 : 25) || payload !== uuid(7300 + n)) return null;
+  return { payload_id: payload, conversation_id: C, run_id: uuid(7000 + n), text: markers[n] ?? `Synthetic answer ${n}` };
 }
 
 async function api(state, req, res, url) {
@@ -463,11 +473,22 @@ async function api(state, req, res, url) {
     const more = all.some(r => r.acceptance_sequence > (rows.at(-1)?.acceptance_sequence ?? after));
     return json(res, 200, { conversation_id: id, results: rows, next_after_sequence: more ? rows.at(-1).acceptance_sequence : null });
   }
+  // Answer texts, one at a time or several in one read (ORK-797).
   const answer = /^\/payloads\/([0-9a-f-]{36})$/.exec(rest);
+  if ((answer || rest === '/payloads') && req.method === 'GET' && id === C && state.payloadBusy > 0) {
+    state.payloadBusy -= 1;
+    return json(res, 503, { code: 'store_unavailable', message: 'Payload unavailable', request_id: 'synthetic', retryable: true });
+  }
   if (answer && req.method === 'GET' && id === C) {
-    const n = Number(answer[1].slice(-4)) - 7300;
-    const markers = { 26: '  NO_REPLY\n', 27: '`NO_REPLY`', 28: 'Why does NO_REPLY appear?' };
-    if (n >= 1 && n <= (state.silentReplies ? 28 : 25)) return json(res, 200, { payload_id: answer[1], conversation_id: C, run_id: uuid(7000 + n), text: markers[n] ?? `Synthetic answer ${n}` });
+    const payload = answerPayload(state, answer[1]);
+    if (payload) return json(res, 200, payload);
+  }
+  if (rest === '/payloads' && req.method === 'GET') {
+    const ids = (q.get('ids') ?? '').split(',');
+    if (ids.length < 1 || ids.length > 50 || ids.some(p => !/^[0-9a-f-]{36}$/.test(p)) || new Set(ids).size !== ids.length)
+      return json(res, 400, { code: 'invalid_id', message: 'Invalid payload identity', request_id: 'synthetic', retryable: false });
+    const payloads = id === C ? ids.map(p => markedPayload(state, id, p) ?? answerPayload(state, p)).filter(Boolean) : [];
+    return json(res, 200, { conversation_id: id, payloads });
   }
   if (rest === '/events') {
     res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store' });

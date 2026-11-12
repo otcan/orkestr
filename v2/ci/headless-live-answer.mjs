@@ -54,6 +54,13 @@ export async function liveAnswerApi(state, req, res, rest, { json, q }) {
     json(res, 200, { payload_id: payload, conversation_id: live.conversation, run_id: RUN_OF[payload], text: TEXT[payload] });
     return true;
   }
+  // Several accepted replies in one read (ORK-797), as slow as one.
+  if (rest === '/payloads') {
+    const ids = (q.get('ids') ?? '').split(',').filter(p => TEXT[p]);
+    await sleep(READ_MS);
+    json(res, 200, { conversation_id: live.conversation, payloads: ids.map(p => ({ payload_id: p, conversation_id: live.conversation, run_id: RUN_OF[p], text: TEXT[p] })) });
+    return true;
+  }
   return false;
 }
 

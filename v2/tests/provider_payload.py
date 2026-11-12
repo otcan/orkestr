@@ -38,11 +38,24 @@ assert request(target=f"/api/v2/conversations/{uuid.uuid4()}/payloads/{payload}"
 status, body = request()
 assert status == 200 and body["text"] == "synthetic progress <untrusted>"
 assert body["payload_id"] == payload and body["conversation_id"] == conversation
+# One read for several answers (ORK-797): same owner and scope checks, unknown
+# IDs left out, bounded and exact identities only.
+batch = f"/api/v2/conversations/{conversation}/payloads"
+unknown = str(uuid.uuid4())
+assert request(changes={"Cookie": None}, target=f"{batch}?ids={payload}")[0] == 401
+assert request(target=f"/api/v2/conversations/{uuid.uuid4()}/payloads?ids={payload}")[0] == 404
+for query in ["", "?ids=", "?ids=not-a-uuid", f"?ids={payload},{payload}", f"?ids={payload}&extra=1",
+              "?ids=" + ",".join(str(uuid.uuid4()) for _ in range(51))]:
+    assert request(target=batch + query)[0] == 400, query
+assert request(target=f"{batch}?ids={unknown},{payload}") == (
+    200, {"conversation_id": conversation, "payloads": [body]})
+assert request(target=f"{batch}?ids={unknown}") == (200, {"conversation_id": conversation, "payloads": []})
 for changes in [{"x-orkestr-csrf": None}, {"Origin": "https://foreign.test"},
                 {"Host": "foreign.test"}]:
     assert request("DELETE", changes)[0] == 403
     assert request()[1] == body
 assert request("DELETE") == (204, None)
 assert request()[1] == dict(body, text=None)
+assert request(target=f"{batch}?ids={payload}")[1]["payloads"] == [dict(body, text=None)]
 assert request("DELETE") == (204, None)
 assert request()[1]["text"] is None

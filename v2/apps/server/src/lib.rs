@@ -686,6 +686,7 @@ pub fn router_with_google_catalog(
         .route("/api/v2/conversations/{id}/steer",post(steering_http::submit))
         .route("/api/v2/conversations/{id}/steering/{key}",get(steering_http::status))
         .route("/api/v2/conversations/{id}/accept",post(execution_accept::accept))
+        .route("/api/v2/conversations/{id}/payloads",get(provider_payload::read_many))
         .route("/api/v2/conversations/{id}/payloads/{payload}",get(provider_payload::read).delete(provider_payload::remove))
         .route("/api/v2/conversations/{id}/held-inputs",get(held_inputs::read))
         .route("/api/v2/conversations/{id}/inputs/{input}/retire",post(retired_inputs::retire))
