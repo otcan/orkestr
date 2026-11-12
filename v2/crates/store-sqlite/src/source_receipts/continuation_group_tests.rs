@@ -2,13 +2,14 @@
 //! requested them. The turn could read each one while it ran, and Core has no
 //! record of that, so after the turn is accepted its queued results get one
 //! continuation turn together, which may stay silent (NO_REPLY). A result
-//! that arrives after the turn ended gets that one turn too.
+//! that arrives after the turn ended gets that one turn too. A queued result
+//! that can never run is retired with a receipt, never left queued.
 use super::*;
 use orkestr_v2_application::{
     runtime::{InboxClaim, RunAdmissionResult},
     IntakeStore,
 };
-use orkestr_v2_contracts::{MessageId, Receipt};
+use orkestr_v2_contracts::{ExecutionWindowRequest, MessageId, QueuedWindowWithdrawal, Receipt};
 
 fn result(n: usize) -> MessageInput {
     MessageInput {
@@ -266,5 +267,87 @@ async fn results_beyond_the_text_budget_wait_and_are_retired_once_superseded() {
         inbox(&f, &overflow).await,
         ("retired".into(), None, Some("source_superseded".into()))
     );
+    close(f).await;
+}
+
+fn window_request(receipt: &Receipt, input: &MessageInput) -> ExecutionWindowRequest {
+    ExecutionWindowRequest {
+        request_key: format!("source-continuation:{}", receipt.event_id.0),
+        input_message_id: receipt.message_id.clone(),
+        input_event_id: receipt.event_id.clone(),
+        input_request_key: input.client_message_id.clone(),
+        expected_generation: 0,
+        window_id: None,
+        predecessor_window_id: None,
+    }
+}
+
+#[tokio::test]
+async fn a_result_the_window_queue_drops_as_superseded_is_retired_not_stranded() {
+    let (f, _, _, query) = fixture().await;
+    let stale = hand_back(&f, &query, &result(1)).await;
+    let request = window_request(&stale, &result(1));
+    // The provider changed before any window took it: its fence fails for good.
+    sqlx::query("INSERT INTO conversation_settings(conversation_id,owner_id,revision,provider,honor_no_reply,provider_generation,updated_at_ms) VALUES(?,?,1,'codex',1,1,0)")
+        .bind(f.conversation.to_string()).bind(f.owner.to_string())
+        .execute(&f.store.pool).await.unwrap();
+    assert!(matches!(
+        f.store
+            .inspect_execution_window_request_authenticated(&f.token, &f.conversation, &request)
+            .await,
+        Err(RuntimeStoreError::Fenced)
+    ));
+    // The dispatcher withdraws its intent; the input used to stay queued
+    // forever. Now it is retired with a receipt, once.
+    let withdrawn = f
+        .store
+        .withdraw_queued_execution_window_authenticated(
+            &f.token,
+            &f.conversation,
+            &request.request_key,
+            QueuedWindowWithdrawal::InputUnavailable,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        withdrawn.withdrawal,
+        Some(QueuedWindowWithdrawal::InputUnavailable)
+    );
+    assert_eq!(
+        inbox(&f, &stale).await,
+        ("retired".into(), None, Some("source_superseded".into()))
+    );
+    f.store
+        .withdraw_queued_execution_window_authenticated(
+            &f.token,
+            &f.conversation,
+            &request.request_key,
+            QueuedWindowWithdrawal::InputUnavailable,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        count(&f, "SELECT count(*) FROM owner_input_retirements").await,
+        1
+    );
+    assert_eq!(count(&f, "SELECT count(*) FROM production_runs").await, 1);
+    close(f).await;
+}
+
+#[tokio::test]
+async fn a_withdrawn_result_whose_fence_still_holds_stays_queued() {
+    let (f, _, _, query) = fixture().await;
+    let live = hand_back(&f, &query, &result(1)).await;
+    let request = window_request(&live, &result(1));
+    f.store
+        .withdraw_queued_execution_window_authenticated(
+            &f.token,
+            &f.conversation,
+            &request.request_key,
+            QueuedWindowWithdrawal::InputUnavailable,
+        )
+        .await
+        .unwrap();
+    assert_eq!(inbox(&f, &live).await, ("queued".into(), None, None));
     close(f).await;
 }

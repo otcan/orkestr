@@ -106,6 +106,8 @@ mod worker;
 use worker::{descendants_clear_except, failed_worker, Fail};
 #[path = "stranded_commit.rs"]
 mod commit;
+#[path = "stranded_continuation.rs"]
+mod continuation;
 #[path = "stranded_lapse.rs"]
 mod lapse;
 use commit::commit_turns;
