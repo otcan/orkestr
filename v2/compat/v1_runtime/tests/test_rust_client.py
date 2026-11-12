@@ -309,6 +309,39 @@ class ClientTests(unittest.TestCase):
         with self.assertRaises(ClientError):
             self.client._path("POST", "/thread-ask-inputs")
 
+    def test_the_conversation_directory_page_is_an_authenticated_read(self):
+        """The shared watch's one request not pinned to a conversation (ORK-782)."""
+        listing = {"conversations": [{"conversation_id": CONVERSATION, "name": "synthetic", "scope": {"kind": "global"},
+                                      "last_sequence": 12}], "next_cursor": None}
+        original = self.respond
+
+        def respond(method, path):
+            if path == "/api/v2/conversations?after=7&limit=100":
+                return 200, listing, {}
+            return original(method, path)
+        self.server.respond = respond
+        session = self.client.session
+        self.assertEqual(session.conversations_page(7, 100), listing)
+        method, path, headers, body = self.server.observed[-1]
+        self.assertEqual((method, path, body), ("GET", "/api/v2/conversations?after=7&limit=100", None))
+        self.assertEqual(headers["Cookie"], f"orkestr_v2_session={TOKEN}")
+        observed = len(self.server.observed)
+        for after, limit in ((-1, 100), (0, 0), (0, 101), ("0", 100), (True, 100)):
+            with self.subTest(after=after, limit=limit), self.assertRaisesRegex(ClientError, "cursor_refused"):
+                session.conversations_page(after, limit)
+        self.assertEqual(len(self.server.observed), observed)
+        # A refused listing is only a missing hint: it never revokes the
+        # session every binding shares.
+        self.server.respond = lambda method, path: ((401, {"error": {"code": "unauthorized"}}, {})
+                                                    if path.startswith("/api/v2/conversations?") else
+                                                    original(method, path))
+        with self.assertRaises(ClientError) as refused:
+            session.conversations_page(0, 100)
+        self.assertEqual((refused.exception.code, refused.exception.status), ("unexpected_status", 401))
+        self.assertFalse(session._revoked)
+        self.assertIsNotNone(session._cookie)
+        self.client.request("GET", "/window", allowed=(200, 204))
+
     def test_steer_routes_are_exact(self):
         for method, suffix in (("GET", "/steer"), ("POST", "/steering/auto-steer:x"), ("GET", "/steering/a b"),
                                ("GET", "/steering/" + "k" * 129), ("GET", "/steering/x?limit=1"),
