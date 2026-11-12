@@ -1088,6 +1088,15 @@ attestation, not transport proof: check the importing system and provider
 receipts before using it. Recorded or uncertain ACKs, active/batched inputs,
 changed scope/content and other pending exports of the input refuse unchanged.
 
+`inspect` also lists the input's other pending exports (id, sequence, kind,
+outcome; no text). When those are only progress exports V1 never reported,
+`suppress --supersede-pending-progress` marks them `superseded` in the same
+transaction (the outcome the ledger itself records when V1 settles a final),
+keeps their text and NULL ACK, and lists their ids in the audit receipt as
+`superseded_progress_export_ids`. It still refuses when any other pending
+export of the input is a final, or is uncertain. Without the flag nothing
+changes, and earlier decisions replay with their original receipts.
+
 Suppression and its immutable full-text audit commit atomically. The export
 outcome becomes `suppressed`, its ACK stays NULL, and complete text remains in
 both live and audit records. An identical request is idempotent; a changed

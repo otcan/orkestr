@@ -97,6 +97,83 @@ class ExportDispositionTests(unittest.TestCase):
             db.execute("INSERT INTO exports(export_id,input_id,kind,source_key,message) VALUES('progress','input','progress','progress:input','{}')")
         self.refuse()
 
+    def add_export(self, export_id, kind, input_id='input', outcome=None, ack=None):
+        message = {'id': export_id, 'role': 'assistant', 'state': 'completed', 'parentMessageId': input_id,
+                   'phase': 'commentary' if kind == 'progress' else 'final_answer', 'text': 'Synthetic ' + export_id}
+        with self.ledger.connect() as db:
+            db.execute('INSERT INTO exports(export_id,input_id,kind,source_key,message,outcome,ack) VALUES(?,?,?,?,?,?,?)',
+                       (export_id, input_id, kind, '%s:%s:%s' % (kind, input_id, export_id), json.dumps(message), outcome, ack))
+
+    def outcomes(self):
+        with self.ledger.connect() as db:
+            return dict(db.execute('SELECT export_id,outcome FROM exports').fetchall())
+
+    def test_opt_in_supersedes_pending_progress_in_the_same_transaction(self):
+        # Progress recorded before and after the final, as on a live ledger.
+        self.add_export('progress-a', 'progress')
+        self.add_export('progress-b', 'progress')
+        with self.ledger.connect() as db:
+            db.execute("UPDATE exports SET seq=seq+10 WHERE export_id='export'")
+        self.add_export('progress-c', 'progress')
+        # Another input's pending progress is never touched.
+        with self.ledger.connect() as db:
+            other = dict(self.data, remote_id='other', public_id='other-public', origin=None)
+            db.execute('INSERT INTO inputs VALUES(?,?,?,?)', ('other-public', 'd3', 'other', json.dumps(other)))
+        self.add_export('other-progress', 'progress', input_id='other')
+        view = inspect(self.path, 'export')
+        self.assertEqual([o['export_id'] for o in view['other_pending_exports']], ['progress-a', 'progress-b', 'progress-c'])
+        self.assertNotIn('Synthetic', json.dumps(view))
+        # Without the flag the existing refusal stands.
+        self.refuse()
+        receipt = suppress(self.path, 'export', **dict(self.request, supersede_pending_progress=True))
+        self.assertEqual(receipt['superseded_progress_export_ids'], ['progress-a', 'progress-b', 'progress-c'])
+        self.assertFalse(receipt['acknowledged'])
+        self.assertFalse(receipt['send_triggered'])
+        self.assertEqual(self.outcomes(), {'export': 'suppressed', 'progress-a': 'superseded', 'progress-b': 'superseded',
+                                           'progress-c': 'superseded', 'other-progress': None})
+        with self.ledger.connect() as db:
+            self.assertEqual(db.execute("SELECT count(*) FROM exports WHERE ack IS NOT NULL").fetchone()[0], 0)
+            texts = [json.loads(m)['text'] for (m,) in db.execute("SELECT message FROM exports WHERE input_id='input' ORDER BY seq")]
+            self.assertEqual(texts, ['Synthetic progress-a', 'Synthetic progress-b', 'Synthetic full reply text', 'Synthetic progress-c'])
+            audit = json.loads(db.execute('SELECT receipt_json FROM export_admin_dispositions').fetchone()[0])
+            self.assertEqual(audit['superseded_progress_export_ids'], ['progress-a', 'progress-b', 'progress-c'])
+        # V1 no longer lists any of them; only the other input stays pending.
+        listed = [m.get('id') for m in self.ledger.listing()['messages']]
+        self.assertNotIn('export', listed)
+        self.assertFalse({'progress-a', 'progress-b', 'progress-c'} & set(listed))
+        self.assertIn('other-progress', listed)
+        # Exact replay is read-only, also after a late V1 report of a progress.
+        self.ledger.acknowledge('progress-a', {'outcome': 'delivered', 'outboxJobId': 'job', 'parentPublicMessageId': 'public'})
+        before = self.snapshot()
+        again = suppress(self.path, 'export', **dict(self.request, supersede_pending_progress=True))
+        self.assertEqual(dict(receipt, duplicate=True), again)
+        self.assertEqual(before, self.snapshot())
+        # The same key without the opt-in is a different decision.
+        self.refuse()
+
+    def test_opt_in_still_refuses_another_final_or_uncertain_export(self):
+        for kind, outcome in (('final', None), ('final', 'uncertain'), ('progress', 'uncertain')):
+            with self.subTest(kind=kind, outcome=outcome):
+                with self.ledger.connect() as db:
+                    db.execute("DELETE FROM exports WHERE export_id!='export'")
+                self.add_export('progress-ok', 'progress')
+                self.add_export('blocking', kind, outcome=outcome, ack='{}' if outcome else None)
+                self.refuse(supersede_pending_progress=True)
+                self.assertEqual(self.outcomes(), {'export': None, 'progress-ok': None, 'blocking': outcome})
+        self.refuse(supersede_pending_progress='yes')
+
+    def test_opt_in_rolls_back_when_a_progress_update_fails(self):
+        self.add_export('progress-a', 'progress')
+        self.add_export('progress-b', 'progress')
+        with self.ledger.connect() as db:
+            db.execute("CREATE TRIGGER synthetic_fail BEFORE UPDATE OF outcome ON exports "
+                       "WHEN NEW.export_id='progress-b' BEGIN SELECT RAISE(ABORT,'synthetic'); END")
+        before = self.snapshot()
+        with self.assertRaises(sqlite3.IntegrityError):
+            suppress(self.path, 'export', **dict(self.request, supersede_pending_progress=True))
+        self.assertEqual(before, self.snapshot())
+        self.assertEqual(self.outcomes(), {'export': None, 'progress-a': None, 'progress-b': None})
+
     def test_audit_is_immutable_and_transaction_failure_rolls_back(self):
         with self.ledger.connect() as db:
             db.execute("CREATE TRIGGER synthetic_fail BEFORE UPDATE ON inputs BEGIN SELECT RAISE(ABORT,'synthetic'); END")
