@@ -11,9 +11,11 @@ const packageName = id => `selection-${id.replaceAll('-', '').slice(0, 12)}.tar`
 
 export function localFilesMock(state) {
   // failPolls: answer polls 503, as when the tab cannot reach the server.
-  // conversation: the one the connected tab polls for (ORK-804 waiting list).
+  // conversation: the one the connected tab polls for (ORK-804 waiting list,
+  // which only UI releases before ORK-810 read: waitingReads stays 0).
+  // holdContent: write ids whose content is answered only once released.
   const lf = state.localFiles = {requests: [], results: new Map(), tab: null, folder: null, conversation: null, conversationName: 'Assistant',
-    polls: 0, disconnects: 0, failPolls: false, waitingReads: 0,
+    polls: 0, disconnects: 0, failPolls: false, waitingReads: 0, holdContent: new Set(),
     // The server's deadline passed before the tab answered (ORK-804).
     expire(id) { const r = lf.requests.find(x => x.request_id === id); r.state = 'failed'; r.error = 'expired'; r.finished_ms = Date.now(); },
     enqueue(operation, {path = null, paths = [], content = null} = {}) {
@@ -47,7 +49,9 @@ export function localFilesMock(state) {
       if (lf.tab && lf.tab !== body.connection_id && !body.takeover) { json(res, 409, {code: 'local_files_connected_elsewhere'}); return true; }
       if (lf.tab !== body.connection_id) for (const r of lf.requests) if (r.state === 'working') r.state = 'queued';
       lf.tab = body.connection_id; lf.folder = body.folder_name; lf.conversation = route[1];
-      for (const r of lf.requests) if (r.state === 'queued') { r.state = 'working'; r.holder = lf.tab; }
+      // Like the server (ORK-810): the tab holds at most 8, the rest stay queued, oldest first.
+      let held = lf.requests.filter(r => r.state === 'working' && r.holder === lf.tab).length;
+      for (const r of lf.requests) if (r.state === 'queued' && held < 8) { r.state = 'working'; r.holder = lf.tab; held++; }
       json(res, 200, {requests: lf.requests.filter(r => r.state === 'working' && r.holder === lf.tab).map(({holder, ...r}) => view(r)), ttl_ms: 75000});
       return true;
     }
@@ -62,7 +66,9 @@ export function localFilesMock(state) {
     const request = lf.requests.find(r => r.request_id === id);
     const held = request && request.state === 'working' && request.holder === lf.tab;
     if (sub === 'content') {
-      if (!held || request.operation !== 'write' || url.searchParams.get('connection_id') !== lf.tab) { json(res, 404, {code: 'not_found'}); return true; }
+      while (lf.holdContent.has(id)) await new Promise(r => setTimeout(r, 25));
+      const still = request && request.state === 'working' && request.holder === lf.tab;
+      if (!still || request.operation !== 'write' || url.searchParams.get('connection_id') !== lf.tab) { json(res, 404, {code: 'not_found'}); return true; }
       res.writeHead(200, {'content-type': 'application/octet-stream'}); res.end(request.bytes); return true;
     }
     const body = JSON.parse(await read(req));

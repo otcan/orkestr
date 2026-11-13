@@ -4,8 +4,10 @@ A thread can work on files of a folder on the owner's own computer, from a
 machine without admin rights, through the Orkestr web app in Chrome or Edge.
 The owner grants one folder to one conversation in the browser. While that
 tab stays open on the conversation, the thread can list the folder, read and
-hash files, package a selection, and write a change after the owner allows
-it. Nothing outside the granted folder can be named.
+hash files, package a selection, and write files. Writes apply on their own
+(ORK-810): the owner allowed changes once, when he connected the folder, and
+sees every write in the chat's Folder activity. Nothing outside the granted
+folder can be named.
 
 Nothing is enabled by this change alone: no thread can use it until the
 operator provisions the conversation's grant and gives its Deep agent the
@@ -25,13 +27,15 @@ owner's tab ── poll every 2 s ─► POST /local-files/poll ────┘ 
    │  performs the request inside the granted FileSystemDirectoryHandle
    ├─ list / hash ───────────► POST .../result (JSON: names, sizes, SHA-256)
    ├─ read / package ────────► encrypted upload + .../attachment, then .../result {upload_id}
-   └─ write ── owner clicks Allow (browser asks for write access) ──► .../result {bytes, SHA-256}
+   └─ write ── applied at once, one at a time in queue order ──────► .../result {bytes, SHA-256}
 ```
 
 1. The thread queues a request for its own conversation. The conversation
    comes from the grant; a request never names one.
 2. The owner's tab, while open and connected, polls. Each poll is the tab's
-   heartbeat and hands it every queued request of the conversation.
+   heartbeat and hands it the oldest queued requests, so that it holds at
+   most 8 at once; the rest wait queued on the server. The tab polls again
+   as soon as one finishes.
 3. The tab performs the request with the File System Access API on the
    folder handle the owner picked (`showDirectoryPicker`), resolving each
    name with `getDirectoryHandle`/`getFileHandle`. It posts the result.
@@ -43,11 +47,14 @@ owner's tab ── poll every 2 s ─► POST /local-files/poll ────┘ 
    conversation, completed, prepared, the requested file name) and returns
    the prepared file's path, size and SHA-256 to the agent.
 5. A write carries its content in the request (base64, at most 1 MiB). The
-   tab shows the owner the path, size and a text preview. Only after the
-   owner presses **Allow write** does the browser ask for write permission
-   (`requestPermission({mode: "readwrite"})` in that click), and the tab
-   writes exactly the queued bytes (`createWritable`). The server only
-   accepts a write result whose size and SHA-256 equal the queued content.
+   tab fetches it, checks its size and SHA-256 against the request, and
+   writes exactly those bytes (`createWritable`), one write at a time in the
+   order the server queued them. There is no card and no browser prompt:
+   read-write access was granted at **Connect folder…**
+   (`showDirectoryPicker({mode: "readwrite"})`, or `requestPermission` in
+   the **Reconnect** click). If the browser has taken it back, the write
+   fails as `permission_denied` without asking. The server only accepts a
+   write result whose size and SHA-256 equal the queued content.
 
 ## Authority and safety
 
@@ -72,9 +79,11 @@ owner's tab ── poll every 2 s ─► POST /local-files/poll ────┘ 
   and the tab each refuse anything else; the tab also refuses it if a server
   were to send one (`invalid_path`). There is no API that can name a file
   outside the handle.
-- **Read-only by default.** The picker asks for read access only. Write
-  access is asked for by the browser in the owner's Allow click, and every
-  write needs its own Allow. Refuse is reported as `refused_by_owner`.
+- **Read and write, granted once (ORK-810).** Connect asks the browser, in
+  that click, to let the site view and change the folder. A browser that
+  grants viewing only leaves the folder read-only: the Files panel says so,
+  writes fail as `permission_denied`, and **Allow changes** asks again in a
+  click. The tab never asks for permission outside a click.
 - **Deadlines.** Every request has one (default 2 minutes, 5 s to 10 minutes).
   Unfinished requests fail as `expired` after it, and as
   `local_files_disconnected` when the tab disconnects or has not polled for
@@ -89,23 +98,26 @@ owner's tab ── poll every 2 s ─► POST /local-files/poll ────┘ 
   words, Disconnect and **Folder activity**.
   Disconnecting (or leaving the conversation) stops serving the folder at
   once and fails what is still open.
-- **A waiting write is seen everywhere (ORK-804).** A write is answered only
-  in the tab serving the folder. While one waits there, that tab's title
-  starts with "Approve write · " (also when the tab is hidden), and if the
-  owner already allowed notifications for the site, one system notification
-  is shown per write (permission is never asked for). Every other tab of the
-  app, on any device, reads `GET /api/v2/local-files/waiting`: its title gets
-  the same mark, a notice under the header names the chat and says to allow
-  or refuse the write in the browser tab where that folder is connected, and
-  the chat's list row shows **Approve write**.
+- **No approval step (ORK-810).** Before ORK-810 each write waited for the
+  owner's **Allow write** in the tab serving the folder, and every tab read
+  `GET /api/v2/local-files/waiting` to say so (ORK-804). Writes now apply on
+  their own. The route and its health feature stay for UI releases before
+  ORK-810 (a tab still open on one shows Allow cards); the current UI never
+  reads it, and it reports at most 8 writes per chat, the bound those
+  releases accept.
 - **Logged.** Every request stays in `local_file_requests` (operation,
   paths, run, grant generation, times, outcome, result). Write content is
   cleared once the request is finished; its size and SHA-256 stay. The tab
-  shows the recent requests under **Folder activity**, including one it no
-  longer holds before it answered (expired, revoked or finished elsewhere):
-  `expired, nothing written` for a write, `expired` otherwise.
-- **Caps.** At most 8 unfinished requests per conversation and 120 per 10
-  minutes (`429 local_files_rate_limited`).
+  lists the 20 most recent requests under **Folder activity** in the chat's
+  Files panel, with time and, for a write, its size: `written`, or `not
+  written: <code>`. One it no longer holds before it answered (expired,
+  revoked or finished elsewhere) stays listed: `expired, nothing written`
+  for a write, `expired` otherwise.
+- **Caps.** At most 64 unfinished requests per conversation (the tab works
+  on 8 at a time, the rest wait queued) and 120 per 10 minutes; past either
+  a new request gets `429 local_files_rate_limited`, and the agent tool waits
+  and asks again with the same key within its timeout. Before ORK-810 the
+  cap was 8 unfinished requests, so a batch of 10 writes lost 2.
 
 ## API
 
@@ -119,18 +131,18 @@ owner's tab ── poll every 2 s ─► POST /local-files/poll ────┘ 
 | `POST .../local-files/requests/{request}/result` | owner's tab | `{"connection_id","outcome":"done"\|"failed","error"?, "listing"\|"hashes"\|"written"\|"upload_id"\|"empty"}` |
 | `POST .../local-files/disconnect` | owner's tab | this tab stops serving the folder |
 | `GET .../local-files?limit=N` | owner's tab | grant state, connection, newest requests |
-| `GET /api/v2/local-files/waiting` | owner (browser, machine bearer, or the owner's live service credential) | conversations with an unfinished, unexpired write waiting for the owner while its folder tab is connected: `{"conversations":[{"conversation_id","conversation_name","folder_name","writes","deadline_ms"}]}` |
+| `GET /api/v2/local-files/waiting` | owner (browser, machine bearer, or the owner's live service credential) | kept for UI releases before ORK-810: conversations with an unfinished, unexpired write while its folder tab is connected, `writes` capped at 8: `{"conversations":[{"conversation_id","conversation_name","folder_name","writes","deadline_ms"}]}` |
 
 Operations: `list` (one directory, not recursive, at most 1000 entries),
 `read` (one file), `hash` (1 to 64 files, SHA-256 computed in the browser),
 `write` (create or replace one file in an existing folder), `package` (an
 uncompressed ustar archive `selection-<id>.tar` of 1 to 64 files).
 Tab error codes: `not_found`, `not_a_file`, `not_a_directory`, `too_large`,
-`refused_by_owner`, `permission_denied`, `invalid_path`, `changed`,
-`browser_error`. The server advertises `local_files_v1` and
-`local_file_writes_waiting_v1` in `/api/v2/health`, and the UI release
-requires both. The waiting list accepts fields a newer server adds, so an
-older UI keeps working; the sidebar page is unchanged.
+`refused_by_owner` (only from UI releases before ORK-810),
+`permission_denied`, `invalid_path`, `changed`, `browser_error`. The server
+advertises `local_files_v1` and `local_file_writes_waiting_v1` in
+`/api/v2/health`. The UI release requires `local_files_v1`; since ORK-810 it
+no longer requires the waiting list, which stays for older UI releases.
 
 ## Limits
 
@@ -143,6 +155,7 @@ older UI keeps working; the sidebar page is unchanged.
 | Files per hash or package | 64 |
 | Listing | 1000 entries, one directory |
 | Deadline | 2 min default, 5 s to 10 min |
+| Unfinished requests per conversation | 64 queued, 8 in the tab at once |
 | Connection lifetime without a poll | 75 s |
 
 Reads and packages are ordinary encrypted uploads: they count toward the
@@ -163,28 +176,32 @@ local_files.py list docs
 local_files.py read docs/plan.md          # prints local_file: <prepared file on the server>
 local_files.py hash a.pdf b.pdf
 local_files.py package docs/plan.md data/table.csv
-local_files.py write docs/plan.md --from-file /tmp/plan.md   # waits up to 10 min for the owner's Allow
+local_files.py write docs/plan.md --from-file /tmp/plan.md   # applies on its own while connected
 local_files.py status <request id>
 local_files.py instructions               # the short agent rules
 ```
 
 Exit status: 0 done, 3 not finished when the wait ended, 4 not done
-(refused, not found, expired, disconnected), 5 no folder connected, 2
+(not found, no permission, expired, disconnected), 5 no folder connected, 2
 refused or failed. Each call prints its request key first; after a lost
 answer, rerun with `--request-key KEY` to get the same request.
 
-`--timeout` defaults to 120 s, and to 600 s (the server maximum) for a write:
-a write waits for a person to notice the card and press "Allow write". A
-write's timeout is never below 120 s; a shorter one is raised with a note on
-stderr (ORK-804: a 25 s write expired before the owner saw the card).
+`--timeout` defaults to 120 s (at most 600 s, the server maximum). A write
+needs no approval (ORK-810), but a tab in the background may poll only once
+a minute, so a write's timeout is never below 120 s; a shorter one is raised
+with a note on stderr. While the conversation's queue is full
+(`429 local_files_rate_limited`) the tool waits and asks again with the same
+request key within its timeout.
 
 The agent learns the command from the Deep house rules, or from the
 generated rules of a new WhatsApp chat (`house_rules::files_rules`, with
 `agent_timers.local_files_tool`, by default
 `/usr/local/libexec/orkestr-local-files/local_files.py`): run it in its own
 shell, never through a Root request, host.exec, sudo or another user (the
-grant works only for the agent), `--timeout 600` for every write, and ask the
-owner before writing more than a few files.
+grant works only for the agent). Since ORK-810 the rules say a write applies
+on its own while the folder is connected (no `--timeout 600`, no asking
+before many files). Rules files written before carry the old bullet; the
+private overlay has a one-off update for them.
 
 ## Enabling it for one conversation (operator)
 
@@ -216,8 +233,8 @@ owner before writing more than a few files.
 2. Make a test folder, for example `orkestr-demo` with `notes.txt` ("hello")
    and a subfolder `docs` with one or two files.
 3. In the composer press **Connect folder…** and pick `orkestr-demo`.
-   Chrome asks to let the site view files: allow it. The chip now shows
-   "● orkestr-demo" and the tab title starts with "●".
+   Chrome asks once to let the site view and edit files: allow it. The chip
+   now shows "● orkestr-demo" and the tab title starts with "●".
 4. Write in the chat: "List my local folder." The thread answers with
    `notes.txt` and `docs`.
 5. "Read notes.txt and tell me its SHA-256." The thread reads the file (it
@@ -225,11 +242,11 @@ owner before writing more than a few files.
    with `sha256sum notes.txt` (or `Get-FileHash notes.txt` on Windows).
 6. "Package notes.txt and everything in docs." The thread gets one
    `selection-….tar`.
-7. "Append a line 'checked by Orkestr' to notes.txt." A yellow box shows the
-   path, size and new text. Press **Allow write**; Chrome asks to let the
-   site save changes: allow it. Open `notes.txt` on disk: it has the line.
-   Ask for another change and press **Refuse**: the thread reports that you
-   refused it and the file is unchanged.
+7. "Append a line 'checked by Orkestr' to notes.txt." Nothing asks you: the
+   thread reports "Wrote", and `notes.txt` on disk has the line. Press the
+   chip: **Files** lists it under **Folder activity** (`write notes.txt (…
+   bytes): written`). "Create ten small files in docs": all ten are written,
+   in order.
 8. "Read ../something" or any path outside the folder: refused.
 9. Press the "● orkestr-demo" chip (it opens **Files**), then **Disconnect
    folder**. Ask "List my local folder" again: the thread
@@ -261,21 +278,22 @@ owner before writing more than a few files.
 
 - Store: `production_runtime::local_files::tests` (grant, running-turn and
   browser-only authority, round trips bound to their request, deadlines,
-  disconnects and takeover settled before any read, path and size caps) and
+  disconnects and takeover settled before any read, path and size caps, a
+  batch of writes queued and handed out 8 at a time in order) and
   `production_runtime::local_files::waiting::tests` (only open, unexpired
-  writes with a live tab; read-only).
+  writes with a live tab; read-only; capped at 8 for older UIs).
 - Server: `local_files_http::tests` (grant header only, CSRF and browser
   session, 1 MiB write route limit, unprepared uploads refused),
   `local_files_waiting_http::tests` and
   `note_sha256_reads_the_materialized_receipt_format`.
-- UI: `v2/apps/ui/tests/local_writes.rs` (notice and row texts).
 - Browser worker: `v2/apps/ui/src/local_files/*.test.mjs` with the synthetic
   directory handle `v2/ci/local-files-fake-directory.mjs`.
 - Headless: `v2/ci/headless-local-files.mjs` runs the real UI bundle against
   the synthetic API (`headless-local-files-mock.mjs`). Chromium in CI cannot
   show a picker, so the test replaces `window.showDirectoryPicker` before the
   page loads; the UI bundle contains no test hook, which the test checks.
-  It also checks that a write queued while the folder tab is hidden marks
-  its title and every other tab (title, notice, list row), and that an
-  expired write closes its card and shows `expired, nothing written`.
+  It checks that Connect asks once for read and write, that writes (a batch
+  of ten, and one while the tab is hidden) apply with no card, prompt or
+  title mark, in queue order, and that written, rejected and expired writes
+  are listed in Folder activity.
 - Agent tool: `v2/tools/tests/test_local_files.py`.

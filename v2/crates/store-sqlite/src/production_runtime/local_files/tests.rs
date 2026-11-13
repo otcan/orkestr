@@ -2,6 +2,7 @@ use super::super::tests::{setup, Case};
 use super::super::thread_asks::tests::{asking_turn, conversation};
 use super::view::package_name;
 use super::*;
+use orkestr_v2_contracts::LOCAL_FILE_QUEUE_MAX;
 use orkestr_v2_contracts::{
     LocalFileDigest, LocalFileEntry, LocalFileHashes, LocalFileKind, LocalFileListing,
     LocalFileWritten, LOCAL_FILE_PATHS_MAX,
@@ -910,7 +911,7 @@ async fn invalid_paths_and_caps_are_refused() {
             .await,
         Err(ResourceError::Invalid)
     );
-    for i in 0..LOCAL_FILE_OPEN_MAX {
+    for i in 0..LOCAL_FILE_QUEUE_MAX {
         f.store
             .create_local_file_request(&grant, &c, &list(&format!("k{i}"), ""), None)
             .await
@@ -922,4 +923,80 @@ async fn invalid_paths_and_caps_are_refused() {
             .await,
         Err(ResourceError::Conflict("local_files_rate_limited"))
     );
+}
+
+#[tokio::test]
+async fn a_batch_of_writes_is_queued_and_handed_out_in_order() {
+    // ORK-810: the owner's test of ten writes lost two to
+    // `local_files_rate_limited`. A batch now waits queued on the server;
+    // the tab holds at most LOCAL_FILE_OPEN_MAX at once, oldest first.
+    let f = setup().await;
+    let c = f.conversation.clone();
+    let (grant, credential, tab) = ready(&f).await;
+    let mut ids = Vec::new();
+    for i in 0..10 {
+        let receipt = f
+            .store
+            .create_local_file_request(
+                &grant,
+                &c,
+                &with(
+                    &format!("batch-{i}"),
+                    LocalFileOperation::Write,
+                    Some(&format!("f{i}.txt")),
+                    &[],
+                ),
+                Some(b"hi"),
+            )
+            .await
+            .unwrap();
+        assert!(receipt.created, "write {i} is accepted");
+        ids.push(receipt.request.request_id);
+    }
+    let held = |reply: &LocalFilePollReply| -> Vec<Uuid> {
+        reply.requests.iter().map(|r| r.request_id).collect()
+    };
+    let first = f
+        .store
+        .poll_local_files(&credential, &f.owner, &c, &poll(tab))
+        .await
+        .unwrap();
+    assert_eq!(
+        held(&first),
+        ids[..LOCAL_FILE_OPEN_MAX as usize],
+        "the oldest, at most the tab's share"
+    );
+    // Polling again before anything finished hands out nothing new.
+    let again = f
+        .store
+        .poll_local_files(&credential, &f.owner, &c, &poll(tab))
+        .await
+        .unwrap();
+    assert_eq!(held(&again), held(&first));
+    // Each finished request makes room for the next queued one.
+    for id in &ids[..2] {
+        f.store
+            .finish_local_file_request(
+                &credential,
+                &f.owner,
+                &c,
+                *id,
+                &failed(tab, "permission_denied"),
+                None,
+            )
+            .await
+            .unwrap();
+    }
+    let next = f
+        .store
+        .poll_local_files(&credential, &f.owner, &c, &poll(tab))
+        .await
+        .unwrap();
+    assert_eq!(held(&next), ids[2..10]);
+    let state: String = sqlx::query_scalar("SELECT state FROM local_file_requests WHERE id=?")
+        .bind(ids[9].to_string())
+        .fetch_one(&f.store.pool)
+        .await
+        .unwrap();
+    assert_eq!(state, "working");
 }

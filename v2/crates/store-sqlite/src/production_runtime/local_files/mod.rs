@@ -14,6 +14,9 @@
 //!   interactive browser session of the owner (`kind='browser'`): never a
 //!   machine bearer or a service credential. CSRF is enforced for it by the
 //!   server's browser guard.
+//! - Queue: up to `LOCAL_FILE_QUEUE_MAX` unfinished requests per
+//!   conversation; the tab holds at most `LOCAL_FILE_OPEN_MAX` at once, the
+//!   rest wait queued, oldest first (ORK-810).
 //! - Connection: one tab per conversation; it is connected while it polled
 //!   within `LOCAL_FILE_CONNECTION_TTL_MS`. Another tab replaces it only when
 //!   the owner chooses that tab (`takeover`). Without a connected tab a new
@@ -35,8 +38,8 @@ use orkestr_v2_contracts::{
     LocalFileOutcome, LocalFilePoll, LocalFilePollReply, LocalFileReceipt, LocalFileRequestCreate,
     LocalFileRequestView, LocalFileResult, LocalFileState, LocalFileUploadFacts, LocalFileUploaded,
     LocalFilesOverview, LOCAL_FILE_CONNECTION_TTL_MS, LOCAL_FILE_HASH_MAX, LOCAL_FILE_LIST_MAX,
-    LOCAL_FILE_OPEN_MAX, LOCAL_FILE_PACKAGE_MAX, LOCAL_FILE_READ_MAX, LOCAL_FILE_RECENT_MAX,
-    LOCAL_FILE_TIMEOUT_MS, LOCAL_FILE_WRITE_MAX,
+    LOCAL_FILE_OPEN_MAX, LOCAL_FILE_PACKAGE_MAX, LOCAL_FILE_QUEUE_MAX, LOCAL_FILE_READ_MAX,
+    LOCAL_FILE_RECENT_MAX, LOCAL_FILE_TIMEOUT_MS, LOCAL_FILE_WRITE_MAX,
 };
 use sha2::{Digest, Sha256};
 use sqlx::{sqlite::SqliteRow, Sqlite, Transaction};
@@ -271,7 +274,7 @@ impl Store {
         let (open, recent): (i64, i64) = sqlx::query_as("SELECT (SELECT count(*) FROM local_file_requests WHERE conversation_id=?1 AND state IN ('queued','working')),(SELECT count(*) FROM local_file_requests WHERE conversation_id=?1 AND created_ms>?2)")
             .bind(&id).bind(now - RECENT_WINDOW_MS)
             .fetch_one(&mut *tx).await.map_err(unavailable)?;
-        if open >= LOCAL_FILE_OPEN_MAX || recent >= LOCAL_FILE_RECENT_MAX {
+        if open >= LOCAL_FILE_QUEUE_MAX || recent >= LOCAL_FILE_RECENT_MAX {
             return Err(ResourceError::Conflict("local_files_rate_limited"));
         }
         let request_id = Uuid::new_v4();
@@ -314,8 +317,9 @@ impl Store {
         Ok(value)
     }
 
-    /// The tab's heartbeat: (re)connect this tab, take every queued request
-    /// and return all unfinished requests this tab holds.
+    /// The tab's heartbeat: (re)connect this tab, take queued requests
+    /// (oldest first, up to `LOCAL_FILE_OPEN_MAX` held at once) and return
+    /// all unfinished requests this tab holds.
     pub async fn poll_local_files(
         &self,
         credential: &str,
@@ -352,8 +356,12 @@ impl Store {
                     .execute(&mut *tx).await.map_err(unavailable)?;
             }
         }
-        sqlx::query("UPDATE local_file_requests SET state='working',connection_id=?,claimed_ms=? WHERE conversation_id=? AND state='queued'")
-            .bind(&tab).bind(now).bind(&id)
+        // A batch waits here, not in the tab: the tab works on at most
+        // LOCAL_FILE_OPEN_MAX at once and polls again as each one finishes.
+        let held: i64 = sqlx::query_scalar("SELECT count(*) FROM local_file_requests WHERE conversation_id=? AND state='working' AND connection_id=?")
+            .bind(&id).bind(&tab).fetch_one(&mut *tx).await.map_err(unavailable)?;
+        sqlx::query("UPDATE local_file_requests SET state='working',connection_id=?,claimed_ms=? WHERE id IN (SELECT id FROM local_file_requests WHERE conversation_id=? AND state='queued' ORDER BY created_ms,rowid LIMIT ?)")
+            .bind(&tab).bind(now).bind(&id).bind((LOCAL_FILE_OPEN_MAX - held).max(0))
             .execute(&mut *tx).await.map_err(unavailable)?;
         let rows = sqlx::query("SELECT * FROM local_file_requests WHERE conversation_id=? AND state='working' AND connection_id=? ORDER BY created_ms,rowid")
             .bind(&id).bind(&tab).fetch_all(&mut *tx).await.map_err(unavailable)?;

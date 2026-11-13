@@ -3,7 +3,8 @@
 //! in the browser tab serving the folder. Every tab and device of the owner
 //! polls it, so a write never waits unseen in a tab the owner is not looking
 //! at. Owner credential (browser cookie, machine bearer or the owner's live
-//! service credential); read-only.
+//! service credential); read-only. Since ORK-810 writes apply on their own and
+//! the current UI no longer reads this; it stays for UI releases before that.
 use super::*;
 use crate::archived_history_http::owner_credential;
 use orkestr_v2_store_sqlite::ResourceError;

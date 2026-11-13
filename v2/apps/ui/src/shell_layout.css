@@ -17,12 +17,6 @@
 .build-badge-close { margin-top: .6rem; }
 /* Sign out sits in the header's flow, so a narrow header wraps instead of overlapping it. */
 .app-heading > .sign-out { position: static; flex: none; min-height: 2.3rem; padding: .2rem .8rem; border-radius: 1.15rem; font-size: .8rem; }
-/* A local folder write waits for the owner (ORK-804): every tab says which
-   chat and that it is answered in the tab where the folder is connected. */
-.write-waiting { flex: none; display: flex; align-items: baseline; gap: .3rem .7rem; padding: .45rem 1rem; font-size: .85rem; background: var(--danger-soft); color: var(--danger-text); border-bottom: 1px solid var(--danger-border); }
-.write-waiting-heading { flex: none; font-weight: 700; }
-.write-waiting-lines { flex: 1; min-width: 0; }
-.write-waiting-lines p { margin: 0; overflow-wrap: anywhere; }
 
 /* Workspace: the list's width is a bounded variable (sidebar_resize.mjs). */
 .workspace { position: relative; flex: 1; min-height: 0; display: grid;

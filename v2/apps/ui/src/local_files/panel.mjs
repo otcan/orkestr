@@ -1,7 +1,9 @@
 // "Local folder" control of one conversation: grant a folder from this
-// computer, see while it is connected, confirm each write, and revoke it.
-// Read-only by default: the picker asks for read access only; write access
-// is asked for by the browser in the owner's Allow click of a write.
+// computer, see while it is connected and what the chat did in it, and
+// revoke it. Connect (or Reconnect) asks the browser once, in that click, to
+// let the site view and change the folder (ORK-810); after that a write the
+// chat queues applies on its own, with no card and no browser prompt, and is
+// listed in Folder activity. Disconnect stops all access at once.
 // The folder handle may be remembered in this browser (IndexedDB) so the
 // owner can reconnect with one click; nothing is connected without a click.
 // Its full controls (state in words, folder_state.mjs; connect, reconnect,
@@ -15,7 +17,6 @@ import {DENIED, folderState} from './folder_state.mjs';
 import {createRelay} from './relay.mjs';
 
 const DB = 'orkestr-local-folders', STORE = 'folders', MARK = '● ';
-const PREVIEW_CHARS = 2000;
 
 function database(indexedDB) {
   return new Promise((resolve, reject) => {
@@ -42,10 +43,18 @@ async function remembered(indexedDB, key, value) {
   } catch { return null; }
 }
 
+const sized = bytes => (Number.isSafeInteger(bytes) ? ` (${bytes.toLocaleString('en')} bytes)` : '');
+// A finished write reads "written"; a failed one "not written" and its code.
+// Other requests keep their outcome ("done", an error code, "expired").
+function outcomeText({operation, outcome}) {
+  if (operation !== 'write' || outcome.startsWith('expired') || outcome.startsWith('written')) return outcome;
+  return outcome === 'done' ? 'written' : `not written: ${outcome}`;
+}
+
 export function mountLocalFiles({conversation, csrf, root, logRoot = null, chipRoot = null, filesHref = null}, {
   picker = globalThis.showDirectoryPicker?.bind(globalThis), indexedDB = globalThis.indexedDB,
   uploader = encryptedUploadClient({conversation, csrf}), fetcher, document = globalThis.document,
-  notifications = globalThis.Notification, relayOptions = {},
+  relayOptions = {},
 } = {}) {
   const make = (tag, props = {}, ...children) => {
     const node = document.createElement(tag);
@@ -70,64 +79,37 @@ export function mountLocalFiles({conversation, csrf, root, logRoot = null, chipR
     if (chipRoot) { chipRoot.replaceChildren(); chipRoot.hidden = true; }
     return {close() {}};
   }
-  let live = true, relay = null, handle = null, saved = null, message = '';
-  const confirmations = new Map();
+  let live = true, relay = null, handle = null, saved = null, message = '', writeAccess = false;
   const key = `conversation:${conversation}`;
-  // The tab title shows the connection ("● ") and, while a write waits for
-  // the owner here, "Approve write · " (ORK-804): a hidden tab still says so.
-  const title = {set(connected) {
-    setTitleMark(document, 'folder', connected);
-    setTitleMark(document, 'write', live && confirmations.size > 0);
-  }};
-  // One system notification per waiting write, only if the owner already
-  // allowed notifications for this site: permission is never asked here.
-  function notify(request) {
-    try {
-      if (notifications?.permission !== 'granted') return null;
-      const notice = new notifications('Approve write', {tag: `orkestr-local-write-${request.request_id}`,
-        body: `The thread wants to write \u201c${request.path}\u201d in \u201c${handle?.name || 'the folder'}\u201d. Allow or refuse it in this tab.`});
-      notice.onclick = () => { try { globalThis.focus?.(); } catch { /* Focus is best effort. */ } notice.close(); };
-      return notice;
-    } catch { return null; }
-  }
+  // The tab title shows the connection ("● ").
+  const title = {set(connected) { setTitleMark(document, 'folder', connected); }};
   const visibility = () => { if (document.visibilityState === 'visible') relay?.poke(); };
   document.addEventListener?.('visibilitychange', visibility);
 
-  function confirm(request, {bytes, signal}) {
-    return new Promise(resolve => {
-      if (signal.aborted) { resolve('refuse'); return; }
-      let preview = null;
-      try { preview = new TextDecoder('utf-8', {fatal: true}).decode(bytes.subarray(0, PREVIEW_CHARS * 4)).slice(0, PREVIEW_CHARS); }
-      catch { /* Not text: size and checksum only. */ }
-      const entry = {request, bytes, preview, notice: null, async allow() {
-        // The browser's permission prompt needs this click's user activation.
-        let permission = 'denied';
-        try { permission = await handle.requestPermission({mode: 'readwrite'}); } catch { /* Treated as denied. */ }
-        settle(permission === 'granted' ? 'allow' : 'denied');
-      }, refuse() { settle('refuse'); }};
-      function settle(answer) {
-        if (confirmations.get(request.request_id) !== entry) return;
-        confirmations.delete(request.request_id); entry.notice?.close(); resolve(answer); render();
-      }
-      signal.addEventListener('abort', () => settle('refuse'), {once: true});
-      confirmations.set(request.request_id, entry);
-      entry.notice = notify(request);
-      render();
-    });
+  async function permission(folder, mode, ask) {
+    try { return await (ask ? folder.requestPermission({mode}) : folder.queryPermission?.({mode}) ?? 'granted'); }
+    catch { return 'denied'; }
+  }
+  // In the owner's click: view and change. A browser that grants viewing
+  // only leaves the folder read-only, and says so; its writes are refused.
+  async function grantWrite(folder) {
+    writeAccess = (await permission(folder, 'readwrite', false)) === 'granted'
+      || (await permission(folder, 'readwrite', true)) === 'granted';
   }
   async function start(folder, takeover) {
     await relay?.stop();
     handle = folder;
-    relay = createRelay({conversation, csrf, root: folder, folderName: folder.name || 'Folder', uploader, confirm,
+    relay = createRelay({conversation, csrf, root: folder, folderName: folder.name || 'Folder', uploader,
       ...(fetcher ? {fetcher} : {}), onChange: () => render(), ...relayOptions});
     void relay.start({takeover});
     render();
   }
   async function connect() {
     let folder;
-    try { folder = await picker({id: 'orkestr-local-folder', mode: 'read'}); }
+    try { folder = await picker({id: 'orkestr-local-folder', mode: 'readwrite'}); }
     catch (error) { message = error?.name === 'AbortError' ? '' : 'The browser did not open the folder.'; render(); return; }
     if (!live || !folder || folder.kind !== 'directory') return;
+    await grantWrite(folder);
     saved = {handle: folder, name: folder.name};
     await remembered(indexedDB, key, saved);
     message = '';
@@ -135,16 +117,21 @@ export function mountLocalFiles({conversation, csrf, root, logRoot = null, chipR
   }
   async function reconnect() {
     if (!saved?.handle) return;
-    let permission = 'denied';
-    try { permission = await saved.handle.requestPermission({mode: 'read'}); } catch { /* Treated as denied. */ }
-    if (permission !== 'granted') { message = DENIED; render(); return; }
+    // One prompt for both: reading is part of read-write access.
+    if ((await permission(saved.handle, 'readwrite', true)) === 'granted') writeAccess = true;
+    else if ((await permission(saved.handle, 'read', true)) === 'granted') writeAccess = false;
+    else { message = DENIED; render(); return; }
     message = '';
     await start(saved.handle, true);
+  }
+  async function allowChanges() {
+    if (!handle) return;
+    writeAccess = (await permission(handle, 'readwrite', true)) === 'granted';
+    render();
   }
   async function disconnect() {
     const current = relay;
     relay = null; handle = null;
-    for (const entry of confirmations.values()) entry.refuse();
     await current?.disconnect();
     saved = null;
     await remembered(indexedDB, key, null);
@@ -165,19 +152,18 @@ export function mountLocalFiles({conversation, csrf, root, logRoot = null, chipR
     const view = relay?.snapshot();
     const connected = view && ['connected', 'connecting', 'retrying'].includes(view.state);
     title.set(Boolean(connected));
-    const controlState = JSON.stringify([view?.state, view?.folder, message, saved?.name ?? null, [...confirmations.keys()]]);
+    const controlState = JSON.stringify([view?.state, view?.folder, message, saved?.name ?? null, writeAccess]);
     if (controlState !== drawnControls) {
       drawnControls = controlState;
-      const state = folderState({view, saved, message});
+      const state = folderState({view, saved, message, writable: writeAccess});
       root.dataset.folderState = state.state;
-      const cards = confirmationNodes(view);
-      controls.replaceChildren(stateNode(state), ...controlNodes(view, connected), ...(chipRoot ? [] : cards));
+      controls.replaceChildren(stateNode(state), ...controlNodes(view, connected));
       if (chipRoot) {
         chipRoot.dataset.folderState = state.state;
-        chipRoot.replaceChildren(chipNode(state, view), ...cards);
+        chipRoot.replaceChildren(chipNode(state, view));
       }
     }
-    const working = (view?.pending ?? []).filter(item => !confirmations.has(item.request_id));
+    const working = view?.pending ?? [];
     const logState = JSON.stringify([working.map(p => p.request_id), (view?.activity ?? []).map(a => [a.id, a.outcome])]);
     if (logState !== drawnLog) {
       drawnLog = logState;
@@ -187,6 +173,7 @@ export function mountLocalFiles({conversation, csrf, root, logRoot = null, chipR
   function controlNodes(view, connected) {
     const nodes = [];
     if (connected) {
+      if (!writeAccess) nodes.push(make('button', {type: 'button', class: 'local-folder-allow-changes', onclick: () => void allowChanges(), text: 'Allow changes'}));
       nodes.push(make('button', {type: 'button', class: 'local-folder-disconnect', onclick: () => void disconnect(), text: 'Disconnect folder'}));
     } else if (view?.state === 'elsewhere') {
       nodes.push(make('button', {type: 'button', onclick: () => void start(handle, true), text: 'Use this tab'}));
@@ -211,30 +198,17 @@ export function mountLocalFiles({conversation, csrf, root, logRoot = null, chipR
     const props = {class: 'local-folder-chip', 'data-state': state.state, title: state.text, text};
     return filesHref ? make('a', {...props, href: filesHref, 'aria-label': `${state.text}. Open Files.`}) : make('span', props);
   }
-  function confirmationNodes(view) {
-    const nodes = [];
-    for (const entry of confirmations.values()) {
-      const {request, bytes} = entry;
-      const card = make('section', {class: 'local-folder-confirm', role: 'alertdialog', 'aria-label': 'Confirm write'},
-        make('strong', {text: 'The thread wants to change a file'}),
-        make('p', {text: `Write ${bytes.length} bytes to \u201c${request.path}\u201d in \u201c${view?.folder ?? 'the folder'}\u201d. This creates the file or replaces it.`}));
-      if (entry.preview !== null) card.append(make('pre', {text: entry.preview || '(empty file)'}));
-      else card.append(make('p', {text: `Binary content, SHA-256 ${request.content_sha256}.`}));
-      card.append(make('button', {type: 'button', class: 'local-folder-allow', onclick: () => void entry.allow(), text: 'Allow write'}),
-        make('button', {type: 'button', class: 'local-folder-refuse', onclick: () => entry.refuse(), text: 'Refuse'}));
-      nodes.push(card);
-    }
-    return nodes;
-  }
-  // Folder activity in the Files panel: what is in progress, then the most
-  // recent outcomes (done, refused, expired, failed), newest first.
+  // Folder activity in the Files panel: what is in progress, then every
+  // recent outcome, newest first: a write says written or not written (with
+  // why) and its size; expired and dropped requests stay listed.
   function logNodes(working, activity) {
     if (!working.length && !activity.length) return [];
     const list = make('ul', {class: 'local-folder-activity', 'aria-label': 'Folder activity'});
-    for (const item of working) list.append(make('li', {text: `${item.operation} ${item.path ?? item.paths.join(', ')}: working\u2026`}));
+    for (const item of working) list.append(make('li', {text: `${item.operation} ${item.path ?? item.paths.join(', ')}${sized(item.content_bytes)}: working\u2026`}));
     for (const item of activity) {
       const at = new Date(item.at);
-      list.append(make('li', {text: `${item.operation} ${item.path}: ${item.outcome}`},
+      list.append(make('li', {class: `local-folder-entry${item.operation === 'write' && item.outcome === 'done' ? ' local-folder-written' : ''}`,
+        text: `${item.operation} ${item.path}${sized(item.bytes)}: ${outcomeText(item)}`},
         make('time', {class: 'local-folder-time', datetime: at.toISOString(), text: ` \u00b7 ${at.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})}`})));
     }
     return [make('h4', {class: 'local-folder-activity-title', text: 'Folder activity'}), list];
@@ -249,7 +223,6 @@ export function mountLocalFiles({conversation, csrf, root, logRoot = null, chipR
     close() {
       live = false;
       document.removeEventListener?.('visibilitychange', visibility);
-      for (const entry of confirmations.values()) entry.refuse();
       const current = relay;
       relay = null;
       void current?.disconnect();

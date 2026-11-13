@@ -309,15 +309,8 @@ test('build identity read is restricted to the exact same-origin health GET', as
     }
 });
 
-test('local folder writes waiting is one exact same-origin GET (ORK-804)', async () => {
-    await execute({recv:async()=>({...base,method:'GET',path:'/api/v2/local-files/waiting',body:null})}, async(path, options)=>{
-        assert.equal(path,'/api/v2/local-files/waiting');
-        assert.equal(options.method,'GET');
-        assert.equal(options.credentials,'same-origin');
-        assert.equal(options.headers['x-orkestr-csrf'],undefined);
-        return Response.json({conversations:[]});
-    });
-    for (const [method,path] of [['POST','/api/v2/local-files/waiting'],['GET','/api/v2/local-files/waiting?all=1'],['GET','/api/v2/local-files/waiting/extra'],['GET','/api/v2/local-files']]) {
+test('the UI no longer reads writes waiting for an Allow: writes apply on their own (ORK-810)', async () => {
+    for (const [method,path] of [['GET','/api/v2/local-files/waiting'],['POST','/api/v2/local-files/waiting']]) {
         await assert.rejects(execute({recv:async()=>({...base,method,path})},()=>assert.fail('fetch must not run')),/Invalid API path/);
     }
 });

@@ -65,9 +65,22 @@ async function until(check, label) {
   for (let i = 0; i < 400; i++) { if (await check()) return; await new Promise(r => setTimeout(r, 5)); }
   assert.fail(`timed out: ${label}`);
 }
-function relay(server, files, root, confirm = async () => 'refuse', options = {}) {
+function relay(server, files, root, options = {}) {
   return createRelay({conversation: CONVERSATION, csrf: 'synthetic-csrf', root, folderName: root.name, uploader: files,
-    confirm, fetcher: server.fetcher, pollMs: 5, ...options});
+    fetcher: server.fetcher, pollMs: 5, ...options});
+}
+// The owner allowed viewing and changing the folder when he connected it.
+const writableTree = () => fakeDirectory(tree(), {readwrite: 'granted'});
+// A fetcher that holds the content of the write to `path` until released.
+function holdContent(server, path) {
+  let release, seen = false;
+  const gate = new Promise(resolve => { release = resolve; });
+  const fetcher = async (url, options) => {
+    const held = /\/content\?/.test(url) && server.requests.find(r => url.includes(r.request_id))?.path === path;
+    if (held) { seen = true; await gate; }
+    return server.fetcher(url, options);
+  };
+  return {fetcher, release: () => release(), seen: () => seen};
 }
 
 test('list, read, hash and package results come back; bytes only through the encrypted uploader', async () => {
@@ -103,53 +116,86 @@ test('list, read, hash and package results come back; bytes only through the enc
   assert.equal(files.uploads.length, 2);
 });
 
-test('a write needs the owner: refused, tampered and allowed writes', async () => {
-  const server = queue(), files = uploader(), root = fakeDirectory(tree());
-  const answers = [];
-  const confirm = async (request, {bytes}) => {
-    answers.push(request.path);
-    if (request.path === 'a.txt') return 'refuse';
-    // The owner's Allow click asks the browser for write access.
-    return (await root.requestPermission({mode: 'readwrite'})) === 'granted' ? 'allow' : 'denied';
-  };
-  const r = relay(server, files, root, confirm);
-  const refused = server.add('write', {path: 'a.txt', content: 'overwritten'});
+test('a write applies on its own: no card, no prompt; only the queued bytes (ORK-810)', async () => {
+  const server = queue(), files = uploader(), root = writableTree();
+  const r = relay(server, files, root);
+  const replaced = server.add('write', {path: 'a.txt', content: 'overwritten'});
   const tampered = server.add('write', {path: 'docs/plan.md', content: 'agreed', served: 'something else'});
-  const allowed = server.add('write', {path: 'docs/new.md', content: 'hello'});
+  const created = server.add('write', {path: 'docs/new.md', content: 'hello'});
   void r.start();
   await until(() => server.results.size === 3, 'write results');
   await r.stop();
-  assert.deepEqual(server.results.get(refused), {connection_id: r.snapshot().connection, outcome: 'failed', error: 'refused_by_owner'});
-  assert.equal(root.fake.text('a.txt'), 'alpha', 'a refused write changes nothing');
+  assert.deepEqual(server.results.get(replaced).written, {bytes_written: 11, sha256: sha('overwritten'), created: false});
+  assert.equal(root.fake.text('a.txt'), 'overwritten');
   assert.equal(server.results.get(tampered).error, 'changed', 'only the bytes the agent queued are ever written');
   assert.equal(root.fake.text('docs/plan.md'), '# Plan\n');
-  assert.deepEqual(server.results.get(allowed).written, {bytes_written: 5, sha256: sha('hello'), created: true});
+  assert.deepEqual(server.results.get(created).written, {bytes_written: 5, sha256: sha('hello'), created: true});
   assert.equal(root.fake.text('docs/new.md'), 'hello');
-  assert.deepEqual(answers.sort(), ['a.txt', 'docs/new.md'], 'the tampered write was never offered');
-  assert.ok(root.fake.calls.some(c => c[0] === 'requestPermission' && c[1] === 'readwrite'));
+  assert.equal(root.fake.calls.some(c => c[0] === 'requestPermission'), false, 'never a browser prompt outside a click');
+  // Every write is in the activity with its size.
+  const logged = Object.fromEntries(r.snapshot().activity.map(a => [a.id, [a.operation, a.path, a.bytes, a.outcome]]));
+  assert.deepEqual(logged[replaced], ['write', 'a.txt', 11, 'done']);
+  assert.deepEqual(logged[tampered], ['write', 'docs/plan.md', 6, 'changed']);
+  assert.deepEqual(logged[created], ['write', 'docs/new.md', 5, 'done']);
 });
 
-test('a request that leaves the queue closes its confirmation; another tab and disconnect', async t => {
-  const server = queue(), files = uploader(), root = fakeDirectory(tree());
-  let aborted = false;
-  const confirm = (request, {signal}) => new Promise(resolve => signal.addEventListener('abort', () => { aborted = true; resolve('refuse'); }));
-  const r = relay(server, files, root, confirm);
+test('a folder the browser allowed for reading only refuses writes without asking', async () => {
+  const server = queue(), root = fakeDirectory(tree(), {grantOnRequest: false});
+  const r = relay(server, uploader(), root);
+  const write = server.add('write', {path: 'a.txt', content: 'x'});
+  void r.start();
+  await until(() => server.results.has(write), 'result');
+  await r.stop();
+  assert.equal(server.results.get(write).error, 'permission_denied');
+  assert.equal(root.fake.text('a.txt'), 'alpha');
+  assert.equal(root.fake.calls.some(c => c[0] === 'requestPermission'), false);
+});
+
+test('a batch of ten writes applies one at a time, in queue order', async () => {
+  const server = queue(), root = writableTree();
+  const r = relay(server, uploader(), root);
+  const ids = [];
+  for (let i = 1; i <= 10; i++) ids.push(server.add('write', {path: `batch/${String(i).padStart(2, '0')}.txt`, content: `file ${i}`}));
+  // The same file twice: the later write wins because it runs later.
+  const first = server.add('write', {path: 'a.txt', content: 'first'});
+  const second = server.add('write', {path: 'a.txt', content: 'second'});
+  root.fake.permissions.readwrite = 'granted';
+  await root.getDirectoryHandle('batch', {create: true});
+  void r.start();
+  await until(() => server.results.size === 12, 'all written');
+  await r.stop();
+  assert.ok([...ids, first, second].every(id => server.results.get(id).outcome === 'done'));
+  const opened = root.fake.calls.filter(c => c[0] === 'createWritable').map(c => c[1]);
+  assert.deepEqual(opened, [...ids.map((_, i) => `${String(i + 1).padStart(2, '0')}.txt`), 'a.txt', 'a.txt'], 'in order, never two at once');
+  const written = root.fake.calls.filter(c => c[0] === 'createWritable' || c[0] === 'written').map(c => c[0]);
+  assert.deepEqual(written, Array(12).fill(['createWritable', 'written']).flat(), 'each write ends before the next opens');
+  assert.equal(root.fake.text('a.txt'), 'second');
+  assert.equal(r.snapshot().activity.length, 12);
+});
+
+test('a write waiting its turn that leaves the queue is never written; another tab and disconnect', async t => {
+  const server = queue(), files = uploader(), root = writableTree();
+  const hold = holdContent(server, 'docs/plan.md');
+  const r = relay({...server, fetcher: hold.fetcher}, files, root);
   t.after(() => r.stop());
+  const slow = server.add('write', {path: 'docs/plan.md', content: 'v2'});
   const id = server.add('write', {path: 'a.txt', content: 'x'});
   void r.start();
-  await until(() => r.snapshot().pending.length === 1, 'confirmation shown');
+  await until(() => hold.seen() && r.snapshot().pending.length === 2, 'second write waits its turn');
   server.drop(id);
-  await until(() => aborted, 'confirmation closed');
+  await until(() => r.snapshot().pending.length === 1, 'dropped');
+  hold.release();
+  await until(() => server.results.has(slow), 'first written');
+  await until(() => r.snapshot().activity.length === 2, 'both recorded');
   assert.equal(server.results.has(id), false, 'nothing is reported for a request the tab no longer holds');
-  // ORK-804: the owner sees that the write expired, once.
-  await until(() => r.snapshot().activity.length === 1, 'expired entry');
-  assert.deepEqual(r.snapshot().activity.map(a => [a.id, a.operation, a.path, a.outcome]), [[id, 'write', 'a.txt', 'expired, nothing written']]);
-  assert.deepEqual(r.snapshot().pending, []);
+  assert.equal(root.fake.text('a.txt'), 'alpha', 'a dropped write is never started');
+  // The owner sees that it expired, once.
+  assert.deepEqual(r.snapshot().activity.map(a => [a.id, a.operation, a.path, a.outcome]),
+    [[slow, 'write', 'docs/plan.md', 'done'], [id, 'write', 'a.txt', 'expired, nothing written']]);
   await r.disconnect();
-  assert.equal(r.snapshot().activity.length, 1, 'disconnecting adds nothing');
+  assert.equal(r.snapshot().activity.length, 2, 'disconnecting adds nothing');
   assert.equal(r.snapshot().state, 'disconnected');
   assert.ok(server.calls.some(([method, path]) => method === 'POST' && path.endsWith('/local-files/disconnect')));
-  assert.equal(root.fake.text('a.txt'), 'alpha');
 
   const busy = queue({elsewhere: true});
   const second = relay(busy, uploader(), fakeDirectory(tree()));
@@ -192,17 +238,17 @@ test('a dropped read is recorded as expired; stopping the relay records nothing'
   await until(() => r.snapshot().activity.length === 1, 'expired entry');
   assert.deepEqual(r.snapshot().activity.map(a => [a.id, a.operation, a.outcome]), [[read, 'read', 'expired']]);
   assert.equal(server.results.has(read), false);
-  // A write waiting for the owner when the relay stops is not "expired".
-  let shown = false;
-  const waiting = relay(server, uploader(), fakeDirectory(tree()), (request, {signal}) => new Promise(resolve => {
-    shown = true; signal.addEventListener('abort', () => resolve('refuse'), {once: true});
-  }));
-  t.after(() => waiting.stop());
+  // A write still in progress when the relay stops is not "expired".
   await r.stop();
+  const hold = holdContent(server, 'a.txt');
+  const waiting = relay({...server, fetcher: hold.fetcher}, uploader(), writableTree());
+  t.after(() => { hold.release(); return waiting.stop(); });
   server.add('write', {path: 'a.txt', content: 'x'});
   void waiting.start();
-  await until(() => shown, 'confirmation shown');
-  await waiting.stop();
+  await until(() => hold.seen(), 'write in progress');
+  const stopping = waiting.stop();
+  hold.release();
+  await stopping;
   await new Promise(resolve => setTimeout(resolve, 20));
   assert.deepEqual(waiting.snapshot().activity, [], 'nothing is recorded when the relay itself stops');
 });
@@ -239,8 +285,8 @@ test('a write that was written but dropped before its result says so', async t =
     if (root.fake.calls.some(c => c[0] === 'written')) await gate;
     return crypto.subtle.digest(algorithm, data);
   }};
-  const confirm = async () => ((await root.requestPermission({mode: 'readwrite'})) === 'granted' ? 'allow' : 'denied');
-  const r = relay(server, uploader(), root, confirm, {subtle});
+  root.fake.permissions.readwrite = 'granted';
+  const r = relay(server, uploader(), root, {subtle});
   t.after(() => { release(); return r.stop(); });
   const write = server.add('write', {path: 'docs/new.md', content: 'hello'});
   void r.start();

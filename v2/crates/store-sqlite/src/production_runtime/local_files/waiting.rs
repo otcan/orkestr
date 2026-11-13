@@ -1,12 +1,15 @@
 //! Owner-wide list of local folder writes waiting for the owner (ORK-804),
 //! so every tab and device can say that a write waits and where to allow it.
+//! Since ORK-810 the current UI applies writes on its own and no longer reads
+//! this list; it stays for UI releases before that (a tab still open on one
+//! asks for Allow), and the count is capped where those releases expect it.
 //! A read only: `settle`'s time-driven transitions are not written here; the
 //! same conditions are applied in the query (an unexpired write and a tab
 //! that polled within the connection lifetime), so a write `settle` would
 //! fail is never listed.
 use super::*;
 use orkestr_v2_contracts::{
-    LocalFileWriteWaiting, LocalFileWritesWaiting, LOCAL_FILE_WAITING_MAX,
+    LocalFileWriteWaiting, LocalFileWritesWaiting, LOCAL_FILE_OPEN_MAX, LOCAL_FILE_WAITING_MAX,
     LOCAL_FILE_WAITING_NAME_MAX,
 };
 
@@ -63,7 +66,9 @@ impl Store {
                     conversation_id: ConversationId(uuid(row.get("conversation_id"))?),
                     conversation_name: display(row.get("name")),
                     folder_name: row.get("folder_name"),
-                    writes: u32::try_from(row.get::<i64, _>("writes")).map_err(unavailable)?,
+                    // A queue may now be deeper than older UIs accept.
+                    writes: u32::try_from(row.get::<i64, _>("writes").min(LOCAL_FILE_OPEN_MAX))
+                        .map_err(unavailable)?,
                     deadline_ms: row.get("deadline_ms"),
                 })
             })

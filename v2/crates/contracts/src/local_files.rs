@@ -32,8 +32,12 @@ pub const LOCAL_FILE_HASH_MAX: u64 = 128 * 1024 * 1024;
 pub const LOCAL_FILE_TIMEOUT_MS: i64 = 120_000;
 pub const LOCAL_FILE_TIMEOUT_MIN_MS: i64 = 5_000;
 pub const LOCAL_FILE_TIMEOUT_MAX_MS: i64 = 600_000;
-/// Unfinished requests per conversation.
+/// Requests the connected tab works on at once. More wait queued on the
+/// server and are handed out as these finish (ORK-810).
 pub const LOCAL_FILE_OPEN_MAX: i64 = 8;
+/// Unfinished requests (queued or in progress) per conversation: a batch of
+/// writes is queued, not refused (ORK-810).
+pub const LOCAL_FILE_QUEUE_MAX: i64 = 64;
 /// Requests per conversation per 10 minutes.
 pub const LOCAL_FILE_RECENT_MAX: i64 = 120;
 /// A tab that has not polled for this long is no longer connected. Chrome
