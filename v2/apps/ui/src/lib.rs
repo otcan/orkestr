@@ -315,7 +315,6 @@ pub mod conversation_status;
 pub mod host_metrics;
 pub mod intelligence;
 pub mod live_map;
-pub mod local_writes;
 pub mod message_time;
 pub mod outbox;
 pub mod rich_text;

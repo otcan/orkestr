@@ -14,8 +14,9 @@
 //!
 //! ORK-804: the note (and a new chat's generated files section) also names
 //! this conversation's local folder command (`v2/tools/local_files.py`): run
-//! it in the agent's own shell, never through Root, give a write ten minutes
-//! for the owner's "Allow write", and ask before writing many files. A Deep
+//! it in the agent's own shell, never through Root. Since ORK-810 a write
+//! applies on its own while the folder is connected (no "Allow write", no
+//! ten-minute wait, no asking before many files). A Deep
 //! turn of a WhatsApp-bound conversation that was typed in the web app gets
 //! the chat rules line from Core (`store-sqlite` `fast_rules::earlier_line`),
 //! so it reads the chat's rules like a WhatsApp-typed turn.
@@ -78,13 +79,15 @@ pub fn files_rules(rules: &DeepHouseRules, conversation: &str) -> String {
     )
 }
 
-/// The local folder bullets (ORK-804), appended to the file rules.
+/// The local folder bullets (ORK-804, ORK-810), appended to the file rules.
+/// The same text is the section `v2/tools/local_files_rules_update.py`
+/// writes into existing chat rules files.
 fn local_files_rules(tool: &str, v2_url: &str, grant_dir: &str, conversation: &str) -> String {
     format!(
         "
 - Files on the owner's computer: only the ones he asks about, in the folder he connected for this conversation in the Orkestr web app (\"Connect folder\", Chrome or Edge). Run the local folder tool yourself in your own shell during this Deep turn, never through a Root request, host.exec, sudo or another user (its grant works only for you):
-  ORKESTR_V2_LOCAL_FILES_GRANT_DIR={grant_dir} PYTHONDONTWRITEBYTECODE=1 python3 -I -S -B {tool} --v2-url {v2_url} --conversation {conversation} <list [\"<dir>\"] | read \"<path>\" | hash \"<path>\" ... | package \"<path>\" ... | write \"<path>\" --from-file <file> --timeout 600>
-  Paths are relative to his folder. Every write waits until he presses \"Allow write\" in his Orkestr tab: always give it --timeout 600, keep the command running and read its output until it ends. Each file is one Allow, so ask him before writing more than a few files. A write is done only when the tool printed \"Wrote\"; `expired` or `refused` means nothing was written. Exit 5 means no folder is connected: ask him to open this conversation in Chrome on his computer and press \"Connect folder\"."
+  ORKESTR_V2_LOCAL_FILES_GRANT_DIR={grant_dir} PYTHONDONTWRITEBYTECODE=1 python3 -I -S -B {tool} --v2-url {v2_url} --conversation {conversation} <list [\"<dir>\"] | read \"<path>\" | hash \"<path>\" ... | package \"<path>\" ... | write \"<path>\" --from-file <file>>
+  Paths are relative to his folder. While his folder is connected a write applies on its own, with no approval step, and he sees it in his Folder activity; at most 1 MiB per file, and several writes are applied in order. Keep the command running and read its output until it ends. A write is done only when the tool printed \"Wrote\"; anything else (`expired`, `permission_denied`, ...) means nothing was written. Exit 5 means no folder is connected: ask him to open this conversation in Chrome on his computer and press \"Connect folder\"."
     )
 }
 
@@ -152,9 +155,8 @@ python3 -I -S -B /opt/synthetic/reply_attach.py --v2-url http://127.0.0.1:19822 
 
     #[test]
     fn a_turn_without_chat_rules_learns_the_local_folder_command() {
-        // ORK-804: the agent found the tool by listing /usr/local/libexec, ran
-        // it through Root host.exec with a 25 s write timeout, and the write
-        // expired before the owner saw the card.
+        // ORK-804: the agent found the tool by listing /usr/local/libexec and
+        // ran it through Root host.exec. ORK-810: writes apply on their own.
         let text = deep_text(Some(&rules()), CONVERSATION, "update docs/plan.md");
         let (note, rest) = text.split_once("\n\n").unwrap();
         assert_eq!(rest, "update docs/plan.md");
@@ -163,12 +165,20 @@ python3 -I -S -B /opt/synthetic/reply_attach.py --v2-url http://127.0.0.1:19822 
 python3 -I -S -B /opt/synthetic/local_files.py --v2-url http://127.0.0.1:19822 \
 --conversation {CONVERSATION} <list"
         )));
-        assert!(note.contains("write \"<path>\" --from-file <file> --timeout 600>"));
+        assert!(note.contains("write \"<path>\" --from-file <file>>"));
         assert!(note.contains("Run the local folder tool yourself in your own shell"));
         assert!(note.contains("never through a Root request, host.exec, sudo or another user"));
-        assert!(note.contains("always give it --timeout 600, keep the command running"));
-        assert!(note.contains("ask him before writing more than a few files"));
+        assert!(note.contains("a write applies on its own, with no approval step"));
+        assert!(note.contains("Keep the command running and read its output until it ends"));
         assert!(note.contains("A write is done only when the tool printed \"Wrote\""));
+        for gone in [
+            "--timeout 600",
+            "Allow write",
+            "ask him before writing",
+            "Each file is one Allow",
+        ] {
+            assert!(!note.contains(gone), "no approval wording left: {gone}");
+        }
         assert!(note.ends_with("press \"Connect folder\".]"));
         assert!(
             !note.contains("--grant-file"),

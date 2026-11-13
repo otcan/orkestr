@@ -3,8 +3,10 @@
 // performs each request inside the folder only and posts the result. File
 // bytes leave the browser only through the encrypted upload client; the
 // result JSON carries listings, hashes and upload references, never bytes.
-// A write is shown to the owner first and needs an explicit Allow (which
-// asks the browser for write permission in that click).
+// A write applies on its own (ORK-810): the owner allowed reading and
+// changing the folder when he connected it, so no card and no later browser
+// prompt follow. Writes run one at a time, in the order the server queued
+// them, and every one is recorded in the activity with its size.
 import {FolderError, LIMITS, hashFiles, listFolder, packageFiles, packageName, readFile, sha256, writeFile} from './folder.mjs';
 
 export const POLL_MS = 2000;
@@ -15,26 +17,35 @@ const later = (ms, signal) => new Promise(resolve => {
   signal?.addEventListener('abort', () => { clearTimeout(timer); resolve(); }, {once: true});
 });
 
-/**
- * confirm(request, {bytes, signal}) resolves 'allow' (readwrite permission
- * was granted in the owner's click), 'refuse' or 'denied'.
- * onChange(snapshot) is called whenever the visible state changes.
- */
-export function createRelay({conversation, csrf, root, folderName, uploader, confirm,
+/** Activity entries kept (newest first), enough for a batch of writes. */
+export const ACTIVITY_MAX = 20;
+
+/** onChange(snapshot) is called whenever the visible state changes. */
+export function createRelay({conversation, csrf, root, folderName, uploader,
   fetcher = (...args) => fetch(...args), subtle = crypto.subtle, onChange = () => {},
   connectionId = crypto.randomUUID(), wait = later, pollMs = POLL_MS}) {
-  if (!uuid(conversation) || !csrf || !root || !folderName || !uploader || !confirm) throw Error('Local folder relay needs a conversation, browser authorization, a folder and an uploader.');
+  if (!uuid(conversation) || !csrf || !root || !folderName || !uploader) throw Error('Local folder relay needs a conversation, browser authorization, a folder and an uploader.');
   const base = `/api/v2/conversations/${conversation}/local-files`;
   const active = new Map(), activity = [];
   const stopper = new AbortController();
   let state = 'connecting', takeover = false, running = null, wake = null;
+  // The write queue: each write starts after the previous one ended.
+  let writes = Promise.resolve();
+  const inOrder = task => { const run = writes.then(task, task); writes = run.catch(() => {}); return run; };
 
   const snapshot = () => ({state, folder: folderName, connection: connectionId, pending: [...active.values()].map(a => a.view), activity: [...activity]});
   const changed = () => { try { onChange(snapshot()); } catch { /* The view may be gone. */ } };
   const note = (request, outcome) => {
-    activity.unshift({id: request.request_id, operation: request.operation, path: request.path ?? request.paths?.join(', ') ?? '', outcome, at: Date.now()});
-    activity.length = Math.min(activity.length, 8);
+    activity.unshift({id: request.request_id, operation: request.operation, path: request.path ?? request.paths?.join(', ') ?? '', outcome,
+      bytes: request.operation === 'write' && Number.isSafeInteger(request.content_bytes) ? request.content_bytes : null, at: Date.now()});
+    activity.length = Math.min(activity.length, ACTIVITY_MAX);
   };
+  // Read-write access was granted at Connect. If the browser took it back
+  // (site settings), the write fails here: no prompt outside a click.
+  async function writable() {
+    if (typeof root.queryPermission !== 'function') return true;
+    try { return (await root.queryPermission({mode: 'readwrite'})) === 'granted'; } catch { return false; }
+  }
   async function call(method, path, body) {
     const response = await fetcher(path, {method, credentials: 'same-origin', cache: 'no-store', redirect: 'error',
       headers: {...(method === 'GET' ? {} : {'x-orkestr-csrf': csrf}), ...(body ? {'Content-Type': 'application/json'} : {})},
@@ -82,16 +93,14 @@ export function createRelay({conversation, csrf, root, folderName, uploader, con
         const status = await upload(file, signal);
         return {status, body: {outcome: 'done', upload_id: status.file.upload_id, files}};
       }
-      case 'write': {
+      case 'write': return inOrder(async () => {
+        // Dropped while an earlier write ran: it is never started.
+        if (signal.aborted) throw new FolderError('browser_error');
         const bytes = await content(request);
-        // Dropped while the content loaded: never show a card nobody can close.
         if (signal.aborted) throw new FolderError('browser_error');
-        const answer = await confirm(request, {bytes, signal});
-        if (signal.aborted) throw new FolderError('browser_error');
-        if (answer === 'refuse') return {body: {outcome: 'failed', error: 'refused_by_owner'}};
-        if (answer !== 'allow') return {body: {outcome: 'failed', error: 'permission_denied'}};
+        if (!await writable()) return {body: {outcome: 'failed', error: 'permission_denied'}};
         return {body: {outcome: 'done', written: await writeFile(root, request.path, bytes, subtle)}};
-      }
+      });
       default: throw new FolderError('browser_error');
     }
   }
@@ -119,6 +128,8 @@ export function createRelay({conversation, csrf, root, folderName, uploader, con
       if (!outcome && entry.dropped && !stopper.signal.aborted) outcome = dropped(request, done);
       if (outcome) note(request, outcome);
       changed();
+      // Take what the server queued behind this one now, not on the next tick.
+      wake?.();
     }
   }
   async function pollOnce() {
@@ -129,8 +140,9 @@ export function createRelay({conversation, csrf, root, folderName, uploader, con
     takeover = false; state = 'connected';
     const held = new Set(reply.value.requests.map(r => r.request_id));
     // A request that is no longer this tab's (expired, finished, taken by a
-    // newer tab) is dropped here, closing any confirmation it showed. Its
-    // handler records the drop in the activity unless it already has an outcome.
+    // newer tab) is dropped here, and a write still waiting its turn is never
+    // started. Its handler records the drop in the activity unless it already
+    // has an outcome.
     for (const [id, entry] of active) if (!held.has(id)) { entry.dropped = true; entry.controller.abort(); active.delete(id); }
     for (const request of reply.value.requests) {
       if (active.has(request.request_id) || !uuid(request.request_id)) continue;

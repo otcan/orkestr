@@ -37,7 +37,6 @@
 .message-composer .composer-context button { grid-row: auto; grid-column: auto; align-self: center; min-width: 0; min-height: 2.1rem; padding: .2rem .75rem; font-size: .78rem; font-weight: 600; border-radius: 1.05rem; background: var(--surface-2); color: var(--text); border: 1px solid var(--border); }
 .message-composer .composer-context button:hover:not(:disabled) { background: var(--surface-3); }
 .message-composer .composer-context p { grid-row: auto; grid-column: auto; font-size: .8rem; color: inherit; }
-.message-composer .composer-context .local-folder-allow { background: var(--accent); color: var(--accent-contrast); border-color: transparent; }
 .composer-context .local-folder { margin-right: 0; font-size: .78rem; }
 /* The folder chip: a button while it needs a click, a link to Files once
    connected. Hidden where the browser cannot connect a folder. */
@@ -46,8 +45,6 @@
 .composer-context a.local-folder-chip, .composer-context span.local-folder-chip { display: inline-flex; align-items: center; min-height: 2.1rem; max-width: 100%; padding: .2rem .75rem; font-size: .78rem; font-weight: 600; border-radius: 1.05rem; background: var(--surface-2); color: var(--text); border: 1px solid var(--border); text-decoration: none; overflow-wrap: anywhere; }
 .composer-context .local-folder-chip[data-state=ready] { background: var(--accent-soft); color: var(--accent-text); border-color: transparent; }
 .composer-context .local-folder-chip[data-state=offline] { background: var(--warn-soft); color: var(--warn-text); border-color: transparent; }
-/* A write waiting for the owner's answer takes the composer's full width. */
-.composer-context:has(.local-folder-confirm), .composer-context .local-folder-chip-slot:has(.local-folder-confirm) { flex-basis: 100%; }
 .local-folder-state { display: inline-flex; align-items: center; gap: .35rem; padding: .2rem .65rem; border-radius: 1rem; background: var(--surface-2); color: var(--muted); font-weight: 600; overflow-wrap: anywhere; }
 .local-folder-state::before { content: ""; flex: none; width: .5rem; height: .5rem; border-radius: 50%; background: var(--faint); }
 .local-folder-state.local-folder-live { background: var(--accent-soft); color: var(--accent-text); }

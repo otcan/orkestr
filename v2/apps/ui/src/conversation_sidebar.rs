@@ -62,8 +62,6 @@ pub fn ConversationSidebar(
         std::collections::BTreeMap::<String, orkestr_v2_ui::conversation_status::RowStatus>::new,
     );
     let slots = use_signal(|| None::<orkestr_v2_ui::conversation_status::Slots>);
-    // Writes waiting for the owner's Allow (ORK-804), polled by the app shell.
-    let writes = try_use_context::<crate::local_writes_waiting::WritesWaiting>();
     use_drop(move || {
         mounted.set(false);
         if let Some(channel) = waiting() {
@@ -273,7 +271,6 @@ pub fn ConversationSidebar(
                 SidebarRow {
                     key:"{row.entry.key}", row: row.clone(), now, selected: row.entry.key == selected && !global_view,
                     status: row.entry.conversation_id.as_ref().and_then(|id| statuses.read().get(&id.to_string()).cloned()),
-                    write: writes.and_then(|w| row.entry.conversation_id.as_ref().and_then(|id| orkestr_v2_ui::local_writes::waiting_for(&w.0.read(), &id.to_string()).cloned())),
                     ontoggle: move |key: String| { let mut set = expanded.write(); if !set.remove(&key) { set.insert(key); } },
                     onselect: move |entry: SidebarEntry| { if session_scope.read().is_current(owner) { onselect.call(entry); } },
                 }
@@ -300,20 +297,12 @@ fn SidebarRow(
     now: i64,
     selected: bool,
     status: Option<orkestr_v2_ui::conversation_status::RowStatus>,
-    /// A local folder write of this chat waits for the owner (ORK-804).
-    #[props(default)]
-    write: Option<orkestr_v2_contracts::LocalFileWriteWaiting>,
     ontoggle: EventHandler<String>,
     onselect: EventHandler<SidebarEntry>,
 ) -> Element {
     let entry = row.entry.clone();
     let time = sidebar::relative_time(now, row.group_activity_ms);
-    // A waiting write needs the owner: it outranks every other state.
-    let write_hint = write.as_ref().map(orkestr_v2_ui::local_writes::row_hint);
-    let work = write
-        .as_ref()
-        .map(orkestr_v2_ui::local_writes::row_state)
-        .or_else(|| sidebar::work_state(&row, status.as_ref()));
+    let work = sidebar::work_state(&row, status.as_ref());
     let channel = sidebar::channel(&entry);
     let unread = sidebar::unread_label(if selected {
         row.hidden_unread
@@ -333,7 +322,6 @@ fn SidebarRow(
         div { class: "conversation-row", "data-depth": "{row.depth}", "data-source": if v1 { "v1" } else { "v2" },
             "data-unread": if unread.is_some() { "true" } else { "false" },
             "data-system": if entry.hidden { "true" } else { "false" },
-            "data-write-waiting": if write.is_some() { "true" } else { "false" },
             button { class: "conversation-choice", r#type: "button", "aria-current": if selected { "page" } else { "false" },
                 onclick: { let entry = entry.clone(); move |_| onselect.call(entry.clone()) },
                 span { class: "avatar-wrap",
@@ -350,8 +338,7 @@ fn SidebarRow(
                     }
                     span { class: "choice-bottom",
                         if let Some(state) = work.clone() {
-                            span { class: "work-state {state.tone.class()}", title: write_hint.clone(), "{state.label}" }
-                            if let Some(hint) = write_hint.clone() { span { class: "visually-hidden", ". {hint}" } }
+                            span { class: "work-state {state.tone.class()}", "{state.label}" }
                         }
                         if let Some(text) = preview.clone() {
                             span { class: "choice-preview", "{text}" }

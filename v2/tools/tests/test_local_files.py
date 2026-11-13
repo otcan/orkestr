@@ -34,7 +34,7 @@ def view(state, operation='list', result=None, error=None, text='status'):
 
 
 class FakeV2(http.server.BaseHTTPRequestHandler):
-    calls, states, refuse = [], [], None
+    calls, states, refuse, busy = [], [], None, 0
 
     def log_message(self, *_):
         pass
@@ -58,6 +58,9 @@ class FakeV2(http.server.BaseHTTPRequestHandler):
         path = self.path[len(f'/api/v2/conversations/{CONVERSATION}/local-files'):]
         FakeV2.calls.append((self.command, path, body))
         if path == '/requests' and self.command == 'POST':
+            if FakeV2.busy:
+                FakeV2.busy -= 1
+                return self._reply(429, {'code': 'local_files_rate_limited'})
             if FakeV2.refuse:
                 return self._reply(409, {'code': FakeV2.refuse})
             return self._reply(202, {'created': True, 'request': FakeV2.states.pop(0)})
@@ -82,7 +85,7 @@ class ToolTests(unittest.TestCase):
         cls.server.server_close()
 
     def setUp(self):
-        FakeV2.calls, FakeV2.states, FakeV2.refuse = [], [], None
+        FakeV2.calls, FakeV2.states, FakeV2.refuse, FakeV2.busy = [], [], None, 0
         self.env = unittest.mock.patch.dict(os.environ, {'ORKESTR_V2_LOCAL_FILES_GRANT': GRANT}, clear=False)
         self.env.start()
         self.addCleanup(self.env.stop)
@@ -182,23 +185,45 @@ class ToolTests(unittest.TestCase):
             self.assertEqual(TOOL.grant_path(CONVERSATION, env), Path(root) / f'{CONVERSATION}.local-files.grant')
         self.assertEqual(FakeV2.calls, [])
 
-    def test_a_write_waits_ten_minutes_by_default_and_never_less_than_two(self):
-        """ORK-804: a 25 s write expired before the owner saw the card."""
+    def test_a_write_needs_no_approval_wait_but_at_least_two_minutes(self):
+        """ORK-810: writes apply on their own; a background tab may poll once a minute."""
         def sent(*argv):
             FakeV2.calls, FakeV2.states = [], [view('done', argv[0], {'bytes_written': 1})]
             code, _, err = self.run_tool(*argv)
             self.assertEqual(code, 0)
             return FakeV2.calls[0][2]['timeout_ms'], err
-        self.assertEqual(sent('write', 'a.txt', '--text', 'x')[0], 600_000)
+        self.assertEqual(sent('write', 'a.txt', '--text', 'x')[0], 120_000, 'the same default as every request')
         timeout, err = sent('write', 'a.txt', '--text', 'x', '--timeout', '25')
         self.assertEqual(timeout, 120_000)
         self.assertIn('write timeout raised to 120 s', err)
+        self.assertNotIn('Allow', err)
         self.assertEqual(sent('write', 'a.txt', '--text', 'x', '--timeout', '300')[0], 300_000)
         self.assertEqual(sent('write', 'a.txt', '--text', 'x', '--timeout', '9000')[0], 600_000, 'the server maximum')
-        self.assertEqual(sent('list')[0], 120_000, 'other requests keep their default')
+        self.assertEqual(sent('list')[0], 120_000)
         self.assertEqual(sent('list', '--timeout', '20')[0], 20_000)
-        self.assertIn('"Allow write"', TOOL.AGENT_INSTRUCTIONS)
+        for gone in ('Allow write', 'ask the owner first', '10 min', '600'):
+            self.assertNotIn(gone, TOOL.AGENT_INSTRUCTIONS)
+        self.assertIn('its own (no approval step)', TOOL.AGENT_INSTRUCTIONS)
         self.assertIn('never through Root', TOOL.AGENT_INSTRUCTIONS)
+
+    def test_a_full_queue_is_waited_out_with_the_same_key(self):
+        """ORK-810: two of ten writes were lost to local_files_rate_limited."""
+        FakeV2.busy = 2
+        FakeV2.states = [view('working', 'write'), view('done', 'write', {'bytes_written': 1})]
+        original = TOOL.QUEUE_RETRY_INTERVAL
+        TOOL.QUEUE_RETRY_INTERVAL = 0.01
+        try:
+            code, _, _ = self.run_tool('write', 'a.txt', '--text', 'x', '--request-key', 'batch-7')
+        finally:
+            TOOL.QUEUE_RETRY_INTERVAL = original
+        self.assertEqual(code, 0)
+        creates = [body for method, path, body in FakeV2.calls if (method, path) == ('POST', '/requests')]
+        self.assertEqual([b['request_key'] for b in creates], ['batch-7'] * 3, 'asked again with the same key')
+        # Without time left the queue's answer is the tool's answer.
+        FakeV2.calls, FakeV2.busy = [], 99
+        self.assertRaises(TOOL.LocalFilesError, TOOL.create_queued,
+                          TOOL.Client(self.url, CONVERSATION, GRANT), {'request_key': 'k'}, 0)
+        FakeV2.busy = 0
 
 
 class FakeApi:

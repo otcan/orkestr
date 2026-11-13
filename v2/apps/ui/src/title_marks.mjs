@@ -1,20 +1,15 @@
-// Marks in front of the browser tab's title (ORK-804). Independent parts of
-// the page set them: the local folder panel (in the attachment bundle) and
-// the app shell (inlined into the WebAssembly app's scripts). Their state
-// lives on the document, so every copy of this module sees the same marks,
-// and a title the page sets meanwhile keeps its marks in front.
+// Marks in front of the browser tab's title (ORK-804). Their state lives on
+// the document, so every copy of this module sees the same marks, and a title
+// the page sets meanwhile keeps its marks in front. Since writes apply on
+// their own (ORK-810) the only mark is the connected folder.
 const KEY = Symbol.for('orkestr.title-marks');
 // Outermost first; marks with the same text are shown once.
 const MARKS = [
-  // A write waits for the owner's Allow in this tab.
-  ['write', 'Approve write · '],
-  // A write waits for the owner somewhere (server-wide, any tab or device).
-  ['waiting', 'Approve write · '],
   // This tab serves a local folder.
   ['folder', '● '],
 ];
 
-/** Turn the mark `name` (write, waiting or folder) on or off. */
+/** Turn the mark `name` (folder) on or off. */
 export function setTitleMark(document, name, on) {
   if (!MARKS.some(([mark]) => mark === name)) throw Error('Unknown title mark');
   const state = document[KEY] ??= {marks: new Set(), applied: ''};

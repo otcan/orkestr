@@ -39,7 +39,6 @@ mod intelligence_view;
 mod live_map_view;
 mod local_files_view;
 mod local_setup;
-mod local_writes_waiting;
 mod memory_export_guard;
 mod memory_transport;
 mod memory_view;
@@ -151,8 +150,6 @@ fn App() -> Element {
     // The view named by the URL at load; the workspace opens it once mounted.
     let mut initial_route = use_context_provider(|| InitialRoute(Signal::new(None)));
     let mut held_inputs = use_signal(orkestr_v2_ui::held_inputs::HeldInputs::default);
-    // Local folder writes waiting for the owner, in every tab (ORK-804).
-    use_context_provider(|| local_writes_waiting::WritesWaiting(Signal::new(Vec::new())));
     // Tab-scoped reload recovery; writes start only after this owner's restore.
     let mut memory_key = use_signal(|| None::<String>);
     let mut restored = use_signal(|| false);
@@ -322,10 +319,6 @@ fn App() -> Element {
                         });
                     }, if logging_out() { "Signing out…" } else { "Sign out" } }
                 }
-            }
-            if !csrf().is_empty() && !current().is_empty() {
-                local_writes_waiting::WritesWaitingPoll { key: "writes-waiting-{session_scope.read().generation()}", session_scope }
-                local_writes_waiting::WritesWaitingNotice {}
             }
             if csrf().is_empty() || notice().contains("not confirmed") {
                 p { class: "app-notice", role: "status", "{notice}" }

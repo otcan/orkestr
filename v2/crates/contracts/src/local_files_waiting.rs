@@ -5,7 +5,8 @@
 //!
 //! The replies are read by UI releases that may be older or newer than the
 //! server, so these types accept unknown fields: a newer server may add one
-//! without breaking an older UI.
+//! without breaking an older UI. Since ORK-810 writes apply on their own; only
+//! UI releases before it read this list.
 use crate::{ConversationId, LOCAL_FILE_NAME_MAX, LOCAL_FILE_OPEN_MAX};
 use serde::{Deserialize, Serialize};
 

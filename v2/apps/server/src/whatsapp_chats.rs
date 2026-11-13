@@ -1001,7 +1001,9 @@ mod onboarding_tests {
         assert!(rules.contains(
             "ORKESTR_V2_LOCAL_FILES_GRANT_DIR=/srv/grants PYTHONDONTWRITEBYTECODE=1 python3 -I -S -B /usr/local/libexec/orkestr-local-files/local_files.py --v2-url http://127.0.0.1:19822 --conversation conv-1 <list"
         ));
-        assert!(rules.contains("--timeout 600"));
+        // ORK-810: writes apply on their own; no approval wording or wait.
+        assert!(rules.contains("a write applies on its own, with no approval step"));
+        assert!(!rules.contains("--timeout 600") && !rules.contains("Allow write"));
         // Files for the owner: this conversation's reply attachment command
         // with the default tool, never a link to a host path (ORK-794).
         assert!(rules.contains(

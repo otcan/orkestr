@@ -7,6 +7,7 @@ import {createHash, randomUUID} from 'node:crypto';
 import {DENIED, folderState} from './folder_state.mjs';
 import {mountLocalFiles} from './panel.mjs';
 import {setTitleMark} from '../title_marks.mjs';
+import {fakeDirectory} from '../../../../ci/local-files-fake-directory.mjs';
 
 const CONVERSATION = '00000000-0000-4000-8000-00000000000a';
 
@@ -56,7 +57,8 @@ function mount({picker = async () => handle(), status = 200, indexedDB = null} =
 test('folderState names every state in words', () => {
   assert.equal(folderState({supported: false}).state, 'unsupported');
   assert.deepEqual(folderState(), {state: 'none', text: 'No folder connected'});
-  assert.match(folderState({view: {state: 'connected', folder: 'F'}}).text, /^Folder ready: “F” · read-only, writes ask you first$/);
+  assert.equal(folderState({view: {state: 'connected', folder: 'F'}}).text, 'Folder connected: “F” · this chat can read and change files in it');
+  assert.equal(folderState({view: {state: 'connected', folder: 'F'}, writable: false}).text, 'Folder connected read-only: “F” · writes are refused until you allow changes');
   assert.equal(folderState({view: {state: 'connecting', folder: 'F'}}).state, 'connecting');
   for (const state of ['retrying', 'elsewhere', 'signed_out']) {
     const value = folderState({view: {state, folder: 'F'}});
@@ -89,7 +91,7 @@ test('no folder, then ready after the owner connects, then no folder after disco
   assert.equal(root.find(n => n.attrs.class === 'local-folder-log'), undefined, 'and not in the composer');
   await root.button('Connect folder…').onclick();
   await until(() => root.dataset.folderState === 'ready', 'ready');
-  assert.match(root.state().textContent, /Folder ready: “Synthetic folder”/);
+  assert.match(root.state().textContent, /Folder connected: “Synthetic folder” · this chat can read and change files in it/);
   assert.ok(root.state().attrs.class.includes('local-folder-live'));
   assert.ok(document.title.startsWith('● '));
   assert.ok(root.button('Disconnect folder'));
@@ -170,95 +172,63 @@ function writeQueue() {
     },
     expire(id) { requests.find(r => r.request_id === id).state = 'failed'; }};
 }
-// Records the system notifications the panel raises.
-function notificationsWith(permission) {
-  const shown = [];
-  class FakeNotification {
-    static permission = permission;
-    static requestPermission() { throw Error('never asked for outside a click'); }
-    constructor(title, options) { this.title = title; this.options = options; this.closed = false; shown.push(this); }
-    close() { this.closed = true; }
-  }
-  return {FakeNotification, shown};
-}
 
-test('a waiting write marks the tab title and raises one notification; the title is restored exactly (ORK-804)', async t => {
-  const document = fakeDocument(), root = new Node('div'), logRoot = new Node('div'), queue = writeQueue();
-  const {FakeNotification, shown} = notificationsWith('granted');
+// ORK-810: Connect asks for view-and-change once; writes then apply on their own.
+test('Connect asks once for read and write; a write applies with no card, notification or title mark', async t => {
+  const document = fakeDocument(), root = new Node('div'), chipRoot = new Node('span'), queue = writeQueue();
+  const folder = fakeDirectory({'notes.txt': 'old'}, {name: 'Synthetic folder'}), pickerCalls = [];
+  // Like Chrome: the picker's readwrite mode grants view and change in that click.
+  const picker = async options => { pickerCalls.push(options); if (options.mode === 'readwrite') folder.fake.permissions.readwrite = 'granted'; return folder; };
   document.visibilityState = 'hidden';
-  const panel = mountLocalFiles({conversation: CONVERSATION, csrf: 'synthetic-csrf', root, logRoot}, {
-    picker: async () => handle(), indexedDB: null, document, uploader: {}, fetcher: queue.fetcher, notifications: FakeNotification,
-    relayOptions: {pollMs: 5}});
+  const panel = mountLocalFiles({conversation: CONVERSATION, csrf: 'synthetic-csrf', root, chipRoot}, {
+    picker, indexedDB: null, document, uploader: {}, fetcher: queue.fetcher, relayOptions: {pollMs: 5}});
   t.after(() => panel.close());
-  await root.button('Connect folder…').onclick();
+  await chipRoot.find(n => n.attrs.class === 'local-folder-chip').onclick();
   await until(() => root.dataset.folderState === 'ready', 'ready');
+  assert.deepEqual(pickerCalls, [{id: 'orkestr-local-folder', mode: 'readwrite'}]);
   assert.equal(document.title, '● Orkestr');
-  const refused = queue.add('notes.txt', 'synthetic text');
-  await until(() => root.button('Refuse'), 'confirmation');
-  assert.equal(document.title, 'Approve write · ● Orkestr', 'a hidden tab says a write waits');
-  assert.equal(shown.length, 1);
-  assert.equal(shown[0].title, 'Approve write');
-  assert.match(shown[0].options.body, /“notes\.txt” in “Synthetic folder”/);
-  assert.equal(shown[0].options.tag, `orkestr-local-write-${refused}`);
-  await new Promise(resolve => setTimeout(resolve, 30));
-  assert.equal(shown.length, 1, 'one notification per waiting write, not per poll');
-  root.button('Refuse').onclick();
-  await until(() => queue.results.has(refused), 'refused');
-  assert.equal(queue.results.get(refused).error, 'refused_by_owner');
-  await until(() => document.title === '● Orkestr', 'mark cleared');
-  assert.equal(shown[0].closed, true, 'the notification closes with the confirmation');
-  // A write that expires before the owner answers closes its card and is
-  // recorded once in the drawer's activity log.
-  const expired = queue.add('later.txt', 'x');
-  await until(() => root.button('Allow write'), 'second confirmation');
-  assert.ok(document.title.startsWith('Approve write · '));
-  queue.expire(expired);
-  await until(() => !root.button('Allow write'), 'card closed');
-  await until(() => logRoot.text().includes('write later.txt: expired, nothing written'), 'expired in the log');
-  assert.equal(logRoot.text().match(/later\.txt/g).length, 1);
-  assert.equal(queue.results.has(expired), false);
-  assert.equal(document.title, '● Orkestr');
-  assert.equal(shown[1].closed, true);
-  // A third write is open when the panel closes: the title is exactly the page's again.
-  queue.add('open.txt', 'y');
-  await until(() => document.title.startsWith('Approve write · '), 'third waiting');
+  const written = queue.add('notes.txt', 'synthetic text');
+  await until(() => queue.results.has(written), 'written without an answer from the owner');
+  assert.equal(queue.results.get(written).outcome, 'done');
+  assert.equal(folder.fake.text('notes.txt'), 'synthetic text');
+  assert.equal(root.find(n => n.attrs.class === 'local-folder-confirm') ?? chipRoot.find(n => n.attrs.class === 'local-folder-confirm'), undefined, 'no card');
+  assert.equal(document.title, '● Orkestr', 'no "Approve write" mark');
+  await until(() => root.text().includes('write notes.txt (14 bytes): written'), 'logged with its size');
+  assert.ok(root.find(n => n.tag === 'time' && /^ · \d{2}:\d{2}/.test(n.textContent)), 'with its time');
   panel.close();
   assert.equal(document.title, 'Orkestr');
 });
 
-test('without notification permission none is raised and none is asked for', async t => {
+test('a browser that grants viewing only: read-only, writes refused, Allow changes asks in a click', async t => {
   const document = fakeDocument(), root = new Node('div'), queue = writeQueue();
-  for (const permission of ['default', 'denied']) {
-    const {FakeNotification, shown} = notificationsWith(permission);
-    const panel = mountLocalFiles({conversation: CONVERSATION, csrf: 'synthetic-csrf', root}, {
-      picker: async () => handle(), indexedDB: null, document, uploader: {}, fetcher: queue.fetcher, notifications: FakeNotification,
-      relayOptions: {pollMs: 5}});
-    t.after(() => panel.close());
-    await root.button('Connect folder…').onclick();
-    const id = queue.add(`${permission}.txt`, 'z');
-    await until(() => root.button('Refuse'), 'confirmation');
-    assert.equal(shown.length, 0, permission);
-    root.button('Refuse').onclick();
-    await until(() => queue.results.has(id), 'answered');
-    panel.close();
-    assert.equal(document.title, 'Orkestr');
-  }
+  const folder = fakeDirectory({'a.txt': 'alpha'}, {name: 'Synthetic folder', grantOnRequest: false});
+  const panel = mountLocalFiles({conversation: CONVERSATION, csrf: 'synthetic-csrf', root}, {
+    picker: async () => folder, indexedDB: null, document, uploader: {}, fetcher: queue.fetcher, relayOptions: {pollMs: 5}});
+  t.after(() => panel.close());
+  await root.button('Connect folder…').onclick();
+  await until(() => root.dataset.folderState === 'ready', 'ready');
+  assert.match(root.state().textContent, /read-only: “Synthetic folder” · writes are refused until you allow changes/);
+  const refused = queue.add('a.txt', 'changed');
+  await until(() => queue.results.has(refused), 'answered');
+  assert.equal(queue.results.get(refused).error, 'permission_denied');
+  assert.equal(folder.fake.text('a.txt'), 'alpha');
+  await until(() => root.text().includes('write a.txt (7 bytes): not written: permission_denied'), 'logged as not written');
+  // The owner allows changes: the click asks the browser, and writes apply.
+  folder.fake.permissions.readwrite = 'granted';
+  await root.button('Allow changes').onclick();
+  await until(() => !root.button('Allow changes'), 'writable');
+  assert.match(root.state().textContent, /^● Folder connected: “Synthetic folder”/);
 });
 
-test('title marks from the panel and the app shell share one prefix and keep the page title', () => {
+test('the folder title mark keeps the page title; write marks are gone (ORK-810)', () => {
   const document = fakeDocument();
   setTitleMark(document, 'folder', true);
-  setTitleMark(document, 'waiting', true);
-  assert.equal(document.title, 'Approve write · ● Orkestr');
-  // This tab's own waiting write and the server-wide signal say it once.
-  setTitleMark(document, 'write', true);
-  assert.equal(document.title, 'Approve write · ● Orkestr');
-  setTitleMark(document, 'waiting', false);
-  assert.equal(document.title, 'Approve write · ● Orkestr');
-  // The page renames itself: the marks stay in front of the new title.
+  assert.equal(document.title, '● Orkestr');
+  // The page renames itself: the mark stays in front of the new title.
   document.title = 'Synthetic chat';
-  setTitleMark(document, 'write', false);
+  setTitleMark(document, 'folder', true);
   assert.equal(document.title, '● Synthetic chat');
+  for (const gone of ['write', 'waiting']) assert.throws(() => setTitleMark(document, gone, true), /Unknown title mark/);
   setTitleMark(document, 'folder', false);
   assert.equal(document.title, 'Synthetic chat');
   setTitleMark(document, 'folder', false);
@@ -309,20 +279,4 @@ test('where folders are unavailable the composer shows no chip at all', () => {
   mountLocalFiles({conversation: CONVERSATION, csrf: 'synthetic-csrf', root, chipRoot}, {picker: null, document: fakeDocument(), uploader: {}});
   assert.deepEqual([chipRoot.children.length, chipRoot.hidden], [0, true]);
   assert.match(root.text(), /need Chrome or Edge/, 'the Files panel says why');
-});
-
-test('the Files panel lists folder activity with its time, newest first', async t => {
-  const document = fakeDocument(), root = new Node('div'), chipRoot = new Node('span'), queue = writeQueue();
-  const panel = mountLocalFiles({conversation: CONVERSATION, csrf: 'synthetic-csrf', root, chipRoot}, {
-    picker: async () => handle(), indexedDB: null, document, uploader: {}, fetcher: queue.fetcher, relayOptions: {pollMs: 5}});
-  t.after(() => panel.close());
-  await chipRoot.find(n => n.attrs.class === 'local-folder-chip').onclick();
-  await until(() => root.dataset.folderState === 'ready', 'ready');
-  const id = queue.add('notes.txt', 'synthetic');
-  await until(() => chipRoot.button('Refuse'), 'the write card shows in the composer');
-  chipRoot.button('Refuse').onclick();
-  await until(() => queue.results.has(id), 'answered');
-  await until(() => root.text().includes('write notes.txt: refused_by_owner'), 'logged');
-  assert.ok(root.find(n => n.tag === 'h4' && n.textContent === 'Folder activity'));
-  assert.ok(root.find(n => n.tag === 'time' && /^ · \d{2}:\d{2}/.test(n.textContent)), 'with its time');
 });

@@ -24,7 +24,12 @@ const install = `(() => {
   const fakeDirectory = ${fakeDirectory.toString()};
   const root = fakeDirectory(${JSON.stringify(tree)});
   window.__syntheticFolder = root; window.__pickerCalls = [];
-  window.showDirectoryPicker = async options => { window.__pickerCalls.push(options); return root; };
+  // Like Chrome: the picker's readwrite mode grants view and change in that click.
+  window.showDirectoryPicker = async options => {
+    window.__pickerCalls.push(options);
+    if (options?.mode === 'readwrite') root.fake.permissions.readwrite = 'granted';
+    return root;
+  };
 })();`;
 function untar(bytes) {
   const files = [];
@@ -84,10 +89,11 @@ try {
   await press(page, '.composer-context .local-folder-chip');
   await page.waitForFunction(() => document.querySelector('.local-folder-live')?.textContent.includes('Synthetic folder'));
   assert.equal((await folderView()).state, 'ready');
-  assert.match((await folderView()).text, /Folder ready: “Synthetic folder” · read-only, writes ask you first/);
+  assert.equal((await folderView()).text, '● Folder connected: “Synthetic folder” · this chat can read and change files in it');
   await page.waitForFunction(() => document.querySelector('.composer-context a.local-folder-chip')?.textContent === '● Synthetic folder');
   assert.deepEqual((await folderView()).chips, [['a', '● Synthetic folder']], 'connected: one chip, a link to Files');
-  assert.deepEqual(await page.evaluate(() => window.__pickerCalls), [{id: 'orkestr-local-folder', mode: 'read'}], 'the picker asks for read access only');
+  // ORK-810: one browser prompt, at Connect, for viewing and changing the folder.
+  assert.deepEqual(await page.evaluate(() => window.__pickerCalls), [{id: 'orkestr-local-folder', mode: 'readwrite'}], 'the picker asks once for read and write');
   assert.ok((await page.title()).startsWith('● '), 'the tab title shows the connection');
   assert.equal(lf.folder, 'Synthetic folder');
   await screenshots(page, 'connected');
@@ -110,33 +116,48 @@ try {
   const outside = lf.enqueue('read', {path: '../outside.txt'});
   assert.equal((await served(outside, 'outside')).error, 'invalid_path', 'the tab never leaves the folder, whatever the server asks');
 
-  // A write waits for the owner; Allow asks the browser for write access.
+  // ORK-810: a write applies on its own: no card, no browser prompt, logged.
+  const prompts = () => page.evaluate(() => window.__syntheticFolder.fake.calls.filter(c => c[0] === 'requestPermission').length);
+  const promptsBefore = await prompts();
   const write = lf.enqueue('write', {path: 'docs/plan.md', content: '# Plan v2\n'});
-  await page.waitForSelector('.local-folder-confirm');
-  assert.match(await page.$eval('.local-folder-confirm', n => n.textContent), /Write 10 bytes to “docs\/plan\.md”[\s\S]*# Plan v2/);
-  await new Promise(r => setTimeout(r, 500));
-  assert.equal(lf.results.has(write), false, 'nothing is written before the owner answers');
-  assert.equal(await page.evaluate(() => window.__syntheticFolder.fake.text('docs/plan.md')), '# Plan\n');
-  await screenshots(page, 'confirm-write');
-  await press(page, '.local-folder-allow');
   assert.deepEqual((await served(write, 'write')).written, {bytes_written: 10, sha256: sha('# Plan v2\n'), created: false});
   assert.equal(await page.evaluate(() => window.__syntheticFolder.fake.text('docs/plan.md')), '# Plan v2\n');
-  assert.ok(await page.evaluate(() => window.__syntheticFolder.fake.calls.some(c => c[0] === 'requestPermission' && c[1] === 'readwrite')));
-  await page.waitForFunction(() => !document.querySelector('.local-folder-confirm'));
-  const refused = lf.enqueue('write', {path: 'a.txt', content: 'overwritten'});
-  await page.waitForSelector('.local-folder-confirm');
-  await press(page, '.local-folder-refuse');
-  assert.equal((await served(refused, 'refused write')).error, 'refused_by_owner');
-  assert.equal(await page.evaluate(() => window.__syntheticFolder.fake.text('a.txt')), 'alpha');
-
-  // The activity log is inspected in the Files panel.
-  await page.waitForFunction(() => document.querySelector('.files-drawer .local-folder-activity')?.textContent.includes('refused_by_owner'));
+  assert.equal(await page.$('.local-folder-confirm, .local-folder-allow'), null, 'no Allow write card');
+  assert.equal(await prompts(), promptsBefore, 'no browser prompt after Connect');
+  await page.waitForFunction(() => document.querySelector('.files-drawer .local-folder-activity')?.textContent.includes('write docs/plan.md (10 bytes): written'));
   assert.equal(await page.$('.composer-context .local-folder-activity'), null, 'the composer shows state, not the log');
+  // The owner's test: ten small files at once. All are written, in order;
+  // none is refused for the queue's size.
+  const batch = [];
+  for (let i = 1; i <= 10; i++) batch.push(lf.enqueue('write', {path: `docs/batch-${String(i).padStart(2, '0')}.txt`, content: `synthetic ${i}`}));
+  for (const [i, id] of batch.entries()) assert.equal((await served(id, `batch ${i + 1}`)).outcome, 'done');
+  const opened = await page.evaluate(() => window.__syntheticFolder.fake.calls.filter(c => c[0] === 'createWritable').map(c => c[1]).slice(-10));
+  assert.deepEqual(opened, batch.map((_, i) => `batch-${String(i + 1).padStart(2, '0')}.txt`), 'in queue order');
+  assert.equal(await page.evaluate(() => window.__syntheticFolder.fake.text('docs/batch-10.txt')), 'synthetic 10');
+  // Rejected and expired writes stay listed: a path outside the folder, and
+  // one the server expired while the tab still waited for its content.
+  const outsideWrite = lf.enqueue('write', {path: '../outside.txt', content: 'x'});
+  assert.equal((await served(outsideWrite, 'write outside')).error, 'invalid_path');
+  const late = lf.enqueue('write', {path: 'a.txt', content: 'late'});
+  lf.holdContent.add(late);
+  await page.waitForFunction(() => document.querySelector('.files-drawer .local-folder-activity')?.textContent.includes('write a.txt (4 bytes): working'), {timeout: 15000});
+  lf.expire(late);
+  // Release the content only after the tab's polls no longer list the write.
+  const pollsAtExpiry = lf.polls;
+  for (let i = 0; i < 400 && lf.polls < pollsAtExpiry + 2; i++) await new Promise(r => setTimeout(r, 25));
+  lf.holdContent.delete(late);
+  await page.waitForFunction(() => document.querySelector('.files-drawer .local-folder-activity')?.textContent.includes('write a.txt (4 bytes): expired, nothing written'), {timeout: 15000});
+  assert.equal(await page.$$eval('.files-drawer .local-folder-activity li', items => items.filter(li => li.textContent.includes('expired')).length), 1, 'recorded once');
+  assert.equal(lf.results.has(late), false, 'nothing is reported for an expired write');
+  assert.equal(await page.evaluate(() => window.__syntheticFolder.fake.text('a.txt')), 'alpha');
+  const log = await page.$eval('.files-drawer .local-folder-activity', n => n.textContent);
+  assert.match(log, /write \.\.\/outside\.txt \(1 bytes\): not written: invalid_path/);
+  await page.click('#conversation-tab-files');
+  await page.waitForFunction(() => getComputedStyle(document.querySelector('.files-drawer')).display !== 'none');
+  await screenshots(page, 'folder-activity');
+  await page.click('.files-drawer-close');
 
-  // ORK-804: a write waiting for the owner while the folder tab is hidden
-  // still shows: in that tab's title, and in every other tab of the app
-  // (title, a notice saying where to answer, the chat's row). One that
-  // expires before the owner answers is recorded once in Folder activity.
+  // A hidden folder tab keeps applying writes, and no tab says "Approve write".
   const setHidden = hidden => page.evaluate(on => {
     if (on) {
       Object.defineProperty(document, 'visibilityState', {configurable: true, get: () => 'hidden'});
@@ -145,8 +166,6 @@ try {
     document.dispatchEvent(new Event('visibilitychange'));
   }, hidden);
   await page.waitForFunction(() => document.title === '● Orkestr', {timeout: 15000});
-  // A hidden page runs no animation frames: poll on a timer, not the default 'raf'.
-  const hiddenWait = {timeout: 15000, polling: 250};
   const other = await browser.newPage();
   other.on('pageerror', error => errors.push(`other tab: ${error.message}`));
   await other.setViewport({width: 1280, height: 860});
@@ -154,29 +173,13 @@ try {
   await other.waitForSelector('.conversation-row');
   await other.bringToFront();
   await setHidden(true);
-  const late = lf.enqueue('write', {path: 'a.txt', content: 'late'});
-  await page.waitForFunction(() => document.title.startsWith('Approve write · '), hiddenWait);
-  assert.equal(await page.title(), 'Approve write · ● Orkestr', 'the hidden folder tab says a write waits');
-  await page.waitForSelector('.local-folder-confirm');
-  await other.waitForFunction(() => document.title === 'Approve write · Orkestr', {timeout: 15000});
-  await other.waitForSelector('.write-waiting');
-  const notice = await other.$eval('.write-waiting', n => n.textContent);
-  assert.match(notice, /^Approve write/);
-  assert.match(notice, /“Assistant” wants to change a file in your folder\. Allow or refuse it in the browser tab where the folder “Synthetic folder” is connected\./);
-  await other.waitForFunction(() => [...document.querySelectorAll('.conversation-row[data-write-waiting=true]')]
-    .some(row => row.querySelector('.work-state.status-attention')?.textContent === 'Approve write' && row.textContent.includes('Assistant')), {timeout: 15000});
-  assert.equal(await other.$$eval('.conversation-row[data-write-waiting=true]', rows => rows.length), 1, 'only the waiting chat');
-  assert.ok(await other.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), 'the notice fits');
-  await screenshots(other, 'write-waiting-elsewhere');
-  lf.expire(late);
-  await page.waitForFunction(() => !document.querySelector('.local-folder-confirm'), hiddenWait);
-  await page.waitForFunction(() => document.querySelector('.files-drawer .local-folder-activity')?.textContent.includes('write a.txt: expired, nothing written'), hiddenWait);
-  assert.equal(await page.$$eval('.files-drawer .local-folder-activity li', items => items.filter(li => li.textContent.includes('expired')).length), 1, 'recorded once');
-  assert.equal(lf.results.has(late), false, 'nothing is reported for an expired write');
-  assert.equal(await page.evaluate(() => window.__syntheticFolder.fake.text('a.txt')), 'alpha');
-  await page.waitForFunction(() => document.title === '● Orkestr', hiddenWait);
-  await other.waitForFunction(() => !document.querySelector('.write-waiting') && document.title === 'Orkestr', {timeout: 15000});
-  assert.ok(lf.waitingReads > 0);
+  const hiddenWrite = lf.enqueue('write', {path: 'a.txt', content: 'hidden'});
+  assert.equal((await served(hiddenWrite, 'hidden write')).outcome, 'done');
+  assert.equal(await page.evaluate(() => window.__syntheticFolder.fake.text('a.txt')), 'hidden');
+  assert.equal(await page.title(), '● Orkestr', 'no "Approve write" mark');
+  assert.equal(await other.title(), 'Orkestr');
+  assert.equal(await other.$('.write-waiting, .conversation-row[data-write-waiting]'), null, 'no waiting-write notice or row state');
+  assert.equal(lf.waitingReads, 0, 'no tab reads the waiting-writes list');
   await other.close();
   await page.bringToFront();
   await setHidden(false);
@@ -205,7 +208,8 @@ try {
   assert.deepEqual(errors, [], 'no unhandled browser error');
   await page.close();
 
-  // Phone width: the confirmation fits; a browser without the API says so.
+  // Phone width: connect from the chip, a write applies, Files fits; a
+  // browser without the API says so.
   const phone = await browser.newPage();
   await phone.setViewport({width: 390, height: 844, deviceScaleFactor: 2, isMobile: true, hasTouch: true});
   await phone.evaluateOnNewDocument(install);
@@ -213,10 +217,12 @@ try {
   await phone.waitForSelector('.composer-context .local-folder-chip');
   await press(phone, '.composer-context .local-folder-chip');
   await phone.waitForSelector('.local-folder-live');
-  lf.enqueue('write', {path: 'a.txt', content: 'phone'});
-  await phone.waitForSelector('.local-folder-confirm');
+  const phoneWrite = lf.enqueue('write', {path: 'a.txt', content: 'phone'});
+  assert.equal((await served(phoneWrite, 'phone write')).outcome, 'done');
+  await press(phone, '.composer-context a.local-folder-chip');
+  await phone.waitForFunction(() => document.querySelector('.files-drawer .local-folder-activity')?.textContent.includes('write a.txt (5 bytes): written'));
   assert.ok(await phone.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), 'no horizontal scroll at phone width');
-  await screenshots(phone, 'phone-confirm');
+  await screenshots(phone, 'phone-files');
   await phone.close();
   const plain = await browser.newPage();
   await plain.evaluateOnNewDocument(() => { Object.defineProperty(window, 'showDirectoryPicker', {value: undefined, configurable: true}); });
@@ -227,7 +233,7 @@ try {
   assert.equal(await plain.$eval('.local-folder', n => n.dataset.folderState), 'unsupported');
   assert.equal(await plain.$eval('.local-folder-state', n => n.textContent), 'Folder access unavailable in this browser');
   await plain.close();
-  console.log('Local folder control: connect, list, read, hash, package, confirmed and refused writes, disconnect passed');
+  console.log('Local folder control: connect (read and write once), list, read, hash, package, writes applied in order without approval, rejected and expired writes logged, disconnect passed');
 } finally {
   await browser?.close();
   server.closeAllConnections();

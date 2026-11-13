@@ -156,3 +156,32 @@ async fn only_open_unexpired_writes_with_a_live_tab_are_listed() {
     sql(&f, "UPDATE local_file_connections SET seen_ms=1").await;
     assert_eq!(waiting(&f, BROWSER).await, vec![]);
 }
+
+#[tokio::test]
+async fn a_queue_deeper_than_older_uis_accept_is_reported_capped() {
+    // ORK-810: writes are queued, not refused, so a batch can exceed the
+    // count UI releases before it validate. The kept list caps it.
+    let f = setup().await;
+    let c = f.conversation.clone();
+    f.store.save_session(BROWSER, &f.owner).await.unwrap();
+    let grant = f
+        .store
+        .issue_local_file_grant(&f.token, &f.owner, &c)
+        .await
+        .unwrap()
+        .grant;
+    asking_turn(&f, &c, "local-files-waiting-deep").await;
+    f.store
+        .poll_local_files(BROWSER, &f.owner, &c, &poll(Uuid::new_v4()))
+        .await
+        .unwrap();
+    for i in 0..LOCAL_FILE_OPEN_MAX + 3 {
+        queue(&f, &grant, &format!("deep-{i}"), LocalFileOperation::Write).await;
+    }
+    let listed = waiting(&f, BROWSER).await;
+    assert_eq!(listed[0].writes, LOCAL_FILE_OPEN_MAX as u32);
+    assert!(LocalFileWritesWaiting {
+        conversations: listed
+    }
+    .is_valid());
+}

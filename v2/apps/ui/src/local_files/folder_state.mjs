@@ -1,19 +1,22 @@
-// The local folder control's state in words (ORK-786). The control sits in
-// the composer's attach actions and always says which of these holds:
+// The local folder control's state in words (ORK-786). The Files panel and
+// the composer's chip always say which of these holds:
 //   unsupported  this browser cannot connect a local folder at all
 //   none         no folder is connected
 //   permission   a remembered folder needs the owner's click to allow access
 //   connecting   the tab is starting to serve a folder
-//   ready        the tab serves the folder (read-only; writes ask first)
+//   ready        the tab serves the folder (reads, and writes that apply on
+//                their own, ORK-810; read-only if the browser allowed only that)
 //   offline      this tab's folder worker cannot serve it right now
 // Pure: it reads the relay snapshot and never touches the folder.
 export const DENIED = 'The browser did not allow access to the folder. Connect it again.';
 
-export function folderState({supported = true, view = null, saved = null, message = ''} = {}) {
+export function folderState({supported = true, view = null, saved = null, message = '', writable = true} = {}) {
   if (!supported) return {state: 'unsupported', text: 'Folder access unavailable in this browser'};
   const name = view?.folder;
   switch (view?.state) {
-    case 'connected': return {state: 'ready', text: `Folder ready: “${name}” · read-only, writes ask you first`};
+    case 'connected': return {state: 'ready', text: writable
+      ? `Folder connected: “${name}” · this chat can read and change files in it`
+      : `Folder connected read-only: “${name}” · writes are refused until you allow changes`};
     case 'connecting': return {state: 'connecting', text: `Connecting folder “${name}”…`};
     case 'retrying': return {state: 'offline', text: `Folder worker offline: reconnecting “${name}”…`};
     case 'elsewhere': return {state: 'offline', text: `Folder worker offline in this tab: “${name}” is served by another tab`};
