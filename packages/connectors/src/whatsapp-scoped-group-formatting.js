@@ -52,12 +52,22 @@ export function validReplyDocument(document) {
 // Their transport metadata belongs in the audit rather than a reply heading.
 export const POST_TIMER_SOURCE_ID = 'post';
 export const FAST_TIMER_SOURCE_ID = 'fast';
+// V2 adapter status lines ("Still working…") and the progress notes of a web
+// or task-update turn: updates, not answers.
+export const UPDATE_TIMER_SOURCE_IDS = new Set(['status', 'web-progress', 'task-update-progress']);
 const oneLine = value => String(value || '').replace(/[\r\n]/g, ' ').trim().slice(0, 120);
 
+// Delivery type of a V2 pseudo-timer reply, which the footer turns into its
+// message type: an operator/system post is a notice ("router_update", compact
+// footer), a status line or progress note an update ("progress"), and every
+// other reply (timer answer, coordinator post, question, web answer) a final
+// ("timer_reply"). Updates and finals keep their agent line.
 export function scopedReplyDeliveryType({label, timerId, postAuthor} = {}) {
+  const source = String(timerId || '').trim();
+  if (UPDATE_TIMER_SOURCE_IDS.has(source)) return 'progress';
   const author = String(postAuthor || '').trim().toLowerCase() ||
     ({operator: 'operator', system: 'operator'})[oneLine(label).toLowerCase()];
-  return timerId === POST_TIMER_SOURCE_ID && author === 'operator' ? 'router_update' : 'timer_reply';
+  return source === POST_TIMER_SOURCE_ID && author === 'operator' ? 'router_update' : 'timer_reply';
 }
 
 export function scopedReplyHeader({label, timerId} = {}) {

@@ -11,6 +11,9 @@ from v2.compat.v1_runtime.worker import Worker
 from v2.compat.v1_runtime.tests.test_worker import Peer
 
 
+RUN='00000000-0000-4000-8000-0000000000a1'
+
+
 class ActivityCase(unittest.TestCase):
     heartbeat=False
 
@@ -216,6 +219,25 @@ class DeepHeartbeatTests(ActivityCase):
         self.advance(1180)
         self.assertIn('Hâlâ çalışıyorum',self.heartbeats()[0]['text'])
 
+    def test_a_line_names_the_running_turn_from_its_own_status_read(self):
+        # ORK-819: V1's footer read a generic "Agent" on every heartbeat.
+        self.data['matched_runs']=[RUN];self.ledger.save(self.data)
+        self.status=dict(deep=dict(run_id=RUN,phase='running',progress=dict(payload_id='payload'),
+                                   models=dict(provider='claude',actual_model='synthetic-model')))
+        self.advance(1180);line,=self.heartbeats()
+        self.assertEqual({k:line.get(k) for k in ('provider','model','layer','identitySource','runId')},
+                         dict(provider='claude',model='synthetic-model',layer='deep',identitySource='run',runId=RUN))
+        self.assertEqual((line['phase'],line['activityNotice']),('final_answer',True))
+        parent=next(m for m in self.ledger.messages() if m['id']==line['parentMessageId'])
+        self.assertEqual(parent['timerSourceId'],'status','V1 labels a status line an update by its parent')
+
+    def test_a_line_without_a_verified_run_names_no_agent(self):
+        # A run outside this input's matched runs, or unreported models, is no evidence.
+        self.status=dict(deep=dict(run_id=RUN,phase='running',models=dict(provider='codex',actual_model='other')))
+        self.advance(1000+20*60)
+        self.assertTrue(self.notices())
+        for line in self.notices():self.assertNotIn('provider',line);self.assertNotIn('model',line)
+
 
 class HeartbeatAfterFinalTests(ActivityCase):
     """No heartbeat after, or racing, an answer final.
@@ -334,6 +356,23 @@ class WaitingHeartbeatTests(ActivityCase):
         self.run_to(1000+16*60,start=1200)
         self.assertEqual(self.posted(),2,'the same 3/8/15 backoff: the next line at 8 minutes')
         self.assertEqual(self.row()['activity']['heartbeats'],2)
+
+    def test_the_line_names_the_running_earlier_turn_only_with_its_identity(self):
+        # ORK-819: the earlier turn's own status read (input_activity.record) names it.
+        from v2.compat.v1_runtime.input_activity import record
+        for name,deep,expected in (
+                ('verified',dict(run_id=RUN,phase='running',models=dict(provider='codex',resolved_model='synthetic-model')),
+                 dict(provider='codex',model='synthetic-model',runId=RUN)),
+                ('not its own run',dict(run_id=RUN,phase='running',models=dict(provider='codex',actual_model='x')),None)):
+            with self.subTest(name):
+                self.setUp()
+                own=[RUN] if expected else ['other']
+                for now in range(1000,1186,15):
+                    record(self.data,dict(deep=deep),own,now=now)
+                    if not expected:self.data['transport_activity']['deep_running']=True  # proof from elsewhere
+                    self.ledger.save(self.data);waiting(self.worker,now=now)
+                line,=self.lines()
+                self.assertEqual({k:line[k] for k in ('provider','model','runId') if k in line},expected or {})
 
     def row(self):
         with self.ledger.connect() as db:

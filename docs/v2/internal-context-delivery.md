@@ -24,9 +24,11 @@ The adapter checks the record's custody, exact text digest and conversation.
 It then awaits the input's ordinary exact-source Deep run without exporting the
 machine input. Useful Deep progress keeps the existing settle interval, payload
 deduplication and binding policy. Its accepted final answer uses the existing
-delivery and acknowledgement path. Both carry `timerSourceId: "task-update"`
-and a synthetic parent with no timer namespace, so the transport can present
-them as ordinary task replies rather than scheduled reminders.
+delivery and acknowledgement path. Both use a synthetic parent with no timer
+namespace, so the transport can present them as ordinary task replies rather
+than scheduled reminders: the answer carries `timerSourceId: "task-update"`
+and a progress note `timerSourceId: "task-update-progress"`, which the
+WhatsApp footer marks as an update.
 
 Unregistered owner text, JSON and API messages retain their existing behavior.
 A malformed or untrusted matching record stops that scan before an echo or

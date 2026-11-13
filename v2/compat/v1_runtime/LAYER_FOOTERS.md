@@ -11,6 +11,10 @@ New exports retain their existing IDs, text, ordering and acknowledgement contra
 
 External coordinator/operator posts preserve their own provider/model and use `identitySource: post`; the native Deep cannot overwrite them. Native questions retain their exact producing run identity.
 
+Adapter status lines (Deep heartbeat, legacy running/missing-run notice, deadline or release continuation) are template text, but they report on one run: they carry that run's identity from the same status read that produced them (`model_identity.run_identity`). A waiting input's line names the earlier running turn from that turn's own fresh status read (`transport_activity.deep_identity`). Without a verified run a line carries no identity, so the footer reads a generic agent rather than a guessed one.
+
+V1's footer types a pseudo-timer reply by its parent's source id: `status`, `web-progress` and `task-update-progress` are updates; an operator/system `post` is a notice (compact footer, no agent line); every other reply (a timer answer, coordinator post, question, `web` or `task-update` answer) is a final. The mirror of the owner's own web message is exported with `kind: "notice"`: it is not an agent's answer.
+
 A coordinator post with `request_key: coordinator-input:<public-input-uuid>:answer` links only to that exact public input in the same scoped ledger. Legacy, foreign or missing inputs remain unlinked; neither the latest event sequence nor message text supplies a substitute. Replayed posts and pending exports retain their first frozen metadata.
 
 This changes no Core schema/API, provider input, native identity, delivery fence, timer authority or replay policy. It supplies the optional metadata consumed by V1's two-layer footer.

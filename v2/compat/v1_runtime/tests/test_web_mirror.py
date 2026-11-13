@@ -110,6 +110,8 @@ class WebMirrorTests(Base):
         self.assertEqual(user["publicMessageId"], "v2timer-" + user["id"])
         self.assertEqual(mirror["text"], "Deploy the window change")
         self.assertEqual(mirror["parentMessageId"], user["id"])
+        # The owner's own words: V1 gives a notice the compact footer, no agent line (ORK-819).
+        self.assertEqual(mirror["kind"], "notice")
         self.assertEqual(self.ledger.health()["webAnswersAwaited"], 1)
         self.assertIsNone(self.ledger.next_input(), "never in the serial WhatsApp queue")
         self.assertNotIn("/messages", [r for r, _ in self.peer.mutations])
@@ -118,7 +120,9 @@ class WebMirrorTests(Base):
         users, replies = self.users(), self.replies()
         self.assertEqual(len(users), 2)
         self.assertEqual(users[1]["text"], LABEL + " ↩ Deploy the window change")
+        self.assertEqual(users[1]["timerSourceId"], "web")
         self.assertEqual(replies[-1]["text"], "Deployed.")
+        self.assertNotIn("kind", replies[-1], "the answer stays an agent final")
         self.assertEqual(replies[-1]["parentMessageId"], users[1]["id"])
         self.assertEqual(self.ledger.health()["webAnswersAwaited"], 0)
         # The adapter never opens a window or accepts a run for web input.
@@ -266,6 +270,10 @@ class WebMirrorTests(Base):
             self.assertIn("halfway.", [m["text"] for m in self.replies()])
             self.scan()
         self.assertEqual([m["text"] for m in self.replies()].count("halfway."), 1)
+        # Its parent marks the note an update for V1's footer (ORK-819).
+        note, = [m for m in self.replies() if m["text"] == "halfway."]
+        parent, = [u for u in self.users() if u["id"] == note["parentMessageId"]]
+        self.assertEqual(parent["timerSourceId"], "web-progress")
 
     def test_app_attachment_notes_become_names_or_a_count(self):
         text = ("see these\n\n[Files attached in the Orkestr app, stored in this conversation's attachment store, "

@@ -1,5 +1,5 @@
 import unittest
-from v2.compat.v1_runtime.model_identity import observed_identity
+from v2.compat.v1_runtime.model_identity import observed_identity, run_identity
 
 RUN = "11111111-1111-4111-8111-111111111111"
 
@@ -79,3 +79,19 @@ class ResolvedModelAndQuickTests(unittest.TestCase):
         self.assertEqual(quick_identity(lambda *_: {}, {}), {})
         unreported = {"run_id": RUN, "models": {}}
         self.assertEqual(quick_identity(lambda *_: {}, {}, unreported), {})
+
+
+class RunIdentityTests(unittest.TestCase):
+    """A status line names the run it reports on, from that run's own status (ORK-819)."""
+
+    def test_names_the_exact_run_from_its_status_without_another_read(self):
+        status = {"run_id": RUN, "phase": "running", "models": {"provider": "codex", "resolved_model": "resolved-model",
+                                                                "actual_reasoning_effort": "high"}}
+        self.assertEqual(run_identity(status), {"provider": "codex", "model": "resolved-model", "layer": "deep",
+                                                "identitySource": "run", "runId": RUN, "observedReasoningEffort": "high"})
+
+    def test_no_verified_run_names_no_agent(self):
+        for status in (None, {}, {"run_id": None}, {"run_id": "not-a-uuid", "models": {"provider": "codex"}},
+                       {"run_id": "00000000-0000-0000-0000-000000000000", "models": {"provider": "codex"}}):
+            with self.subTest(status=status):
+                self.assertEqual(run_identity(status), {})

@@ -93,7 +93,9 @@ class InternalContextTests(Base):
         messages = self.ledger.messages()
         self.assertEqual([m['text'] for m in messages if m['role'] == 'assistant'],
                          ['The reference is rendering.', 'The reference is ready.'])
-        self.assertTrue(all(m['timerSourceId'] == 'task-update' for m in messages if m['role'] == 'user'))
+        # The progress note's parent marks it an update for V1's footer (ORK-819).
+        self.assertEqual([m['timerSourceId'] for m in messages if m['role'] == 'user'],
+                         ['task-update-progress', 'task-update'])
         self.assertNotIn(self.message['text'], [m['text'] for m in messages])
 
     def test_unregistered_json_or_matching_english_text_is_an_ordinary_message(self):

@@ -2,6 +2,8 @@
 import re
 import uuid
 
+from .layer_identity import IDENTITY_FIELDS
+
 
 def token(value):
     return value if isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9._:-]{1,64}", value) else None
@@ -44,6 +46,19 @@ def observed_identity(call, run_id=None, status=None, fast=False):
     if provider:
         result["provider"] = provider
     return result
+
+
+def run_identity(status):
+    """Footer identity for an adapter status line (heartbeat, continuation):
+    the model evidence of the exact run it reports on, from that run's own
+    status read. Without a verified run it is empty, so the line names no
+    agent rather than a guessed one."""
+    if not isinstance(status, dict) or not isinstance(status.get("run_id"), str):
+        return {}
+    observed = observed_identity(None, run_id=status["run_id"], status=status)
+    if observed.get("identitySource") != "run":
+        return {}
+    return {k: v for k, v in observed.items() if k in IDENTITY_FIELDS and v}
 
 
 def quick_identity(call, data, fast_status=None):
