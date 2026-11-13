@@ -8,6 +8,7 @@
 // state in words (folder_state.mjs); the activity log may live elsewhere
 // (`logRoot`, the conversation's Files & context drawer).
 import {encryptedUploadClient} from '../attachments/encrypted_upload.mjs';
+import {setTitleMark} from '../title_marks.mjs';
 import {DENIED, folderState} from './folder_state.mjs';
 import {createRelay} from './relay.mjs';
 
@@ -42,7 +43,7 @@ async function remembered(indexedDB, key, value) {
 export function mountLocalFiles({conversation, csrf, root, logRoot = null}, {
   picker = globalThis.showDirectoryPicker?.bind(globalThis), indexedDB = globalThis.indexedDB,
   uploader = encryptedUploadClient({conversation, csrf}), fetcher, document = globalThis.document,
-  relayOptions = {},
+  notifications = globalThis.Notification, relayOptions = {},
 } = {}) {
   const make = (tag, props = {}, ...children) => {
     const node = document.createElement(tag);
@@ -68,27 +69,45 @@ export function mountLocalFiles({conversation, csrf, root, logRoot = null}, {
   let live = true, relay = null, handle = null, saved = null, message = '';
   const confirmations = new Map();
   const key = `conversation:${conversation}`;
-  const title = {set(on) {
-    const current = document.title || '';
-    if (on && !current.startsWith(MARK)) document.title = MARK + current;
-    if (!on && current.startsWith(MARK)) document.title = current.slice(MARK.length);
+  // The tab title shows the connection ("● ") and, while a write waits for
+  // the owner here, "Approve write · " (ORK-804): a hidden tab still says so.
+  const title = {set(connected) {
+    setTitleMark(document, 'folder', connected);
+    setTitleMark(document, 'write', live && confirmations.size > 0);
   }};
+  // One system notification per waiting write, only if the owner already
+  // allowed notifications for this site: permission is never asked here.
+  function notify(request) {
+    try {
+      if (notifications?.permission !== 'granted') return null;
+      const notice = new notifications('Approve write', {tag: `orkestr-local-write-${request.request_id}`,
+        body: `The thread wants to write \u201c${request.path}\u201d in \u201c${handle?.name || 'the folder'}\u201d. Allow or refuse it in this tab.`});
+      notice.onclick = () => { try { globalThis.focus?.(); } catch { /* Focus is best effort. */ } notice.close(); };
+      return notice;
+    } catch { return null; }
+  }
   const visibility = () => { if (document.visibilityState === 'visible') relay?.poke(); };
   document.addEventListener?.('visibilitychange', visibility);
 
   function confirm(request, {bytes, signal}) {
     return new Promise(resolve => {
-      const settle = answer => { confirmations.delete(request.request_id); resolve(answer); render(); };
-      signal.addEventListener('abort', () => settle('refuse'), {once: true});
+      if (signal.aborted) { resolve('refuse'); return; }
       let preview = null;
       try { preview = new TextDecoder('utf-8', {fatal: true}).decode(bytes.subarray(0, PREVIEW_CHARS * 4)).slice(0, PREVIEW_CHARS); }
       catch { /* Not text: size and checksum only. */ }
-      confirmations.set(request.request_id, {request, bytes, preview, async allow() {
+      const entry = {request, bytes, preview, notice: null, async allow() {
         // The browser's permission prompt needs this click's user activation.
         let permission = 'denied';
         try { permission = await handle.requestPermission({mode: 'readwrite'}); } catch { /* Treated as denied. */ }
         settle(permission === 'granted' ? 'allow' : 'denied');
-      }, refuse() { settle('refuse'); }});
+      }, refuse() { settle('refuse'); }};
+      function settle(answer) {
+        if (confirmations.get(request.request_id) !== entry) return;
+        confirmations.delete(request.request_id); entry.notice?.close(); resolve(answer); render();
+      }
+      signal.addEventListener('abort', () => settle('refuse'), {once: true});
+      confirmations.set(request.request_id, entry);
+      entry.notice = notify(request);
       render();
     });
   }

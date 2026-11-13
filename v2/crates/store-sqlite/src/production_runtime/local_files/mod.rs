@@ -44,6 +44,7 @@ mod grant;
 #[cfg(test)]
 mod tests;
 mod view;
+mod waiting;
 use view::{result_json, view};
 
 type R<T> = std::result::Result<T, ResourceError>;
@@ -172,10 +173,24 @@ impl Store {
         write: bool,
         kinds: &[&str],
     ) -> R<Transaction<'_, Sqlite>> {
+        self.local_files_session(credential, owner, Some(conversation), write, kinds)
+            .await
+    }
+
+    /// [`Self::local_files_scope`], or the owner's credential alone for an
+    /// owner-wide read (`conversation` is `None`).
+    async fn local_files_session(
+        &self,
+        credential: &str,
+        owner: &OwnerId,
+        conversation: Option<&ConversationId>,
+        write: bool,
+        kinds: &[&str],
+    ) -> R<Transaction<'_, Sqlite>> {
         if self.authority.is_some() || credential.is_empty() || credential.len() > 1024 {
             return Err(ResourceError::Unauthorized);
         }
-        if conversation.0.is_nil() {
+        if conversation.is_some_and(|c| c.0.is_nil()) {
             return Err(ResourceError::Invalid);
         }
         let mut tx = self
@@ -196,7 +211,9 @@ impl Store {
         if !kind.is_some_and(|k| kinds.contains(&k.as_str())) {
             return Err(ResourceError::Unauthorized);
         }
-        owned(&mut tx, owner, conversation).await?;
+        if let Some(conversation) = conversation {
+            owned(&mut tx, owner, conversation).await?;
+        }
         Ok(tx)
     }
 

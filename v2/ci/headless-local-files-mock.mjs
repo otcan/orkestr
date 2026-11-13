@@ -11,7 +11,11 @@ const packageName = id => `selection-${id.replaceAll('-', '').slice(0, 12)}.tar`
 
 export function localFilesMock(state) {
   // failPolls: answer polls 503, as when the tab cannot reach the server.
-  const lf = state.localFiles = {requests: [], results: new Map(), tab: null, folder: null, polls: 0, disconnects: 0, failPolls: false,
+  // conversation: the one the connected tab polls for (ORK-804 waiting list).
+  const lf = state.localFiles = {requests: [], results: new Map(), tab: null, folder: null, conversation: null, conversationName: 'Assistant',
+    polls: 0, disconnects: 0, failPolls: false, waitingReads: 0,
+    // The server's deadline passed before the tab answered (ORK-804).
+    expire(id) { const r = lf.requests.find(x => x.request_id === id); r.state = 'failed'; r.error = 'expired'; r.finished_ms = Date.now(); },
     enqueue(operation, {path = null, paths = [], content = null} = {}) {
       const bytes = content === null ? null : Buffer.from(content);
       const request = {request_id: randomUUID(), operation, path, paths, state: 'queued', error: null, bytes,
@@ -22,6 +26,14 @@ export function localFilesMock(state) {
     }};
   const view = ({bytes, ...request}) => request;
   return async (req, res, path) => {
+    // ORK-804: every tab of the owner reads which chat has a write waiting.
+    if (path === '/api/v2/local-files/waiting' && req.method === 'GET') {
+      lf.waitingReads++;
+      const open = lf.requests.filter(r => r.operation === 'write' && ['queued', 'working'].includes(r.state));
+      json(res, 200, {conversations: lf.tab && lf.conversation && open.length ? [{conversation_id: lf.conversation, conversation_name: lf.conversationName,
+        folder_name: lf.folder, writes: open.length, deadline_ms: Math.min(...open.map(r => r.deadline_ms))}] : []});
+      return true;
+    }
     const route = /^\/api\/v2\/conversations\/([0-9a-f-]{36})\/local-files(?:\/(poll|disconnect)|\/requests\/([0-9a-f-]{36})\/(content|result))?$/.exec(path);
     if (!route) return false;
     if (req.method !== 'GET' && req.headers['x-orkestr-csrf'] !== 'synthetic-csrf') { json(res, 403, {code: 'csrf_rejected'}); return true; }
@@ -34,7 +46,7 @@ export function localFilesMock(state) {
       if (lf.failPolls) { json(res, 503, {code: 'synthetic_unavailable'}); return true; }
       if (lf.tab && lf.tab !== body.connection_id && !body.takeover) { json(res, 409, {code: 'local_files_connected_elsewhere'}); return true; }
       if (lf.tab !== body.connection_id) for (const r of lf.requests) if (r.state === 'working') r.state = 'queued';
-      lf.tab = body.connection_id; lf.folder = body.folder_name;
+      lf.tab = body.connection_id; lf.folder = body.folder_name; lf.conversation = route[1];
       for (const r of lf.requests) if (r.state === 'queued') { r.state = 'working'; r.holder = lf.tab; }
       json(res, 200, {requests: lf.requests.filter(r => r.state === 'working' && r.holder === lf.tab).map(({holder, ...r}) => view(r)), ttl_ms: 75000});
       return true;

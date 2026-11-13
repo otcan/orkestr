@@ -84,6 +84,8 @@ export function createRelay({conversation, csrf, root, folderName, uploader, con
       }
       case 'write': {
         const bytes = await content(request);
+        // Dropped while the content loaded: never show a card nobody can close.
+        if (signal.aborted) throw new FolderError('browser_error');
         const answer = await confirm(request, {bytes, signal});
         if (signal.aborted) throw new FolderError('browser_error');
         if (answer === 'refuse') return {body: {outcome: 'failed', error: 'refused_by_owner'}};
@@ -93,10 +95,15 @@ export function createRelay({conversation, csrf, root, folderName, uploader, con
       default: throw new FolderError('browser_error');
     }
   }
+  // A request the server no longer gave this tab (expired, failed by a
+  // revoke, finished elsewhere) before this tab produced an outcome for it.
+  // A write that was already written says so: the agent was not told.
+  const dropped = (request, done) => request.operation !== 'write' ? 'expired'
+    : done?.body?.outcome === 'done' ? 'written, but expired before it was reported' : 'expired, nothing written';
   async function handle(request, entry) {
-    let outcome;
+    let outcome, done = null;
     try {
-      const done = await perform(request, entry.controller.signal);
+      done = await perform(request, entry.controller.signal);
       if (entry.controller.signal.aborted) return;
       outcome = (await finish(request, done.body, done.status)) ? done.body.outcome === 'done' ? 'done' : done.body.error : 'not accepted';
     } catch (error) {
@@ -105,7 +112,11 @@ export function createRelay({conversation, csrf, root, folderName, uploader, con
       outcome = failure;
       try { await finish(request, {outcome: 'failed', error: failure}); } catch { /* The next poll shows it again. */ }
     } finally {
-      active.delete(request.request_id);
+      // The same request may have been offered again meanwhile: only this entry goes.
+      if (active.get(request.request_id) === entry) active.delete(request.request_id);
+      // Exactly one entry per request: an outcome this tab produced wins, and
+      // nothing is recorded when the relay itself stopped.
+      if (!outcome && entry.dropped && !stopper.signal.aborted) outcome = dropped(request, done);
       if (outcome) note(request, outcome);
       changed();
     }
@@ -118,8 +129,9 @@ export function createRelay({conversation, csrf, root, folderName, uploader, con
     takeover = false; state = 'connected';
     const held = new Set(reply.value.requests.map(r => r.request_id));
     // A request that is no longer this tab's (expired, finished, taken by a
-    // newer tab) is dropped here, closing any confirmation it showed.
-    for (const [id, entry] of active) if (!held.has(id)) { entry.controller.abort(); active.delete(id); }
+    // newer tab) is dropped here, closing any confirmation it showed. Its
+    // handler records the drop in the activity unless it already has an outcome.
+    for (const [id, entry] of active) if (!held.has(id)) { entry.dropped = true; entry.controller.abort(); active.delete(id); }
     for (const request of reply.value.requests) {
       if (active.has(request.request_id) || !uuid(request.request_id)) continue;
       const entry = {view: request, controller: new AbortController()};

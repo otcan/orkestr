@@ -129,18 +129,24 @@ test('a write needs the owner: refused, tampered and allowed writes', async () =
   assert.ok(root.fake.calls.some(c => c[0] === 'requestPermission' && c[1] === 'readwrite'));
 });
 
-test('a request that leaves the queue closes its confirmation; another tab and disconnect', async () => {
+test('a request that leaves the queue closes its confirmation; another tab and disconnect', async t => {
   const server = queue(), files = uploader(), root = fakeDirectory(tree());
   let aborted = false;
   const confirm = (request, {signal}) => new Promise(resolve => signal.addEventListener('abort', () => { aborted = true; resolve('refuse'); }));
   const r = relay(server, files, root, confirm);
+  t.after(() => r.stop());
   const id = server.add('write', {path: 'a.txt', content: 'x'});
   void r.start();
   await until(() => r.snapshot().pending.length === 1, 'confirmation shown');
   server.drop(id);
   await until(() => aborted, 'confirmation closed');
   assert.equal(server.results.has(id), false, 'nothing is reported for a request the tab no longer holds');
+  // ORK-804: the owner sees that the write expired, once.
+  await until(() => r.snapshot().activity.length === 1, 'expired entry');
+  assert.deepEqual(r.snapshot().activity.map(a => [a.id, a.operation, a.path, a.outcome]), [[id, 'write', 'a.txt', 'expired, nothing written']]);
+  assert.deepEqual(r.snapshot().pending, []);
   await r.disconnect();
+  assert.equal(r.snapshot().activity.length, 1, 'disconnecting adds nothing');
   assert.equal(r.snapshot().state, 'disconnected');
   assert.ok(server.calls.some(([method, path]) => method === 'POST' && path.endsWith('/local-files/disconnect')));
   assert.equal(root.fake.text('a.txt'), 'alpha');
@@ -165,4 +171,87 @@ test('an upload the server lost is prepared again once before the result', async
   assert.equal(server.results.get(read).outcome, 'done');
   assert.equal(files.uploads.length, 1, 'the file is uploaded once');
   assert.equal(files.attached.length, 2, 'and prepared again');
+});
+
+// ORK-804: a request the server stops giving this tab is recorded in the
+// activity exactly once, and only when this tab produced no outcome for it.
+test('a dropped read is recorded as expired; stopping the relay records nothing', async t => {
+  const server = queue(), root = fakeDirectory(tree());
+  let uploading = false;
+  // An upload that only ends when the relay gives up on it.
+  const files = {async upload(file, id, {signal}) {
+    uploading = true;
+    await new Promise((resolve, reject) => signal.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')), {once: true}));
+  }, async attach() { return {}; }};
+  const r = relay(server, files, root);
+  t.after(() => r.stop());
+  const read = server.add('read', {path: 'a.txt'});
+  void r.start();
+  await until(() => uploading, 'upload started');
+  server.drop(read);
+  await until(() => r.snapshot().activity.length === 1, 'expired entry');
+  assert.deepEqual(r.snapshot().activity.map(a => [a.id, a.operation, a.outcome]), [[read, 'read', 'expired']]);
+  assert.equal(server.results.has(read), false);
+  // A write waiting for the owner when the relay stops is not "expired".
+  let shown = false;
+  const waiting = relay(server, uploader(), fakeDirectory(tree()), (request, {signal}) => new Promise(resolve => {
+    shown = true; signal.addEventListener('abort', () => resolve('refuse'), {once: true});
+  }));
+  t.after(() => waiting.stop());
+  await r.stop();
+  server.add('write', {path: 'a.txt', content: 'x'});
+  void waiting.start();
+  await until(() => shown, 'confirmation shown');
+  await waiting.stop();
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.deepEqual(waiting.snapshot().activity, [], 'nothing is recorded when the relay itself stops');
+});
+
+test('a result posted while the poll drops the request is recorded once, as its outcome', async t => {
+  const server = queue(), root = fakeDirectory(tree());
+  let posted = false, pollsAfter = 0;
+  // The result reaches the server, but its answer arrives only after two
+  // more polls (which no longer list the request) have dropped it.
+  const fetcher = async (path, options) => {
+    const reply = await server.fetcher(path, options);
+    if (path.endsWith('/poll') && posted) pollsAfter++;
+    if (path.endsWith('/result')) { posted = true; await until(() => pollsAfter >= 2, 'polls after the result'); }
+    return reply;
+  };
+  const r = relay({...server, fetcher}, uploader(), root);
+  t.after(() => r.stop());
+  const list = server.add('list', {path: ''});
+  void r.start();
+  await until(() => r.snapshot().activity.length > 0, 'outcome');
+  await new Promise(resolve => setTimeout(resolve, 20));
+  await r.stop();
+  assert.ok(pollsAfter >= 2, 'the poll ran while the result was answered');
+  assert.deepEqual(r.snapshot().activity.map(a => [a.id, a.outcome]), [[list, 'done']], 'never "expired" for a request that completed');
+  assert.equal(server.results.get(list).outcome, 'done');
+});
+
+test('a write that was written but dropped before its result says so', async t => {
+  const server = queue(), root = fakeDirectory(tree());
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  // Hashing the written bytes waits until the server has dropped the request.
+  const subtle = {digest: async (algorithm, data) => {
+    if (root.fake.calls.some(c => c[0] === 'written')) await gate;
+    return crypto.subtle.digest(algorithm, data);
+  }};
+  const confirm = async () => ((await root.requestPermission({mode: 'readwrite'})) === 'granted' ? 'allow' : 'denied');
+  const r = relay(server, uploader(), root, confirm, {subtle});
+  t.after(() => { release(); return r.stop(); });
+  const write = server.add('write', {path: 'docs/new.md', content: 'hello'});
+  void r.start();
+  await until(() => root.fake.calls.some(c => c[0] === 'written'), 'written');
+  server.drop(write);
+  const polls = server.calls.filter(([, path]) => path.endsWith('/poll')).length;
+  await until(() => server.calls.filter(([, path]) => path.endsWith('/poll')).length >= polls + 2, 'dropped');
+  release();
+  await until(() => r.snapshot().activity.length === 1, 'entry');
+  await r.stop();
+  assert.equal(root.fake.text('docs/new.md'), 'hello');
+  assert.deepEqual(r.snapshot().activity.map(a => [a.id, a.outcome]), [[write, 'written, but expired before it was reported']]);
+  assert.equal(server.results.has(write), false);
 });
