@@ -20,8 +20,17 @@ Every fix keeps the codec closed: unknown frames still refuse the channel.
   explicitly correlated frame. One channel carries exactly one native input,
   so a fresh reader still refuses any uncorrelated or historical frame.
 - **System notices.** `system` frames other than `init` (`ui_invalidate`,
-  `api_retry`, `thinking_tokens`, `status`, task notices, ...) are a bounded
-  discard (256 per channel). They can arrive before setup completes.
+  `api_retry`, `status`, task notices, ...) are a bounded discard (256 per
+  channel). They can arrive before setup completes.
+- **Turn progress.** Each model request emits one `status` notice with
+  `status: "requesting"`, and adaptive thinking shown as `updates` emits one
+  `thinking_tokens` estimate per thinking delta. A long, tool-heavy turn emits
+  hundreds of these, so they have their own bound (65536 per channel) instead
+  of the 256 above. Their shape is closed: the installed fields plus the join
+  key the CLI stamps on them (`user_message_uuids` and `user_message_uuid`
+  respectively), which must name this channel's input. Before this rule the
+  257th notice refused a long Deep turn mid-run (broker exit 123, failure
+  class 8).
 - **Stop.** The interrupt ACK reports `still_queued: []`; result frames carry
   extra telemetry (`subagent_stats`, `result_index`, ...); the interrupt notice
   carries `timestamp`. All are accepted and never forwarded.
