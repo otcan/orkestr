@@ -63,6 +63,11 @@ impl Tab {
     /// Owner-wide views, opened from the app header.
     pub const GLOBAL: [Tab; 3] = [Tab::VirtualDesks, Tab::Host, Tab::OrkestrSettings];
 
+    /// Shows the chat: Chat itself, and Files, whose panel opens beside or
+    /// over the same chat so a connected folder keeps working (ORK-809).
+    pub fn shows_chat(self) -> bool {
+        matches!(self, Tab::Chat | Tab::Files)
+    }
     /// An owner-wide view: its route carries no conversation.
     pub fn is_global(self) -> bool {
         Tab::GLOBAL.contains(&self)

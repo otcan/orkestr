@@ -67,23 +67,26 @@ try {
   await page.setViewport({width: 1280, height: 860});
   await page.evaluateOnNewDocument(install);
   await page.goto(`${origin}/#conversation/${A}`, {waitUntil: 'domcontentloaded'});
-  await page.waitForSelector('.local-folder-connect');
+  await page.waitForSelector('.composer-context .local-folder-chip');
   assert.equal(lf.polls, 0, 'nothing is served before the owner connects a folder');
-  // ORK-786: the control sits in the composer's attach actions, not in a
-  // floating toolbar, and states its state in words.
+  // ORK-809: the composer has one folder chip (its state, and Connect in one
+  // click); the full controls, in words, are in the Files panel.
   const folderView = () => page.evaluate(() => {
     const root = document.querySelector('.local-folder');
+    const chips = [...document.querySelectorAll('.message-composer .composer-context .local-folder-chip')];
     return {state: root?.dataset.folderState, text: root?.querySelector('.local-folder-state')?.textContent,
-      role: root?.querySelector('.local-folder-state')?.getAttribute('role'), inComposer: !!root?.closest('.message-composer .composer-context'),
-      toolbar: !!document.querySelector('.conversation-toolbar')};
+      role: root?.querySelector('.local-folder-state')?.getAttribute('role'), inPanel: !!root?.closest('.files-drawer'),
+      chips: chips.map(n => [n.tagName.toLowerCase(), n.textContent]), toolbar: !!document.querySelector('.conversation-toolbar')};
   });
   await page.waitForFunction(() => document.querySelector('.local-folder')?.dataset.folderState === 'none');
-  assert.deepEqual(await folderView(), {state: 'none', text: 'No folder connected', role: 'status', inComposer: true, toolbar: false});
+  assert.deepEqual(await folderView(), {state: 'none', text: 'No folder connected', role: 'status', inPanel: true, chips: [['button', 'Connect folder…']], toolbar: false});
   await screenshots(page, 'none');
-  await press(page, '.local-folder-connect');
+  await press(page, '.composer-context .local-folder-chip');
   await page.waitForFunction(() => document.querySelector('.local-folder-live')?.textContent.includes('Synthetic folder'));
   assert.equal((await folderView()).state, 'ready');
   assert.match((await folderView()).text, /Folder ready: “Synthetic folder” · read-only, writes ask you first/);
+  await page.waitForFunction(() => document.querySelector('.composer-context a.local-folder-chip')?.textContent === '● Synthetic folder');
+  assert.deepEqual((await folderView()).chips, [['a', '● Synthetic folder']], 'connected: one chip, a link to Files');
   assert.deepEqual(await page.evaluate(() => window.__pickerCalls), [{id: 'orkestr-local-folder', mode: 'read'}], 'the picker asks for read access only');
   assert.ok((await page.title()).startsWith('● '), 'the tab title shows the connection');
   assert.equal(lf.folder, 'Synthetic folder');
@@ -126,7 +129,7 @@ try {
   assert.equal((await served(refused, 'refused write')).error, 'refused_by_owner');
   assert.equal(await page.evaluate(() => window.__syntheticFolder.fake.text('a.txt')), 'alpha');
 
-  // The activity log is inspected in the Files & context drawer.
+  // The activity log is inspected in the Files panel.
   await page.waitForFunction(() => document.querySelector('.files-drawer .local-folder-activity')?.textContent.includes('refused_by_owner'));
   assert.equal(await page.$('.composer-context .local-folder-activity'), null, 'the composer shows state, not the log');
 
@@ -184,9 +187,15 @@ try {
   await screenshots(page, 'offline');
   lf.failPolls = false;
   await page.waitForFunction(() => document.querySelector('.local-folder')?.dataset.folderState === 'ready', {timeout: 10000});
-  // Revoking stops serving the folder at once.
-  await press(page, '.local-folder-disconnect');
-  await page.waitForSelector('.local-folder-connect');
+  // The chip of a connected folder opens Files; revoking there stops serving
+  // the folder at once.
+  await press(page, '.composer-context a.local-folder-chip');
+  await page.waitForFunction(conversation => location.hash === `#conversation/${conversation}/files`, {}, A);
+  await page.waitForFunction(() => getComputedStyle(document.querySelector('.files-drawer')).display !== 'none');
+  await screenshots(page, 'files-panel-connected');
+  await press(page, '.files-drawer .local-folder-disconnect');
+  await page.waitForSelector('.files-drawer .local-folder-connect');
+  await page.waitForFunction(() => document.querySelector('.composer-context .local-folder-chip')?.textContent === 'Connect folder…');
   assert.equal(lf.tab, null);
   assert.equal(lf.disconnects, 1);
   assert.ok(!(await page.title()).startsWith('● '), 'the indicator is gone');
@@ -201,8 +210,8 @@ try {
   await phone.setViewport({width: 390, height: 844, deviceScaleFactor: 2, isMobile: true, hasTouch: true});
   await phone.evaluateOnNewDocument(install);
   await phone.goto(`${origin}/#conversation/${A}`, {waitUntil: 'domcontentloaded'});
-  await phone.waitForSelector('.local-folder-connect');
-  await press(phone, '.local-folder-connect');
+  await phone.waitForSelector('.composer-context .local-folder-chip');
+  await press(phone, '.composer-context .local-folder-chip');
   await phone.waitForSelector('.local-folder-live');
   lf.enqueue('write', {path: 'a.txt', content: 'phone'});
   await phone.waitForSelector('.local-folder-confirm');
@@ -214,6 +223,7 @@ try {
   await plain.goto(`${origin}/#conversation/${A}`, {waitUntil: 'domcontentloaded'});
   await plain.waitForFunction(() => document.querySelector('.local-folder-note')?.textContent.includes('need Chrome or Edge'));
   assert.equal(await plain.$('.local-folder-connect'), null);
+  assert.equal(await plain.$eval('.local-folder-chip-slot', n => n.hidden && n.children.length === 0), true, 'no folder chip in the composer');
   assert.equal(await plain.$eval('.local-folder', n => n.dataset.folderState), 'unsupported');
   assert.equal(await plain.$eval('.local-folder-state', n => n.textContent), 'Folder access unavailable in this browser');
   await plain.close();

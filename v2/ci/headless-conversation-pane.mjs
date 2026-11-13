@@ -19,7 +19,7 @@ const measure = page => page.evaluate(() => {
   const area = box(scroll);
   const input = document.querySelector('#composer').getBoundingClientRect();
   const hit = document.elementFromPoint(input.left + input.width / 2, input.top + input.height / 2);
-  const actions = ['#composer', '.message-composer > button[type=submit]', '.message-composer .tool-button', '.local-folder', '.files-drawer-toggle']
+  const actions = ['#composer', '.message-composer > button[type=submit]', '.message-composer .tool-button', '.composer-context .local-folder-chip', '#conversation-tab-files']
     .map(selector => [selector, box(document.querySelector(selector))]);
   return {pane: box(pane), transcript, composer, runState, last, area, pinned: scroll.dataset.pinned,
     composerCovered: hit !== document.querySelector('#composer'),

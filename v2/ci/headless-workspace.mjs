@@ -810,55 +810,72 @@ export const scenarios = [
     await screenshot(label, 'message-formatting');
     await noHorizontalScroll();
   }],
-  ['chat-first-details-drawer', async label => {
+  ['files-panel', async label => {
+    // ORK-809: one Files place per chat. The header's Files opens a panel
+    // docked beside the chat on a wide pane and a full-height sheet on the
+    // phone; the chat (and a connected folder) stays mounted underneath.
     await page.goto(`${origin}/#conversation/${A}`, { waitUntil: 'domcontentloaded' });
     await page.reload({ waitUntil: 'domcontentloaded' });
     await page.waitForSelector('#composer');
-    await page.evaluate(() => { try { localStorage.removeItem('orkestr.v2.conversationDetailsOpen'); } catch {} });
-    await page.reload({ waitUntil: 'domcontentloaded' });
-    await page.waitForSelector('.files-drawer-toggle');
-    // ORK-786: no floating toolbar. A labelled "Files & context" control in
-    // the composer opens the drawer; technical panels never sit in the transcript.
-    const drawer = () => page.evaluate(() => {
-      const aside = document.querySelector('.conversation-details');
-      const toggle = document.querySelector('.files-drawer-toggle');
-      return { shown: !!aside && getComputedStyle(aside).display !== 'none', expanded: toggle.getAttribute('aria-expanded'),
-        controls: toggle.getAttribute('aria-controls') === aside.id, label: toggle.textContent.trim(), inComposer: !!toggle.closest('.message-composer'),
-        inTranscript: !!document.querySelector('.conversation-scroll .conversation-tools'), toolbar: !!document.querySelector('.conversation-toolbar'),
-        stored: (() => { try { return localStorage.getItem('orkestr.v2.conversationDetailsOpen'); } catch { return 'unavailable'; } })() };
+    const panel = () => page.evaluate(() => {
+      const aside = document.querySelector('.files-drawer');
+      return { shown: !!aside && getComputedStyle(aside).display !== 'none', hash: location.hash,
+        toggle: !!document.querySelector('.files-drawer-toggle'), inTranscript: !!document.querySelector('.conversation-scroll .files-section'),
+        current: [...document.querySelectorAll('nav[aria-label="Conversation"] button[aria-current=page]')].map(b => b.textContent.trim()),
+        sections: aside ? [...aside.querySelectorAll('.files-section h3, .files-private-toggle')].map(n => n.textContent.trim()) : [],
+        machinery: /held input|work slot|work window|Latest 100 saved inputs|not supported yet|Thread files/i.test(aside?.innerText ?? '') };
     });
-    assert.deepEqual(await drawer(), { shown: false, expanded: 'false', controls: true, label: 'Files & context', inComposer: true, inTranscript: false, toolbar: false, stored: null });
-    assert.ok(!(await page.evaluate(() => document.querySelector('.conversation-pane').innerText)).includes('Thread files'), 'Thread files are hidden in the chat');
+    let view = await panel();
+    assert.deepEqual([view.shown, view.toggle, view.inTranscript], [false, false, false], 'closed, no separate composer toggle, nothing in the transcript');
     assert.ok(!(await page.evaluate(() => document.body.textContent)).includes('Result accepted'), 'no acceptance jargon');
-    await screenshot(label, 'chat-details-closed');
-    // The control opens the drawer from the keyboard, focus moves into it,
-    // and it is remembered for this viewer.
-    await page.focus('.files-drawer-toggle');
-    await page.keyboard.press('Enter');
-    await page.waitForFunction(() => getComputedStyle(document.querySelector('.conversation-details')).display !== 'none');
-    assert.deepEqual(await drawer(), { shown: true, expanded: 'true', controls: true, label: 'Files & context', inComposer: true, inTranscript: false, toolbar: false, stored: '1' });
+    await screenshot(label, 'chat-files-closed');
+    await page.click('#conversation-tab-files');
+    await page.waitForFunction(() => getComputedStyle(document.querySelector('.files-drawer')).display !== 'none');
+    view = await panel();
+    assert.equal(view.hash, `#conversation/${A}/files`);
+    assert.deepEqual(view.current, ['Files']);
+    assert.deepEqual(view.sections, ['In this chat', 'Your folder', 'Private copies']);
+    assert.equal(view.machinery, false, 'no held inputs, work slots, work window or internal names in Files');
     await page.waitForFunction(() => document.activeElement?.classList.contains('files-drawer-close'));
-    await waitText('Thread files');
-    // The drawer never covers the composer.
-    const overlap = await page.evaluate(() => {
-      const a = document.querySelector('.conversation-details').getBoundingClientRect(), c = document.querySelector('.composer-dock').getBoundingClientRect();
-      return Math.max(0, Math.min(a.bottom, c.bottom) - Math.max(a.top, c.top)) * Math.max(0, Math.min(a.right, c.right) - Math.max(a.left, c.left));
-    });
-    assert.equal(overlap, 0, 'the drawer does not cover the composer');
-    await screenshot(label, 'chat-details-open');
+    // In this chat: the files the owner sent in this chat, newest first, each named and downloadable.
+    await page.waitForFunction(() => document.querySelectorAll('.files-drawer .chat-files .message-file-card').length >= 2, { timeout: 15000 });
+    const cards = await page.$$eval('.files-drawer .chat-files .message-file-card', nodes => nodes.map(n => ({
+      from: n.querySelector('.message-file-from')?.textContent, name: n.querySelector('strong')?.textContent,
+      download: [...n.querySelectorAll('button')].some(b => b.textContent === 'Download') })));
+    const pixel = cards.findIndex(c => c.name === 'orkestr-v2-synthetic-pixel.png');
+    assert.ok(pixel > 0, `the picture is listed, after the newer text files: ${JSON.stringify(cards.map(c => c.name))}`);
+    assert.ok(cards.every(c => c.from === 'You' && c.download), 'each names its sender and offers Download');
+    // Geometry: docked beside the chat (desktop), or a full-height sheet (phone).
+    const box = selector => page.$eval(selector, n => { const r = n.getBoundingClientRect(); return { left: r.left, right: r.right, top: r.top, bottom: r.bottom, width: r.width }; });
+    const [aside, pane, transcript, composer] = [await box('.files-drawer'), await box('.conversation-pane'), await box('.conversation-scroll'), await box('.composer-dock')];
+    if (label === 'phone') {
+      assert.ok(Math.abs(aside.top - pane.top) <= 1 && Math.abs(aside.bottom - pane.bottom) <= 1, `full height: ${JSON.stringify([aside, pane])}`);
+      assert.ok(aside.width >= pane.width - 1, 'full width on the phone');
+    } else {
+      assert.ok(transcript.right <= aside.left + 1 && composer.right <= aside.left + 1, `docked beside the chat: ${JSON.stringify([aside, transcript, composer])}`);
+      assert.ok(Math.abs(aside.right - pane.right) <= 1 && aside.width >= 280, 'at the pane edge, readable');
+    }
+    await screenshot(label, 'chat-files-open');
     await noHorizontalScroll();
-    // Escape closes it and returns focus to its control.
+    // Private copies stay collapsed until asked for.
+    assert.equal(await page.$('.files-drawer [aria-label="Thread files"]'), null);
+    await page.click('.files-private-toggle');
+    await page.waitForSelector('.files-drawer [aria-label="Thread files"]');
+    assert.equal(await page.$eval('.files-private-toggle', n => n.getAttribute('aria-expanded')), 'true');
+    await page.click('.files-private-toggle');
+    await page.waitForFunction(() => !document.querySelector('.files-drawer [aria-label="Thread files"]'));
+    // Escape closes Files, back to Chat with focus on the Files destination.
     await page.keyboard.press('Escape');
-    await page.waitForFunction(() => getComputedStyle(document.querySelector('.conversation-details')).display === 'none');
-    await page.waitForFunction(() => document.activeElement?.classList.contains('files-drawer-toggle'));
-    assert.equal((await drawer()).stored, '0');
-    await page.click('.files-drawer-toggle');
-    await page.waitForFunction(() => getComputedStyle(document.querySelector('.conversation-details')).display !== 'none');
+    await page.waitForFunction(() => getComputedStyle(document.querySelector('.files-drawer')).display === 'none');
+    await page.waitForFunction(() => document.activeElement?.id === 'conversation-tab-files');
+    assert.equal(await page.evaluate(() => location.hash), `#conversation/${A}`);
+    // The Files URL reopens it after a reload; Close returns to Chat.
+    await page.goto(`${origin}/#conversation/${A}/files`, { waitUntil: 'domcontentloaded' });
     await page.reload({ waitUntil: 'domcontentloaded' });
-    await page.waitForFunction(() => document.querySelector('.files-drawer-toggle')?.getAttribute('aria-expanded') === 'true', { timeout: 15000 });
+    await page.waitForFunction(() => { const a = document.querySelector('.files-drawer'); return a && getComputedStyle(a).display !== 'none'; }, { timeout: 15000 });
     await page.click('.files-drawer-close');
-    await page.waitForFunction(() => getComputedStyle(document.querySelector('.conversation-details')).display === 'none');
-    assert.equal((await drawer()).stored, '0');
+    await page.waitForFunction(() => getComputedStyle(document.querySelector('.files-drawer')).display === 'none');
+    assert.equal(await page.evaluate(() => location.hash), `#conversation/${A}`);
   }],
   ['readable-column', async label => {
     await page.goto(`${origin}/#conversation/${A}`, { waitUntil: 'domcontentloaded' });

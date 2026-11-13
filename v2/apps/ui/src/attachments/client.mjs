@@ -29,7 +29,13 @@ export function createAttachmentClient({owner,conversation,csrf,current,readOnly
    const response=await fetcher(path,{method,credentials:'same-origin',cache:'no-store',redirect:'error',signal:controller.signal,
     headers:method==='GET'?{}:{'Content-Type':'application/json','x-orkestr-csrf':csrf},...(body!==undefined?{body:encoded}:{})});
    check();if(response.status!==200){void response.body?.cancel().catch(()=>{});const error=new Error(response.status===401?'Sign in again to access files':response.status===410?'File removed':response.status===409?'File request changed or unavailable':'File request refused');error.status=response.status;throw error;}
-   if(response.redirected||response.headers.get('content-encoding'))throw new Error('Unexpected file representation');
+   if(response.redirected)throw new Error('Unexpected file representation');
+   // The server gzips JSON bodies of 1 KiB and more (response_shaping.rs) and
+   // the browser decodes them before this reads a byte, so a JSON read takes
+   // `gzip`. File bytes are verified against the manifest's length: a coded
+   // file response stays refused, as does any other coding (ORK-809).
+   const coding=(response.headers.get('content-encoding')||'').trim().toLowerCase();
+   if(coding&&(raw||coding!=='gzip'))throw new Error('Unexpected file representation');
    if(raw)return await raw(response);
    const reader=response.body?.getReader();if(!reader)throw new Error('File response missing');
    let size=0,reads=0,text='';const decoder=new TextDecoder();

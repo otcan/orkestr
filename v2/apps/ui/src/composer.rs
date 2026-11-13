@@ -9,8 +9,8 @@ use std::collections::BTreeMap;
 /// composer is free for the next one at once. A message sent while a turn
 /// runs joins that turn as a follow-up input.
 ///
-/// `children` are the conversation's context actions (Connect folder, the
-/// Files & context drawer), shown beside Attach and Paste text.
+/// `children` are the conversation's context actions (the folder chip,
+/// ORK-809), shown beside Attach and Paste text.
 #[component]
 pub fn Composer(
     id: String,
@@ -48,7 +48,7 @@ pub fn Composer(
             }
             div { class: "composer-actions",
                 crate::composer_tools::AttachTools { target: crate::composer_tools::AttachTarget::Native(attach_id.clone()), csrf: csrf.clone(), attached, disabled: preparing() }
-                div { class: "composer-context", role: "group", "aria-label": "Folder and conversation files", {children} }
+                div { class: "composer-context", role: "group", "aria-label": "Your folder", {children} }
             }
             crate::composer_tools::EnterSend { id: "composer" }
             p { id: "composer-help", "Enter sends · Shift+Enter adds a new line. You can keep sending; each message shows its own state." }

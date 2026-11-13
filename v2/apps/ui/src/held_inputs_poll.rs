@@ -13,9 +13,10 @@ pub fn HeldInputsPanel(
 ) -> Element {
     let mut after = use_signal(|| 0i64);
     rsx! {
-        div {
-        button { disabled: after() == 0, onclick: move |_| after.set(0), "First held input" }
+        div { class: "held-inputs",
         HeldInputsPoll { key: "{id}-{after()}", id, after: after(), session_scope, model, projection, onexpired, onnext: move |cursor| after.set(cursor) }
+        // Paging only where there is somewhere to go (ORK-809).
+        if after() != 0 { button { r#type: "button", onclick: move |_| after.set(0), "First held messages" } }
         }
     }
 }
@@ -87,6 +88,8 @@ fn HeldInputsPoll(
         .and_then(|page| page.next_after_sequence);
     rsx! {
         crate::held_inputs_view::HeldInputsView { model, projection, now_ms: now() }
-        button { disabled: next.is_none(), onclick: move |_| { if let Some(cursor) = next { onnext.call(cursor); } }, "Next held input" }
+        if let Some(cursor) = next {
+            button { r#type: "button", onclick: move |_| onnext.call(cursor), "More held messages" }
+        }
     }
 }

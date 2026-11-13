@@ -93,7 +93,14 @@ pub fn Conversation(
     session_scope: Signal<SessionScope>,
     execution: Signal<orkestr_v2_ui::execution::Execution>,
     drafts: Signal<BTreeMap<String, Draft>>,
-    held_inputs: Signal<orkestr_v2_ui::held_inputs::HeldInputs>,
+    /// The Files panel is open: the conversation's Files destination
+    /// (`#conversation/<id>/files`, ORK-809). It docks beside the chat on a
+    /// wide pane and is a full-height sheet on a narrow one; the chat (and a
+    /// connected folder) stays as it is underneath.
+    #[props(default)]
+    files_open: bool,
+    /// Opens (`true`) or closes (`false`) the Files panel.
+    onfiles: EventHandler<bool>,
     onexpired: EventHandler<()>,
 ) -> Element {
     let generation = session_scope.read().generation();
@@ -282,29 +289,29 @@ pub fn Conversation(
             }
         }
     });
-    // Files & context drawer: closed by default, remembered per viewer.
-    let mut details_open = use_signal(|| false);
+    // Files panel (ORK-809). Focus follows the owner: into the panel when it
+    // opens, back to the Files destination when Close or Escape closes it.
     let drawer_id = format!("conversation-details-{id}");
-    let toggle_id = format!("files-drawer-toggle-{id}");
     let close_id = format!("files-drawer-close-{id}");
-    let mut set_drawer = {
-        let (toggle_id, close_id) = (toggle_id.clone(), close_id.clone());
-        move |open: bool| {
-            details_open.set(open);
-            transport::store_flag(orkestr_v2_ui::live_stream::DETAILS_OPEN_KEY, open);
-            // Move focus with the owner's click: into the drawer when it
-            // opens, back to its control when it closes.
-            let target = serde_json::json!(if open { &close_id } else { &toggle_id });
+    let chip_id = format!("local-folder-chip-{id}");
+    let files_href = format!("#conversation/{id}/files");
+    let chat_files = use_signal(Vec::<orkestr_v2_ui::chat_files::ChatFile>::new);
+    let mut private_open = use_signal(|| false);
+    let first_render = use_hook(|| std::rc::Rc::new(std::cell::Cell::new(true)));
+    {
+        let close_id = close_id.clone();
+        use_effect(use_reactive((&files_open,), move |(open,)| {
+            if first_render.replace(false) || !open {
+                return;
+            }
+            let target = serde_json::json!(close_id);
             let _ = document::eval(&format!("for(let i=0;i<40;i++){{const el=document.getElementById({target});if(el&&el.offsetParent!==null){{el.focus();break;}}await new Promise(r=>requestAnimationFrame(r));}}return null;"));
-        }
+        }));
+    }
+    let close_files = move || {
+        onfiles.call(false);
+        let _ = document::eval("for(let i=0;i<40;i++){const el=document.getElementById('conversation-tab-files');if(el&&el.offsetParent!==null){el.focus();break;}await new Promise(r=>requestAnimationFrame(r));}return null;");
     };
-    use_future(move || async move {
-        if let Some(open) =
-            transport::stored_flag(orkestr_v2_ui::live_stream::DETAILS_OPEN_KEY).await
-        {
-            details_open.set(open);
-        }
-    });
     let now = use_signal(|| 0_u64);
     let posts = crate::conversation_posts_view::use_conversation_posts(id.clone(), session_scope);
     let messages = projection
@@ -320,16 +327,15 @@ pub fn Conversation(
     let failure = live_status
         .as_ref()
         .and_then(orkestr_v2_ui::execution::failure_notice);
-    let mut close_drawer = set_drawer.clone();
-    let mut escape_drawer = set_drawer.clone();
+    let escape_files = close_files;
     rsx! {
-        section { class: "conversation-pane native-conversation", "aria-label": "Conversation", "data-files-open": "{details_open}",
+        section { class: "conversation-pane native-conversation", "aria-label": "Conversation", "data-files-open": "{files_open}", "data-stream-status": "{status}",
             style { "{include_str!(\"conversation_layout.css\")}" }
             crate::execution_poll::ExecutionPoll { key: "{id}-{generation}", id: id.clone(), csrf: csrf.clone(), session_scope, execution, worker_tasks: false, headless: true, clock: Some(now), onexpired }
             div { class: "conversation-scroll", tabindex: "0", "aria-label": "Conversation transcript",
                 crate::archived_history_view::ArchivedHistory { key: "archived-{id}-{generation}", id: id.clone(), session_scope, onexpired }
                 crate::intelligence_view::IntelligencePanel { key:"intelligence-{id}-{generation}", id:id.clone(), csrf:csrf.clone(), session_scope, execution, onexpired }
-                crate::accepted_results_view::AcceptedReplies { key: "accepted-{id}-{generation}", id: id.clone(), session_scope, messages, posts: posts(), update: Some(accepted_revision), inline: true, onexpired,
+                crate::accepted_results_view::AcceptedReplies { key: "accepted-{id}-{generation}", id: id.clone(), session_scope, messages, posts: posts(), update: Some(accepted_revision), inline: true, files: Some(chat_files), onexpired,
                     live: Some(crate::accepted_results_view::LiveContext { status: live_status.clone(), csrf: csrf.clone(), execution }) }
                 if let Some(notice) = failure {
                     article { class: "assistant-proposal run-failed", role: "alert",
@@ -344,41 +350,44 @@ pub fn Conversation(
                     button { r#type: "button", onclick: move |_| transport::retry_stream(), "Retry" }
                 }
             }
-            aside { class: "conversation-details files-drawer", id: "{drawer_id}", hidden: !details_open(), "aria-labelledby": "{drawer_id}-title",
-                onkeydown: move |event: KeyboardEvent| { if event.key() == Key::Escape { event.stop_propagation(); escape_drawer(false); } },
+            aside { class: "conversation-details files-drawer", id: "{drawer_id}", hidden: !files_open, "aria-labelledby": "{drawer_id}-title",
+                onkeydown: move |event: KeyboardEvent| { if event.key() == Key::Escape { event.stop_propagation(); escape_files(); } },
                 header { class: "files-drawer-header",
-                    h2 { id: "{drawer_id}-title", "Files & context" }
-                    button { r#type: "button", id: "{close_id}", class: "files-drawer-close", "aria-label": "Close Files & context", onclick: move |_| close_drawer(false), "Close" }
+                    h2 { id: "{drawer_id}-title", "Files" }
+                    button { r#type: "button", id: "{close_id}", class: "files-drawer-close", "aria-label": "Close Files", onclick: move |_| close_files(), "Close" }
                 }
-                section { class: "conversation-tools", "aria-label": "Files and held inputs",
-                    h3 { "Files and held inputs" }
-                    crate::attachments_view::ThreadFiles { key: "files-{id}-{generation}", id: id.clone(), csrf: csrf.clone(), session_scope, onexpired }
-                    crate::held_inputs_poll::HeldInputsPanel { key: "held-{id}-{generation}", id: id.clone(), session_scope, model: held_inputs, projection, onexpired }
+                // 1. Every file of this chat, newest first.
+                section { class: "files-section files-in-chat", "aria-labelledby": "files-in-chat-{id}",
+                    h3 { id: "files-in-chat-{id}", "In this chat" }
+                    if files_open {
+                        crate::chat_files_view::ChatFiles { conversation: id.clone(), files: chat_files(), session_scope }
+                    }
                 }
-                section { class: "conversation-tools", "aria-label": "Local folder activity",
-                    h3 { "Local folder" }
-                    p { class: "files-drawer-note", "A connected folder stays on this computer. The thread reaches it only while this tab is open and connected; every write asks you first. Connect or disconnect it next to Attach." }
-                    div { id: "local-folder-log-{id}", class: "files-drawer-folder-log" }
+                // 2. The owner's folder: state, connect/disconnect and its activity.
+                section { class: "files-section files-folder", "aria-labelledby": "files-folder-{id}",
+                    h3 { id: "files-folder-{id}", "Your folder" }
+                    p { class: "files-drawer-note", "A folder on this computer that this chat can work in while this tab stays open on the chat. Disconnect stops it at once." }
+                    crate::local_files_view::LocalFolder { key: "local-folder-{id}-{generation}", conversation: id.clone(), csrf: csrf.clone(), session_scope, chip_root: Some(chip_id.clone()), files_href: Some(files_href.clone()) }
                 }
-                section { class: "conversation-tools", "aria-label": "Connection and work details",
-                    h3 { "Connection and work details" }
-                    crate::beta_window_view::WindowView { key: "window-{id}-{generation}", id:id.clone(), session_scope, onexpired }
-                    p { class: "stream-status", "{status}" }
-                    p { "Latest 100 saved inputs. History has earlier pages. Unsent drafts remain in this page." }
+                // 3. The encrypted private locker, collapsed.
+                section { class: "files-section files-private",
+                    button { r#type: "button", class: "files-private-toggle", "aria-expanded": "{private_open}", "aria-controls": "files-private-{id}",
+                        onclick: move |_| { let open = !private_open(); private_open.set(open); },
+                        "Private copies"
+                    }
+                    div { id: "files-private-{id}", class: "files-private-body", hidden: !private_open(),
+                        if files_open && private_open() {
+                            crate::attachments_view::ThreadFiles { key: "files-{id}-{generation}", id: id.clone(), csrf: csrf.clone(), session_scope, onexpired }
+                        }
+                    }
                 }
             }
             crate::scroll_pin::ScrollPin {}
             div { class: "composer-dock",
                 crate::execution_panel::ExecutionPanel { execution, now_ms: now(), parent_tasks: false, csrf: csrf.clone(), session_scope, onexpired, compact: true, auto_accept: auto_accept(), onaccepted: Some(EventHandler::new(move |_revision| { let next = *accepted_revision.peek() + 1; accepted_revision.set(next); })) }
                 crate::composer::Composer { key: "composer-{id}-{generation}", id: id.clone(), csrf: csrf.clone(), session_scope, drafts, onexpired,
-                    crate::local_files_view::LocalFolder { key: "local-folder-{id}-{generation}", conversation: id.clone(), csrf: csrf.clone(), session_scope, log_root: Some(format!("local-folder-log-{id}")) }
-                    button { r#type: "button", id: "{toggle_id}", class: "files-drawer-toggle", "aria-expanded": "{details_open}", "aria-controls": "{drawer_id}",
-                        onclick: move |_| { let open = !details_open(); set_drawer(open); },
-                        svg { class: "tool-icon", "aria-hidden": "true", view_box: "0 0 24 24", width: "15", height: "15", fill: "none", stroke: "currentColor", stroke_width: "2", stroke_linecap: "round", stroke_linejoin: "round",
-                            path { d: "M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" }
-                        }
-                        "Files & context"
-                    }
+                    // The one folder item: its state, and Connect in one click (ORK-809).
+                    span { id: "{chip_id}", class: "local-folder-chip-slot" }
                 }
             }
         }

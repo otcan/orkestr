@@ -307,6 +307,7 @@ pub mod beta_window;
 pub mod beta_inputs;
 pub mod page_memory;
 
+pub mod chat_files;
 pub mod chat_timeline;
 pub mod composer_attachments;
 pub mod conversation_directory;

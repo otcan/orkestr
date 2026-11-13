@@ -170,15 +170,20 @@ async function conversationNavigation(label, phone) {
   await page.waitForFunction(() => document.getElementById('more-tabs-toggle').getAttribute('aria-expanded') === 'true');
   await page.mouse.click(5, (await page.evaluate(() => innerHeight)) - 5);
   await page.waitForFunction(() => document.getElementById('more-tabs-toggle').getAttribute('aria-expanded') === 'false');
-  // Files: a primary destination with its own bookmarkable URL; one read, no polling.
+  // Files: a primary destination with its own bookmarkable URL. It opens the
+  // chat's Files panel (ORK-809) over or beside the same chat, which stays
+  // mounted; the collapsed private copies are not read until opened.
   const manifests = () => state.requests.filter(r => r.startsWith('GET /api/v2/conversations/:id/attachment-manifests')).length;
   const before = manifests();
   await clickVisible('Files');
   await waitHash(`#conversation/${A}/files`);
-  await page.waitForSelector('.files-page [aria-label="Thread files"]');
+  await page.waitForFunction(() => { const a = document.querySelector('.files-drawer'); return a && getComputedStyle(a).display !== 'none'; });
+  assert.deepEqual(await page.$$eval('.files-drawer .files-section h3, .files-drawer .files-private-toggle', n => n.map(e => e.textContent.trim())),
+    ['In this chat', 'Your folder', 'Private copies']);
+  assert.ok(await page.$('#composer'), 'the chat stays mounted under Files');
   assert.deepEqual((await navState()).current, ['Files']);
   await new Promise(r => setTimeout(r, 2500));
-  assert.ok(manifests() - before <= 1, 'Files lists once on open');
+  assert.equal(manifests() - before, 0, 'opening Files reads no file store until Private copies opens');
   await screenshot(label, 'files');
   await noHorizontalScroll();
   // A More destination: the toggle names it, back returns.

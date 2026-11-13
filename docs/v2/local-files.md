@@ -83,8 +83,10 @@ owner's tab ── poll every 2 s ─► POST /local-files/poll ────┘ 
 - **One tab.** One tab serves a conversation's folder. Another tab replaces
   it only when the owner chooses it there (**Use this tab**); requests the old
   tab held are offered to the new one.
-- **Visible.** While connected, the conversation toolbar shows
-  "● Folder “name” connected" and the browser tab title starts with "● ".
+- **Visible.** While connected, the composer's folder chip shows "● name"
+  and the browser tab title starts with "● ". The chip links to the chat's
+  **Files** panel (ORK-809), whose **Your folder** section holds the state in
+  words, Disconnect and **Folder activity**.
   Disconnecting (or leaving the conversation) stops serving the folder at
   once and fails what is still open.
 - **A waiting write is seen everywhere (ORK-804).** A write is answered only
@@ -213,10 +215,9 @@ owner before writing more than a few files.
    and open the conversation the operator enabled.
 2. Make a test folder, for example `orkestr-demo` with `notes.txt` ("hello")
    and a subfolder `docs` with one or two files.
-3. In the conversation toolbar press **Connect folder…** and pick
-   `orkestr-demo`. Chrome asks to let the site view files: allow it. The
-   toolbar now shows "● Folder “orkestr-demo” connected" and the tab title
-   starts with "●".
+3. In the composer press **Connect folder…** and pick `orkestr-demo`.
+   Chrome asks to let the site view files: allow it. The chip now shows
+   "● orkestr-demo" and the tab title starts with "●".
 4. Write in the chat: "List my local folder." The thread answers with
    `notes.txt` and `docs`.
 5. "Read notes.txt and tell me its SHA-256." The thread reads the file (it
@@ -230,7 +231,8 @@ owner before writing more than a few files.
    Ask for another change and press **Refuse**: the thread reports that you
    refused it and the file is unchanged.
 8. "Read ../something" or any path outside the folder: refused.
-9. Press **Disconnect folder**. Ask "List my local folder" again: the thread
+9. Press the "● orkestr-demo" chip (it opens **Files**), then **Disconnect
+   folder**. Ask "List my local folder" again: the thread
    says no folder is connected and asks you to connect one.
 
 ## Limitations
