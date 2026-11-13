@@ -149,6 +149,12 @@ def window(worker, data):
             if isinstance(code, dict):
                 code = code.get("code")
             if code == "window_fenced":
+                # A continuation Core admitted under its own window intent
+                # (same message and event) is watched like a dispatched queue
+                # row; window_adoption.py says what proves it.
+                from . import window_adoption
+                if window_adoption.adopt(worker, data):
+                    return True
                 # A definite request refusal does not prove that its admitted
                 # Core source input is retired. Hold this exact frozen tuple
                 # until Core proves safe settlement; never expose an orphan
