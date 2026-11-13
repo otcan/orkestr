@@ -153,8 +153,12 @@ export function createRemoteTimerReplies({config, api, send, formatter, env, now
         { await close(threadId, event, answer, 'suppressed', 'expired', 'expired'); return 0; }
       let current = t;
       try { const {quota} = await api(`/api/quota/providers?ownerUserId=${encodeURIComponent(config.ownerUserId)}`, {timeoutMs: 1000}); if (quota) current = {...current, whatsAppDebugProviderQuota: quota}; } catch {}
-      const header = scopedReplyHeader({label: String(parent.text || '').replace(/^Scheduled timer:\s*/, ''), timerId: parent.timerId, postAuthor: parent.postAuthor});
-      chunks = scopedGroupReplyChunks({text: header ? `${header}\n${answer.text}` : answer.text, message: {...answer, chatId}, thread: current, messages, config, formatter, env, deliveryType: 'router_update'});
+      const label = {label: String(parent.text || '').replace(/^Scheduled timer:\s*/, ''), timerId: parent.timerId, postAuthor: parent.postAuthor};
+      const header = scopedReplyHeader(label);
+      // Only an operator/system post is a notice; timer answers, coordinator
+      // posts and web answers are finals and status lines updates, each with
+      // its agent line (ORK-819: "router_update" made every one a notice).
+      chunks = scopedGroupReplyChunks({text: header ? `${header}\n${answer.text}` : answer.text, message: {...answer, chatId}, thread: current, messages, config, formatter, env, deliveryType: scopedReplyDeliveryType(label)});
       proofs.prepareBatch(chunks.map((entry, i) => ({id: baseId + ':' + i, threadId, chatId, timerId: pick(parent.timerId, event.timerSourceId, 'v2-timer'),
         parentId: parent.id, answerId: answer.id, text: encodeReplyEntry(entry), createdAt: answer.createdAt, runAt: event.ts,
         expiresAt: new Date(answerAt + scope.maxAgeMs).toISOString()})));

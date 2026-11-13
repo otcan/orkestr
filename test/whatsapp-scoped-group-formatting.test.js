@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  decodeReplyEntry, encodeReplyEntry, replyEntrySendFields, scopedGroupReplyChunks, scopedGroupReplyLimit, scopedReplyHeader, scopedReplyPreview,
+  decodeReplyEntry, encodeReplyEntry, replyEntrySendFields, scopedGroupReplyChunks, scopedGroupReplyLimit, scopedReplyDeliveryType, scopedReplyHeader, scopedReplyPreview,
   SCOPED_ATTACHED_MARKER, SCOPED_SEND_MAX_TEXT_LENGTH,
 } from '../packages/connectors/src/whatsapp-scoped-group-formatting.js';
 import * as formatter from '../packages/connectors/src/whatsapp-formatting.js';
@@ -16,10 +16,22 @@ const marker = `\n\n${SCOPED_ATTACHED_MARKER}`;
 test('only real timer metadata adds a reminder heading', () => {
   assert.equal(scopedReplyHeader({timerId: '10000000-0000-4000-8000-000000000001', label: 'Daily brief'}), '⏰ Daily brief');
   assert.equal(scopedReplyHeader({label: 'Local reminder'}), '⏰ Local reminder');
-  for (const timerId of ['web', 'task-update', 'post', 'fast', 'status', 'unknown-transport']) {
+  for (const timerId of ['web', 'task-update', 'post', 'fast', 'status', 'web-progress', 'task-update-progress', 'unknown-transport']) {
     for (const label of ['Update', 'Güncelleme', '更新']) {
       assert.equal(scopedReplyHeader({timerId, label}), '');
     }
+  }
+});
+
+test('a V2 pseudo-timer reply is a notice, an update or a final by its source (ORK-819)', () => {
+  assert.equal(scopedReplyDeliveryType({timerId: 'post', postAuthor: 'operator', label: 'Operator'}), 'router_update');
+  assert.equal(scopedReplyDeliveryType({timerId: 'post', label: 'System'}), 'router_update');
+  for (const timerId of ['status', 'web-progress', 'task-update-progress']) {
+    assert.equal(scopedReplyDeliveryType({timerId, label: 'Update'}), 'progress', timerId);
+  }
+  for (const [timerId, postAuthor] of [['10000000-0000-4000-8000-000000000001'], ['post', 'coordinator'], ['post', 'assistant_question'],
+    ['web'], ['task-update'], ['fast'], [''], ['unknown-transport']]) {
+    assert.equal(scopedReplyDeliveryType({timerId, postAuthor, label: 'Reply'}), 'timer_reply', timerId);
   }
 });
 

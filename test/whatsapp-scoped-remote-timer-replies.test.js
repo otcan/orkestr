@@ -283,3 +283,44 @@ test('a Quick reply older than its staleness bound is never sent, even without a
   other.advance(QUICK_MAX_AGE_MS + 1);
   assert.equal((await other.notifier.tick()).sent, 1);
 });
+
+// ORK-819: every V2 pseudo-timer reply went out with the compact notice
+// footer (no agent, no message type), and status lines and progress notes
+// were never marked as updates.
+test('each V2 pseudo-timer reply kind carries its agent and message type in the footer', async t => {
+  const agent = {remoteProvider: 'codex', remoteModel: 'example-model', remoteLayer: 'deep', remoteIdentitySource: 'run'};
+  const quota = '\ncodex: no data\nclaude: no data\nq:0 · ';
+  const cases = [
+    ['scheduled timer answer', {text: 'Scheduled timer: Morning brief', timerId: '00000000-0000-4000-8000-000000000001'}, agent,
+      /^⏰ Morning brief\nGood morning\.\n\n🤖 codex example-model · msg:\*final\*\n/],
+    ['adapter status line', {text: 'Status', timerId: 'status'}, agent, /^Good morning\.\n\n🤖 codex example-model · msg:\*update\*\n/],
+    ['status line without a verified run', {text: 'Status', timerId: 'status'}, {}, /^Good morning\.\n\n🤖 Agent · msg:\*update\*\n/],
+    ['web progress note', {text: 'Web progress: excerpt', timerId: 'web-progress'}, agent, /\n\n🤖 codex example-model · msg:\*update\*\n/],
+    ['task progress note', {text: 'Task update', timerId: 'task-update-progress'}, agent, /\n\n🤖 codex example-model · msg:\*update\*\n/],
+    ['web answer', {text: 'Web answer: excerpt', timerId: 'web'}, agent, /\n\n🤖 codex example-model · msg:\*final\*\n/],
+    ['task answer', {text: 'Task update', timerId: 'task-update'}, agent, /\n\n🤖 codex example-model · msg:\*final\*\n/],
+    ['coordinator post', {text: 'Coordinator', timerId: 'post', postAuthor: 'coordinator'},
+      {remoteProvider: 'claude', remoteModel: 'example-opus', remoteLayer: 'coordinator', remoteIdentitySource: 'post'},
+      /\n\n🤖 claude example-opus · msg:\*final\*\n/],
+  ];
+  for (const [name, parent, identity, footer] of cases) {
+    const {notifier, state} = fixture(t, {footer: true});
+    Object.assign(state.messages[0], parent);
+    Object.assign(state.messages[1], identity);
+    assert.equal((await notifier.tick()).sent, 1, name);
+    assert.match(state.sent[0].text, footer, name);
+    assert.ok(state.sent[0].text.includes(quota), name);
+  }
+  // A notice keeps the compact footer: no agent line, no message type.
+  for (const [name, parent, identity] of [
+    ['operator post', {text: 'Operator', timerId: 'post', postAuthor: 'operator'}, agent],
+    ['owner web message mirror', {text: 'Web message', timerId: 'web'}, {remoteLayer: 'notice'}],
+  ]) {
+    const {notifier, state} = fixture(t, {footer: true});
+    Object.assign(state.messages[0], parent);
+    Object.assign(state.messages[1], identity);
+    assert.equal((await notifier.tick()).sent, 1, name);
+    assert.match(state.sent[0].text, /^Good morning\.\n\ncodex: no data\nclaude: no data\nq:0 · /, name);
+    assert.doesNotMatch(state.sent[0].text, /🤖|msg:/, name);
+  }
+});

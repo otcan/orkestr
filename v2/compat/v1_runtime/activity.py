@@ -7,6 +7,7 @@ import uuid
 
 from . import notices
 from .ledger import LOCAL_ROLES, NOTICE_NAMESPACE, POST_NAMESPACE
+from .model_identity import run_identity
 
 INTERVAL_S = 10 * 60
 MISSING_RUN_INTERVAL_S = 30 * 60
@@ -160,14 +161,19 @@ def status_slot_free(db, now, spacing):
     return not pending
 
 
-def post_status(ledger, db, data, text, now, **notice):
-    """One status line on its own pseudo-timer parent (see observe())."""
+def post_status(ledger, db, data, text, now, identity=None, **notice):
+    """One status line on its own pseudo-timer parent (see observe()).
+
+    The parent's source id is "status", so V1 labels the line an update. It
+    names the run it reports on (`identity`, from that run's own status
+    read; model_identity.run_identity), never a configured agent."""
     sequence = int(now * 1000)
     source = "heartbeat:%s:%d" % (data["remote_id"], sequence)
     remote = str(uuid.uuid5(NOTICE_NAMESPACE, "input:" + source))
     message = dict(id=str(uuid.uuid5(NOTICE_NAMESPACE, "reply:" + source)), role="assistant", state="completed",
                    phase="final_answer", source="rust-v2-adapter",
                    parentMessageId=remote, text=text, activityNotice=True)
+    message.update(identity or {})
     ledger._pseudo_timer(db, remote, "Status", sequence,
         {"activity_notice": dict(input_id=data["remote_id"], **notice)}, message, source_id="status")
 
@@ -197,6 +203,10 @@ def waiting(worker, now=None):
         head = ledger._live_head_rowid(db, now)
         if head is None:
             return  # Nothing is proven running: no line may claim that.
+        # The line is about that running turn: name it as its own fresh
+        # status read did (input_activity.record), or no agent at all.
+        head_row = db.execute("SELECT data FROM inputs WHERE rowid=?", (head,)).fetchone()
+        identity = (json.loads(head_row[0]).get("transport_activity") or {}).get("deep_identity") if head_row else None
         rows = db.execute("SELECT data FROM inputs WHERE rowid > ? AND json_extract(data,'$.phase') != 'completed' "
                           "ORDER BY rowid LIMIT ?", (head, WAITING_ROWS)).fetchall()
         for (raw,) in rows:
@@ -221,7 +231,8 @@ def waiting(worker, now=None):
                 return
             minutes = max(1, int((now - since) // 60))
             text = notices.render(notices.language_for(db, data), "deep_heartbeat_waiting", minutes=minutes)
-            post_status(ledger, db, data, text, now, running=True, heartbeat=True, waiting=True)
+            post_status(ledger, db, data, text, now, identity=identity if isinstance(identity, dict) else None,
+                        running=True, heartbeat=True, waiting=True)
             activity = data.setdefault("activity", {})
             activity["heartbeat_at"] = now
             activity["heartbeats"] = activity.get("heartbeats", 0) + 1
@@ -328,7 +339,7 @@ def observe(worker, data, statuses, now=None):
         # progress path can be disabled or superseded by the task's final, and
         # cannot transport timer progress. This established pseudo-parent path
         # works for every origin without completing the original input.
-        post_status(ledger, db, data, text, now, running=running, heartbeat=heartbeat)
+        post_status(ledger, db, data, text, now, identity=run_identity(deep), running=running, heartbeat=heartbeat)
         if running:
             activity["healthy_notices"] = activity.get("healthy_notices", 0) + 1
             if heartbeat:

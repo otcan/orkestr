@@ -22,6 +22,8 @@ class QueuePeer(Peer):
         self.provider = "codex"
         self.provider_generation = 0
         self.run_provider = "codex"
+        self.deep_run = "deep-run"
+        self.run_model = None
 
     def request(self, method, route, body=None, allowed=(200,)):
         if route == "/settings" and method == "GET":
@@ -35,8 +37,8 @@ class QueuePeer(Peer):
                          window_id="window" if self.queue_state == "dispatched" else None, withdrawal=None)
             return 202, reply
         if route.split("?", 1)[0] == "/execution" and self.deep_phase:
-            return 200, dict(run_id="deep-run", revision=10, phase=self.deep_phase,
-                             models=dict(provider=self.run_provider))
+            models = dict(provider=self.run_provider, **({"actual_model": self.run_model} if self.run_model else {}))
+            return 200, dict(run_id=self.deep_run, revision=10, phase=self.deep_phase, models=models)
         return super().request(method, route, body=body, allowed=allowed)
 
 
@@ -97,6 +99,7 @@ class DeadlineContinuationTests(Case):
         self.assertNotIn("window", resumed)
         self.assertTrue(all(resumed["keys"][k] != original[k] for k in ("message", "window", "fast", "deep")))
         self.assertEqual([m["text"] for m in self.notices()], [CONTINUE_NOTICE])
+        self.assertNotIn("provider", self.notices()[0], "no verified run identity, no agent named")
         # This input's own Fast proposal is settled so its window can close.
         self.assertIn("fast", self.peer.accepted)
         # The successor turn completes normally and is mirrored as the reply.
@@ -108,6 +111,19 @@ class DeadlineContinuationTests(Case):
         self.assertNotEqual(messages[0]["client_message_id"], messages[1]["client_message_id"])
         self.assertTrue(messages[1]["text"].startswith(CONTINUE_PREFIX))
         self.assertEqual(self.ledger.messages()[-1]["text"], "deep result")
+
+    def test_the_continuation_notice_names_the_stopped_run(self):
+        # ORK-819: V1's footer read a generic "Agent" on this update.
+        run = "00000000-0000-4000-8000-0000000000d1"
+        self.peer.deep_run, self.peer.run_model = run, "synthetic-deep-model"
+        self.peer.matching_run_ids = lambda events, intake: ["fast-run", run]
+        self.stop_by_deadline()
+        self.worker.step(self.data)
+        notice, = self.notices()
+        self.assertEqual((notice["text"], notice["phase"], notice["kind"]), (CONTINUE_NOTICE, "commentary", "progress"))
+        self.assertEqual({k: notice[k] for k in ("provider", "model", "layer", "identitySource", "runId")},
+                         {"provider": "codex", "model": "synthetic-deep-model", "layer": "deep",
+                          "identitySource": "run", "runId": run})
 
     def test_quoted_reply_context_reaches_rust_and_survives_the_requeue(self):
         quoted = dict(message_id="true_chat_ABC", author="orkestr", sent_at="2026-01-02T21:50:00Z", text="earlier", is_own_reply=True, unavailable=False)

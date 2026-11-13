@@ -44,6 +44,11 @@ POST_SOURCE_ID = "post"
 WEB_NAMESPACE = uuid.UUID("7c2e9b14-6d3a-4f8e-a1b5-9e0d4c7f2a68")
 WEB_SOURCE_ID = "web"
 TASK_UPDATE_SOURCE_ID = "task-update"
+# A progress note's parent names its own source, so V1's footer marks it an
+# update rather than a final answer (the note itself is exported as a final:
+# the only shape V1 delivers on a pseudo timer parent).
+WEB_PROGRESS_SOURCE_ID = "web-progress"
+TASK_UPDATE_PROGRESS_SOURCE_ID = "task-update-progress"
 WEB_LABEL = "\U0001f5a5\ufe0f (web)"
 
 
@@ -497,8 +502,10 @@ class Ledger:
         after a restart adopts nothing new. Returns True when newly adopted."""
         message_id = message["message_id"]
         remote_id = str(uuid.uuid5(WEB_NAMESPACE, "mirror:" + message_id))
+        # The owner's own words, not an agent's answer: V1 gives a notice the
+        # compact footer, never an agent line.
         reply = {"id": str(uuid.uuid5(WEB_NAMESPACE, "mirror-reply:" + message_id)), "role": "assistant",
-                 "state": "completed", "phase": "final_answer", "source": "rust-v2-web-mirror",
+                 "state": "completed", "phase": "final_answer", "kind": "notice", "source": "rust-v2-web-mirror",
                  "parentMessageId": remote_id, "text": text}
         reply.update({k: v for k, v in (identity or {}).items() if k in IDENTITY_FIELDS and v})
         excerpt = " ".join(text.split())
@@ -551,7 +558,8 @@ class Ledger:
             db.execute("BEGIN IMMEDIATE")
             self._pseudo_timer(db, remote_id, watch_label(watch, "progress"), int(time.time() * 1000),
                                {"web": {"message_id": message_id, "kind": "progress"}}, reply,
-                               source_id=TASK_UPDATE_SOURCE_ID if watch.get("internal_context") else WEB_SOURCE_ID)
+                               source_id=(TASK_UPDATE_PROGRESS_SOURCE_ID if watch.get("internal_context")
+                                          else WEB_PROGRESS_SOURCE_ID))
             watch.setdefault("progress", []).append(payload_id)
             db.execute("UPDATE web_watch SET data=? WHERE message_id=?", (json.dumps(watch), message_id))
 
@@ -837,10 +845,11 @@ class Ledger:
             self.save(data, db)
             return True
 
-    def continue_notice(self, data, text):
+    def continue_notice(self, data, text, identity=None):
         """Save a re-queued input and tell the owner, in one transaction.
 
         Not bounded by the progress limit: an input continues at most once.
+        `identity` names the stopped run (model_identity.run_identity).
         """
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
@@ -849,6 +858,7 @@ class Ledger:
                        "role": "assistant", "state": "completed", "phase": "commentary", "kind": "progress",
                        "source": "rust-v2-adapter", "parentMessageId": data["remote_id"],
                        "text": notices.localize(notices.language_for(db, data), text)}
+            message.update({k: v for k, v in (identity or {}).items() if k in IDENTITY_FIELDS and v})
             self._export(db, data, "progress", "continued:" + data["remote_id"], message)
             return message
 

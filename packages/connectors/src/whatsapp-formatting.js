@@ -359,8 +359,10 @@ export function shouldAppendWhatsAppDebugFooter(message = {}, env = process.env,
   return ["timer_reply", "delivery_error", "mode_queued", "queue_notice", "router_update"].includes(String(deliveryType || "").trim());
 }
 
-function footerMessageType(deliveryType = "") {
+// A remote runtime's progress export is an update on every delivery path.
+function footerMessageType(deliveryType = "", message = {}) {
   return ["progress", "queue_notice", "mode_queued", "delivery_error", "router_update"].includes(String(deliveryType || "").trim())
+    || String(message?.remoteKind || "").trim().toLowerCase() === "progress"
     ? "update"
     : "final";
 }
@@ -375,14 +377,14 @@ export function whatsappDebugFooter({ message = {}, thread = {}, messages = [], 
   const runtimeSurface = runtimeSurfaceDebugValue(thread);
   const identity = remoteRuntimeReply(message, env) ? [
     singleAgentFooter(message),
-    `msg:*${footerMessageType(deliveryType)}*`,
+    `msg:*${footerMessageType(deliveryType, message)}*`,
   ] : [
     `dbg: ${agent}/${modelDebugLabel(message, thread, env)}`,
     ...(runtimeSurface ? [`rt:${runtimeSurface}`] : []),
     ...(!isClaude && mode ? [`mode:${mode}`] : []),
     ...(!isClaude && codexFastDebugValue(message, thread) ? ["fast:on"] : []),
     // WhatsApp renders *text* bold, so the message type stands out.
-    `msg:*${footerMessageType(deliveryType)}*`,
+    `msg:*${footerMessageType(deliveryType, message)}*`,
   ];
   const quota = whatsappNoticeFooter({ message, thread, messages, deliveryType, env });
   return noticeMessage(message, deliveryType) ? quota : [identity.join(" · "), quota].join("\n");

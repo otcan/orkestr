@@ -27,7 +27,7 @@ from . import switch_command
 from .notices import TEMPLATES
 from .participants import compose
 from .rust_client import ClientError
-from .model_identity import observed_identity, quick_identity
+from .model_identity import observed_identity, quick_identity, run_identity
 from .policy_refusal import notice as policy_notice
 from .first_response import capture as capture_first_response, repeats_fast
 from .questions import QUESTION_PREFIX, QUESTION_LABEL, QUESTION_SCAN_LIMIT, export_question, repeats_question
@@ -1370,7 +1370,7 @@ class Worker:
             continued["cause"] = "release"
         data.update(intake_text=(RELEASE_PREFIX if released else CONTINUE_PREFIX) + text, phase="queued",
                     queued_at=time.time(), continued=continued, continuation_guard=guard)
-        self.ledger.continue_notice(data, RELEASE_NOTICE if released else CONTINUE_NOTICE)
+        self.ledger.continue_notice(data, RELEASE_NOTICE if released else CONTINUE_NOTICE, run_identity(deep))
         return True
 
     def provider_identity(self, run_id=None, status=None, fast=False):
