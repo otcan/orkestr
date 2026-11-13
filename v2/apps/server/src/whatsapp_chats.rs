@@ -92,11 +92,20 @@ pub(crate) struct AgentTimers {
     /// `DEFAULT_REPLY_ATTACH_TOOL`. The same grant authenticates it.
     #[serde(default)]
     pub reply_attach_tool: Option<String>,
+    /// The installed `local_files.py` (ORK-804); defaults to
+    /// `DEFAULT_LOCAL_FILES_TOOL`. Its own grant,
+    /// `<grant_dir>/<conversation>.local-files.grant`, is issued with the
+    /// agent grant (`conversation_grants`).
+    #[serde(default)]
+    pub local_files_tool: Option<String>,
 }
 
 /// Where `v2/tools/reply_attach.py` is installed unless configured.
 pub(crate) const DEFAULT_REPLY_ATTACH_TOOL: &str =
     "/usr/local/libexec/orkestr-reply-attach/reply_attach.py";
+/// Where `v2/tools/local_files.py` is installed unless configured.
+pub(crate) const DEFAULT_LOCAL_FILES_TOOL: &str =
+    "/usr/local/libexec/orkestr-local-files/local_files.py";
 
 /// Paths and the URL go into a shell command of the rules file: plain
 /// absolute paths only.
@@ -122,6 +131,7 @@ impl AgentTimers {
             && self.native_grant_dir.as_deref().is_none_or(shell_path)
             && shell_path(&self.tool)
             && self.reply_attach_tool.as_deref().is_none_or(shell_path)
+            && self.local_files_tool.as_deref().is_none_or(shell_path)
             && loopback_url(&self.v2_url)
     }
     /// The reply attachment command's settings, with the agent's view of the
@@ -137,6 +147,11 @@ impl AgentTimers {
                 .native_grant_dir
                 .clone()
                 .unwrap_or_else(|| self.grant_dir.clone()),
+            local_files_tool: Some(
+                self.local_files_tool
+                    .clone()
+                    .unwrap_or_else(|| DEFAULT_LOCAL_FILES_TOOL.into()),
+            ),
         }
     }
 }
@@ -877,6 +892,7 @@ impl WhatsAppChats {
             tool: "/usr/local/libexec/orkestr-agent-timer/agent_timer.py".into(),
             v2_url: "http://127.0.0.1:19822".into(),
             reply_attach_tool: None,
+            local_files_tool: None,
         });
         self
     }
@@ -978,8 +994,14 @@ mod onboarding_tests {
             tool: "/opt/agent_timer.py".into(),
             v2_url: "http://127.0.0.1:19822".into(),
             reply_attach_tool: None,
+            local_files_tool: None,
         };
         let rules = rules_text("n", "conv-1", "t", "g@g.us", Some(&timers));
+        // ...and the local folder command with the default tool (ORK-804).
+        assert!(rules.contains(
+            "ORKESTR_V2_LOCAL_FILES_GRANT_DIR=/srv/grants PYTHONDONTWRITEBYTECODE=1 python3 -I -S -B /usr/local/libexec/orkestr-local-files/local_files.py --v2-url http://127.0.0.1:19822 --conversation conv-1 <list"
+        ));
+        assert!(rules.contains("--timeout 600"));
         // Files for the owner: this conversation's reply attachment command
         // with the default tool, never a link to a host path (ORK-794).
         assert!(rules.contains(

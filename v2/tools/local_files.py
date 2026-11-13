@@ -15,15 +15,18 @@ open on this conversation, this tool asks it to:
   instructions                     the short agent rules
 
 PATH is relative to the connected folder ("docs/plan.md"); it can never name
-anything outside it. Every request waits for the owner's tab (--timeout,
-default 120 s, at most 600). Each one prints its request key first (stderr);
-after a lost answer rerun with --request-key KEY to get the same request.
+anything outside it. Every request waits for the owner's tab (--timeout, at
+most 600 s; default 120 s, and 600 s for a write). A write waits for a person
+to press "Allow write", so its timeout is never below 120 s (a shorter one is
+raised). Each request prints its request key first (stderr); after a lost
+answer rerun with --request-key KEY to get the same request.
 
 Exit status: 0 done, 3 not finished when the wait ended, 4 not done (refused,
 not found, expired, disconnected), 5 no folder connected, 2 refused or failed.
 The grant comes from --grant-file, ORKESTR_V2_LOCAL_FILES_GRANT, or the
-provisioned file ORKESTR_V2_LOCAL_FILES_GRANT_DIR/<conversation>.grant; it is
-never printed.
+provisioned file ORKESTR_V2_LOCAL_FILES_GRANT_DIR/<conversation>.local-files.grant
+(the directory the agent-timer grant <conversation>.grant shares); it is never
+printed.
 """
 import argparse
 import base64
@@ -41,6 +44,11 @@ TERMINAL = ('done', 'failed')
 PENDING_EXIT, FAILED_EXIT, NOT_CONNECTED_EXIT, ERROR_EXIT = 3, 4, 5, 2
 WRITE_MAX = 1024 * 1024
 TIMEOUT_MAX = 600.0
+TIMEOUT_DEFAULT = 120.0
+# A write waits for a person to read the card and press "Allow write".
+WRITE_TIMEOUT_DEFAULT = 600.0
+WRITE_TIMEOUT_MIN = 120.0
+GRANT_SUFFIX = '.local-files.grant'
 
 AGENT_INSTRUCTIONS = """Files on the owner's computer (Orkestr local folder tool)
 
@@ -52,13 +60,16 @@ connected in the Orkestr web app; you see nothing else of his computer.
   local_files.py read "docs/plan.md"         # prints local_file: open that path
   local_files.py hash "a.pdf" "b.pdf"
   local_files.py package "docs/plan.md" "data/table.csv"
-  local_files.py write "docs/plan.md" --from-file /tmp/plan.md
+  local_files.py write "docs/plan.md" --from-file /tmp/plan.md   # waits up to 10 min
 
 Exit 5 / local_files_not_connected means no folder is connected right now:
 tell the owner to open this conversation in Chrome on his computer and press
 "Connect folder", then try again. Every write waits for the owner to press
-"Allow write" in that tab; until the tool prints the result, nothing is
-written. Never report a write as done unless the tool said "Wrote".
+"Allow write" in that tab (up to 10 minutes; keep the command running and
+check its output until it ends). Until the tool prints the result, nothing is
+written. Never report a write as done unless the tool said "Wrote". Before
+changing more than a few files, ask the owner first: each file is one Allow.
+Run the tool in your own shell, never through Root, sudo or another user.
 Paths are relative to the folder; never try to reach anything outside it.
 """
 
@@ -71,7 +82,7 @@ class LocalFilesError(RuntimeError):
 
 def grant_path(conversation, environ=os.environ):
     root = environ.get('ORKESTR_V2_LOCAL_FILES_GRANT_DIR', '').strip()
-    return Path(root) / f'{conversation}.grant' if root else None
+    return Path(root) / f'{conversation}{GRANT_SUFFIX}' if root else None
 
 
 def read_grant(path=None, environ=os.environ):
@@ -175,8 +186,21 @@ def request_body(args):
             raise LocalFilesError(0, 'content_too_large')
         body['content_base64'] = base64.b64encode(content).decode()
     # The server deadline covers the whole wait; the tool waits a little longer.
-    body['timeout_ms'] = int(max(5.0, min(TIMEOUT_MAX, args.timeout)) * 1000)
+    body['timeout_ms'] = int(max(5.0, min(TIMEOUT_MAX, request_timeout(args))) * 1000)
     return body
+
+
+def request_timeout(args):
+    """--timeout, else the operation's default; a write never waits less than WRITE_TIMEOUT_MIN."""
+    if args.action != 'write':
+        return TIMEOUT_DEFAULT if args.timeout is None else args.timeout
+    if args.timeout is None:
+        return WRITE_TIMEOUT_DEFAULT
+    if args.timeout < WRITE_TIMEOUT_MIN:
+        print(f'write timeout raised to {WRITE_TIMEOUT_MIN:.0f} s: the owner needs time to press "Allow write"',
+              file=sys.stderr)
+        return WRITE_TIMEOUT_MIN
+    return args.timeout
 
 
 def parser():
@@ -191,7 +215,8 @@ def parser():
 
     def operation(name):
         command = commands.add_parser(name)
-        command.add_argument('--timeout', type=float, default=120.0)
+        command.add_argument('--timeout', type=float, default=None,
+                             help='seconds to wait (default 120, write 600; a write at least 120)')
         command.add_argument('--request-key')
         return command
     operation('list').add_argument('path', nargs='?', default='')

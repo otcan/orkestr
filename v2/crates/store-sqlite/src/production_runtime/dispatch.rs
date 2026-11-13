@@ -296,6 +296,24 @@ impl Store {
                 None => text,
             },
         };
+        // A Deep turn without the adapter's chat rules line (typed in the web
+        // app, a timer, accepted results) reads the chat's rules like a
+        // WhatsApp-typed one: the line of the latest earlier adapter intake
+        // (ORK-804). Placed where the adapter's own line sits.
+        let text = if claim.provider.run.role == orkestr_v2_contracts::runtime::Role::Deep
+            && !super::web_rules::carries(&text)
+        {
+            let line = super::web_rules::earlier_line(
+                &mut tx,
+                &context.owner.to_string(),
+                &claim.provider.run.conversation_id.to_string(),
+                &message_id,
+            )
+            .await?;
+            super::web_rules::with_line(line, text)
+        } else {
+            text
+        };
         // A read-only parallel slot turn gets its note; the writer's turn the
         // parallel answers accepted since its previous one. Unchanged while
         // no slot run exists (the owner's switch off).

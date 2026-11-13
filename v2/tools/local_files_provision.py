@@ -6,11 +6,20 @@
                            [--chown USER] [--dry-run]
 
 Makes sure the conversation's local-files grant is issued and installed as
-DIR/<conversation>.grant, where `local_files.py` looks when
+DIR/<conversation>.local-files.grant, where `local_files.py` looks when
 ORKESTR_V2_LOCAL_FILES_GRANT_DIR=DIR is set in the Deep agent's environment.
 Never set that variable for Fast. The directory and file custody is the
 agent-timer grant's (agent_timer_provision.py, whose install it reuses): DIR
-0710 with the --chown user's group, the file 0600 owned by that user.
+0710 with the --chown user's group, the file 0600 owned by that user. The
+name differs from the agent-timer grant's <conversation>.grant, so both can
+share one directory; a server with `agent_timers` issues and installs this
+grant itself (ORK-804).
+
+DIR must be the directory the agent actually sees. With a broker that
+projects a Core-written directory into the agent's namespace, install into
+that source directory, never at the projection's target path on the host
+(a file there is hidden from every agent, and the issue still rotates the
+grant).
 
 - An issued grant whose file is present is left alone (reruns change nothing).
 - A missing file or --rotate issues a new grant; the old one stops at once.
@@ -19,7 +28,7 @@ agent-timer grant's (agent_timer_provision.py, whose install it reuses): DIR
 
 A grant alone reaches nothing: the owner still has to connect a folder for
 this conversation in his browser, and every write needs his confirmation
-there. Use a grant directory separate from the thread-ask and timer ones.
+there. Use a grant directory separate from the thread-ask one.
 CREDENTIALS is a private JSON file {"username": ..., "password": ...} of the
 owner; it is used for one machine login. Grants and credentials are never
 printed.
@@ -80,7 +89,7 @@ def main(argv=None, api=None):
     except ValueError:
         print(json.dumps({'ok': False, 'code': 'invalid_conversation'}), file=sys.stderr)
         return 2
-    path = Path(args.grant_dir) / f'{conversation}.grant'
+    path = Path(args.grant_dir) / f'{conversation}.local-files.grant'
     try:
         owner = pwd.getpwnam(args.chown) if args.chown else None
         if api is None:

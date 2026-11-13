@@ -137,7 +137,8 @@ owner's 4 GiB encrypted upload reservation and stay until they are deleted
 
 `v2/tools/local_files.py` (same pattern as `agent_timer.py`). The grant comes
 from `ORKESTR_V2_LOCAL_FILES_GRANT`, a private `--grant-file`, or
-`ORKESTR_V2_LOCAL_FILES_GRANT_DIR/<conversation>.grant`; `ORKESTR_V2_URL`
+`ORKESTR_V2_LOCAL_FILES_GRANT_DIR/<conversation>.local-files.grant` (the
+directory the agent grant `<conversation>.grant` shares); `ORKESTR_V2_URL`
 and `ORKESTR_V2_CONVERSATION` name the server and conversation.
 
 ```sh
@@ -146,7 +147,7 @@ local_files.py list docs
 local_files.py read docs/plan.md          # prints local_file: <prepared file on the server>
 local_files.py hash a.pdf b.pdf
 local_files.py package docs/plan.md data/table.csv
-local_files.py write docs/plan.md --from-file /tmp/plan.md   # waits for the owner's Allow
+local_files.py write docs/plan.md --from-file /tmp/plan.md   # waits up to 10 min for the owner's Allow
 local_files.py status <request id>
 local_files.py instructions               # the short agent rules
 ```
@@ -156,18 +157,38 @@ Exit status: 0 done, 3 not finished when the wait ended, 4 not done
 refused or failed. Each call prints its request key first; after a lost
 answer, rerun with `--request-key KEY` to get the same request.
 
+`--timeout` defaults to 120 s, and to 600 s (the server maximum) for a write:
+a write waits for a person to notice the card and press "Allow write". A
+write's timeout is never below 120 s; a shorter one is raised with a note on
+stderr (ORK-804: a 25 s write expired before the owner saw the card).
+
+The agent learns the command from the Deep house rules, or from the
+generated rules of a new WhatsApp chat (`house_rules::files_rules`, with
+`agent_timers.local_files_tool`, by default
+`/usr/local/libexec/orkestr-local-files/local_files.py`): run it in its own
+shell, never through a Root request, host.exec, sudo or another user (the
+grant works only for the agent), `--timeout 600` for every write, and ask the
+owner before writing more than a few files.
+
 ## Enabling it for one conversation (operator)
 
 1. Deploy a server and UI built from the same commit (the migration
    `0098_local_files.sql` is additive).
-2. Provision the grant, like the timer grant, in its own directory:
+2. With `agent_timers` configured (see [agent timers](agent-timers.md)) the
+   server issues every conversation's local-files grant itself, beside its
+   agent grant: at creation and after each admitted input, and again when the
+   installed file is missing or no longer the current grant (ORK-804). A
+   revoked grant stays revoked. Nothing else is needed.
+3. Without it, provision the grant by hand:
    `local_files_provision.py --v2-url URL --credentials FILE --grant-dir DIR
    --conversation <uuid> --chown <deep agent user>` (`--revoke` to remove).
-   If the Deep agent can only read the agent-timer grant directory, install
-   the grant there as `<conversation>.local-files.grant` and pass that file
-   with `--grant-file`. Never run the provisioning tool with `--grant-dir` on
-   that directory: it writes `<conversation>.grant`, the timer grant's name.
-3. Give that conversation's Deep agent the tool:
+   It installs `DIR/<conversation>.local-files.grant`, so it may share the
+   agent-timer grant directory. DIR must be the directory the agent sees:
+   with a broker that projects a Core-written grant directory into the
+   agent's namespace, install into that source directory, never at the
+   projection's target path on the host (a file there is hidden from every
+   agent, and the issue still rotates the grant).
+4. Give that conversation's Deep agent the tool:
    `ORKESTR_V2_LOCAL_FILES_GRANT_DIR=DIR`, `ORKESTR_V2_URL`,
    `ORKESTR_V2_CONVERSATION`, and the text of `local_files.py instructions`
    in its chat rules. Never for Fast.
