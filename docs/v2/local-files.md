@@ -87,10 +87,21 @@ owner's tab ── poll every 2 s ─► POST /local-files/poll ────┘ 
   "● Folder “name” connected" and the browser tab title starts with "● ".
   Disconnecting (or leaving the conversation) stops serving the folder at
   once and fails what is still open.
+- **A waiting write is seen everywhere (ORK-804).** A write is answered only
+  in the tab serving the folder. While one waits there, that tab's title
+  starts with "Approve write · " (also when the tab is hidden), and if the
+  owner already allowed notifications for the site, one system notification
+  is shown per write (permission is never asked for). Every other tab of the
+  app, on any device, reads `GET /api/v2/local-files/waiting`: its title gets
+  the same mark, a notice under the header names the chat and says to allow
+  or refuse the write in the browser tab where that folder is connected, and
+  the chat's list row shows **Approve write**.
 - **Logged.** Every request stays in `local_file_requests` (operation,
   paths, run, grant generation, times, outcome, result). Write content is
   cleared once the request is finished; its size and SHA-256 stay. The tab
-  shows the recent requests under **Folder activity**.
+  shows the recent requests under **Folder activity**, including one it no
+  longer holds before it answered (expired, revoked or finished elsewhere):
+  `expired, nothing written` for a write, `expired` otherwise.
 - **Caps.** At most 8 unfinished requests per conversation and 120 per 10
   minutes (`429 local_files_rate_limited`).
 
@@ -106,6 +117,7 @@ owner's tab ── poll every 2 s ─► POST /local-files/poll ────┘ 
 | `POST .../local-files/requests/{request}/result` | owner's tab | `{"connection_id","outcome":"done"\|"failed","error"?, "listing"\|"hashes"\|"written"\|"upload_id"\|"empty"}` |
 | `POST .../local-files/disconnect` | owner's tab | this tab stops serving the folder |
 | `GET .../local-files?limit=N` | owner's tab | grant state, connection, newest requests |
+| `GET /api/v2/local-files/waiting` | owner (browser, machine bearer, or the owner's live service credential) | conversations with an unfinished, unexpired write waiting for the owner while its folder tab is connected: `{"conversations":[{"conversation_id","conversation_name","folder_name","writes","deadline_ms"}]}` |
 
 Operations: `list` (one directory, not recursive, at most 1000 entries),
 `read` (one file), `hash` (1 to 64 files, SHA-256 computed in the browser),
@@ -113,8 +125,10 @@ Operations: `list` (one directory, not recursive, at most 1000 entries),
 uncompressed ustar archive `selection-<id>.tar` of 1 to 64 files).
 Tab error codes: `not_found`, `not_a_file`, `not_a_directory`, `too_large`,
 `refused_by_owner`, `permission_denied`, `invalid_path`, `changed`,
-`browser_error`. The server advertises `local_files_v1` in
-`/api/v2/health`, and the UI release requires it.
+`browser_error`. The server advertises `local_files_v1` and
+`local_file_writes_waiting_v1` in `/api/v2/health`, and the UI release
+requires both. The waiting list accepts fields a newer server adds, so an
+older UI keeps working; the sidebar page is unchanged.
 
 ## Limits
 
@@ -245,14 +259,21 @@ owner before writing more than a few files.
 
 - Store: `production_runtime::local_files::tests` (grant, running-turn and
   browser-only authority, round trips bound to their request, deadlines,
-  disconnects and takeover settled before any read, path and size caps).
+  disconnects and takeover settled before any read, path and size caps) and
+  `production_runtime::local_files::waiting::tests` (only open, unexpired
+  writes with a live tab; read-only).
 - Server: `local_files_http::tests` (grant header only, CSRF and browser
-  session, 1 MiB write route limit, unprepared uploads refused) and
+  session, 1 MiB write route limit, unprepared uploads refused),
+  `local_files_waiting_http::tests` and
   `note_sha256_reads_the_materialized_receipt_format`.
+- UI: `v2/apps/ui/tests/local_writes.rs` (notice and row texts).
 - Browser worker: `v2/apps/ui/src/local_files/*.test.mjs` with the synthetic
   directory handle `v2/ci/local-files-fake-directory.mjs`.
 - Headless: `v2/ci/headless-local-files.mjs` runs the real UI bundle against
   the synthetic API (`headless-local-files-mock.mjs`). Chromium in CI cannot
   show a picker, so the test replaces `window.showDirectoryPicker` before the
   page loads; the UI bundle contains no test hook, which the test checks.
+  It also checks that a write queued while the folder tab is hidden marks
+  its title and every other tab (title, notice, list row), and that an
+  expired write closes its card and shows `expired, nothing written`.
 - Agent tool: `v2/tools/tests/test_local_files.py`.
