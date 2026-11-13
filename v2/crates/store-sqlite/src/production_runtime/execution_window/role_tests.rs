@@ -457,3 +457,5 @@ async fn fast_chat_rules_inline_only_when_the_whole_turn_fits() {
 mod fast_slots;
 #[path = "parallel_deep_tests.rs"]
 mod parallel_deep;
+#[path = "web_rules_tests.rs"]
+mod web_rules;

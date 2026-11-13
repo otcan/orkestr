@@ -52,6 +52,31 @@ impl Store {
         Ok(grant)
     }
 
+    /// Whether `grant` is the conversation's current local-files grant
+    /// (ORK-804): the server replaces an installed file that a rotation
+    /// elsewhere left stale. Same owner scope as reading the grant.
+    pub async fn local_file_grant_current(
+        &self,
+        credential: &str,
+        owner: &OwnerId,
+        conversation: &ConversationId,
+        grant: &str,
+    ) -> R<bool> {
+        let mut tx = self
+            .local_files_scope(credential, owner, conversation, false, OWNER_KINDS)
+            .await?;
+        let row = grant_row(&mut tx, conversation).await?;
+        tx.commit().await.map_err(unavailable)?;
+        let well_formed = grant.len() == 64
+            && grant
+                .bytes()
+                .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
+        Ok(well_formed
+            && row
+                .and_then(|row| row.get::<Option<String>, _>("grant_hash"))
+                .is_some_and(|hash| hash == grant_hash(grant)))
+    }
+
     /// Issue or rotate the conversation's grant. Shown once; the hash is stored.
     pub async fn issue_local_file_grant(
         &self,

@@ -29,6 +29,28 @@ async fn grant_row(
 }
 
 impl Store {
+    /// Whether `grant` is the conversation's current agent grant (ORK-804).
+    /// The server checks the installed file with this before calling it
+    /// present, so a file left stale by a rotation elsewhere is replaced.
+    /// Owner credential as for reading the grant; never returns the hash.
+    pub async fn agent_timer_grant_current(
+        &self,
+        credential: &str,
+        owner: &OwnerId,
+        conversation: &ConversationId,
+        grant: &str,
+    ) -> R<bool> {
+        let mut tx = self
+            .owner_scope(credential, owner, conversation, false)
+            .await?;
+        let row = grant_row(&mut tx, conversation).await?;
+        tx.commit().await.map_err(unavailable)?;
+        Ok(hex64(grant)
+            && row
+                .and_then(|row| row.get::<Option<String>, _>("grant_hash"))
+                .is_some_and(|hash| hash == grant_hash(grant)))
+    }
+
     /// One reauthenticated current-conversation snapshot. Never returns grant
     /// values, hashes, run IDs or resources of another conversation.
     pub async fn agent_timer_discovery(

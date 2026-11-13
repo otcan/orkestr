@@ -9,7 +9,7 @@ import {createHash} from 'node:crypto';
 import {mkdir, readFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import puppeteer from 'puppeteer';
-import {A, startMock} from './headless-workspace-mock.mjs';
+import {A, B, startMock} from './headless-workspace-mock.mjs';
 import {fakeDirectory} from './local-files-fake-directory.mjs';
 
 assert.equal(process.env.CI, 'true', 'Run only against the isolated synthetic API');
@@ -129,6 +129,54 @@ try {
   // The activity log is inspected in the Files & context drawer.
   await page.waitForFunction(() => document.querySelector('.files-drawer .local-folder-activity')?.textContent.includes('refused_by_owner'));
   assert.equal(await page.$('.composer-context .local-folder-activity'), null, 'the composer shows state, not the log');
+
+  // ORK-804: a write waiting for the owner while the folder tab is hidden
+  // still shows: in that tab's title, and in every other tab of the app
+  // (title, a notice saying where to answer, the chat's row). One that
+  // expires before the owner answers is recorded once in Folder activity.
+  const setHidden = hidden => page.evaluate(on => {
+    if (on) {
+      Object.defineProperty(document, 'visibilityState', {configurable: true, get: () => 'hidden'});
+      Object.defineProperty(document, 'hidden', {configurable: true, get: () => true});
+    } else { delete document.visibilityState; delete document.hidden; }
+    document.dispatchEvent(new Event('visibilitychange'));
+  }, hidden);
+  await page.waitForFunction(() => document.title === '● Orkestr', {timeout: 15000});
+  // A hidden page runs no animation frames: poll on a timer, not the default 'raf'.
+  const hiddenWait = {timeout: 15000, polling: 250};
+  const other = await browser.newPage();
+  other.on('pageerror', error => errors.push(`other tab: ${error.message}`));
+  await other.setViewport({width: 1280, height: 860});
+  await other.goto(`${origin}/#conversation/${B}`, {waitUntil: 'domcontentloaded'});
+  await other.waitForSelector('.conversation-row');
+  await other.bringToFront();
+  await setHidden(true);
+  const late = lf.enqueue('write', {path: 'a.txt', content: 'late'});
+  await page.waitForFunction(() => document.title.startsWith('Approve write · '), hiddenWait);
+  assert.equal(await page.title(), 'Approve write · ● Orkestr', 'the hidden folder tab says a write waits');
+  await page.waitForSelector('.local-folder-confirm');
+  await other.waitForFunction(() => document.title === 'Approve write · Orkestr', {timeout: 15000});
+  await other.waitForSelector('.write-waiting');
+  const notice = await other.$eval('.write-waiting', n => n.textContent);
+  assert.match(notice, /^Approve write/);
+  assert.match(notice, /“Assistant” wants to change a file in your folder\. Allow or refuse it in the browser tab where the folder “Synthetic folder” is connected\./);
+  await other.waitForFunction(() => [...document.querySelectorAll('.conversation-row[data-write-waiting=true]')]
+    .some(row => row.querySelector('.work-state.status-attention')?.textContent === 'Approve write' && row.textContent.includes('Assistant')), {timeout: 15000});
+  assert.equal(await other.$$eval('.conversation-row[data-write-waiting=true]', rows => rows.length), 1, 'only the waiting chat');
+  assert.ok(await other.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), 'the notice fits');
+  await screenshots(other, 'write-waiting-elsewhere');
+  lf.expire(late);
+  await page.waitForFunction(() => !document.querySelector('.local-folder-confirm'), hiddenWait);
+  await page.waitForFunction(() => document.querySelector('.files-drawer .local-folder-activity')?.textContent.includes('write a.txt: expired, nothing written'), hiddenWait);
+  assert.equal(await page.$$eval('.files-drawer .local-folder-activity li', items => items.filter(li => li.textContent.includes('expired')).length), 1, 'recorded once');
+  assert.equal(lf.results.has(late), false, 'nothing is reported for an expired write');
+  assert.equal(await page.evaluate(() => window.__syntheticFolder.fake.text('a.txt')), 'alpha');
+  await page.waitForFunction(() => document.title === '● Orkestr', hiddenWait);
+  await other.waitForFunction(() => !document.querySelector('.write-waiting') && document.title === 'Orkestr', {timeout: 15000});
+  assert.ok(lf.waitingReads > 0);
+  await other.close();
+  await page.bringToFront();
+  await setHidden(false);
   // A tab that cannot reach the server says its folder worker is offline.
   lf.failPolls = true;
   await page.waitForFunction(() => document.querySelector('.local-folder')?.dataset.folderState === 'offline', {timeout: 10000});

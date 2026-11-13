@@ -59,6 +59,7 @@ pub(crate) mod fast_rules;
 pub use fast_rules::{FAST_INPUT_BUDGET, FAST_NOTE_RESERVE};
 mod fast_slots;
 pub(crate) mod parallel_deep;
+mod web_rules;
 pub use fast_slots::MAX_AUXILIARY_FAST_SLOTS;
 pub use parallel_deep::MAX_PARALLEL_DEEP_SLOTS;
 mod parallel_deep_turns;

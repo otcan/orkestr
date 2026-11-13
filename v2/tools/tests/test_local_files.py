@@ -113,10 +113,10 @@ class ToolTests(unittest.TestCase):
         self.assertIn('local_file: /srv/exports/x/plan.md', out)
         self.assertEqual(FakeV2.calls[0][2]['request_key'], 'retry-1', 'a retry reuses the printed key')
         FakeV2.calls, FakeV2.states = [], [view('working', 'write'), view('done', 'write', {'bytes_written': 5})]
-        code, _, _ = self.run_tool('write', 'notes/new.txt', '--text', 'hello', '--timeout', '30')
+        code, _, _ = self.run_tool('write', 'notes/new.txt', '--text', 'hello', '--timeout', '180')
         self.assertEqual(code, 0)
         body = FakeV2.calls[0][2]
-        self.assertEqual((base64.b64decode(body['content_base64']), body['timeout_ms']), (b'hello', 30000))
+        self.assertEqual((base64.b64decode(body['content_base64']), body['timeout_ms']), (b'hello', 180000))
 
     def test_no_folder_refused_and_unfinished_have_their_own_exit_codes(self):
         FakeV2.refuse = 'local_files_not_connected'
@@ -155,7 +155,7 @@ class ToolTests(unittest.TestCase):
             code, _, err = self.run_tool('list')
         self.assertIn('grant_missing_or_invalid', err)
         with tempfile.TemporaryDirectory() as root:
-            grant = Path(root) / f'{CONVERSATION}.grant'
+            grant = Path(root) / f'{CONVERSATION}.local-files.grant'
             grant.write_text(GRANT)
             os.chmod(grant, 0o644)
             code, _, err = self.run_tool('--grant-file', str(grant), 'list')
@@ -166,6 +166,39 @@ class ToolTests(unittest.TestCase):
                 code, _, _ = self.run_tool('list')
             self.assertEqual(code, 0, 'the provisioned grant file is found by conversation')
         self.assertNotIn(GRANT, json.dumps(FakeV2.calls))
+
+    def test_the_grant_dir_lookup_never_takes_the_agent_timer_grant(self):
+        """ORK-804: the local-files and agent-timer grants share one agent-visible directory;
+        <conversation>.grant there is the agent-timer grant, which this server refuses."""
+        with tempfile.TemporaryDirectory() as root:
+            timer = Path(root) / f'{CONVERSATION}.grant'
+            timer.write_text('12' * 32)
+            os.chmod(timer, 0o600)
+            env = {'ORKESTR_V2_LOCAL_FILES_GRANT': '', 'ORKESTR_V2_LOCAL_FILES_GRANT_DIR': root}
+            with unittest.mock.patch.dict(os.environ, env):
+                code, _, err = self.run_tool('list')
+            self.assertEqual(code, TOOL.ERROR_EXIT)
+            self.assertIn('grant_file_missing', err)
+            self.assertEqual(TOOL.grant_path(CONVERSATION, env), Path(root) / f'{CONVERSATION}.local-files.grant')
+        self.assertEqual(FakeV2.calls, [])
+
+    def test_a_write_waits_ten_minutes_by_default_and_never_less_than_two(self):
+        """ORK-804: a 25 s write expired before the owner saw the card."""
+        def sent(*argv):
+            FakeV2.calls, FakeV2.states = [], [view('done', argv[0], {'bytes_written': 1})]
+            code, _, err = self.run_tool(*argv)
+            self.assertEqual(code, 0)
+            return FakeV2.calls[0][2]['timeout_ms'], err
+        self.assertEqual(sent('write', 'a.txt', '--text', 'x')[0], 600_000)
+        timeout, err = sent('write', 'a.txt', '--text', 'x', '--timeout', '25')
+        self.assertEqual(timeout, 120_000)
+        self.assertIn('write timeout raised to 120 s', err)
+        self.assertEqual(sent('write', 'a.txt', '--text', 'x', '--timeout', '300')[0], 300_000)
+        self.assertEqual(sent('write', 'a.txt', '--text', 'x', '--timeout', '9000')[0], 600_000, 'the server maximum')
+        self.assertEqual(sent('list')[0], 120_000, 'other requests keep their default')
+        self.assertEqual(sent('list', '--timeout', '20')[0], 20_000)
+        self.assertIn('"Allow write"', TOOL.AGENT_INSTRUCTIONS)
+        self.assertIn('never through Root', TOOL.AGENT_INSTRUCTIONS)
 
 
 class FakeApi:
@@ -201,7 +234,8 @@ class ProvisionTests(unittest.TestCase):
             out = io.StringIO()
             with contextlib.redirect_stdout(out):
                 self.assertEqual(PROVISION.main(argv, api=FakeApi(False)), 0)
-            path = grants / f'{CONVERSATION}.grant'
+            path = grants / f'{CONVERSATION}.local-files.grant'
+            self.assertFalse((grants / f'{CONVERSATION}.grant').exists(), 'never the agent-timer grant name')
             self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
             self.assertEqual(path.read_text().strip(), GRANT)
             self.assertNotIn(GRANT, out.getvalue())

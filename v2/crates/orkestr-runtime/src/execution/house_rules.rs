@@ -11,6 +11,14 @@
 //! turns and read-only parallel Deep slots. The note is added only while the
 //! whole turn still fits the providers' 32 KiB input bound; a turn too large
 //! for it is sent without it.
+//!
+//! ORK-804: the note (and a new chat's generated files section) also names
+//! this conversation's local folder command (`v2/tools/local_files.py`): run
+//! it in the agent's own shell, never through Root, give a write ten minutes
+//! for the owner's "Allow write", and ask before writing many files. A Deep
+//! turn of a WhatsApp-bound conversation that was typed in the web app gets
+//! the chat rules line from Core (`store-sqlite` `fast_rules::earlier_line`),
+//! so it reads the chat's rules like a WhatsApp-typed turn.
 use std::sync::OnceLock;
 
 /// Largest turn input both provider brokers accept (bytes).
@@ -30,6 +38,10 @@ pub struct DeepHouseRules {
     pub v2_url: String,
     /// The agent's view of the grant directory.
     pub grant_dir: String,
+    /// The installed local folder tool (ORK-804). Its grant,
+    /// `<grant_dir>/<conversation>.local-files.grant`, sits beside the agent
+    /// grant. `None` leaves the local folder bullets out.
+    pub local_files_tool: Option<String>,
 }
 
 static CONFIGURED: OnceLock<DeepHouseRules> = OnceLock::new();
@@ -51,13 +63,28 @@ pub fn files_rules(rules: &DeepHouseRules, conversation: &str) -> String {
         reply_attach_tool,
         v2_url,
         grant_dir,
+        local_files_tool,
     } = rules;
+    let local_files = local_files_tool
+        .as_deref()
+        .map(|tool| local_files_rules(tool, v2_url, grant_dir, conversation))
+        .unwrap_or_default();
     format!(
         "- Never answer with a Markdown link, a sandbox: link or a path to a file on this host: the owner can open none of them, in the web app or on WhatsApp.
 - To give the owner a file, put it inside your working directory and attach it yourself during this Deep turn (never through a Root request, sudo or another user: the grant works only for you):
   ORKESTR_V2_AGENT_TIMER_GRANT_DIR={grant_dir} PYTHONDONTWRITEBYTECODE=1 python3 -I -S -B {reply_attach_tool} --v2-url {v2_url} --conversation {conversation} --workspace \"$PWD\" attach \"<file>\"
   End your reply with the [orkestr-attachment ...] lines it prints, unchanged, each on its own line, and name the files in your text without their paths.
-- If it refuses, tell the owner its code in one line. Do not retry in a loop and do not file a repair or Root request."
+- If it refuses, tell the owner its code in one line. Do not retry in a loop and do not file a repair or Root request.{local_files}"
+    )
+}
+
+/// The local folder bullets (ORK-804), appended to the file rules.
+fn local_files_rules(tool: &str, v2_url: &str, grant_dir: &str, conversation: &str) -> String {
+    format!(
+        "
+- Files on the owner's computer: only the ones he asks about, in the folder he connected for this conversation in the Orkestr web app (\"Connect folder\", Chrome or Edge). Run the local folder tool yourself in your own shell during this Deep turn, never through a Root request, host.exec, sudo or another user (its grant works only for you):
+  ORKESTR_V2_LOCAL_FILES_GRANT_DIR={grant_dir} PYTHONDONTWRITEBYTECODE=1 python3 -I -S -B {tool} --v2-url {v2_url} --conversation {conversation} <list [\"<dir>\"] | read \"<path>\" | hash \"<path>\" ... | package \"<path>\" ... | write \"<path>\" --from-file <file> --timeout 600>
+  Paths are relative to his folder. Every write waits until he presses \"Allow write\" in his Orkestr tab: always give it --timeout 600, keep the command running and read its output until it ends. Each file is one Allow, so ask him before writing more than a few files. A write is done only when the tool printed \"Wrote\"; `expired` or `refused` means nothing was written. Exit 5 means no folder is connected: ask him to open this conversation in Chrome on his computer and press \"Connect folder\"."
     )
 }
 
@@ -101,6 +128,7 @@ mod tests {
             reply_attach_tool: "/opt/synthetic/reply_attach.py".into(),
             v2_url: "http://127.0.0.1:19822".into(),
             grant_dir: "/srv/synthetic/agent-grants".into(),
+            local_files_tool: Some("/opt/synthetic/local_files.py".into()),
         }
     }
 
@@ -120,6 +148,44 @@ python3 -I -S -B /opt/synthetic/reply_attach.py --v2-url http://127.0.0.1:19822 
         assert!(note.contains("[orkestr-attachment ...] lines it prints, unchanged"));
         assert!(note.contains("never through a Root request, sudo or another user"));
         assert!(!note.contains("--grant-file"), "never the root path");
+    }
+
+    #[test]
+    fn a_turn_without_chat_rules_learns_the_local_folder_command() {
+        // ORK-804: the agent found the tool by listing /usr/local/libexec, ran
+        // it through Root host.exec with a 25 s write timeout, and the write
+        // expired before the owner saw the card.
+        let text = deep_text(Some(&rules()), CONVERSATION, "update docs/plan.md");
+        let (note, rest) = text.split_once("\n\n").unwrap();
+        assert_eq!(rest, "update docs/plan.md");
+        assert!(note.contains(&format!(
+            "ORKESTR_V2_LOCAL_FILES_GRANT_DIR=/srv/synthetic/agent-grants PYTHONDONTWRITEBYTECODE=1 \
+python3 -I -S -B /opt/synthetic/local_files.py --v2-url http://127.0.0.1:19822 \
+--conversation {CONVERSATION} <list"
+        )));
+        assert!(note.contains("write \"<path>\" --from-file <file> --timeout 600>"));
+        assert!(note.contains("Run the local folder tool yourself in your own shell"));
+        assert!(note.contains("never through a Root request, host.exec, sudo or another user"));
+        assert!(note.contains("always give it --timeout 600, keep the command running"));
+        assert!(note.contains("ask him before writing more than a few files"));
+        assert!(note.contains("A write is done only when the tool printed \"Wrote\""));
+        assert!(note.ends_with("press \"Connect folder\".]"));
+        assert!(
+            !note.contains("--grant-file"),
+            "the grant dir, never a host grant path"
+        );
+        // Without a configured tool the note keeps only the attachment rules.
+        let plain = DeepHouseRules {
+            local_files_tool: None,
+            ..rules()
+        };
+        let text = deep_text(Some(&plain), CONVERSATION, "hello");
+        assert!(text.contains("reply_attach.py"));
+        assert!(!text.contains("local_files") && !text.contains("Connect folder"));
+        // A new chat's generated files section carries the same bullets.
+        let section = files_rules(&rules(), CONVERSATION);
+        assert!(section.contains("/opt/synthetic/local_files.py --v2-url"));
+        assert!(section.starts_with("- Never answer with a Markdown link"));
     }
 
     #[test]
@@ -147,6 +213,6 @@ python3 -I -S -B /opt/synthetic/reply_attach.py --v2-url http://127.0.0.1:19822 
         assert!(noted.ends_with(&fits));
         let full = "x".repeat(PROVIDER_INPUT_MAX - note + 1);
         assert_eq!(deep_text(Some(&rules()), CONVERSATION, &full), full);
-        assert!(note < 1536, "a small fraction of the bound: {note}");
+        assert!(note < 3072, "a small fraction of the bound: {note}");
     }
 }

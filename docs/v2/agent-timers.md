@@ -221,15 +221,30 @@ makes sure of a grant for every conversation, not only new WhatsApp chats
   directory is unusable. A failure is logged and never refuses the creation
   or the input.
 
+The local folder tool's own grant (ORK-804) is issued and installed the same
+way, beside it, as `<conversation>.local-files.grant`. An installed file of
+either grant counts as present only while it holds the grant Core has now: a
+file left stale by a rotation elsewhere is replaced with the next input.
+
 A Deep turn that carries no chat rules line (a conversation without a
-WhatsApp binding, or the owner writing in the web app) starts with a short
-house rules note (`crates/orkestr-runtime/src/execution/house_rules.rs`):
-never answer with a link or path to a host file, and this conversation's
-reply attachment command. Generated chat rules of a new WhatsApp chat carry
-the same text as "Files for the owner (reply attachment tool)". The tool path
-is `agent_timers.reply_attach_tool`, by default
-`/usr/local/libexec/orkestr-reply-attach/reply_attach.py`. The note is left out
+WhatsApp binding) starts with a short house rules note
+(`crates/orkestr-runtime/src/execution/house_rules.rs`): never answer with a
+link or path to a host file, this conversation's reply attachment command,
+and its local folder command (run it in the agent's own shell, `--timeout
+600` for a write, ask before writing many files). Generated chat rules of a
+new WhatsApp chat carry the same text as "Files for the owner (reply
+attachment tool)". The tool paths are `agent_timers.reply_attach_tool` and
+`agent_timers.local_files_tool`, by default
+`/usr/local/libexec/orkestr-reply-attach/reply_attach.py` and
+`/usr/local/libexec/orkestr-local-files/local_files.py`. The note is left out
 when the turn would no longer fit the 32 KiB provider input bound.
+
+A Deep turn of a WhatsApp-bound conversation that the owner typed in the web
+app (or a timer occurrence, or accepted results) has no adapter line of its
+own. Core gives it the chat rules line of the conversation's latest earlier
+WhatsApp intake, unchanged (`store-sqlite` `production_runtime/web_rules.rs`),
+so it reads the chat's rules like a WhatsApp-typed turn instead of only the
+house note (ORK-804). Fast turns are unchanged.
 
 The agent runs the tool itself. A grant file owned by another user is refused
 with `grant_file_wrong_owner`, so root (through a Root request or sudo) never

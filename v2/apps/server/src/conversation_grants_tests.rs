@@ -1,5 +1,7 @@
 //! ORK-794: every conversation has its agent grant, web-created ones
 //! included, and an older one without it gets it with its next input.
+//! ORK-804: the local-files grant is issued beside it the same way, and a
+//! stale installed file is replaced.
 use super::*;
 use crate::conversation_resources_http::tests::{case, send, Case};
 use axum::{
@@ -64,6 +66,36 @@ fn file(grants: &Path, conversation: &ConversationId) -> std::path::PathBuf {
     grants.join(format!("{conversation}.grant"))
 }
 
+fn local_file(grants: &Path, conversation: &ConversationId) -> std::path::PathBuf {
+    grants.join(format!("{conversation}.local-files.grant"))
+}
+
+async fn local_grant(case: &Case, conversation: &ConversationId) -> (bool, i64) {
+    let owner = owner(case).await;
+    let grant = case
+        .state
+        .store
+        .local_file_grant(&case.bearer, &owner, conversation)
+        .await
+        .unwrap();
+    (grant.issued, grant.generation)
+}
+
+/// The installed local-files file is the conversation's current grant: the
+/// agent's request lookup knows it (an unknown request, hence not found).
+async fn local_authenticates(case: &Case, conversation: &ConversationId, value: &str) -> bool {
+    match case
+        .state
+        .store
+        .local_file_request(value.trim(), conversation, uuid::Uuid::new_v4())
+        .await
+    {
+        Err(ResourceError::NotFound) => true,
+        Err(ResourceError::Unauthorized) => false,
+        other => panic!("unexpected answer: {:?}", other.map(|_| ())),
+    }
+}
+
 fn browser(case: &Case) -> HeaderMap {
     let mut headers = HeaderMap::new();
     headers.insert("host", "127.0.0.1:19882".parse().unwrap());
@@ -120,6 +152,17 @@ async fn a_conversation_created_in_the_web_app_has_its_grant_from_the_start() {
     let first = std::fs::read_to_string(&path).unwrap();
     assert!(authenticates(&case, &id, &first).await);
     assert_eq!(grant(&case, &id).await, (true, 1));
+    // The local folder tool's own grant beside it (ORK-804), no operator step.
+    let local = local_file(&grants, &id);
+    assert!(
+        chats::timer_grant_installed(&local),
+        "installed at creation"
+    );
+    let local_first = std::fs::read_to_string(&local).unwrap();
+    assert_ne!(local_first, first, "a separate grant");
+    assert!(local_authenticates(&case, &id, &local_first).await);
+    assert!(!local_authenticates(&case, &id, &first).await);
+    assert_eq!(local_grant(&case, &id).await, (true, 1));
     // A replay of the same creation keeps the grant.
     let replay = crate::conversations_http::create(
         State(case.state.clone()),
@@ -131,6 +174,96 @@ async fn a_conversation_created_in_the_web_app_has_its_grant_from_the_start() {
     assert_eq!(replay.status(), StatusCode::OK);
     assert_eq!(std::fs::read_to_string(&path).unwrap(), first);
     assert_eq!(grant(&case, &id).await, (true, 1));
+    assert_eq!(std::fs::read_to_string(&local).unwrap(), local_first);
+    assert_eq!(local_grant(&case, &id).await, (true, 1));
+    case.finish().await;
+}
+
+#[tokio::test]
+async fn a_stale_grant_file_is_replaced_with_the_next_input() {
+    // ORK-804: a rotation outside the server (a Root host.exec into a
+    // directory the agent cannot see) leaves the installed files well-formed
+    // but stale; the agent's tools then get 401 until someone notices.
+    let mut case = case().await;
+    let grants = configure(&mut case);
+    let id = case.conversation.clone();
+    message(&case, "synthetic:stale-first").await;
+    let agent = std::fs::read_to_string(file(&grants, &id)).unwrap();
+    let local = std::fs::read_to_string(local_file(&grants, &id)).unwrap();
+    assert!(local_authenticates(&case, &id, &local).await);
+    let owner = owner(&case).await;
+    for _ in 0..2 {
+        case.state
+            .store
+            .issue_agent_timer_grant(&case.bearer, &owner, &id)
+            .await
+            .unwrap();
+        case.state
+            .store
+            .issue_local_file_grant(&case.bearer, &owner, &id)
+            .await
+            .unwrap();
+    }
+    assert!(!authenticates(&case, &id, &agent).await);
+    assert!(!local_authenticates(&case, &id, &local).await);
+    assert!(
+        chats::timer_grant_installed(&file(&grants, &id)),
+        "well-formed, only stale"
+    );
+    assert!(chats::timer_grant_installed(&local_file(&grants, &id)));
+    message(&case, "synthetic:stale-second").await;
+    let agent_now = std::fs::read_to_string(file(&grants, &id)).unwrap();
+    let local_now = std::fs::read_to_string(local_file(&grants, &id)).unwrap();
+    assert!(authenticates(&case, &id, &agent_now).await);
+    assert!(local_authenticates(&case, &id, &local_now).await);
+    assert_eq!(grant(&case, &id).await, (true, 4));
+    assert_eq!(local_grant(&case, &id).await, (true, 4));
+    // A current file is left alone.
+    message(&case, "synthetic:stale-third").await;
+    assert_eq!(
+        std::fs::read_to_string(file(&grants, &id)).unwrap(),
+        agent_now
+    );
+    assert_eq!(
+        std::fs::read_to_string(local_file(&grants, &id)).unwrap(),
+        local_now
+    );
+    assert_eq!(
+        (grant(&case, &id).await, local_grant(&case, &id).await),
+        ((true, 4), (true, 4))
+    );
+    case.finish().await;
+}
+
+#[tokio::test]
+async fn a_revoked_local_files_grant_stays_revoked() {
+    let mut case = case().await;
+    let grants = configure(&mut case);
+    let id = case.conversation.clone();
+    message(&case, "synthetic:local-first").await;
+    let owner = owner(&case).await;
+    case.state
+        .store
+        .revoke_local_file_grant(&case.bearer, &owner, &id)
+        .await
+        .unwrap();
+    std::fs::remove_file(local_file(&grants, &id)).unwrap();
+    message(&case, "synthetic:local-second").await;
+    assert!(!local_file(&grants, &id).exists());
+    assert_eq!(local_grant(&case, &id).await, (false, 1));
+    assert_eq!(
+        ensure_local_files(&case.state, &case.bearer, &owner, &id).await,
+        Ok(Grant::Revoked)
+    );
+    // The agent grant is not affected.
+    assert!(
+        authenticates(
+            &case,
+            &id,
+            &std::fs::read_to_string(file(&grants, &id)).unwrap()
+        )
+        .await
+    );
     case.finish().await;
 }
 
@@ -153,6 +286,8 @@ async fn a_project_conversation_has_its_grant_from_the_start() {
     let path = file(&grants, &id);
     assert!(authenticates(&case, &id, &std::fs::read_to_string(&path).unwrap()).await);
     assert_eq!(grant(&case, &id).await, (true, 1));
+    let local = std::fs::read_to_string(local_file(&grants, &id)).unwrap();
+    assert!(local_authenticates(&case, &id, &local).await);
     case.finish().await;
 }
 
@@ -259,10 +394,19 @@ async fn an_unusable_grant_directory_never_refuses_the_input() {
     );
     // Nothing is issued that cannot be installed (no rotation per input).
     assert_eq!(grant(&case, &case.conversation).await, (false, 0));
+    assert_eq!(local_grant(&case, &case.conversation).await, (false, 0));
+    assert_eq!(
+        ensure_local_files(&case.state, &case.bearer, &owner, &case.conversation).await,
+        Err(StageError("local_files_grant_failed"))
+    );
     // The house rules name the agent's view of the grant directory.
     let rules = case.state.deep_house_rules().unwrap();
     assert_eq!(rules.grant_dir, grants.to_str().unwrap());
     assert_eq!(rules.reply_attach_tool, chats::DEFAULT_REPLY_ATTACH_TOOL);
+    assert_eq!(
+        rules.local_files_tool.as_deref(),
+        Some(chats::DEFAULT_LOCAL_FILES_TOOL)
+    );
     assert_eq!(rules.v2_url, "http://127.0.0.1:19822");
     case.finish().await;
 }
