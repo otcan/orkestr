@@ -569,3 +569,104 @@ async fn release_record_never_applies_to_a_run_that_was_not_cut() {
     ));
     close(f).await;
 }
+
+// A real release cut: the train's Stop request, then the provider's stopped
+// observation, which cancels the run, records its terminal evidence and
+// releases the binding to `ready` one generation ahead in one transaction.
+async fn stopped_for_release(f: &Case, source: &ProviderAdmission) {
+    f.handle
+        .append_provider_event(&f.owner, source, &input(source, 1, ProviderEvent::Started))
+        .await
+        .unwrap();
+    let cancel = f
+        .handle
+        .request_cancel(&f.owner, &source.run.run_id, "release-cut")
+        .await
+        .unwrap();
+    let mut control = source.clone();
+    control.run = cancel.new_fenced_admission;
+    f.handle
+        .append_provider_event(
+            &f.owner,
+            &control,
+            &input(&control, 2, ProviderEvent::Stopped),
+        )
+        .await
+        .unwrap();
+}
+
+// 2026-11-13: two force-cut chats had host-tool results admitted (fenced to the
+// running Deep run) shortly before the cut. Those fences consumed the release
+// continuation, so the adapter's continuation got 409 and the chats stayed
+// silent. A fence admitted while the run was live is an ordinary continuation
+// of that run: it neither consumes nor dispatches through the release grant.
+#[tokio::test]
+async fn release_continuation_ignores_results_admitted_before_the_cut() {
+    let (f, source, message, query) = fixture().await;
+    let host = MessageInput {
+        client_message_id: "automatic-host-result-synthetic".into(),
+        text: "Synthetic host tool result".into(),
+    };
+    let live = admit(&f, &host, &query).await.unwrap();
+    stopped_for_release(&f, &source).await;
+    let terminal: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM production_terminal_evidence WHERE run_id=?")
+            .bind(source.run.run_id.to_string())
+            .fetch_one(&f.store.pool)
+            .await
+            .unwrap();
+    assert_eq!(terminal, 1);
+    // No record: still today's refusal.
+    assert!(matches!(
+        admit(&f, &message, &query).await,
+        Err(StoreError::ProviderGenerationMismatch)
+    ));
+    // The pre-cut result never dispatches through the release grant.
+    let mut tx = f.store.pool.begin().await.unwrap();
+    assert!(matches!(
+        crate::source_continuation::validate(
+            &mut tx,
+            &f.owner,
+            &f.conversation,
+            &live.receipt.message_id
+        )
+        .await,
+        Err(StoreError::ProviderGenerationMismatch)
+    ));
+    drop(tx);
+    let recorded = grant(&source.run.run_id, 0);
+    let released = admit_released(&f, &message, &query, Some(&recorded))
+        .await
+        .unwrap();
+    assert!(!released.duplicate);
+    // Still exactly one continuation after the cut.
+    let second = MessageInput {
+        client_message_id: "release-continuation-second".into(),
+        text: "Synthetic second continuation".into(),
+    };
+    assert!(matches!(
+        admit_released(&f, &second, &query, Some(&recorded)).await,
+        Err(StoreError::ProviderGenerationMismatch)
+    ));
+    let mut tx = f.store.pool.begin().await.unwrap();
+    crate::source_continuation::validate(
+        &mut tx,
+        &f.owner,
+        &f.conversation,
+        &released.receipt.message_id,
+    )
+    .await
+    .unwrap();
+    assert!(matches!(
+        crate::source_continuation::validate(
+            &mut tx,
+            &f.owner,
+            &f.conversation,
+            &live.receipt.message_id
+        )
+        .await,
+        Err(StoreError::ProviderGenerationMismatch)
+    ));
+    drop(tx);
+    close(f).await;
+}
