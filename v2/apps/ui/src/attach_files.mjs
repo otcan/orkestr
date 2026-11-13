@@ -38,6 +38,46 @@ export function pastedText(text, now = new Date()) {
   return { filename: `pasted-text-${stamp}.txt`, media_type: 'text/plain', content_base64: toBase64(bytes) };
 }
 
+// A paste into the "Paste text" box attaches the box at once (ORK-811). The
+// clipboard text goes in at the caret, replacing any selection, and the
+// whole box is what gets attached. A paste without text (empty, whitespace
+// only, or a picture) returns null and is left to the browser.
+export function pasteIntoBox(box, clipboard) {
+  const text = clipboard?.getData?.('text/plain') ?? '';
+  if (!text.trim()) return null;
+  const value = typeof box.value === 'string' ? box.value : '';
+  const start = Number.isInteger(box.selectionStart) ? box.selectionStart : value.length;
+  const end = Number.isInteger(box.selectionEnd) ? Math.max(start, box.selectionEnd) : start;
+  return value.slice(0, start) + text + value.slice(end);
+}
+
+// `send(text)` receives the box's text after each paste that carried text.
+export function installPasteAttach(box, send) {
+  const paste = event => {
+    const value = pasteIntoBox(box, event.clipboardData);
+    if (value === null) return;
+    event.preventDefault();
+    // The box keeps the text, so the encrypted paste upload reads it from
+    // there, and a failed upload leaves it in place for a retry.
+    box.value = value;
+    send(box.value);
+  };
+  box.addEventListener('paste', paste);
+  if (box.dataset) box.dataset.pasteAttach = 'on';
+  return () => { box.removeEventListener('paste', paste); if (box.dataset) delete box.dataset.pasteAttach; };
+}
+
+// Finds the paste box with `id` and reports each paste until stopped.
+export async function watchPasteBox(document, id, dioxus) {
+  let box = null;
+  for (let i = 0; i < 200 && !(box = document.getElementById(id)); i++) await new Promise(r => setTimeout(r, 25));
+  if (!box) return null;
+  const off = installPasteAttach(box, text => dioxus.send({ text }));
+  await dioxus.recv();
+  off();
+  return null;
+}
+
 // Opens the browser file picker and resolves with the described files.
 export function pick(document, describeFiles = describe) {
   return new Promise(resolve => {

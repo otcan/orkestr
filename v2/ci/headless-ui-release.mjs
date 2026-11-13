@@ -54,7 +54,7 @@ try{
   await second.evaluate(()=>[...document.querySelectorAll('.composer-tools button')].find(node=>node.textContent.trim()==='Paste text').click());
   await second.waitForSelector('.paste-panel textarea');
   await second.$eval('.paste-panel textarea',node=>{node.value='Synthetic retained B paste';node.dispatchEvent(new Event('input',{bubbles:true}));});
-  await second.evaluate(()=>[...document.querySelectorAll('.paste-panel button')].find(node=>node.textContent.trim()==='Attach as text file').click());
+  await second.evaluate(()=>[...document.querySelectorAll('.paste-panel button')].find(node=>node.textContent.trim()==='Attach').click());
   await bounded(helperHold.seen.promise,'B native helper request');
 
   // Pause the receipt of A's first committed ciphertext chunk, roll the root

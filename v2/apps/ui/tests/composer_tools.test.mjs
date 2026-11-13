@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { enterSends, installEnterSend } from '../src/composer_keys.mjs';
-import { carriesFiles, describe, installDropZone, pastedFiles, pastedText, safeName, toBase64 } from '../src/attach_files.mjs';
+import { carriesFiles, describe, installDropZone, installPasteAttach, pasteIntoBox, pastedFiles, pastedText, safeName, toBase64 } from '../src/attach_files.mjs';
 
 const key = (extra = {}) => ({ key: 'Enter', shiftKey: false, altKey: false, ctrlKey: false, metaKey: false, isComposing: false, keyCode: 13, ...extra });
 
@@ -92,4 +92,28 @@ test('unreadable entries (folders) are refused with a clear error', async () => 
   const folder = { name: 'photos', type: '', size: 4096, arrayBuffer: async () => { throw new Error('NotReadable'); } };
   assert.match((await describe([folder])).error, /photos could not be read \(folders cannot be attached\)/);
   assert.match((await describe([{ ...folder, size: 0 }])).error, /photos is empty or a folder/);
+});
+
+test('a paste with text into the Paste text box attaches the whole box at once (ORK-811)', () => {
+  const clip = text => ({ getData: type => (type === 'text/plain' ? text : '') });
+  assert.equal(pasteIntoBox({ value: '', selectionStart: 0, selectionEnd: 0 }, clip('Synthetic note')), 'Synthetic note');
+  assert.equal(pasteIntoBox({ value: 'typed  end', selectionStart: 6, selectionEnd: 6 }, clip('pasted')), 'typed pasted end');
+  assert.equal(pasteIntoBox({ value: 'abcdef', selectionStart: 1, selectionEnd: 4 }, clip('X')), 'aXef', 'a selection is replaced');
+  assert.equal(pasteIntoBox({ value: 'typed' }, clip(' more')), 'typed more', 'no caret: appended');
+  for (const empty of [clip(''), clip('  \n\t'), null, { getData: () => undefined }])
+    assert.equal(pasteIntoBox({ value: 'kept' }, empty), null, 'a paste without text is left to the browser');
+
+  const listeners = {}, sent = [];
+  const box = { value: 'Typed: ', selectionStart: 7, selectionEnd: 7, dataset: {},
+    addEventListener: (name, cb) => { listeners[name] = cb; }, removeEventListener: name => { delete listeners[name]; } };
+  const off = installPasteAttach(box, text => sent.push(text));
+  assert.equal(box.dataset.pasteAttach, 'on');
+  let prevented = 0;
+  listeners.paste({ clipboardData: clip(''), preventDefault: () => prevented++ });
+  listeners.paste({ clipboardData: { types: ['Files'], files: [{}], getData: () => '' }, preventDefault: () => prevented++ });
+  assert.deepEqual([sent, prevented, box.value], [[], 0, 'Typed: '], 'an empty paste does nothing');
+  listeners.paste({ clipboardData: clip('Synthetic pasted text'), preventDefault: () => prevented++ });
+  assert.deepEqual([sent, prevented, box.value], [['Typed: Synthetic pasted text'], 1, 'Typed: Synthetic pasted text'], 'one paste, one attach');
+  off();
+  assert.deepEqual([Object.keys(listeners), box.dataset.pasteAttach], [[], undefined]);
 });

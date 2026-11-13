@@ -148,7 +148,8 @@ export const scenarios = [
       node.value = value;
       node.dispatchEvent(new Event('input', {bubbles: true}));
     }, longText);
-    await clickText('Attach as text file');
+    // Typed (not pasted) text keeps a small Attach button (ORK-811).
+    await clickWithin('.paste-panel', 'Attach');
     await page.waitForFunction(() => document.querySelectorAll('.attachment-chip').length === 2, {timeout: 90000});
     assert.match(await text('.composer-tools'), /pasted-text-\d{14}-[0-9a-f]{8}\.txt/);
     const uploads = state.uploads.filter(u => u.target === A);
@@ -235,6 +236,32 @@ export const scenarios = [
     await waitText('A file must contain 1 to 1,000,000,000 bytes.');
     await page.evaluate(()=>delete File.prototype.size);
     assert.equal(state.uploads.length, uploads + 3);
+    while (await page.$('.message-composer .chip-remove')) await page.click('.message-composer .chip-remove');
+    // ORK-811: a paste into "Paste text" attaches the text at once as one
+    // .txt file and closes the box; an empty paste does nothing.
+    await clickText('Paste text');
+    await page.waitForSelector('.paste-panel textarea[data-paste-attach="on"]');
+    const pastes = state.uploads.length;
+    const pasteInto = value => page.$eval('.paste-panel textarea', (box, value) => {
+      const dt = new DataTransfer();
+      if (value !== null) dt.setData('text/plain', value);
+      box.focus();
+      return box.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+    }, value);
+    assert.equal(await pasteInto(null), true, 'a paste without text is left to the browser');
+    assert.equal(await pasteInto(' \n '), true, 'a whitespace-only paste is left to the browser');
+    await new Promise(r => setTimeout(r, 600));
+    assert.equal(state.uploads.length, pastes, 'an empty paste uploads nothing');
+    assert.ok(await page.$('.paste-panel textarea'), 'an empty paste keeps the box open');
+    assert.equal(await page.$('.message-composer .attachment-chip'), null, 'an empty paste attaches nothing');
+    assert.equal(await pasteInto('Synthetic pasted note'), false, 'a paste with text is attached by the app');
+    await page.waitForFunction(() => document.querySelectorAll('.message-composer .attachment-chip').length === 1 && !document.querySelector('.paste-panel'));
+    await new Promise(r => setTimeout(r, 600));
+    assert.equal(state.uploads.length, pastes + 1, 'one paste, exactly one attachment');
+    assert.equal(await page.$$eval('.message-composer .attachment-chip', n => n.length), 1);
+    assert.equal(Buffer.from(state.uploads.at(-1).files[0].content_base64, 'base64').toString(), 'Synthetic pasted note');
+    assert.match(await text('.message-composer .attachment-chip .chip-name'), /^pasted-text-\d{14}-[0-9a-f]{8}\.txt$/);
+    await screenshot(label, 'paste-attached');
     while (await page.$('.message-composer .chip-remove')) await page.click('.message-composer .chip-remove');
   }],
   ['parallel-sends', async label => {
