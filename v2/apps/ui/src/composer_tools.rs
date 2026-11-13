@@ -185,6 +185,37 @@ fn upload_bar(
     }
 }
 
+/// Reports each paste of text into the box `id` (ORK-811) with the box's
+/// text after it; see `installPasteAttach` in `attach_files.mjs`. A paste
+/// without text is left to the browser and reported as nothing.
+#[component]
+fn PasteAttach(id: String, onpaste: EventHandler<String>) -> Element {
+    let mut channel = use_signal(|| None::<document::Eval>);
+    use_drop(move || {
+        if let Some(eval) = channel.peek().as_ref() {
+            let _ = eval.send(json!({"stop": true}));
+        }
+    });
+    use_future(move || {
+        let id = id.clone();
+        async move {
+            let mut eval = document::eval(&helper(
+                "return await watchPasteBox(document, await dioxus.recv(), dioxus);",
+            ));
+            if eval.send(json!(id)).is_err() {
+                return;
+            }
+            channel.set(Some(eval));
+            while let Ok(value) = eval.recv::<Value>().await {
+                if let Some(text) = value["text"].as_str() {
+                    onpaste.call(text.to_owned());
+                }
+            }
+        }
+    });
+    rsx! {}
+}
+
 /// Attach (file picker) and Paste text (long text as a `.txt` file). Files
 /// upload at once; the composer sends them with the next message.
 #[component]
@@ -272,9 +303,6 @@ pub fn AttachTools(
     let pick_upload = upload.clone();
     let pick_target = target.clone();
     let pick_csrf = csrf.clone();
-    let paste_upload = upload.clone();
-    let paste_target = target.clone();
-    let paste_csrf = csrf.clone();
     let limit_hint = target.limit_hint();
     // Files dropped onto the conversation or images pasted into the composer
     // upload like Attach. The listener lives as long as this component.
@@ -288,8 +316,73 @@ pub fn AttachTools(
     );
     let gate = use_hook(|| Rc::new(Cell::new(false)));
     let paste_id = format!("paste-text-{tools_id}");
-    let paste_input = paste_id.clone();
     gate.set(disabled);
+    // The Paste text box's text becomes one `.txt` attachment (the same
+    // pasted-text path and limits as before). On success the box is cleared
+    // and closed and the chip shows; a failure keeps the text for a retry.
+    // Nothing is sent until the owner presses Send.
+    let attach_text = {
+        let (upload, target, csrf, input) = (
+            upload.clone(),
+            target.clone(),
+            csrf.clone(),
+            paste_id.clone(),
+        );
+        move || {
+            if busy() || pasted.peek().trim().is_empty() {
+                return;
+            }
+            let (upload, target, csrf, input) =
+                (upload.clone(), target.clone(), csrf.clone(), input.clone());
+            busy.set(true);
+            status.set("Uploading…".into());
+            spawn(async move {
+                let script = paste_helper(&target, &csrf, &input);
+                let result = if matches!(target, AttachTarget::V1(_)) {
+                    let eval = document::eval(&script);
+                    let _ = eval.send(json!(pasted()));
+                    eval.join::<Picked>().await.map_err(|_| ())
+                } else {
+                    pick_with_progress(&script, progress, mounted).await
+                };
+                if !mounted() {
+                    return;
+                }
+                busy.set(false);
+                progress.set(None);
+                match result {
+                    Ok(picked)
+                        if !accept_receipts(
+                            picked.receipts.clone(),
+                            attached,
+                            cancelled,
+                            discard,
+                        ) =>
+                    {
+                        status.set("Upload reply could not be verified.".into())
+                    }
+                    Ok(Picked {
+                        error: Some(error), ..
+                    }) => status.set(error),
+                    // Cancelled: keep the text for another try.
+                    Ok(Picked {
+                        files, receipts, ..
+                    }) if files.is_empty() && receipts.is_empty() => status.set(String::new()),
+                    Ok(Picked { files, .. }) => {
+                        status.set(String::new());
+                        if !files.is_empty() {
+                            upload(files);
+                        }
+                        pasted.set(String::new());
+                        pasting.set(false);
+                    }
+                    Err(_) => status.set("Text could not be attached.".into()),
+                }
+            });
+        }
+    };
+    let mut attach_typed = attach_text.clone();
+    let mut attach_pasted = attach_text;
     let mut drops = use_signal(|| None::<document::Eval>);
     use_drop(move || {
         if let Some(eval) = drops.peek().as_ref() {
@@ -399,43 +492,12 @@ pub fn AttachTools(
         }
         if pasting() {
             div { class: "paste-panel",
-                label { r#for: "{paste_id}", "Paste long text; it is sent as a text file" }
+                label { r#for: "{paste_id}", "Paste text here: it is attached as a text file right away. Nothing is sent until you press Send." }
                 textarea { id: "{paste_id}", rows: 6, value: "{pasted}", disabled: busy(), oninput: move |e| pasted.set(e.value()) }
+                PasteAttach { key: "{paste_id}", id: paste_id.clone(), onpaste: move |text: String| { pasted.set(text); attach_pasted(); } }
                 div { class: "paste-actions",
-                    button { r#type: "button", disabled: busy() || pasted().trim().is_empty(), onclick: move |_| {
-                        let upload = paste_upload.clone();
-                        let target = paste_target.clone();
-                        let csrf = paste_csrf.clone();
-                        let input = paste_input.clone();
-                        busy.set(true);
-                        status.set("Uploading…".into());
-                        spawn(async move {
-                            let script = paste_helper(&target, &csrf, &input);
-                            let result = if matches!(target, AttachTarget::V1(_)) {
-                                let eval = document::eval(&script);
-                                let _ = eval.send(json!(pasted()));
-                                eval.join::<Picked>().await.map_err(|_| ())
-                            } else {
-                                pick_with_progress(&script, progress, mounted).await
-                            };
-                            if !mounted() { return; }
-                            busy.set(false);
-                            progress.set(None);
-                            match result {
-                                Ok(picked) if !accept_receipts(picked.receipts.clone(), attached, cancelled, discard) => status.set("Upload reply could not be verified.".into()),
-                                Ok(Picked { error: Some(error), .. }) => status.set(error),
-                                // Cancelled: keep the text for another try.
-                                Ok(Picked { files, receipts, .. }) if files.is_empty() && receipts.is_empty() => status.set(String::new()),
-                                Ok(Picked { files, .. }) => {
-                                    status.set(String::new());
-                                    if !files.is_empty() { upload(files); }
-                                    pasted.set(String::new());
-                                    pasting.set(false);
-                                }
-                                Err(_) => status.set("Text could not be attached.".into()),
-                            }
-                        });
-                    }, "Attach as text file" }
+                    // Typed (not pasted) text: attach it by hand.
+                    button { r#type: "button", class: "paste-attach", disabled: busy() || pasted().trim().is_empty(), onclick: move |_| attach_typed(), "Attach" }
                     button { r#type: "button", onclick: move |_| { pasted.set(String::new()); pasting.set(false); }, "Cancel" }
                 }
             }
