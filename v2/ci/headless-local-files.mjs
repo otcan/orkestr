@@ -142,6 +142,8 @@ try {
     document.dispatchEvent(new Event('visibilitychange'));
   }, hidden);
   await page.waitForFunction(() => document.title === '● Orkestr', {timeout: 15000});
+  // A hidden page runs no animation frames: poll on a timer, not the default 'raf'.
+  const hiddenWait = {timeout: 15000, polling: 250};
   const other = await browser.newPage();
   other.on('pageerror', error => errors.push(`other tab: ${error.message}`));
   await other.setViewport({width: 1280, height: 860});
@@ -150,7 +152,7 @@ try {
   await other.bringToFront();
   await setHidden(true);
   const late = lf.enqueue('write', {path: 'a.txt', content: 'late'});
-  await page.waitForFunction(() => document.title.startsWith('Approve write · '), {timeout: 15000});
+  await page.waitForFunction(() => document.title.startsWith('Approve write · '), hiddenWait);
   assert.equal(await page.title(), 'Approve write · ● Orkestr', 'the hidden folder tab says a write waits');
   await page.waitForSelector('.local-folder-confirm');
   await other.waitForFunction(() => document.title === 'Approve write · Orkestr', {timeout: 15000});
@@ -164,12 +166,12 @@ try {
   assert.ok(await other.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), 'the notice fits');
   await screenshots(other, 'write-waiting-elsewhere');
   lf.expire(late);
-  await page.waitForFunction(() => !document.querySelector('.local-folder-confirm'), {timeout: 15000});
-  await page.waitForFunction(() => document.querySelector('.files-drawer .local-folder-activity')?.textContent.includes('write a.txt: expired, nothing written'), {timeout: 15000});
+  await page.waitForFunction(() => !document.querySelector('.local-folder-confirm'), hiddenWait);
+  await page.waitForFunction(() => document.querySelector('.files-drawer .local-folder-activity')?.textContent.includes('write a.txt: expired, nothing written'), hiddenWait);
   assert.equal(await page.$$eval('.files-drawer .local-folder-activity li', items => items.filter(li => li.textContent.includes('expired')).length), 1, 'recorded once');
   assert.equal(lf.results.has(late), false, 'nothing is reported for an expired write');
   assert.equal(await page.evaluate(() => window.__syntheticFolder.fake.text('a.txt')), 'alpha');
-  await page.waitForFunction(() => document.title === '● Orkestr', {timeout: 15000});
+  await page.waitForFunction(() => document.title === '● Orkestr', hiddenWait);
   await other.waitForFunction(() => !document.querySelector('.write-waiting') && document.title === 'Orkestr', {timeout: 15000});
   assert.ok(lf.waitingReads > 0);
   await other.close();
