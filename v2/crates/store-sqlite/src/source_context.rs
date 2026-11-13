@@ -59,10 +59,17 @@ pub(super) async fn source_binding_is_current(
 /// cancelled it and released its binding to `ready` one generation ahead, so
 /// `source_binding_is_current` refuses its continuation. The server presents a
 /// grant only for an unexpired Root record naming this exact run, conversation
-/// and provider generation. Exactly one continuation: the first admission's
-/// fence consumes it, and any later run on the same native session refuses it.
-/// `holder` is None at admission (no fence may exist yet) and the admitted
-/// message at its own dispatch-time revalidation (it must hold the only fence).
+/// and provider generation. Exactly one continuation after the cut: the first
+/// admission's fence consumes it, and any later run on the same native session
+/// refuses it. Fences admitted while the run was still live (a host tool's
+/// result, admitted while its binding was busy) are ordinary continuations of
+/// that live run: they neither consume the release continuation nor dispatch
+/// through it. "After the cut" means a message sequence above the run's
+/// terminal evidence event; a run without terminal evidence keeps the strict
+/// rule (every fence counts).
+/// `holder` is None at admission (no post-cut fence may exist yet) and the
+/// admitted message at its own dispatch-time revalidation (it must be the
+/// only post-cut fence, itself admitted after the cut).
 pub struct ReleasedContinuation {
     pub source_run_id: orkestr_v2_contracts::RunId,
     pub provider_generation: i64,
@@ -75,9 +82,10 @@ pub(super) async fn source_binding_released_once(
     run: &RunId,
     holder: Option<&orkestr_v2_contracts::MessageId>,
 ) -> Result<bool> {
-    let valid: i64 = sqlx::query_scalar("SELECT count(*) FROM production_runs r JOIN session_bindings b ON b.id=r.session_id AND b.owner_id=r.owner_id AND b.conversation_id=r.conversation_id LEFT JOIN conversation_settings s ON s.owner_id=r.owner_id AND s.conversation_id=r.conversation_id WHERE r.id=? AND r.owner_id=? AND r.conversation_id=? AND r.role='deep' AND r.state='cancelled' AND b.role='deep' AND b.provider_kind=r.provider_kind AND b.native_session_id=r.native_session_id AND r.provider_kind=COALESCE(s.provider,'codex') AND b.state='ready' AND b.generation=r.binding_generation+1 AND NOT EXISTS(SELECT 1 FROM production_runs other WHERE other.session_id=r.session_id AND other.id!=r.id AND other.binding_generation>=r.binding_generation) AND NOT EXISTS(SELECT 1 FROM source_admission_fences f WHERE f.source_run_id=r.id AND f.message_id<>?)")
+    let holder = holder.map(|m| m.to_string()).unwrap_or_default();
+    let valid: i64 = sqlx::query_scalar("SELECT count(*) FROM production_runs r JOIN session_bindings b ON b.id=r.session_id AND b.owner_id=r.owner_id AND b.conversation_id=r.conversation_id LEFT JOIN conversation_settings s ON s.owner_id=r.owner_id AND s.conversation_id=r.conversation_id WHERE r.id=? AND r.owner_id=? AND r.conversation_id=? AND r.role='deep' AND r.state='cancelled' AND b.role='deep' AND b.provider_kind=r.provider_kind AND b.native_session_id=r.native_session_id AND r.provider_kind=COALESCE(s.provider,'codex') AND b.state='ready' AND b.generation=r.binding_generation+1 AND NOT EXISTS(SELECT 1 FROM production_runs other WHERE other.session_id=r.session_id AND other.id!=r.id AND other.binding_generation>=r.binding_generation) AND NOT EXISTS(SELECT 1 FROM source_admission_fences f JOIN messages m ON m.id=f.message_id WHERE f.source_run_id=r.id AND f.message_id<>? AND m.sequence>COALESCE((SELECT max(e.sequence) FROM production_terminal_evidence t JOIN events e ON e.id=t.event_id WHERE t.run_id=r.id),-1)) AND (?='' OR EXISTS(SELECT 1 FROM messages h WHERE h.id=? AND h.owner_id=r.owner_id AND h.conversation_id=r.conversation_id AND h.sequence>COALESCE((SELECT max(e.sequence) FROM production_terminal_evidence t JOIN events e ON e.id=t.event_id WHERE t.run_id=r.id),-1)))")
         .bind(run.to_string()).bind(owner.to_string()).bind(conversation.to_string())
-        .bind(holder.map(|m| m.to_string()).unwrap_or_default())
+        .bind(&holder).bind(&holder).bind(&holder)
         .fetch_one(&mut *tx).await.map_err(db)?;
     Ok(valid == 1)
 }
