@@ -123,3 +123,14 @@ test('read-only message viewer refuses mutations before network access',async()=
  await assert.rejects(client.remove(f.manifest,f.ref.reference_id),/Read-only/);
  client.close();
 });
+test('a gzip JSON read is accepted; coded file bytes and other codings stay refused (ORK-809)',async()=>{
+ // The server gzips JSON of 1 KiB and more; the browser hands this client the decoded body.
+ const zipped=v=>new Response(JSON.stringify(v),{headers:{'Content-Type':'application/json','Content-Encoding':'gzip'}});
+ const f=await fixture();
+ f.setHandler(path=>path.includes('?')?zipped(f.page()):path.includes('/attachments/')?new Response(f.bytes,{headers:{'Content-Length':'3','Content-Type':f.ref.media_type,'X-Content-Type-Options':'nosniff','Content-Encoding':'gzip'}}):zipped(f.manifest));
+ const page=await f.client.list();assert.equal(page.conversation_id,id(2));
+ assert.equal((await f.client.open(id(5))).manifest_id,id(5),'a gzip manifest read');
+ await assert.rejects(f.client.download(f.manifest,id(4)),/Unexpected file representation/,'file bytes must arrive uncoded');
+ const g=await fixture();g.setHandler(()=>new Response(JSON.stringify(g.page()),{headers:{'Content-Type':'application/json','Content-Encoding':'br'}}));
+ await assert.rejects(g.client.list(),/Unexpected file representation/,'only gzip, which the server sends');
+});

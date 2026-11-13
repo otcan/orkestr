@@ -4,8 +4,6 @@ use crate::{is_replay_item, StreamItem};
 
 /// Window event the Retry button dispatches to wake a waiting reconnect.
 pub const RETRY_EVENT: &str = "orkestr-stream-retry";
-/// Per-viewer localStorage key: whether the conversation Details drawer is open.
-pub const DETAILS_OPEN_KEY: &str = "orkestr.v2.conversationDetailsOpen";
 
 /// Delay before reconnect attempt `failures` (1-based): 1 s doubling to 15 s.
 pub fn backoff_ms(failures: u32) -> u32 {

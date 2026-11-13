@@ -1,18 +1,17 @@
 use dioxus::prelude::*;
 use orkestr_v2_ui::{message_file_refs, session_scope::SessionScope};
-use serde_json::json;
-#[component]
-pub fn MessageFiles(
-    conversation: String,
-    message: String,
-    text: String,
-    session_scope: Signal<SessionScope>,
-) -> Element {
-    let files = message_file_refs::references(&text);
-    let has_files = !files.is_empty();
+use serde_json::{json, Value};
 
-    let root = format!("message-files-{message}");
-    let container = root.clone();
+/// Mounts file cards (`attachments/message_files.mjs`) for `files` (file
+/// reference JSON) into the element `root` once it exists, and closes them
+/// when the component leaves or the session changes. Nothing is mounted for
+/// an empty list.
+pub(crate) fn use_file_cards(
+    root: String,
+    conversation: String,
+    files: Value,
+    session_scope: Signal<SessionScope>,
+) {
     let mut channel = use_signal(|| None::<document::Eval>);
     use_drop(move || {
         if let Some(eval) = channel.peek().as_ref() {
@@ -30,7 +29,8 @@ pub fn MessageFiles(
     use_future(move || {
         let (conversation, files, root) = (conversation.clone(), files.clone(), root.clone());
         async move {
-            if files.is_empty() || !session_scope.read().is_current(owner) {
+            if files.as_array().is_none_or(Vec::is_empty) || !session_scope.read().is_current(owner)
+            {
                 return;
             }
             let assets = include_str!("asset_base.mjs").replace("export ", "");
@@ -44,8 +44,21 @@ pub fn MessageFiles(
             let _ = eval.await;
         }
     });
+}
+
+#[component]
+pub fn MessageFiles(
+    conversation: String,
+    message: String,
+    text: String,
+    session_scope: Signal<SessionScope>,
+) -> Element {
+    let files = message_file_refs::references(&text);
+    let has_files = !files.is_empty();
+    let root = format!("message-files-{message}");
+    use_file_cards(root.clone(), conversation, json!(files), session_scope);
     if !has_files {
         return rsx! {};
     }
-    rsx! {style { "{include_str!(\"message_files.css\")}" } div{id:"{container}",class:"message-files","aria-label":"Message attachments", "Loading attachment controls…"}}
+    rsx! {style { "{include_str!(\"message_files.css\")}" } div{id:"{root}",class:"message-files","aria-label":"Message attachments", "Loading attachment controls…"}}
 }

@@ -102,9 +102,9 @@ pub fn ThreadFiles(
         .unwrap_or_default();
     let next = page.read()["next_after_id"].as_str().map(str::to_string);
     rsx! {
-        section { "aria-label":"Thread files",
-            h3 { "Thread files" }
-            p { "Save a private copy for this conversation. Files are not attached to messages or sent to the assistant. Stored files are encrypted for your enrolled browsers and decrypted here." }
+        // The Files panel's collapsed "Private copies" (ORK-809).
+        section { "aria-label":"Thread files", class: "thread-files",
+            p { class: "files-drawer-note", "Encrypted copies kept for you in this chat. They are not attached to messages or sent to the assistant; only your enrolled browsers can open them." }
             p {role:"status", "{notice}"}
             button {disabled:busy(),onclick:move |_|send(json!({"kind":"list"})),"Refresh files"}
             if pending() {

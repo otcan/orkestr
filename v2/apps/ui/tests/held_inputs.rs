@@ -105,3 +105,24 @@ fn preview_uses_only_exact_loaded_conversation_message_and_unicode_bound() {
     assert!(saved_preview(&projection, &conversation, &missing).is_none());
     assert_eq!(projection.messages.len(), 1);
 }
+
+#[test]
+fn held_messages_show_only_when_a_page_holds_some() {
+    use orkestr_v2_ui::held_inputs::held_shown;
+    let mut state = HeldInputs::default();
+    assert!(!held_shown(&state), "nothing read yet");
+    let original = page();
+    let read = state.begin(original.conversation_id.clone(), 0);
+    assert!(!held_shown(&state), "loading");
+    let mut empty = original.clone();
+    empty.held.clear();
+    state.apply(&read, 1, empty).unwrap();
+    assert!(!held_shown(&state), "an empty page shows nothing (ORK-809)");
+    let read = state.begin(original.conversation_id.clone(), 0);
+    state.failed(&read);
+    let read = state.begin(original.conversation_id.clone(), 0);
+    let mut held = original;
+    held.revision += 1;
+    state.apply(&read, 2, held).unwrap();
+    assert!(held_shown(&state));
+}

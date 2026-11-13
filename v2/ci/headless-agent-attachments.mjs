@@ -3,6 +3,7 @@
 // bundle parses the marker, hides it and mounts the scoped file controls.
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import { gzipSync } from 'node:zlib';
 
 const id = n => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const OWNER = id(9701), MANIFEST = id(9702), REFERENCE = id(9703);
@@ -22,6 +23,16 @@ export function markedPayload(state, conversation, payload) {
   return { payload_id: payload, conversation_id: conversation, run_id: id(7000 + ANSWER), text: `Synthetic answer ${ANSWER}\n\n${MARKER}` };
 }
 
+// The server gzips JSON of 1 KiB and more for a browser that accepts it
+// (response_shaping.rs); the file store is served the same way here, so the
+// attachment client meets the representation the owner's browser gets (ORK-809).
+function zipped(state, req, res, body, json) {
+  if (!/\bgzip\b/.test(req.headers['accept-encoding'] ?? '')) return json(res, 200, body);
+  state.gzippedManifestReads = (state.gzippedManifestReads ?? 0) + 1;
+  res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store', 'content-encoding': 'gzip', vary: 'accept-encoding' });
+  res.end(gzipSync(JSON.stringify(body)));
+}
+
 /** The marked answer and its manifest; false leaves a request to the workspace mock. */
 export function agentAttachmentApi(state, req, res, rest, { json }) {
   const conversation = state.agentAttachments;
@@ -33,11 +44,11 @@ export function agentAttachmentApi(state, req, res, rest, { json }) {
     return true;
   }
   if (rest === '/attachment-manifests') {
-    json(res, 200, { owner_id: OWNER, conversation_id: conversation, after_id: null, next_after_id: null, manifests: [manifest(conversation)] });
+    zipped(state, req, res, { owner_id: OWNER, conversation_id: conversation, after_id: null, next_after_id: null, manifests: [manifest(conversation)] }, json);
     return true;
   }
   if (rest === `/attachment-manifests/${MANIFEST}`) {
-    json(res, 200, manifest(conversation));
+    zipped(state, req, res, manifest(conversation), json);
     return true;
   }
   return false;
@@ -68,7 +79,21 @@ export async function agentAttachments({ page, state, origin, conversation, retu
     await page.waitForFunction((selector, name) => document.querySelector(`${selector} strong`)?.textContent === name,
       { timeout: 15000 }, card, NAME);
     assert.match(await page.$eval(card, n => n.textContent), /Download/);
+    assert.ok(state.gzippedManifestReads > 0, 'the file store was read gzip-encoded, as the server sends it');
     await screenshot(label, 'agent-reply-attachment');
+    // ORK-809: Files lists the assistant's file under "In this chat", and the
+    // collapsed private copies read the same gzip store without an error.
+    await page.click('#conversation-tab-files');
+    const listed = '.files-drawer .chat-files .message-file-card';
+    await page.waitForSelector(listed, { timeout: 15000 });
+    assert.deepEqual(await page.$eval(listed, n => [n.querySelector('.message-file-from')?.textContent, n.querySelector('strong')?.textContent]), ['Assistant', NAME]);
+    await page.$eval(`${listed} button`, button => button.click());
+    await page.waitForFunction(selector => document.querySelector(selector)?.getAttribute('data-verified') === 'true', { timeout: 15000 }, listed);
+    await page.click('.files-private-toggle');
+    await page.waitForFunction(name => [...document.querySelectorAll('.files-drawer [aria-label="Thread files"] button')]
+      .some(b => b.textContent === `Open saved copy: ${name}`), { timeout: 15000 }, NAME);
+    assert.ok(!(await page.$eval('.files-drawer [aria-label="Thread files"]', n => n.textContent)).includes('Unexpected file representation'));
+    await screenshot(label, 'files-panel-agent-file');
   } finally {
     state.agentAttachments = null;
     await page.goto(`${origin}/#conversation/${returnConversation}`, { waitUntil: 'domcontentloaded' });

@@ -265,3 +265,64 @@ test('title marks from the panel and the app shell share one prefix and keep the
   assert.equal(document.title, 'Synthetic chat', 'turning off an absent mark changes nothing');
   assert.throws(() => setTitleMark(document, 'other', true), /Unknown title mark/);
 });
+
+// ORK-809: the composer has one folder chip; the full controls and the
+// activity log live in the Files panel.
+test('the composer chip states the folder and connects in one click; connected, it links to Files', async () => {
+  const document = fakeDocument(), root = new Node('div'), chipRoot = new Node('span'), api = server();
+  const chip = () => chipRoot.find(n => n.attrs.class === 'local-folder-chip');
+  const panel = mountLocalFiles({conversation: CONVERSATION, csrf: 'synthetic-csrf', root, chipRoot, filesHref: '#conversation/synthetic/files'}, {
+    picker: async () => handle(), indexedDB: null, document, uploader: {}, fetcher: api.fetcher, relayOptions: {pollMs: 5}});
+  assert.equal(chipRoot.children.length, 1, 'one item in the composer');
+  assert.deepEqual([chip().tag, chip().textContent, chip().attrs['data-state']], ['button', 'Connect folder…', 'none']);
+  assert.equal(chipRoot.dataset.folderState, 'none');
+  assert.ok(root.button('Connect folder…'), 'the Files panel offers it too');
+  await chip().onclick();
+  await until(() => chipRoot.dataset.folderState === 'ready', 'ready');
+  assert.deepEqual([chip().tag, chip().textContent, chip().attrs.href], ['a', '● Synthetic folder', '#conversation/synthetic/files']);
+  assert.match(chip().attrs['aria-label'], /Synthetic folder.*Open Files\./);
+  assert.ok(root.button('Disconnect folder'), 'disconnect lives in the Files panel');
+  assert.equal(chipRoot.find(n => n.tag === 'button'), undefined, 'no second control in the composer');
+  await root.button('Disconnect folder').onclick();
+  await until(() => chipRoot.dataset.folderState === 'none', 'none');
+  assert.equal(chip().textContent, 'Connect folder…');
+  panel.close();
+  assert.equal(chipRoot.children.length, 0, 'closing clears the chip');
+});
+
+test('a remembered folder: the chip reconnects it in one click', async () => {
+  const saved = {handle: handle('Remembered'), name: 'Remembered'};
+  const document = fakeDocument(), root = new Node('div'), chipRoot = new Node('span'), api = server();
+  const panel = mountLocalFiles({conversation: CONVERSATION, csrf: 'synthetic-csrf', root, chipRoot}, {
+    picker: async () => handle(), indexedDB: memoryIndexedDB({[`conversation:${CONVERSATION}`]: saved}), document, uploader: {}, fetcher: api.fetcher, relayOptions: {pollMs: 5}});
+  await until(() => chipRoot.dataset.folderState === 'permission', 'permission');
+  const chip = chipRoot.find(n => n.attrs.class === 'local-folder-chip');
+  assert.equal(chip.textContent, 'Reconnect “Remembered”');
+  await chip.onclick();
+  await until(() => chipRoot.dataset.folderState === 'ready', 'ready');
+  assert.equal(chipRoot.find(n => n.attrs.class === 'local-folder-chip').tag, 'span', 'without a Files link the state is plain text');
+  panel.close();
+});
+
+test('where folders are unavailable the composer shows no chip at all', () => {
+  const root = new Node('div'), chipRoot = new Node('span');
+  mountLocalFiles({conversation: CONVERSATION, csrf: 'synthetic-csrf', root, chipRoot}, {picker: null, document: fakeDocument(), uploader: {}});
+  assert.deepEqual([chipRoot.children.length, chipRoot.hidden], [0, true]);
+  assert.match(root.text(), /need Chrome or Edge/, 'the Files panel says why');
+});
+
+test('the Files panel lists folder activity with its time, newest first', async t => {
+  const document = fakeDocument(), root = new Node('div'), chipRoot = new Node('span'), queue = writeQueue();
+  const panel = mountLocalFiles({conversation: CONVERSATION, csrf: 'synthetic-csrf', root, chipRoot}, {
+    picker: async () => handle(), indexedDB: null, document, uploader: {}, fetcher: queue.fetcher, relayOptions: {pollMs: 5}});
+  t.after(() => panel.close());
+  await chipRoot.find(n => n.attrs.class === 'local-folder-chip').onclick();
+  await until(() => root.dataset.folderState === 'ready', 'ready');
+  const id = queue.add('notes.txt', 'synthetic');
+  await until(() => chipRoot.button('Refuse'), 'the write card shows in the composer');
+  chipRoot.button('Refuse').onclick();
+  await until(() => queue.results.has(id), 'answered');
+  await until(() => root.text().includes('write notes.txt: refused_by_owner'), 'logged');
+  assert.ok(root.find(n => n.tag === 'h4' && n.textContent === 'Folder activity'));
+  assert.ok(root.find(n => n.tag === 'time' && /^ · \d{2}:\d{2}/.test(n.textContent)), 'with its time');
+});

@@ -3,17 +3,22 @@ use orkestr_v2_contracts::BetaDiscovery;
 use orkestr_v2_ui::{execution::Execution, session_scope::SessionScope, workers::Workers};
 
 /// Per-conversation work: configured controls, the agent run with Stop/Steer and
-/// worker tasks, window/queue state, independent workers and the linked V1
-/// thread's V1 workers. Reading never starts work.
+/// worker tasks, window/queue state, messages Stop held (only when there are
+/// any, ORK-809), independent workers and the linked V1 thread's V1 workers.
+/// Reading never starts work.
 #[component]
 pub fn WorkView(
     id: String,
     csrf: String,
     session_scope: Signal<SessionScope>,
     execution: Signal<Execution>,
+    held_inputs: Signal<orkestr_v2_ui::held_inputs::HeldInputs>,
     onexpired: EventHandler<()>,
 ) -> Element {
     let owner = session_scope.read().generation();
+    // Previews of held messages come from the chat's loaded messages; the
+    // Work page does not load the chat, so each held message is named only.
+    let projection = use_signal(orkestr_v2_ui::Projection::default);
     let mut discovery = use_signal(|| None::<BetaDiscovery>);
     let workers = use_signal(Workers::default);
     let worker_execution = use_signal(Execution::default);
@@ -37,6 +42,7 @@ pub fn WorkView(
             }
             crate::execution_poll::ExecutionPoll { key: "work-{id}-{owner}", id: id.clone(), csrf: csrf.clone(), session_scope, execution, onexpired }
             crate::beta_window_view::WindowView { key: "work-window-{id}-{owner}", id: id.clone(), session_scope, onexpired }
+            crate::held_inputs_poll::HeldInputsPanel { key: "held-{id}-{owner}", id: id.clone(), session_scope, model: held_inputs, projection, onexpired }
             crate::workers_view::WorkersView { key: "workers-{id}-{owner}", id: id.clone(), csrf, session_scope, workers, execution: worker_execution, onexpired }
             crate::v1_workers_view::V1WorkersView { key: "v1-workers-{id}-{owner}", id, session_scope, onexpired }
         }

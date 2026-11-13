@@ -328,7 +328,12 @@ pub fn Workspace(
                         if linked().is_none() {
                             ConversationNav { tab: tab(), onpick: move |name: Tab| {
                                 if tab() == name { return; }
-                                execution.write().select(&current(), "");
+                                // Chat and Files are one mounted chat (the Files
+                                // panel opens over or beside it, ORK-809): its run
+                                // poll and connected folder stay as they are.
+                                if !(name.shows_chat() && tab().shows_chat()) {
+                                    execution.write().select(&current(), "");
+                                }
                                 tab.set(name);
                             } }
                         }
@@ -336,17 +341,17 @@ pub fn Workspace(
                 }
                 if let Some(entry) = linked() {
                     crate::v1_thread_view::V1ThreadView { key: "{entry.key}-{session_scope.read().generation()}", entry, csrf: csrf.clone(), session_scope, drafts, onexpired }
-                } else if tab() == Tab::Chat {
+                } else if tab().shows_chat() {
                     SelectedConversation {
                         key: "{current()}-{session_scope.read().generation()}-{reload}",
-                        id: current(), csrf, session_scope, execution, drafts, held_inputs, onexpired
+                        id: current(), csrf, session_scope, execution, drafts, files_open: tab() == Tab::Files,
+                        onfiles: move |open: bool| tab.set(if open { Tab::Files } else { Tab::Chat }),
+                        onexpired
                     }
                 } else {
                     div { class: "workspace-page",
                         if tab() == Tab::Work {
-                            crate::work_view::WorkView { key: "{current()}-{session_scope.read().generation()}", id: current(), csrf, session_scope, execution, onexpired }
-                        } else if tab() == Tab::Files {
-                            crate::files_view::FilesPage { key: "{current()}-{session_scope.read().generation()}", id: current(), csrf, session_scope, onexpired }
+                            crate::work_view::WorkView { key: "{current()}-{session_scope.read().generation()}", id: current(), csrf, session_scope, execution, held_inputs, onexpired }
                         } else if tab() == Tab::History {
                             crate::history::History { key: "{current()}", id: current(), csrf, session_scope, onexpired }
                         } else if tab() == Tab::Projects {
@@ -395,14 +400,15 @@ fn SelectedConversation(
     session_scope: Signal<SessionScope>,
     execution: Signal<orkestr_v2_ui::execution::Execution>,
     drafts: Signal<BTreeMap<String, Draft>>,
-    held_inputs: Signal<orkestr_v2_ui::held_inputs::HeldInputs>,
+    files_open: bool,
+    onfiles: EventHandler<bool>,
     onexpired: EventHandler<()>,
 ) -> Element {
     let mut ready = use_signal(|| false);
     let mut retry = use_signal(|| 0_u64);
     rsx! {
         if ready() {
-            crate::views::Conversation { id, csrf, session_scope, execution, drafts, held_inputs, onexpired }
+            crate::views::Conversation { id, csrf, session_scope, execution, drafts, files_open, onfiles, onexpired }
         } else {
             div { class: "conversation-loading",
                 crate::beta_discovery::BetaDiscoveryGate {
@@ -439,7 +445,7 @@ fn ConversationNav(tab: Tab, onpick: EventHandler<Tab>) -> Element {
                 }
             },
             for name in Tab::PRIMARY {
-                button { r#type: "button", class: "nav-tab", "aria-current": if tab == name { "page" } else { "false" },
+                button { r#type: "button", id: "conversation-tab-{name.slug()}", class: "nav-tab", "aria-current": if tab == name { "page" } else { "false" },
                     onclick: move |_| { close(false); onpick.call(name); },
                     "{name.label()}"
                 }

@@ -61,8 +61,6 @@
 .conversation-heading[data-scope=global] { background: var(--surface-2); }
 
 /* Files destination. */
-.files-page { max-width: 52rem; }
-.files-page > h2 { margin-bottom: .3rem; }
 
 /* Conversation list rows: name, time, one preview line, unread, one state. */
 .choice-time { flex: none; font-size: .72rem; color: var(--muted); font-variant-numeric: tabular-nums; }

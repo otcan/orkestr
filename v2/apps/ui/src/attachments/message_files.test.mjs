@@ -85,3 +85,13 @@ test('a hinted Download with a matching name verifies and writes',async()=>{
   assert.match(f.root.children[0].children[1].textContent,/File verified\. Download offered\./);
   f.view.close();
 });
+test('a Files panel card names who sent the file; a message card does not (ORK-809)',()=>{
+  globalThis.document={createElement:tag=>new Element(tag)};
+  const client={status:async()=>metadata('text/plain')};
+  const root=new Element('div');
+  const view=mountMessageFiles({conversation,files:[{kind:'encrypted',id,name:'plan.txt',media_type:'text/plain',size:3,from:'Assistant'},{kind:'encrypted',id:'00000000-0000-4000-8000-000000000003',name:'notes.txt',media_type:'text/plain',size:4}],root},{client});
+  const [first,second]=root.children;
+  assert.deepEqual(first.children.slice(0,2).map(n=>[n.className??null,n.textContent]),[['message-file-from','Assistant'],[null,'plan.txt']]);
+  assert.equal(second.children.some(n=>n.className==='message-file-from'),false);
+  view.close();
+});

@@ -4,9 +4,11 @@
 // is asked for by the browser in the owner's Allow click of a write.
 // The folder handle may be remembered in this browser (IndexedDB) so the
 // owner can reconnect with one click; nothing is connected without a click.
-// The control lives in the composer's attach actions and always states its
-// state in words (folder_state.mjs); the activity log may live elsewhere
-// (`logRoot`, the conversation's Files & context drawer).
+// Its full controls (state in words, folder_state.mjs; connect, reconnect,
+// disconnect) live in the conversation's Files panel (`root`, ORK-809), its
+// activity log next to them (`logRoot`). The composer has one chip
+// (`chipRoot`): the state, and Connect or Reconnect in one click; while a
+// folder is connected it links to the Files panel (`filesHref`).
 import {encryptedUploadClient} from '../attachments/encrypted_upload.mjs';
 import {setTitleMark} from '../title_marks.mjs';
 import {DENIED, folderState} from './folder_state.mjs';
@@ -40,7 +42,7 @@ async function remembered(indexedDB, key, value) {
   } catch { return null; }
 }
 
-export function mountLocalFiles({conversation, csrf, root, logRoot = null}, {
+export function mountLocalFiles({conversation, csrf, root, logRoot = null, chipRoot = null, filesHref = null}, {
   picker = globalThis.showDirectoryPicker?.bind(globalThis), indexedDB = globalThis.indexedDB,
   uploader = encryptedUploadClient({conversation, csrf}), fetcher, document = globalThis.document,
   notifications = globalThis.Notification, relayOptions = {},
@@ -64,6 +66,8 @@ export function mountLocalFiles({conversation, csrf, root, logRoot = null}, {
     root.dataset.folderState = unsupported.state;
     root.replaceChildren(stateNode(unsupported), make('span', {class: 'local-folder-note', text: 'Local folders need Chrome or Edge on a computer.'}));
     logRoot?.replaceChildren();
+    // Phones and other browsers: no chip in the composer at all.
+    if (chipRoot) { chipRoot.replaceChildren(); chipRoot.hidden = true; }
     return {close() {}};
   }
   let live = true, relay = null, handle = null, saved = null, message = '';
@@ -154,7 +158,8 @@ export function mountLocalFiles({conversation, csrf, root, logRoot = null}, {
   const controls = make('div', {class: 'local-folder-controls'}), log = make('div', {class: 'local-folder-log'});
   root.replaceChildren(controls);
   (logRoot ?? root).append(log);
-  let drawnControls = '', drawnLog = '', activityOpen = false;
+  if (chipRoot) chipRoot.hidden = false;
+  let drawnControls = '', drawnLog = '';
   function render() {
     if (!live) return;
     const view = relay?.snapshot();
@@ -165,7 +170,12 @@ export function mountLocalFiles({conversation, csrf, root, logRoot = null}, {
       drawnControls = controlState;
       const state = folderState({view, saved, message});
       root.dataset.folderState = state.state;
-      controls.replaceChildren(stateNode(state), ...controlNodes(view, connected));
+      const cards = confirmationNodes(view);
+      controls.replaceChildren(stateNode(state), ...controlNodes(view, connected), ...(chipRoot ? [] : cards));
+      if (chipRoot) {
+        chipRoot.dataset.folderState = state.state;
+        chipRoot.replaceChildren(chipNode(state, view), ...cards);
+      }
     }
     const working = (view?.pending ?? []).filter(item => !confirmations.has(item.request_id));
     const logState = JSON.stringify([working.map(p => p.request_id), (view?.activity ?? []).map(a => [a.id, a.outcome])]);
@@ -186,6 +196,23 @@ export function mountLocalFiles({conversation, csrf, root, logRoot = null}, {
       nodes.push(make('button', {type: 'button', class: 'local-folder-connect', onclick: () => void connect(), text: saved?.handle ? 'Choose another folder\u2026' : 'Connect folder\u2026'}));
     }
     if (message && message !== DENIED) nodes.push(make('span', {class: 'local-folder-note', role: 'status', text: message}));
+    return nodes;
+  }
+  // The composer's one folder item: what holds, and the one click it needs.
+  function chipNode(state, view) {
+    const name = view?.folder ?? saved?.name ?? 'Folder';
+    if (state.state === 'none' || (state.state === 'permission' && !saved?.handle)) {
+      return make('button', {type: 'button', class: 'local-folder-chip', 'data-state': state.state, title: 'Let this chat read and change files in a folder on this computer', onclick: () => void connect(), text: 'Connect folder\u2026'});
+    }
+    if (state.state === 'permission') {
+      return make('button', {type: 'button', class: 'local-folder-chip', 'data-state': state.state, title: state.text, onclick: () => void reconnect(), text: `Reconnect \u201c${name}\u201d`});
+    }
+    const text = state.state === 'ready' ? `${MARK}${name}` : state.state === 'connecting' ? `Connecting \u201c${name}\u201d\u2026` : 'Folder offline';
+    const props = {class: 'local-folder-chip', 'data-state': state.state, title: state.text, text};
+    return filesHref ? make('a', {...props, href: filesHref, 'aria-label': `${state.text}. Open Files.`}) : make('span', props);
+  }
+  function confirmationNodes(view) {
+    const nodes = [];
     for (const entry of confirmations.values()) {
       const {request, bytes} = entry;
       const card = make('section', {class: 'local-folder-confirm', role: 'alertdialog', 'aria-label': 'Confirm write'},
@@ -199,14 +226,18 @@ export function mountLocalFiles({conversation, csrf, root, logRoot = null}, {
     }
     return nodes;
   }
+  // Folder activity in the Files panel: what is in progress, then the most
+  // recent outcomes (done, refused, expired, failed), newest first.
   function logNodes(working, activity) {
     if (!working.length && !activity.length) return [];
-    const list = make('ul', {class: 'local-folder-activity', 'aria-label': 'Recent folder requests'});
+    const list = make('ul', {class: 'local-folder-activity', 'aria-label': 'Folder activity'});
     for (const item of working) list.append(make('li', {text: `${item.operation} ${item.path ?? item.paths.join(', ')}: working\u2026`}));
-    for (const item of activity.slice(0, 5)) list.append(make('li', {text: `${item.operation} ${item.path}: ${item.outcome}`}));
-    const details = make('details', activityOpen ? {open: ''} : {}, make('summary', {text: 'Folder activity'}), list);
-    details.ontoggle = () => { activityOpen = details.open; };
-    return [details];
+    for (const item of activity) {
+      const at = new Date(item.at);
+      list.append(make('li', {text: `${item.operation} ${item.path}: ${item.outcome}`},
+        make('time', {class: 'local-folder-time', datetime: at.toISOString(), text: ` \u00b7 ${at.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})}`})));
+    }
+    return [make('h4', {class: 'local-folder-activity-title', text: 'Folder activity'}), list];
   }
 
   void remembered(indexedDB, key).then(value => {
@@ -224,6 +255,7 @@ export function mountLocalFiles({conversation, csrf, root, logRoot = null}, {
       void current?.disconnect();
       title.set(false);
       log.remove();
+      chipRoot?.replaceChildren();
     },
   };
 }

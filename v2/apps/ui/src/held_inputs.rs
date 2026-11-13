@@ -124,6 +124,13 @@ impl HeldInputs {
         }
     }
 }
+/// Whether the held messages are shown at all (ORK-809): only a page that
+/// holds at least one message. Loading, failed or empty reads show nothing.
+pub fn held_shown(model: &HeldInputs) -> bool {
+    model
+        .displayed_page()
+        .is_some_and(|page| !page.held.is_empty())
+}
 pub fn reason(input: &HeldOwnerInput) -> &'static str {
     match input.reason {
         HeldInputReason::StopBoundary => "Held by Stop; not automatically replayed",

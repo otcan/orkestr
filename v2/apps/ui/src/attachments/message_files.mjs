@@ -38,6 +38,8 @@ export function mountMessageFiles({conversation,files,root},{client=encryptedUpl
       ?{filename:file.name,media_type:file.media_type,plaintext_size:file.size}:null;
     const card=document.createElement('section');card.className='message-file-card';card.setAttribute('data-verified','false');
     const named=typeof file.name==='string'&&file.name?file.name:null;
+    // Files panel (ORK-809): who sent the file, as a plain label.
+    if(typeof file.from==='string'&&file.from){const from=document.createElement('span');from.className='message-file-from';from.textContent=file.from.slice(0,80);card.append(from);}
     const title=document.createElement('strong');title.textContent=named??'Attached file';card.append(title);
     const status=document.createElement('p');status.setAttribute('role','status');card.append(status);
     if(hint)status.textContent=`${humanSize(hint.plaintext_size)} \u00b7 ${hint.media_type}`;

@@ -35,6 +35,10 @@ pub fn AcceptedReplies(
     #[props(default)] update: Option<Signal<i64>>,
     #[props(default)] inline: bool,
     #[props(default)] live: Option<LiveContext>,
+    /// Receives the files of the shown messages, newest first (the Files
+    /// panel's "In this chat", ORK-809).
+    #[props(default)]
+    files: Option<Signal<Vec<orkestr_v2_ui::chat_files::ChatFile>>>,
     session_scope: Signal<SessionScope>,
     onexpired: EventHandler<()>,
 ) -> Element {
@@ -202,6 +206,45 @@ pub fn AcceptedReplies(
     let _ = loaded();
     let answers = crate::accepted_payloads_view::answers(owner, &id, &results, &failed.read());
     let rows = chat_timeline::ordered(&messages, &results, &posts);
+    // Every file of the shown messages: the owner's attachments and the
+    // files of each answer whose text the chat has read.
+    let shown_files = match (&rows, files.is_some()) {
+        (Ok(rows), true) => {
+            let silent_rows = silent.read();
+            orkestr_v2_ui::chat_files::newest_first(
+                rows.iter()
+                    .filter(|row| !row.is_notice() && !row.is_silenced(&silent_rows))
+                    .filter_map(|row| match row {
+                        Row::Input(input) if !input.revisions.deleted => Some((
+                            row.sequence(),
+                            if input.actor == "owner" {
+                                "You".to_string()
+                            } else {
+                                input.actor.clone()
+                            },
+                            input.text.as_str(),
+                        )),
+                        Row::Reply(reply) if !reply.payload_removed => {
+                            match answers.get(&reply.acceptance_sequence) {
+                                Some(Answer::Read(Some(text))) => {
+                                    Some((row.sequence(), "Assistant".to_string(), text.as_str()))
+                                }
+                                _ => None,
+                            }
+                        }
+                        _ => None,
+                    }),
+            )
+        }
+        _ => Vec::new(),
+    };
+    use_effect(use_reactive((&shown_files,), move |(list,)| {
+        if let Some(mut sink) = files {
+            if *sink.peek() != list {
+                sink.set(list);
+            }
+        }
+    }));
     // Times start just before the oldest row on screen.
     let first = rows
         .as_ref()

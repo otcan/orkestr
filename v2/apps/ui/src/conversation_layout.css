@@ -1,7 +1,8 @@
 /* Conversation pane (ORK-786). The transcript and the composer share one
-   column. The Files & context drawer docks beside that column on a wide pane
-   and overlays the transcript, never the composer, on a narrow one. Scoped to
-   the native conversation pane; the linked V1 view keeps its own layout. */
+   column. The Files panel (ORK-809) docks beside that column from about 900px
+   of pane width and is a full-height sheet over the chat on a narrower one.
+   Scoped to the native conversation pane; the linked V1 view keeps its own
+   layout. */
 .conversation-pane.native-conversation {
  /* About 900 CSS px; 960 on very wide panes. */
  --conversation-column: 60rem;
@@ -27,8 +28,8 @@
 }
 .native-conversation > .composer-dock { grid-area: composer; max-height: none; min-height: 0; padding: .6rem max(1.1rem, calc((100% - var(--conversation-column)) / 2)) max(.7rem, env(safe-area-inset-bottom)); }
 
-/* Composer actions: Attach and Paste text, then the conversation's context
-   (Connect folder with its state in words, Files & context). */
+/* Composer actions: Attach and Paste text, then the folder chip (its state,
+   and Connect in one click; a connected folder links to Files, ORK-809). */
 .message-composer > .composer-actions { grid-column: 1 / -1; grid-row: 3; display: flex; flex-wrap: wrap; align-items: center; gap: .35rem .6rem; min-width: 0; }
 .composer-actions > .composer-tools { flex: 1 1 16rem; }
 .composer-actions > .paste-panel { flex-basis: 100%; order: 3; }
@@ -38,8 +39,15 @@
 .message-composer .composer-context p { grid-row: auto; grid-column: auto; font-size: .8rem; color: inherit; }
 .message-composer .composer-context .local-folder-allow { background: var(--accent); color: var(--accent-contrast); border-color: transparent; }
 .composer-context .local-folder { margin-right: 0; font-size: .78rem; }
+/* The folder chip: a button while it needs a click, a link to Files once
+   connected. Hidden where the browser cannot connect a folder. */
+.composer-context .local-folder-chip-slot { display: flex; flex-wrap: wrap; align-items: center; gap: .35rem; min-width: 0; }
+.composer-context .local-folder-chip-slot[hidden], .composer-context .local-folder-chip-slot:empty { display: none; }
+.composer-context a.local-folder-chip, .composer-context span.local-folder-chip { display: inline-flex; align-items: center; min-height: 2.1rem; max-width: 100%; padding: .2rem .75rem; font-size: .78rem; font-weight: 600; border-radius: 1.05rem; background: var(--surface-2); color: var(--text); border: 1px solid var(--border); text-decoration: none; overflow-wrap: anywhere; }
+.composer-context .local-folder-chip[data-state=ready] { background: var(--accent-soft); color: var(--accent-text); border-color: transparent; }
+.composer-context .local-folder-chip[data-state=offline] { background: var(--warn-soft); color: var(--warn-text); border-color: transparent; }
 /* A write waiting for the owner's answer takes the composer's full width. */
-.composer-context:has(.local-folder-confirm), .composer-context .local-folder:has(.local-folder-confirm) { flex-basis: 100%; }
+.composer-context:has(.local-folder-confirm), .composer-context .local-folder-chip-slot:has(.local-folder-confirm) { flex-basis: 100%; }
 .local-folder-state { display: inline-flex; align-items: center; gap: .35rem; padding: .2rem .65rem; border-radius: 1rem; background: var(--surface-2); color: var(--muted); font-weight: 600; overflow-wrap: anywhere; }
 .local-folder-state::before { content: ""; flex: none; width: .5rem; height: .5rem; border-radius: 50%; background: var(--faint); }
 .local-folder-state.local-folder-live { background: var(--accent-soft); color: var(--accent-text); }
@@ -47,7 +55,6 @@
 .local-folder-state[data-state=connecting]::before { background: var(--accent); }
 .local-folder-state[data-state=permission], .local-folder-state[data-state=offline] { background: var(--warn-soft); color: var(--warn-text); }
 .local-folder-state[data-state=permission]::before, .local-folder-state[data-state=offline]::before { background: var(--warn-text); }
-.message-composer .composer-context .files-drawer-toggle[aria-expanded=true] { background: var(--info-soft); border-color: var(--info-border); color: var(--info-text); }
 
 /* The run state: one line next to the composer, a dot per state, and only
    the controls that state allows (run_state.rs). */
@@ -84,18 +91,28 @@
 .message-menu-danger { color: var(--danger-text); }
 .message-menu-notice { margin: .15rem 0 0; font-size: .72rem; opacity: .8; }
 
-/* Files & context drawer. */
-.native-conversation > .files-drawer { grid-area: transcript; z-index: 5; align-self: start; justify-self: end; display: flex; flex-direction: column; gap: .2rem; width: min(30rem, calc(100% - 1rem)); max-height: calc(100% - 1rem); margin: .5rem; overflow: auto; overscroll-behavior: contain; padding: .2rem .9rem .8rem; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); box-shadow: var(--shadow); }
+/* Files panel (ORK-809): one place for a chat's files. A full-height sheet
+   over the chat (with its own Close) below about 900px of pane width; docked
+   beside the chat from there on. The chat stays mounted underneath. */
+.native-conversation > .files-drawer { grid-row: 1 / -1; grid-column: 1; z-index: 6; justify-self: end; align-self: stretch; display: flex; flex-direction: column; width: min(30rem, 100%); min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 0 1rem 1rem; background: var(--surface); border-left: 1px solid var(--border); box-shadow: var(--shadow); }
 .native-conversation > .files-drawer[hidden] { display: none; }
-.files-drawer-header { position: sticky; top: -.2rem; z-index: 1; display: flex; align-items: center; justify-content: space-between; gap: .5rem; padding: .5rem 0 .3rem; background: var(--surface); border-bottom: 1px solid var(--border); }
-.files-drawer-header h2 { font-size: .95rem; }
+.files-drawer-header { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; justify-content: space-between; gap: .5rem; padding: .7rem 0 .5rem; background: var(--surface); border-bottom: 1px solid var(--border); }
+.files-drawer-header h2 { font-size: 1rem; }
 .files-drawer-close { min-height: 2.2rem; padding: .2rem .8rem; font-size: .8rem; border-radius: 1.1rem; }
-.files-drawer h3 { font-size: .85rem; margin: .6rem 0 .2rem; }
-.files-drawer-header + .conversation-tools { border-top: 0; margin-top: 0; }
-.files-drawer-note { font-size: .78rem; color: var(--muted); }
-.files-drawer-folder-log:empty { display: none; }
-@container conversation-pane (min-width: 1180px) {
- .native-conversation > .files-drawer { grid-area: drawer; align-self: stretch; width: 22rem; max-height: none; margin: 0; border-width: 0 0 0 1px; border-radius: 0; box-shadow: none; }
+.files-section { padding: .75rem 0; border-bottom: 1px solid var(--border); font-size: .85rem; }
+.files-section:last-child { border-bottom: 0; }
+.files-section h3 { font-size: .9rem; margin: 0 0 .35rem; }
+.files-drawer-note, .files-empty { font-size: .78rem; color: var(--muted); margin: 0 0 .4rem; }
+.files-folder .local-folder { margin-right: 0; }
+.files-folder .local-folder-state { flex-basis: 100%; justify-content: flex-start; border-radius: .6rem; }
+.local-folder-activity-title { flex-basis: 100%; font-size: .8rem; margin: .5rem 0 .15rem; }
+.local-folder-time { color: var(--faint); }
+.files-private-toggle { display: flex; justify-content: space-between; align-items: center; width: 100%; min-height: 2.2rem; padding: .2rem 0; border: 0; background: transparent; color: var(--text); font-size: .9rem; font-weight: 600; text-align: left; }
+.files-private-toggle::after { content: "\25B8"; color: var(--muted); }
+.files-private-toggle[aria-expanded=true]::after { content: "\25BE"; }
+.thread-files button { margin: .25rem .3rem .25rem 0; }
+@container conversation-pane (min-width: 900px) {
+ .native-conversation > .files-drawer { grid-area: drawer; z-index: auto; justify-self: stretch; width: clamp(18rem, 30cqi, 24rem); box-shadow: none; }
 }
 
 /* Narrow panes (tablet and phone): compact gutters, larger touch targets. */
@@ -108,7 +125,7 @@
 }
 @media (max-width: 52rem), (pointer: coarse) {
  .conversation-pane.native-conversation { grid-template-rows: minmax(0, 1fr) auto auto fit-content(56%); }
- .message-composer .composer-context button, .message-composer .composer-tools .tool-button, .files-drawer-close, .run-state button, .run-state summary, .message-menu-toggle, .message-menu-item { min-height: 44px; }
+ .message-composer .composer-context button, .composer-context .local-folder-chip, .message-composer .composer-tools .tool-button, .files-drawer-close, .files-private-toggle, .run-state button, .run-state summary, .message-menu-toggle, .message-menu-item { min-height: 44px; }
  .message-menu-toggle { min-width: 44px; }
  .composer-context { justify-content: flex-start; margin-left: 0; }
 }
