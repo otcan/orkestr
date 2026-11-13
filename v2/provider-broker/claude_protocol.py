@@ -3,7 +3,7 @@ import json
 import secrets
 import uuid
 from protocol import PROTOCOL, Refused, exact, identifier, require
-from claude_telemetry import validate_telemetry
+from claude_telemetry import PROGRESS_LIMIT, progress_notice, validate_telemetry
 from claude_quota import project
 from claude_control import ClaudeControl, canonical, text_blocks
 from claude_policy import refusal, reported_model
@@ -55,6 +55,7 @@ class ClaudeChannel:
         self.tool_frames = 0
         self.keepalives = 0
         self.system_notices = 0
+        self.progress_notices = 0
 
     def client(self, request):
         require(not self.poisoned)
@@ -180,6 +181,11 @@ class ClaudeChannel:
         require(self.tools and self.control is not None
                 or frame.get("parent_tool_use_id") is None)
         if kind == "system" and frame.get("subtype") != "init":
+            if progress_notice(frame, self.input_uuid):
+                # Per-request progress of a long turn: closed shape, own bound.
+                require(self.progress_notices < PROGRESS_LIMIT)
+                self.progress_notices += 1
+                return None
             # UI/retry/status notices: bounded discard, never readiness or output.
             limit = 16384
             if self.tools and frame.get("subtype") == "commands_changed":
