@@ -17,11 +17,13 @@ const deskRequest = (input.method === 'GET' && input.path === '/api/v2/desktops'
     (input.method === 'POST' && /^\/api\/v2\/conversations\/[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}\/desktops\/[a-z0-9][a-z0-9_-]{0,63}\/(?:acquire|release|reset)$/.test(input.path)) ||
     (input.method === 'POST' && /^\/api\/v2\/desktops\/[a-z0-9][a-z0-9_-]{0,63}\/(?:start|stop|link)$/.test(input.path));
 const health = input.path === "/api/v2/health" && input.method === "GET";
+// Local folder writes waiting for the owner anywhere (ORK-804): one fixed owner read.
+const writesWaiting = input.path === "/api/v2/local-files/waiting" && input.method === "GET";
 // Install-wide provider sign-in: one fixed read and closed per-provider actions.
 const signIn = (input.method === "GET" && input.path === "/api/v2/provider-sign-in") ||
     (input.method === "POST" && /^\/api\/v2\/provider-sign-in\/(?:codex|claude)\/(?:start|code|cancel|sign-out)$/.test(input.path));
 const localAccount = input.path === "/api/v2/oss-setup/account" && ["GET", "POST"].includes(input.method);
-if (!deskRequest && !health && !signIn && !localAccount && !security.test(input.path) && !vault.test(input.path) && !route.test(input.path) && !(manage.test(input.path) && !input.path.includes("..")) && !(sidebar.test(input.path) && !input.path.includes(".."))) throw new Error("Invalid API path");
+if (!deskRequest && !health && !writesWaiting && !signIn && !localAccount && !security.test(input.path) && !vault.test(input.path) && !route.test(input.path) && !(manage.test(input.path) && !input.path.includes("..")) && !(sidebar.test(input.path) && !input.path.includes(".."))) throw new Error("Invalid API path");
 const headers = {"Content-Type": "application/json"};
 if (localAccount) headers["x-orkestr-local-setup"] = "1";
 if (input.csrf && !["GET", "HEAD"].includes(input.method)) headers["x-orkestr-csrf"] = input.csrf;

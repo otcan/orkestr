@@ -309,6 +309,19 @@ test('build identity read is restricted to the exact same-origin health GET', as
     }
 });
 
+test('local folder writes waiting is one exact same-origin GET (ORK-804)', async () => {
+    await execute({recv:async()=>({...base,method:'GET',path:'/api/v2/local-files/waiting',body:null})}, async(path, options)=>{
+        assert.equal(path,'/api/v2/local-files/waiting');
+        assert.equal(options.method,'GET');
+        assert.equal(options.credentials,'same-origin');
+        assert.equal(options.headers['x-orkestr-csrf'],undefined);
+        return Response.json({conversations:[]});
+    });
+    for (const [method,path] of [['POST','/api/v2/local-files/waiting'],['GET','/api/v2/local-files/waiting?all=1'],['GET','/api/v2/local-files/waiting/extra'],['GET','/api/v2/local-files']]) {
+        await assert.rejects(execute({recv:async()=>({...base,method,path})},()=>assert.fail('fetch must not run')),/Invalid API path/);
+    }
+});
+
 test('owner vault routes keep cookie and CSRF and never carry the sealed form', async () => {
     const id = 'vi_0123456789abcdef0123456789abcdef';
     for (const [method,path] of [['GET','/api/v2/vault'],['GET','/api/v2/vault/items'],['POST','/api/v2/vault/items'],['PATCH',`/api/v2/vault/items/${id}`],['DELETE',`/api/v2/vault/items/${id}`],['PUT',`/api/v2/vault/items/${id}/login`],['PUT',`/api/v2/vault/items/${id}/grants`],['POST','/api/v2/vault/import'],['GET','/api/v2/vault/audit']]) {
