@@ -28,8 +28,9 @@ pub(crate) enum WindowAuthority {
 
 enum State {
     Fresh,
-    // Set before the async Core call. Cancellation or a lost commit reply must
-    // never invoke the initial issuer again in this process.
+    // Set before an issuing Core call (bootstrap or rebootstrap). Cancellation
+    // or a lost commit reply must never invoke the initial issuer again in this
+    // process. Read-only retired-window recovery never sets it.
     Attempted,
     Ready(Box<WindowAuthority>),
     Transferred,
@@ -83,7 +84,6 @@ impl InitialAuthority {
                 .config
                 .window_provider(&launch, native)
                 .map_err(|_| RuntimeStoreError::Conflict)?;
-            *state = State::Attempted;
             let config = ProductionSupervisorConfig {
                 provider,
                 namespace: self.namespace.clone(),
@@ -93,6 +93,7 @@ impl InitialAuthority {
             // Request shape selects a distinct Core port. Never fall back from
             // failed recovery to fresh bootstrap, or from bootstrap to recovery.
             let authority = if input.expected_generation == 0 {
+                *state = State::Attempted;
                 WindowAuthority::Initial(
                     store
                         .bootstrap_execution_window_authenticated(browser, conversation, config)
@@ -108,12 +109,18 @@ impl InitialAuthority {
                 // A failed first open has no native to resume. A committed
                 // provider handoff explicitly authorizes fresh native bindings.
                 // Durable state selects this port, never a recovery refusal.
+                *state = State::Attempted;
                 WindowAuthority::Initial(
                     store
                         .rebootstrap_execution_window_authenticated(browser, conversation, config)
                         .await?,
                 )
             } else {
+                // Read-only discovery of an already committed retirement: it
+                // issues nothing, so a refusal (for example a stale request
+                // racing the successor window this process just opened) keeps
+                // the authority as it was. Leaving it `Attempted` fenced every
+                // later admission of the conversation until a restart.
                 WindowAuthority::Retired(
                     store
                         .recover_retired_execution_window_authenticated(
@@ -408,5 +415,156 @@ mod tests {
             )
             .await
             .unwrap();
+    }
+
+    /// A stale successor request (its tuple names a window that is no longer
+    /// the latest closed one) arrives while this process's own window is still
+    /// open: Core's read-only recovery refuses it. That refusal issued nothing,
+    /// so it must not fence the conversation for the rest of the process: once
+    /// the window closes, the next request still opens its successor.
+    #[tokio::test]
+    async fn refused_retired_recovery_never_fences_later_successors() {
+        use orkestr_v2_contracts::{
+            ExecutionWindowReconciliationActor as Actor,
+            ExecutionWindowReconciliationDecision as Decision,
+        };
+        use orkestr_v2_store_sqlite::StrandedExecutionWindow;
+        let root = std::path::PathBuf::from(std::env::var_os("ORKESTR_V2_HOME").unwrap())
+            .join(format!("runtime-refused-recovery-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let store = Store::open(&root.join("state.sqlite3")).await.unwrap();
+        let conversation = store
+            .setup("synthetic-owner", "synthetic-hash")
+            .await
+            .unwrap();
+        let owner = store
+            .credentials("synthetic-owner")
+            .await
+            .unwrap()
+            .unwrap()
+            .0;
+        store
+            .save_session("synthetic-browser", &owner)
+            .await
+            .unwrap();
+        let config: BetaConfig = serde_json::from_value(serde_json::json!({
+            "schema_version":1,"owner_id":owner,"conversation_id":conversation,
+            "manager_socket":"/run/example/control.sock","launcher":"/opt/example/launcher",
+            "launcher_sha256":"a".repeat(64),"workspace":"/srv/example",
+            "namespace":"synthetic-beta","supervisor_key":"synthetic-supervisor"
+        }))
+        .unwrap();
+        async fn admit_input(
+            store: &Store,
+            owner: &OwnerId,
+            conversation: &ConversationId,
+            key: &str,
+        ) -> orkestr_v2_contracts::Receipt {
+            store
+                .admit(
+                    owner,
+                    conversation,
+                    &MessageInput {
+                        client_message_id: key.into(),
+                        text: "synthetic input".into(),
+                    },
+                )
+                .await
+                .unwrap()
+                .receipt
+        }
+        let input = |key: &'static str| admit_input(&store, &owner, &conversation, key);
+        let request = |key: &str, receipt: orkestr_v2_contracts::Receipt| ExecutionWindowRequest {
+            request_key: format!("window:{key}"),
+            input_message_id: receipt.message_id,
+            input_event_id: receipt.event_id,
+            input_request_key: key.into(),
+            expected_generation: 0,
+            window_id: None,
+            predecessor_window_id: None,
+        };
+        let first = request("first", input("first").await);
+        let initial = InitialAuthority::new(&config).unwrap();
+        let admitted = initial
+            .admit(&store, "synthetic-browser", &owner, &conversation, &first)
+            .await
+            .unwrap();
+        let WindowAuthority::Initial(cap) = initial.take().await.unwrap() else {
+            panic!("fresh owner must use initial authority")
+        };
+        let status = admitted.status;
+        let grant = cap
+            .store()
+            .issue_execution_window_credential(
+                cap.credential(),
+                status.window_id,
+                1,
+                "synthetic-boot",
+                status.expires_at_ms,
+                &"a".repeat(64),
+            )
+            .await
+            .unwrap();
+        cap.store()
+            .bind_execution_window(cap.credential(), &grant)
+            .await
+            .unwrap();
+        // The window this process opened is still open: a successor request
+        // reaches Core's retired-window recovery, which refuses it.
+        let mut stale = request("stale", input("stale").await);
+        stale.expected_generation = 1;
+        stale.predecessor_window_id = Some(status.window_id);
+        assert!(matches!(
+            initial
+                .admit(&store, "synthetic-browser", &owner, &conversation, &stale)
+                .await,
+            Err(RuntimeStoreError::Fenced)
+        ));
+        // The window then closes (here: its open failed and is reconciled).
+        store
+            .reconcile_execution_window_authenticated(
+                "synthetic-browser",
+                &conversation,
+                status.window_id,
+                1,
+            )
+            .await
+            .unwrap();
+        let StrandedExecutionWindow::Pending(plan) = store
+            .plan_stranded_execution_window_authenticated(
+                "synthetic-browser",
+                &conversation,
+                status.window_id,
+                1,
+                Decision::AbandonUnaccepted,
+                Actor::Owner,
+            )
+            .await
+            .unwrap()
+        else {
+            panic!("failed open must plan")
+        };
+        store
+            .reconcile_stranded_execution_window_authenticated(
+                "synthetic-browser",
+                &plan,
+                Decision::AbandonUnaccepted,
+                Actor::Owner,
+            )
+            .await
+            .unwrap();
+        // The same process authority still opens the successor.
+        let mut next = request("next", input("next").await);
+        next.expected_generation = 1;
+        next.predecessor_window_id = Some(status.window_id);
+        let successor = initial
+            .admit(&store, "synthetic-browser", &owner, &conversation, &next)
+            .await
+            .expect("a refused read-only recovery must not fence the conversation");
+        assert_eq!(successor.status.generation, 2);
+        assert!(matches!(
+            initial.take().await,
+            Ok(WindowAuthority::Initial(_))
+        ));
     }
 }
