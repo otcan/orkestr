@@ -1,7 +1,7 @@
 //! Production evidence is metadata, never an acceptance or effect grant.
 use super::*;
 use crate::runtime::ledger::hash;
-use orkestr_v2_contracts::EventId;
+use orkestr_v2_contracts::{EventId, RunId};
 
 impl Store {
     pub(crate) async fn production_observe(
@@ -19,7 +19,11 @@ impl Store {
         }
         #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
         let workspace = if provider.run.purpose == AdmissionPurpose::Execution {
-            Some(self.check_binding_before_writer(&provider.binding).await?)
+            Some(fenced_at(
+                "workspace_binding",
+                &provider.run,
+                self.check_binding_before_writer(&provider.binding).await,
+            )?)
         } else {
             None
         };
@@ -30,7 +34,11 @@ impl Store {
         let mut tx = store.pool.begin_with("BEGIN IMMEDIATE").await.map_err(db)?;
         // Authenticate principal and exact issued historical envelope BEFORE
         // receipt lookup, but defer current expiry/incarnation checks for replay.
-        context.authenticate(&mut tx).await?;
+        fenced_at(
+            "context",
+            &provider.run,
+            context.authenticate(&mut tx).await,
+        )?;
         let row =
             sqlx::query("SELECT * FROM production_runs WHERE id=? AND owner_id=? AND context_id=?")
                 .bind(input.run_id.to_string())
@@ -40,7 +48,11 @@ impl Store {
                 .await
                 .map_err(db)?
                 .ok_or(RuntimeStoreError::NotFound)?;
-        super::leases::authenticate(&mut tx, &row, provider).await?;
+        fenced_at(
+            "lease",
+            &provider.run,
+            super::leases::authenticate(&mut tx, &row, provider).await,
+        )?;
         if input.run_id != provider.run.run_id
             || input.session_id != provider.run.session_id
             || input.lease_generation != provider.run.lease_generation
@@ -83,17 +95,24 @@ impl Store {
                 state: state(committed.get("receipt_state"))?, duplicate: true,
             });
         }
-        let row = store.production_authorized_run(&mut tx, provider).await?;
+        let row = fenced_at(
+            "authorized_run",
+            &provider.run,
+            store.production_authorized_run(&mut tx, provider).await,
+        )?;
         let stopping = matches!(input.event, ProviderEvent::Stopped);
         let purpose = if stopping {
             AdmissionPurpose::CancellationAcknowledgement
         } else {
             AdmissionPurpose::Execution
         };
-        if provider.run.purpose != purpose
-            || row.get::<&str, _>("dispatch_state") != "delivery_unknown"
-        {
-            return Err(RuntimeStoreError::Fenced);
+        if provider.run.purpose != purpose {
+            return fenced_at("purpose", &provider.run, Err(RuntimeStoreError::Fenced));
+        }
+        let dispatch = row.get::<&str, _>("dispatch_state");
+        if dispatch != "delivery_unknown" {
+            let check = format!("dispatch_state:{dispatch}");
+            return fenced_at(&check, &provider.run, Err(RuntimeStoreError::Fenced));
         }
         if matches!(
             input.event,
@@ -108,7 +127,11 @@ impl Store {
                 | ProviderEvent::Lost
                 | ProviderEvent::Stopped
         ) {
-            store.require_observed_native(&mut tx, provider).await?;
+            fenced_at(
+                "observed_native",
+                &provider.run,
+                store.require_observed_native(&mut tx, provider).await,
+            )?;
         }
         let next: i64 = sqlx::query_scalar(
             "SELECT coalesce(max(run_sequence),0)+1 FROM production_observations WHERE run_id=?",
@@ -198,6 +221,28 @@ impl Store {
         })
     }
 }
+/// One operator line per fenced observation, naming the exact check that
+/// refused it (the line otherwise only says `Store(Fenced)`, without the run,
+/// the conversation or the cause). Identifiers and closed check names only.
+fn fenced_at<T>(check: &str, run: &RunAdmission, result: Result<T>) -> Result<T> {
+    if matches!(result, Err(RuntimeStoreError::Fenced)) {
+        eprintln!(
+            "{}",
+            fence_line(check, &run.run_id, &run.conversation_id, run.role)
+        );
+    }
+    result
+}
+
+fn fence_line(
+    check: &str,
+    run: &RunId,
+    conversation: &orkestr_v2_contracts::ConversationId,
+    role: orkestr_v2_contracts::runtime::Role,
+) -> String {
+    format!("WARN orkestr-v2-store observation_fenced run={run} conversation={conversation} role={role:?} check={check}")
+}
+
 pub(super) fn failure_class_name(
     class: orkestr_v2_contracts::ExecutionFailureClass,
 ) -> &'static str {
@@ -233,5 +278,52 @@ fn state(value: &str) -> Result<RunState> {
         "failed" => Ok(RunState::Failed),
         "blocked" => Ok(RunState::Blocked),
         _ => Err(RuntimeStoreError::Unavailable),
+    }
+}
+
+#[cfg(test)]
+mod fence_line_tests {
+    use super::*;
+
+    fn admission() -> RunAdmission {
+        RunAdmission {
+            owner_id: OwnerId(Uuid::from_u128(3)),
+            conversation_id: orkestr_v2_contracts::ConversationId(Uuid::from_u128(2)),
+            run_id: RunId(Uuid::from_u128(1)),
+            session_id: orkestr_v2_contracts::SessionId(Uuid::from_u128(4)),
+            role: orkestr_v2_contracts::runtime::Role::Deep,
+            native_session_id: None,
+            lease_generation: 1,
+            dispatch_fence: 1,
+            attempt: 1,
+            lease_deadline_ms: 0,
+            purpose: AdmissionPurpose::Execution,
+        }
+    }
+
+    #[test]
+    fn a_fenced_observation_names_run_conversation_and_check() {
+        let run = RunId(Uuid::from_u128(1));
+        let conversation = orkestr_v2_contracts::ConversationId(Uuid::from_u128(2));
+        let line = fence_line(
+            "dispatch_state:delivered",
+            &run,
+            &conversation,
+            orkestr_v2_contracts::runtime::Role::Deep,
+        );
+        assert_eq!(
+            line,
+            format!("WARN orkestr-v2-store observation_fenced run={run} conversation={conversation} role=Deep check=dispatch_state:delivered")
+        );
+        // Only a Fenced refusal is reported; every result passes through unchanged.
+        assert!(matches!(
+            fenced_at::<()>("context", &admission(), Err(RuntimeStoreError::Busy)),
+            Err(RuntimeStoreError::Busy)
+        ));
+        assert!(matches!(fenced_at("context", &admission(), Ok(7)), Ok(7)));
+        assert!(matches!(
+            fenced_at::<()>("context", &admission(), Err(RuntimeStoreError::Fenced)),
+            Err(RuntimeStoreError::Fenced)
+        ));
     }
 }
