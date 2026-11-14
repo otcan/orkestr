@@ -79,7 +79,7 @@ export async function credentialsPage({ page, state, clickText, waitText, screen
   for (const id of [A, B, C]) assert.ok(!visible.includes(id), 'chat ids are never shown');
   const link = await page.evaluate(() => { const a = [...document.querySelectorAll('.credential-row')][0].querySelector('a.credential-reveal');
     return a && { href: a.href, target: a.target, rel: a.rel, text: a.textContent }; });
-  assert.ok(link?.href.endsWith('creds%2Fsynthetic-ci-token') && link.target === '_blank' && link.rel.includes('noopener'), JSON.stringify(link));
+  assert.ok(link?.href.endsWith('/show/creds/synthetic-ci-token') && link.target === '_blank' && link.rel.includes('noopener'), JSON.stringify(link));
   await screenshot(label, 'credentials');
 
   // Search (name, site, chat) and the type filter.

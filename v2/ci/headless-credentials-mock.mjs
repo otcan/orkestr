@@ -29,7 +29,7 @@ export function credentialsState(now = Date.now()) {
 
 const capabilities = {
   types: ['password', 'token', 'api_key'], grant_ids: 'conversation', owner_desks_editable: true, site_with_value: false,
-  value_replace: 'fields', reveal: 'external', reveal_url: 'https://bao.example.invalid/ui/vault/secrets/orkestr/kv/creds%2F{id}', vault_import: false,
+  value_replace: 'fields', reveal: 'external', reveal_url: 'https://bao.example.invalid/ui/vault/secrets/orkestr/show/creds/{id}', vault_import: false,
 };
 const slug = label => label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 56) || 'credential';
 

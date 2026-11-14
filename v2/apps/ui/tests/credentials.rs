@@ -214,13 +214,13 @@ fn the_reveal_link_names_only_a_plain_id() {
     let caps = Capabilities {
         reveal: "external".into(),
         reveal_url: Some(
-            "https://bao.example.invalid/ui/vault/secrets/orkestr/kv/creds%2F{id}".into(),
+            "https://bao.example.invalid/ui/vault/secrets/orkestr/show/creds/{id}".into(),
         ),
         ..Default::default()
     };
     assert_eq!(
         reveal_link(&caps, "search").as_deref(),
-        Some("https://bao.example.invalid/ui/vault/secrets/orkestr/kv/creds%2Fsearch")
+        Some("https://bao.example.invalid/ui/vault/secrets/orkestr/show/creds/search")
     );
     assert_eq!(reveal_link(&caps, "../x"), None);
     assert_eq!(reveal_link(&Capabilities::default(), "search"), None);

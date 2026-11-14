@@ -255,7 +255,7 @@ impl Case {
         tokio::spawn(async move { axum::serve(listener, bao).await.unwrap() });
         let mut config = json!({"format": "orkestr-v2-credentials-backend-v1", "backend": "openbao", "address": format!("http://{address}"),
             "role_id": ROLE, "secret_id": SECRET_ID, "usage_summary": root.join("usage.json"),
-            "reveal_url": "https://bao.example.invalid/ui/vault/secrets/orkestr/kv/creds%2F{id}"});
+            "reveal_url": "https://bao.example.invalid/ui/vault/secrets/orkestr/show/creds/{id}"});
         if backend == "openbao+catalog" {
             config["catalog"] = json!(root.join("catalog.json"));
         }

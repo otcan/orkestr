@@ -54,7 +54,7 @@ was refused.
  "role_id": "<role id>", "secret_id": "<secret id>",
  "catalog": "/var/lib/example/credentials-catalog.json",
  "usage_summary": "/var/lib/example/credentials-usage.json",
- "reveal_url": "https://bao.example.invalid/ui/vault/secrets/orkestr/kv/creds%2F{id}"}
+ "reveal_url": "https://bao.example.invalid/ui/vault/secrets/orkestr/show/creds/{id}"}
 ```
 
 - `address` must be plain HTTP on a loopback address: the token never crosses

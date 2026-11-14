@@ -9,6 +9,9 @@ const security = /^\/api\/v2\/browser\/(?:security|password|service-credentials(
 // Owner vault (ORK-784): status, items, edits, import, audit. The sealed form
 // is fetched only by vault_reveal.js, never through this bridge.
 const vault = /^\/api\/v2\/vault(?:\/(?:items(?:\/vi_[A-Za-z0-9_-]{6,64}(?:\/(?:login|grants))?)?|import|audit))?$/;
+// Owner credentials (ORK-826): list, add, edit, replace a value, delete (with
+// the revision it saw). No route of the page ever answers with a value.
+const credentials = /^\/api\/v2\/credentials(?:\/(?:vi_[A-Za-z0-9_-]{6,64}|[a-z0-9][a-z0-9-]{0,62})(?:\/value|\?expected_revision=[A-Za-z0-9%._~-]{1,256})?)?$/;
 // Owner-wide discovery; lease mutations retain an explicit conversation scope,
 // and only the fixed owner lifecycle verbs apply to a desk without one. The
 // owner's desk sharing switch is one fixed path, read and replaced whole.
@@ -21,7 +24,7 @@ const health = input.path === "/api/v2/health" && input.method === "GET";
 const signIn = (input.method === "GET" && input.path === "/api/v2/provider-sign-in") ||
     (input.method === "POST" && /^\/api\/v2\/provider-sign-in\/(?:codex|claude)\/(?:start|code|cancel|sign-out)$/.test(input.path));
 const localAccount = input.path === "/api/v2/oss-setup/account" && ["GET", "POST"].includes(input.method);
-if (!deskRequest && !health && !signIn && !localAccount && !security.test(input.path) && !vault.test(input.path) && !route.test(input.path) && !(manage.test(input.path) && !input.path.includes("..")) && !(sidebar.test(input.path) && !input.path.includes(".."))) throw new Error("Invalid API path");
+if (!deskRequest && !health && !signIn && !localAccount && !security.test(input.path) && !vault.test(input.path) && !credentials.test(input.path) && !route.test(input.path) && !(manage.test(input.path) && !input.path.includes("..")) && !(sidebar.test(input.path) && !input.path.includes(".."))) throw new Error("Invalid API path");
 const headers = {"Content-Type": "application/json"};
 if (localAccount) headers["x-orkestr-local-setup"] = "1";
 if (input.csrf && !["GET", "HEAD"].includes(input.method)) headers["x-orkestr-csrf"] = input.csrf;

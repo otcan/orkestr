@@ -14,7 +14,7 @@
 //!  "role_id": "<uuid>", "secret_id": "<uuid>",
 //!  "catalog": "/var/lib/example/credentials-catalog.json",
 //!  "usage_summary": "/var/lib/example/credentials-usage.json",
-//!  "reveal_url": "https://bao.example.invalid/ui/vault/secrets/orkestr/kv/creds%2F{id}"}
+//!  "reveal_url": "https://bao.example.invalid/ui/vault/secrets/orkestr/show/creds/{id}"}
 //! ```
 //!
 //! `catalog`, `usage_summary` and `reveal_url` are optional. A refused file
@@ -251,7 +251,7 @@ mod tests {
             );
         }
         let with_ui = config(
-            json!({"reveal_url": "https://bao.example.invalid/ui/vault/secrets/orkestr/kv/creds%2F{id}"}),
+            json!({"reveal_url": "https://bao.example.invalid/ui/vault/secrets/orkestr/show/creds/{id}"}),
         );
         let Backend::OpenBao { client, .. } = Backend::parse(&with_ui, home) else {
             panic!("openbao expected");
