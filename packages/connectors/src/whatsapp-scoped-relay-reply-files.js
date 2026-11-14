@@ -1,10 +1,12 @@
 // Relay side of reply files: see whatsapp-scoped-reply-files.js for the worker side.
 // Files the assistant attached to a reply, after its text (`replyMediaRoot`).
 // V1 resolves each to its plaintext snapshot; the worker re-checks the bytes.
+// Any type goes, under its canonical type (ORK-827).
 // A file V1 cannot resolve is skipped; a failing send is retried on later
 // polls and skipped after three attempts so it cannot block the group. A
 // skipped file is named once in the chat, plainly (ORK-787):
 // "Not sent on WhatsApp: <name> (<reason>). It is in the Orkestr app."
+import {SCOPED_FILE_MAX_BYTES, SCOPED_FILE_MAX_LABEL, scopedFileMimetype} from './whatsapp-scoped-reply-files.js';
 export const notSentLine = (name, reason) => `Not sent on WhatsApp: ${name} (${reason}). It is in the Orkestr app.`;
 const displayName = attachment => String(attachment?.filename || attachment?.name ||
   attachment?.deliverySource?.filename || 'file').replace(/[\r\n]+/g, ' ').slice(0, 180);
@@ -34,12 +36,16 @@ async function deliver(input, group, answer, touchThread) {
         log({event: 'reply_file_notice_failed', threadId: group.threadId, messageId: answer.id, attachmentId: fileKey});
       }
     };
-    if (!file) { await skip('no_snapshot', 'unavailable'); continue; }
+    if (!file) {
+      const tooLarge = Number(attachment?.size || 0) > SCOPED_FILE_MAX_BYTES;
+      await skip(tooLarge ? 'too_large' : 'no_snapshot', tooLarge ? SCOPED_FILE_MAX_LABEL : 'unavailable');
+      continue;
+    }
     await touchThread();
     let result;
     try {
       result = await send({chatId: input.chat_id, requestId, parentId: input.id,
-        file: {path: file.path, filename: file.filename, mimetype: file.mimetype, sha256: file.sha256}});
+        file: {path: file.path, filename: file.filename, mimetype: scopedFileMimetype(file.mimetype), sha256: file.sha256}});
       if (result?.ok !== true || !result.ids?.length) throw new Error('group_reply_unconfirmed');
     } catch (error) {
       db.prepare('INSERT INTO reply_file_attempts(id,attempts) VALUES(?,1) ON CONFLICT(id) DO UPDATE SET attempts=attempts+1').run(requestId);

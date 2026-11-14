@@ -118,12 +118,12 @@ test("a remote reply's file is imported under required encryption and staged for
   assert.equal(downloads.length, 2);
 });
 
-test("relay files of a remote reply refuse a wrong digest, a disallowed type, an oversized file and another backend", async (t) => {
+test("relay files of a remote reply refuse a wrong digest, an oversized file and another backend", async (t) => {
   const { home, env } = await isolatedEnv(t);
   const { scopedRelayRemoteReplyFiles } = await import("../packages/connectors/src/whatsapp-scoped-relay-remote-files.js");
   const thread = { id: "example-delegated", ownerUserId: "admin", binding };
   const fetched = [];
-  const big = Buffer.alloc(16 * 1024 * 1024 + 1, 1);
+  const big = Buffer.alloc(64 * 1024 * 1024 + 1, 1);
   const fetchImpl = async (url) => {
     const id = decodeURIComponent(new URL(String(url)).pathname.split("/").at(-2));
     fetched.push(id);
@@ -136,12 +136,11 @@ test("relay files of a remote reply refuse a wrong digest, a disallowed type, an
   const files = (attachments, role) => scopedRelayRemoteReplyFiles({ thread, message: message(attachments, role), env, fetchImpl });
 
   assert.deepEqual(await files([remote({ id: "ratt_digest", remoteAttachmentId: "digest", sha256: "b".repeat(64) })]), []);
-  assert.deepEqual(await files([remote({ id: "ratt_type", remoteAttachmentId: "type", filename: "tool.exe", mimetype: "application/x-msdownload" })]), []);
-  assert.deepEqual(await files([remote({ id: "ratt_declared", remoteAttachmentId: "declared", size: 16 * 1024 * 1024 + 1 })]), []);
+  assert.deepEqual(await files([remote({ id: "ratt_declared", remoteAttachmentId: "declared", size: 64 * 1024 * 1024 + 1 })]), []);
   assert.deepEqual(await files([remote({ id: "ratt_big", remoteAttachmentId: "big", size: 0, sha256: undefined })]), []);
   assert.deepEqual(await files([remote({ id: "ratt_other", remoteAttachmentId: "other", remoteThreadId: "another-remote" })]), []);
   assert.deepEqual(await files([remote({ id: "ratt_user", remoteAttachmentId: "user" })], "user"), []);
-  assert.deepEqual(fetched, ["digest", "big"], "type, declared size, other thread and user input are refused before any fetch");
+  assert.deepEqual(fetched, ["digest", "big"], "declared size, other thread and user input are refused before any fetch");
   await assert.rejects(fs.readdir(path.join(home, "uploads", "example-delegated", "artifacts")), "nothing was staged");
 
   // A snapshot V1 staged itself is left to the endpoint's existing branch.
@@ -172,4 +171,35 @@ test("the relay file endpoint still returns a snapshot V1 staged itself", async 
   assert.equal(files[0].sha256, sha(Buffer.from("a,b\n1,2\n")));
   assert.equal(files[0].filename, "totals.csv");
   assert.ok(path.isAbsolute(files[0].path));
+});
+
+test("relay files of a remote reply stage every type under its canonical type (ORK-827)", async (t) => {
+  const { home, env } = await isolatedEnv(t);
+  const { scopedRelayRemoteReplyFiles } = await import("../packages/connectors/src/whatsapp-scoped-relay-remote-files.js");
+  const thread = { id: "example-delegated", ownerUserId: "admin", binding };
+  const bytes = { html: Buffer.from("<!doctype html><title>Plan</title>"), zip: Buffer.from("PK\x03\x04 synthetic"),
+    csv: Buffer.from("a,b\n1,2\n"), unknown: Buffer.from([0, 1, 2, 3]), large: Buffer.alloc(30 * 1024 * 1024, 7) };
+  const fetchImpl = async (url) => {
+    const id = decodeURIComponent(new URL(String(url)).pathname.split("/").at(-2));
+    return new Response(bytes[id], { headers: { "content-type": "application/octet-stream" } });
+  };
+  const remote = (id, filename, mimetype) => ({ id: `ratt_${id}`, kind: "file", filename, mimetype, size: bytes[id].length,
+    source: "remote_runtime_attachment", downloadable: false, remote: true, remoteBackend: "example", remoteThreadId: "example-remote",
+    remoteMessageId: "example-remote-reply", remoteAttachmentId: id, sha256: sha(bytes[id]) });
+  const staged = await scopedRelayRemoteReplyFiles({ thread, env, fetchImpl, message: { id: "local-reply", role: "assistant", attachments: [
+    remote("html", "weekly-plan.html", "text/html"),
+    remote("zip", "October package.zip", "application/zip"),
+    remote("csv", "totals.csv", "text/csv; charset=utf-8"),
+    remote("unknown", "model.weights", ""),
+    remote("large", "scan.tiff", "image/tiff"),
+  ] } });
+  assert.deepEqual(staged.map((f) => [f.filename, f.mimetype]), [
+    ["weekly-plan.html", "text/html"], ["October package.zip", "application/zip"], ["totals.csv", "text/csv"],
+    ["model.weights", "application/octet-stream"], ["scan.tiff", "image/tiff"],
+  ], "every type is staged, and the general 25 MB remote default is not the limit here");
+  const { validReplyFileShape } = await import("../packages/connectors/src/whatsapp-scoped-reply-files.js");
+  for (const file of staged) {
+    assert.equal(path.dirname(file.path), path.join(home, "uploads", "example-delegated", "artifacts"));
+    assert.equal(validReplyFileShape({ path: file.path, filename: file.filename, mimetype: file.mimetype, sha256: file.sha256 }), true, file.filename);
+  }
 });

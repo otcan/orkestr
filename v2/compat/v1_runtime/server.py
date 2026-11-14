@@ -166,7 +166,7 @@ class Handler(BaseHTTPRequestHandler):
         descriptor = reply_files.exported(binding.ledger, attachment_id)
         data = descriptor and reply_files.read_export(binding.config["conversation_id"], descriptor.get("sha256"),
                                                       descriptor.get("size"))
-        if not data or descriptor.get("mimetype") not in reply_files.MEDIA_TYPES:
+        if not data or reply_files.mimetype(descriptor.get("mimetype")) != descriptor.get("mimetype"):
             return self.answer(404, {"ok": False, "error": "attachment_not_found"})
         self.send_response(200)
         self.send_header("Content-Type", descriptor["mimetype"])
