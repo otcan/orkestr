@@ -290,6 +290,27 @@ outcome=released|refused reason=…`.
 A released window is still never retired as graceful: retirement keeps refusing
 uncertain cleanup.
 
+### Automatic re-check of a uid refusal (ORK-828)
+
+The common case needs no operator: the walk met a descendant running as
+another uid (`owned_child_identity`, typically a short-lived setuid helper).
+The walk keeps that descendant's pid, start time and uid, so the checks above
+cover everything it saw. For this cause only, every `reconcile` attempt runs
+the same checks itself. Once they pass, the attempt closes the window (steps
+3 and 4) and the manager logs one line:
+`ALERT orkestr-v2-manager window_release_proven window=… generation=…
+reason=owned_child_identity`. Until then the attempt refuses
+`owned_cleanup_uncertain` as before, and the server retries at most every
+30 s. On 2026-11-14 such a window blocked its conversation, and the release
+train's drain, for 38 minutes after its whole tree was gone.
+
+Every other cause of uncertainty still needs the operator request.
+
+The walk names each refused descendant once, so the program can be identified
+afterwards:
+`manager descendant refused for its uid: pid=… uid=… comm=…` (kernel command
+name only).
+
 ## Clean stop with an unresolved window
 
 Stopping a window task whose window cannot be retired, for example because proposals

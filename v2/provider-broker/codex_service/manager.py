@@ -299,7 +299,8 @@ class Manager:
                 # still open here first, exactly like an uncertainty report,
                 # so the conversation recovers without a manager restart.
                 # Every original child must still be reaped; uncertain cleanup
-                # is never promoted. A fresh manager never holds custody of a
+                # is never promoted without the fail-closed proof of
+                # manager_uncertain. A fresh manager never holds custody of a
                 # previous life's window. An exact replay of a retired record
                 # needs no custody check.
                 if not window.egress_closed:
@@ -308,6 +309,9 @@ class Manager:
                 require(window.egress_closed, "window_egress_owned")
                 try:
                     released = window.children.released()
+                    if not released:
+                        from .manager_uncertain import automatic
+                        released = automatic(self, window) and window.children.released()
                 except Exception:
                     self._cleanup_notice(window)
                     raise

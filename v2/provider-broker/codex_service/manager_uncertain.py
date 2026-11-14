@@ -28,6 +28,15 @@ reconcile attempt closes the window. Any failed check changes nothing. The
 manager removes the request, writes `<window_id>.<generation>.receipt` (JSON:
 outcome and closed reason code) and logs one line either way. Retirement, the
 graceful path, still never accepts uncertain cleanup.
+
+Automatic re-check (ORK-828): when the only cause of the uncertainty is a
+descendant refused for its uid (`owned_child_identity`, typically a short-lived
+setuid helper), the walk kept that descendant's pid and start time, so the
+same proof covers everything the walk saw. `reconcile` then runs the proof
+itself on every attempt instead of waiting for an operator file: on
+2026-11-14 such a window blocked its conversation, and every release train,
+for 38 minutes after its whole tree was gone. Every other uncertainty still
+needs the operator request.
 """
 import json
 import os
@@ -75,6 +84,35 @@ def prove(manager, window_id, generation):
     adopted = getattr(manager, 'adopted', None)
     require(adopted is not None and not adopted.records, 'adopted_children_not_reaped')
     children.operator_released = True
+
+
+# Uncertainty whose every unrecorded identity the walk kept (ownership.py
+# `_unrecorded`), so `prove` alone settles it without an operator request.
+AUTOMATIC_REASONS = frozenset(('owned_child_identity',))
+
+
+def automatic(manager, window):
+    """Reconcile's own fail-closed re-check of an uncertain window (see the
+    module docstring). True when the window's custody is released, now or by
+    an earlier proof; one ALERT line when this call releases it. Never raises:
+    an unproven window keeps refusing exactly as before."""
+    children = window.children
+    if getattr(children, 'operator_released', False):
+        return True
+    if not getattr(children, 'uncertain', False) or \
+            getattr(children, 'uncertainty_reason', None) not in AUTOMATIC_REASONS:
+        return False
+    try:
+        prove(manager, window.window, window.generation)
+    except Exception:
+        return False
+    try:
+        sys.stderr.write('ALERT orkestr-v2-manager window_release_proven window=%s generation=%d reason=%s\n'
+                         % (window.window, window.generation, children.uncertainty_reason))
+        sys.stderr.flush()
+    except (OSError, ValueError):
+        pass  # A diagnostic sink never changes the proof.
+    return True
 
 
 def _directory(manager):

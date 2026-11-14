@@ -29,6 +29,16 @@ def same(identity, any_uid=False):
     return bool(current and current["start"] == identity["start"])
 
 
+def _comm(pid):
+    """Kernel command name (at most 15 bytes) for operator diagnostics; never
+    arguments, environment or paths."""
+    try:
+        comm = Path(f"/proc/{pid}/comm").read_text()[:15].strip()
+    except OSError:
+        comm = "?"
+    return "".join(c if c.isprintable() else "?" for c in comm)
+
+
 class Vanished(Refused):
     """The original identity was reaped before its pidfd pinned it.
 
@@ -279,10 +289,20 @@ class Children:
 
     def _unrecorded(self, identity):
         key = (identity["pid"], identity["start"])
-        if key not in self.unrecorded and len(self.unrecorded) >= 64:
+        if key in self.unrecorded:
+            return
+        if len(self.unrecorded) >= 64:
             self.unrecorded_overflow = True
             return
-        self.unrecorded.setdefault(key, dict(identity))
+        self.unrecorded[key] = dict(identity)
+        # Once per stray, so the operator can name the program that changed
+        # uid (it is usually gone before anyone looks): pid, uid and comm only.
+        try:
+            sys.stderr.write("manager descendant refused for its uid: pid=%d uid=%d comm=%s\n"
+                             % (identity["pid"], identity["uid"], _comm(identity["pid"])))
+            sys.stderr.flush()
+        except (OSError, ValueError):
+            pass  # A diagnostic sink never changes the walk's closed reason.
 
     def _observation_failed(self, error):
         """Persist a closed diagnostic; never expose raw exception text/paths."""
@@ -333,11 +353,7 @@ class Children:
             names = []
             for record in live[:8]:
                 pid = record.identity["pid"]
-                try:
-                    comm = Path(f"/proc/{pid}/comm").read_text()[:15].strip()
-                except OSError:
-                    comm = "?"
-                names.append("%d:%s" % (pid, "".join(c if c.isprintable() else "?" for c in comm)))
+                names.append("%d:%s" % (pid, _comm(pid)))
             more = " (+%d more)" % (len(live) - 8) if len(live) > 8 else ""
             sys.stderr.write("manager owned child not reaped: %s%s\n" % (" ".join(names), more))
             sys.stderr.flush()

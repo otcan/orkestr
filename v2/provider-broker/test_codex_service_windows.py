@@ -287,7 +287,8 @@ class OperatorReleaseTests(unittest.TestCase):
         self.children.observe()
         self.assertEqual(len(self.children.records), 2)
         self.stray = self.spawn(["/bin/sleep", "60"])
-        self.children._unrecorded(process(self.stray.pid))
+        with patch.object(ownership.sys, "stderr", io.StringIO()):
+            self.children._unrecorded(process(self.stray.pid))
         self.children._observation_failed(Refused("owned_child_identity"))
         self.ledger.uncertain(self.request["window_id"], 1, "cleanup_unknown")
         manager = Manager.__new__(Manager)
@@ -405,6 +406,53 @@ class OperatorReleaseTests(unittest.TestCase):
         })
         self.assertEqual(sorted(path.name for path in requests.iterdir()), sorted(receipts))
         self.assertTrue(self.children.operator_released)
+
+    def test_reconcile_itself_releases_a_uid_refusal_once_everything_is_gone(self):
+        """2026-11-14: no operator file. Each reconcile attempt runs the same proof."""
+        alert = ("ALERT orkestr-v2-manager window_release_proven window=%s generation=1 "
+                 "reason=owned_child_identity" % self.request["window_id"])
+        with patch.object(module.sys, "stderr", io.StringIO()) as output:
+            with self.assertRaisesRegex(Refused, "owned_cleanup_uncertain"):
+                self.manager.dispatch(self.reconcile)  # Its tree still runs.
+            self.kill_tree()
+            with self.assertRaisesRegex(Refused, "owned_cleanup_uncertain"):
+                self.manager.dispatch(self.reconcile)  # The refused stray still runs.
+            self.assertFalse(self.children.operator_released)
+            self.assertNotIn(alert, output.getvalue())
+            self.stray.kill()
+            self.stray.wait(timeout=5)
+            receipt = self.manager.dispatch(self.reconcile)["receipt"]
+        self.assertEqual((receipt["state"], receipt["outcome"]), ("retired", "abandoned"))
+        self.assertEqual(self.manager.windows, {})
+        self.assertEqual([line for line in output.getvalue().splitlines() if line.startswith("ALERT")], [alert])
+        with self.assertRaisesRegex(Refused, "original_cleanup_proof_missing"):
+            self.children.proven_gone()  # Graceful retirement still never accepts it.
+
+    def test_any_other_uncertainty_still_waits_for_the_operator(self):
+        self.kill_tree()
+        self.stray.kill()
+        self.stray.wait(timeout=5)
+        with patch.object(module.sys, "stderr", io.StringIO()) as output:
+            for reason in ("owned_child_metadata", "owned_child_family_changed", "owned_process_changed",
+                           "owned_child_disappeared", "owned_child_observation"):
+                with self.subTest(reason=reason):
+                    self.children.uncertainty_reason = reason
+                    with self.assertRaisesRegex(Refused, "owned_cleanup_uncertain"):
+                        self.manager.dispatch(self.reconcile)
+                    self.assertFalse(self.children.operator_released)
+            self.prove()  # The operator request.
+            receipt = self.manager.dispatch(self.reconcile)["receipt"]
+        self.assertEqual(receipt["state"], "retired")
+        self.assertNotIn("window_release_proven", output.getvalue())
+
+    def test_a_descendant_refused_for_its_uid_is_named_once(self):
+        stray = process(self.spawn(["/bin/sleep", "60"]).pid)
+        with patch.object(ownership.sys, "stderr", io.StringIO()) as output:
+            self.children._unrecorded(stray)
+            self.children._unrecorded(stray)
+        self.assertEqual(output.getvalue(), "manager descendant refused for its uid: pid=%d uid=%d comm=sleep\n"
+                         % (stray["pid"], stray["uid"]))
+        self.assertIn((stray["pid"], stray["start"]), self.children.unrecorded)
 
 
 class RefusalNoticeTests(unittest.TestCase):
