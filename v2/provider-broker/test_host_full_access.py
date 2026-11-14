@@ -143,11 +143,20 @@ class HostFullAccessTests(unittest.TestCase):
         from codex_service.profile import host_command
         command = host_command(Path("/opt/example/native"),
                                {"PATH": "/usr/bin:/bin", "HOME": "/home/example"})
-        self.assertEqual(command, ["/usr/bin/env", "-i", "HOME=/home/example", "PATH=/usr/bin:/bin",
+        self.assertEqual(command, ["/usr/bin/env", "-i", "DBUS_SESSION_BUS_ADDRESS=disabled:",
+                                   "HOME=/home/example", "PATH=/usr/bin:/bin",
                                    "/opt/example/native", "app-server", "--listen", "stdio://"])
         for bad in ({"PATH": "/usr/bin"}, {"HOME": "/h", "PATH": "/p", "A=B": "x"}):
             with self.assertRaises(Exception):
                 host_command(Path("/opt/example/native"), bad)
+
+    def test_host_command_keeps_an_operator_configured_session_bus(self):
+        from codex_service.profile import host_command
+        bus = "unix:path=/run/user/1000/bus"
+        command = host_command(Path("/opt/example/native"),
+                               {"PATH": "/usr/bin:/bin", "HOME": "/home/example", "DBUS_SESSION_BUS_ADDRESS": bus})
+        self.assertIn("DBUS_SESSION_BUS_ADDRESS=" + bus, command)
+        self.assertNotIn("DBUS_SESSION_BUS_ADDRESS=disabled:", command)
 
 
 NATIVE = "01a15956-93a3-7730-83a6-84853f05bb69"
@@ -178,6 +187,97 @@ class HostEnvironmentFileTests(unittest.TestCase):
             link.symlink_to(env)
             with self.assertRaises(ContractRefused):
                 host_command(native, {"HOME": "/home/example", "PATH": "/usr/bin:/bin"}, [str(link)])
+
+    def test_session_bus_is_disabled_unless_an_env_file_configures_one(self):
+        import subprocess, tempfile
+        from codex_service.profile import host_command
+        with tempfile.TemporaryDirectory() as root:
+            native = Path(root) / "native"
+            native.write_text("#!/bin/sh\nprintf '%s' \"${DBUS_SESSION_BUS_ADDRESS-unset}\"\n")
+            native.chmod(0o700)
+            env = Path(root) / "tool.env"
+            for text, expected in (("GOG_CLIENT=synthetic\n", "disabled:"),
+                                   ("DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus\n",
+                                    "unix:path=/run/user/1000/bus")):
+                env.write_text(text)
+                env.chmod(0o600)
+                command = host_command(native, {"HOME": "/home/example", "PATH": "/usr/bin:/bin"}, [str(env)])
+                self.assertEqual(subprocess.run(command, capture_output=True, text=True, check=True).stdout, expected)
+
+
+# A disposable non-reaping child subreaper stands in for the broker: it launches
+# the host command, waits only for that native, and counts the dbus-daemons it
+# adopted. The native runs a tool through the ORK-489 gog launcher pattern
+# (`dbus-run-session` when no bus is configured) N times, as a timer turn did.
+SESSION_BUS_REPRODUCTION = r'''
+import ctypes, json, os, subprocess, sys, tempfile, time
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+from codex_service.profile import host_command
+assert ctypes.CDLL(None, use_errno=True).prctl(36, 1, 0, 0, 0) == 0  # PR_SET_CHILD_SUBREAPER
+calls, mode = int(sys.argv[2]), sys.argv[3]
+with tempfile.TemporaryDirectory(prefix="synthetic-session-bus-") as root:
+    tool = Path(root) / "tool"
+    tool.write_text('#!/bin/sh\nif [ -n "${DBUS_SESSION_BUS_ADDRESS:-}" ]; then exec /bin/true; fi\n'
+                    'exec /usr/bin/dbus-run-session -- /bin/true\n')
+    native = Path(root) / "native"
+    native.write_text('#!/bin/sh\ni=0\nwhile [ "$i" -lt %d ]; do "%s"; i=$((i+1)); done\n' % (calls, tool))
+    for path in (tool, native):
+        path.chmod(0o700)
+    environment = {"HOME": root, "PATH": "/usr/bin:/bin"}
+    if mode == "host":
+        command = host_command(native, environment)
+    else:  # negative control: the same native without the host default
+        command = ["/usr/bin/env", "-i", "HOME=" + root, "PATH=/usr/bin:/bin", str(native)]
+    assert subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=60).returncode == 0
+    time.sleep(0.5)
+    own, adopted = os.getpid(), []
+    for entry in os.listdir("/proc"):
+        if not entry.isdigit():
+            continue
+        try:
+            raw = open("/proc/%s/stat" % entry, "rb").read()
+        except OSError:
+            continue
+        close = raw.rindex(b")")
+        if int(raw[close + 2:].split()[1]) == own and raw[raw.index(b"(") + 1:close] == b"dbus-daemon":
+            adopted.append(int(entry))
+    print(json.dumps({"adopted_dbus_daemons": len(adopted)}), flush=True)
+    for pid in adopted:
+        try:
+            os.kill(pid, 15)
+        except ProcessLookupError:
+            pass
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        try:
+            if os.waitpid(-1, os.WNOHANG) == (0, 0):
+                time.sleep(0.02)
+        except ChildProcessError:
+            break
+'''
+
+
+@unittest.skipUnless(Path("/usr/bin/dbus-run-session").exists() and Path("/proc/self/stat").exists(),
+                     "needs Linux /proc and /usr/bin/dbus-run-session")
+class HostSessionBusTests(unittest.TestCase):
+    """ORK-829: N tool calls in a host native leave 0 dbus-daemons under the broker."""
+    CALLS = 6
+
+    def reproduce(self, mode):
+        import json, subprocess, sys
+        result = subprocess.run([sys.executable, "-I", "-S", "-B", "-c", SESSION_BUS_REPRODUCTION,
+                                 str(Path(__file__).resolve().parent), str(self.CALLS), mode],
+                                capture_output=True, text=True, timeout=120,
+                                env={"PATH": "/usr/bin:/bin", "PYTHONDONTWRITEBYTECODE": "1"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return json.loads(result.stdout)["adopted_dbus_daemons"]
+
+    def test_host_native_tool_calls_leave_no_dbus_daemon_under_the_subreaper(self):
+        self.assertEqual(self.reproduce("host"), 0)
+
+    def test_without_the_default_each_call_leaves_a_dbus_daemon(self):
+        self.assertEqual(self.reproduce("control"), self.CALLS)
 
 
 class HostResumeTests(unittest.TestCase):

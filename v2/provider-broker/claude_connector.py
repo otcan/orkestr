@@ -17,6 +17,9 @@ FAST_TOOLS = "Read,Grep,Glob,WebSearch"
 FAST_DISALLOWED_TOOLS = "Bash,Edit,Write,NotebookEdit,WebFetch,Task,Agent,TodoWrite,Skill,SlashCommand"
 FAST_SETTINGS = '{"disableAllHooks":true}'
 EFFORTS = ("low", "medium", "high", "max")
+# Same default as codex_service/profile.py HOST_SESSION_BUS: a host native has
+# no session bus, and an autolaunched one ends up a zombie under the broker.
+HOST_SESSION_BUS = {"DBUS_SESSION_BUS_ADDRESS": "disabled:"}
 
 
 def turn_preferences(source):
@@ -202,7 +205,8 @@ class ClaudeOwnedSession:
             # The real executor environment; the account reference still wins.
             # Each turn is a new process, so detached background tasks would be
             # killed while the turn reports completion (same reason as V1).
-            environment = dict(self._config.host_full_access or self._config.managed_host,
+            # No session bus unless the operator configures one (ORK-829).
+            environment = dict({**HOST_SESSION_BUS, **(self._config.host_full_access or self._config.managed_host)},
                                CLAUDE_CONFIG_DIR=str(self._config.account),
                                CLAUDE_CODE_DISABLE_BACKGROUND_TASKS="1")
 
