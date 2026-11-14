@@ -90,8 +90,7 @@ class PrepareTests(ExportDir, unittest.TestCase):
         cases = {
             "owner upload or unknown manifest": (None, "unavailable"),
             "another conversation": (manifest(conversation=fixture.identity(9)), "unavailable"),
-            "a type WhatsApp does not take": (manifest(media_type="text/html"), "type not supported"),
-            "too large for WhatsApp": (manifest(byte_length=16 * 1024 * 1024 + 1), "over 16 MB"),
+            "too large for WhatsApp": (manifest(byte_length=64 * 1024 * 1024 + 1), "over 64 MB"),
             "removed": (manifest(state="removed"), "unavailable"),
             "digest changed": (manifest(sha256="0" * 64), "unavailable"),
         }
@@ -109,6 +108,29 @@ class PrepareTests(ExportDir, unittest.TestCase):
         (self.exports / CONVERSATION / (SHA + ".zip")).unlink()
         self.assertEqual(reply_files.prepare(Fake(AttachmentPeer()), MARKER),
                          (line % "unavailable", []))
+
+    def test_every_type_becomes_a_descriptor_with_its_canonical_type(self):
+        # ORK-827: no type allowlist. An HTML page, a ZIP, a CSV and a file of
+        # unknown or malformed type each go to WhatsApp; the worker sends them
+        # as documents under their own names (octet-stream when unknown).
+        cases = {
+            "weekly-plan.html": ("text/html", "text/html"),
+            "October package.zip": ("application/zip", "application/zip"),
+            "totals.csv": ("text/csv; charset=utf-8", "text/csv"),
+            "model.weights": ("application/x-unknown-weights", "application/x-unknown-weights"),
+            "blob.bin": ("", "application/octet-stream"),
+            "odd.dat": ("not a type", "application/octet-stream"),
+        }
+        for name, (stored, sent) in cases.items():
+            peer = AttachmentPeer()
+            peer.manifest = manifest(filename=name, media_type=stored)
+            text, files = reply_files.prepare(Fake(peer), "Done.\n" + MARKER)
+            self.assertEqual(text, "Done.", name)
+            self.assertEqual(files, [dict(id=REFERENCE, filename=name, mimetype=sent, size=len(ZIP), sha256=SHA)], name)
+            self.assertNotIn("Not sent on WhatsApp", text, name)
+        self.assertEqual(reply_files.mimetype("Text/HTML ; charset=utf-8"), "text/html")
+        for bad in (None, 7, "", "text", "text/", "/html", "text/html\nX-Injected: 1", "text /html"):
+            self.assertEqual(reply_files.mimetype(bad), "application/octet-stream", bad)
 
     def test_on_by_default_and_an_operator_pause_names_every_file(self):
         with mock.patch.dict(os.environ, {reply_files.SWITCH_ENV: ""}):
@@ -232,6 +254,32 @@ class EndToEndTests(ExportDir, Harness):
         fresh.poll()
         self.assertEqual(fresh.sends, [])
         self.assertEqual(fresh.download(self.remote(1), REFERENCE)[0], 404)
+
+    def test_an_html_page_goes_end_to_end_under_its_own_type(self):
+        # ORK-827: an HTML page, as reported. The adapter serves it with
+        # its own type and the bridge sends it once, under its own name.
+        name = "weekly-plan.html"
+        self.peer.manifest = manifest(filename=name, media_type="text/html")
+        (self.exports / CONVERSATION / (SHA + ".html")).write_bytes(ZIP)
+        marker = MARKER.replace("October package.zip", name)
+        self.ledger.enqueue(dict(publicMessageId="message", publicThreadId="thread-1", chatId="group-1",
+                                 accountId="account", text="Send me the plan"),
+                            author=dict(role="owner", id="owner", label="owner"))
+        worker = self.new_worker()
+        worker.run_once(fixture.Stop())
+        run = self.peer.runs[0, "deep"]
+        self.peer.texts[run["run_id"]] = "Here is the plan.\n\n" + marker
+        run["phase"] = "awaiting_acceptance"
+        self.peer.request("POST", "/accept", body={
+            "run_id": run["run_id"], "completion_event_id": run["acceptance_candidate"]["completion_event_id"],
+            "expected_revision": self.peer.revision, "request_key": "synthetic-core-auto-accept"})
+        worker.run_once(fixture.Stop())
+        (final,) = [m for m in self.ledger.messages() if m["role"] == "assistant"]
+        self.assertEqual(final["text"], "Here is the plan.")
+        self.assertEqual([(a["filename"], a["mimetype"]) for a in final["attachments"]], [(name, "text/html")])
+        bridge = FakeBridge(self, 1)
+        bridge.poll()
+        self.assertEqual([s for s in bridge.sends if s[0] == "media"], [("media", "group-1", name, ZIP)])
 
     def test_marker_lines_never_reach_the_chat_as_text(self):
         self.finish(1, text="Progress note\n" + MARKER)
