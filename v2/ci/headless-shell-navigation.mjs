@@ -20,7 +20,7 @@ const MORE = ['History', 'Projects', 'Timers', 'Job tracker', 'Memory', 'Live ma
 const SLUGS = { Chat: '', Work: '/work', Files: '/files', History: '/history', Projects: '/projects', Timers: '/timers',
   'Job tracker': '/tracker', Memory: '/memory', 'Live map': '/live-map', 'Chat settings': '/settings' };
 // Account and server-wide panels: only in Orkestr settings, never under a chat (ORK-789).
-const OWNER_PANELS = '.owner-password, .vault, .provider-sign-in, [aria-label="Account settings"], [aria-label="About Orkestr"]';
+const OWNER_PANELS = '.owner-password, .credentials-entry, .provider-sign-in, [aria-label="Account settings"], [aria-label="About Orkestr"]';
 const VIEWPORTS = [
   ['1280', { width: 1280, height: 860 }],
   ['1440', { width: 1440, height: 900 }],
@@ -248,7 +248,7 @@ async function globalViews(label) {
   await orkestrSettings(label);
 }
 
-// ORK-789: account, vault, provider sign-in and About are one global page,
+// ORK-789: account, credentials, provider sign-in and About are one global page,
 // opened from the header's Settings (a gear alone on narrow phones).
 async function orkestrSettings(label) {
   const settings = await page.$eval('.global-settings', n => { const r = n.getBoundingClientRect(), s = getComputedStyle(n);

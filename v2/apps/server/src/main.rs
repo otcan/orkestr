@@ -205,6 +205,14 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
             "vault: stored-login configuration refused ({reason}); stored-login reads are off"
         );
     }
+    // Optional: without a file the credentials page manages the built-in vault.
+    state = state.with_credentials_backend(&home);
+    match state.credentials_backend_rejection() {
+        Some(reason) => eprintln!(
+            "credentials: configuration refused ({reason}); the credentials page reports it"
+        ),
+        None => eprintln!("credentials: store {}", state.credentials_backend()),
+    }
     let listener = tokio::net::TcpListener::bind(bind).await?;
     let catalog = match std::env::var_os("ORKESTR_V2_GOOGLE_CATALOG") {
         Some(path) => {

@@ -334,3 +334,20 @@ test('a refused vault address comes back as its 422 message for the form to show
         Response.json({code:'vault_address_required',message},{status:422}));
     assert.deepEqual([result.status,result.body.message],[422,message]);
 });
+
+test('owner credentials routes keep cookie and CSRF and admit only fixed shapes (ORK-826)', async () => {
+    const paths = [['GET','/api/v2/credentials'],['POST','/api/v2/credentials'],['PATCH','/api/v2/credentials/synthetic-search'],
+        ['PUT','/api/v2/credentials/synthetic-search/value'],['DELETE','/api/v2/credentials/synthetic-search?expected_revision=2%3A2026-01-01T00%3A00%3A00Z'],
+        ['PATCH','/api/v2/credentials/vi_Synthetic_01'],['PUT','/api/v2/credentials/vi_Synthetic_01/value'],['DELETE','/api/v2/credentials/vi_Synthetic_01?expected_revision=7']];
+    for (const [method,path] of paths) {
+        await execute({recv:async()=>({...base,method,path,csrf:'synthetic-csrf',body:['POST','PATCH','PUT'].includes(method)?{}:null})},async(actual,options)=>{
+            assert.equal(actual,path);
+            assert.equal(options.credentials,'same-origin');
+            assert.equal(options.headers['x-orkestr-csrf'],method==='GET'?undefined:'synthetic-csrf');
+            return Response.json({ok:true});
+        });
+    }
+    for (const path of ['/api/v2/credentials/../vault/items','/api/v2/credentials/Synthetic','/api/v2/credentials/a/b','/api/v2/credentials/x?expected_revision=a b',
+        '/api/v2/credentials/x/value/extra','/api/v2/credentials?all=1','/api/v2/credentials/x?other=1'])
+        await assert.rejects(execute({recv:async()=>({...base,method:'GET',path})},()=>assert.fail('fetch must not run')),/Invalid API path/);
+});

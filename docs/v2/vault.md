@@ -1,5 +1,8 @@
 # V2 Vault: owner credentials for stored logins (ORK-784)
 
+The owner manages these items on the Credentials page (`credentials.md`,
+ORK-826), which can also use OpenBao as the store instead of this vault.
+
 The V1 app has a password vault (`docs/vault.md`). Its items can only be
 added through a V1 browser session, and the stored-login helper (a root-run
 deployment tool that types a saved login into a managed desk without showing

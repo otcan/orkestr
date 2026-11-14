@@ -312,6 +312,7 @@ pub mod chat_timeline;
 pub mod composer_attachments;
 pub mod conversation_directory;
 pub mod conversation_status;
+pub mod credentials;
 pub mod host_metrics;
 pub mod intelligence;
 pub mod live_map;

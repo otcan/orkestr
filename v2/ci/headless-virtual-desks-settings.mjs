@@ -265,11 +265,11 @@ export async function virtualDesksAndAccountSettings({page, state, conversation,
     await orkestrSettings({page, conversation, clickText, screenshot, label});
 }
 
-// ORK-789: a chat's settings hold only that chat's controls. Password, vault,
+// ORK-789: a chat's settings hold only that chat's controls. Password, credentials,
 // provider sign-in and About are Orkestr settings (`#settings`), a global view
 // that the chat's page (an old bookmark) points to. Ends back on the chat's settings.
 async function orkestrSettings({page, conversation, clickText, screenshot, label}) {
-    const owner = '.owner-password, .vault, .provider-sign-in, [aria-label="Account settings"], [aria-label="About Orkestr"]';
+    const owner = '.owner-password, .credentials-entry, .provider-sign-in, [aria-label="Account settings"], [aria-label="About Orkestr"]';
     assert.equal(await page.$$eval(owner, nodes => nodes.length), 0, 'account and server-wide settings are not under the chat');
     await clickText('Open Orkestr settings');
     await page.waitForSelector('[aria-label="Account settings"] .owner-password');
@@ -282,10 +282,10 @@ async function orkestrSettings({page, conversation, clickText, screenshot, label
         header: document.querySelector('.global-settings')?.getAttribute('aria-current'),
         chat: document.querySelectorAll('#settings-model, .chat-settings').length,
         sections: ['Account settings', 'Provider sign-in', 'About Orkestr'].filter(l => document.querySelector(`.orkestr-settings [aria-label="${l}"]`)),
-        vault: document.querySelectorAll('.orkestr-settings [aria-label="Account settings"] .vault').length,
+        credentials: document.querySelectorAll('.orkestr-settings [aria-label="Account settings"] .credentials-entry').length,
     }));
     const global = {hash: '#settings', scope: 'global', title: 'Orkestr settings', meta: 'Global · shared by all conversations', tabs: 0,
-        header: 'page', chat: 0, sections: ['Account settings', 'Provider sign-in', 'About Orkestr'], vault: 1};
+        header: 'page', chat: 0, sections: ['Account settings', 'Provider sign-in', 'About Orkestr'], credentials: 1};
     assert.deepEqual(await shown(), global);
     assert.equal(await page.$('.conversation-choice[aria-current=page]'), null, 'no conversation is the scope of Orkestr settings');
     await screenshot(label, 'orkestr-settings');

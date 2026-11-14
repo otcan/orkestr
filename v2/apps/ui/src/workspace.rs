@@ -31,6 +31,7 @@ pub fn Workspace(
         Some(Route::Host { .. }) => Tab::Host,
         Some(Route::VirtualDesks) => Tab::VirtualDesks,
         Some(Route::OrkestrSettings) => Tab::OrkestrSettings,
+        Some(Route::Credentials) => Tab::Credentials,
         _ => Tab::Chat,
     });
     let mut host_charts = use_signal(|| matches!(initial, Some(Route::Host { charts: true, .. })));
@@ -106,6 +107,19 @@ pub fn Workspace(
             tab.set(Tab::OrkestrSettings);
         }
     });
+    // Orkestr settings opens Credentials (ORK-826) the same way.
+    let open_credentials = global_views.credentials;
+    let mut seen_credentials = use_signal(|| *open_credentials.peek());
+    use_effect(move || {
+        let requested = open_credentials();
+        if requested != *seen_credentials.peek() {
+            seen_credentials.set(requested);
+            wanted.set(None);
+            linked.set(None);
+            execution.write().select(&current.peek(), "");
+            tab.set(Tab::Credentials);
+        }
+    });
     // The URL follows the view: each change the owner makes is a history entry.
     let mut shown = use_signal(|| None::<Route>);
     use_effect(move || {
@@ -116,6 +130,7 @@ pub fn Workspace(
             },
             None if tab() == Tab::VirtualDesks => Route::VirtualDesks,
             None if tab() == Tab::OrkestrSettings => Route::OrkestrSettings,
+            None if tab() == Tab::Credentials => Route::Credentials,
             None if tab() == Tab::Host => Route::Host {
                 charts: host_charts(),
                 range: host_range(),
@@ -167,6 +182,11 @@ pub fn Workspace(
                     wanted.set(None);
                     linked.set(None);
                     tab.set(Tab::OrkestrSettings);
+                }
+                Route::Credentials => {
+                    wanted.set(None);
+                    linked.set(None);
+                    tab.set(Tab::Credentials);
                 }
                 Route::Host { charts, range } => {
                     linked.set(None);
@@ -383,6 +403,9 @@ pub fn Workspace(
                         } else if tab() == Tab::OrkestrSettings {
                             // Account and server-wide controls: never mounted under a chat (ORK-789).
                             crate::orkestr_settings_view::OrkestrSettings { key: "orkestr-settings-{session_scope.read().generation()}", csrf, session_scope, onexpired }
+                        } else if tab() == Tab::Credentials {
+                            // Owner-wide like Orkestr settings, never under a chat (ORK-826).
+                            crate::credentials_view::Credentials { key: "credentials-{session_scope.read().generation()}", csrf, session_scope, onexpired }
                         } else {
                             crate::chat_settings_view::ChatSettings { key: "settings-{current()}-{session_scope.read().generation()}", conversation: current(), csrf, session_scope, onexpired }
                         }

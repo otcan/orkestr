@@ -24,6 +24,7 @@ fn every_view_round_trips_through_its_fragment() {
         },
         Route::VirtualDesks,
         Route::OrkestrSettings,
+        Route::Credentials,
         Route::V1Thread {
             thread: "group-coordinated".into(),
         },
@@ -245,5 +246,20 @@ fn orkestr_settings_are_global_and_chat_settings_stay_with_the_chat() {
         Route::parse(&format!("#conversation/{ID}/orkestr-settings")),
         None,
         "Orkestr settings never take a conversation's scope"
+    );
+}
+
+#[test]
+fn credentials_are_a_global_page_reached_from_orkestr_settings() {
+    // ORK-826: the owner's passwords, tokens and API keys at `#credentials`,
+    // never inside a conversation's scope.
+    assert_eq!(Route::parse("#credentials"), Some(Route::Credentials));
+    assert_eq!(Route::Credentials.hash(), "#credentials");
+    assert!(Tab::Credentials.is_global() && !Tab::Credentials.in_more());
+    assert_eq!(Tab::Credentials.label(), "Credentials");
+    assert_eq!(
+        Route::parse(&format!("#conversation/{ID}/credentials")),
+        None,
+        "credentials never take a conversation's scope"
     );
 }

@@ -26,7 +26,7 @@ pub fn ChatSettings(
         section { class: "chat-settings", "aria-label": "Chat settings",
             h2 { "Chat settings" }
             div { class: "settings-scope-note",
-                p { "Applies only to this chat. Your password, vault, provider sign-in and installation details are shared by all chats and are in Orkestr settings." }
+                p { "Applies only to this chat. Your password, credentials, provider sign-in and installation details are shared by all chats and are in Orkestr settings." }
                 button { r#type: "button", onclick: move |_| { let mut open = open_settings; open += 1; }, "Open Orkestr settings" }
             }
             ThreadSettings { conversation: conversation.clone(), csrf: csrf.clone(), session_scope, onexpired }

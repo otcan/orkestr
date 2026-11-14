@@ -256,6 +256,16 @@ impl Store {
             .map_err(db)
     }
 
+    /// The owner of a password-signed-in browser session (`kind='browser'`),
+    /// the same check every vault call makes. For owner routes that manage
+    /// credentials in another store (ORK-826).
+    pub async fn vault_owner(&self, credential: &str) -> Result<OwnerId> {
+        let mut tx = self.vault_tx(false).await?;
+        let owner = browser_owner(&mut tx, credential).await?;
+        tx.commit().await.map_err(db)?;
+        Ok(owner)
+    }
+
     pub async fn vault_status(
         &self,
         credential: &str,
