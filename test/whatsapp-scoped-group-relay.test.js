@@ -681,6 +681,20 @@ test('reply files follow the text once each and unresolved files are skipped', a
   assert.equal(new Set(state.sent.map(s => s.requestId)).size, 4);
 });
 
+test('reply files of any type go under their canonical type; one over the limit is named with it (ORK-827)', async t => {
+  const {relay, state} = fixture(t, false, false, {replyMediaRoot: '/srv/uploads'});
+  const final = {...answer('final'), attachments: [{id: 'att-1'}, {id: 'att-2'}, {id: 'att-3', filename: 'scan.tiff', size: 64 * 1024 * 1024 + 1}]};
+  state.pages['/api/threads/thread-1/messages?limit=200'] = {messages: [final]};
+  const file = (filename, mimetype) => ({path: `/srv/uploads/thread-1/artifacts/abc-${filename}`, filename, mimetype, sha256: 'a'.repeat(64)});
+  state.pages['/api/threads/thread-1/messages/final/scoped-relay-files'] = {files: [
+    {id: 'att-1', ...file('weekly-plan.html', 'Text/HTML; charset=utf-8')}, {id: 'att-2', ...file('model.weights', '')}]};
+  await relay.tick();
+  await relay.tick();
+  assert.deepEqual(state.sent.map(s => s.text ?? [s.file.filename, s.file.mimetype]), ['agent: answer',
+    ['weekly-plan.html', 'text/html'], ['model.weights', 'application/octet-stream'],
+    'Not sent on WhatsApp: scan.tiff (over 64 MB). It is in the Orkestr app.']);
+});
+
 test('without a media root, reply files are not sent', async t => {
   const {relay, state} = fixture(t);
   state.pages['/api/threads/thread-1/messages?limit=200'] = {messages: [{...answer('final'), attachments: [{id: 'att-1'}]}]};

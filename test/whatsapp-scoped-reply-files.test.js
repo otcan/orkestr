@@ -6,11 +6,11 @@ import path from 'node:path';
 import test from 'node:test';
 import {createScopedGroupTransport} from '../packages/connectors/src/whatsapp-scoped-group-transport.js';
 import {createScopedNativeWorkerPolicy} from '../packages/connectors/src/whatsapp-scoped-native-worker.js';
-import {readReplyFile, validReplyFileShape} from '../packages/connectors/src/whatsapp-scoped-reply-files.js';
+import {SCOPED_FILE_MAX_BYTES, readReplyFile, scopedFileMimetype, scopedFileSendKind, validReplyFileShape} from '../packages/connectors/src/whatsapp-scoped-reply-files.js';
 
 const sha = data => crypto.createHash('sha256').update(data).digest('hex');
 
-function snapshot(t, threadId = 'thread-1', data = Buffer.from('%PDF-1.7 report'), name = 'report.pdf') {
+function snapshot(t, threadId = 'thread-1', data = Buffer.from('%PDF-1.7 report'), name = 'report.pdf', mimetype = 'application/pdf') {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'reply-files-'));
   t.after(() => fs.rmSync(root, {recursive: true, force: true}));
   const dir = path.join(root, threadId, 'artifacts');
@@ -18,7 +18,7 @@ function snapshot(t, threadId = 'thread-1', data = Buffer.from('%PDF-1.7 report'
   const digest = sha(data);
   const file = path.join(dir, `${digest}-${name}`);
   fs.writeFileSync(file, data);
-  return {root, data, file: {path: file, filename: name, mimetype: 'application/pdf', sha256: digest}};
+  return {root, data, file: {path: file, filename: name, mimetype, sha256: digest}};
 }
 
 test('a reply file is read only from its own thread snapshot with a matching digest', t => {
@@ -38,7 +38,9 @@ test('a reply file is read only from its own thread snapshot with a matching dig
     [{...file, path: outside}, 'thread-1'],
     [{...file, path: link}, 'thread-1'],
     [{...file, sha256: sha('other')}, 'thread-1'],
-    [{...file, mimetype: 'application/x-sh'}, 'thread-1'],
+    [{...file, mimetype: 'not a type'}, 'thread-1'],
+    [{...file, mimetype: 'Application/PDF'}, 'thread-1'],
+    [{...file, mimetype: ''}, 'thread-1'],
     [{...file, filename: '../x.pdf'}, 'thread-1'],
     [{...file, path: 'relative.pdf'}, 'thread-1'],
     [{...file, extra: true}, 'thread-1'],
@@ -55,10 +57,30 @@ test('the worker accepts send-file only for listed groups and with a media root'
   assert.throws(() => createScopedNativeWorkerPolicy(config).checkRequest('POST', url('/send-file'), body), /denied/);
   const p = createScopedNativeWorkerPolicy({...config, replyMediaRoot: '/srv/uploads'});
   p.checkRequest('POST', url('/send-file'), body);
-  for (const patch of [{to: '120000000002@g.us'}, {accountId: 'other'}, {mimetype: 'application/x-sh'}, {sha256: 'x'},
+  for (const patch of [{to: '120000000002@g.us'}, {accountId: 'other'}, {mimetype: 'text/html\r\nx: 1'}, {mimetype: ''}, {sha256: 'x'},
     {path: 'relative'}, {parentId: undefined}, {notificationId: 'f1'}, {text: 'caption'}])
     assert.throws(() => p.checkRequest('POST', url('/send-file'), {...body, ...patch}), /denied/);
   assert.equal(validReplyFileShape({path: body.path, filename: body.filename, mimetype: body.mimetype, sha256: body.sha256}), true);
+  // Any type in canonical form passes (ORK-827), including ones the worker never saw before.
+  for (const mimetype of ['text/html', 'application/zip', 'text/csv', 'application/octet-stream', 'application/x-msdownload', 'model/gltf+json'])
+    p.checkRequest('POST', url('/send-file'), {...body, filename: 'a.file', mimetype});
+});
+
+test('every type has a canonical form and a send kind; only inline media up to 16 MB stays media', () => {
+  assert.equal(scopedFileMimetype('Text/HTML; charset=utf-8'), 'text/html');
+  assert.equal(scopedFileMimetype('application/zip'), 'application/zip');
+  for (const bad of [undefined, null, '', 'text', 'text/', '/html', 'text /html', 'text/html\nx: 1', 7])
+    assert.equal(scopedFileMimetype(bad), 'application/octet-stream', String(bad));
+  const MB = 1024 * 1024;
+  assert.equal(scopedFileSendKind({mimetype: 'image/jpeg', size: 2 * MB}), 'image');
+  assert.equal(scopedFileSendKind({mimetype: 'image/png', size: 16 * MB}), 'image');
+  assert.equal(scopedFileSendKind({mimetype: 'video/mp4', size: MB}), 'video');
+  assert.equal(scopedFileSendKind({mimetype: 'audio/mpeg', size: MB}), 'audio');
+  for (const mimetype of ['image/png', 'video/mp4', 'audio/ogg'])
+    assert.equal(scopedFileSendKind({mimetype, size: 16 * MB + 1}), 'document', `${mimetype} over 16 MB`);
+  for (const mimetype of ['text/html', 'application/zip', 'text/csv', 'application/octet-stream', 'image/svg+xml', 'image/gif', 'video/quicktime', 'audio/wav'])
+    assert.equal(scopedFileSendKind({mimetype, size: MB}), 'document', mimetype);
+  assert.equal(SCOPED_FILE_MAX_BYTES, 64 * MB);
 });
 
 test('a reply file is one journaled send with the reply parent, dedupe and conflict rules', async t => {
@@ -88,4 +110,50 @@ test('a reply file is one journaled send with the reply parent, dedupe and confl
   t.after(() => noRoot.close());
   await noRoot.observe(client, {id: {_serialized: 'owner-1'}, fromMe: true, to: group, body: 'send the pdf', timestamp: now / 1000});
   await assert.rejects(noRoot.sendFile(client, group, file, 'main', request, media), /scope_denied/);
+});
+
+test('an HTML page, a ZIP, a CSV and an unknown type each go as a document under their own name; photos stay media', async t => {
+  const now = Date.now(), own = '15550000001@c.us', group = '120000000001@g.us';
+  const cases = [
+    ['weekly-plan.html', 'text/html', Buffer.from('<!doctype html><title>Plan</title>'), 'document'],
+    ['October package.zip', 'application/zip', Buffer.from('PK\x03\x04 synthetic'), 'document'],
+    ['totals.csv', 'text/csv', Buffer.from('a,b\n1,2\n'), 'document'],
+    ['model.weights', 'application/octet-stream', Buffer.from([0, 1, 2, 3]), 'document'],
+    ['chart.png', 'image/png', Buffer.from('\x89PNG synthetic'), 'image'],
+    ['clip.mp4', 'video/mp4', Buffer.from('synthetic mp4'), 'video'],
+  ];
+  let n = 0;
+  for (const [name, mimetype, bytes, kind] of cases) {
+    const {root, data, file} = snapshot(t, 'thread-1', bytes, name, mimetype);
+    const config = {ownChatId: own, activatedAt: new Date(now - 1000).toISOString(), groups: [{chatId: group, threadId: 'thread-1'}], replyMediaRoot: root};
+    const p = createScopedGroupTransport({config, token: 'test-token', base: {}, dbPath: ':memory:', now: () => now});
+    t.after(() => p.close());
+    const calls = [];
+    const client = {info: {wid: {_serialized: own}}, sendMessage: async (to, content, options) => {
+      calls.push({to, content, options}); return {id: {_serialized: `agent-${++n}`}};
+    }};
+    await p.observe(client, {id: {_serialized: 'owner-1'}, fromMe: true, to: group, body: 'send it', timestamp: now / 1000});
+    const sent = await p.sendFile(client, group, file, 'main', {requestId: `f-${n + 1}`, parentId: 'owner-1'}, m => ({media: m}));
+    assert.equal(sent.ids.length, 1, name);
+    assert.equal(calls.length, 1, name);
+    assert.deepEqual(calls[0].options, {sendSeen: false, sendMediaAsDocument: kind === 'document'}, name);
+    assert.equal(calls[0].content.media.filename, name);
+    assert.equal(calls[0].content.media.mimetype, mimetype);
+    assert.deepEqual(Buffer.from(calls[0].content.media.data, 'base64'), data, name);
+  }
+});
+
+test('a document whose send returns no model is confirmed by its own filename', async t => {
+  const now = Date.now(), own = '15550000001@c.us', group = '120000000001@g.us';
+  const {root, file} = snapshot(t, 'thread-1', Buffer.from('<p>plan</p>'), 'plan.html', 'text/html');
+  const config = {ownChatId: own, activatedAt: new Date(now - 1000).toISOString(), groups: [{chatId: group, threadId: 'thread-1'}], replyMediaRoot: root};
+  const p = createScopedGroupTransport({config, token: 'test-token', base: {}, dbPath: ':memory:', now: () => now, sendLookupDelayMs: 1});
+  t.after(() => p.close());
+  const sentAt = Math.floor(now / 1000);
+  const own_ = (type, filename, id) => ({id: {_serialized: id}, fromMe: true, timestamp: sentAt, ack: 1, type, _data: {filename}});
+  const client = {info: {wid: {_serialized: own}}, sendMessage: async () => undefined,
+    getChatById: async () => ({fetchMessages: async () => [own_('document', 'other.html', 'x-1'), own_('document', 'plan.html', 'x-2')]})};
+  await p.observe(client, {id: {_serialized: 'owner-1'}, fromMe: true, to: group, body: 'send it', timestamp: now / 1000});
+  const sent = await p.sendFile(client, group, file, 'main', {requestId: 'f-plan', parentId: 'owner-1'}, m => ({media: m}));
+  assert.deepEqual(sent.ids, ['x-2']);
 });

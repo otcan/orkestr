@@ -14,7 +14,7 @@ import {downloadScopedGroupMedia} from './whatsapp-scoped-group-media.js';
 import {validateCoordinatorConfig, coordinatorTokenMatches, createCoordinatorAccess} from './whatsapp-scoped-coordinator.js';
 import {validateDelegatesConfig, delegateForBearer, createDelegateAccess} from './whatsapp-scoped-delegates.js';
 import {DYNAMIC_GROUPS_TABLE, createDynamicGroupView, validateDynamicGroups} from './whatsapp-scoped-dynamic-groups.js';
-import {encodeReplyFile, readReplyFile} from './whatsapp-scoped-reply-files.js';
+import {encodeReplyFile, readReplyFile, scopedFileSendKind} from './whatsapp-scoped-reply-files.js';
 
 const fail=code=>{throw new Error(`group_transport_${code}`);};
 const hash=value=>crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -270,6 +270,7 @@ export function createScopedGroupTransport({config,token,base,dbPath=config.jour
     // A file the assistant attached to a reply, read from the group's own
     // thread snapshot (`replyMediaRoot`) and checked against its digest. Same
     // journaled send as a text: parent authorization, dedupe, uncertainty.
+    // Any type: inline photo/video/audio, otherwise a document (ORK-827).
     sendFile(client,to,file,accountId,request={},createMedia) {
       let data=null;
       const group=groups.get(to);
@@ -278,11 +279,12 @@ export function createScopedGroupTransport({config,token,base,dbPath=config.jour
           data=readReplyFile(file,{root:config.replyMediaRoot,threadId:group.threadId});
       } catch {data=null;}
       const valid=Boolean(data);
-      const image=valid && file.mimetype.startsWith('image/');
+      const kind=valid ? scopedFileSendKind({mimetype:file.mimetype,size:data.length}) : 'document';
       return deliver(client,to,valid ? encodeReplyFile(file) : '',accountId,request,()=>client.sendMessage(to,
         createMedia({mimetype:file.mimetype,data:data.toString('base64'),filename:file.filename}),
-        {sendSeen:false,sendMediaAsDocument:!image}),valid,
-        message=>image ? message?.type==='image' : message?.type==='document' && message?._data?.filename===file?.filename);
+        {sendSeen:false,sendMediaAsDocument:kind==='document'}),valid,
+        message=>kind==='document' ? message?.type==='document' && message?._data?.filename===file?.filename
+          : kind==='audio' ? ['audio','ptt'].includes(message?.type) : message?.type===kind);
     },
     policyFields(buildHash) {return {version:1,transportOnly:true,groupsOnly:true,groupCount:groups.size,dynamicGroups:Boolean(dynamic),additionalOwnerAuthors:authors.count,participantGroups:participants.count,timerNotifications:!!scope,operatorNotices:!!operator,routeFence:!!routeFence,sendAttempts:1,textOnly:true,maxTextLength:SCOPED_SEND_MAX_TEXT_LENGTH,markSeen:false,automaticRouting:false,strictBearer:true,coordinator:!!coordinatorAccess,delegates:delegates?delegates.size:0,buildHash};},
     diagnostics(client,buildHash) {return {identityMatches:client?.info?.wid?._serialized===config.ownChatId,...this.policyFields(buildHash)};},
