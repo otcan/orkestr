@@ -8,18 +8,16 @@
 `attach` stores the files in this conversation's attachment store and prints
 one marker line per file on stdout. End the reply with those lines, unchanged,
 each on its own line: the web chat shows each as an attachment card, and the
-WhatsApp adapter sends the files with the reply to this chat's own group (as a
-document, or as an image for PNG/JPEG/WebP). `check` validates only and sends
-nothing.
+WhatsApp adapter sends the files with the reply to this chat's own group, of
+any type (photos, videos and audio as media, every other file as a document).
+`check` validates only and sends nothing.
 
 * FILE is a path inside --workspace (relative to it, or absolute under it).
   `..`, hidden names, and symbolic links anywhere in the path are refused, as
   are secret-looking folders (.ssh, secrets, credentials, vault, tokens ...).
 * Any file the attachment store takes: 1 byte to 16 MiB in all, at most 8 files
-  per reply. The web chat shows every file; WhatsApp gets the ones it can carry
-  (pdf, docx, xlsx, xls, pptx, csv, txt, md, png, jpg/jpeg, webp, zip) and the
-  reply names any other one plainly. Secret-looking files (.pem, .key, id_rsa,
-  credentials.json ...) are refused.
+  per reply. The web chat and WhatsApp both get every file, of any type.
+  Secret-looking files (.pem, .key, id_rsa, credentials.json ...) are refused.
 * Idempotent: the request key comes from the conversation and the files'
   names and contents, so a retry stores nothing new and prints the same lines.
   After a failure, rerun the same command (or pass the printed --request-key).
@@ -52,8 +50,9 @@ GRANT_HEADER = 'X-Orkestr-Agent-Timer-Grant'
 ERROR_EXIT = 2
 MAX_BYTES = 16 * 1024 * 1024
 MAX_FILES = 8
-# The types the WhatsApp worker sends (whatsapp-scoped-reply-files.js), by
-# extension; any other file gets its usual type and shows in the web chat only.
+# The type the server requires for these extensions (AGENT_ATTACHMENT_TYPES in
+# agent_attachments.rs); any other file gets its usual type. WhatsApp gets
+# every file either way (ORK-827).
 TYPES = {
     'pdf': 'application/pdf',
     'xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
@@ -102,8 +101,8 @@ The command prints one line per file, like
 `[orkestr-attachment manifest=... reference=... name="report.pdf"]`.
 End your reply with exactly those lines, unchanged, each on its own line
 (not in a code block, not translated). The web chat shows them as attachment
-cards and WhatsApp receives the files it can carry with your reply, in this
-chat only; the reply names any other file plainly.
+cards and WhatsApp receives every file with your reply, of any type, in this
+chat only.
 Mention the files by name in your text; do not add their paths.
 
 Only files inside the workspace (no `..`, hidden or secret folders, or
@@ -165,7 +164,7 @@ def relative_parts(workspace, raw):
 
 
 def media_type(name):
-    """The WhatsApp type for its extensions, else the usual type, else bytes."""
+    """The server's type for its extensions, else the usual type, else bytes."""
     extension = name.rsplit('.', 1)[-1].lower() if '.' in name else ''
     guess = TYPES.get(extension) or mimetypes.guess_type(name, strict=False)[0]
     return guess if guess and MEDIA.match(guess) else 'application/octet-stream'

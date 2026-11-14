@@ -18,13 +18,14 @@ pub const AGENT_ATTACHMENT_REQUEST_PREFIX: &str = "agent-attach:";
 pub const AGENT_ATTACHMENT_MARKER_PREFIX: &str = "[orkestr-attachment manifest=";
 /// Files of one reply, over all its markers (the web chat shows at most 8).
 pub const AGENT_ATTACHMENT_FILES_MAX: usize = 8;
-/// What the WhatsApp worker sends (`whatsapp-scoped-reply-files.js`): 16 MiB.
+/// Files of one reply in all: the attachment store's limit (`ATTACHMENT_MAX_BYTES`).
+/// The WhatsApp worker takes up to 64 MB per file (`whatsapp-scoped-reply-files.js`).
 pub const AGENT_ATTACHMENT_BYTES_MAX: usize = 16 * 1024 * 1024;
 
-/// File types WhatsApp carries, by lowercase extension: exactly the types the
-/// WhatsApp worker sends as a document or image. An agent may attach any other
-/// file the attachment store takes (ORK-787); it shows in the web chat, and the
-/// WhatsApp text names it as not sent.
+/// Common file types by lowercase extension: a file with one of these
+/// extensions must carry that type. An agent may attach any other file the
+/// attachment store takes (ORK-787). WhatsApp gets every file, of any type,
+/// as media or as a document (ORK-827).
 pub const AGENT_ATTACHMENT_TYPES: &[(&str, &str)] = &[
     ("pdf", "application/pdf"),
     (
