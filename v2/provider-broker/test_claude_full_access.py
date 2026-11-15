@@ -51,7 +51,21 @@ class FullAccessConfigurationTests(unittest.TestCase):
             self.assertEqual(environment["HOME"], "/home/example")
             self.assertEqual(environment["CLAUDE_CONFIG_DIR"], str(root / "account"))
             self.assertEqual(environment["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"], "1")
+            self.assertEqual(environment["DBUS_SESSION_BUS_ADDRESS"], "disabled:")  # ORK-829
             self.assertGreater(session.max_provider_frame, 65536)
+
+    def test_host_environment_keeps_an_operator_configured_session_bus(self):
+        bus = "unix:path=/run/user/1000/bus"
+        with tempfile.TemporaryDirectory(prefix="claude-full-access-") as root:
+            root = Path(root).resolve()
+            config = ClaudeConfiguration.load(self.write(
+                root, host_full_access={"environment": dict(ENVIRONMENT, DBUS_SESSION_BUS_ADDRESS=bus)}))
+            self.assertEqual(config.new_session().environment()["DBUS_SESSION_BUS_ADDRESS"], bus)
+
+    def test_contained_environment_is_unchanged(self):
+        with tempfile.TemporaryDirectory(prefix="claude-full-access-") as root:
+            session = ClaudeConfiguration.load(self.write(Path(root).resolve())).new_session()
+            self.assertNotIn("DBUS_SESSION_BUS_ADDRESS", session.environment())
 
     def test_owner_model_and_effort_reach_native_environment_closed(self):
         from claude_connector import turn_preferences

@@ -165,3 +165,15 @@ use is a tool account's variables, such as `GOG_*` for Gmail. Values never
 appear in an argv, plan, package or log. The broker refuses any file that is
 not a regular file owned by the service user with no group or other access.
 Write each file in POSIX shell syntax (`KEY='value'`).
+
+### No session bus for host providers
+
+Host Codex and Claude providers start with
+`DBUS_SESSION_BUS_ADDRESS=disabled:` unless `environment` or an environment
+file sets the variable (ORK-829). A host native has no login session, so a
+tool that finds no bus address starts its own. Old godbus clients start one
+that never exits. A `dbus-run-session` wrapper stops its bus but does not wait
+for it, so the dead bus is re-parented to the broker, a child subreaper that
+reaps only when the session ends. A timer turn that made about 160 `gog` calls
+left 160 zombie `dbus-daemon`s until the turn ended. With `disabled:`, such
+clients fail fast and start nothing.

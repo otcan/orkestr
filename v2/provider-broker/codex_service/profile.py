@@ -302,9 +302,20 @@ def reachable_allow_rules(home, system=SYSTEM_CODEX):
     return found
 
 
+# A host native has no login session, so it has no session bus. When the
+# address is unset, an old godbus client autolaunches a bus that never exits,
+# and a per-call `dbus-run-session` bus is signalled but never waited for. That
+# bus is orphaned to the broker, a child subreaper that reaps only when the
+# session ends, so every tool call left a zombie dbus-daemon for the rest of
+# the turn (ORK-829). `disabled:` makes such clients fail fast instead. An
+# operator environment, or a sourced environment file, may still set a bus.
+HOST_SESSION_BUS = {"DBUS_SESSION_BUS_ADDRESS": "disabled:"}
+
+
 def host_command(native, environment, environment_files=(), options=(), pinned=None):
     """No namespace, seccomp, egress proxy or mounts: `env -i` installs exactly
-    the operator's real executor environment before the pinned native.
+    the operator's real executor environment before the pinned native, with
+    the session bus disabled unless that environment configures one.
 
     Private environment files (for example a tool account's credentials) are
     sourced by a POSIX shell just before `exec`, so their values never appear
@@ -314,7 +325,8 @@ def host_command(native, environment, environment_files=(), options=(), pinned=N
         type(k) is str and type(v) is str and k and "=" not in k and "\0" not in k + v
         for k, v in environment.items()), "host_environment")
     files = [private_environment_file(path) for path in environment_files]
-    command = ["/usr/bin/env", "-i", *(f"{k}={v}" for k, v in sorted(environment.items()))]
+    installed = {**HOST_SESSION_BUS, **environment}
+    command = ["/usr/bin/env", "-i", *(f"{k}={v}" for k, v in sorted(installed.items()))]
     if files:
         script = 'set -a; for f in ' + " ".join('"$%d"' % (i + 1) for i in range(len(files))) + \
             '; do . "$f"; done; set +a; shift %d; exec "$@"' % len(files)
