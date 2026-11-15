@@ -49,7 +49,7 @@ rename it over the old one). The server reads it only when its custody holds:
 | `kind` | `static` (a published folder) or `app`. |
 | `conversation_id` | The publishing chat's conversation id (hyphenated UUID), or `null` for a site no chat published. |
 | `published_at_ms` | The last publish, milliseconds since the epoch, not negative. |
-| `version` | Optional label of the live version, at most 64 printable ASCII characters (otherwise treated as absent). |
+| `version` | Optional label of the live version: 1 to 64 visible ASCII characters, no spaces (otherwise treated as absent). |
 | `versions` | Optional count of published versions (absent or `null` = 0). |
 | `status` | `live`, or `disabled` (listed greyed, with no Open link). |
 
@@ -82,7 +82,8 @@ Error codes: `custody_rejected` (owner, mode, links or file type),
 `unreadable`, `too_large`, `invalid_json` (not JSON, or a required top-level
 field is missing or of the wrong type), `unknown_format`, `too_many_sites`.
 The server logs a refusal once (`sites: catalog refused (<code>) ...`), and
-again only after the file was usable in between or the reason changed.
+again only when the reason changes or after the file was usable (or absent)
+in between.
 
 `/api/v2/health` lists the feature `sites_v1`.
 

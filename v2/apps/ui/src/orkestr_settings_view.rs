@@ -29,7 +29,7 @@ pub fn OrkestrSettings(
                     }, "Open credentials" }
                 }
                 // Sites and apps the owner's chats published (ORK-834).
-                div { class: "credentials-entry sites-entry", role: "group", "aria-label": "Sites",
+                div { class: "sites-entry", role: "group", "aria-label": "Sites",
                     h3 { "Sites" }
                     p { "Web pages and apps your chats published, which chat published each one and when, with a link to open it." }
                     button { r#type: "button", onclick: move |_| {

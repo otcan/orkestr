@@ -138,9 +138,9 @@
 .global-settings svg { flex: none; }
 .orkestr-settings { max-width: 44rem; }
 .settings-scope-intro, .settings-scope { color: var(--muted); }
-.credentials-entry { margin: .9rem 0; padding: .8rem 1rem; border: 1px solid var(--border); border-radius: .7rem; }
-.credentials-entry h3 { margin: 0 0 .25rem; }
-.credentials-entry p { margin: 0 0 .6rem; color: var(--muted); }
+.credentials-entry, .sites-entry { margin: .9rem 0; padding: .8rem 1rem; border: 1px solid var(--border); border-radius: .7rem; }
+.credentials-entry h3, .sites-entry h3 { margin: 0 0 .25rem; }
+.credentials-entry p, .sites-entry p { margin: 0 0 .6rem; color: var(--muted); }
 .settings-scope-note { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem .8rem; }
 .settings-scope-note p { flex: 1 1 18rem; margin: 0; color: var(--muted); }
 .settings-scope-note button { flex: none; margin: 0; }
@@ -167,7 +167,6 @@
 .heading-site-link:hover { background: var(--accent-soft); border-color: transparent; }
 .heading-site-link svg { flex: none; }
 .heading-site-more { min-height: 2.4rem; min-width: 2.4rem; padding: .2rem .55rem; border-radius: 1.2rem; font-size: .78rem; color: var(--muted); }
-.sites-entry { margin-top: 0; }
 @media (max-width: 52rem) {
  .heading-site-link, .heading-site-more { min-height: 44px; }
  .heading-site-more { min-width: 44px; }
