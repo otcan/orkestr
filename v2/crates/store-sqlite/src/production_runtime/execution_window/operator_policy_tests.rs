@@ -2,7 +2,7 @@
 use super::*;
 use crate::OperatorProviderPolicy;
 
-async fn ready() -> (
+pub(super) async fn ready() -> (
     Pending,
     Store,
     ExecutionWindowRequest,
@@ -42,7 +42,7 @@ async fn operator_policy_handoff_keeps_exact_new_input_queued_and_attests_separa
             .is_err(),
         "ordinary owner handoff must still reject queued input"
     );
-    let receipt = store
+    let (receipt, superseded) = store
         .handoff_provider_for_operator_policy(
             &w.browser_credential,
             &w.f.conversation,
@@ -51,6 +51,7 @@ async fn operator_policy_handoff_keeps_exact_new_input_queued_and_attests_separa
         )
         .await
         .unwrap();
+    assert!(superseded.is_empty());
     assert_eq!(receipt.to_provider, ConversationProvider::Codex);
     assert!(store
         .execution_window_provider_handoff_pending_authenticated(
@@ -76,7 +77,7 @@ async fn operator_policy_handoff_keeps_exact_new_input_queued_and_attests_separa
             )
             .await
             .unwrap(),
-        receipt
+        (receipt.clone(), Vec::new())
     );
     let state: (String, Option<String>) =
         sqlx::query_as("SELECT state,admitted_run_id FROM reasoning_inbox WHERE message_id=?")
@@ -127,7 +128,7 @@ async fn operator_policy_handoff_keeps_exact_new_input_queued_and_attests_separa
 
 #[tokio::test]
 async fn operator_policy_handoff_refuses_unknown_source_other_pending_work_and_retired_input() {
-    let (p, store, _current, mut proof, request) = ready().await;
+    let (p, store, current, mut proof, request) = ready().await;
     let w = &p.w;
     proof.source_commit = "unknown".into();
     assert!(store
@@ -150,6 +151,11 @@ async fn operator_policy_handoff_refuses_unknown_source_other_pending_work_and_r
         )
         .await
         .is_err());
+    // Earlier queued intent is work ahead of the later source (ORK-837).
+    store
+        .enqueue_execution_window_authenticated(&w.browser_credential, &w.f.conversation, &current)
+        .await
+        .unwrap();
     let another = input(&w.f, "synthetic-other-pending").await;
     proof.source_message_id = another.input_message_id;
     assert!(store
@@ -189,7 +195,7 @@ async fn operator_policy_receipt_proof_drift_and_foreign_auth_never_replay_or_re
         )
         .await
         .is_err());
-    let receipt = store
+    let (receipt, _) = store
         .handoff_provider_for_operator_policy(
             &w.browser_credential,
             &w.f.conversation,

@@ -34,14 +34,31 @@ pub(crate) fn proof(
 ) -> Result<orkestr_v2_store_sqlite::OperatorProviderPolicy, &'static str> {
     use sha2::{Digest, Sha256};
     let bytes = serde_json::to_vec(policy).map_err(|_| "provider policy identity unavailable")?;
-    let source = crate::build_identity::identity()["source_commit"]
-        .as_str()
-        .unwrap_or("unknown")
-        .to_owned();
     Ok(orkestr_v2_store_sqlite::OperatorProviderPolicy {
         source_message_id: message,
         policy_sha256: format!("{:x}", Sha256::digest(bytes)),
-        source_commit: source,
+        source_commit: source_commit(),
         rule_ids: rules,
     })
+}
+
+/// The embedded build source; an unpinned build reports `unknown`.
+fn source_commit() -> String {
+    // Unit tests are unpinned builds. One test task may model a qualified
+    // build; nothing outside `cfg(test)` can set it.
+    #[cfg(test)]
+    if let Ok(source) = TEST_SOURCE_COMMIT.try_with(|source| (*source).to_owned()) {
+        return source;
+    }
+    crate::build_identity::identity()["source_commit"]
+        .as_str()
+        .unwrap_or("unknown")
+        .to_owned()
+}
+
+#[cfg(test)]
+tokio::task_local! {
+    /// Test only: the qualified source commit of a synthetic build, scoped to
+    /// one test task.
+    pub(crate) static TEST_SOURCE_COMMIT: &'static str;
 }

@@ -463,6 +463,11 @@ impl Controller {
         window: &ExecutionWindowStatus,
         retired_only: bool,
     ) -> bool {
+        // A unit test process has no root manager parent to answer.
+        #[cfg(test)]
+        if let Ok(released) = super::TEST_MANAGER_RELEASED.try_with(|released| *released) {
+            return released;
+        }
         let Ok(manager) = self
             .manager
             .for_conversation(window.conversation_id.clone())

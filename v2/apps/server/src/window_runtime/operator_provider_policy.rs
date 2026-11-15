@@ -89,9 +89,12 @@ impl Controller {
                 .enqueue_execution_window_authenticated(browser, conversation, input)
                 .await
                 .map_err(|_| "provider policy original intent preservation refused")?;
+            // A new durable intent wakes the dispatcher. A dispatcher pass
+            // re-evaluating its own row never wakes itself (ORK-837): a
+            // waiting or refused switch would otherwise spin without pause.
+            self.queue.remember(browser);
+            self.queue.wake();
         }
-        self.queue.remember(browser);
-        self.queue.wake();
         // Reuse ordinary idle retirement, including all original native reap
         // witnesses. The new triggering message has not joined the old window.
         if window.state != ExecutionWindowState::Closed {
@@ -132,10 +135,21 @@ impl Controller {
             acknowledge_new_native_session: true,
             history_summary: summary,
         };
-        self.store
+        let (_, superseded) = self
+            .store
             .handoff_provider_for_operator_policy(browser, conversation, &request, &proof)
             .await
-            .map_err(|_| "provider policy handoff refused")?;
+            .map_err(|error| match error {
+                // Work ahead of or in flight with the source (ORK-837). The
+                // source stays queued; dispatch retries after that work.
+                RuntimeStoreError::Fenced => POLICY_HANDOFF_BLOCKED,
+                _ => "provider policy handoff refused",
+            })?;
+        // Withdrawn and retired with the switch: results for a turn of the
+        // previous provider generation, which no new session ever issued.
+        for event in superseded {
+            eprintln!("ALERT orkestr-v2-server window_queue_withdrawn conversation={conversation} event={event} cause=provider_policy_handoff");
+        }
         self.forget(conversation)?;
         self.queue.remember(browser);
         self.queue.wake();

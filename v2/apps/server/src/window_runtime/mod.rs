@@ -14,7 +14,9 @@ pub(crate) mod handles;
 pub(crate) mod initial;
 mod integers;
 pub(crate) mod manager_client;
-pub(crate) use controller::{Controller, HandoffError, ReconcileError, WindowOutcome};
+pub(crate) use controller::{
+    Controller, HandoffError, ReconcileError, WindowOutcome, POLICY_HANDOFF_BLOCKED,
+};
 
 #[cfg(test)]
 mod closed_idle_process_tests;

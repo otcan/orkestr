@@ -90,15 +90,19 @@ impl Store {
     ) -> Result<ProviderHandoffReceipt> {
         self.handoff_provider_with_policy(browser, conversation, request, None)
             .await
+            .map(|(receipt, _)| receipt)
     }
 
+    /// The standing operator switch (ORK-837). Returns the receipt and the
+    /// queued successors fenced to the previous provider generation that this
+    /// transaction withdrew and retired, in queue order (empty on replay).
     pub async fn handoff_provider_for_operator_policy(
         &self,
         browser: &str,
         conversation: &ConversationId,
         request: &ProviderHandoffRequest,
         proof: &super::operator_policy::OperatorProviderPolicy,
-    ) -> Result<ProviderHandoffReceipt> {
+    ) -> Result<(ProviderHandoffReceipt, Vec<EventId>)> {
         self.handoff_provider_with_policy(browser, conversation, request, Some(proof))
             .await
     }
@@ -109,7 +113,7 @@ impl Store {
         conversation: &ConversationId,
         request: &ProviderHandoffRequest,
         policy: Option<&super::operator_policy::OperatorProviderPolicy>,
-    ) -> Result<ProviderHandoffReceipt> {
+    ) -> Result<(ProviderHandoffReceipt, Vec<EventId>)> {
         if !request.is_valid() || policy.is_some_and(|proof| !proof.valid(true)) {
             return Err(RuntimeStoreError::InvalidInput);
         }
@@ -135,7 +139,7 @@ impl Store {
                 }
             }
             tx.commit().await.map_err(db)?;
-            return Ok(receipt);
+            return Ok((receipt, Vec::new()));
         }
         let window = sqlx::query("SELECT w.*,s.namespace,s.supervisor_key FROM execution_windows w JOIN production_supervisors s ON s.context_id=w.context_id WHERE w.owner_id=? AND w.conversation_id=? ORDER BY w.generation DESC LIMIT 1")
             .bind(owner.to_string()).bind(conversation.to_string())
@@ -162,9 +166,15 @@ impl Store {
         .await?;
         let queued = if let Some(proof) = policy {
             super::operator_policy::pending_input(&mut tx, &owner, conversation, proof).await?;
-            sqlx::query_scalar::<_,i64>("SELECT (SELECT count(*) FROM reasoning_inbox WHERE conversation_id=? AND state IN ('queued','claimed') AND message_id!=?) + (SELECT count(*) FROM execution_window_queue WHERE owner_id=? AND conversation_id=? AND state='queued' AND message_id!=?)")
-                .bind(conversation.to_string()).bind(proof.source_message_id.to_string()).bind(owner.to_string()).bind(conversation.to_string()).bind(proof.source_message_id.to_string())
-                .fetch_one(&mut *tx).await.map_err(db)?
+            // ORK-837: only work ahead of or in flight with the source. Its
+            // successors queued because it matched; they drain after this.
+            super::policy_successors::blocking(
+                &mut tx,
+                &owner,
+                conversation,
+                &proof.source_message_id,
+            )
+            .await?
         } else {
             sqlx::query_scalar::<_,i64>("SELECT (SELECT count(*) FROM reasoning_inbox WHERE conversation_id=? AND state='queued') + (SELECT count(*) FROM execution_window_queue WHERE owner_id=? AND conversation_id=? AND state='queued')")
                 .bind(conversation.to_string()).bind(owner.to_string()).bind(conversation.to_string()).fetch_one(&mut *tx).await.map_err(db)?
@@ -216,13 +226,24 @@ impl Store {
             .bind(request.target_provider.as_str()).bind(receipt.settings_revision).bind(receipt.provider_generation)
             .bind(&request.history_summary).bind(&receipt.history_sha256).bind(receipt.created_at_ms)
             .bind(serde_json::to_string(&receipt).map_err(db)?).execute(&mut *tx).await.map_err(db)?;
-        if let Some(proof) = policy {
+        let superseded = if let Some(proof) = policy {
             super::operator_policy::record(&mut tx, &owner, conversation, proof).await?;
             sqlx::query("INSERT INTO operator_provider_handoffs(handoff_id,source_message_id,policy_sha256,source_commit,rule_ids_json) VALUES(?,?,?,?,?)")
                 .bind(receipt.handoff_id.to_string()).bind(proof.source_message_id.to_string()).bind(&proof.policy_sha256).bind(&proof.source_commit)
                 .bind(serde_json::to_string(&proof.rule_ids).map_err(db)?).execute(&mut *tx).await.map_err(db)?;
-        }
+            // After the settings write: their fences now fail for good.
+            super::policy_successors::withdraw_superseded(
+                &mut tx,
+                &owner,
+                conversation,
+                &proof.source_message_id,
+                receipt.provider_generation,
+            )
+            .await?
+        } else {
+            Vec::new()
+        };
         tx.commit().await.map_err(db)?;
-        Ok(receipt)
+        Ok((receipt, superseded))
     }
 }

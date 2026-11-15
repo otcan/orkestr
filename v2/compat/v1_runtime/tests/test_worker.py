@@ -26,6 +26,7 @@ class Peer:
         self.lose_deep_response = False
         self.foreign = False
         self.busy = False
+        self.busy_code = "window_busy"
         self.saved_window = None
         self.reply_settings = dict(prefix=None, footer=None, honor_no_reply=True)
         self.render_missing = False
@@ -103,7 +104,7 @@ class Peer:
             return 204, None
         if route == "/window":
             if self.busy:
-                return 409, {"error": "window_busy"}
+                return 409, {"error": self.busy_code}
             self.saved_window = dict(body, status=dict(conversation_id=self.conversation, state="active", generation=1,
                                                        window_id="window", predecessor_window_id=None))
             return 201, self.saved_window
@@ -217,6 +218,20 @@ class WorkerTests(unittest.TestCase):
         attempts = [body for route, body in self.peer.mutations if route == "/window"]
         self.assertEqual(attempts[0], attempts[1])
         self.assertFalse(any("stop" in route for route, _ in self.peer.mutations))
+
+    def test_blocked_policy_switch_is_retained_and_retried_with_the_same_request(self):
+        # Core queued the input before the operator provider switch refused to
+        # run ahead of earlier work: a wait, never a terminal refusal.
+        self.peer.busy, self.peer.busy_code = True, "provider_policy_handoff_blocked"
+        self.worker.step(self.data)
+        self.assertEqual(self.data["phase"], "waiting_for_window")
+        self.assertNotIn("refused", self.data)
+        self.peer.busy = False
+        resumed = self.ledger.next_input()
+        self.worker.step(resumed)
+        attempts = [body for route, body in self.peer.mutations if route == "/window"]
+        self.assertEqual(attempts[0], attempts[1])
+        self.assertEqual(resumed["phase"], "completed")
 
     def test_lost_intake_and_window_responses_keep_exact_mutation_keys(self):
         for dropped in ("/messages", "/window"):

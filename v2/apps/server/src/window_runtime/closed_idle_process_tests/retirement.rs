@@ -2,7 +2,7 @@
 use super::*;
 
 #[allow(clippy::too_many_arguments)]
-pub(super) async fn close(
+pub(in crate::window_runtime) async fn close(
     bound: &Store,
     store: &Store,
     browser: &str,
