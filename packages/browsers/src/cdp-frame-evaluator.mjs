@@ -16,8 +16,7 @@ export function createSameOriginFrameEvaluator(send, { allowedOrigins, pathPrefi
   }));
   let selectedDocument = "", contextId = null;
   const invalidate = () => { selectedDocument = ""; contextId = null; };
-  return async (expression) => {
-    try {
+  const selectDocument = async () => {
       const response = await send("Page.getFrameTree");
       const tree = response.result?.frameTree;
       const top = new URL(tree?.frame?.url || "about:blank");
@@ -32,14 +31,24 @@ export function createSameOriginFrameEvaluator(send, { allowedOrigins, pathPrefi
       if (candidates.length !== 1) throw new Error("frame_missing_or_ambiguous");
       const frame = candidates[0].frame;
       if (!frame.id || !frame.loaderId) throw new Error("frame_document_identity_missing");
-      const key = JSON.stringify([frame.id, frame.loaderId, frame.url]);
+      return { frame, key: JSON.stringify([frame.id, frame.loaderId, frame.url]) };
+  };
+  return async (expression) => {
+    try {
+      if (typeof expression !== "string" || !expression.trim()) throw new Error("frame_expression_invalid");
+      const { frame, key } = await selectDocument();
       if (selectedDocument !== key || contextId === null) {
         const world = await send("Page.createIsolatedWorld", { frameId: frame.id, worldName });
         contextId = world.result?.executionContextId;
         if (world.error || !Number.isInteger(contextId)) throw new Error("frame_context_unavailable");
         selectedDocument = key;
       }
-      const result = await send("Runtime.evaluate", { expression, contextId, returnByValue: true, awaitPromise: true });
+      // World creation binds a frame ID, not a loader ID. Refuse a document
+      // change during that call, and check the world URL atomically with the
+      // action so a later navigation cannot move it outside the policy.
+      if ((await selectDocument()).key !== key) throw new Error("frame_document_changed_no_retry");
+      const guarded = `(() => { if (location.href !== ${JSON.stringify(frame.url)}) throw new Error("frame_location_changed_no_retry"); return (${expression}); })()`;
+      const result = await send("Runtime.evaluate", { expression: guarded, contextId, returnByValue: true, awaitPromise: true });
       if (result.error || result.result?.exceptionDetails || !result.result?.result) throw new Error("frame_evaluation_failed_no_retry");
       return result.result.result.value;
     } catch (error) {
