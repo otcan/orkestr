@@ -27,6 +27,18 @@ use std::{
 /// each keeps its handle generation and one-shot authority history.
 const MAX_CONVERSATIONS: usize = 1024;
 
+/// A standing operator provider switch that waits for work ahead of, or in
+/// flight with, its source (ORK-837). The source intent is already durably
+/// queued; dispatch retries the switch with backoff.
+pub(crate) const POLICY_HANDOFF_BLOCKED: &str = "provider policy handoff waits for earlier work";
+
+#[cfg(test)]
+tokio::task_local! {
+    /// Test only: the root manager's release answer within one test task. The
+    /// real manager must be root and this process's parent.
+    pub(super) static TEST_MANAGER_RELEASED: bool;
+}
+
 pub(crate) enum WindowOutcome {
     Admitted(ExecutionWindowAdmission),
     Queued(ExecutionWindowQueued),

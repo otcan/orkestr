@@ -181,6 +181,14 @@ fn plan(
     Plan::Admit(request)
 }
 
+/// Operator alert for an intent that keeps waiting; it is never withdrawn.
+fn deferred_alert(row: &ExecutionWindowQueued, cause: &str) -> String {
+    format!(
+        "ALERT orkestr-v2-server window_queue_deferred conversation={} event={} cause={cause}",
+        row.conversation_id, row.input_event_id
+    )
+}
+
 pub(super) fn now_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -370,21 +378,32 @@ impl Controller {
                 }
                 Err(error) => return Err(error),
             }
-            let request = match self
-                .route_operator_policy(browser, &self.config.owner_id, conversation, &request)
-                .await
-            {
-                Ok(Some(request)) => request,
-                Ok(None) | Err(_) => continue,
-            };
-            let Ok(entry) = self.entry(conversation) else {
-                continue;
-            };
             // Event identity is owner-wide; request keys may repeat across conversations.
             let retry_key = row.input_event_id.to_string();
             if !self.queue.retry_due(&retry_key) {
                 continue;
             }
+            let request = match self
+                .route_operator_policy(browser, &self.config.owner_id, conversation, &request)
+                .await
+            {
+                Ok(Some(request)) => request,
+                // Preserved: waiting for its window to close, or switched now.
+                Ok(None) => continue,
+                Err(reason) => {
+                    // ORK-837: a refused policy decision (for example a switch
+                    // waiting for earlier work) backs off like a refused
+                    // admission, never silently every pass, and never re-wakes.
+                    eprintln!("window dispatch deferred: {reason}");
+                    if self.queue.failed(&retry_key) == 3 {
+                        eprintln!("{}", deferred_alert(&row, "provider_policy_refused"));
+                    }
+                    continue;
+                }
+            };
+            let Ok(entry) = self.entry(conversation) else {
+                continue;
+            };
             let owner = self.config.owner_id.clone();
             let result = entry.process(browser, &owner, conversation, &request).await;
             if let Err(reason) = &result {
@@ -400,7 +419,7 @@ impl Controller {
                 Err(_) if self.queue.failed(&retry_key) == 3 => {
                     // The occurrence already advanced its timer. Withdrawing it
                     // here silently loses the only durable execution intent.
-                    eprintln!("ALERT orkestr-v2-server window_queue_deferred conversation={} event={} cause=admission_refused", row.conversation_id, row.input_event_id);
+                    eprintln!("{}", deferred_alert(&row, "admission_refused"));
                 }
                 Err(_) => {}
             }

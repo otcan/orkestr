@@ -20,7 +20,7 @@ use std::{
 use uuid::Uuid;
 
 mod browser_fixture;
-mod retirement;
+pub(super) mod retirement;
 use browser_fixture::{credentials, headers, login, logout};
 use retirement::close;
 

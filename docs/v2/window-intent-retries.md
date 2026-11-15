@@ -37,6 +37,12 @@ refusal does not retire the admitted source message. The adapter keeps the
 original frozen request and holds later window admissions for owner review.
 It never replaces keys or opens a successor from that refusal.
 
+`409 provider_policy_handoff_blocked` is definite but refuses nothing: the
+input is already queued behind a standing operator provider switch that waits
+for earlier work in its conversation (see `provider-routing.md`). The adapter
+keeps waiting and retries the same frozen request, which then reports the
+queue row.
+
 Only `409 window_input_retired` permits terminal settlement: Core authenticates
 the exact owner, conversation, message, event and original input request key,
 and checks immutable retirement plus absence of run/window admission effects.

@@ -72,11 +72,7 @@ pub(crate) async fn admit(
                     // Controller errors are closed static diagnostics, never
                     // raw provider output or a user-supplied path/message.
                     eprintln!("window admission refused: {reason}");
-                    Error(
-                        StatusCode::SERVICE_UNAVAILABLE,
-                        "window_unavailable",
-                        "Window admission or transport requires reconciliation",
-                    )
+                    admission_refused(reason)
                 })
         } else {
             state
@@ -119,6 +115,25 @@ pub(crate) async fn admit(
             ))
         }
     })
+}
+
+/// A standing operator provider switch that waits for earlier work is a
+/// definite answer, not an uncertain transport (ORK-837): the input is already
+/// durably queued and is admitted after the switch. Every other refusal keeps
+/// the retryable reconciliation answer.
+fn admission_refused(reason: &'static str) -> Error {
+    if reason == crate::window_runtime::POLICY_HANDOFF_BLOCKED {
+        return Error(
+            StatusCode::CONFLICT,
+            "provider_policy_handoff_blocked",
+            "Input is queued; the operator provider switch waits for earlier work in this conversation",
+        );
+    }
+    Error(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "window_unavailable",
+        "Window admission or transport requires reconciliation",
+    )
 }
 
 /// Owner-wide capacity and this conversation's durably queued window intents.
@@ -383,5 +398,31 @@ pub(crate) fn store_error(error: RuntimeStoreError) -> Error {
             "window_unavailable",
             "Window unavailable",
         ),
+    }
+}
+
+#[cfg(test)]
+mod admission_refusal_tests {
+    use super::*;
+
+    #[test]
+    fn policy_handoff_blocked_is_a_definite_conflict_and_other_refusals_stay_retryable() {
+        let blocked = admission_refused(crate::window_runtime::POLICY_HANDOFF_BLOCKED);
+        assert_eq!(
+            (blocked.0, blocked.1),
+            (StatusCode::CONFLICT, "provider_policy_handoff_blocked")
+        );
+        for reason in [
+            "provider policy handoff refused",
+            "window controller stopped",
+            "provider routing requires an explicit provider handoff",
+        ] {
+            let other = admission_refused(reason);
+            assert_eq!(
+                (other.0, other.1),
+                (StatusCode::SERVICE_UNAVAILABLE, "window_unavailable"),
+                "{reason}"
+            );
+        }
     }
 }

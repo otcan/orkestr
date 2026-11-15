@@ -29,6 +29,7 @@ pub use conversation_status::{ConversationStatusSnapshot, WindowQueueSnapshot};
 pub(super) use queue::enqueue_timer_intent;
 pub(crate) use queue::enqueue_trusted_intent;
 pub(super) mod operator_policy;
+mod policy_successors;
 mod provider_choice;
 pub use operator_policy::OperatorProviderPolicy;
 mod refused_input;

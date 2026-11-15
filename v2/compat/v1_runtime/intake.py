@@ -165,7 +165,10 @@ def window(worker, data):
                     print("ALERT orkestr-v2-wa-adapter window_input_requires_review conversation=%s input=%s" %
                           (worker.client.conversation, data["remote_id"]), file=sys.stderr, flush=True)
                 return False
-            if code == "window_busy":
+            # A standing operator provider switch waiting for earlier work
+            # (ORK-837) already queued this input in Core: the same frozen
+            # request is retried and reports that queue row.
+            if code in ("window_busy", "provider_policy_handoff_blocked"):
                 data["phase"] = "waiting_for_window"
                 worker.ledger.save(data)
                 return False

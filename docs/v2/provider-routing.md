@@ -37,10 +37,24 @@ A handoff requires a source-stamped server build, the exact latest CLOSED Core
 window, manager proof that that same window retired, no live local custody,
 settled prior contexts and descendants, and revision/generation fences repeated
 inside the transaction. It preserves the exact triggering queued input and
-never clears consumed/retired inputs or replays a previous run. Other older
-queued/claimed work blocks automatic handoff for explicit reconciliation.
-An input carrying an immutable original-source continuation fence also blocks
-this automatic handoff; the policy cannot silently rewrite its source identity.
+never clears consumed/retired inputs or replays a previous run. It waits only
+for work ahead of or in flight with that input: a claimed input, a window
+intent queued before the input's own, or an input bound to a window that is
+not closed. Inputs queued behind it (usually queued only because they
+inherited its match while its window was still active) stay queued and are
+admitted in order after the switch. The triggering input itself must not carry
+an immutable original-source continuation fence; the policy cannot rewrite its
+source identity. A queued successor fenced to a run of the previous provider
+generation (a host result for the turn that asked for it) can never run after
+the switch: the switch withdraws it in its own transaction, retires its input
+with the ordinary `source_superseded` receipt and emits a
+`window_queue_withdrawn` alert with cause `provider_policy_handoff`. It is
+never handed to the new provider. An input without a window intent and outside
+every unclosed window is neither ahead nor in flight and stays as it is.
+While the switch waits, direct admission answers `409
+provider_policy_handoff_blocked` (the input is already queued) and dispatch
+backs off, alerting `window_queue_deferred` with cause `provider_policy_refused`
+after three refusals.
 The original request/digest is queued before potentially slow native retirement,
 so cancellation cannot lose its intent. An already accepted idle window uses
 ordinary custody-proven retirement; a live working window queues intent until
