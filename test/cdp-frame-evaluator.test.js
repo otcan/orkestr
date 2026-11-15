@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import vm from "node:vm";
 import { createSameOriginFrameEvaluator } from "../packages/browsers/src/cdp-frame-evaluator.mjs";
 
 const policy = { allowedOrigins: ["https://portal.example"], pathPrefix: "/journal/" };
@@ -59,4 +60,34 @@ test("rejects unsafe policy and never treats policy as authority to open CDP", (
     { ...policy, allowedOrigins: ["https://portal.example/path"] }, { ...policy, pathPrefix: "/journal" }]) {
     assert.throws(() => createSameOriginFrameEvaluator(() => {}, p));
   }
+});
+test("navigation during world creation refuses the action before evaluation", async () => {
+  const f = fixture(), send = f.send;
+  f.send = async (method, params) => {
+    const result = await send(method, params);
+    if (method === "Page.createIsolatedWorld") {
+      f.tree.childFrames[0].frame.loaderId = "new-loader";
+      f.tree.childFrames[0].frame.url = "https://portal.example/other/login";
+    }
+    return result;
+  };
+  await assert.rejects(createSameOriginFrameEvaluator(f.send, policy)("action()"));
+  assert.equal(f.calls.some(x => x.method === "Runtime.evaluate"), false);
+});
+test("navigation after tree validation cannot execute the action at a changed URL", async () => {
+  const f = fixture(), send = f.send;
+  let actions = 0;
+  f.send = async (method, params) => {
+    if (method === "Runtime.evaluate") {
+      try {
+        const value = vm.runInNewContext(params.expression, {
+          location: { href: "https://portal.example/other/login" }, action() { actions++; }
+        });
+        return { result: { result: { value } } };
+      } catch { return { result: { exceptionDetails: {} } }; }
+    }
+    return send(method, params);
+  };
+  await assert.rejects(createSameOriginFrameEvaluator(f.send, policy)("action()"), /no_retry/);
+  assert.equal(actions, 0);
 });
