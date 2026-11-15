@@ -18,6 +18,10 @@ const heading = page => page.evaluate(() => {
     more: document.querySelector('.conversation-heading .heading-site-more')?.textContent ?? null,
   };
 });
+// A chat's event stream outlives a switch to another chat by up to 25 s; a few
+// quick switches can use up the browser's six connections to the mock. The
+// app's own retry event ends those streams (the open chat reconnects).
+const releaseStreams = page => page.evaluate(() => { window.dispatchEvent(new Event('orkestr-stream-retry')); });
 const openChat = async (page, openDrawer, choose, label, name) => {
   await openDrawer(label);
   await choose(name);
@@ -44,7 +48,6 @@ const rows = page => page.$$eval('.site-row', nodes => nodes.map(row => {
 export async function sitesPage({ page, state, label, openDrawer, choose, clickText, waitText, screenshot, noHorizontalScroll }) {
   state.siteCatalog = sitesState();
   // The header: the chat's newest live site, and "+1" for its older one.
-  await openChat(page, openDrawer, choose, label, 'Research notes');
   await openChat(page, openDrawer, choose, label, 'Assistant');
   await page.waitForSelector('.conversation-heading .heading-site-link', { timeout: 20000 });
   assert.deepEqual(await heading(page), { title: 'Assistant', more: '+1',
@@ -59,6 +62,7 @@ export async function sitesPage({ page, state, label, openDrawer, choose, clickT
   await page.waitForSelector('.conversation-heading .heading-site-link', { timeout: 15000 });
   const errands = await heading(page);
   assert.deepEqual([errands.link.href, errands.more], ['https://errands.sites.example.com/', null]);
+  await releaseStreams(page);
 
   // Orkestr settings → Sites: a global page with its own location.
   await page.$eval('.global-settings', b => b.click());
@@ -101,6 +105,7 @@ export async function sitesPage({ page, state, label, openDrawer, choose, clickT
   await clickText('Back to chat');
   await page.waitForSelector('#composer');
   await openChat(page, openDrawer, choose, label, 'Assistant');
+  await releaseStreams(page);
   await page.waitForSelector('.conversation-heading .heading-site-more', { timeout: 15000 });
   await page.$eval('.conversation-heading .heading-site-more', b => b.click());
   await page.waitForFunction(() => location.hash === '#sites', { timeout: 15000 });

@@ -40,3 +40,4 @@
   .site-open { text-align: left; padding-bottom: .75rem !important; }
   .site-open-link { min-height: 2.75rem; }
 }
+.sites-retry { align-self: flex-start; }

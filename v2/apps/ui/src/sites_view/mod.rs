@@ -88,22 +88,33 @@ pub fn Sites(sites: SitesCatalog, session_scope: Signal<SessionScope>) -> Elemen
             names.set(ChatNames::from_sidebar(&sidebar.entries));
         }
     });
+    // `(text, retry)`: what to say instead of the list, and whether asking
+    // again may help.
     let status = match (sites.catalog)() {
         Catalog::Ready(page) => Ok(page),
-        Catalog::Loading => Err("Loading sites…".to_owned()),
-        Catalog::Unsupported => Err("This server has no sites page yet.".to_owned()),
-        Catalog::Failed { status: 401, .. } => {
-            Err("Sites need a session signed in with your password. Sign in again.".to_owned())
+        Catalog::Loading => Err(("Loading sites…".to_owned(), false)),
+        Catalog::Unsupported => Err(("This server has no sites page yet.".to_owned(), false)),
+        Catalog::Failed { status: 401, .. } => Err((
+            "Sites need a session signed in with your password. Sign in again.".to_owned(),
+            false,
+        )),
+        Catalog::Failed { message, .. } => {
+            Err((format!("Sites could not be loaded. {message}"), true))
         }
-        Catalog::Failed { message, .. } => Err(message),
     };
     let page = match status {
         Ok(page) => page,
-        Err(text) => {
+        Err((text, retry)) => {
             return rsx! {
                 section { class: "sites-page", "aria-label": "Sites",
                     style { "{include_str!(\"../sites.css\")}" }
                     p { class: "sites-intro", role: "status", "{text}" }
+                    if retry {
+                        button { r#type: "button", class: "sites-retry", onclick: move |_| {
+                            let mut refresh = sites.refresh;
+                            refresh += 1;
+                        }, "Try again" }
+                    }
                 }
             }
         }
