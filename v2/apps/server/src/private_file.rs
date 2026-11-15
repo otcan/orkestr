@@ -1,7 +1,8 @@
 //! Reading an operator-provided file with its custody checked first: a
 //! regular file (no symlink), one link, owned by root or this process's user,
 //! bounded in size. `secret` files must also be closed to group and others;
-//! other files only closed to writes by them.
+//! other files only closed to writes by them. Shared by the credentials
+//! (ORK-826) and sites (ORK-834) pages.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum Refused {
     Unreadable,

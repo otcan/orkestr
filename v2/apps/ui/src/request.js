@@ -24,7 +24,9 @@ const health = input.path === "/api/v2/health" && input.method === "GET";
 const signIn = (input.method === "GET" && input.path === "/api/v2/provider-sign-in") ||
     (input.method === "POST" && /^\/api\/v2\/provider-sign-in\/(?:codex|claude)\/(?:start|code|cancel|sign-out)$/.test(input.path));
 const localAccount = input.path === "/api/v2/oss-setup/account" && ["GET", "POST"].includes(input.method);
-if (!deskRequest && !health && !signIn && !localAccount && !security.test(input.path) && !vault.test(input.path) && !credentials.test(input.path) && !route.test(input.path) && !(manage.test(input.path) && !input.path.includes("..")) && !(sidebar.test(input.path) && !input.path.includes(".."))) throw new Error("Invalid API path");
+// The host's published sites (ORK-834): one fixed read, never a site itself.
+const sites = input.method === "GET" && input.path === "/api/v2/sites";
+if (!deskRequest && !health && !signIn && !localAccount && !sites && !security.test(input.path) && !vault.test(input.path) && !credentials.test(input.path) && !route.test(input.path) && !(manage.test(input.path) && !input.path.includes("..")) && !(sidebar.test(input.path) && !input.path.includes(".."))) throw new Error("Invalid API path");
 const headers = {"Content-Type": "application/json"};
 if (localAccount) headers["x-orkestr-local-setup"] = "1";
 if (input.csrf && !["GET", "HEAD"].includes(input.method)) headers["x-orkestr-csrf"] = input.csrf;

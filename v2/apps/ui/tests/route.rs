@@ -25,6 +25,7 @@ fn every_view_round_trips_through_its_fragment() {
         Route::VirtualDesks,
         Route::OrkestrSettings,
         Route::Credentials,
+        Route::Sites,
         Route::V1Thread {
             thread: "group-coordinated".into(),
         },
@@ -261,5 +262,20 @@ fn credentials_are_a_global_page_reached_from_orkestr_settings() {
         Route::parse(&format!("#conversation/{ID}/credentials")),
         None,
         "credentials never take a conversation's scope"
+    );
+}
+
+#[test]
+fn sites_are_a_global_page_reached_from_orkestr_settings() {
+    // ORK-834: the sites and apps the owner's chats published, at `#sites`,
+    // never inside a conversation's scope.
+    assert_eq!(Route::parse("#sites"), Some(Route::Sites));
+    assert_eq!(Route::Sites.hash(), "#sites");
+    assert!(Tab::Sites.is_global() && !Tab::Sites.in_more());
+    assert_eq!(Tab::Sites.label(), "Sites");
+    assert_eq!(
+        Route::parse(&format!("#conversation/{ID}/sites")),
+        None,
+        "sites never take a conversation's scope"
     );
 }

@@ -184,12 +184,12 @@ impl Backend {
         let path = std::env::var_os(CONFIG_ENV)
             .map(PathBuf::from)
             .unwrap_or_else(|| home.join("credentials-backend.json"));
-        match super::private_file::read(&path, MAX_CONFIG, true) {
+        match crate::private_file::read(&path, MAX_CONFIG, true) {
             Ok(None) => Backend::V2Vault {
                 usage: Some(home.join("credentials-usage.json")),
             },
             Ok(Some(text)) => Backend::parse(&text, home),
-            Err(super::private_file::Refused::Custody) => Backend::Refused("custody_rejected"),
+            Err(crate::private_file::Refused::Custody) => Backend::Refused("custody_rejected"),
             Err(_) => Backend::Refused("unreadable"),
         }
     }

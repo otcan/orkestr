@@ -351,3 +351,16 @@ test('owner credentials routes keep cookie and CSRF and admit only fixed shapes 
         '/api/v2/credentials/x/value/extra','/api/v2/credentials?all=1','/api/v2/credentials/x?other=1'])
         await assert.rejects(execute({recv:async()=>({...base,method:'GET',path})},()=>assert.fail('fetch must not run')),/Invalid API path/);
 });
+
+test('the sites list is one fixed same-origin read (ORK-834)', async () => {
+    await execute({recv:async()=>({...base,method:'GET',path:'/api/v2/sites',body:null,csrf:'synthetic-csrf'})},async(actual,options)=>{
+        assert.equal(actual,'/api/v2/sites');
+        assert.equal(options.method,'GET');
+        assert.equal(options.credentials,'same-origin');
+        assert.equal(options.headers['x-orkestr-csrf'],undefined);
+        return Response.json({configured:true,sites:[]});
+    });
+    for (const [method,path] of [['POST','/api/v2/sites'],['DELETE','/api/v2/sites'],['GET','/api/v2/sites/notes'],['GET','/api/v2/sites?all=1'],
+        ['GET','/api/v2/sites/../vault'],['GET','https://notes.sites.example.com/']])
+        await assert.rejects(execute({recv:async()=>({...base,method,path,body:null})},()=>assert.fail('fetch must not run')),/Invalid API path/);
+});
